@@ -264,7 +264,7 @@ func planMaaSGateway(c *Client, infraNS string, published []string) (*maasGatewa
 	}
 	// setup-gateway.sh uses an existing openshift-default as it is; only
 	// OpenShift's own controller's.
-	body, present, err := c.getOptional(maasGatewayClassPath())
+	body, present, err := c.GetOptional(maasGatewayClassPath())
 	switch {
 	case err != nil:
 		return nil, fmt.Sprintf("Cannot read GatewayClass %s; nothing was changed: %v.", maasGatewayClass, err), errorCodeFromK8sErr(err)
@@ -302,7 +302,7 @@ func (m *maasRun) applyGateway(plan *maasGatewayPlan, dryRun bool) (string, stri
 		if dryRun {
 			query = url.Values{"dryRun": {"All"}}
 		}
-		if _, _, err := m.c.do(http.MethodPost, withToolFieldManager(clusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "")), "application/json", data, query); err != nil && !isK8sConflict(err) {
+		if _, _, err := m.c.Do(http.MethodPost, withToolFieldManager(clusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "")), "application/json", data, query); err != nil && !isK8sConflict(err) {
 			return fmt.Sprintf("Failed to create GatewayClass %s: %v.%s", maasGatewayClass, err, templateHint(err)), maasWriteCode(err)
 		}
 		if !dryRun {
@@ -341,7 +341,7 @@ func patchModelsAsAService(c *Client, state string) error {
 		return err
 	}
 	patch := fmt.Sprintf(`{"spec":{"components":{"aigateway":{"modelsAsAService":{"managementState":%q}}}}}`, state)
-	_, _, err = c.do(http.MethodPatch, path, "application/merge-patch+json", []byte(patch), url.Values{"fieldManager": {maasDSCManager}})
+	_, _, err = c.Do(http.MethodPatch, path, "application/merge-patch+json", []byte(patch), url.Values{"fieldManager": {maasDSCManager}})
 	return err
 }
 
@@ -418,7 +418,7 @@ func listMaaSObjects(c *Client) ([]maasObject, error) {
 		var items []struct {
 			Metadata objectMeta `json:"metadata"`
 		}
-		if err := c.listInto(l.path, &items); err != nil {
+		if err := c.ListInto(l.path, &items); err != nil {
 			if isDecodeError(err) {
 				return nil, fmt.Errorf("parse the %s list: %w", l.kind, err)
 			}
@@ -449,7 +449,7 @@ func maasControllerGone(c *Client) string {
 // a changed maas-db-config (maas-setup.md "Restarting maas-api"). A
 // missing Deployment needs nothing: the operator starts it with the Secret.
 func restartMaaSAPI(c *Client, ns string) (bool, error) {
-	err := c.patchJSON(namespacedPath("apps/v1", "deployments", ns, "maas-api"), map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
+	err := c.PatchJSON(namespacedPath("apps/v1", "deployments", ns, "maas-api"), map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
 		"annotations": map[string]string{restartAnnotation: clk.Now().UTC().Format(time.RFC3339)},
 	}}}})
 	if isK8sNotFound(err) {
@@ -1414,7 +1414,7 @@ func (m *maasRun) unpublishModelRef(u *maasUnpublish) (*types.OperationResponse,
 					}
 				}
 				patch := map[string]any{"metadata": map[string]any{"resourceVersion": meta.ResourceVersion, "finalizers": rest}}
-				if err := c.patchJSON(path, patch); err != nil && !isK8sNotFound(err) {
+				if err := c.PatchJSON(path, patch); err != nil && !isK8sNotFound(err) {
 					return m.fail("maas", fmt.Sprintf("MaaSModelRef %s/%s is being deleted and maas-controller cannot finish it (%s); removing its finalizer failed: %v. Unpublish again to retry.", project, name, why, err), maasWriteCode(err), "finalizer patch failed")
 				}
 				m.logs = append(m.logs, fmt.Sprintf("maas-controller cannot finish deleting MaaSModelRef %s/%s (%s), so this tool removed the finalizer %s from its own reference. Policies maas-controller generated for the model may be left in %s: oc get authpolicy,tokenratelimitpolicy -n %s -l maas.opendatahub.io/model=%s,app.kubernetes.io/managed-by=maas-controller", project, name, why, maasModelFinalizer, project, project, name))

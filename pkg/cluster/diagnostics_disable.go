@@ -39,7 +39,7 @@ func deploymentReady(c *Client, namespace, name string) (bool, string) {
 			ReadyReplicas int `json:"readyReplicas"`
 		} `json:"status"`
 	}
-	found, err := c.getIntoOptional(namespacedPath("apps/v1", "deployments", namespace, name), &d)
+	found, err := c.GetIntoOptional(namespacedPath("apps/v1", "deployments", namespace, name), &d)
 	if err != nil {
 		if isDecodeError(err) {
 			return false, fmt.Sprintf("could not parse Deployment %s/%s", namespace, name)
@@ -398,7 +398,7 @@ func listConversionObjects(u *Client, crd conversionCRD) (conversionObjects, err
 	if path == "" {
 		return conversionObjects{}, fmt.Errorf("the CRD serves no version the tool could list it at")
 	}
-	body, _, err := u.do(http.MethodGet, path, "", nil, url.Values{"limit": {strconv.Itoa(conversionObjectsLimit)}})
+	body, _, err := u.Do(http.MethodGet, path, "", nil, url.Values{"limit": {strconv.Itoa(conversionObjectsLimit)}})
 	if err != nil {
 		return conversionObjects{}, err
 	}
@@ -542,7 +542,7 @@ func (rc *removalChecker) serviceComponent(ref string) (string, error) {
 	}
 	ns, name, _ := strings.Cut(ref, "/")
 	owner := ""
-	body, found, err := rc.c.getOptional(namespacedPath("v1", "services", ns, name))
+	body, found, err := rc.c.GetOptional(namespacedPath("v1", "services", ns, name))
 	switch {
 	case err != nil:
 		err = fmt.Errorf("read Service %s: %w", ref, err)

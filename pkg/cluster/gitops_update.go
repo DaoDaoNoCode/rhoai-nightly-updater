@@ -83,7 +83,7 @@ func updateGitOpsPlan(c *Client, image string, currentCSV types.CSVInfo, logs *[
 // or when there is none). An answer it cannot parse is an error, so Update
 // refuses rather than delete a Subscription OLM may still be working on.
 func pendingInstallPlan(c *Client) (name, phase string, err error) {
-	body, found, err := c.getOptional(subscriptionPath())
+	body, found, err := c.GetOptional(subscriptionPath())
 	if err != nil {
 		return "", "", err
 	}
@@ -104,7 +104,7 @@ func pendingInstallPlan(c *Client) (name, phase string, err error) {
 		return "", "", nil
 	}
 	name = sub.Status.InstallPlanRef.Name
-	body, found, err = c.getOptional(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, name))
+	body, found, err = c.GetOptional(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, name))
 	if err != nil {
 		return "", "", err
 	}
@@ -160,7 +160,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	policy func(newSub, restoreSub map[string]any) string, pullAdvice func(*Client) string,
 ) (*types.OperationResponse, error) {
 	stopped := func(msg string) (*types.OperationResponse, error) {
-		return &types.OperationResponse{Success: false, Message: msg, Logs: *logs}, c.ctx.Err()
+		return &types.OperationResponse{Success: false, Message: msg, Logs: *logs}, c.Context().Err()
 	}
 	changedBy := g.catalogChanger()
 
@@ -231,7 +231,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting old CSV and InstallPlan..."})
 	if ipName := recovery.installPlanName(); ipName != "" {
 		ipPath := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ipName)
-		if _, err := c.deleteIfExists(ipPath); err != nil {
+		if _, err := c.DeleteIfExists(ipPath); err != nil {
 			return fail("Cannot delete old InstallPlan: "+err.Error(), errorCodeFromK8sErr(err))
 		}
 		*logs = append(*logs, fmt.Sprintf("OK: InstallPlan %s deleted", ipName))
@@ -248,7 +248,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 			// OLM installed it again for the existing Subscription; the
 			// new Subscription adopts that CSV.
 			*logs = append(*logs, fmt.Sprintf("Note: OLM already installed %s again from the catalog", currentCSV.Name))
-		case err != nil && c.ctx.Err() != nil:
+		case err != nil && c.Context().Err() != nil:
 			return stopped("Operation stopped while waiting for the current CSV to be deleted")
 		case err != nil:
 			return fail("Cannot delete current CSV: "+err.Error(), errorCodeFromK8sErr(err))
@@ -343,7 +343,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 
 // readSubscriptionObject reads the operator Subscription as a decoded object.
 func readSubscriptionObject(c *Client) (obj map[string]any, found bool, err error) {
-	body, exists, err := c.getOptional(subscriptionPath())
+	body, exists, err := c.GetOptional(subscriptionPath())
 	if err != nil {
 		return nil, false, err
 	}

@@ -118,7 +118,7 @@ func imageMirrored(c *Client, repo string) (bool, error) {
 		clusterPath("config.openshift.io/v1", "imagetagmirrorsets", ""),
 	} {
 		var sets mirrorSets
-		found, err := c.getIntoOptional(path, &sets)
+		found, err := c.GetIntoOptional(path, &sets)
 		if err != nil {
 			return false, err
 		}
@@ -303,7 +303,7 @@ func planModelImage(c *Client, presetImage string, wantReleased bool, existing *
 		if !strings.HasPrefix(repo, redHatRegistry) {
 			return imagePlan{}, fmt.Errorf("the preset's image %q is not on %s, so no released image of it can be looked up; set %s to an image the cluster can pull", presetImage, strings.TrimSuffix(redHatRegistry, "/"), vllmImageEnv)
 		}
-		img, err := lookupReleasedImage(c.ctx, strings.TrimPrefix(repo, redHatRegistry))
+		img, err := lookupReleasedImage(c.Context(), strings.TrimPrefix(repo, redHatRegistry))
 		if err != nil {
 			return imagePlan{}, fmt.Errorf("cannot find the newest released Red Hat image of %s: %w. Set %s to an image the cluster can pull, or retry", repo, err, vllmImageEnv)
 		}
@@ -363,7 +363,7 @@ const capacityCacheTTL = time.Minute
 // capacityKey is a model's cache entry: the cluster, the model, and the
 // project whose copy of it is not counted.
 func capacityKey(c *Client, name, project string) string {
-	return c.baseURL + "|" + name + "|" + project
+	return c.BaseURL() + "|" + name + "|" + project
 }
 
 // modelCapacityWarning returns a warning when no schedulable amd64 node
@@ -420,7 +420,7 @@ type nodeRoom struct {
 // the requests of its pods; the pods of model in project are not counted
 // (both "" for none).
 func freeRoom(c *Client, project, model string) (map[string]*nodeRoom, error) {
-	body, _, err := c.get("/api/v1/nodes")
+	body, _, err := c.Get("/api/v1/nodes")
 	if err != nil {
 		return nil, err
 	}
@@ -463,7 +463,7 @@ func freeRoom(c *Client, project, model string) (map[string]*nodeRoom, error) {
 	if len(free) == 0 {
 		return free, nil
 	}
-	body, _, err = c.get("/api/v1/pods?fieldSelector=" + url.QueryEscape("status.phase!=Succeeded,status.phase!=Failed"))
+	body, _, err = c.Get("/api/v1/pods?fieldSelector=" + url.QueryEscape("status.phase!=Succeeded,status.phase!=Failed"))
 	if err != nil {
 		return nil, err
 	}
@@ -589,7 +589,7 @@ func getModelsStatus(c *Client, dsc dscRead, dscErr error, models []llmisvcObjec
 	preset := discoverCPUPreset(c)
 	st.Preset, st.PresetProblem = preset.name, preset.problem
 	if preset.problem == "" {
-		key := c.baseURL + "|" + preset.image
+		key := c.BaseURL() + "|" + preset.image
 		plan, ok := planCache.Get(key)
 		if !ok {
 			var err error

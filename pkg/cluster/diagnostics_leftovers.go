@@ -467,7 +467,7 @@ func analyzeStored(c *Client, s reporterScan, rf *reportedApplyFailure) *storedL
 // listModuleObject finds a module CR by listing its resource (the
 // ServiceAccount may list, not get, module CRs). nil when it does not exist.
 func listModuleObject(c *Client, group, version, resource, name string) (map[string]any, error) {
-	body, _, err := c.do(http.MethodGet, componentListPath(group, version, resource), "", nil,
+	body, _, err := c.Do(http.MethodGet, componentListPath(group, version, resource), "", nil,
 		url.Values{"fieldSelector": {"metadata.name=" + name}})
 	if err != nil {
 		return nil, err
@@ -490,7 +490,7 @@ func listModuleObject(c *Client, group, version, resource, name string) (map[str
 // ServiceAccount may list CRDs but get only one by name. An error when the
 // CRD does not exist.
 func readCRDByName(c *Client, name string) (map[string]any, error) {
-	body, _, err := c.do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil,
+	body, _, err := c.Do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil,
 		url.Values{"fieldSelector": {"metadata.name=" + name}})
 	if err != nil {
 		return nil, err
@@ -613,7 +613,7 @@ func installedCSVOwnsCRD(c *Client, crd string) (string, bool, error) {
 			} `json:"customresourcedefinitions"`
 		} `json:"spec"`
 	}
-	if err := c.getInto(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, sub.InstalledCSV), &csv); err != nil {
+	if err := c.GetInto(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, sub.InstalledCSV), &csv); err != nil {
 		if isDecodeError(err) {
 			return sub.InstalledCSV, false, fmt.Errorf("parse CSV %s: %w", sub.InstalledCSV, err)
 		}
@@ -911,7 +911,7 @@ func readDeploymentForScan(c *Client, kind, namespace, name string) (workloadObj
 	if kind != "Deployment" {
 		return workloadObject{}, false, false, nil
 	}
-	body, _, err := c.get(namespacedPath("apps/v1", "deployments", namespace, name))
+	body, _, err := c.Get(namespacedPath("apps/v1", "deployments", namespace, name))
 	return decodeWorkload(body, err)
 }
 

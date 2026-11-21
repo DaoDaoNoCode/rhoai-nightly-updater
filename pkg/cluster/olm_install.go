@@ -111,7 +111,7 @@ func ensureOperatorNamespaceAndGroup(c *Client, dryRun bool) (logs []string, pro
 	case nsMissing:
 		slog.Info("creating operator namespace", "namespace", SubNS)
 		ns := map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": SubNS}}
-		if _, _, err := c.apply(nsPath, ns); err != nil {
+		if _, _, err := c.Apply(nsPath, ns); err != nil {
 			return logs, fmt.Sprintf("Failed to create namespace %s: %v", SubNS, err), errorCodeFromK8sErr(err)
 		}
 		logs = append(logs, fmt.Sprintf("OK: Created namespace %s", SubNS))
@@ -134,7 +134,7 @@ func ensureOperatorNamespaceAndGroup(c *Client, dryRun bool) (logs []string, pro
 			"metadata":   map[string]any{"name": "rhods-operator", "namespace": SubNS},
 			"spec":       map[string]any{},
 		}
-		if _, _, err := c.apply(namespacedPath("operators.coreos.com/v1", "operatorgroups", SubNS, "rhods-operator"), og); err != nil {
+		if _, _, err := c.Apply(namespacedPath("operators.coreos.com/v1", "operatorgroups", SubNS, "rhods-operator"), og); err != nil {
 			return logs, fmt.Sprintf("Failed to create OperatorGroup in %s: %v", SubNS, err), errorCodeFromK8sErr(err)
 		}
 		logs = append(logs, fmt.Sprintf("OK: Created OperatorGroup in %s", SubNS))
@@ -157,14 +157,14 @@ type rhoaiOperatorGroup struct {
 // and its OperatorGroups (none when the namespace is missing). It only
 // reads; problem is set when either could not be read.
 func readOperatorNamespaceAndGroups(c *Client) (nsMissing bool, groups []rhoaiOperatorGroup, problem string, errorCode string) {
-	_, found, err := c.getOptional("/api/v1/namespaces/" + SubNS)
+	_, found, err := c.GetOptional("/api/v1/namespaces/" + SubNS)
 	switch {
 	case err != nil:
 		return false, nil, fmt.Sprintf("Failed to check namespace %s: %v", SubNS, err), errorCodeFromK8sErr(err)
 	case !found:
 		return true, nil, "", ""
 	}
-	body, found, err := c.getOptional(namespacedPath("operators.coreos.com/v1", "operatorgroups", SubNS, ""))
+	body, found, err := c.GetOptional(namespacedPath("operators.coreos.com/v1", "operatorgroups", SubNS, ""))
 	if err != nil {
 		return false, nil, fmt.Sprintf("Failed to check OperatorGroups in %s: %v", SubNS, err), errorCodeFromK8sErr(err)
 	}
@@ -208,14 +208,14 @@ func operatorGroupsUsable(groups []rhoaiOperatorGroup) (ok, problem string) {
 func waitForCSVGone(c *Client, name string) (bool, error) {
 	deadline := clk.Now().Add(CSVDeletionTimeout)
 	for {
-		_, _, err := c.get(csvPath(name))
+		_, _, err := c.Get(csvPath(name))
 		if isK8sNotFound(err) {
 			return true, nil
 		}
 		if clk.Now().After(deadline) {
 			return false, nil
 		}
-		if err := clk.Sleep(c.ctx, InstallPlanPollInterval); err != nil {
+		if err := clk.Sleep(c.Context(), InstallPlanPollInterval); err != nil {
 			return false, err
 		}
 	}
@@ -276,7 +276,7 @@ func waitForOperatorInstall(c *Client, emit func(UpdateStepEvent), logs *[]strin
 	waitStart := time.Now()
 	deadline := clk.Now().Add(OperatorInstallTimeout)
 	budgetLimited := false
-	if opDeadline, ok := c.ctx.Deadline(); ok && opDeadline.Add(-installDeadlineReserve).Before(deadline) {
+	if opDeadline, ok := c.Context().Deadline(); ok && opDeadline.Add(-installDeadlineReserve).Before(deadline) {
 		deadline, budgetLimited = opDeadline.Add(-installDeadlineReserve), true
 	}
 	w := &installWait{c: c, emit: emit, logs: logs}
@@ -284,7 +284,7 @@ func waitForOperatorInstall(c *Client, emit func(UpdateStepEvent), logs *[]strin
 	progress, failed, stopped := w.progress, w.failed, w.stopped
 
 	for {
-		if err := clk.Sleep(c.ctx, InstallPlanPollInterval); err != nil {
+		if err := clk.Sleep(c.Context(), InstallPlanPollInterval); err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
 				return stopped("timeout", "The operation deadline passed before OLM finished installing the operator")
 			}
@@ -298,7 +298,7 @@ func waitForOperatorInstall(c *Client, emit func(UpdateStepEvent), logs *[]strin
 		}
 
 		var sub installWaitSubscription
-		found, err := c.getIntoOptional(subscriptionPath(), &sub)
+		found, err := c.GetIntoOptional(subscriptionPath(), &sub)
 		if err != nil {
 			if isDecodeError(err) {
 				continue
@@ -476,7 +476,7 @@ func (w *installWait) checkCSV(name, installedCSV string, deadline, waitStart ti
 			Message string `json:"message"`
 		} `json:"status"`
 	}
-	found, err := c.getIntoOptional(csvPath(name), &csv)
+	found, err := c.GetIntoOptional(csvPath(name), &csv)
 	if err != nil {
 		return installOutcome{}, false
 	}
@@ -545,7 +545,7 @@ func parenthesize(s string) string {
 // must not give: it approves only a plan that installs exactly expectedCSV.
 func checkInstallPlan(c *Client, name, expectedCSV string, approved map[string]bool, logs *[]string, progress func(string)) (installOutcome, bool) {
 	path := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, name)
-	body, _, err := c.get(path)
+	body, _, err := c.Get(path)
 	if err != nil {
 		return installOutcome{}, false
 	}
@@ -594,7 +594,7 @@ func checkInstallPlan(c *Client, name, expectedCSV string, approved map[string]b
 				errorCode: "approval_required",
 			}, true
 		}
-		if _, _, err := c.patch(path, []byte(`{"spec":{"approved":true}}`)); err != nil {
+		if _, _, err := c.Patch(path, []byte(`{"spec":{"approved":true}}`)); err != nil {
 			return installOutcome{message: fmt.Sprintf("InstallPlan %s needs manual approval and approving it failed: %v", name, err), errorCode: errorCodeOr(err, "approval_required")}, true
 		}
 		approved[name] = true
@@ -853,7 +853,7 @@ func readUpgradeGates(c *Client, version string, since time.Time) (gates []upgra
 	}
 	var dsc statusObject
 	if path, err := dataScienceClusterPath(c); err == nil {
-		if body, _, err := c.get(path); err == nil && json.Unmarshal(body, &dsc) == nil {
+		if body, _, err := c.Get(path); err == nil && json.Unmarshal(body, &dsc) == nil {
 			dscFound = true
 			reported = version != "" && dsc.Status.Release.Version == version
 		}
@@ -880,12 +880,12 @@ func readUpgradeGates(c *Client, version string, since time.Time) (gates []upgra
 func adminAckNote(c *Client, csvName string, since time.Time) string {
 	version := strings.TrimPrefix(csvName, SubName+".")
 	end := clk.Now().Add(upgradeGateWait)
-	if d, ok := c.ctx.Deadline(); ok && d.Add(-installDeadlineReserve).Before(end) {
+	if d, ok := c.Context().Deadline(); ok && d.Add(-installDeadlineReserve).Before(end) {
 		end = d.Add(-installDeadlineReserve)
 	}
 	// Every read, discovery included, ends with the wait: a slow API server
 	// cannot stretch it.
-	ctx, cancel := clk.WithDeadline(c.ctx, end)
+	ctx, cancel := clk.WithDeadline(c.Context(), end)
 	defer cancel()
 	c = c.WithContext(ctx)
 	const staleHedge = " It was reported before this install finished, so it may clear once the new operator reconciles."
@@ -957,7 +957,7 @@ func foreignSubscriptionRefusal(c *Client) string {
 			} `json:"spec"`
 		} `json:"items"`
 	}
-	exists, err := c.getIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ""), &list)
+	exists, err := c.GetIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ""), &list)
 	if err != nil {
 		if isDecodeError(err) {
 			return fmt.Sprintf("Cannot check for other Subscriptions of %s (parse InstallPlans: %v). Nothing was changed.", SubName, err)

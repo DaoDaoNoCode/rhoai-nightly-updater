@@ -87,7 +87,7 @@ func resolveStableTarget(c *Client) (stableTarget, error) {
 			Channels               []stablePackageChannel `json:"channels"`
 		} `json:"status"`
 	}
-	if err := c.listInto(path, &items); err != nil {
+	if err := c.ListInto(path, &items); err != nil {
 		if isDecodeError(err) {
 			return target, fmt.Errorf("parse RHOAI catalog releases: %w", err)
 		}

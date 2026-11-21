@@ -97,7 +97,7 @@ func getPodsInNamespace(c *Client, namespace string) ([]types.PodInfo, error) {
 			} `json:"containerStatuses"`
 		} `json:"status"`
 	}
-	if err := c.listInto(path, &items); err != nil {
+	if err := c.ListInto(path, &items); err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("failed to parse response: %w", err)
 		}

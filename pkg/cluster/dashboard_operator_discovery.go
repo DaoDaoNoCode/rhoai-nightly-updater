@@ -104,7 +104,7 @@ var dashboardTargetCache = newLRU[string, dashboardTarget](16)
 // cachedDashboardTarget is discoverDashboardTarget for status reads, which
 // the pages poll: the RBAC lists it reads are large. Errors are not cached.
 func cachedDashboardTarget(c *Client) (dashboardTarget, error) {
-	key := c.baseURL
+	key := c.BaseURL()
 	if t, ok := dashboardTargetCache.Get(key); ok {
 		return t, nil
 	}
@@ -118,7 +118,7 @@ func cachedDashboardTarget(c *Client) (dashboardTarget, error) {
 // readDashboardOperatorAt reads the operator Deployment ns/name; nil when
 // it does not exist.
 func readDashboardOperatorAt(c *Client, ns, name string) (*dashboardDeployment, error) {
-	body, status, err := c.get(namespacedPath("apps/v1", "deployments", ns, name))
+	body, status, err := c.Get(namespacedPath("apps/v1", "deployments", ns, name))
 	if status == http.StatusNotFound {
 		return nil, nil
 	}
@@ -155,7 +155,7 @@ func loadDashboardOperator(c *Client, fresh bool) (dashboardTarget, *dashboardDe
 		return t, nil, err
 	}
 	if d == nil {
-		dashboardTargetCache.Remove(c.baseURL)
+		dashboardTargetCache.Remove(c.BaseURL())
 		if !fresh {
 			return loadDashboardOperator(c, true)
 		}

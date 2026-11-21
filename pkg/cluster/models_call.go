@@ -230,7 +230,7 @@ func readModelToken(c *Client, project, model, recordedUID string) (string, erro
 		Type     string            `json:"type"`
 		Data     map[string]string `json:"data"`
 	}
-	if err := c.getInto(tokenSecretPathOf(project, model), &sec); err != nil {
+	if err := c.GetInto(tokenSecretPathOf(project, model), &sec); err != nil {
 		if isDecodeError(err) {
 			return "", fmt.Errorf("parse the model's token Secret: %w", err)
 		}
@@ -268,7 +268,7 @@ var _ = registerCachePurge(func() {
 })
 
 func callCheckKey(c *Client, project, name string) string {
-	return c.baseURL + "|" + project + "/" + name
+	return c.BaseURL() + "|" + project + "/" + name
 }
 
 func rememberCallCheck(c *Client, project, name, uid string, check types.ModelCallCheck) {
@@ -364,7 +364,7 @@ func callModelDirectly(c *Client, model llmisvcObject, project, name, served, ty
 // Any other outcome is said, not counted as a failure.
 func probeWithoutToken(c *Client, ok types.ModelCallCheck, base, served, typ, gw string) types.ModelCallCheck {
 	target, body := modelCallRequest(base, served, typ)
-	status, _, err := callModelOnce(c.ctx, target, body, "")
+	status, _, err := callModelOnce(c.Context(), target, body, "")
 	switch {
 	case err == nil && status >= 200 && status < 300:
 		return types.ModelCallCheck{Result: "unauthenticated", Status: status, URL: target,
@@ -395,8 +395,8 @@ func runModelCall(c *Client, base, served, typ, token string, internal bool, pro
 	attempt := 0
 	_, err := waitForGone(c, ModelCallRetryWindow, ModelCallPoll, func(cc *Client) (bool, error) {
 		attempt++
-		status, data, err := callModelOnce(cc.ctx, target, body, token)
-		if err != nil && cc.ctx.Err() != nil && c.ctx.Err() == nil {
+		status, data, err := callModelOnce(cc.Context(), target, body, token)
+		if err != nil && cc.Context().Err() != nil && c.Context().Err() == nil {
 			// The retry window ended during this request.
 			return false, nil
 		}

@@ -239,7 +239,7 @@ func HardResetDSC(c *Client, req types.DSCPlanRequest, emit func(UpdateStepEvent
 		return r.fail("check", "The DataScienceCluster or the release default changed since you reviewed the hard reset, so nothing was changed. Review it again.", "conflict"), nil
 	}
 	path := dscObjectPath(v.version, v.name)
-	if _, _, err := c.do(http.MethodDelete, path, "application/json", dscDeleteBody(v.uid), url.Values{"dryRun": {"All"}}); err != nil {
+	if _, _, err := c.Do(http.MethodDelete, path, "application/json", dscDeleteBody(v.uid), url.Values{"dryRun": {"All"}}); err != nil {
 		return r.fail("check", "The API server refused deleting the DataScienceCluster in its dry run: "+conversionMessage(err)+". Nothing was changed.", nonEmpty(errorCodeFromK8sErr(err), "validation")), nil
 	}
 	obj := v.newDefaultObject(v.resetTarget(&types.DSCPlan{}, *req.KeepEnabled))
@@ -287,7 +287,7 @@ func HardResetDSC(c *Client, req types.DSCPlanRequest, emit func(UpdateStepEvent
 	r.step("check", "success", fmt.Sprintf("DataScienceCluster %s can be reset: %d components are torn down and the release default of operator %s is created%s", v.name, len(p.plan.TornDown), v.op.Version, kept))
 
 	r.step("delete", "running", "Deleting DataScienceCluster "+v.name)
-	if _, _, err := c.do(http.MethodDelete, path, "application/json", dscDeleteBody(v.uid), nil); err != nil {
+	if _, _, err := c.Do(http.MethodDelete, path, "application/json", dscDeleteBody(v.uid), nil); err != nil {
 		clearDSCHardResetRecord(c)
 		if isK8sNotFound(err) || isK8sConflict(err) {
 			return r.fail("delete", "DataScienceCluster "+v.name+" was deleted or replaced by someone else since the check, so nothing was changed by this reset. Reload the page.", "conflict"), nil
@@ -332,7 +332,7 @@ func firstLine(s string) string {
 // an error code.
 func createPlannedDSC(c *Client, version string, obj map[string]any) (string, string) {
 	listPath := fmt.Sprintf(dscListFmt, version)
-	body, _, err := c.get(listPath)
+	body, _, err := c.Get(listPath)
 	if err != nil {
 		return "the DataScienceClusters could not be listed before creating one: " + conversionMessage(err) + ". Nothing was created.", nonEmpty(errorCodeFromK8sErr(err), "internal")
 	}
@@ -353,10 +353,10 @@ func createPlannedDSC(c *Client, version string, obj map[string]any) (string, st
 	}
 	q := url.Values{"fieldManager": {dscComponentsManager}, "fieldValidation": {"Strict"}}
 	dry := url.Values{"fieldManager": {dscComponentsManager}, "fieldValidation": {"Strict"}, "dryRun": {"All"}}
-	if _, _, err := c.do(http.MethodPost, listPath, "application/json", raw, dry); err != nil {
+	if _, _, err := c.Do(http.MethodPost, listPath, "application/json", raw, dry); err != nil {
 		return "the API server refused the release default in its dry run: " + conversionMessage(err) + ". Nothing was created.", nonEmpty(errorCodeFromK8sErr(err), "validation")
 	}
-	if _, _, err := c.do(http.MethodPost, listPath, "application/json", raw, q); err != nil {
+	if _, _, err := c.Do(http.MethodPost, listPath, "application/json", raw, q); err != nil {
 		return "creating the release default failed: " + conversionMessage(err) + ".", nonEmpty(errorCodeFromK8sErr(err), "internal")
 	}
 	return "", ""
@@ -371,7 +371,7 @@ type dscWaitState struct {
 }
 
 func readDSCWaitState(c *Client, path string) (dscWaitState, error) {
-	body, exists, err := c.getOptional(path)
+	body, exists, err := c.GetOptional(path)
 	if err != nil {
 		return dscWaitState{}, err
 	}
@@ -416,10 +416,10 @@ func waitDSCGone(c *Client, path string, v *dscView, ops []hardResetOperator, r 
 	var readErr error
 	gone := false
 	interrupted := func() *types.OperationResponse {
-		return r.fail("wait_deleted", fmt.Sprintf("The reset was stopped (%s) while DataScienceCluster %s and its modules were being removed. Nothing was created. %s", stopCause(c.ctx), v.name, finishHelp(yamlText)), "interrupted")
+		return r.fail("wait_deleted", fmt.Sprintf("The reset was stopped (%s) while DataScienceCluster %s and its modules were being removed. Nothing was created. %s", stopCause(c.Context()), v.name, finishHelp(yamlText)), "interrupted")
 	}
 	for {
-		if c.ctx.Err() != nil {
+		if c.Context().Err() != nil {
 			return interrupted()
 		}
 		var err error
@@ -432,7 +432,7 @@ func waitDSCGone(c *Client, path string, v *dscView, ops []hardResetOperator, r 
 			td, err = readTeardown(c, v.uid, ops)
 		}
 		switch {
-		case err != nil && c.ctx.Err() != nil:
+		case err != nil && c.Context().Err() != nil:
 			return interrupted()
 		case err != nil:
 			readErr = err
@@ -461,7 +461,7 @@ func waitDSCGone(c *Client, path string, v *dscView, ops []hardResetOperator, r 
 		if !clk.Now().Before(deadline) {
 			break
 		}
-		if err := clk.Sleep(c.ctx, HardResetPollInterval); err != nil {
+		if err := clk.Sleep(c.Context(), HardResetPollInterval); err != nil {
 			return interrupted()
 		}
 	}
@@ -519,7 +519,7 @@ func waitDSCReady(c *Client, path string, r *hardResetRun) string {
 		if !clk.Now().Before(deadline) {
 			break
 		}
-		if clk.Sleep(c.ctx, HardResetPollInterval) != nil {
+		if clk.Sleep(c.Context(), HardResetPollInterval) != nil {
 			break
 		}
 	}

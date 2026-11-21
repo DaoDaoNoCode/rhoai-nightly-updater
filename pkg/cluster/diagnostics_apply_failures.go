@@ -393,7 +393,7 @@ func scanApplyReporters(c *Client, keep func(applyFailure) bool) reporterScan {
 	}
 	lists := make([]moduleList, len(api.Kinds))
 	parallelFor(len(api.Kinds), 6, func(i int) {
-		body, _, err := c.get(api.Kinds[i].listPath())
+		body, _, err := c.Get(api.Kinds[i].listPath())
 		if err != nil {
 			lists[i].err = fmt.Errorf("list %s: %w", api.Kinds[i].crd(), err)
 			return
@@ -591,7 +591,7 @@ func crdNameFor(api componentAPI, f applyFailure) string {
 // managedFields. The ServiceAccount may list CRDs but get only two by name,
 // so it lists with a name field selector.
 func crdWriterEvidence(c *Client, crd string) []string {
-	body, _, err := c.do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil,
+	body, _, err := c.Do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil,
 		url.Values{"fieldSelector": {"metadata.name=" + crd}})
 	if err != nil {
 		return []string{fmt.Sprintf("CRD %s: could not read its managedFields: %v", crd, err)}

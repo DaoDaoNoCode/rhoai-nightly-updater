@@ -33,7 +33,7 @@ func modelPullGrace(c *Client, node string) (time.Duration, string) {
 		return ModelImagePullGrace, ""
 	}
 	q := url.Values{"fieldSelector": {"metadata.name=" + node}}
-	body, _, err := c.get("/api/v1/nodes?" + q.Encode())
+	body, _, err := c.Get("/api/v1/nodes?" + q.Encode())
 	if err != nil {
 		return ModelImagePullGrace, ""
 	}

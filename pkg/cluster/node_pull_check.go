@@ -74,7 +74,7 @@ func CheckNodePull(c *Client, image string) (*types.OperationResponse, error) {
 				return &types.OperationResponse{Success: false, Message: msg, Logs: append(logs, msg), ErrorCode: "catalog_image_pull"}, nil
 			}
 		}
-		if err := clk.Sleep(c.ctx, CatalogPollInterval); err != nil {
+		if err := clk.Sleep(c.Context(), CatalogPollInterval); err != nil {
 			return &types.OperationResponse{Success: false, Message: "The check was stopped", Logs: logs}, err
 		}
 	}

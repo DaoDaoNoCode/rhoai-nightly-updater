@@ -292,10 +292,10 @@ var (
 func loadPackageIndex(c *Client) ([]catalogPackage, error) {
 	packageIndexMu.Lock()
 	defer packageIndexMu.Unlock()
-	if idx, ok := packageIndexCache[c.baseURL]; ok && time.Since(idx.at) < packageIndexTTL {
+	if idx, ok := packageIndexCache[c.BaseURL()]; ok && time.Since(idx.at) < packageIndexTTL {
 		return idx.packages, nil
 	}
-	body, _, err := c.get(namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, ""))
+	body, _, err := c.Get(namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, ""))
 	if err != nil {
 		return nil, fmt.Errorf("list package manifests: %w", err)
 	}
@@ -303,7 +303,7 @@ func loadPackageIndex(c *Client) ([]catalogPackage, error) {
 	if err != nil {
 		return nil, err
 	}
-	packageIndexCache[c.baseURL] = packageIndex{at: time.Now(), packages: pkgs}
+	packageIndexCache[c.BaseURL()] = packageIndex{at: time.Now(), packages: pkgs}
 	return pkgs, nil
 }
 
@@ -451,7 +451,7 @@ func (csv clusterCSV) matchNames() []string {
 func listClusterCSVs(c *Client) ([]clusterCSV, error) {
 	// OLM copies the CSV of an AllNamespaces operator into every namespace
 	// and labels the copies olm.copiedFrom.
-	body, _, err := c.do(http.MethodGet, clusterPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ""), "", nil,
+	body, _, err := c.Do(http.MethodGet, clusterPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ""), "", nil,
 		url.Values{"labelSelector": {"!olm.copiedFrom"}})
 	if err != nil {
 		return nil, fmt.Errorf("list CSVs: %w", err)
@@ -570,7 +570,7 @@ func readSingletonOperand(c *Client, e almExample) (operandState, error) {
 	if !found {
 		return operandMissing, nil // its CRD is not served
 	}
-	_, found, err = c.getOptional("/apis/" + operandAPIGroup + "/" + version + "/" + resource + "/cluster")
+	_, found, err = c.GetOptional("/apis/" + operandAPIGroup + "/" + version + "/" + resource + "/cluster")
 	switch {
 	case err != nil:
 		return operandUnverified, err
@@ -597,7 +597,7 @@ func operandManagementState(c *Client, e almExample) (string, error) {
 			ManagementState string `json:"managementState"`
 		} `json:"spec"`
 	}
-	if err := c.getInto("/apis/"+operandAPIGroup+"/"+version+"/"+resource+"/cluster", &obj); err != nil {
+	if err := c.GetInto("/apis/"+operandAPIGroup+"/"+version+"/"+resource+"/cluster", &obj); err != nil {
 		if isDecodeError(err) {
 			return "", fmt.Errorf("parse %s: %w", e.ref(), err)
 		}
@@ -615,7 +615,7 @@ func discoverPlural(c *Client, version, kind string) (string, bool, error) {
 			Kind string `json:"kind"`
 		} `json:"resources"`
 	}
-	found, err := c.getIntoOptional("/apis/"+operandAPIGroup+"/"+version, &list)
+	found, err := c.GetIntoOptional("/apis/"+operandAPIGroup+"/"+version, &list)
 	if err != nil {
 		if isDecodeError(err) {
 			return "", false, fmt.Errorf("parse %s/%s discovery: %w", operandAPIGroup, version, err)
@@ -1096,7 +1096,7 @@ func listOperatorGroups(c *Client, namespace string) ([]operatorGroup, error) {
 	var list struct {
 		Items []operatorGroup `json:"items"`
 	}
-	found, err := c.getIntoOptional(namespacedPath("operators.coreos.com/v1", "operatorgroups", namespace, ""), &list)
+	found, err := c.GetIntoOptional(namespacedPath("operators.coreos.com/v1", "operatorgroups", namespace, ""), &list)
 	if err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse OperatorGroups in %s: %w", namespace, err)

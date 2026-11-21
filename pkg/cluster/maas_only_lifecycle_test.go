@@ -42,7 +42,7 @@ func maasOnlyModel(t *testing.T) *modelsCluster {
 // KServe reconciles it) and reports whether it is gone.
 func routeGone(t *testing.T, mc *modelsCluster) bool {
 	t.Helper()
-	_, _, err := mc.c.get(tModelRoute)
+	_, _, err := mc.c.Get(tModelRoute)
 	if err != nil && !IsK8sError(err, http.StatusNotFound) {
 		t.Fatalf("read the model's route: %v", err)
 	}

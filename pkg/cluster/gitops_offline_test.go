@@ -197,7 +197,7 @@ var networkSinks = []string{
 // apiServerClient is the one function allowed to send requests in the
 // gitops profile: the Kubernetes API client (client.go), with the
 // ServiceAccount's token, to the API server only.
-const apiServerClient = clusterPkg + ".Client.do"
+const apiServerClient = clusterPkg + ".Client.Do"
 
 // outboundFuncs are the functions of the three packages that send a
 // request themselves, except the API client.

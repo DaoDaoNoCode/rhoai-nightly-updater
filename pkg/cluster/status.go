@@ -281,7 +281,7 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 	// Cached per installed catalog image; only the first poll after an image
 	// change waits for Quay (bounded by nightlyStatusTimeout).
 	if reads.nightly != nil {
-		status.Nightly = reads.nightly(c.ctx, quayAuth, status.Subscription, status.CatalogSource)
+		status.Nightly = reads.nightly(c.Context(), quayAuth, status.Subscription, status.CatalogSource)
 	} else {
 		status.Nightly = gitOpsNightlyStatus(status.Subscription, status.CatalogSource)
 	}
@@ -310,7 +310,7 @@ var stableTargetCache = newLRU[string, stableTarget](8)
 // cachedStableTarget is resolveStableTarget for status polling. Only
 // successful lookups are cached, so a discovery error is retried next poll.
 func cachedStableTarget(c *Client) (stableTarget, error) {
-	key := c.baseURL + "|" + getStableSource() + "|" + strings.TrimSpace(os.Getenv("STABLE_CHANNEL"))
+	key := c.BaseURL() + "|" + getStableSource() + "|" + strings.TrimSpace(os.Getenv("STABLE_CHANNEL"))
 	if target, ok := stableTargetCache.Get(key); ok {
 		return target, nil
 	}
@@ -325,12 +325,12 @@ func cachedStableTarget(c *Client) (stableTarget, error) {
 var consoleURLCache = newLRU[string, string](8)
 
 func cachedConsoleURL(c *Client) string {
-	if u, ok := consoleURLCache.Get(c.baseURL); ok {
+	if u, ok := consoleURLCache.Get(c.BaseURL()); ok {
 		return u
 	}
 	u := getConsoleURL(c)
 	if u != "" {
-		consoleURLCache.Add(c.baseURL, u, time.Hour)
+		consoleURLCache.Add(c.BaseURL(), u, time.Hour)
 	}
 	return u
 }
@@ -353,7 +353,7 @@ var (
 )
 
 func cachedDashboardURL(c *Client) string {
-	if u, ok := dashboardURLCache.Get(c.baseURL); ok {
+	if u, ok := dashboardURLCache.Get(c.BaseURL()); ok {
 		return u
 	}
 	u, err := readDashboardURLFromComponent(c)
@@ -362,7 +362,7 @@ func cachedDashboardURL(c *Client) string {
 		slog.Debug("cannot read the dashboard URL", "error", err)
 		ttl = dashboardURLErrorTTL
 	}
-	dashboardURLCache.Add(c.baseURL, u, ttl)
+	dashboardURLCache.Add(c.BaseURL(), u, ttl)
 	return u
 }
 
@@ -370,10 +370,10 @@ func cachedDashboardURL(c *Client) string {
 // read) and the API server's address.
 func getClusterInfo(c *Client) (string, string) {
 	// Use the username set from OAuth headers (production)
-	user := c.username
+	user := c.Username()
 	if user == "" || user == "unknown" {
 		// Fall back to k8s API user lookup (dev mode)
-		body, _, err := c.get("/apis/user.openshift.io/v1/users/~")
+		body, _, err := c.Get("/apis/user.openshift.io/v1/users/~")
 		if err == nil {
 			var result map[string]any
 			if json.Unmarshal(body, &result) == nil {
@@ -388,12 +388,12 @@ func getClusterInfo(c *Client) (string, string) {
 	if user == "" {
 		user = "unknown"
 	}
-	return user, c.baseURL
+	return user, c.BaseURL()
 }
 
 func getClusterVersion(c *Client) (string, error) {
 	var result map[string]any
-	if err := c.getInto(clusterPath("config.openshift.io/v1", "clusterversions", "version"), &result); err != nil {
+	if err := c.GetInto(clusterPath("config.openshift.io/v1", "clusterversions", "version"), &result); err != nil {
 		if isDecodeError(err) {
 			return "", fmt.Errorf("unmarshal: %w", err)
 		}
@@ -433,7 +433,7 @@ func readSubscription(c *Client) (subscriptionDetails, error) {
 			InstalledCSV string  `json:"installedCSV"`
 		} `json:"status"`
 	}
-	exists, err := c.getIntoOptional(path, &sub)
+	exists, err := c.GetIntoOptional(path, &sub)
 	if err != nil {
 		if isDecodeError(err) {
 			return subscriptionDetails{}, fmt.Errorf("unmarshal: %w", err)
@@ -509,7 +509,7 @@ func getCSV(c *Client) (types.CSVInfo, error) {
 // detected below.
 func csvForInstalledName(c *Client, installedName string) (types.CSVInfo, error) {
 	if installedName != "" {
-		body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, installedName))
+		body, _, err := c.Get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, installedName))
 		if err == nil {
 			var csv csvSummary
 			if err := json.Unmarshal(body, &csv); err != nil {
@@ -529,7 +529,7 @@ func csvForInstalledName(c *Client, installedName string) (types.CSVInfo, error)
 	path := namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "") +
 		"?labelSelector=" + url.QueryEscape("!olm.copiedFrom")
 	var items []csvSummary
-	if err := c.listInto(path, &items); err != nil {
+	if err := c.ListInto(path, &items); err != nil {
 		if isDecodeError(err) {
 			return types.CSVInfo{}, fmt.Errorf("unmarshal: %w", err)
 		}
@@ -590,7 +590,7 @@ func readCatalogSource(c *Client) (types.CatalogSourceInfo, *objectMeta, error) 
 			} `json:"connectionState"`
 		} `json:"status"`
 	}
-	found, err := c.getIntoOptional(path, &result)
+	found, err := c.GetIntoOptional(path, &result)
 	if err != nil {
 		if isDecodeError(err) {
 			return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, fmt.Errorf("unmarshal: %w", err)
@@ -694,7 +694,7 @@ func getPullSecret(c *Client) (types.PullSecretInfo, error) {
 // credential it holds, so status polling does not read the Secret twice.
 func readPullSecret(c *Client) (types.PullSecretInfo, string, error) {
 	path := namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret")
-	body, exists, err := c.getOptional(path)
+	body, exists, err := c.GetOptional(path)
 	if err != nil {
 		return types.PullSecretInfo{Exists: false}, "", err
 	}
@@ -734,7 +734,7 @@ func getConsoleURL(c *Client) string {
 			ConsoleURL string `json:"consoleURL"`
 		} `json:"status"`
 	}
-	if err := c.getInto(clusterPath("config.openshift.io/v1", "consoles", "cluster"), &result); err != nil {
+	if err := c.GetInto(clusterPath("config.openshift.io/v1", "consoles", "cluster"), &result); err != nil {
 		return ""
 	}
 	return result.Status.ConsoleURL
@@ -759,7 +759,7 @@ func getInstallPlan(c *Client) (*types.InstallPlanInfo, error) {
 			} `json:"status"`
 		} `json:"items"`
 	}
-	found, err := c.getIntoOptional(path, &result)
+	found, err := c.GetIntoOptional(path, &result)
 	if err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("unmarshal: %w", err)
@@ -818,7 +818,7 @@ func getCatalogPod(c *Client) (*types.CatalogPodInfo, error) {
 			} `json:"containerStatuses"`
 		} `json:"status"`
 	}
-	if err := c.listInto(path, &items); err != nil {
+	if err := c.ListInto(path, &items); err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("unmarshal: %w", err)
 		}
@@ -852,7 +852,7 @@ func getIDMS(c *Client) (types.ImageMirrorInfo, error) {
 			} `json:"imageDigestMirrors"`
 		} `json:"spec"`
 	}
-	if err := c.listInto(path, &items); err != nil {
+	if err := c.ListInto(path, &items); err != nil {
 		if isDecodeError(err) {
 			return types.ImageMirrorInfo{Exists: false}, fmt.Errorf("unmarshal: %w", err)
 		}

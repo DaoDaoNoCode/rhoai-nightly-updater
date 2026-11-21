@@ -219,7 +219,7 @@ func csvContainers(c *Client, ns, name string) ([]operatorContainer, error) {
 			} `json:"install"`
 		} `json:"spec"`
 	}
-	if err := c.getInto(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name), &csv); err != nil {
+	if err := c.GetInto(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name), &csv); err != nil {
 		return nil, err
 	}
 	var out []operatorContainer
@@ -257,7 +257,7 @@ func oomKilledContainers(c *Client, st operatorState) ([]string, error) {
 			} `json:"containerStatuses"`
 		} `json:"status"`
 	}
-	if err := c.listInto(namespacedPath("v1", "pods", st.csvNS, ""), &items); err != nil {
+	if err := c.ListInto(namespacedPath("v1", "pods", st.csvNS, ""), &items); err != nil {
 		return nil, err
 	}
 	var out []string

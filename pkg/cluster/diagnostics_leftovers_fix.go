@@ -223,7 +223,7 @@ func patchLeftoverObject(c *Client, path string, ops []jsonPatchOp, dryRun bool)
 	if dryRun {
 		q.Set("dryRun", "All")
 	}
-	resp, _, err := c.do(http.MethodPatch, path, "application/json-patch+json", body, q)
+	resp, _, err := c.Do(http.MethodPatch, path, "application/json-patch+json", body, q)
 	return resp, err
 }
 
@@ -269,12 +269,12 @@ func fixLeftoverRetryDSC(c *Client, name string) *types.OperationResponse {
 	}
 	stamp := nowRFC3339()
 	add, _ := json.Marshal(map[string]any{"metadata": map[string]any{"uid": uid, "annotations": map[string]any{leftoverRetryAnno: stamp}}})
-	if _, _, err := c.do(http.MethodPatch, path, "application/merge-patch+json", add, url.Values{"fieldManager": {leftoverManager}}); err != nil {
+	if _, _, err := c.Do(http.MethodPatch, path, "application/merge-patch+json", add, url.Values{"fieldManager": {leftoverManager}}); err != nil {
 		return leftoverWriteError(err, "DataScienceCluster "+name, false)
 	}
 	logs := []string{fmt.Sprintf("Added the annotation %s=%s to DataScienceCluster %s", leftoverRetryAnno, stamp, name)}
 	remove, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]any{leftoverRetryAnno: nil}}})
-	_, _, rmErr := c.do(http.MethodPatch, path, "application/merge-patch+json", remove, url.Values{"fieldManager": {leftoverManager}})
+	_, _, rmErr := c.Do(http.MethodPatch, path, "application/merge-patch+json", remove, url.Values{"fieldManager": {leftoverManager}})
 	RecordActivity(c, types.ActivityEntry{
 		Timestamp: nowRFC3339(),
 		User:      getUser(c),
@@ -317,7 +317,7 @@ func readWorkloadAsUser(c *Client, kind, namespace, name string) (workloadObject
 	if path == "" {
 		return workloadObject{}, false, false, nil
 	}
-	body, _, err := c.get(path)
+	body, _, err := c.Get(path)
 	return decodeWorkload(body, err)
 }
 
@@ -332,7 +332,7 @@ func deleteWorkload(c *Client, path, uid, resourceVersion string, dryRun bool) e
 	if dryRun {
 		q = url.Values{"dryRun": {"All"}}
 	}
-	_, _, err := c.do(http.MethodDelete, path, "application/json", opts, q)
+	_, _, err := c.Do(http.MethodDelete, path, "application/json", opts, q)
 	return err
 }
 
@@ -444,7 +444,7 @@ func waitRecreated(c *Client, kind, ns, name, oldUID string) (back, ready bool, 
 		if !clk.Now().Before(deadline) {
 			return back, false, nil
 		}
-		if err := clk.Sleep(c.ctx, leftoverRecreatePoll); err != nil {
+		if err := clk.Sleep(c.Context(), leftoverRecreatePoll); err != nil {
 			return back, false, err
 		}
 	}

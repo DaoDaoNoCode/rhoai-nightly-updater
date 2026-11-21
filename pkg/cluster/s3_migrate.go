@@ -170,7 +170,7 @@ func migrationCopied(c *Client) (bool, error) {
 // recordMigrationCopied sets migrationCopiedAnnotation (a merge patch of
 // one annotation: setup's server-side apply owns the rest of the Secret).
 func recordMigrationCopied(c *Client) error {
-	return c.patchJSON(namespacedPath("v1", "secrets", s3Namespace, s3Secret), map[string]any{"metadata": map[string]any{"annotations": map[string]string{migrationCopiedAnnotation: clk.Now().UTC().Format(time.RFC3339)}}})
+	return c.PatchJSON(namespacedPath("v1", "secrets", s3Namespace, s3Secret), map[string]any{"metadata": map[string]any{"annotations": map[string]string{migrationCopiedAnnotation: clk.Now().UTC().Format(time.RFC3339)}}})
 }
 
 // rcloneImage returns the copy Job's image, overridable with RCLONE_IMAGE
@@ -424,7 +424,7 @@ func readLegacyKeys(c *Client) (s3Keys, error) {
 	var secret struct {
 		Data map[string]string `json:"data"`
 	}
-	if err := c.getInto(path, &secret); err != nil {
+	if err := c.GetInto(path, &secret); err != nil {
 		if isDecodeError(err) {
 			return s3Keys{}, fmt.Errorf("parse Secret %s/%s: %w", legacyNamespace, legacySecret, err)
 		}
@@ -676,14 +676,14 @@ func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, oldK
 		}
 		obj := migrateJob(legacy.server, mode, fresh)
 		data, _ := json.Marshal(obj)
-		if _, _, err := c.do(http.MethodPost, migrateJobCreatePath(), "application/json", data, url.Values{"dryRun": {"All"}}); err != nil {
+		if _, _, err := c.Do(http.MethodPost, migrateJobCreatePath(), "application/json", data, url.Values{"dryRun": {"All"}}); err != nil {
 			return fail(fmt.Sprintf("The API server rejects the copy Job: %v. Nothing was changed.%s", err, templateHint(err)), firstNonEmpty(errorCodeFromK8sErr(err), "validation"), "job dry run failed")
 		}
 		// The old keys first, so the Job's pod finds them when it starts.
 		if err := writeMigrateSource(c, oldKeys); err != nil {
 			return fail(fmt.Sprintf("Cannot write the copy Job's Secret %s/%s with the old storage's keys; the copy did not start: %v.%s", s3Namespace, migrateSourceSecret, err, templateHint(err)), errorCodeFromK8sErr(err), "source secret failed")
 		}
-		body, _, err := c.post(migrateJobCreatePath(), data)
+		body, _, err := c.Post(migrateJobCreatePath(), data)
 		if err != nil {
 			return fail(fmt.Sprintf("Cannot create the copy Job: %v.%s", err, templateHint(err)), errorCodeFromK8sErr(err), "job create failed")
 		}
@@ -699,7 +699,7 @@ func (m *migrateRun) copyAndVerify(legacy *legacyStorage, dspas []dspaInfo, oldK
 	}
 
 	timeout := MigrateCopyTimeout
-	if deadline, ok := c.ctx.Deadline(); ok && fresh && clk.Until(deadline)-removeAfterCopyReserve > timeout {
+	if deadline, ok := c.Context().Deadline(); ok && fresh && clk.Until(deadline)-removeAfterCopyReserve > timeout {
 		timeout = clk.Until(deadline) - removeAfterCopyReserve
 	}
 	job, issue, err := waitMigrateJob(c, job, timeout)
@@ -762,7 +762,7 @@ func writeMigrateSource(c *Client, keys s3Keys) error {
 		"metadata":   map[string]any{"name": migrateSourceSecret, "namespace": s3Namespace, "labels": toolLabels()},
 		"stringData": map[string]any{s3AccessKeyField: keys.AccessKey, s3SecretKeyField: keys.SecretKey},
 	})
-	_, _, err = c.post(withToolFieldManager(namespacedPath("v1", "secrets", s3Namespace, "")), data)
+	_, _, err = c.Post(withToolFieldManager(namespacedPath("v1", "secrets", s3Namespace, "")), data)
 	return err
 }
 
@@ -779,7 +779,7 @@ func ownMigrateSource(c *Client, jobUID string) error {
 	if !found || !meta.hasToolLabel() {
 		return fmt.Errorf("secret %s/%s is gone or not this tool's", s3Namespace, migrateSourceSecret)
 	}
-	return c.patchJSON(migrateSourcePath(), map[string]any{"metadata": map[string]any{
+	return c.PatchJSON(migrateSourcePath(), map[string]any{"metadata": map[string]any{
 		"resourceVersion": meta.ResourceVersion,
 		"ownerReferences": []any{map[string]any{"apiVersion": "batch/v1", "kind": "Job", "name": migrateJobName, "uid": jobUID}},
 	}})
@@ -886,7 +886,7 @@ func parseMigrateJob(body []byte) (migrateJobInfo, error) {
 }
 
 func readMigrateJob(c *Client) (migrateJobInfo, bool, error) {
-	body, found, err := c.getOptional(migrateJobPath())
+	body, found, err := c.GetOptional(migrateJobPath())
 	if err != nil {
 		return migrateJobInfo{}, false, err
 	}
@@ -902,7 +902,7 @@ func readMigrateJob(c *Client) (migrateJobInfo, bool, error) {
 // terminal waiting reason (ImagePullBackOff, ...), and errS3NotReady on
 // timeout.
 func waitMigrateJob(c *Client, job migrateJobInfo, timeout time.Duration) (migrateJobInfo, workloadPodIssue, error) {
-	ctx, cancel := clk.WithTimeout(c.ctx, timeout)
+	ctx, cancel := clk.WithTimeout(c.Context(), timeout)
 	defer cancel()
 	cc := c.WithContext(ctx)
 	for {
@@ -915,8 +915,8 @@ func waitMigrateJob(c *Client, job migrateJobInfo, timeout time.Duration) (migra
 			}
 		}
 		if clk.Sleep(ctx, MigratePoll) != nil {
-			if c.ctx.Err() != nil {
-				return job, workloadPodIssue{}, c.ctx.Err()
+			if c.Context().Err() != nil {
+				return job, workloadPodIssue{}, c.Context().Err()
 			}
 			return job, workloadPodIssue{}, errS3NotReady
 		}
@@ -944,7 +944,7 @@ func readMigrateResult(c *Client, job migrateJobInfo) (copyResult, error) {
 	if sel == "" {
 		return copyResult{}, fmt.Errorf("the Job has no pod selector")
 	}
-	body, _, err := c.get(namespacedPath("v1", "pods", s3Namespace, "") + "?labelSelector=" + url.QueryEscape(sel))
+	body, _, err := c.Get(namespacedPath("v1", "pods", s3Namespace, "") + "?labelSelector=" + url.QueryEscape(sel))
 	if err != nil {
 		return copyResult{}, fmt.Errorf("list its pods: %w", err)
 	}
@@ -1125,7 +1125,7 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 		if !ok {
 			return nil, fmt.Errorf("pipeline server %s is not a name this tool creates", p.d.Meta.Name)
 		}
-		body, _, err := c.do(http.MethodPatch, path, "application/merge-patch+json", p.patch, q)
+		body, _, err := c.Do(http.MethodPatch, path, "application/merge-patch+json", p.patch, q)
 		return body, err
 	}
 
@@ -1156,7 +1156,7 @@ func (m *migrateRun) repoint(legacy *legacyStorage, dspas []dspaInfo, keys s3Key
 		// MigrateCopyTimeout and a MigrateRepointTimeout wait per server.
 		// A server is moved only when its whole wait fits, so a run never
 		// ends with one moved but not yet checked.
-		if deadline, ok := c.ctx.Deadline(); ok && clk.Until(deadline) < MigrateRepointTimeout {
+		if deadline, ok := c.Context().Deadline(); ok && clk.Until(deadline) < MigrateRepointTimeout {
 			return failed(fmt.Sprintf("Not enough time is left in this run to move pipeline server %s and wait until it reaches the new storage (up to %s). Already moved: %s. The old storage is kept; run Migrate storage again to continue.", name, MigrateRepointTimeout, done), "in_progress", "out of time")
 		}
 		m.step("repoint", "running", fmt.Sprintf("Moving pipeline server %s...", name))
@@ -1218,7 +1218,7 @@ func objectStoreText(d dspaInfo) string {
 // condition does not end the wait: DSPO requeues and checks again, for
 // example while the new Service's address propagates.
 func waitObjectStore(c *Client, project, name string, generation int64) (dspaInfo, error) {
-	ctx, cancel := clk.WithTimeout(c.ctx, MigrateRepointTimeout)
+	ctx, cancel := clk.WithTimeout(c.Context(), MigrateRepointTimeout)
 	defer cancel()
 	cc := c.WithContext(ctx)
 	last := dspaInfo{Meta: objectMeta{Generation: generation}}
@@ -1237,8 +1237,8 @@ func waitObjectStore(c *Client, project, name string, generation int64) (dspaInf
 			last = d
 		}
 		if clk.Sleep(ctx, MigratePoll) != nil {
-			if c.ctx.Err() != nil {
-				return last, c.ctx.Err()
+			if c.Context().Err() != nil {
+				return last, c.Context().Err()
 			}
 			return last, fmt.Errorf("after %s %s", MigrateRepointTimeout, objectStoreText(last))
 		}

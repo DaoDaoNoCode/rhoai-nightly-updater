@@ -386,7 +386,7 @@ func fetchImageLabelsForDeployments(c *Client, deployments []types.DeploymentInf
 		}
 	}
 	if fetch && len(missing) > 0 {
-		labelCtx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+		labelCtx, cancel := context.WithTimeout(c.Context(), 30*time.Second)
 		defer cancel()
 		maps.Copy(labels, resolveImageLabels(labelCtx, getQuayAuth(c), missing, true))
 	} else {
@@ -592,12 +592,12 @@ var ReplicaSetOwnerTTL = time.Minute
 // (Kubernetes docs, Field Selectors), and checks the UID, so a ReplicaSet
 // recreated under the same name is not mistaken for the pod's.
 func replicaSetController(c *Client, namespace, name, uid string) (string, error) {
-	key := c.baseURL + "/" + uid
+	key := c.BaseURL() + "/" + uid
 	if owner, ok := replicaSetOwnerCache.Get(key); ok {
 		return owner, nil
 	}
 	q := url.Values{"fieldSelector": {"metadata.name=" + name}}
-	body, _, err := c.do(http.MethodGet, namespacedPath("apps/v1", "replicasets", namespace, ""), "", nil, q)
+	body, _, err := c.Do(http.MethodGet, namespacedPath("apps/v1", "replicasets", namespace, ""), "", nil, q)
 	if err != nil {
 		return "", err
 	}
@@ -741,7 +741,7 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 	if err != nil {
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Failed to encode DSC: %v", err), Logs: logs, ErrorCode: "internal"}, nil
 	}
-	_, _, createErr := c.post("/apis/"+apiVersion+"/datascienceclusters?fieldManager=rhoai-nightly-updater", body)
+	_, _, createErr := c.Post("/apis/"+apiVersion+"/datascienceclusters?fieldManager=rhoai-nightly-updater", body)
 	if isK8sConflict(createErr) {
 		logs = append(logs, "DataScienceCluster already exists (created concurrently)")
 		return &types.OperationResponse{Success: true, Message: "DataScienceCluster already exists", Logs: logs}, nil
@@ -813,7 +813,7 @@ type deploymentList struct {
 func getDeployments(c *Client, namespace string) ([]types.DeploymentInfo, error) {
 	path := namespacedPath("apps/v1", "deployments", namespace, "")
 	var list deploymentList
-	if err := c.getInto(path, &list); err != nil {
+	if err := c.GetInto(path, &list); err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parsing deployments: %w", err)
 		}

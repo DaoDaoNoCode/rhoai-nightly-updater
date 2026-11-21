@@ -131,7 +131,7 @@ func listICSPRules(c *Client) ([]mirrorRule, error) {
 			} `json:"spec"`
 		} `json:"items"`
 	}
-	found, err := c.getIntoOptional(clusterPath("operator.openshift.io/v1alpha1", "imagecontentsourcepolicies", ""), &list)
+	found, err := c.GetIntoOptional(clusterPath("operator.openshift.io/v1alpha1", "imagecontentsourcepolicies", ""), &list)
 	if err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse ImageContentSourcePolicies: %w", err)
@@ -167,7 +167,7 @@ func listITMSRules(c *Client) ([]mirrorRule, error) {
 			} `json:"spec"`
 		} `json:"items"`
 	}
-	found, err := c.getIntoOptional(clusterPath("config.openshift.io/v1", "imagetagmirrorsets", ""), &list)
+	found, err := c.GetIntoOptional(clusterPath("config.openshift.io/v1", "imagetagmirrorsets", ""), &list)
 	if err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse ImageTagMirrorSets: %w", err)

@@ -125,7 +125,7 @@ func pendingUpgradeAckKeys(c *Client) ([]string, map[string]string, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	if err := c.getInto(namespacedPath("v1", "configmaps", SubNS, "odh-upgrade-acks"), &cm); err != nil {
+	if err := c.GetInto(namespacedPath("v1", "configmaps", SubNS, "odh-upgrade-acks"), &cm); err != nil {
 		if isDecodeError(err) {
 			return nil, nil, fmt.Errorf("parse ConfigMap odh-upgrade-acks: %w", err)
 		}
@@ -247,7 +247,7 @@ func checkManagedConfig(c *Client) checkOutput {
 		out.check.Status = "warn"
 	}
 	for _, ns := range namespaces {
-		body, _, err := c.do(http.MethodGet, namespacedPath("apps/v1", "deployments", ns, ""), "", nil, url.Values{})
+		body, _, err := c.Do(http.MethodGet, namespacedPath("apps/v1", "deployments", ns, ""), "", nil, url.Values{})
 		if isK8sNotFound(err) {
 			continue
 		}
@@ -348,7 +348,7 @@ func dscRelease(c *Client) platformRelease {
 	if err != nil {
 		return platformRelease{}
 	}
-	body, _, err := c.get(path)
+	body, _, err := c.Get(path)
 	if err != nil {
 		return platformRelease{}
 	}

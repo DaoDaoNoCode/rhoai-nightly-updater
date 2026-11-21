@@ -80,14 +80,14 @@ func TestGetOptional(t *testing.T) {
 		"/there": {200, `{"a":1}`},
 		"/no":    {403, forbiddenBody},
 	})
-	if body, found, err := c.getOptional("/there"); !found || err != nil || string(body) != `{"a":1}` {
+	if body, found, err := c.GetOptional("/there"); !found || err != nil || string(body) != `{"a":1}` {
 		t.Fatalf("existing object: body=%q found=%v err=%v", body, found, err)
 	}
-	if body, found, err := c.getOptional("/gone"); found || err != nil || body != nil {
+	if body, found, err := c.GetOptional("/gone"); found || err != nil || body != nil {
 		t.Fatalf("missing object: body=%q found=%v err=%v", body, found, err)
 	}
-	wantBody, _, wantErr := c.get("/no")
-	body, found, err := c.getOptional("/no")
+	wantBody, _, wantErr := c.Get("/no")
+	body, found, err := c.GetOptional("/no")
 	if found || err == nil || err.Error() != wantErr.Error() || !IsK8sError(err, 403) || string(body) != string(wantBody) {
 		t.Fatalf("refused read: body=%q found=%v err=%v, want get's %q %v", body, found, err, wantBody, wantErr)
 	}
@@ -106,15 +106,15 @@ func TestGetInto(t *testing.T) {
 	var obj struct {
 		Metadata objectMeta `json:"metadata"`
 	}
-	if err := c.getInto("/there", &obj); err != nil || obj.Metadata.Name != "a" {
+	if err := c.GetInto("/there", &obj); err != nil || obj.Metadata.Name != "a" {
 		t.Fatalf("getInto: %+v %v", obj, err)
 	}
-	_, _, wantErr := c.get("/no")
-	if err := c.getInto("/no", &obj); err == nil || err.Error() != wantErr.Error() || !IsK8sError(err, 403) || isDecodeError(err) {
+	_, _, wantErr := c.Get("/no")
+	if err := c.GetInto("/no", &obj); err == nil || err.Error() != wantErr.Error() || !IsK8sError(err, 403) || isDecodeError(err) {
 		t.Fatalf("refused read: %v, want get's %v", err, wantErr)
 	}
 	wantDecode := json.Unmarshal([]byte(`{"metadata":{"name":1}}`), &obj)
-	err := c.getInto("/bad", &obj)
+	err := c.GetInto("/bad", &obj)
 	if err == nil || err.Error() != wantDecode.Error() || !isDecodeError(err) {
 		t.Fatalf("bad body: %v, want json.Unmarshal's %v", err, wantDecode)
 	}
@@ -125,17 +125,17 @@ func TestGetInto(t *testing.T) {
 		t.Fatalf("a decode error formats as %q", fmt.Sprintf("%v", err))
 	}
 
-	found, err := c.getIntoOptional("/gone", &obj)
+	found, err := c.GetIntoOptional("/gone", &obj)
 	if found || err != nil {
 		t.Fatalf("getIntoOptional missing: found=%v err=%v", found, err)
 	}
-	if found, err := c.getIntoOptional("/there", &obj); !found || err != nil {
+	if found, err := c.GetIntoOptional("/there", &obj); !found || err != nil {
 		t.Fatalf("getIntoOptional existing: found=%v err=%v", found, err)
 	}
-	if found, err := c.getIntoOptional("/no", &obj); found || err == nil || err.Error() != wantErr.Error() {
+	if found, err := c.GetIntoOptional("/no", &obj); found || err == nil || err.Error() != wantErr.Error() {
 		t.Fatalf("getIntoOptional refused: found=%v err=%v", found, err)
 	}
-	if found, err := c.getIntoOptional("/bad", &obj); !found || !isDecodeError(err) || err.Error() != wantDecode.Error() {
+	if found, err := c.GetIntoOptional("/bad", &obj); !found || !isDecodeError(err) || err.Error() != wantDecode.Error() {
 		t.Fatalf("getIntoOptional bad body: found=%v err=%v", found, err)
 	}
 	want := []string{"GET /there", "GET /no", "GET /no", "GET /bad", "GET /gone", "GET /there", "GET /no", "GET /bad"}
@@ -172,7 +172,7 @@ func TestListInto(t *testing.T) {
 		}
 		wantErr := json.Unmarshal([]byte(b), &list)
 		var items []item
-		err := c.listInto(p, &items)
+		err := c.ListInto(p, &items)
 		switch {
 		case wantErr == nil && err != nil:
 			t.Errorf("%s: %v", p, err)
@@ -185,9 +185,9 @@ func TestListInto(t *testing.T) {
 			t.Errorf("unnamed list struct path missing from %q", err)
 		}
 	}
-	_, _, wantErr := c.get("/no")
+	_, _, wantErr := c.Get("/no")
 	var items []json.RawMessage
-	if err := c.listInto("/no", &items); err == nil || err.Error() != wantErr.Error() || isDecodeError(err) {
+	if err := c.ListInto("/no", &items); err == nil || err.Error() != wantErr.Error() || isDecodeError(err) {
 		t.Fatalf("refused list: %v, want get's %v", err, wantErr)
 	}
 	defer func() {
@@ -196,7 +196,7 @@ func TestListInto(t *testing.T) {
 		}
 	}()
 	var notSlice struct{}
-	_ = c.listInto("/ok", &notSlice)
+	_ = c.ListInto("/ok", &notSlice)
 }
 
 func TestPatchJSON(t *testing.T) {
@@ -204,16 +204,16 @@ func TestPatchJSON(t *testing.T) {
 		"/there": {200, `{}`},
 		"/no":    {403, forbiddenBody},
 	})
-	if err := c.patchJSON("/there", map[string]any{"metadata": map[string]any{"resourceVersion": "7"}}); err != nil {
+	if err := c.PatchJSON("/there", map[string]any{"metadata": map[string]any{"resourceVersion": "7"}}); err != nil {
 		t.Fatal(err)
 	}
-	_, _, wantErr := c.patch("/no", []byte(`{}`))
-	if err := c.patchJSON("/no", map[string]any{}); err == nil || err.Error() != wantErr.Error() || !IsK8sError(err, 403) {
+	_, _, wantErr := c.Patch("/no", []byte(`{}`))
+	if err := c.PatchJSON("/no", map[string]any{}); err == nil || err.Error() != wantErr.Error() || !IsK8sError(err, 403) {
 		t.Fatalf("refused patch: %v, want patch's %v", err, wantErr)
 	}
 	bad := map[string]any{"replicas": math.Inf(1)}
 	_, wantMarshal := json.Marshal(bad)
-	if err := c.patchJSON("/there", bad); err == nil || wantMarshal == nil || err.Error() != wantMarshal.Error() {
+	if err := c.PatchJSON("/there", bad); err == nil || wantMarshal == nil || err.Error() != wantMarshal.Error() {
 		t.Fatalf("unmarshalable patch: %v, want json.Marshal's %v", err, wantMarshal)
 	}
 	want := []string{`PATCH /there {"metadata":{"resourceVersion":"7"}}`, "PATCH /no {}", "PATCH /no {}"}
@@ -227,14 +227,14 @@ func TestDeleteIfExists(t *testing.T) {
 		"/there": {200, `{}`},
 		"/no":    {403, forbiddenBody},
 	})
-	if existed, err := c.deleteIfExists("/there"); !existed || err != nil {
+	if existed, err := c.DeleteIfExists("/there"); !existed || err != nil {
 		t.Fatalf("existing object: existed=%v err=%v", existed, err)
 	}
-	if existed, err := c.deleteIfExists("/gone"); existed || err != nil {
+	if existed, err := c.DeleteIfExists("/gone"); existed || err != nil {
 		t.Fatalf("missing object: existed=%v err=%v", existed, err)
 	}
-	_, wantErr := c.delete("/no")
-	existed, err := c.deleteIfExists("/no")
+	_, wantErr := c.Delete("/no")
+	existed, err := c.DeleteIfExists("/no")
 	if existed || err == nil || err.Error() != wantErr.Error() || !IsK8sError(err, 403) {
 		t.Fatalf("refused delete: existed=%v err=%v, want delete's error %v", existed, err, wantErr)
 	}

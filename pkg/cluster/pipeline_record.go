@@ -51,7 +51,7 @@ func readPipelineRecord(c *Client) (pipelineRecord, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	found, err := c.bookkeeping().getIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
+	found, err := c.bookkeeping().GetIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
 	if err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
@@ -83,7 +83,7 @@ func writePipelineRecord(c *Client, rec pipelineRecord) error {
 		"data":       map[string]any{pipelineRecordKey: string(data)},
 	})
 	query := url.Values{"fieldManager": {pipelineRecordManager}, "force": {"true"}}
-	if _, _, err := c.bookkeeping().do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
+	if _, _, err := c.bookkeeping().Do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
 		return fmt.Errorf("record this tool's pipeline servers: %w", err)
 	}
 	return nil

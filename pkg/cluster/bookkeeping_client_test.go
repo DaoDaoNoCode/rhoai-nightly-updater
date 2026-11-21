@@ -145,7 +145,7 @@ func TestBookkeepingClient(t *testing.T) {
 // call on the updater's own ConfigMaps (in its namespace) goes through
 // c.bookkeeping(), and bookkeeping() is used for nothing else, so it cannot
 // carry another write on the ServiceAccount's token. A new record function
-// that calls c.get on its ConfigMap fails here.
+// that calls c.Get on its ConfigMap fails here.
 func TestOwnConfigMapsAreReachedOnlyThroughBookkeeping(t *testing.T) {
 	p := loadClusterSource(t)
 	var problems []string
@@ -169,7 +169,11 @@ func TestOwnConfigMapsAreReachedOnlyThroughBookkeeping(t *testing.T) {
 				if !ok {
 					return true
 				}
-				method, pathArg := requestMethod(sel.Sel.Name), call.Args[0]
+				method, ok := p.requestMethod(sel)
+				if !ok {
+					return true
+				}
+				pathArg := call.Args[0]
 				if method == "do" && len(call.Args) >= 2 {
 					method, pathArg = rawMethods[selectorName(call.Args[0])], call.Args[1]
 				}

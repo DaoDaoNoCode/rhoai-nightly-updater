@@ -495,7 +495,7 @@ func readMaaSToolSubscription(c *Client) (maasToolSub, error) {
 			ModelRefs []map[string]any `json:"modelRefs"`
 		} `json:"spec"`
 	}
-	exists, err := c.getIntoOptional(maasAccessPath(c, "MaaSSubscription"), &sub)
+	exists, err := c.GetIntoOptional(maasAccessPath(c, "MaaSSubscription"), &sub)
 	if err != nil {
 		if isDecodeError(err) {
 			return maasToolSub{}, fmt.Errorf("parse MaaSSubscription %s: %w", maasSubscriptionName, err)
@@ -608,7 +608,7 @@ func unlimitedRefusal(err error, l maasLimit) string {
 // with the existing list of CRDs, by name). False when that cannot be
 // told: Publish's dry run refuses then (unlimitedRefusal).
 func maasNoUnlimited(c *Client) bool {
-	body, _, err := c.do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil, url.Values{"fieldSelector": {"metadata.name=maassubscriptions." + maasGroup}})
+	body, _, err := c.Do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil, url.Values{"fieldSelector": {"metadata.name=maassubscriptions." + maasGroup}})
 	if err != nil {
 		return false
 	}

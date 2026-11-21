@@ -156,7 +156,7 @@ func (m mlflowCR) staleOriginal() bool {
 
 func getMLflowCR(c *Client) (mlflowCR, error) {
 	var cr mlflowCR
-	if err := c.getInto(clusterPath(mlflowAPIGroup, "mlflows", mlflowCRName), &cr); err != nil {
+	if err := c.GetInto(clusterPath(mlflowAPIGroup, "mlflows", mlflowCRName), &cr); err != nil {
 		if isDecodeError(err) {
 			return mlflowCR{}, fmt.Errorf("parse MLflow CR: %w", err)
 		}
@@ -178,7 +178,7 @@ func mlflowOwnedPVCs(c *Client, ns, uid string) ([]string, error) {
 	var items []struct {
 		Metadata objectMeta `json:"metadata"`
 	}
-	if err := c.listInto(namespacedPath("v1", "persistentvolumeclaims", ns, ""), &items); err != nil {
+	if err := c.ListInto(namespacedPath("v1", "persistentvolumeclaims", ns, ""), &items); err != nil {
 		return nil, err
 	}
 	var names []string
@@ -334,7 +334,7 @@ func SetupMLflow(c *Client) (*types.OperationResponse, error) {
 	// Create, never apply: the CR is a singleton, and a forced apply would
 	// take over one that someone created a moment ago.
 	data, _ := json.Marshal(mlflowCR)
-	if _, _, err := c.post(withToolFieldManager(clusterPath(mlflowAPIGroup, "mlflows", "")), data); err != nil {
+	if _, _, err := c.Post(withToolFieldManager(clusterPath(mlflowAPIGroup, "mlflows", "")), data); err != nil {
 		msg := fmt.Sprintf("Failed to create MLflow CR: %v", err)
 		code := errorCodeFromK8sErr(err)
 		switch {
@@ -446,7 +446,7 @@ func patchMLflowCR(c *Client, cr mlflowCR, annotations, spec map[string]any) err
 	if spec != nil {
 		body["spec"] = spec
 	}
-	return c.patchJSON(clusterPath(mlflowAPIGroup, "mlflows", mlflowCRName), body)
+	return c.PatchJSON(clusterPath(mlflowAPIGroup, "mlflows", mlflowCRName), body)
 }
 
 // imageSpec is the spec patch that sets spec.image.image (nil removes it).
@@ -483,7 +483,7 @@ func DeployMLflowPR(c *Client, prNumber int) (*types.OperationResponse, error) {
 
 	tag := fmt.Sprintf("odh-pr-%d", prNumber)
 	logs = append(logs, fmt.Sprintf("Resolving quay.io/%s:%s...", mlflowImageRepo, tag))
-	image, found, err := resolveMLflowPRImage(c.ctx, prNumber)
+	image, found, err := resolveMLflowPRImage(c.Context(), prNumber)
 	if err != nil {
 		return fail(fmt.Sprintf("Cannot verify the PR image on Quay: %v. No changes were made.", err), "network", "resolve failed")
 	}

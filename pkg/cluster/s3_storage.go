@@ -157,7 +157,7 @@ func readS3Keys(c *Client) (keys s3Keys, found bool, err error) {
 	var secret struct {
 		Data map[string]string `json:"data"`
 	}
-	exists, err := c.getIntoOptional(namespacedPath("v1", "secrets", s3Namespace, s3Secret), &secret)
+	exists, err := c.GetIntoOptional(namespacedPath("v1", "secrets", s3Namespace, s3Secret), &secret)
 	if err != nil {
 		if isDecodeError(err) {
 			return s3Keys{}, false, fmt.Errorf("parse Secret %s/%s: %w", s3Namespace, s3Secret, err)
@@ -210,7 +210,7 @@ func S3AdminLogin(c *Client) (login S3Login, err error) {
 		Metadata objectMeta        `json:"metadata"`
 		Data     map[string]string `json:"data"`
 	}
-	found, err := c.getIntoOptional(namespacedPath("v1", "secrets", s3Namespace, s3Secret), &secret)
+	found, err := c.GetIntoOptional(namespacedPath("v1", "secrets", s3Namespace, s3Secret), &secret)
 	if err != nil {
 		if isDecodeError(err) {
 			return S3Login{}, fmt.Errorf("parse Secret %s/%s: %w", s3Namespace, s3Secret, err)
@@ -310,7 +310,7 @@ func lookupS3Namespace(c *Client) (s3NamespaceInfo, error) {
 			Phase string `json:"phase"`
 		} `json:"status"`
 	}
-	found, err := c.getIntoOptional("/api/v1/namespaces/"+s3Namespace, &nsObj)
+	found, err := c.GetIntoOptional("/api/v1/namespaces/"+s3Namespace, &nsObj)
 	if err != nil {
 		if isDecodeError(err) {
 			return s3NamespaceInfo{}, fmt.Errorf("parse namespace %s: %w", s3Namespace, err)
@@ -353,7 +353,7 @@ func listPVCs(c *Client, namespace string) ([]storagePVC, error) {
 			Capacity map[string]string `json:"capacity"`
 		} `json:"status"`
 	}
-	if err := c.listInto(namespacedPath("v1", "persistentvolumeclaims", namespace, ""), &items); err != nil {
+	if err := c.ListInto(namespacedPath("v1", "persistentvolumeclaims", namespace, ""), &items); err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse PVC list: %w", err)
 		}
@@ -492,7 +492,7 @@ type serviceSpec struct {
 // readService reads a Service; found is false when it does not exist. Any
 // other read or parse error is returned.
 func readService(c *Client, namespace, name string) (serviceSpec, error) {
-	body, exists, err := c.getOptional(namespacedPath("v1", "services", namespace, name))
+	body, exists, err := c.GetOptional(namespacedPath("v1", "services", namespace, name))
 	switch {
 	case err != nil:
 		return serviceSpec{}, fmt.Errorf("read Service %s: %w", name, err)
@@ -624,7 +624,7 @@ func s3StatusAndEndpoints(c *Client) (types.ResourceState, s3Endpoints, error) {
 	wg.Add(4)
 	go func() {
 		defer wg.Done()
-		deployBody, _, deployErr = c.get(namespacedPath("apps/v1", "deployments", s3Namespace, s3Deployment))
+		deployBody, _, deployErr = c.Get(namespacedPath("apps/v1", "deployments", s3Namespace, s3Deployment))
 	}()
 	go func() {
 		defer wg.Done()
@@ -1134,7 +1134,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 			"kind":       "Namespace",
 			"metadata":   map[string]any{"name": s3Namespace, "labels": toolLabels()},
 		})
-		_, _, err := c.post(withToolFieldManager("/api/v1/namespaces"), nsData)
+		_, _, err := c.Post(withToolFieldManager("/api/v1/namespaces"), nsData)
 		switch {
 		case err == nil:
 			log.add("OK: Namespace created")
@@ -1295,7 +1295,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 	log.add(fmt.Sprintf("Creating bucket %s...", s3Bucket))
 	bucketErr := s3BucketCreator(c, s3Bucket)
 	if bucketErr != nil {
-		if clk.Sleep(c.ctx, s3BucketRetryDelay) == nil {
+		if clk.Sleep(c.Context(), s3BucketRetryDelay) == nil {
 			bucketErr = s3BucketCreator(c, s3Bucket)
 		}
 	}
@@ -1326,18 +1326,18 @@ var (
 // request runs under one context bounded by S3ReadyTimeout, so a request
 // that starts just before the deadline cannot overrun it.
 func waitS3Ready(c *Client, image string) (workloadPodIssue, error) {
-	ctx, cancel := clk.WithTimeout(c.ctx, S3ReadyTimeout)
+	ctx, cancel := clk.WithTimeout(c.Context(), S3ReadyTimeout)
 	defer cancel()
 	cc := c.WithContext(ctx)
 	var last workloadPodIssue
 	expired := func() (workloadPodIssue, error) {
-		if c.ctx.Err() != nil {
-			return last, c.ctx.Err()
+		if c.Context().Err() != nil {
+			return last, c.Context().Err()
 		}
 		return last, errS3NotReady
 	}
 	for {
-		body, _, err := cc.get(namespacedPath("apps/v1", "deployments", s3Namespace, s3Deployment))
+		body, _, err := cc.Get(namespacedPath("apps/v1", "deployments", s3Namespace, s3Deployment))
 		if ctx.Err() != nil {
 			return expired()
 		}
@@ -1378,7 +1378,7 @@ func createS3Bucket(c *Client, bucket string) error {
 	if !found || keys.AccessKey == "" || keys.SecretKey == "" {
 		return fmt.Errorf("no S3 keys in Secret %s/%s", s3Namespace, s3Secret)
 	}
-	return s3PutBucket(c.ctx, s3BucketEndpoint(os.Getenv), keys.AccessKey, keys.SecretKey, bucket)
+	return s3PutBucket(c.Context(), s3BucketEndpoint(os.Getenv), keys.AccessKey, keys.SecretKey, bucket)
 }
 
 // s3KeptNamespaceHint ends every teardown message: namespaces are never
@@ -1755,7 +1755,7 @@ func namespaceDeletionDetail(c *Client, namespace string) string {
 			} `json:"conditions"`
 		} `json:"status"`
 	}
-	if c.getInto("/api/v1/namespaces/"+namespace, &ns) != nil {
+	if c.GetInto("/api/v1/namespaces/"+namespace, &ns) != nil {
 		return ""
 	}
 	var details []string

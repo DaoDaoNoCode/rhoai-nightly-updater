@@ -319,7 +319,7 @@ func (m idmsItem) isSetupMirror() bool {
 
 func listIDMS(c *Client) ([]idmsItem, error) {
 	var items []idmsItem
-	if err := c.listInto(clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", ""), &items); err != nil {
+	if err := c.ListInto(clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", ""), &items); err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse ImageDigestMirrorSets: %w", err)
 		}
@@ -365,7 +365,7 @@ func prepareMirrorCreate(c *Client, w *nodeSetupWork) {
 	}
 	body, _ := json.Marshal(mirrorObject())
 	w.write = func(c *Client, query url.Values) error {
-		_, _, err := c.do(http.MethodPost, clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", ""), "application/json", body, query)
+		_, _, err := c.Do(http.MethodPost, clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", ""), "application/json", body, query)
 		return err
 	}
 	w.plan.Ready = true
@@ -383,7 +383,7 @@ func prepareMirrorCreate(c *Client, w *nodeSetupWork) {
 	w.plan.Undo = "Remove the image mirror (the same item offers it once it exists), or oc delete imagedigestmirrorset " + MirrorName + ". Removing it drains the nodes, " + poolPace + "."
 	w.done = "Created ImageDigestMirrorSet " + MirrorName + "."
 	w.verify = func(c *Client) error {
-		_, _, err := c.get(clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName))
+		_, _, err := c.Get(clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName))
 		return err
 	}
 }
@@ -433,7 +433,7 @@ func prepareMirrorRemove(c *Client, w *nodeSetupWork) {
 	opts, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "DeleteOptions",
 		"preconditions": map[string]any{"uid": ours.Metadata.UID, "resourceVersion": ours.Metadata.ResourceVersion}})
 	w.write = func(c *Client, query url.Values) error {
-		_, _, err := c.do(http.MethodDelete, clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName), "application/json", opts, query)
+		_, _, err := c.Do(http.MethodDelete, clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName), "application/json", opts, query)
 		return err
 	}
 	w.plan.Ready = true
@@ -443,7 +443,7 @@ func prepareMirrorRemove(c *Client, w *nodeSetupWork) {
 	w.plan.NodeImpact, w.plan.Undo = mirrorRemoveImpactFor(remaining, others)
 	w.done = "Deleted ImageDigestMirrorSet " + MirrorName + "."
 	w.verify = func(c *Client) error {
-		_, found, err := c.getOptional(clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName))
+		_, found, err := c.GetOptional(clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName))
 		if err != nil {
 			return err
 		}
@@ -459,7 +459,7 @@ func prepareMirrorRemove(c *Client, w *nodeSetupWork) {
 // and its Quay lookups use), padded as CRI-O needs it; "" with the reason
 // when there is none.
 func updaterQuayToken(c *Client) (string, string, string) {
-	body, found, err := c.getOptional(namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret"))
+	body, found, err := c.GetOptional(namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret"))
 	if err != nil {
 		return "", refusalCodeFor(err), "Cannot read the updater's token in kube-system/additional-pull-secret: " + err.Error() + ". Nothing was changed."
 	}
@@ -509,7 +509,7 @@ type clusterPullSecret struct {
 // readClusterPullSecret reads openshift-config/pull-secret and refuses
 // (code, message) unless it is safe to change only one entry of it.
 func readClusterPullSecret(c *Client) (*clusterPullSecret, []string, string, string) {
-	body, _, err := c.get(namespacedPath("v1", "secrets", clusterPullSecretNS, clusterPullSecretName))
+	body, _, err := c.Get(namespacedPath("v1", "secrets", clusterPullSecretNS, clusterPullSecretName))
 	if err != nil {
 		return nil, nil, refusalCodeFor(err), "Cannot read " + clusterPullSecretRef + ": " + err.Error() + ". Nothing was changed in it."
 	}
@@ -653,7 +653,7 @@ func preparePullSecret(c *Client, w *nodeSetupWork, add, replaceExisting bool) {
 		"data":     map[string]any{".dockerconfigjson": encoded},
 	})
 	w.write = func(c *Client, query url.Values) error {
-		_, _, err := c.do(http.MethodPatch, namespacedPath("v1", "secrets", clusterPullSecretNS, clusterPullSecretName), "application/merge-patch+json", patch, query)
+		_, _, err := c.Do(http.MethodPatch, namespacedPath("v1", "secrets", clusterPullSecretNS, clusterPullSecretName), "application/merge-patch+json", patch, query)
 		return err
 	}
 	w.plan.Ready = true
@@ -889,7 +889,7 @@ func stuckMachineConfigPools(c *Client) []string {
 			} `json:"conditions"`
 		} `json:"status"`
 	}
-	if c.listInto(clusterPath("machineconfiguration.openshift.io/v1", "machineconfigpools", ""), &items) != nil {
+	if c.ListInto(clusterPath("machineconfiguration.openshift.io/v1", "machineconfigpools", ""), &items) != nil {
 		return nil
 	}
 	var out []string

@@ -197,7 +197,7 @@ func selectQuayAuth(auths map[string]any) string {
 // getQuayAuth extracts the quay.io/rhoai auth credential from the cluster pull secret.
 func getQuayAuth(c *Client) string {
 	path := namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret")
-	body, _, err := c.get(path)
+	body, _, err := c.Get(path)
 	if err != nil {
 		slog.Warn("quay auth: failed to read pull secret", "error", err)
 		return ""

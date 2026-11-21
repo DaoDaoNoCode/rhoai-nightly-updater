@@ -117,18 +117,18 @@ func TestUserTokenErrorsNameTheUser(t *testing.T) {
 	if !user.ActsAsUser() || sa.ActsAsUser() {
 		t.Fatal("ActsAsUser")
 	}
-	_, _, err := user.get("/api/v1/namespaces/x")
+	_, _, err := user.Get("/api/v1/namespaces/x")
 	if !strings.Contains(err.Error(), UserTokenRejectedMessage) || strings.Contains(err.Error(), "user-secret") {
 		t.Fatalf("user 401: %v", err)
 	}
 	if code, ec := HTTPStatusForError(err); code != 401 || ec != "session_expired" {
 		t.Fatalf("user 401 maps to %d %s", code, ec)
 	}
-	_, _, err = user.get("/api/v1/namespaces/forbidden")
+	_, _, err = user.Get("/api/v1/namespaces/forbidden")
 	if !strings.Contains(err.Error(), UserForbiddenMessage) {
 		t.Fatalf("user 403: %v", err)
 	}
-	_, _, err = sa.get("/api/v1/namespaces/x")
+	_, _, err = sa.Get("/api/v1/namespaces/x")
 	if strings.Contains(err.Error(), "sign-in") {
 		t.Fatalf("SA 401 named the user's sign-in: %v", err)
 	}

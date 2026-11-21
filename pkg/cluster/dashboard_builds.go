@@ -91,7 +91,7 @@ func GetDashboardBuilds(c *Client) (*types.DashboardBuildsResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(c.ctx, dashboardBuildsTimeout)
+	ctx, cancel := context.WithTimeout(c.Context(), dashboardBuildsTimeout)
 	defer cancel()
 	return dashboardBuilds(ctx, state.DevImages), nil
 }

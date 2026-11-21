@@ -129,7 +129,7 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 			} `json:"template"`
 		} `json:"spec"`
 	}
-	found, err := c.getIntoOptional(deployPath, &deploy)
+	found, err := c.GetIntoOptional(deployPath, &deploy)
 	if err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse dashboard deployment: %w", err)
@@ -343,7 +343,7 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 		go func(name, r string) {
 			image := fmt.Sprintf("quay.io/%s:%s", r, tag)
 			manifestURL := fmt.Sprintf("https://quay.io/v2/%s/manifests/%s", r, tag)
-			ctx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
+			ctx, cancel := context.WithTimeout(c.Context(), 10*time.Second)
 			defer cancel()
 			req, err := http.NewRequestWithContext(ctx, "HEAD", manifestURL, nil)
 			if err != nil {
@@ -449,7 +449,7 @@ func DeployPRImageWithFlavor(c *Client, prNumber int, flavor string) (*types.Ope
 			return nil, fmt.Errorf("marshal patch: %w", err)
 		}
 		deployPath := namespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName)
-		_, _, err = c.strategicPatch(deployPath, patchData)
+		_, _, err = c.StrategicPatch(deployPath, patchData)
 		if err != nil {
 			RecordActivity(c, types.ActivityEntry{
 				Timestamp: nowRFC3339(),
@@ -642,7 +642,7 @@ func RevertDashboardImage(c *Client) (*types.OperationResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal revert patch: %w", err)
 	}
-	_, _, err = c.strategicPatch(deployPath, patchData)
+	_, _, err = c.StrategicPatch(deployPath, patchData)
 	if err != nil {
 		return &types.OperationResponse{
 			Success: false, Message: fmt.Sprintf("Failed to patch deployment: %v", err),
@@ -712,7 +712,7 @@ func getDeploymentAnnotations(c *Client, ns, name string) (map[string]string, er
 			Annotations map[string]string `json:"annotations"`
 		} `json:"metadata"`
 	}
-	if err := c.getInto(namespacedPath("apps/v1", "deployments", ns, name), &d); err != nil {
+	if err := c.GetInto(namespacedPath("apps/v1", "deployments", ns, name), &d); err != nil {
 		return nil, err
 	}
 	return d.Metadata.Annotations, nil
@@ -807,7 +807,7 @@ func getOriginalImages(c *Client) (map[string]string, error) {
 			} `json:"template"`
 		} `json:"spec"`
 	}
-	if err := c.getInto(operatorPath, &deploy); err != nil {
+	if err := c.GetInto(operatorPath, &deploy); err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse operator deployment: %w", err)
 		}
@@ -896,7 +896,7 @@ func getDashboardPods(c *Client, ns, deployment, deploymentUID string, matchLabe
 			} `json:"containerStatuses"`
 		} `json:"status"`
 	}
-	if err := c.listInto(path, &items); err != nil {
+	if err := c.ListInto(path, &items); err != nil {
 		if isDecodeError(err) {
 			slog.Warn("failed to parse dashboard pod list", "error", err)
 			return nil
@@ -1007,7 +1007,7 @@ func getDeploymentContainerNames(c *Client, namespace, deployName string) ([]str
 			} `json:"template"`
 		} `json:"spec"`
 	}
-	if err := c.getInto(path, &deploy); err != nil {
+	if err := c.GetInto(path, &deploy); err != nil {
 		return nil, err
 	}
 	var names []string
@@ -1021,7 +1021,7 @@ func getDeploymentContainerNames(c *Client, namespace, deployName string) ([]str
 // its container image. Returns empty string if the deployment doesn't exist.
 func getStandaloneModuleImage(c *Client, ns, containerName string) string {
 	path := namespacedPath("apps/v1", "deployments", ns, containerName)
-	body, statusCode, err := c.get(path)
+	body, statusCode, err := c.Get(path)
 	if err != nil || statusCode == 404 {
 		return ""
 	}
@@ -1065,6 +1065,6 @@ func patchStandaloneModule(c *Client, ns, containerName, image string) error {
 		return fmt.Errorf("marshal module patch: %w", err)
 	}
 	path := namespacedPath("apps/v1", "deployments", ns, containerName)
-	_, _, err = c.strategicPatch(path, patchData)
+	_, _, err = c.StrategicPatch(path, patchData)
 	return err
 }

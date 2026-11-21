@@ -239,7 +239,7 @@ func diagnose(c *Client, checks []diagnosticCheck) (*DiagnosticsResponse, error)
 }
 
 func runCheck(c *Client, chk diagnosticCheck) checkOutput {
-	ctx, cancel := context.WithTimeout(c.ctx, diagnosticsCheckTimeout)
+	ctx, cancel := context.WithTimeout(c.Context(), diagnosticsCheckTimeout)
 	defer cancel()
 	done := make(chan checkOutput, 1)
 	go func() {
@@ -258,7 +258,7 @@ func runCheck(c *Client, chk diagnosticCheck) checkOutput {
 		return out
 	case <-ctx.Done():
 		detail := fmt.Sprintf("Check did not finish within %s", diagnosticsCheckTimeout)
-		if errors.Is(c.ctx.Err(), context.Canceled) {
+		if errors.Is(c.Context().Err(), context.Canceled) {
 			detail = "Check cancelled"
 		}
 		return checkOutput{check: CheckResult{Name: chk.name, Status: "warn", Detail: detail}}
@@ -381,7 +381,7 @@ func checkRHOAIPods(c *Client) checkOutput {
 	// A failed lookup is reported: the module namespaces could hold
 	// unhealthy pods, so the check cannot pass without them.
 	var nsErr error
-	body, _, err := c.do(http.MethodGet, clusterPath("v1", "namespaces", ""), "", nil,
+	body, _, err := c.Do(http.MethodGet, clusterPath("v1", "namespaces", ""), "", nil,
 		url.Values{"labelSelector": {"platform.opendatahub.io/part-of"}})
 	if err != nil {
 		nsErr = err
@@ -495,7 +495,7 @@ func readSubscriptionState(c *Client) (subscriptionState, error) {
 			} `json:"conditions"`
 		} `json:"status"`
 	}
-	found, err := c.getIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), &sub)
+	found, err := c.GetIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), &sub)
 	if err != nil {
 		if isDecodeError(err) {
 			return subscriptionState{}, fmt.Errorf("parse subscription: %w", err)
@@ -724,7 +724,7 @@ func checkCSVHealth(c *Client) checkOutput {
 		out.check.Detail = fmt.Sprintf("%s (%s)", csv.Name, csv.Phase)
 	case "Failed":
 		evidence := []string{fmt.Sprintf("Operator: %s, Phase: Failed", csv.Name)}
-		body, _, getErr := c.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, csv.Name))
+		body, _, getErr := c.Get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, csv.Name))
 		if getErr == nil {
 			var full struct {
 				Status struct {
@@ -789,7 +789,7 @@ type installPlanItem struct {
 
 func listInstallPlans(c *Client) ([]installPlanItem, error) {
 	var items []installPlanItem
-	if err := c.listInto(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ""), &items); err != nil {
+	if err := c.ListInto(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ""), &items); err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse install plans: %w", err)
 		}
@@ -1096,7 +1096,7 @@ func checkNodeCapacity(c *Client) checkOutput {
 			} `json:"conditions"`
 		} `json:"status"`
 	}
-	if err := c.listInto(path, &items); err != nil {
+	if err := c.ListInto(path, &items); err != nil {
 		if isDecodeError(err) {
 			out.check = CheckResult{Name: "Node capacity", Status: "warn", Detail: "Could not parse node list"}
 			return out

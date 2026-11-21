@@ -490,7 +490,7 @@ func listMaaSPlaygroundModels(c *Client) []types.PlaygroundModel {
 			ResolvedModelAlias string `json:"resolvedModelAlias"`
 		} `json:"status"`
 	}
-	if err := c.listInto("/apis/"+maasAPI(c)+"/maasmodelrefs", &items); err != nil {
+	if err := c.ListInto("/apis/"+maasAPI(c)+"/maasmodelrefs", &items); err != nil {
 		if isDecodeError(err) {
 			slog.Debug("cannot parse the MaaS model references", "error", err)
 			return nil
@@ -541,7 +541,7 @@ func maasSubscriptionsByModel(c *Client) map[string][]string {
 			} `json:"modelRefs"`
 		} `json:"spec"`
 	}
-	if c.listInto(namespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, ""), &items) != nil {
+	if c.ListInto(namespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, ""), &items) != nil {
 		return out
 	}
 	for _, s := range items {
@@ -639,7 +639,7 @@ func readPlaygroundRecords(c *Client) (map[string]playgroundRecord, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	found, err := c.bookkeeping().getIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
+	found, err := c.bookkeeping().GetIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
 	if err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
@@ -673,7 +673,7 @@ func writePlaygroundRecords(c *Client, records map[string]playgroundRecord) erro
 		"data":       map[string]any{playgroundRecordKey: string(data)},
 	})
 	query := url.Values{"fieldManager": {playgroundRecordManager}, "force": {"true"}}
-	if _, _, err := c.bookkeeping().do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
+	if _, _, err := c.bookkeeping().Do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
 		return fmt.Errorf("record this tool's playgrounds: %w", err)
 	}
 	return nil
@@ -751,7 +751,7 @@ func genAIUIState(c *Client) string {
 			Conditions []k8sCondition `json:"conditions"`
 		} `json:"status"`
 	}
-	found, err := c.getIntoOptional(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, genAIUIDeployment), &d)
+	found, err := c.GetIntoOptional(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, genAIUIDeployment), &d)
 	if err != nil {
 		if isDecodeError(err) {
 			return ""
@@ -827,14 +827,14 @@ func playgroundAPI(c *Client) (genAIAPI, string, string) {
 // ServiceAccount's client of a user's read: the Dashboard CR and its
 // Route are no user data) and calls it with as's token.
 func playgroundAPIAs(find, as *Client) (genAIAPI, string, string) {
-	if as.token == "" {
+	if as.BearerToken() == "" {
 		return genAIAPI{}, "No token is available to call the dashboard's gen-ai API with.", "no_token"
 	}
 	base := genAIBaseURL(find)
 	if base == "" {
 		return genAIAPI{}, "The RHOAI dashboard's address is unknown (no Dashboard component reports one), so its gen-ai API cannot be called.", "no_dashboard"
 	}
-	return genAIAPI{ctx: as.ctx, base: base, token: as.token, asUser: as.asUser}, "", ""
+	return genAIAPI{ctx: as.Context(), base: base, token: as.BearerToken(), asUser: as.ActsAsUser()}, "", ""
 }
 
 // playgroundItem is a playground (srv, nil for none) in a project as the
@@ -884,11 +884,11 @@ func playgroundItem(project string, srv *genAIServer, requested bool) types.Play
 // record of the playgrounds it set up (u's bookkeeping), of which only the
 // user's projects are used. Cached per token.
 func GetPlaygroundStatus(sa, u *Client, project string) (*types.PlaygroundStatus, error) {
-	if !u.asUser {
+	if !u.ActsAsUser() {
 		return nil, errNotUserClient
 	}
 	c := u
-	key := fmt.Sprintf("%d|%s|%s", playgroundStatusGen.Load(), tokenKey(c.token), project)
+	key := fmt.Sprintf("%d|%s|%s", playgroundStatusGen.Load(), tokenKey(c.BearerToken()), project)
 	if st, ok := playgroundStatusCache.Get(key); ok {
 		return st, nil
 	}
@@ -1392,7 +1392,7 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 				said = true
 				p.step("install", "running", fmt.Sprintf("The previous playground's database in %s is still being removed; trying again every %s (up to %s)...", p.project, PlaygroundInstallRetryPoll, clockText(PlaygroundInstallRetryTimeout)))
 			}
-			if err := clk.Sleep(p.c.ctx, PlaygroundInstallRetryPoll); err != nil {
+			if err := clk.Sleep(p.c.Context(), PlaygroundInstallRetryPoll); err != nil {
 				installErr = err
 				break
 			}
@@ -1429,7 +1429,7 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 	var last, problem string
 	var srv *genAIServer
 	ready, err := waitForGone(p.c, PlaygroundReadyTimeout, PlaygroundPoll, func(cc *Client) (bool, error) {
-		s, err := p.api.with(cc.ctx).playgroundStatus(p.project)
+		s, err := p.api.with(cc.Context()).playgroundStatus(p.project)
 		if err != nil {
 			return false, err
 		}
@@ -1518,7 +1518,7 @@ func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
 	p.step("delete", "success", fmt.Sprintf("The dashboard is deleting the playground in %s.", p.project))
 	p.step("gone", "running", "Waiting until the playground is gone...")
 	gone, err := waitForGone(p.c, PlaygroundDeleteTimeout, PlaygroundPoll, func(cc *Client) (bool, error) {
-		s, err := p.api.with(cc.ctx).playgroundStatus(p.project)
+		s, err := p.api.with(cc.Context()).playgroundStatus(p.project)
 		return err == nil && s == nil, err
 	})
 	if err != nil {

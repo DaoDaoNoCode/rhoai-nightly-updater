@@ -540,7 +540,7 @@ func patchMaaSDSC(c *Client, aigateway, maas string, dryRun bool) error {
 	if dryRun {
 		query.Set("dryRun", "All")
 	}
-	_, _, err = c.do(http.MethodPatch, path, "application/merge-patch+json", patch, query)
+	_, _, err = c.Do(http.MethodPatch, path, "application/merge-patch+json", patch, query)
 	return err
 }
 

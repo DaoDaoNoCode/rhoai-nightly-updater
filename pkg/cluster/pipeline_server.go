@@ -193,7 +193,7 @@ func listDSPAs(c *Client, namespace string) ([]dspaInfo, error) {
 			} `json:"status"`
 		} `json:"items"`
 	}
-	found, err := c.getIntoOptional(dspaCollectionPath(namespace), &list)
+	found, err := c.GetIntoOptional(dspaCollectionPath(namespace), &list)
 	if err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse pipeline server list: %w", err)
@@ -246,7 +246,7 @@ type routeSpec struct {
 // readRoute reads a Route; found is false when the Route (or the Route API)
 // does not exist. Any other read or parse error is returned.
 func readRoute(c *Client, namespace, name string) (routeSpec, error) {
-	body, exists, err := c.getOptional(namespacedPath("route.openshift.io/v1", "routes", namespace, name))
+	body, exists, err := c.GetOptional(namespacedPath("route.openshift.io/v1", "routes", namespace, name))
 	switch {
 	case err != nil:
 		return routeSpec{}, fmt.Errorf("read Route %s: %w", name, err)
@@ -513,7 +513,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	}
 	dspaPath := namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, dspaName)
 	readDSPA := func() (objectMeta, bool, error) {
-		body, present, getErr := c.getOptional(dspaPath)
+		body, present, getErr := c.GetOptional(dspaPath)
 		if getErr != nil {
 			return objectMeta{}, false, getErr
 		}
@@ -649,7 +649,7 @@ func dspoRunning(c *Client) (bool, error) {
 			ReadyReplicas int `json:"readyReplicas"`
 		} `json:"status"`
 	}
-	if err := c.listInto(namespacedPath("apps/v1", "deployments", ns, "")+"?labelSelector="+url.QueryEscape(dspoSelector), &items); err != nil {
+	if err := c.ListInto(namespacedPath("apps/v1", "deployments", ns, "")+"?labelSelector="+url.QueryEscape(dspoSelector), &items); err != nil {
 		return false, err
 	}
 	for _, d := range items {
@@ -793,7 +793,7 @@ func deleteDSPASecret(c *Client, project string, target *dspaInfo, all []dspaInf
 		*logs = append(*logs, fmt.Sprintf("Kept secret %s: this tool never creates a secret with that name", name))
 		return ""
 	}
-	body, found, err := c.getOptional(path)
+	body, found, err := c.GetOptional(path)
 	if err != nil {
 		*logs = append(*logs, fmt.Sprintf("Warning: cannot read secret %s: %v", name, err))
 		return fmt.Sprintf(" The credentials secret %s could not be checked and was left in place: %v.", name, err)
@@ -964,7 +964,7 @@ const dspaCRDName = "datasciencepipelinesapplications.datasciencepipelinesapplic
 // installed DSPA CRD. It lists CRDs by name (the cluster-wide list the
 // diagnostics already use), so it needs no rule of its own.
 func dspaSpecSchema(c *Client) (map[string]any, error) {
-	body, _, err := c.do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil,
+	body, _, err := c.Do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil,
 		url.Values{"fieldSelector": {"metadata.name=" + dspaCRDName}})
 	if err != nil {
 		return nil, err

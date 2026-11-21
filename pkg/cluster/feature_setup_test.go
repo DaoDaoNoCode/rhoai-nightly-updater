@@ -202,7 +202,7 @@ func updateFieldOwnership(manager string, before, patch, next map[string]any) {
 func someoneSets(t *testing.T, pc *prereqCluster, key, state string) {
 	t.Helper()
 	patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"components": map[string]any{key: map[string]any{"managementState": state}}}})
-	if _, _, err := pc.c.do(http.MethodPatch, tDSC, "application/merge-patch+json", patch, url.Values{"fieldManager": {"kubectl-edit"}}); err != nil {
+	if _, _, err := pc.c.Do(http.MethodPatch, tDSC, "application/merge-patch+json", patch, url.Values{"fieldManager": {"kubectl-edit"}}); err != nil {
 		t.Fatal(err)
 	}
 }

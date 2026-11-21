@@ -70,7 +70,7 @@ func TestResetClusterCachesCoversEveryURLKeyedCache(t *testing.T) {
 				t.Fatal(err)
 			}
 			for line := range strings.SplitSeq(string(b), "\n") {
-				if (strings.Contains(line, "c.baseURL") || strings.Contains(line, ".BaseURL()")) && !strings.Contains(line, "return user, c.baseURL") {
+				if (strings.Contains(line, "c.baseURL") || strings.Contains(line, ".BaseURL()")) && !strings.Contains(line, "return user, c.BaseURL()") {
 					got[f]++
 				}
 			}

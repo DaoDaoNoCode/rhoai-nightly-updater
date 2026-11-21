@@ -66,11 +66,11 @@ var apiVersionsCache = newLRU[string, []string](64)
 // discovery afresh and caches nothing, so a per-cluster cache is never
 // fed by a user's token.
 func servedVersions(c *Client, group string, fallback []string) apiVersions {
-	key := c.baseURL + "|" + group
-	if v, ok := apiVersionsCache.Get(key); ok && !c.asUser {
+	key := c.BaseURL() + "|" + group
+	if v, ok := apiVersionsCache.Get(key); ok && !c.ActsAsUser() {
 		return apiVersions{Versions: v, Discovered: true}
 	}
-	body, _, err := c.get("/apis/" + group)
+	body, _, err := c.Get("/apis/" + group)
 	if err != nil {
 		return apiVersions{Versions: fallback}
 	}
@@ -78,7 +78,7 @@ func servedVersions(c *Client, group string, fallback []string) apiVersions {
 	if len(versions) == 0 {
 		return apiVersions{Versions: fallback}
 	}
-	if !c.asUser {
+	if !c.ActsAsUser() {
 		apiVersionsCache.Add(key, versions, apiVersionsCacheTTL)
 	}
 	return apiVersions{Versions: versions, Discovered: true}
@@ -208,7 +208,7 @@ func readServed(c *Client, group, pathFmt string, named bool, query url.Values, 
 	var conversionErr, notFound error
 	versions := servedVersions(c, group, fallback)
 	for _, version := range versions.Versions {
-		body, _, err := c.do(http.MethodGet, fmt.Sprintf(pathFmt, version), "", nil, query)
+		body, _, err := c.Do(http.MethodGet, fmt.Sprintf(pathFmt, version), "", nil, query)
 		switch {
 		case isK8sNotFound(err) && named && versions.Discovered:
 			return out, err // the version is served, so the object does not exist

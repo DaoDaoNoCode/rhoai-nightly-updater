@@ -191,7 +191,7 @@ type staleObservation struct {
 // staleFor reports how long the CR's operator has been seen lagging behind
 // its current generation, once that is at least moduleStaleAfter.
 func (m moduleObject) staleFor(c *Client, now time.Time) (time.Duration, bool) {
-	key := strings.Join([]string{c.baseURL, m.Module, m.Obj.Metadata.Name, m.Obj.Metadata.UID}, "|")
+	key := strings.Join([]string{c.BaseURL(), m.Module, m.Obj.Metadata.Name, m.Obj.Metadata.UID}, "|")
 	st, gen := m.Obj.Status, m.Obj.Metadata.Generation
 	staleSeen.Lock()
 	defer staleSeen.Unlock()
@@ -217,7 +217,7 @@ func listModuleObjects(c *Client, api componentAPI) ([]moduleObject, error) {
 	}
 	results := make([]result, len(api.Kinds))
 	parallelFor(len(api.Kinds), 6, func(i int) {
-		body, _, err := c.get(api.Kinds[i].listPath())
+		body, _, err := c.Get(api.Kinds[i].listPath())
 		if err != nil {
 			results[i].err = fmt.Errorf("list %s: %w", api.Kinds[i].Resource, err)
 			return

@@ -96,7 +96,7 @@ const mlflowNoStatusURLReason = "This MLflow reports no https address in its CR 
 // unavailable. The address is the CR's status.url, the address the operator
 // reports and odh-dashboard links to (see mlflowCR).
 func mlflowSampleTarget(c *Client, project string) (*mlflowTarget, string, error) {
-	return mlflowSampleTargetAs(c, project, c.token)
+	return mlflowSampleTargetAs(c, project, c.BearerToken())
 }
 
 // mlflowSampleTargetAs is mlflowSampleTarget whose MLflow calls carry
@@ -124,7 +124,7 @@ func mlflowSampleTargetAs(c *Client, project, token string) (*mlflowTarget, stri
 	}
 	return &mlflowTarget{
 		api: &sampleAPI{
-			ctx: c.ctx, base: base, token: token, server: "MLflow",
+			ctx: c.Context(), base: base, token: token, server: "MLflow",
 			headers: map[string]string{mlflowWorkspaceHeader: project},
 		},
 		ui: base, project: project, c: c, cr: cr, dashboard: httpsBase(cachedDashboardURL(c)),
@@ -237,11 +237,11 @@ func GetMLflowSamplesStatus(sa, u *Client, project string) (*types.MLflowSamples
 	// The token and the project's invalidation count key the cache: one
 	// user's answer is never another's, and a samples operation on the
 	// project makes every user's cached answer unreachable.
-	key := fmt.Sprintf("%s|%d|%s", tokenKey(u.token), gen, project)
+	key := fmt.Sprintf("%s|%d|%s", tokenKey(u.BearerToken()), gen, project)
 	if cached, ok := mlflowSamplesCache.Get(key); ok {
 		return &cached, nil
 	}
-	t, reason, err := mlflowSampleTargetAs(sa, project, u.token)
+	t, reason, err := mlflowSampleTargetAs(sa, project, u.BearerToken())
 	if err != nil {
 		return nil, err
 	}
@@ -429,7 +429,7 @@ func RunMLflowSamples(c *Client, req types.MLflowSamplesRequest, onStep func(Upd
 				stepCode = "in_progress"
 			}
 			code = firstNonEmpty(code, stepCode)
-			emit(UpdateStepEvent{Step: id, Status: "failed", Message: fmt.Sprintf("%s: %v%s", name, err, deniedHint(err, c.asUser)), ErrorCode: stepCode})
+			emit(UpdateStepEvent{Step: id, Status: "failed", Message: fmt.Sprintf("%s: %v%s", name, err, deniedHint(err, c.ActsAsUser())), ErrorCode: stepCode})
 			continue
 		}
 		emit(UpdateStepEvent{Step: id, Status: "success", Message: fmt.Sprintf("%s: %s", name, msg)})

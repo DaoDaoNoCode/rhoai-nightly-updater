@@ -56,7 +56,7 @@ func createKuadrant(c *Client, version, ns string, dryRun bool) error {
 	if dryRun {
 		query = url.Values{"dryRun": {"All"}}
 	}
-	_, _, err := c.do(http.MethodPost, withToolFieldManager("/apis/kuadrant.io/"+version+"/namespaces/"+ns+"/kuadrants"), "application/json", data, query)
+	_, _, err := c.Do(http.MethodPost, withToolFieldManager("/apis/kuadrant.io/"+version+"/namespaces/"+ns+"/kuadrants"), "application/json", data, query)
 	if isK8sConflict(err) {
 		return nil
 	}
@@ -98,7 +98,7 @@ func createInfraNamespace(c *Client, ns string, dryRun bool) error {
 	if dryRun {
 		query = url.Values{"dryRun": {"All"}}
 	}
-	_, _, err := c.do(http.MethodPost, withToolFieldManager("/api/v1/namespaces"), "application/json", data, query)
+	_, _, err := c.Do(http.MethodPost, withToolFieldManager("/api/v1/namespaces"), "application/json", data, query)
 	return err
 }
 
@@ -118,7 +118,7 @@ func infraNamespaceLeftovers(c *Client, ns string) ([]string, error) {
 		var items []struct {
 			Metadata objectMeta `json:"metadata"`
 		}
-		if err := c.listInto(l.path, &items); err != nil {
+		if err := c.ListInto(l.path, &items); err != nil {
 			if isDecodeError(err) {
 				return nil, fmt.Errorf("parse the %s list: %w", l.kind, err)
 			}
@@ -214,7 +214,7 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 		return nil, fmt.Errorf("%w: no Service %s/authorino-authorino-authorization", errAuthorinoNotYet, ns)
 	case svc.Annotations[servingCertAnnotation] != secret:
 		patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{servingCertAnnotation: secret}}})
-		if _, _, err := c.do(http.MethodPatch, namespacedPath("v1", "services", ns, "authorino-authorino-authorization"), "application/merge-patch+json", patch, query); err != nil {
+		if _, _, err := c.Do(http.MethodPatch, namespacedPath("v1", "services", ns, "authorino-authorino-authorization"), "application/merge-patch+json", patch, query); err != nil {
 			return changes, fmt.Errorf("annotate Service %s/authorino-authorino-authorization: %w", ns, err)
 		}
 		changes = append(changes, fmt.Sprintf("Service authorino-authorino-authorization asks service-ca for Secret %s", secret))
@@ -222,12 +222,12 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 	if !cr.Spec.Listener.TLS.Enabled || cr.Spec.Listener.TLS.CertSecretRef.Name != secret {
 		patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"listener": map[string]any{"tls": map[string]any{
 			"enabled": true, "certSecretRef": map[string]any{"name": secret}}}}})
-		if _, _, err := c.do(http.MethodPatch, "/apis/"+authorinoGroup+"/"+read.Version+"/namespaces/"+ns+"/authorinos/authorino", "application/merge-patch+json", patch, query); err != nil {
+		if _, _, err := c.Do(http.MethodPatch, "/apis/"+authorinoGroup+"/"+read.Version+"/namespaces/"+ns+"/authorinos/authorino", "application/merge-patch+json", patch, query); err != nil {
 			return changes, fmt.Errorf("enable TLS on Authorino %s/authorino: %w", ns, err)
 		}
 		changes = append(changes, "Authorino's listener serves TLS with "+secret)
 	}
-	body, exists, err := c.getOptional(namespacedPath("apps/v1", "deployments", ns, "authorino"))
+	body, exists, err := c.GetOptional(namespacedPath("apps/v1", "deployments", ns, "authorino"))
 	if err != nil {
 		return changes, fmt.Errorf("read Deployment %s/authorino: %w", ns, err)
 	}
@@ -258,7 +258,7 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 			return changes, fmt.Errorf("deployment %s/authorino has no containers", ns)
 		}
 		patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": containers}}}})
-		if _, _, err := c.do(http.MethodPatch, namespacedPath("apps/v1", "deployments", ns, "authorino"), "application/strategic-merge-patch+json", patch, query); err != nil {
+		if _, _, err := c.Do(http.MethodPatch, namespacedPath("apps/v1", "deployments", ns, "authorino"), "application/strategic-merge-patch+json", patch, query); err != nil {
 			return changes, fmt.Errorf("set SSL_CERT_FILE on Deployment %s/authorino: %w", ns, err)
 		}
 		changes = append(changes, "Authorino trusts the service CA (SSL_CERT_FILE and REQUESTS_CA_BUNDLE)")
@@ -267,7 +267,7 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 		patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
 			"annotations": map[string]string{restartAnnotation: clk.Now().UTC().Format(time.RFC3339)},
 		}}}})
-		if _, _, err := c.do(http.MethodPatch, namespacedPath("apps/v1", "deployments", ns, "authorino"), "application/merge-patch+json", patch, query); err != nil {
+		if _, _, err := c.Do(http.MethodPatch, namespacedPath("apps/v1", "deployments", ns, "authorino"), "application/merge-patch+json", patch, query); err != nil {
 			return changes, fmt.Errorf("restart Deployment %s/authorino: %w", ns, err)
 		}
 		changes = append(changes, "Authorino restarted to use it")

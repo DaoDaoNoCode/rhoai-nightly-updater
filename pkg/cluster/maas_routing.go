@@ -166,7 +166,7 @@ func readModelGatewayRefs(c *Client, project, name string) (gatewayRefs, string,
 // metadata and its whole spec from the same read.
 func readModelGatewayRefsSpec(c *Client, project, name string) (gatewayRefs, objectMeta, map[string]any, error) {
 	path, _ := toolModelPath(project, name)
-	body, _, err := c.get(path)
+	body, _, err := c.Get(path)
 	if err != nil {
 		return nil, objectMeta{}, nil, err
 	}
@@ -205,7 +205,7 @@ func writeModelGatewayRefs(c *Client, project, name, rv string, refs gatewayRefs
 		"metadata": map[string]any{"resourceVersion": rv},
 		"spec":     map[string]any{"router": map[string]any{"gateway": map[string]any{"refs": list}}},
 	})
-	_, _, err := c.do(http.MethodPatch, path, "application/merge-patch+json", patch, url.Values{"fieldManager": {maasModelManager}})
+	_, _, err := c.Do(http.MethodPatch, path, "application/merge-patch+json", patch, url.Values{"fieldManager": {maasModelManager}})
 	return err
 }
 
@@ -241,7 +241,7 @@ func readModelRoute(c *Client, project, name string) ([]string, bool, error) {
 			} `json:"parentRefs"`
 		} `json:"spec"`
 	}
-	found, err := c.getIntoOptional(path, &route)
+	found, err := c.GetIntoOptional(path, &route)
 	if err != nil {
 		if isDecodeError(err) {
 			return nil, false, fmt.Errorf("parse HTTPRoute %s/%s-kserve-route: %w", project, name, err)
@@ -485,7 +485,7 @@ func writeModelRouter(c *Client, project, name, rv string, exp exposurePlan) err
 		"metadata": meta,
 		"spec":     map[string]any{"router": router},
 	})
-	_, _, err := c.do(http.MethodPatch, path, "application/merge-patch+json", patch, url.Values{"fieldManager": {maasModelManager}})
+	_, _, err := c.Do(http.MethodPatch, path, "application/merge-patch+json", patch, url.Values{"fieldManager": {maasModelManager}})
 	return err
 }
 

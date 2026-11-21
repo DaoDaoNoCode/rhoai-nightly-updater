@@ -446,7 +446,7 @@ func readGatewayObject(c *Client, kind string) (objectMeta, bool, error) {
 func readInferenceGateway(c *Client) (gatewayObject, bool, error) {
 	path := gatewayObjectPath("Gateway")
 	var gw gatewayObject
-	found, err := c.getIntoOptional(path, &gw)
+	found, err := c.GetIntoOptional(path, &gw)
 	if err != nil {
 		if isDecodeError(err) {
 			return gatewayObject{}, false, fmt.Errorf("parse Gateway %s/%s: %w", inferenceGatewayNamespace, inferenceGatewayName, err)
@@ -467,7 +467,7 @@ func clusterAppsDomain(c *Client) (string, error) {
 			Domain string `json:"domain"`
 		} `json:"spec"`
 	}
-	if err := c.getInto(clusterPath("config.openshift.io/v1", "ingresses", "cluster"), &ing); err != nil {
+	if err := c.GetInto(clusterPath("config.openshift.io/v1", "ingresses", "cluster"), &ing); err != nil {
 		if isDecodeError(err) {
 			return "", fmt.Errorf("parse the cluster's ingress configuration: %w", err)
 		}
@@ -491,7 +491,7 @@ func defaultIngressCertificate(c *Client) (string, error) {
 			} `json:"defaultCertificate"`
 		} `json:"spec"`
 	}
-	found, err := c.getIntoOptional(namespacedPath("operator.openshift.io/v1", "ingresscontrollers", "openshift-ingress-operator", "default"), &ic)
+	found, err := c.GetIntoOptional(namespacedPath("operator.openshift.io/v1", "ingresscontrollers", "openshift-ingress-operator", "default"), &ic)
 	if err != nil {
 		if isDecodeError(err) {
 			return "", fmt.Errorf("parse IngressController %s/default: %w", ingressOperatorNS, err)
@@ -574,7 +574,7 @@ func gatewayClassController(c *Client) (string, error) {
 			ControllerName string `json:"controllerName"`
 		} `json:"spec"`
 	}
-	if err := c.getInto(path, &gc); err != nil {
+	if err := c.GetInto(path, &gc); err != nil {
 		return "", err
 	}
 	return gc.Spec.ControllerName, nil
@@ -601,7 +601,7 @@ func authPolicyStateOf(c *Client, ns, gateway string) string {
 	var body []byte
 	var err error
 	if ns == inferenceGatewayNamespace && gateway == inferenceGatewayName {
-		body, _, err = c.get(namespacedPath("kuadrant.io/"+versions.Versions[0], "authpolicies", "openshift-ingress", "openshift-ai-inference-authn"))
+		body, _, err = c.Get(namespacedPath("kuadrant.io/"+versions.Versions[0], "authpolicies", "openshift-ingress", "openshift-ai-inference-authn"))
 		if isK8sNotFound(err) {
 			return "missing"
 		}
@@ -610,7 +610,7 @@ func authPolicyStateOf(c *Client, ns, gateway string) string {
 			return ""
 		}
 		var list []byte
-		list, _, err = c.get(namespacedPath("kuadrant.io/"+versions.Versions[0], "authpolicies", "openshift-ingress", ""))
+		list, _, err = c.Get(namespacedPath("kuadrant.io/"+versions.Versions[0], "authpolicies", "openshift-ingress", ""))
 		if err == nil {
 			var items struct {
 				Items []json.RawMessage `json:"items"`
@@ -666,7 +666,7 @@ func dnsPublished(c *Client, host string) string {
 			} `json:"zones"`
 		} `json:"status"`
 	}
-	if c.listInto(namespacedPath("ingress.operator.openshift.io/v1", "dnsrecords", "openshift-ingress", ""), &items) != nil {
+	if c.ListInto(namespacedPath("ingress.operator.openshift.io/v1", "dnsrecords", "openshift-ingress", ""), &items) != nil {
 		return ""
 	}
 	for _, rec := range items {
@@ -717,7 +717,7 @@ func readKServeGateway(c *Client) (kserveGateway, error) {
 	if err != nil {
 		return kserveGateway{}, fmt.Errorf("find ConfigMap %s: %w", kserveConfigMap, err)
 	}
-	body, found, err := c.getOptional(namespacedPath("v1", "configmaps", ns, kserveConfigMap))
+	body, found, err := c.GetOptional(namespacedPath("v1", "configmaps", ns, kserveConfigMap))
 	if err != nil {
 		return kserveGateway{}, fmt.Errorf("read ConfigMap %s/%s: %w", ns, kserveConfigMap, err)
 	}
@@ -957,7 +957,7 @@ func otherGatewaysOfClass(c *Client) ([]string, error) {
 			GatewayClassName string `json:"gatewayClassName"`
 		} `json:"spec"`
 	}
-	if err := c.listInto(clusterPath("gateway.networking.k8s.io/v1", "gateways", ""), &items); err != nil {
+	if err := c.ListInto(clusterPath("gateway.networking.k8s.io/v1", "gateways", ""), &items); err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse the Gateways: %w", err)
 		}
@@ -982,7 +982,7 @@ func attachedRoutesReason(n int) string {
 // gatewayServiceWarning checks that the gateway's Service has the name the
 // "https" listener's hostname assumes ("" when it does, or cannot be read).
 func gatewayServiceWarning(c *Client) string {
-	body, found, err := c.getOptional(namespacedPath("v1", "services", "openshift-ingress", "openshift-ai-inference-openshift-ai-inference"))
+	body, found, err := c.GetOptional(namespacedPath("v1", "services", "openshift-ingress", "openshift-ai-inference-openshift-ai-inference"))
 	missing := fmt.Sprintf("The gateway's Service is not named %s, so the in-cluster listener (%s) does not match it and callers inside the cluster (the dashboard's playground) may be refused. Report this with the output of `oc get svc -n %s -l %s=%s`.", inferenceGatewayService, inferenceGatewayInternalHost, inferenceGatewayNamespace, gatewayNameLabel, inferenceGatewayName)
 	if err != nil {
 		return ""

@@ -99,7 +99,7 @@ func (j deploymentJSON) toOperatorDeployment(via string) operatorDeployment {
 
 func readOperatorDeployment(c *Client, namespace, name, via string) (*operatorDeployment, error) {
 	var j deploymentJSON
-	if err := c.getInto(namespacedPath("apps/v1", "deployments", namespace, name), &j); err != nil {
+	if err := c.GetInto(namespacedPath("apps/v1", "deployments", namespace, name), &j); err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse Deployment %s/%s: %w", namespace, name, err)
 		}
@@ -242,7 +242,7 @@ func serviceSelects(c *Client, namespace, name string, podLabels map[string]stri
 			Selector map[string]string `json:"selector"`
 		} `json:"spec"`
 	}
-	found, err := c.getIntoOptional(namespacedPath("v1", "services", namespace, name), &svc)
+	found, err := c.GetIntoOptional(namespacedPath("v1", "services", namespace, name), &svc)
 	if err != nil {
 		if isDecodeError(err) {
 			return false, fmt.Errorf("parse Service %s/%s: %w", namespace, name, err)
@@ -344,7 +344,7 @@ func applyFixRestartModuleOperator(c *Client, module string) (*types.OperationRe
 	if !b.Restart.OK {
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Not restarting %s: %s. Nothing was changed.", d.ref(), b.Restart.Reason), Logs: logs, ErrorCode: "prerequisites"}, nil
 	}
-	err = c.patchJSON(namespacedPath("apps/v1", "deployments", d.Namespace, d.Name), map[string]any{
+	err = c.PatchJSON(namespacedPath("apps/v1", "deployments", d.Namespace, d.Name), map[string]any{
 		"metadata": map[string]any{"uid": d.UID, "resourceVersion": d.ResourceVersion},
 		"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
 			"annotations": map[string]string{restartAnnotation: nowRFC3339()},

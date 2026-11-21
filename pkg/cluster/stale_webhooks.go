@@ -130,7 +130,7 @@ func (h serviceHealth) describe(ref string) string {
 // at once (the namespace guard).
 func checkServiceHealth(c *Client, ref string, grace time.Duration) serviceHealth {
 	ns, name, _ := strings.Cut(ref, "/")
-	body, found, err := c.getOptional(namespacedPath("v1", "services", ns, name))
+	body, found, err := c.GetOptional(namespacedPath("v1", "services", ns, name))
 	if err != nil {
 		return serviceHealth{state: serviceUnknown, err: err}
 	}
@@ -153,7 +153,7 @@ func checkServiceHealth(c *Client, ref string, grace time.Duration) serviceHealt
 	if svc.Spec.Type == "ExternalName" {
 		return serviceHealth{state: serviceServing, exists: true}
 	}
-	body, _, err = c.get(namespacedPath("discovery.k8s.io/v1", "endpointslices", ns, "") + "?labelSelector=" + url.QueryEscape("kubernetes.io/service-name="+name))
+	body, _, err = c.Get(namespacedPath("discovery.k8s.io/v1", "endpointslices", ns, "") + "?labelSelector=" + url.QueryEscape("kubernetes.io/service-name="+name))
 	if err != nil {
 		return serviceHealth{state: serviceUnknown, exists: true, err: fmt.Errorf("list endpoints of Service %s: %w", ref, err)}
 	}
@@ -426,7 +426,7 @@ func (e *webhookEnv) csvPresent(ns, name string) csvPresence {
 		return p
 	}
 	var p csvPresence
-	body, found, err := e.c.getOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name))
+	body, found, err := e.c.GetOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name))
 	switch {
 	case err != nil:
 		p.err = err
@@ -559,7 +559,7 @@ func listAdmissionConfigs(c *Client) ([]admissionConfig, []string) {
 	var errs []string
 	for _, wk := range webhookKinds {
 		var items []admissionConfig
-		if err := c.listInto(clusterPath("admissionregistration.k8s.io/v1", wk.resource, ""), &items); err != nil {
+		if err := c.ListInto(clusterPath("admissionregistration.k8s.io/v1", wk.resource, ""), &items); err != nil {
 			if isDecodeError(err) {
 				errs = append(errs, fmt.Sprintf("parse %s: %v", wk.resource, err))
 				continue
@@ -794,7 +794,7 @@ func listRHOAIConversionCRDs(c *Client) ([]conversionCRD, error) {
 	var items []conversionCRD
 	seen := map[string]bool{}
 	for _, sel := range rhoaiCRDSelectors {
-		body, _, err := c.do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil, url.Values{"labelSelector": {sel}})
+		body, _, err := c.Do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil, url.Values{"labelSelector": {sel}})
 		if err != nil {
 			return nil, err
 		}

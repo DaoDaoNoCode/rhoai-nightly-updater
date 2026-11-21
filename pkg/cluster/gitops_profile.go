@@ -134,8 +134,8 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	if preflightErr != nil {
 		var changed *errCatalogImageChanged
 		switch {
-		case c.ctx.Err() != nil:
-			return &types.OperationResponse{Success: false, Message: "Operation stopped while waiting for the catalog", Logs: logs}, c.ctx.Err()
+		case c.Context().Err() != nil:
+			return &types.OperationResponse{Success: false, Message: "Operation stopped while waiting for the catalog", Logs: logs}, c.Context().Err()
 		case errors.As(preflightErr, &changed):
 			return fail("Update stopped: "+changed.Error()+". Nothing was changed.", ErrorCodeGitOpsManaged)
 		case isCatalogImagePullError(preflightErr):
@@ -375,7 +375,7 @@ func liveCatalogTarget(c *Client, image, override, changedBy string, emit func(U
 		if !clk.Now().Before(deadline) {
 			return catalogTarget{}, errors.New(problem)
 		}
-		if err := clk.Sleep(c.ctx, CatalogPollInterval); err != nil {
+		if err := clk.Sleep(c.Context(), CatalogPollInterval); err != nil {
 			return catalogTarget{}, err
 		}
 	}

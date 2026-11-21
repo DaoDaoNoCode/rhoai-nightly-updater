@@ -126,7 +126,7 @@ const LockLostMessage = "Another updater pod took over the lock, so this operati
 // operationLockLost reports whether c's operation was stopped because its
 // cross-pod lock was lost.
 func operationLockLost(c *Client) bool {
-	return c != nil && c.ctx != nil && errors.Is(context.Cause(c.ctx), ErrOperationLockLost)
+	return c != nil && c.Context() != nil && errors.Is(context.Cause(c.Context()), ErrOperationLockLost)
 }
 
 // bookkeepingContext is postOperationContext for the updater's own records
@@ -134,9 +134,9 @@ func operationLockLost(c *Client) bool {
 func bookkeepingContext(c *Client, timeout time.Duration) (context.Context, context.CancelFunc) {
 	parent := context.Background()
 	end := clk.Now().Add(timeout)
-	if c != nil && c.ctx != nil {
-		parent = context.WithoutCancel(c.ctx)
-		if d, ok := c.ctx.Deadline(); ok {
+	if c != nil && c.Context() != nil {
+		parent = context.WithoutCancel(c.Context())
+		if d, ok := c.Context().Deadline(); ok {
 			if hard := d.Add(postDeadlineWork()); hard.Before(end) {
 				end = hard
 			}
@@ -213,12 +213,12 @@ func (r *operatorRecovery) restoreNightlyCatalog(c *Client) []string {
 	if r.catalog != nil {
 		obj := map[string]any{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
 			"metadata": map[string]any{"name": CatalogName, "namespace": CatalogNS}, "spec": r.catalog["spec"]}
-		if _, _, err := c.apply(catalogPath, obj); err != nil {
+		if _, _, err := c.Apply(catalogPath, obj); err != nil {
 			return []string{"CatalogSource: " + err.Error()}
 		}
 		return nil
 	}
-	if _, err := c.deleteIfExists(catalogPath); err != nil {
+	if _, err := c.DeleteIfExists(catalogPath); err != nil {
 		return []string{"remove the new CatalogSource: " + err.Error()}
 	}
 	return nil
@@ -271,7 +271,7 @@ func captureOperatorRecovery(c *Client) (*operatorRecovery, error) {
 		{namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName), &r.catalog},
 	} {
 		var obj map[string]any
-		found, err := c.getIntoOptional(resource.path, &obj)
+		found, err := c.GetIntoOptional(resource.path, &obj)
 		if err != nil {
 			if isDecodeError(err) {
 				return nil, err
@@ -453,7 +453,7 @@ func (r *operatorRecovery) reapplySubscription(c *Client) []string {
 	obj := map[string]any{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "Subscription",
 		"metadata": map[string]any{"name": SubName, "namespace": SubNS}, "spec": spec}
 	keepArgoTracking(r.subscription, obj)
-	if _, _, err := c.apply(subscriptionPath(), obj); err != nil {
+	if _, _, err := c.Apply(subscriptionPath(), obj); err != nil {
 		failures = append(failures, "Subscription: "+err.Error())
 	}
 	return failures
@@ -530,7 +530,7 @@ func listRHOAICSVs(c *Client) ([]rhoaiCSV, error) {
 			} `json:"metadata"`
 		} `json:"items"`
 	}
-	found, err := c.getIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""), &list)
+	found, err := c.GetIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""), &list)
 	if err != nil {
 		return nil, err
 	}
@@ -602,7 +602,7 @@ func (r *operatorRecovery) attemptCSVsToRemove(c *Client) ([]rhoaiCSV, error) {
 				UID string `json:"uid"`
 			} `json:"metadata"`
 		}
-		found, getErr := c.getIntoOptional(csvPath(name), &obj)
+		found, getErr := c.GetIntoOptional(csvPath(name), &obj)
 		if getErr != nil {
 			return out, err
 		}
@@ -644,7 +644,7 @@ func deleteCSVByUIDAndWait(c *Client, csv rhoaiCSV) (gone bool, err error) {
 		if clk.Now().After(deadline) {
 			return false, nil
 		}
-		if err := clk.Sleep(c.ctx, InstallPlanPollInterval); err != nil {
+		if err := clk.Sleep(c.Context(), InstallPlanPollInterval); err != nil {
 			return false, err
 		}
 	}

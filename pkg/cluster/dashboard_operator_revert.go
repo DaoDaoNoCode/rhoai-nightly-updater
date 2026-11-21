@@ -146,7 +146,7 @@ func pausedOperatorText(operator string) string {
 
 func legacyDashboardDevActive(c *Client, ns string) (bool, error) {
 	var d dashboardDeployment
-	found, err := c.getIntoOptional(namespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName), &d)
+	found, err := c.GetIntoOptional(namespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName), &d)
 	if err != nil {
 		return false, err
 	}
@@ -209,13 +209,12 @@ func RevertDashboardDevForOperation(c *Client) error {
 }
 
 func waitDashboardOperatorReady(c *Client, ns, name string, replicas int) error {
-	ctx, cancel := clk.WithTimeout(c.ctx, dashboardOperatorReadyTimeout)
+	ctx, cancel := clk.WithTimeout(c.Context(), dashboardOperatorReadyTimeout)
 	defer cancel()
-	reader := *c
-	reader.ctx = ctx
+	reader := c.WithContext(ctx)
 	var last string
 	for {
-		operator, err := readDashboardOperatorAt(&reader, ns, name)
+		operator, err := readDashboardOperatorAt(reader, ns, name)
 		switch {
 		case err != nil:
 			last = err.Error()

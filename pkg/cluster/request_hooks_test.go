@@ -14,7 +14,7 @@ import (
 //     cancelled here fails the request every time: net/http's
 //     Transport.roundTrip returns context.Cause(ctx) for a done context
 //     before it sends anything (net/http/transport.go).
-//   - answered runs once the client closed the response body; c.do reads
+//   - answered runs once the client closed the response body; c.Do reads
 //     the body in full before it closes it, so the request succeeded.
 //
 // A server handler is no such point: a context cancelled while the handler

@@ -117,7 +117,7 @@ func simulateKServeRoute(mc *modelsCluster) *kserveRouteSim {
 // KServe reconciles it) and returns its parents' names.
 func routeParents(t *testing.T, mc *modelsCluster) string {
 	t.Helper()
-	body, _, err := mc.c.get(tModelRoute)
+	body, _, err := mc.c.Get(tModelRoute)
 	if err != nil {
 		t.Fatalf("read the model's route: %v", err)
 	}

@@ -433,7 +433,7 @@ func createMaaSPOCCreds(c *Client, ns, password string, dryRun bool) (string, er
 	if dryRun {
 		query = url.Values{"dryRun": {"All"}}
 	}
-	body, _, err := c.do(http.MethodPost, maasCreatePath("PostgresSecret", ns), "application/json", data, query)
+	body, _, err := c.Do(http.MethodPost, maasCreatePath("PostgresSecret", ns), "application/json", data, query)
 	if isK8sConflict(err) {
 		return "", &foreignObjectError{Desc: maasDesc("PostgresSecret", ns)}
 	}
@@ -507,7 +507,7 @@ func newMaaSPOCPassword() (string, error) {
 // again with it (keep false). The tool never reads postgres-creds itself.
 func maasPOCPassword(c *Client, st maasDBState) (string, bool, error) {
 	if st.kind == maasDBDevelopment && st.credsUID != "" && st.secretFound && toolOwned(st.secret) {
-		body, _, err := c.get(maasObjectPath("Secret", st.ns))
+		body, _, err := c.Get(maasObjectPath("Secret", st.ns))
 		if err != nil {
 			return "", false, fmt.Errorf("read %s: %w", maasDesc("Secret", st.ns), err)
 		}
@@ -531,7 +531,7 @@ func maasPOCPassword(c *Client, st maasDBState) (string, bool, error) {
 // postgresql_16_image of the RHOAI operator's CSV, else its fallback
 // image. It says which.
 func maasPOCImage(c *Client) (string, string) {
-	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""))
+	body, _, err := c.Get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""))
 	if err == nil {
 		var list struct {
 			Items []struct {
@@ -593,7 +593,7 @@ func maasPOCRestartWarning(c *Client, ns string) string {
 			} `json:"containerStatuses"`
 		} `json:"status"`
 	}
-	if c.listInto(namespacedPath("v1", "pods", ns, ""), &items) != nil {
+	if c.ListInto(namespacedPath("v1", "pods", ns, ""), &items) != nil {
 		return ""
 	}
 	var dbCreated, apiStarted time.Time

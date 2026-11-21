@@ -134,7 +134,7 @@ func readOperatorSubscription(c *Client, ns, name string) (*olmSubscription, err
 		}
 		return nil, nil
 	}
-	body, found, err := c.getOptional(path)
+	body, found, err := c.GetOptional(path)
 	if err != nil {
 		return nil, fmt.Errorf("read Subscription %s/%s: %w", ns, name, err)
 	}
@@ -158,7 +158,7 @@ func listSubscriptions(c *Client, ns string) ([]*olmSubscription, error) {
 	var list struct {
 		Items []json.RawMessage `json:"items"`
 	}
-	if err := c.getInto(path, &list); err != nil {
+	if err := c.GetInto(path, &list); err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse the Subscription list: %w", err)
 		}
@@ -348,7 +348,7 @@ func readOperatorPackage(c *Client, pkg, source string) (operatorPackage, bool, 
 			Channels               []packageChannel `json:"channels"`
 		} `json:"status"`
 	}
-	if err := c.listInto(path, &items); err != nil {
+	if err := c.ListInto(path, &items); err != nil {
 		if isDecodeError(err) {
 			return operatorPackage{}, false, fmt.Errorf("parse package %s: %w", pkg, err)
 		}
@@ -486,7 +486,7 @@ func readOperatorGroups(c *Client, ns string) (operatorGroups, error) {
 	var list struct {
 		Items operatorGroups `json:"items"`
 	}
-	if err := c.getInto(namespacedPath("operators.coreos.com/v1", "operatorgroups", ns, ""), &list); err != nil {
+	if err := c.GetInto(namespacedPath("operators.coreos.com/v1", "operatorgroups", ns, ""), &list); err != nil {
 		return nil, err
 	}
 	return list.Items, nil
@@ -532,7 +532,7 @@ func createOperatorObjects(c *Client, plan *operatorInstallPlan, dryRun bool) ([
 	var made []string
 	if plan.nsMissing {
 		data, _ := json.Marshal(ns)
-		if _, _, err := c.do(http.MethodPost, withToolFieldManager("/api/v1/namespaces"), "application/json", data, query); err != nil {
+		if _, _, err := c.Do(http.MethodPost, withToolFieldManager("/api/v1/namespaces"), "application/json", data, query); err != nil {
 			return made, fmt.Errorf("create Namespace %s: %w", plan.op.namespace, err)
 		}
 		made = append(made, "Namespace "+plan.op.namespace)
@@ -542,13 +542,13 @@ func createOperatorObjects(c *Client, plan *operatorInstallPlan, dryRun bool) ([
 	}
 	if plan.groupMissing {
 		data, _ := json.Marshal(group)
-		if _, _, err := c.do(http.MethodPost, withToolFieldManager(namespacedPath("operators.coreos.com/v1", "operatorgroups", plan.op.namespace, "")), "application/json", data, query); err != nil {
+		if _, _, err := c.Do(http.MethodPost, withToolFieldManager(namespacedPath("operators.coreos.com/v1", "operatorgroups", plan.op.namespace, "")), "application/json", data, query); err != nil {
 			return made, fmt.Errorf("create OperatorGroup %s/%s: %w", plan.op.namespace, plan.op.group, err)
 		}
 		made = append(made, "OperatorGroup "+plan.op.namespace+"/"+plan.op.group)
 	}
 	data, _ := json.Marshal(sub)
-	if _, _, err := c.do(http.MethodPost, withToolFieldManager(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", plan.op.namespace, "")), "application/json", data, query); err != nil {
+	if _, _, err := c.Do(http.MethodPost, withToolFieldManager(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", plan.op.namespace, "")), "application/json", data, query); err != nil {
 		return made, fmt.Errorf("create Subscription %s/%s: %w", plan.op.namespace, plan.op.subName, err)
 	}
 	made = append(made, "Subscription "+plan.op.namespace+"/"+plan.op.subName)
@@ -563,7 +563,7 @@ func csvPhase(c *Client, ns, name string) (string, string, error) {
 			Message string `json:"message"`
 		} `json:"status"`
 	}
-	found, err := c.getIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name), &csv)
+	found, err := c.GetIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name), &csv)
 	if err != nil {
 		return "", "", err
 	}
@@ -661,7 +661,7 @@ func patchSubscription(c *Client, sub *olmSubscription, spec map[string]any, dry
 	if dryRun {
 		query.Set("dryRun", "All")
 	}
-	body, _, err := c.do(http.MethodPatch, path, "application/merge-patch+json", data, query)
+	body, _, err := c.Do(http.MethodPatch, path, "application/merge-patch+json", data, query)
 	if err != nil {
 		return err
 	}
@@ -685,7 +685,7 @@ func controllerDeployed(c *Client, name string) (bool, error) {
 			Name string `json:"name"`
 		} `json:"metadata"`
 	}
-	if err := c.listInto("/apis/apps/v1/deployments?fieldSelector="+url.QueryEscape("metadata.name="+name), &items); err != nil {
+	if err := c.ListInto("/apis/apps/v1/deployments?fieldSelector="+url.QueryEscape("metadata.name="+name), &items); err != nil {
 		return false, fmt.Errorf("list Deployments named %s: %w", name, err)
 	}
 	for _, d := range items {

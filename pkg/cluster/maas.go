@@ -186,7 +186,7 @@ func readMaaSRecord(c *Client) (maasRecord, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	found, err := c.bookkeeping().getIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
+	found, err := c.bookkeeping().GetIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
 	if err != nil {
 		if isDecodeError(err) {
 			return rec, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
@@ -350,7 +350,7 @@ const maasEmbeddingReason = "This tool publishes chat models only. Use the embed
 // failure is never replaced by a default name (rhoai_namespaces.go).
 func maasInfraNamespace(c *Client) (string, error) {
 	const what = "the default tenant (MaaSTenantConfig models-as-a-service/default-tenant)"
-	body, _, err := c.get(namespacedPath(maasAPI(c), "maastenantconfigs", "models-as-a-service", "default-tenant"))
+	body, _, err := c.Get(namespacedPath(maasAPI(c), "maastenantconfigs", "models-as-a-service", "default-tenant"))
 	switch {
 	case err == nil:
 		var tc struct {
@@ -622,7 +622,7 @@ type maasGatewayState struct {
 }
 
 func readMaaSGateway(c *Client) (maasGatewayState, error) {
-	body, exists, err := c.getOptional(maasObjectPath("Gateway", ""))
+	body, exists, err := c.GetOptional(maasObjectPath("Gateway", ""))
 	if err != nil {
 		return maasGatewayState{}, err
 	}
@@ -810,7 +810,7 @@ func maasConnectionURL(c *Client, ns string) (string, error) {
 	var s struct {
 		Data map[string]string `json:"data"`
 	}
-	if err := c.getInto(namespacedPath("v1", "secrets", ns, "maas-db-app"), &s); err != nil {
+	if err := c.GetInto(namespacedPath("v1", "secrets", ns, "maas-db-app"), &s); err != nil {
 		if isDecodeError(err) {
 			return "", errors.New("the database's application Secret cannot be parsed")
 		}
@@ -838,7 +838,7 @@ func readMaaSDBCluster(c *Client, ns string) (objectMeta, bool, bool, string, er
 			ReadyInstances int    `json:"readyInstances"`
 		} `json:"status"`
 	}
-	found, err := c.getIntoOptional(maasObjectPath("Cluster", ns), &cl)
+	found, err := c.GetIntoOptional(maasObjectPath("Cluster", ns), &cl)
 	if err != nil {
 		if isDecodeError(err) {
 			return objectMeta{}, true, false, "", err
@@ -860,7 +860,7 @@ func deploymentAvailable(c *Client, ns, name string) string {
 			Conditions []k8sCondition `json:"conditions"`
 		} `json:"status"`
 	}
-	found, err := c.getIntoOptional(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, name), &d)
+	found, err := c.GetIntoOptional(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, name), &d)
 	if err != nil {
 		return ""
 	}
@@ -881,7 +881,7 @@ func readyCondition(c *Client, path string) (string, string) {
 			Conditions []k8sCondition `json:"conditions"`
 		} `json:"status"`
 	}
-	found, err := c.getIntoOptional(path, &obj)
+	found, err := c.GetIntoOptional(path, &obj)
 	if err != nil {
 		return "", ""
 	}
@@ -920,10 +920,10 @@ func maasGatewayAuth(c *Client) string {
 // document answers 404 when no CRD of the group is installed. Any other
 // failure is returned, so callers can refuse rather than guess.
 func groupServed(c *Client, group string) (bool, error) {
-	if v, ok := apiVersionsCache.Get(c.baseURL + "|" + group); ok && len(v) > 0 {
+	if v, ok := apiVersionsCache.Get(c.BaseURL() + "|" + group); ok && len(v) > 0 {
 		return true, nil
 	}
-	body, found, err := c.getOptional("/apis/" + group)
+	body, found, err := c.GetOptional("/apis/" + group)
 	if err != nil {
 		return false, fmt.Errorf("read the API group %s: %w", group, err)
 	}
@@ -986,7 +986,7 @@ func authorinoTLS(c *Client, ns string) (string, bool, string) {
 	if known && !tlsOK {
 		missing = append(missing, "TLS on Authorino's listener")
 	}
-	if body, _, err := c.get(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, "authorino")); err != nil {
+	if body, _, err := c.Get(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, "authorino")); err != nil {
 		known = false
 	} else if !authorinoTrustsServiceCA(body) {
 		missing = append(missing, "trust of the service CA (SSL_CERT_FILE)")
@@ -1762,7 +1762,7 @@ func readMaaSModelRef(c *Client, project, name string) (maasModelRefObject, bool
 
 func readMaaSObject(c *Client, path string) (maasModelRefObject, bool, error) {
 	var obj maasModelRefObject
-	found, err := c.getIntoOptional(path, &obj)
+	found, err := c.GetIntoOptional(path, &obj)
 	if err != nil {
 		return obj, false, err
 	}

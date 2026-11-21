@@ -72,7 +72,7 @@ func readTopologyHosted(c *Client) (bool, error) {
 			ControlPlaneTopology string `json:"controlPlaneTopology"`
 		} `json:"status"`
 	}
-	if err := c.getInto(clusterPath("config.openshift.io/v1", "infrastructures", "cluster"), &infra); err != nil {
+	if err := c.GetInto(clusterPath("config.openshift.io/v1", "infrastructures", "cluster"), &infra); err != nil {
 		if isDecodeError(err) {
 			return false, fmt.Errorf("parse Infrastructure cluster: %w", err)
 		}
@@ -106,7 +106,7 @@ func readRedHatManaged(c *Client) (bool, error) {
 			Name string `json:"name"`
 		} `json:"webhooks"`
 	}
-	if err := c.listInto(clusterPath("admissionregistration.k8s.io/v1", "validatingwebhookconfigurations", ""), &items); err != nil {
+	if err := c.ListInto(clusterPath("admissionregistration.k8s.io/v1", "validatingwebhookconfigurations", ""), &items); err != nil {
 		if isDecodeError(err) {
 			return false, fmt.Errorf("parse validating webhook configurations: %w", err)
 		}
@@ -129,14 +129,14 @@ var controlPlaneCache = newLRU[string, string](8)
 // cachedControlPlane is readControlPlane, cached per cluster; "" when it
 // cannot be read (unknown).
 func cachedControlPlane(c *Client) string {
-	if cp, ok := controlPlaneCache.Get(c.baseURL); ok {
+	if cp, ok := controlPlaneCache.Get(c.BaseURL()); ok {
 		return cp
 	}
 	cp, err := readControlPlane(c)
 	if err != nil {
 		return ""
 	}
-	controlPlaneCache.Add(c.baseURL, cp, time.Hour)
+	controlPlaneCache.Add(c.BaseURL(), cp, time.Hour)
 	return cp
 }
 

@@ -30,7 +30,7 @@ func catalogChannels(c *Client, source string) ([]any, error) {
 			Channels    []any  `json:"channels"`
 		} `json:"status"`
 	}
-	if err := c.listInto(path, &items); err != nil {
+	if err := c.ListInto(path, &items); err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse catalog packages: %w", err)
 		}
@@ -170,7 +170,7 @@ func preflightReinstallCatalog(c *Client, image, override string) (catalogTarget
 		} else {
 			lastProblem = fmt.Sprintf("no channel matches the image's release (available: %s)", strings.Join(channelNames(channels), ", "))
 		}
-		if err := clk.Sleep(c.ctx, CatalogPollInterval); err != nil {
+		if err := clk.Sleep(c.Context(), CatalogPollInterval); err != nil {
 			return catalogTarget{}, err
 		}
 	}
@@ -187,7 +187,7 @@ func createVerificationCatalog(c *Client, image string) (name, path string, remo
 	remove = func() {
 		ctx, cancel := postOperationContext(c, 30*time.Second)
 		defer cancel()
-		if _, err := c.WithContext(ctx).deleteIfExists(path); err != nil {
+		if _, err := c.WithContext(ctx).DeleteIfExists(path); err != nil {
 			slog.Warn("failed to delete verification CatalogSource; the next operation removes it", "name", name, "error", err)
 		}
 	}
@@ -195,7 +195,7 @@ func createVerificationCatalog(c *Client, image string) (name, path string, remo
 	meta := spec["metadata"].(map[string]any)
 	meta["name"] = name
 	meta["labels"] = map[string]any{managedByLabel: managedByValue, catalogPurposeLabel: verificationCatalogRole}
-	if _, _, err := c.apply(path, spec); err != nil {
+	if _, _, err := c.Apply(path, spec); err != nil {
 		// The apply may have created it before failing.
 		remove()
 		return "", "", nil, fmt.Errorf("create verification catalog: %w", err)
@@ -213,7 +213,7 @@ func verificationCatalogState(c *Client, path string) (string, error) {
 			} `json:"connectionState"`
 		} `json:"status"`
 	}
-	if err := c.getInto(path, &cs); err != nil {
+	if err := c.GetInto(path, &cs); err != nil {
 		if isDecodeError(err) {
 			return "", fmt.Errorf("parse verification catalog: %w", err)
 		}
@@ -248,7 +248,7 @@ func cleanupStaleVerificationCatalogs(c *Client) {
 			CreationTimestamp string            `json:"creationTimestamp"`
 		} `json:"metadata"`
 	}
-	if err := c.listInto(namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, ""), &items); err != nil {
+	if err := c.ListInto(namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, ""), &items); err != nil {
 		if isDecodeError(err) {
 			slog.Warn("cannot parse CatalogSources to remove stale verification catalogs", "error", err)
 			return
@@ -266,7 +266,7 @@ func cleanupStaleVerificationCatalogs(c *Client) {
 			continue
 		}
 		path := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, m.Name)
-		if _, err := c.deleteIfExists(path); err != nil {
+		if _, err := c.DeleteIfExists(path); err != nil {
 			slog.Warn("failed to delete stale verification CatalogSource", "name", m.Name, "error", err)
 			continue
 		}
@@ -346,7 +346,7 @@ func catalogPodPullFailure(c *Client, source string) (string, string) {
 			ContainerStatuses     []containerWaitStatus `json:"containerStatuses"`
 		} `json:"status"`
 	}
-	if c.listInto(path, &items) != nil {
+	if c.ListInto(path, &items) != nil {
 		return "", ""
 	}
 	for _, pod := range items {
@@ -401,7 +401,7 @@ func spaced(s string) string {
 // lack). Only the operator's own CRDs (OLM package label) are read; CRDs
 // the target does not list are skipped.
 func storedVersionConflicts(c *Client, owned map[string][]string) ([]string, error) {
-	body, _, err := c.do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil, url.Values{"labelSelector": {rhoaiCRDSelectors[0]}})
+	body, _, err := c.Do(http.MethodGet, "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", "", nil, url.Values{"labelSelector": {rhoaiCRDSelectors[0]}})
 	if err != nil {
 		return nil, fmt.Errorf("list the operator's CRDs: %w", err)
 	}

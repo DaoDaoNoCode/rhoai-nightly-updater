@@ -103,7 +103,7 @@ type csvForDefaults struct {
 
 func readCSVForDefaults(c *Client, name string) (*installedOperator, error) {
 	var csv csvForDefaults
-	if err := c.getInto(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, name), &csv); err != nil {
+	if err := c.GetInto(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, name), &csv); err != nil {
 		return nil, err
 	}
 	op := &installedOperator{Name: name, Version: csv.Spec.Version, Phase: csv.Status.Phase, ALMExamples: csv.Metadata.Annotations["alm-examples"],
@@ -124,7 +124,7 @@ func readCSVForDefaults(c *Client, name string) (*installedOperator, error) {
 // getInstalledOperator reads the installed RHOAI CSV. The Subscription's
 // installedCSV is preferred over old CSVs remaining during an upgrade.
 func getInstalledOperator(c *Client) (*installedOperator, error) {
-	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName))
+	body, _, err := c.Get(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName))
 	if err == nil {
 		var sub struct {
 			Status struct {
@@ -274,7 +274,7 @@ func fetchDefaultDSCSpec(c *Client, want string) (*dscDefaults, error) {
 	if err != nil {
 		return nil, err
 	}
-	return defaultDSCSpecFor(c.ctx, op, servedVersions(c, dscGroup, dscFallbackVersions), want)
+	return defaultDSCSpecFor(c.Context(), op, servedVersions(c, dscGroup, dscFallbackVersions), want)
 }
 
 // defaultsOrder is the API versions to look for defaults in: want alone,

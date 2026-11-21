@@ -51,7 +51,7 @@ func readDSCCRD(c *Client) (*dscCRD, error) {
 			} `json:"versions"`
 		} `json:"spec"`
 	}
-	if err := c.getInto(dscCRDPath, &crd); err != nil {
+	if err := c.GetInto(dscCRDPath, &crd); err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse the DataScienceCluster CRD: %w", err)
 		}

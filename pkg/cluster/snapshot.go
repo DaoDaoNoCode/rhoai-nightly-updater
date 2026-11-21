@@ -66,7 +66,7 @@ func SaveDeploymentSnapshot(c *Client) error {
 		},
 	}
 
-	_, _, err = c.bookkeeping().apply(cmPath, cm)
+	_, _, err = c.bookkeeping().Apply(cmPath, cm)
 	if err != nil {
 		return fmt.Errorf("failed to save snapshot: %w", err)
 	}
@@ -78,7 +78,7 @@ func GetDeploymentSnapshot(c *Client) (map[string]string, string) {
 	ns := getActivityNamespace()
 	cmPath := namespacedPath("v1", "configmaps", ns, snapshotConfigMapName)
 
-	body, _, err := c.bookkeeping().get(cmPath)
+	body, _, err := c.bookkeeping().Get(cmPath)
 	if err != nil {
 		if !isK8sNotFound(err) {
 			slog.Warn("snapshot: failed to read", "error", err)
@@ -173,7 +173,7 @@ func saveSubscriptionSnapshot(c *Client, sub map[string]any) error {
 		"data":       map[string]any{subscriptionSnapshotKey: string(data)},
 	})
 	query := url.Values{"fieldManager": {subscriptionSnapshotManager}, "force": {"true"}}
-	if _, _, err := c.bookkeeping().do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
+	if _, _, err := c.bookkeeping().Do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
 		return fmt.Errorf("record the operator Subscription: %w", err)
 	}
 	return nil
@@ -185,7 +185,7 @@ func loadSubscriptionSnapshot(c *Client) (*subscriptionSnapshot, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	found, err := c.bookkeeping().getIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
+	found, err := c.bookkeeping().GetIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
 	if err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
@@ -216,7 +216,7 @@ func recordLiveSubscription(c *Client) {
 	ctx, cancel := postOperationContext(c, subscriptionRecordTimeout)
 	defer cancel()
 	c = c.WithContext(ctx)
-	body, _, err := c.get(subscriptionPath())
+	body, _, err := c.Get(subscriptionPath())
 	if err != nil {
 		slog.Warn("could not read the operator Subscription to record it", "error", err)
 		return

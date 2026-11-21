@@ -40,7 +40,7 @@ const dsProjectSelector = "opendatahub.io/dashboard=true"
 // pkg/bootstrappolicy/policy.go:461, bound to system:authenticated at
 // :766). A cluster-admin sees every project.
 func ListUserDSProjects(u *Client) ([]string, error) {
-	if !u.asUser {
+	if !u.ActsAsUser() {
 		return nil, errNotUserClient
 	}
 	var items []struct {
@@ -51,7 +51,7 @@ func ListUserDSProjects(u *Client) ([]string, error) {
 			Phase string `json:"phase"`
 		} `json:"status"`
 	}
-	if err := u.listInto("/apis/project.openshift.io/v1/projects?labelSelector="+url.QueryEscape(dsProjectSelector), &items); err != nil {
+	if err := u.ListInto("/apis/project.openshift.io/v1/projects?labelSelector="+url.QueryEscape(dsProjectSelector), &items); err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse the project list: %w", err)
 		}
@@ -76,7 +76,7 @@ func ListUserDSProjects(u *Client) ([]string, error) {
 // set up, used only for objects of this project. A part the user may not
 // read says so in its Problem field; the others are still shown.
 func GetProjectStatus(sa, u *Client, project string) (*types.ProjectStatus, error) {
-	if !u.asUser {
+	if !u.ActsAsUser() {
 		return nil, errNotUserClient
 	}
 	ok, err := isUserDSProject(u, project)
@@ -178,13 +178,13 @@ func userReadProblem(what, project string, err error) (string, string) {
 // listProjectLLMInferenceServices lists the LLMInferenceServices of one
 // project with the user's token.
 func listProjectLLMInferenceServices(u *Client, project string) ([]llmisvcObject, error) {
-	if !u.asUser {
+	if !u.ActsAsUser() {
 		return nil, errNotUserClient
 	}
 	var list struct {
 		Items []llmisvcObject `json:"items"`
 	}
-	found, err := u.getIntoOptional(namespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, ""), &list)
+	found, err := u.GetIntoOptional(namespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, ""), &list)
 	if err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse LLMInferenceServices: %w", err)
@@ -201,7 +201,7 @@ func listProjectLLMInferenceServices(u *Client, project string) ([]llmisvcObject
 // listProjectInferenceServices lists the KServe InferenceServices of one
 // project with the user's token. A cluster without the API has none.
 func listProjectInferenceServices(u *Client, project string) ([]types.ProjectInferenceService, error) {
-	if !u.asUser {
+	if !u.ActsAsUser() {
 		return nil, errNotUserClient
 	}
 	out := []types.ProjectInferenceService{}
@@ -214,7 +214,7 @@ func listProjectInferenceServices(u *Client, project string) ([]types.ProjectInf
 			} `json:"status"`
 		} `json:"items"`
 	}
-	found, err := u.getIntoOptional(namespacedPath("serving.kserve.io/v1beta1", "inferenceservices", project, ""), &list)
+	found, err := u.GetIntoOptional(namespacedPath("serving.kserve.io/v1beta1", "inferenceservices", project, ""), &list)
 	if err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse InferenceServices: %w", err)

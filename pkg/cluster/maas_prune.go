@@ -289,7 +289,7 @@ func updateToolObject(c *Client, desc, path string, obj map[string]any, current 
 			if mErr != nil {
 				return mErr
 			}
-			_, _, err = c.do(http.MethodPatch, path, "application/apply-patch+yaml", data, url.Values{"fieldManager": {toolFieldManager}, "force": {"true"}})
+			_, _, err = c.Do(http.MethodPatch, path, "application/apply-patch+yaml", data, url.Values{"fieldManager": {toolFieldManager}, "force": {"true"}})
 			if err == nil {
 				return nil
 			}

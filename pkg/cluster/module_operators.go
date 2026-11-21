@@ -189,7 +189,7 @@ func (f *moduleOperatorFinder) loadPods() error {
 	}
 	f.podsLoaded = true
 	var items []moduleOperatorPod
-	if err := f.c.listInto(namespacedPath("v1", "pods", f.appNS, ""), &items); err != nil {
+	if err := f.c.ListInto(namespacedPath("v1", "pods", f.appNS, ""), &items); err != nil {
 		if isDecodeError(err) {
 			f.podsErr = fmt.Errorf("parse Pods in %s: %w", f.appNS, err)
 			return f.podsErr
@@ -223,7 +223,7 @@ func (f *moduleOperatorFinder) read() error {
 	}
 	f.appNS = appNS
 
-	body, _, err := f.c.get(clusterPath("rbac.authorization.k8s.io/v1", "clusterroles", ""))
+	body, _, err := f.c.Get(clusterPath("rbac.authorization.k8s.io/v1", "clusterroles", ""))
 	if err != nil {
 		return fmt.Errorf("list ClusterRoles: %w", err)
 	}
@@ -243,7 +243,7 @@ func (f *moduleOperatorFinder) read() error {
 		f.roles[r.Metadata.Name] = r.Rules
 	}
 
-	body, _, err = f.c.get(clusterPath("rbac.authorization.k8s.io/v1", "clusterrolebindings", ""))
+	body, _, err = f.c.Get(clusterPath("rbac.authorization.k8s.io/v1", "clusterrolebindings", ""))
 	if err != nil {
 		return fmt.Errorf("list ClusterRoleBindings: %w", err)
 	}
@@ -255,7 +255,7 @@ func (f *moduleOperatorFinder) read() error {
 	}
 	f.bindings = bindings.Items
 
-	body, _, err = f.c.get(namespacedPath("apps/v1", "deployments", f.appNS, ""))
+	body, _, err = f.c.Get(namespacedPath("apps/v1", "deployments", f.appNS, ""))
 	if err != nil {
 		return fmt.Errorf("list Deployments in %s: %w", f.appNS, err)
 	}

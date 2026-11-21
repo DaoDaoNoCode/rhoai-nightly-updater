@@ -143,7 +143,7 @@ func pickHardwareProfile(c *Client, entry catalogModel) (hardwareProfile, string
 		return hardwareProfile{}, fmt.Sprintf("the dashboard's namespace is not known (%v)", err)
 	}
 	var items []hardwareProfileObject
-	if err := c.listInto(namespacedPath("infrastructure.opendatahub.io/v1", "hardwareprofiles", ns, ""), &items); err != nil {
+	if err := c.ListInto(namespacedPath("infrastructure.opendatahub.io/v1", "hardwareprofiles", ns, ""), &items); err != nil {
 		if isDecodeError(err) {
 			return hardwareProfile{}, "the hardware profiles cannot be parsed"
 		}

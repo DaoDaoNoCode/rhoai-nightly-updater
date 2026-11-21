@@ -82,7 +82,7 @@ func TestCreateDefaultDSC_CreatesSuccessfully(t *testing.T) {
 	dscListPathV1 := "/apis/datasciencecluster.opendatahub.io/v1/datascienceclusters"
 	dscApplyPath := "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc"
 
-	// The actual implementation uses c.apply() which internally uses PATCH with SSA params
+	// The actual implementation uses c.Apply() which internally uses PATCH with SSA params
 	client, records, cleanup := newRecordingMockClient(map[string]mockResponse{
 		namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""): csvListMock("3.6.0"),
 		dscListPathV2: {body: string(emptyListJSON)},

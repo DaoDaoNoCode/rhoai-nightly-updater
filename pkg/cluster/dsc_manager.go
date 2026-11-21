@@ -1210,7 +1210,7 @@ func patchDSCFields(c *Client, path string, ops []jsonPatchOp, dryRun bool) ([]b
 	if dryRun {
 		q.Set("dryRun", "All")
 	}
-	resp, _, err := c.do(http.MethodPatch, path, "application/json-patch+json", body, q)
+	resp, _, err := c.Do(http.MethodPatch, path, "application/json-patch+json", body, q)
 	return resp, err
 }
 

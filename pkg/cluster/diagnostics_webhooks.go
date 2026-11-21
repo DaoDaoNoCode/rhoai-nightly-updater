@@ -43,7 +43,7 @@ func probeCRDObjects(c *Client, listPath string) (crdObjects, string) {
 	if listPath == "" {
 		return crdObjectsUnknown, "the CRD serves no version"
 	}
-	body, _, err := c.do(http.MethodGet, listPath, "", nil, url.Values{"limit": {"1"}})
+	body, _, err := c.Do(http.MethodGet, listPath, "", nil, url.Values{"limit": {"1"}})
 	switch {
 	case IsK8sError(err, http.StatusForbidden):
 		return crdObjectsUnknown, "this app may not list them"
@@ -133,7 +133,7 @@ func readDSCComponents(c *Client) map[string]string {
 			} `json:"components"`
 		} `json:"spec"`
 	}
-	if c.getInto(path, &dsc) != nil {
+	if c.GetInto(path, &dsc) != nil {
 		return nil
 	}
 	out := map[string]string{}
@@ -369,7 +369,7 @@ func deleteExact(c *Client, path, uid, resourceVersion string) error {
 		opts["preconditions"] = pre
 	}
 	body, _ := json.Marshal(opts)
-	_, _, err := c.do(http.MethodDelete, path, "application/json", body, nil)
+	_, _, err := c.Do(http.MethodDelete, path, "application/json", body, nil)
 	return err
 }
 
@@ -445,7 +445,7 @@ func listOperatorCSVs(c *Client) ([]operatorCSV, error) {
 			Message string `json:"message"`
 		} `json:"status"`
 	}
-	if err := c.listInto(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""), &items); err != nil {
+	if err := c.ListInto(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""), &items); err != nil {
 		return nil, err
 	}
 	var out []operatorCSV

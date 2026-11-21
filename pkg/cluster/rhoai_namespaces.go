@@ -46,12 +46,12 @@ var rhoaiNamespacesCache = newLRU[string, rhoaiNamespaces](16)
 // cached per cluster for rhoaiNamespacesTTL. err is errNoDSCInitialization
 // when none exists, or a read error; callers must not guess a name then.
 func discoverRHOAINamespaces(c *Client) (rhoaiNamespaces, error) {
-	key := c.baseURL
+	key := c.BaseURL()
 	if ns, ok := rhoaiNamespacesCache.Get(key); ok {
 		return ns, nil
 	}
 	// Status reads ask from several goroutines at once: one read serves them.
-	ctx := c.ctx
+	ctx := c.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}

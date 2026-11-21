@@ -340,7 +340,7 @@ func (m *maasRun) removeTierPolicies() (*types.OperationResponse, error) {
 	for _, p := range legacy {
 		path := legacyTierPolicyPath(p.Kind, p.Version)
 		opts, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": map[string]any{"uid": p.UID}})
-		if _, _, err := c.do(http.MethodDelete, path, "application/json", opts, url.Values{"dryRun": {"All"}}); err != nil && !isK8sNotFound(err) {
+		if _, _, err := c.Do(http.MethodDelete, path, "application/json", opts, url.Values{"dryRun": {"All"}}); err != nil && !isK8sNotFound(err) {
 			return m.fail("check", fmt.Sprintf("The API server rejects deleting %s %s: %v. Nothing was deleted.%s", p.Kind, p.Name, err, templateHint(err)), maasWriteCode(err), "dry run failed")
 		}
 	}

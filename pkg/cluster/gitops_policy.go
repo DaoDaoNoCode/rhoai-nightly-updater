@@ -371,7 +371,7 @@ func CheckGitOpsAdmissionPolicy(c *Client) error {
 		var live struct {
 			Spec map[string]any `json:"spec"`
 		}
-		if err := c.getInto(clusterPath("admissionregistration.k8s.io/v1", o.resource, name), &live); err != nil {
+		if err := c.GetInto(clusterPath("admissionregistration.k8s.io/v1", o.resource, name), &live); err != nil {
 			if isDecodeError(err) {
 				return fmt.Errorf("parse %s %s: %w", o.kind, name, err)
 			}

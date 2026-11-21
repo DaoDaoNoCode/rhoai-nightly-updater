@@ -4,8 +4,10 @@ package cluster
 // granted by deploy/template.yaml, and every grant must be used by the code.
 //
 // The test parses the source of pkg/cluster and of every package under it,
-// finds each call to a Client request method (get, post, put, patch,
-// strategicPatch, apply, dryRunApply, delete), resolves the request path
+// finds each call to a Client request method (Get, Post, Put, Patch,
+// StrategicPatch, Apply, DryRunApply, Delete, Do, and the REST helpers on
+// top of them; calls are told apart by type, so a cache's Get or an
+// http.Client's Do is none), resolves the request path
 // statically (through plain f(...) and qualified pkg.F(...) calls and
 // constants of those packages), and maps it to the RBAC request
 // attributes the API server checks (verb, API group, resource, namespace and
@@ -15,10 +17,14 @@ package cluster
 // test until it is resolved or listed in rbacCallsNotUsingTheSAToken.
 
 import (
+	"errors"
 	"fmt"
 	"go/ast"
+	"go/importer"
 	"go/parser"
 	"go/token"
+	"go/types"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -154,28 +160,49 @@ func isRequestSourceFile(base string) bool {
 	return strings.HasPrefix(base, "client") || base == "rest.go"
 }
 
+// requestMethods maps the Client request methods (client.go) to the names
+// the scans derive verbs from (methodVerbs, toRequests): "get" becomes get
+// or list depending on the path, "do" takes its http.Method argument.
+var requestMethods = map[string]string{
+	"Get":            "get",
+	"Post":           "post",
+	"Put":            "put",
+	"Patch":          "patch",
+	"StrategicPatch": "strategicPatch",
+	"Apply":          "apply",
+	"DryRunApply":    "dryRunApply",
+	"Delete":         "delete",
+	"Do":             "do",
+}
+
 // helperMethods maps each REST helper (rest.go) to the Client request
 // method it sends for its path argument (the first, as for the request
 // methods).
 var helperMethods = map[string]string{
-	"getOptional":     "get",
-	"getInto":         "get",
-	"getIntoOptional": "get",
-	"listInto":        "get",
-	"deleteIfExists":  "delete",
-	"patchJSON":       "patch",
+	"GetOptional":     "Get",
+	"GetInto":         "Get",
+	"GetIntoOptional": "Get",
+	"ListInto":        "Get",
+	"DeleteIfExists":  "Delete",
+	"PatchJSON":       "Patch",
 }
 
-// requestMethod is the Client request method a call by this method name
-// sends: a helper's (helperMethods), or the name itself.
-func requestMethod(name string) string {
-	if m, ok := helperMethods[name]; ok {
-		return m
+// requestMethod is the request a call sends when sel names a Client
+// request method or REST helper (by type: clientMethodCalls), as a
+// requestMethods value; false for any other call.
+func (p *sourcePkg) requestMethod(sel *ast.SelectorExpr) (string, bool) {
+	name, ok := p.clientCalls[sel]
+	if !ok {
+		return "", false
 	}
-	return name
+	if m, ok := helperMethods[name]; ok {
+		name = m
+	}
+	m, ok := requestMethods[name]
+	return m, ok
 }
 
-// rawMethods maps the http.Method constants passed to Client.do to the
+// rawMethods maps the http.Method constants passed to Client.Do to the
 // Client method with the same RBAC verbs.
 var rawMethods = map[string]string{
 	"MethodGet":    "get",
@@ -231,6 +258,9 @@ type sourcePkg struct {
 	lits    map[symID]*ast.CompositeLit
 	funcs   map[symID]*ast.FuncDecl
 	fileOf  map[*ast.FuncDecl]string
+	// clientCalls maps each selector that calls a Client method to the
+	// method's name (clientMethodCalls).
+	clientCalls map[*ast.SelectorExpr]string
 	// only, when set, limits the scan to these functions (funcPos keys):
 	// their API calls, and the call sites a parameter is resolved from.
 	only map[string]bool
@@ -476,6 +506,106 @@ var (
 	clusterSourceErr  error
 )
 
+// clientMethodCalls maps each selector in the parsed tree (clusterSource)
+// that calls a method of Client to the method's name. The selectors are
+// told apart by type, not by name: a cache's Get, a header's Get or an
+// http.Client's Do is no API request. Each package under pkg/cluster is
+// type-checked from the same syntax trees once per test binary, its
+// imports from their export data (exportData). It fails when a name in
+// requestMethods or helperMethods is not a Client method, so a renamed
+// request method cannot drop out of the scans.
+func clientMethodCalls(t *testing.T) map[*ast.SelectorExpr]string {
+	t.Helper()
+	clientCallsOnce.Do(func() {
+		ps := clusterSource(t)
+		exports := exportData(t)
+		byDir := map[string][]string{}
+		for name := range ps.files {
+			dir := filepath.Dir(ps.paths[name])
+			byDir[dir] = append(byDir[dir], name)
+		}
+		dirs := make([]string, 0, len(byDir))
+		for dir := range byDir {
+			dirs = append(dirs, dir)
+		}
+		sort.Strings(dirs)
+		imp := importer.ForCompiler(ps.fset, "gc", func(path string) (io.ReadCloser, error) {
+			file, ok := exports[path]
+			if !ok {
+				return nil, fmt.Errorf("no export data for %s", path)
+			}
+			return os.Open(file)
+		})
+		calls := map[*ast.SelectorExpr]string{}
+		var client *types.Named
+		for _, dir := range dirs {
+			names := byDir[dir]
+			sort.Strings(names)
+			files := make([]*ast.File, 0, len(names))
+			for _, name := range names {
+				files = append(files, ps.files[name])
+			}
+			info := &types.Info{Selections: map[*ast.SelectorExpr]*types.Selection{}}
+			pkg, err := (&types.Config{Importer: imp}).Check(clusterImportPath(dir), ps.fset, files, info)
+			if err != nil {
+				clientCallsErr = fmt.Errorf("type-check %s: %w", clusterImportPath(dir), err)
+				return
+			}
+			if tn, ok := pkg.Scope().Lookup("Client").(*types.TypeName); ok {
+				client, _ = tn.Type().(*types.Named)
+			}
+			for sel, s := range info.Selections {
+				if s.Kind() != types.MethodVal {
+					continue
+				}
+				if isClientType(s.Obj().(*types.Func).Signature().Recv().Type()) {
+					calls[sel] = s.Obj().Name()
+				}
+			}
+		}
+		if client == nil {
+			clientCallsErr = errors.New("no package under pkg/cluster declares Client")
+			return
+		}
+		for _, m := range []map[string]string{requestMethods, helperMethods} {
+			for name := range m {
+				if fn, _, _ := types.LookupFieldOrMethod(client, true, client.Obj().Pkg(), name); fn == nil {
+					clientCallsErr = fmt.Errorf("the RBAC scans know a Client request method %s that Client does not have: update requestMethods/helperMethods", name)
+					return
+				}
+			}
+		}
+		clientCallsVal = calls
+	})
+	if clientCallsErr != nil {
+		t.Fatal(clientCallsErr)
+	}
+	if clientCallsVal == nil {
+		t.Fatal("the Client calls could not be found")
+	}
+	return clientCallsVal
+}
+
+// isClientType reports whether t is Client or *Client of a package under
+// pkg/cluster.
+func isClientType(t types.Type) bool {
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = ptr.Elem()
+	}
+	named, ok := t.(*types.Named)
+	if !ok || named.Obj().Name() != "Client" || named.Obj().Pkg() == nil {
+		return false
+	}
+	path := named.Obj().Pkg().Path()
+	return path == clusterPkg || strings.HasPrefix(path, clusterPkg+"/")
+}
+
+var (
+	clientCallsOnce sync.Once
+	clientCallsVal  map[*ast.SelectorExpr]string
+	clientCallsErr  error
+)
+
 // loadClusterSource indexes the source of pkg/cluster and of every package
 // under it for one scan.
 func loadClusterSource(t *testing.T) *sourcePkg {
@@ -483,7 +613,8 @@ func loadClusterSource(t *testing.T) *sourcePkg {
 	ps := clusterSource(t)
 	p := &sourcePkg{fset: ps.fset, files: map[string]*ast.File{}, pkgOf: map[string]string{}, imports: map[string]map[string]string{},
 		consts: map[symID]string{}, lits: map[symID]*ast.CompositeLit{}, funcs: map[symID]*ast.FuncDecl{}, fileOf: map[*ast.FuncDecl]string{},
-		identMemo: map[identKey][]string{}, resultMemo: map[resultKey][]string{}, locals: map[*ast.FuncDecl]map[string]bool{}}
+		identMemo: map[identKey][]string{}, resultMemo: map[resultKey][]string{}, locals: map[*ast.FuncDecl]map[string]bool{},
+		clientCalls: clientMethodCalls(t)}
 	pkgNames := map[string]string{}
 	names := make([]string, 0, len(ps.files))
 	for name, f := range ps.files {
@@ -1237,10 +1368,13 @@ func scanRequests(t *testing.T, only map[string]bool, onlyBookkeeping bool) ([]r
 				if !ok || len(call.Args) == 0 {
 					return true
 				}
-				method := requestMethod(sel.Sel.Name)
+				method, ok := p.requestMethod(sel)
+				if !ok {
+					return true
+				}
 				pathArg := call.Args[0]
 				if method == "do" {
-					// c.do(http.MethodX, path, ...): the raw request method.
+					// c.Do(http.MethodX, path, ...): the raw request method.
 					m, ok := rawMethods[selectorName(call.Args[0])]
 					if !ok || len(call.Args) < 2 {
 						problems = append(problems, fmt.Sprintf("%s:%d do: request method is not an http.Method constant", file, p.fset.Position(call.Pos()).Line))

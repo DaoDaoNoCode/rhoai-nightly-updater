@@ -53,7 +53,7 @@ func GetSummary(c *Client) (*types.Summary, error) {
 	if sub.found {
 		s.RHOAI.Channel, s.RHOAI.Version, s.RHOAI.Phase = sub.info.Channel, csv.Version, csv.Phase
 	}
-	s.Nightly = summaryNightly(csErr, func() *types.NightlyStatus { return getNightlyStatus(c.ctx, quayAuth, sub.info, cs) })
+	s.Nightly = summaryNightly(csErr, func() *types.NightlyStatus { return getNightlyStatus(c.Context(), quayAuth, sub.info, cs) })
 	if dsc.Object != nil {
 		s.DSC.Exists = true
 		s.DSC.Ready = dscReady(dsc.Object)

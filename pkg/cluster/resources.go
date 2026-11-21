@@ -166,7 +166,7 @@ func parseObjectMeta(body []byte) (objectMeta, error) {
 // readObjectMeta reads the metadata of the object at path. found is false on
 // 404; any other error is returned.
 func readObjectMeta(c *Client, path string) (meta objectMeta, found bool, err error) {
-	body, exists, err := c.getOptional(path)
+	body, exists, err := c.GetOptional(path)
 	if err != nil {
 		return objectMeta{}, false, err
 	}
@@ -194,7 +194,7 @@ func deleteWithUIDPropagation(c *Client, path, uid, policy string) (int, error) 
 		"preconditions":     map[string]any{"uid": uid},
 		"propagationPolicy": policy,
 	})
-	_, status, err := c.do(http.MethodDelete, path, "application/json", body, nil)
+	_, status, err := c.Do(http.MethodDelete, path, "application/json", body, nil)
 	return status, err
 }
 
@@ -262,7 +262,7 @@ func ensureToolObject(c *Client, desc, path, createPath string, obj map[string]a
 	}
 	for range 3 {
 		if !found {
-			created, _, postErr := c.do(http.MethodPost, createPath, "application/json", data, query)
+			created, _, postErr := c.Do(http.MethodPost, createPath, "application/json", data, query)
 			if postErr == nil {
 				current, found = afterWrite(created, current, found, dryRun)
 				return "created", current, found, nil
@@ -305,9 +305,9 @@ func ensureToolObject(c *Client, desc, path, createPath string, obj map[string]a
 			applyErr    error
 		)
 		if dryRun {
-			appliedBody, _, applyErr = c.dryRunApply(path, guarded)
+			appliedBody, _, applyErr = c.DryRunApply(path, guarded)
 		} else {
-			appliedBody, _, applyErr = c.apply(path, guarded)
+			appliedBody, _, applyErr = c.Apply(path, guarded)
 		}
 		if applyErr == nil {
 			current, found = afterWrite(appliedBody, current, found, dryRun)
@@ -415,7 +415,7 @@ func upgradeToolFieldOwnership(c *Client, path string, current objectMeta) (obje
 	if err != nil {
 		return current, err
 	}
-	body, _, err := c.do(http.MethodPatch, path, "application/json-patch+json", patch, nil)
+	body, _, err := c.Do(http.MethodPatch, path, "application/json-patch+json", patch, nil)
 	if err != nil {
 		return current, err
 	}
@@ -477,7 +477,7 @@ func unionFieldsV1(a, b map[string]json.RawMessage) (map[string]json.RawMessage,
 // (false, nil) on timeout and (false, err) on any read error, including
 // 401/403: an unreadable object is not "still being deleted".
 func waitForGone(c *Client, timeout, interval time.Duration, gone func(cc *Client) (bool, error)) (bool, error) {
-	ctx, cancel := clk.WithTimeout(c.ctx, timeout)
+	ctx, cancel := clk.WithTimeout(c.Context(), timeout)
 	defer cancel()
 	cc := c.WithContext(ctx)
 	for {
@@ -488,8 +488,8 @@ func waitForGone(c *Client, timeout, interval time.Duration, gone func(cc *Clien
 		if ctx.Err() != nil {
 			// The caller's own context ended (client gone): report it. The
 			// local deadline only means "not gone yet".
-			if c.ctx.Err() != nil {
-				return false, c.ctx.Err()
+			if c.Context().Err() != nil {
+				return false, c.Context().Err()
 			}
 			return false, nil
 		}
@@ -503,7 +503,7 @@ func waitForGone(c *Client, timeout, interval time.Duration, gone func(cc *Clien
 // waitForDeletion polls path until it returns 404. See waitForGone.
 func waitForDeletion(c *Client, path string, timeout, interval time.Duration) (bool, error) {
 	return waitForGone(c, timeout, interval, func(cc *Client) (bool, error) {
-		_, _, err := cc.get(path)
+		_, _, err := cc.Get(path)
 		if isK8sNotFound(err) {
 			return true, nil
 		}
@@ -553,7 +553,7 @@ func inspectPods(c *Client, namespace, selector, wantImage string) (workloadPodI
 			ContainerStatuses     []containerStatus `json:"containerStatuses"`
 		} `json:"status"`
 	}
-	if err := c.listInto(namespacedPath("v1", "pods", namespace, "")+"?labelSelector="+url.QueryEscape(selector), &items); err != nil {
+	if err := c.ListInto(namespacedPath("v1", "pods", namespace, "")+"?labelSelector="+url.QueryEscape(selector), &items); err != nil {
 		if isDecodeError(err) {
 			return workloadPodIssue{}, fmt.Errorf("parse pod list: %w", err)
 		}
@@ -804,7 +804,7 @@ func routeHost(c *Client, namespace, name string) string {
 			Host string `json:"host"`
 		} `json:"spec"`
 	}
-	if c.getInto(namespacedPath("route.openshift.io/v1", "routes", namespace, name), &route) != nil {
+	if c.GetInto(namespacedPath("route.openshift.io/v1", "routes", namespace, name), &route) != nil {
 		return ""
 	}
 	return route.Spec.Host
@@ -821,7 +821,7 @@ func GetDSProjects(c *Client) ([]string, error) {
 			Phase string `json:"phase"`
 		} `json:"status"`
 	}
-	if err := c.listInto(path, &items); err != nil {
+	if err := c.ListInto(path, &items); err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse namespace list: %w", err)
 		}

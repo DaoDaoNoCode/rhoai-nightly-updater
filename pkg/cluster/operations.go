@@ -267,7 +267,7 @@ func waitForNightlyCatalogReady(c *Client, image string, emit func(UpdateStepEve
 	deadline := clk.Now().Add(CatalogReadyTimeout)
 	pull := pullFailureWatch{advice: nodePullAdvice}
 	for clk.Now().Before(deadline) {
-		if err := clk.Sleep(c.ctx, CatalogPollInterval); err != nil {
+		if err := clk.Sleep(c.Context(), CatalogPollInterval); err != nil {
 			return false, err
 		}
 
@@ -295,14 +295,14 @@ func waitForNightlyCatalogReady(c *Client, image string, emit func(UpdateStepEve
 func waitForNightlyPackageManifest(c *Client, image string, logs *[]string) error {
 	start := clk.Now()
 	for clk.Since(start) < PackageManifestPropagationWait {
-		if err := c.ctx.Err(); err != nil {
+		if err := c.Context().Err(); err != nil {
 			return err
 		}
 		if ch, _ := detectNightlyChannel(c, image); ch != "" {
 			*logs = append(*logs, fmt.Sprintf("OK: PackageManifest ready in %s (channel: %s)", clk.Since(start).Round(time.Second), ch))
 			return nil
 		}
-		if err := clk.Sleep(c.ctx, 3*time.Second); err != nil {
+		if err := clk.Sleep(c.Context(), 3*time.Second); err != nil {
 			return err
 		}
 	}
@@ -321,7 +321,7 @@ func applySubscriptionWithRetry(c *Client, path string, sub map[string]any, reco
 	const attempts = 3
 	for attempt := 1; attempt <= attempts; attempt++ {
 		var body []byte
-		body, _, applyErr = c.apply(path, sub)
+		body, _, applyErr = c.Apply(path, sub)
 		if applyErr == nil {
 			recovery.noteAttemptSubscription(c, body)
 			return nil, nil
@@ -335,7 +335,7 @@ func applySubscriptionWithRetry(c *Client, path string, sub map[string]any, reco
 		if !willRetry {
 			break
 		}
-		if err := clk.Sleep(c.ctx, backoff); err != nil {
+		if err := clk.Sleep(c.Context(), backoff); err != nil {
 			return applyErr, err
 		}
 	}
@@ -434,7 +434,7 @@ func VerifyNodeReadiness(c *Client) (*types.OperationResponse, error) {
 	}
 
 	httpClient := &http.Client{Timeout: 15 * time.Second}
-	bearerToken, err := getQuayBearerToken(c.ctx, httpClient, quayAuth)
+	bearerToken, err := getQuayBearerToken(c.Context(), httpClient, quayAuth)
 	if err != nil {
 		return &types.OperationResponse{
 			Success:   false,
@@ -446,7 +446,7 @@ func VerifyNodeReadiness(c *Client) (*types.OperationResponse, error) {
 	logs = append(logs, "OK: Authenticated with quay.io/rhoai")
 
 	// Step 4: Try listing tags to confirm full access
-	req, _ := http.NewRequestWithContext(c.ctx, "GET", "https://quay.io/v2/rhoai/rhoai-fbc-fragment/tags/list?n=1", nil)
+	req, _ := http.NewRequestWithContext(c.Context(), "GET", "https://quay.io/v2/rhoai/rhoai-fbc-fragment/tags/list?n=1", nil)
 	req.Header.Set("Authorization", "Bearer "+bearerToken)
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -655,8 +655,8 @@ func updateVerifyTarget(c *Client, image string, chk *updateChecks, logs *[]stri
 	emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Verifying the selected catalog image..."})
 	target, preflightErr := preflightReinstallCatalog(c, image, channelOverride)
 	if preflightErr != nil {
-		if c.ctx.Err() != nil {
-			return &types.OperationResponse{Success: false, Message: "Operation stopped while verifying the catalog image", Logs: *logs}, c.ctx.Err()
+		if c.Context().Err() != nil {
+			return &types.OperationResponse{Success: false, Message: "Operation stopped while verifying the catalog image", Logs: *logs}, c.Context().Err()
 		}
 		hint := ""
 		if channelOverride != "" {
@@ -717,7 +717,7 @@ func updateApplyCatalog(c *Client, image string, recovery *operatorRecovery, log
 	emit(UpdateStepEvent{Step: "apply_catalog_source", Status: "running", Message: "Applying CatalogSource..."})
 	if recovery.subscription != nil {
 		recovery.subscriptionChanged = true
-		if _, err := c.deleteIfExists(subscriptionPath()); err != nil {
+		if _, err := c.DeleteIfExists(subscriptionPath()); err != nil {
 			return fail("Cannot remove the current Subscription: "+err.Error(), errorCodeFromK8sErr(err))
 		}
 		*logs = append(*logs, "OK: Subscription removed while the catalog is replaced (the operator keeps running)")
@@ -728,10 +728,10 @@ func updateApplyCatalog(c *Client, image string, recovery *operatorRecovery, log
 	recovery.noteCatalogChanged()
 	// Recreate this source so READY and PackageManifest cannot describe its
 	// previous image. The verified temporary catalog remains separate.
-	if _, deleteErr := c.deleteIfExists(csPath); deleteErr != nil {
+	if _, deleteErr := c.DeleteIfExists(csPath); deleteErr != nil {
 		return fail("Cannot replace nightly catalog: "+deleteErr.Error(), errorCodeFromK8sErr(deleteErr))
 	}
-	if _, _, err := c.apply(csPath, buildCatalogSourceSpec(image)); err != nil {
+	if _, _, err := c.Apply(csPath, buildCatalogSourceSpec(image)); err != nil {
 		return fail(fmt.Sprintf("Failed to apply CatalogSource: %v", err), errorCodeFromK8sErr(err))
 	}
 	*logs = append(*logs, "OK: CatalogSource applied")
@@ -776,7 +776,7 @@ func updateDetectChannel(c *Client, image string, channel *string, logs *[]strin
 		}
 		slog.Warn("detectNightlyChannel failed", "attempt", attempt, "error", detectErr)
 		if attempt < 3 {
-			if err := clk.Sleep(c.ctx, ChannelRetryDelay); err != nil {
+			if err := clk.Sleep(c.Context(), ChannelRetryDelay); err != nil {
 				return &types.OperationResponse{Success: false, Message: "Operation stopped while detecting the channel", Logs: *logs}, err
 			}
 		}
@@ -801,13 +801,13 @@ func updateDeleteCSV(c *Client, currentCSV types.CSVInfo, recovery *operatorReco
 	emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting old CSV and InstallPlan..."})
 	if ipName := recovery.installPlanName(); ipName != "" {
 		ipPath := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ipName)
-		if _, err := c.deleteIfExists(ipPath); err != nil {
+		if _, err := c.DeleteIfExists(ipPath); err != nil {
 			return fail("Cannot delete old InstallPlan: "+err.Error(), errorCodeFromK8sErr(err))
 		}
 		*logs = append(*logs, fmt.Sprintf("OK: InstallPlan %s deleted", ipName))
 	}
 	if currentCSV.Name != "" {
-		if _, err := c.deleteIfExists(csvPath(currentCSV.Name)); err != nil {
+		if _, err := c.DeleteIfExists(csvPath(currentCSV.Name)); err != nil {
 			return fail("Cannot delete current CSV: "+err.Error(), errorCodeFromK8sErr(err))
 		}
 		recovery.noteCSVRemoved(currentCSV.Name)
@@ -851,10 +851,10 @@ func applyUpdateSubscription(c *Client, sub map[string]any, channel string, reco
 func readCSVMetaRetrying(c *Client, csv string) (meta objectMeta, found bool, err error) {
 	for attempt := 0; ; attempt++ {
 		meta, found, err = readObjectMeta(c, csvPath(csv))
-		if err == nil || attempt == 2 || c.ctx.Err() != nil {
+		if err == nil || attempt == 2 || c.Context().Err() != nil {
 			return meta, found, err
 		}
-		if clk.Sleep(c.ctx, time.Second) != nil {
+		if clk.Sleep(c.Context(), time.Second) != nil {
 			return meta, found, err
 		}
 	}
@@ -994,12 +994,12 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 
 	// Validate image exists on Quay
 	quayAuth := getQuayAuth(c)
-	bearerToken, tokenErr := getQuayBearerToken(c.ctx, quayHTTPClient, quayAuth)
+	bearerToken, tokenErr := getQuayBearerToken(c.Context(), quayHTTPClient, quayAuth)
 	if tokenErr != nil {
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] WARNING: Could not authenticate with Quay: %v", tokenErr))
 	} else {
 		tag := extractTagFromRef(image)
-		_, digestErr := getTagDigest(c.ctx, quayHTTPClient, bearerToken, tag)
+		_, digestErr := getTagDigest(c.Context(), quayHTTPClient, bearerToken, tag)
 		if digestErr != nil {
 			logs = append(logs, fmt.Sprintf("[DRY-RUN] WARNING: Image tag %q not found on Quay — the image may not exist", tag))
 		} else {
@@ -1058,7 +1058,7 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
 	var csDryErr error
 	if !gitOps.active() {
-		_, _, csDryErr = c.dryRunApply(csPath, catalogSpec)
+		_, _, csDryErr = c.DryRunApply(csPath, catalogSpec)
 	}
 	if csDryErr != nil {
 		logs = append(logs, fmt.Sprintf("[DRY-RUN] FAILED: CatalogSource apply rejected by API server: %v", csDryErr))
@@ -1115,7 +1115,7 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 // ships for its release, read from the image's catalog content. Tests replace
 // it to avoid registry calls.
 var lookupTargetBundle = func(c *Client, image string) (string, error) {
-	content, err := ExtractFBCContent(c.ctx, c, image)
+	content, err := ExtractFBCContent(c.Context(), c, image)
 	if err != nil {
 		return "", err
 	}
@@ -1281,8 +1281,8 @@ func reinstallResolveTarget(c *Client, targetType, image string, rs *reinstallCh
 		emit(UpdateStepEvent{Step: "validate_target", Status: "running", Message: "Verifying the selected catalog image..."})
 		target, err := preflightReinstallCatalog(c, image, channelOverride)
 		if err != nil {
-			if c.ctx.Err() != nil {
-				return &types.OperationResponse{Success: false, Message: "Operation stopped while verifying the catalog image; the current operator was not removed", Logs: *logs}, c.ctx.Err()
+			if c.Context().Err() != nil {
+				return &types.OperationResponse{Success: false, Message: "Operation stopped while verifying the catalog image; the current operator was not removed", Logs: *logs}, c.Context().Err()
 			}
 			code := "validation"
 			if isCatalogImagePullError(err) {
@@ -1449,7 +1449,7 @@ func reinstallRemoveOperator(c *Client, csv types.CSVInfo, recovery *operatorRec
 	// --- Step 3: delete_catalog_source ---
 	emit(UpdateStepEvent{Step: "delete_catalog_source", Status: "running", Message: "Removing nightly CatalogSource..."})
 	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
-	switch existed, delErr := c.deleteIfExists(csPath); {
+	switch existed, delErr := c.DeleteIfExists(csPath); {
 	case delErr != nil:
 		return fail("Cannot remove nightly CatalogSource: "+delErr.Error(), errorCodeFromK8sErr(delErr))
 	case !existed:
@@ -1463,7 +1463,7 @@ func reinstallRemoveOperator(c *Client, csv types.CSVInfo, recovery *operatorRec
 
 	// --- Step 4: delete_subscription ---
 	emit(UpdateStepEvent{Step: "delete_subscription", Status: "running", Message: "Removing operator Subscription..."})
-	switch existed, delErr := c.deleteIfExists(subscriptionPath()); {
+	switch existed, delErr := c.DeleteIfExists(subscriptionPath()); {
 	case delErr != nil:
 		return fail(fmt.Sprintf("Failed to delete Subscription: %v", delErr), errorCodeFromK8sErr(delErr))
 	case !existed:
@@ -1478,7 +1478,7 @@ func reinstallRemoveOperator(c *Client, csv types.CSVInfo, recovery *operatorRec
 	// --- Step 5: delete_csv ---
 	emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Removing current CSV..."})
 	if csv.Name != "" {
-		if _, err := c.deleteIfExists(csvPath(csv.Name)); err != nil {
+		if _, err := c.DeleteIfExists(csvPath(csv.Name)); err != nil {
 			return fail("Cannot delete current CSV: "+err.Error(), errorCodeFromK8sErr(err))
 		}
 		recovery.noteCSVRemoved(csv.Name)
@@ -1533,7 +1533,7 @@ func reinstallCleanUp(c *Client, logs *[]string, emit func(UpdateStepEvent)) (*t
 
 	// --- Step 8: wait_propagation ---
 	emit(UpdateStepEvent{Step: "wait_propagation", Status: "running", Message: "Waiting for cleanup to propagate..."})
-	if err := clk.Sleep(c.ctx, PropagationWait); err != nil {
+	if err := clk.Sleep(c.Context(), PropagationWait); err != nil {
 		return &types.OperationResponse{Success: false, Message: "Operation cancelled during cleanup wait.", Logs: *logs}, err
 	}
 	*logs = append(*logs, fmt.Sprintf("OK: waited %s for cleanup propagation", PropagationWait))
@@ -1572,7 +1572,7 @@ func reinstallNightlySteps(c *Client, image, channel, approveCSV string, recover
 	emit(UpdateStepEvent{Step: "create_catalog_source", Status: "running", Message: "Creating CatalogSource with nightly image..."})
 	csApplyPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
 	recovery.noteCatalogChanged()
-	if _, _, err := c.apply(csApplyPath, buildCatalogSourceSpec(image)); err != nil {
+	if _, _, err := c.Apply(csApplyPath, buildCatalogSourceSpec(image)); err != nil {
 		return fail(fmt.Sprintf("Failed to create nightly CatalogSource: %v", err), errorCodeFromK8sErr(err))
 	}
 	logs = append(logs, "OK: CatalogSource created with nightly image")
@@ -1727,7 +1727,7 @@ func patchCRDConversionWebhooks(c *Client) (int, []string) {
 				} `json:"conversion"`
 			} `json:"spec"`
 		}
-		found, err := c.getIntoOptional(path, &obj)
+		found, err := c.GetIntoOptional(path, &obj)
 		if err != nil {
 			if isDecodeError(err) {
 				warnings = append(warnings, fmt.Sprintf("parse CRD %s: %v", crd, err))
@@ -1744,13 +1744,13 @@ func patchCRDConversionWebhooks(c *Client) (int, []string) {
 		if conv.Strategy != "Webhook" || svc.Name == "" || svc.Namespace == "" {
 			continue
 		}
-		if _, _, err := c.get(namespacedPath("v1", "services", svc.Namespace, svc.Name)); !isK8sNotFound(err) {
+		if _, _, err := c.Get(namespacedPath("v1", "services", svc.Namespace, svc.Name)); !isK8sNotFound(err) {
 			if err != nil {
 				warnings = append(warnings, fmt.Sprintf("check conversion Service of CRD %s: %v", crd, err))
 			}
 			continue
 		}
-		if _, _, err := c.patch(path, patchData); err != nil {
+		if _, _, err := c.Patch(path, patchData); err != nil {
 			warnings = append(warnings, fmt.Sprintf("patch conversion of CRD %s: %v", crd, err))
 			continue
 		}
@@ -1770,7 +1770,7 @@ func rhoaiCSVExists(c *Client) (bool, error) {
 			} `json:"metadata"`
 		} `json:"items"`
 	}
-	found, err := c.getIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""), &list)
+	found, err := c.GetIntoOptional(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""), &list)
 	if err != nil {
 		return false, err
 	}
@@ -1968,7 +1968,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	// new InstallPlan as soon as the CSV disappears, and deleting the
 	// Subscription afterwards would garbage-collect that plan mid-install.
 	emit(UpdateStepEvent{Step: "delete_subscription", Status: "running", Message: "Deleting Subscription..."})
-	if _, subDelErr := c.deleteIfExists(subscriptionPath()); subDelErr != nil {
+	if _, subDelErr := c.DeleteIfExists(subscriptionPath()); subDelErr != nil {
 		return fail(fmt.Sprintf("Failed to delete Subscription: %v", subDelErr), errorCodeFromK8sErr(subDelErr))
 	}
 	recovery.subscriptionChanged = true
@@ -1981,7 +1981,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	} else {
 		emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting CSV to trigger a fresh install..."})
 		logs = append(logs, fmt.Sprintf("Deleting CSV %s...", csv.Name))
-		if _, csvDelErr := c.deleteIfExists(csvPath(csv.Name)); csvDelErr != nil {
+		if _, csvDelErr := c.DeleteIfExists(csvPath(csv.Name)); csvDelErr != nil {
 			return fail(fmt.Sprintf("Failed to delete CSV %s: %v", csv.Name, csvDelErr), errorCodeFromK8sErr(csvDelErr))
 		}
 		recovery.noteCSVRemoved(csv.Name)
@@ -2001,7 +2001,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 			logs = append(logs, fmt.Sprintf("Warning: CSV %s is still being deleted after %s; continuing", csv.Name, CSVDeletionTimeout))
 		}
 	}
-	if err := clk.Sleep(c.ctx, RefreshCleanupWait); err != nil {
+	if err := clk.Sleep(c.Context(), RefreshCleanupWait); err != nil {
 		return &types.OperationResponse{Success: false, Message: "Operation cancelled during cleanup wait.", Logs: logs}, err
 	}
 	emit(UpdateStepEvent{Step: "wait_cleanup", Status: "success", Message: "Cleanup propagated"})
@@ -2138,7 +2138,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 	// Check if secret already exists. Its other registry credentials must be
 	// preserved: only the quay.io/rhoai entry is replaced.
 	secretPath := namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret")
-	existingBody, secretExists, getErr := c.getOptional(secretPath)
+	existingBody, secretExists, getErr := c.GetOptional(secretPath)
 	if getErr != nil {
 		return &types.OperationResponse{
 			Success:   false,
@@ -2219,7 +2219,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 
 	if secretExists {
 		logs = append(logs, "Secret already exists, updating...")
-		_, _, err = c.apply(secretPath, secret)
+		_, _, err = c.Apply(secretPath, secret)
 		if err != nil {
 			return &types.OperationResponse{
 				Success:   false,
@@ -2236,7 +2236,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 		if marshalErr != nil {
 			return nil, fmt.Errorf("marshal secret: %w", marshalErr)
 		}
-		_, _, err = c.post(secretsPath, data)
+		_, _, err = c.Post(secretsPath, data)
 		if err != nil {
 			return &types.OperationResponse{
 				Success:   false,

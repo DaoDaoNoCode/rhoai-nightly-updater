@@ -24,7 +24,7 @@ func dscSpecSchema(c *Client, apiVersion string) (map[string]any, error) {
 			} `json:"versions"`
 		} `json:"spec"`
 	}
-	if err := c.getInto("/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io", &crd); err != nil {
+	if err := c.GetInto("/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io", &crd); err != nil {
 		return nil, err
 	}
 	version := strings.TrimPrefix(apiVersion, "datasciencecluster.opendatahub.io/")
@@ -98,7 +98,7 @@ func checkDSCCompatibilityFor(c *Client, read dscRead, op *installedOperator, op
 		result.DefaultsError = "Unable to load version-matched defaults: " + opErr.Error()
 		return result
 	}
-	defaults, err := defaultDSCSpecFrom(c.ctx, op, servedVersions(c, dscGroup, dscFallbackVersions), read.Version, fetchSample)
+	defaults, err := defaultDSCSpecFrom(c.Context(), op, servedVersions(c, dscGroup, dscFallbackVersions), read.Version, fetchSample)
 	if err != nil {
 		result.DefaultsError = defaultsErrorMessage(read, err)
 		return result
@@ -547,7 +547,7 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersio
 		}
 		detail += ". Components set to Removed: " + strings.Join(removals, ", ")
 	}
-	if err := c.patchJSON(path, map[string]any{
+	if err := c.PatchJSON(path, map[string]any{
 		"metadata": map[string]any{"resourceVersion": resourceVersion},
 		"spec":     replacementMergePatch(oldSpec, nextSpec),
 	}); err != nil {

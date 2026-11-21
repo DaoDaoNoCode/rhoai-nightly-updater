@@ -38,7 +38,7 @@ func canI(c *Client, verb, namespace, name string) (bool, error) {
 			"group": "", "resource": "secrets", "verb": verb, "namespace": namespace, "name": name,
 		}},
 	})
-	resp, _, err := c.post(clusterPath("authorization.k8s.io/v1", "selfsubjectaccessreviews", ""), body)
+	resp, _, err := c.Post(clusterPath("authorization.k8s.io/v1", "selfsubjectaccessreviews", ""), body)
 	if err != nil {
 		return false, err
 	}

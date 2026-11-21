@@ -66,7 +66,7 @@ func certManagerRunning(c *Client) (running bool, seen string, err error) {
 	var found []string
 	byRef := map[string]bool{}
 	for _, sel := range []string{"app.kubernetes.io/name=cert-manager", "app=cert-manager"} {
-		body, _, err := c.do(http.MethodGet, "/apis/apps/v1/deployments", "", nil, url.Values{"labelSelector": {sel}})
+		body, _, err := c.Do(http.MethodGet, "/apis/apps/v1/deployments", "", nil, url.Values{"labelSelector": {sel}})
 		if err != nil {
 			return false, "", err
 		}
@@ -168,7 +168,7 @@ func (l *podLister) list(namespace string) ([]certPod, error) {
 	if pods, ok := l.pods[namespace]; ok || l.errs[namespace] != nil {
 		return pods, l.errs[namespace]
 	}
-	body, _, err := l.c.get(namespacedPath("v1", "pods", namespace, ""))
+	body, _, err := l.c.Get(namespacedPath("v1", "pods", namespace, ""))
 	var list struct {
 		Items []certPod `json:"items"`
 	}
@@ -239,7 +239,7 @@ func checkCertificates(c *Client) checkOutput {
 		var list struct {
 			Items []certificateItem `json:"items"`
 		}
-		found, err := c.getIntoOptional(namespacedPath("cert-manager.io/v1", "certificates", ns, ""), &list)
+		found, err := c.GetIntoOptional(namespacedPath("cert-manager.io/v1", "certificates", ns, ""), &list)
 		if err != nil {
 			if isDecodeError(err) {
 				errs = append(errs, fmt.Sprintf("parse certificates in %s: %v", ns, err))

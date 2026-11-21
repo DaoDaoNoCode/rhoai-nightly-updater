@@ -369,7 +369,7 @@ func (s catalogServing) describe(target catalogTarget) string {
 // terminating. ok is false when the list could not be read.
 func readCatalogPods(c *Client, image string) (ready bool, stale int, ok bool) {
 	path := namespacedPath("v1", "pods", CatalogNS, "") + "?labelSelector=" + url.QueryEscape("olm.catalogSource="+CatalogName)
-	body, _, err := c.get(path)
+	body, _, err := c.Get(path)
 	if err != nil {
 		return false, 0, false
 	}
@@ -454,7 +454,7 @@ func waitForCatalogServing(c *Client, image string, target catalogTarget, change
 	pull := pullFailureWatch{advice: pullAdvice}
 	last := ""
 	for clk.Now().Before(deadline) {
-		if err := clk.Sleep(c.ctx, CatalogPollInterval); err != nil {
+		if err := clk.Sleep(c.Context(), CatalogPollInterval); err != nil {
 			return false, err
 		}
 		s := readCatalogServing(c, image, target)

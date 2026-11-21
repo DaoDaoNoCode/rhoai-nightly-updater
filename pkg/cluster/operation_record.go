@@ -62,7 +62,7 @@ func readDSCHardResetRecord(c *Client) (*types.DSCHardResetRecord, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	found, err := c.bookkeeping().getIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName), &cm)
+	found, err := c.bookkeeping().GetIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName), &cm)
 	if err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse operation record: %w", err)
@@ -106,7 +106,7 @@ func ReadOperationRecord(c *Client) (*OperationRecord, error) {
 		} `json:"metadata"`
 		Data map[string]string `json:"data"`
 	}
-	found, err := c.bookkeeping().getIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName), &cm)
+	found, err := c.bookkeeping().GetIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName), &cm)
 	if err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse operation record: %w", err)
@@ -155,7 +155,7 @@ func SaveOperationMarker(c *Client, marker *types.OperationMarker) error {
 		"metadata":   map[string]any{"name": operationConfigMapName, "namespace": ns},
 		"data":       map[string]any{operationKey: value},
 	}
-	if _, _, err := c.bookkeeping().apply(namespacedPath("v1", "configmaps", ns, operationConfigMapName), cm); err != nil {
+	if _, _, err := c.bookkeeping().Apply(namespacedPath("v1", "configmaps", ns, operationConfigMapName), cm); err != nil {
 		return fmt.Errorf("save operation marker: %w", err)
 	}
 	return nil
@@ -265,7 +265,7 @@ func writeOperationRecord(c *Client, rec *OperationRecord, data map[string]strin
 		if err != nil {
 			return err
 		}
-		_, _, err = c.bookkeeping().post(namespacedPath("v1", "configmaps", ns, ""), cm)
+		_, _, err = c.bookkeeping().Post(namespacedPath("v1", "configmaps", ns, ""), cm)
 		return err
 	}
 	return patchOperationRecord(c, rec.resourceVersion, data)
@@ -282,7 +282,7 @@ func patchOperationRecord(c *Client, resourceVersion string, data map[string]str
 		body["metadata"] = map[string]any{"resourceVersion": resourceVersion}
 	}
 	ns := getActivityNamespace()
-	err := c.bookkeeping().patchJSON(namespacedPath("v1", "configmaps", ns, operationConfigMapName), body)
+	err := c.bookkeeping().PatchJSON(namespacedPath("v1", "configmaps", ns, operationConfigMapName), body)
 	if resourceVersion == "" && isK8sNotFound(err) {
 		return writeOperationRecord(c, &OperationRecord{}, data)
 	}

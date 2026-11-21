@@ -314,7 +314,7 @@ func (a *argoCheck) applicationsServed() argoRead[bool] {
 		return *a.served
 	}
 	var r argoRead[bool]
-	body, present, err := a.c.getOptional(argoAPI)
+	body, present, err := a.c.GetOptional(argoAPI)
 	switch {
 	case err != nil:
 		r.err = fmt.Sprintf("reading the API server's list of Argo CD APIs failed: %v", err)
@@ -463,14 +463,14 @@ var (
 // request; otherwise always from the API server. The cached slice is shared
 // and must not be changed.
 func readArgoApplications(c *Client) ([]argoApp, error) {
-	if !c.statusRead {
+	if !c.StatusRead() {
 		return listArgoApplications(c)
 	}
-	key := c.baseURL
+	key := c.BaseURL()
 	if apps, ok := argoApplicationsCache.Get(key); ok {
 		return apps, nil
 	}
-	ctx := c.ctx
+	ctx := c.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -490,7 +490,7 @@ func readArgoApplications(c *Client) ([]argoApp, error) {
 // listArgoApplications reads the list of every Application.
 func listArgoApplications(c *Client) ([]argoApp, error) {
 	var items []argoApp
-	if err := c.listInto(argoAPI+"/applications", &items); err != nil {
+	if err := c.ListInto(argoAPI+"/applications", &items); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -563,7 +563,7 @@ func (a *argoCheck) remoteCluster() argoRead[string] {
 	}
 	var r argoRead[string]
 	defer func() { a.remote = &r }()
-	body, exists, err := a.c.getOptional(acmWorkAPI)
+	body, exists, err := a.c.GetOptional(acmWorkAPI)
 	switch {
 	case err != nil:
 		r.err = fmt.Sprintf("whether an ACM hub manages this cluster could not be read: %v", err)
@@ -580,7 +580,7 @@ func (a *argoCheck) remoteCluster() argoRead[string] {
 			return r
 		}
 	}
-	body, _, err = a.c.get(clusterPath("rbac.authorization.k8s.io/v1", "clusterrolebindings", "") + "?fieldSelector=" + url.QueryEscape(argoCDManagerFieldPath))
+	body, _, err = a.c.Get(clusterPath("rbac.authorization.k8s.io/v1", "clusterrolebindings", "") + "?fieldSelector=" + url.QueryEscape(argoCDManagerFieldPath))
 	if err != nil {
 		r.err = fmt.Sprintf("whether an Argo CD on another cluster manages this one could not be read: %v", err)
 		return r
@@ -605,7 +605,7 @@ func (a *argoCheck) managerRoleBinding(ns string) argoRead[string] {
 		return r
 	}
 	var r argoRead[string]
-	_, found, err := a.c.getOptional(namespacedPath("rbac.authorization.k8s.io/v1", "rolebindings", ns, argoCDManagerBinding))
+	_, found, err := a.c.GetOptional(namespacedPath("rbac.authorization.k8s.io/v1", "rolebindings", ns, argoCDManagerBinding))
 	switch {
 	case err != nil:
 		r.err = fmt.Sprintf("whether an Argo CD on another cluster manages namespace %s could not be read: %v", ns, err)

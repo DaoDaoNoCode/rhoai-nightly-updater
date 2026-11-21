@@ -150,7 +150,7 @@ func hardResetOperators(c *Client, dscUID string) ([]hardResetOperator, string, 
 			continue
 		}
 		seen[op.ref()] = true
-		body, _, err := c.get(namespacedPath("apps/v1", "deployments", op.Namespace, op.Name))
+		body, _, err := c.Get(namespacedPath("apps/v1", "deployments", op.Namespace, op.Name))
 		if err != nil {
 			return nil, "", fmt.Errorf("read Deployment %s: %w", op.ref(), err)
 		}
@@ -174,7 +174,7 @@ func operatorsLeft(c *Client, ops []hardResetOperator) ([]hardResetOperator, err
 		var d struct {
 			Metadata objectMeta `json:"metadata"`
 		}
-		found, err := c.getIntoOptional(namespacedPath("apps/v1", "deployments", o.Namespace, o.Name), &d)
+		found, err := c.GetIntoOptional(namespacedPath("apps/v1", "deployments", o.Namespace, o.Name), &d)
 		if err != nil {
 			if isDecodeError(err) {
 				return nil, fmt.Errorf("parse Deployment %s/%s: %w", o.Namespace, o.Name, err)
@@ -379,7 +379,7 @@ func namespaceOwnerBlocker(c *Client) string {
 			OwnerReferences []ownerRef `json:"ownerReferences"`
 		} `json:"metadata"`
 	}
-	if err := u.listInto("/api/v1/namespaces", &items); err != nil {
+	if err := u.ListInto("/api/v1/namespaces", &items); err != nil {
 		if isDecodeError(err) {
 			return "The namespaces could not be read to check that none would be deleted with the DataScienceCluster: " + err.Error() + "."
 		}
@@ -535,7 +535,7 @@ func (r *ownerResolver) read(ref ownerRef, group, version, what string, unknown 
 			OwnerReferences   []ownerRef `json:"ownerReferences"`
 		} `json:"metadata"`
 	}
-	found, err := r.c.getIntoOptional(apiPath, &obj)
+	found, err := r.c.GetIntoOptional(apiPath, &obj)
 	if err != nil {
 		if isDecodeError(err) {
 			return unknown("could not be read: " + err.Error())
@@ -587,7 +587,7 @@ func (r *ownerResolver) path(group, version, kind, name string) (string, string)
 		var doc struct {
 			Resources []apiResource `json:"resources"`
 		}
-		if err := r.c.getInto(gv, &doc); err != nil {
+		if err := r.c.GetInto(gv, &doc); err != nil {
 			return "", "API discovery of " + strings.TrimPrefix(gv, "/") + ": " + err.Error()
 		}
 		resources = doc.Resources

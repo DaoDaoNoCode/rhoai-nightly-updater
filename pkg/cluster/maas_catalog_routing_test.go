@@ -38,7 +38,7 @@ func modelRefsOf(mc *modelsCluster, name string) string {
 // KServe reconciles it) and returns its parents' names.
 func routeParentsOf(t *testing.T, mc *modelsCluster, name string) string {
 	t.Helper()
-	body, _, err := mc.c.get("/apis/gateway.networking.k8s.io/v1/namespaces/proj/httproutes/" + name + "-kserve-route")
+	body, _, err := mc.c.Get("/apis/gateway.networking.k8s.io/v1/namespaces/proj/httproutes/" + name + "-kserve-route")
 	if err != nil {
 		t.Fatalf("read the route of %s: %v", name, err)
 	}

@@ -261,7 +261,7 @@ func listLLMInferenceServices(c *Client) ([]llmisvcObject, error) {
 	var list struct {
 		Items []llmisvcObject `json:"items"`
 	}
-	found, err := c.getIntoOptional(clusterPath("serving.kserve.io/v1alpha2", "llminferenceservices", ""), &list)
+	found, err := c.GetIntoOptional(clusterPath("serving.kserve.io/v1alpha2", "llminferenceservices", ""), &list)
 	if err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse LLMInferenceServices: %w", err)
@@ -280,7 +280,7 @@ func readToolModel(c *Client, project, name string) (llmisvcObject, bool, error)
 		return llmisvcObject{}, false, fmt.Errorf("%s is not a model of this tool's catalog", name)
 	}
 	var m llmisvcObject
-	found, err := c.getIntoOptional(path, &m)
+	found, err := c.GetIntoOptional(path, &m)
 	if err != nil {
 		if isDecodeError(err) {
 			return llmisvcObject{}, false, fmt.Errorf("parse LLMInferenceService %s/%s: %w", project, name, err)
@@ -515,7 +515,7 @@ func discoverCPUPreset(c *Client) cpuPreset {
 	if err != nil {
 		return cpuPreset{problem: fmt.Sprintf("Cannot tell which namespace RHOAI's applications (KServe's controller and presets) run in: %v.", err)}
 	}
-	body, exists, err := c.getOptional(namespacedPath("apps/v1", "deployments", ns, "llmisvc-controller-manager"))
+	body, exists, err := c.GetOptional(namespacedPath("apps/v1", "deployments", ns, "llmisvc-controller-manager"))
 	if err != nil {
 		return cpuPreset{problem: fmt.Sprintf("Cannot read Deployment %s/%s: %v.%s", ns, llmisvcControllerName, err, templateHint(err))}
 	}
@@ -551,7 +551,7 @@ func discoverCPUPreset(c *Client) cpuPreset {
 		return cpuPreset{problem: fmt.Sprintf("Deployment %s/%s sets no %s, so the CPU preset's name is unknown on this release.", ns, llmisvcControllerName, llmisvcConfigPrefixEnv)}
 	}
 	name := prefix + cpuPresetSuffix
-	body, exists, err = c.getOptional(namespacedPath("serving.kserve.io/v1alpha2", "llminferenceserviceconfigs", ns, name))
+	body, exists, err = c.GetOptional(namespacedPath("serving.kserve.io/v1alpha2", "llminferenceserviceconfigs", ns, name))
 	if err != nil {
 		return cpuPreset{name: name, problem: fmt.Sprintf("Cannot read the CPU preset %s/%s: %v.%s", ns, name, err, templateHint(err))}
 	}
@@ -701,7 +701,7 @@ func projectNamespace(c *Client, project string) (map[string]string, string, str
 			Phase string `json:"phase"`
 		} `json:"status"`
 	}
-	found, err := c.getIntoOptional("/api/v1/namespaces/"+project, &ns)
+	found, err := c.GetIntoOptional("/api/v1/namespaces/"+project, &ns)
 	if err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Sprintf("Cannot parse project %s: %v.", project, err), "internal"
@@ -1233,7 +1233,7 @@ func (m *modelsRun) setupModelReady(s *modelsSetup) (*types.OperationResponse, e
 	c, mp := m.c, s.mp
 	m.step("model-ready", "running", "Waiting for the model to start (typically 3 to 5 minutes the first time)...")
 	timeout := ModelReadyTimeout
-	if dl, ok := c.ctx.Deadline(); ok {
+	if dl, ok := c.Context().Deadline(); ok {
 		if left := clk.Until(dl) - 30*time.Second; left < timeout {
 			timeout = left
 		}
@@ -1627,7 +1627,7 @@ type modelProgress struct {
 // revision (w.current): a pod of the previous one, still failing or still
 // serving during a change, says nothing about the change.
 func readModelProgress(c *Client, project, name string, w modelWorkload) (modelProgress, error) {
-	body, _, err := c.get(namespacedPath("v1", "pods", project, "") + "?labelSelector=" + url.QueryEscape(modelPodSelector(name)))
+	body, _, err := c.Get(namespacedPath("v1", "pods", project, "") + "?labelSelector=" + url.QueryEscape(modelPodSelector(name)))
 	if err != nil {
 		return modelProgress{}, err
 	}
@@ -1647,7 +1647,7 @@ func readModelProgress(c *Client, project, name string, w modelWorkload) (modelP
 	}
 	var newest *modelEvent
 	if len(names) > 0 {
-		if body, _, err := c.get(namespacedPath("v1", "events", project, "") + "?fieldSelector=" + url.QueryEscape("involvedObject.kind=Pod")); err == nil {
+		if body, _, err := c.Get(namespacedPath("v1", "events", project, "") + "?fieldSelector=" + url.QueryEscape("involvedObject.kind=Pod")); err == nil {
 			var events struct {
 				Items []modelEvent `json:"items"`
 			}
@@ -1821,7 +1821,7 @@ func readModelWorkload(c *Client, project, name string) (modelWorkload, error) {
 			AvailableReplicas  int32 `json:"availableReplicas"`
 		} `json:"status"`
 	}
-	if err := c.listInto(namespacedPath("apps/v1", "deployments", project, "")+"?"+q.Encode(), &items); err != nil {
+	if err := c.ListInto(namespacedPath("apps/v1", "deployments", project, "")+"?"+q.Encode(), &items); err != nil {
 		if isDecodeError(err) {
 			return modelWorkload{}, fmt.Errorf("parse the model's Deployments: %w", err)
 		}

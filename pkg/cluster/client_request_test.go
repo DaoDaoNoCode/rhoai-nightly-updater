@@ -31,21 +31,21 @@ func TestClientRequestsWireFormat(t *testing.T) {
 		call func() error
 		want seen
 	}{
-		{"get", func() error { _, _, err := c.get("/a?labelSelector=x%3Dy"); return err },
+		{"get", func() error { _, _, err := c.Get("/a?labelSelector=x%3Dy"); return err },
 			seen{"GET", "/a", "labelSelector=x%3Dy", "", "application/json", "Bearer tok", ""}},
-		{"post", func() error { _, _, err := c.post("/a", []byte(`{"x":1}`)); return err },
+		{"post", func() error { _, _, err := c.Post("/a", []byte(`{"x":1}`)); return err },
 			seen{"POST", "/a", "", "application/json", "application/json", "Bearer tok", `{"x":1}`}},
-		{"put", func() error { _, _, err := c.put("/a", []byte(`{}`)); return err },
+		{"put", func() error { _, _, err := c.Put("/a", []byte(`{}`)); return err },
 			seen{"PUT", "/a", "", "application/json", "application/json", "Bearer tok", `{}`}},
-		{"patch", func() error { _, _, err := c.patch("/a", []byte(`{}`)); return err },
+		{"patch", func() error { _, _, err := c.Patch("/a", []byte(`{}`)); return err },
 			seen{"PATCH", "/a", "", "application/merge-patch+json", "application/json", "Bearer tok", `{}`}},
-		{"strategicPatch", func() error { _, _, err := c.strategicPatch("/a", []byte(`{}`)); return err },
+		{"strategicPatch", func() error { _, _, err := c.StrategicPatch("/a", []byte(`{}`)); return err },
 			seen{"PATCH", "/a", "", "application/strategic-merge-patch+json", "application/json", "Bearer tok", `{}`}},
-		{"apply", func() error { _, _, err := c.apply("/a", map[string]int{"x": 1}); return err },
+		{"apply", func() error { _, _, err := c.Apply("/a", map[string]int{"x": 1}); return err },
 			seen{"PATCH", "/a", "fieldManager=rhoai-nightly-updater&force=true", "application/apply-patch+yaml", "application/json", "Bearer tok", `{"x":1}`}},
-		{"dryRunApply", func() error { _, _, err := c.dryRunApply("/a", map[string]int{"x": 1}); return err },
+		{"dryRunApply", func() error { _, _, err := c.DryRunApply("/a", map[string]int{"x": 1}); return err },
 			seen{"PATCH", "/a", "dryRun=All&fieldManager=rhoai-nightly-updater&force=true", "application/apply-patch+yaml", "application/json", "Bearer tok", `{"x":1}`}},
-		{"delete", func() error { _, err := c.delete("/a"); return err },
+		{"delete", func() error { _, err := c.Delete("/a"); return err },
 			seen{"DELETE", "/a", "", "", "application/json", "Bearer tok", ""}},
 	}
 	for _, tc := range cases {
@@ -57,11 +57,11 @@ func TestClientRequestsWireFormat(t *testing.T) {
 		}
 	}
 
-	body, status, err := c.get("/fail")
+	body, status, err := c.Get("/fail")
 	if status != 409 || !IsK8sError(err, 409) || string(body) == "" {
 		t.Fatalf("error response: status=%d err=%v body=%q", status, err, body)
 	}
-	if status, err := c.delete("/fail"); status != 409 || !IsK8sError(err, 409) {
+	if status, err := c.Delete("/fail"); status != 409 || !IsK8sError(err, 409) {
 		t.Fatalf("delete error: status=%d err=%v", status, err)
 	}
 }

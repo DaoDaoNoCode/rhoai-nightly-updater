@@ -40,7 +40,7 @@ func CheckUserPermissionWithToken(ctx context.Context, userToken, verb, resource
 	if err != nil {
 		return false, fmt.Errorf("marshal permission review: %w", err)
 	}
-	body, _, err := userClient.post("/apis/authorization.openshift.io/v1/subjectaccessreviews", data)
+	body, _, err := userClient.Post("/apis/authorization.openshift.io/v1/subjectaccessreviews", data)
 	if err != nil {
 		return false, wrapUserTokenError("permission review failed", err)
 	}
@@ -122,7 +122,7 @@ func ReadSessionToken(ctx context.Context, userToken string) (*SessionToken, err
 		return nil, err
 	}
 	userClient := NewUserClient(ctx, userToken)
-	body, _, err := userClient.get("/apis/oauth.openshift.io/v1/useroauthaccesstokens/" + name)
+	body, _, err := userClient.Get("/apis/oauth.openshift.io/v1/useroauthaccesstokens/" + name)
 	// Only a 404 about this very object says the sign-in is gone; a 404
 	// without details (the resource type is not served) says nothing.
 	var ke *K8sError
@@ -156,7 +156,7 @@ func LookupUserWithToken(ctx context.Context, userToken string) (string, error) 
 			Name string `json:"name"`
 		} `json:"metadata"`
 	}
-	if err := userClient.getInto("/apis/user.openshift.io/v1/users/~", &user); err != nil {
+	if err := userClient.GetInto("/apis/user.openshift.io/v1/users/~", &user); err != nil {
 		if isDecodeError(err) {
 			return "", fmt.Errorf("parse user: %w", err)
 		}

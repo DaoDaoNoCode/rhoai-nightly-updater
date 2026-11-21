@@ -232,7 +232,7 @@ func probeWithUID(c *Client, path, uid string) (string, error) {
 	body, _ := json.Marshal(map[string]any{
 		"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": map[string]any{"uid": uid},
 	})
-	_, _, err := c.do(http.MethodDelete, path, "application/json", body, url.Values{"dryRun": {"All"}})
+	_, _, err := c.Do(http.MethodDelete, path, "application/json", body, url.Values{"dryRun": {"All"}})
 	switch {
 	case err == nil:
 		return "ours", nil
@@ -301,7 +301,7 @@ func applyModelToken(c *Client, project, model, modelUID string, plan tokenPlan,
 		}
 		desc := fmt.Sprintf("%s %s/%s", kind, project, tokenObjectName(kind, model))
 		data, _ := json.Marshal(tokenObject(kind, project, model, modelUID))
-		body, _, err := c.do(http.MethodPost, tokenCreatePath(kind, project), "application/json", data, query)
+		body, _, err := c.Do(http.MethodPost, tokenCreatePath(kind, project), "application/json", data, query)
 		switch {
 		case err == nil:
 			if kind == tokenPartSecret && !dryRun {

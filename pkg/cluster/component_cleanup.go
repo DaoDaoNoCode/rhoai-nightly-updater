@@ -149,7 +149,7 @@ func listModuleCRsIn(c *Client, api componentAPI, module string) ([]moduleCRItem
 // listKindCRs lists the CRs of one module kind.
 func listKindCRs(c *Client, k componentKind) ([]moduleCRItem, error) {
 	var items []moduleCRItem
-	if err := c.listInto(k.listPath(), &items); err != nil {
+	if err := c.ListInto(k.listPath(), &items); err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse %s: %w", k.crd(), err)
 		}
@@ -192,7 +192,7 @@ func (a componentAPI) kindOf(group, kind string) (componentKind, bool) {
 func discoverComponentAPI(c *Client) (componentAPI, error) {
 	api := componentAPI{Groups: map[string]string{}}
 	for _, group := range moduleAPIGroups {
-		body, found, err := c.getOptional("/apis/" + group)
+		body, found, err := c.GetOptional("/apis/" + group)
 		if err != nil {
 			return componentAPI{}, fmt.Errorf("discover %s: %w", group, err)
 		}
@@ -215,7 +215,7 @@ func discoverComponentAPI(c *Client) (componentAPI, error) {
 		if version == "" {
 			return componentAPI{}, fmt.Errorf("%s discovery lists no preferred version", group)
 		}
-		body, _, err = c.get("/apis/" + group + "/" + version)
+		body, _, err = c.Get("/apis/" + group + "/" + version)
 		if err != nil {
 			return componentAPI{}, fmt.Errorf("discover %s/%s resources: %w", group, version, err)
 		}
@@ -286,7 +286,7 @@ func cleanupStuckComponentCRs(c *Client) (int, []string) {
 				DeletionTimestamp *string  `json:"deletionTimestamp"`
 			} `json:"metadata"`
 		}
-		if err := c.listInto(listPath, &items); err != nil {
+		if err := c.ListInto(listPath, &items); err != nil {
 			if isDecodeError(err) {
 				warnings = append(warnings, fmt.Sprintf("parse %s: %v", resource, err))
 				continue
@@ -327,7 +327,7 @@ func cleanupStuckComponentCRs(c *Client) (int, []string) {
 			// under the same name, or whose finalizers changed since they
 			// were inspected, is left alone. A recreated CR always has a new
 			// resourceVersion (and uid, which is immutable).
-			if err := c.patchJSON(listPath+"/"+m.Name, map[string]any{"metadata": map[string]any{
+			if err := c.PatchJSON(listPath+"/"+m.Name, map[string]any{"metadata": map[string]any{
 				"uid": m.UID, "resourceVersion": m.ResourceVersion, "finalizers": []string{},
 			}}); err != nil {
 				switch {

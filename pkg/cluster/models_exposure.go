@@ -73,7 +73,7 @@ func listAllGateways(c *Client) ([]gatewayObject, error) {
 	var list struct {
 		Items []gatewayObject `json:"items"`
 	}
-	found, err := c.getIntoOptional(clusterPath("gateway.networking.k8s.io/v1", "gateways", ""), &list)
+	found, err := c.GetIntoOptional(clusterPath("gateway.networking.k8s.io/v1", "gateways", ""), &list)
 	if err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse the Gateways: %w", err)
@@ -207,7 +207,7 @@ func withServicePort(c *Client, address string) string {
 			} `json:"ports"`
 		} `json:"spec"`
 	}
-	if c.getInto(namespacedPath("v1", "services", labels[1], labels[0]), &svc) != nil {
+	if c.GetInto(namespacedPath("v1", "services", labels[1], labels[0]), &svc) != nil {
 		return ""
 	}
 	port := 0

@@ -56,7 +56,7 @@ func (p conversionProbe) path() string {
 // uses, other resources answer 403 and are skipped. The RBAC coverage test
 // lists this function in rbacBestEffortCalls.
 func getDiscovered(c *Client, path string, query url.Values) ([]byte, error) {
-	body, _, err := c.do(http.MethodGet, path, "", nil, query)
+	body, _, err := c.Do(http.MethodGet, path, "", nil, query)
 	return body, err
 }
 

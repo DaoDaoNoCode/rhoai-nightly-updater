@@ -257,7 +257,7 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 		isNew := false
 
 		// Step 1: GET the ConfigMap with its resourceVersion
-		body, found, err := c.bookkeeping().getOptional(cmPath)
+		body, found, err := c.bookkeeping().GetOptional(cmPath)
 		if err != nil {
 			slog.Warn("failed to get activity configmap", "error", err)
 			return
@@ -323,10 +323,10 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 		if isNew {
 			// Create with POST for new ConfigMaps
 			cmListPath := namespacedPath("v1", "configmaps", ns, "")
-			_, _, err = c.bookkeeping().post(cmListPath, cmData)
+			_, _, err = c.bookkeeping().Post(cmListPath, cmData)
 		} else {
 			// Update with PUT for existing ConfigMaps (carries resourceVersion)
-			_, _, err = c.bookkeeping().put(cmPath, cmData)
+			_, _, err = c.bookkeeping().Put(cmPath, cmData)
 		}
 
 		if err != nil {
@@ -352,7 +352,7 @@ func GetActivity(c *Client) ([]types.ActivityEntry, error) {
 	cmPath := namespacedPath("v1", "configmaps", ns, activityConfigMapName)
 
 	var cm map[string]any
-	found, err := c.bookkeeping().getIntoOptional(cmPath, &cm)
+	found, err := c.bookkeeping().GetIntoOptional(cmPath, &cm)
 	if err != nil {
 		if isDecodeError(err) {
 			return nil, fmt.Errorf("parse activity configmap: %w", err)

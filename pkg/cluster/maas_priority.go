@@ -31,7 +31,7 @@ func maasSubscriptionPriority(c *Client) (int, []string, error) {
 			} `json:"spec"`
 		} `json:"items"`
 	}
-	found, err := c.getIntoOptional(namespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, ""), &list)
+	found, err := c.GetIntoOptional(namespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, ""), &list)
 	if err != nil {
 		if isDecodeError(err) {
 			return 0, nil, fmt.Errorf("parse the MaaSSubscription list: %w", err)
@@ -62,7 +62,7 @@ func maasSubscriptionPriority(c *Client) (int, []string, error) {
 // maasOwnSubscriptionPriority is the priority of this tool's subscription
 // as it is (Unpublish keeps it), or the docs' sample's.
 func maasOwnSubscriptionPriority(c *Client) int {
-	body, _, err := c.get(maasAccessPath(c, "MaaSSubscription"))
+	body, _, err := c.Get(maasAccessPath(c, "MaaSSubscription"))
 	if err != nil {
 		return maasDocsSamplePriority
 	}

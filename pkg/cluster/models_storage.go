@@ -32,7 +32,7 @@ func modelVolumeIsEmptyDir(c *Client) bool {
 	if err != nil {
 		return true
 	}
-	body, _, err := c.get(namespacedPath("v1", "configmaps", ns, kserveConfigMap))
+	body, _, err := c.Get(namespacedPath("v1", "configmaps", ns, kserveConfigMap))
 	if err != nil {
 		return true
 	}
@@ -61,7 +61,7 @@ func quotaWarning(c *Client, project string, entry catalogModel, ephemeral bool)
 			Used map[string]string `json:"used"`
 		} `json:"status"`
 	}
-	if c.listInto(namespacedPath("v1", "resourcequotas", project, ""), &items) != nil {
+	if c.ListInto(namespacedPath("v1", "resourcequotas", project, ""), &items) != nil {
 		return ""
 	}
 	need := map[string]string{

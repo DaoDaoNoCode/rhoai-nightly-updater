@@ -183,7 +183,7 @@ func readSnapshotKey(c *Client, key string) (string, error) {
 	var cm struct {
 		Data map[string]string `json:"data"`
 	}
-	found, err := c.bookkeeping().getIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
+	found, err := c.bookkeeping().GetIntoOptional(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName), &cm)
 	if err != nil {
 		if isDecodeError(err) {
 			return "", fmt.Errorf("parse the snapshot ConfigMap: %w", err)
@@ -207,7 +207,7 @@ func writeSnapshotKey(c *Client, key, manager, value string) error {
 		"data":       map[string]any{key: value},
 	})
 	query := url.Values{"fieldManager": {manager}, "force": {"true"}}
-	_, _, err := c.bookkeeping().do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query)
+	_, _, err := c.bookkeeping().Do(http.MethodPatch, namespacedPath("v1", "configmaps", ns, snapshotConfigMapName), "application/apply-patch+yaml", cm, query)
 	return err
 }
 
@@ -241,7 +241,7 @@ func patchDSCComponent(c *Client, key, state, resourceVersion string, dryRun boo
 	if dryRun {
 		query.Set("dryRun", "All")
 	}
-	answer, _, err := c.do(http.MethodPatch, path, "application/merge-patch+json", patch, query)
+	answer, _, err := c.Do(http.MethodPatch, path, "application/merge-patch+json", patch, query)
 	if err != nil {
 		return nil, err
 	}
@@ -1003,7 +1003,7 @@ func componentUsers(c *Client, key string) ([]string, error) {
 		for _, m := range models {
 			live(m.Metadata, "LLMInferenceService")
 		}
-		body, found, err := c.getOptional(clusterPath("serving.kserve.io/v1beta1", "inferenceservices", ""))
+		body, found, err := c.GetOptional(clusterPath("serving.kserve.io/v1beta1", "inferenceservices", ""))
 		if err != nil {
 			return nil, fmt.Errorf("list InferenceServices: %w", err)
 		}

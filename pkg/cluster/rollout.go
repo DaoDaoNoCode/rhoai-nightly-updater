@@ -189,7 +189,7 @@ func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, e
 			} `json:"strategy"`
 		} `json:"spec"`
 	}
-	found, err := c.getIntoOptional(namespacedPath("apps/v1", "deployments", namespace, name), &dep)
+	found, err := c.GetIntoOptional(namespacedPath("apps/v1", "deployments", namespace, name), &dep)
 	if err != nil {
 		if isDecodeError(err) {
 			return a, fmt.Errorf("parse deployment: %w", err)
@@ -237,7 +237,7 @@ func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, e
 	if len(dep.Spec.Selector.MatchLabels) > 0 {
 		rsQuery = url.Values{"labelSelector": {labelSelectorString(dep.Spec.Selector.MatchLabels)}}
 	}
-	rsBody, _, err := c.do(http.MethodGet, namespacedPath("apps/v1", "replicasets", namespace, ""), "", nil, rsQuery)
+	rsBody, _, err := c.Do(http.MethodGet, namespacedPath("apps/v1", "replicasets", namespace, ""), "", nil, rsQuery)
 	if err != nil {
 		return a, fmt.Errorf("list replicasets: %w", err)
 	}
@@ -478,7 +478,7 @@ func patchMaxUnavailable(c *Client, namespace, name string) (rolloutAssessment, 
 			"strategy": map[string]any{"rollingUpdate": map[string]any{"maxUnavailable": 1}},
 		},
 	})
-	respBody, _, err := c.strategicPatch(namespacedPath("apps/v1", "deployments", namespace, name), patch)
+	respBody, _, err := c.StrategicPatch(namespacedPath("apps/v1", "deployments", namespace, name), patch)
 	if err != nil {
 		if isK8sConflict(err) {
 			return a, false, fmt.Sprintf("%s: the Deployment changed while it was being checked; nothing was patched. Run diagnostics again.", a.target())
@@ -601,7 +601,7 @@ func RestoreRolloutStrategy(c *Client, namespace, name string) (*types.Operation
 	}
 	target := namespace + "/" + name
 	path := namespacedPath("apps/v1", "deployments", namespace, name)
-	body, found, err := c.getOptional(path)
+	body, found, err := c.GetOptional(path)
 	if err != nil {
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot read Deployment %s: %v", target, err), ErrorCode: errorCodeFromK8sErr(err)}, nil
 	}
@@ -641,7 +641,7 @@ func RestoreRolloutStrategy(c *Client, namespace, name string) (*types.Operation
 		patchObj["spec"] = spec
 	}
 	patch, _ := json.Marshal(patchObj)
-	if _, _, err := c.strategicPatch(path, patch); err != nil {
+	if _, _, err := c.StrategicPatch(path, patch); err != nil {
 		if isK8sConflict(err) {
 			return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Deployment %s changed while it was being checked; nothing was changed. Run diagnostics again.", target), ErrorCode: "conflict"}, nil
 		}

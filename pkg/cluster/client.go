@@ -296,10 +296,10 @@ func NewClientWithContext(ctx context.Context, token string) *Client {
 	}
 }
 
-// do sends one authenticated request to the Kubernetes API. query values are
+// Do sends one authenticated request to the Kubernetes API. query values are
 // added to the path's own query. Error responses are returned as *K8sError
 // together with their body; transport failures as *NetworkError.
-func (c *Client) do(method, path, contentType string, body []byte, query url.Values) ([]byte, int, error) {
+func (c *Client) Do(method, path, contentType string, body []byte, query url.Values) ([]byte, int, error) {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -348,34 +348,34 @@ func (c *Client) do(method, path, contentType string, body []byte, query url.Val
 	return respBody, resp.StatusCode, nil
 }
 
-func (c *Client) get(path string) ([]byte, int, error) {
-	return c.do(http.MethodGet, path, "", nil, nil)
+func (c *Client) Get(path string) ([]byte, int, error) {
+	return c.Do(http.MethodGet, path, "", nil, nil)
 }
 
-func (c *Client) post(path string, data []byte) ([]byte, int, error) {
-	return c.do(http.MethodPost, path, "application/json", data, nil)
+func (c *Client) Post(path string, data []byte) ([]byte, int, error) {
+	return c.Do(http.MethodPost, path, "application/json", data, nil)
 }
 
-func (c *Client) put(path string, data []byte) ([]byte, int, error) {
-	return c.do(http.MethodPut, path, "application/json", data, nil)
+func (c *Client) Put(path string, data []byte) ([]byte, int, error) {
+	return c.Do(http.MethodPut, path, "application/json", data, nil)
 }
 
-// patch sends a JSON merge patch.
-func (c *Client) patch(path string, patchData []byte) ([]byte, int, error) {
-	return c.do(http.MethodPatch, path, "application/merge-patch+json", patchData, nil)
+// Patch sends a JSON merge patch.
+func (c *Client) Patch(path string, patchData []byte) ([]byte, int, error) {
+	return c.Do(http.MethodPatch, path, "application/merge-patch+json", patchData, nil)
 }
 
-func (c *Client) strategicPatch(path string, patchData []byte) ([]byte, int, error) {
-	return c.do(http.MethodPatch, path, "application/strategic-merge-patch+json", patchData, nil)
+func (c *Client) StrategicPatch(path string, patchData []byte) ([]byte, int, error) {
+	return c.Do(http.MethodPatch, path, "application/strategic-merge-patch+json", patchData, nil)
 }
 
-// apply server-side applies resource, taking ownership of its fields.
-func (c *Client) apply(path string, resource any) ([]byte, int, error) {
+// Apply server-side applies resource, taking ownership of its fields.
+func (c *Client) Apply(path string, resource any) ([]byte, int, error) {
 	return c.applyWithOptions(path, resource, false)
 }
 
-// dryRunApply validates a server-side apply without persisting it.
-func (c *Client) dryRunApply(path string, resource any) ([]byte, int, error) {
+// DryRunApply validates a server-side apply without persisting it.
+func (c *Client) DryRunApply(path string, resource any) ([]byte, int, error) {
 	return c.applyWithOptions(path, resource, true)
 }
 
@@ -388,11 +388,11 @@ func (c *Client) applyWithOptions(path string, resource any, dryRun bool) ([]byt
 	if dryRun {
 		query.Set("dryRun", "All")
 	}
-	return c.do(http.MethodPatch, path, "application/apply-patch+yaml", data, query)
+	return c.Do(http.MethodPatch, path, "application/apply-patch+yaml", data, query)
 }
 
-func (c *Client) delete(path string) (int, error) {
-	_, status, err := c.do(http.MethodDelete, path, "", nil, nil)
+func (c *Client) Delete(path string) (int, error) {
+	_, status, err := c.Do(http.MethodDelete, path, "", nil, nil)
 	return status, err
 }
 
@@ -469,7 +469,7 @@ func IsK8sError(err error, statusCode int) bool {
 // GetVersion calls the /version endpoint to verify API server reachability.
 // This is a lightweight, unauthenticated-friendly call suitable for readiness probes.
 func (c *Client) GetVersion() (string, error) {
-	body, _, err := c.get("/version")
+	body, _, err := c.Get("/version")
 	if err != nil {
 		return "", fmt.Errorf("kubernetes API unreachable: %w", err)
 	}

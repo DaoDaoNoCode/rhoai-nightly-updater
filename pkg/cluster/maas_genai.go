@@ -58,7 +58,7 @@ func patchModelGenAI(c *Client, project, name, rv string, labels, annotations ma
 		meta["annotations"] = annotations
 	}
 	patch, _ := json.Marshal(map[string]any{"metadata": meta})
-	_, _, err := c.do(http.MethodPatch, path, "application/merge-patch+json", patch, url.Values{"fieldManager": {maasModelManager}})
+	_, _, err := c.Do(http.MethodPatch, path, "application/merge-patch+json", patch, url.Values{"fieldManager": {maasModelManager}})
 	return err
 }
 
