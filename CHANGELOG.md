@@ -146,6 +146,14 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   1 MiB bound like every other external read, and the three admin reads
   (DSC plan, S3 credentials, MaaS groups) check the user's permission once
   per request instead of twice.
+- **An operation whose lease renewals fail stops 10 s before another pod
+  may take over.** The holder judged its renewals only when one returned,
+  and counted from when the last successful write returned, not from the
+  heartbeat time written into the lease (which other pods compare with
+  the 45 s TTL). Depending on how long the writes took, it kept running
+  until 5 s, 2 s or 0 s before the lease expired instead of 10 s before
+  it. It now stops 35 s after that heartbeat, between renewals or during
+  one.
 
 ### Security
 

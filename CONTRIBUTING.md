@@ -466,7 +466,7 @@ path := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", "ns", "
 
 #### 3. Test Patterns
 
-No test waits in real time. Every wait, poll, retry and periodic job takes its time from an injected clock (`clk` in `pkg/cluster` and `pkg/api`, `clock.Real` in production); tests use `pkg/clock/clocktest`: `pkg/cluster`'s `TestMain` installs a fake clock that advances when the code sleeps, and `pkg/api`'s `resetPackageState` gives each test its own fake clock, which the test advances (`testClock.Advance`) and synchronises with the code under test through its fakes (for example `fakeRecord.beat`, which waits for the lease write a heartbeat makes). Do not add `time.Sleep`, polling loops or "it would have run by now" waits to tests; a `time.After` may only end a test that hangs.
+No test waits in real time. Every wait, poll, retry and periodic job takes its time from an injected clock (`clk` in `pkg/cluster` and `pkg/api`, `clock.Real` in production); tests use `pkg/clock/clocktest`: `pkg/cluster`'s `TestMain` installs a fake clock that advances when the code sleeps, and `pkg/api`'s `resetPackageState` gives each test its own fake clock, which the test advances (`testClock.Advance`) and synchronises with the code under test through its fakes (for example `fakeRecord.beat`, which advances one heartbeat interval and waits with `testClock.WaitForTicksHandled` until the heartbeat handled the tick: made its lease write and decided on it; waiting only for the write is not enough when the code reads the clock after it). Do not add `time.Sleep`, polling loops or "it would have run by now" waits to tests; a `time.After` may only end a test that hangs.
 
 #### 4. Errors and operation results
 
