@@ -1,4 +1,4 @@
-package cluster
+package components
 
 import (
 	"encoding/json"
@@ -18,7 +18,7 @@ import (
 // the dashboard under dashboard.standard and renamed modelregistry to
 // aiHub).
 
-const dscCRDPath = "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io"
+const DSCCRDPath = "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io"
 
 // dscCRDVersion is one version of the DataScienceCluster CRD.
 type dscCRDVersion struct {
@@ -30,14 +30,14 @@ type dscCRDVersion struct {
 	Spec map[string]any
 }
 
-// dscCRD is the installed DataScienceCluster CRD.
-type dscCRD struct {
+// DSCCRD is the installed DataScienceCluster CRD.
+type DSCCRD struct {
 	Versions []dscCRDVersion
 }
 
-// readDSCCRD reads the installed DataScienceCluster CRD (get on the CRD
+// ReadDSCCRD reads the installed DataScienceCluster CRD (get on the CRD
 // by name, which both profiles grant).
-func readDSCCRD(c *Client) (*dscCRD, error) {
+func ReadDSCCRD(c *kube.Client) (*DSCCRD, error) {
 	var crd struct {
 		Spec struct {
 			Versions []struct {
@@ -51,13 +51,13 @@ func readDSCCRD(c *Client) (*dscCRD, error) {
 			} `json:"versions"`
 		} `json:"spec"`
 	}
-	if err := c.GetInto(dscCRDPath, &crd); err != nil {
+	if err := c.GetInto(DSCCRDPath, &crd); err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse the DataScienceCluster CRD: %w", err)
 		}
 		return nil, err
 	}
-	out := &dscCRD{}
+	out := &DSCCRD{}
 	for _, v := range crd.Spec.Versions {
 		props, _ := v.Schema.OpenAPIV3Schema["properties"].(map[string]any)
 		spec, _ := props["spec"].(map[string]any)
@@ -66,8 +66,8 @@ func readDSCCRD(c *Client) (*dscCRD, error) {
 	return out, nil
 }
 
-// storage returns the storage version's name ("" when none is marked).
-func (d *dscCRD) storage() string {
+// Storage returns the storage version's name ("" when none is marked).
+func (d *DSCCRD) Storage() string {
 	for _, v := range d.Versions {
 		if v.Storage {
 			return v.Name
@@ -76,8 +76,8 @@ func (d *dscCRD) storage() string {
 	return ""
 }
 
-// version returns the served version name, or nil.
-func (d *dscCRD) version(name string) *dscCRDVersion {
+// Version returns the served version name, or nil.
+func (d *DSCCRD) Version(name string) *dscCRDVersion {
 	for i := range d.Versions {
 		if d.Versions[i].Name == name && d.Versions[i].Served {
 			return &d.Versions[i]
@@ -86,35 +86,35 @@ func (d *dscCRD) version(name string) *dscCRDVersion {
 	return nil
 }
 
-// schemaProps returns an object schema's properties.
-func schemaProps(schema map[string]any) map[string]any {
+// SchemaProps returns an object schema's properties.
+func SchemaProps(schema map[string]any) map[string]any {
 	p, _ := schema["properties"].(map[string]any)
 	return p
 }
 
-// schemaChild returns the schema of key in an object schema, or nil.
-func schemaChild(schema map[string]any, key string) map[string]any {
-	child, _ := schemaProps(schema)[key].(map[string]any)
+// SchemaChild returns the schema of key in an object schema, or nil.
+func SchemaChild(schema map[string]any, key string) map[string]any {
+	child, _ := SchemaProps(schema)[key].(map[string]any)
 	return child
 }
 
-// dscToggle is an object under spec.components the CRD defines that has a
+// DSCToggle is an object under spec.components the CRD defines that has a
 // managementState (Toggle), or that holds such objects (a group).
-type dscToggle struct {
+type DSCToggle struct {
 	Path          []string // under spec.components: ["kserve", "nim"]
 	Toggle        bool
 	Allowed       []string
 	SchemaDefault string
 }
 
-func (t dscToggle) key() string { return strings.Join(t.Path, ".") }
+func (t DSCToggle) Key() string { return strings.Join(t.Path, ".") }
 
 // managementPattern is the pattern form of an enum ("^(Managed|Removed)$").
 var managementPattern = regexp.MustCompile(`^\^?\(?([A-Za-z]+(?:\|[A-Za-z]+)*)\)?\$?$`)
 
-// allowedStates returns the values a managementState schema accepts: its
+// AllowedStates returns the values a managementState schema accepts: its
 // enum, or, only without one, the alternatives of a simple pattern.
-func allowedStates(schema map[string]any) []string {
+func AllowedStates(schema map[string]any) []string {
 	var out []string
 	if enum, ok := schema["enum"].([]any); ok {
 		for _, v := range enum {
@@ -132,14 +132,14 @@ func allowedStates(schema map[string]any) []string {
 	return nil
 }
 
-// dscToggleTree returns every object of spec.components that has a
+// DSCToggleTree returns every object of spec.components that has a
 // managementState or holds one, at any depth, parents before their
 // children, siblings by name.
-func dscToggleTree(spec map[string]any) []dscToggle {
-	components := schemaChild(spec, "components")
-	var walk func(schema map[string]any, path []string) []dscToggle
-	walk = func(schema map[string]any, path []string) []dscToggle {
-		props := schemaProps(schema)
+func DSCToggleTree(spec map[string]any) []DSCToggle {
+	components := SchemaChild(spec, "components")
+	var walk func(schema map[string]any, path []string) []DSCToggle
+	walk = func(schema map[string]any, path []string) []DSCToggle {
+		props := SchemaProps(schema)
 		keys := make([]string, 0, len(props))
 		for k := range props {
 			keys = append(keys, k)
@@ -151,17 +151,17 @@ func dscToggleTree(spec map[string]any) []dscToggle {
 			}
 			return keys[i] < keys[j]
 		})
-		var out []dscToggle
+		var out []DSCToggle
 		for _, k := range keys {
 			child, _ := props[k].(map[string]any)
-			if child == nil || k == "managementState" || schemaProps(child) == nil {
+			if child == nil || k == "managementState" || SchemaProps(child) == nil {
 				continue
 			}
 			p := append(append([]string{}, path...), k)
-			node := dscToggle{Path: p}
-			if ms := schemaChild(child, "managementState"); ms != nil {
+			node := DSCToggle{Path: p}
+			if ms := SchemaChild(child, "managementState"); ms != nil {
 				node.Toggle = true
-				node.Allowed = allowedStates(ms)
+				node.Allowed = AllowedStates(ms)
 				node.SchemaDefault, _ = ms["default"].(string)
 			}
 			sub := walk(child, p)
@@ -181,14 +181,14 @@ func dscToggleTree(spec map[string]any) []dscToggle {
 // sameFieldRule finds "self.<f> == oldSelf.<f>" in a CEL rule.
 var sameFieldRule = regexp.MustCompile(`self\.([A-Za-z0-9_]+)\s*==\s*oldSelf\.([A-Za-z0-9_]+)`)
 
-// dscProtectedFields returns the fields under spec.components (dotted
+// DSCProtectedFields returns the fields under spec.components (dotted
 // paths) whose value the CRD's validation rules (x-kubernetes-validations)
 // keep: a field with the rule "self == oldSelf" (workbenches.workbenchNamespace,
 // "WorkbenchNamespace is immutable"), and a field an object's rule compares
 // with its old value (aiHub.instancesNamespace, "InstancesNamespace is
 // immutable when AI Hub is Managed"). A reset keeps their value whenever the
 // DSC has one: they name namespaces that hold users' data.
-func dscProtectedFields(spec map[string]any) map[string]bool {
+func DSCProtectedFields(spec map[string]any) map[string]bool {
 	out := map[string]bool{}
 	var walk func(schema map[string]any, path []string)
 	walk = func(schema map[string]any, path []string) {
@@ -206,19 +206,19 @@ func dscProtectedFields(spec map[string]any) map[string]bool {
 				}
 			}
 		}
-		for k, v := range schemaProps(schema) {
+		for k, v := range SchemaProps(schema) {
 			if child, ok := v.(map[string]any); ok {
 				walk(child, append(append([]string{}, path...), k))
 			}
 		}
 	}
-	if components := schemaChild(spec, "components"); components != nil {
+	if components := SchemaChild(spec, "components"); components != nil {
 		walk(components, nil)
 	}
 	return out
 }
 
-// applySchemaDefaults fills in x, in place, what the API server's
+// ApplySchemaDefaults fills in x, in place, what the API server's
 // defaulting adds to an object of the installed CRD (Kubernetes structural
 // schema defaulting, apiextensions-apiserver
 // pkg/apiserver/schema/defaulting/algorithm.go Default): in every object,
@@ -229,13 +229,13 @@ func dscProtectedFields(spec map[string]any) map[string]bool {
 // schema's default too (kubernetes v1.34 algorithm.go:53-55). The API server
 // does this on every create, update and read, so a field it defaulted
 // (no field manager owns it) comes back by itself in a new object.
-func applySchemaDefaults(x any, schema map[string]any) {
+func ApplySchemaDefaults(x any, schema map[string]any) {
 	if schema == nil {
 		return
 	}
 	switch x := x.(type) {
 	case map[string]any:
-		props := schemaProps(schema)
+		props := SchemaProps(schema)
 		for k, p := range props {
 			ps, _ := p.(map[string]any)
 			def, ok := ps["default"]
@@ -249,13 +249,13 @@ func applySchemaDefaults(x any, schema map[string]any) {
 		additional, _ := schema["additionalProperties"].(map[string]any)
 		for k, v := range x {
 			if ps, ok := props[k].(map[string]any); ok {
-				applySchemaDefaults(v, ps)
+				ApplySchemaDefaults(v, ps)
 			} else if additional != nil {
 				if def, ok := additional["default"]; ok && v == nil && additional["nullable"] != true {
 					v = kube.NormalizeJSON(def)
 					x[k] = v
 				}
-				applySchemaDefaults(v, additional)
+				ApplySchemaDefaults(v, additional)
 			}
 		}
 	case []any:
@@ -267,39 +267,39 @@ func applySchemaDefaults(x any, schema map[string]any) {
 			if def, ok := items["default"]; ok && x[i] == nil && items["nullable"] != true {
 				x[i] = kube.NormalizeJSON(def)
 			}
-			applySchemaDefaults(x[i], items)
+			ApplySchemaDefaults(x[i], items)
 		}
 	}
 }
 
-// withSchemaDefaults returns a copy of obj with the schema's defaults
-// filled in (applySchemaDefaults); an empty object for nil.
-func withSchemaDefaults(obj map[string]any, schema map[string]any) map[string]any {
+// WithSchemaDefaults returns a copy of obj with the schema's defaults
+// filled in (ApplySchemaDefaults); an empty object for nil.
+func WithSchemaDefaults(obj map[string]any, schema map[string]any) map[string]any {
 	out, _ := kube.NormalizeJSON(obj).(map[string]any)
 	if out == nil {
 		out = map[string]any{}
 	}
-	applySchemaDefaults(out, schema)
+	ApplySchemaDefaults(out, schema)
 	return out
 }
 
-// defaultedBack reports whether removing a field that holds value changes
+// DefaultedBack reports whether removing a field that holds value changes
 // nothing: its schema has a default, and the API server's defaulting puts
 // exactly value back (the default with the defaults below it). Removing
 // such a field is no change, so a reset neither sends nor lists it.
-func defaultedBack(schema map[string]any, value any) bool {
+func DefaultedBack(schema map[string]any, value any) bool {
 	def, ok := schema["default"]
 	if !ok {
 		return false
 	}
 	back, now := kube.NormalizeJSON(def), kube.NormalizeJSON(value)
-	applySchemaDefaults(back, schema)
-	applySchemaDefaults(now, schema)
+	ApplySchemaDefaults(back, schema)
+	ApplySchemaDefaults(now, schema)
 	return kube.JSONEqual(back, now)
 }
 
-// lookupPath returns the value at path in a decoded JSON object.
-func lookupPath(obj map[string]any, path []string) (any, bool) {
+// LookupPath returns the value at path in a decoded JSON object.
+func LookupPath(obj map[string]any, path []string) (any, bool) {
 	var cur any = obj
 	for _, k := range path {
 		m, ok := cur.(map[string]any)
@@ -313,9 +313,9 @@ func lookupPath(obj map[string]any, path []string) (any, bool) {
 	return cur, true
 }
 
-// lookupState returns the managementState of the object at path.
-func lookupState(components map[string]any, path []string) (string, bool) {
-	v, ok := lookupPath(components, append(append([]string{}, path...), "managementState"))
+// LookupState returns the managementState of the object at path.
+func LookupState(components map[string]any, path []string) (string, bool) {
+	v, ok := LookupPath(components, append(append([]string{}, path...), "managementState"))
 	if !ok {
 		return "", false
 	}
@@ -325,7 +325,7 @@ func lookupState(components map[string]any, path []string) (string, bool) {
 
 // --- JSON Patch (RFC 6902) -------------------------------------------------
 
-func patchOp(op string, path []string, value any) kube.JSONPatchOp {
+func PatchOp(op string, path []string, value any) kube.JSONPatchOp {
 	o := kube.JSONPatchOp{Op: op, Path: kube.PointerOf(path)}
 	if op != "remove" {
 		raw, _ := json.Marshal(value)
@@ -334,37 +334,37 @@ func patchOp(op string, path []string, value any) kube.JSONPatchOp {
 	return o
 }
 
-// dscAssign sets the value at Path (keys from the DSC's root, such as
+// DSCAssign sets the value at Path (keys from the DSC's root, such as
 // ["spec", "components", "kserve", "managementState"]).
-type dscAssign struct {
+type DSCAssign struct {
 	Path  []string
 	Value any
 }
 
-// buildJSONPatch returns a JSON Patch that makes exactly these changes to
+// BuildJSONPatch returns a JSON Patch that makes exactly these changes to
 // obj and fails as a whole when anything it changes differs from what obj
 // holds now: each replaced or removed value is tested first, and a value
 // added where nothing is gets a test of the nearest object that exists (a
 // concurrent change anywhere in it fails the patch rather than being
 // overwritten). Missing objects on the way are added with the value. All
 // tests come first, so they see the object as read.
-func buildJSONPatch(obj map[string]any, sets []dscAssign, removes [][]string) ([]kube.JSONPatchOp, error) {
+func BuildJSONPatch(obj map[string]any, sets []DSCAssign, removes [][]string) ([]kube.JSONPatchOp, error) {
 	var tests, changes []kube.JSONPatchOp
 	tested := map[string]bool{}
 	test := func(path []string, value any) {
 		p := kube.PointerOf(path)
 		if !tested[p] {
 			tested[p] = true
-			tests = append(tests, patchOp("test", path, value))
+			tests = append(tests, PatchOp("test", path, value))
 		}
 	}
 	for _, r := range removes {
-		v, ok := lookupPath(obj, r)
+		v, ok := LookupPath(obj, r)
 		if !ok {
 			return nil, fmt.Errorf("%s is not in the DataScienceCluster", strings.Join(r, "."))
 		}
 		test(r, v)
-		changes = append(changes, patchOp("remove", r, nil))
+		changes = append(changes, PatchOp("remove", r, nil))
 	}
 	// Sets whose path is missing are grouped under the first missing key.
 	type insertion struct {
@@ -379,17 +379,17 @@ func buildJSONPatch(obj map[string]any, sets []dscAssign, removes [][]string) ([
 		if len(s.Path) == 0 {
 			return nil, fmt.Errorf("empty path")
 		}
-		if cur, ok := lookupPath(obj, s.Path); ok {
+		if cur, ok := LookupPath(obj, s.Path); ok {
 			if kube.JSONEqual(cur, s.Value) {
 				continue
 			}
 			test(s.Path, cur)
-			changes = append(changes, patchOp("replace", s.Path, s.Value))
+			changes = append(changes, PatchOp("replace", s.Path, s.Value))
 			continue
 		}
 		k := 0
 		for k < len(s.Path)-1 {
-			v, ok := lookupPath(obj, s.Path[:k+1])
+			v, ok := LookupPath(obj, s.Path[:k+1])
 			if !ok {
 				break
 			}
@@ -399,7 +399,7 @@ func buildJSONPatch(obj map[string]any, sets []dscAssign, removes [][]string) ([
 			k++
 		}
 		root := s.Path[:k+1]
-		parent, _ := lookupPath(obj, s.Path[:k])
+		parent, _ := LookupPath(obj, s.Path[:k])
 		if len(s.Path[:k]) == 0 {
 			parent = obj
 		}
@@ -432,10 +432,10 @@ func buildJSONPatch(obj map[string]any, sets []dscAssign, removes [][]string) ([
 			if len(in.value) > 0 {
 				return nil, fmt.Errorf("conflicting changes at %s", strings.Join(in.root, "."))
 			}
-			changes = append(changes, patchOp("add", in.root, in.leaf))
+			changes = append(changes, PatchOp("add", in.root, in.leaf))
 			continue
 		}
-		changes = append(changes, patchOp("add", in.root, in.value))
+		changes = append(changes, PatchOp("add", in.root, in.value))
 	}
 	return append(tests, changes...), nil
 }

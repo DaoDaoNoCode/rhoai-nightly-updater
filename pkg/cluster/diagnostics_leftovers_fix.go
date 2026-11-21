@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -201,7 +202,7 @@ func fixLeftoverStoredFields(c *Client, target string, ack *AckBinding) *types.O
 	var after map[string]any
 	if err := json.Unmarshal(body, &after); err == nil {
 		for _, lf := range changes {
-			got, present := lookupPath(after, lf.Keys)
+			got, present := components.LookupPath(after, lf.Keys)
 			if (lf.Change == "set-default" && (!present || !kube.JSONEqual(got, lf.After))) || (lf.Change == "remove" && present) {
 				return &types.OperationResponse{Success: false, ErrorCode: "internal", Logs: logs,
 					Message: fmt.Sprintf("The API server accepted the change, but %s is %s in the object it returned. Run diagnostics again and check %s.", lf.Path, fieldJSON(got), st.ref())}

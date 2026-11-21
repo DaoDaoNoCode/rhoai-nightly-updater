@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -141,7 +142,7 @@ func TestJSONPointerEscapesTildeAndSlash(t *testing.T) {
 		t.Fatalf("keys = %v", got)
 	}
 	obj := map[string]any{"spec": map[string]any{"a/b": "old", "c~d": map[string]any{}}}
-	ops, err := buildJSONPatch(obj, []dscAssign{{Path: []string{"spec", "a/b"}, Value: "new"}, {Path: []string{"spec", "c~d", "~1"}, Value: true}}, nil)
+	ops, err := components.BuildJSONPatch(obj, []components.DSCAssign{{Path: []string{"spec", "a/b"}, Value: "new"}, {Path: []string{"spec", "c~d", "~1"}, Value: true}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,10 +150,10 @@ func TestJSONPointerEscapesTildeAndSlash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v, _ := lookupPath(after, []string{"spec", "a/b"}); v != "new" {
+	if v, _ := components.LookupPath(after, []string{"spec", "a/b"}); v != "new" {
 		t.Fatalf("a/b = %v (ops %+v)", v, ops)
 	}
-	if v, _ := lookupPath(after, []string{"spec", "c~d", "~1"}); v != true {
+	if v, _ := components.LookupPath(after, []string{"spec", "c~d", "~1"}); v != true {
 		t.Fatalf("c~d/~1 = %v", v)
 	}
 }
@@ -344,7 +345,7 @@ func TestHardResetStoppedWhileWaitingCanBeFinished(t *testing.T) {
 		t.Fatalf("finish = %+v", res)
 	}
 	created := f.get(dscV3Path)
-	if v, _ := lookupPath(comps(created), []string{"workbenches", "workbenchNamespace"}); v != "my-notebooks" {
+	if v, _ := components.LookupPath(comps(created), []string{"workbenches", "workbenchNamespace"}); v != "my-notebooks" {
 		t.Fatalf("created = %v", created)
 	}
 	posts := f.callsTo(http.MethodPost, dscV3List)

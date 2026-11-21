@@ -1,4 +1,4 @@
-package cluster
+package components
 
 import (
 	"context"
@@ -23,7 +23,7 @@ const dscSamplesBaseURL = "https://raw.githubusercontent.com/red-hat-data-servic
 
 var dscVersionPattern = regexp.MustCompile(`(?i)^(?:rhoai-|v)?([0-9]+)\.([0-9]+)(?:\.[0-9]+)?(?:[-.]([a-z]+)(?:\.?([0-9]+))?)?(?:[+.-].*)?$`)
 
-type dscDefaults struct {
+type DSCDefaults struct {
 	Spec       map[string]any
 	YAML       string
 	Version    string // operator version
@@ -46,7 +46,7 @@ type dscDefaultsCacheEntry struct {
 	at   time.Time
 }
 
-func dscBranchForVersion(version string) (string, error) {
+func DSCBranchForVersion(version string) (string, error) {
 	m := dscVersionPattern.FindStringSubmatch(strings.TrimSpace(version))
 	if m == nil {
 		return "", fmt.Errorf("cannot determine DSC sample branch from operator version %q", version)
@@ -61,9 +61,9 @@ func dscBranchForVersion(version string) (string, error) {
 	return branch, nil
 }
 
-// installedOperator is the installed RHOAI CSV as needed for DSC defaults
+// InstalledOperator is the installed RHOAI CSV as needed for DSC defaults
 // and diagnostics.
-type installedOperator struct {
+type InstalledOperator struct {
 	Name        string
 	Version     string
 	Phase       string
@@ -103,12 +103,12 @@ type csvForDefaults struct {
 	} `json:"status"`
 }
 
-func readCSVForDefaults(c *Client, name string) (*installedOperator, error) {
+func readCSVForDefaults(c *kube.Client, name string) (*InstalledOperator, error) {
 	var csv csvForDefaults
 	if err := c.GetInto(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, name), &csv); err != nil {
 		return nil, err
 	}
-	op := &installedOperator{Name: name, Version: csv.Spec.Version, Phase: csv.Status.Phase, ALMExamples: csv.Metadata.Annotations["alm-examples"],
+	op := &InstalledOperator{Name: name, Version: csv.Spec.Version, Phase: csv.Status.Phase, ALMExamples: csv.Metadata.Annotations["alm-examples"],
 		ContainerImage: csv.Metadata.Annotations["containerImage"], CreatedAt: csv.Metadata.Annotations["createdAt"]}
 	for _, d := range csv.Spec.Install.Spec.Deployments {
 		if d.Name != "" {
@@ -123,9 +123,9 @@ func readCSVForDefaults(c *Client, name string) (*installedOperator, error) {
 	return op, nil
 }
 
-// getInstalledOperator reads the installed RHOAI CSV. The Subscription's
+// ReadInstalledOperator reads the installed RHOAI CSV. The Subscription's
 // installedCSV is preferred over old CSVs remaining during an upgrade.
-func getInstalledOperator(c *Client) (*installedOperator, error) {
+func ReadInstalledOperator(c *kube.Client) (*InstalledOperator, error) {
 	body, _, err := c.Get(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName))
 	if err == nil {
 		var sub struct {
@@ -156,7 +156,7 @@ func getInstalledOperator(c *Client) (*installedOperator, error) {
 	if csv.Version == "" {
 		return nil, fmt.Errorf("install the RHOAI operator before fetching DSC defaults")
 	}
-	op := &installedOperator{Name: csv.Name, Version: csv.Version, Phase: csv.Phase}
+	op := &InstalledOperator{Name: csv.Name, Version: csv.Version, Phase: csv.Phase}
 	// Read the CSV itself for alm-examples; without it the GitHub sample is used.
 	if full, err := readCSVForDefaults(c, csv.Name); err == nil && full.Version == csv.Version {
 		op.ALMExamples = full.ALMExamples
@@ -172,12 +172,12 @@ type dscExample struct {
 	YAML string
 }
 
-// dscExamplesFromALM returns the DataScienceCluster examples that the
+// DSCExamplesFromALM returns the DataScienceCluster examples that the
 // installed operator bundle ships in its CSV's alm-examples annotation, by
 // API version ("v3"). They are the exact samples of the installed build
 // (the GitHub branch can move ahead of it) and need no network access.
 // Examples not named default-dsc or without components are left out.
-func dscExamplesFromALM(almExamples string) map[string]dscExample {
+func DSCExamplesFromALM(almExamples string) map[string]dscExample {
 	out := map[string]dscExample{}
 	if strings.TrimSpace(almExamples) == "" {
 		return out
@@ -191,7 +191,7 @@ func dscExamplesFromALM(almExamples string) map[string]dscExample {
 			continue
 		}
 		apiVersion, _ := example["apiVersion"].(string)
-		version, ok := dscAPIVersion(apiVersion)
+		version, ok := DSCAPIVersion(apiVersion)
 		if !ok || !isDefaultDSC(example, version) {
 			continue
 		}
@@ -224,9 +224,9 @@ func dscExamplesFromALM(almExamples string) map[string]dscExample {
 	return out
 }
 
-// dscAPIVersion returns the version of a DataScienceCluster apiVersion
+// DSCAPIVersion returns the version of a DataScienceCluster apiVersion
 // ("datasciencecluster.opendatahub.io/v3" gives "v3").
-func dscAPIVersion(apiVersion string) (string, bool) {
+func DSCAPIVersion(apiVersion string) (string, bool) {
 	group, version, ok := strings.Cut(apiVersion, "/")
 	if !ok || group != rhoai.DSCGroup || !rhoai.KubeVersionPattern.MatchString(version) {
 		return "", false
@@ -244,10 +244,10 @@ func isDefaultDSC(sample map[string]any, version string) bool {
 		meta["name"] == "default-dsc" && len(components) > 0
 }
 
-// missingDefaultsError: the installed operator has no defaults in the API
+// MissingDefaultsError: the installed operator has no defaults in the API
 // version the DataScienceCluster was read at. Defaults of another version
 // are never used instead: component names differ between versions.
-type missingDefaultsError struct {
+type MissingDefaultsError struct {
 	Want            string   // "v2"
 	Available       []string // the versions alm-examples has defaults for
 	OperatorVersion string
@@ -255,7 +255,7 @@ type missingDefaultsError struct {
 	Branch          string
 }
 
-func (e *missingDefaultsError) Error() string {
+func (e *MissingDefaultsError) Error() string {
 	var where []string
 	if e.CSV != "" {
 		where = append(where, "the alm-examples of "+e.CSV)
@@ -268,15 +268,15 @@ func (e *missingDefaultsError) Error() string {
 	return msg
 }
 
-// fetchDefaultDSCSpec returns the installed operator's defaults in API
+// FetchDefaultDSCSpec returns the installed operator's defaults in API
 // version want ("v3"), or with want "" in the newest served version that
 // has them.
-func fetchDefaultDSCSpec(c *Client, want string) (*dscDefaults, error) {
-	op, err := getInstalledOperator(c)
+func FetchDefaultDSCSpec(c *kube.Client, want string) (*DSCDefaults, error) {
+	op, err := ReadInstalledOperator(c)
 	if err != nil {
 		return nil, err
 	}
-	return defaultDSCSpecFor(c.Context(), op, rhoai.ServedVersions(c, rhoai.DSCGroup, rhoai.DSCFallbackVersions), want)
+	return DefaultDSCSpecFor(c.Context(), op, rhoai.ServedVersions(c, rhoai.DSCGroup, rhoai.DSCFallbackVersions), want)
 }
 
 // defaultsOrder is the API versions to look for defaults in: want alone,
@@ -300,35 +300,35 @@ func defaultsOrder(versions rhoai.APIVersions, examples map[string]dscExample, w
 	return order
 }
 
-// defaultDSCSpecFor prefers the installed CSV's alm-examples and falls back
+// DefaultDSCSpecFor prefers the installed CSV's alm-examples and falls back
 // to the sample on the matching rhods-operator branch, in the API versions
 // of defaultsOrder. DSC_SAMPLE_REF forces the GitHub sample from that ref.
-func defaultDSCSpecFor(ctx context.Context, op *installedOperator, versions rhoai.APIVersions, want string) (*dscDefaults, error) {
-	return defaultDSCSpecFrom(ctx, op, versions, want, fetchDSCSample)
+func DefaultDSCSpecFor(ctx context.Context, op *InstalledOperator, versions rhoai.APIVersions, want string) (*DSCDefaults, error) {
+	return DefaultDSCSpecFrom(ctx, op, versions, want, FetchDSCSample)
 }
 
-// dscSampleFetcher downloads a DataScienceCluster sample (fetchDSCSample).
-type dscSampleFetcher func(ctx context.Context, sourceURL, version string) (string, int, error)
+// DSCSampleFetcher downloads a DataScienceCluster sample (FetchDSCSample).
+type DSCSampleFetcher func(ctx context.Context, sourceURL, version string) (string, int, error)
 
-// defaultDSCSpecFrom is defaultDSCSpecFor with the GitHub fallback given as
+// DefaultDSCSpecFrom is DefaultDSCSpecFor with the GitHub fallback given as
 // fetchSample. With fetchSample nil (the gitops profile, which contacts no
 // host but the API server) only the installed CSV's alm-examples are used,
 // and DSC_SAMPLE_REF is ignored.
-func defaultDSCSpecFrom(ctx context.Context, op *installedOperator, versions rhoai.APIVersions, want string, fetchSample dscSampleFetcher) (*dscDefaults, error) {
+func DefaultDSCSpecFrom(ctx context.Context, op *InstalledOperator, versions rhoai.APIVersions, want string, fetchSample DSCSampleFetcher) (*DSCDefaults, error) {
 	version := op.Version
-	branch, err := dscBranchForVersion(version)
+	branch, err := DSCBranchForVersion(version)
 	override := strings.TrimSpace(os.Getenv("DSC_SAMPLE_REF"))
 	if fetchSample == nil {
 		override = ""
 	}
 	examples := map[string]dscExample{}
 	if override == "" {
-		examples = dscExamplesFromALM(op.ALMExamples)
+		examples = DSCExamplesFromALM(op.ALMExamples)
 	}
 	order := defaultsOrder(versions, examples, want)
 	for _, v := range order {
 		if ex, ok := examples[v]; ok {
-			return &dscDefaults{Spec: ex.Spec, YAML: ex.YAML, Version: version, APIVersion: v, Branch: branch, Source: "csv",
+			return &DSCDefaults{Spec: ex.Spec, YAML: ex.YAML, Version: version, APIVersion: v, Branch: branch, Source: "csv",
 				SourceDescription: "alm-examples of the installed CSV " + op.Name}, nil
 		}
 	}
@@ -360,10 +360,10 @@ func defaultDSCSpecFrom(ctx context.Context, op *installedOperator, versions rho
 		if !isDefaultDSC(spec, apiVersion) {
 			return nil, fmt.Errorf("upstream sample is not a valid default DataScienceCluster")
 		}
-		return &dscDefaults{Spec: spec, YAML: body, Version: version, APIVersion: apiVersion, Branch: branch, SourceURL: sourceURL, Source: "github", SourceDescription: sourceURL}, nil
+		return &DSCDefaults{Spec: spec, YAML: body, Version: version, APIVersion: apiVersion, Branch: branch, SourceURL: sourceURL, Source: "github", SourceDescription: sourceURL}, nil
 	}
 	if want != "" {
-		e := &missingDefaultsError{Want: want, OperatorVersion: version, Branch: branch}
+		e := &MissingDefaultsError{Want: want, OperatorVersion: version, Branch: branch}
 		if override == "" {
 			e.CSV = op.Name
 		}
@@ -376,9 +376,9 @@ func defaultDSCSpecFrom(ctx context.Context, op *installedOperator, versions rho
 	return nil, fmt.Errorf("no DSC sample found for %s (DataScienceCluster %s)", branch, strings.Join(order, ", "))
 }
 
-// fetchDSCSample downloads a GitHub sample of DataScienceCluster apiVersion
+// FetchDSCSample downloads a GitHub sample of DataScienceCluster apiVersion
 // version. Only valid samples are cached.
-func fetchDSCSample(ctx context.Context, sourceURL, version string) (string, int, error) {
+func FetchDSCSample(ctx context.Context, sourceURL, version string) (string, int, error) {
 	dscDefaultsCache.RLock()
 	entry, ok := dscDefaultsCache.entries[sourceURL]
 	dscDefaultsCache.RUnlock()
@@ -420,10 +420,10 @@ func fetchDSCSample(ctx context.Context, sourceURL, version string) (string, int
 	return string(body), resp.StatusCode, nil
 }
 
-// GetDefaultDSCYAML returns the defaults a "create" or "reset to defaults"
+// DefaultDSCYAML returns the defaults a "create" or "reset to defaults"
 // would use: in the API version the existing DataScienceCluster is read
 // at, or, without one, in the newest served version that has them.
-func GetDefaultDSCYAML(c *Client) (*dscDefaults, error) {
+func DefaultDSCYAML(c *kube.Client) (*DSCDefaults, error) {
 	read, err := rhoai.ReadFirstDSC(c)
 	if err != nil {
 		return nil, err
@@ -432,5 +432,5 @@ func GetDefaultDSCYAML(c *Client) (*dscDefaults, error) {
 	if read.Object != nil {
 		want = read.Version
 	}
-	return fetchDefaultDSCSpec(c, want)
+	return FetchDefaultDSCSpec(c, want)
 }

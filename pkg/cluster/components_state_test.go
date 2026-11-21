@@ -10,6 +10,7 @@ import (
 	"testing"
 	"testing/synctest"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -251,7 +252,7 @@ func TestDefaultDSCFromALMExamples(t *testing.T) {
 			var github int
 			mockDSCSamples(t, func(*http.Request) (int, string) { github++; return 200, testDSCSample })
 			t.Setenv("DSC_SAMPLE_REF", tc.override)
-			defaults, err := defaultDSCSpecFor(context.Background(), &installedOperator{Name: "rhods-operator.3.6.0", Version: "3.6.0", ALMExamples: tc.alm}, rhoai.APIVersions{Versions: rhoai.DSCFallbackVersions}, "")
+			defaults, err := components.DefaultDSCSpecFor(context.Background(), &components.InstalledOperator{Name: "rhods-operator.3.6.0", Version: "3.6.0", ALMExamples: tc.alm}, rhoai.APIVersions{Versions: rhoai.DSCFallbackVersions}, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -272,7 +273,7 @@ func TestDefaultDSCFromALMExamples(t *testing.T) {
 				}
 				// Callers get their own copy.
 				comps["dashboard"] = nil
-				again, _ := defaultDSCSpecFor(context.Background(), &installedOperator{Version: "3.6.0", ALMExamples: tc.alm}, rhoai.APIVersions{Versions: rhoai.DSCFallbackVersions}, "")
+				again, _ := components.DefaultDSCSpecFor(context.Background(), &components.InstalledOperator{Version: "3.6.0", ALMExamples: tc.alm}, rhoai.APIVersions{Versions: rhoai.DSCFallbackVersions}, "")
 				if again.Spec["spec"].(map[string]any)["components"].(map[string]any)["dashboard"] == nil {
 					t.Fatal("shared mutable defaults")
 				}

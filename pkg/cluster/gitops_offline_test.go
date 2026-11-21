@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -149,7 +150,7 @@ func TestInstalledOperatorBuild(t *testing.T) {
 	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
 	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"), 200,
 		`{"metadata":{"annotations":{"containerImage":"registry.redhat.io/rhoai/odh-rhel9-operator@sha256:abc","createdAt":"2026-10-08T04:00:00Z"}},"spec":{"version":"3.6.0"},"status":{"phase":"Succeeded"}}`)
-	op, err := getInstalledOperator(c)
+	op, err := components.ReadInstalledOperator(c)
 	if err != nil || op.ContainerImage != "registry.redhat.io/rhoai/odh-rhel9-operator@sha256:abc" || op.CreatedAt != "2026-10-08T04:00:00Z" {
 		t.Fatalf("%+v %v", op, err)
 	}

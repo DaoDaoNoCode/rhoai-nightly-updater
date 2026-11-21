@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
@@ -1240,7 +1241,7 @@ func applyFixDisableComponent(c *Client, compName string) (*types.OperationRespo
 		return &types.OperationResponse{Success: false, ErrorCode: "validation",
 			Message: fmt.Sprintf("Component %q is not a component the installed DataScienceCluster CRD defines. Use the OpenShift Console to edit the DSC directly.", compName)}, nil
 	}
-	state, present := lookupState(v.components(), strings.Split(compName, "."))
+	state, present := components.LookupState(v.components(), strings.Split(compName, "."))
 	if !present {
 		return nothingToDo(fmt.Sprintf("the DataScienceCluster has no %s component. Nothing was changed.", compName), nil), nil
 	}

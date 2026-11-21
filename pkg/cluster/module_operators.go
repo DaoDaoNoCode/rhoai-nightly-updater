@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -146,7 +147,7 @@ type moduleOperatorFinder struct {
 	bindings    []rbacBinding
 	deployments []moduleOperatorDeployment
 	csvLoaded   bool
-	csv         *installedOperator
+	csv         *components.InstalledOperator
 	csvErr      error
 	// The applications namespace's Pods, read only by finalizerOwner.
 	podsLoaded bool
@@ -272,10 +273,10 @@ func (f *moduleOperatorFinder) read() error {
 	return nil
 }
 
-func (f *moduleOperatorFinder) installedCSV() (*installedOperator, error) {
+func (f *moduleOperatorFinder) installedCSV() (*components.InstalledOperator, error) {
 	if !f.csvLoaded {
 		f.csvLoaded = true
-		f.csv, f.csvErr = getInstalledOperator(f.c)
+		f.csv, f.csvErr = components.ReadInstalledOperator(f.c)
 	}
 	return f.csv, f.csvErr
 }

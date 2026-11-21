@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -37,14 +38,10 @@ func mockDSCSamples(t *testing.T, fetch func(*http.Request) (int, string)) {
 		status, body := fetch(r)
 		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})}
-	dscDefaultsCache.Lock()
-	dscDefaultsCache.entries = make(map[string]dscDefaultsCacheEntry)
-	dscDefaultsCache.Unlock()
+	components.ResetDSCDefaultsCacheForTest()
 	t.Cleanup(func() {
 		http.DefaultClient = old
-		dscDefaultsCache.Lock()
-		dscDefaultsCache.entries = make(map[string]dscDefaultsCacheEntry)
-		dscDefaultsCache.Unlock()
+		components.ResetDSCDefaultsCacheForTest()
 	})
 }
 
@@ -65,14 +62,14 @@ func TestDSCBranchForVersion(t *testing.T) {
 		"5.23.0-preview": "rhoai-5.23-preview", "5.23.0-preview.4": "rhoai-5.23-preview.4",
 	} {
 		t.Run(version, func(t *testing.T) {
-			got, err := dscBranchForVersion(version)
+			got, err := components.DSCBranchForVersion(version)
 			if err != nil || got != want {
 				t.Fatalf("got %q, %v; want %q", got, err, want)
 			}
 		})
 	}
 	for _, version := range []string{"", "latest", "../../main", "3"} {
-		if _, err := dscBranchForVersion(version); err == nil {
+		if _, err := components.DSCBranchForVersion(version); err == nil {
 			t.Errorf("accepted %q", version)
 		}
 	}
@@ -88,12 +85,12 @@ func TestDefaultDSCFollowsUnnumberedEAAndRefOverride(t *testing.T) {
 		rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""): csvListMock("3.7.0-ea"),
 	})
 	defer cleanup()
-	defaults, err := fetchDefaultDSCSpec(c, "")
+	defaults, err := components.FetchDefaultDSCSpec(c, "")
 	if err != nil || defaults.Branch != "rhoai-3.7-ea" || !strings.Contains(requestedPaths[0], "/rhoai-3.7-ea/") {
 		t.Fatalf("defaults=%+v, error=%v, paths=%v", defaults, err, requestedPaths)
 	}
 	t.Setenv("DSC_SAMPLE_REF", "release/new-convention")
-	defaults, err = fetchDefaultDSCSpec(c, "")
+	defaults, err = components.FetchDefaultDSCSpec(c, "")
 	if err != nil || defaults.Branch != "release/new-convention" || len(requestedPaths) != 2 || !strings.Contains(requestedPaths[1], "/release%2Fnew-convention/") {
 		t.Fatalf("override defaults=%+v, error=%v, paths=%v", defaults, err, requestedPaths)
 	}
@@ -110,13 +107,13 @@ func TestDefaultDSCUsesInstalledCSVAndBranchCache(t *testing.T) {
 	}
 	c, cleanup := newMockClient(responses)
 	defer cleanup()
-	first, err := fetchDefaultDSCSpec(c, "")
+	first, err := components.FetchDefaultDSCSpec(c, "")
 	if err != nil || first.Branch != "rhoai-3.6-ea.2" {
 		t.Fatalf("defaults: %+v, %v", first, err)
 	}
 	// Every caller gets a fresh parsed map; repairs must never mutate cached defaults.
 	first.Spec["spec"].(map[string]any)["components"] = nil
-	second, err := fetchDefaultDSCSpec(c, "")
+	second, err := components.FetchDefaultDSCSpec(c, "")
 	if err != nil || second.Spec["spec"].(map[string]any)["components"] == nil {
 		t.Fatal("shared mutable defaults")
 	}
@@ -127,7 +124,7 @@ func TestDefaultDSCUsesInstalledCSVAndBranchCache(t *testing.T) {
 		rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""): csvListMock("3.3.0"),
 	})
 	defer olderCleanup()
-	third, err := fetchDefaultDSCSpec(older, "")
+	third, err := components.FetchDefaultDSCSpec(older, "")
 	if err != nil || third.Branch != "rhoai-3.3" || len(fetched) != 2 {
 		t.Fatalf("upgrade reused wrong cache: %+v %v %v", third, err, fetched)
 	}
@@ -160,7 +157,7 @@ func TestDefaultDSCVersionFallbackAndFailures(t *testing.T) {
 			})
 			c, cleanup := newMockClient(map[string]mockResponse{rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""): csvListMock("3.3.0")})
 			defer cleanup()
-			defaults, err := fetchDefaultDSCSpec(c, "")
+			defaults, err := components.FetchDefaultDSCSpec(c, "")
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("defaults=%+v error=%v", defaults, err)
 			}

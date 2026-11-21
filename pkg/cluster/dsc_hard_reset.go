@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -100,11 +101,11 @@ func (v *dscView) newDefaultObject(comps map[string]any) map[string]any {
 	sort.Strings(fields)
 	for _, f := range fields {
 		keys := strings.Split(f, ".")
-		old, ok := lookupPath(v.components(), keys)
+		old, ok := components.LookupPath(v.components(), keys)
 		if !ok {
 			continue
 		}
-		parent, ok := lookupPath(comps, keys[:len(keys)-1])
+		parent, ok := components.LookupPath(comps, keys[:len(keys)-1])
 		if pm, isMap := parent.(map[string]any); ok && isMap {
 			pm[keys[len(keys)-1]] = old
 		}
@@ -152,10 +153,10 @@ func (v *dscView) planHardReset(c *Client, keep bool) *dscPlanned {
 	p.plan.Changes = v.changesBetween(v.defaultedComponents(v.components()), createdComps)
 	for _, t := range v.tree {
 		if len(t.Path) == 1 && v.componentEnabled(v.components(), t) {
-			p.plan.TornDown = append(p.plan.TornDown, t.key())
+			p.plan.TornDown = append(p.plan.TornDown, t.Key())
 		}
 		if t.Toggle && v.deployed(v.components(), t.Path) && !v.deployed(newComps, t.Path) {
-			p.plan.StayRemoved = append(p.plan.StayRemoved, t.key())
+			p.plan.StayRemoved = append(p.plan.StayRemoved, t.Key())
 		}
 	}
 	v.removalBlocks(c, v.components(), newComps, true).applyTo(p.plan)
@@ -164,13 +165,13 @@ func (v *dscView) planHardReset(c *Client, keep bool) *dscPlanned {
 }
 
 // asCreated is obj as the API server stores it: its spec with what the
-// installed CRD's defaults fill in (applySchemaDefaults). The plan shows
+// installed CRD's defaults fill in (components.ApplySchemaDefaults). The plan shows
 // and compares this object; the create sends obj and the API server fills
 // in the same values.
 func (v *dscView) asCreated(obj map[string]any) map[string]any {
 	out, _ := kube.NormalizeJSON(obj).(map[string]any)
 	if spec, ok := out["spec"].(map[string]any); ok {
-		applySchemaDefaults(spec, v.spec)
+		components.ApplySchemaDefaults(spec, v.spec)
 	}
 	return out
 }
@@ -249,7 +250,7 @@ func HardResetDSC(c *Client, req types.DSCPlanRequest, emit func(UpdateStepEvent
 	// (fieldValidation=Strict), the CRD's validation rules and the
 	// operator's validating webhook see it before anything is deleted. The
 	// test of the UID makes it about this DSC only.
-	validate := []kube.JSONPatchOp{patchOp("test", []string{"metadata", "uid"}, v.uid), patchOp("replace", []string{"spec"}, obj["spec"])}
+	validate := []kube.JSONPatchOp{components.PatchOp("test", []string{"metadata", "uid"}, v.uid), components.PatchOp("replace", []string{"spec"}, obj["spec"])}
 	if _, err := patchDSCFields(c, path, validate, true); err != nil {
 		// A failed test of the UID gets the same bare 422 as a refused
 		// spec (see dsc_manager.go): the DSC read again tells them apart.
@@ -619,14 +620,14 @@ func FinishDSCHardReset(c *Client, req types.DSCFinishRequest) (*types.Operation
 	if !td.done() {
 		return refuse("The old DataScienceCluster's modules are not cleaned up yet: "+td.stuck()+". Nothing was changed; finish the hard reset once they are.", "prerequisites")
 	}
-	crd, err := readDSCCRD(c)
+	crd, err := components.ReadDSCCRD(c)
 	if err != nil {
 		return refuse("Cannot read the DataScienceCluster CRD: "+err.Error()+". Nothing was changed.", kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "prerequisites"))
 	}
-	if crd.storage() != version || crd.version(version) == nil {
-		return refuse(fmt.Sprintf("The DataScienceCluster CRD now stores %s, not %s, the version the reset planned, so the recorded object is not used. Create the DataScienceCluster again with Create DataScienceCluster. Nothing was changed.", kube.NonEmpty(crd.storage(), "no version"), version), "prerequisites")
+	if crd.Storage() != version || crd.Version(version) == nil {
+		return refuse(fmt.Sprintf("The DataScienceCluster CRD now stores %s, not %s, the version the reset planned, so the recorded object is not used. Create the DataScienceCluster again with Create DataScienceCluster. Nothing was changed.", kube.NonEmpty(crd.Storage(), "no version"), version), "prerequisites")
 	}
-	op, err := getInstalledOperator(c)
+	op, err := components.ReadInstalledOperator(c)
 	if err != nil {
 		return refuse("Cannot read the installed operator: "+err.Error()+". Nothing was changed.", kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "prerequisites"))
 	}

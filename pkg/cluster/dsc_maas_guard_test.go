@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -202,11 +203,11 @@ func TestSoftResetKeepsWhatTheUserTurnedOn(t *testing.T) {
 	}
 	stored := comps(f.get(dscV3Path))
 	for _, p := range []string{"aigateway", "aigateway.modelsAsAService"} {
-		if s, _ := lookupState(stored, strings.Split(p, ".")); s != "Managed" {
+		if s, _ := components.LookupState(stored, strings.Split(p, ".")); s != "Managed" {
 			t.Fatalf("%s = %s after a reset that keeps it", p, s)
 		}
 	}
-	if _, ok := lookupPath(stored, []string{"kserve", "rawDeploymentServiceConfig"}); ok {
+	if _, ok := components.LookupPath(stored, []string{"kserve", "rawDeploymentServiceConfig"}); ok {
 		t.Fatal("the reset kept rawDeploymentServiceConfig")
 	}
 }
@@ -241,10 +242,10 @@ func TestTurnedOnListsDeployedTogglesTheDefaultLeavesOff(t *testing.T) {
 	if want := []string{"kserve.modelExpress", "kueue"}; !reflect.DeepEqual(plan.Kept, want) {
 		t.Fatalf("kept = %v, want %v", plan.Kept, want)
 	}
-	if s, _ := lookupState(target, []string{"kueue"}); s != "Unmanaged" {
+	if s, _ := components.LookupState(target, []string{"kueue"}); s != "Unmanaged" {
 		t.Fatalf("kueue = %s", s)
 	}
-	if s, _ := lookupState(target, []string{"aigateway", "modelsAsAService"}); s != "Removed" {
+	if s, _ := components.LookupState(target, []string{"aigateway", "modelsAsAService"}); s != "Removed" {
 		t.Fatalf("modelsAsAService = %s (an orphan was kept)", s)
 	}
 	plan = &types.DSCPlan{}
@@ -265,7 +266,7 @@ func TestKeptSubComponentKeepsItsParent(t *testing.T) {
 	if want := []string{"aigateway", "aigateway.batchGateway"}; !reflect.DeepEqual(plan.Kept, want) {
 		t.Fatalf("kept = %v, want %v", plan.Kept, want)
 	}
-	if s, _ := lookupState(target, []string{"aigateway"}); s != "Managed" {
+	if s, _ := components.LookupState(target, []string{"aigateway"}); s != "Managed" {
 		t.Fatalf("aigateway = %s", s)
 	}
 }
@@ -313,7 +314,7 @@ func TestHardResetKeepsWhatTheUserTurnedOn(t *testing.T) {
 	}
 	created := comps(f.get(dscV3Path))
 	for _, p := range []string{"aigateway", "aigateway.modelsAsAService"} {
-		if s, _ := lookupState(created, strings.Split(p, ".")); s != "Managed" {
+		if s, _ := components.LookupState(created, strings.Split(p, ".")); s != "Managed" {
 			t.Fatalf("%s = %s in the new DSC", p, s)
 		}
 	}

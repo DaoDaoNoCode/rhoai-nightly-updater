@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -79,10 +80,10 @@ func patchControlledDashboardImage(c *Client, operator *dashboardDeployment, ima
 }
 
 func checkDSCCompatibility(c *Client, dsc map[string]any) *types.DSCCompatibility {
-	op, err := getInstalledOperator(c)
+	op, err := components.ReadInstalledOperator(c)
 	apiVersion, _ := dsc["apiVersion"].(string)
-	version, _ := dscAPIVersion(apiVersion)
-	return checkDSCCompatibilityFor(c, rhoai.DSCRead{Object: dsc, State: rhoai.DSCStatePresent, Version: version}, op, err, fetchDSCSample)
+	version, _ := components.DSCAPIVersion(apiVersion)
+	return checkDSCCompatibilityFor(c, rhoai.DSCRead{Object: dsc, State: rhoai.DSCStatePresent, Version: version}, op, err, components.FetchDSCSample)
 }
 
 // GetOperationState returns the running-operation marker and the last

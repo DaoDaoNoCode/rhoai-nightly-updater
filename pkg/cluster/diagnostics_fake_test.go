@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -187,7 +188,7 @@ func minimalDSCCRD(version string, components ...string) string {
 // that defines components, and JSON patches of it: a dry run changes
 // nothing, a write is kept. patchBody, when set, is answered instead (an
 // API server that dropped the change).
-func serveToggleDSC(f *fakeAPI, version, dsc, patchBody string, components ...string) {
+func serveToggleDSC(f *fakeAPI, version, dsc, patchBody string, comps ...string) {
 	list := "/apis/datasciencecluster.opendatahub.io/" + version + "/datascienceclusters"
 	var obj map[string]any
 	if err := json.Unmarshal([]byte(dsc), &obj); err != nil {
@@ -218,7 +219,7 @@ func serveToggleDSC(f *fakeAPI, version, dsc, patchBody string, components ...st
 		defer mu.Unlock()
 		return 200, current()
 	})
-	f.json("GET", dscCRDPath, 200, minimalDSCCRD(version, components...))
+	f.json("GET", components.DSCCRDPath, 200, minimalDSCCRD(version, comps...))
 	serveInstalledOperator(f)
 	f.handle("PATCH", list+"/"+name, func(r *http.Request, body []byte) (int, string) {
 		mu.Lock()

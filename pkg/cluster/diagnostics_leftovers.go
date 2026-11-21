@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -329,7 +330,7 @@ func (lf *leftoverField) decide(obj map[string]any, root map[string]any) {
 		lf.Change, lf.Why = "none", "the path is not a plain field under spec, so the tool does not change it"
 		return
 	}
-	lf.Value, lf.Present = lookupPath(obj, lf.Keys)
+	lf.Value, lf.Present = components.LookupPath(obj, lf.Keys)
 	lf.Schema = schemaAt(root, lf.Keys)
 	switch {
 	case !lf.Present:
@@ -634,13 +635,13 @@ func installedCSVOwnsCRD(c *Client, crd string) (string, bool, error) {
 // resourceVersion (the object the user reviewed) and each field's stored
 // value are tested first, so nothing changes if anything moved.
 func (st *storedLeftover) patchOps() []kube.JSONPatchOp {
-	ops := []kube.JSONPatchOp{patchOp("test", []string{"metadata", "uid"}, st.UID), patchOp("test", []string{"metadata", "resourceVersion"}, st.ResourceVersion)}
+	ops := []kube.JSONPatchOp{components.PatchOp("test", []string{"metadata", "uid"}, st.UID), components.PatchOp("test", []string{"metadata", "resourceVersion"}, st.ResourceVersion)}
 	for _, lf := range st.changes() {
-		ops = append(ops, patchOp("test", lf.Keys, lf.Value))
+		ops = append(ops, components.PatchOp("test", lf.Keys, lf.Value))
 		if lf.Change == "set-default" {
-			ops = append(ops, patchOp("replace", lf.Keys, lf.After))
+			ops = append(ops, components.PatchOp("replace", lf.Keys, lf.After))
 		} else {
-			ops = append(ops, patchOp("remove", lf.Keys, nil))
+			ops = append(ops, components.PatchOp("remove", lf.Keys, nil))
 		}
 	}
 	return ops

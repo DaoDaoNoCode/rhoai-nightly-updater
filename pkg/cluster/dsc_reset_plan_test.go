@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -125,7 +126,7 @@ func TestDefaultedBack(t *testing.T) {
 		{"object default, a value differs", nim, map[string]any{"managementState": "Removed", "airGapped": false}, false},
 		{"object without a default", eval, map[string]any{"permit": "deny"}, false},
 	} {
-		if got := defaultedBack(tc.schema, tc.value); got != tc.want {
+		if got := components.DefaultedBack(tc.schema, tc.value); got != tc.want {
 			t.Errorf("%s: defaultedBack = %v, want %v", tc.name, got, tc.want)
 		}
 	}
@@ -147,7 +148,7 @@ func TestApplySchemaDefaults(t *testing.T) {
 	}}
 	obj := map[string]any{"present": map[string]any{}, "null": nil, "nullOK": nil,
 		"list": []any{map[string]any{}, map[string]any{"b": 2}}, "byName": map[string]any{"one": map[string]any{}}}
-	applySchemaDefaults(obj, schema)
+	components.ApplySchemaDefaults(obj, schema)
 	want := map[string]any{"present": map[string]any{"a": "x"}, "made": map[string]any{"a": "x"}, "null": "d", "nullOK": nil,
 		"list": []any{map[string]any{"b": float64(1)}, map[string]any{"b": 2}}, "byName": map[string]any{"one": map[string]any{"c": true}}}
 	if !kube.JSONEqual(obj, want) {
@@ -180,7 +181,7 @@ func TestApplySchemaDefaultsNullAdditionalProperties(t *testing.T) {
 		{"no default", map[string]any{"properties": map[string]any{"b": map[string]any{"default": "x"}}}, nil},
 	} {
 		obj := map[string]any{"byName": map[string]any{"one": nil}}
-		applySchemaDefaults(obj, map[string]any{"properties": map[string]any{"byName": map[string]any{"additionalProperties": tc.schema}}})
+		components.ApplySchemaDefaults(obj, map[string]any{"properties": map[string]any{"byName": map[string]any{"additionalProperties": tc.schema}}})
 		if got := obj["byName"].(map[string]any)["one"]; !kube.JSONEqual(got, tc.want) {
 			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
 		}

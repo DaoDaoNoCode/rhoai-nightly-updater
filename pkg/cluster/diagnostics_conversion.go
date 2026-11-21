@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -214,7 +215,7 @@ func checkConversionFailures(c *Client) checkOutput {
 		}
 	}
 
-	var operator *installedOperator
+	var operator *components.InstalledOperator
 	failedKinds := []string{}
 	for _, k := range kinds {
 		var failed, working []conversionProbe
@@ -230,9 +231,9 @@ func checkConversionFailures(c *Client) checkOutput {
 			continue
 		}
 		if operator == nil {
-			operator, _ = getInstalledOperator(c)
+			operator, _ = components.ReadInstalledOperator(c)
 			if operator == nil {
-				operator = &installedOperator{}
+				operator = &components.InstalledOperator{}
 			}
 		}
 		failedKinds = append(failedKinds, fmt.Sprintf("%s %s", k.kind, joinVersions(failed)))
@@ -280,7 +281,7 @@ func joinVersions(probes []conversionProbe) string {
 
 // conversionProblem reports one kind whose objects the operator's
 // conversion webhook cannot convert to the failed versions.
-func conversionProblem(group, resource, kind string, failed, working []conversionProbe, op *installedOperator) Problem {
+func conversionProblem(group, resource, kind string, failed, working []conversionProbe, op *components.InstalledOperator) Problem {
 	crd := resource + "." + group
 	failedVersions := joinVersions(failed)
 	evidence := []string{}

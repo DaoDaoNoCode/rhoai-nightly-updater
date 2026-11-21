@@ -3,6 +3,8 @@ package cluster
 import (
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 )
 
 func TestDisableComponent_PatchesTheExistingDSC(t *testing.T) {
@@ -61,7 +63,7 @@ func TestDisableComponent_DiscoveryErrorBlocks(t *testing.T) {
 func TestDisableComponent_NoCRDSchemaRefuses(t *testing.T) {
 	f, client := newFakeAPI(t)
 	serveToggleDSC(f, "v2", `{"metadata":{"name":"my-dsc","uid":"u1"},"spec":{"components":{"ray":{"managementState":"Managed"}}}}`, "", "ray")
-	f.status("GET", dscCRDPath, 403, "Forbidden")
+	f.status("GET", components.DSCCRDPath, 403, "Forbidden")
 	result, err := ApplyFix(client, "disable-component:ray")
 	if err != nil || result.Success || !strings.Contains(result.Message, "CRD") {
 		t.Fatalf("ApplyFix = %+v, %v", result, err)

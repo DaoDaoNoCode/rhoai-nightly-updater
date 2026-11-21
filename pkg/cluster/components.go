@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
@@ -27,7 +28,7 @@ import (
 // through DSCExists/DSCState rather than an error. Labels already in the cache
 // are always added; includeLabels also fetches missing ones from Quay (slower).
 func GetComponents(c *Client, includeLabels bool) (*types.ComponentsResponse, error) {
-	return getComponents(c, componentRegistryReads{labels: fetchImageLabelsForDeployments, dscSample: fetchDSCSample}, includeLabels)
+	return getComponents(c, componentRegistryReads{labels: fetchImageLabelsForDeployments, dscSample: components.FetchDSCSample}, includeLabels)
 }
 
 // componentRegistryReads are the reads of GetComponents that the gitops
@@ -35,7 +36,7 @@ func GetComponents(c *Client, includeLabels bool) (*types.ComponentsResponse, er
 // from GitHub) and the GitHub DSC sample. nil fields are skipped.
 type componentRegistryReads struct {
 	labels    func(c *Client, deployments []types.DeploymentInfo, fetch bool)
-	dscSample dscSampleFetcher
+	dscSample components.DSCSampleFetcher
 }
 
 // GetComponentsGitOps is GetComponents in the gitops profile, which
@@ -63,7 +64,7 @@ func getComponents(c *Client, reads componentRegistryReads, includeLabels bool) 
 		appPods, opPods    []types.PodInfo
 		snapshot           map[string]string
 		snapshotTime       string
-		installedOp        *installedOperator
+		installedOp        *components.InstalledOperator
 		installedOpErr     error
 		installedOpReadyCh = make(chan struct{})
 	)
@@ -88,7 +89,7 @@ func getComponents(c *Client, reads componentRegistryReads, includeLabels bool) 
 	run(func() { snapshot, snapshotTime = GetDeploymentSnapshot(c) })
 	run(func() {
 		defer close(installedOpReadyCh)
-		installedOp, installedOpErr = getInstalledOperator(c)
+		installedOp, installedOpErr = components.ReadInstalledOperator(c)
 	})
 
 	read, err := rhoai.ReadFirstDSC(c)
@@ -685,7 +686,7 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 
 	// Step 2: Use the sample shipped with the installed operator version.
 	logs = append(logs, "Creating default DataScienceCluster...")
-	defaults, fetchErr := fetchDefaultDSCSpec(c, "")
+	defaults, fetchErr := components.FetchDefaultDSCSpec(c, "")
 	if fetchErr != nil {
 		return &types.OperationResponse{Success: false, Message: "Failed to fetch version-matched DSC defaults: " + fetchErr.Error(), Logs: logs, ErrorCode: kube.NonEmpty(kube.ErrorCodeFromK8sErr(fetchErr), "prerequisites")}, nil
 	}

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
@@ -789,7 +790,7 @@ func legacyRevertAnnotations(c *Client, ns string) (patch map[string]any, note s
 // its namespace (SubNS), which reconciles the dashboard on releases without
 // a dashboard module.
 func getOriginalImages(c *Client) (map[string]string, error) {
-	csv, err := getInstalledOperator(c)
+	csv, err := components.ReadInstalledOperator(c)
 	if err != nil {
 		return nil, fmt.Errorf("read the installed RHOAI CSV: %w", err)
 	}

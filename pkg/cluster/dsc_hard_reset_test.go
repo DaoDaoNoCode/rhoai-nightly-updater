@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -110,13 +111,13 @@ func TestHardResetDeletesWaitsAndCreatesTheReleaseDefault(t *testing.T) {
 		t.Fatalf("created = %v", created)
 	}
 	cs := comps(created)
-	if v, _ := lookupPath(cs, []string{"workbenches", "workbenchNamespace"}); v != "my-notebooks" {
+	if v, _ := components.LookupPath(cs, []string{"workbenches", "workbenchNamespace"}); v != "my-notebooks" {
 		t.Fatalf("workbenchNamespace = %v", v)
 	}
-	if v, _ := lookupPath(cs, []string{"aiHub", "instancesNamespace"}); v != "my-registries" {
+	if v, _ := components.LookupPath(cs, []string{"aiHub", "instancesNamespace"}); v != "my-registries" {
 		t.Fatalf("instancesNamespace = %v", v)
 	}
-	if s, _ := lookupState(cs, []string{"aigateway"}); s != "Removed" {
+	if s, _ := components.LookupState(cs, []string{"aigateway"}); s != "Removed" {
 		t.Fatalf("aigateway = %s (not the release default)", s)
 	}
 	if got := stepNames(steps); got != "check:running check:success delete:running delete:success wait_deleted:running wait_deleted:success create:running create:success wait_ready:running wait_ready:success" {

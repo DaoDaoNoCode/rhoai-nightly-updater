@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -51,18 +52,18 @@ type dscView struct {
 	name, uid  string
 	version    string // the version the DSC was read at, "v3"
 	apiVersion string // "datasciencecluster.opendatahub.io/v3"
-	crd        *dscCRD
+	crd        *components.DSCCRD
 	crdErr     error
 	spec       map[string]any // the spec schema at version
-	tree       []dscToggle
-	byKey      map[string]dscToggle
+	tree       []components.DSCToggle
+	byKey      map[string]components.DSCToggle
 	protected  map[string]bool
 	// defaults is the release default's spec; nil with defaultsErr set
 	// when there is none to use.
 	defaults      map[string]any
 	defaultsLabel map[string]any
 	defaultsErr   string
-	op            *installedOperator
+	op            *components.InstalledOperator
 	// argoApp is the Argo CD application managing the DSC (argo.managedBy).
 	argoApp string
 	argo    argo.Tracking
@@ -97,7 +98,7 @@ func readDSCView(c *Client) (*dscView, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetching DSC list: %w", err)
 	}
-	v := &dscView{state: rhoai.DSCStateNoCRD, byKey: map[string]dscToggle{}}
+	v := &dscView{state: rhoai.DSCStateNoCRD, byKey: map[string]components.DSCToggle{}}
 	if r.Version == "" {
 		return v, nil
 	}
@@ -124,19 +125,19 @@ func readDSCView(c *Client) (*dscView, error) {
 	v.argoApp = v.argo.ManagedBy()
 	v.acm = v.argoApp == "" && argo.ACMEnforcesSpec(v.meta)
 	v.helm = helmManagerOf(v.meta)
-	v.crd, v.crdErr = readDSCCRD(c)
+	v.crd, v.crdErr = components.ReadDSCCRD(c)
 	if v.crdErr == nil {
-		if ver := v.crd.version(v.version); ver != nil && ver.Spec != nil {
+		if ver := v.crd.Version(v.version); ver != nil && ver.Spec != nil {
 			v.spec = ver.Spec
 		} else {
 			v.crdErr = fmt.Errorf("the CRD has no schema for served version %s", v.version)
 		}
 	}
-	v.tree = dscToggleTree(v.spec)
+	v.tree = components.DSCToggleTree(v.spec)
 	for _, t := range v.tree {
-		v.byKey[t.key()] = t
+		v.byKey[t.Key()] = t
 	}
-	v.protected = dscProtectedFields(v.spec)
+	v.protected = components.DSCProtectedFields(v.spec)
 	v.readDefaults(c)
 	return v, nil
 }
@@ -146,13 +147,13 @@ func readDSCView(c *Client) (*dscView, error) {
 // GitHub sample is not used: only what the installed bundle ships is the
 // release default.
 func (v *dscView) readDefaults(c *Client) {
-	op, err := getInstalledOperator(c)
+	op, err := components.ReadInstalledOperator(c)
 	if err != nil {
 		v.defaultsErr = "Cannot read the installed operator: " + err.Error()
 		return
 	}
 	v.op = op
-	ex, ok := dscExamplesFromALM(op.ALMExamples)[v.version]
+	ex, ok := components.DSCExamplesFromALM(op.ALMExamples)[v.version]
 	if !ok {
 		v.defaultsErr = fmt.Sprintf("The installed operator %s ships no DataScienceCluster %s example in its CSV's alm-examples, so there is no release default to compare with.", kube.NonEmpty(op.Version, op.Name), v.version)
 		return
@@ -164,7 +165,7 @@ func (v *dscView) readDefaults(c *Client) {
 	}
 	if v.spec != nil {
 		var unknown []string
-		pruneUnknownDSCFields(spec, v.spec, "spec", &unknown)
+		components.PruneUnknownDSCFields(spec, v.spec, "spec", &unknown)
 		if len(unknown) > 0 {
 			sort.Strings(unknown)
 			v.defaultsErr = "The release default sets fields the installed CRD does not define (" + strings.Join(unknown, ", ") + "), so it is not used."
@@ -193,13 +194,13 @@ func (v *dscView) status() map[string]any {
 }
 
 // stateOf returns the managementState the operator acts on for the toggle
-// at path in components, and whether components sets it. An unset state is
+// at path in comps, and whether comps sets it. An unset state is
 // the CRD's schema default for it where it has one (rhods-operator 3.6
 // modules/aipipelines handler.go starts argoWorkflowsControllers Managed,
 // the schema's default), else Removed (components.NormalizeManagementState
 // of "").
-func (v *dscView) stateOf(components map[string]any, path []string) (string, bool) {
-	if s, ok := lookupState(components, path); ok && s != "" {
+func (v *dscView) stateOf(comps map[string]any, path []string) (string, bool) {
+	if s, ok := components.LookupState(comps, path); ok && s != "" {
 		return s, true
 	}
 	if t, ok := v.byKey[strings.Join(path, ".")]; ok && t.SchemaDefault != "" {
@@ -230,7 +231,7 @@ func (v *dscView) deployed(components map[string]any, path []string) bool {
 
 // componentEnabled reports whether a top-level component's module runs: its
 // own state, or for a group without one (dashboard, data) any part.
-func (v *dscView) componentEnabled(components map[string]any, top dscToggle) bool {
+func (v *dscView) componentEnabled(components map[string]any, top components.DSCToggle) bool {
 	if top.Toggle {
 		return v.deployed(components, top.Path)
 	}
@@ -243,11 +244,11 @@ func (v *dscView) componentEnabled(components map[string]any, top dscToggle) boo
 }
 
 // descendants returns the toggles below t.
-func (v *dscView) descendants(t dscToggle) []dscToggle {
-	prefix := t.key() + "."
-	var out []dscToggle
+func (v *dscView) descendants(t components.DSCToggle) []components.DSCToggle {
+	prefix := t.Key() + "."
+	var out []components.DSCToggle
 	for _, d := range v.tree {
-		if strings.HasPrefix(d.key(), prefix) {
+		if strings.HasPrefix(d.Key(), prefix) {
 			out = append(out, d)
 		}
 	}
@@ -303,8 +304,8 @@ func (v *dscView) readOnlyReason() (string, string) {
 		return fmt.Sprintf("DataScienceCluster %s is being deleted (finalizers: %s). Nothing was changed.", v.name, kube.NonEmpty(strings.Join(v.meta.Finalizers, ", "), "none")), "conflict"
 	case v.crdErr != nil:
 		return "Cannot read the DataScienceCluster CRD, so changes cannot be checked against it: " + v.crdErr.Error(), "prerequisites"
-	case v.crd.storage() != v.version:
-		return fmt.Sprintf("The DataScienceCluster is read as %s, but the CRD stores %s: the operator's conversion does not work now, so this page changes nothing. Diagnostics explains the conversion failure.", v.version, kube.NonEmpty(v.crd.storage(), "no version")), "prerequisites"
+	case v.crd.Storage() != v.version:
+		return fmt.Sprintf("The DataScienceCluster is read as %s, but the CRD stores %s: the operator's conversion does not work now, so this page changes nothing. Diagnostics explains the conversion failure.", v.version, kube.NonEmpty(v.crd.Storage(), "no version")), "prerequisites"
 	}
 	return "", ""
 }
@@ -335,7 +336,7 @@ func (v *dscView) model() *types.DSCManager {
 	}
 	out.Name, out.UID, out.APIVersion = v.name, v.uid, v.apiVersion
 	if v.crd != nil {
-		out.StorageVersion = v.crd.storage()
+		out.StorageVersion = v.crd.Storage()
 	}
 	if v.crdErr != nil {
 		out.SchemaError = v.crdErr.Error()
@@ -372,7 +373,7 @@ func (v *dscView) model() *types.DSCManager {
 	comps, defComps := v.components(), v.defaultComponents()
 	for _, t := range v.tree {
 		name := t.Path[len(t.Path)-1]
-		n := types.DSCNode{Path: t.key(), Name: name, Depth: len(t.Path) - 1, Toggle: t.Toggle, Allowed: t.Allowed, SchemaDefault: t.SchemaDefault}
+		n := types.DSCNode{Path: t.Key(), Name: name, Depth: len(t.Path) - 1, Toggle: t.Toggle, Allowed: t.Allowed, SchemaDefault: t.SchemaDefault}
 		if len(t.Path) > 1 {
 			n.Parent = strings.Join(t.Path[:len(t.Path)-1], ".")
 		}
@@ -381,9 +382,9 @@ func (v *dscView) model() *types.DSCManager {
 		}
 		n.Condition = conditionFor(conds, name)
 		if t.Toggle {
-			n.Spec, n.SpecSet = lookupState(comps, t.Path)
+			n.Spec, n.SpecSet = components.LookupState(comps, t.Path)
 			if v.defaults != nil {
-				n.Default, n.DefaultSet = lookupState(defComps, t.Path)
+				n.Default, n.DefaultSet = components.LookupState(defComps, t.Path)
 				if n.SpecSet {
 					want := "Removed" // unset is Removed
 					if n.DefaultSet {
@@ -409,7 +410,7 @@ func (v *dscView) comparison() types.DSCComparison {
 	out := types.DSCComparison{
 		DefaultsRead:      v.defaults != nil,
 		SchemaRead:        v.spec != nil,
-		CRDComponents:     dscObjectKeys(schemaProps(schemaChild(v.spec, "components"))),
+		CRDComponents:     dscObjectKeys(components.SchemaProps(components.SchemaChild(v.spec, "components"))),
 		DefaultComponents: dscObjectKeys(v.defaultComponents()),
 		DSCComponents:     dscObjectKeys(v.components()),
 	}
@@ -480,10 +481,10 @@ func (v *dscView) mismatches() []types.DSCMismatch {
 		if !t.Toggle {
 			continue
 		}
-		spec, specSet := lookupState(comps, t.Path)
+		spec, specSet := components.LookupState(comps, t.Path)
 		if v.defaults != nil && !specSet {
-			if def, ok := lookupState(defComps, t.Path); ok {
-				m := types.DSCMismatch{Kind: "unset", Path: t.key(), Default: def, Fixable: true}
+			if def, ok := components.LookupState(defComps, t.Path); ok {
+				m := types.DSCMismatch{Kind: "unset", Path: t.Key(), Default: def, Fixable: true}
 				eff, _ := v.stateOf(comps, t.Path)
 				how := "the operator treats it as Removed"
 				if t.SchemaDefault != "" {
@@ -508,8 +509,8 @@ func (v *dscView) mismatches() []types.DSCMismatch {
 					if !set {
 						state = "not set (" + as + ")"
 					}
-					out = append(out, types.DSCMismatch{Kind: "parent-removed", Path: t.key(), Parent: anc.key(),
-						Message: fmt.Sprintf("Managed, but %s is %s, so the operator deploys nothing for it. Set %s to Managed, or set this to Removed.", anc.key(), state, anc.key())})
+					out = append(out, types.DSCMismatch{Kind: "parent-removed", Path: t.Key(), Parent: anc.Key(),
+						Message: fmt.Sprintf("Managed, but %s is %s, so the operator deploys nothing for it. Set %s to Managed, or set this to Removed.", anc.Key(), state, anc.Key())})
 					break
 				}
 			}
@@ -517,7 +518,7 @@ func (v *dscView) mismatches() []types.DSCMismatch {
 	}
 	if v.spec != nil {
 		var unknown []string
-		pruneUnknownDSCFields(v.obj["spec"], v.spec, "spec", &unknown)
+		components.PruneUnknownDSCFields(v.obj["spec"], v.spec, "spec", &unknown)
 		sort.Strings(unknown)
 		for _, u := range unknown {
 			out = append(out, types.DSCMismatch{Kind: "unknown-field", Path: strings.TrimPrefix(u, "spec.components."), Fixable: true,
@@ -535,7 +536,7 @@ type dscPlanned struct {
 	ops  []kube.JSONPatchOp
 	// sets are checked in the API server's answer: a value it pruned
 	// silently would otherwise pass as done.
-	sets []dscAssign
+	sets []components.DSCAssign
 }
 
 func (v *dscView) newPlan(action string) *dscPlanned {
@@ -584,15 +585,15 @@ func planToken(parts ...any) string {
 // copies, so a field the API server defaults is no change when a value
 // leaves it out.
 func (v *dscView) defaultedComponents(comps map[string]any) map[string]any {
-	return withSchemaDefaults(comps, schemaChild(v.spec, "components"))
+	return components.WithSchemaDefaults(comps, components.SchemaChild(v.spec, "components"))
 }
 
-// protectedFields returns the protected fields (dscProtectedFields) the
+// protectedFields returns the protected fields (components.DSCProtectedFields) the
 // DataScienceCluster sets, sorted: a reset keeps their value.
 func (v *dscView) protectedFields() []string {
 	var out []string
 	for f := range v.protected {
-		if _, ok := lookupPath(v.components(), strings.Split(f, ".")); ok {
+		if _, ok := components.LookupPath(v.components(), strings.Split(f, ".")); ok {
 			out = append(out, f)
 		}
 	}
@@ -608,13 +609,13 @@ func (v *dscView) changesBetween(before, after map[string]any) []types.DSCChange
 		if !t.Toggle {
 			continue
 		}
-		b, bSet := lookupState(before, t.Path)
-		a, aSet := lookupState(after, t.Path)
+		b, bSet := components.LookupState(before, t.Path)
+		a, aSet := components.LookupState(after, t.Path)
 		db, da := v.deployed(before, t.Path), v.deployed(after, t.Path)
 		if b == a && bSet == aSet && db == da {
 			continue
 		}
-		ch := types.DSCChange{Path: t.key(), From: b, FromSet: bSet, To: a, ToSet: aSet, Toggle: true}
+		ch := types.DSCChange{Path: t.Key(), From: b, FromSet: bSet, To: a, ToSet: aSet, Toggle: true}
 		switch {
 		case db && !da:
 			ch.Effect = "removes"
@@ -685,7 +686,7 @@ func (v *dscView) orphanWarnings(before, after map[string]any) []string {
 		if s, _ := v.stateOf(after, t.Path); s != "Managed" || v.deployed(after, t.Path) || !v.deployed(before, t.Path) {
 			continue
 		}
-		out = append(out, fmt.Sprintf("%s stays Managed but deploys nothing while %s is not Managed.", t.key(), strings.Join(t.Path[:len(t.Path)-1], ".")))
+		out = append(out, fmt.Sprintf("%s stays Managed but deploys nothing while %s is not Managed.", t.Key(), strings.Join(t.Path[:len(t.Path)-1], ".")))
 	}
 	return out
 }
@@ -693,9 +694,9 @@ func (v *dscView) orphanWarnings(before, after map[string]any) []string {
 // usersCheckedComponents are the components componentUsers can check.
 var usersCheckedComponents = map[string]bool{"aipipelines": true, "datasciencepipelines": true, "mlflowoperator": true, "kserve": true, "ogx": true, "llamastackoperator": true, "dashboard": true}
 
-// modulesOf returns the modules (guardModule) a top-level component runs in
-// components, in tree order: its own, and those of its deployed parts.
-func (v *dscView) modulesOf(components map[string]any, top dscToggle) []string {
+// modulesOf returns the modules (components.GuardModule) a top-level component runs in
+// comps, in tree order: its own, and those of its deployed parts.
+func (v *dscView) modulesOf(comps map[string]any, top components.DSCToggle) []string {
 	var out []string
 	seen := map[string]bool{}
 	add := func(m string) {
@@ -704,12 +705,12 @@ func (v *dscView) modulesOf(components map[string]any, top dscToggle) []string {
 			out = append(out, m)
 		}
 	}
-	if top.Toggle && v.deployed(components, top.Path) {
-		add(guardModule(top.key()))
+	if top.Toggle && v.deployed(comps, top.Path) {
+		add(components.GuardModule(top.Key()))
 	}
 	for _, d := range v.descendants(top) {
-		if d.Toggle && v.deployed(components, d.Path) {
-			add(guardModule(d.key()))
+		if d.Toggle && v.deployed(comps, d.Path) {
+			add(components.GuardModule(d.Key()))
 		}
 	}
 	return out
@@ -753,7 +754,7 @@ func (v *dscView) removalBlocks(c *Client, before, after map[string]any, teardow
 					reasons = append(reasons, rc.blockers(m)...)
 				}
 			}
-			name := top.key()
+			name := top.Key()
 			if usersCheckedComponents[name] {
 				users, err := componentUsers(c, name)
 				switch {
@@ -780,8 +781,8 @@ func (v *dscView) removalBlocks(c *Client, before, after map[string]any, teardow
 		}
 		for _, d := range v.descendants(top) {
 			if d.Toggle && v.deployed(before, d.Path) && !v.deployed(after, d.Path) {
-				if reasons := rc.partBlockers(guardModule(d.key())); len(reasons) > 0 {
-					blocks = append(blocks, types.DSCRemovalBlock{Component: d.key(), Reasons: reasons})
+				if reasons := rc.partBlockers(components.GuardModule(d.Key())); len(reasons) > 0 {
+					blocks = append(blocks, types.DSCRemovalBlock{Component: d.Key(), Reasons: reasons})
 				}
 			}
 		}
@@ -873,12 +874,12 @@ func (v *dscView) planToggle(c *Client, path, to string, withParent bool) *dscPl
 		return p.refuse(fmt.Sprintf("spec.components.%s.managementState accepts %s, not %q.", path, strings.Join(t.Allowed, ", "), to), "validation")
 	}
 	comps := v.components()
-	if cur, set := lookupState(comps, t.Path); set && cur == to {
+	if cur, set := components.LookupState(comps, t.Path); set && cur == to {
 		return p.refuse(fmt.Sprintf("%s is already %s. Nothing to change.", path, to), "nothing_to_do")
 	}
-	p.sets = []dscAssign{{Path: componentsPath(append(append([]string{}, t.Path...), "managementState")...), Value: to}}
+	p.sets = []components.DSCAssign{{Path: componentsPath(append(append([]string{}, t.Path...), "managementState")...), Value: to}}
 	if to == "Managed" {
-		var parents []dscToggle
+		var parents []components.DSCToggle
 		for i := 1; i < len(t.Path); i++ {
 			anc, ok := v.byKey[strings.Join(t.Path[:i], ".")]
 			if ok && anc.Toggle {
@@ -889,23 +890,23 @@ func (v *dscView) planToggle(c *Client, path, to string, withParent bool) *dscPl
 		}
 		if len(parents) > 0 {
 			parent := parents[0]
-			p.plan.ParentPath = parent.key()
-			state, set := lookupState(comps, parent.Path)
+			p.plan.ParentPath = parent.Key()
+			state, set := components.LookupState(comps, parent.Path)
 			if !set {
 				state = "not set"
 			}
 			if !withParent {
-				return p.refuse(fmt.Sprintf("%s is %s, so setting %s to Managed would deploy nothing. Set %s to Managed in the same change, or set it first.", parent.key(), state, path, parent.key()), "parent_removed")
+				return p.refuse(fmt.Sprintf("%s is %s, so setting %s to Managed would deploy nothing. Set %s to Managed in the same change, or set it first.", parent.Key(), state, path, parent.Key()), "parent_removed")
 			}
 			for _, anc := range parents {
 				if !slices.Contains(anc.Allowed, "Managed") {
-					return p.refuse(fmt.Sprintf("%s does not accept Managed, so %s cannot be deployed.", anc.key(), path), "validation")
+					return p.refuse(fmt.Sprintf("%s does not accept Managed, so %s cannot be deployed.", anc.Key(), path), "validation")
 				}
-				p.sets = append(p.sets, dscAssign{Path: componentsPath(append(append([]string{}, anc.Path...), "managementState")...), Value: "Managed"})
+				p.sets = append(p.sets, components.DSCAssign{Path: componentsPath(append(append([]string{}, anc.Path...), "managementState")...), Value: "Managed"})
 			}
 		}
 	}
-	ops, err := buildJSONPatch(v.obj, p.sets, nil)
+	ops, err := components.BuildJSONPatch(v.obj, p.sets, nil)
 	if err != nil {
 		return p.refuse("Cannot build the change: "+err.Error(), "internal")
 	}
@@ -922,7 +923,7 @@ func (v *dscView) planFix(c *Client) *dscPlanned {
 	for _, m := range v.mismatches() {
 		switch m.Kind {
 		case "unset":
-			p.sets = append(p.sets, dscAssign{Path: componentsPath(append(strings.Split(m.Path, "."), "managementState")...), Value: m.Default})
+			p.sets = append(p.sets, components.DSCAssign{Path: componentsPath(append(strings.Split(m.Path, "."), "managementState")...), Value: m.Default})
 		case "unknown-field":
 			removes = append(removes, fieldPathKeys("spec.components."+m.Path))
 		}
@@ -930,7 +931,7 @@ func (v *dscView) planFix(c *Client) *dscPlanned {
 	if len(p.sets) == 0 && len(removes) == 0 {
 		return p.refuse("Nothing to fix: no component is missing and no unknown field is in the DataScienceCluster.", "nothing_to_do")
 	}
-	ops, err := buildJSONPatch(v.obj, p.sets, removes)
+	ops, err := components.BuildJSONPatch(v.obj, p.sets, removes)
 	if err != nil {
 		return p.refuse("Cannot build the change: "+err.Error(), "internal")
 	}
@@ -967,7 +968,7 @@ func fieldPathKeys(path string) []string {
 }
 
 // planSoftReset makes spec.components the release default in place: only
-// what differs, keeping protected fields (dscProtectedFields) and values
+// what differs, keeping protected fields (components.DSCProtectedFields) and values
 // the API server's defaulting would put back anyway, and with keep the
 // components the user turned on (resetTarget).
 func (v *dscView) planSoftReset(c *Client, keep bool) *dscPlanned {
@@ -982,9 +983,9 @@ func (v *dscView) planSoftReset(c *Client, keep bool) *dscPlanned {
 	target := v.resetTarget(p.plan, keep)
 	p.plan.ProtectedFields = v.protectedFields()
 	var removes [][]string
-	compSchema := schemaChild(v.spec, "components")
+	compSchema := components.SchemaChild(v.spec, "components")
 	v.resetDiff(compSchema, v.components(), target, nil, &p.sets, &removes)
-	ops, err := buildJSONPatch(v.obj, p.sets, removes)
+	ops, err := components.BuildJSONPatch(v.obj, p.sets, removes)
 	if err != nil {
 		return p.refuse("Cannot build the change: "+err.Error(), "internal")
 	}
@@ -999,17 +1000,17 @@ func (v *dscView) planSoftReset(c *Client, keep bool) *dscPlanned {
 // Unmanaged, where the CRD allows it) in the DataScienceCluster and
 // deployed, while the release default leaves them off (Removed, or unset
 // without a CRD default that enables them).
-func (v *dscView) turnedOn() []dscToggle {
+func (v *dscView) turnedOn() []components.DSCToggle {
 	if v.defaults == nil {
 		return nil
 	}
 	live, def := v.components(), v.defaultComponents()
-	var out []dscToggle
+	var out []components.DSCToggle
 	for _, t := range v.tree {
 		if !t.Toggle {
 			continue
 		}
-		s, set := lookupState(live, t.Path)
+		s, set := components.LookupState(live, t.Path)
 		if !set || (s != "Managed" && s != "Unmanaged") || !slices.Contains(t.Allowed, s) || !v.deployed(live, t.Path) {
 			continue
 		}
@@ -1033,9 +1034,9 @@ func (v *dscView) resetTarget(plan *types.DSCPlan, keep bool) map[string]any {
 	}
 	live, def := v.components(), v.defaultComponents()
 	assign := map[string]string{}
-	add := func(t dscToggle, state string) {
-		if _, done := assign[t.key()]; !done {
-			assign[t.key()] = state
+	add := func(t components.DSCToggle, state string) {
+		if _, done := assign[t.Key()]; !done {
+			assign[t.Key()] = state
 		}
 	}
 	for _, t := range v.turnedOn() {
@@ -1048,14 +1049,14 @@ func (v *dscView) resetTarget(plan *types.DSCPlan, keep bool) map[string]any {
 				add(anc, "Managed")
 			}
 		}
-		s, _ := lookupState(live, t.Path)
+		s, _ := components.LookupState(live, t.Path)
 		add(t, s)
 	}
 	// Tree order: parents before their children.
 	var ordered []string
 	for _, t := range v.tree {
-		if _, ok := assign[t.key()]; ok {
-			ordered = append(ordered, t.key())
+		if _, ok := assign[t.Key()]; ok {
+			ordered = append(ordered, t.Key())
 		}
 	}
 	plan.TurnedOn = ordered
@@ -1085,7 +1086,7 @@ func setStateIn(components map[string]any, path []string, state string) {
 }
 
 // resetDiff collects the sets and removals that turn live into target.
-func (v *dscView) resetDiff(schema, live, target map[string]any, path []string, sets *[]dscAssign, removes *[][]string) {
+func (v *dscView) resetDiff(schema, live, target map[string]any, path []string, sets *[]components.DSCAssign, removes *[][]string) {
 	keys := map[string]bool{}
 	for k := range live {
 		keys[k] = true
@@ -1100,7 +1101,7 @@ func (v *dscView) resetDiff(schema, live, target map[string]any, path []string, 
 	sort.Strings(sorted)
 	for _, k := range sorted {
 		p := append(append([]string{}, path...), k)
-		child := schemaChild(schema, k)
+		child := components.SchemaChild(schema, k)
 		lv, lok := live[k]
 		tv, tok := target[k]
 		if lok && v.protected[strings.Join(p, ".")] {
@@ -1113,12 +1114,12 @@ func (v *dscView) resetDiff(schema, live, target map[string]any, path []string, 
 			if lIsMap && tIsMap {
 				v.resetDiff(child, lm, tm, p, sets, removes)
 			} else if !kube.JSONEqual(lv, tv) {
-				*sets = append(*sets, dscAssign{Path: componentsPath(p...), Value: tv})
+				*sets = append(*sets, components.DSCAssign{Path: componentsPath(p...), Value: tv})
 			}
 		case tok:
-			*sets = append(*sets, dscAssign{Path: componentsPath(p...), Value: tv})
+			*sets = append(*sets, components.DSCAssign{Path: componentsPath(p...), Value: tv})
 		case lok:
-			if child != nil && defaultedBack(child, lv) {
+			if child != nil && components.DefaultedBack(child, lv) {
 				continue // the API server puts it back
 			}
 			if lm, isMap := lv.(map[string]any); isMap && child != nil && len(lm) > 0 && v.keepsProtectedBelow(p, lm) {
@@ -1135,7 +1136,7 @@ func (v *dscView) keepsProtectedBelow(path []string, obj map[string]any) bool {
 	prefix := strings.Join(path, ".") + "."
 	for f := range v.protected {
 		if after, ok := strings.CutPrefix(f, prefix); ok {
-			if _, ok := lookupPath(obj, strings.Split(after, ".")); ok {
+			if _, ok := components.LookupPath(obj, strings.Split(after, ".")); ok {
 				return true
 			}
 		}
@@ -1220,8 +1221,8 @@ func (v *dscView) write(c *Client, p *dscPlanned) (res *types.OperationResponse,
 			Message: fmt.Sprintf("DataScienceCluster %s was read without a uid or resourceVersion, so the change cannot be limited to the object that was checked. Nothing was changed.", v.name)}, false
 	}
 	ops := append([]kube.JSONPatchOp{
-		patchOp("test", []string{"metadata", "uid"}, v.uid),
-		patchOp("test", []string{"metadata", "resourceVersion"}, v.meta.ResourceVersion),
+		components.PatchOp("test", []string{"metadata", "uid"}, v.uid),
+		components.PatchOp("test", []string{"metadata", "resourceVersion"}, v.meta.ResourceVersion),
 	}, p.ops...)
 	path := dscObjectPath(v.version, v.name)
 	if _, err := patchDSCFields(c, path, ops, true); err != nil {
@@ -1236,7 +1237,7 @@ func (v *dscView) write(c *Client, p *dscPlanned) (res *types.OperationResponse,
 		return &types.OperationResponse{Success: false, ErrorCode: "internal", Message: "The change was sent, but the API server's answer could not be read: " + err.Error() + ". Reload the page to see the DataScienceCluster."}, false
 	}
 	for _, s := range p.sets {
-		if got, ok := lookupPath(after, s.Path); !ok || !kube.JSONEqual(got, s.Value) {
+		if got, ok := components.LookupPath(after, s.Path); !ok || !kube.JSONEqual(got, s.Value) {
 			return &types.OperationResponse{Success: false, ErrorCode: "internal",
 				Message: fmt.Sprintf("The API server accepted the change, but %s is %s instead of %s in the DataScienceCluster it returned. Reload the page and check it.", strings.Join(s.Path[2:], "."), kube.NonEmpty(fieldText(got), "unset"), fieldText(s.Value))}, false
 		}
@@ -1362,7 +1363,7 @@ func (v *dscView) checkToggle(c *Client, req types.DSCToggleRequest, reviewed bo
 		return nil, &types.OperationResponse{Success: false, ErrorCode: "conflict", Message: fmt.Sprintf("The DataScienceCluster is %s now, not %s. Reload the page. Nothing was changed.", v.name, req.Name)}
 	}
 	if t, ok := v.byKey[req.Path]; ok && t.Toggle && v.state == rhoai.DSCStatePresent {
-		if cur, _ := lookupState(v.components(), t.Path); cur != req.From {
+		if cur, _ := components.LookupState(v.components(), t.Path); cur != req.From {
 			return nil, &types.OperationResponse{Success: false, ErrorCode: "conflict",
 				Message: fmt.Sprintf("%s changed since you looked: it is %s now, not %s. Reload the page and try again. Nothing was changed.", req.Path, kube.NonEmpty(cur, "not set"), kube.NonEmpty(req.From, "not set"))}
 		}

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -38,9 +39,9 @@ func TestDSCDefaults_AcceptsV3ALMExample(t *testing.T) {
 		t.Error("GitHub must not be used when alm-examples has the version")
 		return 500, ""
 	})
-	op := &installedOperator{Name: "rhods-operator.3.6.0", Version: "3.6.0", ALMExamples: almExamplesV3}
+	op := &components.InstalledOperator{Name: "rhods-operator.3.6.0", Version: "3.6.0", ALMExamples: almExamplesV3}
 	for _, versions := range []rhoai.APIVersions{discoveredV3V2, {Versions: rhoai.DSCFallbackVersions}} {
-		d, err := defaultDSCSpecFor(context.Background(), op, versions, "")
+		d, err := components.DefaultDSCSpecFor(context.Background(), op, versions, "")
 		if err != nil || d.Source != "csv" || d.APIVersion != "v3" || d.Spec["apiVersion"] != "datasciencecluster.opendatahub.io/v3" {
 			t.Fatalf("versions %+v: %+v %v", versions, d, err)
 		}
@@ -48,7 +49,7 @@ func TestDSCDefaults_AcceptsV3ALMExample(t *testing.T) {
 			t.Fatalf("yaml %s", d.YAML)
 		}
 	}
-	d, err := defaultDSCSpecFor(context.Background(), op, discoveredV3V2, "v3")
+	d, err := components.DefaultDSCSpecFor(context.Background(), op, discoveredV3V2, "v3")
 	if err != nil || d.APIVersion != "v3" {
 		t.Fatalf("want v3: %+v %v", d, err)
 	}
@@ -63,8 +64,8 @@ func TestDSCDefaults_GitHubTriesServedVersionsInOrder(t *testing.T) {
 		}
 		return 200, testDSCSample
 	})
-	op := &installedOperator{Name: "rhods-operator.3.6.0", Version: "3.6.0"}
-	d, err := defaultDSCSpecFor(context.Background(), op, discoveredV3V2, "")
+	op := &components.InstalledOperator{Name: "rhods-operator.3.6.0", Version: "3.6.0"}
+	d, err := components.DefaultDSCSpecFor(context.Background(), op, discoveredV3V2, "")
 	if err != nil || d.APIVersion != "v3" || d.Source != "github" || len(fetched) != 1 ||
 		!strings.HasSuffix(fetched[0], "/rhoai-3.6/config/rhoai/samples/datasciencecluster_v3_datasciencecluster.yaml") {
 		t.Fatalf("%+v %v %v", d, err, fetched)
@@ -79,7 +80,7 @@ func TestDSCDefaults_GitHubTriesServedVersionsInOrder(t *testing.T) {
 		}
 		return 200, testDSCSample
 	})
-	d, err = defaultDSCSpecFor(context.Background(), &installedOperator{Version: "3.5.0"}, discoveredV3V2, "")
+	d, err = components.DefaultDSCSpecFor(context.Background(), &components.InstalledOperator{Version: "3.5.0"}, discoveredV3V2, "")
 	if err != nil || d.APIVersion != "v2" || len(fetched) != 2 || !strings.Contains(fetched[0], "_v3_") {
 		t.Fatalf("%+v %v %v", d, err, fetched)
 	}
@@ -87,7 +88,7 @@ func TestDSCDefaults_GitHubTriesServedVersionsInOrder(t *testing.T) {
 	// DSC_SAMPLE_REF keeps working, for the version asked for.
 	fetched = nil
 	t.Setenv("DSC_SAMPLE_REF", "main")
-	d, err = defaultDSCSpecFor(context.Background(), &installedOperator{Version: "3.6.0", ALMExamples: almExamplesV3}, discoveredV3V2, "v2")
+	d, err = components.DefaultDSCSpecFor(context.Background(), &components.InstalledOperator{Version: "3.6.0", ALMExamples: almExamplesV3}, discoveredV3V2, "v2")
 	if err != nil || d.Source != "github" || d.APIVersion != "v2" || len(fetched) != 1 || !strings.Contains(fetched[0], "/main/config/rhoai/samples/datasciencecluster_v2_") {
 		t.Fatalf("%+v %v %v", d, err, fetched)
 	}
@@ -100,9 +101,9 @@ func TestDSCDefaults_NeverAnotherVersion(t *testing.T) {
 		}
 		return 404, "404: Not Found"
 	})
-	op := &installedOperator{Name: "rhods-operator.3.6.0", Version: "3.6.0", ALMExamples: almExamplesV3}
-	_, err := defaultDSCSpecFor(context.Background(), op, discoveredV3V2, "v2")
-	var missing *missingDefaultsError
+	op := &components.InstalledOperator{Name: "rhods-operator.3.6.0", Version: "3.6.0", ALMExamples: almExamplesV3}
+	_, err := components.DefaultDSCSpecFor(context.Background(), op, discoveredV3V2, "v2")
+	var missing *components.MissingDefaultsError
 	if !errors.As(err, &missing) || !reflect.DeepEqual(missing.Available, []string{"v3"}) || missing.Want != "v2" {
 		t.Fatalf("err %v", err)
 	}
