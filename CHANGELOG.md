@@ -126,6 +126,17 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   that nothing was changed. This was the unmerged October fix for the
   disable-component fix, carried over to the rework.
 
+- **IPv6 clusters.** The API server address was built as
+  `https://<KUBERNETES_SERVICE_HOST>:<port>`, which is not a valid URL when
+  the host is an IPv6 address (IPv6 or IPv6-primary dual-stack clusters),
+  so every call failed. The address is now bracketed (`https://[fd02::1]:443`),
+  as client-go does.
+
+- **Update under Argo CD refuses when it cannot read OLM's progress.** The
+  check that keeps Update from deleting a Subscription OLM is still
+  installing took a Subscription or InstallPlan it could not parse for
+  "nothing pending". It now refuses with "Nothing was changed".
+
 - **A component that serves a CRD conversion webhook can be set to
   Removed again when that CRD holds no objects.** Setting
   `mcplifecycleoperator` (or any component whose Service converts a CRD)
