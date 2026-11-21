@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
 )
 
 const csvBase = "/apis/operators.coreos.com/v1alpha1/namespaces/redhat-ods-operator/clusterserviceversions"
@@ -14,14 +16,14 @@ func TestStaleWebhooks_OLMOwnedWhileCSVExistsIsGuidanceOnly(t *testing.T) {
 	setupWebhookFixtures(f)
 	f.json("GET", csvBase+"/rhods-operator.3.6.0", http.StatusOK, `{"kind":"ClusterServiceVersion"}`)
 
-	out := checkStaleWebhooks(c)
+	out := diagnostics.CheckStaleWebhooks(c)
 	var guidance *Problem
-	for i := range out.problems {
-		if out.problems[i].ID == "stale-webhooks" {
-			t.Fatalf("offered deletion of OLM-owned webhooks while their CSV exists: %+v", out.problems[i])
+	for i := range out.Problems {
+		if out.Problems[i].ID == "stale-webhooks" {
+			t.Fatalf("offered deletion of OLM-owned webhooks while their CSV exists: %+v", out.Problems[i])
 		}
-		if out.problems[i].ID == "webhook-service-missing" {
-			guidance = &out.problems[i]
+		if out.Problems[i].ID == "webhook-service-missing" {
+			guidance = &out.Problems[i]
 		}
 	}
 	if guidance == nil || guidance.AutoFixable || !strings.Contains(strings.Join(guidance.Evidence, "\n"), "still exists") {
@@ -114,9 +116,9 @@ func TestStaleWebhooks_PartlyServingConfigIsNotStale(t *testing.T) {
 		},
 	}}})
 	f.json("GET", svcPath("redhat-ods-operator", "alive"), http.StatusOK, `{}`)
-	out := checkStaleWebhooks(c)
-	if len(out.problems) != 0 {
-		t.Fatalf("problems = %+v", out.problems)
+	out := diagnostics.CheckStaleWebhooks(c)
+	if len(out.Problems) != 0 {
+		t.Fatalf("problems = %+v", out.Problems)
 	}
 }
 
@@ -151,11 +153,11 @@ func TestStaleCRDConversion_IsReportedAsGuidance(t *testing.T) {
 	f.json("GET", dscV2List, http.StatusOK, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
 	f.json("GET", dscV2List+"/default-dsc", http.StatusOK, `{"spec":{"components":{"mcplifecycleoperator":{"managementState":"Removed"},"kserve":{"managementState":"Managed"}}}}`)
 
-	out := checkStaleWebhooks(c)
-	if len(out.problems) != 1 {
-		t.Fatalf("problems = %+v", out.problems)
+	out := diagnostics.CheckStaleWebhooks(c)
+	if len(out.Problems) != 1 {
+		t.Fatalf("problems = %+v", out.Problems)
 	}
-	p := out.problems[0]
+	p := out.Problems[0]
 	if p.ID != "stale-crd-conversion" || p.AutoFixable || p.Severity != "critical" {
 		t.Fatalf("problem = %+v", p)
 	}
@@ -166,8 +168,8 @@ func TestStaleCRDConversion_IsReportedAsGuidance(t *testing.T) {
 	if !strings.Contains(p.Fix, "mcplifecycleoperator") {
 		t.Fatalf("fix = %s", p.Fix)
 	}
-	if out.check.Status != "fail" {
-		t.Fatalf("check = %+v", out.check)
+	if out.Check.Status != "fail" {
+		t.Fatalf("check = %+v", out.Check)
 	}
 }
 
@@ -207,11 +209,11 @@ func TestStaleCRDConversion_EmptyCRDsCanBeDeleted(t *testing.T) {
 	f.json("GET", dscV2List, http.StatusOK, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
 	f.json("GET", dscV2List+"/default-dsc", http.StatusOK, `{"spec":{"components":{"sparkoperator":{"managementState":"Removed"}}}}`)
 
-	out := checkStaleWebhooks(c)
-	if len(out.problems) != 1 || out.problems[0].ID != "stale-crd-conversion" {
-		t.Fatalf("problems = %+v", out.problems)
+	out := diagnostics.CheckStaleWebhooks(c)
+	if len(out.Problems) != 1 || out.Problems[0].ID != "stale-crd-conversion" {
+		t.Fatalf("problems = %+v", out.Problems)
 	}
-	p := out.problems[0]
+	p := out.Problems[0]
 	cmd := "oc delete crd " + strings.Join(names, " ")
 	if !strings.Contains(p.Fix, "hold no objects, so they can be deleted: `"+cmd+"`") || strings.Count(p.Fix, "sparkoperator)") != 1 ||
 		strings.Contains(p.Fix, "sparkoperator, sparkoperator") || strings.Contains(p.Fix, "back to Removed") || p.TechnicalCmd != cmd {
@@ -238,7 +240,7 @@ func TestStaleCRDConversion_ObjectsOrUnknown(t *testing.T) {
 	f.json("GET", dscV2List, http.StatusOK, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
 	f.json("GET", dscV2List+"/default-dsc", http.StatusOK, `{"spec":{"components":{"sparkoperator":{"managementState":"Removed"}}}}`)
 
-	p := checkStaleWebhooks(c).problems[0]
+	p := diagnostics.CheckStaleWebhooks(c).Problems[0]
 	for _, want := range []string{
 		"For CRDs scheduledsparkapplications.sparkoperator.k8s.io, sparkapplications.sparkoperator.k8s.io: bring back the Service",
 		"to Managed again (here: sparkoperator). Then, if you do not need the objects, delete them, then the CRDs, before you set the component back to Removed",
@@ -261,9 +263,9 @@ func TestStaleCRDConversion_ForbiddenListIsAWarning(t *testing.T) {
 	f, c := newFakeAPI(t)
 	serveDSCI(f, "redhat-ods-applications")
 	f.status("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", http.StatusForbidden, "Forbidden")
-	out := checkStaleWebhooks(c)
-	if out.check.Status != "warn" || !strings.Contains(out.check.Detail, "cannot list CRDs") {
-		t.Fatalf("check = %+v", out.check)
+	out := diagnostics.CheckStaleWebhooks(c)
+	if out.Check.Status != "warn" || !strings.Contains(out.Check.Detail, "cannot list CRDs") {
+		t.Fatalf("check = %+v", out.Check)
 	}
 }
 
@@ -278,11 +280,11 @@ func TestStaleCRDConversion_UnreadableEndpointsWarn(t *testing.T) {
 	f.status("GET", "/apis/discovery.k8s.io/v1/namespaces/redhat-ods-applications/endpointslices", http.StatusForbidden, "Forbidden")
 	f.json("GET", vwcPath, http.StatusOK, `{"items":[]}`)
 	f.json("GET", mwcPath, http.StatusOK, `{"items":[]}`)
-	out := checkStaleWebhooks(c)
-	if out.check.Status != "warn" || !strings.Contains(out.check.Detail, "conversion Service of CRD modelregistries.modelregistry.opendatahub.io: list endpoints") {
-		t.Fatalf("check = %+v", out.check)
+	out := diagnostics.CheckStaleWebhooks(c)
+	if out.Check.Status != "warn" || !strings.Contains(out.Check.Detail, "conversion Service of CRD modelregistries.modelregistry.opendatahub.io: list endpoints") {
+		t.Fatalf("check = %+v", out.Check)
 	}
-	if len(out.problems) != 0 {
-		t.Fatalf("problems = %+v", out.problems)
+	if len(out.Problems) != 0 {
+		t.Fatalf("problems = %+v", out.Problems)
 	}
 }

@@ -1,0 +1,1140 @@
+package components
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"regexp"
+	"slices"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+	"unicode"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/report"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+)
+
+// Prerequisite operators named in DataScienceCluster and module conditions.
+//
+// RHOAI modules check for operators they depend on and report a missing one
+// in a condition message (live on RHOAI 3.6):
+//
+//	TrainerReady=False (Error): dependency not met: JobSet Operator is not installed. Please install ...
+//	KserveLLMInferenceServiceDependencies=False (PreConditionFailed): cert-manager operator not installed
+//	KserveLLMInferenceServiceWideEPDependencies=False (PreConditionFailed): LeaderWorkerSet not installed; cert-manager operator (Wide EP) not installed
+//
+// The names are free text, so they are resolved against the cluster's own
+// catalogs (PackageManifests: package name, CSV display name and CSV name),
+// after normalising case, punctuation and words such as "operator". The
+// tool never installs them: diagnostics prints the exact commands, built
+// from the catalog's metadata, for an administrator to run.
+//
+// "Installed" follows what the modules check: trainer-operator
+// (internal/controller/dependencies.go) needs the operator's CRD, an OLM
+// OperatorCondition named after its CSV (odh-platform-utilities
+// pkg/cluster/olm OperatorExists) and the operand CR JobSetOperator/cluster.
+// OLM creates the OperatorCondition with the CSV, so a Succeeded CSV stands
+// for both; the operand is read when it is a cluster singleton in
+// operator.openshift.io, the group the Red Hat operators use for theirs.
+
+// prerequisiteGrace is how long a prerequisite must have been installed
+// before a module that still reports it missing is said to be in back-off.
+var prerequisiteGrace = 2 * time.Minute
+
+var (
+	// missingSegmentSplit splits a condition message into clauses.
+	missingSegmentSplit = regexp.MustCompile(`;|\.\s+|\n`)
+	notInstalledPhrase  = regexp.MustCompile(`(?i)\s*\b(?:is|are)?\s*not\s+installed\b`)
+	parenthetical       = regexp.MustCompile(`\([^)]*\)`)
+	nameListSplit       = regexp.MustCompile(`,\s*|\s+and\s+`)
+)
+
+// ParseMissingDependencies returns the operator names a condition message
+// reports as not installed, in message order and without duplicates.
+func ParseMissingDependencies(msg string) []string {
+	var out []string
+	for _, seg := range missingSegmentSplit.Split(msg, -1) {
+		loc := notInstalledPhrase.FindStringIndex(seg)
+		if loc == nil {
+			continue
+		}
+		subject := seg[:loc[0]]
+		if i := strings.LastIndex(subject, ":"); i >= 0 {
+			subject = subject[i+1:]
+		}
+		subject = parenthetical.ReplaceAllString(subject, " ")
+		for _, name := range nameListSplit.Split(subject, -1) {
+			name = strings.Join(strings.Fields(name), " ")
+			name = strings.TrimPrefix(strings.TrimPrefix(name, "the "), "The ")
+			if name == "" || len(name) > 80 || len(strings.Fields(name)) > 8 {
+				continue
+			}
+			if !slices.Contains(out, name) {
+				out = append(out, name)
+			}
+		}
+	}
+	return out
+}
+
+// Modules also name a missing operand directly (live, after
+// JobSetOperator/cluster was deleted):
+//
+//	dependency not met: JobSetOperator CR with name 'cluster' not found. Please create the JobSetOperator CR to enable the JobSet controller.
+var (
+	operandNotFoundPhrase = regexp.MustCompile(`\b([A-Z][A-Za-z0-9]*) (?:CR|custom resource) (?:with name |named )?['"]([a-z0-9][a-z0-9.-]*)['"] (?:not found|does not exist)`)
+	operandCreatePhrase   = regexp.MustCompile(`(?i:please create) (?:the |an? )?([A-Z][A-Za-z0-9]*) (?:CR|custom resource)\b`)
+)
+
+// OperandMention is a missing operand named in a condition message; Name
+// is "" when the message does not name it.
+type OperandMention struct{ Kind, Name string }
+
+// ParseMissingOperands returns the operands a message reports missing.
+func ParseMissingOperands(msg string) []OperandMention {
+	var out []OperandMention
+	add := func(kind, name string) {
+		for i := range out {
+			if out[i].Kind == kind {
+				if out[i].Name == "" {
+					out[i].Name = name
+				}
+				return
+			}
+		}
+		out = append(out, OperandMention{Kind: kind, Name: name})
+	}
+	for _, m := range operandNotFoundPhrase.FindAllStringSubmatch(msg, -1) {
+		add(m[1], m[2])
+	}
+	for _, m := range operandCreatePhrase.FindAllStringSubmatch(msg, -1) {
+		add(m[1], "")
+	}
+	return out
+}
+
+// operatorNameStopWords are dropped when names are compared: they appear in
+// some spellings of an operator's name and not in others.
+var operatorNameStopWords = map[string]bool{
+	"operator": true, "operators": true, "openshift": true, "for": true, "the": true, "redhat": true, "rh": true,
+}
+
+// operatorNameAliases maps normalised short names that operators use in
+// messages to the normalised catalog name. Discovery still decides: an alias
+// only changes which catalog entry is looked for.
+var operatorNameAliases = map[string]string{
+	"lws": "leaderworkerset",
+}
+
+// NormalizeOperatorName reduces an operator name to lower-case letters and
+// digits without stop words: "JobSet Operator", "Job Set Operator" and
+// "job-set" all become "jobset"; "cert-manager Operator for Red Hat
+// OpenShift" and "openshift-cert-manager-operator" become "certmanager".
+func NormalizeOperatorName(s string) string {
+	s = strings.ToLower(parenthetical.ReplaceAllString(s, " "))
+	s = strings.ReplaceAll(s, "red hat", " ")
+	words := strings.FieldsFunc(s, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+	var kept []string
+	for _, w := range words {
+		if !operatorNameStopWords[w] {
+			kept = append(kept, w)
+		}
+	}
+	n := strings.Join(kept, "")
+	if a, ok := operatorNameAliases[n]; ok {
+		return a
+	}
+	return n
+}
+
+// CSVBaseName is a CSV name without its version: "jobset-operator.v1.0.1"
+// becomes "jobset-operator".
+func CSVBaseName(csv string) string {
+	base, _, _ := strings.Cut(csv, ".")
+	return base
+}
+
+// --- Catalog ---
+
+// ALMExample is one object of a CSV's alm-examples annotation.
+type ALMExample struct {
+	APIVersion string
+	Kind       string
+	Name       string
+	Namespace  string
+	Spec       json.RawMessage
+}
+
+func (e ALMExample) group() string {
+	g, _, _ := strings.Cut(e.APIVersion, "/")
+	if !strings.Contains(e.APIVersion, "/") {
+		return ""
+	}
+	return g
+}
+
+// ObjName is the operand's name ("cluster" when the example has none).
+func (e ALMExample) ObjName() string { return kube.NonEmpty(e.Name, "cluster") }
+
+// Ref is "<Kind>/<name>".
+func (e ALMExample) Ref() string { return e.Kind + "/" + e.ObjName() }
+
+// ResourceArg is the kind as oc accepts it, qualified by its group.
+func (e ALMExample) ResourceArg() string {
+	if g := e.group(); g != "" {
+		return strings.ToLower(e.Kind) + "." + g
+	}
+	return strings.ToLower(e.Kind)
+}
+
+// CatalogPackage is the part of a PackageManifest diagnostics uses: the
+// default channel's head CSV.
+type CatalogPackage struct {
+	Name             string
+	Catalog          string
+	CatalogNamespace string
+	Provider         string
+	DefaultChannel   string
+	CurrentCSV       string
+	DisplayName      string // the head CSV's display name
+	InstallModes     []string
+	SuggestedNS      string
+	ClusterMonitor   bool // operatorframework.io/cluster-monitoring=true
+	Examples         []ALMExample
+	OwnedKinds       []string // kinds of the head CSV's owned CRDs
+}
+
+// rank orders the catalogs a package may come from: the Red Hat catalog,
+// other Red Hat-provided packages, certified, then anything else
+// (community), which Red Hat does not support.
+func (p CatalogPackage) rank() int {
+	switch {
+	case p.Catalog == "redhat-operators":
+		return 0
+	case strings.Contains(strings.ToLower(p.Provider), "red hat"):
+		return 1
+	case p.Catalog == "certified-operators":
+		return 2
+	default:
+		return 3
+	}
+}
+
+func (p CatalogPackage) supports(mode string) bool { return slices.Contains(p.InstallModes, mode) }
+
+func (p CatalogPackage) describe() string {
+	return fmt.Sprintf("package %s in catalog %s (provider %s), default channel %s, head %s",
+		p.Name, p.Catalog, kube.NonEmpty(p.Provider, "unknown"), p.DefaultChannel, kube.NonEmpty(p.CurrentCSV, "unknown"))
+}
+
+// matchKeys are the normalised names the package is known by.
+func (p CatalogPackage) matchKeys() []string {
+	var keys []string
+	for _, s := range []string{p.Name, p.DisplayName, CSVBaseName(p.CurrentCSV)} {
+		if k := NormalizeOperatorName(s); k != "" && !slices.Contains(keys, k) {
+			keys = append(keys, k)
+		}
+	}
+	return keys
+}
+
+// SingletonFor returns the package's singleton operand for the dependency
+// (see singletonFrom).
+func (p CatalogPackage) SingletonFor(key string) *ALMExample {
+	return singletonFrom(p.Examples, append([]string{key}, p.matchKeys()...))
+}
+
+// singletonFrom returns the cluster-scoped singleton operand ("cluster",
+// no namespace) of a CSV's alm-examples: the only one, or the one whose
+// kind (without "Operator") matches one of the operator's normalised
+// names. nil when there is none or it is ambiguous.
+func singletonFrom(examples []ALMExample, names []string) *ALMExample {
+	var singletons []ALMExample
+	for _, e := range examples {
+		if e.Name == "cluster" && e.Namespace == "" && e.Kind != "" {
+			singletons = append(singletons, e)
+		}
+	}
+	if len(singletons) == 1 {
+		return &singletons[0]
+	}
+	for i, e := range singletons {
+		if slices.Contains(names, NormalizeOperatorName(e.Kind)) {
+			return &singletons[i]
+		}
+	}
+	return nil
+}
+
+type packageIndex struct {
+	at       time.Time
+	packages []CatalogPackage
+}
+
+var (
+	packageIndexMu    sync.Mutex
+	packageIndexCache = map[string]packageIndex{} // by API server URL
+	// packageIndexTTL bounds how stale the catalog view may be. Listing
+	// every PackageManifest is large (about 20 MB on a cluster with the
+	// default catalogs), so it is read only when a condition names a
+	// dependency, and then at most this often.
+	packageIndexTTL = 15 * time.Minute
+
+	_ = kube.RegisterCachePurge(func() {
+		packageIndexMu.Lock()
+		packageIndexCache = map[string]packageIndex{}
+		packageIndexMu.Unlock()
+	})
+)
+
+// loadPackageIndex lists the PackageManifests of the global catalogs.
+func loadPackageIndex(c *kube.Client) ([]CatalogPackage, error) {
+	packageIndexMu.Lock()
+	defer packageIndexMu.Unlock()
+	if idx, ok := packageIndexCache[c.BaseURL()]; ok && time.Since(idx.at) < packageIndexTTL {
+		return idx.packages, nil
+	}
+	body, _, err := c.Get(rhoai.NamespacedPath("packages.operators.coreos.com/v1", "packagemanifests", rhoai.CatalogNS, ""))
+	if err != nil {
+		return nil, fmt.Errorf("list package manifests: %w", err)
+	}
+	pkgs, err := ParsePackageManifests(body)
+	if err != nil {
+		return nil, err
+	}
+	packageIndexCache[c.BaseURL()] = packageIndex{at: time.Now(), packages: pkgs}
+	return pkgs, nil
+}
+
+func ParsePackageManifests(body []byte) ([]CatalogPackage, error) {
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Name   string            `json:"name"`
+				Labels map[string]string `json:"labels"`
+			} `json:"metadata"`
+			Status struct {
+				CatalogSource          string `json:"catalogSource"`
+				CatalogSourceNamespace string `json:"catalogSourceNamespace"`
+				Provider               struct {
+					Name string `json:"name"`
+				} `json:"provider"`
+				DefaultChannel string `json:"defaultChannel"`
+				Channels       []struct {
+					Name           string `json:"name"`
+					CurrentCSV     string `json:"currentCSV"`
+					CurrentCSVDesc struct {
+						DisplayName  string `json:"displayName"`
+						InstallModes []struct {
+							Type      string `json:"type"`
+							Supported bool   `json:"supported"`
+						} `json:"installModes"`
+						Annotations               map[string]string `json:"annotations"`
+						CustomResourceDefinitions struct {
+							Owned []OwnedCRD `json:"owned"`
+						} `json:"customresourcedefinitions"`
+					} `json:"currentCSVDesc"`
+				} `json:"channels"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return nil, fmt.Errorf("parse package manifests: %w", err)
+	}
+	out := make([]CatalogPackage, 0, len(list.Items))
+	for _, it := range list.Items {
+		p := CatalogPackage{
+			Name: it.Metadata.Name, Catalog: it.Status.CatalogSource, CatalogNamespace: it.Status.CatalogSourceNamespace,
+			Provider: it.Status.Provider.Name, DefaultChannel: it.Status.DefaultChannel,
+		}
+		if p.Catalog == "" {
+			p.Catalog = it.Metadata.Labels["catalog"]
+		}
+		if p.CatalogNamespace == "" {
+			p.CatalogNamespace = kube.NonEmpty(it.Metadata.Labels["catalog-namespace"], rhoai.CatalogNS)
+		}
+		if p.Provider == "" {
+			p.Provider = it.Metadata.Labels["provider"]
+		}
+		for _, ch := range it.Status.Channels {
+			if ch.Name != p.DefaultChannel {
+				continue
+			}
+			d := ch.CurrentCSVDesc
+			p.CurrentCSV, p.DisplayName = ch.CurrentCSV, d.DisplayName
+			for _, m := range d.InstallModes {
+				if m.Supported {
+					p.InstallModes = append(p.InstallModes, m.Type)
+				}
+			}
+			p.SuggestedNS = d.Annotations["operatorframework.io/suggested-namespace"]
+			p.ClusterMonitor = d.Annotations["operatorframework.io/cluster-monitoring"] == "true"
+			p.Examples = parseALMExamples(d.Annotations["alm-examples"])
+			for _, o := range d.CustomResourceDefinitions.Owned {
+				p.OwnedKinds = append(p.OwnedKinds, o.Kind)
+			}
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+func parseALMExamples(raw string) []ALMExample {
+	var objs []struct {
+		APIVersion string `json:"apiVersion"`
+		Kind       string `json:"kind"`
+		Metadata   struct {
+			Name      string `json:"name"`
+			Namespace string `json:"namespace"`
+		} `json:"metadata"`
+		Spec json.RawMessage `json:"spec"`
+	}
+	if raw == "" || json.Unmarshal([]byte(raw), &objs) != nil {
+		return nil
+	}
+	out := make([]ALMExample, 0, len(objs))
+	for _, o := range objs {
+		out = append(out, ALMExample{APIVersion: o.APIVersion, Kind: o.Kind, Name: o.Metadata.Name, Namespace: o.Metadata.Namespace, Spec: o.Spec})
+	}
+	return out
+}
+
+// MatchPackages returns the packages known by the normalised key, best
+// first (catalog rank, then name).
+func MatchPackages(pkgs []CatalogPackage, key string) []CatalogPackage {
+	var out []CatalogPackage
+	for _, p := range pkgs {
+		if slices.Contains(p.matchKeys(), key) {
+			out = append(out, p)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].rank() != out[j].rank() {
+			return out[i].rank() < out[j].rank()
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+// --- Installed operators ---
+
+// ClusterCSV is a CSV anywhere on the cluster (OLM's copies excluded).
+type ClusterCSV struct {
+	Name, Namespace, DisplayName, Phase string
+	Labels                              map[string]string
+	Changed                             time.Time // status.lastTransitionTime
+	Examples                            []ALMExample
+	Owned                               []OwnedCRD
+	Deployments                         []string // spec.install.spec.deployments[].name
+}
+
+// OwnedCRD is one entry of spec.customresourcedefinitions.owned.
+type OwnedCRD struct {
+	Name    string `json:"name"` // <plural>.<group>
+	Kind    string `json:"kind"`
+	Version string `json:"version"`
+}
+
+// matchNames are the normalised names the installed operator is known by.
+func (csv ClusterCSV) matchNames() []string {
+	var out []string
+	for _, s := range append([]string{csv.DisplayName, CSVBaseName(csv.Name)}, csv.Packages()...) {
+		if n := NormalizeOperatorName(s); n != "" && !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func ListClusterCSVs(c *kube.Client) ([]ClusterCSV, error) {
+	// OLM copies the CSV of an AllNamespaces operator into every namespace
+	// and labels the copies olm.copiedFrom.
+	body, _, err := c.Do(http.MethodGet, rhoai.ClusterPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ""), "", nil,
+		url.Values{"labelSelector": {"!olm.copiedFrom"}})
+	if err != nil {
+		return nil, fmt.Errorf("list CSVs: %w", err)
+	}
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Name        string            `json:"name"`
+				Namespace   string            `json:"namespace"`
+				Labels      map[string]string `json:"labels"`
+				Annotations map[string]string `json:"annotations"`
+			} `json:"metadata"`
+			Spec struct {
+				DisplayName               string `json:"displayName"`
+				CustomResourceDefinitions struct {
+					Owned []OwnedCRD `json:"owned"`
+				} `json:"customresourcedefinitions"`
+				Install struct {
+					Spec struct {
+						Deployments []struct {
+							Name string `json:"name"`
+						} `json:"deployments"`
+					} `json:"spec"`
+				} `json:"install"`
+			} `json:"spec"`
+			Status struct {
+				Phase              string `json:"phase"`
+				LastTransitionTime string `json:"lastTransitionTime"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return nil, fmt.Errorf("parse CSVs: %w", err)
+	}
+	out := make([]ClusterCSV, 0, len(list.Items))
+	for _, it := range list.Items {
+		csv := ClusterCSV{Name: it.Metadata.Name, Namespace: it.Metadata.Namespace, DisplayName: it.Spec.DisplayName, Phase: it.Status.Phase, Labels: it.Metadata.Labels}
+		csv.Changed, _ = ParseK8sTime(it.Status.LastTransitionTime)
+		csv.Examples = parseALMExamples(it.Metadata.Annotations["alm-examples"])
+		csv.Owned = it.Spec.CustomResourceDefinitions.Owned
+		for _, d := range it.Spec.Install.Spec.Deployments {
+			csv.Deployments = append(csv.Deployments, d.Name)
+		}
+		out = append(out, csv)
+	}
+	return out, nil
+}
+
+// Packages returns the package names OLM labelled the CSV with
+// (operators.coreos.com/<package>.<namespace>).
+func (csv ClusterCSV) Packages() []string {
+	var out []string
+	for k := range csv.Labels {
+		rest, ok := strings.CutPrefix(k, "operators.coreos.com/")
+		if !ok {
+			continue
+		}
+		if pkg, ok := strings.CutSuffix(rest, "."+csv.Namespace); ok && pkg != "" {
+			out = append(out, pkg)
+		}
+	}
+	return out
+}
+
+// FindInstalledCSV returns the CSV of the package (or, without a catalog
+// match, of an operator known by the key), preferring a Succeeded one.
+func FindInstalledCSV(csvs []ClusterCSV, pkg *CatalogPackage, key string) *ClusterCSV {
+	var best *ClusterCSV
+	for i, csv := range csvs {
+		match := false
+		if pkg != nil {
+			match = slices.Contains(csv.Packages(), pkg.Name) || (pkg.CurrentCSV != "" && CSVBaseName(csv.Name) == CSVBaseName(pkg.CurrentCSV))
+		}
+		if !match {
+			match = slices.Contains(csv.matchNames(), key)
+		}
+		if match && (best == nil || (best.Phase != "Succeeded" && csv.Phase == "Succeeded")) {
+			best = &csvs[i]
+		}
+	}
+	return best
+}
+
+// --- Operands ---
+
+// operandAPIGroup is the only group whose singleton operands the tool may
+// read (RBAC: get, resourceNames ["cluster"]). The Red Hat JobSet,
+// LeaderWorkerSet and cert-manager operators keep their operand there.
+const operandAPIGroup = "operator.openshift.io"
+
+type operandState string
+
+const (
+	operandNone       operandState = ""           // the package has no singleton operand
+	OperandPresent    operandState = "present"    // <Kind>/cluster exists
+	operandMissing    operandState = "missing"    // it does not
+	operandUnverified operandState = "unverified" // not readable here
+)
+
+var errOperandGroup = errors.New("the tool only reads singleton operands in " + operandAPIGroup)
+
+// readSingletonOperand reports whether the cluster-scoped operand
+// <Kind>/cluster exists. Other names and groups are not readable (RBAC).
+func readSingletonOperand(c *kube.Client, e ALMExample) (operandState, error) {
+	group, version, ok := strings.Cut(e.APIVersion, "/")
+	if !ok || group != operandAPIGroup || !DNS1123Label.MatchString(version) {
+		return operandUnverified, errOperandGroup
+	}
+	if e.ObjName() != "cluster" || e.Namespace != "" {
+		return operandUnverified, fmt.Errorf("the tool only reads cluster-scoped operands named cluster, not %s", e.Ref())
+	}
+	resource, found, err := discoverPlural(c, version, e.Kind)
+	if err != nil {
+		return operandUnverified, err
+	}
+	if !found {
+		return operandMissing, nil // its CRD is not served
+	}
+	_, found, err = c.GetOptional("/apis/" + operandAPIGroup + "/" + version + "/" + resource + "/cluster")
+	switch {
+	case err != nil:
+		return operandUnverified, err
+	case !found:
+		return operandMissing, nil
+	default:
+		return OperandPresent, nil
+	}
+}
+
+// OperandManagementState reads spec.managementState of a readable
+// singleton operand ("" when it has none).
+func OperandManagementState(c *kube.Client, e ALMExample) (string, error) {
+	group, version, ok := strings.Cut(e.APIVersion, "/")
+	if !ok || group != operandAPIGroup || e.ObjName() != "cluster" || !DNS1123Label.MatchString(version) {
+		return "", errOperandGroup
+	}
+	resource, found, err := discoverPlural(c, version, e.Kind)
+	if err != nil || !found {
+		return "", err
+	}
+	var obj struct {
+		Spec struct {
+			ManagementState string `json:"managementState"`
+		} `json:"spec"`
+	}
+	if err := c.GetInto("/apis/"+operandAPIGroup+"/"+version+"/"+resource+"/cluster", &obj); err != nil {
+		if kube.IsDecodeError(err) {
+			return "", fmt.Errorf("parse %s: %w", e.Ref(), err)
+		}
+		return "", err
+	}
+	return obj.Spec.ManagementState, nil
+}
+
+// discoverPlural finds the resource of a kind in operandAPIGroup from API
+// discovery (readable by every authenticated user).
+func discoverPlural(c *kube.Client, version, kind string) (string, bool, error) {
+	var list struct {
+		Resources []struct {
+			Name string `json:"name"`
+			Kind string `json:"kind"`
+		} `json:"resources"`
+	}
+	found, err := c.GetIntoOptional("/apis/"+operandAPIGroup+"/"+version, &list)
+	if err != nil {
+		if kube.IsDecodeError(err) {
+			return "", false, fmt.Errorf("parse %s/%s discovery: %w", operandAPIGroup, version, err)
+		}
+		return "", false, fmt.Errorf("discover %s/%s: %w", operandAPIGroup, version, err)
+	}
+	if !found {
+		return "", false, nil
+	}
+	for _, r := range list.Resources {
+		if r.Kind == kind && !strings.Contains(r.Name, "/") && DNS1123Label.MatchString(r.Name) {
+			return r.Name, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// --- Dependency state ---
+
+// Dependency is one prerequisite operator named in conditions, resolved
+// against the catalogs and the installed CSVs.
+type Dependency struct {
+	Mention string // as the first message names it
+	// OperandKind/OperandName: the message names a missing operand
+	// rather than an operator; its operator is the CSV that owns the kind.
+	OperandKind, OperandName string
+	Key                      string // normalised
+	Package                  *CatalogPackage
+	Others                   []CatalogPackage // other catalog matches, best first
+	CatalogErr               error
+	CSV                      *ClusterCSV
+	CSVErr                   error
+	Operand                  *ALMExample
+	OperandSt                operandState
+	OperandErr               error
+	// Reporters are the conditions that name it.
+	Reporters []*ClassifiedCondition
+	// NeededBy are other findings that need it (a Certificate that is
+	// never issued without cert-manager); NeededImpact says what that
+	// breaks. Either makes it block, like a blocking condition.
+	NeededBy     []string
+	NeededImpact string
+}
+
+// installed: a Succeeded CSV.
+func (d *Dependency) installed() bool { return d.CSV != nil && d.CSV.Phase == "Succeeded" }
+
+// satisfied: installed, and its singleton operand (if any) was seen. An
+// operand that could not be read (RBAC, discovery, another API group) is
+// not satisfied: nothing proves the module waits on a retry rather than on
+// the operand, so no restart is offered on that basis.
+func (d *Dependency) Satisfied() bool {
+	return d.installed() && (d.OperandSt == operandNone || d.OperandSt == OperandPresent)
+}
+
+// operandProblem: installed, but the operand is missing or unverified.
+func (d *Dependency) operandProblem() bool {
+	return d.installed() && (d.OperandSt == operandMissing || d.OperandSt == operandUnverified)
+}
+
+func (d *Dependency) DisplayName() string {
+	switch {
+	case d.OperandKind != "" && d.CSV == nil && d.Package == nil:
+		return "the operator that provides " + d.OperandKind
+	case d.Package != nil && d.Package.DisplayName != "":
+		return d.Package.DisplayName
+	case d.CSV != nil && d.CSV.DisplayName != "":
+		return d.CSV.DisplayName
+	}
+	return d.Mention
+}
+
+// slug identifies the dependency in problem IDs.
+func (d *Dependency) slug() string {
+	if d.CSV != nil {
+		if pkgs := d.CSV.Packages(); len(pkgs) > 0 {
+			sort.Strings(pkgs)
+			return pkgs[0]
+		}
+	}
+	if d.Package != nil {
+		return d.Package.Name
+	}
+	return d.Key
+}
+
+// Blocking reports whether any condition that names it blocks Ready.
+func (d *Dependency) Blocking() bool {
+	for _, r := range d.Reporters {
+		if r.Blocking {
+			return true
+		}
+	}
+	return false
+}
+
+// ProblemID is the ID of the problem that tells how to fix the dependency,
+// "" when it is satisfied (a module back-off problem covers that).
+func (d *Dependency) ProblemID() string {
+	switch {
+	case d.Satisfied():
+		return ""
+	case d.operandProblem():
+		return "prerequisite-operand-" + d.slug()
+	case d.CSV != nil:
+		return "prerequisite-not-ready-" + d.slug()
+	}
+	return "prerequisite-missing-" + d.slug()
+}
+
+// ResolveDependencies fills in catalog, CSV and operand state. Lookups are
+// made only when there is something to resolve.
+func ResolveDependencies(c *kube.Client, deps []*Dependency) {
+	if len(deps) == 0 {
+		return
+	}
+	var pkgs []CatalogPackage
+	var csvs []ClusterCSV
+	var pkgErr, csvErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); pkgs, pkgErr = loadPackageIndex(c) }()
+	go func() { defer wg.Done(); csvs, csvErr = ListClusterCSVs(c) }()
+	wg.Wait()
+	for _, d := range deps {
+		d.CatalogErr, d.CSVErr = pkgErr, csvErr
+		if d.OperandKind != "" {
+			resolveOperandMention(c, d, pkgs, csvs)
+			continue
+		}
+		if pkgErr == nil {
+			if matches := MatchPackages(pkgs, d.Key); len(matches) > 0 {
+				d.Package = &matches[0]
+				d.Others = matches[1:]
+			}
+		}
+		if csvErr == nil {
+			d.CSV = FindInstalledCSV(csvs, d.Package, d.Key)
+		}
+		// The operand comes from what is installed: an installed CSV
+		// (perhaps of another package than the preferred catalog entry)
+		// ships its own examples.
+		switch {
+		case d.CSV != nil:
+			d.Operand = singletonFrom(d.CSV.Examples, append([]string{d.Key}, d.CSV.matchNames()...))
+		case d.Package != nil:
+			d.Operand = d.Package.SingletonFor(d.Key)
+		}
+		if d.Operand != nil && d.installed() {
+			d.OperandSt, d.OperandErr = readSingletonOperand(c, *d.Operand)
+		}
+	}
+}
+
+// resolveOperandMention finds the operator of a missing operand: the
+// installed CSV that owns its kind (its own alm-examples give the object),
+// else the catalog package whose head CSV owns it.
+func resolveOperandMention(c *kube.Client, d *Dependency, pkgs []CatalogPackage, csvs []ClusterCSV) {
+	var owned *OwnedCRD
+	for i := range csvs {
+		for j, o := range csvs[i].Owned {
+			if o.Kind == d.OperandKind && (d.CSV == nil || (d.CSV.Phase != "Succeeded" && csvs[i].Phase == "Succeeded")) {
+				d.CSV, owned = &csvs[i], &csvs[i].Owned[j]
+			}
+		}
+	}
+	examples := []ALMExample(nil)
+	if d.CSV != nil {
+		examples = d.CSV.Examples
+	} else {
+		for i, p := range pkgs {
+			if slices.Contains(p.OwnedKinds, d.OperandKind) && (d.Package == nil || p.rank() < d.Package.rank()) {
+				d.Package = &pkgs[i]
+			}
+		}
+		if d.Package != nil {
+			examples = d.Package.Examples
+		}
+	}
+	var pick *ALMExample
+	for i, e := range examples {
+		if e.Kind != d.OperandKind {
+			continue
+		}
+		if pick == nil || (d.OperandName != "" && e.Name == d.OperandName) {
+			pick = &examples[i]
+		}
+	}
+	switch {
+	case pick != nil:
+		op := *pick
+		if d.OperandName != "" {
+			op.Name = d.OperandName
+		}
+		d.Operand = &op
+	case owned != nil:
+		// No example: the kind's group and version from the owned CRD.
+		if _, group, ok := strings.Cut(owned.Name, "."); ok && owned.Version != "" {
+			d.Operand = &ALMExample{APIVersion: group + "/" + owned.Version, Kind: d.OperandKind, Name: d.OperandName}
+		}
+	}
+	if d.Operand == nil && d.installed() {
+		// Nothing to build the object from: guidance only.
+		d.Operand = &ALMExample{Kind: d.OperandKind, Name: d.OperandName}
+	}
+	if d.Operand != nil && d.installed() {
+		d.OperandSt, d.OperandErr = readSingletonOperand(c, *d.Operand)
+	}
+}
+
+// --- Problems ---
+
+// PrerequisiteProblem tells how to install, finish or configure one
+// dependency. existingOG names the OperatorGroup already in the target
+// namespace, if any.
+func PrerequisiteProblem(c *kube.Client, d *Dependency) report.Problem {
+	var conds []string
+	var fixes []string
+	for _, r := range d.Reporters {
+		conds = append(conds, r.label())
+	}
+	sort.Strings(conds)
+	conds = append(conds, d.NeededBy...)
+	severity, impact := "info", "It only gates an optional feature: the reporting conditions have severity Info, so the DataScienceCluster can be Ready without it."
+	switch {
+	case d.Blocking():
+		severity, impact = "warning", "It keeps the DataScienceCluster from being Ready."
+	case len(d.NeededBy) > 0:
+		severity, impact = "warning", d.NeededImpact
+	}
+	evidence := append([]string{}, conds...)
+	if d.Package != nil {
+		evidence = append(evidence, "Catalog: "+d.Package.describe())
+		if d.Package.rank() == 3 {
+			evidence = append(evidence, fmt.Sprintf("Only a community package matches %q; Red Hat does not support it. Check whether your subscription includes a supported one before using it.", d.Mention))
+		}
+		for _, o := range d.Others {
+			note := "also matches"
+			if o.rank() == 3 {
+				note = "also matches (community, not supported by Red Hat; use the one above)"
+			}
+			evidence = append(evidence, fmt.Sprintf("Catalog: package %s in %s %s", o.Name, o.Catalog, note))
+		}
+	}
+	if d.CatalogErr != nil {
+		evidence = append(evidence, fmt.Sprintf("Could not read the catalogs: %v%s", d.CatalogErr, kube.TemplateHint(d.CatalogErr)))
+	}
+	if d.CSVErr != nil {
+		evidence = append(evidence, fmt.Sprintf("Could not list installed operators: %v%s", d.CSVErr, kube.TemplateHint(d.CSVErr)))
+	}
+	p := report.Problem{
+		ID:        d.ProblemID(),
+		Severity:  severity,
+		Mergeable: true,
+	}
+	name := d.DisplayName()
+
+	switch {
+	case d.operandProblem():
+		csv := d.CSV
+		evidence = append(evidence, fmt.Sprintf("Installed: CSV %s/%s is Succeeded", csv.Namespace, csv.Name))
+		if d.OperandSt == operandMissing {
+			evidence = append(evidence, fmt.Sprintf("%s (%s) does not exist", d.Operand.Ref(), d.Operand.APIVersion))
+			p.Title = fmt.Sprintf("%s is installed, but its %s does not exist", name, d.Operand.Ref())
+		} else {
+			evidence = append(evidence, fmt.Sprintf("Whether %s (%s) exists could not be checked: %v%s", d.Operand.Ref(), d.Operand.APIVersion, d.OperandErr, kube.TemplateHint(d.OperandErr)))
+			p.Title = fmt.Sprintf("%s is installed; check that its %s exists", name, d.Operand.Ref())
+			fixes = append(fixes, fmt.Sprintf("The tool could not read %s, so it cannot tell a missing operand from a module operator that has not retried, and offers no restart.", d.Operand.Ref()))
+		}
+		p.Description = fmt.Sprintf("Modules check for the operator and for its operand: %s does nothing until %s exists, and the module keeps reporting it as not installed. %s", name, d.Operand.Ref(), impact)
+		p.AffectedObjects = []string{d.Operand.Kind + " " + d.Operand.ObjName()}
+		cmd, err := OperandCommand(*d.Operand)
+		if err != nil {
+			fixes = append(fixes, fmt.Sprintf("Create %s as the operator's documentation describes (%v).", d.Operand.Ref(), err))
+		} else {
+			fixes = append(fixes, fmt.Sprintf("Create %s from the example the operator ships in its CSV (command below; it creates the object only if it is still missing). Then, if the module still reports it after a few minutes, restart the module's operator (Diagnostics offers it once it can see the operand).", d.Operand.Ref()))
+			p.TechnicalCmd = cmd
+		}
+	case d.CSV != nil && !d.installed():
+		csv := d.CSV
+		evidence = append(evidence, fmt.Sprintf("CSV %s/%s is in phase %s", csv.Namespace, csv.Name, kube.NonEmpty(csv.Phase, "unknown")))
+		p.Title = fmt.Sprintf("%s is installed but not ready (CSV phase %s)", name, kube.NonEmpty(csv.Phase, "unknown"))
+		p.Description = fmt.Sprintf("OLM has an install of %s, but its CSV is not Succeeded, so modules treat it as missing. %s", name, impact)
+		p.AffectedObjects = []string{fmt.Sprintf("ClusterServiceVersion %s/%s", csv.Namespace, csv.Name)}
+		fixes = append(fixes, "Read the CSV's status message (command below). Installing usually finishes within minutes; a Failed CSV needs its cause fixed, after which OLM retries.")
+		p.TechnicalCmd = kube.ShellCommand("oc", "get", "csv", csv.Name, "-n", csv.Namespace, "-o", "jsonpath={.status.phase}: {.status.reason}: {.status.message}")
+	case d.OperandKind != "" && d.Package == nil && d.CSV == nil:
+		p.Title = fmt.Sprintf("No installed operator provides %s, which a module needs", d.OperandKind)
+		p.Description = fmt.Sprintf("A module reports %s missing. No installed CSV owns the %s kind, and no package in this cluster's catalogs does. %s", d.Mention, d.OperandKind, impact)
+		fixes = append(fixes, fmt.Sprintf("Install the operator that provides %s (the module's message names its purpose), then create %s.", d.OperandKind, d.Mention))
+		p.TechnicalCmd = "oc get crd -o custom-columns=NAME:.metadata.name,KIND:.spec.names.kind | grep -w " + kube.ShellQuote(d.OperandKind)
+	case d.Package == nil:
+		p.Title = fmt.Sprintf("Prerequisite operator %q is not installed", d.Mention)
+		p.Description = fmt.Sprintf("%q is not installed, and no package in this cluster's catalogs matches that name. %s", d.Mention, impact)
+		fixes = append(fixes, fmt.Sprintf("Find the operator in the OpenShift console (Ecosystem or Operators > OperatorHub, search %q) and install it; prefer a Red Hat provided package. If the catalogs of this cluster are restricted (disconnected install), mirror the operator first.", d.Mention))
+		p.TechnicalCmd = kube.ShellCommand("oc", "get", "packagemanifests", "-n", rhoai.CatalogNS, "-o", "custom-columns=NAME:.metadata.name,CATALOG:.status.catalogSource,DISPLAY:.status.channels[0].currentCSVDesc.displayName") +
+			" | grep -i " + kube.ShellQuote(firstWord(d.Mention))
+	default:
+		pkg := d.Package
+		p.Title = fmt.Sprintf("Prerequisite operator %s is not installed", name)
+		p.Description = fmt.Sprintf("%q is not installed. It is package %s in the %s catalog. %s", d.Mention, pkg.Name, pkg.Catalog, impact)
+		plan, err := PlanInstall(c, *pkg, d.Operand)
+		if err != nil {
+			fixes = append(fixes, fmt.Sprintf("Install %s (package %s, channel %s, catalog %s) from the OpenShift console: %v", name, pkg.Name, pkg.DefaultChannel, pkg.Catalog, err))
+			break
+		}
+		evidence = append(evidence, plan.evidence...)
+		if g, err := argo.ReadOperatorGitOps(c); err == nil && g.Active() {
+			if app := kube.NonEmpty(g.SubscriptionApp, g.CatalogApp); app != "" {
+				fixes = append(fixes, fmt.Sprintf("Argo CD application %q manages RHOAI here: add %s to Git (with the odh-gitops chart, enable it under dependencies in the values) rather than applying the objects below by hand, which Argo CD would not know about; they are listed for reference.", app, name))
+			} else {
+				fixes = append(fixes, fmt.Sprintf("%s manages the RHOAI catalog here: add %s where the cluster's configuration is kept (an ACM policy, or Git) rather than applying the objects below by hand; they are listed for reference.", kube.SentenceStart(argo.ACMCatalogManager), name))
+			}
+		}
+		fixes = append(fixes, fmt.Sprintf("Install %s with the commands below (as a cluster administrator; the tool does not install operators). %s", name, strings.Join(plan.Notes, " ")))
+		p.TechnicalCmd = plan.Script
+	}
+	p.Evidence = evidence
+	p.Fix = strings.Join(fixes, " ")
+	return p
+}
+
+func firstWord(s string) string {
+	for _, w := range strings.FieldsFunc(s, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' }) {
+		if !operatorNameStopWords[strings.ToLower(w)] {
+			return w
+		}
+	}
+	return s
+}
+
+// prerequisiteInstall is the copyable install of one package.
+type prerequisiteInstall struct {
+	Script   string
+	Notes    []string
+	evidence []string
+}
+
+// PlanInstall builds the Namespace, OperatorGroup and Subscription for a
+// package from its catalog metadata, the wait commands, and the singleton
+// operand when the package has one.
+func PlanInstall(c *kube.Client, p CatalogPackage, operand *ALMExample) (prerequisiteInstall, error) {
+	for _, s := range []string{p.Name, p.Catalog, p.CatalogNamespace, p.DefaultChannel} {
+		if s == "" || !DNS1123Subdomain.MatchString(s) {
+			return prerequisiteInstall{}, fmt.Errorf("the catalog entry has an unexpected name, channel or source (%q)", s)
+		}
+	}
+	var plan prerequisiteInstall
+	var objects []string
+	var ns string
+	switch {
+	case p.supports("OwnNamespace"):
+		ns = p.SuggestedNS
+		if ns == "" {
+			ns = p.Name
+			if !strings.HasPrefix(ns, "openshift-") {
+				ns = "openshift-" + ns
+			}
+		}
+		if !DNS1123Label.MatchString(ns) {
+			return prerequisiteInstall{}, fmt.Errorf("the suggested namespace %q is not a valid namespace name", ns)
+		}
+		nsObj := "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: " + ns
+		if p.ClusterMonitor {
+			nsObj += "\n  labels:\n    openshift.io/cluster-monitoring: \"true\""
+		}
+		objects = append(objects, nsObj)
+		where := "its suggested namespace"
+		if p.SuggestedNS == "" {
+			where = "a namespace named after the package (the CSV suggests none)"
+		}
+		plan.Notes = append(plan.Notes, fmt.Sprintf("It goes into %s %s, watching only that namespace (install mode OwnNamespace, which the CSV supports).", where, ns))
+		ogs, err := listOperatorGroups(c, ns)
+		switch {
+		case err != nil:
+			plan.Notes = append(plan.Notes, fmt.Sprintf("Could not check for an existing OperatorGroup in %s (%v); if one exists, leave the OperatorGroup out: a namespace may have only one, and it must target a mode the CSV supports.", ns, err))
+			fallthrough
+		case len(ogs) == 0:
+			objects = append(objects, "apiVersion: operators.coreos.com/v1\nkind: OperatorGroup\nmetadata:\n  name: "+ns+"\n  namespace: "+ns+"\nspec:\n  targetNamespaces:\n  - "+ns)
+		default:
+			note, err := reuseOperatorGroup(p, ns, ogs)
+			if err != nil {
+				return prerequisiteInstall{}, err
+			}
+			plan.Notes = append(plan.Notes, note)
+		}
+	case p.supports("AllNamespaces"):
+		ns = "openshift-operators"
+		plan.Notes = append(plan.Notes, "The CSV does not support OwnNamespace, so it is installed for all namespaces into openshift-operators.")
+		ogs, err := listOperatorGroups(c, ns)
+		switch {
+		case err != nil:
+			plan.Notes = append(plan.Notes, fmt.Sprintf("Could not read the OperatorGroup of openshift-operators (%v); OpenShift creates global-operators there, which watches all namespaces.", err))
+		case len(ogs) == 0:
+			objects = append(objects, "apiVersion: operators.coreos.com/v1\nkind: OperatorGroup\nmetadata:\n  name: global-operators\n  namespace: openshift-operators\nspec: {}")
+			plan.Notes = append(plan.Notes, "openshift-operators has no OperatorGroup (OpenShift normally creates global-operators), so one that watches all namespaces is created.")
+		default:
+			note, err := reuseOperatorGroup(p, ns, ogs)
+			if err != nil {
+				return prerequisiteInstall{}, err
+			}
+			plan.Notes = append(plan.Notes, note)
+		}
+	default:
+		return prerequisiteInstall{}, fmt.Errorf("the CSV supports only the install modes %s, which need a target namespace chosen by you", kube.NonEmpty(strings.Join(p.InstallModes, ", "), "(none)"))
+	}
+	objects = append(objects, fmt.Sprintf("apiVersion: operators.coreos.com/v1alpha1\nkind: Subscription\nmetadata:\n  name: %s\n  namespace: %s\nspec:\n  channel: %s\n  name: %s\n  source: %s\n  sourceNamespace: %s\n  installPlanApproval: Automatic",
+		p.Name, ns, p.DefaultChannel, p.Name, p.Catalog, p.CatalogNamespace))
+	lines := []string{
+		"oc apply -f - <<'EOF'\n" + strings.Join(objects, "\n---\n") + "\nEOF",
+		kube.ShellCommand("oc", "wait", "subscription/"+p.Name, "-n", ns, "--for=jsonpath={.status.state}=AtLatestKnown", "--timeout=10m"),
+		"oc wait csv/\"$(oc get subscription/" + p.Name + " -n " + ns + " -o jsonpath='{.status.installedCSV}')\" -n " + ns + " --for=jsonpath='{.status.phase}'=Succeeded --timeout=10m",
+	}
+	plan.Notes = append(plan.Notes, fmt.Sprintf("The Subscription follows the default channel %s of %s with automatic updates; the two oc wait lines return once the operator is installed.", p.DefaultChannel, p.Catalog))
+	plan.evidence = append(plan.evidence, fmt.Sprintf("Install modes supported by %s: %s; suggested namespace: %s", kube.NonEmpty(p.CurrentCSV, p.Name), strings.Join(p.InstallModes, ", "), kube.NonEmpty(p.SuggestedNS, "none")))
+	if operand != nil {
+		cmd, err := OperandCommand(*operand)
+		if err == nil {
+			lines = append(lines, cmd)
+			plan.Notes = append(plan.Notes, fmt.Sprintf("The last command creates %s from the CSV's example, which the operator needs before it does anything; some operators create it themselves, so it is created only if it is still missing.", operand.Ref()))
+		}
+	}
+	plan.Script = strings.Join(lines, "\n")
+	return plan, nil
+}
+
+// OperandCommand creates <Kind>/cluster from the CSV example unless it
+// exists. The quoted here-document keeps the shell from expanding it, and
+// the JSON is re-encoded so no line can end the here-document early.
+func OperandCommand(e ALMExample) (string, error) {
+	if !KindPattern.MatchString(e.Kind) || !groupVersion.MatchString(e.APIVersion) || !DNS1123Subdomain.MatchString(e.ObjName()) || e.Namespace != "" {
+		return "", fmt.Errorf("the example has an unexpected apiVersion, kind, name or a namespace")
+	}
+	obj := map[string]any{"apiVersion": e.APIVersion, "kind": e.Kind, "metadata": map[string]string{"name": e.ObjName()}}
+	if len(e.Spec) > 0 && string(e.Spec) != "null" {
+		obj["spec"] = e.Spec
+	}
+	data, err := json.MarshalIndent(obj, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return kube.ShellCommand("oc", "get", e.ResourceArg()+"/"+e.ObjName()) + " >/dev/null 2>&1 || oc create -f - <<'EOF'\n" + string(data) + "\nEOF", nil
+}
+
+// OperatorGroup is the part of an OperatorGroup that decides the install
+// mode of the operators in its namespace.
+type OperatorGroup struct {
+	Metadata struct {
+		Name string `json:"name"`
+	} `json:"metadata"`
+	Spec struct {
+		TargetNamespaces []string                   `json:"targetNamespaces"`
+		Selector         map[string]json.RawMessage `json:"selector"`
+	} `json:"spec"`
+}
+
+// InstallMode is the OLM install mode the OperatorGroup gives operators in
+// namespace ns ("" when a label selector picks the namespaces, which the
+// tool cannot evaluate).
+func (og OperatorGroup) InstallMode(ns string) string {
+	t := og.Spec.TargetNamespaces
+	switch {
+	case len(og.Spec.Selector) > 0:
+		return ""
+	case len(t) == 0:
+		return "AllNamespaces"
+	case len(t) == 1 && t[0] == ns:
+		return "OwnNamespace"
+	case len(t) == 1:
+		return "SingleNamespace"
+	}
+	return "MultiNamespace"
+}
+
+// listOperatorGroups returns the OperatorGroups of a namespace (none when
+// it does not exist).
+func listOperatorGroups(c *kube.Client, namespace string) ([]OperatorGroup, error) {
+	var list struct {
+		Items []OperatorGroup `json:"items"`
+	}
+	found, err := c.GetIntoOptional(rhoai.NamespacedPath("operators.coreos.com/v1", "operatorgroups", namespace, ""), &list)
+	if err != nil {
+		if kube.IsDecodeError(err) {
+			return nil, fmt.Errorf("parse OperatorGroups in %s: %w", namespace, err)
+		}
+		return nil, err
+	}
+	if !found {
+		return nil, nil
+	}
+	return list.Items, nil
+}
+
+// reuseOperatorGroup checks that the namespace's existing OperatorGroup
+// gives an install mode the CSV supports (OLM fails the CSV with
+// UnsupportedOperatorGroup otherwise, and with TooManyOperatorGroups when
+// a namespace has several).
+func reuseOperatorGroup(p CatalogPackage, ns string, ogs []OperatorGroup) (string, error) {
+	if len(ogs) > 1 {
+		var names []string
+		for _, og := range ogs {
+			names = append(names, og.Metadata.Name)
+		}
+		sort.Strings(names)
+		return "", fmt.Errorf("namespace %s has %d OperatorGroups (%s); OLM installs nothing there until only one is left (TooManyOperatorGroups), so the tool gives no commands for it", ns, len(ogs), strings.Join(names, ", "))
+	}
+	og := ogs[0]
+	mode := og.InstallMode(ns)
+	switch {
+	case mode == "":
+		return "", fmt.Errorf("namespace %s has OperatorGroup %s, which picks its target namespaces with a label selector; check that it gives an install mode the CSV supports (%s) and install from the console", ns, og.Metadata.Name, strings.Join(p.InstallModes, ", "))
+	case !p.supports(mode):
+		return "", fmt.Errorf("namespace %s has OperatorGroup %s with install mode %s (targetNamespaces %s), which %s does not support (%s); OLM would fail the install. Use another namespace or change that OperatorGroup",
+			ns, og.Metadata.Name, mode, kube.NonEmpty(strings.Join(og.Spec.TargetNamespaces, ", "), "all"), kube.NonEmpty(p.CurrentCSV, p.Name), strings.Join(p.InstallModes, ", "))
+	}
+	return fmt.Sprintf("%s already has OperatorGroup %s (install mode %s, which the CSV supports), so none is created: a namespace may have only one.", ns, og.Metadata.Name, mode), nil
+}

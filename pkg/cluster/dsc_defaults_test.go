@@ -9,6 +9,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 const testDSCSample = `apiVersion: datasciencecluster.opendatahub.io/v2
@@ -35,14 +38,10 @@ func mockDSCSamples(t *testing.T, fetch func(*http.Request) (int, string)) {
 		status, body := fetch(r)
 		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})}
-	dscDefaultsCache.Lock()
-	dscDefaultsCache.entries = make(map[string]dscDefaultsCacheEntry)
-	dscDefaultsCache.Unlock()
+	components.ResetDSCDefaultsCacheForTest()
 	t.Cleanup(func() {
 		http.DefaultClient = old
-		dscDefaultsCache.Lock()
-		dscDefaultsCache.entries = make(map[string]dscDefaultsCacheEntry)
-		dscDefaultsCache.Unlock()
+		components.ResetDSCDefaultsCacheForTest()
 	})
 }
 
@@ -63,14 +62,14 @@ func TestDSCBranchForVersion(t *testing.T) {
 		"5.23.0-preview": "rhoai-5.23-preview", "5.23.0-preview.4": "rhoai-5.23-preview.4",
 	} {
 		t.Run(version, func(t *testing.T) {
-			got, err := dscBranchForVersion(version)
+			got, err := components.DSCBranchForVersion(version)
 			if err != nil || got != want {
 				t.Fatalf("got %q, %v; want %q", got, err, want)
 			}
 		})
 	}
 	for _, version := range []string{"", "latest", "../../main", "3"} {
-		if _, err := dscBranchForVersion(version); err == nil {
+		if _, err := components.DSCBranchForVersion(version); err == nil {
 			t.Errorf("accepted %q", version)
 		}
 	}
@@ -83,15 +82,15 @@ func TestDefaultDSCFollowsUnnumberedEAAndRefOverride(t *testing.T) {
 		return 200, testDSCSample
 	})
 	c, cleanup := newMockClient(map[string]mockResponse{
-		namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""): csvListMock("3.7.0-ea"),
+		rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""): csvListMock("3.7.0-ea"),
 	})
 	defer cleanup()
-	defaults, err := fetchDefaultDSCSpec(c, "")
+	defaults, err := components.FetchDefaultDSCSpec(c, "")
 	if err != nil || defaults.Branch != "rhoai-3.7-ea" || !strings.Contains(requestedPaths[0], "/rhoai-3.7-ea/") {
 		t.Fatalf("defaults=%+v, error=%v, paths=%v", defaults, err, requestedPaths)
 	}
 	t.Setenv("DSC_SAMPLE_REF", "release/new-convention")
-	defaults, err = fetchDefaultDSCSpec(c, "")
+	defaults, err = components.FetchDefaultDSCSpec(c, "")
 	if err != nil || defaults.Branch != "release/new-convention" || len(requestedPaths) != 2 || !strings.Contains(requestedPaths[1], "/release%2Fnew-convention/") {
 		t.Fatalf("override defaults=%+v, error=%v, paths=%v", defaults, err, requestedPaths)
 	}
@@ -100,21 +99,21 @@ func TestDefaultDSCFollowsUnnumberedEAAndRefOverride(t *testing.T) {
 func TestDefaultDSCUsesInstalledCSVAndBranchCache(t *testing.T) {
 	var fetched []string
 	mockDSCSamples(t, func(r *http.Request) (int, string) { fetched = append(fetched, r.URL.Path); return 200, testDSCSample })
-	subPath := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
-	csvPath := namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "installed")
+	subPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName)
+	csvPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "installed")
 	responses := map[string]mockResponse{
 		subPath: {body: `{"status":{"installedCSV":"installed"}}`},
 		csvPath: {body: `{"spec":{"version":"3.6.0-ea.2"}}`},
 	}
 	c, cleanup := newMockClient(responses)
 	defer cleanup()
-	first, err := fetchDefaultDSCSpec(c, "")
+	first, err := components.FetchDefaultDSCSpec(c, "")
 	if err != nil || first.Branch != "rhoai-3.6-ea.2" {
 		t.Fatalf("defaults: %+v, %v", first, err)
 	}
 	// Every caller gets a fresh parsed map; repairs must never mutate cached defaults.
 	first.Spec["spec"].(map[string]any)["components"] = nil
-	second, err := fetchDefaultDSCSpec(c, "")
+	second, err := components.FetchDefaultDSCSpec(c, "")
 	if err != nil || second.Spec["spec"].(map[string]any)["components"] == nil {
 		t.Fatal("shared mutable defaults")
 	}
@@ -122,10 +121,10 @@ func TestDefaultDSCUsesInstalledCSVAndBranchCache(t *testing.T) {
 		t.Fatalf("cache miss: %v", fetched)
 	}
 	older, olderCleanup := newMockClient(map[string]mockResponse{
-		namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""): csvListMock("3.3.0"),
+		rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""): csvListMock("3.3.0"),
 	})
 	defer olderCleanup()
-	third, err := fetchDefaultDSCSpec(older, "")
+	third, err := components.FetchDefaultDSCSpec(older, "")
 	if err != nil || third.Branch != "rhoai-3.3" || len(fetched) != 2 {
 		t.Fatalf("upgrade reused wrong cache: %+v %v %v", third, err, fetched)
 	}
@@ -156,9 +155,9 @@ func TestDefaultDSCVersionFallbackAndFailures(t *testing.T) {
 				}
 				return tc.status, tc.sample
 			})
-			c, cleanup := newMockClient(map[string]mockResponse{namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""): csvListMock("3.3.0")})
+			c, cleanup := newMockClient(map[string]mockResponse{rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""): csvListMock("3.3.0")})
 			defer cleanup()
-			defaults, err := fetchDefaultDSCSpec(c, "")
+			defaults, err := components.FetchDefaultDSCSpec(c, "")
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("defaults=%+v error=%v", defaults, err)
 			}
@@ -193,7 +192,7 @@ func TestDSCCompatibilityChecksKeysAndPreservesOptionalFields(t *testing.T) {
 	mockDSCSamples(t, func(*http.Request) (int, string) { return 200, testDSCSample })
 	c, cleanup := newMockClient(map[string]mockResponse{
 		"/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io": {body: testDSCCRD()},
-		namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""):                            csvListMock("3.6.0-ea.2"),
+		rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""):                csvListMock("3.6.0-ea.2"),
 	})
 	defer cleanup()
 	var dsc map[string]any
@@ -239,7 +238,7 @@ func TestRepairDSCPrunesOrResetsWithExplicitDeletions(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			c := &Client{baseURL: server.URL, httpClient: server.Client(), ctx: context.Background()}
+			c := newTestClient(testClientOptions{BaseURL: server.URL, HTTPClient: server.Client(), Ctx: context.Background()})
 			result, err := RepairDSC(c, "my-dsc", mode, "3.6.0", "datasciencecluster.opendatahub.io/v2", nil, []string{})
 			if err != nil || !result.Success {
 				t.Fatalf("repair: %+v %v", result, err)
@@ -286,7 +285,7 @@ func TestRepairDSCRefusesUnavailableSchemaOrChangedVersion(t *testing.T) {
 			c, records, cleanup := newRecordingMockClient(map[string]mockResponse{
 				"/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/my-dsc":                                         {body: `{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"my-dsc","resourceVersion":"42"},"spec":{"components":{"dashboard":{"managementState":"Removed"}}}}`},
 				"/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io": {body: testDSCCRD(), statusCode: tc.schemaStatus},
-				namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""):                            csvListMock("3.6.0"),
+				rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""):                csvListMock("3.6.0"),
 			})
 			defer cleanup()
 			if _, err := RepairDSC(c, "my-dsc", "reset-defaults", tc.expectedVersion, "datasciencecluster.opendatahub.io/v2", nil, []string{}); err == nil {
@@ -304,8 +303,8 @@ func TestRepairDSCRefusesUnavailableSchemaOrChangedVersion(t *testing.T) {
 func TestCreateDSCUpstreamFailureDoesNotApplyBuiltinDefaults(t *testing.T) {
 	mockDSCSamples(t, func(*http.Request) (int, string) { return 503, "offline" })
 	c, records, cleanup := newRecordingMockClient(map[string]mockResponse{
-		"/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters":                     {body: `{"items":[]}`},
-		namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""): csvListMock("3.6.0"),
+		"/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters":                                 {body: `{"items":[]}`},
+		rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""): csvListMock("3.6.0"),
 	})
 	defer cleanup()
 	result, err := CreateDefaultDSC(c)

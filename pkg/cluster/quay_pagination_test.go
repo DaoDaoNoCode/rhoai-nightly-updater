@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 )
 
 // fakeTagRepo answers HEAD manifests/<tag> like the registry: 200 with a
@@ -60,10 +62,10 @@ func (f *fakeTagRepo) client() *http.Client {
 	})}
 }
 
-func rawTags(tags []parsedTag) []string {
+func rawTags(tags []registry.Tag) []string {
 	var out []string
 	for _, t := range tags {
-		out = append(out, t.raw)
+		out = append(out, t.Raw)
 	}
 	sort.Strings(out)
 	return out
@@ -81,7 +83,7 @@ func TestFetchAndParseTags_ProbesEveryReleaseName(t *testing.T) {
 	}
 	// Per-commit and unrelated tags exist too, and are never asked about.
 	f := newFakeTagRepo(append(want, "rhoai-3.6-"+strings.Repeat("a", 40), "rhoai-3.7-ea.1-"+strings.Repeat("b", 40), "latest", "rhoai.end")...)
-	got, err := fetchAndParseTags(context.Background(), f.client(), "t")
+	got, err := registry.FetchAndParseTags(context.Background(), f.client(), "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +96,7 @@ func TestFetchAndParseTags_ProbesEveryReleaseName(t *testing.T) {
 	if n := f.requests.Load(); n > 450 {
 		t.Fatalf("%d probes for the scan", n)
 	}
-	if d, ok := tagDigestCache.Get("rhoai-3.7-ea.1"); !ok || !strings.HasPrefix(d, "sha256:") {
+	if d, ok := registry.TagDigestCache.Get("rhoai-3.7-ea.1"); !ok || !strings.HasPrefix(d, "sha256:") {
 		t.Fatalf("a probe that found the tag should have cached its digest, got %q", d)
 	}
 }
@@ -102,7 +104,7 @@ func TestFetchAndParseTags_ProbesEveryReleaseName(t *testing.T) {
 func TestFetchAndParseTags_MissingMajorsAndMinorsEndTheWalk(t *testing.T) {
 	resetReleaseTagCache(t)
 	f := newFakeTagRepo("rhoai-3.6")
-	got, err := fetchAndParseTags(context.Background(), f.client(), "t")
+	got, err := registry.FetchAndParseTags(context.Background(), f.client(), "t")
 	if err != nil || !reflect.DeepEqual(rawTags(got), []string{"rhoai-3.6"}) {
 		t.Fatalf("tags=%v err=%v", rawTags(got), err)
 	}

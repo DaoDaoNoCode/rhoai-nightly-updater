@@ -10,7 +10,7 @@ export function sentence(text: string): string {
   return /[.!?:]["')\]]*$/.test(t) ? t : `${t}.`;
 }
 
-/** Digest prefix length, the same as the backend's activity "build" field (pkg/cluster/activity.go). */
+/** Digest prefix length, the same as the backend's activity "build" field (pkg/cluster/internal/record/activity.go). */
 export const SHORT_DIGEST_LEN = 12;
 export const SHORT_COMMIT_LEN = 7;
 

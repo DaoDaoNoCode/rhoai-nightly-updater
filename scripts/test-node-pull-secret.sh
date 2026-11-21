@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2015 # "check && pass || fail": pass never fails
 # Runs the command the setup card shows for a self-managed cluster
-# (pkg/cluster/node_pull_secret.sh: add the quay.io/rhoai entry to
+# (pkg/cluster/internal/rhoai/node_pull_secret.sh: add the quay.io/rhoai entry to
 # openshift-config/pull-secret) against a fake oc, with the real jq, in bash
 # and, when installed, zsh. Offline.
 #   bash scripts/test-node-pull-secret.sh
@@ -11,8 +11,8 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 SRC=$(cd "$HERE/.." && pwd)
-CMD_FILE="$SRC/pkg/cluster/node_pull_secret.sh"
-REMOVE_FILE="$SRC/pkg/cluster/node_pull_secret_remove.sh"
+CMD_FILE="$SRC/pkg/cluster/internal/rhoai/node_pull_secret.sh"
+REMOVE_FILE="$SRC/pkg/cluster/internal/rhoai/node_pull_secret_remove.sh"
 
 if ! command -v jq >/dev/null 2>&1 || ! jq -n '"eA==" | @base64d' >/dev/null 2>&1; then
 	if [ "${REQUIRE_JQ:-}" = 1 ]; then

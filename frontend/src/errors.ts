@@ -130,7 +130,7 @@ export function describeOutcomeError(outcome: { message: string; errorCode?: str
 /**
  * Friendly text for a Quay lookup failure reported by the backend. The
  * backend has no errorCode for Quay failures yet, so this reads its own
- * fixed formats: "returned HTTP <code>" (pkg/cluster/quay.go) and Go network
+ * fixed formats: "returned HTTP <code>" (pkg/cluster/internal/registry/quay.go) and Go network
  * error words. Bare digits are never matched, because image digests contain them.
  */
 export function describeQuayError(e: unknown): string {

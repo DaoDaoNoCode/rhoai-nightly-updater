@@ -12,6 +12,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // fakeAPI is a strict Kubernetes API fake for diagnostics tests. Routes are
@@ -67,8 +71,8 @@ func newFakeAPI(t *testing.T) (*fakeAPI, *Client) {
 	}))
 	t.Cleanup(srv.Close)
 	// A new server may reuse an earlier test's address, which keys the cache.
-	controlPlaneCache.Purge()
-	return f, &Client{baseURL: srv.URL, token: "test", httpClient: srv.Client(), ctx: context.Background()}
+	rhoai.ControlPlaneCache.Purge()
+	return f, newTestClient(testClientOptions{BaseURL: srv.URL, Token: "test", HTTPClient: srv.Client(), Ctx: context.Background()})
 }
 
 // json registers a fixed response.
@@ -184,7 +188,7 @@ func minimalDSCCRD(version string, components ...string) string {
 // that defines components, and JSON patches of it: a dry run changes
 // nothing, a write is kept. patchBody, when set, is answered instead (an
 // API server that dropped the change).
-func serveToggleDSC(f *fakeAPI, version, dsc, patchBody string, components ...string) {
+func serveToggleDSC(f *fakeAPI, version, dsc, patchBody string, comps ...string) {
 	list := "/apis/datasciencecluster.opendatahub.io/" + version + "/datascienceclusters"
 	var obj map[string]any
 	if err := json.Unmarshal([]byte(dsc), &obj); err != nil {
@@ -215,7 +219,7 @@ func serveToggleDSC(f *fakeAPI, version, dsc, patchBody string, components ...st
 		defer mu.Unlock()
 		return 200, current()
 	})
-	f.json("GET", dscCRDPath, 200, minimalDSCCRD(version, components...))
+	f.json("GET", components.DSCCRDPath, 200, minimalDSCCRD(version, comps...))
 	serveInstalledOperator(f)
 	f.handle("PATCH", list+"/"+name, func(r *http.Request, body []byte) (int, string) {
 		mu.Lock()
@@ -223,12 +227,12 @@ func serveToggleDSC(f *fakeAPI, version, dsc, patchBody string, components ...st
 		if patchBody != "" {
 			return 200, patchBody
 		}
-		var ops []jsonPatchOp
+		var ops []kube.JSONPatchOp
 		if err := json.Unmarshal(body, &ops); err != nil {
 			return 400, `{"kind":"Status","status":"Failure","code":400}`
 		}
-		next, err := applyJSONPatch(obj, ops)
-		if _, ok := errors.AsType[*errJSONPatchTest](err); ok {
+		next, err := kube.ApplyJSONPatch(obj, ops)
+		if _, ok := errors.AsType[*kube.JSONPatchTestError](err); ok {
 			return 422, apiServerPatchTestFailed
 		}
 		if err != nil {
@@ -272,8 +276,8 @@ func (f *fakeAPI) realWrites() []string {
 // serveInstalledOperator serves the Subscription and the installed CSV,
 // which names the operator's Deployment (rhods-operator).
 func serveInstalledOperator(f *fakeAPI) {
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), 200,
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"), 200,
 		`{"metadata":{"name":"rhods-operator.3.6.0"},"spec":{"version":"3.6.0","install":{"spec":{"deployments":[{"name":"rhods-operator"}]}}},"status":{"phase":"Succeeded"}}`)
 }
 

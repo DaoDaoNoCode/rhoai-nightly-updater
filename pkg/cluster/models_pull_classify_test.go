@@ -3,6 +3,8 @@ package cluster
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 )
 
 // A mirrored pull lists every source; live on ROSA HCP (2026-11-18) a node
@@ -22,7 +24,7 @@ func TestManifestUnknown_MirrorRefusingCredentialsIsNotMissing(t *testing.T) {
 		{"denied", `manifest unknown; quay.io/x: denied: requested access to the resource is denied`, false},
 		{"credentials only", `unauthorized: authentication required`, false},
 	} {
-		if got := manifestUnknown(c.msg); got != c.want {
+		if got := serving.ManifestUnknown(c.msg); got != c.want {
 			t.Errorf("%s: manifestUnknown = %v, want %v", c.name, got, c.want)
 		}
 	}
@@ -38,15 +40,15 @@ func TestDescribeModelPod_MirrorRefusalWaitsOnTheNode(t *testing.T) {
 			"name": "storage-initializer", "state": map[string]any{"waiting": map[string]any{"reason": "ErrImagePull", "message": live}},
 		}}},
 	})
-	var p modelPod
+	var p serving.ModelPod
 	if err := json.Unmarshal(raw, &p); err != nil {
 		t.Fatal(err)
 	}
-	got := describeModelPod(p, "")
-	if got.imageMissing || got.problem != "" {
+	got := serving.DescribeModelPod(p, "")
+	if got.ImageMissing || got.Problem != "" {
 		t.Fatalf("taken as a missing image or a problem: %+v", got)
 	}
-	if got.pullFailure == "" || got.node != "new-node" {
+	if got.PullFailure == "" || got.Node != "new-node" {
 		t.Fatalf("not a pull failure on its node: %+v", got)
 	}
 }

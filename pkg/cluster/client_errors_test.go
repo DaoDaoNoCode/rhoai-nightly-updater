@@ -8,6 +8,10 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // A 403 answered to the ServiceAccount's token (a read, the app's records)
@@ -17,17 +21,17 @@ import (
 func TestTemplateHintOnlyForTheServiceAccountsRefusals(t *testing.T) {
 	sa := fmt.Errorf("read: %w", &K8sError{Status: 403, Reason: "Forbidden"})
 	user := fmt.Errorf("patch: %w", &K8sError{Status: 403, Reason: "Forbidden", User: true})
-	if templateHint(sa) == "" {
+	if kube.TemplateHint(sa) == "" {
 		t.Error("no hint for the ServiceAccount's 403")
 	}
-	if h := templateHint(user); h != "" {
+	if h := kube.TemplateHint(user); h != "" {
 		t.Errorf("hint for the user's 403: %q", h)
 	}
-	if !strings.Contains(user.Error(), UserForbiddenMessage) {
+	if !strings.Contains(user.Error(), kube.UserForbiddenMessage) {
 		t.Errorf("the user's 403 does not say whose permissions refused it: %v", user)
 	}
 	for _, err := range []error{nil, errors.New("x"), &K8sError{Status: 404}, &K8sError{Status: 401}} {
-		if h := templateHint(err); h != "" {
+		if h := kube.TemplateHint(err); h != "" {
 			t.Errorf("%v: hint %q", err, h)
 		}
 	}
@@ -45,11 +49,11 @@ func TestErrorCodeFromK8sErr(t *testing.T) {
 		{&K8sError{Status: 401, Reason: "Unauthorized"}, "unauthorized"},
 		{fmt.Errorf("patch: %w", &K8sError{Status: 403, User: true}), "forbidden"},
 		{&K8sError{Status: 403}, "forbidden"},
-		{wrapNetworkError(errors.New("connection refused")), "network"},
+		{&NetworkError{Err: errors.New("connection refused")}, "network"},
 		{&K8sError{Status: 500}, ""},
 		{errors.New("x"), ""},
 	} {
-		if got := errorCodeFromK8sErr(tc.err); got != tc.want {
+		if got := kube.ErrorCodeFromK8sErr(tc.err); got != tc.want {
 			t.Errorf("%v: %q, want %q", tc.err, got, tc.want)
 		}
 	}
@@ -62,13 +66,13 @@ func TestUserTokenRejectedMidOperationIsSignInEnded(t *testing.T) {
 	dscListPathV2 := "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters"
 	dscListPathV1 := "/apis/datasciencecluster.opendatahub.io/v1/datascienceclusters"
 	client, _, cleanup := newRecordingMockClient(map[string]mockResponse{
-		namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""): csvListMock("3.6.0"),
+		rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, ""): csvListMock("3.6.0"),
 		"GET " + dscListPathV2:  {body: `{"items":[]}`},
 		dscListPathV1:           {body: `{"items":[]}`},
 		"POST " + dscListPathV2: {body: `{"kind":"Status","status":"Failure","reason":"Unauthorized","code":401,"message":"Unauthorized"}`, statusCode: 401},
 	})
 	defer cleanup()
-	client.asUser = true
+	editTestClient(client, func(o *testClientOptions) { o.AsUser = true })
 
 	result, err := CreateDefaultDSC(client)
 	if err != nil {
@@ -84,13 +88,13 @@ func TestUserTokenRejectedMidOperationIsSignInEnded(t *testing.T) {
 // that is not a cluster request keeps "prerequisites".
 func TestFailedReadKeepsItsErrorCode(t *testing.T) {
 	f, c := newFakeAPI(t)
-	f.status("GET", "/apis/"+componentAPIGroup, http.StatusForbidden, "Forbidden")
+	f.status("GET", "/apis/"+rhoai.ComponentAPIGroup, http.StatusForbidden, "Forbidden")
 	res, err := RevertDashboardImage(c)
 	if err != nil || res.Success || res.ErrorCode != "forbidden" {
 		t.Fatalf("result %+v, err %v", res, err)
 	}
 	f.mu.Lock()
-	delete(f.routes, "GET /apis/"+componentAPIGroup)
+	delete(f.routes, "GET /apis/"+rhoai.ComponentAPIGroup)
 	f.mu.Unlock()
 	serveDashboardModule(f, fixtureAppsNS, fixtureOperatorName, `{"metadata":{}}`)
 	res, err = RevertDashboardImage(c)
@@ -114,16 +118,16 @@ func TestHTTPStatusForError(t *testing.T) {
 		{"500", &K8sError{Status: 500}, 502, "cluster_unavailable"},
 		{"503", &K8sError{Status: 503}, 502, "cluster_unavailable"},
 		{"409", &K8sError{Status: 409}, 502, "cluster_error"},
-		{"network", wrapNetworkError(errors.New("connection refused")), 502, "network"},
-		{"timeout inside network error", wrapNetworkError(&url.Error{Op: "Get", URL: "x", Err: context.DeadlineExceeded}), 504, "timeout"},
+		{"network", &NetworkError{Err: errors.New("connection refused")}, 502, "network"},
+		{"timeout inside network error", &NetworkError{Err: &url.Error{Op: "Get", URL: "x", Err: context.DeadlineExceeded}}, 504, "timeout"},
 		{"canceled", fmt.Errorf("x: %w", context.Canceled), 503, "canceled"},
-		{"quay rejects credentials", fmt.Errorf("x: %w", &quayAuthError{StatusCode: 401}), 502, "registry_auth"},
-		{"quay outage", &quayAuthError{StatusCode: 503}, 502, "registry_unavailable"},
+		{"quay rejects credentials", fmt.Errorf("x: %w", &registry.QuayAuthError{StatusCode: 401}), 502, "registry_auth"},
+		{"quay outage", &registry.QuayAuthError{StatusCode: 503}, 502, "registry_unavailable"},
 		{"other", errors.New("parse failure"), 500, "internal"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			code, ec := HTTPStatusForError(tc.err)
+			code, ec := kube.HTTPStatusForError(tc.err)
 			if code != tc.wantCode || ec != tc.wantEC {
 				t.Fatalf("got (%d, %q), want (%d, %q)", code, ec, tc.wantCode, tc.wantEC)
 			}

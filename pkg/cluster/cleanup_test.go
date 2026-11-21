@@ -35,7 +35,7 @@ func fakeTeardowns(t *testing.T, fail map[string]*types.OperationResponse) *[]st
 	}
 	cleanupMLflow = func(*Client) (*types.OperationResponse, error) { return result("mlflow", "MLflow removed."), nil }
 	cleanupPlayground = func(c *Client, project string) (*types.OperationResponse, error) {
-		if c == nil || !c.asUser {
+		if c == nil || !c.ActsAsUser() {
 			t.Errorf("playground teardown of %s does not get the user's client", project)
 		}
 		return result(CleanupStepID("playground", project), "Playground deleted from '"+project+"'."), nil
@@ -71,7 +71,7 @@ func TestCleanUp_DeletesTheModelsBeforeTheGateway(t *testing.T) {
 func TestCleanUp_DeletesThePlaygroundsBeforeTheModels(t *testing.T) {
 	ran := fakeTeardowns(t, nil)
 	_, c := newResourceFake(t)
-	c.asUser = true
+	editTestClient(c, func(o *testClientOptions) { o.AsUser = true })
 	res, err := CleanUp(c, types.CleanupRequest{Models: []string{"a"}, Playgrounds: []string{"a", "b"}, InferenceGateway: true}, nil)
 	if err != nil || !res.Success {
 		t.Fatalf("got %+v, %v", res, err)
@@ -144,7 +144,7 @@ func TestCleanUp_StopsWhenTheOperationIsCancelled(t *testing.T) {
 	_, c := newResourceFake(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	c.ctx = ctx
+	editTestClient(c, func(o *testClientOptions) { o.Ctx = ctx })
 	res, _ := CleanUp(c, types.CleanupRequest{MLflow: true}, nil)
 	if res.Success || len(*ran) != 0 || !strings.Contains(res.Message, "Not done: MLflow.") {
 		t.Fatalf("got %+v, ran %v", res, *ran)

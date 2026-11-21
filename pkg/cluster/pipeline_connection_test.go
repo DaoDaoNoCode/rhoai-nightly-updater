@@ -4,6 +4,10 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 )
 
 // assertConnection checks the dashboard S3 Connection in ns: the shape
@@ -12,13 +16,13 @@ import (
 // manifests/base/connection-types/s3.yaml), with the given keys.
 func assertConnection(t *testing.T, f *resourceFake, ns, accessKey, secretKey string) {
 	t.Helper()
-	obj := f.get(secretPath(ns, connectionSecretName))
+	obj := f.get(secretPath(ns, storage.ConnectionSecretName))
 	if obj == nil {
-		t.Fatalf("connection %s/%s missing", ns, connectionSecretName)
+		t.Fatalf("connection %s/%s missing", ns, storage.ConnectionSecretName)
 	}
 	meta := ensureMap(obj, "metadata")
 	labels, _ := meta["labels"].(map[string]any)
-	if labels["opendatahub.io/dashboard"] != "true" || labels["opendatahub.io/managed"] != "true" || labels[managedByLabelKey] != managedByLabelValue {
+	if labels["opendatahub.io/dashboard"] != "true" || labels["opendatahub.io/managed"] != "true" || labels[kube.ManagedByLabelKey] != kube.ManagedByLabelValue {
 		t.Errorf("labels = %v", labels)
 	}
 	ann, _ := meta["annotations"].(map[string]any)
@@ -54,16 +58,16 @@ func TestSetupPipelineServer_CreatesTheDashboardConnection(t *testing.T) {
 	putManagedDSC(f)
 	putReadyManagedS3(f)
 	putDSProject(f, "proj")
-	keys, _, _ := readS3Keys(c)
+	keys, _, _ := storage.ReadS3Keys(c)
 	for run := range 2 {
 		if resp, _ := SetupPipelineServer(c, "proj"); !resp.Success {
 			t.Fatalf("run %d: %+v", run, resp)
 		}
 		assertConnection(t, f, "proj", keys.AccessKey, keys.SecretKey)
-		assertOwnedByDSPA(t, f, secretPath("proj", connectionSecretName), "proj", dspaName)
+		assertOwnedByDSPA(t, f, secretPath("proj", storage.ConnectionSecretName), "proj", storage.DSPAName)
 	}
 	st, err := GetResourcesStatus(c)
-	if err != nil || len(st.PipelineServers) != 1 || st.PipelineServers[0].Connection != connectionSecretName {
+	if err != nil || len(st.PipelineServers) != 1 || st.PipelineServers[0].Connection != storage.ConnectionSecretName {
 		t.Fatalf("status = %+v err=%v", st, err)
 	}
 }
@@ -73,9 +77,9 @@ func TestSetupPipelineServer_ForeignConnectionNameRefused(t *testing.T) {
 	putManagedDSC(f)
 	putReadyManagedS3(f)
 	putDSProject(f, "proj")
-	f.putJSON(secretPath("proj", connectionSecretName), `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}},"data":{"k":"dXNlcg=="}}`)
+	f.putJSON(secretPath("proj", storage.ConnectionSecretName), `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}},"data":{"k":"dXNlcg=="}}`)
 	resp, _ := SetupPipelineServer(c, "proj")
-	if resp.Success || resp.ErrorCode != "not_managed" || !strings.Contains(resp.Message, connectionSecretName) {
+	if resp.Success || resp.ErrorCode != "not_managed" || !strings.Contains(resp.Message, storage.ConnectionSecretName) {
 		t.Fatalf("got %+v", resp)
 	}
 	for _, m := range f.mutations() {
@@ -88,16 +92,16 @@ func TestSetupPipelineServer_ForeignConnectionNameRefused(t *testing.T) {
 func TestTeardownPipelineServer_DeletesTheConnection(t *testing.T) {
 	fastPipelineTimings(t)
 	f, c := newResourceFake(t)
-	putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
-	f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
-	f.putJSON(secretPath("proj", connectionSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
+	putDSPA(f, "proj", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, "", "")
+	f.putJSON(secretPath("proj", storage.DSPASecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
+	f.putJSON(secretPath("proj", storage.ConnectionSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 	resp, _ := TeardownPipelineServer(c, "proj")
-	if !resp.Success || f.has(secretPath("proj", connectionSecretName)) {
+	if !resp.Success || f.has(secretPath("proj", storage.ConnectionSecretName)) {
 		t.Fatalf("got %+v", resp)
 	}
 	// One of the same name that someone else made stays.
-	f.putJSON(secretPath("proj", connectionSecretName), `{"metadata":{}}`)
-	if resp, _ := TeardownPipelineServer(c, "proj"); !resp.Success || !f.has(secretPath("proj", connectionSecretName)) {
+	f.putJSON(secretPath("proj", storage.ConnectionSecretName), `{"metadata":{}}`)
+	if resp, _ := TeardownPipelineServer(c, "proj"); !resp.Success || !f.has(secretPath("proj", storage.ConnectionSecretName)) {
 		t.Fatalf("got %+v", resp)
 	}
 }
@@ -105,20 +109,20 @@ func TestTeardownPipelineServer_DeletesTheConnection(t *testing.T) {
 // The selected project's status reads the Connection itself: the DSPA's
 // annotation only says the tool created one, not that it is still there.
 func TestGetResourcesStatusFor_ReadsTheConnection(t *testing.T) {
-	annotated := `,"annotations":{"` + dspaConnectionAnnotation + `":"` + connectionSecretName + `"}`
+	annotated := `,"annotations":{"` + storage.DSPAConnectionAnnotation + `":"` + storage.ConnectionSecretName + `"}`
 	cases := []struct {
 		name, want string
 		setup      func(f *resourceFake)
 	}{
 		{"present", ConnectionPresent, func(f *resourceFake) {
-			f.putJSON(secretPath("proj", connectionSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
+			f.putJSON(secretPath("proj", storage.ConnectionSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 		}},
 		{"deleted in the dashboard", ConnectionMissing, func(f *resourceFake) {}},
 		{"someone else's", ConnectionForeign, func(f *resourceFake) {
-			f.putJSON(secretPath("proj", connectionSecretName), `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}}}`)
+			f.putJSON(secretPath("proj", storage.ConnectionSecretName), `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"}}}`)
 		}},
 		{"unreadable", ConnectionUnreadable, func(f *resourceFake) {
-			f.fail["GET "+secretPath("proj", connectionSecretName)] = 403
+			f.fail["GET "+secretPath("proj", storage.ConnectionSecretName)] = 403
 		}},
 	}
 	for _, tc := range cases {
@@ -126,8 +130,8 @@ func TestGetResourcesStatusFor_ReadsTheConnection(t *testing.T) {
 			f, c := newResourceFake(t)
 			putDSProject(f, "proj")
 			putDSProject(f, "other")
-			putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, annotated, "")
-			putDSPA(f, "other", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, annotated, "")
+			putDSPA(f, "proj", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, annotated, "")
+			putDSPA(f, "other", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, annotated, "")
 			tc.setup(f)
 			st, err := GetResourcesStatusFor(c, "proj")
 			if err != nil {
@@ -142,7 +146,7 @@ func TestGetResourcesStatusFor_ReadsTheConnection(t *testing.T) {
 					t.Errorf("%s connection state = %q, want %q (%+v)", ps.Namespace, ps.ConnectionState, want, ps)
 				}
 			}
-			if hasRequest(f, "GET "+secretPath("other", connectionSecretName)) {
+			if hasRequest(f, "GET "+secretPath("other", storage.ConnectionSecretName)) {
 				t.Error("the Connection of a project that is not selected was read")
 			}
 		})
@@ -154,14 +158,14 @@ func TestGetResourcesStatusFor_ReadsTheConnection(t *testing.T) {
 func TestGetResourcesStatusFor_NoSecretReadOutsideTheSelectedServer(t *testing.T) {
 	f, c := newResourceFake(t)
 	putDSProject(f, "proj")
-	putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
+	putDSPA(f, "proj", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, "", "")
 	for _, project := range []string{"", "elsewhere"} {
 		if _, err := GetResourcesStatusFor(c, project); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, ns := range []string{"proj", "elsewhere"} {
-		if hasRequest(f, "GET "+secretPath(ns, connectionSecretName)) {
+		if hasRequest(f, "GET "+secretPath(ns, storage.ConnectionSecretName)) {
 			t.Errorf("secret read in %s", ns)
 		}
 	}

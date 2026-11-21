@@ -13,6 +13,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -73,10 +76,9 @@ func mockDashboardTags(t *testing.T, published ...string) *dashboardTagMock {
 	}
 	// Labels and tag digests are cached per digest across tests.
 	resetRegistryCaches()
-	original := quayHTTPClient
-	quayHTTPClient = &http.Client{Transport: m}
+	restore := registry.SetHTTPClientForTest(&http.Client{Transport: m})
 	t.Cleanup(func() {
-		quayHTTPClient = original
+		restore()
 		resetRegistryCaches()
 	})
 	return m
@@ -202,7 +204,7 @@ func devImage(t *testing.T, state types.DashboardState, deployment string) types
 
 func mustDeploy(t *testing.T, c *Client, mode string, pr int, flavor string) *types.OperationResponse {
 	t.Helper()
-	result, err := deployDashboardBuild(c, mode, pr, flavor)
+	result, err := dashdev.DeployBuild(c, mode, pr, flavor)
 	if err != nil || !result.Success {
 		t.Fatalf("deploy %s %d: result=%+v err=%v", mode, pr, result, err)
 	}
@@ -236,10 +238,10 @@ func TestDashboardSwitchingBuildsResetsComponentsWithoutNewBuild(t *testing.T) {
 			f, c := newDashboardDevFixture(t)
 			tc.first(t, c)
 			if tc.legacy {
-				session, _ := dashboardSession(&f.operator)
+				session, _ := dashdev.SessionOf(&f.operator)
 				session.Baseline = nil
 				raw, _ := json.Marshal(session)
-				f.operator.Metadata.Annotations[dashboardDevAnnotation] = string(raw)
+				f.operator.Metadata.Annotations[dashdev.SessionAnnotation] = string(raw)
 			}
 			// PR 222 only touched the host.
 			mockDashboardTags(t, "odh-dashboard:odh-pr-222")
@@ -247,7 +249,7 @@ func TestDashboardSwitchingBuildsResetsComponentsWithoutNewBuild(t *testing.T) {
 			if !strings.Contains(result.Message, "1 of 3") || !strings.Contains(result.Message, "release image") {
 				t.Errorf("message does not say which containers run the PR: %q", result.Message)
 			}
-			if got := fixtureImage(f, dashboardDeploymentName); !strings.Contains(got, ":odh-pr-222@") {
+			if got := fixtureImage(f, dashdev.DeploymentName); !strings.Contains(got, ":odh-pr-222@") {
 				t.Fatalf("host = %s", got)
 			}
 			if got := fixtureImage(f, "notebooks-ui"); got != "release-notebooks" {
@@ -258,12 +260,12 @@ func TestDashboardSwitchingBuildsResetsComponentsWithoutNewBuild(t *testing.T) {
 			}
 			var state types.DashboardState
 			populateDashboardDevState(c, &state)
-			if state.PRNumber != 222 || state.DevMode != "pr" || !state.DevImagesMatchTarget || strings.Join(state.PRContainers, ",") != dashboardContainerName {
+			if state.PRNumber != 222 || state.DevMode != "pr" || !state.DevImagesMatchTarget || strings.Join(state.PRContainers, ",") != dashdev.ContainerName {
 				t.Fatalf("state=%+v", state)
 			}
-			host := devImage(t, state, dashboardDeploymentName)
+			host := devImage(t, state, dashdev.DeploymentName)
 			notebooks := devImage(t, state, "notebooks-ui")
-			if host.TargetSource != "pr" || host.Running != "pr" || host.RunningPR != 222 || host.TargetTag != "odh-pr-222" || host.Flavor != DashboardFlavorRHOAI {
+			if host.TargetSource != "pr" || host.Running != "pr" || host.RunningPR != 222 || host.TargetTag != "odh-pr-222" || host.Flavor != dashdev.FlavorRHOAI {
 				t.Errorf("host=%+v", host)
 			}
 			if notebooks.TargetSource != "baseline" || notebooks.Running != "release" || notebooks.TargetImage != "release-notebooks" || !notebooks.MatchesTarget {
@@ -272,7 +274,7 @@ func TestDashboardSwitchingBuildsResetsComponentsWithoutNewBuild(t *testing.T) {
 			if *f.operator.Spec.Replicas != 0 {
 				t.Fatal("operator resumed during a build switch")
 			}
-			session, _ := dashboardSession(&f.operator)
+			session, _ := dashdev.SessionOf(&f.operator)
 			if session.Replicas != 2 {
 				t.Fatalf("original replica count lost across sessions: %d", session.Replicas)
 			}
@@ -286,14 +288,14 @@ func TestDashboardPRToMainRetargetsEveryComponent(t *testing.T) {
 	mustDeploy(t, c, "pr", 111, "")
 	mockDashboardTags(t, allFixtureTags("odh-stable")...)
 	mustDeploy(t, c, "main", 0, "")
-	for name, repo := range map[string]string{dashboardDeploymentName: "odh-dashboard", "notebooks-ui": "odh-mod-arch-notebooks", "future-workload": "odh-mod-arch-future"} {
+	for name, repo := range map[string]string{dashdev.DeploymentName: "odh-dashboard", "notebooks-ui": "odh-mod-arch-notebooks", "future-workload": "odh-mod-arch-future"} {
 		if got, want := fixtureImage(f, name), "quay.io/opendatahub/"+repo+":"+fixtureCommitTag(repo+":odh-stable")+"@"+fixtureDigest(repo+":odh-stable"); got != want {
 			t.Fatalf("%s = %s, want %s", name, got, want)
 		}
 	}
 	var state types.DashboardState
 	populateDashboardDevState(c, &state)
-	if state.DevMode != "main" || state.PRNumber != 0 || state.IsCustomPR || !state.DevImagesMatchTarget || state.Flavor != DashboardFlavorRHOAI {
+	if state.DevMode != "main" || state.PRNumber != 0 || state.IsCustomPR || !state.DevImagesMatchTarget || state.Flavor != dashdev.FlavorRHOAI {
 		t.Fatalf("state=%+v", state)
 	}
 }
@@ -322,7 +324,7 @@ func TestDashboardDeployFlavorSelection(t *testing.T) {
 			f, c := newDashboardDevFixture(t)
 			mockDashboardTags(t, tc.published...)
 			mustDeploy(t, c, tc.mode, 5, tc.flavor)
-			if got := fixtureImage(f, dashboardDeploymentName); !strings.Contains(got, tc.wantHost) {
+			if got := fixtureImage(f, dashdev.DeploymentName); !strings.Contains(got, tc.wantHost) {
 				t.Fatalf("host = %s, want %s", got, tc.wantHost)
 			}
 			if got := fixtureImage(f, "notebooks-ui"); !strings.Contains(got, tc.wantNB) {
@@ -332,18 +334,18 @@ func TestDashboardDeployFlavorSelection(t *testing.T) {
 			populateDashboardDevState(c, &state)
 			wantFlavor := tc.flavor
 			if wantFlavor == "" {
-				wantFlavor = DashboardFlavorRHOAI
+				wantFlavor = dashdev.FlavorRHOAI
 			}
-			if state.Flavor != wantFlavor || state.DefaultFlavor != DashboardFlavorRHOAI || len(state.AvailableFlavors) != 2 {
+			if state.Flavor != wantFlavor || state.DefaultFlavor != dashdev.FlavorRHOAI || len(state.AvailableFlavors) != 2 {
 				t.Errorf("flavor state=%q default=%q available=%v", state.Flavor, state.DefaultFlavor, state.AvailableFlavors)
 			}
-			host := devImage(t, state, dashboardDeploymentName)
+			host := devImage(t, state, dashdev.DeploymentName)
 			if host.Flavor != tc.hostFlavor || host.Running != tc.mode {
 				t.Errorf("host flavor = %q running = %q, want %q %q", host.Flavor, host.Running, tc.hostFlavor, tc.mode)
 			}
 			if tc.mode == "main" {
 				// The UI labels the row "Latest main" by the session's floating tag.
-				if want := dashboardBuildTags("main", 0, tc.hostFlavor)[0]; host.TargetTag != want || !host.MatchesTarget {
+				if want := dashdev.BuildTags("main", 0, tc.hostFlavor)[0]; host.TargetTag != want || !host.MatchesTarget {
 					t.Errorf("host target tag = %q matches=%v, want %q", host.TargetTag, host.MatchesTarget, want)
 				}
 			}
@@ -352,7 +354,7 @@ func TestDashboardDeployFlavorSelection(t *testing.T) {
 	t.Run("invalid-flavor", func(t *testing.T) {
 		f, c := newDashboardDevFixture(t)
 		mockDashboardTags(t, allFixtureTags("odh-pr-5")...)
-		result, err := deployDashboardBuild(c, "pr", 5, "upstream")
+		result, err := dashdev.DeployBuild(c, "pr", 5, "upstream")
 		if err != nil || result.Success || result.ErrorCode != "validation" || len(f.writes) > 0 {
 			t.Fatalf("result=%+v err=%v writes=%v", result, err, f.writes)
 		}
@@ -363,7 +365,7 @@ func TestDashboardDeployFlavorSelection(t *testing.T) {
 // the start, and an RHOAI update while paused is reported as stale.
 func TestDashboardOverrideTracksUsersAndRHOAIUpdates(t *testing.T) {
 	f, c := newDashboardDevFixture(t)
-	f.operator.Metadata.Annotations[platformVersionAnnotation] = "3.6.0"
+	f.operator.Metadata.Annotations[dashdev.PlatformVersionAnnotation] = "3.6.0"
 	f.operator.Spec.Template.Spec.Containers[0].Image = "operator@sha256:v1"
 	c.SetUsername("alice")
 	mockDashboardTags(t, allFixtureTags("odh-pr-111")...)
@@ -387,7 +389,7 @@ func TestDashboardOverrideTracksUsersAndRHOAIUpdates(t *testing.T) {
 
 	// RHOAI update while paused: the platform re-applies the Deployment with
 	// new images and version but keeps replicas at 0.
-	f.operator.Metadata.Annotations[platformVersionAnnotation] = "3.6.1"
+	f.operator.Metadata.Annotations[dashdev.PlatformVersionAnnotation] = "3.6.1"
 	f.operator.Spec.Template.Spec.Containers[0].Image = "operator@sha256:v2"
 	for i, env := range f.operator.Spec.Template.Spec.Containers[0].Env {
 		f.operator.Spec.Template.Spec.Containers[0].Env[i].Value = env.Value + "-v2"
@@ -449,7 +451,7 @@ func TestDashboardOverrideSummaryStates(t *testing.T) {
 			f, c := newDashboardDevFixture(t)
 			f.operator.Spec.Replicas = &tc.replicas
 			if tc.annotation != "" {
-				f.operator.Metadata.Annotations[dashboardDevAnnotation] = tc.annotation
+				f.operator.Metadata.Annotations[dashdev.SessionAnnotation] = tc.annotation
 			}
 			if tc.operatorErr != 0 {
 				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -457,7 +459,7 @@ func TestDashboardOverrideSummaryStates(t *testing.T) {
 					io.WriteString(w, `{"kind":"Status","status":"Failure"}`)
 				}))
 				t.Cleanup(srv.Close)
-				c = &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+				c = newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 			}
 			override, err := DashboardOverrideSummary(c)
 			if (err != nil) != tc.wantErr || (override == nil) != (tc.wantNil || tc.wantErr) {
@@ -491,18 +493,18 @@ func TestDashboardRevertRecoversFromAnyState(t *testing.T) {
 		{"corrupt-annotation-while-paused", func(t *testing.T, f *dashboardDevFixture, c *Client) {
 			zero := 0
 			f.operator.Spec.Replicas = &zero
-			f.operator.Metadata.Annotations[dashboardDevAnnotation] = "{not json"
-		}, dashboardOperatorDefaultReplicas},
+			f.operator.Metadata.Annotations[dashdev.SessionAnnotation] = "{not json"
+		}, dashdev.OperatorDefaultReplicas},
 		{"annotation-for-another-operator", func(t *testing.T, f *dashboardDevFixture, c *Client) {
 			zero := 0
 			f.operator.Spec.Replicas = &zero
-			f.operator.Metadata.Annotations[dashboardDevAnnotation] = `{"operatorUID":"old","replicas":3}`
-		}, dashboardOperatorDefaultReplicas},
+			f.operator.Metadata.Annotations[dashdev.SessionAnnotation] = `{"operatorUID":"old","replicas":3}`
+		}, dashdev.OperatorDefaultReplicas},
 		{"annotation-lost-while-paused", func(t *testing.T, f *dashboardDevFixture, c *Client) {
 			mockDashboardTags(t, allFixtureTags("odh-pr-1")...)
 			mustDeploy(t, c, "pr", 1, "")
-			delete(f.operator.Metadata.Annotations, dashboardDevAnnotation)
-		}, dashboardOperatorDefaultReplicas},
+			delete(f.operator.Metadata.Annotations, dashdev.SessionAnnotation)
+		}, dashdev.OperatorDefaultReplicas},
 		{"dashboard-removed-while-paused", func(t *testing.T, f *dashboardDevFixture, c *Client) {
 			mockDashboardTags(t, allFixtureTags("odh-pr-1")...)
 			mustDeploy(t, c, "pr", 1, "")
@@ -538,7 +540,7 @@ func TestDashboardRevertRecoversFromAnyState(t *testing.T) {
 				if *f.operator.Spec.Replicas != tc.wantReplicas {
 					t.Fatalf("revert %d: replicas=%d want %d", attempt, *f.operator.Spec.Replicas, tc.wantReplicas)
 				}
-				if _, ok := f.operator.Metadata.Annotations[dashboardDevAnnotation]; ok {
+				if _, ok := f.operator.Metadata.Annotations[dashdev.SessionAnnotation]; ok {
 					t.Fatalf("revert %d left the session annotation", attempt)
 				}
 			}
@@ -568,8 +570,8 @@ func TestDashboardRevertReportsFailures(t *testing.T) {
 			io.WriteString(w, `{"kind":"Status","status":"Failure","message":"forbidden"}`)
 		}))
 		defer srv.Close()
-		c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
-		result, _ := revertDashboardOperatorTo(c, dashboardTarget{Operator: &moduleOperator{Namespace: fixtureAppsNS, Name: fixtureOperatorName}})
+		c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
+		result, _ := dashdev.RevertOperatorTo(c, dashdev.Target{Operator: &components.ModuleOperator{Namespace: fixtureAppsNS, Name: fixtureOperatorName}})
 		var err error
 		if err != nil || result.Success || result.ErrorCode != "forbidden" {
 			t.Fatalf("result=%+v err=%v", result, err)
@@ -581,7 +583,7 @@ func TestDashboardRevertReportsFailures(t *testing.T) {
 		mustDeploy(t, c, "pr", 1, "")
 		f.failOperatorPatch = http.StatusInternalServerError
 		result, err := RevertDashboardImage(c)
-		if err != nil || result.Success || *f.operator.Spec.Replicas != 0 || f.operator.Metadata.Annotations[dashboardDevAnnotation] == "" {
+		if err != nil || result.Success || *f.operator.Spec.Replicas != 0 || f.operator.Metadata.Annotations[dashdev.SessionAnnotation] == "" {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}
 		f.failOperatorPatch = 0
@@ -599,11 +601,11 @@ func TestDashboardRevertReportsFailures(t *testing.T) {
 		f.failWorkload = "notebooks-ui"
 		result, err := RevertDashboardImage(c)
 		// The operator resumes anyway; the session stays so Revert is offered again.
-		if err != nil || result.Success || result.ErrorCode != "partial_failure" || *f.operator.Spec.Replicas != 2 || f.operator.Metadata.Annotations[dashboardDevAnnotation] == "" {
+		if err != nil || result.Success || result.ErrorCode != "partial_failure" || *f.operator.Spec.Replicas != 2 || f.operator.Metadata.Annotations[dashdev.SessionAnnotation] == "" {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}
 		f.failWorkload = ""
-		if result, err := RevertDashboardImage(c); err != nil || !result.Success || f.operator.Metadata.Annotations[dashboardDevAnnotation] != "" {
+		if result, err := RevertDashboardImage(c); err != nil || !result.Success || f.operator.Metadata.Annotations[dashdev.SessionAnnotation] != "" {
 			t.Fatalf("retry=%+v err=%v", result, err)
 		}
 	})
@@ -616,11 +618,11 @@ func TestDashboardInterruptedDeployCanBeRetried(t *testing.T) {
 	c.SetUsername("alice")
 	mockDashboardTags(t, allFixtureTags("odh-pr-7")...)
 	f.failWorkload = "notebooks-ui"
-	result, err := deployDashboardBuild(c, "pr", 7, "")
+	result, err := dashdev.DeployBuild(c, "pr", 7, "")
 	if err != nil || result.Success || result.ErrorCode != "partial_failure" {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	started, _ := dashboardSession(&f.operator)
+	started, _ := dashdev.SessionOf(&f.operator)
 	var state types.DashboardState
 	populateDashboardDevState(c, &state)
 	if state.DevImagesMatchTarget || devImage(t, state, "notebooks-ui").MatchesTarget {
@@ -628,10 +630,10 @@ func TestDashboardInterruptedDeployCanBeRetried(t *testing.T) {
 	}
 	// A restarted updater has a new client and no in-memory state.
 	f.failWorkload = ""
-	restarted := &Client{baseURL: c.baseURL, httpClient: c.httpClient, ctx: context.Background()}
+	restarted := newTestClient(testClientOptions{BaseURL: c.BaseURL(), HTTPClient: c.TestOptions().HTTPClient, Ctx: context.Background()})
 	restarted.SetUsername("bob")
 	mustDeploy(t, restarted, "pr", 7, "")
-	session, _ := dashboardSession(&f.operator)
+	session, _ := dashdev.SessionOf(&f.operator)
 	if session.Replicas != 2 || session.StartedAt != started.StartedAt || session.StartedBy != "alice" || session.UpdatedBy != "bob" {
 		t.Fatalf("session=%+v", session)
 	}
@@ -749,7 +751,7 @@ func TestParseDashboardBuild(t *testing.T) {
 		{"quay.io/opendatahub/other:pr-12", "", "", 0},
 		{"registry.redhat.io/rhoai/odh-dashboard-rhel9@sha256:abc", "", "", 0},
 	} {
-		kind, pr, flavor := parseDashboardBuild("opendatahub/odh-dashboard", tc.image)
+		kind, pr, flavor := dashdev.ParseBuild("opendatahub/odh-dashboard", tc.image)
 		if kind != tc.kind || pr != tc.pr || flavor != tc.flavor {
 			t.Errorf("%s: kind=%q pr=%d flavor=%q", tc.image, kind, pr, flavor)
 		}
@@ -785,10 +787,10 @@ func TestDashboardMainDeploysUnderTheCommitTag(t *testing.T) {
 			if tc.flavor == "odh" {
 				floating = "main"
 			}
-			if got, want := fixtureImage(f, dashboardDeploymentName), "quay.io/opendatahub/odh-dashboard:"+tc.want+"@"+fixtureDigest("odh-dashboard:"+floating); got != want {
+			if got, want := fixtureImage(f, dashdev.DeploymentName), "quay.io/opendatahub/odh-dashboard:"+tc.want+"@"+fixtureDigest("odh-dashboard:"+floating); got != want {
 				t.Fatalf("host = %s, want %s", got, want)
 			}
-			session, _ := dashboardSession(&f.operator)
+			session, _ := dashdev.SessionOf(&f.operator)
 			for _, b := range session.Bindings {
 				if b.Tag != floating || b.Source != "main" || !strings.Contains(b.TargetImage, "@sha256:") {
 					t.Fatalf("binding %+v: the session keeps the floating tag", b)
@@ -799,7 +801,7 @@ func TestDashboardMainDeploysUnderTheCommitTag(t *testing.T) {
 			if !state.DevImagesMatchTarget || state.DevMode != "main" {
 				t.Fatalf("state=%+v", state)
 			}
-			if h := devImage(t, state, dashboardDeploymentName); h.Running != "main" || h.TargetTag != floating {
+			if h := devImage(t, state, dashdev.DeploymentName); h.Running != "main" || h.TargetTag != floating {
 				t.Fatalf("host=%+v", h)
 			}
 		})
@@ -808,7 +810,7 @@ func TestDashboardMainDeploysUnderTheCommitTag(t *testing.T) {
 		f, c := newDashboardDevFixture(t)
 		m := mockDashboardTags(t, allFixtureTags("odh-pr-5")...)
 		mustDeploy(t, c, "pr", 5, "")
-		if got, want := fixtureImage(f, dashboardDeploymentName), "quay.io/opendatahub/odh-dashboard:odh-pr-5@"+fixtureDigest("odh-dashboard:odh-pr-5"); got != want {
+		if got, want := fixtureImage(f, dashdev.DeploymentName), "quay.io/opendatahub/odh-dashboard:odh-pr-5@"+fixtureDigest("odh-dashboard:odh-pr-5"); got != want {
 			t.Fatalf("host = %s, want %s", got, want)
 		}
 		if n := m.headCount("odh-dashboard:odh-pr-5"); n != 1 {

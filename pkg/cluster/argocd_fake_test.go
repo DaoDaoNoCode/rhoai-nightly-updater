@@ -8,6 +8,9 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // fakeArgoCD answers what argocd.go reads: Argo CD's discovery document and
@@ -41,15 +44,15 @@ type fakeArgoCD struct {
 // argoManagingAll is an Argo CD whose Application openshift-gitops/testArgoApp
 // (Synced) lists objs: the cluster a gitops test means by "Argo CD manages
 // it".
-func argoManagingAll(objs ...argoObject) *fakeArgoCD {
+func argoManagingAll(objs ...argo.Object) *fakeArgoCD {
 	return &fakeArgoCD{served: true, apps: []map[string]any{argoApplicationListing("openshift-gitops", objs...)}}
 }
 
 // argoManagingAllBut is argoManagingAll of the gitops fakes' objects
 // (argoGitOpsObjects) except these: a test that takes Argo CD's marks off an
 // object takes it out of the Application too, since Argo CD's list decides.
-func argoManagingAllBut(except ...argoObject) *fakeArgoCD {
-	var objs []argoObject
+func argoManagingAllBut(except ...argo.Object) *fakeArgoCD {
+	var objs []argo.Object
 	for _, o := range argoGitOpsObjects {
 		if !slices.Contains(except, o) {
 			objs = append(objs, o)
@@ -61,12 +64,12 @@ func argoManagingAllBut(except ...argoObject) *fakeArgoCD {
 // argoApplicationListing is Application ns/testArgoApp, compared with Git
 // (Synced), whose status.resources lists objs as Argo CD does: a
 // cluster-scoped object without a namespace.
-func argoApplicationListing(ns string, objs ...argoObject) map[string]any {
+func argoApplicationListing(ns string, objs ...argo.Object) map[string]any {
 	resources := []any{}
 	for _, o := range objs {
-		r := map[string]any{"group": o.group, "version": "v1", "kind": o.kind, "name": o.name, "status": "Synced"}
-		if !o.clusterScoped {
-			r["namespace"] = o.namespace
+		r := map[string]any{"group": o.Group, "version": "v1", "kind": o.Kind, "name": o.Name, "status": "Synced"}
+		if !o.ClusterScoped {
+			r["namespace"] = o.Namespace
 		}
 		resources = append(resources, r)
 	}
@@ -81,7 +84,7 @@ func argoApplicationListing(ns string, objs ...argoObject) map[string]any {
 }
 
 // the operator objects and the DSC the gitops fakes track.
-var argoGitOpsObjects = []argoObject{argoSubscriptionObject, argoCatalogObject, argoDSCObject("default-dsc")}
+var argoGitOpsObjects = []argo.Object{argo.SubscriptionObject, argo.CatalogObject, argo.DSCObject("default-dsc")}
 
 const argoDiscoveryPath = "/apis/argoproj.io/v1alpha1"
 
@@ -89,8 +92,8 @@ const argoDiscoveryPath = "/apis/argoproj.io/v1alpha1"
 func (f *fakeArgoCD) serve(w http.ResponseWriter, r *http.Request) bool {
 	p := r.URL.Path
 	isArgo := strings.HasPrefix(p, argoDiscoveryPath)
-	isACM := p == acmWorkAPI
-	isBinding := p == "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings" && strings.Contains(r.URL.Query().Get("fieldSelector"), argoCDManagerBinding)
+	isACM := p == argo.ACMWorkAPI
+	isBinding := p == "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings" && strings.Contains(r.URL.Query().Get("fieldSelector"), argo.ManagerBinding)
 	roleBindingNS, isRoleBinding := managerRoleBindingNamespace(p)
 	if r.Method != http.MethodGet || (!isArgo && !isACM && !isBinding && !isRoleBinding) {
 		return false
@@ -140,7 +143,7 @@ func (f *fakeArgoCD) serve(w http.ResponseWriter, r *http.Request) bool {
 	case isBinding:
 		items := []any{}
 		if f.argocdManager {
-			items = append(items, map[string]any{"metadata": map[string]any{"name": argoCDManagerBinding}})
+			items = append(items, map[string]any{"metadata": map[string]any{"name": argo.ManagerBinding}})
 		}
 		writeJSON(w, map[string]any{"items": items})
 	case isRoleBinding:
@@ -148,7 +151,7 @@ func (f *fakeArgoCD) serve(w http.ResponseWriter, r *http.Request) bool {
 			notFound(w)
 			return true
 		}
-		writeJSON(w, map[string]any{"kind": "RoleBinding", "metadata": map[string]any{"name": argoCDManagerBinding, "namespace": roleBindingNS}})
+		writeJSON(w, map[string]any{"kind": "RoleBinding", "metadata": map[string]any{"name": argo.ManagerBinding, "namespace": roleBindingNS}})
 	}
 	return true
 }
@@ -161,13 +164,13 @@ func managerRoleBindingNamespace(p string) (string, bool) {
 		return "", false
 	}
 	ns, name, _ := strings.Cut(rest, "/")
-	return ns, name == "rolebindings/"+argoCDManagerBinding
+	return ns, name == "rolebindings/"+argo.ManagerBinding
 }
 
 // managerRoleBindingPath is the path of RoleBinding argocd-manager-role-binding
 // in ns.
 func managerRoleBindingPath(ns string) string {
-	return "/apis/rbac.authorization.k8s.io/v1/namespaces/" + ns + "/rolebindings/" + argoCDManagerBinding
+	return "/apis/rbac.authorization.k8s.io/v1/namespaces/" + ns + "/rolebindings/" + argo.ManagerBinding
 }
 
 // handler is an http.Handler that answers only the fake's paths (404
@@ -183,8 +186,8 @@ func (f *fakeArgoCD) handler() http.Handler {
 // register adds the fake's paths to a fakeAPI (which matches paths without
 // their query).
 func (f *fakeArgoCD) register(api *fakeAPI) {
-	paths := []string{argoDiscoveryPath, argoDiscoveryPath + "/applications", acmWorkAPI, "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings"}
-	for _, ns := range append([]string{SubNS, CatalogNS, "redhat-ods-applications"}, f.managerRoleBindings...) {
+	paths := []string{argoDiscoveryPath, argoDiscoveryPath + "/applications", argo.ACMWorkAPI, "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings"}
+	for _, ns := range append([]string{rhoai.SubNS, rhoai.CatalogNS, "redhat-ods-applications"}, f.managerRoleBindings...) {
 		paths = append(paths, managerRoleBindingPath(ns))
 	}
 	for _, p := range paths {

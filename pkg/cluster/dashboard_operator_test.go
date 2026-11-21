@@ -11,6 +11,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -19,14 +22,14 @@ import (
 // changing an actual cluster.
 type dashboardDevFixture struct {
 	mu               sync.Mutex
-	operator         dashboardDeployment
-	workloads        map[string]dashboardDeployment
+	operator         dashdev.Deployment
+	workloads        map[string]dashdev.Deployment
 	writes           []string
 	operatorPods     bool
 	failWorkload     string
 	failResume       bool
 	conflicts        map[string]int
-	onConflict       func(*dashboardDeployment)
+	onConflict       func(*dashdev.Deployment)
 	containerPatches map[string][][]string
 	// pods are returned for namespace pod lists without the operator selector.
 	pods []map[string]any
@@ -47,8 +50,8 @@ type dashboardDevFixture struct {
 	patchPaths []string
 }
 
-func dashboardFixtureDeployment(name, container, image, owner string) dashboardDeployment {
-	var d dashboardDeployment
+func dashboardFixtureDeployment(name, container, image, owner string) dashdev.Deployment {
+	var d dashdev.Deployment
 	data := fmt.Sprintf(`{"metadata":{"name":%q,"uid":%q,"resourceVersion":"1","generation":1,"ownerReferences":[{"kind":"Dashboard","apiVersion":"components.platform.opendatahub.io/v1alpha1","controller":true,"uid":%q}]},"spec":{"replicas":1,"template":{"spec":{"containers":[{"name":%q,"image":%q}]}}},"status":{"observedGeneration":1,"replicas":1,"updatedReplicas":1,"readyReplicas":1}}`, name, "uid-"+name, owner, container, image)
 	json.Unmarshal([]byte(data), &d)
 	return d
@@ -56,19 +59,19 @@ func dashboardFixtureDeployment(name, container, image, owner string) dashboardD
 
 func newDashboardDevFixture(t *testing.T) (*dashboardDevFixture, *Client) {
 	t.Helper()
-	f := &dashboardDevFixture{workloads: map[string]dashboardDeployment{}}
+	f := &dashboardDevFixture{workloads: map[string]dashdev.Deployment{}}
 	json.Unmarshal([]byte(`{"metadata":{"name":"dashboard-module-manager","namespace":"custom-apps","uid":"operator-uid","resourceVersion":"1","annotations":{}},"spec":{"replicas":2,"selector":{"matchLabels":{"app":"dashboard-operator"}},"template":{"spec":{"containers":[{"name":"manager","env":[{"name":"RELATED_IMAGE_ODH_DASHBOARD_IMAGE","value":"release-host"},{"name":"RELATED_IMAGE_ODH_MOD_ARCH_NOTEBOOKS_IMAGE","value":"release-notebooks"},{"name":"RELATED_IMAGE_ODH_MOD_ARCH_FUTURE_IMAGE","value":"release-future"},{"name":"RELATED_IMAGE_ODH_KUBE_RBAC_PROXY_IMAGE","value":"release-proxy"}]}]}}}}`), &f.operator)
-	f.workloads[dashboardDeploymentName] = dashboardFixtureDeployment(dashboardDeploymentName, dashboardContainerName, "release-host", "dashboard-owner")
+	f.workloads[dashdev.DeploymentName] = dashboardFixtureDeployment(dashdev.DeploymentName, dashdev.ContainerName, "release-host", "dashboard-owner")
 	f.workloads["notebooks-ui"] = dashboardFixtureDeployment("notebooks-ui", "notebooks-ui", "release-notebooks", "dashboard-owner")
 	// No naming convention is required when the original image matches the env.
 	f.workloads["future-workload"] = dashboardFixtureDeployment("future-workload", "custom-name", "release-future", "dashboard-owner")
-	f.workloads["unrelated"] = dashboardFixtureDeployment("unrelated", dashboardContainerName, "release-host", "different-owner")
+	f.workloads["unrelated"] = dashboardFixtureDeployment("unrelated", dashdev.ContainerName, "release-host", "different-owner")
 	f.workloads["proxy"] = dashboardFixtureDeployment("proxy", "kube-rbac-proxy", "release-proxy", "dashboard-owner")
 	isolateClusterCaches(t)
 	f.discovery = dashboardModuleDiscoveryRoutes(fixtureAppsNS)
 	srv := newFakePlainServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
-	return f, &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+	return f, newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 }
 
 func (f *dashboardDevFixture) serve(w http.ResponseWriter, r *http.Request) {
@@ -244,22 +247,22 @@ func (f *dashboardDevFixture) serve(w http.ResponseWriter, r *http.Request) {
 func TestDashboardAtomicHostPatchRetriesStatusConflicts(t *testing.T) {
 	mockDashboardRegistry(t, nil)
 	f, c := newDashboardDevFixture(t)
-	d := f.workloads[dashboardDeploymentName]
+	d := f.workloads[dashdev.DeploymentName]
 	core := d.Spec.Template.Spec.Containers[0]
 	core.Name = "core-bff"
 	core.Image = "release-core"
 	d.Spec.Template.Spec.Containers = append(d.Spec.Template.Spec.Containers, core)
-	f.workloads[dashboardDeploymentName] = d
+	f.workloads[dashdev.DeploymentName] = d
 	env := f.operator.Spec.Template.Spec.Containers[0].Env[0]
 	env.Name = "RELATED_IMAGE_ODH_CORE_BFF_IMAGE"
 	env.Value = "release-core"
 	f.operator.Spec.Template.Spec.Containers[0].Env = append(f.operator.Spec.Template.Spec.Containers[0].Env, env)
-	f.conflicts = map[string]int{dashboardDeploymentName: 2}
+	f.conflicts = map[string]int{dashdev.DeploymentName: 2}
 	result, err := DeployDashboardMain(c)
 	if err != nil || !result.Success {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	patches := f.containerPatches[dashboardDeploymentName]
+	patches := f.containerPatches[dashdev.DeploymentName]
 	if len(patches) != 1 || len(patches[0]) != 2 {
 		t.Fatalf("expected one atomic host/core patch after retries, got %v", patches)
 	}
@@ -274,20 +277,20 @@ func TestDashboardConflictRetriesRejectConcurrentChanges(t *testing.T) {
 	for _, change := range []string{"owner", "uid", "image", "container", "operator-resumed"} {
 		t.Run(change, func(t *testing.T) {
 			f, c := newDashboardDevFixture(t)
-			images, err := discoverDashboardImages(c, &f.operator)
+			images, err := dashdev.DiscoverImages(c, &f.operator)
 			if err != nil {
 				t.Fatal(err)
 			}
 			var image types.DashboardDevImage
 			for _, candidate := range images {
-				if candidate.Deployment == dashboardDeploymentName {
+				if candidate.Deployment == dashdev.DeploymentName {
 					image = candidate
 				}
 			}
 			zero := 0
 			f.operator.Spec.Replicas = &zero
-			f.conflicts = map[string]int{dashboardDeploymentName: 1}
-			f.onConflict = func(d *dashboardDeployment) {
+			f.conflicts = map[string]int{dashdev.DeploymentName: 1}
+			f.onConflict = func(d *dashdev.Deployment) {
 				switch change {
 				case "owner":
 					d.Metadata.OwnerReferences[0].UID = "another-dashboard"
@@ -305,7 +308,7 @@ func TestDashboardConflictRetriesRejectConcurrentChanges(t *testing.T) {
 			if err := patchControlledDashboardImage(c, &f.operator, image, "selected-build"); err == nil {
 				t.Fatal("overwrote a concurrent change")
 			}
-			if len(f.containerPatches[dashboardDeploymentName]) != 0 {
+			if len(f.containerPatches[dashdev.DeploymentName]) != 0 {
 				t.Fatal("unsafe retry patched a changed workload")
 			}
 		})
@@ -314,21 +317,21 @@ func TestDashboardConflictRetriesRejectConcurrentChanges(t *testing.T) {
 
 func TestDashboardConflictRetriesAreBounded(t *testing.T) {
 	f, c := newDashboardDevFixture(t)
-	images, err := discoverDashboardImages(c, &f.operator)
+	images, err := dashdev.DiscoverImages(c, &f.operator)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var image types.DashboardDevImage
 	for _, candidate := range images {
-		if candidate.Deployment == dashboardDeploymentName {
+		if candidate.Deployment == dashdev.DeploymentName {
 			image = candidate
 		}
 	}
 	zero := 0
 	f.operator.Spec.Replicas = &zero
-	f.conflicts = map[string]int{dashboardDeploymentName: 10}
+	f.conflicts = map[string]int{dashdev.DeploymentName: 10}
 	err = patchControlledDashboardImage(c, &f.operator, image, "selected-build")
-	if !IsK8sError(err, http.StatusConflict) || len(f.writes) != 5 {
+	if !kube.IsK8sError(err, http.StatusConflict) || len(f.writes) != 5 {
 		t.Fatalf("err=%v attempts=%v", err, f.writes)
 	}
 }
@@ -336,20 +339,20 @@ func TestDashboardConflictRetriesAreBounded(t *testing.T) {
 func TestDashboardPartialStateDoesNotClaimMainIsApplied(t *testing.T) {
 	mockDashboardRegistry(t, nil)
 	f, c := newDashboardDevFixture(t)
-	f.failWorkload = dashboardDeploymentName
+	f.failWorkload = dashdev.DeploymentName
 	result, err := DeployDashboardMain(c)
 	if err != nil || result.Success {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	for _, oldSession := range []bool{false, true} {
 		if oldSession {
-			session, _ := dashboardSession(&f.operator)
+			session, _ := dashdev.SessionOf(&f.operator)
 			session.TargetsRecorded = false
 			for i := range session.Bindings {
 				session.Bindings[i].TargetImage = ""
 			}
 			raw, _ := json.Marshal(session)
-			f.operator.Metadata.Annotations[dashboardDevAnnotation] = string(raw)
+			f.operator.Metadata.Annotations[dashdev.SessionAnnotation] = string(raw)
 		}
 		var state types.DashboardState
 		populateDashboardDevState(c, &state)
@@ -357,7 +360,7 @@ func TestDashboardPartialStateDoesNotClaimMainIsApplied(t *testing.T) {
 			t.Fatalf("oldSession=%v state=%+v", oldSession, state)
 		}
 		for _, image := range state.DevImages {
-			if image.Deployment == dashboardDeploymentName && (image.MatchesTarget || image.TargetImage == "") {
+			if image.Deployment == dashdev.DeploymentName && (image.MatchesTarget || image.TargetImage == "") {
 				t.Fatalf("failed host incorrectly marked applied: %+v", image)
 			}
 		}
@@ -366,8 +369,7 @@ func TestDashboardPartialStateDoesNotClaimMainIsApplied(t *testing.T) {
 
 func mockDashboardRegistry(t *testing.T, statuses map[string]int) {
 	t.Helper()
-	original := quayHTTPClient
-	quayHTTPClient = &http.Client{Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
+	t.Cleanup(registry.SetHTTPClientForTest(&http.Client{Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
 		status := http.StatusOK
 		for key, s := range statuses {
 			if strings.Contains(r.URL.Path, key) {
@@ -375,8 +377,7 @@ func mockDashboardRegistry(t *testing.T, statuses map[string]int) {
 			}
 		}
 		return &http.Response{StatusCode: status, Header: http.Header{"Docker-Content-Digest": []string{"sha256:" + strings.Repeat("a", 64)}}, Body: io.NopCloser(strings.NewReader(""))}, nil
-	})}
-	t.Cleanup(func() { quayHTTPClient = original })
+	})}))
 }
 
 func TestDashboardMainDiscoversOwnedComponentsAndRecoversAfterRestart(t *testing.T) {
@@ -407,11 +408,11 @@ func TestDashboardMainDiscoversOwnedComponentsAndRecoversAfterRestart(t *testing
 	if err != nil || !result.Success || *f.operator.Spec.Replicas != 2 {
 		t.Fatalf("revert=%+v err=%v replicas=%d", result, err, *f.operator.Spec.Replicas)
 	}
-	if f.operator.Metadata.Annotations[dashboardDevAnnotation] != "" {
+	if f.operator.Metadata.Annotations[dashdev.SessionAnnotation] != "" {
 		t.Fatal("session retained after successful revert")
 	}
 	// Images remain until the controller reconciles; the tool only resumes it.
-	if !strings.Contains(f.workloads[dashboardDeploymentName].Spec.Template.Spec.Containers[0].Image, ":odh-stable@") {
+	if !strings.Contains(f.workloads[dashdev.DeploymentName].Spec.Template.Spec.Containers[0].Image, ":odh-stable@") {
 		t.Fatal("revert unexpectedly patched image directly")
 	}
 }
@@ -426,7 +427,7 @@ func TestDashboardPRSkipsUnbuiltComponents(t *testing.T) {
 	if f.workloads["notebooks-ui"].Spec.Template.Spec.Containers[0].Image != "release-notebooks" {
 		t.Fatal("unbuilt component patched")
 	}
-	if !strings.Contains(f.workloads[dashboardDeploymentName].Spec.Template.Spec.Containers[0].Image, ":odh-pr-123@") {
+	if !strings.Contains(f.workloads[dashdev.DeploymentName].Spec.Template.Spec.Containers[0].Image, ":odh-pr-123@") {
 		t.Fatal("host PR not patched")
 	}
 	var state types.DashboardState
@@ -463,7 +464,7 @@ func TestDashboardTargetStatusDetectsMissingOrReplacedWorkloads(t *testing.T) {
 
 func TestDashboardLegacyTargetStatusPreservesPRReadiness(t *testing.T) {
 	state := types.DashboardState{IsCustomPR: true, PodReady: true}
-	populateDashboardDevStateWithOperator(nil, &state, dashboardTarget{Legacy: "no Dashboard kind is served"}, nil, nil)
+	dashdev.PopulateStateWithOperator(nil, &state, dashdev.Target{Legacy: "no Dashboard kind is served"}, nil, nil)
 	if !state.AllDevImagesReady || !state.DevImagesMatchTarget || !state.IsDevMode {
 		t.Fatalf("legacy PR readiness lost: %+v", state)
 	}
@@ -478,7 +479,7 @@ func TestDashboardPreflightFailuresDoNotPauseOrPatch(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mockDashboardRegistry(t, map[string]int{"odh-mod-arch-notebooks": tc.status})
 			f, c := newDashboardDevFixture(t)
-			result, err := deployDashboardBuild(c, tc.mode, 123, "")
+			result, err := dashdev.DeployBuild(c, tc.mode, 123, "")
 			if err != nil || result.Success || len(f.writes) > 0 {
 				t.Fatalf("result=%+v err=%v writes=%v", result, err, f.writes)
 			}
@@ -491,10 +492,11 @@ func TestDashboardPauseFailurePreservesRecoveryAndPreventsImagePatches(t *testin
 	f, c := newDashboardDevFixture(t)
 	f.operatorPods = true
 	ctx, cancel := context.WithCancel(context.Background())
-	c.ctx = ctx
+	editTestClient(c, func(o *testClientOptions) { o.Ctx = ctx })
 	// Cancel as soon as the first pod check proves the controller still runs.
-	original := c.httpClient.Transport
-	c.httpClient.Transport = dscSampleTransport(func(r *http.Request) (*http.Response, error) {
+	hc := c.TestOptions().HTTPClient
+	original := hc.Transport
+	hc.Transport = dscSampleTransport(func(r *http.Request) (*http.Response, error) {
 		resp, err := original.RoundTrip(r)
 		if strings.HasSuffix(r.URL.Path, "/pods") {
 			cancel()
@@ -502,11 +504,11 @@ func TestDashboardPauseFailurePreservesRecoveryAndPreventsImagePatches(t *testin
 		return resp, err
 	})
 	result, err := DeployDashboardMain(c)
-	if err != nil || result.Success || len(f.writes) != 1 || f.operator.Metadata.Annotations[dashboardDevAnnotation] == "" {
+	if err != nil || result.Success || len(f.writes) != 1 || f.operator.Metadata.Annotations[dashdev.SessionAnnotation] == "" {
 		t.Fatalf("result=%+v err=%v writes=%v", result, err, f.writes)
 	}
 	// Recovery uses a fresh request after the failed/cancelled operation.
-	c.ctx = context.Background()
+	editTestClient(c, func(o *testClientOptions) { o.Ctx = context.Background() })
 	f.operatorPods = false
 	result, err = RevertDashboardImage(c)
 	if err != nil || !result.Success || *f.operator.Spec.Replicas != 2 {
@@ -529,7 +531,7 @@ func TestDashboardPartialFailureAndRetryKeepOriginalReplicas(t *testing.T) {
 	}
 	f.failResume = true
 	result, err = RevertDashboardImage(c)
-	if err != nil || result.Success || f.operator.Metadata.Annotations[dashboardDevAnnotation] == "" {
+	if err != nil || result.Success || f.operator.Metadata.Annotations[dashdev.SessionAnnotation] == "" {
 		t.Fatalf("failed resume=%+v err=%v", result, err)
 	}
 	f.failResume = false
@@ -549,11 +551,11 @@ func TestDashboardRefusesExternallyPausedOperatorAndInvalidOwnership(t *testing.
 				zero := 0
 				f.operator.Spec.Replicas = &zero
 			case "unowned-host":
-				d := f.workloads[dashboardDeploymentName]
+				d := f.workloads[dashdev.DeploymentName]
 				d.Metadata.OwnerReferences = nil
-				f.workloads[dashboardDeploymentName] = d
+				f.workloads[dashdev.DeploymentName] = d
 			case "invalid-session":
-				f.operator.Metadata.Annotations[dashboardDevAnnotation] = `{"operatorUID":"old-operator","replicas":1}`
+				f.operator.Metadata.Annotations[dashdev.SessionAnnotation] = `{"operatorUID":"old-operator","replicas":1}`
 			}
 			result, err := DeployDashboardMain(c)
 			if err != nil || result.Success || len(f.writes) > 0 {
@@ -567,19 +569,19 @@ func TestDashboardImagePatchRefusesReplacedWorkloads(t *testing.T) {
 	for _, change := range []string{"uid", "owner", "container"} {
 		t.Run(change, func(t *testing.T) {
 			f, c := newDashboardDevFixture(t)
-			images, err := discoverDashboardImages(c, &f.operator)
+			images, err := dashdev.DiscoverImages(c, &f.operator)
 			if err != nil {
 				t.Fatal(err)
 			}
 			var target types.DashboardDevImage
 			for _, image := range images {
-				if image.Deployment == dashboardDeploymentName {
+				if image.Deployment == dashdev.DeploymentName {
 					target = image
 				}
 			}
 			zero := 0
 			f.operator.Spec.Replicas = &zero
-			d := f.workloads[dashboardDeploymentName]
+			d := f.workloads[dashdev.DeploymentName]
 			switch change {
 			case "uid":
 				d.Metadata.UID = "replacement"
@@ -588,7 +590,7 @@ func TestDashboardImagePatchRefusesReplacedWorkloads(t *testing.T) {
 			case "container":
 				d.Spec.Template.Spec.Containers = nil
 			}
-			f.workloads[dashboardDeploymentName] = d
+			f.workloads[dashdev.DeploymentName] = d
 			if err := patchControlledDashboardImage(c, &f.operator, target, "test-image"); err == nil || len(f.writes) > 0 {
 				t.Fatalf("err=%v writes=%v", err, f.writes)
 			}

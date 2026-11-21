@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -126,13 +128,13 @@ func TestInferenceGateway_ListsTheModelsProjectByName(t *testing.T) {
 	}
 	wantAllowed(t, mc, "openshift-ingress", "proj")
 
-	var gw gatewayObject
+	var gw serving.GatewayObject
 	raw, _ := json.Marshal(mc.f.get(testGatewayPath))
 	_ = json.Unmarshal(raw, &gw)
-	if got := gw.admits("proj", nil); got != "yes" {
+	if got := gw.Admits("proj", nil); got != "yes" {
 		t.Errorf("proj: %s", got)
 	}
-	if got := gw.admits("attacker", map[string]string{"opendatahub.io/dashboard": "true"}); got != "no" {
+	if got := gw.Admits("attacker", map[string]string{"opendatahub.io/dashboard": "true"}); got != "no" {
 		t.Errorf("an unlisted project is admitted: %s", got)
 	}
 
@@ -247,7 +249,7 @@ func TestInferenceGateway_ConvertsAPreReleaseGateway(t *testing.T) {
 			}
 			delete(mc.f.fail, "GET /apis/serving.kserve.io/v1alpha2/llminferenceservices")
 			// The tool's record cannot be read: nothing is written either.
-			recPath := "GET /api/v1/namespaces/" + getActivityNamespace() + "/configmaps/" + snapshotConfigMapName
+			recPath := "GET /api/v1/namespaces/" + record.GetActivityNamespace() + "/configmaps/" + record.SnapshotConfigMapName
 			mc.f.fail[recPath] = 500
 			if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "dev"}); res.Success || len(mc.f.mutations()[before:]) != 0 {
 				t.Fatalf("an unreadable record must refuse before any write: %+v %v", res, mc.f.mutations()[before:])
@@ -356,7 +358,7 @@ func TestModelsTeardown_TakesARecordedProjectOffTheGateway(t *testing.T) {
 	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
-	if rec, _ := readGatewayProjects(mc.c); strings.Join(rec, ",") != "proj" {
+	if rec, _ := serving.ReadGatewayProjects(mc.c); strings.Join(rec, ",") != "proj" {
 		t.Fatalf("record: %v", rec)
 	}
 	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "teardown", Project: "proj"})
@@ -364,7 +366,7 @@ func TestModelsTeardown_TakesARecordedProjectOffTheGateway(t *testing.T) {
 		t.Fatalf("teardown: %+v", res)
 	}
 	wantAllowed(t, mc, "openshift-ingress")
-	if rec, _ := readGatewayProjects(mc.c); len(rec) != 0 {
+	if rec, _ := serving.ReadGatewayProjects(mc.c); len(rec) != 0 {
 		t.Errorf("record after: %v", rec)
 	}
 	// The write was dry-run first.
@@ -391,7 +393,7 @@ func TestModelsTeardown_KeepsAProjectStillUsedOrNotAdded(t *testing.T) {
 	if res, _ := runModels(t, mc2.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
-	if err := writeGatewayProjects(mc2.c, nil); err != nil {
+	if err := serving.WriteGatewayProjects(mc2.c, nil); err != nil {
 		t.Fatal(err)
 	}
 	if res, _ := runModels(t, mc2.c, types.ModelsRequest{Action: "teardown", Project: "proj"}); !res.Success || strings.Contains(res.Message, "taken off") {

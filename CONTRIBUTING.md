@@ -105,7 +105,7 @@ rhoai-nightly-updater/
 ├── .env.example             # Environment variable reference
 ├── pkg/                     # Go backend packages
 │   ├── api/                 # HTTP handlers (one <feature>_handlers.go per feature), auth in auth_handlers.go
-│   ├── cluster/             # Kubernetes API client and operations
+│   ├── cluster/             # Facade over cluster/internal/: the Kubernetes API client and operations (see Backend layout)
 │   ├── middleware/          # HTTP middleware (security, request ID)
 │   └── types/               # Shared type definitions
 ├── frontend/                # React/TypeScript frontend
@@ -125,6 +125,19 @@ rhoai-nightly-updater/
 └── docs/                    # Documentation
 ```
 
+## Backend layout
+
+`pkg/api` (the HTTP handlers) and `main.go` call only `pkg/cluster`, which is a facade over the packages in `pkg/cluster/internal/` plus the orchestrators that combine several of them (status, summary, resources, the components page, the user-token project reads, clean-up). Shared request and response types are in `pkg/types`, the clock interface in `pkg/clock`.
+
+- **Layers.** Each internal package imports only packages below it; none imports `pkg/cluster`. From the bottom: `kube` (the API client, its errors, REST helpers, object and text helpers, the clock, the cache registry) and `report` (the Diagnostics report types); `rhoai` (the product's namespaces, API versions, path builders) and `authz` (user-token checks); `record`, `argo`, `registry`; `catalog`, `components`; `dashdev`, `envkit`, `node`; `mlflow`, `storage`, `operator`; `serving`, `gitops`; `dsc`; `features`, `diagnostics`. The package doc of `pkg/cluster` (`doc.go`) has the same list with what each package holds. New code goes into the lowest package whose imports it needs; if it needs a higher one, it belongs higher. `TestInternalPackagesImportOnlyLowerLayers` (`pkg/cluster/layers_test.go`) fails on an import of the same or a higher layer, an import of `pkg/cluster`, or a package in no layer, and when this list or `doc.go` differs from its own; a new package goes into all three.
+- **The facade rule.** `pkg/cluster/facade_<package>.go` re-exports `internal/<package>` under the names `pkg/api` uses: type aliases, constants, error values (the same values, so `errors.Is` matches either name) and functions. A facade function is a pure forward, `return pkg.F(its parameters in order)`, nothing else: the RBAC scan follows a parameter through such a forward, and a wrapper that computes, reorders or drops an argument is an ordinary caller to it.
+- **Names.** Inside a package, names do not repeat the package name (`record.Action`, not `record.RecordAction`); a name nothing outside its package uses stays unexported. File base names are unique across `pkg/cluster/**`: the RBAC scan keys call sites by `file:Function`.
+- **Tests.** Most tests stay in `pkg/cluster` (they share its fake clusters) and call the internal packages directly. A test changes an internal package's timing or hook through its `UseTestTimings`/`Set...ForTest` functions, which panic outside a test binary; `TestMain` installs the fake clock (`kube.SetClockForTest`). These hooks set package variables that every test in the binary reads, until the test puts them back, so a test that uses one must not run in parallel with other tests: no `t.Parallel()` in it or its subtests. No Go test calls `t.Parallel()`; `scripts/test-go.sh` runs the packages, and the parts of a large one, as separate processes instead.
+
+**The RBAC scan and its golden file.** `pkg/cluster/rbac_coverage_test.go` reads the source of every package under `pkg/cluster` and derives each API request the code can make (verb, API group, resource, namespace, name); the RBAC tests check them against `deploy/template.yaml` and `deploy/rbac-gitops.yaml`. `TestRBACRequestsGolden` freezes that list in `pkg/cluster/testdata/rbac-requests.golden`. A change that only moves or rewrites code (a refactor, a new helper) must leave the golden byte for byte the same; if it differs, the move changed a request or the scanner lost track of one, so find out which before anything else. A change that is meant to request something new or different regenerates it (`go test ./pkg/cluster -run TestRBACRequestsGolden -update`); review the golden's diff like the code (every added line is something the ServiceAccount or the user's token now asks for, and it needs its rule in the template and in [SECURITY.md](SECURITY.md)) and commit it with the change.
+
+**Refactors keep behaviour.** The 5.0.0 restructuring of `pkg/cluster` into these packages was made in steps, each checked before it was merged: lint clean, `pkg/api` and `main.go` unchanged, the RBAC golden and the frontend contract fixtures byte-identical, the same test names, the race tests no slower, per-function coverage not lower, no error text gone. A later refactor of the backend should hold to the same: the golden, `TestFrontendContract` and the test list are the quick evidence that nothing a user or the cluster sees changed.
+
 ## Running Tests
 
 ### All Tests
@@ -136,7 +149,7 @@ make test              # Go, frontend, release/install script and chart tests
 ### Go Tests
 
 ```bash
-make test-go           # Runs: scripts/test-go.sh (go test -race -count=1 ./..., pkg/cluster split over the CPUs; GO_TEST_SHARDS=1 for one process)
+make test-go           # Runs: scripts/test-go.sh (go test -race -count=1 ./..., the test binaries side by side, one more than the CPUs at a time (a race test binary idles for a second before it exits), and a package with 200+ tests split into parts; GO_TEST_JOBS, GO_TEST_SHARDS=1 for no parts, GO_TEST_PART_TESTS; test flags such as -shuffle=on as arguments)
 ```
 
 **Test patterns:**
@@ -156,7 +169,7 @@ Runs Vitest over `frontend/src/**/*.test.ts[x]` in jsdom. No browser needed.
 ### Script and chart tests
 
 ```bash
-make test-scripts      # scripts/test-release.sh, test-install.sh and test-node-pull-secret.sh in parallel (offline, fake oc/curl/crane; the last needs jq; the summary names what was skipped)
+make test-scripts      # scripts/test-release.sh, test-install.sh, test-node-pull-secret.sh and test-test-go.sh in parallel (offline, fake oc/curl/crane; test-node-pull-secret.sh needs jq, test-test-go.sh go; the summary names what was skipped)
 make test-chart        # scripts/test-chart.sh: helm lint and helm template of deploy/chart (offline)
 make check-chart       # only: the chart's copies of deploy/template.yaml and deploy/rbac-gitops.yaml are current
 ```
@@ -263,11 +276,11 @@ Requires prior `docker login` or `podman login` to the registry. To test your bu
 GitLab CI (`.gitlab-ci.yml`) runs on merge requests, branch pushes and release tags (`vX.Y.Z`, and pre-releases `vX.Y.Z-alpha.N`, `-beta.N`, `-rc.N`; other tags run nothing):
 
 - **test** stage, all must pass, no lint exceptions:
-  - `go` (`make ci-go`): gofmt, `go mod verify`, `go vet`, the race tests (`scripts/test-go.sh`: `go test -race -count=1` over every package, with `pkg/cluster` split into one process per CPU, at most 4), govulncheck. GitHub's `go` job runs the same target;
+  - `go` (`make ci-go`): gofmt, `go mod verify`, `go vet`, the race tests (`scripts/test-go.sh`: `go test -race -count=1` over every package, the test binaries run side by side, one more than the CPUs at a time, and a package with 200 or more tests split into parts of about 200, at most one per CPU; the parts start while the other test binaries build), govulncheck. GitHub's `go` job runs the same target;
   - `golangci-lint`;
-  - `checks` (`make -k ci-checks`): the frontend's typecheck, ESLint and `npm audit`; `make docs-check`; shellcheck 0.11.0 on `scripts/*.sh`, `dev.sh`, `docs/tools/*.sh` and `pkg/cluster/node_pull_secret.sh` (as bash: it is a pasted command, so it carries no shell directive; `make shellcheck`). GitHub runs the same in its `frontend-checks` and `docs` jobs, with the shellcheck release tarball checked against `SHELLCHECK_SHA256`;
+  - `checks` (`make -k ci-checks`): the frontend's typecheck, ESLint and `npm audit`; `make docs-check`; shellcheck 0.11.0 on `scripts/*.sh`, `dev.sh`, `docs/tools/*.sh` and `pkg/cluster/internal/rhoai/node_pull_secret.sh` (as bash: it is a pasted command, so it carries no shell directive; `make shellcheck`). GitHub runs the same in its `frontend-checks` and `docs` jobs, with the shellcheck release tarball checked against `SHELLCHECK_SHA256`;
   - `frontend-test` (tests) and `frontend-build` (production build), in parallel with `checks`, each after its own `npm ci` from one npm cache;
-  - `script-tests` (`make -k ci-script-tests`): `scripts/test-release.sh`, `scripts/test-install.sh` and `scripts/test-node-pull-secret.sh` at the same time, then `scripts/test-chart.sh`. The job installs Debian's `jq` 1.7.1 into the Go image and Helm `HELM_VERSION` from get.helm.sh, checked against `HELM_SHA256` (both in `.gitlab-ci.yml` and `.github/workflows/ci.yml`; change them together); the target sets `REQUIRE_JQ=1` and `REQUIRE_HELM=1`, so a missing tool fails instead of skipping tests;
+  - `script-tests` (`make -k ci-script-tests`): `scripts/test-release.sh`, `scripts/test-install.sh`, `scripts/test-node-pull-secret.sh` and `scripts/test-test-go.sh` (`scripts/test-go.sh` on a small module of its own) at the same time, then `scripts/test-chart.sh`. The job installs Debian's `jq` 1.7.1 into the Go image and Helm `HELM_VERSION` from get.helm.sh, checked against `HELM_SHA256` (both in `.gitlab-ci.yml` and `.github/workflows/ci.yml`; change them together); the target sets `REQUIRE_JQ=1` and `REQUIRE_HELM=1`, so a missing tool fails instead of skipping tests;
   - `release-guard` (tags only, `make release-check TAG=vX.Y.Z`): `scripts/release.sh check`, see [Releases](#releases);
   - the docs, chart and script checks share the `checks` and `script-tests` jobs because each job waits about two minutes for its runner VM, and those checks take seconds; `make -k` runs every part and names each one that failed;
   - the Go jobs keep Go's module and build caches (and golangci-lint's) in `.cache/`, one GitLab cache per job keyed on `go.sum`; tag pipelines only read them (main's pipeline of the commit wrote them).
@@ -431,32 +444,35 @@ var HandleUpdate = withMutationAuth(func(c *cluster.Client, w http.ResponseWrite
 
 #### 2. Kubernetes API Client
 
-All Kubernetes API calls use a **raw HTTP client** (`pkg/cluster/client.go`) instead of the official Kubernetes client library.
+All Kubernetes API calls use a **raw HTTP client** (`pkg/cluster/internal/kube/client.go`) instead of the official Kubernetes client library.
 
 **Why**: Avoid dependency bloat, faster builds, simpler debugging.
 
 **Pattern**:
 
 ```go
-// From pkg/cluster/client.go
-func (c *Client) get(path string) ([]byte, int, error) {
-    req, _ := http.NewRequestWithContext(c.ctx, "GET", c.baseURL+path, nil)
-    req.Header.Set("Authorization", "Bearer "+c.token)
-    req.Header.Set("Accept", "application/json")
-    resp, err := c.httpClient.Do(req)
-    // ... handle response, parse K8s errors
+// From pkg/cluster/internal/kube/client.go: Get, Post, Put, Patch, Delete
+// and Apply all go through Do.
+func (c *Client) Do(method, path, contentType string, body []byte, query url.Values) ([]byte, int, error) {
+    req, err := http.NewRequestWithContext(c.ctx, method, c.baseURL+path, reader)
+    // ... the bearer token, the response size limit; errors as *K8sError
+    // (the API server's answer) or *NetworkError (no answer)
 }
 ```
 
+The REST helpers in `pkg/cluster/internal/kube/rest.go` (`GetInto`, `ListInto`, `GetOptional`, `DeleteIfExists`, `PatchJSON`, ...) cover the common shapes; `kube.IsK8sNotFound(err)` and `kube.IsK8sConflict(err)` test for a 404 or 409.
+
 **Path builders**:
 
-- `namespacedPath(apiGroup, resource, namespace, name)` — for namespaced resources (Pods, Deployments, Subscriptions)
-- `clusterPath(apiGroup, resource, name)` — for cluster-scoped resources (ClusterVersions, Nodes)
+- `rhoai.NamespacedPath(apiGroup, resource, namespace, name)` — for namespaced resources (Pods, Deployments, Subscriptions)
+- `rhoai.ClusterPath(apiGroup, resource, name)` — for cluster-scoped resources (ClusterVersions, Nodes)
+
+The RBAC scan resolves these two by name to the request they build, so build paths with them rather than by hand.
 
 **Example**:
 
 ```go
-path := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", "ns", "sub-name")
+path := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", "ns", "sub-name")
 // Returns: /apis/operators.coreos.com/v1alpha1/namespaces/ns/subscriptions/sub-name
 ```
 
@@ -468,7 +484,7 @@ path := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", "ns", "
 
 #### 3. Test Patterns
 
-No test waits in real time. Every wait, poll, retry and periodic job takes its time from an injected clock (`clk` in `pkg/cluster` and `pkg/api`, `clock.Real` in production); tests use `pkg/clock/clocktest`: `pkg/cluster`'s `TestMain` installs a fake clock that advances when the code sleeps, and `pkg/api`'s `resetPackageState` gives each test its own fake clock, which the test advances (`testClock.Advance`) and synchronises with the code under test through its fakes (for example `fakeRecord.beat`, which advances one heartbeat interval and waits with `testClock.WaitForTicksHandled` until the heartbeat handled the tick: made its lease write and decided on it; waiting only for the write is not enough when the code reads the clock after it). Do not add `time.Sleep`, polling loops or "it would have run by now" waits to tests; a `time.After` may only end a test that hangs.
+No test waits in real time. Every wait, poll, retry and periodic job takes its time from an injected clock (`kube.Clock()` in `pkg/cluster` and its internal packages, `clk` in `pkg/api`, `clock.Real` in production); tests use `pkg/clock/clocktest`: `pkg/cluster`'s `TestMain` installs a fake clock that advances when the code sleeps, and `pkg/api`'s `resetPackageState` gives each test its own fake clock, which the test advances (`testClock.Advance`) and synchronises with the code under test through its fakes (for example `fakeRecord.beat`, which advances one heartbeat interval and waits with `testClock.WaitForTicksHandled` until the heartbeat handled the tick: made its lease write and decided on it; waiting only for the write is not enough when the code reads the clock after it). Do not add `time.Sleep`, polling loops or "it would have run by now" waits to tests; a `time.After` may only end a test that hangs.
 
 #### 4. Errors and operation results
 

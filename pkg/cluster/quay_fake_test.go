@@ -13,6 +13,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 )
 
 // fakeRegistry answers quay.io and api.github.com requests in memory and
@@ -77,7 +81,7 @@ func (f *fakeRegistry) RoundTrip(r *http.Request) (*http.Response, error) {
 		f.gate.pass()
 	}
 	if f.latency > 0 {
-		if err := clk.Sleep(r.Context(), f.latency); err != nil {
+		if err := kube.Clock().Sleep(r.Context(), f.latency); err != nil {
 			return nil, err
 		}
 	}
@@ -157,37 +161,19 @@ func (f *fakeRegistry) answer(r *http.Request) (kind string, status int, body []
 func installFakeRegistry(t *testing.T, f *fakeRegistry) {
 	t.Helper()
 	resetRegistryCaches()
-	original := quayHTTPClient
-	quayHTTPClient = &http.Client{Transport: f, Timeout: 10 * time.Second}
+	restore := registry.SetHTTPClientForTest(&http.Client{Transport: f, Timeout: 10 * time.Second})
 	t.Cleanup(func() {
-		nightlyBackground.Wait()
-		quayHTTPClient = original
+		registry.WaitBackgroundForTest()
+		restore()
 		resetRegistryCaches()
 	})
 }
 
 func resetRegistryCaches() {
-	quayTokenCache.Purge()
-	labelCache.Purge()
-	commitDateCache.Purge()
-	tagDigestCache.Purge()
-	fbcContentCache.Purge()
-	nightlyStatusCache.Purge()
-	dashboardWarmAttempts.Purge()
-	prCache.Purge()
-	compareCache.Purge()
-	commitCache.Purge()
-	componentImageCache.Purge()
-	branchHeadCache.Purge()
-	divergenceCache.Purge()
-	dashboardPRCache.Purge()
-	dashboardTagCache.Purge()
-	githubBackoff.Lock()
-	githubBackoff.until = time.Time{}
-	githubBackoff.Unlock()
-	tagScanCacheMu.Lock()
-	tagScanCache = nil
-	tagScanCacheMu.Unlock()
+	registry.ResetCachesForTest()
+	dashdev.DivergenceCache.Purge()
+	dashdev.PRCache.Purge()
+	dashdev.TagCache.Purge()
 }
 
 func digestOf(n int) string { return fmt.Sprintf("sha256:%064d", n) }

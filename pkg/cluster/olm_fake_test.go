@@ -11,6 +11,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // fakeOLM is a small stateful stand-in for the Kubernetes API with OLM. It
@@ -88,9 +93,9 @@ func (f *fakeOLM) installed(csv string, spec map[string]any) *fakeOLM {
 	if spec == nil {
 		spec = map[string]any{}
 	}
-	full := map[string]any{"channel": "stable-3.x", "installPlanApproval": "Automatic", "name": SubName, "source": CatalogName, "sourceNamespace": CatalogNS}
+	full := map[string]any{"channel": "stable-3.x", "installPlanApproval": "Automatic", "name": rhoai.SubName, "source": rhoai.CatalogName, "sourceNamespace": rhoai.CatalogNS}
 	maps.Copy(full, spec)
-	f.sub = map[string]any{"metadata": map[string]any{"name": SubName, "uid": "uid-sub-installed"}, "spec": full,
+	f.sub = map[string]any{"metadata": map[string]any{"name": rhoai.SubName, "uid": "uid-sub-installed"}, "spec": full,
 		"status": map[string]any{"state": "AtLatestKnown", "currentCSV": csv, "installedCSV": csv, "installPlanRef": map[string]any{"name": "install-old"}}}
 	f.addCSV(csv, "Succeeded")
 	f.installPlans["install-old"] = map[string]any{"spec": map[string]any{"clusterServiceVersionNames": []string{csv}}, "status": map[string]any{"phase": "Complete"}}
@@ -108,7 +113,7 @@ func (f *fakeOLM) addCSV(name, phase string) {
 	}
 	f.csvs[name] = map[string]any{
 		"metadata": meta,
-		"spec":     map[string]any{"displayName": "Red Hat OpenShift AI", "version": strings.TrimPrefix(name, SubName+".")},
+		"spec":     map[string]any{"displayName": "Red Hat OpenShift AI", "version": strings.TrimPrefix(name, rhoai.SubName+".")},
 		"status":   map[string]any{"phase": phase},
 	}
 }
@@ -127,8 +132,8 @@ func (f *fakeOLM) client(ctx context.Context) *Client {
 	srv := newFakePlainServer(http.HandlerFunc(f.serve))
 	f.t.Cleanup(srv.Close)
 	// A new server may reuse an earlier test's address, which keys the cache.
-	controlPlaneCache.Purge()
-	return &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: ctx}
+	rhoai.ControlPlaneCache.Purge()
+	return newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: ctx})
 }
 
 func notFound(w http.ResponseWriter) {
@@ -197,9 +202,9 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(p, "/secrets/additional-pull-secret"):
 		_, _ = io.WriteString(w, pullSecretBody(f.t, map[string]any{"quay.io/rhoai": map[string]any{"auth": exampleAuth("user:pass")}}))
 	case strings.HasSuffix(p, "/imagedigestmirrorsets"):
-		_, _ = fmt.Fprintf(w, `{"items":[{"metadata":{"name":"rhoai-mirror"},"spec":{"imageDigestMirrors":[{"source":%q}]}}]}`, IDMSSource)
-	case p == "/api/v1/namespaces/"+SubNS:
-		_, _ = io.WriteString(w, `{"metadata":{"name":"`+SubNS+`"}}`)
+		_, _ = fmt.Fprintf(w, `{"items":[{"metadata":{"name":"rhoai-mirror"},"spec":{"imageDigestMirrors":[{"source":%q}]}}]}`, rhoai.IDMSSource)
+	case p == "/api/v1/namespaces/"+rhoai.SubNS:
+		_, _ = io.WriteString(w, `{"metadata":{"name":"`+rhoai.SubNS+`"}}`)
 	case strings.HasSuffix(p, "/operatorgroups"):
 		writeJSON(w, map[string]any{"items": f.operatorGrps})
 	case strings.Contains(p, "/operatorgroups/"):
@@ -212,22 +217,22 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(p, "/packagemanifests"):
 		source := strings.TrimPrefix(r.URL.Query().Get("labelSelector"), "catalog=")
 		channels := f.channels
-		if source == CatalogName && f.mainChannels != nil {
+		if source == rhoai.CatalogName && f.mainChannels != nil {
 			channels = *f.mainChannels
 		}
-		if source == getStableSource() && f.stableChans != "" {
+		if source == catalog.StableSource() && f.stableChans != "" {
 			channels = f.stableChans
 		}
-		_, _ = fmt.Fprintf(w, `{"items":[{"metadata":{"name":%q},"status":{"packageName":%q,"catalogSource":%q,"catalogSourceNamespace":%q,"defaultChannel":"stable-3.x","channels":%s}}]}`, SubName, SubName, source, CatalogNS, channels)
-	case strings.HasSuffix(p, "/namespaces/"+CatalogNS+"/pods") && f.gitOpsPods && r.URL.Query().Get("labelSelector") == "olm.catalogSource="+CatalogName:
+		_, _ = fmt.Fprintf(w, `{"items":[{"metadata":{"name":%q},"status":{"packageName":%q,"catalogSource":%q,"catalogSourceNamespace":%q,"defaultChannel":"stable-3.x","channels":%s}}]}`, rhoai.SubName, rhoai.SubName, source, rhoai.CatalogNS, channels)
+	case strings.HasSuffix(p, "/namespaces/"+rhoai.CatalogNS+"/pods") && f.gitOpsPods && r.URL.Query().Get("labelSelector") == "olm.catalogSource="+rhoai.CatalogName:
 		image := ""
 		if f.catalog != nil {
 			image, _ = f.catalog["spec"].(map[string]any)["image"].(string)
 		}
 		_, _ = fmt.Fprintf(w, `{"items":[{"metadata":{"name":"rhoai-catalog-dev-abc"},"spec":{"containers":[{"image":%q}]},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`, image)
-	case strings.HasSuffix(p, "/namespaces/"+CatalogNS+"/pods"):
+	case strings.HasSuffix(p, "/namespaces/"+rhoai.CatalogNS+"/pods"):
 		_, _ = io.WriteString(w, f.catalogPods)
-	case strings.HasSuffix(p, "/subscriptions/"+SubName):
+	case strings.HasSuffix(p, "/subscriptions/"+rhoai.SubName):
 		f.serveSubscription(w, r, body)
 	case strings.HasSuffix(p, "/clusterserviceversions"):
 		var items []any
@@ -272,11 +277,11 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 		// A dashboard module whose operator is dashboardOp.
 		_, _ = io.WriteString(w, dashboardModuleDiscoveryRoutes(fixtureAppsNS)[p])
 	case f.dashboardOp != "" && p == "/apis/apps/v1/namespaces/"+fixtureAppsNS+"/deployments":
-		var op dashboardDeployment
+		var op dashdev.Deployment
 		_ = json.Unmarshal([]byte(f.dashboardOp), &op)
 		op.Metadata.Name = fixtureOperatorName
 		writeJSON(w, map[string]any{"items": []any{dashboardModuleOperatorListItem(op)}})
-	case p == namespacedPath("apps/v1", "deployments", fixtureAppsNS, fixtureOperatorName):
+	case p == rhoai.NamespacedPath("apps/v1", "deployments", fixtureAppsNS, fixtureOperatorName):
 		if f.dashboardOp == "" {
 			notFound(w)
 			return
@@ -295,12 +300,12 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_, _ = io.WriteString(w, f.platform)
-	case strings.HasSuffix(p, "/configmaps/"+snapshotConfigMapName) && r.Method == http.MethodPatch && r.URL.Query().Get("fieldManager") == subscriptionSnapshotManager:
+	case strings.HasSuffix(p, "/configmaps/"+record.SnapshotConfigMapName) && r.Method == http.MethodPatch && r.URL.Query().Get("fieldManager") == record.SubscriptionSnapshotManager:
 		data, _ := body["data"].(map[string]any)
-		f.recordedSub, _ = data[subscriptionSnapshotKey].(string)
+		f.recordedSub, _ = data[record.SubscriptionSnapshotKey].(string)
 		_, _ = io.WriteString(w, `{}`)
-	case strings.HasSuffix(p, "/configmaps/"+snapshotConfigMapName) && r.Method == http.MethodGet:
-		writeJSON(w, map[string]any{"data": map[string]any{subscriptionSnapshotKey: f.recordedSub}})
+	case strings.HasSuffix(p, "/configmaps/"+record.SnapshotConfigMapName) && r.Method == http.MethodGet:
+		writeJSON(w, map[string]any{"data": map[string]any{record.SubscriptionSnapshotKey: f.recordedSub}})
 	case strings.Contains(p, "/configmaps/") && r.Method != http.MethodGet:
 		_, _ = io.WriteString(w, `{}`)
 	case p == "/apis/apiextensions.k8s.io/v1/customresourcedefinitions":
@@ -411,7 +416,7 @@ func (f *fakeOLM) serveSubscription(w http.ResponseWriter, r *http.Request, body
 			f.csvSeq++
 			uid = fmt.Sprintf("uid-sub-%d", f.csvSeq)
 		}
-		meta := map[string]any{"name": SubName, "uid": uid}
+		meta := map[string]any{"name": rhoai.SubName, "uid": uid}
 		bodyMeta, _ := body["metadata"].(map[string]any)
 		for _, k := range []string{"annotations", "labels"} {
 			if bodyMeta[k] != nil {
@@ -454,7 +459,7 @@ func (f *fakeOLM) subscriptionApplies() []map[string]any {
 	defer f.mu.Unlock()
 	var out []map[string]any
 	for _, r := range f.requests {
-		if r.Method == http.MethodPatch && strings.HasSuffix(r.Path, "/subscriptions/"+SubName) {
+		if r.Method == http.MethodPatch && strings.HasSuffix(r.Path, "/subscriptions/"+rhoai.SubName) {
 			spec, _ := r.Body["spec"].(map[string]any)
 			out = append(out, spec)
 		}
@@ -501,7 +506,7 @@ func dashboardOperatorAbsent(w http.ResponseWriter, r *http.Request) bool {
 // moduleGroupPath: the path is a module API group's discovery document or
 // below it (both groups, component_cleanup.go).
 func moduleGroupPath(p string) bool {
-	for _, g := range moduleAPIGroups {
+	for _, g := range rhoai.ModuleAPIGroups {
 		if p == "/apis/"+g || strings.HasPrefix(p, "/apis/"+g+"/") {
 			return true
 		}

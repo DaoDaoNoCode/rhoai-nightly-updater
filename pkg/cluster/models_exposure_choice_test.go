@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -17,9 +19,9 @@ func TestModelExposures_NeverRecommendsAGatewayWithUnknownTokenChecks(t *testing
 		t.Fatalf("gateway: %+v", res)
 	}
 	gw := mc.f.get(testGatewayPath)
-	ensureMap(ensureMap(gw, "metadata"), "labels")[odhManagedLabel] = "false"
+	ensureMap(ensureMap(gw, "metadata"), "labels")[serving.ODHManagedLabel] = "false"
 	ex := exposures(t, mc, "")
-	if a := optionByKey(t, ex, exposureDefault); !a.Available || !strings.Contains(a.Warning, "managed=false") || ex.Default != "" {
+	if a := optionByKey(t, ex, serving.ExposureDefault); !a.Available || !strings.Contains(a.Warning, "managed=false") || ex.Default != "" {
 		t.Fatalf("default %s, option %+v", ex.Default, a)
 	}
 	// A setup that names no way is refused rather than routed there.
@@ -27,7 +29,7 @@ func TestModelExposures_NeverRecommendsAGatewayWithUnknownTokenChecks(t *testing
 		t.Fatalf("setup without a choice: %+v", res)
 	}
 	// Chosen explicitly, it is used.
-	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: exposureDefault}); !res.Success {
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: serving.ExposureDefault}); !res.Success {
 		t.Fatalf("explicit setup: %+v", res)
 	}
 }
@@ -57,7 +59,7 @@ func TestModelsSetup_AGatewayThatAnswersWithoutATokenFailsTheCheck(t *testing.T)
 	}
 
 	mc2 := newModelsCluster(t)
-	if res, _ := runModels(t, mc2.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: exposureInternal}); !res.Success || mc2.calls.probes != 0 {
+	if res, _ := runModels(t, mc2.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: serving.ExposureInternal}); !res.Success || mc2.calls.probes != 0 {
 		t.Fatalf("internal: %+v probes %d", res, mc2.calls.probes)
 	}
 }
@@ -66,11 +68,10 @@ func TestModelsSetup_AGatewayThatAnswersWithoutATokenFailsTheCheck(t *testing.T)
 // setup then fails with the pull failure and what to check, not "still
 // starting".
 func TestModelsSetup_ReadyWaitEndingDuringAFailingPullKeepsTheAdvice(t *testing.T) {
-	defer func(d time.Duration) { ModelReadyTimeout = d }(ModelReadyTimeout)
-	ModelReadyTimeout = ModelImagePullGraceYoungNode / 2
+	defer serving.SetModelReadyTimeoutForTest(serving.ModelImagePullGraceYoungNode / 2)()
 	mc := newModelsCluster(t)
 	mc.readyAfter = 0
-	mc.f.putJSON("/api/v1/nodes/node-a", `{"metadata":{"creationTimestamp":"`+clk.Now().Add(-3*time.Minute).UTC().Format(time.RFC3339)+`"}}`)
+	mc.f.putJSON("/api/v1/nodes/node-a", `{"metadata":{"creationTimestamp":"`+kube.Clock().Now().Add(-3*time.Minute).UTC().Format(time.RFC3339)+`"}}`)
 	mc.f.putJSON(testModelPodsPath, `{"metadata":{"labels":{"app.kubernetes.io/name":"qwen25-05b-instruct","app.kubernetes.io/component":"llminferenceservice-workload"}},
 		"spec":{"nodeName":"node-a"},
 		"status":{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ImagePullBackOff","message":"unauthorized: authentication required"}}}]}}`)
@@ -93,7 +94,7 @@ func TestModels_StatusNamesAddedProjectsAndPlannedExposure(t *testing.T) {
 	if got := strings.Join(st.InferenceGateway.AddedProjects, ","); got != "proj" {
 		t.Errorf("added projects: %q", got)
 	}
-	for _, e := range []string{"", exposureDefault, exposureInternal} {
+	for _, e := range []string{"", serving.ExposureDefault, serving.ExposureInternal} {
 		p, err := GetPrerequisitesStatusFor(mc.c, e)
 		if err != nil || p.ModelsExposure != e {
 			t.Errorf("planned for %q: %+v %v", e, p, err)
@@ -120,7 +121,7 @@ func TestModelExposures_UnknownKServeDefaultIsNotAssumed(t *testing.T) {
 			}
 			breakIt(mc)
 			ex := exposures(t, mc, "")
-			if a := optionByKey(t, ex, exposureDefault); a.Available || ex.Default == exposureDefault {
+			if a := optionByKey(t, ex, serving.ExposureDefault); a.Available || ex.Default == serving.ExposureDefault {
 				t.Fatalf("default route offered: %+v", a)
 			}
 			byName := optionByKey(t, ex, "gateway:openshift-ingress/openshift-ai-inference")
@@ -128,11 +129,11 @@ func TestModelExposures_UnknownKServeDefaultIsNotAssumed(t *testing.T) {
 				t.Fatalf("by name: %+v", byName)
 			}
 			before := len(mc.f.mutations())
-			if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: exposureDefault}); res.Success || len(mc.f.mutations()[before:]) != 0 {
+			if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: serving.ExposureDefault}); res.Success || len(mc.f.mutations()[before:]) != 0 {
 				t.Fatalf("default route: %+v %v", res, mc.f.mutations()[before:])
 			}
 			wantAllowed(t, mc, "openshift-ingress")
-			if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: exposureGateway, GatewayRef: "openshift-ingress/openshift-ai-inference"}); !res.Success {
+			if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: serving.ExposureGateway, GatewayRef: "openshift-ingress/openshift-ai-inference"}); !res.Success {
 				t.Fatalf("by name: %+v", res)
 			}
 			wantAllowed(t, mc, "openshift-ingress", "proj")

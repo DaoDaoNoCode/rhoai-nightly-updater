@@ -198,7 +198,7 @@ export const scenarios = {
     w.status.catalogServes = { channel: "beta", csv: "rhods-operator.3.6.0-ea.1", operatorImage: "registry.redhat.io/rhoai/odh-rhel9-operator@sha256:3f9e7b1c5d2a8e406b1f9c3d7a2e5b8f0c6d4a193f9e7b1c5d2a8e406b1f9c3d", built: "2026-10-05T21:47:53Z", installed: false };
     w.status.dscManagedBy = "rhoai";
   },
-  // Argo CD's tracking annotation confirmed with Argo CD (pkg/cluster/argocd.go),
+  // Argo CD's tracking annotation confirmed with Argo CD (pkg/cluster/internal/argo/argocd.go),
   // and the four ways it is not: three left over, one not confirmed.
   "gitops-confirmed": (w) => {
     scenarios["gitops-synced"](w);

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -35,7 +37,7 @@ func serveModules(f *resourceFake) {
 	defer f.mu.Unlock()
 	f.groups = map[string]string{
 		"/apis/datasciencecluster.opendatahub.io":           dscGroupDoc,
-		"/apis/" + componentAPIGroup:                        `{"kind":"APIGroup","name":"components.platform.opendatahub.io","preferredVersion":{"groupVersion":"components.platform.opendatahub.io/v1alpha1","version":"v1alpha1"}}`,
+		"/apis/" + rhoai.ComponentAPIGroup:                  `{"kind":"APIGroup","name":"components.platform.opendatahub.io","preferredVersion":{"groupVersion":"components.platform.opendatahub.io/v1alpha1","version":"v1alpha1"}}`,
 		"/apis/components.platform.opendatahub.io/v1alpha1": `{"resources":[{"name":"kueues","kind":"Kueue","verbs":["list","get","patch"]}]}`,
 	}
 }
@@ -133,14 +135,14 @@ func TestHardResetTimesOutOnAModuleCRAndFinishWaits(t *testing.T) {
 	if posts := f.callsTo(http.MethodPost, dscV3List); len(posts) != 0 {
 		t.Fatalf("created: %+v", posts)
 	}
-	pending, err := pendingHardReset(c)
+	pending, err := dsc.PendingHardReset(c)
 	if err != nil || pending == nil {
 		t.Fatalf("pending %+v %v", pending, err)
 	}
 	f.beforeServe = nil
 	f.put("/apis/dscinitialization.opendatahub.io/v2/dscinitializations/default-dsci", map[string]any{
 		"metadata": map[string]any{"name": "default-dsci"}, "spec": map[string]any{"applicationsNamespace": "redhat-ods-applications"},
-		"status": map[string]any{"release": map[string]any{"name": selfManagedPlatform}}})
+		"status": map[string]any{"release": map[string]any{"name": dsc.SelfManagedPlatform}}})
 	fin, _ := FinishDSCHardReset(c, types.DSCFinishRequest{Name: pending.Name, Token: pending.Token})
 	if fin.Success || fin.ErrorCode != "prerequisites" || !strings.Contains(fin.Message, "Kueue default-kueue") {
 		t.Fatalf("finish = %+v", fin)
@@ -158,16 +160,16 @@ func TestHardResetTimesOutOnAModuleCRAndFinishWaits(t *testing.T) {
 func TestHardResetRefusesAModuleCRWithAnUnknownOperator(t *testing.T) {
 	f, c := teardownWorld(t)
 	serveModules(f)
-	ops, refusal, err := hardResetOperators(c, liveDSCUID)
+	ops, refusal, err := dsc.HardResetOperators(c, liveDSCUID)
 	if err != nil || len(ops) != 0 || !strings.Contains(refusal, "Kueue default-kueue: the tool cannot identify its module operator") {
 		t.Fatalf("ops %+v, refusal %q, err %v", ops, refusal, err)
 	}
 	// The installed CSV owns the Kueue CRD: the RHOAI operator reconciles
 	// it, and there is no module operator to wait for.
-	csv := f.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"))
+	csv := f.get(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"))
 	ensureMap(csv, "spec")["customresourcedefinitions"] = map[string]any{"owned": []any{map[string]any{"name": "kueues.components.platform.opendatahub.io"}}}
-	f.put(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), csv)
-	if ops, refusal, err := hardResetOperators(c, liveDSCUID); err != nil || len(ops) != 0 || refusal != "" {
+	f.put(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"), csv)
+	if ops, refusal, err := dsc.HardResetOperators(c, liveDSCUID); err != nil || len(ops) != 0 || refusal != "" {
 		t.Fatalf("ops %+v, refusal %q, err %v", ops, refusal, err)
 	}
 }
@@ -365,7 +367,7 @@ func TestHardResetAllowsNamespacesTheCollectorKeeps(t *testing.T) {
 			f, c := managerWorld(t, nil)
 			serveOwnerKinds(f)
 			tc.edit(f)
-			if why := namespaceOwnerBlocker(c); why != "" {
+			if why := dsc.NamespaceOwnerBlockerForTest(c); why != "" {
 				t.Fatalf("refused: %s", why)
 			}
 		})
@@ -417,7 +419,7 @@ func TestHardResetReadsNamespaceOwnersWithTheSignedInUsersToken(t *testing.T) {
 	// The stream runs with the user's client itself (no ServiceAccount
 	// client behind it) and runs the same guard before the delete.
 	user := c.SignedInUser()
-	user.signedInUser = nil
+	editTestClient(user, func(o *testClientOptions) { o.SignedInUser = nil })
 	res, err := HardResetDSC(user, types.DSCPlanRequest{Name: plan.Name, UID: plan.UID, Token: plan.Token, Confirm: plan.Name, KeepEnabled: new(false)}, func(UpdateStepEvent) {})
 	if err != nil || !res.Success {
 		t.Fatalf("result = %+v, %v", res, err)
@@ -436,7 +438,7 @@ func TestHardResetReadsNamespaceOwnersWithTheSignedInUsersToken(t *testing.T) {
 	ownedNamespace(f2, "acm", ref(amwGV, "AppliedManifestWork", "w", "w-uid"))
 	putOwner(f2, amwPath+"w", "w-uid", nil, dscRef())
 	user2 := c2.SignedInUser()
-	user2.signedInUser = nil
+	editTestClient(user2, func(o *testClientOptions) { o.SignedInUser = nil })
 	res, _ = HardResetDSC(user2, types.DSCPlanRequest{Name: plan.Name, UID: plan.UID, Token: plan.Token, Confirm: plan.Name, KeepEnabled: new(false)}, func(UpdateStepEvent) {})
 	if res.Success || res.ErrorCode != "prerequisites" || !strings.Contains(res.Message, "namespace acm, owned by AppliedManifestWork w") {
 		t.Fatalf("result = %+v", res)
@@ -487,21 +489,21 @@ func TestPlatformModulesSettled(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newResourceFake(t)
 			setPlatform(f, tc.gen, tc.observed, tc.status, tc.reason, tc.msg)
-			settled, why, err := platformModulesSettled(c)
+			settled, why, err := dsc.PlatformModulesSettled(c)
 			if err != nil || settled != tc.settled || !strings.Contains(why, tc.want) {
 				t.Fatalf("settled %v, %q, %v", settled, why, err)
 			}
 		})
 	}
 	f, c := newResourceFake(t)
-	if settled, why, err := platformModulesSettled(c); !settled || err != nil || why != "no Platform default exists" {
+	if settled, why, err := dsc.PlatformModulesSettled(c); !settled || err != nil || why != "no Platform default exists" {
 		t.Fatalf("no Platform: %v %q %v", settled, why, err)
 	}
 	setPlatform(f, 1, 1, "True", "", "")
 	p := f.get(platformPath)
 	ensureMap(p, "metadata")["deletionTimestamp"] = "2026-11-19T00:00:00Z"
 	f.put(platformPath, p)
-	if settled, why, _ := platformModulesSettled(c); settled || !strings.Contains(why, "being deleted") {
+	if settled, why, _ := dsc.PlatformModulesSettled(c); settled || !strings.Contains(why, "being deleted") {
 		t.Fatalf("deleting Platform: %v %q", settled, why)
 	}
 }
@@ -513,7 +515,7 @@ func TestOperatorsLeft(t *testing.T) {
 	f, c := newResourceFake(t)
 	f.put("/apis/apps/v1/namespaces/redhat-ods-applications/deployments/kept", map[string]any{"metadata": map[string]any{"name": "kept", "uid": "u1"}})
 	f.put("/apis/apps/v1/namespaces/redhat-ods-applications/deployments/again", map[string]any{"metadata": map[string]any{"name": "again", "uid": "new"}})
-	left, err := operatorsLeft(c, []hardResetOperator{
+	left, err := dsc.OperatorsLeft(c, []dsc.HardResetOperator{
 		{Namespace: "redhat-ods-applications", Name: "kept", UID: "u1"},
 		{Namespace: "redhat-ods-applications", Name: "again", UID: "old"},
 		{Namespace: "redhat-ods-applications", Name: "gone", UID: "u3"},
@@ -521,11 +523,11 @@ func TestOperatorsLeft(t *testing.T) {
 	if err != nil || len(left) != 1 || left[0].Name != "kept" {
 		t.Fatalf("left %+v %v", left, err)
 	}
-	st := teardownState{Operators: left}
-	if !strings.Contains(st.stuck(), "Deployment redhat-ods-applications/kept") || !strings.Contains(st.progress(), "module operators") {
-		t.Fatalf("%q / %q", st.stuck(), st.progress())
+	st := dsc.TeardownState{Operators: left}
+	if !strings.Contains(st.Stuck(), "Deployment redhat-ods-applications/kept") || !strings.Contains(st.Progress(), "module operators") {
+		t.Fatalf("%q / %q", st.Stuck(), st.Progress())
 	}
-	if o, ok := parseHardResetOperator(hardResetOperator{Namespace: "n", Name: "d", UID: "u"}.record()); !ok || o.UID != "u" {
+	if o, ok := dsc.ParseHardResetOperator(dsc.HardResetOperator{Namespace: "n", Name: "d", UID: "u"}.Record()); !ok || o.UID != "u" {
 		t.Fatalf("record round trip %+v", o)
 	}
 }

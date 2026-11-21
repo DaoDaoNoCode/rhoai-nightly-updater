@@ -15,6 +15,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 )
 
 // foreignJSON is an object someone else created: no tool label, created
@@ -33,7 +37,7 @@ func assertForeignUntouched(t *testing.T, f *resourceFake, path, field, want str
 	}
 	meta := obj["metadata"].(map[string]any)
 	labels, _ := meta["labels"].(map[string]any)
-	if meta["uid"] != "foreign-uid" || labels[managedByLabelKey] != nil || labels["owner"] != "someone" {
+	if meta["uid"] != "foreign-uid" || labels[kube.ManagedByLabelKey] != nil || labels["owner"] != "someone" {
 		t.Errorf("%s metadata changed: %v", path, meta)
 	}
 	if field != "" {
@@ -48,8 +52,8 @@ func TestSetupPipelineServer_ForeignObjectsBetweenCheckAndWrite(t *testing.T) {
 	cases := []struct {
 		name, method, trigger, path string
 	}{
-		{"secret created before POST", http.MethodPost, "/api/v1/namespaces/p1/secrets", secretPath("p1", dspaSecretName)},
-		{"DSPA created before POST", http.MethodPost, "/apis/" + dspaAPIGroup + "/namespaces/p1/datasciencepipelinesapplications", dspaPath("p1", dspaName)},
+		{"secret created before POST", http.MethodPost, "/api/v1/namespaces/p1/secrets", secretPath("p1", storage.DSPASecretName)},
+		{"DSPA created before POST", http.MethodPost, "/apis/" + storage.DSPAAPIGroup + "/namespaces/p1/datasciencepipelinesapplications", dspaPath("p1", storage.DSPAName)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -75,19 +79,19 @@ func TestSetupPipelineServer_ForeignObjectsBetweenCheckAndWrite(t *testing.T) {
 		putManagedDSC(f)
 		putReadyManagedS3(f)
 		putDSProject(f, "p1")
-		f.putJSON(secretPath("p1", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`,"resourceVersion":"3"}}`)
+		f.putJSON(secretPath("p1", storage.DSPASecretName), `{"metadata":{"labels":`+toolLabelJSON+`,"resourceVersion":"3"}}`)
 		var once sync.Once
 		f.beforeServe = func(method, path string) {
-			if method == http.MethodPatch && path == secretPath("p1", dspaSecretName) {
-				once.Do(func() { f.putJSON(secretPath("p1", dspaSecretName), foreignJSON(`,"data":{"k":"dXNlcg=="}`)) })
+			if method == http.MethodPatch && path == secretPath("p1", storage.DSPASecretName) {
+				once.Do(func() { f.putJSON(secretPath("p1", storage.DSPASecretName), foreignJSON(`,"data":{"k":"dXNlcg=="}`)) })
 			}
 		}
 		resp, _ := SetupPipelineServer(c, "p1")
 		if resp.Success || resp.ErrorCode != "not_managed" {
 			t.Fatalf("want not_managed, got %+v", resp)
 		}
-		assertForeignUntouched(t, f, secretPath("p1", dspaSecretName), "data", "dXNlcg==")
-		if f.has(dspaPath("p1", dspaName)) {
+		assertForeignUntouched(t, f, secretPath("p1", storage.DSPASecretName), "data", "dXNlcg==")
+		if f.has(dspaPath("p1", storage.DSPAName)) {
 			t.Error("no DSPA may be created after the secret was refused")
 		}
 	})
@@ -96,11 +100,11 @@ func TestSetupPipelineServer_ForeignObjectsBetweenCheckAndWrite(t *testing.T) {
 		putManagedDSC(f)
 		putReadyManagedS3(f)
 		putDSProject(f, "p1")
-		putDSPA(f, "p1", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
+		putDSPA(f, "p1", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, "", "")
 		f.beforeServe = func(method, path string) {
-			if method == http.MethodPatch && path == dspaPath("p1", dspaName) {
+			if method == http.MethodPatch && path == dspaPath("p1", storage.DSPAName) {
 				f.mu.Lock()
-				f.bumpRV(ensureMap(f.objects[fakeKey{gv: dspaAPIGroup, ns: "p1", plural: "datasciencepipelinesapplications", name: dspaName}], "metadata"))
+				f.bumpRV(ensureMap(f.objects[fakeKey{gv: storage.DSPAAPIGroup, ns: "p1", plural: "datasciencepipelinesapplications", name: storage.DSPAName}], "metadata"))
 				f.mu.Unlock()
 			}
 		}
@@ -123,7 +127,7 @@ func stallServer(t *testing.T, status int) *Client {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+	c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 	if status == 0 {
 		return withLatency(c, 5*time.Second)
 	}
@@ -133,29 +137,29 @@ func stallServer(t *testing.T, status int) *Client {
 func TestWaitForDeletion_DeadlineAndErrors(t *testing.T) {
 	t.Run("stalled API call does not overrun the deadline", func(t *testing.T) {
 		c := stallServer(t, 0)
-		start := clk.Now()
-		gone, err := waitForDeletion(c, "/api/v1/namespaces/minio", 200*time.Millisecond, 10*time.Millisecond)
+		start := kube.Clock().Now()
+		gone, err := kube.WaitForDeletion(c, "/api/v1/namespaces/minio", 200*time.Millisecond, 10*time.Millisecond)
 		if gone || err != nil {
 			t.Fatalf("gone=%v err=%v, want a plain timeout", gone, err)
 		}
-		if d := clk.Since(start); d != 200*time.Millisecond {
+		if d := kube.Clock().Since(start); d != 200*time.Millisecond {
 			t.Errorf("waited %s, want the 200ms deadline", d)
 		}
 	})
 	for _, status := range []int{401, 403, 500} {
 		t.Run("HTTP "+itoa(status)+" is an error, not still-deleting", func(t *testing.T) {
 			c := stallServer(t, status)
-			gone, err := waitForDeletion(c, "/api/v1/namespaces/minio", time.Second, 10*time.Millisecond)
-			if gone || !IsK8sError(err, status) {
+			gone, err := kube.WaitForDeletion(c, "/api/v1/namespaces/minio", time.Second, 10*time.Millisecond)
+			if gone || !kube.IsK8sError(err, status) {
 				t.Fatalf("gone=%v err=%v", gone, err)
 			}
 		})
 	}
 	t.Run("caller context cancelled", func(t *testing.T) {
 		c := stallServer(t, 0)
-		ctx, cancel := clk.WithTimeout(context.Background(), 50*time.Millisecond)
+		ctx, cancel := kube.Clock().WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
-		gone, err := waitForDeletion(c.WithContext(ctx), "/x", time.Second, 10*time.Millisecond)
+		gone, err := kube.WaitForDeletion(c.WithContext(ctx), "/x", time.Second, 10*time.Millisecond)
 		if gone || !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("gone=%v err=%v, want the caller's context error", gone, err)
 		}
@@ -165,12 +169,12 @@ func TestWaitForDeletion_DeadlineAndErrors(t *testing.T) {
 func TestTeardownPipelineServer_ForbiddenWhileWaitingIsAnError(t *testing.T) {
 	fastPipelineTimings(t)
 	f, c := newResourceFake(t)
-	putDSPA(f, "p1", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, `,"finalizers":["`+dspaFinalizer+`"]`, "")
+	putDSPA(f, "p1", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, `,"finalizers":["`+storage.DSPAFinalizer+`"]`, "")
 	putDSPO(f, 1)
 	f.beforeServe = func(method, path string) {
-		if method == http.MethodDelete && path == dspaPath("p1", dspaName) {
+		if method == http.MethodDelete && path == dspaPath("p1", storage.DSPAName) {
 			f.mu.Lock()
-			f.fail["GET "+dspaPath("p1", dspaName)] = 403
+			f.fail["GET "+dspaPath("p1", storage.DSPAName)] = 403
 			f.mu.Unlock()
 		}
 	}

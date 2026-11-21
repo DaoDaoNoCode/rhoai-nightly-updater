@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 const componentsV1 = "/apis/components.platform.opendatahub.io/v1alpha1/"
@@ -78,7 +81,7 @@ func TestCleanupStuckComponentCRsLive36LeavesRunningOperatorsAlone(t *testing.T)
 	serveComponentCRs(f, items)
 	f.status("GET", componentsV1+"rays", http.StatusInternalServerError, "InternalError")
 
-	n, warnings := cleanupStuckComponentCRs(c)
+	n, warnings := components.CleanupStuckCRs(c)
 	if n != 0 {
 		t.Fatalf("unstuck %d", n)
 	}
@@ -123,7 +126,7 @@ func TestCleanupStuckComponentCRsOperatorGone(t *testing.T) {
 	}
 	serveComponentCRs(f, items)
 
-	n, warnings := cleanupStuckComponentCRs(c)
+	n, warnings := components.CleanupStuckCRs(c)
 	var want []string
 	for _, m := range gone {
 		o := liveOperator(m)
@@ -256,7 +259,7 @@ func TestCleanupStuckComponentCRsRefusals(t *testing.T) {
 			if tc.api != nil {
 				tc.api(f)
 			}
-			name := firstNonEmpty(tc.cr, crName(tc.module))
+			name := kube.FirstNonEmpty(tc.cr, crName(tc.module))
 			since := old
 			if !tc.since.IsZero() {
 				since = tc.since
@@ -267,7 +270,7 @@ func TestCleanupStuckComponentCRsRefusals(t *testing.T) {
 			}
 			serveComponentCRs(f, map[string][]map[string]any{plural: {deletingCR(name, since)}})
 
-			n, warnings := cleanupStuckComponentCRs(c)
+			n, warnings := components.CleanupStuckCRs(c)
 			if tc.patch {
 				assertWrites(t, f, "PATCH "+componentsV1+plural+"/"+name)
 				if n != 1 || len(warnings) != 0 {
@@ -290,7 +293,7 @@ func TestCleanupStuckComponentCRsRecentReadsNoRBAC(t *testing.T) {
 	serveLive36Kinds(f)
 	serveLive36ModuleOperators(f)
 	serveComponentCRs(f, map[string][]map[string]any{"trustyais": {deletingCR("default-trustyai", time.Now())}})
-	if n, _ := cleanupStuckComponentCRs(c); n != 0 {
+	if n, _ := components.CleanupStuckCRs(c); n != 0 {
 		t.Fatalf("unstuck %d", n)
 	}
 	for _, p := range []string{"/apis/rbac.authorization.k8s.io/v1/clusterroles", "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings", "/apis/apps/v1/namespaces/" + liveAppsNS + "/deployments", dsciV2List} {
@@ -306,8 +309,8 @@ func TestCleanupStuckComponentCRs_NoComponentAPI(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"kind":"Status","code":404}`)
 	}))
 	defer srv.Close()
-	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
-	if n, warnings := cleanupStuckComponentCRs(c); n != 0 || len(warnings) != 0 {
+	c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
+	if n, warnings := components.CleanupStuckCRs(c); n != 0 || len(warnings) != 0 {
 		t.Fatalf("fresh cluster: unstuck=%d warnings=%v", n, warnings)
 	}
 }
@@ -342,7 +345,7 @@ func TestCleanupStuckComponentCRs_ReplacedCRIsLeftAlone(t *testing.T) {
 			w.serve(f)
 			serveComponentCRs(f, map[string][]map[string]any{o.Plural: {tt.item}})
 			f.status("PATCH", componentsV1+o.Plural+"/default-aipipelines", tt.status, "Status")
-			n, warnings := cleanupStuckComponentCRs(c)
+			n, warnings := components.CleanupStuckCRs(c)
 			if patches := len(f.requests("PATCH", componentsV1+o.Plural+"/default-aipipelines")); n != 0 || patches != tt.calls || !strings.Contains(strings.Join(warnings, "\n"), tt.want) {
 				t.Fatalf("unstuck=%d patches=%d warnings=%v", n, patches, warnings)
 			}

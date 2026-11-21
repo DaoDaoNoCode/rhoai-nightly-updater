@@ -3,6 +3,8 @@ package cluster
 import (
 	"net/url"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // The API server's address comes from KUBERNETES_SERVICE_HOST and _PORT,
@@ -18,12 +20,12 @@ func TestNewClientAPIServerURL(t *testing.T) {
 		t.Run(tc.want, func(t *testing.T) {
 			t.Setenv("KUBERNETES_SERVICE_HOST", tc.host)
 			t.Setenv("KUBERNETES_SERVICE_PORT", tc.port)
-			c := NewClientWithContext(t.Context(), "token")
-			if c.baseURL != tc.want {
-				t.Fatalf("baseURL = %q, want %q", c.baseURL, tc.want)
+			c := kube.NewClientWithContext(t.Context(), "token")
+			if c.BaseURL() != tc.want {
+				t.Fatalf("baseURL = %q, want %q", c.BaseURL(), tc.want)
 			}
-			if u, err := url.Parse(c.baseURL + "/api"); err != nil || u.Port() != "443" {
-				t.Fatalf("not a usable URL: %q (%v)", c.baseURL, err)
+			if u, err := url.Parse(c.BaseURL() + "/api"); err != nil || u.Port() != "443" {
+				t.Fatalf("not a usable URL: %q (%v)", c.BaseURL(), err)
 			}
 		})
 	}

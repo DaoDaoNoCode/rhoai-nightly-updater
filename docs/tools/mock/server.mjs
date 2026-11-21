@@ -164,7 +164,7 @@ async function nodeSetupStream(req, res) {
         if (action === "mirror-create") world.status.imageMirror = { exists: true, name: "rhoai-quay-mirror", source: "registry.redhat.io/rhoai" };
         if (action === "mirror-remove") world.status.imageMirror = { exists: false, name: "", source: "" };
         // The backend records the entry it wrote, and clears the record
-        // when it removes it (pkg/cluster/node_pull_record.go).
+        // when it removes it (pkg/cluster/internal/node/node_pull_record.go).
         const nodes = world.status.pullSecret.nodes;
         if (action === "pull-secret-add") {
           world.nodes = { pullEntry: "same" };
@@ -683,7 +683,7 @@ async function api(req, res, u) {
   if (key === "POST /api/diagnostics/fix" || key === "POST /api/diagnostics/fix/acknowledged") {
     const { problemId = "", acknowledged = false } = await body(req);
     return mutation(res, "diagnostics-fix", "Apply diagnostics fix", () => {
-      // The backend's answers (pkg/cluster/diagnostics_leftovers_fix.go).
+      // The backend's answers (pkg/cluster/internal/diagnostics/diagnostics_leftovers_fix.go).
       if (problemId.startsWith("recreate-leftover:")) {
         if (!acknowledged) {
           return { success: false, errorCode: "acknowledgement_required", logs: [],

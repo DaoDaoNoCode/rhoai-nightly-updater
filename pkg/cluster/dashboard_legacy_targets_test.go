@@ -10,6 +10,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 )
 
 // legacyDashboardServer simulates a cluster without dashboard-operator. deployments
@@ -26,7 +29,7 @@ func legacyDashboardServer(t *testing.T, deployments map[string][]string) (*Clie
 		const prefix = "/apis/apps/v1/namespaces/redhat-ods-applications/deployments/"
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/deployments/rhods-operator") {
 			var env []map[string]string
-			for container, name := range containerEnvVarMap {
+			for container, name := range dashdev.ContainerEnvVars {
 				env = append(env, map[string]string{"name": name, "value": "release-" + container})
 			}
 			b, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": []any{map[string]any{"env": env}}}}}})
@@ -75,7 +78,7 @@ func legacyDashboardServer(t *testing.T, deployments map[string][]string) (*Clie
 		io.WriteString(w, `{}`)
 	}))
 	t.Cleanup(srv.Close)
-	return &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}, func() map[string][]string {
+	return newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()}), func() map[string][]string {
 		mu.Lock()
 		defer mu.Unlock()
 		out := map[string][]string{}
@@ -90,11 +93,9 @@ func legacyDashboardServer(t *testing.T, deployments map[string][]string) (*Clie
 // allPRImagesPublished makes every PR image appear to exist on Quay.
 func allPRImagesPublished(t *testing.T) {
 	t.Helper()
-	original := quayHTTPClient
-	quayHTTPClient = &http.Client{Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
+	t.Cleanup(registry.SetHTTPClientForTest(&http.Client{Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
-	})}
-	t.Cleanup(func() { quayHTTPClient = original })
+	})}))
 }
 
 func TestLegacyDeployPR_SidecarPatchesOnlyInstalledContainers(t *testing.T) {
@@ -155,15 +156,13 @@ func TestLegacyRevert_SkipsUninstalledContainers(t *testing.T) {
 }
 
 func TestLegacyDeployPR_NothingInstalledMakesNoChanges(t *testing.T) {
-	original := quayHTTPClient
-	quayHTTPClient = &http.Client{Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
+	t.Cleanup(registry.SetHTTPClientForTest(&http.Client{Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
 		status := 404
 		if strings.Contains(r.URL.Path, "/odh-mod-arch-agent-ops/") {
 			status = 200
 		}
 		return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
-	})}
-	t.Cleanup(func() { quayHTTPClient = original })
+	})}))
 	client, patched := legacyDashboardServer(t, map[string][]string{
 		"rhods-dashboard": {"rhods-dashboard", "gen-ai-ui"},
 	})

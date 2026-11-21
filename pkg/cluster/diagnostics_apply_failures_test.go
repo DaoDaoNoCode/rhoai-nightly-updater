@@ -7,6 +7,11 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Verbatim condition messages from RHOAI 3.6 (E2).
@@ -18,28 +23,28 @@ const (
 )
 
 func TestParseApplyFailures(t *testing.T) {
-	got := parseApplyFailures(msgImmutableSelector)
-	if len(got) != 1 || got[0].Class != applyImmutable || got[0].Namespace != "redhat-ods-applications" || got[0].Name != "kuberay-operator" ||
+	got := components.ParseApplyFailures(msgImmutableSelector)
+	if len(got) != 1 || got[0].Class != components.ApplyImmutable || got[0].Namespace != "redhat-ods-applications" || got[0].Name != "kuberay-operator" ||
 		got[0].GroupVersion != "apps/v1" || got[0].Kind != "Deployment" || strings.Join(got[0].Fields, ",") != "spec.selector" {
 		t.Fatalf("immutable: %+v", got)
 	}
-	got = parseApplyFailures(msgTwoControllers)
-	if len(got) != 1 || got[0].Class != applyControllerOwner || got[0].Kind != "ServiceMonitor" || got[0].group() != "monitoring.coreos.com" ||
+	got = components.ParseApplyFailures(msgTwoControllers)
+	if len(got) != 1 || got[0].Class != components.ApplyControllerOwner || got[0].Kind != "ServiceMonitor" || got[0].Group() != "monitoring.coreos.com" ||
 		got[0].Owners != "Platform/default and AIHub/default-aihub" {
 		t.Fatalf("controller owners: %+v", got)
 	}
-	got = parseApplyFailures(msgSchemaMismatch)
-	if len(got) != 1 || got[0].Class != applySchemaMismatch || got[0].Namespace != "" || got[0].Name != "default-trustyai" || got[0].Kind != "TrustyAI" ||
+	got = components.ParseApplyFailures(msgSchemaMismatch)
+	if len(got) != 1 || got[0].Class != components.ApplySchemaMismatch || got[0].Namespace != "" || got[0].Name != "default-trustyai" || got[0].Kind != "TrustyAI" ||
 		strings.Join(got[0].Fields, ",") != ".spec.eval.lmeval.permitCodeExecution: expected boolean, got &{deny}" {
 		t.Fatalf("schema: %+v", got)
 	}
-	got = parseApplyFailures(msgTypedPatch)
-	if len(got) != 1 || got[0].Class != applySchemaMismatch || !strings.HasPrefix(got[0].Fields[0], ".spec.eval.lmeval.permitOnline: expected string, got ") {
+	got = components.ParseApplyFailures(msgTypedPatch)
+	if len(got) != 1 || got[0].Class != components.ApplySchemaMismatch || !strings.HasPrefix(got[0].Fields[0], ".spec.eval.lmeval.permitOnline: expected string, got ") {
 		t.Fatalf("typed patch: %+v", got)
 	}
 	// Two failures in one message are both found, each with its own error.
-	got = parseApplyFailures("Some modules failed: " + msgImmutableSelector + "; " + msgTwoControllers)
-	if len(got) != 2 || got[0].Class != applyImmutable || got[1].Class != applyControllerOwner || strings.Contains(got[0].Detail, "ServiceMonitor") {
+	got = components.ParseApplyFailures("Some modules failed: " + msgImmutableSelector + "; " + msgTwoControllers)
+	if len(got) != 2 || got[0].Class != components.ApplyImmutable || got[1].Class != components.ApplyControllerOwner || strings.Contains(got[0].Detail, "ServiceMonitor") {
 		t.Fatalf("two: %+v", got)
 	}
 
@@ -51,7 +56,7 @@ func TestParseApplyFailures(t *testing.T) {
 		`failure deploying resource ns/x: apply failed apps/v1, Kind=Deployment: Internal error occurred: failed calling webhook`,
 		`Deployment "x" is invalid: spec.selector: Invalid value: {}: field is immutable`, // not an apply failure report
 	} {
-		if got := parseApplyFailures(msg); len(got) != 0 {
+		if got := components.ParseApplyFailures(msg); len(got) != 0 {
 			t.Errorf("%q: %+v", msg, got)
 		}
 	}
@@ -77,7 +82,7 @@ func TestParseApplyFailuresRejectsMalformedObjects(t *testing.T) {
 		{"redhat-ods-applications", strings.Repeat("a", 254), "apps/v1", "Deployment"},
 	} {
 		msg := fmt.Sprintf(tmpl, tc[0], tc[1], tc[2], tc[3])
-		if got := parseApplyFailures(msg); len(got) != 0 {
+		if got := components.ParseApplyFailures(msg); len(got) != 0 {
 			t.Errorf("%v accepted: %+v", tc, got)
 		}
 	}
@@ -86,14 +91,14 @@ func TestParseApplyFailuresRejectsMalformedObjects(t *testing.T) {
 		`failure deploying resource ns/a b: apply failed apps/v1, Kind=Deployment: field is immutable`,
 		"failure deploying resource ns/a\nb: apply failed apps/v1, Kind=Deployment: field is immutable",
 	} {
-		for _, f := range parseApplyFailures(msg) {
+		for _, f := range components.ParseApplyFailures(msg) {
 			if strings.ContainsAny(f.Name, " \n") {
 				t.Errorf("%q: %+v", msg, f)
 			}
 		}
 	}
 	// A valid cluster-scoped and a valid core object still parse.
-	if got := parseApplyFailures(fmt.Sprintf(tmpl, "", "a.b-c", "v1", "Service")); len(got) != 1 {
+	if got := components.ParseApplyFailures(fmt.Sprintf(tmpl, "", "a.b-c", "v1", "Service")); len(got) != 1 {
 		t.Errorf("core object rejected: %+v", got)
 	}
 }
@@ -112,11 +117,11 @@ func TestShellQuote(t *testing.T) {
 		"":                            "''",
 		"jsonpath={.metadata.labels}": "'jsonpath={.metadata.labels}'",
 	} {
-		if got := shellQuote(in); got != want {
+		if got := kube.ShellQuote(in); got != want {
 			t.Errorf("shellQuote(%q) = %s, want %s", in, got, want)
 		}
 	}
-	if got := shellCommand("oc", "delete", "x;id"); got != "oc delete 'x;id'" {
+	if got := kube.ShellCommand("oc", "delete", "x;id"); got != "oc delete 'x;id'" {
 		t.Errorf("shellCommand = %s", got)
 	}
 }
@@ -132,12 +137,12 @@ func applyFailureCR(name string, ready string, msgs ...string) map[string]any {
 func TestCheckApplyFailures(t *testing.T) {
 	c, crdLookups := applyFailuresWorld(t)
 
-	out := checkApplyFailures(c.WithContext(context.Background()))
-	if out.check.Status != "fail" || len(out.problems) != 4 {
-		t.Fatalf("check %+v, %d problems: %+v", out.check, len(out.problems), out.problems)
+	out := diagnostics.CheckApplyFailures(c.WithContext(context.Background()))
+	if out.Check.Status != "fail" || len(out.Problems) != 4 {
+		t.Fatalf("check %+v, %d problems: %+v", out.Check, len(out.Problems), out.Problems)
 	}
 	byID := map[string]Problem{}
-	for _, p := range out.problems {
+	for _, p := range out.Problems {
 		byID[p.ID] = p
 		if p.AutoFixable || p.Fix == "" || p.TechnicalCmd == "" || len(p.AffectedObjects) == 0 || len(p.Evidence) == 0 {
 			t.Errorf("incomplete problem %+v", p)
@@ -206,7 +211,7 @@ func checkApplyFailureProblems(t *testing.T, byID map[string]Problem, crdLookups
 
 	owner := byID["operator-apply-failed-servicemonitor-redhat-ods-applications-aihub-controller-manager-metrics-monitor"]
 	if owner.Severity != "warning" || !strings.Contains(owner.TechnicalCmd, "oc delete servicemonitor.monitoring.coreos.com aihub-controller-manager-metrics-monitor -n redhat-ods-applications") ||
-		!strings.Contains(owner.TechnicalCmd, "oc delete pod -n "+SubNS+" -l name="+SubName) || !strings.Contains(strings.Join(owner.Evidence, "\n"), "Platform/default and AIHub/default-aihub") {
+		!strings.Contains(owner.TechnicalCmd, "oc delete pod -n "+rhoai.SubNS+" -l name="+rhoai.SubName) || !strings.Contains(strings.Join(owner.Evidence, "\n"), "Platform/default and AIHub/default-aihub") {
 		t.Errorf("controller owner: %+v", owner)
 	}
 
@@ -244,11 +249,11 @@ func TestApplyFailuresOneProblemPerObject(t *testing.T) {
 	f.obj("/apis/config.opendatahub.io/v1alpha1/platforms", map[string]any{
 		"items": []any{applyFailureCR("default", "False", immutable2)},
 	})
-	out := checkApplyFailures(c.WithContext(context.Background()))
-	if len(out.problems) != 1 {
-		t.Fatalf("%d problems: %+v", len(out.problems), out.problems)
+	out := diagnostics.CheckApplyFailures(c.WithContext(context.Background()))
+	if len(out.Problems) != 1 {
+		t.Fatalf("%d problems: %+v", len(out.Problems), out.Problems)
 	}
-	p := out.problems[0]
+	p := out.Problems[0]
 	ev := strings.Join(p.Evidence, "\n")
 	if p.ID != "operator-apply-failed-deployment-redhat-ods-applications-shared" || p.Severity != "critical" ||
 		!strings.Contains(p.Title, "must be recreated: spec.template.metadata.labels, spec.selector cannot be changed") || !strings.Contains(p.Title, "two controller owners") ||
@@ -263,13 +268,13 @@ func TestCheckApplyFailuresHealthyAndUnreadable(t *testing.T) {
 	f.obj("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", map[string]any{
 		"items": []any{applyFailureCR("default-dsc", "False", "Some modules are not ready: trainer")},
 	})
-	out := checkApplyFailures(c.WithContext(context.Background()))
-	if out.check.Status != "pass" || len(out.problems) != 0 || !strings.Contains(out.check.Detail, "1 CR checked") {
-		t.Fatalf("healthy: %+v %+v", out.check, out.problems)
+	out := diagnostics.CheckApplyFailures(c.WithContext(context.Background()))
+	if out.Check.Status != "pass" || len(out.Problems) != 0 || !strings.Contains(out.Check.Detail, "1 CR checked") {
+		t.Fatalf("healthy: %+v %+v", out.Check, out.Problems)
 	}
 	f.status("GET", "/apis/config.opendatahub.io/v1alpha1/platforms", 403, "Forbidden")
-	if out := checkApplyFailures(c.WithContext(context.Background())); out.check.Status != "warn" || !strings.Contains(out.check.Detail, "Platform") {
-		t.Fatalf("unreadable: %+v", out.check)
+	if out := diagnostics.CheckApplyFailures(c.WithContext(context.Background())); out.Check.Status != "warn" || !strings.Contains(out.Check.Detail, "Platform") {
+		t.Fatalf("unreadable: %+v", out.Check)
 	}
 }
 

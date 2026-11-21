@@ -6,6 +6,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 var testNow = time.Date(2026, 10, 5, 22, 0, 0, 0, time.UTC)
@@ -80,10 +84,10 @@ func running(container string, restarts int) podOpt {
 	}
 }
 
-func toDiagPod(t *testing.T, raw map[string]any) diagPod {
+func toDiagPod(t *testing.T, raw map[string]any) components.Pod {
 	t.Helper()
 	b, _ := json.Marshal(raw)
-	var p diagPod
+	var p components.Pod
 	if err := json.Unmarshal(b, &p); err != nil {
 		t.Fatal(err)
 	}
@@ -95,34 +99,34 @@ func TestClassifyPod(t *testing.T) {
 	tests := []struct {
 		name     string
 		pod      map[string]any
-		wantKind podIssueKind // "" means healthy / not reported
-		wantIn   string       // substring of Message
+		wantKind components.PodIssueKind // "" means healthy / not reported
+		wantIn   string                  // substring of Message
 	}{
 		{"running and ready", makePod(ns, "dash", "h1", "a", time.Hour, running("c", 0)), "", ""},
 		{"scheduled ContainerCreating past grace",
 			makePod(ns, "odh-observability", "7b6d65d9b7", "vxzxh", 2*time.Hour, phase("Pending"), waiting("manager", "ContainerCreating", "", 0)),
-			issueStuckCreating, ""},
+			components.IssueStuckCreating, ""},
 		{"scheduled ContainerCreating within grace",
 			makePod(ns, "x", "h", "a", 10*time.Second, phase("Pending"), waiting("manager", "ContainerCreating", "", 0)), "", ""},
 		{"unschedulable",
 			makePod(ns, "x", "h", "a", 5*time.Minute, unschedulable("0/6 nodes are available: 3 Insufficient cpu.")),
-			issueUnschedulable, "Insufficient cpu"},
+			components.IssueUnschedulable, "Insufficient cpu"},
 		{"unschedulable within grace", makePod(ns, "x", "h", "a", 5*time.Second, unschedulable("0/6 nodes")), "", ""},
 		{"crashloop",
 			makePod(ns, "trustyai-operator-module-controller-manager", "768dc89f6c", "ttk76", 48*time.Hour,
 				waiting("manager", "CrashLoopBackOff", "back-off 5m0s restarting failed container", 527),
 				lastTerminated("Error", 1, time.Minute)),
-			issueCrashLoop, "last exit: Error (exit code 1)"},
+			components.IssueCrashLoop, "last exit: Error (exit code 1)"},
 		{"image pull backoff reported immediately",
 			makePod(ns, "minio", "h", "a", 5*time.Second, phase("Pending"),
 				waiting("minio", "ImagePullBackOff", `Back-off pulling image "quay.io/minio/minio:latest": unauthorized`, 0)),
-			issueImagePull, "unauthorized"},
+			components.IssueImagePull, "unauthorized"},
 		{"missing config secret",
 			makePod(ns, "x", "h", "a", time.Minute, phase("Pending"), waiting("c", "CreateContainerConfigError", `secret "db-creds" not found`, 0)),
-			issueContainerConfig, `secret "db-creds" not found`},
+			components.IssueContainerConfig, `secret "db-creds" not found`},
 		{"running but restarting recently",
 			makePod(ns, "x", "h", "a", time.Hour, running("c", 7), lastTerminated("OOMKilled", 137, 5*time.Minute)),
-			issueRestarting, "OOMKilled"},
+			components.IssueRestarting, "OOMKilled"},
 		{"old restarts are not reported",
 			makePod(ns, "x", "h", "a", 72*time.Hour, running("c", 7), lastTerminated("Error", 1, 2*time.Hour)), "", ""},
 		{"completed pod", makePod(ns, "maas-ui", "d5d4dc448", "8868x", 48*time.Hour, phase("Succeeded")), "", ""},
@@ -132,11 +136,11 @@ func TestClassifyPod(t *testing.T) {
 			}), "", ""},
 		{"never scheduled, no condition", makePod(ns, "x", "h", "a", 5*time.Minute, phase("Pending"), func(p map[string]any) {
 			status(p)["conditions"] = []any{}
-		}), issueNotScheduled, "scheduler"},
+		}), components.IssueNotScheduled, "scheduler"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := classifyPod(toDiagPod(t, tt.pod), testNow)
+			got := components.ClassifyPod(toDiagPod(t, tt.pod), testNow)
 			if tt.wantKind == "" {
 				if got != nil {
 					t.Fatalf("got %+v, want healthy", got)
@@ -157,15 +161,15 @@ func TestClassifyPod_InitContainerCrashLoop(t *testing.T) {
 			"state": map[string]any{"waiting": map[string]any{"reason": "CrashLoopBackOff"}},
 		}}
 	})
-	got := classifyPod(toDiagPod(t, p), testNow)
-	if got == nil || got.Kind != issueCrashLoop || got.Container != "init" {
+	got := components.ClassifyPod(toDiagPod(t, p), testNow)
+	if got == nil || got.Kind != components.IssueCrashLoop || got.Container != "init" {
 		t.Fatalf("got %+v", got)
 	}
 }
 
 func TestPodOwner(t *testing.T) {
 	p := toDiagPod(t, makePod("ns", "odh-observability", "7b6d65d9b7", "vxzxh", time.Hour))
-	if name, kind := podOwner(p); name != "odh-observability" || kind != "Deployment" {
+	if name, kind := components.PodOwner(p); name != "odh-observability" || kind != "Deployment" {
 		t.Fatalf("owner = %s %s", name, kind)
 	}
 }
@@ -266,12 +270,12 @@ func TestRHOAIPods_EventsForbiddenSaysSo(t *testing.T) {
 
 func TestOperatorPods_CrashLoopIsCritical(t *testing.T) {
 	f, c := newFakeAPI(t)
-	pod := makePod(SubNS, "rhods-operator", "75bd6cd964", "abcde", time.Hour,
+	pod := makePod(rhoai.SubNS, "rhods-operator", "75bd6cd964", "abcde", time.Hour,
 		waiting("manager", "CrashLoopBackOff", "", 12), lastTerminated("Error", 2, time.Minute))
 	pod["metadata"].(map[string]any)["creationTimestamp"] = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
-	f.obj("/api/v1/namespaces/"+SubNS+"/pods", map[string]any{"items": []any{pod}})
-	out := checkOperatorPods(c)
-	if len(out.problems) != 1 || out.problems[0].Severity != "critical" || out.problems[0].AutoFixable {
+	f.obj("/api/v1/namespaces/"+rhoai.SubNS+"/pods", map[string]any{"items": []any{pod}})
+	out := diagnostics.CheckOperatorPods(c)
+	if len(out.Problems) != 1 || out.Problems[0].Severity != "critical" || out.Problems[0].AutoFixable {
 		t.Fatalf("out = %+v", out)
 	}
 }

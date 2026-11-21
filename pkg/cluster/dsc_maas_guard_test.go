@@ -7,6 +7,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -23,7 +30,7 @@ const (
 )
 
 func snapshotPath() string {
-	return namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName)
+	return rhoai.NamespacedPath("v1", "configmaps", record.GetActivityNamespace(), record.SnapshotConfigMapName)
 }
 
 // maasServed makes the fake serve the MaaS API (no objects yet).
@@ -32,14 +39,14 @@ func maasServed(f *resourceFake) {
 }
 
 // putMaaSRecord stores this tool's MaaS record.
-func putMaaSRecord(t *testing.T, f *resourceFake, rec maasRecord) {
+func putMaaSRecord(t *testing.T, f *resourceFake, rec serving.MaaSRecord) {
 	t.Helper()
 	raw, err := json.Marshal(rec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.put(snapshotPath(), map[string]any{"metadata": map[string]any{"name": snapshotConfigMapName, "namespace": getActivityNamespace()},
-		"data": map[string]any{maasRecordKey: string(raw)}})
+	f.put(snapshotPath(), map[string]any{"metadata": map[string]any{"name": record.SnapshotConfigMapName, "namespace": record.GetActivityNamespace()},
+		"data": map[string]any{serving.MaaSRecordKey: string(raw)}})
 }
 
 // maasInUseWorld is managerWorld with MaaS in use as on the live cluster.
@@ -47,11 +54,11 @@ func maasInUseWorld(t *testing.T, edit func(dsc map[string]any)) (*resourceFake,
 	t.Helper()
 	f, c := managerWorld(t, edit)
 	maasServed(f)
-	f.put(guardModelRef, map[string]any{"metadata": map[string]any{"name": "qwen25-05b-instruct", "namespace": "proj", "labels": toolLabels()},
+	f.put(guardModelRef, map[string]any{"metadata": map[string]any{"name": "qwen25-05b-instruct", "namespace": "proj", "labels": envkit.ToolLabels()},
 		"spec": map[string]any{"modelRef": map[string]any{"kind": "LLMInferenceService", "name": "qwen25-05b-instruct"}}})
-	f.put(guardSubscription, map[string]any{"metadata": map[string]any{"name": maasSubscriptionName, "namespace": maasTenantNamespace, "labels": toolLabels()}})
-	f.put(guardAuthPolicy, map[string]any{"metadata": map[string]any{"name": maasAuthPolicyName, "namespace": maasTenantNamespace, "labels": toolLabels()}})
-	putMaaSRecord(t, f, maasRecord{DSCChanged: true, PreviousModelsAsAService: "Removed", AIGatewayChanged: true, PreviousAIGateway: "Removed",
+	f.put(guardSubscription, map[string]any{"metadata": map[string]any{"name": serving.MaaSSubscriptionName, "namespace": serving.MaaSTenantNamespace, "labels": envkit.ToolLabels()}})
+	f.put(guardAuthPolicy, map[string]any{"metadata": map[string]any{"name": serving.MaaSAuthPolicyName, "namespace": serving.MaaSTenantNamespace, "labels": envkit.ToolLabels()}})
+	putMaaSRecord(t, f, serving.MaaSRecord{DSCChanged: true, PreviousModelsAsAService: "Removed", AIGatewayChanged: true, PreviousAIGateway: "Removed",
 		Published: []string{"proj/qwen25-05b-instruct"}, DBNamespace: "redhat-ai-gateway-infra", Database: "cnpg"})
 	return f, c
 }
@@ -128,7 +135,7 @@ func TestMaaSGuardBlocksTurningMaaSOff(t *testing.T) {
 // toggle's checks: the guard applies there too.
 func TestMaaSGuardBlocksDisableComponent(t *testing.T) {
 	f, c := maasInUseWorld(t, nil)
-	res, err := applyFixDisableComponent(c, "aigateway")
+	res, err := dsc.DisableComponent(c, "aigateway")
 	if err != nil || res.Success || !strings.Contains(res.Message, "MaaS is in use") {
 		t.Fatalf("disable = %+v, %v", res, err)
 	}
@@ -199,11 +206,11 @@ func TestSoftResetKeepsWhatTheUserTurnedOn(t *testing.T) {
 	}
 	stored := comps(f.get(dscV3Path))
 	for _, p := range []string{"aigateway", "aigateway.modelsAsAService"} {
-		if s, _ := lookupState(stored, strings.Split(p, ".")); s != "Managed" {
+		if s, _ := components.LookupState(stored, strings.Split(p, ".")); s != "Managed" {
 			t.Fatalf("%s = %s after a reset that keeps it", p, s)
 		}
 	}
-	if _, ok := lookupPath(stored, []string{"kserve", "rawDeploymentServiceConfig"}); ok {
+	if _, ok := components.LookupPath(stored, []string{"kserve", "rawDeploymentServiceConfig"}); ok {
 		t.Fatal("the reset kept rawDeploymentServiceConfig")
 	}
 }
@@ -229,23 +236,23 @@ func TestTurnedOnListsDeployedTogglesTheDefaultLeavesOff(t *testing.T) {
 		setPath(t, dsc, "spec.components.aigateway.managementState", "Removed")
 		setPath(t, dsc, "spec.components.aigateway.batchGateway.managementState", "Managed")
 	})
-	v, err := readDSCView(c)
+	v, err := dsc.ReadView(c)
 	if err != nil {
 		t.Fatal(err)
 	}
 	plan := &types.DSCPlan{}
-	target := v.resetTarget(plan, true)
+	target := v.ResetTarget(plan, true)
 	if want := []string{"kserve.modelExpress", "kueue"}; !reflect.DeepEqual(plan.Kept, want) {
 		t.Fatalf("kept = %v, want %v", plan.Kept, want)
 	}
-	if s, _ := lookupState(target, []string{"kueue"}); s != "Unmanaged" {
+	if s, _ := components.LookupState(target, []string{"kueue"}); s != "Unmanaged" {
 		t.Fatalf("kueue = %s", s)
 	}
-	if s, _ := lookupState(target, []string{"aigateway", "modelsAsAService"}); s != "Removed" {
+	if s, _ := components.LookupState(target, []string{"aigateway", "modelsAsAService"}); s != "Removed" {
 		t.Fatalf("modelsAsAService = %s (an orphan was kept)", s)
 	}
 	plan = &types.DSCPlan{}
-	if target := v.resetTarget(plan, false); !jsonEqual(target, v.defaultComponents()) || len(plan.Kept) != 0 || len(plan.TurnedOn) != 2 {
+	if target := v.ResetTarget(plan, false); !kube.JSONEqual(target, v.DefaultComponents()) || len(plan.Kept) != 0 || len(plan.TurnedOn) != 2 {
 		t.Fatalf("without keep: kept %v, turned on %v, target %v", plan.Kept, plan.TurnedOn, target)
 	}
 }
@@ -256,13 +263,13 @@ func TestKeptSubComponentKeepsItsParent(t *testing.T) {
 		setPath(t, dsc, "spec.components.aigateway.modelsAsAService.managementState", "Removed")
 		setPath(t, dsc, "spec.components.aigateway.batchGateway.managementState", "Managed")
 	})
-	v, _ := readDSCView(c)
+	v, _ := dsc.ReadView(c)
 	plan := &types.DSCPlan{}
-	target := v.resetTarget(plan, true)
+	target := v.ResetTarget(plan, true)
 	if want := []string{"aigateway", "aigateway.batchGateway"}; !reflect.DeepEqual(plan.Kept, want) {
 		t.Fatalf("kept = %v, want %v", plan.Kept, want)
 	}
-	if s, _ := lookupState(target, []string{"aigateway"}); s != "Managed" {
+	if s, _ := components.LookupState(target, []string{"aigateway"}); s != "Managed" {
 		t.Fatalf("aigateway = %s", s)
 	}
 }
@@ -310,12 +317,12 @@ func TestHardResetKeepsWhatTheUserTurnedOn(t *testing.T) {
 	}
 	created := comps(f.get(dscV3Path))
 	for _, p := range []string{"aigateway", "aigateway.modelsAsAService"} {
-		if s, _ := lookupState(created, strings.Split(p, ".")); s != "Managed" {
+		if s, _ := components.LookupState(created, strings.Split(p, ".")); s != "Managed" {
 			t.Fatalf("%s = %s in the new DSC", p, s)
 		}
 	}
 	// The recorded object (for Finish) was the kept one; cleared once created.
-	if rec, _ := readDSCHardResetRecord(c); rec != nil {
+	if rec, _ := record.ReadDSCHardResetRecord(c); rec != nil {
 		t.Fatalf("record left: %+v", rec)
 	}
 }
@@ -385,7 +392,7 @@ func TestMaaSGuardBlocksWhenAServedListIsNotFound(t *testing.T) {
 		if b := maasBlock(plan, "aigateway"); b == nil || !strings.Contains(strings.Join(b.Reasons, " "), "cannot tell whether MaaS is in use") {
 			t.Errorf("%s answers 404: %+v", list, plan)
 		}
-		if _, err := foreignMaaSObjects(c); err == nil {
+		if _, err := serving.ForeignMaaSObjects(c); err == nil {
 			t.Errorf("%s answers 404: Clean up MaaS's in-use check found nobody", list)
 		}
 	}
@@ -422,7 +429,7 @@ func TestMaaSGuardWithoutTheMaaSAPI(t *testing.T) {
 func TestMaaSGuardAllowsWhenMaaSIsNotInUse(t *testing.T) {
 	f, c := managerWorld(t, nil)
 	maasServed(f)
-	putMaaSRecord(t, f, maasRecord{Shared: map[string]string{"rhcl": "installed"}}) // shared pieces only: kept by Clean up MaaS
+	putMaaSRecord(t, f, serving.MaaSRecord{Shared: map[string]string{"rhcl": "installed"}}) // shared pieces only: kept by Clean up MaaS
 	for _, path := range []string{"aigateway", "aigateway.modelsAsAService"} {
 		if plan := mustPlan(t, c, "toggle", path, "Removed", false); len(plan.Blocked) != 0 {
 			t.Fatalf("%s: %+v", path, plan.Blocked)
@@ -454,7 +461,7 @@ func TestMaaSGuardSignalsAlone(t *testing.T) {
 		f, c := managerWorld(t, nil)
 		maasServed(f)
 		f.put("/apis/maas.opendatahub.io/v1alpha1/namespaces/team/maasmodelrefs/their-model", map[string]any{
-			"metadata": map[string]any{"name": "their-model", "namespace": "team", "deletionTimestamp": "2026-11-19T10:00:00Z", "finalizers": []any{maasModelFinalizer}}})
+			"metadata": map[string]any{"name": "their-model", "namespace": "team", "deletionTimestamp": "2026-11-19T10:00:00Z", "finalizers": []any{serving.MaaSModelFinalizer}}})
 		plan := mustPlan(t, c, "toggle", "aigateway", "Removed", false)
 		b := maasBlock(plan, "aigateway")
 		if b == nil || !strings.Contains(b.Reasons[len(b.Reasons)-1], "published model team/their-model (being deleted)") {
@@ -463,7 +470,7 @@ func TestMaaSGuardSignalsAlone(t *testing.T) {
 	})
 	t.Run("record only", func(t *testing.T) {
 		f, c := managerWorld(t, nil)
-		putMaaSRecord(t, f, maasRecord{DSCChanged: true, PreviousModelsAsAService: "Removed"})
+		putMaaSRecord(t, f, serving.MaaSRecord{DSCChanged: true, PreviousModelsAsAService: "Removed"})
 		plan := mustPlan(t, c, "toggle", "aigateway.modelsAsAService", "Removed", false)
 		b := maasBlock(plan, "aigateway.modelsAsAService")
 		if b == nil || !strings.Contains(b.Reasons[0], "MaaS is in use (set up by this tool on the MaaS tab)") {
@@ -481,7 +488,7 @@ func TestMaaSGuardPaths(t *testing.T) {
 		setPath(t, dsc, "spec.components.aigateway.modelsAsAService.managementState", "Removed")
 		setPath(t, dsc, "spec.components.aigateway.batchGateway.managementState", "Managed")
 	})
-	putMaaSRecord(t, f, maasRecord{DBNamespace: "redhat-ai-gateway-infra", Database: "cnpg"})
+	putMaaSRecord(t, f, serving.MaaSRecord{DBNamespace: "redhat-ai-gateway-infra", Database: "cnpg"})
 	if b := maasBlock(mustPlan(t, c, "toggle", "aigateway", "Removed", false), "aigateway"); b == nil || !strings.Contains(b.Reasons[len(b.Reasons)-1], "MaaS is in use") {
 		t.Fatalf("aigateway: %+v", b)
 	}

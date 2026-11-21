@@ -62,7 +62,7 @@ echo -e "${GREEN}User:${NC}    $(oc whoami)"
 # The backend verifies the API server's certificate as oc does. ROSA and OSD
 # API certificates are publicly trusted; a self-managed cluster's are signed
 # by the cluster's own CA, which only the kubeconfig carries. Pass that CA on
-# (KUBE_CA_FILE, see pkg/cluster/client.go); an explicit KUBE_CA_FILE wins.
+# (KUBE_CA_FILE, see pkg/cluster/internal/kube/client.go); an explicit KUBE_CA_FILE wins.
 CA_TMP=""
 if [ -z "${KUBE_CA_FILE:-}" ]; then
   kube_cluster_field() { oc config view --raw --minify -o "jsonpath={.clusters[0].cluster.$1}" 2>/dev/null || true; }

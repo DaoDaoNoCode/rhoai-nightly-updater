@@ -1,6 +1,6 @@
 # What the tool changes on your cluster
 
-This is every object the updater creates, patches or deletes, with the conditions. It is derived from the write calls in `pkg/cluster` (`post`, `put`, `patch`, `strategicPatch`, `apply`, `delete`, `deleteWithUID`, `deleteExact`), from the Makefile and `scripts/install.sh`, and from the Helm chart `deploy/chart`.
+This is every object the updater creates, patches or deletes, with the conditions. It is derived from the write calls in `pkg/cluster` (`Post`, `Put`, `Patch`, `StrategicPatch`, `Apply`, `Delete`, `deleteWithUID`, `deleteExact`), from the Makefile and `scripts/install.sh`, and from the Helm chart `deploy/chart`.
 
 **Whose token makes the change (4.0.0).** Every change in §3 to §8 is made with the signed-in user's own OpenShift token, so the API server checks it against that user's RBAC and its audit log names the user (before 4.0.0 it named the updater's ServiceAccount). The updater's ServiceAccount writes only its own state (§2), the gitops profile's Update, and the background MaaS prune job (§7: it updates or deletes the tool's existing MaaS objects and narrows `maas-default-gateway`; it never creates). Its RBAC is in `deploy/template.yaml` ([SECURITY.md](../SECURITY.md#serviceaccount-rbac)).
 

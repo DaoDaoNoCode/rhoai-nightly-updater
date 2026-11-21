@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -28,7 +30,7 @@ type genAIFake struct {
 	t  *testing.T
 	mu sync.Mutex
 	// servers is each project's playground (absent: none).
-	servers map[string]*genAIServer
+	servers map[string]*features.GenAIServer
 	models  map[string]string // project -> aaa/models body
 	// startingReads is how many status reads a new playground reports
 	// Initializing before Ready; failPhase makes it report Failed instead.
@@ -60,7 +62,7 @@ type genAIFake struct {
 }
 
 func newGenAIFake(t *testing.T) *genAIFake {
-	return &genAIFake{t: t, servers: map[string]*genAIServer{}, models: map[string]string{}, reads: map[string]int{}, startingReads: 2}
+	return &genAIFake{t: t, servers: map[string]*features.GenAIServer{}, models: map[string]string{}, reads: map[string]int{}, startingReads: 2}
 }
 
 func (g *genAIFake) serve(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +81,7 @@ func (g *genAIFake) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	asUser := g.userToken != "" && r.Header.Get("Authorization") == "Bearer "+g.userToken
 	if asUser && r.Method+" "+r.URL.Path == "GET /gen-ai/api/v1/maas/models" {
-		_, _ = io.WriteString(w, firstNonEmpty(g.maasModels, `{"data":[]}`))
+		_, _ = io.WriteString(w, kube.FirstNonEmpty(g.maasModels, `{"data":[]}`))
 		return
 	}
 	for _, forwarding := range []string{"/gen-ai/api/v1/maas/", "/gen-ai/api/v1/lsd/responses", "/gen-ai/api/v1/genai-proxy/"} {
@@ -94,7 +96,7 @@ func (g *genAIFake) serve(w http.ResponseWriter, r *http.Request) {
 		if src := r.URL.Query()["sources"]; len(src) > 0 {
 			g.t.Errorf("aaa/models with sources %v: for sources=maas the dashboard asks MaaS with the caller's token", src)
 		}
-		_, _ = io.WriteString(w, firstNonEmpty(g.models[ns], `{"data":[]}`))
+		_, _ = io.WriteString(w, kube.FirstNonEmpty(g.models[ns], `{"data":[]}`))
 	case "GET /gen-ai/api/v1/lsd/status":
 		srv := g.servers[ns]
 		if srv == nil {
@@ -135,7 +137,7 @@ func (g *genAIFake) serve(w http.ResponseWriter, r *http.Request) {
 			_, _ = io.WriteString(w, `{"data":{"name":"lsd-genai-playground","httpStatus":"200"}}`)
 			return
 		}
-		g.servers[ns] = &genAIServer{Name: "lsd-genai-playground", Phase: "Initializing"}
+		g.servers[ns] = &features.GenAIServer{Name: "lsd-genai-playground", Phase: "Initializing"}
 		if g.onInstall != nil {
 			g.onInstall(ns)
 		}
@@ -198,19 +200,17 @@ func (e *playgroundEnv) putMaaSModels() {
 func newPlaygroundEnv(t *testing.T) *playgroundEnv {
 	t.Helper()
 	t.Setenv("NAMESPACE", "rhoai-nightly-updater")
-	PurgePlaygroundStatus()
+	features.PurgePlaygroundStatus()
 	k8s, c := newResourceFake(t)
 	// The ServiceAccount's client, as a read gets it: the gen-ai API is
 	// called with its token.
-	c.token = testGenAIToken
+	editTestClient(c, func(o *testClientOptions) { o.Token = testGenAIToken })
 	g := newGenAIFake(t)
 	g.models["proj"] = testQwenModels
 	srv := newFakeServer(http.HandlerFunc(g.serve))
 	t.Cleanup(srv.Close)
-	origBase, origClient := genAIBaseURL, genAIHTTPClient
-	genAIBaseURL = func(*Client) string { return srv.URL }
-	genAIHTTPClient = srv.Client()
-	t.Cleanup(func() { genAIBaseURL, genAIHTTPClient = origBase, origClient; PurgePlaygroundStatus() })
+	restoreGenAI := features.SetGenAIForTest(func(*Client) string { return srv.URL }, srv.Client())
+	t.Cleanup(func() { restoreGenAI(); features.PurgePlaygroundStatus() })
 	k8s.putJSON("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc", `{
 		"spec":{"components":{"ogx":{"managementState":"Managed"}}},
 		"status":{"conditions":[{"type":"OGXReady","status":"True"}]}}`)
@@ -223,7 +223,7 @@ func newPlaygroundEnv(t *testing.T) *playgroundEnv {
 	installs := 0
 	g.onInstall = func(ns string) {
 		installs++
-		e.putServer(ns, fmt.Sprintf("uid-installed-%d", installs), clk.Now())
+		e.putServer(ns, fmt.Sprintf("uid-installed-%d", installs), kube.Clock().Now())
 	}
 	return e
 }
@@ -253,9 +253,9 @@ func (e *playgroundEnv) run(t *testing.T, req types.PlaygroundRequest) (*types.O
 	return res, steps
 }
 
-func (e *playgroundEnv) records(t *testing.T) map[string]playgroundRecord {
+func (e *playgroundEnv) records(t *testing.T) map[string]features.PlaygroundRecord {
 	t.Helper()
-	r, err := readPlaygroundRecords(e.c)
+	r, err := features.ReadPlaygroundRecords(e.c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +330,7 @@ func TestPlayground_SetupWithTheServiceAccountNeverAddsAMaaSModel(t *testing.T) 
 // own token, as a change's client does (NewUserClient).
 func (e *playgroundEnv) userPlaygroundClient(token string) *Client {
 	uc := *e.c
-	uc.token, uc.asUser = token, true
+	editTestClient(&uc, func(o *testClientOptions) { o.Token, o.AsUser = token, true })
 	e.g.userToken = token
 	e.g.maasModels = `{"data":[{"id":"gpt-oss-20b","display_name":"GPT OSS 20B","ready":true,"capabilities":["text-generation"],"subscriptions":[{"name":"team-sub"}]}]}`
 	return &uc
@@ -366,22 +366,22 @@ func TestPlayground_SetupWithTheUsersTokenAddsAMaaSModel(t *testing.T) {
 		}
 	}
 	// The ServiceAccount's client gets the ServiceAccount allowlist.
-	if api, _, _ := playgroundAPI(e.c); api.asUser || api.token != testGenAIToken {
+	if api, _, _ := features.PlaygroundAPI(e.c); api.AsUser || api.Token != testGenAIToken {
 		t.Fatal("the ServiceAccount's client is treated as the user's")
 	}
 	// Even with the user's token, the calls that are not the playground's
 	// own stay refused.
-	api, _, _ := playgroundAPI(uc)
-	if !api.asUser || api.token != userToken {
+	api, _, _ := features.PlaygroundAPI(uc)
+	if !api.AsUser || api.Token != userToken {
 		t.Fatal("the user's client does not call with the user's token")
 	}
 	for _, c := range []struct{ method, path string }{{http.MethodPost, "/maas/tokens"}, {http.MethodPost, "/lsd/responses"}, {http.MethodGet, "/genai-proxy/ns/proj/v1/models"}} {
-		if err := api.call(c.method, c.path, "proj", nil, nil); !errors.Is(err, errGenAINotAllowed) {
+		if err := api.Call(c.method, c.path, "proj", nil, nil); !errors.Is(err, features.ErrGenAINotAllowed) {
 			t.Errorf("%s %s with the user's token: %v", c.method, c.path, err)
 		}
 	}
 	traced := map[string]any{"enable_guardrails": false, "enable_tracing": true, "vector_stores": []any{}, "models": []map[string]any{{"model_name": "m", "model_source_type": "maas"}}}
-	if err := api.call(http.MethodPost, "/lsd/install", "proj", traced, nil); !errors.Is(err, errGenAINotAllowed) {
+	if err := api.Call(http.MethodPost, "/lsd/install", "proj", traced, nil); !errors.Is(err, features.ErrGenAINotAllowed) {
 		t.Errorf("an install with tracing: %v", err)
 	}
 }
@@ -419,7 +419,7 @@ func TestPlayground_SetupWithProjectModelsOnlyNeverReachesMaaS(t *testing.T) {
 // check guards the token whatever calls it.
 func TestPlayground_GenAIClientRefusesCallsThatReachMaaS(t *testing.T) {
 	e := newPlaygroundEnv(t)
-	api, problem, _ := playgroundAPI(e.c)
+	api, problem, _ := features.PlaygroundAPI(e.c)
 	if problem != "" {
 		t.Fatal(problem)
 	}
@@ -450,14 +450,14 @@ func TestPlayground_GenAIClientRefusesCallsThatReachMaaS(t *testing.T) {
 		{http.MethodPost, "/lsd/install", nil},
 		{http.MethodGet, "/lsd/models", nil},
 	} {
-		if err := api.call(c.method, c.path, "proj", c.in, nil); !errors.Is(err, errGenAINotAllowed) {
+		if err := api.Call(c.method, c.path, "proj", c.in, nil); !errors.Is(err, features.ErrGenAINotAllowed) {
 			t.Errorf("%s %s %v: got %v", c.method, c.path, c.in, err)
 		}
 	}
 	if len(e.g.paths) != 0 {
 		t.Fatalf("sent: %v", e.g.paths)
 	}
-	if err := api.call(http.MethodPost, "/lsd/install", "proj", install(nil), nil); err != nil {
+	if err := api.Call(http.MethodPost, "/lsd/install", "proj", install(nil), nil); err != nil {
 		t.Fatalf("an install with the project's own model: %v", err)
 	}
 }
@@ -532,7 +532,7 @@ func TestPlayground_SetupUsesTheReadyModelsOnly(t *testing.T) {
 		t.Errorf("the check does not name the model left out: %s", steps[0].Message)
 	}
 	// A chosen model that is not ready is still refused.
-	PurgePlaygroundStatus()
+	features.PurgePlaygroundStatus()
 	delete(e.g.servers, "proj")
 	req := setup()
 	req.Models = []types.PlaygroundModelRef{{Name: "deepseek", Source: "namespace"}}
@@ -560,9 +560,9 @@ func TestPlayground_AStaleRecordDoesNotOwnANewPlayground(t *testing.T) {
 	if res, _ := e.run(t, setup()); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
-	e.g.servers["proj"] = &genAIServer{Name: "lsd-genai-playground", Phase: "Ready"}
-	e.putServer("proj", "uid-made-in-the-dashboard", clk.Now())
-	PurgePlaygroundStatus()
+	e.g.servers["proj"] = &features.GenAIServer{Name: "lsd-genai-playground", Phase: "Ready"}
+	e.putServer("proj", "uid-made-in-the-dashboard", kube.Clock().Now())
+	features.PurgePlaygroundStatus()
 	st, err := GetPlaygroundStatus(e.c, e.reader, "proj")
 	if err != nil || len(st.Items) != 1 || st.Items[0].ManagedByTool {
 		t.Fatalf("status %+v, %v", st, err)
@@ -587,8 +587,8 @@ func TestPlayground_AnInstallAnsweredWithAnExistingServerIsNotOwned(t *testing.T
 		if method == http.MethodPatch && path == testRecordPath {
 			e.g.mu.Lock()
 			if e.g.servers["proj"] == nil {
-				e.g.servers["proj"] = &genAIServer{Name: "lsd-genai-playground", Phase: "Ready"}
-				e.putServer("proj", "uid-someone-else", clk.Now().Add(-time.Minute))
+				e.g.servers["proj"] = &features.GenAIServer{Name: "lsd-genai-playground", Phase: "Ready"}
+				e.putServer("proj", "uid-someone-else", kube.Clock().Now().Add(-time.Minute))
 			}
 			e.g.mu.Unlock()
 		}
@@ -654,7 +654,7 @@ func TestPlayground_SetupNeedsAChatModel(t *testing.T) {
 // delete refuse, and nothing is sent to change it.
 func TestPlayground_LeavesAPlaygroundItDidNotRequest(t *testing.T) {
 	e := newPlaygroundEnv(t)
-	e.g.servers["proj"] = &genAIServer{Name: "lsd-genai-playground", Phase: "Ready"}
+	e.g.servers["proj"] = &features.GenAIServer{Name: "lsd-genai-playground", Phase: "Ready"}
 	if res, _ := e.run(t, setup()); res.Success || res.ErrorCode != "not_managed" {
 		t.Fatalf("setup: %+v", res)
 	}
@@ -748,7 +748,7 @@ func TestPlayground_UnknownOperatorReadinessIsANote(t *testing.T) {
 
 func TestPlayground_NoToken(t *testing.T) {
 	e := newPlaygroundEnv(t)
-	e.c.token = ""
+	editTestClient(e.c, func(o *testClientOptions) { o.Token = "" })
 	res, err := RunPlayground(e.c, setup(), nil)
 	if err != nil || res.Success || res.ErrorCode != "no_token" || len(e.g.auth) != 0 {
 		t.Fatalf("got %+v, %v", res, err)
@@ -762,9 +762,9 @@ func TestPlayground_Status(t *testing.T) {
 	if res, _ := e.run(t, setup()); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
-	e.g.servers["other"] = &genAIServer{Name: "lsd-genai-playground", Phase: "Initializing"}
+	e.g.servers["other"] = &features.GenAIServer{Name: "lsd-genai-playground", Phase: "Initializing"}
 	e.g.startingReads = 1 << 20
-	PurgePlaygroundStatus()
+	features.PurgePlaygroundStatus()
 	st, err := GetPlaygroundStatus(e.c, e.reader, "proj")
 	if err != nil {
 		t.Fatal(err)
@@ -807,7 +807,7 @@ func TestPlayground_StatusOfAnAPIThatDiffers(t *testing.T) {
 
 func TestPlayground_StatusWithoutToken(t *testing.T) {
 	e := newPlaygroundEnv(t)
-	e.reader.token = ""
+	editTestClient(e.reader, func(o *testClientOptions) { o.Token = "" })
 	st, err := GetPlaygroundStatus(e.c, e.reader, "")
 	if err != nil || st.APICode != "no_token" || len(e.g.auth) != 0 {
 		t.Fatalf("got %+v, %v", st, err)
@@ -826,7 +826,7 @@ func TestPlayground_StatusIsTheUsers(t *testing.T) {
 	}
 	// The reader may see proj only.
 	e.k8s.deleteObject("/apis/project.openshift.io/v1/projects/other")
-	PurgePlaygroundStatus()
+	features.PurgePlaygroundStatus()
 	before := len(e.g.auth)
 	st, err := GetPlaygroundStatus(e.c, e.reader, "proj")
 	if err != nil {

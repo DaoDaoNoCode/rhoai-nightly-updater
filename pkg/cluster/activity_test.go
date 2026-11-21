@@ -10,15 +10,16 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 // TestRecordActivityConcurrent verifies that optimistic concurrency in
-// RecordActivity properly handles concurrent callers so that no entries are lost.
+// record.Activity properly handles concurrent callers so that no entries are lost.
 //
 // It spins up a mock K8s API server that stores ConfigMap state in memory
 // and enforces resourceVersion checks (returning 409 Conflict on mismatch).
-// It launches goroutines that each call RecordActivity once.  After all
+// It launches goroutines that each call record.Activity once.  After all
 // goroutines finish, it reads the ConfigMap and asserts that all entries
 // are present.
 //
@@ -159,20 +160,20 @@ func TestRecordActivityConcurrent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &Client{
-		baseURL:    server.URL,
-		token:      "test-token",
-		httpClient: &http.Client{},
-		ctx:        context.Background(),
-	}
+	client := newTestClient(testClientOptions{
+		BaseURL:    server.URL,
+		Token:      "test-token",
+		HTTPClient: &http.Client{},
+		Ctx:        context.Background(),
+	})
 
-	// Launch numGoroutines concurrent RecordActivity calls.
+	// Launch numGoroutines concurrent record.Activity calls.
 	var wg sync.WaitGroup
 	wg.Add(numGoroutines)
 	for i := range numGoroutines {
 		go func(idx int) {
 			defer wg.Done()
-			RecordActivity(client, types.ActivityEntry{
+			record.Activity(client, types.ActivityEntry{
 				Timestamp: fmt.Sprintf("2025-01-01T00:00:%02dZ", idx),
 				User:      fmt.Sprintf("user-%d", idx),
 				Action:    "test",
@@ -305,16 +306,16 @@ func TestRecordActivityExceedsMax(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &Client{
-		baseURL:    server.URL,
-		token:      "test-token",
-		httpClient: &http.Client{},
-		ctx:        context.Background(),
-	}
+	client := newTestClient(testClientOptions{
+		BaseURL:    server.URL,
+		Token:      "test-token",
+		HTTPClient: &http.Client{},
+		Ctx:        context.Background(),
+	})
 
-	// Call RecordActivity sequentially to isolate trimming behavior
+	// Call record.Activity sequentially to isolate trimming behavior
 	for i := range numEntries {
-		RecordActivity(client, types.ActivityEntry{
+		record.Activity(client, types.ActivityEntry{
 			Timestamp: fmt.Sprintf("2025-01-01T00:00:%02dZ", i%60),
 			User:      fmt.Sprintf("user-%d", i),
 			Action:    "test",
@@ -340,8 +341,8 @@ func TestRecordActivityExceedsMax(t *testing.T) {
 		t.Fatalf("failed to parse entries: %v", err)
 	}
 
-	if len(entries) != maxActivityEntries {
-		t.Fatalf("expected %d entries (maxActivityEntries), got %d", maxActivityEntries, len(entries))
+	if len(entries) != record.MaxActivityEntries {
+		t.Fatalf("expected %d entries (maxActivityEntries), got %d", record.MaxActivityEntries, len(entries))
 	}
 }
 

@@ -8,6 +8,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // R5-F4/F8: the worst case of one operation (Dashboard Dev revert and every
@@ -54,40 +59,38 @@ func TestShutdownBudgetFitsTerminationGracePeriod(t *testing.T) {
 		t.Fatalf("marker clear %s / flush %s cannot cover a pending retry write plus its own write", MarkerClearTimeout, MarkerFlushTimeout)
 	}
 
-	if RecoveryTimeout != restoreCSVBudget+restoreApplyTimeout {
+	if RecoveryTimeout != record.RestoreCSVBudget+record.RestoreApplyTimeout {
 		t.Fatalf("RecoveryTimeout %s is not the sum of its phases", RecoveryTimeout)
 	}
 	// After the deadline: the restore, then the activity entry and the
 	// Subscription record (all capped together by postOperationContext),
 	// then the marker clear.
-	worst := OperationDeadline + postDeadlineWork() + MarkerClearTimeout
+	worst := OperationDeadline + record.PostDeadlineWork() + MarkerClearTimeout
 	if ShutdownDrainTimeout() < worst {
 		t.Fatalf("drain %s < worst case %s", ShutdownDrainTimeout(), worst)
 	}
 	total := ShutdownDrainTimeout() + MarkerFlushTimeout + HTTPShutdownTimeout
-	if ShutdownMargin < 10*time.Second || total+ShutdownMargin > grace {
+	if record.ShutdownMargin < 10*time.Second || total+record.ShutdownMargin > grace {
 		t.Fatalf("drain %s + marker flush %s + HTTP shutdown %s = %s, plus a %s margin, exceeds terminationGracePeriodSeconds %s",
-			ShutdownDrainTimeout(), MarkerFlushTimeout, HTTPShutdownTimeout, total, ShutdownMargin, grace)
+			ShutdownDrainTimeout(), MarkerFlushTimeout, HTTPShutdownTimeout, total, record.ShutdownMargin, grace)
 	}
-	if installDeadlineReserve <= 0 || installDeadlineReserve >= OperationDeadline {
-		t.Fatalf("installDeadlineReserve = %s", installDeadlineReserve)
+	if operator.InstallDeadlineReserve <= 0 || operator.InstallDeadlineReserve >= OperationDeadline {
+		t.Fatalf("installDeadlineReserve = %s", operator.InstallDeadlineReserve)
 	}
 }
 
 // R5-F8: the install wait ends on its own before the operation's deadline,
 // whatever OperatorInstallTimeout says.
 func TestInstallWaitEndsBeforeTheOperationDeadline(t *testing.T) {
-	old := OperatorInstallTimeout
-	OperatorInstallTimeout = time.Minute
-	t.Cleanup(func() { OperatorInstallTimeout = old })
+	t.Cleanup(operator.SetInstallTimeoutForTest(time.Minute))
 	f := newFakeOLM(t)
-	f.sub = map[string]any{"metadata": map[string]any{"name": SubName}, "spec": map[string]any{}, "status": map[string]any{}}
-	ctx, cancel := clk.WithTimeout(context.Background(), installDeadlineReserve+300*time.Millisecond)
+	f.sub = map[string]any{"metadata": map[string]any{"name": rhoai.SubName}, "spec": map[string]any{}, "status": map[string]any{}}
+	ctx, cancel := kube.Clock().WithTimeout(context.Background(), operator.InstallDeadlineReserve+300*time.Millisecond)
 	defer cancel()
 	var logs []string
-	start := clk.Now()
-	out := waitForOperatorInstall(f.client(ctx), func(UpdateStepEvent) {}, &logs, &operatorRecovery{}, "")
-	if out.errorCode != "install_timeout" || !strings.Contains(out.message, "time budget") || clk.Since(start) > 300*time.Millisecond+InstallPlanPollInterval {
-		t.Fatalf("outcome = %+v after %s", out, clk.Since(start))
+	start := kube.Clock().Now()
+	out := operator.WaitForInstall(f.client(ctx), func(UpdateStepEvent) {}, &logs, &operator.Recovery{}, "")
+	if out.ErrorCode != "install_timeout" || !strings.Contains(out.Message, "time budget") || kube.Clock().Since(start) > 300*time.Millisecond+operator.InstallPlanPollInterval {
+		t.Fatalf("outcome = %+v after %s", out, kube.Clock().Since(start))
 	}
 }

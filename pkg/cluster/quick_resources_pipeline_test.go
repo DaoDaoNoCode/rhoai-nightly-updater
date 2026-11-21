@@ -5,17 +5,22 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 )
 
 func dspaPath(ns, name string) string {
-	return "/apis/" + dspaAPIGroup + "/namespaces/" + ns + "/datasciencepipelinesapplications/" + name
+	return "/apis/" + storage.DSPAAPIGroup + "/namespaces/" + ns + "/datasciencepipelinesapplications/" + name
 }
 
 func secretPath(ns, name string) string {
 	return "/api/v1/namespaces/" + ns + "/secrets/" + name
 }
 
-const toolLabelJSON = `{"` + managedByLabelKey + `":"` + managedByLabelValue + `"}`
+const toolLabelJSON = `{"` + kube.ManagedByLabelKey + `":"` + kube.ManagedByLabelValue + `"}`
 
 // putDSPA stores a DSPA. labels is a JSON object, manager the creator.
 func putDSPA(f *resourceFake, ns, name, labels, manager, op, host, secret, extraMeta, status string) {
@@ -37,9 +42,7 @@ func putDSPO(f *resourceFake, ready int) {
 
 func fastPipelineTimings(t *testing.T) {
 	t.Helper()
-	oldT, oldP := PipelineServerDeleteTimeout, PipelineServerDeletePoll
-	PipelineServerDeleteTimeout, PipelineServerDeletePoll = 100*time.Millisecond, 10*time.Millisecond
-	t.Cleanup(func() { PipelineServerDeleteTimeout, PipelineServerDeletePoll = oldT, oldP })
+	t.Cleanup(storage.SetPipelineServerDeleteTimingForTest(100*time.Millisecond, 10*time.Millisecond))
 }
 
 func TestGetResourcesStatus_ListsOnlyToolPipelineServers(t *testing.T) {
@@ -52,14 +55,14 @@ func TestGetResourcesStatus_ListsOnlyToolPipelineServers(t *testing.T) {
 		putDSProject(f, ns)
 	}
 	notReady := `{"conditions":[{"type":"Ready","status":"False","reason":"MinimumReplicasAvailable","message":"Could not connect to (seaweedfs-s3.seaweedfs.svc:8333): connection refused"}]}`
-	putDSPA(f, "mine", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", notReady)
-	putDSPA(f, "legacy-apply", "dspa", `{}`, toolFieldManager, "Apply", legacyS3Host(), legacyDSPASecretName, "", "")
-	putDSPA(f, "legacy-post", "dspa", `{}`, legacyPostManager, "Update", legacyS3Host(), legacyDSPASecretName, "", "")
+	putDSPA(f, "mine", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, "", notReady)
+	putDSPA(f, "legacy-apply", "dspa", `{}`, envkit.ToolFieldManager, "Apply", storage.LegacyS3Host(), storage.LegacyDSPASecretName, "", "")
+	putDSPA(f, "legacy-post", "dspa", `{}`, envkit.LegacyPostManager, "Update", storage.LegacyS3Host(), storage.LegacyDSPASecretName, "", "")
 	// Created from the RHOAI dashboard: same name, secret and even host.
-	putDSPA(f, "dashboard-same-spec", "dspa", `{}`, "unknown", "Update", legacyS3Host(), legacyDSPASecretName, "", "")
-	putDSPA(f, "dashboard", "dspa", `{}`, "Mozilla", "Update", "s3.amazonaws.com", legacyDSPASecretName, "", "")
+	putDSPA(f, "dashboard-same-spec", "dspa", `{}`, "unknown", "Update", storage.LegacyS3Host(), storage.LegacyDSPASecretName, "", "")
+	putDSPA(f, "dashboard", "dspa", `{}`, "Mozilla", "Update", "s3.amazonaws.com", storage.LegacyDSPASecretName, "", "")
 	// A tool DSPA in a project the user cannot see.
-	putDSPA(f, "hidden", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
+	putDSPA(f, "hidden", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, "", "")
 
 	st, err := GetResourcesStatus(c)
 	if err != nil {
@@ -72,7 +75,7 @@ func TestGetResourcesStatus_ListsOnlyToolPipelineServers(t *testing.T) {
 			t.Errorf("%s listed without ManagedByTool", ps.Namespace)
 		}
 	}
-	if strings.Join(got, ",") != "legacy-apply/dspa,legacy-post/dspa,mine/"+dspaName {
+	if strings.Join(got, ",") != "legacy-apply/dspa,legacy-post/dspa,mine/"+storage.DSPAName {
 		t.Errorf("pipeline servers = %v", got)
 	}
 	if strings.Join(st.UnmanagedPipelineProjects, ",") != "dashboard,dashboard-same-spec" {
@@ -98,18 +101,18 @@ func TestGetResourcesStatus_ListsOnlyToolPipelineServers(t *testing.T) {
 			if !ps.TerminalError {
 				t.Errorf("a pipeline server not ready long after creation should be terminal: %+v", ps)
 			}
-			if len(ps.DataPVCs) != 1 || ps.DataPVCs[0] != "mariadb-"+dspaName {
+			if len(ps.DataPVCs) != 1 || ps.DataPVCs[0] != "mariadb-"+storage.DSPAName {
 				t.Errorf("DataPVCs = %v", ps.DataPVCs)
 			}
 		}
 	}
 	// Every live DSPA on the tool's storages blocks their teardown,
 	// including the dashboard-created one and the one in a hidden project.
-	if !strings.Contains(st.MinIO.TeardownBlockedReason, "5 pipeline servers use this S3 storage: dashboard-same-spec/dspa, hidden/"+dspaName+", legacy-apply/dspa, legacy-post/dspa, mine/"+dspaName+".") || !strings.Contains(st.MinIO.TeardownBlockedReason, "dashboard-same-spec/dspa") {
+	if !strings.Contains(st.MinIO.TeardownBlockedReason, "5 pipeline servers use this S3 storage: dashboard-same-spec/dspa, hidden/"+storage.DSPAName+", legacy-apply/dspa, legacy-post/dspa, mine/"+storage.DSPAName+".") || !strings.Contains(st.MinIO.TeardownBlockedReason, "dashboard-same-spec/dspa") {
 		t.Errorf("S3 storage teardown reason = %q", st.MinIO.TeardownBlockedReason)
 	}
 	// The same users, structured, for the clean-up's selection.
-	if got := strings.Join(st.MinIO.UsedBy, " "); got != "dashboard-same-spec/dspa hidden/"+dspaName+" legacy-apply/dspa legacy-post/dspa mine/"+dspaName {
+	if got := strings.Join(st.MinIO.UsedBy, " "); got != "dashboard-same-spec/dspa hidden/"+storage.DSPAName+" legacy-apply/dspa legacy-post/dspa mine/"+storage.DSPAName {
 		t.Errorf("S3 storage users = %q", got)
 	}
 }
@@ -120,7 +123,7 @@ func TestGetResourcesStatus_ListsOnlyToolPipelineServers(t *testing.T) {
 // APIServerReady, not Ready). Ready=False alone, for example while another
 // component restarts, is not stuck.
 func TestPipelineServerState_StuckFollowsAPIServerReady(t *testing.T) {
-	old := time.Now().Add(-dspaStuckAfter - time.Minute).UTC().Format(time.RFC3339)
+	old := time.Now().Add(-storage.DSPAStuckAfter - time.Minute).UTC().Format(time.RFC3339)
 	fresh := time.Now().UTC().Format(time.RFC3339)
 	cases := []struct {
 		name, created, conditions string
@@ -138,8 +141,8 @@ func TestPipelineServerState_StuckFollowsAPIServerReady(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newResourceFake(t)
 			putDSProject(f, "proj")
-			f.putJSON(dspaPath("proj", dspaName), `{"metadata":{"labels":`+toolLabelJSON+`,"creationTimestamp":"`+tc.created+`"},
-				"spec":{"objectStorage":{"externalStorage":{"host":"`+s3Host()+`","s3CredentialsSecret":{"secretName":"`+dspaSecretName+`"}}}},
+			f.putJSON(dspaPath("proj", storage.DSPAName), `{"metadata":{"labels":`+toolLabelJSON+`,"creationTimestamp":"`+tc.created+`"},
+				"spec":{"objectStorage":{"externalStorage":{"host":"`+storage.S3Host()+`","s3CredentialsSecret":{"secretName":"`+storage.DSPASecretName+`"}}}},
 				"status":{"conditions":`+tc.conditions+`}}`)
 			st, err := GetResourcesStatus(c)
 			if err != nil || len(st.PipelineServers) != 1 {
@@ -160,7 +163,7 @@ func TestGetResourcesStatus_RequestCountDoesNotGrowWithProjects(t *testing.T) {
 		for i := range projects {
 			ns := "p" + itoa(i)
 			putDSProject(f, ns)
-			putDSPA(f, ns, dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", `{"conditions":[{"type":"Ready","status":"True"}]}`)
+			putDSPA(f, ns, storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, "", `{"conditions":[{"type":"Ready","status":"True"}]}`)
 		}
 		if _, err := GetResourcesStatus(c); err != nil {
 			t.Fatal(err)
@@ -211,23 +214,23 @@ func TestSetupPipelineServer_CreatesTheStandardName(t *testing.T) {
 			t.Errorf("setup changed a namespace: %s", m)
 		}
 	}
-	if dspaName != "dspa" {
-		t.Fatalf("dspaName = %q, want the workbench controller's dspa", dspaName)
+	if storage.DSPAName != "dspa" {
+		t.Fatalf("dspaName = %q, want the workbench controller's dspa", storage.DSPAName)
 	}
-	for _, path := range []string{dspaPath("new-project", "dspa"), secretPath("new-project", dspaSecretName)} {
+	for _, path := range []string{dspaPath("new-project", "dspa"), secretPath("new-project", storage.DSPASecretName)} {
 		obj := f.get(path)
 		if obj == nil {
 			t.Fatalf("%s not created", path)
 		}
 		l := obj["metadata"].(map[string]any)["labels"].(map[string]any)
-		if l[managedByLabelKey] != managedByLabelValue {
+		if l[kube.ManagedByLabelKey] != kube.ManagedByLabelValue {
 			t.Errorf("%s lacks the ownership label", path)
 		}
 	}
-	if f.has(dspaPath("new-project", previousDSPAName)) || f.has(secretPath("new-project", legacyDSPASecretName)) {
+	if f.has(dspaPath("new-project", storage.PreviousDSPAName)) || f.has(secretPath("new-project", storage.LegacyDSPASecretName)) {
 		t.Error("setup must create only dspa and the tool's own secret name")
 	}
-	raw, _ := json.Marshal(f.get(dspaPath("new-project", dspaName)))
+	raw, _ := json.Marshal(f.get(dspaPath("new-project", storage.DSPAName)))
 	if strings.Contains(string(raw), "instructLab") {
 		t.Errorf("DSPA sends a field the 3.6 CRD does not declare: %s", raw)
 	}
@@ -245,7 +248,7 @@ func putDSPACRD(f *resourceFake, managedEnabled, mlflow bool) {
 	if mlflow {
 		spec += `,"mlflow":{"type":"object","properties":{"integrationMode":{"type":"string","enum":["AUTODETECT","DISABLED"]},"injectUserEnvVars":{"type":"boolean"}}}`
 	}
-	f.putJSON(clusterPath("apiextensions.k8s.io/v1", "customresourcedefinitions", dspaCRDName),
+	f.putJSON(rhoai.ClusterPath("apiextensions.k8s.io/v1", "customresourcedefinitions", storage.DSPACRDName),
 		`{"spec":{"versions":[{"name":"v1","served":true,"storage":true,"schema":{"openAPIV3Schema":{"type":"object","properties":{"spec":{"type":"object","properties":{`+spec+`}}}}}}]}}`)
 }
 
@@ -277,7 +280,7 @@ func TestSetupPipelineServer_DashboardSettingsWhenTheCRDHasThem(t *testing.T) {
 			if resp, _ := SetupPipelineServer(c, "proj"); !resp.Success {
 				t.Fatalf("setup failed: %+v", resp)
 			}
-			spec := ensureMap(f.get(dspaPath("proj", dspaName)), "spec")
+			spec := ensureMap(f.get(dspaPath("proj", storage.DSPAName)), "spec")
 			api := ensureMap(spec, "apiServer")
 			if api["pipelineStore"] != "database" || api["cacheEnabled"] != true || api["enableSamplePipeline"] != false {
 				t.Errorf("apiServer = %v", api)
@@ -311,7 +314,7 @@ func assertOwnedByDSPA(t *testing.T, f *resourceFake, path, ns, name string) {
 		t.Fatalf("%s ownerReferences = %v", path, refs)
 	}
 	ref := refs[0].(map[string]any)
-	if ref["apiVersion"] != dspaAPIGroup || ref["kind"] != "DataSciencePipelinesApplication" || ref["name"] != name || ref["uid"] != uid || uid == nil {
+	if ref["apiVersion"] != storage.DSPAAPIGroup || ref["kind"] != "DataSciencePipelinesApplication" || ref["name"] != name || ref["uid"] != uid || uid == nil {
 		t.Errorf("%s owner = %v, want DSPA %s/%s uid %v", path, ref, ns, name, uid)
 	}
 	if _, ok := ref["blockOwnerDeletion"]; ok {
@@ -337,9 +340,9 @@ func TestSetupPipelineServer_SecretOwnedByTheDSPA(t *testing.T) {
 		if resp, _ := SetupPipelineServer(c, "proj"); !resp.Success {
 			t.Fatalf("run %d: %+v", run, resp)
 		}
-		assertOwnedByDSPA(t, f, secretPath("proj", dspaSecretName), "proj", dspaName)
-		labels, _ := ensureMap(f.get(secretPath("proj", dspaSecretName)), "metadata")["labels"].(map[string]any)
-		if labels["opendatahub.io/dashboard"] != "true" || labels[managedByLabelKey] != managedByLabelValue {
+		assertOwnedByDSPA(t, f, secretPath("proj", storage.DSPASecretName), "proj", storage.DSPAName)
+		labels, _ := ensureMap(f.get(secretPath("proj", storage.DSPASecretName)), "metadata")["labels"].(map[string]any)
+		if labels["opendatahub.io/dashboard"] != "true" || labels[kube.ManagedByLabelKey] != kube.ManagedByLabelValue {
 			t.Errorf("run %d: secret labels = %v", run, labels)
 		}
 	}
@@ -351,12 +354,12 @@ func TestSetupPipelineServer_OwnerWriteFailure(t *testing.T) {
 	putManagedDSC(f)
 	putReadyManagedS3(f)
 	putDSProject(f, "proj")
-	f.fail["PATCH "+secretPath("proj", dspaSecretName)] = 500
+	f.fail["PATCH "+secretPath("proj", storage.DSPASecretName)] = 500
 	resp, _ := SetupPipelineServer(c, "proj")
-	if resp.Success || resp.ErrorCode != "partial_failure" || !strings.Contains(resp.Message, "Pipeline server created") || !strings.Contains(resp.Message, dspaSecretName) {
+	if resp.Success || resp.ErrorCode != "partial_failure" || !strings.Contains(resp.Message, "Pipeline server created") || !strings.Contains(resp.Message, storage.DSPASecretName) {
 		t.Fatalf("got %+v", resp)
 	}
-	if !f.has(dspaPath("proj", dspaName)) {
+	if !f.has(dspaPath("proj", storage.DSPAName)) {
 		t.Error("the pipeline server must stay")
 	}
 }
@@ -379,29 +382,29 @@ func TestSetupPipelineServer_Refusals(t *testing.T) {
 		{"project has a dashboard pipeline server", func(f *resourceFake) {
 			putReadyManagedS3(f)
 			putDSProject(f, "proj")
-			putDSPA(f, "proj", "dspa", `{}`, "unknown", "Update", legacyS3Host(), legacyDSPASecretName, "", "")
+			putDSPA(f, "proj", "dspa", `{}`, "unknown", "Update", storage.LegacyS3Host(), storage.LegacyDSPASecretName, "", "")
 		}, "not_managed"},
 		{"project has a pipeline server from an earlier version", func(f *resourceFake) {
 			putReadyManagedS3(f)
 			putDSProject(f, "proj")
-			putDSPA(f, "proj", "dspa", `{}`, legacyPostManager, "Update", legacyS3Host(), legacyDSPASecretName, "", "")
+			putDSPA(f, "proj", "dspa", `{}`, envkit.LegacyPostManager, "Update", storage.LegacyS3Host(), storage.LegacyDSPASecretName, "", "")
 		}, "validation"},
 		// A server this tool set up under its earlier name: Set up does not
 		// add dspa next to it; Recreate replaces it.
 		{"project has the tool's nightly-dspa", func(f *resourceFake) {
 			putReadyManagedS3(f)
 			putDSProject(f, "proj")
-			putDSPA(f, "proj", previousDSPAName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
+			putDSPA(f, "proj", storage.PreviousDSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, "", "")
 		}, "validation"},
 		{"secret name taken by someone else", func(f *resourceFake) {
 			putReadyManagedS3(f)
 			putDSProject(f, "proj")
-			f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{}}`)
+			f.putJSON(secretPath("proj", storage.DSPASecretName), `{"metadata":{}}`)
 		}, "not_managed"},
 		{"no DSPA CRD", func(f *resourceFake) {
 			putReadyManagedS3(f)
 			putDSProject(f, "proj")
-			f.fail["GET /apis/"+dspaAPIGroup+"/namespaces/proj/datasciencepipelinesapplications"] = 404
+			f.fail["GET /apis/"+storage.DSPAAPIGroup+"/namespaces/proj/datasciencepipelinesapplications"] = 404
 		}, "prerequisites"},
 		// Only a Data Science project (made in the dashboard) gets a
 		// pipeline server: setup never creates the namespace.
@@ -448,7 +451,7 @@ func TestSetupPipelineServer_RerunIsIdempotent(t *testing.T) {
 }
 
 func TestTeardownPipelineServer(t *testing.T) {
-	withFinalizer := `,"finalizers":["` + dspaFinalizer + `"]`
+	withFinalizer := `,"finalizers":["` + storage.DSPAFinalizer + `"]`
 	cases := []struct {
 		name          string
 		setup         func(f *resourceFake)
@@ -463,39 +466,39 @@ func TestTeardownPipelineServer(t *testing.T) {
 		{
 			name: "tool pipeline server",
 			setup: func(f *resourceFake) {
-				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
-				f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
+				putDSPA(f, "proj", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, "", "")
+				f.putJSON(secretPath("proj", storage.DSPASecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 			},
-			wantOK: true, wantDeleted: []string{dspaPath("proj", dspaName), secretPath("proj", dspaSecretName)}, wantMsg: "mariadb-" + dspaName,
+			wantOK: true, wantDeleted: []string{dspaPath("proj", storage.DSPAName), secretPath("proj", storage.DSPASecretName)}, wantMsg: "mariadb-" + storage.DSPAName,
 		},
 		{
 			name: "dashboard pipeline server is never deleted",
 			setup: func(f *resourceFake) {
-				putDSPA(f, "proj", "dspa", `{}`, "unknown", "Update", legacyS3Host(), legacyDSPASecretName, "", "")
-				f.putJSON(secretPath("proj", legacyDSPASecretName), `{"metadata":{}}`)
+				putDSPA(f, "proj", "dspa", `{}`, "unknown", "Update", storage.LegacyS3Host(), storage.LegacyDSPASecretName, "", "")
+				f.putJSON(secretPath("proj", storage.LegacyDSPASecretName), `{"metadata":{}}`)
 			},
 			wantCode: "not_managed", wantNoDeletes: true,
 		},
 		{
 			name: "legacy pipeline server and secret",
 			setup: func(f *resourceFake) {
-				putDSPA(f, "proj", "dspa", `{}`, legacyPostManager, "Update", legacyS3Host(), legacyDSPASecretName, "", "")
-				f.putJSON(secretPath("proj", legacyDSPASecretName), `{"metadata":{"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(toolFieldManager, "Apply")+`}}`)
+				putDSPA(f, "proj", "dspa", `{}`, envkit.LegacyPostManager, "Update", storage.LegacyS3Host(), storage.LegacyDSPASecretName, "", "")
+				f.putJSON(secretPath("proj", storage.LegacyDSPASecretName), `{"metadata":{"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON(envkit.ToolFieldManager, "Apply")+`}}`)
 			},
-			wantOK: true, wantDeleted: []string{dspaPath("proj", "dspa"), secretPath("proj", legacyDSPASecretName)},
+			wantOK: true, wantDeleted: []string{dspaPath("proj", "dspa"), secretPath("proj", storage.LegacyDSPASecretName)},
 		},
 		{
 			name: "legacy pipeline server whose secret someone else created",
 			setup: func(f *resourceFake) {
-				putDSPA(f, "proj", "dspa", `{}`, toolFieldManager, "Apply", legacyS3Host(), legacyDSPASecretName, "", "")
-				f.putJSON(secretPath("proj", legacyDSPASecretName), `{"metadata":{"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON("unknown", "Update")+`}}`)
+				putDSPA(f, "proj", "dspa", `{}`, envkit.ToolFieldManager, "Apply", storage.LegacyS3Host(), storage.LegacyDSPASecretName, "", "")
+				f.putJSON(secretPath("proj", storage.LegacyDSPASecretName), `{"metadata":{"creationTimestamp":"`+created+`","managedFields":`+managedFieldsJSON("unknown", "Update")+`}}`)
 			},
-			wantOK: true, wantDeleted: []string{dspaPath("proj", "dspa")}, wantKept: []string{secretPath("proj", legacyDSPASecretName)},
+			wantOK: true, wantDeleted: []string{dspaPath("proj", "dspa")}, wantKept: []string{secretPath("proj", storage.LegacyDSPASecretName)},
 		},
 		{
 			name: "finalizer and operator not running",
 			setup: func(f *resourceFake) {
-				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, withFinalizer, "")
+				putDSPA(f, "proj", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, withFinalizer, "")
 				putDSPO(f, 0)
 			},
 			wantCode: "prerequisites", wantNoDeletes: true,
@@ -503,39 +506,39 @@ func TestTeardownPipelineServer(t *testing.T) {
 		{
 			name: "finalizer and operator running",
 			setup: func(f *resourceFake) {
-				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, withFinalizer, "")
-				f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
+				putDSPA(f, "proj", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, withFinalizer, "")
+				f.putJSON(secretPath("proj", storage.DSPASecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 				putDSPO(f, 1)
 				f.finalizeOnGet = true
 			},
-			wantOK: true, wantDeleted: []string{dspaPath("proj", dspaName), secretPath("proj", dspaSecretName)},
+			wantOK: true, wantDeleted: []string{dspaPath("proj", storage.DSPAName), secretPath("proj", storage.DSPASecretName)},
 		},
 		{
 			name: "finalizer never completes",
 			setup: func(f *resourceFake) {
-				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, withFinalizer, "")
-				f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
+				putDSPA(f, "proj", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, withFinalizer, "")
+				f.putJSON(secretPath("proj", storage.DSPASecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 				putDSPO(f, 1)
 			},
-			wantCode: "in_progress", wantDeleted: []string{secretPath("proj", dspaSecretName)}, wantKept: []string{dspaPath("proj", dspaName)},
+			wantCode: "in_progress", wantDeleted: []string{secretPath("proj", storage.DSPASecretName)}, wantKept: []string{dspaPath("proj", storage.DSPAName)},
 		},
 		{
 			name: "secret shared with another live pipeline server",
 			setup: func(f *resourceFake) {
-				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
-				putDSPA(f, "proj", "other", `{}`, "unknown", "Update", s3Host(), dspaSecretName, "", "")
-				f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
+				putDSPA(f, "proj", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, "", "")
+				putDSPA(f, "proj", "other", `{}`, "unknown", "Update", storage.S3Host(), storage.DSPASecretName, "", "")
+				f.putJSON(secretPath("proj", storage.DSPASecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 			},
-			wantOK: true, wantDeleted: []string{dspaPath("proj", dspaName)}, wantKept: []string{secretPath("proj", dspaSecretName), dspaPath("proj", "other")},
+			wantOK: true, wantDeleted: []string{dspaPath("proj", storage.DSPAName)}, wantKept: []string{secretPath("proj", storage.DSPASecretName), dspaPath("proj", "other")},
 		},
 		{
 			name: "secret delete fails",
 			setup: func(f *resourceFake) {
-				putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", "")
-				f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
-				f.fail["DELETE "+secretPath("proj", dspaSecretName)] = 500
+				putDSPA(f, "proj", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, "", "")
+				f.putJSON(secretPath("proj", storage.DSPASecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
+				f.fail["DELETE "+secretPath("proj", storage.DSPASecretName)] = 500
 			},
-			wantCode: "partial_failure", wantDeleted: []string{dspaPath("proj", dspaName)},
+			wantCode: "partial_failure", wantDeleted: []string{dspaPath("proj", storage.DSPAName)},
 		},
 		{
 			name:   "nothing to remove",
@@ -585,13 +588,13 @@ func TestTeardownPipelineServer(t *testing.T) {
 func TestTeardownPipelineServer_RerunWhileTerminatingDoesNotDeleteAgain(t *testing.T) {
 	fastPipelineTimings(t)
 	f, c := newResourceFake(t)
-	putDSPA(f, "proj", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName,
-		`,"deletionTimestamp":"`+created+`","finalizers":["`+dspaFinalizer+`"]`, "")
+	putDSPA(f, "proj", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName,
+		`,"deletionTimestamp":"`+created+`","finalizers":["`+storage.DSPAFinalizer+`"]`, "")
 	resp, _ := TeardownPipelineServer(c, "proj")
 	if resp.Success || resp.ErrorCode != "in_progress" {
 		t.Fatalf("got %+v", resp)
 	}
-	if hasMutation(f, "DELETE "+dspaPath("proj", dspaName)) {
+	if hasMutation(f, "DELETE "+dspaPath("proj", storage.DSPAName)) {
 		t.Error("a terminating DSPA must not be deleted again")
 	}
 }
@@ -599,23 +602,23 @@ func TestTeardownPipelineServer_RerunWhileTerminatingDoesNotDeleteAgain(t *testi
 func TestPipelineTeardown_RerunRemovesOrphanSecret(t *testing.T) {
 	fastPipelineTimings(t)
 	f, c := newResourceFake(t)
-	f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
+	f.putJSON(secretPath("proj", storage.DSPASecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 	resp, _ := TeardownPipelineServer(c, "proj")
-	if !resp.Success || f.has(secretPath("proj", dspaSecretName)) {
+	if !resp.Success || f.has(secretPath("proj", storage.DSPASecretName)) {
 		t.Fatalf("got %+v", resp)
 	}
 	// An unlabelled secret with the same name is left alone.
-	f.putJSON(secretPath("proj", dspaSecretName), `{"metadata":{}}`)
-	if resp, _ := TeardownPipelineServer(c, "proj"); !resp.Success || !f.has(secretPath("proj", dspaSecretName)) {
+	f.putJSON(secretPath("proj", storage.DSPASecretName), `{"metadata":{}}`)
+	if resp, _ := TeardownPipelineServer(c, "proj"); !resp.Success || !f.has(secretPath("proj", storage.DSPASecretName)) {
 		t.Fatalf("got %+v", resp)
 	}
 }
 
 func TestCountNounAndVerbAgree(t *testing.T) {
-	if got := countNoun(1, "pipeline server", "pipeline servers") + " " + verb(1, "uses", "use"); got != "1 pipeline server uses" {
+	if got := kube.CountNoun(1, "pipeline server", "pipeline servers") + " " + kube.Verb(1, "uses", "use"); got != "1 pipeline server uses" {
 		t.Errorf("singular: %q", got)
 	}
-	if got := countNoun(2, "pipeline server", "pipeline servers") + " " + verb(2, "uses", "use"); got != "2 pipeline servers use" {
+	if got := kube.CountNoun(2, "pipeline server", "pipeline servers") + " " + kube.Verb(2, "uses", "use"); got != "2 pipeline servers use" {
 		t.Errorf("plural: %q", got)
 	}
 }

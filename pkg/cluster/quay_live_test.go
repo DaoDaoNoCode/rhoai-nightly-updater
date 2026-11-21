@@ -9,6 +9,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Explicit opt-in: reads the current cluster pull secret in memory and makes
@@ -25,19 +28,18 @@ func TestReleaseDiscoveryLiveQuay(t *testing.T) {
 		t.Fatalf("read pull secret: %v", err)
 	}
 	c, cleanup := newMockClient(map[string]mockResponse{
-		namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret"): {body: string(secret)},
+		rhoai.NamespacedPath("v1", "secrets", "kube-system", "additional-pull-secret"): {body: string(secret)},
 	})
 	defer cleanup()
 	var calls atomic.Int32
-	original := quayHTTPClient
+	original := registry.HTTPClient()
 	counted := &http.Client{Timeout: original.Timeout, Transport: dscSampleTransport(func(r *http.Request) (*http.Response, error) {
 		calls.Add(1)
 		return original.Transport.RoundTrip(r)
 	})}
-	quayHTTPClient = counted
-	t.Cleanup(func() { quayHTTPClient = original })
+	t.Cleanup(registry.SetHTTPClientForTest(counted))
 	started := time.Now()
-	latest, err := FetchLatestNightly(ctx, c)
+	latest, err := registry.FetchLatestNightly(ctx, c)
 	if err != nil {
 		t.Fatalf("cold latest lookup: %v", err)
 	}

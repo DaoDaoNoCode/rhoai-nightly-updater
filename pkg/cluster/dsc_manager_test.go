@@ -10,6 +10,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -46,7 +51,7 @@ func managerWorld(t *testing.T, edit func(dsc map[string]any)) (*resourceFake, *
 	t.Helper()
 	f, c := newResourceFake(t)
 	f.groups = map[string]string{"/apis/datasciencecluster.opendatahub.io": dscGroupDoc}
-	f.put(dscCRDPath, readFixture(t, dscCRDFixture))
+	f.put(components.DSCCRDPath, readFixture(t, dscCRDFixture))
 	dsc := readFixture(t, dscLiveFixture)
 	if edit != nil {
 		edit(dsc)
@@ -56,8 +61,8 @@ func managerWorld(t *testing.T, edit func(dsc map[string]any)) (*resourceFake, *
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.put(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), map[string]any{"status": map[string]any{"installedCSV": "rhods-operator.3.6.0"}})
-	f.put(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), map[string]any{
+	f.put(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName), map[string]any{"status": map[string]any{"installedCSV": "rhods-operator.3.6.0"}})
+	f.put(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"), map[string]any{
 		"metadata": map[string]any{"annotations": map[string]any{"alm-examples": string(alm)}},
 		"spec": map[string]any{"version": "3.6.0", "install": map[string]any{"spec": map[string]any{
 			"deployments": []any{map[string]any{"name": "rhods-operator"}}}}},
@@ -142,20 +147,20 @@ func reviewedToggle(t *testing.T, c *Client, req types.DSCToggleRequest) (*types
 
 func TestDSCToggleTreeFromTheInstalledCRD(t *testing.T) {
 	f, c := newResourceFake(t)
-	f.put(dscCRDPath, readFixture(t, dscCRDFixture))
-	crd, err := readDSCCRD(c)
+	f.put(components.DSCCRDPath, readFixture(t, dscCRDFixture))
+	crd, err := components.ReadDSCCRD(c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if crd.storage() != "v3" || crd.version("v2") == nil || !crd.version("v2").Deprecated {
+	if crd.Storage() != "v3" || crd.Version("v2") == nil || !crd.Version("v2").Deprecated {
 		t.Fatalf("versions: %+v", crd.Versions)
 	}
-	tree := dscToggleTree(crd.version("v3").Spec)
-	byKey := map[string]dscToggle{}
+	tree := components.DSCToggleTree(crd.Version("v3").Spec)
+	byKey := map[string]components.DSCToggle{}
 	var order []string
 	for _, n := range tree {
-		byKey[n.key()] = n
-		order = append(order, n.key())
+		byKey[n.Key()] = n
+		order = append(order, n.Key())
 	}
 	for key, want := range map[string]struct {
 		toggle  bool
@@ -193,26 +198,26 @@ func TestDSCToggleTreeFromTheInstalledCRD(t *testing.T) {
 		t.Fatalf("order: %v", order)
 	}
 	// The deprecated v2 view has its own tree: wva accepts only Removed.
-	v2 := map[string]dscToggle{}
-	for _, n := range dscToggleTree(crd.version("v2").Spec) {
-		v2[n.key()] = n
+	v2 := map[string]components.DSCToggle{}
+	for _, n := range components.DSCToggleTree(crd.Version("v2").Spec) {
+		v2[n.Key()] = n
 	}
 	if w := v2["kserve.wva"]; !reflect.DeepEqual(w.Allowed, []string{"Removed"}) {
 		t.Fatalf("v2 kserve.wva = %+v", w)
 	}
-	if got := dscProtectedFields(crd.version("v3").Spec); !reflect.DeepEqual(got, map[string]bool{"workbenches.workbenchNamespace": true, "aiHub.instancesNamespace": true}) {
+	if got := components.DSCProtectedFields(crd.Version("v3").Spec); !reflect.DeepEqual(got, map[string]bool{"workbenches.workbenchNamespace": true, "aiHub.instancesNamespace": true}) {
 		t.Fatalf("protected fields = %v", got)
 	}
 }
 
 func TestAllowedStatesFallsBackToThePatternOnlyWithoutEnum(t *testing.T) {
-	if got := allowedStates(map[string]any{"enum": []any{"Managed", "Removed"}, "pattern": "^(Managed|Unmanaged|Force|Removed)$"}); !reflect.DeepEqual(got, []string{"Managed", "Removed"}) {
+	if got := components.AllowedStates(map[string]any{"enum": []any{"Managed", "Removed"}, "pattern": "^(Managed|Unmanaged|Force|Removed)$"}); !reflect.DeepEqual(got, []string{"Managed", "Removed"}) {
 		t.Fatalf("enum: %v", got)
 	}
-	if got := allowedStates(map[string]any{"pattern": "^(Managed|Unmanaged|Force|Removed)$"}); !reflect.DeepEqual(got, []string{"Managed", "Unmanaged", "Force", "Removed"}) {
+	if got := components.AllowedStates(map[string]any{"pattern": "^(Managed|Unmanaged|Force|Removed)$"}); !reflect.DeepEqual(got, []string{"Managed", "Unmanaged", "Force", "Removed"}) {
 		t.Fatalf("pattern: %v", got)
 	}
-	if got := allowedStates(map[string]any{"pattern": "^[a-z]+$"}); got != nil {
+	if got := components.AllowedStates(map[string]any{"pattern": "^[a-z]+$"}); got != nil {
 		t.Fatalf("an unparsable pattern gives no values, got %v", got)
 	}
 }
@@ -398,10 +403,10 @@ func TestDSCManagerUnknownFieldsAreRowsAndFixRemovesThem(t *testing.T) {
 	if _, ok := stored["codeflare"]; ok {
 		t.Fatal("codeflare is still in the DSC")
 	}
-	if _, ok := lookupPath(stored, []string{"kserve", "serving"}); ok {
+	if _, ok := components.LookupPath(stored, []string{"kserve", "serving"}); ok {
 		t.Fatal("kserve.serving is still in the DSC")
 	}
-	if _, ok := lookupPath(stored, []string{"kserve", "oauthProxy", "legacy"}); ok {
+	if _, ok := components.LookupPath(stored, []string{"kserve", "oauthProxy", "legacy"}); ok {
 		t.Fatal("kserve.oauthProxy.legacy is still in the DSC")
 	}
 	after, _ := GetDSCManager(c)
@@ -436,7 +441,7 @@ func TestDSCManagerComparisonWithoutAReleaseDefault(t *testing.T) {
 	f, c := managerWorld(t, func(dsc map[string]any) {
 		setPath(t, dsc, "spec.components.dashboard.standard", nil)
 	})
-	csv := namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0")
+	csv := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0")
 	obj := f.get(csv)
 	setPath(t, obj, "metadata.annotations.alm-examples", "[]")
 	f.put(csv, obj)
@@ -475,7 +480,7 @@ func TestToggleReplacesOnlyThatFieldAfterADryRun(t *testing.T) {
 		t.Fatalf("the dry run did not come first: %v", f.requests)
 	}
 	for _, call := range append(dry, real...) {
-		if call.ContentType != "application/json-patch+json" || call.Query.Get("fieldManager") != dscComponentsManager || call.Query.Get("fieldValidation") != "Strict" {
+		if call.ContentType != "application/json-patch+json" || call.Query.Get("fieldManager") != dsc.ComponentsManager || call.Query.Get("fieldValidation") != "Strict" {
 			t.Fatalf("call = %+v", call)
 		}
 		want := `[{"op":"test","path":"/metadata/uid","value":"` + dscFixtureUID + `"},{"op":"test","path":"/metadata/resourceVersion","value":"` + dscFixtureRV + `"},` +
@@ -484,7 +489,7 @@ func TestToggleReplacesOnlyThatFieldAfterADryRun(t *testing.T) {
 			t.Fatalf("body = %s", call.Body)
 		}
 	}
-	if s, _ := lookupState(comps(f.get(dscV3Path)), []string{"kserve", "modelExpress"}); s != "Managed" {
+	if s, _ := components.LookupState(comps(f.get(dscV3Path)), []string{"kserve", "modelExpress"}); s != "Managed" {
 		t.Fatalf("stored %q", s)
 	}
 }
@@ -501,8 +506,8 @@ func TestToggleAddsMissingObjectsWithATestOfTheirParent(t *testing.T) {
 	}
 	_, real := patchesTo(f)
 	ops := fieldOps(t, real[0].Body)
-	if len(ops) != 2 || ops[0]["op"] != "test" || ops[0]["path"] != "/spec/components" || !jsonEqual(ops[0]["value"], before) ||
-		ops[1]["op"] != "add" || ops[1]["path"] != "/spec/components/databaseservice" || !jsonEqual(ops[1]["value"], map[string]any{"managementState": "Managed"}) {
+	if len(ops) != 2 || ops[0]["op"] != "test" || ops[0]["path"] != "/spec/components" || !kube.JSONEqual(ops[0]["value"], before) ||
+		ops[1]["op"] != "add" || ops[1]["path"] != "/spec/components/databaseservice" || !kube.JSONEqual(ops[1]["value"], map[string]any{"managementState": "Managed"}) {
 		t.Fatalf("ops = %v", ops)
 	}
 
@@ -513,7 +518,7 @@ func TestToggleAddsMissingObjectsWithATestOfTheirParent(t *testing.T) {
 	}
 	_, real = patchesTo(f)
 	ops = fieldOps(t, real[1].Body)
-	if len(ops) != 2 || ops[0]["path"] != "/spec/components/dashboard" || !jsonEqual(ops[0]["value"], dashboard) ||
+	if len(ops) != 2 || ops[0]["path"] != "/spec/components/dashboard" || !kube.JSONEqual(ops[0]["value"], dashboard) ||
 		ops[1]["op"] != "add" || ops[1]["path"] != "/spec/components/dashboard/maasPortal" {
 		t.Fatalf("ops = %v", ops)
 	}
@@ -621,7 +626,7 @@ func TestToggleToManagedUnderARemovedParent(t *testing.T) {
 		t.Fatalf("ops = %v", ops)
 	}
 	stored := comps(f.get(dscV3Path))
-	if a, _ := lookupState(stored, []string{"aigateway"}); a != "Managed" {
+	if a, _ := components.LookupState(stored, []string{"aigateway"}); a != "Managed" {
 		t.Fatalf("aigateway = %s", a)
 	}
 }
@@ -664,25 +669,25 @@ func TestToggleToRemovedFailsClosed(t *testing.T) {
 func TestDSCChangesRefusedUnderArgoCDAndACM(t *testing.T) {
 	for name, edit := range map[string]func(map[string]any){
 		"argo": func(dsc map[string]any) {
-			setPath(t, dsc, "metadata.annotations", map[string]any{argoTrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:odh-gitops/default-dsc"})
+			setPath(t, dsc, "metadata.annotations", map[string]any{argo.TrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:odh-gitops/default-dsc"})
 		},
 		"acm": func(dsc map[string]any) {
-			setPath(t, dsc, "metadata.managedFields", []any{map[string]any{"manager": acmPolicyManager, "operation": "Update", "fieldsType": "FieldsV1", "fieldsV1": map[string]any{"f:spec": map[string]any{}}}})
+			setPath(t, dsc, "metadata.managedFields", []any{map[string]any{"manager": argo.ACMPolicyManager, "operation": "Update", "fieldsType": "FieldsV1", "fieldsV1": map[string]any{"f:spec": map[string]any{}}}})
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, c := managerWorld(t, edit)
-			f.argo = argoManagingAll(argoDSCObject("default-dsc"))
+			f.argo = argoManagingAll(argo.DSCObject("default-dsc"))
 			m, _ := GetDSCManager(c)
 			if m.ReadOnlyReason == "" {
 				t.Fatal("no read-only reason")
 			}
 			res, _ := reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "ray", From: "Managed", To: "Removed"})
-			if res.Success || res.ErrorCode != ErrorCodeGitOpsManaged {
+			if res.Success || res.ErrorCode != kube.ErrorCodeGitOpsManaged {
 				t.Fatalf("toggle = %+v", res)
 			}
 			for _, action := range []string{"fix", "soft-reset", "hard-reset"} {
-				if p, _ := PlanDSCChange(c, action, "", "", false, false); p.Code != ErrorCodeGitOpsManaged {
+				if p, _ := PlanDSCChange(c, action, "", "", false, false); p.Code != kube.ErrorCodeGitOpsManaged {
 					t.Fatalf("%s plan = %+v", action, p)
 				}
 			}
@@ -697,17 +702,17 @@ func TestDSCChangesRefusedUnderArgoCDAndACM(t *testing.T) {
 // tool's to change; Argo CD not reachable, it stays read-only and says why.
 func TestDSCManagerConfirmsArgoCDTracking(t *testing.T) {
 	tracked := func(dsc map[string]any) {
-		setPath(t, dsc, "metadata.annotations", map[string]any{argoTrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:odh-gitops/default-dsc"})
+		setPath(t, dsc, "metadata.annotations", map[string]any{argo.TrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:odh-gitops/default-dsc"})
 	}
-	for name, argo := range map[string]*fakeArgoCD{
+	for name, argoCD := range map[string]*fakeArgoCD{
 		"argo cd not installed": {},
 		"application gone":      {served: true},
 		"not among its resources": {served: true, apps: []map[string]any{
-			argoApplicationListing("openshift-gitops", argoSubscriptionObject)}},
+			argoApplicationListing("openshift-gitops", argo.SubscriptionObject)}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, c := managerWorld(t, tracked)
-			f.argo = argo
+			f.argo = argoCD
 			m, err := GetDSCManager(c)
 			if err != nil || m.ReadOnlyReason != "" || m.ManagedBy != "" {
 				t.Fatalf("manager = %+v, %v", m, err)
@@ -726,7 +731,7 @@ func TestDSCManagerConfirmsArgoCDTracking(t *testing.T) {
 			t.Fatalf("manager = %+v", m)
 		}
 		res, _ := reviewedToggle(t, c, types.DSCToggleRequest{Name: "default-dsc", Path: "ray", From: "Managed", To: "Removed"})
-		if res.Success || res.ErrorCode != ErrorCodeGitOpsManaged || len(f.mutations()) != 0 {
+		if res.Success || res.ErrorCode != kube.ErrorCodeGitOpsManaged || len(f.mutations()) != 0 {
 			t.Fatalf("toggle = %+v, writes %v", res, f.mutations())
 		}
 	})
@@ -763,10 +768,10 @@ func TestFixAddsExactlyThePreviewedToggles(t *testing.T) {
 		t.Fatalf("fix = %+v, %v", res, err)
 	}
 	stored := comps(f.get(dscV3Path))
-	if s, _ := lookupState(stored, []string{"dashboard", "standard"}); s != "Managed" {
+	if s, _ := components.LookupState(stored, []string{"dashboard", "standard"}); s != "Managed" {
 		t.Fatalf("dashboard.standard = %q", s)
 	}
-	if s, _ := lookupState(stored, []string{"databaseservice"}); s != "Removed" {
+	if s, _ := components.LookupState(stored, []string{"databaseservice"}); s != "Removed" {
 		t.Fatalf("databaseservice = %q", s)
 	}
 	if m, _ := GetDSCManager(c); len(m.Mismatches) != 0 {
@@ -811,16 +816,16 @@ func TestSoftResetChangesOnlyWhatDiffersAndKeepsProtectedFields(t *testing.T) {
 		}
 	}
 	stored := comps(f.get(dscV3Path))
-	if v, _ := lookupPath(stored, []string{"workbenches", "workbenchNamespace"}); v != "my-notebooks" {
+	if v, _ := components.LookupPath(stored, []string{"workbenches", "workbenchNamespace"}); v != "my-notebooks" {
 		t.Fatalf("workbenchNamespace = %v", v)
 	}
-	if v, _ := lookupPath(stored, []string{"aiHub", "instancesNamespace"}); v != "my-registries" {
+	if v, _ := components.LookupPath(stored, []string{"aiHub", "instancesNamespace"}); v != "my-registries" {
 		t.Fatalf("instancesNamespace = %v", v)
 	}
-	if _, ok := lookupPath(stored, []string{"kserve", "rawDeploymentServiceConfig"}); ok {
+	if _, ok := components.LookupPath(stored, []string{"kserve", "rawDeploymentServiceConfig"}); ok {
 		t.Fatal("rawDeploymentServiceConfig kept")
 	}
-	if a, _ := lookupState(stored, []string{"aigateway"}); a != "Removed" {
+	if a, _ := components.LookupState(stored, []string{"aigateway"}); a != "Removed" {
 		t.Fatalf("aigateway = %s", a)
 	}
 }
@@ -845,10 +850,10 @@ func TestSoftResetRefusesWhileARemovalIsBlocked(t *testing.T) {
 
 func TestBuildJSONPatchGroupsMissingObjects(t *testing.T) {
 	obj := map[string]any{"spec": map[string]any{"components": map[string]any{"kserve": map[string]any{"managementState": "Managed"}}}}
-	ops, err := buildJSONPatch(obj, []dscAssign{
-		{Path: componentsPath("aigateway", "managementState"), Value: "Removed"},
-		{Path: componentsPath("aigateway", "batchGateway", "managementState"), Value: "Removed"},
-		{Path: componentsPath("kserve", "managementState"), Value: "Removed"},
+	ops, err := components.BuildJSONPatch(obj, []components.DSCAssign{
+		{Path: dsc.ComponentsPath("aigateway", "managementState"), Value: "Removed"},
+		{Path: dsc.ComponentsPath("aigateway", "batchGateway", "managementState"), Value: "Removed"},
+		{Path: dsc.ComponentsPath("kserve", "managementState"), Value: "Removed"},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -859,18 +864,18 @@ func TestBuildJSONPatchGroupsMissingObjects(t *testing.T) {
 	if string(raw) != want {
 		t.Fatalf("ops = %s", raw)
 	}
-	after, err := applyJSONPatch(obj, ops)
+	after, err := kube.ApplyJSONPatch(obj, ops)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s, _ := lookupState(comps(after), []string{"aigateway", "batchGateway"}); s != "Removed" {
+	if s, _ := components.LookupState(comps(after), []string{"aigateway", "batchGateway"}); s != "Removed" {
 		t.Fatalf("after = %v", after)
 	}
 	// The original is unchanged; a failed test applies nothing.
-	if _, err := applyJSONPatch(obj, []jsonPatchOp{patchOp("test", componentsPath("kserve", "managementState"), "Removed")}); err == nil {
+	if _, err := kube.ApplyJSONPatch(obj, []kube.JSONPatchOp{components.PatchOp("test", dsc.ComponentsPath("kserve", "managementState"), "Removed")}); err == nil {
 		t.Fatal("test passed on another value")
 	}
-	if s, _ := lookupState(comps(obj), []string{"kserve"}); s != "Managed" {
+	if s, _ := components.LookupState(comps(obj), []string{"kserve"}); s != "Managed" {
 		t.Fatal("applyJSONPatch changed its input")
 	}
 }
@@ -884,7 +889,7 @@ func TestBuildJSONPatchGroupsMissingObjects(t *testing.T) {
 func TestHardResetDeleteRule(t *testing.T) {
 	has := func(path string) bool {
 		for _, g := range templateGrantsFrom(t, path) {
-			if slices.Contains(g.rule.APIGroups, dscGroup) && slices.Contains(g.rule.Resources, "datascienceclusters") && slices.Contains(g.rule.Verbs, "delete") {
+			if slices.Contains(g.rule.APIGroups, rhoai.DSCGroup) && slices.Contains(g.rule.Resources, "datascienceclusters") && slices.Contains(g.rule.Verbs, "delete") {
 				return true
 			}
 		}

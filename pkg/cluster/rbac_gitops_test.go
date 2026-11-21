@@ -3,10 +3,11 @@ package cluster
 // RBAC of the gitops profile: deploy/rbac-gitops.yaml must grant exactly the
 // ServiceAccount requests that the gitops profile can make, as
 // rbac_coverage_test.go checks deploy/template.yaml against every request
-// the package makes.
+// the packages make.
 //
 // What the profile can make is found from the code: a reference graph over
-// the type-checked sources of main.go, pkg/api and this package. A function
+// the type-checked sources of main.go, pkg/api, pkg/cluster and every
+// package under pkg/cluster. A function
 // reaches every function, method and package-level variable its body
 // (closures included) names, called or not, and a variable reaches what its
 // initializer and every assignment to it name; a function value passed
@@ -14,7 +15,7 @@ package cluster
 // functions, with api.Register replaced by the gitops profile's handlers
 // (api.gitOpsRoutes): Register adds no other handler in that profile, and
 // refusedInGitOpsProfile answers without a call. The ServiceAccount
-// requests of the reached functions of this package are then derived as
+// requests of the reached functions of those packages are then derived as
 // for the full profile, with each parameter that makes up a path resolved
 // from reached call sites only.
 //
@@ -28,11 +29,9 @@ import (
 	"bytes"
 	"fmt"
 	"go/ast"
-	"go/importer"
 	"go/parser"
 	"go/token"
 	"go/types"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,12 +40,21 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/gitops"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"gopkg.in/yaml.v3"
 )
 
 const (
 	modulePath    = "github.com/juntwang/rhoai-nightly-updater"
 	clusterPkg    = modulePath + "/pkg/cluster"
+	kubePkg       = clusterPkg + "/internal/kube"
+	registryPkg   = clusterPkg + "/internal/registry"
+	mlflowPkg     = clusterPkg + "/internal/mlflow"
+	rhoaiPkg      = clusterPkg + "/internal/rhoai"
+	recordPkg     = clusterPkg + "/internal/record"
+	servingPkg    = clusterPkg + "/internal/serving"
+	gitopsPkg     = clusterPkg + "/internal/gitops"
 	apiPkg        = modulePath + "/pkg/api"
 	rbacGitOpsRel = "../../deploy/rbac-gitops.yaml"
 )
@@ -65,13 +73,14 @@ var (
 	exportErr   error
 )
 
-// exportData maps each import path the three packages depend on to its
-// compiled export data, from `go list -export` (the go command builds them
-// into its cache), so the packages type-check without any other module.
+// exportData maps each import path that main and the packages under
+// pkg/cluster depend on to its compiled export data, from `go list -export`
+// (the go command builds them into its cache), so the packages type-check
+// without any other module.
 func exportData(t *testing.T) map[string]string {
 	t.Helper()
 	exportOnce.Do(func() {
-		cmd := exec.CommandContext(t.Context(), "go", "list", "-export", "-deps", "-f", "{{.ImportPath}}\t{{.Export}}", modulePath)
+		cmd := exec.CommandContext(t.Context(), "go", "list", "-export", "-deps", "-f", "{{.ImportPath}}\t{{.Export}}", modulePath, "./pkg/cluster/...")
 		cmd.Dir = "../.."
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
@@ -99,8 +108,15 @@ func exportData(t *testing.T) map[string]string {
 // type-checks them as package path.
 func typeCheck(t *testing.T, path, dir string, only ...string) *typedPkg {
 	t.Helper()
-	exports := exportData(t)
 	fset := token.NewFileSet()
+	return typeCheckWith(t, fset, exportImporter(t, fset), path, dir, only...)
+}
+
+// typeCheckWith is typeCheck with the file set and importer given, so that
+// several packages type-checked together decode each imported package's
+// export data once.
+func typeCheckWith(t *testing.T, fset *token.FileSet, imp types.Importer, path, dir string, only ...string) *typedPkg {
+	t.Helper()
 	names := only
 	if len(names) == 0 {
 		matches, err := filepath.Glob(filepath.Join(dir, "*.go"))
@@ -123,13 +139,6 @@ func typeCheck(t *testing.T, path, dir string, only ...string) *typedPkg {
 		tp.files[name] = f
 		files = append(files, f)
 	}
-	imp := importer.ForCompiler(fset, "gc", func(p string) (io.ReadCloser, error) {
-		file, ok := exports[p]
-		if !ok {
-			return nil, fmt.Errorf("no export data for %s", p)
-		}
-		return os.Open(file)
-	})
 	tp.info = &types.Info{
 		Defs:       map[*ast.Ident]types.Object{},
 		Uses:       map[*ast.Ident]types.Object{},
@@ -296,10 +305,13 @@ func (g refGraph) reach(roots []string, pruned map[string]bool) map[string]bool 
 
 // profileGraph is the reference graph of the binary, and what it needs.
 type profileGraph struct {
-	graph   refGraph
-	cluster *typedPkg
-	// funcPositions maps this package's function keys to their funcPos
-	// ("file:line"), the key serviceAccountRequestsIn uses.
+	graph refGraph
+	// clusterPkgs are the import paths of pkg/cluster and of every package
+	// under it, each type-checked from its source.
+	clusterPkgs []string
+	// funcPositions maps the function keys of those packages to their
+	// funcPos ("file:line", file by base name, unique across the tree), the
+	// key serviceAccountRequestsIn uses.
 	funcPositions map[string]string
 }
 
@@ -311,24 +323,36 @@ var (
 func loadProfileGraph(t *testing.T) *profileGraph {
 	t.Helper()
 	profileGraphOnce.Do(func() {
-		clusterTP := typeCheck(t, clusterPkg, ".")
-		apiTP := typeCheck(t, apiPkg, "../api")
-		mainTP := typeCheck(t, "main", "../..", "main.go")
 		g := refGraph{}
-		g.addPackage(clusterTP)
-		g.addPackage(apiTP)
-		g.addPackage(mainTP)
 		positions := map[string]string{}
-		for name, f := range clusterTP.files {
-			for _, decl := range f.Decls {
-				if d, ok := decl.(*ast.FuncDecl); ok {
-					if fn, _ := clusterTP.info.Defs[d.Name].(*types.Func); fn != nil {
-						positions[funcKey(fn)] = fmt.Sprintf("%s:%d", name, clusterTP.fset.Position(d.Pos()).Line)
+		var pkgs []string
+		dirs := clusterSourceDirs(t)
+		names := make([]string, 0, len(dirs))
+		for dir := range dirs {
+			names = append(names, dir)
+		}
+		sort.Strings(names)
+		fset := token.NewFileSet()
+		imp := exportImporter(t, fset)
+		for _, dir := range names {
+			path := clusterImportPath(dir)
+			tp := typeCheckWith(t, fset, imp, path, dir)
+			g.addPackage(tp)
+			pkgs = append(pkgs, path)
+			// The positions of this directory's functions.
+			for name, f := range tp.files {
+				for _, decl := range f.Decls {
+					if d, ok := decl.(*ast.FuncDecl); ok {
+						if fn, _ := tp.info.Defs[d.Name].(*types.Func); fn != nil {
+							positions[funcKey(fn)] = fmt.Sprintf("%s:%d", name, tp.fset.Position(d.Pos()).Line)
+						}
 					}
 				}
 			}
 		}
-		profileGraphVal = &profileGraph{graph: g, cluster: clusterTP, funcPositions: positions}
+		g.addPackage(typeCheckWith(t, fset, imp, apiPkg, "../api"))
+		g.addPackage(typeCheckWith(t, fset, imp, "main", "../..", "main.go"))
+		profileGraphVal = &profileGraph{graph: g, clusterPkgs: pkgs, funcPositions: positions}
 	})
 	if profileGraphVal == nil {
 		t.Fatal("the reference graph could not be built")
@@ -338,7 +362,7 @@ func loadProfileGraph(t *testing.T) *profileGraph {
 
 func (pg *profileGraph) roots() []string {
 	roots := []string{"main.main"}
-	for _, p := range []string{"main", apiPkg, clusterPkg} {
+	for _, p := range append([]string{"main", apiPkg}, pg.clusterPkgs...) {
 		roots = append(roots, p+".init")
 	}
 	return roots
@@ -356,7 +380,7 @@ func (pg *profileGraph) fullReach() map[string]bool {
 	return pg.graph.reach(pg.roots(), nil)
 }
 
-// clusterFuncs turns a reach into the funcPos set of this package.
+// clusterFuncs turns a reach into the funcPos set of the cluster packages.
 func (pg *profileGraph) clusterFuncs(reach map[string]bool) map[string]bool {
 	out := map[string]bool{}
 	for key, pos := range pg.funcPositions {
@@ -528,8 +552,8 @@ func TestGitOpsTemplateParameters(t *testing.T) {
 	for _, p := range tmpl.Parameters {
 		seen[p.Name] = true
 		if p.Name == "OPERATOR_NAMESPACE" {
-			if p.Value != SubNS {
-				t.Errorf("OPERATOR_NAMESPACE defaults to %q, but the code uses %q", p.Value, SubNS)
+			if p.Value != rhoai.SubNS {
+				t.Errorf("OPERATOR_NAMESPACE defaults to %q, but the code uses %q", p.Value, rhoai.SubNS)
 			}
 			if _, clash := defaults[p.Name]; clash {
 				t.Error("deploy/template.yaml has OPERATOR_NAMESPACE too; keep one definition")
@@ -549,8 +573,8 @@ func TestGitOpsTemplateParameters(t *testing.T) {
 			t.Errorf("parameter %s is missing", name)
 		}
 	}
-	if defaults["MARKETPLACE_NAMESPACE"] != CatalogNS {
-		t.Errorf("MARKETPLACE_NAMESPACE defaults to %q, but the code uses %q", defaults["MARKETPLACE_NAMESPACE"], CatalogNS)
+	if defaults["MARKETPLACE_NAMESPACE"] != rhoai.CatalogNS {
+		t.Errorf("MARKETPLACE_NAMESPACE defaults to %q, but the code uses %q", defaults["MARKETPLACE_NAMESPACE"], rhoai.CatalogNS)
 	}
 	// `oc process` drops literal namespaces (TestTemplateNamespacesAreParameters).
 	for _, o := range tmpl.Objects {
@@ -584,7 +608,7 @@ func TestGitOpsAdmissionPolicyMatchesTheCode(t *testing.T) {
 	}
 	meta := policy["metadata"].(map[string]any)
 	if meta["name"] != "${APP_NAME}-${NAMESPACE}-gitops" || binding["metadata"].(map[string]any)["name"] != meta["name"] {
-		t.Errorf("the policy and binding must be named ${APP_NAME}-${NAMESPACE}-gitops, the name the Template passes in %s", GitOpsAdmissionPolicyEnv)
+		t.Errorf("the policy and binding must be named ${APP_NAME}-${NAMESPACE}-gitops, the name the Template passes in %s", gitops.GitOpsAdmissionPolicyEnv)
 	}
 	spec := policy["spec"].(map[string]any)
 	if spec["failurePolicy"] != "Fail" {
@@ -610,13 +634,13 @@ func TestGitOpsAdmissionPolicyMatchesTheCode(t *testing.T) {
 	}
 	all := strings.Join(exprs, "\n") + fmt.Sprint(spec["variables"])
 	for _, want := range []string{
-		"request.name == '" + SubName + "'",
-		"object.spec.name == '" + SubName + "'",
-		"object.spec.source == '" + CatalogName + "'",
+		"request.name == '" + rhoai.SubName + "'",
+		"object.spec.name == '" + rhoai.SubName + "'",
+		"object.spec.source == '" + rhoai.CatalogName + "'",
 		"object.spec.sourceNamespace == '${MARKETPLACE_NAMESPACE}'",
 		"request.namespace == '${OPERATOR_NAMESPACE}'",
 		"'${SUBSCRIPTION_ENV_ALLOWLIST}'.split(',')",
-		"startsWith('" + SubName + ".')",
+		"startsWith('" + rhoai.SubName + ".')",
 		"request.resource.resource != 'operatorgroups'",
 		"request.resource.resource != 'catalogsources'",
 	} {

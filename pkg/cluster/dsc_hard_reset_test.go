@@ -7,6 +7,12 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -99,7 +105,7 @@ func TestHardResetDeletesWaitsAndCreatesTheReleaseDefault(t *testing.T) {
 		}
 	}
 	posts := f.callsTo(http.MethodPost, dscV3List)
-	if len(posts) != 2 || posts[0].Query.Get("dryRun") != "All" || posts[1].Query.Get("fieldValidation") != "Strict" || posts[1].Query.Get("fieldManager") != dscComponentsManager {
+	if len(posts) != 2 || posts[0].Query.Get("dryRun") != "All" || posts[1].Query.Get("fieldValidation") != "Strict" || posts[1].Query.Get("fieldManager") != dsc.ComponentsManager {
 		t.Fatalf("creates = %+v", posts)
 	}
 	created := f.get(dscV3Path)
@@ -107,13 +113,13 @@ func TestHardResetDeletesWaitsAndCreatesTheReleaseDefault(t *testing.T) {
 		t.Fatalf("created = %v", created)
 	}
 	cs := comps(created)
-	if v, _ := lookupPath(cs, []string{"workbenches", "workbenchNamespace"}); v != "my-notebooks" {
+	if v, _ := components.LookupPath(cs, []string{"workbenches", "workbenchNamespace"}); v != "my-notebooks" {
 		t.Fatalf("workbenchNamespace = %v", v)
 	}
-	if v, _ := lookupPath(cs, []string{"aiHub", "instancesNamespace"}); v != "my-registries" {
+	if v, _ := components.LookupPath(cs, []string{"aiHub", "instancesNamespace"}); v != "my-registries" {
 		t.Fatalf("instancesNamespace = %v", v)
 	}
-	if s, _ := lookupState(cs, []string{"aigateway"}); s != "Removed" {
+	if s, _ := components.LookupState(cs, []string{"aigateway"}); s != "Removed" {
 		t.Fatalf("aigateway = %s (not the release default)", s)
 	}
 	if got := stepNames(steps); got != "check:running check:success delete:running delete:success wait_deleted:running wait_deleted:success create:running create:success wait_ready:running wait_ready:success" {
@@ -215,13 +221,13 @@ func TestHardResetRefusals(t *testing.T) {
 		{"argo cd", func(t *testing.T, f *resourceFake, dsc map[string]any) {
 			if f != nil {
 				// Argo CD answers that its Application lists the DSC.
-				f.argo = argoManagingAll(argoDSCObject("default-dsc"))
+				f.argo = argoManagingAll(argo.DSCObject("default-dsc"))
 			}
 			if dsc == nil {
 				return
 			}
-			setPath(t, dsc, "metadata.annotations", map[string]any{argoTrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:x/default-dsc"})
-		}, nil, ErrorCodeGitOpsManaged},
+			setPath(t, dsc, "metadata.annotations", map[string]any{argo.TrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:x/default-dsc"})
+		}, nil, kube.ErrorCodeGitOpsManaged},
 		{"operator down", func(t *testing.T, f *resourceFake, dsc map[string]any) {
 			if f == nil {
 				return
@@ -238,7 +244,7 @@ func TestHardResetRefusals(t *testing.T) {
 			if f == nil {
 				return
 			}
-			f.put(clusterPath(mlflowAPIGroup, "mlflows", mlflowCRName), map[string]any{})
+			f.put(rhoai.ClusterPath(mlflow.APIGroup, "mlflows", mlflow.CRName), map[string]any{})
 		}, nil, "prerequisites"},
 		{"name not typed", nil, func(r *types.DSCPlanRequest) { r.Confirm = "default" }, "validation"},
 		{"stale plan", nil, func(r *types.DSCPlanRequest) { r.Token = strings.Repeat("a", 24) }, "conflict"},
@@ -273,16 +279,16 @@ func TestNewDefaultObjectIsTheReleaseDefault(t *testing.T) {
 	_, c := managerWorld(t, func(dsc map[string]any) {
 		setPath(t, dsc, "spec.components.workbenches.workbenchNamespace", nil)
 	})
-	v, err := readDSCView(c)
+	v, err := dsc.ReadView(c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	obj := v.newDefaultObject(v.resetTarget(&types.DSCPlan{}, false))
+	obj := v.NewDefaultObject(v.ResetTarget(&types.DSCPlan{}, false))
 	raw, _ := json.Marshal(obj)
 	if !strings.Contains(string(raw), `"name":"default-dsc"`) || strings.Contains(string(raw), "workbenchNamespace") {
 		t.Fatalf("object = %s", raw)
 	}
-	if !jsonEqual(comps(obj), v.defaultComponents()) {
+	if !kube.JSONEqual(comps(obj), v.DefaultComponents()) {
 		t.Fatalf("not the release default: %s", raw)
 	}
 }

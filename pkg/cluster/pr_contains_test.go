@@ -15,6 +15,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -217,12 +218,11 @@ func (t githubTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 func installFakeGitHub(t *testing.T, g *fakeGitHub) *atomic.Int32 {
 	t.Helper()
 	resetRegistryCaches()
-	original := quayHTTPClient
 	registryReads := &atomic.Int32{}
 	registryURLs = &sync.Map{}
-	quayHTTPClient = &http.Client{Transport: githubTransport{github: g, other: registryReads, otherURLs: registryURLs}, Timeout: 10 * time.Second}
+	restore := registry.SetHTTPClientForTest(&http.Client{Transport: githubTransport{github: g, other: registryReads, otherURLs: registryURLs}, Timeout: 10 * time.Second})
 	t.Cleanup(func() {
-		quayHTTPClient = original
+		restore()
 		resetRegistryCaches()
 	})
 	return registryReads
@@ -257,16 +257,16 @@ func seedBuild(t *testing.T, n int, tag, gitURL, commit string) string {
 	t.Helper()
 	fbc := fmt.Sprintf("quay.io/rhoai/rhoai-fbc-fragment:%s@%s", tag, digestOf(n))
 	dash := fmt.Sprintf("quay.io/rhoai/odh-dashboard-rhel9@%s", digestOf(1000+n))
-	key, ok := fbcCacheKey(fbc)
+	key, ok := registry.FBCCacheKey(fbc)
 	if !ok {
 		t.Fatal("bad fbc ref")
 	}
-	fbcContentCache.Add(key, &types.FBCContentResponse{Tag: tag, RelatedImages: []types.RelatedImage{
+	registry.FBCContentCache.Add(key, &types.FBCContentResponse{Tag: tag, RelatedImages: []types.RelatedImage{
 		{Name: "odh_kserve_image", Image: "quay.io/rhoai/odh-kserve@" + digestOf(2000+n)},
 		{Name: "odh_dashboard_image", Image: dash},
 	}}, 0)
-	repo, digest, _ := extractRepoAndDigest(dash)
-	labelCache.Add(repo+"@"+digest, labelCacheValue{labels: ImageLabels{GitCommit: commit, GitURL: gitURL}}, 0)
+	repo, digest, _ := registry.RepoAndDigest(dash)
+	registry.LabelCache.Add(repo+"@"+digest, registry.LabelCacheValue{Labels: registry.ImageLabels{GitCommit: commit, GitURL: gitURL}}, 0)
 	return fbc
 }
 
@@ -274,11 +274,11 @@ func seedBuild(t *testing.T, n int, tag, gitURL, commit string) string {
 // tags listing does.
 func seedBuildDate(t *testing.T, fbc, buildDate string) {
 	t.Helper()
-	repo, digest, ok := extractRepoAndDigest(fbc)
+	repo, digest, ok := registry.RepoAndDigest(fbc)
 	if !ok {
 		t.Fatal("bad fbc ref")
 	}
-	labelCache.Add(repo+"@"+digest, labelCacheValue{labels: ImageLabels{BuildDate: buildDate}}, 0)
+	registry.LabelCache.Add(repo+"@"+digest, registry.LabelCacheValue{Labels: registry.ImageLabels{BuildDate: buildDate}}, 0)
 }
 
 // seedComponentBuild puts a build in the caches whose component images are
@@ -287,7 +287,7 @@ func seedBuildDate(t *testing.T, fbc, buildDate string) {
 func seedComponentBuild(t *testing.T, n int, tag string, images ...[4]string) string {
 	t.Helper()
 	fbc := fmt.Sprintf("quay.io/rhoai/rhoai-fbc-fragment:%s@%s", tag, digestOf(n))
-	key, ok := fbcCacheKey(fbc)
+	key, ok := registry.FBCCacheKey(fbc)
 	if !ok {
 		t.Fatal("bad fbc ref")
 	}
@@ -295,19 +295,19 @@ func seedComponentBuild(t *testing.T, n int, tag string, images ...[4]string) st
 	for i, img := range images {
 		ref := fmt.Sprintf("quay.io/rhoai/%s@%s", img[1], digestOf(4000+10*n+i))
 		related = append(related, types.RelatedImage{Name: img[0], Image: ref})
-		repo, digest, _ := extractRepoAndDigest(ref)
+		repo, digest, _ := registry.RepoAndDigest(ref)
 		if img[3] == "" {
-			labelCache.Add(repo+"@"+digest, labelCacheValue{noLabels: true}, 0)
+			registry.LabelCache.Add(repo+"@"+digest, registry.LabelCacheValue{NoLabels: true}, 0)
 		} else {
-			labelCache.Add(repo+"@"+digest, labelCacheValue{labels: ImageLabels{GitCommit: img[3], GitURL: img[2]}}, 0)
+			registry.LabelCache.Add(repo+"@"+digest, registry.LabelCacheValue{Labels: registry.ImageLabels{GitCommit: img[3], GitURL: img[2]}}, 0)
 		}
 	}
-	fbcContentCache.Add(key, &types.FBCContentResponse{Tag: tag, RelatedImages: related}, 0)
+	registry.FBCContentCache.Add(key, &types.FBCContentResponse{Tag: tag, RelatedImages: related}, 0)
 	return fbc
 }
 
-func staticBuilds(builds ...prBuild) func(context.Context) ([]prBuild, error) {
-	return func(context.Context) ([]prBuild, error) { return builds, nil }
+func staticBuilds(builds ...registry.Build) func(context.Context) ([]registry.Build, error) {
+	return func(context.Context) ([]registry.Build, error) { return builds, nil }
 }
 
 func resultsByTag(resp *types.PRContainsResponse) map[string]types.PRContainsBuild {
@@ -330,12 +330,12 @@ func TestFindBuildsContainingPR_Verdicts(t *testing.T) {
 
 	installed := seedBuild(t, 1, "rhoai-3.6", forkURL+".git", commitNew)
 	builds := staticBuilds(
-		prBuild{image: installed, installed: true},
-		prBuild{image: seedBuild(t, 2, "rhoai-3.5", forkURL, commitOld)},
-		prBuild{image: seedBuild(t, 3, "rhoai-3.7", forkURL, mergeSHA)},
-		prBuild{image: seedBuild(t, 4, "rhoai-3.4", forkURL, behind)},
+		registry.Build{Image: installed, Installed: true},
+		registry.Build{Image: seedBuild(t, 2, "rhoai-3.5", forkURL, commitOld)},
+		registry.Build{Image: seedBuild(t, 3, "rhoai-3.7", forkURL, mergeSHA)},
+		registry.Build{Image: seedBuild(t, 4, "rhoai-3.4", forkURL, behind)},
 	)
-	resp, err := findBuildsContainingPR(context.Background(), "", DefaultPRSearchRepo, 9938, builds)
+	resp, err := registry.SearchPR(context.Background(), "", DefaultPRSearchRepo, 9938, builds)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +365,7 @@ func TestFindBuildsContainingPR_Verdicts(t *testing.T) {
 
 	// Merge commit and compare answers are immutable: a second search makes no GitHub call.
 	before := g.count("pull") + g.count("compare")
-	if _, err := findBuildsContainingPR(context.Background(), "", DefaultPRSearchRepo, 9938, builds); err != nil {
+	if _, err := registry.SearchPR(context.Background(), "", DefaultPRSearchRepo, 9938, builds); err != nil {
 		t.Fatal(err)
 	}
 	if after := g.count("pull") + g.count("compare"); after != before {
@@ -398,7 +398,7 @@ func TestFindBuildsContainingPR_RequestErrors(t *testing.T) {
 				g.failures["pull"] = tc.fail
 			}
 			listed := false
-			_, err := findBuildsContainingPR(context.Background(), "", DefaultPRSearchRepo, 42, func(context.Context) ([]prBuild, error) {
+			_, err := registry.SearchPR(context.Background(), "", DefaultPRSearchRepo, 42, func(context.Context) ([]registry.Build, error) {
 				listed = true
 				return nil, nil
 			})
@@ -416,7 +416,7 @@ func TestFindBuildsContainingPR_RequestErrors(t *testing.T) {
 		g := newFakeGitHub()
 		installFakeGitHub(t, g)
 		for _, repo := range []string{"evil", "a/b/c", "a/b c", ""} {
-			_, err := findBuildsContainingPR(context.Background(), "", repo, 1, staticBuilds())
+			_, err := registry.SearchPR(context.Background(), "", repo, 1, staticBuilds())
 			var searchErr *PRSearchError
 			if !errors.As(err, &searchErr) || searchErr.Code != "validation" || g.count("pull") != 0 {
 				t.Fatalf("%q: err %v, calls %d", repo, err, g.count("pull"))
@@ -433,12 +433,12 @@ func TestForkCandidates(t *testing.T) {
 		"Red-Hat-Data-Services/ODH-Dashboard":   {"Red-Hat-Data-Services/ODH-Dashboard"},
 		"kserve/kserve":                         {"red-hat-data-services/kserve", "kserve/kserve"},
 	} {
-		got := forkCandidates(repo)
+		got := registry.ForkCandidates(repo)
 		if strings.Join(got, ",") != strings.Join(want, ",") {
 			t.Errorf("%s: %v, want %v", repo, got, want)
 		}
 	}
-	if !isCandidate([]string{"red-hat-data-services/odh-dashboard"}, "Red-Hat-Data-Services/odh-dashboard") {
+	if !registry.IsCandidate([]string{"red-hat-data-services/odh-dashboard"}, "Red-Hat-Data-Services/odh-dashboard") {
 		t.Error("candidates must compare case-insensitively")
 	}
 }
@@ -463,7 +463,7 @@ func TestFindBuildsContainingPR_StableBranch(t *testing.T) {
 	}
 	t.Run("not in stable yet", func(t *testing.T) {
 		g, build := setup(t, "diverged")
-		resp, err := findBuildsContainingPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(prBuild{image: build}))
+		resp, err := registry.SearchPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(registry.Build{Image: build}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -473,7 +473,7 @@ func TestFindBuildsContainingPR_StableBranch(t *testing.T) {
 	})
 	t.Run("in stable, waiting for the fork", func(t *testing.T) {
 		_, build := setup(t, "ahead")
-		resp, err := findBuildsContainingPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(prBuild{image: build}))
+		resp, err := registry.SearchPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(registry.Build{Image: build}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -485,7 +485,7 @@ func TestFindBuildsContainingPR_StableBranch(t *testing.T) {
 		g, _ := setup(t, "ahead")
 		g.compare[mergeSHA+"..."+commitNew] = "ahead"
 		newer := seedBuild(t, 2, "rhoai-3.7", forkURL, commitNew)
-		resp, err := findBuildsContainingPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(prBuild{image: newer}))
+		resp, err := registry.SearchPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(registry.Build{Image: newer}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -495,7 +495,7 @@ func TestFindBuildsContainingPR_StableBranch(t *testing.T) {
 	})
 	t.Run("stable unknown to GitHub: no explanation", func(t *testing.T) {
 		_, build := setup(t, "")
-		resp, err := findBuildsContainingPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(prBuild{image: build}))
+		resp, err := registry.SearchPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(registry.Build{Image: build}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -537,8 +537,8 @@ func TestFindBuildsContainingPR_AnyRepository(t *testing.T) {
 		[4]string{"odh_kserve_image", "odh-kserve", kserveURL, commitOld},
 		[4]string{"odh_unlabelled_image", "odh-unlabelled", "", ""},
 	)
-	builds := staticBuilds(prBuild{image: withDSP}, prBuild{image: older}, prBuild{image: badCommit}, prBuild{image: withoutDSP})
-	resp, err := findBuildsContainingPR(context.Background(), "", dspRepo, 777, builds)
+	builds := staticBuilds(registry.Build{Image: withDSP}, registry.Build{Image: older}, registry.Build{Image: badCommit}, registry.Build{Image: withoutDSP})
+	resp, err := registry.SearchPR(context.Background(), "", dspRepo, 777, builds)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -561,16 +561,16 @@ func TestFindBuildsContainingPR_AnyRepository(t *testing.T) {
 		t.Errorf("url %q", resp.URL)
 	}
 	// The component of each build is remembered: a second search reads no labels.
-	if _, ok := componentImageCache.Get(digestOf(1) + "|" + dspRepo); !ok {
+	if _, ok := registry.ComponentImageCache.Get(digestOf(1) + "|" + dspRepo); !ok {
 		t.Error("the component image was not cached")
 	}
-	if _, ok := componentImageCache.Get(digestOf(4) + "|" + dspRepo); !ok {
+	if _, ok := registry.ComponentImageCache.Get(digestOf(4) + "|" + dspRepo); !ok {
 		t.Error("the complete scan without a match was not cached")
 	}
 
 	t.Run("the PR on the fork itself", func(t *testing.T) {
 		g.prRepos[dspFork] = true
-		resp, err := findBuildsContainingPR(context.Background(), "", dspFork, 777, staticBuilds(prBuild{image: withDSP}))
+		resp, err := registry.SearchPR(context.Background(), "", dspFork, 777, staticBuilds(registry.Build{Image: withDSP}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -604,8 +604,8 @@ func TestFindBuildsContainingPR_BuiltBeforeMerge(t *testing.T) {
 	seedBuildDate(t, newer, "2026-10-06T02:30:00Z")
 	undated := seedBuild(t, 4, "rhoai-3.5", forkURL, commitNew)
 
-	resp, err := findBuildsContainingPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(
-		prBuild{image: old}, prBuild{image: sameMinute}, prBuild{image: halfHour}, prBuild{image: twoHours}, prBuild{image: newer}, prBuild{image: undated}))
+	resp, err := registry.SearchPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(
+		registry.Build{Image: old}, registry.Build{Image: sameMinute}, registry.Build{Image: halfHour}, registry.Build{Image: twoHours}, registry.Build{Image: newer}, registry.Build{Image: undated}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -661,7 +661,7 @@ func TestRoughDuration(t *testing.T) {
 		49 * time.Hour:                "2 days",
 		12*24*time.Hour + 5*time.Hour: "12 days",
 	} {
-		if got := roughDuration(d); got != want {
+		if got := registry.RoughDuration(d); got != want {
 			t.Errorf("%s: %q, want %q", d, got, want)
 		}
 	}
@@ -681,8 +681,8 @@ func TestFindBuildsContainingCommit(t *testing.T) {
 		not := seedBuild(t, 2, "rhoai-3.5", forkURL, commitOld)
 		before := fmt.Sprintf("quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.4@%s", digestOf(3))
 		seedBuildDate(t, before, "2026-10-04T03:00:00Z")
-		resp, err := findBuildsContainingCommit(context.Background(), "", DefaultPRSearchRepo, "6C8AC6E", staticBuilds(
-			prBuild{image: contains, installed: true}, prBuild{image: not}, prBuild{image: before}))
+		resp, err := registry.SearchCommit(context.Background(), "", DefaultPRSearchRepo, "6C8AC6E", staticBuilds(
+			registry.Build{Image: contains, Installed: true}, registry.Build{Image: not}, registry.Build{Image: before}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -705,7 +705,7 @@ func TestFindBuildsContainingCommit(t *testing.T) {
 		}
 		// Resolved commits and compare answers are kept: a repeat is free.
 		before2 := g.count("commits") + g.count("compare")
-		if _, err := findBuildsContainingCommit(context.Background(), "", DefaultPRSearchRepo, "6c8ac6e", staticBuilds(prBuild{image: contains}, prBuild{image: not})); err != nil {
+		if _, err := registry.SearchCommit(context.Background(), "", DefaultPRSearchRepo, "6c8ac6e", staticBuilds(registry.Build{Image: contains}, registry.Build{Image: not})); err != nil {
 			t.Fatal(err)
 		}
 		if after := g.count("commits") + g.count("compare"); after != before2 {
@@ -718,7 +718,7 @@ func TestFindBuildsContainingCommit(t *testing.T) {
 		installFakeGitHub(t, g)
 		g.commits[forkRepo+"|"+commitOld] = "Fork-only change"
 		g.compare[commitOld+"..."+commitNew] = "ahead"
-		resp, err := findBuildsContainingCommit(context.Background(), "", DefaultPRSearchRepo, commitOld[:10], staticBuilds(prBuild{image: seedBuild(t, 1, "rhoai-3.6", forkURL, commitNew)}))
+		resp, err := registry.SearchCommit(context.Background(), "", DefaultPRSearchRepo, commitOld[:10], staticBuilds(registry.Build{Image: seedBuild(t, 1, "rhoai-3.6", forkURL, commitNew)}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -734,7 +734,7 @@ func TestFindBuildsContainingCommit(t *testing.T) {
 		g := newFakeGitHub()
 		installFakeGitHub(t, g)
 		listed := false
-		_, err := findBuildsContainingCommit(context.Background(), "", DefaultPRSearchRepo, "abcdef0", func(context.Context) ([]prBuild, error) {
+		_, err := registry.SearchCommit(context.Background(), "", DefaultPRSearchRepo, "abcdef0", func(context.Context) ([]registry.Build, error) {
 			listed = true
 			return nil, nil
 		})
@@ -747,7 +747,7 @@ func TestFindBuildsContainingCommit(t *testing.T) {
 			t.Errorf("listed %v, lookups %d", listed, g.count("commits"))
 		}
 		// The miss is remembered for a while.
-		if _, err := findBuildsContainingCommit(context.Background(), "", DefaultPRSearchRepo, "abcdef0", staticBuilds()); err == nil || g.count("commits") != 2 {
+		if _, err := registry.SearchCommit(context.Background(), "", DefaultPRSearchRepo, "abcdef0", staticBuilds()); err == nil || g.count("commits") != 2 {
 			t.Errorf("err %v, lookups %d", err, g.count("commits"))
 		}
 	})
@@ -756,7 +756,7 @@ func TestFindBuildsContainingCommit(t *testing.T) {
 		g := newFakeGitHub()
 		installFakeGitHub(t, g)
 		g.rateLimited("commits", 10*time.Minute)
-		resp, err := findBuildsContainingCommit(context.Background(), "", DefaultPRSearchRepo, "abcdef0", staticBuilds(prBuild{image: seedBuild(t, 1, "rhoai-3.6", forkURL, commitNew)}))
+		resp, err := registry.SearchCommit(context.Background(), "", DefaultPRSearchRepo, "abcdef0", staticBuilds(registry.Build{Image: seedBuild(t, 1, "rhoai-3.6", forkURL, commitNew)}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -772,7 +772,7 @@ func TestFindBuildsContainingCommit(t *testing.T) {
 		g := newFakeGitHub()
 		installFakeGitHub(t, g)
 		for repo, sha := range map[string]string{"evil": "abcdef0", DefaultPRSearchRepo: "abc", "a/b": strings.Repeat("a", 41)} {
-			_, err := findBuildsContainingCommit(context.Background(), "", repo, sha, staticBuilds())
+			_, err := registry.SearchCommit(context.Background(), "", repo, sha, staticBuilds())
 			var searchErr *PRSearchError
 			if !errors.As(err, &searchErr) || searchErr.Code != "validation" {
 				t.Errorf("%s %s: %v", repo, sha, err)
@@ -793,7 +793,7 @@ func TestFindBuildsContainingPR_RateLimits(t *testing.T) {
 			return true
 		}
 		image := seedBuild(t, 1, "rhoai-3.6", forkURL, commitNew)
-		resp, err := findBuildsContainingPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(prBuild{image: image}))
+		resp, err := registry.SearchPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(registry.Build{Image: image}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -809,7 +809,7 @@ func TestFindBuildsContainingPR_RateLimits(t *testing.T) {
 		}
 		// The backoff holds: the next request does not call GitHub at all.
 		before := g.count("pull")
-		resp, err = findBuildsContainingPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(prBuild{image: image}))
+		resp, err = registry.SearchPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(registry.Build{Image: image}))
 		if err != nil || !resp.RateLimited || g.count("pull") != before {
 			t.Errorf("during the backoff: err %v, rateLimited %v, calls %d", err, resp.RateLimited, g.count("pull")-before)
 		}
@@ -821,7 +821,7 @@ func TestFindBuildsContainingPR_RateLimits(t *testing.T) {
 		g.prs[9938] = mergedPR()
 		g.compare[mergeSHA+"..."+commitNew] = "ahead"
 		// Answered first and cached, so the second build is checked from the cache.
-		if _, err := compareContains(context.Background(), forkRepo, mergeSHA, commitNew); err != nil {
+		if _, err := registry.CompareContains(context.Background(), forkRepo, mergeSHA, commitNew); err != nil {
 			t.Fatal(err)
 		}
 		g.failures["compare"] = func(w http.ResponseWriter) bool {
@@ -829,9 +829,9 @@ func TestFindBuildsContainingPR_RateLimits(t *testing.T) {
 			w.WriteHeader(http.StatusTooManyRequests)
 			return true
 		}
-		resp, err := findBuildsContainingPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(
-			prBuild{image: seedBuild(t, 1, "rhoai-3.6", forkURL, commitNew)},
-			prBuild{image: seedBuild(t, 2, "rhoai-3.5", forkURL, commitOld)},
+		resp, err := registry.SearchPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(
+			registry.Build{Image: seedBuild(t, 1, "rhoai-3.6", forkURL, commitNew)},
+			registry.Build{Image: seedBuild(t, 2, "rhoai-3.5", forkURL, commitOld)},
 		))
 		if err != nil {
 			t.Fatal(err)
@@ -854,27 +854,27 @@ func TestFindBuildsContainingPR_UnknownBuilds(t *testing.T) {
 	errSHA := "2222222222222222222222222222222222222222"
 
 	noDash := fmt.Sprintf("quay.io/rhoai/rhoai-fbc-fragment:rhoai-2.25@%s", digestOf(10))
-	key, _ := fbcCacheKey(noDash)
-	fbcContentCache.Add(key, &types.FBCContentResponse{RelatedImages: []types.RelatedImage{{Name: "odh_kserve_image", Image: "quay.io/rhoai/odh-kserve@" + digestOf(11)}}}, 0)
+	key, _ := registry.FBCCacheKey(noDash)
+	registry.FBCContentCache.Add(key, &types.FBCContentResponse{RelatedImages: []types.RelatedImage{{Name: "odh_kserve_image", Image: "quay.io/rhoai/odh-kserve@" + digestOf(11)}}}, 0)
 
 	noLabels := fmt.Sprintf("quay.io/rhoai/rhoai-fbc-fragment:rhoai-2.24@%s", digestOf(12))
-	key, _ = fbcCacheKey(noLabels)
+	key, _ = registry.FBCCacheKey(noLabels)
 	dash := "quay.io/rhoai/odh-dashboard-rhel9@" + digestOf(13)
-	fbcContentCache.Add(key, &types.FBCContentResponse{RelatedImages: []types.RelatedImage{{Name: "odh_dashboard_image", Image: dash}}}, 0)
-	repo, digest, _ := extractRepoAndDigest(dash)
-	labelCache.Add(repo+"@"+digest, labelCacheValue{noLabels: true}, 0)
+	registry.FBCContentCache.Add(key, &types.FBCContentResponse{RelatedImages: []types.RelatedImage{{Name: "odh_dashboard_image", Image: dash}}}, 0)
+	repo, digest, _ := registry.RepoAndDigest(dash)
+	registry.LabelCache.Add(repo+"@"+digest, registry.LabelCacheValue{NoLabels: true}, 0)
 
 	builds := staticBuilds(
-		prBuild{image: noDash},
-		prBuild{image: noLabels},
-		prBuild{image: seedBuild(t, 3, "rhoai-2.23", "https://gitlab.com/x/odh-dashboard", commitNew)},
-		prBuild{image: seedBuild(t, 4, "rhoai-2.22", "https://github.com/someone/odh-dashboard", commitNew)},
-		prBuild{image: seedBuild(t, 5, "rhoai-2.21", forkURL, "3333333333333333333333333333333333333333")},
-		prBuild{image: seedBuild(t, 6, "rhoai-2.20", forkURL, errSHA)},
-		prBuild{image: seedBuild(t, 7, "rhoai-3.6", forkURL, commitNew)},
+		registry.Build{Image: noDash},
+		registry.Build{Image: noLabels},
+		registry.Build{Image: seedBuild(t, 3, "rhoai-2.23", "https://gitlab.com/x/odh-dashboard", commitNew)},
+		registry.Build{Image: seedBuild(t, 4, "rhoai-2.22", "https://github.com/someone/odh-dashboard", commitNew)},
+		registry.Build{Image: seedBuild(t, 5, "rhoai-2.21", forkURL, "3333333333333333333333333333333333333333")},
+		registry.Build{Image: seedBuild(t, 6, "rhoai-2.20", forkURL, errSHA)},
+		registry.Build{Image: seedBuild(t, 7, "rhoai-3.6", forkURL, commitNew)},
 	)
 	g.compare[mergeSHA+"..."+errSHA] = "weird"
-	resp, err := findBuildsContainingPR(context.Background(), "", DefaultPRSearchRepo, 9938, builds)
+	resp, err := registry.SearchPR(context.Background(), "", DefaultPRSearchRepo, 9938, builds)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -943,12 +943,12 @@ func TestFindBuildsContainingPR_RepositoryAllowlist(t *testing.T) {
 	installFakeGitHub(t, g)
 	t.Run("an owner outside the allowlist is refused before GitHub is asked", func(t *testing.T) {
 		for _, repo := range []string{"evil/repo", "../x", "opendatahub-io/.."} {
-			_, err := findBuildsContainingPR(context.Background(), "", repo, 5, staticBuilds())
+			_, err := registry.SearchPR(context.Background(), "", repo, 5, staticBuilds())
 			var searchErr *PRSearchError
 			if !errors.As(err, &searchErr) || searchErr.Status != 400 || searchErr.Code != "validation" || searchErr.Msg != SearchRepoMessage {
 				t.Errorf("%s: %v", repo, err)
 			}
-			_, err = findBuildsContainingCommit(context.Background(), "", repo, "abcdef0", staticBuilds())
+			_, err = registry.SearchCommit(context.Background(), "", repo, "abcdef0", staticBuilds())
 			if !errors.As(err, &searchErr) || searchErr.Status != 400 || searchErr.Code != "validation" || searchErr.Msg != SearchRepoMessage {
 				t.Errorf("%s (commit): %v", repo, err)
 			}
@@ -961,7 +961,7 @@ func TestFindBuildsContainingPR_RepositoryAllowlist(t *testing.T) {
 		g.prRepos["OpenDataHub-io/odh-dashboard"] = true
 		g.prs[9938] = mergedPR()
 		g.compare[mergeSHA+"..."+commitNew] = "ahead"
-		resp, err := findBuildsContainingPR(context.Background(), "", "OpenDataHub-io/odh-dashboard", 9938, staticBuilds(prBuild{image: seedBuild(t, 1, "rhoai-3.6", forkURL, commitNew)}))
+		resp, err := registry.SearchPR(context.Background(), "", "OpenDataHub-io/odh-dashboard", 9938, staticBuilds(registry.Build{Image: seedBuild(t, 1, "rhoai-3.6", forkURL, commitNew)}))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -981,18 +981,18 @@ func TestFindBuildsContainingPR_BoundedConcurrencyAndToken(t *testing.T) {
 		g.gate = newCallGate()
 		installFakeGitHub(t, g)
 		g.prs[9938] = mergedPR()
-		var builds []prBuild
+		var builds []registry.Build
 		for i := range 12 {
 			commit := fmt.Sprintf("%040d", i+1)
 			g.compare[mergeSHA+"..."+commit] = "ahead"
-			builds = append(builds, prBuild{image: seedBuild(t, 100+i, fmt.Sprintf("rhoai-3.%d", i), forkURL, commit)})
+			builds = append(builds, registry.Build{Image: seedBuild(t, 100+i, fmt.Sprintf("rhoai-3.%d", i), forkURL, commit)})
 		}
 		var resp *types.PRContainsResponse
 		var err error
 		// The GitHub calls go through each time all that can run at once
 		// are waiting.
 		g.gate.releaseUntilDone(func() {
-			resp, err = findBuildsContainingPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(builds...))
+			resp, err = registry.SearchPR(context.Background(), "", DefaultPRSearchRepo, 9938, staticBuilds(builds...))
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -1002,8 +1002,8 @@ func TestFindBuildsContainingPR_BoundedConcurrencyAndToken(t *testing.T) {
 				t.Errorf("%s: %+v", b.Tag, b)
 			}
 		}
-		if _, m := g.gate.counts(); m != prConcurrency {
-			t.Errorf("max concurrent GitHub calls %d, want %d", m, prConcurrency)
+		if _, m := g.gate.counts(); m != registry.PRConcurrency {
+			t.Errorf("max concurrent GitHub calls %d, want %d", m, registry.PRConcurrency)
 		}
 		for _, a := range g.auth {
 			if a != "Bearer ghp_test" {
@@ -1019,9 +1019,9 @@ func TestFindBuildsContainingPR_Timeout(t *testing.T) {
 	g.prs[9938] = mergedPR()
 	ctx, cancel := context.WithCancel(context.Background())
 	image := seedBuild(t, 1, "rhoai-3.6", forkURL, commitNew)
-	resp, err := findBuildsContainingPR(ctx, "", DefaultPRSearchRepo, 9938, func(context.Context) ([]prBuild, error) {
+	resp, err := registry.SearchPR(ctx, "", DefaultPRSearchRepo, 9938, func(context.Context) ([]registry.Build, error) {
 		cancel()
-		return []prBuild{{image: image}}, nil
+		return []registry.Build{{Image: image}}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1040,7 +1040,7 @@ func TestGitHubRepoFromURL(t *testing.T) {
 		"https://github.com/red-hat-data-services/odh-dashboard/tree": "",
 		"": "",
 	} {
-		got, ok := githubRepoFromURL(in)
+		got, ok := registry.GitHubRepoFromURL(in)
 		if got != want || ok != (want != "") {
 			t.Errorf("%q: %q %v", in, got, ok)
 		}

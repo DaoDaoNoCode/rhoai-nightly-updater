@@ -7,6 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/authz"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -30,7 +35,9 @@ func (f *resourceFake) deleteObject(path string) {
 // withUserRead builds it.
 func userClientOf(c *Client, token string) *Client {
 	u := *c
-	u.token, u.asUser, u.bookkeeper, u.signedInUser, u.statusRead = token, true, c, nil, false
+	editTestClient(&u, func(o *testClientOptions) {
+		o.Token, o.AsUser, o.Bookkeeper, o.SignedInUser, o.StatusRead = token, true, c, nil, false
+	})
 	return &u
 }
 
@@ -65,16 +72,16 @@ func TestListUserDSProjects(t *testing.T) {
 // Refused with the ServiceAccount's client, before any request.
 func TestUserReadsRefuseTheServiceAccount(t *testing.T) {
 	k8s, c := newResourceFake(t)
-	if _, err := ListUserDSProjects(c); !errors.Is(err, errNotUserClient) {
+	if _, err := ListUserDSProjects(c); !errors.Is(err, authz.ErrNotUserClient) {
 		t.Fatalf("got %v", err)
 	}
-	if _, err := GetProjectStatus(c, c, "p"); !errors.Is(err, errNotUserClient) {
+	if _, err := GetProjectStatus(c, c, "p"); !errors.Is(err, authz.ErrNotUserClient) {
 		t.Fatalf("project status: %v", err)
 	}
-	if _, err := GetPlaygroundStatus(c, c, ""); !errors.Is(err, errNotUserClient) {
+	if _, err := GetPlaygroundStatus(c, c, ""); !errors.Is(err, authz.ErrNotUserClient) {
 		t.Fatalf("playground status: %v", err)
 	}
-	if _, err := GetMLflowSamplesStatus(c, c, "p"); !errors.Is(err, errNotUserClient) {
+	if _, err := GetMLflowSamplesStatus(c, c, "p"); !errors.Is(err, authz.ErrNotUserClient) {
 		t.Fatalf("samples status: %v", err)
 	}
 	if len(k8s.calls) != 0 {
@@ -102,7 +109,7 @@ func TestGetProjectStatus(t *testing.T) {
 	k8s.putJSON("/apis/serving.kserve.io/v1beta1/namespaces/proj/inferenceservices/iris",
 		`{"metadata":{"name":"iris","namespace":"proj"},"status":{"url":"https://iris.example.com","conditions":[{"type":"Ready","status":"False","reason":"Loading"}]}}`)
 	u := userClientOf(c, fakeUserToken)
-	k8s.failAs[fakeUserToken+" GET /api/v1/namespaces/proj/secrets/"+connectionSecretName] = 403
+	k8s.failAs[fakeUserToken+" GET /api/v1/namespaces/proj/secrets/"+storage.ConnectionSecretName] = 403
 
 	st, err := GetProjectStatus(c, u, "proj")
 	if err != nil {
@@ -132,7 +139,7 @@ func TestGetProjectStatus(t *testing.T) {
 		t.Errorf("inference services %+v", st.InferenceServices)
 	}
 	for _, call := range k8s.calls {
-		own := strings.HasPrefix(call.Path, "/api/v1/namespaces/"+getActivityNamespace()+"/configmaps/")
+		own := strings.HasPrefix(call.Path, "/api/v1/namespaces/"+record.GetActivityNamespace()+"/configmaps/")
 		if strings.Contains(call.Path, "/namespaces/proj/") && call.Token != fakeUserToken {
 			t.Errorf("%s read with %q, not the user's token", call.Path, call.Token)
 		}
@@ -179,7 +186,7 @@ func TestPlaygroundStatusForUserHasNoServiceAccountText(t *testing.T) {
 		e.k8s.deleteObject("/apis/project.openshift.io/v1/projects/proj")
 		e.k8s.deleteObject("/apis/project.openshift.io/v1/projects/other")
 		e.k8s.putJSON("/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters/default-dsc", dsc)
-		PurgePlaygroundStatus()
+		features.PurgePlaygroundStatus()
 		full, err := GetPlaygroundStatus(e.c, e.reader, "")
 		if err != nil {
 			t.Fatal(err)
@@ -216,10 +223,10 @@ func TestUserReadForbiddenIsTheUsers(t *testing.T) {
 	k8s, c := newResourceFake(t)
 	k8s.failAs[fakeUserToken+" GET /apis/project.openshift.io/v1/projects"] = 403
 	_, err := ListUserDSProjects(userClientOf(c, fakeUserToken))
-	if code, ec := HTTPStatusForError(err); code != 403 || ec != ErrorCodeForbiddenForUser {
+	if code, ec := kube.HTTPStatusForError(err); code != 403 || ec != kube.ErrorCodeForbiddenForUser {
 		t.Fatalf("got %d %s (%v)", code, ec, err)
 	}
-	if templateHint(err) != "" {
-		t.Fatalf("template hint on the user's refusal: %q", templateHint(err))
+	if kube.TemplateHint(err) != "" {
+		t.Fatalf("template hint on the user's refusal: %q", kube.TemplateHint(err))
 	}
 }

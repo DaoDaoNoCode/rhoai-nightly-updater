@@ -9,6 +9,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -27,7 +32,7 @@ const (
 )
 
 func trackingID(kind, ns, name string) map[string]any {
-	return map[string]any{argoTrackingAnnotation: fmt.Sprintf("%s:operators.coreos.com/%s:%s/%s", testArgoApp, kind, ns, name)}
+	return map[string]any{argo.TrackingAnnotation: fmt.Sprintf("%s:operators.coreos.com/%s:%s/%s", testArgoApp, kind, ns, name)}
 }
 
 // gitOpsFake is a cluster where Argo CD manages the nightly catalog and the
@@ -37,11 +42,11 @@ func gitOpsFake(t *testing.T) *fakeOLM {
 		"channel": gitOpsChannel,
 		"config":  map[string]any{"env": []any{map[string]any{"name": "DISABLE_DSC_CONFIG", "value": "true"}}},
 	})
-	subAnn := trackingID("Subscription", SubNS, SubName)
-	subAnn[lastAppliedAnnotation] = `{"kind":"Subscription","spec":{"channel":"beta"}}`
+	subAnn := trackingID("Subscription", rhoai.SubNS, rhoai.SubName)
+	subAnn[argo.LastAppliedAnnotation] = `{"kind":"Subscription","spec":{"channel":"beta"}}`
 	f.sub["metadata"].(map[string]any)["annotations"] = subAnn
 	f.sub["metadata"].(map[string]any)["labels"] = map[string]any{"helm.sh/chart": "rhai-on-openshift-chart-3.4.0", "app.kubernetes.io/managed-by": "Helm"}
-	f.catalog["metadata"] = map[string]any{"annotations": trackingID("CatalogSource", CatalogNS, CatalogName)}
+	f.catalog["metadata"] = map[string]any{"annotations": trackingID("CatalogSource", rhoai.CatalogNS, rhoai.CatalogName)}
 	f.catalog["spec"].(map[string]any)["displayName"] = "Red Hat OpenShift AI (nightly)"
 	f.gitOpsPods = true
 	f.channels = `[{"name":"beta","currentCSV":"` + gitOpsCSV + `","currentCSVDesc":{"annotations":{"containerImage":"` + gitOpsOperatorImage + `","createdAt":"` + gitOpsBuilt + `"}}},` +
@@ -65,7 +70,7 @@ func indexOf(list []string, want string) int {
 
 func TestArgoApplication(t *testing.T) {
 	sub := func(id string) string {
-		return argoApplication(map[string]string{argoTrackingAnnotation: id}, "operators.coreos.com", "Subscription", SubNS, SubName)
+		return argo.TrackingApplication(map[string]string{argo.TrackingAnnotation: id}, "operators.coreos.com", "Subscription", rhoai.SubNS, rhoai.SubName)
 	}
 	for id, want := range map[string]string{
 		"rhai-on-openshift:operators.coreos.com/Subscription:redhat-ods-operator/rhods-operator": "rhai-on-openshift",
@@ -86,12 +91,12 @@ func TestArgoApplication(t *testing.T) {
 			t.Errorf("argoApplication(%q) = %q, want %q", id, got, want)
 		}
 	}
-	if got := argoApplication(map[string]string{"app.kubernetes.io/instance": "rhai-on-openshift"}, "operators.coreos.com", "Subscription", SubNS, SubName); got != "" {
+	if got := argo.TrackingApplication(map[string]string{"app.kubernetes.io/instance": "rhai-on-openshift"}, "operators.coreos.com", "Subscription", rhoai.SubNS, rhoai.SubName); got != "" {
 		t.Errorf("the instance label is not a tracking annotation, got %q", got)
 	}
 	// A cluster-scoped object carries the application's destination
 	// namespace in the id; only group, kind and name are checked.
-	if got := argoApplication(map[string]string{argoTrackingAnnotation: "rhai-on-openshift:datasciencecluster.opendatahub.io/DataScienceCluster:odh-gitops/default-dsc"}, dscGroup, "DataScienceCluster", "", "default-dsc"); got != testArgoApp {
+	if got := argo.TrackingApplication(map[string]string{argo.TrackingAnnotation: "rhai-on-openshift:datasciencecluster.opendatahub.io/DataScienceCluster:odh-gitops/default-dsc"}, rhoai.DSCGroup, "DataScienceCluster", "", "default-dsc"); got != testArgoApp {
 		t.Errorf("cluster-scoped DSC: got %q", got)
 	}
 }
@@ -102,18 +107,18 @@ func TestArgoApplication(t *testing.T) {
 func TestKeepArgoTracking(t *testing.T) {
 	prev := map[string]any{"metadata": map[string]any{
 		"annotations": map[string]any{
-			argoTrackingAnnotation:                "app:operators.coreos.com/Subscription:ns/name",
+			argo.TrackingAnnotation:               "app:operators.coreos.com/Subscription:ns/name",
 			"argocd.argoproj.io/installation-id":  "inst-1",
 			"argocd.argoproj.io/sync-options":     "Prune=false",
-			lastAppliedAnnotation:                 "{}",
+			argo.LastAppliedAnnotation:            "{}",
 			"olm.operatorframework.io/managed-by": "x",
 		},
 		"labels": map[string]any{"helm.sh/chart": "c"},
 	}}
 	obj := map[string]any{"metadata": map[string]any{"name": "name"}}
-	keepArgoTracking(prev, obj)
+	argo.KeepTracking(prev, obj)
 	ann := obj["metadata"].(map[string]any)["annotations"].(map[string]any)
-	for _, k := range []string{argoTrackingAnnotation, "argocd.argoproj.io/installation-id", "argocd.argoproj.io/sync-options", lastAppliedAnnotation} {
+	for _, k := range []string{argo.TrackingAnnotation, "argocd.argoproj.io/installation-id", "argocd.argoproj.io/sync-options", argo.LastAppliedAnnotation} {
 		if ann[k] == nil {
 			t.Errorf("annotation %s not kept: %v", k, ann)
 		}
@@ -121,32 +126,32 @@ func TestKeepArgoTracking(t *testing.T) {
 	if ann["olm.operatorframework.io/managed-by"] != "x" {
 		t.Errorf("an annotation Git may set was not copied: %v", ann)
 	}
-	kept := map[string]any{"metadata": map[string]any{"annotations": map[string]any{lastAppliedAnnotation: "mine"}}}
-	keepArgoTracking(prev, kept)
-	if kept["metadata"].(map[string]any)["annotations"].(map[string]any)[lastAppliedAnnotation] != "mine" {
+	kept := map[string]any{"metadata": map[string]any{"annotations": map[string]any{argo.LastAppliedAnnotation: "mine"}}}
+	argo.KeepTracking(prev, kept)
+	if kept["metadata"].(map[string]any)["annotations"].(map[string]any)[argo.LastAppliedAnnotation] != "mine" {
 		t.Errorf("an annotation of the new object was overwritten: %v", kept)
 	}
 	if labels := obj["metadata"].(map[string]any)["labels"].(map[string]any); labels["helm.sh/chart"] != "c" {
 		t.Errorf("labels = %v", labels)
 	}
 	untracked := map[string]any{"metadata": map[string]any{"name": "name"}}
-	keepArgoTracking(map[string]any{"metadata": map[string]any{"labels": map[string]any{"a": "b"}}}, untracked)
+	argo.KeepTracking(map[string]any{"metadata": map[string]any{"labels": map[string]any{"a": "b"}}}, untracked)
 	if untracked["metadata"].(map[string]any)["labels"] != nil {
 		t.Error("labels copied from an untracked object")
 	}
 	// Label tracking (OpenShift GitOps up to 1.18): no tracking annotation,
 	// only the instance label; the recreated object keeps it and the rest.
 	labelTracked := map[string]any{"metadata": map[string]any{
-		"annotations": map[string]any{lastAppliedAnnotation: "{}"},
-		"labels":      map[string]any{argoInstanceLabel: testArgoApp, "helm.sh/chart": "c"},
+		"annotations": map[string]any{argo.LastAppliedAnnotation: "{}"},
+		"labels":      map[string]any{argo.InstanceLabel: testArgoApp, "helm.sh/chart": "c"},
 	}}
 	recreated := map[string]any{"metadata": map[string]any{"name": "name"}}
-	keepArgoTracking(labelTracked, recreated)
+	argo.KeepTracking(labelTracked, recreated)
 	meta := recreated["metadata"].(map[string]any)
-	if labels, _ := meta["labels"].(map[string]any); labels[argoInstanceLabel] != testArgoApp || labels["helm.sh/chart"] != "c" {
+	if labels, _ := meta["labels"].(map[string]any); labels[argo.InstanceLabel] != testArgoApp || labels["helm.sh/chart"] != "c" {
 		t.Errorf("label tracking: labels = %v", meta["labels"])
 	}
-	if ann, _ := meta["annotations"].(map[string]any); ann[lastAppliedAnnotation] != "{}" {
+	if ann, _ := meta["annotations"].(map[string]any); ann[argo.LastAppliedAnnotation] != "{}" {
 		t.Errorf("label tracking: annotations = %v", meta["annotations"])
 	}
 }
@@ -159,13 +164,13 @@ func TestKeepArgoTracking(t *testing.T) {
 func TestUpdateUnderGitOps_InstallsWhatTheCatalogServes(t *testing.T) {
 	f := gitOpsFake(t)
 	emit, events := eventsRecorder()
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, emit)
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, emit)
 	if err != nil || !result.Success {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 
-	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
-	subPath := subscriptionPath()
+	csPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
+	subPath := rhoai.SubscriptionPath()
 	var writes []string
 	for _, w := range f.writes() {
 		if !strings.Contains(w, "-verify-") { // the verification catalog
@@ -177,8 +182,8 @@ func TestUpdateUnderGitOps_InstallsWhatTheCatalogServes(t *testing.T) {
 			t.Fatalf("the Argo CD managed catalog was written: %v", writes)
 		}
 	}
-	order := []string{"DELETE " + namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, "install-old"),
-		"DELETE " + csvPath(gitOpsCSV), "DELETE " + subPath, "PATCH " + subPath}
+	order := []string{"DELETE " + rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "installplans", rhoai.SubNS, "install-old"),
+		"DELETE " + operator.CSVPath(gitOpsCSV), "DELETE " + subPath, "PATCH " + subPath}
 	for i := 1; i < len(order); i++ {
 		a, b := indexOf(writes, order[i-1]), indexOf(writes, order[i])
 		if a < 0 || b < 0 || a > b {
@@ -200,7 +205,7 @@ func TestUpdateUnderGitOps_InstallsWhatTheCatalogServes(t *testing.T) {
 	if subSpec["channel"] != gitOpsChannel || subSpec["config"] == nil {
 		t.Fatalf("Subscription spec = %v, want channel %s and the config Git sets", subSpec, gitOpsChannel)
 	}
-	if ann, _ := f.sub["metadata"].(map[string]any)["annotations"].(map[string]any); ann[argoTrackingAnnotation] == nil || ann[lastAppliedAnnotation] == nil {
+	if ann, _ := f.sub["metadata"].(map[string]any)["annotations"].(map[string]any); ann[argo.TrackingAnnotation] == nil || ann[argo.LastAppliedAnnotation] == nil {
 		t.Fatalf("the recreated Subscription lacks Argo CD's tracking or last-applied annotation: %v", ann)
 	}
 	// The chart's labels too: without them Argo CD syncs the Subscription
@@ -217,8 +222,8 @@ func TestUpdateUnderGitOps_InstallsWhatTheCatalogServes(t *testing.T) {
 // any change, and says where to change it.
 func TestUpdateUnderGitOps_RefusesAnotherImage(t *testing.T) {
 	f := gitOpsFake(t)
-	result, err := UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
-	if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged ||
+	result, err := operator.UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
+	if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged ||
 		!strings.Contains(result.Message, "change the image in Git") || !strings.Contains(result.Message, gitOpsImage) || !strings.Contains(result.Message, testArgoApp) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -233,7 +238,7 @@ func TestUpdateUnderGitOps_ImageChangesMeanwhile(t *testing.T) {
 	f := gitOpsFake(t)
 	stale := strings.Replace(f.channels, "sha256:new", "sha256:older", 1)
 	f.mainChannels = &stale // the catalog pod has not caught up yet
-	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
+	csPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 	reads := 0
 	f.intercept = func(f *fakeOLM, w http.ResponseWriter, r *http.Request) bool {
 		if r.Method == http.MethodGet && r.URL.Path == csPath {
@@ -244,8 +249,8 @@ func TestUpdateUnderGitOps_ImageChangesMeanwhile(t *testing.T) {
 		}
 		return false
 	}
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-	if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged ||
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+	if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged ||
 		!strings.Contains(result.Message, "while Update waited") || !strings.Contains(result.Message, testArgoApp) || !strings.Contains(result.Message, "sha256:newer") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -262,17 +267,17 @@ func TestUpdateUnderGitOps_RestoreKeepsTracking(t *testing.T) {
 	f := gitOpsFake(t)
 	f.onSubscribe = func(*fakeOLM, map[string]any) {} // OLM never acts
 	emit, events := eventsRecorder()
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, emit)
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, emit)
 	if err != nil || result.Success || result.ErrorCode != "install_timeout" {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	if lastStatus(events(), restoreStepName) != "success" {
+	if lastStatus(events(), operator.RestoreStepName) != "success" {
 		t.Fatalf("restore did not succeed: %v", events())
 	}
 	if !strings.Contains(result.Message, "OLM installs the build the catalog serves again") || strings.Contains(result.Message, "previous operator version") {
 		t.Fatalf("restore message under GitOps: %q", result.Message)
 	}
-	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
+	csPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 	for _, w := range f.writes() {
 		if strings.HasSuffix(w, " "+csPath) {
 			t.Fatalf("the catalog was written: %v", f.writes())
@@ -283,7 +288,7 @@ func TestUpdateUnderGitOps_RestoreKeepsTracking(t *testing.T) {
 	if image := f.catalog["spec"].(map[string]any)["image"]; image != gitOpsImage {
 		t.Fatalf("catalog image = %v, want Git's", image)
 	}
-	if ann, _ := f.sub["metadata"].(map[string]any)["annotations"].(map[string]any); ann[argoTrackingAnnotation] == nil {
+	if ann, _ := f.sub["metadata"].(map[string]any)["annotations"].(map[string]any); ann[argo.TrackingAnnotation] == nil {
 		t.Fatal("the restored Subscription has no Argo CD tracking annotation")
 	}
 	if f.sub["spec"].(map[string]any)["channel"] != gitOpsChannel {
@@ -298,7 +303,7 @@ func TestUpdateUnderGitOps_WaitsForTheNewBuild(t *testing.T) {
 	f := gitOpsFake(t)
 	stale := strings.Replace(f.channels, "sha256:new", "sha256:older", 1)
 	f.mainChannels = &stale
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success || result.ErrorCode != "timeout" || !strings.Contains(result.Message, "did not serve") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -310,25 +315,25 @@ func TestUpdateUnderGitOps_WaitsForTheNewBuild(t *testing.T) {
 }
 
 func TestCatalogServing(t *testing.T) {
-	target := catalogTarget{Channel: "beta", HeadCSV: gitOpsCSV, Fingerprint: "op@sha256:new t1"}
-	ok := catalogServing{image: "img:new", state: "READY", podReady: true, head: gitOpsCSV, fingerprint: "op@sha256:new t1"}
-	if !ok.servesTarget("img:new", target) {
+	target := catalog.Target{Channel: "beta", HeadCSV: gitOpsCSV, Fingerprint: "op@sha256:new t1"}
+	ok := operator.CatalogServing{Image: "img:new", State: "READY", PodReady: true, Head: gitOpsCSV, Fingerprint: "op@sha256:new t1"}
+	if !ok.ServesTarget("img:new", target) {
 		t.Fatal("a ready catalog serving the build was not accepted")
 	}
-	for name, s := range map[string]catalogServing{
-		"old pod still serving": {image: "img:new", state: "READY", podReady: true, stalePods: 1, head: gitOpsCSV, fingerprint: ok.fingerprint},
-		"new pod not ready":     {image: "img:new", state: "READY", head: gitOpsCSV, fingerprint: ok.fingerprint},
-		"old build listed":      {image: "img:new", state: "READY", podReady: true, head: gitOpsCSV, fingerprint: "op@sha256:old t0"},
-		"not READY":             {image: "img:new", state: "CONNECTING", podReady: true, head: gitOpsCSV, fingerprint: ok.fingerprint},
-		"other head":            {image: "img:new", state: "READY", podReady: true, head: "rhods-operator.3.5.0", fingerprint: ok.fingerprint},
+	for name, s := range map[string]operator.CatalogServing{
+		"old pod still serving": {Image: "img:new", State: "READY", PodReady: true, StalePods: 1, Head: gitOpsCSV, Fingerprint: ok.Fingerprint},
+		"new pod not ready":     {Image: "img:new", State: "READY", Head: gitOpsCSV, Fingerprint: ok.Fingerprint},
+		"old build listed":      {Image: "img:new", State: "READY", PodReady: true, Head: gitOpsCSV, Fingerprint: "op@sha256:old t0"},
+		"not READY":             {Image: "img:new", State: "CONNECTING", PodReady: true, Head: gitOpsCSV, Fingerprint: ok.Fingerprint},
+		"other head":            {Image: "img:new", State: "READY", PodReady: true, Head: "rhods-operator.3.5.0", Fingerprint: ok.Fingerprint},
 	} {
-		if s.servesTarget("img:new", target) {
+		if s.ServesTarget("img:new", target) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
 	noFingerprint := target
 	noFingerprint.Fingerprint = ""
-	if !(catalogServing{image: "img:new", state: "READY", podReady: true, head: gitOpsCSV}).servesTarget("img:new", noFingerprint) {
+	if !(operator.CatalogServing{Image: "img:new", State: "READY", PodReady: true, Head: gitOpsCSV}).ServesTarget("img:new", noFingerprint) {
 		t.Fatal("a catalog without fingerprint annotations is judged by its head")
 	}
 }
@@ -338,8 +343,8 @@ func TestUpdateUnderGitOps_Refusals(t *testing.T) {
 	t.Run("source not the nightly catalog", func(t *testing.T) {
 		f := gitOpsFake(t)
 		f.sub["spec"].(map[string]any)["source"] = "redhat-operators"
-		result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-		if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "redhat-operators") {
+		result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+		if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "redhat-operators") {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}
 		if w := f.writes(); len(w) != 0 {
@@ -349,8 +354,8 @@ func TestUpdateUnderGitOps_Refusals(t *testing.T) {
 	t.Run("no catalog to install from", func(t *testing.T) {
 		f := gitOpsFake(t)
 		f.catalog = nil
-		result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-		if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "does not exist") || !strings.Contains(result.Message, "in Git") {
+		result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+		if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "does not exist") || !strings.Contains(result.Message, "in Git") {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}
 		if w := f.writes(); len(w) != 0 {
@@ -363,8 +368,8 @@ func TestUpdateUnderGitOps_Refusals(t *testing.T) {
 		delete(f.csvs, gitOpsCSV)
 		f.sub["status"] = map[string]any{"state": "UpgradePending", "installPlanRef": map[string]any{"name": "install-first"}}
 		f.installPlans["install-first"] = map[string]any{"spec": map[string]any{"clusterServiceVersionNames": []string{gitOpsCSV}}, "status": map[string]any{"phase": "Installing"}}
-		result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-		if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "install-first is Installing") {
+		result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+		if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "install-first is Installing") {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}
 		if w := f.writes(); len(w) != 0 {
@@ -372,15 +377,15 @@ func TestUpdateUnderGitOps_Refusals(t *testing.T) {
 		}
 		// Once that plan is done (Failed here), Update proceeds.
 		f.installPlans["install-first"]["status"].(map[string]any)["phase"] = "Failed"
-		if result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {}); err != nil || !result.Success {
+		if result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {}); err != nil || !result.Success {
 			t.Fatalf("after the plan ended: result=%+v err=%v", result, err)
 		}
 	})
 	t.Run("startingCSV pinned to another build", func(t *testing.T) {
 		f := gitOpsFake(t)
 		f.sub["spec"].(map[string]any)["startingCSV"] = "rhods-operator.3.5.0"
-		result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-		if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "pins startingCSV rhods-operator.3.5.0") {
+		result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+		if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "pins startingCSV rhods-operator.3.5.0") {
 			t.Fatalf("result=%+v err=%v", result, err)
 		}
 		for _, w := range f.writes() {
@@ -392,7 +397,7 @@ func TestUpdateUnderGitOps_Refusals(t *testing.T) {
 	t.Run("build without Git's channel", func(t *testing.T) {
 		f := gitOpsFake(t)
 		f.channels = `[{"name":"stable-3.x","currentCSV":"rhods-operator.3.6.0"}]`
-		result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+		result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 		if err != nil || result.Success || result.ErrorCode != "validation" || !strings.Contains(result.Message, `channel "beta" is not in the catalog`) ||
 			!strings.Contains(result.Message, "change it in Git") {
 			t.Fatalf("result=%+v err=%v", result, err)
@@ -410,7 +415,7 @@ func TestUpdateUnderGitOps_Refusals(t *testing.T) {
 func TestUpdateUnderGitOps_KeepsStartingCSV(t *testing.T) {
 	f := gitOpsFake(t)
 	f.sub["spec"].(map[string]any)["startingCSV"] = gitOpsCSV
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 	if err != nil || !result.Success {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -428,13 +433,13 @@ func TestUpdateUnderGitOps_ImageChangesBeforeTheDeletions(t *testing.T) {
 	f.intercept = func(f *fakeOLM, w http.ResponseWriter, r *http.Request) bool {
 		// The catalog's PackageManifest is read last in each wait poll: the
 		// image changes right after the poll that accepted the catalog.
-		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/packagemanifests") && strings.Contains(r.URL.Query().Get("labelSelector"), CatalogName) {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/packagemanifests") && strings.Contains(r.URL.Query().Get("labelSelector"), rhoai.CatalogName) {
 			f.catalog["spec"].(map[string]any)["image"] = "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:newer"
 		}
 		return false
 	}
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-	if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "sha256:newer") {
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+	if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(result.Message, "sha256:newer") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	for _, w := range f.writes() {
@@ -456,13 +461,13 @@ func TestUpdateUnderGitOps_SubscriptionChangesMeanwhile(t *testing.T) {
 		return false
 	}
 	emit, events := eventsRecorder()
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, emit)
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, emit)
 	if err != nil || result.Success || result.ErrorCode != "conflict" || !strings.Contains(result.Message, "channel fast") || !strings.Contains(result.Message, "Git's current settings") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	// Only the restore writes the Subscription: it recreates it from Git's
 	// current spec (the old CSV is gone), with Argo CD's tracking.
-	if lastStatus(events(), restoreStepName) != "success" {
+	if lastStatus(events(), operator.RestoreStepName) != "success" {
 		t.Fatalf("restore did not run: %v", events())
 	}
 	f.mu.Lock()
@@ -470,7 +475,7 @@ func TestUpdateUnderGitOps_SubscriptionChangesMeanwhile(t *testing.T) {
 	if f.sub["spec"].(map[string]any)["channel"] != "fast" {
 		t.Fatalf("the restore put the old channel back over Git's: %v", f.sub["spec"])
 	}
-	if ann, _ := f.sub["metadata"].(map[string]any)["annotations"].(map[string]any); ann[argoTrackingAnnotation] == nil {
+	if ann, _ := f.sub["metadata"].(map[string]any)["annotations"].(map[string]any); ann[argo.TrackingAnnotation] == nil {
 		t.Fatalf("the restored Subscription lost Argo CD's tracking: %v", f.sub["metadata"])
 	}
 }
@@ -488,7 +493,7 @@ func TestUpdateUnderGitOps_StartingCSVChangesMeanwhile(t *testing.T) {
 				}
 				return false
 			}
-			result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+			result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -513,10 +518,10 @@ func TestUpdateUnderGitOps_StartingCSVChangesMeanwhile(t *testing.T) {
 func TestUpdateUnderGitOps_CatalogOnlyManaged(t *testing.T) {
 	f := gitOpsFake(t)
 	delete(f.sub["metadata"].(map[string]any), "annotations")
-	f.argo = argoManagingAllBut(argoSubscriptionObject)
+	f.argo = argoManagingAllBut(argo.SubscriptionObject)
 	f.sub["spec"].(map[string]any)["channel"] = "fast"
 	f.sub["spec"].(map[string]any)["startingCSV"] = "rhods-operator.3.5.0"
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 	if err != nil || !result.Success {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -537,7 +542,7 @@ func TestUpdateUnderGitOps_BuildWithoutAnnotations(t *testing.T) {
 		f.csvAnnotations = nil
 		olmInstalls(gitOpsCSV)(f, spec)
 	}
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success || result.ErrorCode != "install_mismatch" || !strings.Contains(result.Message, "carries no build annotations") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -553,7 +558,7 @@ func TestUpdateUnderGitOps_RecreatesFromTheLiveSubscription(t *testing.T) {
 		}
 		return false
 	}
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 	if err != nil || !result.Success {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -574,11 +579,11 @@ func TestUpdateUnderGitOps_AnotherBuildInstalled(t *testing.T) {
 		olmInstalls(gitOpsCSV)(f, spec)
 	}
 	emit, events := eventsRecorder()
-	result, err := UpdateStream(f.client(context.Background()), gitOpsImage, emit)
+	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, emit)
 	if err != nil || result.Success || result.ErrorCode != "install_mismatch" || !strings.Contains(result.Message, "sha256:other") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	if lastStatus(events(), restoreStepName) != "" {
+	if lastStatus(events(), operator.RestoreStepName) != "" {
 		t.Fatalf("a Succeeded operator was torn down: %v", events())
 	}
 	if _, ok := f.csvs[gitOpsCSV]; !ok {
@@ -591,7 +596,7 @@ func TestUpdateUnderGitOps_AnotherBuildInstalled(t *testing.T) {
 func TestCreateDSCRefusedUnderGitOps(t *testing.T) {
 	f := gitOpsFake(t)
 	r, err := CreateDefaultDSC(f.client(context.Background()))
-	if err != nil || r.Success || r.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(r.Message, testArgoApp) {
+	if err != nil || r.Success || r.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(r.Message, testArgoApp) {
 		t.Fatalf("result=%+v err=%v", r, err)
 	}
 	if w := f.writes(); len(w) != 0 {
@@ -615,7 +620,7 @@ func TestOperatorOperationsRefusedUnderGitOps(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := gitOpsFake(t)
 			code, msg := run(f.client(context.Background()))
-			if code != ErrorCodeGitOpsManaged || !strings.Contains(msg, testArgoApp) || !strings.Contains(msg, "Nothing was changed") {
+			if code != kube.ErrorCodeGitOpsManaged || !strings.Contains(msg, testArgoApp) || !strings.Contains(msg, "Nothing was changed") {
 				t.Fatalf("code=%q message=%q", code, msg)
 			}
 			if w := f.writes(); len(w) != 0 {
@@ -626,18 +631,16 @@ func TestOperatorOperationsRefusedUnderGitOps(t *testing.T) {
 	t.Run("only the catalog managed", func(t *testing.T) {
 		f := gitOpsFake(t)
 		delete(f.sub["metadata"].(map[string]any), "annotations")
-		f.argo = argoManagingAllBut(argoSubscriptionObject)
+		f.argo = argoManagingAllBut(argo.SubscriptionObject)
 		r, _ := ReinstallStreamWithOptions(f.client(context.Background()), "stable", "", "", OperationOptions{}, func(UpdateStepEvent) {})
-		if r.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(r.Message, "CatalogSource "+CatalogName) {
+		if r.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(r.Message, "CatalogSource "+rhoai.CatalogName) {
 			t.Fatalf("result=%+v", r)
 		}
 	})
 }
 
 func TestUpdateDryRunUnderGitOps(t *testing.T) {
-	oldLookup := lookupTargetBundle
-	t.Cleanup(func() { lookupTargetBundle = oldLookup })
-	lookupTargetBundle = func(*Client, string) (string, error) { return gitOpsCSV, nil }
+	t.Cleanup(operator.SetLookupTargetBundleForTest(func(*Client, string) (string, error) { return gitOpsCSV, nil }))
 	f := gitOpsFake(t)
 	result, err := Update(f.client(context.Background()), gitOpsImage, true)
 	if err != nil || !result.Success {
@@ -652,7 +655,7 @@ func TestUpdateDryRunUnderGitOps(t *testing.T) {
 	if strings.Contains(logs, "Would delete and recreate Subscription") {
 		t.Errorf("dry run describes the plain flow:\n%s", logs)
 	}
-	if result, err := Update(f.client(context.Background()), testNightlyImage, true); err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged {
+	if result, err := Update(f.client(context.Background()), testNightlyImage, true); err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged {
 		t.Fatalf("dry run of another image: result=%+v err=%v", result, err)
 	}
 }
@@ -662,7 +665,7 @@ func TestUpdateDryRunUnderGitOps(t *testing.T) {
 func TestStatusReportsWhatTheCatalogServes(t *testing.T) {
 	f := gitOpsFake(t)
 	c := f.client(context.Background())
-	sub := types.SubscriptionInfo{Source: CatalogName, Channel: gitOpsChannel}
+	sub := types.SubscriptionInfo{Source: rhoai.CatalogName, Channel: gitOpsChannel}
 	cs := types.CatalogSourceInfo{Exists: true, Image: gitOpsImage}
 	csv := types.CSVInfo{Name: gitOpsCSV, Phase: "Succeeded"}
 	annotate := func(image, created string) {
@@ -670,28 +673,28 @@ func TestStatusReportsWhatTheCatalogServes(t *testing.T) {
 	}
 
 	delete(f.csvs[gitOpsCSV]["metadata"].(map[string]any), "annotations")
-	s := readCatalogServes(c, sub, cs, csv)
+	s := operator.ReadCatalogServes(c, sub, cs, csv)
 	if s == nil || s.Channel != gitOpsChannel || s.CSV != gitOpsCSV || s.OperatorImage != gitOpsOperatorImage || s.Built != gitOpsBuilt || s.Installed != nil || s.Updating {
 		t.Fatalf("without CSV annotations: %+v", s)
 	}
 	annotate(gitOpsOperatorImage, gitOpsBuilt)
-	if s := readCatalogServes(c, sub, cs, csv); s == nil || s.Installed == nil || !*s.Installed {
+	if s := operator.ReadCatalogServes(c, sub, cs, csv); s == nil || s.Installed == nil || !*s.Installed {
 		t.Fatalf("same build: %+v", s)
 	}
 	annotate("registry.redhat.io/rhoai/odh-rhel9-operator@sha256:older", "2026-09-18T04:00:00Z")
-	if s := readCatalogServes(c, sub, cs, csv); s == nil || s.Installed == nil || *s.Installed {
+	if s := operator.ReadCatalogServes(c, sub, cs, csv); s == nil || s.Installed == nil || *s.Installed {
 		t.Fatalf("older build of the same version: %+v", s)
 	}
-	if s := readCatalogServes(c, sub, cs, types.CSVInfo{Name: "rhods-operator.3.5.0", Phase: "Succeeded"}); s == nil || s.Installed == nil || *s.Installed {
+	if s := operator.ReadCatalogServes(c, sub, cs, types.CSVInfo{Name: "rhods-operator.3.5.0", Phase: "Succeeded"}); s == nil || s.Installed == nil || *s.Installed {
 		t.Fatalf("another version: %+v", s)
 	}
-	if s := readCatalogServes(c, sub, cs, types.CSVInfo{Phase: "Not Found"}); s == nil || s.Installed != nil {
+	if s := operator.ReadCatalogServes(c, sub, cs, types.CSVInfo{Phase: "Not Found"}); s == nil || s.Installed != nil {
 		t.Fatalf("nothing installed: %+v", s)
 	}
-	if s := readCatalogServes(c, types.SubscriptionInfo{Source: CatalogName, Channel: "fast"}, cs, csv); s != nil {
+	if s := operator.ReadCatalogServes(c, types.SubscriptionInfo{Source: rhoai.CatalogName, Channel: "fast"}, cs, csv); s != nil {
 		t.Fatalf("channel not in the catalog: %+v", s)
 	}
-	if s := readCatalogServes(c, types.SubscriptionInfo{Source: "redhat-operators", Channel: "stable-3.x"}, cs, csv); s != nil {
+	if s := operator.ReadCatalogServes(c, types.SubscriptionInfo{Source: "redhat-operators", Channel: "stable-3.x"}, cs, csv); s != nil {
 		t.Fatalf("another source: %+v", s)
 	}
 	// Argo CD just changed the image: the registry pod still runs the old
@@ -699,11 +702,11 @@ func TestStatusReportsWhatTheCatalogServes(t *testing.T) {
 	moved := types.CatalogSourceInfo{Exists: true, Image: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:newer"}
 	f.gitOpsPods = false
 	f.catalogPods = `{"items":[{"metadata":{"name":"old"},"spec":{"containers":[{"image":"` + gitOpsImage + `"}]},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`
-	if s := readCatalogServes(c, sub, moved, csv); s == nil || !s.Updating || s.Installed != nil {
+	if s := operator.ReadCatalogServes(c, sub, moved, csv); s == nil || !s.Updating || s.Installed != nil {
 		t.Fatalf("catalog pod being replaced: %+v", s)
 	}
 	f.channels = `[{"name":"beta"}]`
-	if s := readCatalogServes(c, sub, cs, csv); s != nil {
+	if s := operator.ReadCatalogServes(c, sub, cs, csv); s != nil {
 		t.Fatalf("channel without a head: %+v", s)
 	}
 }
@@ -711,7 +714,7 @@ func TestStatusReportsWhatTheCatalogServes(t *testing.T) {
 // The DSC repairs and Diagnostics' disable-component refuse a DSC that Argo
 // CD manages: it would put the old spec back.
 func TestDSCChangesRefusedUnderGitOps(t *testing.T) {
-	tracked := `"annotations":{"` + argoTrackingAnnotation + `":"` + testArgoApp + `:datasciencecluster.opendatahub.io/DataScienceCluster:odh-gitops/default-dsc"}`
+	tracked := `"annotations":{"` + argo.TrackingAnnotation + `":"` + testArgoApp + `:datasciencecluster.opendatahub.io/DataScienceCluster:odh-gitops/default-dsc"}`
 	t.Run("repair", func(t *testing.T) {
 		mockDSCSamples(t, func(*http.Request) (int, string) { return 200, testDSCSample })
 		var mu sync.Mutex
@@ -719,7 +722,7 @@ func TestDSCChangesRefusedUnderGitOps(t *testing.T) {
 		c := dscRepairD3Server(t, `{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"default-dsc","resourceVersion":"42",`+tracked+`},"spec":{"components":{"dashboard":{"managementState":"Managed"}}}}`, &patched, &mu,
 			argoManagingAll(argoGitOpsObjects...))
 		r, err := RepairDSC(c, "default-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v2", nil, []string{})
-		if err != nil || r.Success || r.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(r.Message, testArgoApp) {
+		if err != nil || r.Success || r.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(r.Message, testArgoApp) {
 			t.Fatalf("result = %+v, %v", r, err)
 		}
 		mu.Lock()
@@ -733,7 +736,7 @@ func TestDSCChangesRefusedUnderGitOps(t *testing.T) {
 		argoManagingAll(argoGitOpsObjects...).register(f)
 		serveToggleDSC(f, "v2", `{"metadata":{"name":"default-dsc","uid":"u1","resourceVersion":"7",`+tracked+`},"spec":{"components":{"ray":{"managementState":"Managed"}}}}`, "", "ray")
 		res, err := ApplyFix(c, "disable-component:ray")
-		if err != nil || res.Success || res.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(res.Message, "Set ray to Removed in Git") {
+		if err != nil || res.Success || res.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(res.Message, "Set ray to Removed in Git") {
 			t.Fatalf("result = %+v, %v", res, err)
 		}
 		assertWrites(t, f)
@@ -744,18 +747,18 @@ func TestDSCChangesRefusedUnderGitOps(t *testing.T) {
 // and sets who manages them (gitOpsManagers).
 func statusManagersOf(t *testing.T, c *Client) *types.StatusResponse {
 	t.Helper()
-	sub, err := readSubscription(c)
+	sub, err := rhoai.ReadSubscription(c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cs, csMeta, err := readCatalogSource(c)
+	cs, csMeta, err := rhoai.ReadCatalogSource(c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	status := &types.StatusResponse{Subscription: sub.info, CatalogSource: cs}
-	var subMeta *objectMeta
-	if sub.found {
-		subMeta = &sub.meta
+	status := &types.StatusResponse{Subscription: sub.Info, CatalogSource: cs}
+	var subMeta *kube.ObjectMeta
+	if sub.Found {
+		subMeta = &sub.Meta
 	}
 	gitOpsManagers(c, status, subMeta, csMeta, nil)
 	return status
@@ -784,13 +787,13 @@ func TestStatusReportsArgoCDApplications(t *testing.T) {
 	if s := statusManagersOf(t, c); s.CatalogSource.ManagedBy != testArgoApp || s.CatalogSource.ArgoCD == nil || *s.CatalogSource.ArgoCD != want {
 		t.Fatalf("unmarked catalog the Application lists: %+v %+v", s.CatalogSource, s.CatalogSource.ArgoCD)
 	}
-	f.argo.setApps(argoApplicationListing("openshift-gitops", argoSubscriptionObject))
+	f.argo.setApps(argoApplicationListing("openshift-gitops", argo.SubscriptionObject))
 	if s := statusManagersOf(t, c); s.CatalogSource.ManagedBy != "" || s.CatalogSource.ArgoCD != nil {
 		t.Fatalf("unmarked catalog no Application lists: %+v", s.CatalogSource)
 	}
 	// Readers outside the status do not claim a manager from the
 	// annotation alone.
-	if sub, _ := readSubscription(c); sub.info.ManagedBy != "" {
-		t.Fatalf("readSubscription set managedBy %q", sub.info.ManagedBy)
+	if sub, _ := rhoai.ReadSubscription(c); sub.Info.ManagedBy != "" {
+		t.Fatalf("readSubscription set managedBy %q", sub.Info.ManagedBy)
 	}
 }

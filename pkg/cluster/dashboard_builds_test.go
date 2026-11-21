@@ -9,6 +9,8 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -40,7 +42,7 @@ func installDashboardBuildsFakes(t *testing.T, published ...string) (*dashboardT
 	g := newFakeGitHub()
 	g.compareRepos[upstreamRepo] = true
 	g.branches[upstreamRepo+":main"] = mainHead
-	quayHTTPClient = &http.Client{Transport: splitTransport{quay: m, github: githubTransport{github: g}}, Timeout: 10 * time.Second}
+	registry.SetHTTPClientForTest(&http.Client{Transport: splitTransport{quay: m, github: githubTransport{github: g}}, Timeout: 10 * time.Second})
 	return m, g
 }
 
@@ -74,12 +76,12 @@ func TestDashboardBuildsMainBuild(t *testing.T) {
 		g.compare[commit+"..."+mainHead] = "identical"
 		g.compareCounts[commit+"..."+mainHead] = [2]int{0, 0}
 		// The container runs the pinned commit tag; the floating tag has the same digest.
-		image := runningBuild("rhods-dashboard", "odh-dashboard", "main", "main", 0, DashboardFlavorODH)
+		image := runningBuild("rhods-dashboard", "odh-dashboard", "main", "main", 0, dashdev.FlavorODH)
 		image.CurrentImage = "quay.io/opendatahub/odh-dashboard:" + fixtureCommitTag("odh-dashboard:main") + "@" + fixtureDigest("odh-dashboard:main")
 
-		resp := dashboardBuilds(context.Background(), []types.DashboardDevImage{image})
+		resp := dashdev.BuildsOf(context.Background(), []types.DashboardDevImage{image})
 		b := oneBuild(t, resp)
-		if b.Deployment != "rhods-dashboard" || b.Image != image.CurrentImage || b.Running != "main" || b.Flavor != DashboardFlavorODH || b.PR != 0 {
+		if b.Deployment != "rhods-dashboard" || b.Image != image.CurrentImage || b.Running != "main" || b.Flavor != dashdev.FlavorODH || b.PR != 0 {
 			t.Fatalf("build=%+v", b)
 		}
 		// The build-date label is the UBI base's; the config's created time is the build.
@@ -111,9 +113,9 @@ func TestDashboardBuildsMainBuild(t *testing.T) {
 		g.compare[commit+"..."+mainHead] = "ahead"
 		g.compareCounts[commit+"..."+mainHead] = [2]int{3, 0}
 
-		resp := dashboardBuilds(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, DashboardFlavorRHOAI)})
+		resp := dashdev.BuildsOf(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, dashdev.FlavorRHOAI)})
 		b := oneBuild(t, resp)
-		if b.Commit != commit || b.Repo != upstreamRepo || b.Flavor != DashboardFlavorRHOAI {
+		if b.Commit != commit || b.Repo != upstreamRepo || b.Flavor != dashdev.FlavorRHOAI {
 			t.Fatalf("build=%+v", b)
 		}
 		if d := b.Divergence; d == nil || d.Status != "behind" || d.Behind != 3 || d.Ahead != 0 || d.BaseHead != mainHead {
@@ -130,7 +132,7 @@ func TestDashboardBuildsMainBuild(t *testing.T) {
 				commit := fixtureCommit("odh-dashboard:odh-stable")
 				g.compare[commit+"..."+mainHead] = githubStatus
 				g.compareCounts[commit+"..."+mainHead] = [2]int{2, 5}
-				b := oneBuild(t, dashboardBuilds(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, DashboardFlavorRHOAI)}))
+				b := oneBuild(t, dashdev.BuildsOf(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, dashdev.FlavorRHOAI)}))
 				if d := b.Divergence; d == nil || d.Status != want || d.Behind != 2 || d.Ahead != 5 {
 					t.Fatalf("divergence=%+v, want status %q", d, want)
 				}
@@ -145,10 +147,10 @@ func TestDashboardBuildsMainBuild(t *testing.T) {
 		m.setLabels(fixtureDigest("odh-mod-arch-gen-ai:odh-stable"), map[string]string{"git.commit": commit, "git.url": upstreamURL})
 		g.compare[commit+"..."+mainHead] = "identical"
 		images := []types.DashboardDevImage{
-			runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, DashboardFlavorRHOAI),
-			runningBuild("gen-ai-ui", "odh-mod-arch-gen-ai", "odh-stable", "main", 0, DashboardFlavorRHOAI),
+			runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, dashdev.FlavorRHOAI),
+			runningBuild("gen-ai-ui", "odh-mod-arch-gen-ai", "odh-stable", "main", 0, dashdev.FlavorRHOAI),
 		}
-		resp := dashboardBuilds(context.Background(), images)
+		resp := dashdev.BuildsOf(context.Background(), images)
 		if len(resp.Builds) != 2 || resp.Builds[0].Container != "rhods-dashboard" || resp.Builds[1].Container != "gen-ai-ui" {
 			t.Fatalf("builds=%+v", resp.Builds)
 		}
@@ -162,7 +164,7 @@ func TestDashboardBuildsMainBuild(t *testing.T) {
 		}
 		// The second request is answered from the caches: the branch head for
 		// 5 minutes, the compare of two SHAs for good.
-		dashboardBuilds(context.Background(), images)
+		dashdev.BuildsOf(context.Background(), images)
 		if g.count("compare") != 1 || g.count("branch") != 1 {
 			t.Fatalf("repeat made GitHub calls: compare=%d branch=%d", g.count("compare"), g.count("branch"))
 		}
@@ -179,7 +181,7 @@ func TestDashboardBuildsPRBuild(t *testing.T) {
 		g.prs[5123] = openPR(prHead)
 		g.compare[prHead+"..."+prHead] = "identical"
 		g.compareCounts[prHead+"..."+prHead] = [2]int{0, 0}
-		b := oneBuild(t, dashboardBuilds(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-pr-5123", "pr", 5123, DashboardFlavorRHOAI)}))
+		b := oneBuild(t, dashdev.BuildsOf(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-pr-5123", "pr", 5123, dashdev.FlavorRHOAI)}))
 		if b.Running != "pr" || b.PR != 5123 || b.Commit != prHead {
 			t.Fatalf("build=%+v", b)
 		}
@@ -200,7 +202,7 @@ func TestDashboardBuildsPRBuild(t *testing.T) {
 		g.prs[5123] = openPR(prHead)
 		g.compare[commit+"..."+prHead] = "ahead"
 		g.compareCounts[commit+"..."+prHead] = [2]int{2, 0}
-		b := oneBuild(t, dashboardBuilds(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "pr-5123", "pr", 5123, DashboardFlavorODH)}))
+		b := oneBuild(t, dashdev.BuildsOf(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "pr-5123", "pr", 5123, dashdev.FlavorODH)}))
 		if d := b.Divergence; d == nil || d.Status != "behind" || d.Behind != 2 || d.BaseHead != prHead || d.PRState != "open" {
 			t.Fatalf("divergence=%+v", d)
 		}
@@ -213,7 +215,7 @@ func TestDashboardBuildsPRBuild(t *testing.T) {
 		pr["state"], pr["merged"], pr["merged_at"], pr["merge_commit_sha"] = "closed", true, "2026-10-29T08:00:00Z", mergeSHA
 		g.prs[5123] = pr
 		g.compare[prHead+"..."+prHead] = "identical"
-		b := oneBuild(t, dashboardBuilds(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-pr-5123", "pr", 5123, DashboardFlavorRHOAI)}))
+		b := oneBuild(t, dashdev.BuildsOf(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-pr-5123", "pr", 5123, dashdev.FlavorRHOAI)}))
 		if d := b.Divergence; d == nil || d.PRState != "merged" || d.Status != "identical" {
 			t.Fatalf("divergence=%+v", d)
 		}
@@ -228,19 +230,19 @@ func TestDashboardBuildsPRBuild(t *testing.T) {
 		closed["state"] = "closed"
 		g.prs[5123] = closed
 		g.compare[prHead+"..."+prHead] = "identical"
-		cacheTime := fakeCacheClock(t, dashboardPRCache)
-		images := []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-pr-5123", "pr", 5123, DashboardFlavorRHOAI)}
-		if d := oneBuild(t, dashboardBuilds(context.Background(), images)).Divergence; d == nil || d.PRState != "closed" || d.Status != "identical" {
+		cacheTime := fakeCacheClock(t, dashdev.PRCache)
+		images := []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-pr-5123", "pr", 5123, dashdev.FlavorRHOAI)}
+		if d := oneBuild(t, dashdev.BuildsOf(context.Background(), images)).Divergence; d == nil || d.PRState != "closed" || d.Status != "identical" {
 			t.Fatalf("divergence=%+v", d)
 		}
 		newHead := strings.Repeat("e", 40)
-		cacheTime.Advance(dashboardPRHeadTTL)
+		cacheTime.Advance(dashdev.PRHeadTTL)
 		g.mu.Lock()
 		g.prs[5123] = openPR(newHead)
 		g.compare[prHead+"..."+newHead] = "ahead"
 		g.compareCounts[prHead+"..."+newHead] = [2]int{1, 0}
 		g.mu.Unlock()
-		if d := oneBuild(t, dashboardBuilds(context.Background(), images)).Divergence; d == nil || d.PRState != "open" || d.Status != "behind" || d.BaseHead != newHead {
+		if d := oneBuild(t, dashdev.BuildsOf(context.Background(), images)).Divergence; d == nil || d.PRState != "open" || d.Status != "behind" || d.BaseHead != newHead {
 			t.Fatalf("after reopening, divergence=%+v", d)
 		}
 		if g.count("pull") != 2 {
@@ -255,7 +257,7 @@ func TestDashboardBuildsPRBuild(t *testing.T) {
 		m.setLabels(fixtureDigest("odh-dashboard:odh-pr-5123"), map[string]string{"git.commit": prHead, "git.url": "https://github.com/someone/odh-dashboard"})
 		g.prs[5123] = openPR(prHead)
 		g.compare[prHead+"..."+prHead] = "identical"
-		b := oneBuild(t, dashboardBuilds(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-pr-5123", "pr", 5123, DashboardFlavorRHOAI)}))
+		b := oneBuild(t, dashdev.BuildsOf(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-pr-5123", "pr", 5123, dashdev.FlavorRHOAI)}))
 		if b.Repo != DefaultPRSearchRepo || !strings.HasPrefix(b.CommitURL, "https://github.com/"+DefaultPRSearchRepo+"/commit/") {
 			t.Fatalf("repo=%q commitURL=%q", b.Repo, b.CommitURL)
 		}
@@ -267,7 +269,7 @@ func TestDashboardBuildsPRBuild(t *testing.T) {
 	t.Run("pr-not-found", func(t *testing.T) {
 		m, g := installDashboardBuildsFakes(t, "odh-dashboard:odh-pr-5123")
 		m.setLabels(fixtureDigest("odh-dashboard:odh-pr-5123"), map[string]string{"git.commit": prHead, "git.url": upstreamURL})
-		b := oneBuild(t, dashboardBuilds(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-pr-5123", "pr", 5123, DashboardFlavorRHOAI)}))
+		b := oneBuild(t, dashdev.BuildsOf(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-pr-5123", "pr", 5123, dashdev.FlavorRHOAI)}))
 		if d := b.Divergence; d == nil || d.Status != "unknown" || d.Reason != "pr_not_found" || d.Base != "pr-5123" {
 			t.Fatalf("divergence=%+v", d)
 		}
@@ -283,9 +285,9 @@ func TestDashboardBuildsPRBuild(t *testing.T) {
 		m.setLabels(fixtureDigest("odh-dashboard:odh-pr-5123"), map[string]string{"git.commit": prHead, "git.url": upstreamURL})
 		g.prs[5123] = openPR(prHead)
 		g.compare[prHead+"..."+prHead] = "identical"
-		image := runningBuild("rhods-dashboard", "odh-dashboard", "odh-pr-5123", "pr", 5123, DashboardFlavorRHOAI)
+		image := runningBuild("rhods-dashboard", "odh-dashboard", "odh-pr-5123", "pr", 5123, dashdev.FlavorRHOAI)
 		image.CurrentImage = "quay.io/opendatahub/odh-dashboard:odh-pr-5123"
-		b := oneBuild(t, dashboardBuilds(context.Background(), []types.DashboardDevImage{image}))
+		b := oneBuild(t, dashdev.BuildsOf(context.Background(), []types.DashboardDevImage{image}))
 		if b.Commit != prHead || b.Newer != nil || b.Divergence == nil || b.Divergence.Status != "identical" {
 			t.Fatalf("build=%+v", b)
 		}
@@ -296,9 +298,9 @@ func TestDashboardBuildsGitHubFailures(t *testing.T) {
 	t.Run("rate-limited", func(t *testing.T) {
 		_, g := installDashboardBuildsFakes(t, "odh-dashboard:odh-stable", "odh-mod-arch-gen-ai:odh-stable")
 		g.rateLimited("branch", 30*time.Minute)
-		resp := dashboardBuilds(context.Background(), []types.DashboardDevImage{
-			runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, DashboardFlavorRHOAI),
-			runningBuild("gen-ai-ui", "odh-mod-arch-gen-ai", "odh-stable", "main", 0, DashboardFlavorRHOAI),
+		resp := dashdev.BuildsOf(context.Background(), []types.DashboardDevImage{
+			runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, dashdev.FlavorRHOAI),
+			runningBuild("gen-ai-ui", "odh-mod-arch-gen-ai", "odh-stable", "main", 0, dashdev.FlavorRHOAI),
 		})
 		if !resp.RateLimited || resp.RetryAfterSeconds <= 0 || resp.RetryAfterSeconds > 1800 {
 			t.Fatalf("rateLimited=%v retryAfter=%d", resp.RateLimited, resp.RetryAfterSeconds)
@@ -321,13 +323,13 @@ func TestDashboardBuildsGitHubFailures(t *testing.T) {
 			http.Error(w, `{"message":"No commit found"}`, http.StatusUnprocessableEntity)
 			return true
 		}
-		images := []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, DashboardFlavorRHOAI)}
-		b := oneBuild(t, dashboardBuilds(context.Background(), images))
+		images := []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, dashdev.FlavorRHOAI)}
+		b := oneBuild(t, dashdev.BuildsOf(context.Background(), images))
 		if d := b.Divergence; d == nil || d.Status != "unknown" || d.Reason != "commit_not_found" || d.BaseHead != mainHead {
 			t.Fatalf("divergence=%+v", d)
 		}
 		// Remembered for a while: the commit may be pushed later.
-		dashboardBuilds(context.Background(), images)
+		dashdev.BuildsOf(context.Background(), images)
 		if g.count("compare") != 1 {
 			t.Fatalf("compare called %d times", g.count("compare"))
 		}
@@ -336,12 +338,12 @@ func TestDashboardBuildsGitHubFailures(t *testing.T) {
 	t.Run("github-error-is-not-cached", func(t *testing.T) {
 		_, g := installDashboardBuildsFakes(t, "odh-dashboard:odh-stable")
 		g.failures["compare"] = func(w http.ResponseWriter) bool { w.WriteHeader(http.StatusBadGateway); return true }
-		images := []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, DashboardFlavorRHOAI)}
-		b := oneBuild(t, dashboardBuilds(context.Background(), images))
+		images := []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, dashdev.FlavorRHOAI)}
+		b := oneBuild(t, dashdev.BuildsOf(context.Background(), images))
 		if d := b.Divergence; d == nil || d.Status != "unknown" || d.Reason != "github_error" || d.Message == "" {
 			t.Fatalf("divergence=%+v", d)
 		}
-		dashboardBuilds(context.Background(), images)
+		dashdev.BuildsOf(context.Background(), images)
 		if g.count("compare") != 2 {
 			t.Fatalf("compare called %d times, want a retry", g.count("compare"))
 		}
@@ -352,7 +354,7 @@ func TestDashboardBuildsLabelProblems(t *testing.T) {
 	t.Run("no-labels", func(t *testing.T) {
 		m, g := installDashboardBuildsFakes(t, "odh-dashboard:odh-stable")
 		m.setLabels(fixtureDigest("odh-dashboard:odh-stable"), nil)
-		b := oneBuild(t, dashboardBuilds(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, DashboardFlavorRHOAI)}))
+		b := oneBuild(t, dashdev.BuildsOf(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, dashdev.FlavorRHOAI)}))
 		if b.Reason != "no_commit_label" || b.Message == "" || b.Commit != "" || b.Divergence != nil {
 			t.Fatalf("build=%+v", b)
 		}
@@ -363,7 +365,7 @@ func TestDashboardBuildsLabelProblems(t *testing.T) {
 	t.Run("commit-label-is-not-a-sha", func(t *testing.T) {
 		m, _ := installDashboardBuildsFakes(t, "odh-dashboard:odh-stable")
 		m.setLabels(fixtureDigest("odh-dashboard:odh-stable"), map[string]string{"vcs-ref": "release-3.6", "git.url": upstreamURL})
-		b := oneBuild(t, dashboardBuilds(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, DashboardFlavorRHOAI)}))
+		b := oneBuild(t, dashdev.BuildsOf(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, dashdev.FlavorRHOAI)}))
 		if b.Reason != "no_commit_label" || b.Commit != "" || b.Divergence != nil {
 			t.Fatalf("build=%+v", b)
 		}
@@ -372,7 +374,7 @@ func TestDashboardBuildsLabelProblems(t *testing.T) {
 		m, g := installDashboardBuildsFakes(t, "odh-dashboard:odh-stable")
 		commit := fixtureCommit("odh-dashboard:odh-stable")
 		m.setLabels(fixtureDigest("odh-dashboard:odh-stable"), map[string]string{"git.commit": commit, "git.url": "https://gitlab.example.com/forks/odh-dashboard", "build-date": "2026-10-29T06:00:00Z"})
-		b := oneBuild(t, dashboardBuilds(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, DashboardFlavorRHOAI)}))
+		b := oneBuild(t, dashdev.BuildsOf(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, dashdev.FlavorRHOAI)}))
 		if b.Reason != "unknown_repo" || b.Commit != commit || b.BuildDate == "" || b.Repo != "" || b.CommitURL != "" || b.Divergence != nil {
 			t.Fatalf("build=%+v", b)
 		}
@@ -384,19 +386,17 @@ func TestDashboardBuildsLabelProblems(t *testing.T) {
 		// In a synctest bubble the container timeout passes, in fake time,
 		// only once nothing else can run: the other container is done by
 		// then, as it is when the registry answers it in time.
-		original := dashboardBuildContainerTimeout
-		dashboardBuildContainerTimeout = 50 * time.Millisecond // before the registry read's own timeout
-		t.Cleanup(func() { dashboardBuildContainerTimeout = original })
+		t.Cleanup(dashdev.SetBuildContainerTimeoutForTest(50 * time.Millisecond)) // before the registry read's own timeout
 		synctest.Test(t, func(t *testing.T) {
 			m, _ := installDashboardBuildsFakes(t, "odh-dashboard:odh-stable", "odh-mod-arch-gen-ai:odh-stable")
 			m.stall("odh-mod-arch-gen-ai")
 			start := time.Now()
-			resp := dashboardBuilds(context.Background(), []types.DashboardDevImage{
-				runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, DashboardFlavorRHOAI),
-				runningBuild("gen-ai-ui", "odh-mod-arch-gen-ai", "odh-stable", "main", 0, DashboardFlavorRHOAI),
+			resp := dashdev.BuildsOf(context.Background(), []types.DashboardDevImage{
+				runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, dashdev.FlavorRHOAI),
+				runningBuild("gen-ai-ui", "odh-mod-arch-gen-ai", "odh-stable", "main", 0, dashdev.FlavorRHOAI),
 			})
-			if d := time.Since(start); d != dashboardBuildContainerTimeout {
-				t.Fatalf("the builds took %s, want the container timeout %s", d, dashboardBuildContainerTimeout)
+			if d := time.Since(start); d != dashdev.BuildContainerTimeout {
+				t.Fatalf("the builds took %s, want the container timeout %s", d, dashdev.BuildContainerTimeout)
 			}
 			if len(resp.Builds) != 2 {
 				t.Fatalf("builds=%+v", resp.Builds)
@@ -414,7 +414,7 @@ func TestDashboardBuildsLabelProblems(t *testing.T) {
 func TestDashboardBuildsNewerBuild(t *testing.T) {
 	t.Run("floating-tag-moved", func(t *testing.T) {
 		m, g := installDashboardBuildsFakes(t, "odh-dashboard:odh-stable")
-		running := runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, DashboardFlavorRHOAI)
+		running := runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, dashdev.FlavorRHOAI)
 		commit := fixtureCommit("odh-dashboard:odh-stable")
 		g.compare[commit+"..."+mainHead] = "ahead"
 		g.compareCounts[commit+"..."+mainHead] = [2]int{1, 0}
@@ -425,7 +425,7 @@ func TestDashboardBuildsNewerBuild(t *testing.T) {
 		m.republish("odh-dashboard:"+mainHead, newDigest)
 		m.setLabels(newDigest, map[string]string{"git.commit": mainHead, "git.url": upstreamURL, "build-date": "2026-10-29T09:00:00Z"})
 
-		b := oneBuild(t, dashboardBuilds(context.Background(), []types.DashboardDevImage{running}))
+		b := oneBuild(t, dashdev.BuildsOf(context.Background(), []types.DashboardDevImage{running}))
 		if b.Commit != commit || b.Divergence == nil || b.Divergence.Behind != 1 {
 			t.Fatalf("build=%+v", b)
 		}
@@ -438,12 +438,12 @@ func TestDashboardBuildsNewerBuild(t *testing.T) {
 
 	t.Run("odh-flavor-checks-main-and-pins-main-7hex", func(t *testing.T) {
 		m, _ := installDashboardBuildsFakes(t, "odh-dashboard:main")
-		running := runningBuild("rhods-dashboard", "odh-dashboard", "main", "main", 0, DashboardFlavorODH)
+		running := runningBuild("rhods-dashboard", "odh-dashboard", "main", "main", 0, dashdev.FlavorODH)
 		newDigest := digestOf(43)
 		m.republish("odh-dashboard:main", newDigest)
 		m.republish("odh-dashboard:main-"+mainHead[:7], newDigest)
 		m.setLabels(newDigest, map[string]string{"vcs-ref": mainHead, "io.openshift.build.source-location": upstreamURL})
-		b := oneBuild(t, dashboardBuilds(context.Background(), []types.DashboardDevImage{running}))
+		b := oneBuild(t, dashdev.BuildsOf(context.Background(), []types.DashboardDevImage{running}))
 		if n := b.Newer; n == nil || n.Tag != "main" || n.Image != "quay.io/opendatahub/odh-dashboard:main-"+mainHead[:7]+"@"+newDigest || n.Commit != mainHead {
 			t.Fatalf("newer=%+v", n)
 		}
@@ -459,7 +459,7 @@ func TestDashboardBuildsNewerBuild(t *testing.T) {
 		newDigest := digestOf(44)
 		m.republish("odh-dashboard:odh-pr-7", newDigest)
 		m.setLabels(newDigest, map[string]string{"git.commit": prHead, "git.url": upstreamURL})
-		b := oneBuild(t, dashboardBuilds(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-pr-7", "pr", 7, DashboardFlavorRHOAI)}))
+		b := oneBuild(t, dashdev.BuildsOf(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-pr-7", "pr", 7, dashdev.FlavorRHOAI)}))
 		// PR builds are not pinned to a commit tag: the floating PR tag is kept.
 		if n := b.Newer; n == nil || n.Tag != "odh-pr-7" || n.Image != "quay.io/opendatahub/odh-dashboard:odh-pr-7@"+newDigest || n.Commit != prHead {
 			t.Fatalf("newer=%+v", n)
@@ -468,11 +468,11 @@ func TestDashboardBuildsNewerBuild(t *testing.T) {
 
 	t.Run("same-digest-and-cached-for-a-minute", func(t *testing.T) {
 		m, _ := installDashboardBuildsFakes(t, "odh-dashboard:odh-stable")
-		images := []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, DashboardFlavorRHOAI)}
-		if b := oneBuild(t, dashboardBuilds(context.Background(), images)); b.Newer != nil {
+		images := []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-stable", "main", 0, dashdev.FlavorRHOAI)}
+		if b := oneBuild(t, dashdev.BuildsOf(context.Background(), images)); b.Newer != nil {
 			t.Fatalf("newer=%+v", b.Newer)
 		}
-		dashboardBuilds(context.Background(), images)
+		dashdev.BuildsOf(context.Background(), images)
 		if n := m.headCount("odh-dashboard:odh-stable"); n != 1 {
 			t.Fatalf("the floating tag was resolved %d times in a minute, want 1", n)
 		}
@@ -482,7 +482,7 @@ func TestDashboardBuildsNewerBuild(t *testing.T) {
 		m, _ := installDashboardBuildsFakes(t, "odh-dashboard:odh-pr-7")
 		m.setLabels(fixtureDigest("odh-dashboard:odh-pr-7"), map[string]string{"git.commit": prHead, "git.url": upstreamURL})
 		m.unpublish("odh-dashboard:odh-pr-7")
-		b := oneBuild(t, dashboardBuilds(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-pr-7", "pr", 7, DashboardFlavorRHOAI)}))
+		b := oneBuild(t, dashdev.BuildsOf(context.Background(), []types.DashboardDevImage{runningBuild("rhods-dashboard", "odh-dashboard", "odh-pr-7", "pr", 7, dashdev.FlavorRHOAI)}))
 		if b.Newer != nil || b.Commit != prHead {
 			t.Fatalf("build=%+v", b)
 		}
@@ -499,9 +499,9 @@ func TestGetDashboardBuildsCoversPRAndMainContainersOnly(t *testing.T) {
 	g.compare[prHead+"..."+prHead] = "identical"
 	commit := fixtureCommit("odh-dashboard:odh-stable")
 	g.compare[commit+"..."+mainHead] = "identical"
-	host := f.workloads[dashboardDeploymentName]
+	host := f.workloads[dashdev.DeploymentName]
 	host.Spec.Template.Spec.Containers[0].Image = runningBuild("", "odh-dashboard", "odh-stable", "", 0, "").CurrentImage
-	f.workloads[dashboardDeploymentName] = host
+	f.workloads[dashdev.DeploymentName] = host
 	notebooks := f.workloads["notebooks-ui"]
 	notebooks.Spec.Template.Spec.Containers[0].Image = runningBuild("", "odh-mod-arch-notebooks", "odh-pr-9", "", 0, "").CurrentImage
 	f.workloads["notebooks-ui"] = notebooks
@@ -518,10 +518,10 @@ func TestGetDashboardBuildsCoversPRAndMainContainersOnly(t *testing.T) {
 	for _, b := range resp.Builds {
 		byContainer[b.Container] = b
 	}
-	if b := byContainer["notebooks-ui"]; b.Running != "pr" || b.PR != 9 || b.Flavor != DashboardFlavorRHOAI || b.Commit != prHead || b.Divergence == nil || b.Divergence.Base != "pr-9" {
+	if b := byContainer["notebooks-ui"]; b.Running != "pr" || b.PR != 9 || b.Flavor != dashdev.FlavorRHOAI || b.Commit != prHead || b.Divergence == nil || b.Divergence.Base != "pr-9" {
 		t.Fatalf("notebooks=%+v", b)
 	}
-	if b := byContainer[dashboardContainerName]; b.Running != "main" || b.Commit != commit || b.Divergence == nil || b.Divergence.Base != "main" {
+	if b := byContainer[dashdev.ContainerName]; b.Running != "main" || b.Commit != commit || b.Divergence == nil || b.Divergence.Base != "main" {
 		t.Fatalf("host=%+v", b)
 	}
 	if _, ok := byContainer["custom-name"]; ok {

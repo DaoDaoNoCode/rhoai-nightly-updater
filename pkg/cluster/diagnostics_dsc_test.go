@@ -3,6 +3,9 @@ package cluster
 import (
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 )
 
 func TestDisableComponent_PatchesTheExistingDSC(t *testing.T) {
@@ -23,7 +26,7 @@ func TestDisableComponent_PatchesTheExistingDSC(t *testing.T) {
 	}
 	want := `[{"op":"test","path":"/metadata/uid","value":"u1"},{"op":"test","path":"/metadata/resourceVersion","value":"1"},` +
 		`{"op":"test","path":"/spec/components/llamastackoperator/managementState","value":"Managed"},{"op":"replace","path":"/spec/components/llamastackoperator/managementState","value":"Removed"}]`
-	if patches[1].Body != want || !strings.Contains(patches[1].Query, "fieldManager="+dscComponentsManager) || !strings.Contains(patches[1].Query, "fieldValidation=Strict") {
+	if patches[1].Body != want || !strings.Contains(patches[1].Query, "fieldManager="+dsc.ComponentsManager) || !strings.Contains(patches[1].Query, "fieldValidation=Strict") {
 		t.Fatalf("patch = %+v", patches[1])
 	}
 }
@@ -61,7 +64,7 @@ func TestDisableComponent_DiscoveryErrorBlocks(t *testing.T) {
 func TestDisableComponent_NoCRDSchemaRefuses(t *testing.T) {
 	f, client := newFakeAPI(t)
 	serveToggleDSC(f, "v2", `{"metadata":{"name":"my-dsc","uid":"u1"},"spec":{"components":{"ray":{"managementState":"Managed"}}}}`, "", "ray")
-	f.status("GET", dscCRDPath, 403, "Forbidden")
+	f.status("GET", components.DSCCRDPath, 403, "Forbidden")
 	result, err := ApplyFix(client, "disable-component:ray")
 	if err != nil || result.Success || !strings.Contains(result.Message, "CRD") {
 		t.Fatalf("ApplyFix = %+v, %v", result, err)

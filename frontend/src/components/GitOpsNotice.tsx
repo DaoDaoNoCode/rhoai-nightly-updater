@@ -14,10 +14,11 @@ function appLabel(app: string, tracking: ArgoCDTracking | undefined): string {
 /**
  * What the tool still does while Argo CD manages the operator or the
  * DataScienceCluster, or an ACM policy the nightly catalog
- * (pkg/cluster/gitops.go). Git (or the policy) is the source of truth: Argo
- * CD and ACM put back whatever differs and recreate what is deleted. Shown
- * only for an application Argo CD confirmed, or could not be asked about
- * (pkg/cluster/argocd.go); that case says why.
+ * (pkg/cluster/internal/argo/gitops_guard.go). Git (or the policy) is the
+ * source of truth: Argo CD and ACM put back whatever differs and recreate
+ * what is deleted. Shown only for an application Argo CD confirmed, or
+ * could not be asked about (pkg/cluster/internal/argo/argocd.go); that case
+ * says why.
  */
 export const GitOpsNotice: React.FC<{ status: StatusResponse }> = ({ status }) => {
   const operatorApp = operatorGitOpsApp(status);

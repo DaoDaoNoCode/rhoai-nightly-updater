@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // The Dashboard Dev fixtures run where nothing is named as on RHOAI: the
@@ -54,7 +57,7 @@ func dashboardModuleDiscoveryRoutes(appsNS string) map[string]string {
 
 // dashboardModuleOperatorListItem is operator as the Deployment list shows
 // it: owned by Platform/default and running as sa.
-func dashboardModuleOperatorListItem(operator dashboardDeployment) map[string]any {
+func dashboardModuleOperatorListItem(operator dashdev.Deployment) map[string]any {
 	raw, _ := json.Marshal(operator)
 	var item map[string]any
 	_ = json.Unmarshal(raw, &item)
@@ -86,7 +89,7 @@ func serveDashboardModule(f *fakeAPI, appsNS, name, body string, others ...map[s
 	for path, b := range dashboardModuleDiscoveryRoutes(appsNS) {
 		f.json("GET", path, 200, b)
 	}
-	var op dashboardDeployment
+	var op dashdev.Deployment
 	_ = json.Unmarshal([]byte(body), &op)
 	op.Metadata.Name = name
 	if op.Metadata.UID == "" {
@@ -94,7 +97,7 @@ func serveDashboardModule(f *fakeAPI, appsNS, name, body string, others ...map[s
 	}
 	items := append([]any{dashboardModuleOperatorListItem(op)}, anySlice(others)...)
 	f.obj("/apis/apps/v1/namespaces/"+appsNS+"/deployments", map[string]any{"items": items})
-	f.json("GET", namespacedPath("apps/v1", "deployments", appsNS, name), 200, body)
+	f.json("GET", rhoai.NamespacedPath("apps/v1", "deployments", appsNS, name), 200, body)
 }
 
 func anySlice(ms []map[string]any) []any {
@@ -122,9 +125,9 @@ func legacyClusterRoute(w http.ResponseWriter, r *http.Request) bool {
 		_, _ = io.WriteString(w, `{"kind":"Status","status":"Failure","reason":"NotFound","code":404}`)
 	case p == dsciV2List:
 		_, _ = io.WriteString(w, defaultDSCIList)
-	case p == namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName):
+	case p == rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName):
 		_, _ = io.WriteString(w, `{"status":{"installedCSV":"rhods-operator.3.4.0"}}`)
-	case p == namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.4.0"):
+	case p == rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.4.0"):
 		_, _ = io.WriteString(w, `{"metadata":{"name":"rhods-operator.3.4.0"},"spec":{"version":"3.4.0","install":{"spec":{"deployments":[{"name":"rhods-operator"}]}}},"status":{"phase":"Succeeded"}}`)
 	default:
 		return false

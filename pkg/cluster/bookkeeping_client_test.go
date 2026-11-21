@@ -11,6 +11,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -40,8 +45,8 @@ func (rec *tokenRecorder) server(t *testing.T) *httptest.Server {
 // keeps its records with the ServiceAccount's, as pkg/api builds it for a
 // mutation.
 func userClientWithBookkeeper(srv *httptest.Server) *Client {
-	sa := &Client{baseURL: srv.URL, token: "sa-token", httpClient: srv.Client(), ctx: context.Background()}
-	c := &Client{baseURL: srv.URL, token: "user-token", httpClient: srv.Client(), ctx: context.Background(), username: "alice"}
+	sa := newTestClient(testClientOptions{BaseURL: srv.URL, Token: "sa-token", HTTPClient: srv.Client(), Ctx: context.Background()})
+	c := newTestClient(testClientOptions{BaseURL: srv.URL, Token: "user-token", HTTPClient: srv.Client(), Ctx: context.Background(), Username: "alice"})
 	c.SetBookkeeping(sa)
 	return c
 }
@@ -55,45 +60,45 @@ func TestBookkeepingUsesTheServiceAccount(t *testing.T) {
 	srv := rec.server(t)
 	c := userClientWithBookkeeper(srv)
 
-	RecordActivity(c, types.ActivityEntry{Action: "update", User: "alice", Success: true})
+	record.Activity(c, types.ActivityEntry{Action: "update", User: "alice", Success: true})
 	if _, err := GetActivity(c); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readSnapshotKey(c, "k"); err != nil {
+	if _, err := record.ReadSnapshotKey(c, "k"); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeSnapshotKey(c, "k", "m", "v"); err != nil {
+	if err := record.WriteSnapshotKey(c, "k", "m", "v"); err != nil {
 		t.Fatal(err)
 	}
-	if err := saveSubscriptionSnapshot(c, map[string]any{"spec": map[string]any{"channel": "x"}}); err != nil {
+	if err := record.SaveSubscriptionSnapshot(c, map[string]any{"spec": map[string]any{"channel": "x"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadSubscriptionSnapshot(c); err != nil {
+	if _, err := record.LoadSubscriptionSnapshot(c); err != nil {
 		t.Fatal(err)
 	}
-	GetDeploymentSnapshot(c)
-	if _, err := readModelsRecord(c); err != nil {
+	components.ReadDeploymentSnapshot(c)
+	if _, err := serving.ReadModelsRecord(c); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeModelsRecord(c, modelsRecord{}); err != nil {
+	if err := serving.WriteModelsRecord(c, serving.ModelsRecord{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readPipelineRecord(c); err != nil {
+	if _, err := storage.ReadPipelineRecord(c); err != nil {
 		t.Fatal(err)
 	}
-	if err := writePipelineRecord(c, pipelineRecord{}); err != nil {
+	if err := storage.WritePipelineRecord(c, storage.PipelineRecord{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readPlaygroundRecords(c); err != nil {
+	if _, err := features.ReadPlaygroundRecords(c); err != nil {
 		t.Fatal(err)
 	}
-	if err := writePlaygroundRecords(c, map[string]playgroundRecord{}); err != nil {
+	if err := features.WritePlaygroundRecords(c, map[string]features.PlaygroundRecord{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readMaaSRecord(c); err != nil {
+	if _, err := serving.ReadMaaSRecord(c); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeMaaSRecord(c, maasRecord{}); err != nil {
+	if err := serving.WriteMaaSRecord(c, serving.MaaSRecord{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ReadOperationRecord(c); err != nil {
@@ -122,30 +127,30 @@ func TestBookkeepingUsesTheServiceAccount(t *testing.T) {
 	}
 }
 
-// bookkeeping() hands out the ServiceAccount's client with the caller's
+// Bookkeeping() hands out the ServiceAccount's client with the caller's
 // context and user, and the client itself when none was set.
 func TestBookkeepingClient(t *testing.T) {
 	ctx := t.Context()
-	sa := &Client{token: "sa-token", ctx: context.Background()}
-	c := &Client{token: "user-token", ctx: ctx, username: "alice"}
-	if got := c.bookkeeping(); got != c {
+	sa := newTestClient(testClientOptions{Token: "sa-token", Ctx: context.Background()})
+	c := newTestClient(testClientOptions{Token: "user-token", Ctx: ctx, Username: "alice"})
+	if got := c.Bookkeeping(); got != c {
 		t.Fatal("without a bookkeeper the client keeps its own records")
 	}
 	c.SetBookkeeping(sa)
-	b := c.WithContext(ctx).bookkeeping()
-	if b.token != "sa-token" || b.ctx != ctx || b.username != "alice" || b.bookkeeper != nil {
-		t.Fatalf("bookkeeping() = token %q ctx %v user %q", b.token, b.ctx == ctx, b.username)
+	b := c.WithContext(ctx).Bookkeeping()
+	if b.BearerToken() != "sa-token" || b.Context() != ctx || b.Username() != "alice" || b.TestOptions().Bookkeeper != nil {
+		t.Fatalf("Bookkeeping() = token %q ctx %v user %q", b.BearerToken(), b.Context() == ctx, b.Username())
 	}
-	if sa.username != "" || sa.ctx == ctx {
-		t.Fatal("bookkeeping() must not change the ServiceAccount client")
+	if sa.Username() != "" || sa.Context() == ctx {
+		t.Fatal("Bookkeeping() must not change the ServiceAccount client")
 	}
 }
 
 // The source rule behind TestBookkeepingUsesTheServiceAccount: every API
 // call on the updater's own ConfigMaps (in its namespace) goes through
-// c.bookkeeping(), and bookkeeping() is used for nothing else, so it cannot
+// c.Bookkeeping(), and Bookkeeping() is used for nothing else, so it cannot
 // carry another write on the ServiceAccount's token. A new record function
-// that calls c.get on its ConfigMap fails here.
+// that calls c.Get on its ConfigMap fails here.
 func TestOwnConfigMapsAreReachedOnlyThroughBookkeeping(t *testing.T) {
 	p := loadClusterSource(t)
 	var problems []string
@@ -157,32 +162,16 @@ func TestOwnConfigMapsAreReachedOnlyThroughBookkeeping(t *testing.T) {
 	for _, file := range files {
 		for _, decl := range p.files[file].Decls {
 			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil || requestSourceFiles[file] {
+			if !ok || fn.Body == nil || p.isTransport(fn) {
 				continue
 			}
-			ast.Inspect(fn.Body, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok || len(call.Args) == 0 {
-					return true
-				}
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
-				method, pathArg := requestMethod(sel.Sel.Name), call.Args[0]
-				if method == "do" && len(call.Args) >= 2 {
-					method, pathArg = rawMethods[selectorName(call.Args[0])], call.Args[1]
-				}
-				if _, known := methodVerbs[method]; !known && method != "get" {
-					return true
-				}
-				viaBookkeeping := false
-				if inner, ok := sel.X.(*ast.CallExpr); ok && selectorName(inner.Fun) == "bookkeeping" {
-					viaBookkeeping = true
-				}
+			// Refused calls fail the RBAC scans (scanRequests).
+			calls, _ := p.requestCalls(file, fn.Body)
+			for _, rc := range calls {
+				viaBookkeeping := p.isBookkeeping(rc.client)
 				own := false
-				for _, path := range (resolver{p: p, fn: fn}).resolve(pathArg) {
-					rs, err := toRequests(method, path, file)
+				for _, path := range (resolver{p: p, fn: fn}).resolve(rc.path) {
+					rs, err := toRequests(rc.method, path, file)
 					if err != nil {
 						continue
 					}
@@ -192,15 +181,14 @@ func TestOwnConfigMapsAreReachedOnlyThroughBookkeeping(t *testing.T) {
 						}
 					}
 				}
-				pos := p.fset.Position(call.Pos())
+				pos := p.fset.Position(rc.call.Pos())
 				switch {
 				case own && !viaBookkeeping:
-					problems = append(problems, fmt.Sprintf("%s:%d %s: the updater's own ConfigMap is not reached through c.bookkeeping()", file, pos.Line, fn.Name.Name))
+					problems = append(problems, fmt.Sprintf("%s:%d %s: the updater's own ConfigMap is not reached through c.Bookkeeping()", file, pos.Line, fn.Name.Name))
 				case viaBookkeeping && !own:
-					problems = append(problems, fmt.Sprintf("%s:%d %s: c.bookkeeping() is only for the updater's own ConfigMaps", file, pos.Line, fn.Name.Name))
+					problems = append(problems, fmt.Sprintf("%s:%d %s: c.Bookkeeping() is only for the updater's own ConfigMaps", file, pos.Line, fn.Name.Name))
 				}
-				return true
-			})
+			}
 		}
 	}
 	if len(problems) > 0 {

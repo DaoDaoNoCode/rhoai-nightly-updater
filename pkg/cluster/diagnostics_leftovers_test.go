@@ -10,6 +10,12 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Verbatim condition messages of the live case (RHOAI 3.6.0, 2026-11-19).
@@ -130,12 +136,12 @@ func (w *leftoverWorld) list(obj map[string]any) string {
 func (w *leftoverWorld) patchCR(r *http.Request, body []byte) (int, string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	var ops []jsonPatchOp
+	var ops []kube.JSONPatchOp
 	if err := json.Unmarshal(body, &ops); err != nil {
 		return 400, `{"kind":"Status","code":400}`
 	}
-	next, err := applyJSONPatch(w.cr, ops)
-	if _, ok := errors.AsType[*errJSONPatchTest](err); ok {
+	next, err := kube.ApplyJSONPatch(w.cr, ops)
+	if _, ok := errors.AsType[*kube.JSONPatchTestError](err); ok {
 		return 422, apiServerPatchTestFailed
 	}
 	if err != nil {
@@ -184,7 +190,7 @@ func (w *leftoverWorld) serveCRDManagers(managers []string, schema map[string]an
 	}
 	// An older write by the RHOAI operator never counts once another
 	// manager wrote later.
-	entries = append(entries, map[string]any{"manager": platformCRDManager, "operation": "Apply", "time": "2026-10-01T10:00:00Z", "fieldsV1": map[string]any{"f:metadata": map[string]any{}}})
+	entries = append(entries, map[string]any{"manager": diagnostics.PlatformCRDManager, "operation": "Apply", "time": "2026-10-01T10:00:00Z", "fieldsV1": map[string]any{"f:metadata": map[string]any{}}})
 	crd := map[string]any{
 		"metadata": map[string]any{"name": trustyCRD, "managedFields": entries},
 		"spec":     map[string]any{"versions": []any{map[string]any{"name": "v1alpha1", "served": true, "storage": true, "schema": map[string]any{"openAPIV3Schema": schema}}}},
@@ -192,19 +198,19 @@ func (w *leftoverWorld) serveCRDManagers(managers []string, schema map[string]an
 	w.f.obj("/apis/apiextensions.k8s.io/v1/customresourcedefinitions", map[string]any{"items": []any{crd}})
 }
 
-func (w *leftoverWorld) scan() checkOutput {
+func (w *leftoverWorld) scan() diagnostics.CheckOutput {
 	w.t.Helper()
-	out := checkLeftovers(w.c)
-	out.check.Name = leftoversCheckName
+	out := diagnostics.CheckLeftovers(w.c)
+	out.Check.Name = components.LeftoversCheckName
 	return out
 }
 
-func onlyProblem(t *testing.T, out checkOutput) Problem {
+func onlyProblem(t *testing.T, out diagnostics.CheckOutput) Problem {
 	t.Helper()
-	if len(out.problems) != 1 {
-		t.Fatalf("%d problems: %+v (check %+v)", len(out.problems), out.problems, out.check)
+	if len(out.Problems) != 1 {
+		t.Fatalf("%d problems: %+v (check %+v)", len(out.Problems), out.Problems, out.Check)
 	}
-	return out.problems[0]
+	return out.Problems[0]
 }
 
 func storedFalse() map[string]any {
@@ -217,7 +223,7 @@ func storedFalse() map[string]any {
 func recreateAck(t *testing.T, w *leftoverWorld) AckBinding {
 	t.Helper()
 	const id = "recreate-leftover:Deployment/redhat-ods-applications/trustyai-service-operator-controller-manager"
-	for _, p := range w.scan().problems {
+	for _, p := range w.scan().Problems {
 		if p.AutoFixAction == id && p.AcknowledgeBinding != nil {
 			return *p.AcknowledgeBinding
 		}
@@ -237,25 +243,25 @@ func scannedWithBinding(t *testing.T, w *leftoverWorld) Problem {
 }
 
 func TestParseStoredTypeFailure(t *testing.T) {
-	got := parseApplyFailures(msgStoredTypes)
-	if len(got) != 1 || got[0].Class != applyStoredType || got[0].Kind != "TrustyAI" || got[0].Name != "default-trustyai" || got[0].Namespace != "" ||
+	got := components.ParseApplyFailures(msgStoredTypes)
+	if len(got) != 1 || got[0].Class != components.ApplyStoredType || got[0].Kind != "TrustyAI" || got[0].Name != "default-trustyai" || got[0].Namespace != "" ||
 		strings.Join(got[0].Fields, "|") != ".spec.eval.lmeval.permitOnline: expected string, got &value.valueUnstructured{Value:false}|.spec.eval.lmeval.permitCodeExecution: expected string, got &value.valueUnstructured{Value:false}" {
 		t.Fatalf("%+v", got)
 	}
-	if !got[0].leftover() || got[0].problemID() != "leftover-fields-trustyai-default-trustyai" {
-		t.Errorf("leftover %v, id %s", got[0].leftover(), got[0].problemID())
+	if !got[0].Leftover() || got[0].ProblemID() != "leftover-fields-trustyai-default-trustyai" {
+		t.Errorf("leftover %v, id %s", got[0].Leftover(), got[0].ProblemID())
 	}
-	sel := parseApplyFailures(msgTrustySelector)
-	if len(sel) != 1 || !sel[0].leftover() || sel[0].problemID() != "leftover-recreate-deployment-redhat-ods-applications-trustyai-service-operator-controller-manager" {
+	sel := components.ParseApplyFailures(msgTrustySelector)
+	if len(sel) != 1 || !sel[0].Leftover() || sel[0].ProblemID() != "leftover-recreate-deployment-redhat-ods-applications-trustyai-service-operator-controller-manager" {
 		t.Fatalf("%+v", sel)
 	}
 	// The live condition explains the component in the Components table.
-	if got := componentCause(dscCondition{Message: msgStoredTypes}); got != "An object is left over from an earlier release" {
+	if got := components.CauseOf(rhoai.DSCCondition{Message: msgStoredTypes}); got != "An object is left over from an earlier release" {
 		t.Errorf("component cause %q", got)
 	}
 	// The DataScienceCluster problem links to this check's problem.
-	cc := &classifiedCondition{Cond: dscCondition{Type: "ProvisioningSucceeded", Status: "False", Message: msgStoredTypes}}
-	cc.classify(map[string]*dependency{}, &[]*dependency{})
+	cc := &components.ClassifiedCondition{Cond: rhoai.DSCCondition{Type: "ProvisioningSucceeded", Status: "False", Message: msgStoredTypes}}
+	cc.Classify(map[string]*components.Dependency{}, &[]*components.Dependency{})
 	if strings.Join(cc.ApplyIDs, ",") != "leftover-fields-trustyai-default-trustyai" {
 		t.Errorf("DSC links %v", cc.ApplyIDs)
 	}
@@ -273,13 +279,13 @@ func TestLeftoverStoredFieldsScan(t *testing.T) {
 		"status":{"phase":"Running","containerStatuses":[{"name":"manager","restartCount":1061,"state":{"waiting":{"reason":"CrashLoopBackOff"}},"lastState":{"terminated":{"reason":"Error","exitCode":1,"message":"`+msgInformer+`"}}}]}}]}`)
 	out := w.scan()
 	p := onlyProblem(t, out)
-	if out.check.Status != "fail" || p.ID != "leftover-fields-trustyai-default-trustyai" || p.Severity != "critical" || !p.AutoFixable ||
+	if out.Check.Status != "fail" || p.ID != "leftover-fields-trustyai-default-trustyai" || p.Severity != "critical" || !p.AutoFixable ||
 		p.AutoFixAction != "fix-leftover-fields:TrustyAI/default-trustyai" || p.Title != "TrustyAI default-trustyai has field values from an earlier release" ||
 		!strings.Contains(p.Acknowledge, `.spec.eval.lmeval.permitOnline (false -> "deny"), .spec.eval.lmeval.permitCodeExecution (false -> "deny")`) ||
 		!strings.Contains(p.Acknowledge, "may not mean the same") {
 		t.Fatalf("problem %+v", p)
 	}
-	if b := p.AcknowledgeBinding; b == nil || b.UID != "trusty-uid" || b.ResourceVersion != "100" || *b != *newAckBinding("trusty-uid", "100", p.Acknowledge) {
+	if b := p.AcknowledgeBinding; b == nil || b.UID != "trusty-uid" || b.ResourceVersion != "100" || *b != *diagnostics.NewAckBinding("trusty-uid", "100", p.Acknowledge) {
 		t.Fatalf("binding %+v", p.AcknowledgeBinding)
 	}
 	if len(p.FieldChanges) != 2 {
@@ -301,15 +307,15 @@ func TestLeftoverStoredFieldsScan(t *testing.T) {
 		t.Errorf("confirm %q, cmd %q", p.ConfirmMessage, p.TechnicalCmd)
 	}
 	// The crash-looping module operator links to it.
-	pods := checkRHOAIPods(w.c)
-	linked := linkProblems(append(pods.problems, p))
+	pods := diagnostics.CheckRHOAIPods(w.c)
+	linked := diagnostics.LinkProblems(append(pods.Problems, p))
 	crash := findProblem(&DiagnosticsResponse{Problems: linked}, "pod-crashloop-redhat-ods-applications-trustyai-operator-module-controller-manager")
 	if crash == nil || !slices.Contains(crash.RelatedProblems, p.ID) || !strings.Contains(strings.Join(crash.Evidence, "\n"), "Likely caused by") {
 		t.Errorf("crash problem %+v", crash)
 	}
 	// The apply-failures check leaves the object to this check.
-	if apply := checkApplyFailures(w.c); len(apply.problems) != 0 {
-		t.Errorf("also reported by %s: %+v", applyFailuresCheckName, apply.problems)
+	if apply := diagnostics.CheckApplyFailures(w.c); len(apply.Problems) != 0 {
+		t.Errorf("also reported by %s: %+v", components.ApplyFailuresCheckName, apply.Problems)
 	}
 }
 
@@ -352,8 +358,8 @@ func TestLeftoverStoredFieldsFixAndRetry(t *testing.T) {
 	}
 	res, _ = ApplyFix(w.c, p.AutoFixAction)
 	dscPatches := w.f.requests("PATCH", dscV2List+"/default-dsc")
-	if !res.Success || len(dscPatches) != 2 || !strings.Contains(dscPatches[0].Body, `"uid":"dsc-uid"`) || !strings.Contains(dscPatches[0].Body, leftoverRetryAnno) ||
-		!strings.Contains(dscPatches[1].Body, `"`+leftoverRetryAnno+`":null`) {
+	if !res.Success || len(dscPatches) != 2 || !strings.Contains(dscPatches[0].Body, `"uid":"dsc-uid"`) || !strings.Contains(dscPatches[0].Body, diagnostics.LeftoverRetryAnno) ||
+		!strings.Contains(dscPatches[1].Body, `"`+diagnostics.LeftoverRetryAnno+`":null`) {
 		t.Fatalf("retry %+v, patches %+v", res, dscPatches)
 	}
 }
@@ -479,8 +485,8 @@ func TestLeftoverStoredFieldsCRDNotCurrent(t *testing.T) {
 	// The installed CSV owns it: current, whoever wrote it last.
 	w := newLeftoverWorld(t, []string{msgStoredTypes}, nil, storedFalse())
 	w.serveCRD("kubectl-edit", lmevalSchema(true))
-	w.f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
-	w.f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), 200,
+	w.f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
+	w.f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"), 200,
 		`{"spec":{"customresourcedefinitions":{"owned":[{"name":"`+trustyCRD+`"}]}}}`)
 	if p := onlyProblem(t, w.scan()); !p.AutoFixable || !strings.Contains(strings.Join(p.Evidence, "\n"), "the installed CSV rhods-operator.3.6.0 owns it") {
 		t.Errorf("owned CRD: %+v", p)
@@ -574,9 +580,9 @@ func TestLeftoverRecreateDeployment(t *testing.T) {
 func TestLeftoverRecreateNotBackInTime(t *testing.T) {
 	w := newLeftoverWorld(t, nil, []string{msgTrustySelector}, storedFalse())
 	w.recreate = false
-	start := clk.Now()
+	start := kube.Clock().Now()
 	res, _ := ApplyFixAcknowledged(w.c, "recreate-leftover:Deployment/redhat-ods-applications/trustyai-service-operator-controller-manager", recreateAck(t, w))
-	if res.Success || res.ErrorCode != "not_recreated" || clk.Since(start) < leftoverRecreateWait {
+	if res.Success || res.ErrorCode != "not_recreated" || kube.Clock().Since(start) < diagnostics.LeftoverRecreateWait {
 		t.Fatalf("%+v", res)
 	}
 	// Deleted already: the scan says it waits for the operator.
@@ -660,33 +666,33 @@ func TestLeftoverRecreateRefusals(t *testing.T) {
 // A component with an in-use reader: nothing in use needs no
 // acknowledgement; in use, or unreadable, does.
 func TestLeftoverRecreateUsers(t *testing.T) {
-	users := func(list []string, err error) usersReader {
+	users := func(list []string, err error) diagnostics.UsersReader {
 		return func(*Client, string) ([]string, error) { return list, err }
 	}
-	rf := func(w *leftoverWorld) *reportedApplyFailure {
-		s := scanApplyReporters(w.c, allApplyFailures)
-		r := leftoverObject(s, "apps", "Deployment", "redhat-ods-applications", "trustyai-service-operator-controller-manager", applyImmutable)
+	rf := func(w *leftoverWorld) *components.ReportedApplyFailure {
+		s := components.ScanApplyReporters(w.c, components.AllApplyFailures)
+		r := diagnostics.LeftoverObject(s, "apps", "Deployment", "redhat-ods-applications", "trustyai-service-operator-controller-manager", components.ApplyImmutable)
 		if r == nil {
 			t.Fatal("not found")
 		}
 		return r
 	}
-	usersCheckedComponents["trustyai"] = true
-	defer delete(usersCheckedComponents, "trustyai")
+	dsc.UsersCheckedComponents["trustyai"] = true
+	defer delete(dsc.UsersCheckedComponents, "trustyai")
 	w := newLeftoverWorld(t, nil, []string{msgTrustySelector}, storedFalse())
-	if r := analyzeRecreate(w.c, rf(w), "redhat-ods-applications", readDeploymentForScan, users(nil, nil)); len(r.AckReasons) != 0 || len(r.Blockers) != 0 {
+	if r := diagnostics.AnalyzeRecreate(w.c, rf(w), "redhat-ods-applications", diagnostics.ReadDeploymentForScan, users(nil, nil)); len(r.AckReasons) != 0 || len(r.Blockers) != 0 {
 		t.Errorf("not in use: %+v", r)
 	}
-	r := analyzeRecreate(w.c, rf(w), "redhat-ods-applications", readDeploymentForScan, users([]string{"LMEvalJob p/x"}, nil))
+	r := diagnostics.AnalyzeRecreate(w.c, rf(w), "redhat-ods-applications", diagnostics.ReadDeploymentForScan, users([]string{"LMEvalJob p/x"}, nil))
 	if !strings.Contains(strings.Join(r.AckReasons, ";"), "in use (LMEvalJob p/x)") {
 		t.Errorf("in use: %+v", r)
 	}
-	r = analyzeRecreate(w.c, rf(w), "redhat-ods-applications", readDeploymentForScan, users(nil, context.DeadlineExceeded))
+	r = diagnostics.AnalyzeRecreate(w.c, rf(w), "redhat-ods-applications", diagnostics.ReadDeploymentForScan, users(nil, context.DeadlineExceeded))
 	if !strings.Contains(strings.Join(r.AckReasons, ";"), "could not check what uses trustyai") {
 		t.Errorf("error: %+v", r)
 	}
 	// The gitops scan does not read users.
-	if p := onlyProblem(t, checkLeftoversGitOps(w.c)); !strings.Contains(p.Acknowledge, "this scan does not check what uses trustyai") {
+	if p := onlyProblem(t, diagnostics.CheckLeftoversGitOps(w.c)); !strings.Contains(p.Acknowledge, "this scan does not check what uses trustyai") {
 		t.Errorf("gitops: %+v", p)
 	}
 }
@@ -742,7 +748,7 @@ func TestLeftoverWaitUsesTheClock(t *testing.T) {
 	w := newLeftoverWorld(t, nil, nil, storedFalse())
 	w.dep = nil
 	start := time.Now()
-	back, ready, err := waitRecreated(w.c, "Deployment", "redhat-ods-applications", "trustyai-service-operator-controller-manager", "old-uid")
+	back, ready, err := diagnostics.WaitRecreated(w.c, "Deployment", "redhat-ods-applications", "trustyai-service-operator-controller-manager", "old-uid")
 	if back || ready || err != nil || time.Since(start) > 5*time.Second {
 		t.Fatalf("%v %v %v %s", back, ready, err, time.Since(start))
 	}

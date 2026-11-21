@@ -46,7 +46,7 @@ This document captures every OpenShift-specific behavior that affects the RHOAI 
 - The Route timeout and oauth-proxy `--upstream-timeout` are both 960 s; `--upstream-flush=200ms` streams the events.
 - If a stream is cut, the operation continues. The page reattaches through `GET /api/operation`.
 
-**Shutdown budget** (pkg/cluster/operator_recovery.go; `budget_test.go` checks it against the template):
+**Shutdown budget** (pkg/cluster/internal/operator/operator_recovery.go; `budget_test.go` checks it against the template):
 - drain 980 s (15 min deadline + 60 s restore + 20 s bookkeeping);
 - marker flush 10 s;
 - HTTP shutdown 20 s;
@@ -76,7 +76,7 @@ This typically takes 10-30 seconds depending on image size and pull speed.
 
 **Fix:** CatalogSource readiness is a step in the SSE pipeline. The pipeline polls the CatalogSource state and emits SSE events to show live progress.
 
-**Values:** `CatalogReadyTimeout` (120 s) and `CatalogPollInterval` (5 s) in `pkg/cluster/operations.go`.
+**Values:** `ReadyTimeout` (120 s) and `PollInterval` (5 s) in `pkg/cluster/internal/catalog/catalog_timing.go`.
 
 ## 7. OLM Version Pinning
 
@@ -102,7 +102,7 @@ The exact sequences are in [CLUSTER_CHANGES.md](CLUSTER_CHANGES.md#4-operator-li
 
 ## 9. DSPA API Version
 
-**What:** The tool reads and writes DataSciencePipelinesApplications at `datasciencepipelinesapplications.opendatahub.io/v1` only (`dspaAPIGroup` in `pkg/cluster/pipeline_server.go`), the version the RHOAI 3.x data-science-pipelines-operator serves.
+**What:** The tool reads and writes DataSciencePipelinesApplications at `datasciencepipelinesapplications.opendatahub.io/v1` only (`DSPAAPIGroup` in `pkg/cluster/internal/storage/pipeline_server.go`), the version the RHOAI 3.x data-science-pipelines-operator serves.
 
 **Fields:** before writing a pipeline server, Set up reads the served `v1` schema of the installed CRD (`dspaSpecSchema`) and sets the optional settings (managed pipelines, the MLflow integration) only when that schema declares them; when the CRD cannot be read, it says so in the log and leaves them to the operator's defaults.
 
@@ -143,10 +143,10 @@ These headers are set by the SSEWriter before the first event is flushed. The re
 
 ## 13. Timing in Tests
 
-**What:** Every wait in `pkg/cluster` (polls, retry backoffs, grace periods, and the deadlines that bound them) goes through the package clock `clk` (`pkg/cluster/clock.go`, interface in `pkg/clock`). Production uses the wall clock.
+**What:** Every wait in `pkg/cluster` and its internal packages (polls, retry backoffs, grace periods, and the deadlines that bound them) goes through one clock, `kube.Clock()` (`clk` in `pkg/cluster/internal/kube/clock.go`, interface in `pkg/clock`). Production uses the wall clock.
 
-**Tests:** `TestMain` (`pkg/cluster/testmain_test.go`) replaces `clk` with `clocktest.NewAutoFake()`, a fake clock that moves forward whenever the code sleeps, so no test waits in real time. Caches tell their entries' ages by a clock of their own, which a test replaces with a `clocktest.Fake` and moves with `Advance` (`fakeCacheClock`). The timing values are package-level `var`s (for example `CatalogReadyTimeout`, `CatalogPollInterval`, `SubRetryBackoffs` in `operations.go`): `TestMain` shortens them so a fake-clock loop runs few iterations, and a test may set one to choose which deadline is reached first.
+**Tests:** `TestMain` (`pkg/cluster/testmain_test.go`) replaces it with `clocktest.NewAutoFake()` (`kube.SetClockForTest`), a fake clock that moves forward whenever the code sleeps, so no test waits in real time. Caches tell their entries' ages by a clock of their own, which a test replaces with a `clocktest.Fake` and moves with `Advance` (`fakeCacheClock`). The timing values are package-level `var`s of the internal packages (for example `catalog.ReadyTimeout`, `catalog.PollInterval`, `operator.SubRetryBackoffs`): `TestMain` shortens them (`operator.UseTestTimings`, which also calls `catalog.UseTestTimings`) so a fake-clock loop runs few iterations, and a test may set one through the package's `Set...ForTest` hook to choose which deadline is reached first. The hooks panic outside a test binary.
 
 **Not on the clock:** timestamps that are recorded or compared with the cluster's own (activity entries, object ages) come from the `time` package.
 
-**Production values:** read them in the source (`operations.go`, `PrerequisiteReadyTimeout` in `feature_setup.go`, and the other `*Timeout`/`*Poll*` variables); they are sized for real cluster latencies.
+**Production values:** read them in the source (`pkg/cluster/internal/operator/operations.go`, `prerequisiteReadyTimeout` in `pkg/cluster/internal/features/feature_setup.go`, and the other `*Timeout`/`*Poll*` variables of the internal packages); they are sized for real cluster latencies.

@@ -8,6 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -49,12 +53,12 @@ func cnpgFakePackage() fakePackage {
 }
 
 // rhclCatalog is rhclFakePackage as the code reads it.
-func rhclCatalog() operatorPackage {
-	var out operatorPackage
+func rhclCatalog() envkit.OperatorPackage {
+	var out envkit.OperatorPackage
 	_ = json.Unmarshal([]byte(packageManifestStatus("rhcl-operator", rhclFakePackage())), &struct {
-		DefaultChannel *string           `json:"defaultChannel"`
-		Channels       *[]packageChannel `json:"channels"`
-	}{&out.defaultChannel, &out.channels})
+		DefaultChannel *string                  `json:"defaultChannel"`
+		Channels       *[]envkit.PackageChannel `json:"channels"`
+	}{&out.DefaultChannel, &out.Channels})
 	return out
 }
 
@@ -177,7 +181,7 @@ func (s *fakeOLMSim) stepOne(k fakeKey) {
 		return
 	}
 	installed, _ := status["installedCSV"].(string)
-	from := csvVersion(installed)
+	from := envkit.CSVVersion(installed)
 	to := ""
 	switch {
 	case installed == "":
@@ -209,7 +213,7 @@ func newFreshMaaSCluster(t *testing.T) (*modelsCluster, *fakeOLMSim) {
 	f.mu.Lock()
 	for k := range f.objects {
 		if strings.HasPrefix(k.gv, "kuadrant.io") || k.gv == "operator.authorino.kuadrant.io/v1beta1" || k.ns == "kuadrant-system" || k.name == "redhat-ai-gateway-infra" ||
-			k.name == kuadrantController || k.name == cnpgController {
+			k.name == serving.KuadrantController || k.name == serving.CNPGController {
 			delete(f.objects, k)
 		}
 	}
@@ -224,11 +228,11 @@ func newFreshMaaSCluster(t *testing.T) (*modelsCluster, *fakeOLMSim) {
 	sim.onInstalled = func(pkg, ns, from, to string) {
 		switch pkg {
 		case "rhcl-operator":
-			f.objects[fakeKey{gv: "apps/v1", ns: ns, plural: "deployments", name: kuadrantController}] = map[string]any{"metadata": map[string]any{"name": kuadrantController}}
+			f.objects[fakeKey{gv: "apps/v1", ns: ns, plural: "deployments", name: serving.KuadrantController}] = map[string]any{"metadata": map[string]any{"name": serving.KuadrantController}}
 			f.groups["/apis/kuadrant.io"] = `{"kind":"APIGroup","name":"kuadrant.io","versions":[{"groupVersion":"kuadrant.io/v1","version":"v1"},{"groupVersion":"kuadrant.io/v1beta1","version":"v1beta1"}],"preferredVersion":{"groupVersion":"kuadrant.io/v1","version":"v1"}}`
 			delete(f.fail, "GET /apis/kuadrant.io/v1beta1/kuadrants")
 		case "cloudnative-pg":
-			f.objects[fakeKey{gv: "apps/v1", ns: ns, plural: "deployments", name: cnpgController}] = map[string]any{"metadata": map[string]any{"name": cnpgController}}
+			f.objects[fakeKey{gv: "apps/v1", ns: ns, plural: "deployments", name: serving.CNPGController}] = map[string]any{"metadata": map[string]any{"name": serving.CNPGController}}
 			f.groups["/apis/postgresql.cnpg.io"] = `{"kind":"APIGroup","name":"postgresql.cnpg.io","versions":[{"groupVersion":"postgresql.cnpg.io/v1","version":"v1"}],"preferredVersion":{"groupVersion":"postgresql.cnpg.io/v1","version":"v1"}}`
 		}
 	}
@@ -298,9 +302,9 @@ func maasClusterWithModel(t *testing.T) *modelsCluster {
 	return mc
 }
 
-func readRecord(t *testing.T, c *Client) maasRecord {
+func readRecord(t *testing.T, c *Client) serving.MaaSRecord {
 	t.Helper()
-	rec, err := readMaaSRecord(c)
+	rec, err := serving.ReadMaaSRecord(c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,15 +393,15 @@ func TestMaaSSetup_FreshClusterDoesEveryStep(t *testing.T) {
 	if og := mc.f.get("/apis/operators.coreos.com/v1/namespaces/kuadrant-system/operatorgroups/kuadrant-operator-group"); og == nil || og["spec"] != nil {
 		t.Fatalf("operator group = %v", og)
 	}
-	if ns := mc.f.get("/api/v1/namespaces/redhat-ai-gateway-infra"); ns == nil || ns["metadata"].(map[string]any)["labels"].(map[string]any)[managedByLabelKey] != managedByLabelValue {
+	if ns := mc.f.get("/api/v1/namespaces/redhat-ai-gateway-infra"); ns == nil || ns["metadata"].(map[string]any)["labels"].(map[string]any)[kube.ManagedByLabelKey] != kube.ManagedByLabelValue {
 		t.Fatalf("infra namespace = %v", ns)
 	}
 	svc := mc.f.get("/api/v1/namespaces/kuadrant-system/services/authorino-authorino-authorization")
-	if svc["metadata"].(map[string]any)["annotations"].(map[string]any)[servingCertAnnotation] != "authorino-server-cert" {
+	if svc["metadata"].(map[string]any)["annotations"].(map[string]any)[serving.CertSecretAnnotation] != "authorino-server-cert" {
 		t.Fatalf("service = %v", svc)
 	}
 	dep, _ := json.Marshal(mc.f.get("/apis/apps/v1/namespaces/kuadrant-system/deployments/authorino"))
-	if !strings.Contains(string(dep), `"SSL_CERT_FILE"`) || !strings.Contains(string(dep), restartAnnotation) {
+	if !strings.Contains(string(dep), `"SSL_CERT_FILE"`) || !strings.Contains(string(dep), components.RestartAnnotation) {
 		t.Fatalf("authorino deployment = %s", dep)
 	}
 	ag := mc.f.get(tMaaSDSC)["spec"].(map[string]any)["components"].(map[string]any)["aigateway"].(map[string]any)
@@ -595,7 +599,7 @@ func TestMaaSUpgradeRHCL_HopsThroughTheChannelOLMOffers(t *testing.T) {
 		t.Fatalf("subscription = %v after %v", sub, channels)
 	}
 	svc := mc.f.get("/api/v1/namespaces/kuadrant-system/services/authorino-authorino-authorization")
-	if ann, _ := svc["metadata"].(map[string]any)["annotations"].(map[string]any); ann[servingCertAnnotation] == nil {
+	if ann, _ := svc["metadata"].(map[string]any)["annotations"].(map[string]any); ann[serving.CertSecretAnnotation] == nil {
 		t.Fatalf("the certificate was not asked for again: %v", svc)
 	}
 	if !strings.Contains(res.Message, "1.5.0") {
@@ -747,7 +751,7 @@ func TestMaaSTierPolicies(t *testing.T) {
 	mc.f.putJSON("/apis/kuadrant.io/v1alpha1/namespaces/openshift-ingress/tokenratelimitpolicies/gateway-tier-rate-limits", `{`+target+`}`)
 	mc.f.putJSON("/apis/kuadrant.io/v1/namespaces/openshift-ingress/ratelimitpolicies/custom-limit", `{`+target+`}`)
 	mc.f.putJSON("/apis/kuadrant.io/v1alpha1/namespaces/openshift-ingress/tokenratelimitpolicies/gateway-default-deny", `{"metadata":{"labels":{"app.kubernetes.io/managed-by":"maas-controller"}},`+target+`}`)
-	if got := maasGatewayAuth(mc.c); got != "enforced" {
+	if got := serving.MaaSGatewayAuth(mc.c); got != "enforced" {
 		t.Fatalf("gateway auth = %s", got)
 	}
 	st, _ := GetMaaSStatus(mc.c)
@@ -872,7 +876,7 @@ func TestMaaSPublish_ForeignGatewaySelectingByLabel(t *testing.T) {
 			if !stepSaid(events, "gateway", "The gateway someone else made admits the project.") {
 				t.Fatalf("events = %+v", events)
 			}
-			if !mc.f.has(tMaaSRef) || !readRecord(t, mc.c).published("proj", "qwen25-05b-instruct") {
+			if !mc.f.has(tMaaSRef) || !readRecord(t, mc.c).IsPublished("proj", "qwen25-05b-instruct") {
 				t.Fatalf("not published: record %+v", readRecord(t, mc.c))
 			}
 		})

@@ -23,7 +23,7 @@ Sources (commit, then what it is cited for):
 Three kinds of cluster need different setups:
 
 1. **Hosted control plane** (ROSA HCP, HyperShift): Infrastructure `cluster`
-   `status.controlPlaneTopology: External` (`pkg/cluster/control_plane.go`).
+   `status.controlPlaneTopology: External` (`pkg/cluster/internal/rhoai/control_plane.go`).
    The mirror goes through OCM (`rosa create image-mirror`); the nodes get
    `kube-system/additional-pull-secret` through HyperShift's global pull
    secret (section D). Unchanged by this work.

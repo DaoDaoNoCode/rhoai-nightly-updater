@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -31,7 +32,7 @@ func TestMaaSPublish_TakesTheModelOutOfGenAIAssetsAndUnpublishRestores(t *testin
 	if labels["opendatahub.io/dashboard"] != "true" {
 		t.Errorf("dashboard label lost: %v", labels)
 	}
-	rec, _ := readMaaSRecord(mc.c)
+	rec, _ := serving.ReadMaaSRecord(mc.c)
 	if g := rec.GenAI["proj/qwen25-05b-instruct"]; g.Asset != "true" || g.UseCase != "Chat" || !g.HadAsset || !g.HadUseCase {
 		t.Errorf("record %+v", rec.GenAI)
 	}
@@ -49,7 +50,7 @@ func TestMaaSPublish_TakesTheModelOutOfGenAIAssetsAndUnpublishRestores(t *testin
 	if labels["opendatahub.io/genai-asset"] != "true" || ann["opendatahub.io/genai-use-case"] != "Chat" {
 		t.Errorf("not restored: %v %v", labels, ann)
 	}
-	if rec, _ := readMaaSRecord(mc.c); len(rec.GenAI) != 0 {
+	if rec, _ := serving.ReadMaaSRecord(mc.c); len(rec.GenAI) != 0 {
 		t.Errorf("record kept %+v", rec.GenAI)
 	}
 }
@@ -67,7 +68,7 @@ func TestMaaSPublish_TheModelRefIsOwnedByTheModelAndCarriesItsDescription(t *tes
 	if got := jsonOf(meta["ownerReferences"]); got != want {
 		t.Errorf("ownerReferences %s, want %s", got, want)
 	}
-	entry, _ := catalogEntry("")
+	entry, _ := serving.CatalogEntry("")
 	if got := meta["annotations"].(map[string]any)["openshift.io/description"]; got != entry.Description {
 		t.Errorf("description %v", got)
 	}
@@ -119,7 +120,7 @@ func TestMaaSUnpublish_AfterGarbageCollectionTookTheModelRef(t *testing.T) {
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"}); !res.Success {
 		t.Fatalf("unpublish: %+v", res)
 	}
-	if rec, _ := readMaaSRecord(mc.c); len(rec.Published) != 0 || len(rec.GenAI) != 0 || len(rec.ModelRefs) != 0 {
+	if rec, _ := serving.ReadMaaSRecord(mc.c); len(rec.Published) != 0 || len(rec.GenAI) != 0 || len(rec.ModelRefs) != 0 {
 		t.Errorf("record kept %+v", rec)
 	}
 }

@@ -8,6 +8,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -123,7 +128,7 @@ func TestHelmManagedDSCIsReadOnly(t *testing.T) {
 		t.Fatalf("read-only reason = %q", m.ReadOnlyReason)
 	}
 	for _, action := range []string{"toggle", "fix", "soft-reset", "hard-reset"} {
-		if plan, _ := PlanDSCChange(c, action, "ray", "Removed", false, false); plan.Code != ErrorCodeGitOpsManaged {
+		if plan, _ := PlanDSCChange(c, action, "ray", "Removed", false, false); plan.Code != kube.ErrorCodeGitOpsManaged {
 			t.Fatalf("%s plan = %+v", action, plan)
 		}
 	}
@@ -131,25 +136,25 @@ func TestHelmManagedDSCIsReadOnly(t *testing.T) {
 
 func TestJSONPointerEscapesTildeAndSlash(t *testing.T) {
 	keys := []string{"spec", "a/b", "c~d", "~1"}
-	if p := pointerOf(keys); p != "/spec/a~1b/c~0d/~01" {
+	if p := kube.PointerOf(keys); p != "/spec/a~1b/c~0d/~01" {
 		t.Fatalf("pointer = %s", p)
 	}
-	if got := pointerKeys(pointerOf(keys)); !reflect.DeepEqual(got, keys) {
+	if got := kube.PointerKeys(kube.PointerOf(keys)); !reflect.DeepEqual(got, keys) {
 		t.Fatalf("keys = %v", got)
 	}
 	obj := map[string]any{"spec": map[string]any{"a/b": "old", "c~d": map[string]any{}}}
-	ops, err := buildJSONPatch(obj, []dscAssign{{Path: []string{"spec", "a/b"}, Value: "new"}, {Path: []string{"spec", "c~d", "~1"}, Value: true}}, nil)
+	ops, err := components.BuildJSONPatch(obj, []components.DSCAssign{{Path: []string{"spec", "a/b"}, Value: "new"}, {Path: []string{"spec", "c~d", "~1"}, Value: true}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	after, err := applyJSONPatch(obj, ops)
+	after, err := kube.ApplyJSONPatch(obj, ops)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v, _ := lookupPath(after, []string{"spec", "a/b"}); v != "new" {
+	if v, _ := components.LookupPath(after, []string{"spec", "a/b"}); v != "new" {
 		t.Fatalf("a/b = %v (ops %+v)", v, ops)
 	}
-	if v, _ := lookupPath(after, []string{"spec", "c~d", "~1"}); v != true {
+	if v, _ := components.LookupPath(after, []string{"spec", "c~d", "~1"}); v != true {
 		t.Fatalf("c~d/~1 = %v", v)
 	}
 }
@@ -183,11 +188,11 @@ func operatorRemovesDSCAt(f *resourceFake, path string, n int, then func()) {
 
 func hardResetRecordOf(t *testing.T, f *resourceFake) string {
 	t.Helper()
-	cm := f.get(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName))
+	cm := f.get(rhoai.NamespacedPath("v1", "configmaps", record.GetActivityNamespace(), record.OperationConfigMapName))
 	if cm == nil {
 		return ""
 	}
-	v, _ := ensureMap(cm, "data")[dscHardResetKey].(string)
+	v, _ := ensureMap(cm, "data")[record.DSCHardResetKey].(string)
 	return v
 }
 
@@ -237,7 +242,7 @@ func TestHardResetValidatesTheNewSpecBeforeTheDelete(t *testing.T) {
 
 func TestHardResetWithoutReleaseDefaultIsRefusedBeforeTheDelete(t *testing.T) {
 	f, c := managerWorld(t, nil)
-	csv := f.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"))
+	csv := f.get(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"))
 	ensureMap(csv, "metadata")["annotations"] = map[string]any{"alm-examples": "[]"}
 	res, _ := runHardReset(t, c, nil)
 	if res.Success || res.ErrorCode != "prerequisites" || !strings.Contains(res.Message, "release default") {
@@ -335,13 +340,13 @@ func TestHardResetStoppedWhileWaitingCanBeFinished(t *testing.T) {
 		t.Fatalf("unknown platform = %+v", res)
 	}
 	f.put("/apis/dscinitialization.opendatahub.io/v2/dscinitializations/default-dsci", map[string]any{
-		"metadata": map[string]any{"name": "default-dsci"}, "status": map[string]any{"release": map[string]any{"name": selfManagedPlatform}}})
+		"metadata": map[string]any{"name": "default-dsci"}, "status": map[string]any{"release": map[string]any{"name": dsc.SelfManagedPlatform}}})
 	res, _ = FinishDSCHardReset(c, types.DSCFinishRequest{Name: "default-dsc", Token: m.PendingHardReset.Token})
 	if !res.Success {
 		t.Fatalf("finish = %+v", res)
 	}
 	created := f.get(dscV3Path)
-	if v, _ := lookupPath(comps(created), []string{"workbenches", "workbenchNamespace"}); v != "my-notebooks" {
+	if v, _ := components.LookupPath(comps(created), []string{"workbenches", "workbenchNamespace"}); v != "my-notebooks" {
 		t.Fatalf("created = %v", created)
 	}
 	posts := f.callsTo(http.MethodPost, dscV3List)
@@ -363,10 +368,10 @@ func TestFinishHardResetGuards(t *testing.T) {
 	rec := &types.DSCHardResetRecord{Name: "default-dsc", OldUID: "u", APIVersion: "datasciencecluster.opendatahub.io/v3",
 		Object: `{"apiVersion":"datasciencecluster.opendatahub.io/v3","kind":"DataScienceCluster","metadata":{"name":"default-dsc"},"spec":{}}`,
 		YAML:   "kind: DataScienceCluster\n", OperatorCSV: "rhods-operator.3.5.0", StartedAt: "2026-11-19T00:00:00Z"}
-	if err := SaveDSCHardResetRecord(c, rec); err != nil {
+	if err := record.SaveDSCHardResetRecord(c, rec); err != nil {
 		t.Fatal(err)
 	}
-	token := pendingHardResetToken(rec)
+	token := dsc.PendingHardResetToken(rec)
 	if res, _ := FinishDSCHardReset(c, types.DSCFinishRequest{Name: "default-dsc", Token: token}); res.Success || !strings.Contains(res.Message, "default-dsc now exists") {
 		t.Fatalf("with a DSC = %+v", res)
 	}
@@ -464,25 +469,25 @@ func TestRemovalChecksFailClosedOnModulesTheToolCannotCheck(t *testing.T) {
 	f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1/sparkoperators", http.StatusOK, `{"items":[{"metadata":{"name":"default-sparkoperator"}}]}`)
 	f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1/rays", http.StatusOK, `{"items":[]}`)
 	serveLive36ModuleOperators(f)
-	rc := newRemovalChecker(c)
-	if got := strings.Join(rc.partBlockers("data"), " "); !strings.Contains(got, "no components.platform.opendatahub.io or services.platform.opendatahub.io kind is named after data") {
+	rc := dsc.NewRemovalChecker(c)
+	if got := strings.Join(rc.PartBlockers("data"), " "); !strings.Contains(got, "no components.platform.opendatahub.io or services.platform.opendatahub.io kind is named after data") {
 		t.Fatalf("unknown kind: %q", got)
 	}
-	if got := strings.Join(rc.moduleBlockers("sparkoperator"), " "); !strings.Contains(got, "can't confirm its operator is running") {
+	if got := strings.Join(rc.ModuleBlockers("sparkoperator"), " "); !strings.Contains(got, "can't confirm its operator is running") {
 		t.Fatalf("unknown operator: %q", got)
 	}
-	if b, _ := rc.teardownBlockers("sparkoperator"); len(b) == 0 {
+	if b, _ := rc.TeardownBlockers("sparkoperator"); len(b) == 0 {
 		t.Fatal("teardown of an unknown operator's module passed")
 	}
-	if got := rc.moduleBlockers("ray"); len(got) != 0 {
+	if got := rc.ModuleBlockers("ray"); len(got) != 0 {
 		t.Fatalf("ray (no CR, operator known) = %v", got)
 	}
 	// The CSV names no Deployment: blocked, not assumed.
 	f2, c2 := newFakeAPI(t)
-	f2.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
-	f2.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), 200, `{"metadata":{"name":"rhods-operator.3.6.0"},"spec":{"version":"3.6.0"}}`)
+	f2.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
+	f2.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"), 200, `{"metadata":{"name":"rhods-operator.3.6.0"},"spec":{"version":"3.6.0"}}`)
 	f2.json("GET", "/apis/apps/v1/namespaces/redhat-ods-operator/deployments/rhods-operator", http.StatusOK, `{"status":{"readyReplicas":1}}`)
-	if why := operatorDeploymentsBlocker(c2); !strings.Contains(why, "lists no Deployment") {
+	if why := dsc.OperatorDeploymentsBlocker(c2); !strings.Contains(why, "lists no Deployment") {
 		t.Fatalf("no deployment = %q", why)
 	}
 }

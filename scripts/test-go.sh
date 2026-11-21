@@ -1,81 +1,332 @@
 #!/bin/sh
 # go test -race -count=1 over every package, as one would run
-# `go test -race -count=1 ./...`, but with pkg/cluster split into several
-# processes: its ~1,200 tests run one after another (they change package
-# variables, so they cannot use t.Parallel) and take most of the time.
-# Each process runs a share of the top-level tests, chosen from the test
-# binary's own -test.list, so every test runs exactly once; a test's
-# subtests stay with it. `make test-go` and the CI go job run this script.
+# `go test -race -count=1 ./...`, with the test binaries run side by side
+# and a package with many tests split into parts: the ~1,200 tests of
+# pkg/cluster run one after another (they change package variables, so they
+# cannot use t.Parallel) and would take most of the time. A part runs a
+# share of the package's top-level tests, chosen from the test binary's own
+# -test.list, so every test runs exactly once; a test's subtests stay with
+# it. `make test-go` and the CI go job run this script.
 #
-# Environment: GO_TEST_SHARDS, the number of pkg/cluster processes (default:
-# the CPUs, at most 4; 1 runs the package in one process).
+# The race test binaries are built with go test -c (several packages at
+# once, which builds in parallel), and every package without tests is
+# compiled (go build), so a package that does not build fails the run as it
+# fails go test ./.... The binaries run as jobs, at most GO_TEST_JOBS at a
+# time, the longest first: each part of a split package, and each other
+# package whole. A package is split only when it has at least
+# GO_TEST_PART_TESTS tests: a part then holds about that many, and there
+# are at most GO_TEST_SHARDS parts. The packages that may split are built
+# first, then the packages without tests; the other test binaries build
+# while the parts run, and their jobs start once they are built.
 #
-# Output: each part's output in full, in a fixed order, then a summary;
-# exits non-zero if any part failed.
+# Arguments: test flags for every package, such as -shuffle=on or
+# -run=TestX; each is passed to the test binaries as -test.<flag>, one
+# argument each (a value may hold spaces). A value goes in the same
+# argument (-run=TestX, not -run TestX). -run and -skip filter the tests of
+# every package and every part: a part runs its own share by skipping the
+# others' tests, its -skip pattern being theirs plus, as a top-level
+# alternative, the caller's.
+#
+# Environment (the CPUs: nproc):
+#   GO_TEST_JOBS        test processes at a time (default: the CPUs plus
+#                       one: a race test binary sleeps a second before it
+#                       exits, the race detector's atexit_sleep_ms, so with
+#                       one process per CPU a CPU would idle at the end of
+#                       each job)
+#   GO_TEST_SHARDS      most parts of one package (default: the CPUs; 1
+#                       runs every package in one process)
+#   GO_TEST_PART_TESTS  tests per part of a split package (default 200)
+#
+# Output: each job's line in a fixed order (package, then part), the output
+# of each failed one in full, then a summary; exits non-zero if any failed.
 set -eu
 
 cd "$(dirname "$0")/.."
 cpus=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+jobs=${GO_TEST_JOBS:-$((cpus + 1))}
+[ "$jobs" -ge 1 ] || jobs=1
 shards=${GO_TEST_SHARDS:-$cpus}
-[ "$shards" -le 4 ] || shards=4
 [ "$shards" -ge 1 ] || shards=1
+per=${GO_TEST_PART_TESTS:-200}
+[ "$per" -ge 1 ] || per=1
+
+# quote ARG: ARG in single quotes, for eval to give back as one word.
+quote() {
+	printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+# The test binaries' flags, each quoted (eval "set -- $binflags"); the
+# caller's -skip pattern apart, as the parts add theirs to it.
+binflags=""
+skip=""
+for f in "$@"; do
+	case $f in
+	-test.*) b=$f ;;
+	-*) b=-test.${f#-} ;;
+	*)
+		echo "test-go.sh: $f is not a flag" >&2
+		exit 2
+		;;
+	esac
+	case $b in
+	-test.skip=*) skip=${b#-test.skip=} ;;
+	-test.skip | -test.run)
+		echo "test-go.sh: $f needs its pattern in the same argument ($f=<regexp>)" >&2
+		exit 2
+		;;
+	*) binflags="$binflags $(quote "$b")" ;;
+	esac
+done
 
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT INT TERM
+# later: the go test -c building test binaries while parts run, if any.
+later=""
+trap '[ -z "$later" ] || kill "$later" 2>/dev/null || :; rm -rf "$work"' EXIT INT TERM
+module=$(go list -m)
 
-# The cluster package's race-instrumented test binary, built once.
-go test -race -c -o "$work/cluster.test" ./pkg/cluster
-(cd pkg/cluster && "$work/cluster.test" -test.list '.*') >"$work/tests"
-total=$(wc -l <"$work/tests" | tr -d ' ')
-[ "$total" -gt 0 ] || {
-	echo "pkg/cluster lists no tests" >&2
+# Every package, "<T or N> <import path> <dir>" (T: it has tests); then
+# the packages with tests, "<index> <import path> <dir>", and those
+# without, "<import path>".
+go list -f '{{if or .TestGoFiles .XTestGoFiles}}T{{else}}N{{end}} {{.ImportPath}} {{.Dir}}' ./... >"$work/all"
+awk '$1 == "T" { sub(/^T /, ""); print ++n, $0 }' "$work/all" >"$work/pkgs"
+awk '$1 == "N" { print $2 }' "$work/all" >"$work/notests"
+[ -s "$work/pkgs" ] || {
+	echo "test-go.sh: no package has tests" >&2
+	exit 1
+}
+# go test -c -o DIR/ names each binary after the last element of its
+# import path; two such packages would overwrite each other's.
+dup=$(awk '{ n = split($2, p, "/"); print p[n] }' "$work/pkgs" | sort | uniq -d)
+[ -z "$dup" ] || {
+	echo "test-go.sh: several packages with tests end in: $dup (their test binaries would share a name)" >&2
 	exit 1
 }
 
-# Deal the tests out in order, one each per shard in turn.
-i=0
-while IFS= read -r name; do
-	printf '%s\n' "$name" >>"$work/shard.$((i % shards))"
-	i=$((i + 1))
-done <"$work/tests"
-
-others=$(go list ./... | grep -v '/pkg/cluster$')
-echo "go test -race: pkg/cluster ($total tests) in $shards process(es) on $cpus CPU(s), with the other packages alongside"
-
-# shellcheck disable=SC2086 # $others is a list of packages.
-(go test -race -count=1 $others >"$work/others.log" 2>&1; echo $? >"$work/others.rc") &
-s=0
-while [ "$s" -lt "$shards" ]; do
-	run="^($(paste -sd'|' "$work/shard.$s"))\$"
-	(
-		cd pkg/cluster
-		start=$(date +%s)
-		rc=0
-		"$work/cluster.test" -test.count=1 -test.timeout=10m -test.run "$run" >"$work/shard.$s.log" 2>&1 || rc=$?
-		echo "$rc $(($(date +%s) - start))" >"$work/shard.$s.rc"
-	) &
-	s=$((s + 1))
-done
-wait
-
-# As go test prints a package: its output only when it failed.
-failed=""
-cat "$work/others.log"
-[ "$(cat "$work/others.rc")" = 0 ] || failed="$failed other-packages"
-pkg=$(go list ./pkg/cluster)
-s=0
-while [ "$s" -lt "$shards" ]; do
-	n=$(wc -l <"$work/shard.$s" | tr -d ' ')
-	read -r rc secs <"$work/shard.$s.rc"
-	if [ "$rc" = 0 ]; then
-		echo "ok  	$pkg	part $((s + 1)) of $shards, $n tests, ${secs}s"
+# Each package's tests. The source gives an upper bound (it also counts
+# TestMain and the tests in files the build excludes). A package whose
+# bound reaches GO_TEST_PART_TESTS may be split (listed in first; the
+# others in rest).
+: >"$work/first"
+: >"$work/rest"
+while read -r i pkg dir; do
+	awk '/^func (Test|Example|Fuzz)[^a-z]/ { n++ } END { print n + 0 }' "$dir"/*_test.go >"$work/$i.est"
+	if [ "$(cat "$work/$i.est")" -ge "$per" ] && [ "$shards" -gt 1 ]; then
+		: >"$work/$i.first"
+		echo "$pkg" >>"$work/first"
 	else
-		cat "$work/shard.$s.log"
-		echo "FAIL	$pkg	part $((s + 1)) of $shards, $n tests, ${secs}s (exit $rc)"
-		failed="$failed pkg/cluster-part-$((s + 1))"
+		echo "$pkg" >>"$work/rest"
 	fi
-	s=$((s + 1))
+done <"$work/pkgs"
+
+# The race-instrumented test binaries. Those of the packages that may split
+# first, as their parts take longest. Then the packages without tests are
+# compiled, as go test ./... does: one that does not build fails the run,
+# before any test runs, even when nothing imports it (not by go test -c,
+# which refuses two packages ending in the same name though only one of them
+# gives a test binary). The other test binaries build while the parts run
+# (on a cold build cache, linking them takes seconds the parts would wait
+# for); a package among them that does not build fails the run when it is
+# its turn. Without parts to run meanwhile, they build first.
+mkdir "$work/bin"
+if [ -s "$work/first" ]; then
+	# shellcheck disable=SC2046 # the packages are a list
+	go test -race -c -o "$work/bin/" $(cat "$work/first")
+fi
+if [ -s "$work/notests" ]; then
+	# shellcheck disable=SC2046 # the packages are a list
+	go build -race $(cat "$work/notests")
+fi
+if [ -s "$work/rest" ]; then
+	if [ -s "$work/first" ]; then
+		# shellcheck disable=SC2046 # the packages are a list
+		go test -race -c -o "$work/bin/" $(cat "$work/rest") >"$work/build.log" 2>&1 </dev/null &
+		later=$!
+	else
+		# shellcheck disable=SC2046 # the packages are a list
+		go test -race -c -o "$work/bin/" $(cat "$work/rest")
+	fi
+fi
+
+# The packages that may split list their tests (-test.list, in the
+# package's directory as go test runs it; the binaries list at the same
+# time), and that list is the count. Listing runs no test, so it goes
+# without the race detector's second of sleep before exiting (a later
+# atexit_sleep_ms in GORACE wins).
+lists=""
+while read -r i pkg dir; do
+	[ -f "$work/$i.first" ] || continue
+	bin="$work/bin/${pkg##*/}.test"
+	[ -x "$bin" ] || {
+		echo "test-go.sh: no test binary for $pkg" >&2
+		exit 1
+	}
+	(cd "$dir" && GORACE="${GORACE:+$GORACE }atexit_sleep_ms=0" "$bin" -test.list '.*' >"$work/$i.tests" 2>"$work/$i.listerr"; echo $? >"$work/$i.listrc") </dev/null &
+	lists="$lists $!"
+done <"$work/pkgs"
+for l in $lists; do
+	wait "$l" || :
 done
+
+# How many parts each package runs in: its listed tests per part, at most
+# $shards, so never more parts than tests; a split package's tests dealt
+# out in order, one each per part in turn.
+while read -r i pkg dir; do
+	n=$(cat "$work/$i.est")
+	parts=1
+	if [ -f "$work/$i.first" ]; then
+		if [ "$(cat "$work/$i.listrc" 2>/dev/null)" != 0 ]; then
+			cat "$work/$i.tests" "$work/$i.listerr" >&2
+			echo "test-go.sh: the test binary of $pkg cannot list its tests" >&2
+			exit 1
+		fi
+		n=$(wc -l <"$work/$i.tests" | tr -d ' ')
+		parts=$(((n + per - 1) / per))
+		[ "$parts" -le "$shards" ] || parts=$shards
+		[ "$parts" -ge 1 ] || parts=1
+	fi
+	echo "$i $parts $n" >"$work/plan.$i"
+	printf '%s\n' "$pkg" >"$work/pkg.$i"
+	printf '%s\n' "$dir" >"$work/dir.$i"
+	[ "$parts" -gt 1 ] || continue
+	awk -v d="$work/part.$i." -v k="$parts" '{ print > (d (NR - 1) % k) }' "$work/$i.tests"
+done <"$work/pkgs"
+
+# The jobs, those of the packages built first before the others, each
+# group longest first: "<group> <tests> <index> <part> <parts>" (group 0:
+# built first, 1: built while group 0 runs; part 0 of 1: the whole
+# package).
+while read -r i pkg dir; do
+	read -r _ parts n <"$work/plan.$i"
+	g=1
+	[ ! -f "$work/$i.first" ] || g=0
+	p=0
+	while [ "$p" -lt "$parts" ]; do
+		echo "$g $((n / parts)) $i $p $parts"
+		p=$((p + 1))
+	done
+done <"$work/pkgs" | sort -k1,1n -k2,2nr -k3,3n -k4,4n >"$work/jobs"
+
+npkgs=$(wc -l <"$work/pkgs" | tr -d ' ')
+njobs=$(wc -l <"$work/jobs" | tr -d ' ')
+split=$(awk '$5 > 1 && $4 == 0 { print $3 }' "$work/jobs" | while read -r i; do
+	read -r _ parts n <"$work/plan.$i"
+	printf ' %s (%s tests, %s parts)' "$(awk -v i="$i" '$1 == i { print $2 }' "$work/pkgs")" "$n" "$parts"
+done)
+echo "go test -race: $npkgs package(s) with tests, as $njobs process(es), $jobs at a time, on $cpus CPU(s); split:${split:- none}${1+; test flags: $*}"
+
+# run_job I PART PARTS: runs a package, or a part of it, in the package's
+# directory (as go test does); "<exit status> <seconds>" in job.I.PART.rc.
+run_job() {
+	i=$1 p=$2 k=$3
+	pkg=$(cat "$work/pkg.$i")
+	dir=$(cat "$work/dir.$i")
+	log="$work/job.$i.$p.log"
+	if [ ! -x "$work/bin/${pkg##*/}.test" ]; then
+		echo "test-go.sh: no test binary for $pkg: it did not build" >"$log"
+		echo "2 0" >"$work/job.$i.$p.rc"
+		return
+	fi
+	pat=""
+	if [ "$k" -gt 1 ]; then
+		# This part skips the package's tests dealt to the other parts,
+		# so the caller's -run (a binary takes one) still chooses among
+		# its own. go test splits a -skip pattern at a top-level "|"
+		# into alternatives and skips a test any of them matches
+		# (testing/match.go), so the caller's -skip is one more. grep
+		# exits 1 when no line is left (nothing to skip) and 2 on an
+		# error, which must not read as nothing to skip: the part would
+		# run the whole package.
+		grc=0
+		grep -vxF -f "$work/part.$i.$p" "$work/$i.tests" >"$work/skip.$i.$p" 2>"$log" || grc=$?
+		case $grc in
+		0) pat="^($(paste -sd'|' "$work/skip.$i.$p"))\$" ;;
+		1) ;;
+		*)
+			echo "test-go.sh: cannot work out the tests of $pkg part $((p + 1)) (grep exit status $grc)" >>"$log"
+			echo "2 0" >"$work/job.$i.$p.rc"
+			return
+			;;
+		esac
+	fi
+	[ -z "$skip" ] || pat="${pat:+$pat|}$skip"
+	# Linux limits one argument to 128 KiB (MAX_ARG_STRLEN).
+	if [ "${#pat}" -gt 120000 ]; then
+		echo "test-go.sh: the -skip pattern of $pkg part $((p + 1)) is ${#pat} bytes, too long for one argument" >"$log"
+		echo "2 0" >"$work/job.$i.$p.rc"
+		return
+	fi
+	eval "set -- $binflags"
+	[ -z "$pat" ] || set -- "$@" "-test.skip=$pat"
+	start=$(date +%s)
+	rc=0
+	(cd "$dir" && "$work/bin/${pkg##*/}.test" -test.paniconexit0 -test.count=1 -test.timeout=10m "$@") >"$log" 2>&1 || rc=$?
+	echo "$rc $(($(date +%s) - start))" >"$work/job.$i.$p.rc"
+}
+
+# At most $jobs at a time: a job takes a token from the pipe before it
+# starts and puts it back when it ends.
+mkfifo "$work/slots"
+exec 3<>"$work/slots"
+t=0
+while [ "$t" -lt "$jobs" ]; do
+	echo >&3
+	t=$((t + 1))
+done
+brc=0
+while read -r g _ i p k; do
+	# The jobs of group 1 wait for their binaries.
+	if [ "$g" = 1 ] && [ -n "$later" ]; then
+		wait "$later" || brc=$?
+		later=""
+	fi
+	read -r _ <&3
+	(
+		# The token goes back whatever happens to the job; a job that
+		# wrote no status failed.
+		rc=0
+		run_job "$i" "$p" "$k" || rc=$?
+		[ -f "$work/job.$i.$p.rc" ] || echo "${rc:-1} 0" >"$work/job.$i.$p.rc"
+		echo >&3
+	) </dev/null &
+done <"$work/jobs"
+if [ -n "$later" ]; then
+	wait "$later" || brc=$?
+	later=""
+fi
+wait
+exec 3>&-
+
+# The build of the binaries that built while parts ran, when it failed (its
+# packages without a binary fail below); then in package order: a line per
+# job, the output of a failed one in full.
+failed=""
+if [ "$brc" != 0 ]; then
+	cat "$work/build.log"
+	failed=" build"
+fi
+while read -r i pkg dir; do
+	read -r _ parts _ <"$work/plan.$i"
+	rel=${pkg#"$module"}
+	rel=${rel#/}
+	p=0
+	while [ "$p" -lt "$parts" ]; do
+		read -r rc secs <"$work/job.$i.$p.rc"
+		what="${secs}s"
+		name=${rel:-.}
+		if [ "$parts" -gt 1 ]; then
+			what="part $((p + 1)) of $parts, $(wc -l <"$work/part.$i.$p" | tr -d ' ') tests, ${secs}s"
+			name="$name-part-$((p + 1))"
+		fi
+		if [ "$rc" = 0 ]; then
+			echo "ok  	$pkg	$what"
+		else
+			cat "$work/job.$i.$p.log"
+			echo "FAIL	$pkg	$what (exit $rc)"
+			failed="$failed $name"
+		fi
+		p=$((p + 1))
+	done
+done <"$work/pkgs"
 if [ -n "$failed" ]; then
 	echo "FAILED:$failed"
 	exit 1

@@ -7,6 +7,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 const (
@@ -67,10 +71,10 @@ func operatorDeploymentJSON(name, strategy string, available int) map[string]any
 // cluster.
 func (w *dscWorld) installedCSV(since time.Duration) {
 	name, ns, display, phase, pkg := "jobset-operator.v1.0.1", "openshift-jobset-operator", "Job Set Operator", "Succeeded", "job-set"
-	w.installedCSVs(csvItem(name, ns, display, phase, since, pkg, jobSetExamples, []ownedCRD{{Name: "jobsetoperators.operator.openshift.io", Kind: "JobSetOperator", Version: "v1"}}))
+	w.installedCSVs(csvItem(name, ns, display, phase, since, pkg, jobSetExamples, []components.OwnedCRD{{Name: "jobsetoperators.operator.openshift.io", Kind: "JobSetOperator", Version: "v1"}}))
 }
 
-func csvItem(name, ns, display, phase string, since time.Duration, pkg, examples string, owned []ownedCRD) map[string]any {
+func csvItem(name, ns, display, phase string, since time.Duration, pkg, examples string, owned []components.OwnedCRD) map[string]any {
 	return map[string]any{
 		"metadata": map[string]any{"name": name, "namespace": ns, "labels": map[string]string{"operators.coreos.com/" + pkg + "." + ns: ""},
 			"annotations": map[string]string{"alm-examples": examples}},
@@ -94,17 +98,17 @@ func (w *dscWorld) trainerCR(conds []dcond, generation, observed int) {
 	}}})
 }
 
-func problemsByID(out checkOutput) map[string]Problem {
+func problemsByID(out diagnostics.CheckOutput) map[string]Problem {
 	m := map[string]Problem{}
-	for _, p := range out.problems {
+	for _, p := range out.Problems {
 		m[p.ID] = p
 	}
 	return m
 }
 
-func ids(out checkOutput) []string {
+func ids(out diagnostics.CheckOutput) []string {
 	var s []string
-	for _, p := range out.problems {
+	for _, p := range out.Problems {
 		s = append(s, p.ID)
 	}
 	return s
@@ -123,17 +127,17 @@ func liveMissingPrereqs() []dcond {
 
 func TestDSCCheck_MissingPrerequisitesGetCommandsAndClassification(t *testing.T) {
 	w := newDSCWorld(t, liveMissingPrereqs())
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	byID := problemsByID(out)
-	if out.check.Status != "fail" {
-		t.Fatalf("check = %+v", out.check)
+	if out.Check.Status != "fail" {
+		t.Fatalf("check = %+v", out.Check)
 	}
 	for _, id := range []string{"dsc-not-ready", "prerequisite-missing-job-set", "prerequisite-missing-openshift-cert-manager-operator", "prerequisite-missing-leader-worker-set"} {
 		if _, ok := byID[id]; !ok {
 			t.Fatalf("missing %s in %v", id, ids(out))
 		}
 	}
-	if len(out.problems) != 4 {
+	if len(out.Problems) != 4 {
 		t.Fatalf("problems = %v", ids(out))
 	}
 
@@ -182,9 +186,9 @@ func TestDSCCheck_MissingPrerequisitesGetCommandsAndClassification(t *testing.T)
 // the commands stay for reference.
 func TestDSCCheck_MissingPrerequisiteUnderGitOps(t *testing.T) {
 	w := newDSCWorld(t, liveMissingPrereqs())
-	w.f.obj(subscriptionPath(), map[string]any{"metadata": map[string]any{"name": SubName, "namespace": SubNS, "annotations": trackingID("Subscription", SubNS, SubName)}})
-	w.f.obj(namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName), map[string]any{"metadata": map[string]any{"name": CatalogName, "namespace": CatalogNS, "annotations": trackingID("CatalogSource", CatalogNS, CatalogName)}})
-	out := checkDataScienceCluster(w.c)
+	w.f.obj(rhoai.SubscriptionPath(), map[string]any{"metadata": map[string]any{"name": rhoai.SubName, "namespace": rhoai.SubNS, "annotations": trackingID("Subscription", rhoai.SubNS, rhoai.SubName)}})
+	w.f.obj(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName), map[string]any{"metadata": map[string]any{"name": rhoai.CatalogName, "namespace": rhoai.CatalogNS, "annotations": trackingID("CatalogSource", rhoai.CatalogNS, rhoai.CatalogName)}})
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	js, ok := problemsByID(out)["prerequisite-missing-job-set"]
 	if !ok {
 		t.Fatalf("problems = %v", ids(out))
@@ -201,18 +205,18 @@ func TestDSCCheck_ReadyWithOptionalPrerequisiteOnly(t *testing.T) {
 		{"type": "Ready", "status": "True"},
 		{"type": "KserveLLMInferenceServiceWideEPDependencies", "status": "False", "reason": "PreConditionFailed", "severity": "Info", "message": "LeaderWorkerSet not installed"},
 	})
-	out := checkDataScienceCluster(w.c)
-	if out.check.Status != "pass" || strings.Join(ids(out), ",") != "prerequisite-missing-leader-worker-set" ||
-		!strings.Contains(out.check.Detail, "optional prerequisites not installed: Leader Worker Set Operator") {
-		t.Fatalf("out = %+v %v", out.check, ids(out))
+	out := diagnostics.CheckDataScienceCluster(w.c)
+	if out.Check.Status != "pass" || strings.Join(ids(out), ",") != "prerequisite-missing-leader-worker-set" ||
+		!strings.Contains(out.Check.Detail, "optional prerequisites not installed: Leader Worker Set Operator") {
+		t.Fatalf("out = %+v %v", out.Check, ids(out))
 	}
 }
 
 func TestDSCCheck_HealthyClusterReadsNoCatalog(t *testing.T) {
 	w := newDSCWorld(t, []dcond{{"type": "Ready", "status": "True"}, {"type": "TrainerReady", "status": "True"}})
-	out := checkDataScienceCluster(w.c)
-	if out.check.Status != "pass" || len(out.problems) != 0 {
-		t.Fatalf("out = %+v %v", out.check, ids(out))
+	out := diagnostics.CheckDataScienceCluster(w.c)
+	if out.Check.Status != "pass" || len(out.Problems) != 0 {
+		t.Fatalf("out = %+v %v", out.Check, ids(out))
 	}
 	if n := len(w.f.requests("GET", packageManifestsPath)); n != 0 {
 		t.Fatalf("listed package manifests %d times on a healthy cluster", n)
@@ -222,7 +226,7 @@ func TestDSCCheck_HealthyClusterReadsNoCatalog(t *testing.T) {
 func TestDSCCheck_InstalledButOperandMissing(t *testing.T) {
 	w := newDSCWorld(t, liveMissingPrereqs()[:2])
 	w.installedCSV(time.Hour)
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	byID := problemsByID(out)
 	p, ok := byID["prerequisite-operand-job-set"]
 	if !ok || p.AutoFixable || !strings.Contains(p.Title, "its JobSetOperator/cluster does not exist") ||
@@ -242,7 +246,7 @@ func TestDSCCheck_SatisfiedDependencyOffersRestart(t *testing.T) {
 	w.installedCSV(time.Hour)
 	w.f.json("GET", jobSetOperandPath, 200, `{"metadata":{"name":"cluster"}}`)
 	w.trainerCR([]dcond{{"type": "Ready", "status": "False", "reason": "Error", "message": msgTrainerJobSet, "lastTransitionTime": ago(time.Hour)}}, 3, 3)
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	byID := problemsByID(out)
 	b, ok := byID["module-operator-backoff-trainer"]
 	if !ok || !b.AutoFixable || b.AutoFixAction != "restart-module-operator:trainer" || b.Severity != "warning" ||
@@ -278,7 +282,7 @@ func TestDSCCheck_OperandFromInstalledCSVPackage(t *testing.T) {
 		{"type": "KserveLLMInferenceServiceDependencies", "status": "False", "reason": "PreConditionFailed", "message": msgCertManager},
 	})
 	w.installedCSVs(csvItem("cert-manager.v1.16.5", "openshift-operators", "cert-manager", "Succeeded", time.Hour, "cert-manager", `[]`, nil))
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	for _, id := range ids(out) {
 		if strings.HasPrefix(id, "prerequisite-") {
 			t.Fatalf("installed community cert-manager reported as %s", id)
@@ -292,7 +296,7 @@ func TestDSCCheck_OperandFromInstalledCSVPackage(t *testing.T) {
 	w2 := newDSCWorld(t, liveMissingPrereqs()[:2])
 	w2.installedCSVs(csvItem("jobset-operator.v0.9.0", "openshift-jobset-operator", "Job Set Operator", "Succeeded", time.Hour, "job-set",
 		`[{"apiVersion":"operator.openshift.io/v1","kind":"JobSetOperator","metadata":{"name":"cluster"},"spec":{"managementState":"Managed","logLevel":"Debug"}}]`, nil))
-	p := problemsByID(checkDataScienceCluster(w2.c))["prerequisite-operand-job-set"]
+	p := problemsByID(diagnostics.CheckDataScienceCluster(w2.c))["prerequisite-operand-job-set"]
 	if !strings.Contains(p.TechnicalCmd, `"logLevel": "Debug"`) {
 		t.Fatalf("operand command = %s", p.TechnicalCmd)
 	}
@@ -302,7 +306,7 @@ func TestDSCCheck_JustInstalledDependencyIsNotBackoff(t *testing.T) {
 	w := newDSCWorld(t, liveMissingPrereqs()[:2])
 	w.installedCSV(30 * time.Second)
 	w.f.json("GET", jobSetOperandPath, 200, `{}`)
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	if _, ok := problemsByID(out)["module-operator-backoff-trainer"]; ok {
 		t.Fatalf("problems = %v", ids(out))
 	}
@@ -315,7 +319,7 @@ func TestDSCCheck_OperandForbiddenSaysMakeUpgrade(t *testing.T) {
 	w := newDSCWorld(t, liveMissingPrereqs()[:2])
 	w.installedCSV(time.Hour)
 	w.f.status("GET", jobSetOperandPath, http.StatusForbidden, "Forbidden")
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	byID := problemsByID(out)
 	// An operand the tool cannot read does not authorize a restart.
 	if _, ok := byID["module-operator-backoff-trainer"]; ok {
@@ -334,12 +338,7 @@ func TestDSCCheck_OperandForbiddenSaysMakeUpgrade(t *testing.T) {
 // ageStaleObservations moves every remembered stale observation back by d,
 // standing in for the time between two scans.
 func ageStaleObservations(d time.Duration) {
-	staleSeen.Lock()
-	defer staleSeen.Unlock()
-	for k, v := range staleSeen.m {
-		v.first = v.first.Add(-d)
-		staleSeen.m[k] = v
-	}
+	components.AgeStaleObservationsForTest(d)
 }
 
 func TestDSCCheck_StaleModuleIsBackoffOnlyAcrossScans(t *testing.T) {
@@ -357,7 +356,7 @@ func TestDSCCheck_StaleModuleIsBackoffOnlyAcrossScans(t *testing.T) {
 	ray(4)
 	w.f.obj("/apis/apps/v1/namespaces/redhat-ods-applications/deployments/ray-module-operator-controller-manager", operatorDeploymentJSON("ray-module-operator-controller-manager", "RollingUpdate", 1))
 	backoff := func() (Problem, bool) {
-		p, ok := problemsByID(checkDataScienceCluster(w.c))["module-operator-backoff-ray"]
+		p, ok := problemsByID(diagnostics.CheckDataScienceCluster(w.c))["module-operator-backoff-ray"]
 		return p, ok
 	}
 
@@ -371,7 +370,7 @@ func TestDSCCheck_StaleModuleIsBackoffOnlyAcrossScans(t *testing.T) {
 		t.Fatal("a restart was offered one minute after the lag was first seen")
 	}
 	// The same generation still unobserved more than moduleStaleAfter later.
-	ageStaleObservations(moduleStaleAfter)
+	ageStaleObservations(components.ModuleStaleAfter)
 	b, ok := backoff()
 	if !ok || !b.AutoFixable || !strings.Contains(strings.Join(b.Evidence, "\n"), "generation 4 but its operator last reported observedGeneration 3, unchanged across scans") {
 		t.Fatalf("backoff = %+v", b)
@@ -388,14 +387,7 @@ func TestDSCCheck_StaleModuleIsBackoffOnlyAcrossScans(t *testing.T) {
 	// Caught up: the observation is forgotten.
 	ray(3)
 	backoff()
-	staleSeen.Lock()
-	n := 0
-	for k := range staleSeen.m {
-		if strings.HasPrefix(k, w.c.baseURL+"|") {
-			n++
-		}
-	}
-	staleSeen.Unlock()
+	n := components.StaleObservationsForTest(w.c.BaseURL() + "|")
 	if n != 0 {
 		t.Fatalf("%d observations kept after the operator caught up", n)
 	}
@@ -428,11 +420,11 @@ func TestRestartAssessment(t *testing.T) {
 				webhookOn(w.f)
 			}
 			w.f.obj(trainerOperatorPath, operatorDeploymentJSON("trainer-operator-controller-manager", tt.strategy, tt.available))
-			d, why := findModuleOperator(w.c, newModuleOperatorFinder(w.c, nil), "trainer")
+			d, why := components.FindModuleOperator(w.c, components.NewModuleOperatorFinder(w.c, nil), "trainer")
 			if d == nil {
 				t.Fatal(why)
 			}
-			a := assessRestart(w.c, *d)
+			a := components.AssessRestart(w.c, *d)
 			if a.OK != tt.wantOK || !strings.Contains(a.Note+a.Reason, tt.wantText) {
 				t.Fatalf("assessment = %+v", a)
 			}
@@ -455,8 +447,8 @@ func TestMaxUnavailablePods_MatchesDeploymentController(t *testing.T) {
 		{3, "50%", "50%", 1, true},            // surge 2, unavailable 1
 		{1, float64(0), "nonsense", 1, false}, // unparseable: assume the worst
 	} {
-		d := operatorDeployment{Replicas: tt.replicas, MaxSurge: tt.surge, MaxUnavailable: tt.unav}
-		got, ok := d.maxUnavailablePods()
+		d := components.OperatorDeployment{Replicas: tt.replicas, MaxSurge: tt.surge, MaxUnavailable: tt.unav}
+		got, ok := d.MaxUnavailablePods()
 		if got != tt.want || ok != tt.wantParseable {
 			t.Errorf("replicas=%d surge=%v unavailable=%v: got %d,%v want %d,%v", tt.replicas, tt.surge, tt.unav, got, ok, tt.want, tt.wantParseable)
 		}
@@ -473,11 +465,11 @@ func TestRestartAssessment_SurgeZeroWithFailWebhookRefuses(t *testing.T) {
 	w.f.json("GET", "/apis/admissionregistration.k8s.io/v1/validatingwebhookconfigurations", 200, `{"items":[{"metadata":{"name":"trainer-webhook","labels":{"platform.opendatahub.io/part-of":"trainer"}},
 		"webhooks":[{"name":"vtrainer.kb.io","failurePolicy":"Fail","clientConfig":{"service":{"namespace":"redhat-ods-applications","name":"svc"}}}]}]}`)
 	w.f.json("GET", "/api/v1/namespaces/redhat-ods-applications/services/svc", 200, `{"spec":{"selector":{"app.kubernetes.io/name":"trainer-operator-controller-manager"}}}`)
-	d, why := findModuleOperator(w.c, newModuleOperatorFinder(w.c, nil), "trainer")
+	d, why := components.FindModuleOperator(w.c, components.NewModuleOperatorFinder(w.c, nil), "trainer")
 	if d == nil {
 		t.Fatal(why)
 	}
-	a := assessRestart(w.c, *d)
+	a := components.AssessRestart(w.c, *d)
 	if a.OK || !strings.Contains(a.Reason, "would be rejected meanwhile") || !strings.Contains(a.Reason, "maxSurge 0 and maxUnavailable 25%") {
 		t.Fatalf("assessment = %+v", a)
 	}
@@ -494,12 +486,12 @@ func TestFindModuleOperator_FromRBACNotName(t *testing.T) {
 	w.serve(f)
 	o := liveOperator("ray")
 	f.obj("/apis/apps/v1/namespaces/"+liveAppsNS+"/deployments/"+o.Deployment, operatorDeploymentJSON(o.Deployment, "RollingUpdate", 1))
-	finder := newModuleOperatorFinder(c, nil)
-	d, why := findModuleOperator(c, finder, "ray")
+	finder := components.NewModuleOperatorFinder(c, nil)
+	d, why := components.FindModuleOperator(c, finder, "ray")
 	if d == nil || d.Name != o.Deployment || !strings.Contains(d.Via, "rays/finalizers") {
 		t.Fatalf("d = %+v, why = %s", d, why)
 	}
-	if d, why := findModuleOperator(c, finder, "newmodule"); d != nil || !strings.Contains(why, "does not own CRD newmodules") {
+	if d, why := components.FindModuleOperator(c, finder, "newmodule"); d != nil || !strings.Contains(why, "does not own CRD newmodules") {
 		t.Fatalf("d = %+v, why = %s", d, why)
 	}
 }
@@ -527,7 +519,7 @@ func TestApplyFixRestartModuleOperator(t *testing.T) {
 		}
 		meta := sent["metadata"].(map[string]any)
 		ann := sent["spec"].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)
-		if meta["uid"] != "dep-uid" || meta["resourceVersion"] != "7" || ann[restartAnnotation] == nil || len(sent) != 2 {
+		if meta["uid"] != "dep-uid" || meta["resourceVersion"] != "7" || ann[components.RestartAnnotation] == nil || len(sent) != 2 {
 			t.Fatalf("patch = %v", sent)
 		}
 		assertWrites(t, w.f, "PATCH "+trainerOperatorPath)
@@ -575,9 +567,9 @@ func TestDSCCheck_UpgradeGates(t *testing.T) {
 		{"type": "ModulesReady", "status": "False", "reason": "AdminAckRequired", "message": msgGateAck},
 	})
 	w.f.json("GET", "/api/v1/namespaces/redhat-ods-operator/configmaps/odh-upgrade-acks", 200, `{"data":{"kserve-v2":"false","old":"true"}}`)
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	byID := problemsByID(out)
-	g, ok := byID[dscGateProblemID]
+	g, ok := byID[components.DSCGateProblemID]
 	if !ok || g.Severity != "critical" || g.AutoFixable {
 		t.Fatalf("problems = %v", ids(out))
 	}
@@ -588,7 +580,7 @@ func TestDSCCheck_UpgradeGates(t *testing.T) {
 		t.Fatalf("gate = %+v", g)
 	}
 	dsc := byID["dsc-not-ready"]
-	if !slices.Contains(dsc.RelatedProblems, dscGateProblemID) || !strings.Contains(strings.Join(dsc.Evidence, "\n"), "ModulesReady=False (AdminAckRequired): Waiting for upgrade gates to be acknowledged → cause: an upgrade gate holds provisioning") {
+	if !slices.Contains(dsc.RelatedProblems, components.DSCGateProblemID) || !strings.Contains(strings.Join(dsc.Evidence, "\n"), "ModulesReady=False (AdminAckRequired): Waiting for upgrade gates to be acknowledged → cause: an upgrade gate holds provisioning") {
 		t.Fatalf("dsc = %+v", dsc)
 	}
 }
@@ -598,7 +590,7 @@ func TestDSCCheck_UnclassifiedKeepsGenericFix(t *testing.T) {
 		{"type": "Ready", "status": "False", "reason": "Error", "message": "Some components are not ready"},
 		{"type": "WorkbenchesReady", "status": "False", "reason": "Error", "message": "something unexpected"},
 	})
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	dsc := problemsByID(out)["dsc-not-ready"]
 	if !strings.Contains(strings.Join(dsc.Evidence, "\n"), "WorkbenchesReady=False (Error): something unexpected → cause not classified") ||
 		!strings.Contains(dsc.Fix, "For WorkbenchesReady, which the tool does not classify") || len(dsc.RelatedProblems) != 0 {
@@ -609,7 +601,7 @@ func TestDSCCheck_UnclassifiedKeepsGenericFix(t *testing.T) {
 func TestDSCCheck_CatalogUnreadableStillReports(t *testing.T) {
 	w := newDSCWorld(t, liveMissingPrereqs()[:2])
 	w.f.status("GET", packageManifestsPath, http.StatusForbidden, "Forbidden")
-	out := checkDataScienceCluster(w.c)
+	out := diagnostics.CheckDataScienceCluster(w.c)
 	p, ok := problemsByID(out)["prerequisite-missing-jobset"]
 	if !ok || !strings.Contains(strings.Join(p.Evidence, "\n"), "Could not read the catalogs") || !strings.Contains(p.Fix, "OperatorHub") {
 		t.Fatalf("problems = %v, p = %+v", ids(out), p)
@@ -618,16 +610,16 @@ func TestDSCCheck_CatalogUnreadableStillReports(t *testing.T) {
 
 func TestComponentCause(t *testing.T) {
 	for _, tt := range []struct {
-		cond dscCondition
+		cond rhoai.DSCCondition
 		want string
 	}{
-		{dscCondition{Message: msgTrainerJobSet}, "Prerequisite operator not installed: JobSet Operator"},
-		{dscCondition{Message: msgWideEP}, "Prerequisite operators not installed: LeaderWorkerSet, cert-manager operator"},
-		{dscCondition{Reason: "AdminAckRequired", Message: msgGateAck}, "An upgrade gate holds provisioning"},
-		{dscCondition{Message: msgRayStale}, "Its module operator has not reconciled the current spec yet"},
-		{dscCondition{Message: "boom"}, ""},
+		{rhoai.DSCCondition{Message: msgTrainerJobSet}, "Prerequisite operator not installed: JobSet Operator"},
+		{rhoai.DSCCondition{Message: msgWideEP}, "Prerequisite operators not installed: LeaderWorkerSet, cert-manager operator"},
+		{rhoai.DSCCondition{Reason: "AdminAckRequired", Message: msgGateAck}, "An upgrade gate holds provisioning"},
+		{rhoai.DSCCondition{Message: msgRayStale}, "Its module operator has not reconciled the current spec yet"},
+		{rhoai.DSCCondition{Message: "boom"}, ""},
 	} {
-		if got := componentCause(tt.cond); got != tt.want {
+		if got := components.CauseOf(tt.cond); got != tt.want {
 			t.Errorf("componentCause(%q) = %q, want %q", tt.cond.Message, got, tt.want)
 		}
 	}

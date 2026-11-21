@@ -3,6 +3,8 @@ package cluster
 import (
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 )
 
 // writes returns the non-GET MLflow requests made since index from.
@@ -25,13 +27,13 @@ func TestTrainingSample_AddIsCompleteAndIdempotent(t *testing.T) {
 		t.Fatalf("%s\n%s", msg, stepMessages(steps))
 	}
 	f := env.mlflow
-	exp := f.expByName(trainingExperiment)
-	if exp == nil || exp.stage != "active" || exp.tags[sampleMarkerKey] != SampleTraining {
+	exp := f.expByName(mlflow.TrainingExperiment)
+	if exp == nil || exp.stage != "active" || exp.tags[mlflow.SampleMarkerKey] != SampleTraining {
 		t.Fatalf("experiment = %+v", exp)
 	}
 	lrs := map[string]bool{}
 	for _, r := range f.runs {
-		if r.exp != exp.id || r.status != "FINISHED" || r.metrics != 2*trainingEpochs || r.tags[sampleMarkerKey] != SampleTraining || r.params["epochs"] != "20" {
+		if r.exp != exp.id || r.status != "FINISHED" || r.metrics != 2*mlflow.TrainingEpochs || r.tags[mlflow.SampleMarkerKey] != SampleTraining || r.params["epochs"] != "20" {
 			t.Errorf("run %+v", r)
 		}
 		lrs[r.params["learning_rate"]] = true
@@ -39,8 +41,8 @@ func TestTrainingSample_AddIsCompleteAndIdempotent(t *testing.T) {
 	if len(f.runs) != 3 || !lrs["0.1"] || !lrs["0.01"] || !lrs["0.001"] {
 		t.Errorf("runs: %v", lrs)
 	}
-	m := f.models[trainingModel]
-	if m == nil || len(m.versions) != 2 || m.aliases[trainingAlias] != "2" || m.tags[sampleMarkerKey] != SampleTraining {
+	m := f.models[mlflow.TrainingModel]
+	if m == nil || len(m.versions) != 2 || m.aliases[mlflow.TrainingAlias] != "2" || m.tags[mlflow.SampleMarkerKey] != SampleTraining {
 		t.Fatalf("model = %+v", m)
 	}
 	if s := env.status(t)[SampleTraining]; s.State != "present" || s.Link == "" {
@@ -70,7 +72,7 @@ func TestTrainingSample_RemoveThenAddRestores(t *testing.T) {
 	if ok, msg, steps := env.run(t, "remove", SampleTraining); !ok {
 		t.Fatalf("%s\n%s", msg, stepMessages(steps))
 	}
-	if env.mlflow.models[trainingModel] != nil || env.mlflow.expByName(trainingExperiment).stage != "deleted" {
+	if env.mlflow.models[mlflow.TrainingModel] != nil || env.mlflow.expByName(mlflow.TrainingExperiment).stage != "deleted" {
 		t.Error("not removed")
 	}
 	if env.mlflow.models["my-model"] == nil || env.mlflow.experiments["99"].stage != "active" {
@@ -99,9 +101,9 @@ func TestTrainingSample_ForeignIsLeftAlone(t *testing.T) {
 		t.Run(foreign, func(t *testing.T) {
 			env := newSamplesEnv(t)
 			if foreign == "experiment" {
-				env.mlflow.experiments["5"] = &fakeExperiment{id: "5", name: trainingExperiment, stage: "active", tags: map[string]string{}}
+				env.mlflow.experiments["5"] = &fakeExperiment{id: "5", name: mlflow.TrainingExperiment, stage: "active", tags: map[string]string{}}
 			} else {
-				env.mlflow.models[trainingModel] = &fakeModel{tags: map[string]string{"team": "x"}, aliases: map[string]string{}}
+				env.mlflow.models[mlflow.TrainingModel] = &fakeModel{tags: map[string]string{"team": "x"}, aliases: map[string]string{}}
 			}
 			for _, action := range []string{"add", "remove"} {
 				n := len(env.mlflow.requests)
@@ -131,11 +133,11 @@ func TestTrainingSample_InterruptedAddIsPartialAndCompletes(t *testing.T) {
 	if ok, msg, _ := env.run(t, "add", SampleTraining); !ok {
 		t.Fatal(msg)
 	}
-	if m := env.mlflow.models[trainingModel]; m.aliases[trainingAlias] == "" || len(env.mlflow.runs) != 3 {
+	if m := env.mlflow.models[mlflow.TrainingModel]; m.aliases[mlflow.TrainingAlias] == "" || len(env.mlflow.runs) != 3 {
 		t.Errorf("model %+v, %d runs", m, len(env.mlflow.runs))
 	}
 	// The retry reuses the two versions the first Add registered.
-	if m := env.mlflow.models[trainingModel]; len(m.versions) != 2 || m.aliases[trainingAlias] != "2" {
+	if m := env.mlflow.models[mlflow.TrainingModel]; len(m.versions) != 2 || m.aliases[mlflow.TrainingAlias] != "2" {
 		t.Errorf("versions %v, alias %v: the retry registered extra versions", m.versions, m.aliases)
 	}
 }
@@ -156,7 +158,7 @@ func TestTrainingSample_RetryReusesRunsAndVersions(t *testing.T) {
 			t.Errorf("%d runs, want 3", len(env.mlflow.runs))
 		}
 		for _, run := range env.mlflow.runs {
-			if run.status != "FINISHED" || run.metrics != 2*trainingEpochs {
+			if run.status != "FINISHED" || run.metrics != 2*mlflow.TrainingEpochs {
 				t.Errorf("run %s: %s, %d metrics", run.name, run.status, run.metrics)
 			}
 		}
@@ -166,12 +168,12 @@ func TestTrainingSample_RetryReusesRunsAndVersions(t *testing.T) {
 		if ok, msg, _ := env.run(t, "add", SampleTraining); !ok {
 			t.Fatal(msg)
 		}
-		m := env.mlflow.models[trainingModel]
+		m := env.mlflow.models[mlflow.TrainingModel]
 		m.versions, m.aliases = m.versions[:1], map[string]string{}
 		if ok, msg, steps := env.run(t, "add", SampleTraining); !ok {
 			t.Fatalf("%s\n%s", msg, stepMessages(steps))
 		}
-		if len(m.versions) != 2 || m.aliases[trainingAlias] != "2" {
+		if len(m.versions) != 2 || m.aliases[mlflow.TrainingAlias] != "2" {
 			t.Errorf("versions %v, alias %v", m.versions, m.aliases)
 		}
 	})

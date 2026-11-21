@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strconv"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 )
 
 // Opt-in verification of the actual installed operator and public Quay builds.
@@ -34,13 +36,13 @@ func TestDashboardBuildDiscoveryLive(t *testing.T) {
 		w.Write(body)
 	}))
 	defer server.Close()
-	c := &Client{baseURL: server.URL, httpClient: server.Client(), ctx: context.Background()}
-	target, operator, err := loadDashboardOperator(c, true)
+	c := newTestClient(testClientOptions{BaseURL: server.URL, HTTPClient: server.Client(), Ctx: context.Background()})
+	target, operator, err := dashdev.LoadOperator(c, true)
 	if err != nil || operator == nil {
 		t.Fatalf("dashboard module operator: %+v %v", target, err)
 	}
-	t.Logf("dashboard module operator: %s (%s)", operator.ref(), target.Operator.Via)
-	images, err := discoverDashboardImages(c, operator)
+	t.Logf("dashboard module operator: %s (%s)", operator.Ref(), target.Operator.Via)
+	images, err := dashdev.DiscoverImages(c, operator)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,12 +58,12 @@ func TestDashboardBuildDiscoveryLive(t *testing.T) {
 		go func(imageRepo, component string) {
 			// Both flavors of "latest main" must exist: the default RHOAI build
 			// (odh-stable) and the OpenShift CI build (main).
-			main, _, found, err := resolveDashboardBuildTags(context.Background(), imageRepo, dashboardBuildTags("main", 0, DashboardFlavorRHOAI)[:1])
+			main, _, found, err := dashdev.ResolveBuildTags(context.Background(), imageRepo, dashdev.BuildTags("main", 0, dashdev.FlavorRHOAI)[:1])
 			if err == nil && !found {
 				err = fmt.Errorf("odh-stable image missing")
 			}
 			if err == nil {
-				_, _, found, err = resolveDashboardBuildTags(context.Background(), imageRepo, dashboardBuildTags("main", 0, DashboardFlavorODH))
+				_, _, found, err = dashdev.ResolveBuildTags(context.Background(), imageRepo, dashdev.BuildTags("main", 0, dashdev.FlavorODH))
 				if err == nil && !found {
 					err = fmt.Errorf("main image missing")
 				}
@@ -70,7 +72,7 @@ func TestDashboardBuildDiscoveryLive(t *testing.T) {
 			if err == nil && pr != "" {
 				n, _ := strconv.Atoi(pr)
 				var tag string
-				_, tag, prFound, err = resolveDashboardBuildTags(context.Background(), imageRepo, dashboardBuildTags("pr", n, DashboardFlavorRHOAI))
+				_, tag, prFound, err = dashdev.ResolveBuildTags(context.Background(), imageRepo, dashdev.BuildTags("pr", n, dashdev.FlavorRHOAI))
 				if prFound {
 					component += " (" + tag + ")"
 				}

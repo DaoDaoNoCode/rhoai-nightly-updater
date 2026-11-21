@@ -5,6 +5,12 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // The writes the gitops profile's Update may make: the old InstallPlan and
@@ -13,11 +19,11 @@ import (
 func gitOpsProfileWriteAllowed(w string) bool {
 	method, path, _ := strings.Cut(w, " ")
 	switch {
-	case strings.HasPrefix(path, namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, "")) && method == http.MethodDelete:
+	case strings.HasPrefix(path, rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "installplans", rhoai.SubNS, "")) && method == http.MethodDelete:
 		return true
-	case strings.HasPrefix(path, namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "")) && method == http.MethodDelete:
+	case strings.HasPrefix(path, rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "")) && method == http.MethodDelete:
 		return true
-	case path == subscriptionPath() && (method == http.MethodPatch || method == http.MethodDelete):
+	case path == rhoai.SubscriptionPath() && (method == http.MethodPatch || method == http.MethodDelete):
 		return true
 	}
 	return false
@@ -39,7 +45,7 @@ func TestUpdateGitOpsProfile_InstallsWhatTheCatalogServes(t *testing.T) {
 			t.Errorf("the gitops profile wrote %s; writes: %v", w, writes)
 		}
 	}
-	subPath := subscriptionPath()
+	subPath := rhoai.SubscriptionPath()
 	if d, p := indexOf(writes, "DELETE "+subPath), indexOf(writes, "PATCH "+subPath); d < 0 || p != d+1 {
 		t.Fatalf("the Subscription was not deleted and recreated back to back: %v", writes)
 	}
@@ -65,7 +71,7 @@ func TestUpdateGitOpsProfile_RefusesAnUnmanagedCatalog(t *testing.T) {
 		"subscription only": func() *fakeOLM {
 			f := servesGitOpsPolicy(t, gitOpsFake(t))
 			f.catalog["metadata"] = map[string]any{}
-			f.argo = argoManagingAllBut(argoCatalogObject)
+			f.argo = argoManagingAllBut(argo.CatalogObject)
 			return f
 		},
 		"no catalog": func() *fakeOLM {
@@ -77,7 +83,7 @@ func TestUpdateGitOpsProfile_RefusesAnUnmanagedCatalog(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := setup()
 			result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-			if err != nil || result.Success || result.ErrorCode != ErrorCodeProfileGitOps || !strings.Contains(result.Message, "Nothing was changed") {
+			if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeProfileGitOps || !strings.Contains(result.Message, "Nothing was changed") {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}
 			if w := f.writes(); len(w) != 0 {
@@ -96,11 +102,11 @@ func TestUpdateGitOpsProfile_RefusesAMissingOperatorGroup(t *testing.T) {
 			f.operatorGrps = append(f.operatorGrps, map[string]any{"metadata": map[string]any{"name": "other"}, "spec": map[string]any{}})
 		},
 		"not global": func(f *fakeOLM) {
-			f.operatorGrps = []any{map[string]any{"metadata": map[string]any{"name": "rhods-operator"}, "spec": map[string]any{"targetNamespaces": []any{SubNS}}}}
+			f.operatorGrps = []any{map[string]any{"metadata": map[string]any{"name": "rhods-operator"}, "spec": map[string]any{"targetNamespaces": []any{rhoai.SubNS}}}}
 		},
 		"no namespace": func(f *fakeOLM) {
 			f.intercept = func(_ *fakeOLM, w http.ResponseWriter, r *http.Request) bool {
-				if r.URL.Path == "/api/v1/namespaces/"+SubNS {
+				if r.URL.Path == "/api/v1/namespaces/"+rhoai.SubNS {
 					notFound(w)
 					return true
 				}
@@ -126,9 +132,9 @@ func TestUpdateGitOpsProfile_RefusesAMissingOperatorGroup(t *testing.T) {
 // Deployments, which the profile cannot do.
 func TestUpdateGitOpsProfile_RefusesADashboardDevSession(t *testing.T) {
 	f := servesGitOpsPolicy(t, gitOpsFake(t))
-	f.dashboardOp = `{"metadata":{"uid":"u1","annotations":{"` + dashboardDevAnnotation + `":"{}"}},"spec":{"replicas":0}}`
+	f.dashboardOp = `{"metadata":{"uid":"u1","annotations":{"` + dashdev.SessionAnnotation + `":"{}"}},"spec":{"replicas":0}}`
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-	if err != nil || result.Success || result.ErrorCode != errorCodeDashboardDevActive || !strings.Contains(result.Message, "full profile") || !strings.Contains(result.Message, "scale Deployment "+fixtureAppsNS+"/"+fixtureOperatorName+" back up") {
+	if err != nil || result.Success || result.ErrorCode != operator.ErrorCodeDashboardDevActive || !strings.Contains(result.Message, "full profile") || !strings.Contains(result.Message, "scale Deployment "+fixtureAppsNS+"/"+fixtureOperatorName+" back up") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	if w := f.writes(); len(w) != 0 {
@@ -140,7 +146,7 @@ func TestUpdateGitOpsProfile_RefusesADashboardDevSession(t *testing.T) {
 func TestUpdateGitOpsProfile_RefusesAnotherImage(t *testing.T) {
 	f := servesGitOpsPolicy(t, gitOpsFake(t))
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
-	if err != nil || result.Success || result.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(result.Message, gitOpsImage) {
+	if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(result.Message, gitOpsImage) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	if w := f.writes(); len(w) != 0 {
@@ -150,9 +156,7 @@ func TestUpdateGitOpsProfile_RefusesAnotherImage(t *testing.T) {
 
 // The gitops profile's dry run makes no change and refuses what Update would.
 func TestUpdateDryRunGitOpsProfile(t *testing.T) {
-	orig := lookupTargetBundle
-	t.Cleanup(func() { lookupTargetBundle = orig })
-	lookupTargetBundle = func(*Client, string) (string, error) { return gitOpsCSV, nil }
+	t.Cleanup(operator.SetLookupTargetBundleForTest(func(*Client, string) (string, error) { return gitOpsCSV, nil }))
 
 	f := servesGitOpsPolicy(t, gitOpsFake(t))
 	result, err := UpdateDryRunGitOpsProfile(f.client(context.Background()), gitOpsImage)
@@ -164,7 +168,7 @@ func TestUpdateDryRunGitOpsProfile(t *testing.T) {
 	}
 
 	f = newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
-	if result, _ := UpdateDryRunGitOpsProfile(f.client(context.Background()), gitOpsImage); result.Success || result.ErrorCode != ErrorCodeProfileGitOps {
+	if result, _ := UpdateDryRunGitOpsProfile(f.client(context.Background()), gitOpsImage); result.Success || result.ErrorCode != kube.ErrorCodeProfileGitOps {
 		t.Fatalf("unmanaged catalog: %+v", result)
 	}
 	f = gitOpsFake(t)
@@ -173,7 +177,7 @@ func TestUpdateDryRunGitOpsProfile(t *testing.T) {
 		t.Fatalf("no OperatorGroup: %+v", result)
 	}
 	f = gitOpsFake(t)
-	if result, _ := UpdateDryRunGitOpsProfile(f.client(context.Background()), testNightlyImage); result.Success || result.ErrorCode != ErrorCodeGitOpsManaged {
+	if result, _ := UpdateDryRunGitOpsProfile(f.client(context.Background()), testNightlyImage); result.Success || result.ErrorCode != kube.ErrorCodeGitOpsManaged {
 		t.Fatalf("another image: %+v", result)
 	}
 	if w := f.writes(); len(w) != 0 {
@@ -203,7 +207,7 @@ func TestUpdateGitOpsProfile_RestoreStaysInsideTheProfile(t *testing.T) {
 	if f.sub == nil {
 		t.Fatal("the Subscription was not restored")
 	}
-	if ann, _ := f.sub["metadata"].(map[string]any)["annotations"].(map[string]any); ann[argoTrackingAnnotation] == nil {
+	if ann, _ := f.sub["metadata"].(map[string]any)["annotations"].(map[string]any); ann[argo.TrackingAnnotation] == nil {
 		t.Fatalf("the restored Subscription lost Argo CD's tracking: %v", f.sub["metadata"])
 	}
 }
@@ -234,12 +238,12 @@ func TestUpdateGitOpsProfile_RefusesWhatThePolicyWouldRefuse(t *testing.T) {
 		// redhat-operators, so the restore could not re-apply it.
 		"catalog only, Subscription on redhat-operators": func(f *fakeOLM) {
 			f.sub["metadata"].(map[string]any)["annotations"] = map[string]any{}
-			f.argo = argoManagingAllBut(argoSubscriptionObject)
+			f.argo = argoManagingAllBut(argo.SubscriptionObject)
 			f.sub["spec"].(map[string]any)["source"] = "redhat-operators"
 		},
 		"another sourceNamespace": func(f *fakeOLM) {
 			f.sub["metadata"].(map[string]any)["annotations"] = map[string]any{}
-			f.argo = argoManagingAllBut(argoSubscriptionObject)
+			f.argo = argoManagingAllBut(argo.SubscriptionObject)
 			f.sub["spec"].(map[string]any)["sourceNamespace"] = "other-catalogs"
 		},
 	} {
@@ -247,7 +251,7 @@ func TestUpdateGitOpsProfile_RefusesWhatThePolicyWouldRefuse(t *testing.T) {
 			f := servesGitOpsPolicy(t, gitOpsFake(t))
 			setup(f)
 			result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-			if err != nil || result.Success || result.ErrorCode != ErrorCodeProfileGitOps || !strings.Contains(result.Message, "Nothing was changed") {
+			if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeProfileGitOps || !strings.Contains(result.Message, "Nothing was changed") {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}
 			if w := f.writes(); len(w) != 0 {
@@ -290,7 +294,7 @@ func TestUpdateGitOpsProfile_SubscriptionChangesBeforeTheDeletions(t *testing.T)
 		return false
 	}
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-	if err != nil || result.Success || result.ErrorCode != ErrorCodeProfileGitOps || !strings.Contains(result.Message, "Nothing was changed") || !changed {
+	if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeProfileGitOps || !strings.Contains(result.Message, "Nothing was changed") || !changed {
 		t.Fatalf("result=%+v err=%v changed=%v", result, err, changed)
 	}
 	if w := f.writes(); len(w) != 0 {
@@ -310,7 +314,7 @@ func TestUpdateGitOpsProfile_SubscriptionChangesAfterTheCSVDeletion(t *testing.T
 		return false
 	}
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-	if err != nil || result.Success || result.ErrorCode != ErrorCodeProfileGitOps || !strings.Contains(result.Message, "left as Git sets it") {
+	if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeProfileGitOps || !strings.Contains(result.Message, "left as Git sets it") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	for _, w := range f.writes() {
@@ -325,7 +329,7 @@ func TestUpdateGitOpsProfile_SubscriptionChangesAfterTheCSVDeletion(t *testing.T
 // (it would otherwise read the replacement's UID and delete it).
 func TestUpdateGitOpsProfile_SubscriptionReplacedBeforeItsDeletion(t *testing.T) {
 	f := servesGitOpsPolicy(t, gitOpsFake(t))
-	subPath := subscriptionPath()
+	subPath := rhoai.SubscriptionPath()
 	f.intercept = func(f *fakeOLM, _ http.ResponseWriter, r *http.Request) bool {
 		if r.Method == http.MethodDelete && r.URL.Path == subPath && f.sub != nil {
 			f.sub["metadata"].(map[string]any)["uid"] = "uid-sub-replacement"
@@ -356,13 +360,13 @@ func TestUpdateGitOpsProfile_PolicyChangesWhileUpdateRuns(t *testing.T) {
 	f.intercept = func(f *fakeOLM, _ http.ResponseWriter, r *http.Request) bool {
 		if !changed && r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/installplans") {
 			changed = true
-			p := f.admission[clusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicies", testGitOpsPolicyName)]
+			p := f.admission[rhoai.ClusterPath("admissionregistration.k8s.io/v1", "validatingadmissionpolicies", testGitOpsPolicyName)]
 			p["spec"].(map[string]any)["variables"] = []any{map[string]any{"name": "allowedEnv", "expression": "'OTHER'.split(',')"}}
 		}
 		return false
 	}
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
-	if err != nil || result.Success || result.ErrorCode != ErrorCodeProfileGitOps || !strings.Contains(result.Message, "Argo CD may be rolling out") || !strings.Contains(result.Message, "Nothing was changed") || !changed {
+	if err != nil || result.Success || result.ErrorCode != kube.ErrorCodeProfileGitOps || !strings.Contains(result.Message, "Argo CD may be rolling out") || !strings.Contains(result.Message, "Nothing was changed") || !changed {
 		t.Fatalf("result=%+v err=%v changed=%v", result, err, changed)
 	}
 	if w := f.writes(); len(w) != 0 {

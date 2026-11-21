@@ -1,0 +1,53 @@
+package cluster
+
+import (
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
+)
+
+// The S3 storage, its migration and the pipeline servers
+// (internal/storage), under the names pkg/api and this package use.
+
+// MigrateOptions is storage.MigrateOptions.
+type MigrateOptions = storage.MigrateOptions
+
+// S3Login is storage.S3Login.
+type S3Login = storage.S3Login
+
+// S3AdminLoginUnavailable is storage.S3AdminLoginUnavailable.
+type S3AdminLoginUnavailable = storage.S3AdminLoginUnavailable
+
+// MigrateS3Storage is storage.Migrate.
+func MigrateS3Storage(c *Client, opts MigrateOptions, onStep func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+	return storage.Migrate(c, opts, onStep)
+}
+
+// SetupS3Storage is storage.SetupS3.
+func SetupS3Storage(c *Client) (*types.OperationResponse, error) {
+	return storage.SetupS3(c)
+}
+
+// TeardownS3Storage is storage.TeardownS3.
+func TeardownS3Storage(c *Client, opts types.S3TeardownRequest) (*types.OperationResponse, error) {
+	return storage.TeardownS3(c, opts)
+}
+
+// S3AdminLogin is storage.S3AdminLogin.
+func S3AdminLogin(c *Client) (S3Login, error) {
+	return storage.S3AdminLogin(c)
+}
+
+// SetupPipelineServer is storage.SetupPipelineServer.
+func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, error) {
+	return storage.SetupPipelineServer(c, project)
+}
+
+// RecreatePipelineServer is storage.RecreatePipelineServer.
+func RecreatePipelineServer(c *Client, project string) (*types.OperationResponse, error) {
+	return storage.RecreatePipelineServer(c, project)
+}
+
+// TeardownPipelineServer is storage.TeardownPipelineServer.
+func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse, error) {
+	return storage.TeardownPipelineServer(c, project)
+}

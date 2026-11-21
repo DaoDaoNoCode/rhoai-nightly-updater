@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -58,7 +59,7 @@ func TestCompletedOperationRoundTrip(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: t.Context()}
+	c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: t.Context()})
 
 	done := &types.CompletedOperation{ID: "op1", Type: "update", Label: "Update to nightly", User: "alice",
 		Target: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6", StartedAt: "2026-10-05T10:00:00Z", FinishedAt: "2026-10-05T10:05:00Z", Success: true, Message: "done"}
@@ -80,7 +81,7 @@ func TestCompletedOperationRoundTrip(t *testing.T) {
 	}
 
 	mu.Lock()
-	data[lastCompletedKey] = "{not json"
+	data[record.LastCompletedKey] = "{not json"
 	mu.Unlock()
 	if marker, last, err := GetOperationState(c); err != nil || marker == nil || last != nil {
 		t.Fatalf("unreadable lastCompleted: marker %+v last %+v err %v", marker, last, err)

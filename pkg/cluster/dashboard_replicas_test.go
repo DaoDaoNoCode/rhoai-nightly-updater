@@ -4,6 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 )
 
 // dashboardStateWith reads the dashboard state of a rhods-dashboard
@@ -69,37 +73,37 @@ func TestDeploymentChecksKeepTheirQuestions(t *testing.T) {
 		{deployment(1, 0), false},
 	} {
 		c, cleanup := newMockClient(map[string]mockResponse{"/apis/apps/v1/namespaces/ns/deployments/op": {body: tc.body}})
-		if ok, why := deploymentReady(c, "ns", "op"); ok != tc.want {
+		if ok, why := dsc.DeploymentReady(c, "ns", "op"); ok != tc.want {
 			t.Errorf("deploymentReady(%s) = %v %q", tc.body, ok, why)
 		}
 		cleanup()
 	}
 
 	two := 2
-	var d dashboardDeployment
+	var d dashdev.Deployment
 	d.Spec.Replicas = &two
 	d.Metadata.Generation, d.Status.ObservedGeneration = 3, 3
 	d.Status.Replicas, d.Status.UpdatedReplicas, d.Status.ReadyReplicas = 2, 2, 2
-	if !dashboardDeploymentReady(d) {
+	if !dashdev.DeploymentReady(d) {
 		t.Error("2 of 2 updated and ready is not ready")
 	}
 	d.Status.ReadyReplicas = 1
-	if dashboardDeploymentReady(d) {
+	if dashdev.DeploymentReady(d) {
 		t.Error("1 of 2 ready is ready")
 	}
 	d.Status.ReadyReplicas, d.Status.ObservedGeneration = 2, 2
-	if dashboardDeploymentReady(d) {
+	if dashdev.DeploymentReady(d) {
 		t.Error("a template the controller has not seen is ready")
 	}
 
-	var s s3DeploymentSpec
+	var s storage.S3DeploymentSpec
 	s.Metadata.Generation, s.Status.ObservedGeneration = 2, 2
 	s.Status.UpdatedReplicas, s.Status.ReadyReplicas = 1, 1
-	if !s.rolledOut() {
+	if !s.RolledOut() {
 		t.Error("an updated, ready S3 server is not rolled out")
 	}
 	s.Status.ObservedGeneration = 1
-	if s.rolledOut() {
+	if s.RolledOut() {
 		t.Error("an unobserved template is rolled out")
 	}
 }

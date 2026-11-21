@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 )
 
 // CRI-O (containers/image) decodes "auth" with base64.StdEncoding only, so an
@@ -27,7 +29,7 @@ func TestCreatePullSecret_StoresPaddedAuth(t *testing.T) {
 			if len(w) != 1 {
 				t.Fatalf("expected one write, got %d", len(w))
 			}
-			got := authFromEntry(writtenAuths(t, w[0])["quay.io/rhoai"])
+			got := registry.AuthFromEntry(writtenAuths(t, w[0])["quay.io/rhoai"])
 			if got != tc.want {
 				t.Fatalf("stored auth = %q, want %q", got, tc.want)
 			}

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -66,7 +68,7 @@ func statusWrite(f *resourceFake) func(dsc map[string]any) {
 }
 
 func rayState(f *resourceFake) string {
-	s, _ := lookupState(comps(f.get(dscV3Path)), []string{"ray"})
+	s, _ := components.LookupState(comps(f.get(dscV3Path)), []string{"ray"})
 	return s
 }
 
@@ -269,8 +271,8 @@ func TestDSCWriteKeepsTheRefusalWhenTheStatusMovesMeanwhile(t *testing.T) {
 			if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, invalid) || strings.Count(res.Message, "Nothing was changed") != 1 {
 				t.Fatalf("result = %+v", res)
 			}
-			if _, real := patchesTo(f); len(real) != dscWriteAttempts {
-				t.Fatalf("real patches = %d, want %d", len(real), dscWriteAttempts)
+			if _, real := patchesTo(f); len(real) != dsc.WriteAttempts {
+				t.Fatalf("real patches = %d, want %d", len(real), dsc.WriteAttempts)
 			}
 			if rayState(f) != "Managed" {
 				t.Fatalf("ray = %q", rayState(f))
@@ -289,8 +291,8 @@ func TestDSCWriteGivesUpWhenTheDSCKeepsChanging(t *testing.T) {
 			if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "changed each time") || !strings.Contains(res.Message, "Nothing was changed") {
 				t.Fatalf("result = %+v", res)
 			}
-			if _, real := patchesTo(f); len(real) != dscWriteAttempts {
-				t.Fatalf("real patches = %d, want %d", len(real), dscWriteAttempts)
+			if _, real := patchesTo(f); len(real) != dsc.WriteAttempts {
+				t.Fatalf("real patches = %d, want %d", len(real), dsc.WriteAttempts)
 			}
 			if rayState(f) != "Managed" {
 				t.Fatalf("ray = %q", rayState(f))
@@ -338,7 +340,7 @@ func TestDSCPlannedWritesRetryAfterAStatusWrite(t *testing.T) {
 	if _, real := patchesTo(f); len(real) != 2 {
 		t.Fatalf("real patches = %d", len(real))
 	}
-	if s, _ := lookupState(comps(f.get(dscV3Path)), []string{"databaseservice"}); s != "Removed" {
+	if s, _ := components.LookupState(comps(f.get(dscV3Path)), []string{"databaseservice"}); s != "Removed" {
 		t.Fatalf("databaseservice = %q", s)
 	}
 }

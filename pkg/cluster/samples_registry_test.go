@@ -3,6 +3,8 @@ package cluster
 import (
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 )
 
 func TestMCPSample_AddRemove(t *testing.T) {
@@ -11,8 +13,8 @@ func TestMCPSample_AddRemove(t *testing.T) {
 	if !ok {
 		t.Fatalf("%s\n%s", msg, stepMessages(steps))
 	}
-	srv := env.mlflow.mcp[mcpSampleName]
-	if srv == nil || srv.versions[mcpSampleVersion] != "active" || srv.endpoints != 1 || srv.tags[sampleMarkerKey] != SampleMCPServer || srv.description != mcpSampleDescription {
+	srv := env.mlflow.mcp[mlflow.MCPSampleName]
+	if srv == nil || srv.versions[mlflow.MCPSampleVersion] != "active" || srv.endpoints != 1 || srv.tags[mlflow.SampleMarkerKey] != SampleMCPServer || srv.description != mlflow.MCPSampleDescription {
 		t.Fatalf("server %+v", srv)
 	}
 	if s := env.status(t)[SampleMCPServer]; s.State != "present" || s.Actions[0] != "remove" {
@@ -27,11 +29,11 @@ func TestMCPSample_AddRemove(t *testing.T) {
 	if ok, msg, steps := env.run(t, "remove", SampleMCPServer); !ok {
 		t.Fatalf("%s\n%s", msg, stepMessages(steps))
 	}
-	want := []string{"PATCH /api/3.0/mlflow/mcp-servers/" + mcpSampleName + "/versions/" + mcpSampleVersion, "DELETE /api/3.0/mlflow/mcp-servers/" + mcpSampleName}
+	want := []string{"PATCH /api/3.0/mlflow/mcp-servers/" + mlflow.MCPSampleName + "/versions/" + mlflow.MCPSampleVersion, "DELETE /api/3.0/mlflow/mcp-servers/" + mlflow.MCPSampleName}
 	if got := env.mlflow.writes(n); strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("remove writes %v, want deprecate then delete", got)
 	}
-	if env.mlflow.mcp[mcpSampleName] != nil {
+	if env.mlflow.mcp[mlflow.MCPSampleName] != nil {
 		t.Error("server not deleted")
 	}
 	if ok, msg, _ := env.run(t, "remove", SampleMCPServer); !ok || !strings.Contains(msg, "removed") {
@@ -44,24 +46,24 @@ func TestMCPSample_AddRemove(t *testing.T) {
 // reporting success with the entry still there.
 func TestRegistrySamples_BareNotFoundIsAnError(t *testing.T) {
 	env := newSamplesEnv(t)
-	if ok, msg, _ := env.run(t, "add", SampleMCPServer, SampleSkill); !ok {
+	if ok, msg, _ := env.run(t, "add", SampleMCPServer, mlflow.SampleSkill); !ok {
 		t.Fatal(msg)
 	}
-	mcpGet := "GET /api/3.0/mlflow/mcp-servers/" + mcpSampleName
-	skillGet := "GET /api/3.0/mlflow/skills/" + skillSampleName
+	mcpGet := "GET /api/3.0/mlflow/mcp-servers/" + mlflow.MCPSampleName
+	skillGet := "GET /api/3.0/mlflow/skills/" + mlflow.SkillSampleName
 	env.mlflow.bareNext[mcpGet], env.mlflow.bareNext[skillGet] = 404, 404
 	got := env.status(t)
-	for _, id := range []string{SampleMCPServer, SampleSkill} {
+	for _, id := range []string{SampleMCPServer, mlflow.SampleSkill} {
 		if got[id].State != "unknown" {
 			t.Errorf("%s status = %+v, want unknown", id, got[id])
 		}
 	}
 	env.mlflow.bareNext[mcpGet], env.mlflow.bareNext[skillGet] = 404, 404
-	ok, msg, steps := env.run(t, "remove", SampleMCPServer, SampleSkill)
+	ok, msg, steps := env.run(t, "remove", SampleMCPServer, mlflow.SampleSkill)
 	if ok || strings.Contains(stepMessages(steps), "nothing to remove") {
 		t.Errorf("remove succeeded on a bare 404: %s\n%s", msg, stepMessages(steps))
 	}
-	if env.mlflow.mcp[mcpSampleName] == nil || env.mlflow.skills[skillSampleName] == nil {
+	if env.mlflow.mcp[mlflow.MCPSampleName] == nil || env.mlflow.skills[mlflow.SkillSampleName] == nil {
 		t.Error("an entry was deleted")
 	}
 }
@@ -85,27 +87,27 @@ func TestRegistrySamples_ParentCreatedMeanwhileIsNotClaimed(t *testing.T) {
 				if method != "POST" || !strings.HasSuffix(path, "/versions") {
 					return
 				}
-				if strings.Contains(path, "/mcp-servers/") && env.mlflow.mcp[mcpSampleName] == nil {
-					env.mlflow.mcp[mcpSampleName] = tc.mcp
+				if strings.Contains(path, "/mcp-servers/") && env.mlflow.mcp[mlflow.MCPSampleName] == nil {
+					env.mlflow.mcp[mlflow.MCPSampleName] = tc.mcp
 				}
-				if strings.Contains(path, "/skills/") && env.mlflow.skills[skillSampleName] == nil {
-					env.mlflow.skills[skillSampleName] = tc.skill
+				if strings.Contains(path, "/skills/") && env.mlflow.skills[mlflow.SkillSampleName] == nil {
+					env.mlflow.skills[mlflow.SkillSampleName] = tc.skill
 				}
 			}
 			theirMCP := len(tc.mcp.versions)
 			theirSkill := tc.skill.versions
-			ok, msg, steps := env.run(t, "add", SampleMCPServer, SampleSkill)
+			ok, msg, steps := env.run(t, "add", SampleMCPServer, mlflow.SampleSkill)
 			if ok || !strings.Contains(msg, "not_managed") || !strings.Contains(stepMessages(steps), "Someone else created") {
 				t.Fatalf("%s\n%s", msg, stepMessages(steps))
 			}
-			srv, sk := env.mlflow.mcp[mcpSampleName], env.mlflow.skills[skillSampleName]
-			if srv == nil || srv.tags[sampleMarkerKey] != "" || len(srv.versions) != theirMCP {
+			srv, sk := env.mlflow.mcp[mlflow.MCPSampleName], env.mlflow.skills[mlflow.SkillSampleName]
+			if srv == nil || srv.tags[mlflow.SampleMarkerKey] != "" || len(srv.versions) != theirMCP {
 				t.Errorf("their MCP server was changed: %+v", srv)
 			}
-			if _, left := srv.versions[mcpSampleVersion]; left {
+			if _, left := srv.versions[mlflow.MCPSampleVersion]; left {
 				t.Error("the tool's MCP version was left in their server")
 			}
-			if sk == nil || sk.tags[sampleMarkerKey] != "" || sk.versions-len(sk.deleted) != theirSkill {
+			if sk == nil || sk.tags[mlflow.SampleMarkerKey] != "" || sk.versions-len(sk.deleted) != theirSkill {
 				t.Errorf("their skill was changed: %+v", sk)
 			}
 		})
@@ -114,7 +116,7 @@ func TestRegistrySamples_ParentCreatedMeanwhileIsNotClaimed(t *testing.T) {
 
 func TestMCPSample_PartialIsCompleted(t *testing.T) {
 	env := newSamplesEnv(t)
-	env.mlflow.mcp[mcpSampleName] = &fakeMCP{tags: map[string]string{sampleMarkerKey: SampleMCPServer}, versions: map[string]string{mcpSampleVersion: "deprecated"}}
+	env.mlflow.mcp[mlflow.MCPSampleName] = &fakeMCP{tags: map[string]string{mlflow.SampleMarkerKey: SampleMCPServer}, versions: map[string]string{mlflow.MCPSampleVersion: "deprecated"}}
 	s := env.status(t)[SampleMCPServer]
 	if s.State != "partial" || len(s.Missing) != 2 {
 		t.Errorf("status %+v", s)
@@ -122,7 +124,7 @@ func TestMCPSample_PartialIsCompleted(t *testing.T) {
 	if ok, msg, _ := env.run(t, "add", SampleMCPServer); !ok {
 		t.Fatal(msg)
 	}
-	if srv := env.mlflow.mcp[mcpSampleName]; srv.versions[mcpSampleVersion] != "active" || srv.endpoints != 1 {
+	if srv := env.mlflow.mcp[mlflow.MCPSampleName]; srv.versions[mlflow.MCPSampleVersion] != "active" || srv.endpoints != 1 {
 		t.Errorf("server %+v", srv)
 	}
 }
@@ -131,22 +133,22 @@ func TestMCPSample_PartialIsCompleted(t *testing.T) {
 // entry the tool made stays behind.
 func TestMCPSample_UnmarkedServerIsRolledBack(t *testing.T) {
 	env := newSamplesEnv(t)
-	env.mlflow.failNext["POST /api/3.0/mlflow/mcp-servers/"+mcpSampleName+"/tags"] = 500
+	env.mlflow.failNext["POST /api/3.0/mlflow/mcp-servers/"+mlflow.MCPSampleName+"/tags"] = 500
 	if ok, msg, _ := env.run(t, "add", SampleMCPServer); ok {
 		t.Fatalf("got %s", msg)
 	}
-	if env.mlflow.mcp[mcpSampleName] != nil {
+	if env.mlflow.mcp[mlflow.MCPSampleName] != nil {
 		t.Error("an unmarked server stayed behind")
 	}
 }
 
 func TestRegistrySamples_ForeignAndDenied(t *testing.T) {
 	env := newSamplesEnv(t)
-	env.mlflow.mcp[mcpSampleName] = &fakeMCP{tags: map[string]string{}, versions: map[string]string{mcpSampleVersion: "active"}, endpoints: 1}
-	env.mlflow.skills[skillSampleName] = &fakeSkill{tags: map[string]string{}, versions: 1}
+	env.mlflow.mcp[mlflow.MCPSampleName] = &fakeMCP{tags: map[string]string{}, versions: map[string]string{mlflow.MCPSampleVersion: "active"}, endpoints: 1}
+	env.mlflow.skills[mlflow.SkillSampleName] = &fakeSkill{tags: map[string]string{}, versions: 1}
 	for _, action := range []string{"add", "remove"} {
 		n := len(env.mlflow.requests)
-		ok, msg, _ := env.run(t, action, SampleMCPServer, SampleSkill)
+		ok, msg, _ := env.run(t, action, SampleMCPServer, mlflow.SampleSkill)
 		if ok || !strings.Contains(msg, "not_managed") || len(env.mlflow.writes(n)) != 0 {
 			t.Errorf("%s: %s writes %v", action, msg, env.mlflow.writes(n))
 		}
@@ -154,7 +156,7 @@ func TestRegistrySamples_ForeignAndDenied(t *testing.T) {
 
 	env2 := newSamplesEnv(t)
 	env2.mlflow.userAllow = func(resource, verb, ns, name string) bool { return verb != "update" }
-	ok, msg, steps := env2.run(t, "add", SampleMCPServer, SampleSkill)
+	ok, msg, steps := env2.run(t, "add", SampleMCPServer, mlflow.SampleSkill)
 	if ok || !strings.Contains(msg, "forbidden") || strings.Count(stepMessages(steps), "403 PERMISSION_DENIED") != 2 {
 		t.Errorf("%s\n%s", msg, stepMessages(steps))
 	}
@@ -162,36 +164,36 @@ func TestRegistrySamples_ForeignAndDenied(t *testing.T) {
 
 func TestSkillSample_AddRemoveAndMissingAPI(t *testing.T) {
 	env := newSamplesEnv(t)
-	if ok, msg, steps := env.run(t, "add", SampleSkill); !ok {
+	if ok, msg, steps := env.run(t, "add", mlflow.SampleSkill); !ok {
 		t.Fatalf("%s\n%s", msg, stepMessages(steps))
 	}
-	sk := env.mlflow.skills[skillSampleName]
-	if sk == nil || sk.versions != 1 || sk.tags[sampleMarkerKey] != SampleSkill || sk.source["ref"] != skillSampleRef || sk.source["subpath"] != skillSampleSubpath {
+	sk := env.mlflow.skills[mlflow.SkillSampleName]
+	if sk == nil || sk.versions != 1 || sk.tags[mlflow.SampleMarkerKey] != mlflow.SampleSkill || sk.source["ref"] != mlflow.SkillSampleRef || sk.source["subpath"] != mlflow.SkillSampleSubpath {
 		t.Fatalf("skill %+v", sk)
 	}
-	if s := env.status(t)[SampleSkill]; s.State != "present" {
+	if s := env.status(t)[mlflow.SampleSkill]; s.State != "present" {
 		t.Errorf("status %+v", s)
 	}
 	n := len(env.mlflow.requests)
-	if ok, _, _ := env.run(t, "add", SampleSkill); !ok || len(env.mlflow.writes(n)) != 0 {
+	if ok, _, _ := env.run(t, "add", mlflow.SampleSkill); !ok || len(env.mlflow.writes(n)) != 0 {
 		t.Errorf("second add wrote %v", env.mlflow.writes(n))
 	}
-	if ok, msg, _ := env.run(t, "remove", SampleSkill); !ok || env.mlflow.skills[skillSampleName] != nil {
+	if ok, msg, _ := env.run(t, "remove", mlflow.SampleSkill); !ok || env.mlflow.skills[mlflow.SkillSampleName] != nil {
 		t.Errorf("remove: %s", msg)
 	}
 
 	env.mlflow.noSkills = true
-	if ok, msg, steps := env.run(t, "add", SampleSkill); ok || !strings.Contains(stepMessages(steps), "no Skill Registry") {
+	if ok, msg, steps := env.run(t, "add", mlflow.SampleSkill); ok || !strings.Contains(stepMessages(steps), "no Skill Registry") {
 		t.Errorf("add without the API: %s\n%s", msg, stepMessages(steps))
 	}
-	if ok, msg, _ := env.run(t, "remove", SampleSkill); !ok {
+	if ok, msg, _ := env.run(t, "remove", mlflow.SampleSkill); !ok {
 		t.Errorf("remove without the API: %s", msg)
 	}
 }
 
 func TestMLflowSamples_AddAllThenRemoveAll(t *testing.T) {
 	env := newSamplesEnv(t)
-	ok, msg, steps := env.run(t, "add", SampleSkill, SampleMCPServer, SampleTraining, SampleGenAIDemo)
+	ok, msg, steps := env.run(t, "add", mlflow.SampleSkill, SampleMCPServer, SampleTraining, SampleGenAIDemo)
 	if !ok {
 		t.Fatalf("%s\n%s", msg, stepMessages(steps))
 	}
@@ -209,11 +211,11 @@ func TestMLflowSamples_AddAllThenRemoveAll(t *testing.T) {
 			t.Errorf("%s = %+v", id, s)
 		}
 	}
-	if ok, msg, _ := env.run(t, "remove", SampleTraining, SampleMCPServer, SampleSkill); !ok {
+	if ok, msg, _ := env.run(t, "remove", SampleTraining, SampleMCPServer, mlflow.SampleSkill); !ok {
 		t.Fatal(msg)
 	}
 	st := env.status(t)
-	if st[SampleGenAIDemo].State != "present" || st[SampleTraining].State != "removed" || st[SampleMCPServer].State != "absent" || st[SampleSkill].State != "absent" {
+	if st[SampleGenAIDemo].State != "present" || st[SampleTraining].State != "removed" || st[SampleMCPServer].State != "absent" || st[mlflow.SampleSkill].State != "absent" {
 		t.Errorf("after remove: %+v", st)
 	}
 }

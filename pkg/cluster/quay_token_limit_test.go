@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 )
 
 // endlessToken is a 64 MiB token response body that does not close its
@@ -38,7 +40,7 @@ func TestQuayTokenResponseIsBounded(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(body), Header: http.Header{}, Request: r}, nil
 	})}
-	_, err := fetchQuayToken(context.Background(), client, "", []string{quayFBCRepo})
+	_, err := registry.FetchQuayToken(context.Background(), client, "", []string{registry.FBCRepo})
 	if err == nil || !strings.Contains(err.Error(), "decoding auth response") {
 		t.Fatalf("err = %v", err)
 	}
@@ -49,7 +51,7 @@ func TestQuayTokenResponseIsBounded(t *testing.T) {
 	client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"token":"` + strings.Repeat("t", 3000) + `"}`)), Header: http.Header{}, Request: r}, nil
 	})
-	if tok, err := fetchQuayToken(context.Background(), client, "", []string{quayFBCRepo}); err != nil || len(tok) != 3000 {
+	if tok, err := registry.FetchQuayToken(context.Background(), client, "", []string{registry.FBCRepo}); err != nil || len(tok) != 3000 {
 		t.Fatalf("token %d bytes, %v", len(tok), err)
 	}
 }

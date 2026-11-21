@@ -10,6 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -53,9 +57,9 @@ func (a *statusAPI) handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := r.URL.Path
-	csvPrefix := namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "")
+	csvPrefix := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "")
 	switch {
-	case p == namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName):
+	case p == rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName):
 		if a.sub == "" {
 			notFound()
 			return
@@ -70,11 +74,11 @@ func (a *statusAPI) handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_, _ = fmt.Fprint(w, body)
-	case p == namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, ""):
+	case p == rhoai.NamespacedPath("packages.operators.coreos.com/v1", "packagemanifests", rhoai.CatalogNS, ""):
 		_, _ = fmt.Fprint(w, stableManifestJSON("redhat-operators", "stable-3.5", []map[string]any{
 			{"name": "stable-3.5", "currentCSV": "rhods-operator.v3.5.0", "currentCSVDesc": map[string]string{"version": "3.5.0"}},
 		}))
-	case p == namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName):
+	case p == rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName):
 		if a.csImage == "" {
 			notFound()
 			return
@@ -94,7 +98,7 @@ func (a *statusAPI) handler(w http.ResponseWriter, r *http.Request) {
 		_, _ = fmt.Fprintf(w, `{"data":{".dockerconfigjson":%q}}`, cfg)
 	case strings.HasSuffix(p, "/datascienceclusters"):
 		_, _ = fmt.Fprint(w, `{"items":[{"metadata":{"name":"default-dsc"}}]}`)
-	case strings.HasSuffix(p, "/configmaps/"+snapshotConfigMapName) && a.snapshot != "":
+	case strings.HasSuffix(p, "/configmaps/"+record.SnapshotConfigMapName) && a.snapshot != "":
 		_, _ = fmt.Fprint(w, a.snapshot)
 	case strings.HasSuffix(p, "/configmaps/rhoai-updater-activity"):
 		_, _ = fmt.Fprint(w, `{"data":{}}`)
@@ -113,11 +117,11 @@ func newStatusAPI(t *testing.T, a *statusAPI) *Client {
 	t.Cleanup(srv.Close)
 	stableTargetCache.Purge()
 	consoleURLCache.Purge()
-	controlPlaneCache.Purge()
+	rhoai.ControlPlaneCache.Purge()
 	t.Cleanup(stableTargetCache.Purge)
 	t.Cleanup(consoleURLCache.Purge)
-	t.Cleanup(controlPlaneCache.Purge)
-	return &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background(), username: "tester"}
+	t.Cleanup(rhoai.ControlPlaneCache.Purge)
+	return newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background(), Username: "tester"})
 }
 
 const csv360 = `{"metadata":{"name":"rhods-operator.3.6.0"},"spec":{"version":"3.6.0","displayName":"Red Hat OpenShift AI"},"status":{"phase":"Succeeded"}}`
@@ -147,14 +151,14 @@ func TestGetStatus_ReadsInstalledCSVByNameAndCachesStableTarget(t *testing.T) {
 			t.Fatalf("errors %v", status.Errors)
 		}
 	}
-	csvList := namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "")
+	csvList := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "")
 	if a.count(csvList) != 0 {
 		t.Fatalf("the CSV list must not be read when the Subscription names the CSV")
 	}
-	if n := a.count(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)); n != 3 {
+	if n := a.count(rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName)); n != 3 {
 		t.Fatalf("subscription read %d times for 3 polls, want 3 (no duplicate)", n)
 	}
-	if n := a.count(namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, "")); n != 1 {
+	if n := a.count(rhoai.NamespacedPath("packages.operators.coreos.com/v1", "packagemanifests", rhoai.CatalogNS, "")); n != 1 {
 		t.Fatalf("PackageManifest read %d times for 3 polls, want 1", n)
 	}
 	if n := a.count("/apis/config.openshift.io/v1/consoles/cluster"); n != 1 {
@@ -175,7 +179,7 @@ func TestGetStatus_FreshClusterWithoutSubscription(t *testing.T) {
 	if status.Subscription.State != "Not Installed" || status.CSV.Phase != "Not Found" || status.Nightly != nil || len(status.Errors) != 0 {
 		t.Fatalf("status %+v", status)
 	}
-	if q := a.queries[namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "")]; len(q) != 1 || !strings.Contains(q[0], "labelSelector=%21olm.copiedFrom") {
+	if q := a.queries[rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "")]; len(q) != 1 || !strings.Contains(q[0], "labelSelector=%21olm.copiedFrom") {
 		t.Fatalf("CSV list should exclude copied CSVs, queries %v", q)
 	}
 }
@@ -184,7 +188,7 @@ func TestGetStatus_StableDiscoveryErrorIsNotCached(t *testing.T) {
 	t.Setenv("STABLE_SOURCE", "redhat-operators")
 	t.Setenv("STABLE_CHANNEL", "")
 	installFakeRegistry(t, newFakeRegistry())
-	pm := namespacedPath("packages.operators.coreos.com/v1", "packagemanifests", CatalogNS, "")
+	pm := rhoai.NamespacedPath("packages.operators.coreos.com/v1", "packagemanifests", rhoai.CatalogNS, "")
 	a := &statusAPI{csvList: `{"items":[]}`, failPath: map[string]int{pm: 503}}
 	c := newStatusAPI(t, a)
 	for range 2 {
@@ -203,7 +207,7 @@ func TestGetStatus_StableDiscoveryErrorIsNotCached(t *testing.T) {
 }
 
 func TestCSVForInstalledName(t *testing.T) {
-	csvPath := namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "")
+	csvPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "")
 	cases := []struct {
 		name      string
 		installed string
@@ -227,7 +231,7 @@ func TestCSVForInstalledName(t *testing.T) {
 				a.failPath[csvPath+"/"+tc.installed] = tc.failName
 			}
 			c := newStatusAPI(t, a)
-			got, err := csvForInstalledName(c, tc.installed)
+			got, err := rhoai.CSVForInstalledName(c, tc.installed)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("err %v, want %q", err, tc.wantErr)
@@ -242,8 +246,8 @@ func TestCSVForInstalledName(t *testing.T) {
 }
 
 func TestGetNightlyStatus(t *testing.T) {
-	nightlySub := types.SubscriptionInfo{Source: CatalogName}
-	installedImg := quayImage + ":rhoai-3.6@" + digestOf(1)
+	nightlySub := types.SubscriptionInfo{Source: rhoai.CatalogName}
+	installedImg := registry.FBCImage + ":rhoai-3.6@" + digestOf(1)
 	cases := []struct {
 		name       string
 		sub        types.SubscriptionInfo
@@ -257,7 +261,7 @@ func TestGetNightlyStatus(t *testing.T) {
 		{name: "no catalog source", sub: nightlySub, wantNil: true},
 		{name: "up to date", sub: nightlySub, cs: types.CatalogSourceInfo{Exists: true, Image: installedImg}, tagDigest: digestOf(1), wantUpdate: new(false)},
 		{name: "update available", sub: nightlySub, cs: types.CatalogSourceInfo{Exists: true, Image: installedImg}, tagDigest: digestOf(2), wantUpdate: new(true)},
-		{name: "tag-only install: no comparison", sub: nightlySub, cs: types.CatalogSourceInfo{Exists: true, Image: quayImage + ":rhoai-3.6"}, tagDigest: digestOf(2)},
+		{name: "tag-only install: no comparison", sub: nightlySub, cs: types.CatalogSourceInfo{Exists: true, Image: registry.FBCImage + ":rhoai-3.6"}, tagDigest: digestOf(2)},
 		{name: "quay lookup fails", sub: nightlySub, cs: types.CatalogSourceInfo{Exists: true, Image: installedImg}, wantError: true},
 		{name: "custom catalog image", sub: nightlySub, cs: types.CatalogSourceInfo{Exists: true, Image: "quay.io/rhoai/rhoai-fbc-fragment@" + digestOf(3)}},
 	}
@@ -270,7 +274,7 @@ func TestGetNightlyStatus(t *testing.T) {
 			f.labels[digestOf(1)] = map[string]string{"build-date": "2026-10-01"}
 			f.labels[digestOf(2)] = map[string]string{"build-date": "2026-10-05"}
 			installFakeRegistry(t, f)
-			got := getNightlyStatus(context.Background(), "auth", tc.sub, tc.cs)
+			got := registry.NightlyStatus(context.Background(), "auth", tc.sub, tc.cs)
 			if tc.wantNil {
 				if got != nil {
 					t.Fatalf("want nil, got %+v", got)
@@ -302,10 +306,10 @@ func TestGetNightlyStatus_CachedPerInstalledImage(t *testing.T) {
 	f := newFakeRegistry()
 	f.tagDigests["rhoai-3.6"] = digestOf(2)
 	installFakeRegistry(t, f)
-	sub := types.SubscriptionInfo{Source: CatalogName}
-	old := types.CatalogSourceInfo{Exists: true, Image: quayImage + ":rhoai-3.6@" + digestOf(1)}
+	sub := types.SubscriptionInfo{Source: rhoai.CatalogName}
+	old := types.CatalogSourceInfo{Exists: true, Image: registry.FBCImage + ":rhoai-3.6@" + digestOf(1)}
 	for i := range 5 {
-		if got := getNightlyStatus(context.Background(), "a", sub, old); got.UpdateAvailable == nil || !*got.UpdateAvailable {
+		if got := registry.NightlyStatus(context.Background(), "a", sub, old); got.UpdateAvailable == nil || !*got.UpdateAvailable {
 			t.Fatalf("poll %d: %+v", i, got)
 		}
 	}
@@ -314,8 +318,8 @@ func TestGetNightlyStatus_CachedPerInstalledImage(t *testing.T) {
 	}
 	// After an update the CatalogSource points at the new digest: the very
 	// next poll must reflect it, not the cached "update available".
-	updated := types.CatalogSourceInfo{Exists: true, Image: quayImage + ":rhoai-3.6@" + digestOf(2)}
-	if got := getNightlyStatus(context.Background(), "a", sub, updated); got.UpdateAvailable == nil || *got.UpdateAvailable {
+	updated := types.CatalogSourceInfo{Exists: true, Image: registry.FBCImage + ":rhoai-3.6@" + digestOf(2)}
+	if got := registry.NightlyStatus(context.Background(), "a", sub, updated); got.UpdateAvailable == nil || *got.UpdateAvailable {
 		t.Fatalf("after update: %+v", got)
 	}
 	if n := f.count("quay-head"); n != 2 {
@@ -327,25 +331,24 @@ func TestGetNightlyStatus_StaleEntryRefreshesInBackground(t *testing.T) {
 	f := newFakeRegistry()
 	f.tagDigests["rhoai-3.6"] = digestOf(1)
 	installFakeRegistry(t, f)
-	sub := types.SubscriptionInfo{Source: CatalogName}
-	cs := types.CatalogSourceInfo{Exists: true, Image: quayImage + ":rhoai-3.6@" + digestOf(1)}
-	getNightlyStatus(context.Background(), "a", sub, cs)
-	nightlyBackground.Wait()
+	sub := types.SubscriptionInfo{Source: rhoai.CatalogName}
+	cs := types.CatalogSourceInfo{Exists: true, Image: registry.FBCImage + ":rhoai-3.6@" + digestOf(1)}
+	registry.NightlyStatus(context.Background(), "a", sub, cs)
+	registry.WaitBackgroundForTest()
 
 	// A new nightly is pushed, and the cached comparison ages past freshness.
 	f.mu.Lock()
 	f.tagDigests["rhoai-3.6"] = digestOf(9)
 	f.mu.Unlock()
-	nightlyBackground.Wait()
-	previous := nightlyStatusFresh
-	nightlyStatusFresh = 0
-	t.Cleanup(func() { nightlyBackground.Wait(); nightlyStatusFresh = previous })
+	registry.WaitBackgroundForTest()
+	restore := registry.SetNightlyStatusFreshForTest(0)
+	t.Cleanup(func() { registry.WaitBackgroundForTest(); restore() })
 
-	if got := getNightlyStatus(context.Background(), "a", sub, cs); *got.UpdateAvailable {
+	if got := registry.NightlyStatus(context.Background(), "a", sub, cs); *got.UpdateAvailable {
 		t.Fatal("the stale value is served while refreshing")
 	}
-	nightlyBackground.Wait()
-	if got := getNightlyStatus(context.Background(), "a", sub, cs); got.UpdateAvailable == nil || !*got.UpdateAvailable {
+	registry.WaitBackgroundForTest()
+	if got := registry.NightlyStatus(context.Background(), "a", sub, cs); got.UpdateAvailable == nil || !*got.UpdateAvailable {
 		t.Fatal("background refresh did not pick up the new build")
 	}
 }
@@ -357,24 +360,24 @@ func TestGetNightlyStatus_VeryStaleEntryIsLookedUpNow(t *testing.T) {
 	f := newFakeRegistry()
 	f.tagDigests["rhoai-3.6"] = digestOf(1)
 	installFakeRegistry(t, f)
-	sub := types.SubscriptionInfo{Source: CatalogName}
-	cs := types.CatalogSourceInfo{Exists: true, Image: quayImage + ":rhoai-3.6@" + digestOf(1)}
-	if got := getNightlyStatus(context.Background(), "a", sub, cs); got.UpdateAvailable == nil || *got.UpdateAvailable {
+	sub := types.SubscriptionInfo{Source: rhoai.CatalogName}
+	cs := types.CatalogSourceInfo{Exists: true, Image: registry.FBCImage + ":rhoai-3.6@" + digestOf(1)}
+	if got := registry.NightlyStatus(context.Background(), "a", sub, cs); got.UpdateAvailable == nil || *got.UpdateAvailable {
 		t.Fatal("the first lookup finds the installed build up to date")
 	}
-	nightlyBackground.Wait()
+	registry.WaitBackgroundForTest()
 
 	f.mu.Lock()
 	f.tagDigests["rhoai-3.6"] = digestOf(9)
 	f.mu.Unlock()
-	previousFresh, previousStale := nightlyStatusFresh, nightlyStatusStaleMax
-	nightlyStatusFresh, nightlyStatusStaleMax = 0, 0
+	restoreFresh, restoreStale := registry.SetNightlyStatusFreshForTest(0), registry.SetNightlyStatusStaleMaxForTest(0)
 	t.Cleanup(func() {
-		nightlyBackground.Wait()
-		nightlyStatusFresh, nightlyStatusStaleMax = previousFresh, previousStale
+		registry.WaitBackgroundForTest()
+		restoreFresh()
+		restoreStale()
 	})
 
-	got := getNightlyStatus(context.Background(), "a", sub, cs)
+	got := registry.NightlyStatus(context.Background(), "a", sub, cs)
 	if got.UpdateAvailable == nil || !*got.UpdateAvailable {
 		t.Fatalf("a very stale entry must be looked up before answering, got updateAvailable=%v error=%q", got.UpdateAvailable, got.Error)
 	}
@@ -389,25 +392,25 @@ func TestGetNightlyStatus_VeryStaleEntryReportsASlowQuay(t *testing.T) {
 	f := newFakeRegistry()
 	f.tagDigests["rhoai-3.6"] = digestOf(1)
 	installFakeRegistry(t, f)
-	sub := types.SubscriptionInfo{Source: CatalogName}
-	cs := types.CatalogSourceInfo{Exists: true, Image: quayImage + ":rhoai-3.6@" + digestOf(1)}
-	getNightlyStatus(context.Background(), "a", sub, cs)
-	nightlyBackground.Wait()
+	sub := types.SubscriptionInfo{Source: rhoai.CatalogName}
+	cs := types.CatalogSourceInfo{Exists: true, Image: registry.FBCImage + ":rhoai-3.6@" + digestOf(1)}
+	registry.NightlyStatus(context.Background(), "a", sub, cs)
+	registry.WaitBackgroundForTest()
 
 	f.mu.Lock()
 	f.tagDigests["rhoai-3.6"] = digestOf(9)
 	f.latency = 200 * time.Millisecond
 	f.mu.Unlock()
-	previousFresh, previousStale := nightlyStatusFresh, nightlyStatusStaleMax
-	nightlyStatusFresh, nightlyStatusStaleMax = 0, 0
+	restoreFresh, restoreStale := registry.SetNightlyStatusFreshForTest(0), registry.SetNightlyStatusStaleMaxForTest(0)
 	t.Cleanup(func() {
-		nightlyBackground.Wait()
-		nightlyStatusFresh, nightlyStatusStaleMax = previousFresh, previousStale
+		registry.WaitBackgroundForTest()
+		restoreFresh()
+		restoreStale()
 	})
 
-	ctx, cancel := clk.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := kube.Clock().WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	got := getNightlyStatus(ctx, "a", sub, cs)
+	got := registry.NightlyStatus(ctx, "a", sub, cs)
 	if got.Error == "" || (got.UpdateAvailable != nil && !*got.UpdateAvailable) {
 		t.Fatalf("a very stale entry is not shown while Quay is slow, got %+v", got)
 	}
@@ -424,11 +427,11 @@ func TestDashboardCommitIsFilledFromCachedCatalog(t *testing.T) {
 	})
 	f.labels[dashDigest] = map[string]string{"vcs-ref": "96088eb", "git.url": "https://github.com/red-hat-data-services/odh-dashboard"}
 	installFakeRegistry(t, f)
-	sub := types.SubscriptionInfo{Source: CatalogName}
-	cs := types.CatalogSourceInfo{Exists: true, Image: quayImage + ":rhoai-3.6@" + installed}
-	getNightlyStatus(context.Background(), "a", sub, cs)
-	nightlyBackground.Wait()
-	got := getNightlyStatus(context.Background(), "a", sub, cs)
+	sub := types.SubscriptionInfo{Source: rhoai.CatalogName}
+	cs := types.CatalogSourceInfo{Exists: true, Image: registry.FBCImage + ":rhoai-3.6@" + installed}
+	registry.NightlyStatus(context.Background(), "a", sub, cs)
+	registry.WaitBackgroundForTest()
+	got := registry.NightlyStatus(context.Background(), "a", sub, cs)
 	if got.Installed.DashboardCommit != "96088eb" || got.Latest.DashboardCommit != "96088eb" {
 		t.Fatalf("dashboard commit never filled: %+v", got.Installed)
 	}

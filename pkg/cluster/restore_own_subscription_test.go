@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -28,8 +30,8 @@ func replacedAfterApply(f *fakeOLM) {
 // and said so.
 func assertReplacementKept(t *testing.T, f *fakeOLM, result *types.OperationResponse, events []UpdateStepEvent) {
 	t.Helper()
-	if result.Success || lastStatus(events, restoreStepName) != "failed" || !strings.Contains(result.Message, "another Subscription replaced the one this operation created") {
-		t.Fatalf("restore %q, message %q", lastStatus(events, restoreStepName), result.Message)
+	if result.Success || lastStatus(events, operator.RestoreStepName) != "failed" || !strings.Contains(result.Message, "another Subscription replaced the one this operation created") {
+		t.Fatalf("restore %q, message %q", lastStatus(events, operator.RestoreStepName), result.Message)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -47,7 +49,7 @@ func TestRestoreLeavesASubscriptionThatReplacedTheAttempts(t *testing.T) {
 		f.channels = `[{"name":"stable-3.x","currentCSV":"rhods-operator.3.6.1"}]`
 		replacedAfterApply(f)
 		emit, events := eventsRecorder()
-		result, err := UpdateStream(f.client(context.Background()), testNightlyImage, emit)
+		result, err := operator.UpdateStream(f.client(context.Background()), testNightlyImage, emit)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -57,7 +59,7 @@ func TestRestoreLeavesASubscriptionThatReplacedTheAttempts(t *testing.T) {
 		f := gitOpsFake(t)
 		replacedAfterApply(f)
 		emit, events := eventsRecorder()
-		result, err := UpdateStream(f.client(context.Background()), gitOpsImage, emit)
+		result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, emit)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -81,30 +83,30 @@ func TestRestoreLeavesASubscriptionThatReplacedTheAttempts(t *testing.T) {
 func TestRestoreDeletesOnlyTheAttemptsSubscription(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
 	c := f.client(context.Background())
-	r, err := captureOperatorRecovery(c)
+	r, err := operator.CaptureRecovery(c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.subscriptionChanged = true
+	r.SubscriptionChanged = true
 	f.mu.Lock()
 	f.sub = nil // the operation deleted the previous one
 	f.mu.Unlock()
-	if applyErr, _ := applySubscriptionWithRetry(c, subscriptionPath(), buildSubscription(r.subscriptionBase(), CatalogName, "stable-3.x"), r, nil); applyErr != nil {
+	if applyErr, _ := operator.ApplySubscriptionWithRetry(c, rhoai.SubscriptionPath(), operator.BuildSubscription(r.SubscriptionBase(), rhoai.CatalogName, "stable-3.x"), r, nil); applyErr != nil {
 		t.Fatal(applyErr)
 	}
 	f.mu.Lock()
 	own, _ := f.sub["metadata"].(map[string]any)["uid"].(string)
 	f.mu.Unlock()
-	if r.attemptSubscriptionUID == "" || r.attemptSubscriptionUID != own {
-		t.Fatalf("recorded %q, applied %q", r.attemptSubscriptionUID, own)
+	if r.AttemptSubscriptionUID == "" || r.AttemptSubscriptionUID != own {
+		t.Fatalf("recorded %q, applied %q", r.AttemptSubscriptionUID, own)
 	}
 	// Its own one is deleted and the previous one put back.
 	result := &types.OperationResponse{}
 	emit, events := eventsRecorder()
-	r.restore(c, result, emit)
+	r.Restore(c, result, emit)
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if lastStatus(events(), restoreStepName) != "success" || f.sub == nil || f.sub["metadata"].(map[string]any)["uid"] == own {
+	if lastStatus(events(), operator.RestoreStepName) != "success" || f.sub == nil || f.sub["metadata"].(map[string]any)["uid"] == own {
 		t.Fatalf("restore %v, sub %v", events(), f.sub)
 	}
 }

@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 )
 
 // Addresses read from the cluster go into commands users paste into a
@@ -26,7 +29,7 @@ func TestSnippetURL(t *testing.T) {
 		"https://":                                                    false,
 		"":                                                            false,
 	} {
-		if got := snippetURL(s); got != want {
+		if got := kube.SnippetURL(s); got != want {
 			t.Errorf("snippetURL(%q) = %v, want %v", s, got, want)
 		}
 	}
@@ -52,16 +55,16 @@ func TestStatusHidesUnsafeAddresses(t *testing.T) {
 		t.Fatalf("model: %+v", m)
 	}
 
-	var d dspaInfo
+	var d storage.DSPA
 	_ = json.Unmarshal([]byte(`{}`), &d)
 	d.Meta.Namespace, d.Meta.Name = "proj", "dspa"
-	d.Ready = &dspaCondition{Status: "True"}
+	d.Ready = &storage.DSPACondition{Status: "True"}
 	d.APIURL = "https://ds-pipeline-dspa-proj.apps.example.com/`id`"
-	if s := pipelineServerState(d, ""); s.APIRoute != "" || !strings.Contains(s.Warning, "not a plain https address") {
+	if s := storage.PipelineServerState(d, ""); s.APIRoute != "" || !strings.Contains(s.Warning, "not a plain https address") {
 		t.Fatalf("pipeline server: %+v", s)
 	}
 	d.APIURL = "https://ds-pipeline-dspa-proj.apps.example.com"
-	if s := pipelineServerState(d, ""); s.APIRoute != d.APIURL {
+	if s := storage.PipelineServerState(d, ""); s.APIRoute != d.APIURL {
 		t.Fatalf("pipeline server: %+v", s)
 	}
 }

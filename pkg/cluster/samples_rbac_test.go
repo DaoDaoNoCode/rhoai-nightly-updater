@@ -4,6 +4,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 )
 
 // The samples' MLflow calls are authorized by MLflow with access reviews of
@@ -69,7 +72,7 @@ func TestTemplateGrantsTheSamplesNoUnnamedDelete(t *testing.T) {
 			}
 		}
 	}
-	for _, name := range []string{demoExperiment, "someone-elses"} {
+	for _, name := range []string{mlflow.DemoExperiment, "someone-elses"} {
 		if allow("experiments", "delete", "p", name) {
 			t.Errorf("delete on experiment %q is granted", name)
 		}
@@ -81,7 +84,7 @@ func TestTemplateGrantsTheSamplesNoUnnamedDelete(t *testing.T) {
 func TestTemplateGrantsNoPipelineServerAPI(t *testing.T) {
 	for _, g := range templateGrants(t) {
 		for _, verb := range []string{"get", "create", "delete", "update", "patch", "list"} {
-			for _, name := range []string{dspaName, previousDSPAName, ""} {
+			for _, name := range []string{storage.DSPAName, storage.PreviousDSPAName, ""} {
 				r := rbacRequest{Verb: verb, Group: "datasciencepipelinesapplications.opendatahub.io", Resource: "datasciencepipelinesapplications/api", Namespace: "p", Name: name, NamedReview: true}
 				if g.allows(r) {
 					t.Errorf("the template grants %s on the KFP API of %q", verb, name)
@@ -99,8 +102,8 @@ func TestSampleFakeRulesAreAllUsed(t *testing.T) {
 		action  string
 		samples []string
 	}{
-		{"add", mlflowSampleIDs},
-		{"remove", []string{SampleTraining, SampleMCPServer, SampleSkill}},
+		{"add", mlflow.SampleIDs},
+		{"remove", []string{SampleTraining, SampleMCPServer, mlflow.SampleSkill}},
 		{"add", []string{SampleTraining}}, // restores the experiment
 		{"regenerate", []string{SampleGenAIDemo}},
 	}
@@ -110,12 +113,12 @@ func TestSampleFakeRulesAreAllUsed(t *testing.T) {
 		}
 	}
 	// A model without its alias: Add reads its versions (model-versions/get).
-	env.mlflow.models[trainingModel].aliases = map[string]string{}
+	env.mlflow.models[mlflow.TrainingModel].aliases = map[string]string{}
 	if ok, msg, _ := env.run(t, "add", SampleTraining); !ok {
 		t.Fatal(msg)
 	}
 	// A feature this generator lacks: its tag is dropped (delete-experiment-tag).
-	env.mlflow.expByName(demoExperiment).tags[demoVersionTagPrefix+"retired_feature"] = "0"
+	env.mlflow.expByName(mlflow.DemoExperiment).tags[mlflow.DemoVersionTagPrefix+"retired_feature"] = "0"
 	env.mlflow.mlflowDeleteDemo()
 	if ok, msg, _ := env.run(t, "add", SampleGenAIDemo); !ok { // restore + reset
 		t.Fatal(msg)
@@ -123,20 +126,20 @@ func TestSampleFakeRulesAreAllUsed(t *testing.T) {
 	env.status(t)
 	// Registry entries someone creates while the tool adds them: the tool
 	// lists their versions and deletes the one it added.
-	if ok, msg, _ := env.run(t, "remove", SampleMCPServer, SampleSkill); !ok {
+	if ok, msg, _ := env.run(t, "remove", SampleMCPServer, mlflow.SampleSkill); !ok {
 		t.Fatal(msg)
 	}
 	env.mlflow.onRequest = func(method, path string) {
 		if method == "POST" && strings.HasSuffix(path, "/versions") {
-			if strings.Contains(path, "/mcp-servers/") && env.mlflow.mcp[mcpSampleName] == nil {
-				env.mlflow.mcp[mcpSampleName] = &fakeMCP{tags: map[string]string{}, versions: map[string]string{}, createdBy: "alice"}
+			if strings.Contains(path, "/mcp-servers/") && env.mlflow.mcp[mlflow.MCPSampleName] == nil {
+				env.mlflow.mcp[mlflow.MCPSampleName] = &fakeMCP{tags: map[string]string{}, versions: map[string]string{}, createdBy: "alice"}
 			}
-			if strings.Contains(path, "/skills/") && env.mlflow.skills[skillSampleName] == nil {
-				env.mlflow.skills[skillSampleName] = &fakeSkill{tags: map[string]string{}, createdBy: "alice"}
+			if strings.Contains(path, "/skills/") && env.mlflow.skills[mlflow.SkillSampleName] == nil {
+				env.mlflow.skills[mlflow.SkillSampleName] = &fakeSkill{tags: map[string]string{}, createdBy: "alice"}
 			}
 		}
 	}
-	if ok, msg, _ := env.run(t, "add", SampleMCPServer, SampleSkill); ok {
+	if ok, msg, _ := env.run(t, "add", SampleMCPServer, mlflow.SampleSkill); ok {
 		t.Fatalf("claimed a registry entry someone else created: %s", msg)
 	}
 	env.mlflow.onRequest = nil

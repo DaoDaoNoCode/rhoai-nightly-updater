@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // RepairDSC returns the API server's refusal of its final patch, made with
@@ -40,7 +42,7 @@ func TestRepairDSCReturnsTheRequestsOwnError(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			c := &Client{baseURL: server.URL, httpClient: server.Client(), ctx: context.Background(), asUser: true}
+			c := newTestClient(testClientOptions{BaseURL: server.URL, HTTPClient: server.Client(), Ctx: context.Background(), AsUser: true})
 			result, err := RepairDSC(c, "my-dsc", "remove-invalid", "", "datasciencecluster.opendatahub.io/v2", nil, nil)
 			k, ok := errors.AsType[*K8sError](err)
 			if result != nil || !ok || k.Status != tc.status || !k.User {
@@ -51,9 +53,9 @@ func TestRepairDSCReturnsTheRequestsOwnError(t *testing.T) {
 	t.Run("network", func(t *testing.T) {
 		server := httptest.NewServer(http.NotFoundHandler())
 		server.Close() // nothing listens any more
-		c := &Client{baseURL: server.URL, httpClient: server.Client(), ctx: context.Background(), asUser: true}
+		c := newTestClient(testClientOptions{BaseURL: server.URL, HTTPClient: server.Client(), Ctx: context.Background(), AsUser: true})
 		result, err := RepairDSC(c, "my-dsc", "remove-invalid", "", "datasciencecluster.opendatahub.io/v2", nil, nil)
-		if result != nil || !IsNetworkError(err) {
+		if result != nil || !kube.IsNetworkError(err) {
 			t.Fatalf("RepairDSC = %+v, %v (%T)", result, err, err)
 		}
 	})

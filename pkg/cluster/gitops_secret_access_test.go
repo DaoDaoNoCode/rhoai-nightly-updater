@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"gopkg.in/yaml.v3"
 )
 
@@ -75,7 +77,7 @@ func TestCheckServiceAccountSecretAccess(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f, c := newFakeAPI(t)
-			f.handle("POST", clusterPath("authorization.k8s.io/v1", "selfsubjectaccessreviews", ""), func(_ *http.Request, body []byte) (int, string) {
+			f.handle("POST", rhoai.ClusterPath("authorization.k8s.io/v1", "selfsubjectaccessreviews", ""), func(_ *http.Request, body []byte) (int, string) {
 				var review struct {
 					Kind string `json:"kind"`
 					Spec struct {
@@ -93,24 +95,24 @@ func TestCheckServiceAccountSecretAccess(t *testing.T) {
 				b, _ := json.Marshal(map[string]any{"status": map[string]any{"allowed": ok}})
 				return 201, string(b)
 			})
-			out := checkServiceAccountSecretAccess(c)
+			out := diagnostics.CheckServiceAccountSecretAccess(c)
 			if name == "none" {
-				if out.check.Status != "pass" || len(out.problems) != 0 {
+				if out.Check.Status != "pass" || len(out.Problems) != 0 {
 					t.Fatalf("%+v", out)
 				}
 				return
 			}
-			if out.check.Status != "fail" || len(out.problems) != 1 || out.problems[0].ID != "gitops-secret-access" {
+			if out.Check.Status != "fail" || len(out.Problems) != 1 || out.Problems[0].ID != "gitops-secret-access" {
 				t.Fatalf("%+v", out)
 			}
-			if name == "left by install.sh" && !strings.Contains(out.check.Detail, "Secret kube-system/additional-pull-secret") {
-				t.Fatalf("detail %q", out.check.Detail)
+			if name == "left by install.sh" && !strings.Contains(out.Check.Detail, "Secret kube-system/additional-pull-secret") {
+				t.Fatalf("detail %q", out.Check.Detail)
 			}
 		})
 	}
 	f, c := newFakeAPI(t)
-	f.status("POST", clusterPath("authorization.k8s.io/v1", "selfsubjectaccessreviews", ""), http.StatusServiceUnavailable, "ServiceUnavailable")
-	if out := checkServiceAccountSecretAccess(c); out.check.Status != "warn" || len(out.problems) != 0 {
+	f.status("POST", rhoai.ClusterPath("authorization.k8s.io/v1", "selfsubjectaccessreviews", ""), http.StatusServiceUnavailable, "ServiceUnavailable")
+	if out := diagnostics.CheckServiceAccountSecretAccess(c); out.Check.Status != "warn" || len(out.Problems) != 0 {
 		t.Fatalf("API error: %+v", out)
 	}
 }

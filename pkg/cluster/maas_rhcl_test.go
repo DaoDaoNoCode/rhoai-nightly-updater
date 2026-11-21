@@ -3,6 +3,9 @@ package cluster
 import (
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 )
 
 // Below the docs' minimum the warning names the in-tool upgrade, never a
@@ -20,7 +23,7 @@ func TestRHCLWarning(t *testing.T) {
 		{version: "1.4.0", want: []string{"bypasses gateway authentication", "publishes nothing", "Upgrade Connectivity Link"}},
 		{version: "1.4.4", want: []string{"1.4.4", "Upgrade Connectivity Link"}},
 	} {
-		got := rhclWarning(tc.version)
+		got := serving.RHCLWarning(tc.version)
 		if tc.want == nil {
 			if got != "" {
 				t.Errorf("rhclWarning(%q) = %q, want none", tc.version, got)
@@ -43,16 +46,16 @@ func TestRHCLWarning(t *testing.T) {
 // newer head below the target's (the RHCL catalog of 2026-11-18).
 func TestRHCLChannelPicking(t *testing.T) {
 	pkg := rhclCatalog()
-	if got := rhclTargetChannel(pkg); got != "stable-1.5" {
+	if got := serving.RHCLTargetChannel(pkg); got != "stable-1.5" {
 		t.Fatalf("target = %q", got)
 	}
-	if got := hopChannel(pkg, "rhcl-operator.v1.4.3", "stable-1.5"); got != "stable-1.4" {
+	if got := serving.HopChannel(pkg, "rhcl-operator.v1.4.3", "stable-1.5"); got != "stable-1.4" {
 		t.Fatalf("hop = %q", got)
 	}
-	if got := hopChannel(pkg, "rhcl-operator.v1.4.4", "stable-1.5"); got != "" {
+	if got := serving.HopChannel(pkg, "rhcl-operator.v1.4.4", "stable-1.5"); got != "" {
 		t.Fatalf("hop from 1.4.4 = %q", got)
 	}
-	if got := rhclTargetChannel(operatorPackage{defaultChannel: "stable", channels: pkg.channels[:2]}); got != "" {
+	if got := serving.RHCLTargetChannel(envkit.OperatorPackage{DefaultChannel: "stable", Channels: pkg.Channels[:2]}); got != "" {
 		t.Fatalf("target without a 1.5 channel = %q", got)
 	}
 }

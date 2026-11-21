@@ -4,6 +4,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 )
 
 func TestExtractRepoAndDigest(t *testing.T) {
@@ -81,7 +84,7 @@ func TestExtractRepoAndDigest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo, digest, ok := extractRepoAndDigest(tt.imageID)
+			repo, digest, ok := registry.RepoAndDigest(tt.imageID)
 			if ok != tt.wantOk {
 				t.Errorf("ok = %v, want %v", ok, tt.wantOk)
 			}
@@ -102,7 +105,7 @@ func TestCheckRedirect_StripsAuthorization(t *testing.T) {
 	req, _ := http.NewRequestWithContext(t.Context(), "GET", "https://example.com/blob", nil)
 	req.Header.Set("Authorization", "Bearer test-token")
 
-	err := stripAuthOnRedirect(req, []*http.Request{})
+	err := registry.StripAuthOnRedirect(req, []*http.Request{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -119,53 +122,53 @@ func TestParseImageLabels(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		labels map[string]string
-		want   ImageLabels
+		want   registry.ImageLabels
 	}{
 		{"konflux", map[string]string{
 			"git.commit": "1111111111111111111111111111111111111111", "git.url": "https://github.com/opendatahub-io/odh-dashboard",
 			"vcs-ref": "1111111111111111111111111111111111111111", "build-date": "2026-10-29T01:02:03Z", "version": "3.6.0",
-		}, ImageLabels{GitCommit: "1111111111111111111111111111111111111111", GitURL: "https://github.com/opendatahub-io/odh-dashboard", BuildDate: "2026-10-29T01:02:03Z", Version: "3.6.0"}},
+		}, registry.ImageLabels{GitCommit: "1111111111111111111111111111111111111111", GitURL: "https://github.com/opendatahub-io/odh-dashboard", BuildDate: "2026-10-29T01:02:03Z", Version: "3.6.0"}},
 		// build-date and version are the UBI base's: the build date is the config's created time.
 		{"openshift-ci", map[string]string{
 			"vcs-ref": "2222222222222222222222222222222222222222", "io.openshift.build.commit.id": "2222222222222222222222222222222222222222",
 			"io.openshift.build.source-location": "https://github.com/opendatahub-io/odh-dashboard",
 			"org.opencontainers.image.revision":  "9999999999999999999999999999999999999999", "build-date": "2026-10-29T04:05:06Z", "version": "9.8",
-		}, ImageLabels{GitCommit: "2222222222222222222222222222222222222222", GitURL: "https://github.com/opendatahub-io/odh-dashboard", BuildDate: "2026-10-29T22:55:20Z"}},
+		}, registry.ImageLabels{GitCommit: "2222222222222222222222222222222222222222", GitURL: "https://github.com/opendatahub-io/odh-dashboard", BuildDate: "2026-10-29T22:55:20Z"}},
 		// A PR build: the OpenShift CI keys are present but empty, so no commit.
 		{"openshift-ci-pr-build", map[string]string{
 			"vcs-ref": "", "io.openshift.build.commit.id": "", "io.openshift.build.source-location": "",
 			"org.opencontainers.image.revision": "9999999999999999999999999999999999999999", "build-date": "2026-10-29T13:34:30Z", "version": "1",
-		}, ImageLabels{BuildDate: "2026-10-29T22:55:20Z"}},
+		}, registry.ImageLabels{BuildDate: "2026-10-29T22:55:20Z"}},
 		{"openshift-ci-without-created", map[string]string{
 			"vcs-ref": "2222222222222222222222222222222222222222", "io.openshift.build.commit.id": "2222222222222222222222222222222222222222",
 			"build-date": "2026-10-29T04:05:06Z", "version": "9.8",
-		}, ImageLabels{GitCommit: "2222222222222222222222222222222222222222"}},
+		}, registry.ImageLabels{GitCommit: "2222222222222222222222222222222222222222"}},
 		{"vcs-url-before-source-location", map[string]string{
 			"git.commit": "3333333333333333333333333333333333333333", "vcs-url": "https://github.com/example/vcs",
 			"io.openshift.build.source-location": "https://github.com/example/openshift",
-		}, ImageLabels{GitCommit: "3333333333333333333333333333333333333333", GitURL: "https://github.com/example/vcs"}},
+		}, registry.ImageLabels{GitCommit: "3333333333333333333333333333333333333333", GitURL: "https://github.com/example/vcs"}},
 		{"git-url-wins", map[string]string{
 			"git.commit": "4444444444444444444444444444444444444444", "git.url": "https://github.com/example/git", "vcs-url": "https://github.com/example/vcs",
-		}, ImageLabels{GitCommit: "4444444444444444444444444444444444444444", GitURL: "https://github.com/example/git"}},
-		{"revision-alone-is-not-a-commit", map[string]string{"org.opencontainers.image.revision": "5555555555555555555555555555555555555555"}, ImageLabels{}},
+		}, registry.ImageLabels{GitCommit: "4444444444444444444444444444444444444444", GitURL: "https://github.com/example/git"}},
+		{"revision-alone-is-not-a-commit", map[string]string{"org.opencontainers.image.revision": "5555555555555555555555555555555555555555"}, registry.ImageLabels{}},
 		// The UI links the repository: an image's labels cannot make it a
 		// javascript: or plain http link; the next https label is used.
 		{"javascript-url-dropped", map[string]string{
 			"git.commit": "6666666666666666666666666666666666666666", "git.url": "javascript:alert(document.cookie)//",
-		}, ImageLabels{GitCommit: "6666666666666666666666666666666666666666"}},
+		}, registry.ImageLabels{GitCommit: "6666666666666666666666666666666666666666"}},
 		{"http-url-dropped-for-the-next-https-one", map[string]string{
 			"git.commit": "6666666666666666666666666666666666666666", "git.url": "http://github.com/example/git", "vcs-url": "https://github.com/example/vcs",
-		}, ImageLabels{GitCommit: "6666666666666666666666666666666666666666", GitURL: "https://github.com/example/vcs"}},
+		}, registry.ImageLabels{GitCommit: "6666666666666666666666666666666666666666", GitURL: "https://github.com/example/vcs"}},
 		{"url-with-user-info-dropped", map[string]string{
 			"git.commit": "6666666666666666666666666666666666666666", "git.url": "https://github.com@evil.example/x",
-		}, ImageLabels{GitCommit: "6666666666666666666666666666666666666666"}},
+		}, registry.ImageLabels{GitCommit: "6666666666666666666666666666666666666666"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			created := "2026-10-29T22:55:20.781805405Z"
 			if tc.name == "openshift-ci-without-created" {
 				created = ""
 			}
-			if got := parseImageLabels(tc.labels, created); *got != tc.want {
+			if got := registry.ParseImageLabels(tc.labels, created); *got != tc.want {
 				t.Fatalf("got %+v, want %+v", *got, tc.want)
 			}
 		})
@@ -191,10 +194,10 @@ func TestBuildImageRegistryPrefix(t *testing.T) {
 		{"evil.example/quay.io/opendatahub/odh-dashboard:main", false, false},
 		{"registry.access.redhat.com/ubi9/nginx-124:latest", false, false},
 	} {
-		if got := isRHOAIImage(tc.ref); got != tc.rhoai {
+		if got := registry.IsRHOAIImage(tc.ref); got != tc.rhoai {
 			t.Errorf("isRHOAIImage(%q) = %v, want %v", tc.ref, got, tc.rhoai)
 		}
-		if got := isBuildImage(tc.ref); got != tc.build {
+		if got := components.IsBuildImage(tc.ref); got != tc.build {
 			t.Errorf("isBuildImage(%q) = %v, want %v", tc.ref, got, tc.build)
 		}
 	}

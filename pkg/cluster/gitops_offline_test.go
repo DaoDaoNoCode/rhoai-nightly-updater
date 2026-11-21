@@ -7,6 +7,13 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/gitops"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // noOutsideHosts makes every request through the registry and GitHub
@@ -20,7 +27,7 @@ func noOutsideHosts(t *testing.T) {
 		t.Errorf("the gitops profile sent a request to %s", r.URL.Host)
 		return nil, errors.New("no outside hosts in the gitops profile")
 	})
-	quayHTTPClient.Transport = fail
+	registry.HTTPClient().Transport = fail
 	orig := http.DefaultClient.Transport
 	http.DefaultClient.Transport = fail
 	t.Cleanup(func() { http.DefaultClient.Transport = orig })
@@ -46,22 +53,20 @@ func requestedSecret(f *fakeOLM) bool {
 // secrets are used, and take the build from the catalog's PackageManifest.
 func TestGitOpsProfileUpdateReadsNoSecretAndNoRegistry(t *testing.T) {
 	noOutsideHosts(t)
-	orig := lookupTargetBundle
-	t.Cleanup(func() { lookupTargetBundle = orig })
-	lookupTargetBundle = func(*Client, string) (string, error) {
+	t.Cleanup(operator.SetLookupTargetBundleForTest(func(*Client, string) (string, error) {
 		t.Error("the gitops dry run read the bundle from the registry")
 		return "", errors.New("registry")
-	}
+	}))
 
 	f := servesGitOpsPolicy(t, gitOpsFake(t))
 	emit, events := eventsRecorder()
 	result, err := UpdateStreamGitOpsProfile(f.client(context.Background()), gitOpsImage, emit)
-	if err != nil || !result.Success || indexOf(result.Logs, gitOpsProfileNoPullSecret) < 0 {
+	if err != nil || !result.Success || indexOf(result.Logs, gitops.ProfileNoPullSecret) < 0 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	said := false
 	for _, e := range events() {
-		said = said || e.Message == gitOpsProfileNoPullSecret
+		said = said || e.Message == gitops.ProfileNoPullSecret
 	}
 	if !said || requestedSecret(f) {
 		t.Fatalf("said=%v, Secret requested=%v", said, requestedSecret(f))
@@ -69,7 +74,7 @@ func TestGitOpsProfileUpdateReadsNoSecretAndNoRegistry(t *testing.T) {
 
 	f = servesGitOpsPolicy(t, gitOpsFake(t))
 	dry, err := UpdateDryRunGitOpsProfile(f.client(context.Background()), gitOpsImage)
-	if err != nil || !dry.Success || indexOf(dry.Logs, gitOpsProfileNoPullSecret) < 0 || requestedSecret(f) ||
+	if err != nil || !dry.Success || indexOf(dry.Logs, gitops.ProfileNoPullSecret) < 0 || requestedSecret(f) ||
 		indexOf(dry.Logs, "OK: The catalog serves "+gitOpsCSV+" on channel "+gitOpsChannel) < 0 {
 		t.Fatalf("dry run: %+v %v", dry, err)
 	}
@@ -121,7 +126,7 @@ func TestGetStatusGitOps(t *testing.T) {
 // come from the CSV's alm-examples or are reported missing.
 func TestGetComponentsGitOps(t *testing.T) {
 	noOutsideHosts(t)
-	labelCache.Add("rhoai/odh-dashboard-rhel9@sha256:"+strings.Repeat("1", 64), labelCacheValue{labels: ImageLabels{GitCommit: "abc", BuildDate: "2026-10-01"}}, 0)
+	registry.LabelCache.Add("rhoai/odh-dashboard-rhel9@sha256:"+strings.Repeat("1", 64), registry.LabelCacheValue{Labels: registry.ImageLabels{GitCommit: "abc", BuildDate: "2026-10-01"}}, 0)
 	dsc := mockResponse{body: `{"items":[{"apiVersion":"datasciencecluster.opendatahub.io/v2","metadata":{"name":"default-dsc"},"spec":{"components":{"dashboard":{"managementState":"Managed"}}}}]}`}
 	c, _ := componentsAPI(t, nil, dsc, notFoundResp, "")
 	resp, err := GetComponentsGitOps(c)
@@ -143,10 +148,10 @@ func TestGetComponentsGitOps(t *testing.T) {
 // The operator build comes from the installed CSV's annotations.
 func TestInstalledOperatorBuild(t *testing.T) {
 	f, c := newFakeAPI(t)
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), 200,
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"), 200,
 		`{"metadata":{"annotations":{"containerImage":"registry.redhat.io/rhoai/odh-rhel9-operator@sha256:abc","createdAt":"2026-10-08T04:00:00Z"}},"spec":{"version":"3.6.0"},"status":{"phase":"Succeeded"}}`)
-	op, err := getInstalledOperator(c)
+	op, err := components.ReadInstalledOperator(c)
 	if err != nil || op.ContainerImage != "registry.redhat.io/rhoai/odh-rhel9-operator@sha256:abc" || op.CreatedAt != "2026-10-08T04:00:00Z" {
 		t.Fatalf("%+v %v", op, err)
 	}
@@ -156,18 +161,18 @@ func TestInstalledOperatorBuild(t *testing.T) {
 // the same order, then the Secret-access check, and no Secret read.
 func TestGitOpsDiagnosticChecks(t *testing.T) {
 	var want []string
-	for _, chk := range diagnosticChecks {
-		if chk.name == secretAccessCheckName {
+	for _, chk := range diagnostics.Checks {
+		if chk.Name == diagnostics.SecretAccessCheckName {
 			t.Fatal("the full profile reads the pull secret; the Secret-access check is the gitops profile's only")
 		}
-		if chk.name != "Pull secret" {
-			want = append(want, chk.name)
+		if chk.Name != "Pull secret" {
+			want = append(want, chk.Name)
 		}
 	}
-	want = append(want, secretAccessCheckName)
+	want = append(want, diagnostics.SecretAccessCheckName)
 	var got []string
-	for _, chk := range gitOpsDiagnosticChecks {
-		got = append(got, chk.name)
+	for _, chk := range diagnostics.GitOpsChecks {
+		got = append(got, chk.Name)
 	}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("gitOpsDiagnosticChecks = %v, want diagnosticChecks without the pull secret: %v", got, want)
@@ -195,9 +200,9 @@ var networkSinks = []string{
 }
 
 // apiServerClient is the one function allowed to send requests in the
-// gitops profile: the Kubernetes API client (client.go), with the
+// gitops profile: the Kubernetes API client (internal/kube client.go), with the
 // ServiceAccount's token, to the API server only.
-const apiServerClient = clusterPkg + ".Client.do"
+const apiServerClient = kubePkg + ".Client.Do"
 
 // outboundFuncs are the functions of the three packages that send a
 // request themselves, except the API client.
@@ -257,7 +262,7 @@ func TestGitOpsProfileReachesNoRegistry(t *testing.T) {
 	all := outboundFuncs(pg)
 	// The check must see the registry clients of the full profile, or it
 	// proves nothing.
-	for _, want := range []string{clusterPkg + ".fetchQuayToken", apiPkg + ".registryGet"} {
+	for _, want := range []string{registryPkg + ".FetchQuayToken", apiPkg + ".registryGet"} {
 		found := false
 		for _, f := range all {
 			found = found || f == want

@@ -1,0 +1,1509 @@
+package serving
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"slices"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
+)
+
+// Run is one streamed MaaS operation.
+type Run struct {
+	Client   *kube.Client
+	Emit     func(types.UpdateStepEvent)
+	Logs     []string
+	Activity string
+	Target   string
+	// newModel (Models routing): publish a model the Models tab just set
+	// up to be reached through MaaS only. Its server runs, but it is not
+	// Ready until published: its route needs the MaaS gateway to admit the
+	// project, which publish does. Publish waits for Ready on its route.
+	newModel bool
+}
+
+func (m *Run) Step(id, status, msg string) {
+	m.Logs = append(m.Logs, msg)
+	if m.Emit != nil {
+		m.Emit(types.UpdateStepEvent{Step: id, Status: status, Message: msg})
+	}
+}
+
+func (m *Run) Fail(id, msg, code, activity string) (*types.OperationResponse, error) {
+	if m.Emit != nil {
+		m.Emit(types.UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: code})
+	}
+	m.Logs = append(m.Logs, msg)
+	slog.Warn("maas operation stopped", "step", id, "reason", activity, "user", kube.GetUser(m.Client))
+	record.Action(m.Client, m.Activity, fmt.Sprintf("%s (%s)", m.Target, activity), false)
+	return &types.OperationResponse{Success: false, Message: msg, Logs: m.Logs, ErrorCode: code}, nil
+}
+
+func (m *Run) Done(msg string) (*types.OperationResponse, error) {
+	slog.Info("maas operation", "action", m.Activity, "target", m.Target, "user", kube.GetUser(m.Client))
+	record.Action(m.Client, m.Activity, m.Target, true)
+	return &types.OperationResponse{Success: true, Message: msg, Logs: m.Logs}, nil
+}
+
+// MaaSWriteCode turns a write error into a refusal code.
+func MaaSWriteCode(err error) string {
+	var foreign *envkit.ForeignObjectError
+	switch {
+	case errors.As(err, &foreign):
+		return "not_managed"
+	case errors.Is(err, envkit.ErrObjectChanged) || kube.IsK8sConflict(err):
+		return "conflict"
+	}
+	return kube.ErrorCodeFromK8sErr(err)
+}
+
+// ValidateMaaSRequest returns why req cannot run, or "".
+func ValidateMaaSRequest(req types.MaaSRequest) string {
+	// Which of the optional fields each action takes.
+	var takesDB, takesAccess, takesLimit bool
+	switch req.Action {
+	case "setup", "teardown", "upgrade-rhcl", "rhcl-memory", "rhcl-deny-on-failure", "authorino-tls", "remove-tier-policies", "change-access", "change-database":
+		if req.Project != "" {
+			return "the platform takes no project"
+		}
+		if req.Model != "" {
+			return "the platform takes no model"
+		}
+		takesDB = req.Action == "setup" || req.Action == "change-database"
+		takesAccess = req.Action == "change-access"
+	case "publish", "unpublish", "change-limit":
+		if !ProjectNameRegex.MatchString(req.Project) {
+			return "a valid project is required"
+		}
+		entry, ok := CatalogEntry(req.Model)
+		if !ok {
+			return "unknown model"
+		}
+		if entry.Type != ModelTypeChat {
+			return "only chat models are published to MaaS"
+		}
+		takesAccess = req.Action == "publish"
+		takesLimit = req.Action == "publish" || req.Action == "change-limit"
+	default:
+		return "action must be setup, teardown, publish, unpublish, change-limit, change-access, change-database, upgrade-rhcl, rhcl-memory, rhcl-deny-on-failure, authorino-tls or remove-tier-policies"
+	}
+	switch {
+	case req.Database != nil && !takesDB:
+		return req.Action + " takes no database"
+	case req.Access != nil && !takesAccess:
+		return req.Action + " takes no audience"
+	case req.Limit != nil && !takesLimit:
+		return req.Action + " takes no limit"
+	case req.ConfirmKeysLost && req.Action != "change-database":
+		return req.Action + " takes no confirmation"
+	}
+	switch req.Action {
+	case "change-database":
+		if req.Database == nil {
+			return "choose the database to change to"
+		}
+		if !req.ConfirmKeysLost {
+			return "changing the database loses every API key: confirm it"
+		}
+	case "change-access":
+		if req.Access == nil {
+			return "say who can use the published models"
+		}
+	case "change-limit":
+		if req.Limit == nil {
+			return "give the model's new limit"
+		}
+	}
+	if req.Database != nil {
+		if problem := ValidateMaaSDatabaseRequest(*req.Database); problem != "" {
+			return problem
+		}
+	}
+	if _, problem := ParseMaaSAudience(req.Access); req.Access != nil && problem != "" {
+		return problem
+	}
+	if _, problem := ParseMaaSLimit(req.Limit); problem != "" {
+		return problem
+	}
+	return ""
+}
+
+// RunMaaS sets up or removes the MaaS platform, or publishes or unpublishes
+// this tool's model in a project, as one operation with streamed steps:
+// setup "check", "database", "gateway", "authorino-tls", "dsc", "ready";
+// teardown "check", "unpublish", "dsc", "gateway", "database"; publish
+// "check", "gateway", "model", "maas", "ready"; unpublish "check", "maas",
+// "model", "gateway".
+func RunMaaS(c *kube.Client, req types.MaaSRequest, onStep func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+	m := &Run{Client: c, Emit: onStep, Activity: req.Action + "-maas", Target: "MaaS platform"}
+	entry, _ := CatalogEntry(req.Model)
+	if req.Project != "" {
+		m.Target = fmt.Sprintf("model %s in %s", kube.FirstNonEmpty(entry.Name, req.Model), req.Project)
+	}
+	if problem := ValidateMaaSRequest(req); problem != "" {
+		return m.Fail("check", problem, "validation", "invalid request")
+	}
+	// Projects of publications that are gone leave the MaaS gateway first
+	// (maas_prune.go).
+	m.Logs = append(m.Logs, ReleaseGoneMaaSProjects(c)...)
+	switch req.Action {
+	case "setup":
+		return m.setup(req.Database)
+	case "teardown":
+		return m.teardown()
+	case "upgrade-rhcl":
+		m.Target = "Connectivity Link"
+		return m.upgradeRHCL()
+	case "rhcl-memory":
+		m.Target = "Connectivity Link's memory limit"
+		return m.rhclMemory()
+	case "rhcl-deny-on-failure":
+		m.Target = "Connectivity Link's rate-limit failure mode"
+		return m.rhclDenyOnFailure()
+	case "authorino-tls":
+		m.Target = "Authorino TLS"
+		return m.authorinoTLSOnly()
+	case "remove-tier-policies":
+		m.Target = "the old tier policies"
+		return m.removeTierPolicies()
+	case "publish":
+		return m.publish(req.Project, entry.Name, req.Access, req.Limit)
+	case "change-limit":
+		return m.changeLimit(req.Project, entry.Name, req.Limit)
+	case "change-access":
+		m.Target = "who can use the published MaaS models"
+		return m.changeAccess(req.Access)
+	case "change-database":
+		m.Target = "the MaaS database"
+		return m.changeDatabase(req.Database)
+	}
+	return m.unpublish(req.Project, entry.Name, true)
+}
+
+// TeardownMaaSPlatform removes the MaaS platform this tool set up (Clean up
+// everything).
+func TeardownMaaSPlatform(c *kube.Client) (*types.OperationResponse, error) {
+	return RunMaaS(c, types.MaaSRequest{Action: "teardown"}, nil)
+}
+
+// UnpublishMaaSModel unpublishes every model this tool published in
+// project (Clean up everything), one after the other; it stops at the
+// first that fails.
+func UnpublishMaaSModel(c *kube.Client, project string) (*types.OperationResponse, error) {
+	var logs, done []string
+	for _, entry := range ModelCatalog {
+		if entry.Type != ModelTypeChat {
+			continue
+		}
+		published, err := MaaSPublishedIn(c, project, entry.Name)
+		if err != nil {
+			return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot check whether %s in %s is published: %v.", entry.Name, project, err), Logs: logs, ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
+		}
+		if !published {
+			continue
+		}
+		res, _ := RunMaaS(c, types.MaaSRequest{Action: "unpublish", Project: project, Model: entry.Name}, nil)
+		logs = append(logs, res.Logs...)
+		if !res.Success {
+			res.Logs = logs
+			return res, nil
+		}
+		done = append(done, res.Message)
+	}
+	if len(done) == 0 {
+		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("No model of this tool is published in %s; nothing to undo.", project), Logs: logs}, nil
+	}
+	return &types.OperationResponse{Success: true, Message: strings.Join(done, " "), Logs: logs}, nil
+}
+
+// --- the gateway ----------------------------------------------------------------
+
+// maasGatewayPlan is the gateway's objects as setup or a publication writes
+// them, with what was read of each.
+type maasGatewayPlan struct {
+	objects map[string]map[string]any
+	current map[string]kube.ObjectMeta
+	found   map[string]bool
+	// classMissing: GatewayClass openshift-default does not exist; setup
+	// creates it (and nothing ever changes or deletes it).
+	classMissing bool
+	host         string
+}
+
+// planMaaSGateway reads the class and the gateway this tool writes, for the
+// namespaces the gateway admits. A refusal is a message and a code.
+func planMaaSGateway(c *kube.Client, infraNS string, published []string) (*maasGatewayPlan, string, string) {
+	plan := &maasGatewayPlan{current: map[string]kube.ObjectMeta{}, found: map[string]bool{}}
+	meta, ok, err := kube.ReadObjectMeta(c, maasObjectPath("Gateway", ""))
+	if err != nil {
+		return nil, fmt.Sprintf("Cannot read %s; nothing was changed: %v.%s", maasDesc("Gateway", ""), err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err)
+	}
+	plan.current["Gateway"], plan.found["Gateway"] = meta, ok
+	cm, cmOK, err := kube.ReadObjectMeta(c, maasObjectPath("ConfigMap", ""))
+	if err != nil {
+		return nil, fmt.Sprintf("Cannot read %s; nothing was changed: %v.%s", maasDesc("ConfigMap", ""), err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err)
+	}
+	plan.current["ConfigMap"], plan.found["ConfigMap"] = cm, cmOK
+	if ok && meta.Terminating() {
+		return nil, fmt.Sprintf("%s is still being deleted. Wait until it is gone, then try again.", maasDesc("Gateway", "")), "terminating"
+	}
+	// A gateway someone else made is used as it is, with whatever options
+	// it names: the options ConfigMap matters only to the tool's own.
+	if ok && !gatewayOwned(meta) {
+		return nil, "", "foreign"
+	}
+	if cmOK && !ToolOwned(cm) {
+		return nil, fmt.Sprintf("%s exists and was not created by this tool. Nothing was changed.", maasDesc("ConfigMap", "")), "not_managed"
+	}
+	// setup-gateway.sh uses an existing openshift-default as it is; only
+	// OpenShift's own controller's.
+	body, present, err := c.GetOptional(maasGatewayClassPath())
+	switch {
+	case err != nil:
+		return nil, fmt.Sprintf("Cannot read GatewayClass %s; nothing was changed: %v.", maasGatewayClass, err), kube.ErrorCodeFromK8sErr(err)
+	case !present:
+		plan.classMissing = true
+	default:
+		var gc struct {
+			Spec struct {
+				ControllerName string `json:"controllerName"`
+			} `json:"spec"`
+		}
+		_ = json.Unmarshal(body, &gc)
+		if gc.Spec.ControllerName != gatewayControllerName {
+			return nil, fmt.Sprintf("GatewayClass %s exists and belongs to controller %q instead of OpenShift's (%s). Nothing was changed.", maasGatewayClass, gc.Spec.ControllerName, gatewayControllerName), "not_managed"
+		}
+	}
+	domain, err := clusterAppsDomain(c)
+	if err != nil {
+		return nil, fmt.Sprintf("Cannot find the cluster's apps domain for maas.<domain>; nothing was changed: %v.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "prerequisites")
+	}
+	cert, err := defaultIngressCertificate(c)
+	if err != nil {
+		return nil, fmt.Sprintf("Cannot find the cluster's default ingress certificate; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err)
+	}
+	plan.objects = maasGatewayObjects(domain, cert, maasGatewayNamespaces(infraNS, published))
+	plan.host = maasHostPrefix + domain
+	return plan, "", ""
+}
+
+func (m *Run) applyGateway(plan *maasGatewayPlan, dryRun bool) (string, string) {
+	if plan.classMissing {
+		// Create only (setup_gatewayclass); one created meanwhile is used.
+		data, _ := json.Marshal(plan.objects["GatewayClass"])
+		var query url.Values
+		if dryRun {
+			query = url.Values{"dryRun": {"All"}}
+		}
+		if _, _, err := m.Client.Do(http.MethodPost, envkit.WithToolFieldManager(rhoai.ClusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "")), "application/json", data, query); err != nil && !kube.IsK8sConflict(err) {
+			return fmt.Sprintf("Failed to create GatewayClass %s: %v.%s", maasGatewayClass, err, kube.TemplateHint(err)), MaaSWriteCode(err)
+		}
+		if !dryRun {
+			plan.classMissing = false
+			m.Logs = append(m.Logs, "OK: GatewayClass "+maasGatewayClass+" created")
+		}
+	}
+	for _, kind := range []string{"ConfigMap", "Gateway"} {
+		k := kind
+		read := func() (kube.ObjectMeta, bool, error) { return kube.ReadObjectMeta(m.Client, maasObjectPath(k, "")) }
+		owned := gatewayOwned
+		if kind == "ConfigMap" {
+			owned = ToolOwned
+		}
+		action, meta, found, err := envkit.EnsureToolObject(m.Client, maasDesc(kind, ""), maasObjectPath(kind, ""), maasCreatePath(kind, ""), plan.objects[kind], plan.current[kind], plan.found[kind], read, owned, dryRun)
+		plan.current[kind], plan.found[kind] = meta, found
+		if err != nil {
+			if dryRun {
+				return fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.%s", maasDesc(kind, ""), err, kube.TemplateHint(err)), MaaSWriteCode(err)
+			}
+			return fmt.Sprintf("Failed to apply %s: %v.%s", maasDesc(kind, ""), err, kube.TemplateHint(err)), MaaSWriteCode(err)
+		}
+		if !dryRun {
+			m.Logs = append(m.Logs, fmt.Sprintf("OK: %s %s", maasDesc(kind, ""), action))
+		}
+	}
+	return "", ""
+}
+
+// patchModelsAsAService sets aigateway.modelsAsAService.managementState as
+// field manager rhoai-nightly-updater-maas-dsc: the API server then tells
+// whether the value is still the tool's (dscMaaSOwned).
+func patchModelsAsAService(c *kube.Client, state string) error {
+	path, err := rhoai.DataScienceClusterPath(c)
+	if err != nil {
+		return err
+	}
+	patch := fmt.Sprintf(`{"spec":{"components":{"aigateway":{"modelsAsAService":{"managementState":%q}}}}}`, state)
+	_, _, err = c.Do(http.MethodPatch, path, "application/merge-patch+json", []byte(patch), url.Values{"fieldManager": {maasDSCManager}})
+	return err
+}
+
+// dscMaaSOwned: the tool's field manager still owns
+// aigateway.modelsAsAService.managementState, so nobody has set it since
+// setup (the API server gives a field to whoever last set it).
+func dscMaaSOwned(d maasDSC) bool {
+	raw, _ := json.Marshal(d.read.Object["metadata"])
+	var meta kube.ObjectMeta
+	_ = json.Unmarshal(raw, &meta)
+	return meta.OwnsFieldPath([]string{maasDSCManager}, "f:spec", "f:components", "f:aigateway", "f:modelsAsAService", "f:managementState")
+}
+
+// ForeignMaaSObjects names the MaaSModelRefs (cluster-wide), and the
+// MaaSSubscriptions and MaaSAuthPolicies (in models-as-a-service), that
+// this tool did not create. An API that is not served lists nothing.
+func ForeignMaaSObjects(c *kube.Client) ([]string, error) {
+	objs, err := ListMaaSObjects(c)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, o := range objs {
+		if !ToolOwned(o.Meta) {
+			out = append(out, fmt.Sprintf("%s %s/%s", o.Kind, o.Meta.Namespace, o.Meta.Name))
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// maasObject is one MaaS object ListMaaSObjects found.
+type maasObject struct {
+	Kind string
+	Meta kube.ObjectMeta
+}
+
+// servedMaaSAPI is the MaaS group version the API server serves (its
+// preferred one), from discovery, and false when the group is not served
+// (404, or no versions). A discovery read that fails is an error: unlike
+// MaaSAPI it never falls back to v1alpha1, whose lists a cluster serving
+// only a newer version answers with 404.
+func servedMaaSAPI(c *kube.Client) (string, bool, error) {
+	served, err := GroupServed(c, MaaSGroup)
+	if err != nil || !served {
+		return "", served, err
+	}
+	v := rhoai.ServedVersions(c, MaaSGroup, nil)
+	if !v.Discovered || len(v.Versions) == 0 {
+		return "", true, fmt.Errorf("read the versions of the API group %s: discovery did not answer", MaaSGroup)
+	}
+	return MaaSGroup + "/" + v.Versions[0], true, nil
+}
+
+// ListMaaSObjects lists the MaaSModelRefs (cluster-wide), and the
+// MaaSSubscriptions and MaaSAuthPolicies (in models-as-a-service, where
+// maas-controller reads them), whoever made them, at the version
+// discovery reports. A group that is not served lists nothing. Once it is
+// served, every failure is returned, a 404 on a list included: the
+// callers decide whether MaaS is in use (the DataScienceCluster's MaaS
+// guard, Clean up MaaS and Change database), and "cannot tell" must not
+// read as "nobody uses it".
+func ListMaaSObjects(c *kube.Client) ([]maasObject, error) {
+	api, served, err := servedMaaSAPI(c)
+	if err != nil || !served {
+		return nil, err
+	}
+	var out []maasObject
+	for _, l := range []struct{ kind, path string }{
+		{"MaaSModelRef", "/apis/" + api + "/maasmodelrefs"},
+		{"MaaSSubscription", rhoai.NamespacedPath(api, "maassubscriptions", MaaSTenantNamespace, "")},
+		{"MaaSAuthPolicy", rhoai.NamespacedPath(api, "maasauthpolicies", MaaSTenantNamespace, "")},
+	} {
+		var items []struct {
+			Metadata kube.ObjectMeta `json:"metadata"`
+		}
+		if err := c.ListInto(l.path, &items); err != nil {
+			if kube.IsDecodeError(err) {
+				return nil, fmt.Errorf("parse the %s list: %w", l.kind, err)
+			}
+			return nil, fmt.Errorf("list %ss: %w", l.kind, err)
+		}
+		for _, it := range items {
+			out = append(out, maasObject{Kind: l.kind, Meta: it.Metadata})
+		}
+	}
+	return out, nil
+}
+
+// maasControllerGone says why maas-controller cannot remove a MaaSModelRef's
+// finalizer, or "" when it may: MaaS is not Managed in the
+// DataScienceCluster (the operator then removes maas-controller), or its
+// Deployment is gone from the applications namespace.
+func maasControllerGone(c *kube.Client) string {
+	if dsc, err := readMaaSDSC(c); err == nil && dsc.read.Object != nil && dsc.maas != "Managed" {
+		return "MaaS is " + kube.FirstNonEmpty(dsc.maas, "not set") + " in the DataScienceCluster"
+	}
+	if ns, err := rhoai.AppsNamespace(c); err == nil && deploymentAvailable(c, ns, "maas-controller") == "missing" {
+		return "Deployment " + ns + "/maas-controller does not exist"
+	}
+	return ""
+}
+
+// restartMaaSAPI rolls maas-api as `oc rollout restart` does, so it reads
+// a changed maas-db-config (maas-setup.md "Restarting maas-api"). A
+// missing Deployment needs nothing: the operator starts it with the Secret.
+func restartMaaSAPI(c *kube.Client, ns string) (bool, error) {
+	err := c.PatchJSON(rhoai.NamespacedPath("apps/v1", "deployments", ns, "maas-api"), map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
+		"annotations": map[string]string{components.RestartAnnotation: kube.Clock().Now().UTC().Format(time.RFC3339)},
+	}}}})
+	if kube.IsK8sNotFound(err) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// --- removal --------------------------------------------------------------------
+
+// maasTeardown is what Remove's check step read, for the steps after it.
+type maasTeardown struct {
+	rec   MaaSRecord
+	dsc   maasDSC
+	infra string
+	// objs: the Gateway, its options ConfigMap, then the database objects.
+	objs []maasTeardownObj
+}
+
+// maasTeardownObj is one object Remove read.
+type maasTeardownObj struct {
+	kind  string
+	meta  kube.ObjectMeta
+	found bool
+}
+
+// teardown removes the MaaS platform this tool set up, in reverse order of
+// setup. Steps: "check", "unpublish", "dsc", "gateway", "database". Each
+// step returns nil, nil to go on.
+func (m *Run) teardown() (*types.OperationResponse, error) {
+	t := &maasTeardown{}
+	if r, err := m.teardownCheck(t); r != nil || err != nil {
+		return r, err
+	}
+	// Published models first.
+	if r, err := m.teardownUnpublish(t); r != nil || err != nil {
+		return r, err
+	}
+	// MaaS in the DataScienceCluster, back to what it was.
+	if r, err := m.teardownDSC(t); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.teardownGateway(t); r != nil || err != nil {
+		return r, err
+	}
+	return m.teardownDatabase(t)
+}
+
+// teardownCheck reads what this tool set up into t, and refuses while
+// someone else uses MaaS. It ends the run when nothing was set up.
+func (m *Run) teardownCheck(t *maasTeardown) (*types.OperationResponse, error) {
+	c := m.Client
+	m.Step("check", "running", "Checking what this tool set up...")
+	rec, err := ReadMaaSRecord(c)
+	if err != nil {
+		return m.Fail("check", err.Error()+" Nothing was deleted.", kube.ErrorCodeFromK8sErr(err), "record read failed")
+	}
+	dsc, err := readMaaSDSC(c)
+	if err != nil {
+		return m.Fail("check", fmt.Sprintf("Cannot read the DataScienceCluster; nothing was deleted: %v.", err), kube.ErrorCodeFromK8sErr(err), "dsc read failed")
+	}
+	infra, err := maasDBNamespace(c, rec)
+	if err != nil {
+		return m.Fail("check", kube.SentenceStart(err.Error())+". Nothing was deleted.", "prerequisites", "infra namespace unknown")
+	}
+	var objs []maasTeardownObj
+	owned := 0
+	// The gateway and its options, then the database: maas-db-config and
+	// every database object of this tool, whichever kind it set up (a
+	// Change database that stopped half-way leaves two). The user's own
+	// database has no object here; one this tool did not create is kept.
+	for _, kind := range []string{"Gateway", "ConfigMap", "Secret", "Cluster", "PostgresDeployment", "PostgresService"} {
+		meta, found, err := kube.ReadObjectMeta(c, maasObjectPath(kind, infra))
+		if err != nil && (kind != "Cluster" || !kube.IsK8sNotFound(err)) {
+			return m.Fail("check", fmt.Sprintf("Cannot read %s; nothing was deleted: %v.", maasDesc(kind, infra), err), kube.ErrorCodeFromK8sErr(err), "read failed")
+		}
+		objs = append(objs, maasTeardownObj{kind, meta, found})
+		if found && ToolOwned(meta) {
+			owned++
+		}
+	}
+	// postgres-creds is never read: the record says whether this tool made
+	// one (deletePOCCreds deletes it by its UID).
+	if rec.POCCredsUID != "" {
+		owned++
+	}
+	if owned == 0 && !rec.DSCChanged && !rec.AIGatewayChanged && rec.InfraNamespace == "" && len(rec.Published) == 0 {
+		m.Step("check", "success", "Nothing of the MaaS platform was set up by this tool.")
+		return m.Done("The MaaS platform was not set up by this tool; nothing to remove.")
+	}
+	if rec.DSCChanged && dsc.maas == "Managed" && dsc.argoApp != "" {
+		return m.Fail("check", argo.GitOpsRefusal("The DataScienceCluster", dsc.argoApp, "turning off Models as a Service")+" Nothing was deleted."+dsc.argo.UnconfirmedNote(), kube.ErrorCodeGitOpsManaged, "dsc gitops")
+	}
+	if !rec.DSCChanged && dsc.maas == "Managed" && owned > 0 {
+		return m.Fail("check", "MaaS was turned on in the DataScienceCluster by someone else, and it uses the gateway and database this tool created: removing them would break it. Turn MaaS off first (aigateway.modelsAsAService Removed), then remove. Nothing was deleted.", "in_use", "maas on, not by tool")
+	}
+	if rec.DSCChanged && dsc.maas == "Managed" && !dscMaaSOwned(dsc) {
+		return m.Fail("check", fmt.Sprintf("aigateway.modelsAsAService in DataScienceCluster %[1]s was set after this tool's setup, by someone else or by an earlier version of this tool that did not mark its change, so this tool does not change it back, and the gateway and database MaaS uses stay. To remove the platform: if nobody else uses MaaS, set it to Removed yourself (oc patch datasciencecluster %[1]s --type=merge -p '{\"spec\":{\"components\":{\"aigateway\":{\"modelsAsAService\":{\"managementState\":\"Removed\"}}}}}'), wait until maas-api is gone, then Remove again: it deletes the gateway and database this tool created. Nothing was deleted.", dsc.name), "in_use", "dsc changed since setup")
+	}
+	// Others' use of MaaS: their model references, subscriptions and access
+	// policies stop working without the platform (and turning MaaS off
+	// takes maas-api and their keys away).
+	if others, err := ForeignMaaSObjects(c); err != nil {
+		return m.Fail("check", fmt.Sprintf("Cannot check whether others use MaaS, so nothing was deleted: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "maas list failed")
+	} else if len(others) > 0 {
+		return m.Fail("check", fmt.Sprintf("Others use this MaaS platform: %s. Removing it would break them. They unpublish and remove theirs first. Nothing was deleted.", strings.Join(others, ", ")), "in_use", "maas in use")
+	}
+	m.Step("check", "success", "Removing, in reverse order of setup: published models, MaaS in the DataScienceCluster, the gateway, the database.")
+	t.rec, t.dsc, t.infra, t.objs = rec, dsc, infra, objs
+	return nil, nil
+}
+
+// teardownUnpublish unpublishes this tool's models, then reads the record
+// they changed again.
+func (m *Run) teardownUnpublish(t *maasTeardown) (*types.OperationResponse, error) {
+	c, rec := m.Client, &t.rec
+	m.Step("unpublish", "running", "Unpublishing this tool's models...")
+	pubs := rec.Pubs()
+	for _, p := range pubs {
+		res, _ := (&Run{Client: c, Activity: "unpublish-maas", Target: fmt.Sprintf("model %s in %s", p.Model, p.Project)}).unpublish(p.Project, p.Model, false)
+		m.Logs = append(m.Logs, res.Logs...)
+		if !res.Success {
+			return m.Fail("unpublish", res.Message, res.ErrorCode, "unpublish failed")
+		}
+	}
+	m.Step("unpublish", "success", fmt.Sprintf("%d %s unpublished.", len(pubs), kube.Verb(len(pubs), "model", "models")))
+	var err error
+	if *rec, err = ReadMaaSRecord(c); err != nil {
+		return m.Fail("dsc", err.Error(), kube.ErrorCodeFromK8sErr(err), "record read failed")
+	}
+	return nil, nil
+}
+
+// teardownDSC sets modelsAsAService, then aigateway, back to what they were
+// where this tool changed them.
+func (m *Run) teardownDSC(t *maasTeardown) (*types.OperationResponse, error) {
+	c, rec, dsc, infra := m.Client, &t.rec, t.dsc, t.infra
+	if rec.DSCChanged {
+		prev := kube.FirstNonEmpty(rec.PreviousModelsAsAService, "Removed")
+		if dsc.maas == "Managed" {
+			m.Step("dsc", "running", fmt.Sprintf("Setting aigateway.modelsAsAService back to %s...", prev))
+			if err := patchModelsAsAService(c, prev); err != nil {
+				return m.Fail("dsc", fmt.Sprintf("Failed to restore modelsAsAService: %v. Nothing else was deleted.", err), kube.ErrorCodeFromK8sErr(err), "dsc patch failed")
+			}
+			gone, _ := kube.WaitForGone(c, maasDeleteTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
+				return deploymentAvailable(cc, infra, "maas-api") == "missing", nil
+			})
+			if !gone {
+				m.Step("dsc", "running", "maas-api is still being removed by the operator; continuing.")
+			}
+		}
+		rec.DSCChanged, rec.PreviousModelsAsAService = false, ""
+		if err := WriteMaaSRecord(c, *rec); err != nil {
+			return m.Fail("dsc", err.Error(), kube.ErrorCodeFromK8sErr(err), "record write failed")
+		}
+		m.Step("dsc", "running", "modelsAsAService is "+prev+" again, as before setup.")
+	} else {
+		m.Step("dsc", "running", "modelsAsAService not changed: this tool did not turn MaaS on.")
+	}
+	// The AI gateway itself, back to what it was, only while nobody has set
+	// it since setup (the API server gives the field to whoever last set it).
+	if rec.AIGatewayChanged {
+		prev := kube.FirstNonEmpty(rec.PreviousAIGateway, "Removed")
+		switch {
+		case dsc.aigateway != "Managed":
+			m.Logs = append(m.Logs, "aigateway is "+kube.FirstNonEmpty(dsc.aigateway, "not set")+" already")
+		case !dscAIGatewayOwned(dsc):
+			m.Logs = append(m.Logs, "Kept aigateway Managed: it was set after this tool's setup, by someone else")
+			m.Step("dsc", "running", "aigateway stays Managed: someone set it after this tool's setup.")
+		default:
+			if err := patchMaaSDSC(c, prev, "", false); err != nil {
+				return m.Fail("dsc", fmt.Sprintf("Failed to restore aigateway: %v. Nothing else was deleted.", err), kube.ErrorCodeFromK8sErr(err), "dsc patch failed")
+			}
+			m.Logs = append(m.Logs, "OK: aigateway is "+prev+" again")
+		}
+		rec.AIGatewayChanged, rec.PreviousAIGateway = false, ""
+		if err := WriteMaaSRecord(c, *rec); err != nil {
+			return m.Fail("dsc", err.Error(), kube.ErrorCodeFromK8sErr(err), "record write failed")
+		}
+	}
+	m.Step("dsc", "success", "The DataScienceCluster is back to what it was before setup, where this tool changed it.")
+	return nil, nil
+}
+
+// teardownDelete deletes o when this tool created it and waits for it to
+// go; whether it was deleted, or the refusal that ends the run.
+func (m *Run) teardownDelete(step, infra string, o maasTeardownObj) (bool, *types.OperationResponse) {
+	c := m.Client
+	if !o.found {
+		return false, nil
+	}
+	if !ToolOwned(o.meta) {
+		m.Logs = append(m.Logs, "Kept "+maasDesc(o.kind, infra)+": not created by this tool")
+		return false, nil
+	}
+	path := maasObjectPath(o.kind, infra)
+	m.Step(step, "running", "Deleting "+maasDesc(o.kind, infra)+"...")
+	if _, err := kube.DeleteWithUID(c, path, o.meta.UID); err != nil && !kube.IsK8sNotFound(err) {
+		res, _ := m.Fail(step, fmt.Sprintf("Failed to delete %s: %v. Remove again to retry.", maasDesc(o.kind, infra), err), MaaSWriteCode(err), "delete failed")
+		return false, res
+	}
+	if gone, _ := kube.WaitForDeletion(c, path, maasDeleteTimeout, envkit.PollInterval); !gone {
+		m.Logs = append(m.Logs, maasDesc(o.kind, infra)+" is still being deleted")
+	}
+	return true, nil
+}
+
+// teardownGateway deletes the Gateway and its options ConfigMap this tool
+// created, while no route is attached to the Gateway.
+func (m *Run) teardownGateway(t *maasTeardown) (*types.OperationResponse, error) {
+	c, infra, objs := m.Client, t.infra, t.objs
+	// The gateway goes only when no route is attached to it, as for the
+	// inference gateway: the gateway controller's count also sees routes of
+	// models published by others and routes made by hand.
+	if o := objs[0]; o.found && ToolOwned(o.meta) {
+		gw, err := readMaaSGateway(c)
+		if err != nil {
+			return m.Fail("gateway", fmt.Sprintf("Cannot read the gateway's attached routes, so the gateway and the database were not deleted: %v.", err), kube.ErrorCodeFromK8sErr(err), "gateway read failed")
+		}
+		if n := gw.gw.AttachedRoutes(); gw.found && n > 0 {
+			return m.Fail("gateway", fmt.Sprintf("%d %s attached to Gateway %s/%s (models published by others, or routes made by hand; `oc get httproute -A` lists them), so the gateway and the database were not deleted. Remove again once they are gone.", n, kube.Verb(n, "route is", "routes are"), inferenceGatewayNamespace, MaaSGatewayName), "in_use", "routes attached")
+		}
+	}
+	// The Gateway, then its options ConfigMap.
+	for _, o := range objs[:2] {
+		if _, res := m.teardownDelete("gateway", infra, o); res != nil {
+			return res, nil
+		}
+	}
+	m.Step("gateway", "success", "The gateway this tool created is deleted; OpenShift removes its load balancer. GatewayClass "+maasGatewayClass+" stays: it is OpenShift's shared class for gateways and costs nothing on its own.")
+	return nil, nil
+}
+
+// teardownDatabase deletes the database objects and the infrastructure
+// namespace this tool created, and ends the run with what was kept.
+func (m *Run) teardownDatabase(t *maasTeardown) (*types.OperationResponse, error) {
+	c, rec, infra, objs := m.Client, &t.rec, t.infra, t.objs
+	var kept []string
+	var deleted []string
+	devOurs := false
+	for _, o := range objs[2:] {
+		devOurs = devOurs || (o.kind == "PostgresDeployment" && o.found && ToolOwned(o.meta))
+		gone, res := m.teardownDelete("database", infra, o)
+		if res != nil {
+			return res, nil
+		}
+		if gone {
+			deleted = append(deleted, maasDesc(o.kind, infra))
+		}
+	}
+	// The development database's postgres-creds: by its recorded UID only;
+	// with no record it is kept, and the log says why.
+	if rec.POCCredsUID != "" || devOurs {
+		gone, res := m.deletePOCCreds("database", infra, rec)
+		if res != nil {
+			return res, nil
+		}
+		if gone {
+			deleted = append(deleted, maasDesc("PostgresSecret", infra))
+		}
+	}
+	if rec.DBNamespace != "" || rec.Database != "" {
+		rec.DBNamespace, rec.Database = "", ""
+		if err := WriteMaaSRecord(c, *rec); err != nil {
+			return m.Fail("database", err.Error(), kube.ErrorCodeFromK8sErr(err), "record write failed")
+		}
+	}
+	dbMsg := "Nothing of the database was created by this tool."
+	if len(deleted) > 0 {
+		dbMsg = "Deleted: " + strings.Join(deleted, ", ") + " (a database's data goes with it). A PostgreSQL of your own is never touched."
+	}
+	if ns := rec.InfraNamespace; ns != "" {
+		kept, err := m.deleteInfraNamespace(rec, ns)
+		if err != nil {
+			return m.Fail("database", err.Error(), kube.ErrorCodeFromK8sErr(err), "record write failed")
+		}
+		if kept != "" {
+			dbMsg += " " + kept
+		} else {
+			dbMsg += " Namespace " + ns + ", which this tool created, is being deleted."
+		}
+	}
+	m.Step("database", "success", dbMsg)
+	for _, o := range objs {
+		if o.found && !ToolOwned(o.meta) {
+			kept = append(kept, maasDesc(o.kind, infra)+" (not created by this tool)")
+		}
+	}
+	msg := "The MaaS platform this tool set up is removed. Kept, as shared platform pieces other RHOAI features use (RHOAI's inference gateway authentication is Kuadrant's), also where this tool installed them: Connectivity Link with its Kuadrant CR and Authorino TLS, and the CloudNativePG operator. Also kept: GatewayClass " + maasGatewayClass + " (OpenShift's shared class for gateways; it costs nothing on its own), and the namespaces and objects RHOAI's operator made"
+	if len(kept) > 0 {
+		msg += "; " + strings.Join(kept, "; ")
+	}
+	return m.Done(msg + ".")
+}
+
+// --- publish ----------------------------------------------------------------------
+
+// maasModelRefObjectFor is the MaaSModelRef of the tool's model as the
+// dashboard's MaaS option makes it (odh-dashboard rhoai-3.6 maas
+// maas-model-ref.ts postDeployMaaSModelRef L161-231, which passes the
+// model's UID and description to the BFF's buildModelRefUnstructured in
+// packages/maas/bff/internal/repositories/maasmodelrefs.go): owned by the
+// model with blockOwnerDeletion false, so garbage collection removes it
+// with the model (the MaaS record then shows the publication as partly
+// done, and Unpublish finishes it), and a description. The display name
+// and description are the catalog's (the caller's), not the object's,
+// which a project editor can change.
+func maasModelRefObjectFor(c *kube.Client, project, name, displayName, description, modelUID string) map[string]any {
+	annotations := map[string]any{"openshift.io/display-name": displayName}
+	if description != "" {
+		annotations["openshift.io/description"] = description
+	}
+	return map[string]any{
+		"apiVersion": MaaSAPI(c),
+		"kind":       "MaaSModelRef",
+		"metadata": map[string]any{
+			"name": name, "namespace": project, "labels": envkit.ToolLabels(),
+			"annotations": annotations,
+			"ownerReferences": []any{map[string]any{
+				"apiVersion": llmisvcAPIVersion, "kind": "LLMInferenceService", "name": name, "uid": modelUID, "blockOwnerDeletion": false,
+			}},
+		},
+		"spec": map[string]any{"modelRef": map[string]any{"kind": "LLMInferenceService", "name": name}},
+	}
+}
+
+func maasAccessPath(c *kube.Client, kind string) string {
+	if kind == "MaaSSubscription" {
+		return rhoai.NamespacedPath(MaaSAPI(c), "maassubscriptions", "models-as-a-service", "rhoai-nightly-updater-subscription")
+	}
+	return rhoai.NamespacedPath(MaaSAPI(c), "maasauthpolicies", "models-as-a-service", "rhoai-nightly-updater-access")
+}
+
+func maasAccessCreatePath(c *kube.Client, kind string) string {
+	if kind == "MaaSSubscription" {
+		return envkit.WithToolFieldManager(rhoai.NamespacedPath(MaaSAPI(c), "maassubscriptions", "models-as-a-service", ""))
+	}
+	return envkit.WithToolFieldManager(rhoai.NamespacedPath(MaaSAPI(c), "maasauthpolicies", "models-as-a-service", ""))
+}
+
+// applyMaaSObject creates or updates one of the tool's MaaS objects.
+func applyMaaSObject(c *kube.Client, desc, path, createPath string, obj map[string]any, dryRun bool) error {
+	cur, found, err := kube.ReadObjectMeta(c, path)
+	if err != nil {
+		return err
+	}
+	read := func() (kube.ObjectMeta, bool, error) { return kube.ReadObjectMeta(c, path) }
+	_, _, _, err = envkit.EnsureToolObject(c, desc, path, createPath, obj, cur, found, read, ToolOwned, dryRun)
+	return err
+}
+
+// isMaaSGatewayRef: a model gateway ref names the MaaS gateway.
+func isMaaSGatewayRef(name, namespace string) bool {
+	return name == MaaSGatewayName && namespace == inferenceGatewayNamespace
+}
+
+// gatewayRefNames are the model's gateway refs as "namespace/name".
+func (m LLMISvcObject) gatewayRefNames() []string {
+	if m.Spec.Router == nil || m.Spec.Router.Gateway == nil {
+		return nil
+	}
+	var names []string
+	for _, ref := range m.Spec.Router.Gateway.Refs {
+		names = append(names, kube.FirstNonEmpty(ref.Namespace, m.Metadata.Namespace)+"/"+ref.Name)
+	}
+	return names
+}
+
+// ModelHasMaaSRef: the model still routes through the MaaS gateway.
+func ModelHasMaaSRef(m LLMISvcObject) bool {
+	if m.Spec.Router == nil || m.Spec.Router.Gateway == nil {
+		return false
+	}
+	for _, ref := range m.Spec.Router.Gateway.Refs {
+		if isMaaSGatewayRef(ref.Name, ref.Namespace) {
+			return true
+		}
+	}
+	return false
+}
+
+// maasLivePubs are the publications the shared subscription and access
+// policy list: the recorded ones that still have this tool's MaaSModelRef
+// (not being deleted), plus with, minus without (zero for none). A
+// recorded one whose reference is gone is left out: a modelRef to nothing
+// would make the subscription, and so every publication, not ready.
+func maasLivePubs(c *kube.Client, rec MaaSRecord, with, without MaaSPub) ([]MaaSPub, error) {
+	var out []MaaSPub
+	for _, p := range rec.Pubs() {
+		if p == with || p == without {
+			continue
+		}
+		ref, found, err := readMaaSModelRef(c, p.Project, p.Model)
+		if err != nil {
+			return nil, fmt.Errorf("read MaaSModelRef %s: %w", p.Key(), err)
+		}
+		if found && ToolOwned(ref.Metadata) && !ref.Metadata.Terminating() {
+			out = append(out, p)
+		}
+	}
+	if with.Project != "" {
+		out = append(out, with)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key() < out[j].Key() })
+	return out, nil
+}
+
+// maasPublish is what Publish's check step found, for the steps after it.
+type maasPublish struct {
+	project, name string
+	limit         MaaSLimit
+	priority      int
+	refPath       string
+	model         LLMISvcObject
+	expect        ModelSpecExpectation
+	rec           MaaSRecord
+	// original: the refs Unpublish writes back.
+	original MaaSModelRefs
+	// gwPlan: nil when the gateway is someone else's.
+	gwPlan    *maasGatewayPlan
+	aud       MaaSAudience
+	sub, auth map[string]any
+	refObj    map[string]any
+}
+
+// publish publishes the tool's model name in project. Steps: "check"
+// (the platform, the model, the record, the gateway, who can use it, then
+// every write as a dry run), "gateway", "model", "maas", "ready". Each part
+// returns nil, nil to go on.
+func (m *Run) publish(project, name string, access *types.MaaSAudience, limitReq *types.MaaSLimit) (*types.OperationResponse, error) {
+	pl := &maasPublish{project: project, name: name}
+	if r, err := m.publishCheckPlatform(pl, limitReq); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.publishCheckModel(pl); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.publishRecordRefs(pl); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.publishCheckGateway(pl); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.publishAccess(pl, access); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.publishDryRuns(pl); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.publishGateway(pl); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.publishModel(pl); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.publishMaaSObjects(pl); r != nil || err != nil {
+		return r, err
+	}
+	return m.publishWaitReady(pl)
+}
+
+// publishCheckPlatform checks the limit, the platform, Connectivity Link's
+// version and the other subscriptions' priorities.
+func (m *Run) publishCheckPlatform(pl *maasPublish, limitReq *types.MaaSLimit) (*types.OperationResponse, error) {
+	c := m.Client
+	m.Step("check", "running", "Checking the platform and the model...")
+	limit, problem := ParseMaaSLimit(limitReq)
+	if problem != "" {
+		return m.Fail("check", "Invalid limit: "+problem+". Nothing was changed.", "validation", "invalid limit")
+	}
+	st, err := GetMaaSStatus(c)
+	if err != nil {
+		return m.Fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "status failed")
+	}
+	if !st.Platform.Ready {
+		return m.Fail("check", maasNotReadyReason(st)+" Nothing was changed.", "prerequisites", "platform not ready")
+	}
+	// Connectivity Link's version (fail closed when it cannot be read).
+	rhcl, err := envkit.ReadOperator(c, RHCLOperator)
+	if err != nil {
+		return m.Fail("check", fmt.Sprintf("Cannot read the installed operators, so this tool cannot check Connectivity Link's version; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err), "csv read failed")
+	}
+	if envkit.VersionCore(rhcl.Version) == rhclAuthBypassVersion {
+		return m.Fail("check", RHCLWarning(rhcl.Version)+" Nothing was changed.", "prerequisites", "rhcl auth bypass")
+	}
+	priority, others, err := maasSubscriptionPriority(c)
+	if err != nil {
+		return m.Fail("check", fmt.Sprintf("Cannot list the MaaSSubscriptions, so this tool cannot pick a priority below the others'; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err), "subscription list failed")
+	}
+	if len(others) > 0 && rhclBelowMinimum(rhcl.Version) {
+		return m.Fail("check", fmt.Sprintf("MaaS already has other subscriptions (%s), and with this tool's a signed-in user would have two or more. On Connectivity Link %s such a caller can hang (the MaaS docs ask for %s or later), so this tool does not publish until it is upgraded: Upgrade Connectivity Link on the MaaS tab does it. Nothing was changed.", strings.Join(others, ", "), rhcl.Version, rhclDocsMinimum), "prerequisites", "rhcl too old for several subscriptions")
+	}
+	infra, err := MaaSInfraNamespace(c)
+	if err != nil {
+		return m.Fail("check", kube.SentenceStart(err.Error())+". Nothing was changed.", "prerequisites", "infra namespace unknown")
+	}
+	if msg, code := MaaSNamespaceRefusal(c, infra); msg != "" {
+		return m.Fail("check", msg, code, "namespace not rhoai's")
+	}
+	pl.limit, pl.priority = limit, priority
+	return nil, nil
+}
+
+// publishCheckModel checks that the model is this tool's, ready and as set
+// up, and that its MaaSModelRef, if any, is this tool's.
+func (m *Run) publishCheckModel(pl *maasPublish) (*types.OperationResponse, error) {
+	c, project, name := m.Client, pl.project, pl.name
+	refPath, _ := maasModelRefPath(c, project, name)
+	model, found, err := ReadToolModel(c, project, name)
+	owned := false
+	if err == nil && found {
+		owned, err = ownsModel(c, model.Metadata)
+	}
+	switch {
+	case err != nil:
+		return m.Fail("check", fmt.Sprintf("Cannot read %s in %s: %v. Nothing was changed.", name, project, err), kube.ErrorCodeFromK8sErr(err), "model read failed")
+	case !found:
+		return m.Fail("check", fmt.Sprintf("Project %s has no %s of this tool. Set it up on the Models tab first. Nothing was changed.", project, name), "prerequisites", "no model")
+	case !owned:
+		return m.Fail("check", fmt.Sprintf("%s in %s was not created by this tool, so it is not published. Nothing was changed.", name, project), "not_managed", "model foreign")
+	}
+	if cond, ok := kube.FindCondition(model.Status.Conditions, "Ready"); (!ok || cond.Status != "True") && !m.newModel {
+		return m.Fail("check", fmt.Sprintf("%s in %s is not ready yet. Publish it once it is. Nothing was changed.", name, project), "prerequisites", "model not ready")
+	}
+	expect, msg := planModelSpecExpectation(c, name)
+	if msg != "" {
+		return m.Fail("check", msg+" Nothing was changed.", "prerequisites", "model spec unknown")
+	}
+	if _, _, spec, err := readModelGatewayRefsSpec(c, project, name); err != nil {
+		return m.Fail("check", fmt.Sprintf("Cannot read %s in %s: %v. Nothing was changed.", name, project, err), kube.ErrorCodeFromK8sErr(err), "model read failed")
+	} else if d := expect.differences(spec); len(d) > 0 {
+		return m.Fail("check", specChangedRefusal(name, project, d, "Nothing was changed."), "conflict", "model spec changed")
+	}
+	ref, refFound, err := readMaaSModelRef(c, project, name)
+	if err != nil {
+		return m.Fail("check", fmt.Sprintf("Cannot read MaaSModelRef %s/%s: %v. Nothing was changed.", project, name, err), kube.ErrorCodeFromK8sErr(err), "ref read failed")
+	}
+	if refFound && !ToolOwned(ref.Metadata) {
+		return m.Fail("check", fmt.Sprintf("Project %s already has a MaaSModelRef %s that this tool did not create; it is left alone. Nothing was changed.", project, name), "not_managed", "ref foreign")
+	}
+	pl.refPath, pl.model, pl.expect = refPath, model, expect
+	return nil, nil
+}
+
+// publishRecordRefs reads the record and sets in it what Unpublish writes
+// back: the model's refs and Gen AI metadata, and that it is published.
+// Nothing is written yet.
+func (m *Run) publishRecordRefs(pl *maasPublish) (*types.OperationResponse, error) {
+	c, project, name, model := m.Client, pl.project, pl.name, pl.model
+	rec, err := ReadMaaSRecord(c)
+	if err != nil {
+		return m.Fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
+	}
+	// The refs Unpublish writes back: no route for a model that has none
+	// (set up "Only inside the cluster", or unpublished after a setup
+	// through MaaS only), else the model's own while it has no MaaS
+	// gateway, else what this build recorded when it published, else no
+	// route for a model the Models tab set up through MaaS only (it was
+	// created on the MaaS gateway alone; nothing is recorded when its
+	// publish, part of the setup, stopped before the record was written, so
+	// a publish again from the MaaS tab finds it unpublished), else (a
+	// publication by an earlier build, always recorded as published) what
+	// that one replaced.
+	refs, _, spec, err := readModelGatewayRefsSpec(c, project, name)
+	if err != nil {
+		return m.Fail("check", fmt.Sprintf("Cannot read %s in %s: %v. Nothing was changed.", name, project, err), kube.ErrorCodeFromK8sErr(err), "model read failed")
+	}
+	original, recorded := rec.ModelRefsOf(project, name)
+	switch {
+	case !specHasRoute(spec) && !refs.hasMaaS():
+		original = MaaSModelRefs{NoRoute: true}
+	case !refs.hasMaaS():
+		original = MaaSModelRefs{Refs: refs}
+	case recorded && !refs.maasOnly():
+		return m.Fail("check", refsChangedRefusal(project, name, refs, original, "Then Publish again: it records them and routes the model through "+MaaSGatewayName+" alone."), "conflict", "model refs changed")
+	case !recorded && refs.maasOnly() && (m.newModel || !rec.IsPublished(project, name)):
+		original = MaaSModelRefs{NoRoute: true}
+	case !recorded:
+		original = MaaSModelRefs{Refs: refs.earlierBuildOriginal()}
+	}
+	rec.setModelRefs(project, name, original)
+	// What the model had before a first publish; a publish again (after a
+	// failed one) keeps what the first recorded.
+	if _, recordedGenAI := rec.GenAI[MaaSPub{project, name}.Key()]; !recordedGenAI {
+		rec.setGenAI(project, name, genAIOf(model.Metadata))
+	}
+	rec.SetPublished(project, name, true)
+	pl.rec, pl.original = rec, original
+	return nil, nil
+}
+
+// publishCheckGateway plans the tool's gateway with the project admitted;
+// a gateway someone else made has to admit it already.
+func (m *Run) publishCheckGateway(pl *maasPublish) (*types.OperationResponse, error) {
+	c, project, rec := m.Client, pl.project, pl.rec
+	infra, err := MaaSInfraNamespace(c)
+	if err != nil {
+		return m.Fail("check", kube.SentenceStart(err.Error())+". Nothing was changed.", "prerequisites", "infra namespace unknown")
+	}
+	gwPlan, msg, code := planMaaSGateway(c, infra, rec.Projects())
+	if msg != "" {
+		return m.Fail("check", msg, code, "gateway check failed")
+	}
+	if code == "foreign" {
+		gw, err := readMaaSGateway(c)
+		if err != nil {
+			return m.Fail("check", "Cannot read the gateway: "+err.Error(), kube.ErrorCodeFromK8sErr(err), "gateway read failed")
+		}
+		labels, msg, code := ProjectNamespace(c, project)
+		if msg != "" {
+			return m.Fail("check", msg+" Nothing was changed.", code, "project check failed")
+		}
+		if admits := gw.gw.Admits(project, labels); admits == "unknown" {
+			return m.Fail("check", fmt.Sprintf("Gateway %s/%s, which this tool did not create, selects the namespaces it admits in a way this tool cannot evaluate, so it cannot tell whether %s is admitted. Its owner checks the listeners' allowedRoutes. Nothing was changed.", inferenceGatewayNamespace, MaaSGatewayName, project), "prerequisites", "gateway admission unknown")
+		} else if admits == "no" {
+			return m.Fail("check", fmt.Sprintf("Gateway %s/%s, which this tool did not create, does not admit routes from %s. Its owner adds the project (maas-setup.md: label it maas.opendatahub.io/gateway-access=true when the gateway selects that label). Nothing was changed.", inferenceGatewayNamespace, MaaSGatewayName, project), "prerequisites", "gateway does not admit")
+		}
+		gwPlan = nil
+	}
+	pl.gwPlan = gwPlan
+	return nil, nil
+}
+
+// publishAccess builds the shared subscription and access policy with the
+// model added: the other models keep their limits, and access sets the
+// audience only for the first model.
+func (m *Run) publishAccess(pl *maasPublish, access *types.MaaSAudience) (*types.OperationResponse, error) {
+	c, project, name, rec, limit, priority := m.Client, pl.project, pl.name, pl.rec, pl.limit, pl.priority
+	live, err := maasLivePubs(c, rec, MaaSPub{project, name}, MaaSPub{})
+	if err != nil {
+		return m.Fail("check", fmt.Sprintf("Cannot check the other publications: %v. Nothing was changed.", err), kube.ErrorCodeFromK8sErr(err), "ref read failed")
+	}
+	// The other models keep their limits, and the audience is the
+	// subscription's: Publish sets it only for the first model.
+	cur, err := readMaaSToolSubscription(c)
+	if err != nil {
+		return m.Fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "subscription read failed")
+	}
+	aud := MaaSAudience{Everyone: true}
+	if cur.found {
+		aud = cur.audience
+	}
+	if access != nil {
+		want, problem := ParseMaaSAudience(access)
+		if problem != "" {
+			return m.Fail("check", "Invalid audience: "+problem+". Nothing was changed.", "validation", "invalid audience")
+		}
+		if cur.found && len(live) > 1 && !want.Equal(cur.audience) {
+			return m.Fail("check", fmt.Sprintf("Who can use the published models is set for all of them (now %s), and other models are published. Change it with Change who can use them on the MaaS tab, then publish. Nothing was changed.", cur.audience.Text()), "conflict", "audience differs")
+		}
+		aud = want
+	}
+	limits := map[string]MaaSLimit{}
+	for _, p := range live {
+		limits[p.Key()] = cur.limitOf(p)
+	}
+	limits[MaaSPub{project, name}.Key()] = limit
+	sub, auth := maasAccessObjects(c, live, limits, aud, priority)
+	if !aud.Everyone {
+		for _, p := range MaaSGroupProblems(c, aud.Groups) {
+			m.Step("check", "running", p.Message)
+		}
+	}
+	pl.aud, pl.sub, pl.auth = aud, sub, auth
+	return nil, nil
+}
+
+// publishDryRuns dry-runs the gateway and the MaaS objects, and ends the
+// check step.
+func (m *Run) publishDryRuns(pl *maasPublish) (*types.OperationResponse, error) {
+	c, project, name, model, refPath, gwPlan, sub, auth, limit, aud := m.Client, pl.project, pl.name, pl.model, pl.refPath, pl.gwPlan, pl.sub, pl.auth, pl.limit, pl.aud
+	// The catalog's display name and description (the text setup writes on
+	// the model), never the object's: MaaS shows them to every signed-in
+	// user, and a project editor can change the annotations.
+	entry, _ := CatalogEntry(name)
+	refObj := maasModelRefObjectFor(c, project, name, kube.FirstNonEmpty(entry.DisplayName, name), entry.Description, model.Metadata.UID)
+	if gwPlan != nil {
+		if msg, code := m.applyGateway(gwPlan, true); msg != "" {
+			return m.Fail("check", msg, code, "gateway dry run failed")
+		}
+	}
+	for _, w := range []struct {
+		desc, path, create string
+		obj                map[string]any
+	}{
+		{"MaaSModelRef " + project + "/" + name, refPath, envkit.WithToolFieldManager(rhoai.NamespacedPath(MaaSAPI(c), "maasmodelrefs", project, "")), refObj},
+		{"MaaSSubscription " + MaaSSubscriptionName, maasAccessPath(c, "MaaSSubscription"), maasAccessCreatePath(c, "MaaSSubscription"), sub},
+		{"MaaSAuthPolicy " + MaaSAuthPolicyName, maasAccessPath(c, "MaaSAuthPolicy"), maasAccessCreatePath(c, "MaaSAuthPolicy"), auth},
+	} {
+		if err := applyMaaSObject(c, w.desc, w.path, w.create, w.obj, true); err != nil {
+			if why := UnlimitedRefusal(err, limit); why != "" && strings.HasPrefix(w.desc, "MaaSSubscription") {
+				return m.Fail("check", why+" Nothing was changed.", "prerequisites", "unlimited not served")
+			}
+			return m.Fail("check", fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.", w.desc, err), MaaSWriteCode(err), "dry run failed")
+		}
+	}
+	m.Step("check", "success", fmt.Sprintf("The platform is ready and the model can be published: %s, for %s.", limit.Text(), aud.Text()))
+	pl.refObj = refObj
+	return nil, nil
+}
+
+// publishGateway writes the record, then lets the tool's gateway admit the
+// project.
+func (m *Run) publishGateway(pl *maasPublish) (*types.OperationResponse, error) {
+	c, project, rec, gwPlan := m.Client, pl.project, pl.rec, pl.gwPlan
+	if err := WriteMaaSRecord(c, rec); err != nil {
+		return m.Fail("gateway", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
+	}
+	if gwPlan != nil {
+		m.Step("gateway", "running", fmt.Sprintf("Letting the MaaS gateway admit routes from %s...", project))
+		if msg, code := m.applyGateway(gwPlan, false); msg != "" {
+			return m.Fail("gateway", msg+" Unpublish to undo.", code, "gateway apply failed")
+		}
+		m.Step("gateway", "success", fmt.Sprintf("The MaaS gateway admits routes from %s.", project))
+	} else {
+		m.Step("gateway", "success", "The gateway someone else made admits the project.")
+	}
+	return nil, nil
+}
+
+// publishModel routes the model through the MaaS gateway and takes it out
+// of Gen AI studio's AI assets.
+func (m *Run) publishModel(pl *maasPublish) (*types.OperationResponse, error) {
+	c, project, name, original, expect := m.Client, pl.project, pl.name, pl.original, pl.expect
+	if msg, code := m.routeModelThroughMaaS(project, name, original, expect); msg != "" {
+		return m.Fail("model", msg, code, "model routing failed")
+	}
+	if err := stripModelGenAI(c, project, name); err != nil {
+		return m.Fail("model", err.Error()+". Publish again to retry, or Unpublish to undo.", MaaSWriteCode(err), "genai metadata failed")
+	}
+	m.Logs = append(m.Logs, "OK: the model left Gen AI studio's AI assets (label "+genAIAssetLabel+" and annotation "+GenAIUseCaseAnnotation+" removed, as the dashboard's MaaS option does); MaaS lists it")
+	return nil, nil
+}
+
+// publishMaaSObjects applies the model reference, the subscription and the
+// authorization policy.
+func (m *Run) publishMaaSObjects(pl *maasPublish) (*types.OperationResponse, error) {
+	c, project, name, refPath, refObj, sub, auth := m.Client, pl.project, pl.name, pl.refPath, pl.refObj, pl.sub, pl.auth
+	m.Step("maas", "running", "Creating the model reference, the subscription and the authorization policy...")
+	for _, w := range []struct {
+		desc, path, create string
+		obj                map[string]any
+	}{
+		{"MaaSModelRef " + project + "/" + name, refPath, envkit.WithToolFieldManager(rhoai.NamespacedPath(MaaSAPI(c), "maasmodelrefs", project, "")), refObj},
+		{"MaaSSubscription " + MaaSSubscriptionName, maasAccessPath(c, "MaaSSubscription"), maasAccessCreatePath(c, "MaaSSubscription"), sub},
+		{"MaaSAuthPolicy " + MaaSAuthPolicyName, maasAccessPath(c, "MaaSAuthPolicy"), maasAccessCreatePath(c, "MaaSAuthPolicy"), auth},
+	} {
+		if err := applyMaaSObject(c, w.desc, w.path, w.create, w.obj, false); err != nil {
+			return m.Fail("maas", fmt.Sprintf("Failed to apply %s: %v. Unpublish to undo.", w.desc, err), MaaSWriteCode(err), "apply failed")
+		}
+		m.Logs = append(m.Logs, "OK: "+w.desc)
+	}
+	m.Step("maas", "success", fmt.Sprintf("MaaSModelRef %s/%s, MaaSSubscription %s and MaaSAuthPolicy %s are applied.", project, name, MaaSSubscriptionName, MaaSAuthPolicyName))
+	return nil, nil
+}
+
+// publishWaitReady waits for MaaS to accept the model and ends the run.
+func (m *Run) publishWaitReady(pl *maasPublish) (*types.OperationResponse, error) {
+	c, project, name := m.Client, pl.project, pl.name
+	m.Step("ready", "running", "Waiting for MaaS to accept the model...")
+	last := ""
+	ready, err := kube.WaitForGone(c, maasPublishTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
+		r, _, err := readMaaSModelRef(cc, project, name)
+		if err != nil {
+			return false, err
+		}
+		a := maasPhase(cc, maasAccessPath(c, "MaaSAuthPolicy"))
+		s := maasPhase(cc, maasAccessPath(c, "MaaSSubscription"))
+		msg := fmt.Sprintf("Model reference: %s; access: %s; subscription: %s", kube.FirstNonEmpty(r.Status.Phase, "pending"), kube.FirstNonEmpty(a, "pending"), kube.FirstNonEmpty(s, "pending"))
+		if msg != last {
+			last = msg
+			m.Step("ready", "running", msg)
+		}
+		return r.Status.Phase == "Ready" && a == "Active" && s == "Active", nil
+	})
+	if err != nil {
+		return m.Fail("ready", fmt.Sprintf("Stopped waiting: %v. The model is published; the MaaS tab shows its state.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "wait failed")
+	}
+	if !ready {
+		m.Step("ready", "success", fmt.Sprintf("Not ready after %s (%s). The MaaS tab shows its state.", ClockText(maasPublishTimeout), last))
+		return m.Done(fmt.Sprintf("%s in %s is published and still being accepted.", name, project))
+	}
+	m.Step("ready", "success", "MaaS lists the model.")
+	return m.Done(fmt.Sprintf("%s in %s is published to MaaS under subscription %s.", name, project, MaaSSubscriptionName))
+}
+
+// --- unpublish ---------------------------------------------------------------------
+
+// maasUnpublish is what Unpublish's check step read, for the steps after it.
+type maasUnpublish struct {
+	project, name string
+	// say steps, or only logs when the unpublish is part of a removal.
+	say      func(id, status, msg string)
+	rec      MaaSRecord
+	refPath  string
+	ref      maasModelRefObject
+	refFound bool
+	model    LLMISvcObject
+	// modelFound, modelOwned: the model exists, and this tool created it.
+	modelFound, modelOwned bool
+	// recordedRefs, recordedGenAI: what Unpublish writes back on the model.
+	recordedRefs     MaaSModelRefs
+	hasRecordedRefs  bool
+	recordedGenAI    maasGenAI
+	hasRecordedGenAI bool
+	live             []MaaSPub
+}
+
+// unpublish removes the publication of the tool's model name in project, in
+// reverse order: the authorization policy and subscription entries (the objects
+// when no other project is left), the model reference, the model's gateway
+// ref, and the project from the gateway. stepped is false when it runs as
+// part of a removal. Steps: "check", "maas", "model", "gateway". Each part
+// returns nil, nil to go on.
+func (m *Run) unpublish(project, name string, stepped bool) (*types.OperationResponse, error) {
+	say := func(id, status, msg string) {
+		if stepped {
+			m.Step(id, status, msg)
+		} else {
+			m.Logs = append(m.Logs, msg)
+		}
+	}
+	u := &maasUnpublish{project: project, name: name, say: say}
+	if r, err := m.unpublishCheck(u); r != nil || err != nil {
+		return r, err
+	}
+	// The authorization policy and the subscription.
+	if r, err := m.unpublishAccess(u); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.unpublishModelRef(u); r != nil || err != nil {
+		return r, err
+	}
+	if r, err := m.unpublishModel(u); r != nil || err != nil {
+		return r, err
+	}
+	return m.unpublishGateway(u)
+}
+
+// unpublishCheck reads the publication into u and refuses when the model's
+// gateways changed since publishing. It ends the run when the model is not
+// published.
+func (m *Run) unpublishCheck(u *maasUnpublish) (*types.OperationResponse, error) {
+	c, project, name, say := m.Client, u.project, u.name, u.say
+	say("check", "running", "Checking the publication...")
+	rec, err := ReadMaaSRecord(c)
+	if err != nil {
+		return m.Fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
+	}
+	refPath, _ := maasModelRefPath(c, project, name)
+	ref, refFound, err := readMaaSModelRef(c, project, name)
+	if err != nil {
+		return m.Fail("check", fmt.Sprintf("Cannot read MaaSModelRef %s/%s: %v. Nothing was changed.", project, name, err), kube.ErrorCodeFromK8sErr(err), "ref read failed")
+	}
+	if refFound && !ToolOwned(ref.Metadata) {
+		return m.Fail("check", fmt.Sprintf("MaaSModelRef %s/%s was not created by this tool; it is left alone.", project, name), "not_managed", "ref foreign")
+	}
+	model, modelFound, err := ReadToolModel(c, project, name)
+	if err != nil {
+		return m.Fail("check", fmt.Sprintf("Cannot read %s in %s: %v. Nothing was changed.", name, project, err), kube.ErrorCodeFromK8sErr(err), "model read failed")
+	}
+	modelOwned := false
+	if modelFound {
+		if modelOwned, err = ownsModel(c, model.Metadata); err != nil {
+			return m.Fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
+		}
+	}
+	routed := modelOwned && ModelHasMaaSRef(model)
+	if !refFound && !rec.IsPublished(project, name) && !routed {
+		say("check", "success", "Not published.")
+		return m.Done(fmt.Sprintf("%s in %s is not published; nothing to undo.", name, project))
+	}
+	// The refs to write back, captured before the record forgets them; a
+	// gateway someone added since publishing stops Unpublish here, before
+	// anything changes.
+	recordedRefs, hasRecordedRefs := rec.ModelRefsOf(project, name)
+	recordedGenAI, hasRecordedGenAI := rec.GenAI[MaaSPub{project, name}.Key()]
+	if routed {
+		refs, _, err := readModelGatewayRefs(c, project, name)
+		if err != nil {
+			return m.Fail("check", fmt.Sprintf("Cannot read %s in %s: %v. Nothing was changed.", name, project, err), kube.ErrorCodeFromK8sErr(err), "model read failed")
+		}
+		// A setup through MaaS only whose publish stopped before it recorded
+		// anything goes back to no route too (RouteBefore).
+		recordedRefs, hasRecordedRefs = rec.RouteBefore(project, name, refs)
+		if hasRecordedRefs && !refs.maasOnly() {
+			return m.Fail("check", refsChangedRefusal(project, name, refs, recordedRefs, "Then Unpublish again: it leaves the model's gateways as you set them."), "conflict", "model refs changed")
+		}
+	}
+	say("check", "success", "Unpublishing, in reverse order of publishing.")
+	live, err := maasLivePubs(c, rec, MaaSPub{}, MaaSPub{project, name})
+	if err != nil {
+		return m.Fail("check", fmt.Sprintf("Cannot check the other publications: %v. Nothing was changed.", err), kube.ErrorCodeFromK8sErr(err), "ref read failed")
+	}
+	rec.SetPublished(project, name, false)
+	u.rec, u.refPath, u.ref, u.refFound, u.model, u.modelFound, u.modelOwned = rec, refPath, ref, refFound, model, modelFound, modelOwned
+	u.recordedRefs, u.hasRecordedRefs, u.recordedGenAI, u.hasRecordedGenAI, u.live = recordedRefs, hasRecordedRefs, recordedGenAI, hasRecordedGenAI, live
+	return nil, nil
+}
+
+// unpublishAccess takes the model off the shared authorization policy and
+// subscription, and deletes them when no publication is left.
+func (m *Run) unpublishAccess(u *maasUnpublish) (*types.OperationResponse, error) {
+	c, say, live := m.Client, u.say, u.live
+	say("maas", "running", "Removing the model from the authorization policy and the subscription...")
+	// The models left keep their limits and the audience (fail closed: a
+	// subscription that cannot be read is not rewritten with defaults).
+	cur, err := readMaaSToolSubscription(c)
+	if err != nil {
+		return m.Fail("maas", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "subscription read failed")
+	}
+	limits := map[string]MaaSLimit{}
+	for _, p := range live {
+		limits[p.Key()] = cur.limitOf(p)
+	}
+	sub, auth := maasAccessObjects(c, live, limits, cur.audience, maasOwnSubscriptionPriority(c))
+	for _, w := range []struct {
+		kind, desc string
+		obj        map[string]any
+	}{{"MaaSAuthPolicy", "MaaSAuthPolicy " + MaaSAuthPolicyName, auth}, {"MaaSSubscription", "MaaSSubscription " + MaaSSubscriptionName, sub}} {
+		path := maasAccessPath(c, w.kind)
+		meta, found, err := kube.ReadObjectMeta(c, path)
+		if err != nil {
+			return m.Fail("maas", fmt.Sprintf("Cannot read %s: %v.", w.desc, err), kube.ErrorCodeFromK8sErr(err), "read failed")
+		}
+		if !found || !ToolOwned(meta) {
+			continue
+		}
+		if len(live) == 0 {
+			if _, err := kube.DeleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
+				return m.Fail("maas", fmt.Sprintf("Failed to delete %s: %v.", w.desc, err), MaaSWriteCode(err), "delete failed")
+			}
+			_, _ = kube.WaitForDeletion(c, path, maasDeleteTimeout, envkit.PollInterval)
+			m.Logs = append(m.Logs, "OK: "+w.desc+" deleted")
+			continue
+		}
+		if err := applyMaaSObject(c, w.desc, path, maasAccessCreatePath(c, w.kind), w.obj, false); err != nil {
+			return m.Fail("maas", fmt.Sprintf("Failed to update %s: %v.", w.desc, err), MaaSWriteCode(err), "apply failed")
+		}
+	}
+	return nil, nil
+}
+
+// unpublishModelRef deletes the tool's MaaSModelRef and waits for it to go,
+// taking maas-controller's finalizer off it when maas-controller is gone.
+func (m *Run) unpublishModelRef(u *maasUnpublish) (*types.OperationResponse, error) {
+	c, project, name, say, refPath, ref, refFound := m.Client, u.project, u.name, u.say, u.refPath, u.ref, u.refFound
+	if refFound {
+		path := refPath
+		if _, err := kube.DeleteWithUID(c, path, ref.Metadata.UID); err != nil && !kube.IsK8sNotFound(err) {
+			return m.Fail("maas", fmt.Sprintf("Failed to delete MaaSModelRef %s/%s: %v.", project, name, err), MaaSWriteCode(err), "delete failed")
+		}
+		// maas-controller removes its finalizer after deleting the policies it
+		// generated for the model. Without maas-controller nothing would:
+		// the tool takes it off its own reference and says what may be left.
+		if meta, found, err := kube.ReadObjectMeta(c, path); err == nil && found && meta.Terminating() && slices.Contains(meta.Finalizers, MaaSModelFinalizer) {
+			if why := maasControllerGone(c); why != "" {
+				var rest []string
+				for _, f := range meta.Finalizers {
+					if f != MaaSModelFinalizer {
+						rest = append(rest, f)
+					}
+				}
+				patch := map[string]any{"metadata": map[string]any{"resourceVersion": meta.ResourceVersion, "finalizers": rest}}
+				if err := c.PatchJSON(path, patch); err != nil && !kube.IsK8sNotFound(err) {
+					return m.Fail("maas", fmt.Sprintf("MaaSModelRef %s/%s is being deleted and maas-controller cannot finish it (%s); removing its finalizer failed: %v. Unpublish again to retry.", project, name, why, err), MaaSWriteCode(err), "finalizer patch failed")
+				}
+				m.Logs = append(m.Logs, fmt.Sprintf("maas-controller cannot finish deleting MaaSModelRef %s/%s (%s), so this tool removed the finalizer %s from its own reference. Policies maas-controller generated for the model may be left in %s: oc get authpolicy,tokenratelimitpolicy -n %s -l maas.opendatahub.io/model=%s,app.kubernetes.io/managed-by=maas-controller", project, name, why, MaaSModelFinalizer, project, project, name))
+			}
+		}
+		if gone, err := kube.WaitForDeletion(c, path, maasDeleteTimeout, envkit.PollInterval); err != nil || !gone {
+			return m.Fail("maas", fmt.Sprintf("MaaSModelRef %s/%s is still being deleted (maas-controller removes its finalizer; it must be running). Unpublish again to check.", project, name), "in_progress", "ref still deleting")
+		}
+	}
+	say("maas", "success", "The model reference is deleted, and the authorization policy and subscription no longer list the model.")
+	return nil, nil
+}
+
+// unpublishModel routes the model as before publishing and puts it back in
+// Gen AI studio's AI assets.
+func (m *Run) unpublishModel(u *maasUnpublish) (*types.OperationResponse, error) {
+	c, project, name, say := m.Client, u.project, u.name, u.say
+	modelFound, modelOwned, recordedRefs, hasRecordedRefs, recordedGenAI, hasRecordedGenAI := u.modelFound, u.modelOwned, u.recordedRefs, u.hasRecordedRefs, u.recordedGenAI, u.hasRecordedGenAI
+	// The model's gateway refs. The record keeps the publication until the
+	// route has left the MaaS gateway, so the tab shows a route that did not
+	// as partly published.
+	say("model", "running", "Routing the model as before publishing...")
+	switch {
+	case !modelFound:
+		say("model", "success", "The model is gone; nothing to change on it.")
+	case !modelOwned:
+		say("model", "success", "The model was not created by this tool; it is left alone.")
+	default:
+		if msg, code := m.RestoreModelRoute(project, name, recordedRefs, hasRecordedRefs, say); msg != "" {
+			return m.Fail("model", msg, code, "model routing failed")
+		}
+		if hasRecordedGenAI {
+			if err := restoreModelGenAI(c, project, name, recordedGenAI); err != nil {
+				return m.Fail("model", err.Error()+". Unpublish again to retry.", MaaSWriteCode(err), "genai metadata failed")
+			}
+			m.Logs = append(m.Logs, "OK: the model is back in Gen AI studio's AI assets (its "+genAIAssetLabel+" label and "+GenAIUseCaseAnnotation+" annotation)")
+		}
+	}
+	return nil, nil
+}
+
+// unpublishGateway writes the record, takes the project off the tool's
+// gateway when no other publication there needs it, and ends the run.
+func (m *Run) unpublishGateway(u *maasUnpublish) (*types.OperationResponse, error) {
+	c, project, name, say, rec := m.Client, u.project, u.name, u.say, u.rec
+	modelFound, modelOwned, recordedRefs := u.modelFound, u.modelOwned, u.recordedRefs
+	// The project on the gateway.
+	infra, infraErr := MaaSInfraNamespace(c)
+	if err := WriteMaaSRecord(c, rec); err != nil {
+		return m.Fail("gateway", err.Error(), kube.ErrorCodeFromK8sErr(err), "record write failed")
+	}
+	var gwPlan *maasGatewayPlan
+	var msg, code string
+	if infraErr != nil {
+		msg = kube.SentenceStart(infraErr.Error())
+	} else {
+		gwPlan, msg, code = planMaaSGateway(c, infra, rec.Projects())
+	}
+	switch {
+	case msg != "":
+		// The publication is gone; only the gateway's list of projects is
+		// stale, and the next setup or publication rewrites it.
+		say("gateway", "success", fmt.Sprintf("The MaaS gateway was not updated (%s) and may still admit routes from %s. Set up MaaS again to update it.", strings.TrimSuffix(msg, "."), project))
+		return m.Done(fmt.Sprintf("%s in %s is unpublished from MaaS; the MaaS gateway was not updated.", name, project))
+	case code == "foreign":
+		say("gateway", "success", "The gateway someone else made is not changed.")
+	case !gwPlan.found["Gateway"]:
+		say("gateway", "success", "There is no MaaS gateway to update.")
+	case slices.Contains(rec.Projects(), project):
+		say("gateway", "success", fmt.Sprintf("The MaaS gateway still admits routes from %s: another model of this tool is published there.", project))
+	default:
+		gwPlan.classMissing = false // only the gateway changes
+		if msg, code := m.applyGateway(gwPlan, false); msg != "" {
+			return m.Fail("gateway", msg, code, "gateway apply failed")
+		}
+		say("gateway", "success", fmt.Sprintf("The MaaS gateway no longer admits routes from %s.", project))
+	}
+	note := ""
+	// A model set up through MaaS only has no direct address to note.
+	if modelFound && modelOwned && !recordedRefs.NoRoute {
+		if note = directRouteNote(c, project, name); note != "" {
+			m.Logs = append(m.Logs, strings.TrimSpace(note))
+		}
+	}
+	return m.Done(fmt.Sprintf("%s in %s is unpublished from MaaS.%s", name, project, note))
+}

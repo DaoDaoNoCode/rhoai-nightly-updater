@@ -8,11 +8,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/node"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 const (
-	nsIDMSPath       = "/apis/config.openshift.io/v1/imagedigestmirrorsets/" + MirrorName
+	nsIDMSPath       = "/apis/config.openshift.io/v1/imagedigestmirrorsets/" + node.MirrorName
 	nsIDMSList       = "/apis/config.openshift.io/v1/imagedigestmirrorsets"
 	nsICSPList       = "/apis/operator.openshift.io/v1alpha1/imagecontentsourcepolicies"
 	nsITMSList       = "/apis/config.openshift.io/v1/imagetagmirrorsets"
@@ -74,9 +78,7 @@ func nodeSetupFake(t *testing.T, topology string, managed bool) (*resourceFake, 
 		"metadata": map[string]any{"resourceVersion": "42"},
 		"data":     map[string]any{".dockerconfigjson": nsDockerConfig(t, map[string]any{"auths": clusterLogins(nil)})},
 	})
-	orig := verifyQuayCredentials
-	verifyQuayCredentials = func(string) error { return nil }
-	t.Cleanup(func() { verifyQuayCredentials = orig })
+	t.Cleanup(registry.SetVerifyQuayCredentialsForTest(func(string) error { return nil }))
 	return f, c
 }
 
@@ -113,11 +115,11 @@ func writes(f *resourceFake) []string { return f.mutations() }
 
 func TestMirrorCreateOnSelfManaged(t *testing.T) {
 	f, c := nodeSetupFake(t, "HighlyAvailable", false)
-	plan, err := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+	plan, err := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorCreate})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !plan.Ready || plan.ControlPlane != ControlPlaneSelfManaged || len(plan.Changes) != 1 || !strings.Contains(plan.NodeImpact, "without draining or rebooting") || !strings.Contains(plan.Undo, "oc delete imagedigestmirrorset rhoai-quay-mirror") {
+	if !plan.Ready || plan.ControlPlane != rhoai.ControlPlaneSelfManaged || len(plan.Changes) != 1 || !strings.Contains(plan.NodeImpact, "without draining or rebooting") || !strings.Contains(plan.Undo, "oc delete imagedigestmirrorset rhoai-quay-mirror") {
 		t.Fatalf("plan %+v", plan)
 	}
 	if w := writes(f); len(w) != 0 {
@@ -127,7 +129,7 @@ func TestMirrorCreateOnSelfManaged(t *testing.T) {
 		t.Fatal("the plan made no server-side dry run of the create")
 	}
 
-	res, steps := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+	res, steps := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.MirrorCreate})
 	if !res.Success || !strings.Contains(res.Message, "Created ImageDigestMirrorSet rhoai-quay-mirror") {
 		t.Fatalf("result %+v", res)
 	}
@@ -152,7 +154,7 @@ func TestMirrorCreateOnSelfManaged(t *testing.T) {
 	}
 
 	// Done now: a second plan has nothing to do.
-	again, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+	again, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorCreate})
 	if !again.NothingToDo || again.Ready || !strings.Contains(again.State, "rhoai-quay-mirror already redirects") {
 		t.Fatalf("second plan %+v", again)
 	}
@@ -162,7 +164,7 @@ func TestMirrorCreateCountsAnExistingMirrorAndRefusesAForeignName(t *testing.T) 
 	t.Run("another IDMS redirects the source to quay.io/rhoai", func(t *testing.T) {
 		f, c := nodeSetupFake(t, "HighlyAvailable", false)
 		f.putJSON("/apis/config.openshift.io/v1/imagedigestmirrorsets/team-mirrors", `{"spec":{"imageDigestMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["mirror.example.com/rhoai","quay.io/rhoai"]}]}}`)
-		res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+		res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.MirrorCreate})
 		if !res.Success || !strings.Contains(res.Message, "ImageDigestMirrorSet team-mirrors already redirects registry.redhat.io/rhoai to quay.io/rhoai") || len(writes(f)) != 0 {
 			t.Fatalf("result %+v, writes %v", res, writes(f))
 		}
@@ -170,7 +172,7 @@ func TestMirrorCreateCountsAnExistingMirrorAndRefusesAForeignName(t *testing.T) 
 	t.Run("an ImageContentSourcePolicy redirects the source to quay.io/rhoai", func(t *testing.T) {
 		f, c := nodeSetupFake(t, "HighlyAvailable", false)
 		f.putJSON(nsICSPList+"/rhoai-icsp", `{"spec":{"repositoryDigestMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["quay.io/rhoai"]}]}}`)
-		plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+		plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorCreate})
 		if !plan.NothingToDo || !strings.Contains(plan.State, "ImageContentSourcePolicy rhoai-icsp already redirects") || len(writes(f)) != 0 {
 			t.Fatalf("plan %+v, writes %v", plan, writes(f))
 		}
@@ -181,11 +183,11 @@ func TestMirrorCreateCountsAnExistingMirrorAndRefusesAForeignName(t *testing.T) 
 	t.Run("another IDMS maps the source elsewhere", func(t *testing.T) {
 		f, c := nodeSetupFake(t, "HighlyAvailable", false)
 		f.putJSON("/apis/config.openshift.io/v1/imagedigestmirrorsets/team-mirrors", `{"spec":{"imageDigestMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["mirror.example.com/rhoai"]}]}}`)
-		plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+		plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorCreate})
 		if !plan.Ready || !strings.Contains(plan.State, "ImageDigestMirrorSet team-mirrors maps it to mirror.example.com/rhoai") || !strings.Contains(plan.State, "merges the mirrors") {
 			t.Fatalf("plan %+v", plan)
 		}
-		res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+		res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.MirrorCreate})
 		if !res.Success || !f.has(nsIDMSPath) || !f.has("/apis/config.openshift.io/v1/imagedigestmirrorsets/team-mirrors") {
 			t.Fatalf("result %+v", res)
 		}
@@ -193,18 +195,18 @@ func TestMirrorCreateCountsAnExistingMirrorAndRefusesAForeignName(t *testing.T) 
 	t.Run("the source mapped to quay.io/rhoai by tag only", func(t *testing.T) {
 		f, c := nodeSetupFake(t, "HighlyAvailable", false)
 		f.putJSON(nsITMSList+"/tags", `{"spec":{"imageTagMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["quay.io/rhoai"]}]}}`)
-		if plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate}); !plan.Ready {
+		if plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorCreate}); !plan.Ready {
 			t.Fatalf("an ITMS serves no pull by digest, so it does not count: plan %+v", plan)
 		}
 	})
 	t.Run("rhoai-quay-mirror exists for something else", func(t *testing.T) {
 		f, c := nodeSetupFake(t, "HighlyAvailable", false)
 		f.putJSON(nsIDMSPath, `{"spec":{"imageDigestMirrors":[{"source":"registry.example.com/other","mirrors":["quay.io/other"]}]}}`)
-		plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+		plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorCreate})
 		if plan.Ready || plan.RefusalCode != "foreign" || !strings.Contains(plan.Refusal, "does not redirect registry.redhat.io/rhoai") {
 			t.Fatalf("plan %+v", plan)
 		}
-		res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+		res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.MirrorCreate})
 		if res.Success || res.ErrorCode != "foreign" || len(writes(f)) != 0 {
 			t.Fatalf("result %+v, writes %v", res, writes(f))
 		}
@@ -220,15 +222,15 @@ func TestNodeSetupPerPlatform(t *testing.T) {
 		wantCode string // "" = ready
 		wantCP   string
 	}{
-		{"hosted: mirror", "External", false, NodeSetupMirrorCreate, "hosted", ControlPlaneHosted},
-		{"hosted: pull secret", "External", false, NodeSetupPullAdd, "hosted", ControlPlaneHosted},
-		{"hosted with SRE webhooks", "External", true, NodeSetupMirrorCreate, "hosted", ControlPlaneHosted},
-		{"topology unreadable: mirror", "", false, NodeSetupMirrorCreate, "unknown_topology", ""},
-		{"topology unreadable: pull secret removal", "", false, NodeSetupPullRemove, "unknown_topology", ""},
-		{"managed classic: mirror allowed", "HighlyAvailable", true, NodeSetupMirrorCreate, "", ControlPlaneManaged},
-		{"managed classic: pull secret refused", "HighlyAvailable", true, NodeSetupPullAdd, "managed", ControlPlaneManaged},
-		{"managed classic: pull secret removal refused", "HighlyAvailable", true, NodeSetupPullRemove, "managed", ControlPlaneManaged},
-		{"single node", "SingleReplica", false, NodeSetupPullAdd, "", ControlPlaneSelfManaged},
+		{"hosted: mirror", "External", false, node.MirrorCreate, "hosted", rhoai.ControlPlaneHosted},
+		{"hosted: pull secret", "External", false, node.PullAdd, "hosted", rhoai.ControlPlaneHosted},
+		{"hosted with SRE webhooks", "External", true, node.MirrorCreate, "hosted", rhoai.ControlPlaneHosted},
+		{"topology unreadable: mirror", "", false, node.MirrorCreate, "unknown_topology", ""},
+		{"topology unreadable: pull secret removal", "", false, node.PullRemove, "unknown_topology", ""},
+		{"managed classic: mirror allowed", "HighlyAvailable", true, node.MirrorCreate, "", rhoai.ControlPlaneManaged},
+		{"managed classic: pull secret refused", "HighlyAvailable", true, node.PullAdd, "managed", rhoai.ControlPlaneManaged},
+		{"managed classic: pull secret removal refused", "HighlyAvailable", true, node.PullRemove, "managed", rhoai.ControlPlaneManaged},
+		{"single node", "SingleReplica", false, node.PullAdd, "", rhoai.ControlPlaneSelfManaged},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := nodeSetupFake(t, tc.topology, tc.managed)
@@ -261,14 +263,14 @@ func TestNodeSetupPerPlatform(t *testing.T) {
 // reading the topology first: with both present every action is refused
 // as hosted, and the webhooks are not even listed.
 func TestNodeSetupHostedCheckComesFirst(t *testing.T) {
-	for _, action := range []string{NodeSetupMirrorCreate, NodeSetupMirrorRemove, NodeSetupPullAdd, NodeSetupPullRemove} {
+	for _, action := range []string{node.MirrorCreate, node.MirrorRemove, node.PullAdd, node.PullRemove} {
 		t.Run(action, func(t *testing.T) {
 			f, c := nodeSetupFake(t, "External", true)
 			plan, err := PlanNodeSetup(c, types.NodeSetupRequest{Action: action})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if plan.ControlPlane != ControlPlaneHosted || plan.RefusalCode != "hosted" {
+			if plan.ControlPlane != rhoai.ControlPlaneHosted || plan.RefusalCode != "hosted" {
 				t.Fatalf("plan %+v", plan)
 			}
 			if n := len(f.callsTo(http.MethodGet, webhookConfigsPath)); n != 0 {
@@ -281,7 +283,7 @@ func TestNodeSetupHostedCheckComesFirst(t *testing.T) {
 	}
 	t.Run("the status's control plane", func(t *testing.T) {
 		f, c := nodeSetupFake(t, "External", true)
-		if cp, err := readControlPlane(c); err != nil || cp != ControlPlaneHosted {
+		if cp, err := rhoai.ReadControlPlane(c); err != nil || cp != rhoai.ControlPlaneHosted {
 			t.Fatalf("readControlPlane = %q, %v", cp, err)
 		}
 		if n := len(f.callsTo(http.MethodGet, webhookConfigsPath)); n != 0 {
@@ -296,7 +298,7 @@ func TestNodeSetupHostedCheckComesFirst(t *testing.T) {
 // mirror is attempted, and RBAC or admission refuses it in the dry run,
 // before anything changes.
 func TestNodeSetupUnknownPlatformRefusesThePullSecret(t *testing.T) {
-	for _, action := range []string{NodeSetupPullAdd, NodeSetupPullRemove} {
+	for _, action := range []string{node.PullAdd, node.PullRemove} {
 		t.Run(action, func(t *testing.T) {
 			f, c := nodeSetupFake(t, "HighlyAvailable", false)
 			f.fail["GET "+webhookConfigsPath] = 403
@@ -321,12 +323,12 @@ func TestNodeSetupUnknownPlatformIsAttemptedAndItsRefusalHandled(t *testing.T) {
 	f.fail["GET /apis/admissionregistration.k8s.io/v1/validatingwebhookconfigurations"] = 403
 	f.failDryRun["POST "+nsIDMSList] = 403
 	f.failMessage["DRYRUN POST "+nsIDMSList] = `admission webhook "imagecontentpolicies-validation.managed.openshift.io" denied the request: Managed OpenShift customers may not create ImageContentSourcePolicy, ImageDigestMirrorSet, or ImageTagMirrorSet resources that configure mirrors that would conflict with system registries`
-	plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+	plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorCreate})
 	if plan.ControlPlane != "" || plan.Ready || plan.RefusalCode != "forbidden" ||
 		!strings.Contains(plan.Refusal, "denied the request") || !strings.Contains(plan.Refusal, "Do it yourself instead") {
 		t.Fatalf("plan %+v", plan)
 	}
-	res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+	res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.MirrorCreate})
 	if res.Success || res.ErrorCode != "forbidden" || len(writes(f)) != 0 {
 		t.Fatalf("run %+v, writes %v", res, writes(f))
 	}
@@ -337,14 +339,14 @@ func TestMirrorRemove(t *testing.T) {
 	t.Run("the setup's mirror", func(t *testing.T) {
 		f, c := nodeSetupFake(t, "HighlyAvailable", false)
 		f.putJSON(nsIDMSPath, ours)
-		plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorRemove})
+		plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorRemove})
 		if !plan.Ready || plan.UID == "" || plan.ResourceVersion == "" || !strings.Contains(plan.NodeImpact, "drains each node") || !strings.Contains(plan.NodeImpact, "single-node cluster is not drained") {
 			t.Fatalf("plan %+v", plan)
 		}
 		if !f.has(nsIDMSPath) {
 			t.Fatal("the plan deleted it")
 		}
-		res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupMirrorRemove, UID: plan.UID, ResourceVersion: plan.ResourceVersion})
+		res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.MirrorRemove, UID: plan.UID, ResourceVersion: plan.ResourceVersion})
 		if !res.Success || f.has(nsIDMSPath) {
 			t.Fatalf("result %+v, still there %v", res, f.has(nsIDMSPath))
 		}
@@ -356,15 +358,15 @@ func TestMirrorRemove(t *testing.T) {
 	t.Run("the docs' command made it, without the label", func(t *testing.T) {
 		f, c := nodeSetupFake(t, "HighlyAvailable", false)
 		f.putJSON(nsIDMSPath, `{"spec":{"imageDigestMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["quay.io/rhoai"]}]}}`)
-		if plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorRemove}); !plan.Ready {
+		if plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorRemove}); !plan.Ready {
 			t.Fatalf("plan %+v", plan)
 		}
 	})
 	t.Run("it changed after the review", func(t *testing.T) {
 		f, c := nodeSetupFake(t, "HighlyAvailable", false)
 		f.putJSON(nsIDMSPath, ours)
-		plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorRemove})
-		res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupMirrorRemove, UID: plan.UID, ResourceVersion: "7"})
+		plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorRemove})
+		res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.MirrorRemove, UID: plan.UID, ResourceVersion: "7"})
 		if res.Success || res.ErrorCode != "conflict" || !f.has(nsIDMSPath) || len(writes(f)) != 0 {
 			t.Fatalf("result %+v", res)
 		}
@@ -383,11 +385,11 @@ func TestMirrorRemove(t *testing.T) {
 			if tc.other != "" {
 				f.putJSON("/apis/config.openshift.io/v1/imagedigestmirrorsets/ocm-mirror", tc.other)
 			}
-			plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorRemove})
+			plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorRemove})
 			if plan.Ready || plan.RefusalCode != tc.code {
 				t.Fatalf("plan %+v", plan)
 			}
-			res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupMirrorRemove, ResourceVersion: "1"})
+			res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.MirrorRemove, ResourceVersion: "1"})
 			if res.Success || len(writes(f)) != 0 {
 				t.Fatalf("result %+v, writes %v", res, writes(f))
 			}
@@ -395,14 +397,14 @@ func TestMirrorRemove(t *testing.T) {
 	}
 	t.Run("nothing to remove", func(t *testing.T) {
 		_, c := nodeSetupFake(t, "HighlyAvailable", false)
-		if plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorRemove}); !plan.NothingToDo {
+		if plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorRemove}); !plan.NothingToDo {
 			t.Fatalf("plan %+v", plan)
 		}
 	})
 	t.Run("only an ImageContentSourcePolicy of someone else's", func(t *testing.T) {
 		f, c := nodeSetupFake(t, "HighlyAvailable", false)
 		f.putJSON(nsICSPList+"/rhoai-icsp", `{"spec":{"repositoryDigestMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["quay.io/rhoai"]}]}}`)
-		plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorRemove})
+		plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorRemove})
 		if plan.Ready || plan.RefusalCode != "foreign" || !strings.Contains(plan.Refusal, "ImageContentSourcePolicy rhoai-icsp") {
 			t.Fatalf("plan %+v", plan)
 		}
@@ -435,7 +437,7 @@ func TestMirrorRemoveNodeImpact(t *testing.T) {
 			if tc.path != "" {
 				f.putJSON(tc.path, tc.obj)
 			}
-			plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorRemove})
+			plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorRemove})
 			if !plan.Ready {
 				t.Fatalf("plan %+v", plan)
 			}
@@ -458,7 +460,7 @@ func TestMirrorRemoveNodeImpact(t *testing.T) {
 
 func TestPullSecretAddKeepsEveryOtherLogin(t *testing.T) {
 	f, c := nodeSetupFake(t, "HighlyAvailable", false)
-	plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupPullAdd})
+	plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.PullAdd})
 	if !plan.Ready || plan.ResourceVersion != "42" || !strings.Contains(plan.Changes[0], "add a quay.io/rhoai entry") || !strings.Contains(plan.Changes[0], "the other 2 registry logins stay as they are") {
 		t.Fatalf("plan %+v", plan)
 	}
@@ -468,7 +470,7 @@ func TestPullSecretAddKeepsEveryOtherLogin(t *testing.T) {
 			t.Fatalf("the plan carries a credential: %s", raw)
 		}
 	}
-	res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupPullAdd, ResourceVersion: plan.ResourceVersion})
+	res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.PullAdd, ResourceVersion: plan.ResourceVersion})
 	if !res.Success {
 		t.Fatalf("result %+v", res)
 	}
@@ -490,14 +492,14 @@ func TestPullSecretAddKeepsEveryOtherLogin(t *testing.T) {
 	// a hash of the token, never the token.
 	uid, _ := f.get(nsPullSecretPath)["metadata"].(map[string]any)["uid"].(string)
 	rec := nsReadRecord(t, f)
-	if rec == nil || rec.SecretUID != uid || rec.Key != "quay.io/rhoai" || !rec.matches(nsTokenPadded) || rec.At == "" || rec.By == "" {
+	if rec == nil || rec.SecretUID != uid || rec.Key != "quay.io/rhoai" || !rec.Matches(nsTokenPadded) || rec.At == "" || rec.By == "" {
 		t.Fatalf("record %+v", rec)
 	}
-	if plan.EntrySetBy != EntrySetByNone {
+	if plan.EntrySetBy != node.EntrySetByNone {
 		t.Fatalf("plan entrySetBy %q", plan.EntrySetBy)
 	}
-	again, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupPullAdd})
-	if !again.NothingToDo || again.EntrySetBy != EntrySetByTool || !strings.Contains(again.State, "the quay.io/rhoai entry this tool added") {
+	again, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.PullAdd})
+	if !again.NothingToDo || again.EntrySetBy != node.EntrySetByTool || !strings.Contains(again.State, "the quay.io/rhoai entry this tool added") {
 		t.Fatalf("second plan %+v", again)
 	}
 	assertNoCredentials(t, f, plan, res, again)
@@ -506,7 +508,7 @@ func TestPullSecretAddKeepsEveryOtherLogin(t *testing.T) {
 func TestPullSecretChangedAfterTheReviewChangesNothing(t *testing.T) {
 	t.Run("a different version than the plan's", func(t *testing.T) {
 		f, c := nodeSetupFake(t, "HighlyAvailable", false)
-		res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupPullAdd, ResourceVersion: "41"})
+		res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.PullAdd, ResourceVersion: "41"})
 		if res.Success || res.ErrorCode != "conflict" || len(writes(f)) != 0 {
 			t.Fatalf("result %+v, writes %v", res, writes(f))
 		}
@@ -523,7 +525,7 @@ func TestPullSecretChangedAfterTheReviewChangesNothing(t *testing.T) {
 				f.mu.Unlock()
 			}
 		}
-		res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupPullAdd, ResourceVersion: "42"})
+		res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.PullAdd, ResourceVersion: "42"})
 		if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "Nothing was changed") {
 			t.Fatalf("result %+v", res)
 		}
@@ -565,20 +567,20 @@ func TestPullSecretFailsClosed(t *testing.T) {
 			f.mu.Unlock()
 		}, "no_token"},
 		{"Quay refuses the token", func(t *testing.T, f *resourceFake) {
-			verifyQuayCredentials = func(string) error { return &quayAuthError{StatusCode: 401, Body: "unauthorized"} }
+			registry.SetVerifyQuayCredentialsForTest(func(string) error { return &registry.QuayAuthError{StatusCode: 401, Body: "unauthorized"} })
 		}, "quay"},
 		{"Quay cannot be asked", func(t *testing.T, f *resourceFake) {
-			verifyQuayCredentials = func(string) error { return &quayAuthError{StatusCode: 503, Body: "down"} }
+			registry.SetVerifyQuayCredentialsForTest(func(string) error { return &registry.QuayAuthError{StatusCode: 503, Body: "down"} })
 		}, "quay"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := nodeSetupFake(t, "HighlyAvailable", false)
 			tc.setup(t, f)
-			plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupPullAdd})
+			plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.PullAdd})
 			if plan.Ready || plan.RefusalCode != tc.code {
 				t.Fatalf("plan %+v", plan)
 			}
-			res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupPullAdd, ResourceVersion: "42"})
+			res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.PullAdd, ResourceVersion: "42"})
 			if res.Success || res.ErrorCode != tc.code || len(writes(f)) != 0 {
 				t.Fatalf("result %+v, writes %v", res, writes(f))
 			}
@@ -594,7 +596,7 @@ func TestPullSecretFailsClosed(t *testing.T) {
 func TestPullSecretErrorsAreRedacted(t *testing.T) {
 	f, c := nodeSetupFake(t, "HighlyAvailable", false)
 	f.failEcho["DRYRUN PATCH "+nsPullSecretPath] = 422
-	plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupPullAdd})
+	plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.PullAdd})
 	if plan.Ready || !strings.Contains(plan.Refusal, "[redacted]") {
 		t.Fatalf("plan %+v", plan)
 	}
@@ -613,21 +615,21 @@ func TestNodeSetupNamesStuckMachineConfigPools(t *testing.T) {
 	f.putJSON(nsPoolsPath+"/worker", `{"spec":{"paused":true}}`)
 	f.putJSON(nsPoolsPath+"/infra", `{"status":{"conditions":[{"type":"Degraded","status":"True"}]}}`)
 	f.putJSON(nsPoolsPath+"/master", `{"status":{"conditions":[{"type":"Updated","status":"True"}]}}`)
-	plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+	plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorCreate})
 	if !slices.Equal(plan.Pools, []string{"infra (degraded)", "worker (paused)"}) {
 		t.Fatalf("pools %v", plan.Pools)
 	}
 }
 
 func TestNodeSetupActionsAreLabelledInTheActivityLog(t *testing.T) {
-	for action, recorded := range nodeSetupActivity {
+	for action, recorded := range node.SetupActivity {
 		if !ValidNodeSetupAction(action) {
 			t.Errorf("%s is not an action", action)
 		}
-		if a, ok := activityActions[recorded]; !ok || a[0] != "setup" {
+		if a, ok := record.ActivityActions[recorded]; !ok || a[0] != "setup" {
 			t.Errorf("%s: activity %q has no setup label", action, recorded)
 		}
-		if activityFailedLabels[recorded] == "" {
+		if record.ActivityFailedLabels[recorded] == "" {
 			t.Errorf("%s: no failed label", recorded)
 		}
 	}

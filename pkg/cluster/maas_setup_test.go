@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"slices"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 )
 
 // The infrastructure namespace made by someone else between the check and
@@ -23,8 +25,8 @@ func TestCreateMaaSInfraNamespace_MadeMeanwhile(t *testing.T) {
 			f, c := newFakeAPI(t)
 			f.status("POST", "/api/v1/namespaces", http.StatusConflict, "AlreadyExists")
 			f.json("GET", "/api/v1/namespaces/"+infra, http.StatusOK, `{"metadata":{"name":"`+infra+`","annotations":`+tc.annotations+`}}`)
-			rec := maasRecord{InfraNamespace: "set before"}
-			r, err := (&maasRun{c: c}).createMaaSInfraNamespace(&rec, infra)
+			rec := serving.MaaSRecord{InfraNamespace: "set before"}
+			r, err := (&serving.Run{Client: c}).CreateMaaSInfraNamespace(&rec, infra)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -46,12 +48,12 @@ func TestCreateMaaSInfraNamespace_Created(t *testing.T) {
 	const infra = "redhat-ai-gateway-infra"
 	f, c := newFakeAPI(t)
 	f.json("POST", "/api/v1/namespaces", http.StatusCreated, `{"metadata":{"name":"`+infra+`"}}`)
-	rec := maasRecord{}
-	m := &maasRun{c: c}
-	if r, err := m.createMaaSInfraNamespace(&rec, infra); r != nil || err != nil {
+	rec := serving.MaaSRecord{}
+	m := &serving.Run{Client: c}
+	if r, err := m.CreateMaaSInfraNamespace(&rec, infra); r != nil || err != nil {
 		t.Fatalf("%+v %v", r, err)
 	}
-	if rec.InfraNamespace != infra || !slices.Contains(m.logs, "OK: Namespace "+infra+" created") {
-		t.Fatalf("record %q, logs %v", rec.InfraNamespace, m.logs)
+	if rec.InfraNamespace != infra || !slices.Contains(m.Logs, "OK: Namespace "+infra+" created") {
+		t.Fatalf("record %q, logs %v", rec.InfraNamespace, m.Logs)
 	}
 }

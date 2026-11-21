@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -40,7 +42,7 @@ func TestMaaSPublish_PublishesAModelKServeDefaulted(t *testing.T) {
 		initC := templateContainer(spec, "initContainers", "storage-initializer")
 		initC["resources"] = map[string]any{"requests": map[string]any{"cpu": "100m", "memory": "100Mi"}, "limits": map[string]any{"cpu": "1", "memory": "1Gi"}}
 		meta["managedFields"] = []any{
-			map[string]any{"manager": toolFieldManager, "operation": "Apply", "apiVersion": "serving.kserve.io/v1alpha2", "fieldsType": "FieldsV1",
+			map[string]any{"manager": envkit.ToolFieldManager, "operation": "Apply", "apiVersion": "serving.kserve.io/v1alpha2", "fieldsType": "FieldsV1",
 				"fieldsV1": map[string]any{"f:spec": map[string]any{"f:model": map[string]any{}, "f:template": map[string]any{}}}},
 			map[string]any{"manager": "manager", "operation": "Update", "apiVersion": "serving.kserve.io/v1alpha2", "fieldsType": "FieldsV1",
 				"fieldsV1": map[string]any{"f:spec": map[string]any{"f:template": map[string]any{
@@ -108,7 +110,7 @@ func TestMaaSPublish_RefusesAChangedModelSpec(t *testing.T) {
 // The released image (a Red Hat release of the preset's repository,
 // pinned by digest) and VLLM_CPU_IMAGE are what setup itself may write.
 func TestModelSpecExpectation_Images(t *testing.T) {
-	e := modelSpecExpectation{presetRepo: "registry.redhat.io/rhaii/vllm-cpu-rhel9", override: "mirror.example.com/vllm@sha256:abc"}
+	e := serving.ModelSpecExpectation{PresetRepo: "registry.redhat.io/rhaii/vllm-cpu-rhel9", Override: "mirror.example.com/vllm@sha256:abc"}
 	for img, want := range map[string]bool{
 		"": true,
 		"registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:0123": true,
@@ -117,7 +119,7 @@ func TestModelSpecExpectation_Images(t *testing.T) {
 		"registry.redhat.io/rhaii/other@sha256:0123":          false,
 		"quay.io/someone/vllm-cpu-rhel9@sha256:0123":          false,
 	} {
-		if got := e.imageAllowed(img); got != want {
+		if got := e.ImageAllowed(img); got != want {
 			t.Errorf("imageAllowed(%q) = %v, want %v", img, got, want)
 		}
 	}

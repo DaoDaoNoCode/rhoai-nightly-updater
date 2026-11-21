@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 )
 
 const (
@@ -69,9 +71,7 @@ func TestVerifyNodeReadiness_PullSecretMissing(t *testing.T) {
 
 // An IDMS list that fails is not reported as an unconfigured mirror.
 func TestVerifyNodeReadiness_IDMSReadFails(t *testing.T) {
-	orig := verifyQuayCredentials
-	verifyQuayCredentials = func(string) error { return nil }
-	defer func() { verifyQuayCredentials = orig }()
+	defer registry.SetVerifyQuayCredentialsForTest(func(string) error { return nil })()
 
 	cases := []struct {
 		name     string
@@ -112,9 +112,7 @@ func TestVerifyNodeReadiness_IDMSReadFails(t *testing.T) {
 }
 
 func TestVerifyNodeReadiness_IDMSMissing(t *testing.T) {
-	orig := verifyQuayCredentials
-	verifyQuayCredentials = func(string) error { return nil }
-	defer func() { verifyQuayCredentials = orig }()
+	defer registry.SetVerifyQuayCredentialsForTest(func(string) error { return nil })()
 
 	client, cleanup := newMockClient(map[string]mockResponse{
 		nodeReadinessPullSecretPath: {body: pullSecretBody(t, map[string]any{

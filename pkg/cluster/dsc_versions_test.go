@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -29,16 +32,16 @@ spec:
 `
 )
 
-var discoveredV3V2 = apiVersions{Versions: []string{"v3", "v2"}, Discovered: true}
+var discoveredV3V2 = rhoai.APIVersions{Versions: []string{"v3", "v2"}, Discovered: true}
 
 func TestDSCDefaults_AcceptsV3ALMExample(t *testing.T) {
 	mockDSCSamples(t, func(*http.Request) (int, string) {
 		t.Error("GitHub must not be used when alm-examples has the version")
 		return 500, ""
 	})
-	op := &installedOperator{Name: "rhods-operator.3.6.0", Version: "3.6.0", ALMExamples: almExamplesV3}
-	for _, versions := range []apiVersions{discoveredV3V2, {Versions: dscFallbackVersions}} {
-		d, err := defaultDSCSpecFor(context.Background(), op, versions, "")
+	op := &components.InstalledOperator{Name: "rhods-operator.3.6.0", Version: "3.6.0", ALMExamples: almExamplesV3}
+	for _, versions := range []rhoai.APIVersions{discoveredV3V2, {Versions: rhoai.DSCFallbackVersions}} {
+		d, err := components.DefaultDSCSpecFor(context.Background(), op, versions, "")
 		if err != nil || d.Source != "csv" || d.APIVersion != "v3" || d.Spec["apiVersion"] != "datasciencecluster.opendatahub.io/v3" {
 			t.Fatalf("versions %+v: %+v %v", versions, d, err)
 		}
@@ -46,7 +49,7 @@ func TestDSCDefaults_AcceptsV3ALMExample(t *testing.T) {
 			t.Fatalf("yaml %s", d.YAML)
 		}
 	}
-	d, err := defaultDSCSpecFor(context.Background(), op, discoveredV3V2, "v3")
+	d, err := components.DefaultDSCSpecFor(context.Background(), op, discoveredV3V2, "v3")
 	if err != nil || d.APIVersion != "v3" {
 		t.Fatalf("want v3: %+v %v", d, err)
 	}
@@ -61,8 +64,8 @@ func TestDSCDefaults_GitHubTriesServedVersionsInOrder(t *testing.T) {
 		}
 		return 200, testDSCSample
 	})
-	op := &installedOperator{Name: "rhods-operator.3.6.0", Version: "3.6.0"}
-	d, err := defaultDSCSpecFor(context.Background(), op, discoveredV3V2, "")
+	op := &components.InstalledOperator{Name: "rhods-operator.3.6.0", Version: "3.6.0"}
+	d, err := components.DefaultDSCSpecFor(context.Background(), op, discoveredV3V2, "")
 	if err != nil || d.APIVersion != "v3" || d.Source != "github" || len(fetched) != 1 ||
 		!strings.HasSuffix(fetched[0], "/rhoai-3.6/config/rhoai/samples/datasciencecluster_v3_datasciencecluster.yaml") {
 		t.Fatalf("%+v %v %v", d, err, fetched)
@@ -77,7 +80,7 @@ func TestDSCDefaults_GitHubTriesServedVersionsInOrder(t *testing.T) {
 		}
 		return 200, testDSCSample
 	})
-	d, err = defaultDSCSpecFor(context.Background(), &installedOperator{Version: "3.5.0"}, discoveredV3V2, "")
+	d, err = components.DefaultDSCSpecFor(context.Background(), &components.InstalledOperator{Version: "3.5.0"}, discoveredV3V2, "")
 	if err != nil || d.APIVersion != "v2" || len(fetched) != 2 || !strings.Contains(fetched[0], "_v3_") {
 		t.Fatalf("%+v %v %v", d, err, fetched)
 	}
@@ -85,7 +88,7 @@ func TestDSCDefaults_GitHubTriesServedVersionsInOrder(t *testing.T) {
 	// DSC_SAMPLE_REF keeps working, for the version asked for.
 	fetched = nil
 	t.Setenv("DSC_SAMPLE_REF", "main")
-	d, err = defaultDSCSpecFor(context.Background(), &installedOperator{Version: "3.6.0", ALMExamples: almExamplesV3}, discoveredV3V2, "v2")
+	d, err = components.DefaultDSCSpecFor(context.Background(), &components.InstalledOperator{Version: "3.6.0", ALMExamples: almExamplesV3}, discoveredV3V2, "v2")
 	if err != nil || d.Source != "github" || d.APIVersion != "v2" || len(fetched) != 1 || !strings.Contains(fetched[0], "/main/config/rhoai/samples/datasciencecluster_v2_") {
 		t.Fatalf("%+v %v %v", d, err, fetched)
 	}
@@ -98,9 +101,9 @@ func TestDSCDefaults_NeverAnotherVersion(t *testing.T) {
 		}
 		return 404, "404: Not Found"
 	})
-	op := &installedOperator{Name: "rhods-operator.3.6.0", Version: "3.6.0", ALMExamples: almExamplesV3}
-	_, err := defaultDSCSpecFor(context.Background(), op, discoveredV3V2, "v2")
-	var missing *missingDefaultsError
+	op := &components.InstalledOperator{Name: "rhods-operator.3.6.0", Version: "3.6.0", ALMExamples: almExamplesV3}
+	_, err := components.DefaultDSCSpecFor(context.Background(), op, discoveredV3V2, "v2")
+	var missing *components.MissingDefaultsError
 	if !errors.As(err, &missing) || !reflect.DeepEqual(missing.Available, []string{"v3"}) || missing.Want != "v2" {
 		t.Fatalf("err %v", err)
 	}
@@ -114,8 +117,8 @@ func TestDSCDefaults_NeverAnotherVersion(t *testing.T) {
 // whose alm-examples have only the v3 example.
 func dscV3BrokenAPI(t *testing.T) (*fakeAPI, *Client) {
 	t.Helper()
-	apiVersionsCache.Purge()
-	t.Cleanup(apiVersionsCache.Purge)
+	rhoai.APIVersionsCache.Purge()
+	t.Cleanup(rhoai.APIVersionsCache.Purge)
 	consoleURLCache.Purge()
 	t.Cleanup(consoleURLCache.Purge)
 	f, c := newFakeAPI(t)
@@ -123,8 +126,8 @@ func dscV3BrokenAPI(t *testing.T) (*fakeAPI, *Client) {
 	f.json("GET", "/apis/datasciencecluster.opendatahub.io/v3/datascienceclusters", 429, liveDSCv3Conversion429)
 	f.json("GET", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters", 200, liveDSCv2)
 	f.json("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/datascienceclusters.datasciencecluster.opendatahub.io", 200, testDSCCRD())
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), 200, installedCSVBody(almExamplesV3))
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"), 200, installedCSVBody(almExamplesV3))
 	return f, c
 }
 
@@ -141,7 +144,7 @@ func TestGetComponents_V3UnreadableComparesNothingAndSaysWhy(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertWrites(t, f)
-	if resp.DSCState != DSCStatePresent || resp.DSCAPIVersion != "datasciencecluster.opendatahub.io/v2" || len(resp.Components) != 3 {
+	if resp.DSCState != rhoai.DSCStatePresent || resp.DSCAPIVersion != "datasciencecluster.opendatahub.io/v2" || len(resp.Components) != 3 {
 		t.Fatalf("resp %+v", resp)
 	}
 	fb := resp.DSCVersionFallback
@@ -201,7 +204,7 @@ func TestAddDSCComponents_GroupedV3Components(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp := &types.ComponentsResponse{}
-	addDSCComponents(resp, dsc)
+	components.AddDSCComponents(resp, dsc)
 	got := map[string]string{}
 	for _, comp := range resp.Components {
 		got[comp.Name] = comp.ManagementState + "/" + comp.Status
@@ -224,13 +227,13 @@ func TestClientReturns429WithoutWaitingForRetryAfter(t *testing.T) {
 		_, _ = w.Write([]byte(liveDSCv3Conversion429))
 	}))
 	defer srv.Close()
-	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
-	start := clk.Now()
-	_, status, err := c.get("/apis/datasciencecluster.opendatahub.io/v3/datascienceclusters")
-	if elapsed := clk.Since(start); elapsed != 0 {
+	c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
+	start := kube.Clock().Now()
+	_, status, err := c.Get("/apis/datasciencecluster.opendatahub.io/v3/datascienceclusters")
+	if elapsed := kube.Clock().Since(start); elapsed != 0 {
 		t.Fatalf("waited %s", elapsed)
 	}
-	if status != 429 || calls != 1 || !isConversionWebhookError(err) {
+	if status != 429 || calls != 1 || !rhoai.IsConversionWebhookError(err) {
 		t.Fatalf("status %d calls %d err %v", status, calls, err)
 	}
 }

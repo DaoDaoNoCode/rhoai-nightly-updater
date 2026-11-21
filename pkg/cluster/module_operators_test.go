@@ -7,6 +7,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // live36Operator is one module operator as the RHOAI 3.6 platform applies
@@ -78,7 +83,7 @@ func rule(groups, resources, verbs []string, names ...string) map[string]any {
 	return r
 }
 
-var componentsGroup = []string{componentAPIGroup}
+var componentsGroup = []string{rhoai.ComponentAPIGroup}
 
 func platformDeployment(name, sa, ownerAPIVersion, ownerKind, ownerName string) map[string]any {
 	meta := map[string]any{"name": name, "namespace": liveAppsNS, "labels": map[string]any{"platform.opendatahub.io/part-of": "platform", "app.kubernetes.io/name": name}}
@@ -121,7 +126,7 @@ func newLive36ModuleOperatorWorld() *moduleOperatorWorld {
 		map[string]any{"metadata": map[string]any{"name": "odh-observability"}, "rules": []any{rule([]string{"monitoring.coreos.com"}, []string{"*"}, []string{"*"})}},
 	)
 	w.bindings = append(w.bindings,
-		crb("rhods-operator.3.6.0-6kq8d", "rhods-operator.3.6.0-6kq8d", saSubject(SubNS, "redhat-ods-operator-controller-manager")),
+		crb("rhods-operator.3.6.0-6kq8d", "rhods-operator.3.6.0-6kq8d", saSubject(rhoai.SubNS, "redhat-ods-operator-controller-manager")),
 		crb("cluster-admin", "cluster-admin", map[string]any{"kind": "Group", "name": "system:masters"}, saSubject("openshift-monitoring", "cluster-monitoring-operator")),
 		crb("odh-observability", "odh-observability", saSubject(liveAppsNS, "odh-observability")),
 	)
@@ -144,9 +149,9 @@ func newLive36ModuleOperatorWorld() *moduleOperatorWorld {
 	w.deployments = append(w.deployments,
 		platformDeployment("odh-observability", "odh-observability", "config.opendatahub.io/v1alpha1", "Platform", "default"),
 		// Operands: owned by their module CR.
-		platformDeployment("trustyai-service-operator-controller-manager", "trustyai-service-operator-controller-manager", componentAPIGroup+"/v1alpha1", "TrustyAI", "default-trustyai"),
-		platformDeployment("kuberay-operator", "kuberay-operator", componentAPIGroup+"/v1alpha1", "Ray", "default-ray"),
-		platformDeployment("rhods-dashboard", "rhods-dashboard", componentAPIGroup+"/v1alpha1", "Dashboard", "default-dashboard"),
+		platformDeployment("trustyai-service-operator-controller-manager", "trustyai-service-operator-controller-manager", rhoai.ComponentAPIGroup+"/v1alpha1", "TrustyAI", "default-trustyai"),
+		platformDeployment("kuberay-operator", "kuberay-operator", rhoai.ComponentAPIGroup+"/v1alpha1", "Ray", "default-ray"),
+		platformDeployment("rhods-dashboard", "rhods-dashboard", rhoai.ComponentAPIGroup+"/v1alpha1", "Dashboard", "default-dashboard"),
 	)
 	return w
 }
@@ -202,8 +207,8 @@ func serveLive36Kinds(f *fakeAPI) {
 // serveInstalledOperatorOwningKueue serves the installed 3.6 CSV, which owns
 // the Kueue CRD (the bundle ships it; config/rhoai/manifests/bases).
 func serveInstalledOperatorOwningKueue(f *fakeAPI) {
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), 200,
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"), 200,
 		`{"metadata":{"name":"rhods-operator.3.6.0"},"spec":{"version":"3.6.0","customresourcedefinitions":{"owned":[{"name":"datascienceclusters.datasciencecluster.opendatahub.io"},{"name":"kueues.components.platform.opendatahub.io"}]},"install":{"spec":{"deployments":[{"name":"rhods-operator"}]}}},"status":{"phase":"Succeeded"}}`)
 }
 
@@ -215,13 +220,13 @@ func TestModuleOperatorFinderLive36(t *testing.T) {
 	serveLive36Kinds(f)
 	serveLive36ModuleOperators(f)
 	serveInstalledOperatorOwningKueue(f)
-	finder := newModuleOperatorFinder(c, nil)
+	finder := components.NewModuleOperatorFinder(c, nil)
 	for _, o := range live36Operators {
 		cr := "default-" + o.Module
 		if o.Module == "mcplifecycleoperator" {
 			cr = "default"
 		}
-		op, why, err := finder.find(o.Module, cr)
+		op, why, err := finder.Find(o.Module, cr)
 		if err != nil || op == nil || op.Namespace != liveAppsNS || op.Name != o.Deployment || op.RHOAI {
 			t.Errorf("%s: op %+v, why %q, err %v", o.Module, op, why, err)
 			continue
@@ -230,13 +235,13 @@ func TestModuleOperatorFinderLive36(t *testing.T) {
 			t.Errorf("%s via %q", o.Module, op.Via)
 		}
 	}
-	op, why, err := finder.find("kueue", "default-kueue")
-	if err != nil || op == nil || !op.RHOAI || op.ref() != SubNS+"/rhods-operator" || !strings.Contains(op.Via, "owns CRD kueues.components.platform.opendatahub.io") {
+	op, why, err := finder.Find("kueue", "default-kueue")
+	if err != nil || op == nil || !op.RHOAI || op.Ref() != rhoai.SubNS+"/rhods-operator" || !strings.Contains(op.Via, "owns CRD kueues.components.platform.opendatahub.io") {
 		t.Fatalf("kueue: %+v %q %v", op, why, err)
 	}
 	// A kind nothing in the namespace may update, and that the CSV does not
 	// own, is unknown.
-	if op, why, err := finder.find("newmodule", "default"); op != nil || err != nil || !strings.Contains(why, "does not own CRD newmodules") {
+	if op, why, err := finder.Find("newmodule", "default"); op != nil || err != nil || !strings.Contains(why, "does not own CRD newmodules") {
 		t.Fatalf("newmodule: %+v %q %v", op, why, err)
 	}
 	for _, p := range []string{"/apis/rbac.authorization.k8s.io/v1/clusterroles", "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings", "/apis/apps/v1/namespaces/" + liveAppsNS + "/deployments"} {
@@ -263,7 +268,7 @@ func TestModuleOperatorFinderUnknown(t *testing.T) {
 			func(w *moduleOperatorWorld) {
 				o := liveOperator("mcplifecycleoperator")
 				w.dropDeployment(o.Deployment)
-				w.deployments = append(w.deployments, platformDeployment(o.Deployment, o.ServiceAccount, componentAPIGroup+"/v1alpha1", "MCPLifecycleOperator", "default"))
+				w.deployments = append(w.deployments, platformDeployment(o.Deployment, o.ServiceAccount, rhoai.ComponentAPIGroup+"/v1alpha1", "MCPLifecycleOperator", "default"))
 			}},
 		{"cluster-admin Deployment does not stand in for a gone operator", "trustyai", "default-trustyai", "no Deployment owned by the Platform runs as it", "",
 			func(w *moduleOperatorWorld) {
@@ -308,7 +313,7 @@ func TestModuleOperatorFinderUnknown(t *testing.T) {
 			w := newLive36ModuleOperatorWorld()
 			tc.edit(w)
 			w.serve(f)
-			op, why, err := newModuleOperatorFinder(c, nil).find(tc.module, tc.cr)
+			op, why, err := components.NewModuleOperatorFinder(c, nil).Find(tc.module, tc.cr)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -365,10 +370,10 @@ func TestModuleOperatorFinderFailsClosed(t *testing.T) {
 			if !f.routed(dsciV2List) {
 				f.json("GET", dsciV2List, 200, `{"items":[{"metadata":{"name":"default-dsci"},"spec":{"applicationsNamespace":"`+liveAppsNS+`"}}]}`)
 			}
-			if _, _, err := newModuleOperatorFinder(c, nil).find("aigateway", "default-aigateway"); err == nil || !strings.Contains(err.Error(), tc.want) {
+			if _, _, err := components.NewModuleOperatorFinder(c, nil).Find("aigateway", "default-aigateway"); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v", err)
 			}
-			got := strings.Join(newRemovalChecker(c).moduleBlockers("aigateway"), "; ")
+			got := strings.Join(dsc.NewRemovalChecker(c).ModuleBlockers("aigateway"), "; ")
 			if !strings.Contains(got, "could not identify its operator") || !strings.Contains(got, tc.want) || !strings.Contains(got, "won't remove it") {
 				t.Fatalf("blockers = %q", got)
 			}
@@ -398,20 +403,20 @@ func TestRemovalChecksUseDiscoveredOperators(t *testing.T) {
 	}
 	f.json("GET", "/apis/apps/v1/namespaces/"+liveAppsNS+"/deployments/ai-gateway-operator", http.StatusOK, `{"status":{"readyReplicas":1}}`)
 	f.json("GET", "/apis/apps/v1/namespaces/"+liveAppsNS+"/deployments/mcp-lifecycle-module-operator-controller-manager", http.StatusOK, `{"status":{"readyReplicas":0}}`)
-	rc := newRemovalChecker(c)
-	if got := rc.moduleBlockers("aigateway"); len(got) != 0 {
+	rc := dsc.NewRemovalChecker(c)
+	if got := rc.ModuleBlockers("aigateway"); len(got) != 0 {
 		t.Errorf("aigateway: %q", got)
 	}
-	if got := strings.Join(rc.moduleBlockers("mcplifecycleoperator"), "; "); !strings.Contains(got, "its operator redhat-ods-applications/mcp-lifecycle-module-operator-controller-manager removes the finalizers of the module CR (finalizer platform.opendatahub.io/finalizer) and its operands, but Deployment redhat-ods-applications/mcp-lifecycle-module-operator-controller-manager has no ready pod") {
+	if got := strings.Join(rc.ModuleBlockers("mcplifecycleoperator"), "; "); !strings.Contains(got, "its operator redhat-ods-applications/mcp-lifecycle-module-operator-controller-manager removes the finalizers of the module CR (finalizer platform.opendatahub.io/finalizer) and its operands, but Deployment redhat-ods-applications/mcp-lifecycle-module-operator-controller-manager has no ready pod") {
 		t.Errorf("mcplifecycleoperator: %q", got)
 	}
-	if got := rc.moduleBlockers("kueue"); len(got) != 0 {
+	if got := rc.ModuleBlockers("kueue"); len(got) != 0 {
 		t.Errorf("kueue (the RHOAI operator's own): %q", got)
 	}
-	if got := strings.Join(rc.moduleBlockers("trustyai"), "; "); got != unknownOperatorBlocker() {
+	if got := strings.Join(rc.ModuleBlockers("trustyai"), "; "); got != dsc.UnknownOperatorBlocker() {
 		t.Errorf("trustyai without its operator: %q", got)
 	}
-	if got := strings.Join(rc.partBlockers("trustyai"), "; "); got != unknownOperatorBlocker() {
+	if got := strings.Join(rc.PartBlockers("trustyai"), "; "); got != dsc.UnknownOperatorBlocker() {
 		t.Errorf("trustyai part: %q", got)
 	}
 }
@@ -424,13 +429,13 @@ func TestStuckModuleNamesDiscoveredOperator(t *testing.T) {
 	serveLive36ModuleOperators(f)
 	serveInstalledOperator(f)
 	f.json("GET", "/apis/apps/v1/namespaces/"+liveAppsNS+"/deployments/ai-gateway-operator", http.StatusOK, `{"status":{"readyReplicas":0}}`)
-	p := stuckModuleProblem(c, newModuleOperatorFinder(c, nil), stuckModule{Module: "aigateway", Name: "default-aigateway", Finalizers: []string{"platform.opendatahub.io/finalizer"}})
+	p := diagnostics.StuckModuleProblem(c, components.NewModuleOperatorFinder(c, nil), diagnostics.StuckModule{Module: "aigateway", Name: "default-aigateway", Finalizers: []string{"platform.opendatahub.io/finalizer"}})
 	ev := strings.Join(p.Evidence, "\n")
 	if !strings.Contains(ev, "owned by Platform default; its ServiceAccount ai-gateway-operator may update aigateways and aigateways/finalizers") ||
 		!strings.Contains(ev, "has no ready pod") || p.Fix != "Start redhat-ods-applications/ai-gateway-operator again; it removes the finalizer." {
 		t.Fatalf("%+v", p)
 	}
-	q := stuckModuleProblem(c, newModuleOperatorFinder(c, nil), stuckModule{Module: "newmodule", Name: "default"})
+	q := diagnostics.StuckModuleProblem(c, components.NewModuleOperatorFinder(c, nil), diagnostics.StuckModule{Module: "newmodule", Name: "default"})
 	if !strings.Contains(strings.Join(q.Evidence, "\n"), "Operator: not identified") {
 		t.Fatalf("%+v", q)
 	}
@@ -444,13 +449,13 @@ func TestStuckModuleNamesDiscoveredOperator(t *testing.T) {
 const servicesV1 = "/apis/services.platform.opendatahub.io/v1alpha1/"
 
 func serveDatabaseService(f *fakeAPI, w *moduleOperatorWorld, deployment bool) {
-	f.json("GET", "/apis/"+servicesAPIGroup, 200, `{"kind":"APIGroup","name":"services.platform.opendatahub.io","preferredVersion":{"groupVersion":"services.platform.opendatahub.io/v1alpha1","version":"v1alpha1"}}`)
+	f.json("GET", "/apis/"+rhoai.ServicesAPIGroup, 200, `{"kind":"APIGroup","name":"services.platform.opendatahub.io","preferredVersion":{"groupVersion":"services.platform.opendatahub.io/v1alpha1","version":"v1alpha1"}}`)
 	f.obj("/apis/services.platform.opendatahub.io/v1alpha1", map[string]any{"resources": []any{
 		map[string]any{"name": "databaseservices", "kind": "DatabaseService", "verbs": []string{"get", "list", "patch", "update"}},
 		map[string]any{"name": "databaseservices/status", "kind": "DatabaseService", "verbs": []string{"get", "patch", "update"}},
 		map[string]any{"name": "auths", "kind": "Auth", "verbs": []string{"get", "list", "patch", "update"}},
 	}})
-	sg := []string{servicesAPIGroup}
+	sg := []string{rhoai.ServicesAPIGroup}
 	w.roles = append(w.roles, map[string]any{"metadata": map[string]any{"name": "databaseservice-manager-role"}, "rules": []any{
 		rule(sg, []string{"databaseservices"}, []string{"get", "list", "update", "watch"}),
 		rule(sg, []string{"databaseservices/finalizers"}, []string{"update"}),
@@ -472,19 +477,19 @@ func TestDatabaseServiceModuleInTheServicesGroup(t *testing.T) {
 	w := newLive36ModuleOperatorWorld()
 	serveDatabaseService(f, w, true)
 	w.serve(f)
-	finder := newModuleOperatorFinder(c, nil)
-	op, why, err := finder.find("databaseservice", "default-databaseservice")
+	finder := components.NewModuleOperatorFinder(c, nil)
+	op, why, err := finder.Find("databaseservice", "default-databaseservice")
 	if err != nil || op == nil || op.Name != "databaseservice-operator" || !strings.Contains(op.Via, "databaseservices/finalizers") {
 		t.Fatalf("databaseservice: %+v %q %v", op, why, err)
 	}
-	if op, why, err := finder.find("auth", "auth"); op != nil || err != nil || !strings.Contains(why, "does not own CRD auths.services.platform.opendatahub.io") {
+	if op, why, err := finder.Find("auth", "auth"); op != nil || err != nil || !strings.Contains(why, "does not own CRD auths.services.platform.opendatahub.io") {
 		t.Fatalf("auth: %+v %q %v", op, why, err)
 	}
 	// A rule for the same resource in the components group grants nothing.
 	f.json("GET", servicesV1+"databaseservices", 200, `{"items":[{"metadata":{"name":"default-databaseservice","finalizers":["platform.opendatahub.io/finalizer"]}}]}`)
 	f.json("GET", "/apis/apps/v1/namespaces/"+liveAppsNS+"/deployments/databaseservice-operator", 200, `{"status":{"readyReplicas":1}}`)
 	f.json("GET", "/apis/apps/v1/namespaces/redhat-ods-operator/deployments/rhods-operator", 200, `{"status":{"readyReplicas":1}}`)
-	if got := newRemovalChecker(c).moduleBlockers("databaseservice"); len(got) != 0 {
+	if got := dsc.NewRemovalChecker(c).ModuleBlockers("databaseservice"); len(got) != 0 {
 		t.Fatalf("removal of databaseservice refused: %q", got)
 	}
 	old := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
@@ -495,14 +500,14 @@ func TestDatabaseServiceModuleInTheServicesGroup(t *testing.T) {
 	f.obj(componentsV1+"kueues", map[string]any{"items": []any{}})
 	f.obj(componentsV1+"newmodules", map[string]any{"items": []any{}})
 	f.obj(servicesV1+"auths", map[string]any{"items": []any{}})
-	stuck, err := stuckModuleCRs(c, time.Now())
+	stuck, err := diagnostics.StuckModuleCRs(c, time.Now())
 	if err != nil || len(stuck) != 1 || stuck[0].Module != "databaseservice" || stuck[0].CRD != "databaseservices.services.platform.opendatahub.io" {
 		t.Fatalf("stuck %+v %v", stuck, err)
 	}
-	if p := stuckModuleProblem(c, finder, stuck[0]); p.TechnicalCmd != "oc get databaseservices.services.platform.opendatahub.io default-databaseservice -o yaml" {
+	if p := diagnostics.StuckModuleProblem(c, finder, stuck[0]); p.TechnicalCmd != "oc get databaseservices.services.platform.opendatahub.io default-databaseservice -o yaml" {
 		t.Fatalf("cmd %q", p.TechnicalCmd)
 	}
-	_, warnings := cleanupStuckComponentCRs(c)
+	_, warnings := components.CleanupStuckCRs(c)
 	cleanupWarnings(t, warnings, "databaseservices/default-databaseservice has been deleting since "+old+", but its operator redhat-ods-applications/databaseservice-operator still exists")
 	assertWrites(t, f)
 }
@@ -521,7 +526,7 @@ func TestModuleOperatorRBACIsMatchedInTheKindsGroup(t *testing.T) {
 		}
 	}
 	w.serve(f)
-	if op, why, err := newModuleOperatorFinder(c, nil).find("databaseservice", "default-databaseservice"); op != nil || err != nil || !strings.Contains(why, "no ServiceAccount in redhat-ods-applications may update databaseservices") {
+	if op, why, err := components.NewModuleOperatorFinder(c, nil).Find("databaseservice", "default-databaseservice"); op != nil || err != nil || !strings.Contains(why, "no ServiceAccount in redhat-ods-applications may update databaseservices") {
 		t.Fatalf("%+v %q %v", op, why, err)
 	}
 }
@@ -556,15 +561,15 @@ func TestFinalizerOwnerCountsPods(t *testing.T) {
 				f.status("GET", "/api/v1/namespaces/"+liveAppsNS+"/pods", http.StatusForbidden, "Forbidden")
 			}
 			w.serve(f)
-			owner, err := newModuleOperatorFinder(c, nil).finalizerOwner("trustyai", "default-trustyai")
+			owner, err := components.NewModuleOperatorFinder(c, nil).FinalizerOwner("trustyai", "default-trustyai")
 			if tc.podsErr {
 				if err == nil || !strings.Contains(err.Error(), "list Pods in redhat-ods-applications") {
 					t.Fatalf("err = %v", err)
 				}
 				return
 			}
-			if err != nil || owner.gone() != tc.wantGone || !slices.Equal(owner.Pods, tc.wantPods) {
-				t.Fatalf("owner %+v gone=%v err %v", owner, owner.gone(), err)
+			if err != nil || owner.Gone() != tc.wantGone || !slices.Equal(owner.Pods, tc.wantPods) {
+				t.Fatalf("owner %+v gone=%v err %v", owner, owner.Gone(), err)
 			}
 		})
 	}

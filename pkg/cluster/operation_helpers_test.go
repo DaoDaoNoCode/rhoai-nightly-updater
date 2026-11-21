@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 )
 
 func helperServer(t *testing.T, h http.HandlerFunc) (*Client, context.CancelFunc) {
@@ -17,7 +19,7 @@ func helperServer(t *testing.T, h http.HandlerFunc) (*Client, context.CancelFunc
 	t.Cleanup(srv.Close)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	return &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: ctx}, cancel
+	return newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: ctx}), cancel
 }
 
 func TestApplySubscriptionWithRetry(t *testing.T) {
@@ -43,11 +45,11 @@ func TestApplySubscriptionWithRetry(t *testing.T) {
 				fmt.Fprint(w, `{}`)
 			})
 			var got []string
-			applyErr, cancelErr := applySubscriptionWithRetry(c, "/sub", sub, nil, func(attempt int, err error, willRetry bool, backoff time.Duration) {
+			applyErr, cancelErr := operator.ApplySubscriptionWithRetry(c, "/sub", sub, nil, func(attempt int, err error, willRetry bool, backoff time.Duration) {
 				state := "final"
 				if willRetry {
 					state = "retry"
-					if backoff != SubRetryBackoffs[attempt-1] {
+					if backoff != operator.SubRetryBackoffs[attempt-1] {
 						t.Errorf("attempt %d backoff %s", attempt, backoff)
 					}
 				}
@@ -62,7 +64,7 @@ func TestApplySubscriptionWithRetry(t *testing.T) {
 
 func TestApplySubscriptionWithRetry_CanceledWhileWaiting(t *testing.T) {
 	c, cancel := helperServer(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) })
-	applyErr, cancelErr := applySubscriptionWithRetry(c, "/sub", map[string]any{}, nil, func(int, error, bool, time.Duration) { cancel() })
+	applyErr, cancelErr := operator.ApplySubscriptionWithRetry(c, "/sub", map[string]any{}, nil, func(int, error, bool, time.Duration) { cancel() })
 	if applyErr == nil || !errors.Is(cancelErr, context.Canceled) {
 		t.Fatalf("applyErr=%v cancelErr=%v", applyErr, cancelErr)
 	}
@@ -79,7 +81,7 @@ func TestWaitForNightlyCatalogReady(t *testing.T) {
 	})
 	var logs []string
 	var events []UpdateStepEvent
-	ready, err := waitForNightlyCatalogReady(c, "img", func(e UpdateStepEvent) { events = append(events, e) }, &logs)
+	ready, err := operator.WaitForNightlyCatalogReady(c, "img", func(e UpdateStepEvent) { events = append(events, e) }, &logs)
 	if err != nil || !ready || len(logs) != 2 || len(events) != 2 || events[1].Detail != "READY" {
 		t.Fatalf("ready=%v err=%v logs=%v events=%v", ready, err, logs, events)
 	}
@@ -87,7 +89,7 @@ func TestWaitForNightlyCatalogReady(t *testing.T) {
 	c, _ = helperServer(t, func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"status":{"connectionState":{"lastObservedState":"TRANSIENT_FAILURE"}}}`)
 	})
-	if ready, err := waitForNightlyCatalogReady(c, "img", func(UpdateStepEvent) {}, &logs); ready || err != nil {
+	if ready, err := operator.WaitForNightlyCatalogReady(c, "img", func(UpdateStepEvent) {}, &logs); ready || err != nil {
 		t.Fatalf("timeout: ready=%v err=%v", ready, err)
 	}
 }

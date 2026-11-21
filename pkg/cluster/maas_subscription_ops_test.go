@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -81,7 +82,7 @@ func TestMaaSPublish_Unlimited(t *testing.T) {
 		t.Errorf("description %q", desc)
 	}
 	err := &K8sError{Status: 422, K8sMessage: `MaaSSubscription "x" is invalid: spec.modelRefs[0].tokenRateLimits: Required value`}
-	if why := unlimitedRefusal(err, maasLimit{unlimited: true}); !strings.Contains(why, "has no unlimited option") || strings.Contains(why, "RHOAI") {
+	if why := serving.UnlimitedRefusal(err, serving.MaaSLimit{Unlimited: true}); !strings.Contains(why, "has no unlimited option") || strings.Contains(why, "RHOAI") {
 		t.Errorf("the refusal of an API without unlimited: %q (no release named)", why)
 	}
 }
@@ -109,7 +110,7 @@ func TestMaaSNoUnlimited_FromTheCRD(t *testing.T) {
 			if tc.crd != "" {
 				f.putJSON(path, tc.crd)
 			}
-			if got := maasNoUnlimited(c); got != tc.want {
+			if got := serving.MaaSNoUnlimited(c); got != tc.want {
 				t.Errorf("noUnlimited = %v, want %v", got, tc.want)
 			}
 		})

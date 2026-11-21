@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -25,9 +27,9 @@ func TestMLflowSamplesStatus_Unavailable(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newResourceFake(t)
 			f.putProject(fakeProject)
-			InvalidateSamplesStatus(fakeProject)
+			mlflow.InvalidateSamplesStatus(fakeProject)
 			if tc.deploy {
-				putMLflow(f, toolLabelJSON, toolFieldManager, "Update", "", `{}`, tc.status)
+				putMLflow(f, toolLabelJSON, envkit.ToolFieldManager, "Update", "", `{}`, tc.status)
 			}
 			st, err := GetMLflowSamplesStatus(c, userClientOf(c, samplesUserToken), fakeProject)
 			if err != nil {
@@ -36,7 +38,7 @@ func TestMLflowSamplesStatus_Unavailable(t *testing.T) {
 			if st.Available || !strings.Contains(st.Reason, tc.want) || strings.Contains(st.Reason, "yet") || len(st.Samples) != 0 {
 				t.Errorf("got %+v", st)
 			}
-			InvalidateSamplesStatus(fakeProject)
+			mlflow.InvalidateSamplesStatus(fakeProject)
 		})
 	}
 }
@@ -44,7 +46,7 @@ func TestMLflowSamplesStatus_Unavailable(t *testing.T) {
 func TestMLflowSamplesStatus_AllAbsentAndHeaders(t *testing.T) {
 	env := newSamplesEnv(t)
 	got := env.status(t)
-	for _, id := range mlflowSampleIDs {
+	for _, id := range mlflow.SampleIDs {
 		if got[id].State != "absent" || !reflect.DeepEqual(got[id].Actions, []string{"add"}) {
 			t.Errorf("%s = %+v", id, got[id])
 		}
@@ -63,7 +65,7 @@ func TestMLflowSamplesStatus_AllAbsentAndHeaders(t *testing.T) {
 func TestMLflowSamplesStatus_OnlyDSProjects(t *testing.T) {
 	env := newSamplesEnv(t)
 	env.k8s.putJSON("/api/v1/namespaces/openshift-config", `{"metadata":{},"status":{"phase":"Active"}}`)
-	InvalidateSamplesStatus("openshift-config")
+	mlflow.InvalidateSamplesStatus("openshift-config")
 	st, err := GetMLflowSamplesStatus(env.c, env.user, "openshift-config")
 	if !errors.Is(err, ErrNotDSProject) || st != nil {
 		t.Errorf("got %+v, %v; want ErrNotDSProject", st, err)
@@ -106,7 +108,7 @@ func TestMLflowSamplesStatus_IsCached(t *testing.T) {
 	if len(env.mlflow.requests) != n {
 		t.Errorf("second status read MLflow again: %v", env.mlflow.requests[n:])
 	}
-	InvalidateSamplesStatus(fakeProject)
+	mlflow.InvalidateSamplesStatus(fakeProject)
 	if _, err := GetMLflowSamplesStatus(env.c, env.user, fakeProject); err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +122,7 @@ func TestMLflowSamplesStatus_IsCached(t *testing.T) {
 func TestMLflowSamplesStatus_ReadDuringInvalidationIsNotCached(t *testing.T) {
 	env := newSamplesEnv(t)
 	var once sync.Once
-	env.mlflow.onRequest = func(string, string) { once.Do(func() { InvalidateSamplesStatus(fakeProject) }) }
+	env.mlflow.onRequest = func(string, string) { once.Do(func() { mlflow.InvalidateSamplesStatus(fakeProject) }) }
 	if _, err := GetMLflowSamplesStatus(env.c, env.user, fakeProject); err != nil {
 		t.Fatal(err)
 	}
@@ -145,18 +147,18 @@ func TestMLflowSamplesStatus_ReadDuringInvalidationIsNotCached(t *testing.T) {
 func TestMLflowSamplesStatus_SkillsAPIMissing(t *testing.T) {
 	env := newSamplesEnv(t)
 	env.mlflow.noSkills = true
-	if s := env.status(t)[SampleSkill]; s.State != "unsupported" || len(s.Actions) != 0 {
+	if s := env.status(t)[mlflow.SampleSkill]; s.State != "unsupported" || len(s.Actions) != 0 {
 		t.Errorf("skill = %+v", s)
 	}
 }
 
 func TestMLflowSamplesStatus_Foreign(t *testing.T) {
 	env := newSamplesEnv(t)
-	env.mlflow.experiments["7"] = &fakeExperiment{id: "7", name: trainingExperiment, stage: "active", tags: map[string]string{}}
-	env.mlflow.mcp[mcpSampleName] = &fakeMCP{tags: map[string]string{}, versions: map[string]string{"1.0.0": "active"}, endpoints: 1}
-	env.mlflow.skills[skillSampleName] = &fakeSkill{tags: map[string]string{sampleMarkerKey: "other"}, versions: 1}
+	env.mlflow.experiments["7"] = &fakeExperiment{id: "7", name: mlflow.TrainingExperiment, stage: "active", tags: map[string]string{}}
+	env.mlflow.mcp[mlflow.MCPSampleName] = &fakeMCP{tags: map[string]string{}, versions: map[string]string{"1.0.0": "active"}, endpoints: 1}
+	env.mlflow.skills[mlflow.SkillSampleName] = &fakeSkill{tags: map[string]string{mlflow.SampleMarkerKey: "other"}, versions: 1}
 	got := env.status(t)
-	for _, id := range []string{SampleTraining, SampleMCPServer, SampleSkill} {
+	for _, id := range []string{SampleTraining, SampleMCPServer, mlflow.SampleSkill} {
 		if got[id].State != "foreign" || len(got[id].Actions) != 0 || !strings.Contains(got[id].Message, "not created by this tool") {
 			t.Errorf("%s = %+v", id, got[id])
 		}
@@ -165,9 +167,9 @@ func TestMLflowSamplesStatus_Foreign(t *testing.T) {
 
 func TestMLflowSamplesStatus_Demo(t *testing.T) {
 	env := newSamplesEnv(t)
-	demo := &fakeExperiment{id: "1", name: demoExperiment, stage: "active", tags: map[string]string{
-		sampleMarkerKey:                  SampleGenAIDemo,
-		demoVersionTagPrefix + "prompts": "1", demoVersionTagPrefix + "evaluation": "0", demoVersionTagPrefix + "issues": "0",
+	demo := &fakeExperiment{id: "1", name: mlflow.DemoExperiment, stage: "active", tags: map[string]string{
+		mlflow.SampleMarkerKey:                  SampleGenAIDemo,
+		mlflow.DemoVersionTagPrefix + "prompts": "1", mlflow.DemoVersionTagPrefix + "evaluation": "0", mlflow.DemoVersionTagPrefix + "issues": "0",
 	}}
 	env.mlflow.experiments["1"] = demo
 	s := env.status(t)[SampleGenAIDemo]
@@ -177,11 +179,11 @@ func TestMLflowSamplesStatus_Demo(t *testing.T) {
 	if s.Link != env.srv.URL+"/mlflow/#/experiments/1?workspace=proj" {
 		t.Errorf("link = %q", s.Link)
 	}
-	demo.tags[demoVersionTagPrefix+"evaluation"], demo.tags[demoVersionTagPrefix+"issues"] = "2", "4"
+	demo.tags[mlflow.DemoVersionTagPrefix+"evaluation"], demo.tags[mlflow.DemoVersionTagPrefix+"issues"] = "2", "4"
 	if s := env.status(t)[SampleGenAIDemo]; s.State != "present" || !strings.Contains(s.Message, "delete it in the MLflow UI") {
 		t.Errorf("complete: %+v", s)
 	}
-	demo.tags = map[string]string{sampleMarkerKey: SampleGenAIDemo}
+	demo.tags = map[string]string{mlflow.SampleMarkerKey: SampleGenAIDemo}
 	if s := env.status(t)[SampleGenAIDemo]; s.State != "partial" {
 		t.Errorf("no tags: %+v", s)
 	}
@@ -191,11 +193,11 @@ func TestMLflowSamplesStatus_Demo(t *testing.T) {
 	if s := env.status(t)[SampleGenAIDemo]; s.State != "foreign" || len(s.Actions) != 0 || !strings.Contains(s.Message, "not created by this tool") {
 		t.Errorf("unmarked, no versions: %+v", s)
 	}
-	demo.tags = map[string]string{demoVersionTagPrefix + "traces": "1"}
+	demo.tags = map[string]string{mlflow.DemoVersionTagPrefix + "traces": "1"}
 	if s := env.status(t)[SampleGenAIDemo]; s.State != "foreign" || len(s.Actions) != 0 || !strings.Contains(s.Message, "deletes traces and evaluations in that experiment, whoever logged them") {
 		t.Errorf("MLflow UI demo: %+v", s)
 	}
-	demo.tags[sampleMarkerKey] = SampleGenAIDemo
+	demo.tags[mlflow.SampleMarkerKey] = SampleGenAIDemo
 	demo.stage = "deleted"
 	if s := env.status(t)[SampleGenAIDemo]; s.State != "removed" || !reflect.DeepEqual(s.Actions, []string{"add"}) {
 		t.Errorf("deleted: %+v", s)
@@ -224,7 +226,7 @@ func TestRunMLflowSamples_Refusals(t *testing.T) {
 		{"delete", []string{SampleTraining}, "action must be"},
 		{"add", nil, "samples is required"},
 		{"add", []string{"nope"}, "unknown sample"},
-		{"add", []string{SampleSkill, SampleSkill}, "listed twice"},
+		{"add", []string{mlflow.SampleSkill, mlflow.SampleSkill}, "listed twice"},
 		{"regenerate", []string{SampleTraining}, "only genai-demo"},
 		{"remove", []string{SampleGenAIDemo}, "cannot be removed by the updater"},
 	} {
@@ -242,7 +244,7 @@ func TestRunMLflowSamples_Refusals(t *testing.T) {
 	if resp.Success || resp.ErrorCode != "validation" || !strings.Contains(resp.Message, "not a Data Science project") {
 		t.Errorf("other project: %+v", resp)
 	}
-	putMLflow(env.k8s, toolLabelJSON, toolFieldManager, "Update", "", `{}`, `{"url":"https://x/mlflow","conditions":[{"type":"Available","status":"False"}]}`)
+	putMLflow(env.k8s, toolLabelJSON, envkit.ToolFieldManager, "Update", "", `{}`, `{"url":"https://x/mlflow","conditions":[{"type":"Available","status":"False"}]}`)
 	resp, _ = RunMLflowSamples(env.user, mlflowRequest("add", SampleTraining), nil)
 	if resp.Success || resp.ErrorCode != "prerequisites" || !strings.Contains(resp.Message, "not ready") {
 		t.Errorf("not ready: %+v", resp)
@@ -262,13 +264,13 @@ func TestSamplesTLSConfig(t *testing.T) {
 		}
 	}
 	env := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
-	if cfg := samplesTLSConfig(env(map[string]string{"DEV_INSECURE_TLS": "true"}), read(nil)); cfg.InsecureSkipVerify {
+	if cfg := mlflow.SamplesTLSConfig(env(map[string]string{"DEV_INSECURE_TLS": "true"}), read(nil)); cfg.InsecureSkipVerify {
 		t.Error("DEV_INSECURE_TLS without DEV_MODE skipped verification")
 	}
-	if cfg := samplesTLSConfig(env(map[string]string{"DEV_MODE": "true", "DEV_INSECURE_TLS": "true"}), read(nil)); !cfg.InsecureSkipVerify {
+	if cfg := mlflow.SamplesTLSConfig(env(map[string]string{"DEV_MODE": "true", "DEV_INSECURE_TLS": "true"}), read(nil)); !cfg.InsecureSkipVerify {
 		t.Error("DEV_MODE with DEV_INSECURE_TLS must skip verification, as for the API server")
 	}
-	if cfg := samplesTLSConfig(env(nil), read(nil)); cfg.RootCAs == nil || cfg.MinVersion == 0 {
+	if cfg := mlflow.SamplesTLSConfig(env(nil), read(nil)); cfg.RootCAs == nil || cfg.MinVersion == 0 {
 		t.Error("no root pool")
 	}
 }
@@ -293,19 +295,19 @@ func TestParseSampleAPIError(t *testing.T) {
 		{`{"detail":"Item missing"}`, "", "Item missing", false, false, false},
 		{`{"error_code":"INVALID_PARAMETER_VALUE","message":"Not Found"}`, "INVALID_PARAMETER_VALUE", "Not Found", false, false, false},
 	} {
-		e := parseSampleAPIError("MLflow", 404, []byte(tc.body))
-		if e.Code != tc.code || e.Message != tc.msg || isEndpointMissing(e) != tc.missing || isNotFound(e) != tc.notFound {
-			t.Errorf("%s: %+v missing=%v notFound=%v", tc.body, e, isEndpointMissing(e), isNotFound(e))
+		e := mlflow.ParseSampleAPIError("MLflow", 404, []byte(tc.body))
+		if e.Code != tc.code || e.Message != tc.msg || mlflow.IsEndpointMissing(e) != tc.missing || mlflow.IsNotFound(e) != tc.notFound {
+			t.Errorf("%s: %+v missing=%v notFound=%v", tc.body, e, mlflow.IsEndpointMissing(e), mlflow.IsNotFound(e))
 		}
 	}
-	long := parseSampleAPIError("MLflow", 500, []byte(strings.Repeat("x", 1000)))
-	if len(long.Message) > maxSampleErrorMessage+3 {
+	long := mlflow.ParseSampleAPIError("MLflow", 500, []byte(strings.Repeat("x", 1000)))
+	if len(long.Message) > mlflow.MaxSampleErrorMessage+3 {
 		t.Errorf("message not shortened: %d", len(long.Message))
 	}
-	if !isAlreadyExists(parseSampleAPIError("KFP", 409, nil)) || !isDenied(parseSampleAPIError("KFP", 403, nil)) {
+	if !mlflow.IsAlreadyExists(mlflow.ParseSampleAPIError("KFP", 409, nil)) || !mlflow.IsDenied(mlflow.ParseSampleAPIError("KFP", 403, nil)) {
 		t.Error("409/403 not classified")
 	}
-	if sampleErrorCode(errors.New("dial")) != "network" || sampleErrorCode(parseSampleAPIError("MLflow", 403, nil)) != "forbidden" {
+	if mlflow.SampleErrorCode(errors.New("dial")) != "network" || mlflow.SampleErrorCode(mlflow.ParseSampleAPIError("MLflow", 403, nil)) != "forbidden" {
 		t.Error("error codes")
 	}
 }

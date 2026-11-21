@@ -19,8 +19,8 @@ export interface PipelineStepDef {
 }
 
 // Pipeline step definitions. They mirror the order and the step ids that
-// pkg/cluster/operations.go emits (UpdateStreamWithOptions,
-// ReinstallStreamWithOptions, RefreshOperatorStreamWithOptions), so the
+// pkg/cluster/internal/operator/operations.go emits (UpdateStreamWithOptions,
+// ReinstallStreamWithOptions, RefreshStreamWithOptions), so the
 // confirmation dialogs and the progress view describe what really runs.
 
 const UPDATE_STEPS: PipelineStepDef[] = [
@@ -95,7 +95,7 @@ const REFRESH_STEPS: PipelineStepDef[] = [
 
 /**
  * Shown after the regular steps when the backend undoes a failed attempt
- * (pkg/cluster/operator_recovery.go restoreStepName).
+ * (pkg/cluster/internal/operator/operator_recovery.go RestoreStepName).
  */
 export const RESTORE_STEP: PipelineStepDef = {
   id: "restore_previous_operator",

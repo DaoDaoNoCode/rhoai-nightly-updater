@@ -8,6 +8,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 func TestNightlyCatalogNeverFallsBackToStable(t *testing.T) {
@@ -17,24 +20,24 @@ func TestNightlyCatalogNeverFallsBackToStable(t *testing.T) {
 		body   string
 	}{
 		{"API error", 503, `{}`},
-		{"stable package only", 200, strings.ReplaceAll(wrapPkgManifestList(`{"status":{"channels":[{"name":"fast","currentCSV":"rhods-operator.v3.7.0"}]}}`), CatalogName, "redhat-operators")},
+		{"stable package only", 200, strings.ReplaceAll(wrapPkgManifestList(`{"status":{"channels":[{"name":"fast","currentCSV":"rhods-operator.v3.7.0"}]}}`), rhoai.CatalogName, "redhat-operators")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var ambiguousQuery bool
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if strings.HasSuffix(r.URL.Path, "/packagemanifests/"+SubName) {
+				if strings.HasSuffix(r.URL.Path, "/packagemanifests/"+rhoai.SubName) {
 					ambiguousQuery = true
 				}
-				if r.URL.Query().Get("labelSelector") != "catalog="+CatalogName || r.URL.Query().Get("fieldSelector") != "metadata.name="+SubName {
+				if r.URL.Query().Get("labelSelector") != "catalog="+rhoai.CatalogName || r.URL.Query().Get("fieldSelector") != "metadata.name="+rhoai.SubName {
 					t.Error("missing catalog selectors")
 				}
 				w.WriteHeader(tc.status)
 				io.WriteString(w, tc.body)
 			}))
 			defer srv.Close()
-			c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
-			ch, _ := detectNightlyChannel(c, "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.7")
-			exists, _ := channelExistsInCatalog(c, "fast")
+			c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
+			ch, _ := operator.DetectNightlyChannel(c, "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.7")
+			exists, _ := operator.ChannelExistsInCatalog(c, "fast")
 			if ch != "" || exists || ambiguousQuery {
 				t.Fatalf("channel=%q exists=%v ambiguous=%v", ch, exists, ambiguousQuery)
 			}
@@ -51,7 +54,7 @@ func TestInstallPreflightFailureDoesNotRemoveOperator(t *testing.T) {
 			responses[listPath] = mockResponse{body: `{"items":[]}`}
 			c, requests, cleanup := newRecordingMockClient(responses)
 			defer cleanup()
-			result, err := UpdateStream(c, image, func(UpdateStepEvent) {})
+			result, err := operator.UpdateStream(c, image, func(UpdateStepEvent) {})
 			if action == "reinstall" {
 				result, err = Reinstall(c, "nightly", image, "")
 			}
@@ -82,7 +85,7 @@ func TestInstallCleanupFailureRestoresPreviousDesiredState(t *testing.T) {
 			var resultMessage string
 			var success bool
 			if action == "update" {
-				r, err := UpdateStream(c, image, emit)
+				r, err := operator.UpdateStream(c, image, emit)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -119,15 +122,15 @@ func TestInstallCleanupFailureRestoresPreviousDesiredState(t *testing.T) {
 }
 
 func TestCSVUsesInstalledSubscriptionIdentity(t *testing.T) {
-	subPath := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
-	listPath := namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "")
+	subPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName)
+	listPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "")
 	body, _ := json.Marshal(map[string]any{"items": []any{
 		map[string]any{"metadata": map[string]string{"name": "rhods-operator.v3.3.0"}, "spec": map[string]string{"displayName": "Red Hat OpenShift AI", "version": "3.3.0"}},
 		map[string]any{"metadata": map[string]string{"name": "rhods-operator.v3.7.0"}, "spec": map[string]string{"displayName": "Red Hat OpenShift AI", "version": "3.7.0"}},
 	}})
 	c, cleanup := newMockClient(map[string]mockResponse{subPath: {body: `{"status":{"installedCSV":"rhods-operator.v3.7.0"}}`}, listPath: {body: string(body)}})
 	defer cleanup()
-	csv, err := getCSV(c)
+	csv, err := rhoai.GetCSV(c)
 	if err != nil || csv.Version != "3.7.0" {
 		t.Fatalf("CSV=%+v err=%v", csv, err)
 	}
@@ -145,14 +148,14 @@ func TestCSVStaleSubscriptionIdentity(t *testing.T) {
 		{"unrelated operator", `[{"metadata":{"name":"other-operator.v1.0.0"},"spec":{"displayName":"Other Operator"}}]`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			subPath := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
-			listPath := namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "")
+			subPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName)
+			listPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "")
 			c, cleanup := newMockClient(map[string]mockResponse{
 				subPath:  {body: `{"status":{"installedCSV":"rhods-operator.v3.5.0"}}`},
 				listPath: {body: `{"items":` + tc.items + `}`},
 			})
 			defer cleanup()
-			csv, err := getCSV(c)
+			csv, err := rhoai.GetCSV(c)
 			if tc.wantErr {
 				if err == nil || !strings.Contains(err.Error(), "rhods-operator.v3.5.0") || !strings.Contains(err.Error(), "rhods-operator.v3.6.0") {
 					t.Fatalf("expected stale identity error naming both CSVs; CSV=%+v err=%v", csv, err)
@@ -174,7 +177,7 @@ func TestInstallStaleCSVIdentityDoesNotRemoveOperator(t *testing.T) {
 			defer cleanup()
 			var message string
 			if action == "update" {
-				result, err := UpdateStream(c, image, func(UpdateStepEvent) {})
+				result, err := operator.UpdateStream(c, image, func(UpdateStepEvent) {})
 				if err != nil || result == nil || result.Success {
 					t.Fatalf("result=%+v err=%v", result, err)
 				}

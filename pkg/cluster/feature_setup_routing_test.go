@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -17,7 +18,7 @@ func TestPrerequisites_ModelsPlanDependsOnTheExposure(t *testing.T) {
 	for _, tc := range []struct {
 		exposure string
 		rhcl     bool
-	}{{"", false}, {exposureInternal, false}, {exposureMaaS, false}, {exposureDefault, true}, {exposureGateway, true}} {
+	}{{"", false}, {serving.ExposureInternal, false}, {serving.ExposureMaaS, false}, {serving.ExposureDefault, true}, {serving.ExposureGateway, true}} {
 		st, err := GetPrerequisitesStatusFor(pc.c, tc.exposure)
 		if err != nil {
 			t.Fatal(err)
@@ -36,7 +37,7 @@ func TestPrerequisites_ModelsPlanDependsOnTheExposure(t *testing.T) {
 			t.Errorf("pipelines plan: %v", p)
 		}
 	}
-	if msg := ValidatePrerequisitesRequest(types.PrerequisitesRequest{Feature: "pipelines", Exposure: exposureDefault}); msg == "" {
+	if msg := ValidatePrerequisitesRequest(types.PrerequisitesRequest{Feature: "pipelines", Exposure: serving.ExposureDefault}); msg == "" {
 		t.Error("an exposure for pipelines was accepted")
 	}
 	if msg := ValidatePrerequisitesRequest(types.PrerequisitesRequest{Feature: "models", Exposure: "everywhere"}); msg == "" {
@@ -59,7 +60,7 @@ func TestPrerequisites_ModelsThroughAGatewayInstallsConnectivityLink(t *testing.
 	}
 	pc.f.fail["GET /apis/kuadrant.io/v1/kuadrants"] = 404
 	var events []UpdateStepEvent
-	res, err := RunPrerequisites(pc.c, types.PrerequisitesRequest{Feature: "models", Exposure: exposureDefault}, func(e UpdateStepEvent) { events = append(events, e) })
+	res, err := RunPrerequisites(pc.c, types.PrerequisitesRequest{Feature: "models", Exposure: serving.ExposureDefault}, func(e UpdateStepEvent) { events = append(events, e) })
 	if err != nil {
 		t.Fatal(err)
 	}

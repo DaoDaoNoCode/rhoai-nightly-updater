@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 const (
@@ -115,11 +118,11 @@ func TestDeleteStaleWebhooks_ServiceLookupForbiddenIsNotStale(t *testing.T) {
 func TestStaleWebhookCheck_ListsExactlyTheObjectsTheFixDeletes(t *testing.T) {
 	f, c := newFakeAPI(t)
 	setupWebhookFixtures(f)
-	out := checkStaleWebhooks(c)
-	if len(out.problems) != 1 {
-		t.Fatalf("problems = %+v", out.problems)
+	out := diagnostics.CheckStaleWebhooks(c)
+	if len(out.Problems) != 1 {
+		t.Fatalf("problems = %+v", out.Problems)
 	}
-	p := out.problems[0]
+	p := out.Problems[0]
 	want := []string{
 		"ValidatingWebhookConfiguration datasciencecluster-v2-validator.opendatahub.io-nfzvz",
 		"MutatingWebhookConfiguration servicemonitor-injector.opendatahub.io-7vqqf",
@@ -144,11 +147,11 @@ func TestStaleWebhookCheck_ServingWebhooksDuringUpgradeAreNotStale(t *testing.T)
 	f, c := newFakeAPI(t)
 	setupWebhookFixtures(f)
 	f.json("GET", svcPath("redhat-ods-operator", "rhods-operator-service"), http.StatusOK, `{"kind":"Service"}`)
-	f.obj("/apis/operators.coreos.com/v1alpha1/namespaces/"+SubNS+"/clusterserviceversions", map[string]any{
+	f.obj("/apis/operators.coreos.com/v1alpha1/namespaces/"+rhoai.SubNS+"/clusterserviceversions", map[string]any{
 		"items": []any{map[string]any{"metadata": map[string]any{"name": "rhods-operator.3.6.0"}, "spec": map[string]any{"version": "3.6.0"}, "status": map[string]any{"phase": "Installing"}}},
 	})
-	out := checkStaleWebhooks(c)
-	if len(out.problems) != 0 || out.check.Status != "pass" {
+	out := diagnostics.CheckStaleWebhooks(c)
+	if len(out.Problems) != 0 || out.Check.Status != "pass" {
 		t.Fatalf("out = %+v", out)
 	}
 }
@@ -223,9 +226,9 @@ func TestDeleteStaleInstallPlans_ReferencedPlan(t *testing.T) {
 				t.Fatalf("result = %+v", res)
 			}
 			// The check offers no auto-fix either, so the two agree.
-			out := checkInstallPlanHealth(c)
-			if len(out.problems) != 1 || out.problems[0].AutoFixable {
-				t.Fatalf("problems = %+v", out.problems)
+			out := diagnostics.CheckInstallPlanHealth(c)
+			if len(out.Problems) != 1 || out.Problems[0].AutoFixable {
+				t.Fatalf("problems = %+v", out.Problems)
 			}
 		})
 	}
@@ -281,11 +284,11 @@ func TestInstallPlanCheck_FailedPlanConfirmNamesThePlans(t *testing.T) {
 		installPlan("install-old", "Complete", "u1", "1", "2026-10-01T00:00:00Z"),
 		installPlan("install-bad", "Failed", "u2", "2", "2026-10-02T00:00:00Z"),
 	}})
-	out := checkInstallPlanHealth(c)
-	if len(out.problems) != 1 || out.problems[0].AutoFixAction != "delete-stale-installplans" {
-		t.Fatalf("problems = %+v", out.problems)
+	out := diagnostics.CheckInstallPlanHealth(c)
+	if len(out.Problems) != 1 || out.Problems[0].AutoFixAction != "delete-stale-installplans" {
+		t.Fatalf("problems = %+v", out.Problems)
 	}
-	p := out.problems[0]
+	p := out.Problems[0]
 	if !strings.Contains(p.ConfirmMessage, "install-bad") || strings.Contains(p.ConfirmMessage, "install-old") {
 		t.Errorf("confirm = %s", p.ConfirmMessage)
 	}
@@ -297,8 +300,8 @@ func TestInstallPlanCheck_FailedPlanConfirmNamesThePlans(t *testing.T) {
 func TestInstallPlanCheck_NoSubscriptionAndNoPlansPasses(t *testing.T) {
 	// The old code treated a 404 Subscription as "exists" on this path.
 	_, c := newFakeAPI(t)
-	out := checkInstallPlanHealth(c)
-	if out.check.Status != "pass" || len(out.problems) != 0 {
+	out := diagnostics.CheckInstallPlanHealth(c)
+	if out.Check.Status != "pass" || len(out.Problems) != 0 {
 		t.Fatalf("out = %+v", out)
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -52,7 +54,7 @@ func TestModelOwnership_ALookAlikeIsNotTheTools(t *testing.T) {
 	if res.Success || res.ErrorCode != "not_managed" {
 		t.Errorf("setup over the look-alike: %+v", res)
 	}
-	if res, _ := TeardownModels(mc.c, "proj", "qwen3-1-7b"); res.Success || res.ErrorCode != "not_managed" {
+	if res, _ := serving.TeardownModels(mc.c, "proj", "qwen3-1-7b"); res.Success || res.ErrorCode != "not_managed" {
 		t.Errorf("teardown of the look-alike: %+v", res)
 	}
 	res, _ = runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj", Model: "qwen3-1-7b"})
@@ -67,7 +69,7 @@ func TestModelOwnership_ALookAlikeIsNotTheTools(t *testing.T) {
 	if !mc.f.has(forged) {
 		t.Fatal("the look-alike was deleted")
 	}
-	if published, err := MaaSPublishedIn(mc.c, "proj", "qwen3-1-7b"); err != nil || published {
+	if published, err := serving.MaaSPublishedIn(mc.c, "proj", "qwen3-1-7b"); err != nil || published {
 		t.Errorf("MaaSPublishedIn = %v, %v", published, err)
 	}
 	mst, err := GetMaaSStatus(mc.c)
@@ -88,7 +90,7 @@ func TestModelOwnership_RecordsTheCreatedUIDAndForgetsItOnDelete(t *testing.T) {
 		t.Fatalf("setup: %+v", res)
 	}
 	uid := mc.f.get(testModelPath)["metadata"].(map[string]any)["uid"].(string)
-	rec, err := readModelsRecord(mc.c)
+	rec, err := serving.ReadModelsRecord(mc.c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,13 +105,13 @@ func TestModelOwnership_RecordsTheCreatedUIDAndForgetsItOnDelete(t *testing.T) {
 	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj"}); !res.Success {
 		t.Fatalf("setup again: %+v", res)
 	}
-	if rec, _ := readModelsRecord(mc.c); rec["proj/qwen25-05b-instruct"].UID != uid {
+	if rec, _ := serving.ReadModelsRecord(mc.c); rec["proj/qwen25-05b-instruct"].UID != uid {
 		t.Fatalf("record after setup again: %+v", rec)
 	}
-	if res, _ := TeardownModels(mc.c, "proj"); !res.Success {
+	if res, _ := serving.TeardownModels(mc.c, "proj"); !res.Success {
 		t.Fatalf("teardown: %+v", res)
 	}
-	if rec, _ := readModelsRecord(mc.c); len(rec) != 0 {
+	if rec, _ := serving.ReadModelsRecord(mc.c); len(rec) != 0 {
 		t.Fatalf("record after teardown: %+v", rec)
 	}
 }
@@ -123,10 +125,10 @@ func TestModelOwnership_AModelMadeAgainElsewhereIsNotTheTools(t *testing.T) {
 	}
 	deleteFakeObject(mc, testModelPath)
 	forgeModel(mc, "proj", "qwen25-05b-instruct")
-	if st := modelState(mc.c, readModelForTest(t, mc), false, mustReadModelsRecord(t, mc)); st.ManagedByTool {
+	if st := serving.ModelState(mc.c, readModelForTest(t, mc), false, mustReadModelsRecord(t, mc)); st.ManagedByTool {
 		t.Fatalf("the model made again is shown as the tool's: %+v", st)
 	}
-	if res, _ := TeardownModels(mc.c, "proj"); res.Success || res.ErrorCode != "not_managed" || !mc.f.has(testModelPath) {
+	if res, _ := serving.TeardownModels(mc.c, "proj"); res.Success || res.ErrorCode != "not_managed" || !mc.f.has(testModelPath) {
 		t.Fatalf("teardown: %+v", res)
 	}
 }
@@ -171,7 +173,7 @@ func TestMaaSPublish_DisplayNameFromTheCatalog(t *testing.T) {
 		t.Errorf("MaaSModelRef display name %v", ann["openshift.io/display-name"])
 	}
 	// The description too: the catalog's, the text the tool writes on the model.
-	if entry, _ := catalogEntry(""); ann["openshift.io/description"] != entry.Description {
+	if entry, _ := serving.CatalogEntry(""); ann["openshift.io/description"] != entry.Description {
 		t.Errorf("MaaSModelRef description %v", ann["openshift.io/description"])
 	}
 	st, _ := GetMaaSStatus(mc.c)
@@ -192,22 +194,22 @@ func recordModelFixture(f *resourceFake, path string) {
 	cmKey, _ := parseFakePath(testSnapshotCM)
 	cm := f.objects[cmKey]
 	if cm == nil {
-		cm = map[string]any{"metadata": map[string]any{"name": snapshotConfigMapName, "namespace": "rhoai-nightly-updater", "uid": "snapshot-uid", "resourceVersion": "1"}}
+		cm = map[string]any{"metadata": map[string]any{"name": record.SnapshotConfigMapName, "namespace": "rhoai-nightly-updater", "uid": "snapshot-uid", "resourceVersion": "1"}}
 		f.objects[cmKey] = cm
 	}
 	data := ensureMap(cm, "data")
-	rec := modelsRecord{}
-	if raw, _ := data[modelsRecordKey].(string); raw != "" {
+	rec := serving.ModelsRecord{}
+	if raw, _ := data[serving.ModelsRecordKey].(string); raw != "" {
 		_ = json.Unmarshal([]byte(raw), &rec)
 	}
-	rec[modelRecordKey(k.ns, k.name)] = recordedModel{UID: meta["uid"].(string)}
+	rec[serving.ModelRecordKey(k.ns, k.name)] = serving.RecordedModel{UID: meta["uid"].(string)}
 	raw, _ := json.Marshal(rec)
-	data[modelsRecordKey] = string(raw)
+	data[serving.ModelsRecordKey] = string(raw)
 }
 
-func mustReadModelsRecord(t *testing.T, mc *modelsCluster) modelsRecord {
+func mustReadModelsRecord(t *testing.T, mc *modelsCluster) serving.ModelsRecord {
 	t.Helper()
-	rec, err := readModelsRecord(mc.c)
+	rec, err := serving.ReadModelsRecord(mc.c)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,6 +5,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 )
 
 const runningCopyJob = `{"metadata":{"uid":"earlier-job","labels":` + toolLabelJSON + `},"spec":{"template":{"spec":{"containers":[{"name":"rclone","env":[{"name":"COPY_MODE","value":"ignore-existing"}]}]}}}}`
@@ -56,10 +59,10 @@ func TestRemoveOldStorage_FinalCopyResumes(t *testing.T) {
 		t.Fatalf("got %v %s: %s", ok, code, msg)
 	}
 	job := f.get(migrateJobPathT)
-	if job == nil || ensureMap(ensureMap(job, "metadata"), "annotations")[finalCopyAnnotation] != "true" {
+	if job == nil || ensureMap(ensureMap(job, "metadata"), "annotations")[storage.FinalCopyAnnotation] != "true" {
 		t.Fatalf("the unfinished final copy was not left running with its mark: %v", job)
 	}
-	noWritesIn(t, f, legacyNamespace)
+	noWritesIn(t, f, storage.LegacyNamespace)
 
 	before := len(f.mutations())
 	finishJobAfterReads(f, sim, 1)
@@ -81,8 +84,8 @@ func TestRemoveOldStorage_FinalCopyResumes(t *testing.T) {
 func TestRemoveOldStorage_FinalCopyNeverOverwrites(t *testing.T) {
 	f, c := migratedForRemoval(t)
 	for _, k := range []fakeKey{
-		{gv: dspaAPIGroup, ns: "juntao-test", plural: "datasciencepipelinesapplications", name: legacyDSPAName},
-		{gv: dspaAPIGroup, ns: "team-a", plural: "datasciencepipelinesapplications", name: previousDSPAName},
+		{gv: storage.DSPAAPIGroup, ns: "juntao-test", plural: "datasciencepipelinesapplications", name: storage.LegacyDSPAName},
+		{gv: storage.DSPAAPIGroup, ns: "team-a", plural: "datasciencepipelinesapplications", name: storage.PreviousDSPAName},
 	} {
 		delete(f.objects, k)
 	}
@@ -91,7 +94,7 @@ func TestRemoveOldStorage_FinalCopyNeverOverwrites(t *testing.T) {
 	stuck := false
 	releasePVCWhenServerGone(f, &stuck)
 	runMigrate(t, c, MigrateOptions{RemoveOldStorage: true})
-	if sim.mode != copyIgnoreExisting {
+	if sim.mode != storage.CopyIgnoreExisting {
 		t.Errorf("the final copy ran with COPY_MODE %q", sim.mode)
 	}
 }
@@ -101,16 +104,14 @@ func TestRemoveOldStorage_FinalCopyNeverOverwrites(t *testing.T) {
 func TestRemoveOldStorage_FinalCopyUsesTheRemainingTime(t *testing.T) {
 	f, c := migratedForRemoval(t)
 	stuck := false
-	old := removeAfterCopyReserve
-	removeAfterCopyReserve = 50 * time.Millisecond
-	t.Cleanup(func() { removeAfterCopyReserve = old })
+	t.Cleanup(storage.SetRemoveAfterCopyReserveForTest(50 * time.Millisecond))
 	sim := &migrateSim{result: copyOK, objectStore: "True", jobRunning: true}
 	simulateMigrate(f, sim)
 	releasePVCWhenServerGone(f, &stuck)
 	// The copy takes 400ms on the clock: longer than MigrateCopyTimeout
 	// (200ms here) but within the remaining time.
-	finishJobAfter(f, sim, 2*MigrateCopyTimeout)
-	ctx, cancel := clk.WithTimeout(context.Background(), 3*time.Second)
+	finishJobAfter(f, sim, 2*storage.MigrateCopyTimeout)
+	ctx, cancel := kube.Clock().WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	ok, msg, _, _ := runMigrate(t, c.WithContext(ctx), MigrateOptions{RemoveOldStorage: true})
 	if !ok {
@@ -122,11 +123,11 @@ func TestRemoveOldStorage_FinalCopyUsesTheRemainingTime(t *testing.T) {
 // operation's deadline; otherwise the run stops before moving it.
 func TestMigrate_StopsBeforeARepointThatCannotFinishInTime(t *testing.T) {
 	fastMigrateTimings(t)
-	MigrateRepointTimeout = 10 * time.Second
+	storage.SetMigrateRepointTimeoutForTest(10 * time.Second)
 	f, c := newResourceFake(t)
 	putMigrationCase(f)
 	simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
-	ctx, cancel := clk.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := kube.Clock().WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	ok, msg, code, _ := runMigrate(t, c.WithContext(ctx), MigrateOptions{})
 	if ok || code != "in_progress" || !strings.Contains(msg, "Not enough time is left in this run to move pipeline server juntao-test/dspa") || !strings.Contains(msg, "run Migrate storage again to continue") {
@@ -148,12 +149,12 @@ func TestRepointedGeneration(t *testing.T) {
 		{"no generation in the response", `{"metadata":{}}`, 4},
 		{"a stale generation in the response", `{"metadata":{"generation":3}}`, 4},
 	} {
-		if got := repointedGeneration([]byte(tc.body), 3); got != tc.want {
+		if got := storage.RepointedGeneration([]byte(tc.body), 3); got != tc.want {
 			t.Errorf("%s: %d, want %d", tc.name, got, tc.want)
 		}
 	}
-	stale := dspaInfo{Meta: objectMeta{Generation: 3}, ObjectStore: &dspaCondition{Status: "True", ObservedGeneration: 3}}
-	if stale.objectStoreReadyAt(repointedGeneration([]byte(`not json`), 3)) {
+	stale := storage.DSPA{Meta: kube.ObjectMeta{Generation: 3}, ObjectStore: &storage.DSPACondition{Status: "True", ObservedGeneration: 3}}
+	if stale.ObjectStoreReadyAt(storage.RepointedGeneration([]byte(`not json`), 3)) {
 		t.Error("a condition from before the patch counts")
 	}
 }

@@ -14,7 +14,7 @@ import (
 //     cancelled here fails the request every time: net/http's
 //     Transport.roundTrip returns context.Cause(ctx) for a done context
 //     before it sends anything (net/http/transport.go).
-//   - answered runs once the client closed the response body; c.do reads
+//   - answered runs once the client closed the response body; c.Do reads
 //     the body in full before it closes it, so the request succeeded.
 //
 // A server handler is no such point: a context cancelled while the handler
@@ -29,13 +29,13 @@ type requestHooks struct {
 // withRequestHooks returns a copy of c whose requests run h.
 func withRequestHooks(c *Client, h requestHooks) *Client {
 	cp := *c
-	hc := *c.httpClient
+	hc := *c.TestOptions().HTTPClient
 	base := hc.Transport
 	if base == nil {
 		base = http.DefaultTransport
 	}
 	hc.Transport = hookTransport{base: base, hooks: h}
-	cp.httpClient = &hc
+	editTestClient(&cp, func(o *testClientOptions) { o.HTTPClient = &hc })
 	return &cp
 }
 

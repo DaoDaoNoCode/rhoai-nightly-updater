@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -27,7 +28,7 @@ func maasOnlyPublishStopped(t *testing.T) *modelsCluster {
 		t.Fatalf("inference gateway setup: %+v", res)
 	}
 	mc.f.fail["GET "+tMaaSSub] = http.StatusInternalServerError
-	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: exposureMaaS})
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: serving.ExposureMaaS})
 	delete(mc.f.fail, "GET "+tMaaSSub)
 	if res.Success || !strings.Contains(res.Message, "Set it up again on the Models tab to publish it, or delete the model.") {
 		t.Fatalf("setup with a publish that stops: %+v", res)
@@ -88,7 +89,7 @@ func TestMaaSOnlyPublishStopped_DeleteUnpublishesFirst(t *testing.T) {
 // later Unpublish removes the route.
 func TestMaaSOnlyPublishStopped_SetUpAgainThenUnpublish(t *testing.T) {
 	mc := maasOnlyPublishStopped(t)
-	if res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: exposureMaaS}); !res.Success {
+	if res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: serving.ExposureMaaS}); !res.Success {
 		t.Fatalf("set up again: %+v %s", res, finalSteps(events))
 	}
 	if rec := rawMaaSRecord(mc); !strings.Contains(rec, `"proj/qwen25-05b-instruct":{"noRoute":true}`) {
@@ -107,16 +108,16 @@ func TestMaaSOnlyPublishStopped_SetUpAgainThenUnpublish(t *testing.T) {
 // a publication by an earlier build (recorded as published) keeps what it
 // replaced.
 func TestMaaSPublish_UnrecordedMaaSOnlyRecordsNoRoute(t *testing.T) {
-	var rec maasRecord
-	if got, ok := rec.routeBefore("proj", "m", maasOnlyRefs()); !ok || !got.NoRoute {
+	var rec serving.MaaSRecord
+	if got, ok := rec.RouteBefore("proj", "m", serving.MaaSOnlyRefs()); !ok || !got.NoRoute {
 		t.Fatalf("unrecorded = %+v, %v", got, ok)
 	}
-	rec.setPublished("proj", "m", true)
-	if got, ok := rec.routeBefore("proj", "m", maasOnlyRefs()); ok {
+	rec.SetPublished("proj", "m", true)
+	if got, ok := rec.RouteBefore("proj", "m", serving.MaaSOnlyRefs()); ok {
 		t.Fatalf("earlier build's publication = %+v", got)
 	}
-	var none maasRecord
-	if got, ok := none.routeBefore("proj", "m", nil); ok {
+	var none serving.MaaSRecord
+	if got, ok := none.RouteBefore("proj", "m", nil); ok {
 		t.Fatalf("not on the MaaS gateway = %+v", got)
 	}
 }
@@ -133,7 +134,7 @@ func TestMaaSPublish_InternalModelGetsARouteAndLosesItAgain(t *testing.T) {
 	mc.f.put("/api/v1/namespaces/proj/services/qwen25-05b-instruct-kserve-workload-svc", map[string]any{
 		"spec": map[string]any{"ports": []any{map[string]any{"name": "https", "appProtocol": "https", "port": 8000}}},
 	})
-	if res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: exposureInternal}); !res.Success {
+	if res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: serving.ExposureInternal}); !res.Success {
 		t.Fatalf("internal setup: %+v %s", res, finalSteps(events))
 	}
 	for round := 1; round <= 2; round++ {
@@ -144,7 +145,7 @@ func TestMaaSPublish_InternalModelGetsARouteAndLosesItAgain(t *testing.T) {
 		if got := modelRefsJSON(t, mc); got != tMaaSOnly {
 			t.Fatalf("round %d refs = %s", round, got)
 		}
-		if got := routeParents(t, mc); got != maasGatewayName {
+		if got := routeParents(t, mc); got != serving.MaaSGatewayName {
 			t.Fatalf("round %d route = %s", round, got)
 		}
 		if rec := rawMaaSRecord(mc); !strings.Contains(rec, `"proj/qwen25-05b-instruct":{"noRoute":true}`) {
@@ -173,7 +174,7 @@ func TestMaaSOnlySetup_UnpublishPublishUnpublish(t *testing.T) {
 	if res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj"}); !res.Success {
 		t.Fatalf("publish: %+v %s", res, finalSteps(events))
 	}
-	if got := routeParents(t, mc); got != maasGatewayName {
+	if got := routeParents(t, mc); got != serving.MaaSGatewayName {
 		t.Fatalf("route = %s", got)
 	}
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"}); !res.Success {
@@ -194,8 +195,8 @@ func TestMaaSOnlySetup_RestoreAfterTheRouteIsGone(t *testing.T) {
 	mc.f.put(testModelPath, obj)
 	mc.f.requests = nil
 	var said []string
-	run := &maasRun{c: mc.c}
-	msg, code := run.restoreModelRoute("proj", "qwen25-05b-instruct", maasModelRefs{NoRoute: true}, true, func(_, _, m string) { said = append(said, m) })
+	run := &serving.Run{Client: mc.c}
+	msg, code := run.RestoreModelRoute("proj", "qwen25-05b-instruct", serving.MaaSModelRefs{NoRoute: true}, true, func(_, _, m string) { said = append(said, m) })
 	if msg != "" || code != "" {
 		t.Fatalf("restore = %q, %q", msg, code)
 	}
@@ -217,7 +218,7 @@ func TestModels_InnerMaaSRunsKeepTheirLogs(t *testing.T) {
 	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true}); !res.Success {
 		t.Fatalf("inference gateway setup: %+v", res)
 	}
-	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: exposureMaaS})
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: serving.ExposureMaaS})
 	if !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}

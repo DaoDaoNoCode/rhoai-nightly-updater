@@ -142,7 +142,7 @@ lint-frontend: frontend-deps  ## Type-check and lint the frontend
 
 test: test-go test-frontend test-scripts test-chart  ## Run all tests
 
-test-go:  ## Run Go tests with the race detector (pkg/cluster split over the CPUs; GO_TEST_SHARDS=1: one process)
+test-go:  ## Run Go tests with the race detector (test binaries side by side, a package with many tests in parts; GO_TEST_SHARDS=1: no parts)
 	sh scripts/test-go.sh
 
 test-frontend: frontend-deps  ## Run frontend tests
@@ -154,11 +154,11 @@ frontend-lock:  ## Update frontend/package-lock.json with CI's pinned node image
 	$(RUNTIME) run --rm -v "$(CURDIR)/frontend:/w:Z" -w /w "$$NODE_IMAGE" \
 		sh -c 'echo "npm $$(npm --version)"; npm install --package-lock-only --ignore-scripts --no-audit --no-fund'
 
-# The three script tests run at the same time (each in its own temporary
+# The script tests run at the same time (each in its own temporary
 # directory); the summary names anything skipped (test-node-pull-secret.sh
 # without jq, unless REQUIRE_JQ=1).
-test-scripts:  ## Test the release and install scripts (offline, in parallel; the summary names anything skipped)
-	sh scripts/run-parallel.sh 'sh scripts/test-release.sh' 'bash scripts/test-install.sh' 'bash scripts/test-node-pull-secret.sh'
+test-scripts:  ## Test the release, install, node pull secret and test-go scripts (offline, in parallel; the summary names anything skipped)
+	sh scripts/run-parallel.sh 'sh scripts/test-release.sh' 'bash scripts/test-install.sh' 'bash scripts/test-node-pull-secret.sh' 'sh scripts/test-test-go.sh'
 
 test-chart:  ## Lint and render the Helm chart (offline; says SKIP without helm, fails then with REQUIRE_HELM=1)
 	bash scripts/test-chart.sh
@@ -191,7 +191,7 @@ build-frontend: frontend-deps  ## Production build of the frontend (frontend/dis
 # take comments at the prompt), so shellcheck is told the shell.
 shellcheck:  ## shellcheck every shell script (CI: shellcheck 0.11.0)
 	shellcheck scripts/*.sh dev.sh docs/tools/*.sh
-	shellcheck --shell=bash pkg/cluster/node_pull_secret.sh
+	shellcheck --shell=bash pkg/cluster/internal/rhoai/node_pull_secret.sh
 
 release-check:  ## The tag pipeline's release guard for TAG=vX.Y.Z (CHANGELOG, chart version, template revision)
 	@test -n "$(TAG)" || { echo "Usage: make release-check TAG=vX.Y.Z"; exit 1; }

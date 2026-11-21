@@ -5,6 +5,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 )
 
 // The admin UI has its own password, not the S3 secret key that every
@@ -83,7 +86,7 @@ func TestS3AdminLogin(t *testing.T) {
 		f.fail["GET "+s3SecretPath] = 403
 		_, err := S3AdminLogin(c)
 		var u *S3AdminLoginUnavailable
-		if err == nil || errors.As(err, &u) || !IsK8sError(err, 403) {
+		if err == nil || errors.As(err, &u) || !kube.IsK8sError(err, 403) {
 			t.Fatalf("err = %v; want the API error", err)
 		}
 	})
@@ -102,7 +105,7 @@ func TestResourcesStatusDoesNotCarryTheAdminPassword(t *testing.T) {
 		t.Fatalf("status carries the password: %s", b)
 	}
 	for _, r := range f.requests {
-		if strings.Contains(r, "/secrets/"+s3Secret) {
+		if strings.Contains(r, "/secrets/"+storage.S3Secret) {
 			t.Errorf("status read the storage's Secret: %s", r)
 		}
 	}

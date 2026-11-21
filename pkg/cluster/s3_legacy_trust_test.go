@@ -3,6 +3,9 @@ package cluster
 import (
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 )
 
 // Any user may `oc new-project minio` and put objects there that look like
@@ -13,7 +16,7 @@ import (
 func TestReadLegacyStorage_IgnoresANamespaceTheToolDidNotMake(t *testing.T) {
 	planted := map[string]string{
 		"project request": `{"metadata":{"annotations":{"openshift.io/requester":"mallory"},"managedFields":` + managedFieldsJSON("openshift-apiserver", "Update") + `},"status":{"phase":"Active"}}`,
-		"project request with the earliest manager": `{"metadata":{"annotations":{"openshift.io/requester":"mallory"},"managedFields":` + managedFieldsJSON(legacyPostManager, "Update") + `},"status":{"phase":"Active"}}`,
+		"project request with the earliest manager": `{"metadata":{"annotations":{"openshift.io/requester":"mallory"},"managedFields":` + managedFieldsJSON(envkit.LegacyPostManager, "Update") + `},"status":{"phase":"Active"}}`,
 		"no marker at all":                          `{"metadata":{},"status":{"phase":"Active"}}`,
 	}
 	for name, ns := range planted {
@@ -22,7 +25,7 @@ func TestReadLegacyStorage_IgnoresANamespaceTheToolDidNotMake(t *testing.T) {
 			f, c := newResourceFake(t)
 			putLegacySeaweedFS(f) // tool-looking objects, with the attacker's keys
 			f.putJSON(legacyNSPath, ns)
-			if l, err := readLegacyStorage(c); l != nil || err != nil {
+			if l, err := storage.ReadLegacy(c); l != nil || err != nil {
 				t.Fatalf("adopted: %+v, %v", l, err)
 			}
 			st, err := GetResourcesStatus(c)
@@ -47,7 +50,7 @@ func TestReadLegacyStorage_TrustsTheToolsOwnNamespace(t *testing.T) {
 	for name, put := range map[string]func(*resourceFake){"2.x": putLegacySeaweedFS, "earliest MinIO": putLegacyMinIO} {
 		f, c := newResourceFake(t)
 		put(f)
-		if l, err := readLegacyStorage(c); l == nil || err != nil {
+		if l, err := storage.ReadLegacy(c); l == nil || err != nil {
 			t.Errorf("%s: not detected: %v", name, err)
 		}
 		st, _ := GetResourcesStatus(c)
@@ -60,7 +63,7 @@ func TestReadLegacyStorage_TrustsTheToolsOwnNamespace(t *testing.T) {
 	f, c := newResourceFake(t)
 	putLegacySeaweedFS(f)
 	f.putJSON(legacyNSPath, `{"metadata":{"labels":`+toolLabelJSON+`,"annotations":{"openshift.io/requester":"admin"}},"status":{"phase":"Active"}}`)
-	if l, err := readLegacyStorage(c); l == nil || err != nil {
+	if l, err := storage.ReadLegacy(c); l == nil || err != nil {
 		t.Errorf("labelled: not detected: %v", err)
 	}
 }

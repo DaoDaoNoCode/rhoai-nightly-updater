@@ -492,6 +492,6 @@ dsc_hard_reset_teardown.go:namespaceOwnerBlocker
 dsc_hard_reset_teardown.go:path
 dsc_hard_reset_teardown.go:read
 gitops_policy.go:CheckGitOpsAdmissionPolicy
-user_reads.go:ListUserDSProjects
+user_projects.go:ListUserDSProjects
 user_reads.go:listProjectInferenceServices
 user_reads.go:listProjectLLMInferenceServices

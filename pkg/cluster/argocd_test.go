@@ -6,6 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -13,24 +17,24 @@ func argoClient(t *testing.T, f *fakeArgoCD) *Client {
 	t.Helper()
 	srv := newFakePlainServer(f.handler())
 	t.Cleanup(srv.Close)
-	return &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+	return newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 }
 
 // subTracked is the Subscription's annotations with a tracking id naming app.
 func subTracked(app string) map[string]string {
-	return map[string]string{argoTrackingAnnotation: app + ":operators.coreos.com/Subscription:" + SubNS + "/" + SubName}
+	return map[string]string{argo.TrackingAnnotation: app + ":operators.coreos.com/Subscription:" + rhoai.SubNS + "/" + rhoai.SubName}
 }
 
 // subLabelled is the Subscription's labels under label tracking (OpenShift
 // GitOps up to 1.18): the instance label naming app, no annotation.
 func subLabelled(app string) map[string]string {
-	return map[string]string{argoInstanceLabel: app}
+	return map[string]string{argo.InstanceLabel: app}
 }
 
 // Each answer of Argo CD (or its absence) and the verdict on the
 // Subscription with a tracking annotation.
 func TestArgoTrackingVerdicts(t *testing.T) {
-	compared := func(ns string, objs ...argoObject) map[string]any {
+	compared := func(ns string, objs ...argo.Object) map[string]any {
 		return argoApplicationListing(ns, objs...)
 	}
 	notCompared := func(edit func(status map[string]any)) map[string]any {
@@ -47,13 +51,13 @@ func TestArgoTrackingVerdicts(t *testing.T) {
 		sync        string
 	}{
 		"managed": {
-			argo:  argoManagingAll(argoSubscriptionObject),
+			argo:  argoManagingAll(argo.SubscriptionObject),
 			state: types.ArgoCDManaged, namespace: "openshift-gitops", sync: "Synced",
 		},
 		"managed by a second instance's application of the same name": {
 			argo: &fakeArgoCD{served: true, apps: []map[string]any{
-				compared("openshift-gitops", argoCatalogObject),
-				compared("team-gitops", argoSubscriptionObject),
+				compared("openshift-gitops", argo.CatalogObject),
+				compared("team-gitops", argo.SubscriptionObject),
 			}},
 			state: types.ArgoCDManaged, namespace: "team-gitops", sync: "Synced",
 		},
@@ -74,19 +78,19 @@ func TestArgoTrackingVerdicts(t *testing.T) {
 			state: types.ArgoCDUnconfirmed, reason: "ClusterRoleBinding argocd-manager-role-binding",
 		},
 		"argo cd not installed, argocd cluster add --namespace registered the operator's namespace": {
-			argo:  &fakeArgoCD{managerRoleBindings: []string{SubNS}},
-			state: types.ArgoCDUnconfirmed, reason: "RoleBinding argocd-manager-role-binding in namespace " + SubNS,
+			argo:  &fakeArgoCD{managerRoleBindings: []string{rhoai.SubNS}},
+			state: types.ArgoCDUnconfirmed, reason: "RoleBinding argocd-manager-role-binding in namespace " + rhoai.SubNS,
 		},
 		"argo cd not installed, argocd cluster add --namespace registered the catalog's namespace": {
-			argo:  &fakeArgoCD{managerRoleBindings: []string{CatalogNS}},
-			state: types.ArgoCDUnconfirmed, reason: "RoleBinding argocd-manager-role-binding in namespace " + CatalogNS,
+			argo:  &fakeArgoCD{managerRoleBindings: []string{rhoai.CatalogNS}},
+			state: types.ArgoCDUnconfirmed, reason: "RoleBinding argocd-manager-role-binding in namespace " + rhoai.CatalogNS,
 		},
 		"argo cd not installed, argocd cluster add --namespace registered another namespace": {
 			argo:  &fakeArgoCD{managerRoleBindings: []string{"team-x"}},
 			state: types.ArgoCDStale, staleReason: types.ArgoCDNotInstalled,
 		},
 		"argo cd not installed, ACM discovery fails": {
-			argo:  &fakeArgoCD{fail: map[string]int{acmWorkAPI: http.StatusServiceUnavailable}},
+			argo:  &fakeArgoCD{fail: map[string]int{argo.ACMWorkAPI: http.StatusServiceUnavailable}},
 			state: types.ArgoCDUnconfirmed, reason: "whether an ACM hub manages this cluster could not be read",
 		},
 		"argo cd not installed, the binding list is forbidden": {
@@ -94,8 +98,8 @@ func TestArgoTrackingVerdicts(t *testing.T) {
 			state: types.ArgoCDUnconfirmed, reason: "403",
 		},
 		"argo cd not installed, the RoleBinding read is forbidden": {
-			argo:  &fakeArgoCD{fail: map[string]int{managerRoleBindingPath(SubNS): http.StatusForbidden}},
-			state: types.ArgoCDUnconfirmed, reason: "manages namespace " + SubNS + " could not be read",
+			argo:  &fakeArgoCD{fail: map[string]int{managerRoleBindingPath(rhoai.SubNS): http.StatusForbidden}},
+			state: types.ArgoCDUnconfirmed, reason: "manages namespace " + rhoai.SubNS + " could not be read",
 		},
 		"application gone": {
 			argo:  &fakeArgoCD{served: true},
@@ -106,25 +110,25 @@ func TestArgoTrackingVerdicts(t *testing.T) {
 			state: types.ArgoCDUnconfirmed, reason: `no application "` + testArgoApp + `" is on this cluster, but an ACM hub`,
 		},
 		"application does not list it": {
-			argo:  &fakeArgoCD{served: true, apps: []map[string]any{compared("openshift-gitops", argoCatalogObject)}},
+			argo:  &fakeArgoCD{served: true, apps: []map[string]any{compared("openshift-gitops", argo.CatalogObject)}},
 			state: types.ArgoCDStale, staleReason: types.ArgoCDNotAmongResources, namespace: "openshift-gitops",
 		},
 		"application does not list it, an ACM hub manages the cluster": {
-			argo:  &fakeArgoCD{served: true, acm: true, apps: []map[string]any{compared("openshift-gitops", argoCatalogObject)}},
+			argo:  &fakeArgoCD{served: true, acm: true, apps: []map[string]any{compared("openshift-gitops", argo.CatalogObject)}},
 			state: types.ArgoCDUnconfirmed, reason: "application openshift-gitops/" + testArgoApp + " does not list it, but an ACM hub", namespace: "openshift-gitops",
 		},
 		"application does not list it, argocd cluster add registered the cluster": {
-			argo:  &fakeArgoCD{served: true, argocdManager: true, apps: []map[string]any{compared("openshift-gitops", argoCatalogObject)}},
+			argo:  &fakeArgoCD{served: true, argocdManager: true, apps: []map[string]any{compared("openshift-gitops", argo.CatalogObject)}},
 			state: types.ArgoCDUnconfirmed, reason: "ClusterRoleBinding argocd-manager-role-binding", namespace: "openshift-gitops",
 		},
 		"application lists it in another namespace": {
 			argo: &fakeArgoCD{served: true, apps: []map[string]any{compared("openshift-gitops",
-				argoObject{group: "operators.coreos.com", kind: "Subscription", namespace: "other", name: SubName})}},
+				argo.Object{Group: "operators.coreos.com", Kind: "Subscription", Namespace: "other", Name: rhoai.SubName})}},
 			state: types.ArgoCDStale, staleReason: types.ArgoCDNotAmongResources, namespace: "openshift-gitops",
 		},
 		"application lists another group's object of that kind and name": {
 			argo: &fakeArgoCD{served: true, apps: []map[string]any{compared("openshift-gitops",
-				argoObject{group: "example.com", kind: "Subscription", namespace: SubNS, name: SubName})}},
+				argo.Object{Group: "example.com", Kind: "Subscription", Namespace: rhoai.SubNS, Name: rhoai.SubName})}},
 			state: types.ArgoCDStale, staleReason: types.ArgoCDNotAmongResources, namespace: "openshift-gitops",
 		},
 		"application not compared yet": {
@@ -156,27 +160,27 @@ func TestArgoTrackingVerdicts(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := newArgoCheck(argoClient(t, tc.argo)).object(subTracked(testArgoApp), nil, argoSubscriptionObject)
-			if got.app != testArgoApp || got.state != tc.state || got.staleReason != tc.staleReason || got.namespace != tc.namespace || got.sync != tc.sync {
+			got := argo.NewCheck(argoClient(t, tc.argo)).Object(subTracked(testArgoApp), nil, argo.SubscriptionObject)
+			if got.App != testArgoApp || got.State != tc.state || got.StaleReason != tc.staleReason || got.Namespace != tc.namespace || got.Sync != tc.sync {
 				t.Fatalf("verdict = %+v", got)
 			}
-			if !strings.Contains(got.reason, tc.reason) || (tc.reason == "") != (got.reason == "") {
-				t.Fatalf("reason = %q, want it to contain %q", got.reason, tc.reason)
+			if !strings.Contains(got.Reason, tc.reason) || (tc.reason == "") != (got.Reason == "") {
+				t.Fatalf("reason = %q, want it to contain %q", got.Reason, tc.reason)
 			}
 			// Every refusal reads managedBy: only a left-over annotation
 			// lets the tool change the object.
 			if want := testArgoApp; tc.state == types.ArgoCDStale {
-				if got.managedBy() != "" {
-					t.Fatalf("stale tracking still managed by %q", got.managedBy())
+				if got.ManagedBy() != "" {
+					t.Fatalf("stale tracking still managed by %q", got.ManagedBy())
 				}
-			} else if got.managedBy() != want {
-				t.Fatalf("managedBy = %q, want %q", got.managedBy(), want)
+			} else if got.ManagedBy() != want {
+				t.Fatalf("managedBy = %q, want %q", got.ManagedBy(), want)
 			}
-			if note := got.unconfirmedNote(); (tc.state == types.ArgoCDUnconfirmed) != (note != "") || !strings.Contains(note, tc.reason) {
+			if note := got.UnconfirmedNote(); (tc.state == types.ArgoCDUnconfirmed) != (note != "") || !strings.Contains(note, tc.reason) {
 				t.Fatalf("note = %q", note)
 			}
-			info := got.info()
-			if info == nil || info.Application != testArgoApp || info.State != tc.state || info.StaleReason != tc.staleReason || info.Reason != got.reason {
+			info := got.Info()
+			if info == nil || info.Application != testArgoApp || info.State != tc.state || info.StaleReason != tc.staleReason || info.Reason != got.Reason {
 				t.Fatalf("info = %+v", info)
 			}
 		})
@@ -196,15 +200,15 @@ func TestArgoTrackingLabelTracking(t *testing.T) {
 		reported  bool // info() is set
 	}{
 		"listed in an Application's status.resources, no annotation: managed": {
-			argo:  argoManagingAll(argoSubscriptionObject),
+			argo:  argoManagingAll(argo.SubscriptionObject),
 			state: types.ArgoCDManaged, app: testArgoApp, namespace: "openshift-gitops", reported: true,
 		},
 		"Application in another namespace, label <namespace>_<name>": {
-			argo:  &fakeArgoCD{served: true, apps: []map[string]any{argoApplicationListing("team-a", argoSubscriptionObject)}},
+			argo:  &fakeArgoCD{served: true, apps: []map[string]any{argoApplicationListing("team-a", argo.SubscriptionObject)}},
 			state: types.ArgoCDManaged, app: testArgoApp, namespace: "team-a", reported: true,
 		},
 		"the named Application does not list it: left over": {
-			argo:  &fakeArgoCD{served: true, apps: []map[string]any{argoApplicationListing("openshift-gitops", argoCatalogObject)}},
+			argo:  &fakeArgoCD{served: true, apps: []map[string]any{argoApplicationListing("openshift-gitops", argo.CatalogObject)}},
 			state: types.ArgoCDStale, namespace: "openshift-gitops", reported: true,
 		},
 		"the named Application has not compared yet: not confirmed": {
@@ -226,8 +230,8 @@ func TestArgoTrackingLabelTracking(t *testing.T) {
 			state: types.ArgoCDUnconfirmed, app: testArgoApp, reason: "Argo CD is not installed on this cluster, but an ACM hub", reported: true,
 		},
 		"Argo CD not installed, argocd cluster add --namespace on the operator's namespace: not confirmed": {
-			argo:  &fakeArgoCD{managerRoleBindings: []string{SubNS}},
-			state: types.ArgoCDUnconfirmed, app: testArgoApp, reason: "RoleBinding argocd-manager-role-binding in namespace " + SubNS, reported: true,
+			argo:  &fakeArgoCD{managerRoleBindings: []string{rhoai.SubNS}},
+			state: types.ArgoCDUnconfirmed, app: testArgoApp, reason: "RoleBinding argocd-manager-role-binding in namespace " + rhoai.SubNS, reported: true,
 		},
 		"Argo CD not installed, no remote sign: not reported (Helm sets the label too)": {
 			argo: &fakeArgoCD{},
@@ -238,16 +242,16 @@ func TestArgoTrackingLabelTracking(t *testing.T) {
 			if strings.Contains(name, "<namespace>_<name>") {
 				label = "team-a_" + testArgoApp
 			}
-			got := newArgoCheck(argoClient(t, tc.argo)).object(nil, subLabelled(label), argoSubscriptionObject)
+			got := argo.NewCheck(argoClient(t, tc.argo)).Object(nil, subLabelled(label), argo.SubscriptionObject)
 			wantApp := tc.app
 			if wantApp != "" {
 				wantApp = label
 			}
-			if got.state != tc.state || got.managedBy() != wantApp || got.namespace != tc.namespace || !strings.Contains(got.reason, tc.reason) {
-				t.Fatalf("verdict = %+v, managedBy %q", got, got.managedBy())
+			if got.State != tc.state || got.ManagedBy() != wantApp || got.Namespace != tc.namespace || !strings.Contains(got.Reason, tc.reason) {
+				t.Fatalf("verdict = %+v, managedBy %q", got, got.ManagedBy())
 			}
-			if (got.info() != nil) != tc.reported {
-				t.Fatalf("info = %+v", got.info())
+			if (got.Info() != nil) != tc.reported {
+				t.Fatalf("info = %+v", got.Info())
 			}
 		})
 	}
@@ -259,15 +263,15 @@ func TestArgoTrackingLabelTracking(t *testing.T) {
 // keeps it managed.
 func TestArgoTrackingUnmarkedObject(t *testing.T) {
 	t.Run("listed: managed, named by the Application", func(t *testing.T) {
-		got := newArgoCheck(argoClient(t, argoManagingAll(argoSubscriptionObject))).object(nil, nil, argoSubscriptionObject)
-		if got.state != types.ArgoCDManaged || got.managedBy() != testArgoApp || got.namespace != "openshift-gitops" {
+		got := argo.NewCheck(argoClient(t, argoManagingAll(argo.SubscriptionObject))).Object(nil, nil, argo.SubscriptionObject)
+		if got.State != types.ArgoCDManaged || got.ManagedBy() != testArgoApp || got.Namespace != "openshift-gitops" {
 			t.Fatalf("verdict = %+v", got)
 		}
 	})
 	t.Run("not listed: not managed, nothing reported", func(t *testing.T) {
-		f := &fakeArgoCD{served: true, acm: true, apps: []map[string]any{argoApplicationListing("openshift-gitops", argoCatalogObject)}}
-		got := newArgoCheck(argoClient(t, f)).object(nil, nil, argoSubscriptionObject)
-		if got.managedBy() != "" || got.info() != nil {
+		f := &fakeArgoCD{served: true, acm: true, apps: []map[string]any{argoApplicationListing("openshift-gitops", argo.CatalogObject)}}
+		got := argo.NewCheck(argoClient(t, f)).Object(nil, nil, argo.SubscriptionObject)
+		if got.ManagedBy() != "" || got.Info() != nil {
 			t.Fatalf("verdict = %+v", got)
 		}
 		// Unmarked objects do not look for remote signs.
@@ -279,8 +283,8 @@ func TestArgoTrackingUnmarkedObject(t *testing.T) {
 	})
 	t.Run("Argo CD not installed: only discovery is asked", func(t *testing.T) {
 		f := &fakeArgoCD{acm: true}
-		got := newArgoCheck(argoClient(t, f)).object(nil, nil, argoSubscriptionObject)
-		if got.managedBy() != "" || got.info() != nil {
+		got := argo.NewCheck(argoClient(t, f)).Object(nil, nil, argo.SubscriptionObject)
+		if got.ManagedBy() != "" || got.Info() != nil {
 			t.Fatalf("verdict = %+v", got)
 		}
 		if reqs := f.requested(); len(reqs) != 1 || reqs[0] != argoDiscoveryPath {
@@ -292,11 +296,11 @@ func TestArgoTrackingUnmarkedObject(t *testing.T) {
 		"discovery fails":       {fail: map[string]int{argoDiscoveryPath: http.StatusInternalServerError}},
 	} {
 		t.Run(name+": not confirmed, application unknown", func(t *testing.T) {
-			got := newArgoCheck(argoClient(t, f)).object(nil, nil, argoSubscriptionObject)
-			if got.state != types.ArgoCDUnconfirmed || got.managedBy() != argoUnknownApplication || got.reason == "" {
+			got := argo.NewCheck(argoClient(t, f)).Object(nil, nil, argo.SubscriptionObject)
+			if got.State != types.ArgoCDUnconfirmed || got.ManagedBy() != argo.UnknownApplication || got.Reason == "" {
 				t.Fatalf("verdict = %+v", got)
 			}
-			if info := got.info(); info == nil || info.Application != argoUnknownApplication {
+			if info := got.Info(); info == nil || info.Application != argo.UnknownApplication {
 				t.Fatalf("info = %+v", info)
 			}
 		})
@@ -306,11 +310,11 @@ func TestArgoTrackingUnmarkedObject(t *testing.T) {
 // An Application that lists the object decides, even when the annotation
 // names another application (an earlier one, or a copy).
 func TestArgoTrackingListedByAnotherApplication(t *testing.T) {
-	other := argoApplicationListing("openshift-gitops", argoSubscriptionObject)
+	other := argoApplicationListing("openshift-gitops", argo.SubscriptionObject)
 	other["metadata"].(map[string]any)["name"] = "rhoai-operator"
-	f := &fakeArgoCD{served: true, apps: []map[string]any{argoApplicationListing("openshift-gitops", argoCatalogObject), other}}
-	got := newArgoCheck(argoClient(t, f)).object(subTracked(testArgoApp), nil, argoSubscriptionObject)
-	if got.state != types.ArgoCDManaged || got.managedBy() != "rhoai-operator" || got.namespace != "openshift-gitops" {
+	f := &fakeArgoCD{served: true, apps: []map[string]any{argoApplicationListing("openshift-gitops", argo.CatalogObject), other}}
+	got := argo.NewCheck(argoClient(t, f)).Object(subTracked(testArgoApp), nil, argo.SubscriptionObject)
+	if got.State != types.ArgoCDManaged || got.ManagedBy() != "rhoai-operator" || got.Namespace != "openshift-gitops" {
 		t.Fatalf("verdict = %+v", got)
 	}
 }
@@ -321,7 +325,7 @@ func TestArgoTrackingListedByAnotherApplication(t *testing.T) {
 // (controller/state.go, isSelfReferencedObj), unless Git holds it.
 func TestArgoTrackingCopiedAnnotation(t *testing.T) {
 	listing := func(status string) *fakeArgoCD {
-		app := argoApplicationListing("openshift-gitops", argoSubscriptionObject)
+		app := argoApplicationListing("openshift-gitops", argo.SubscriptionObject)
 		res := app["status"].(map[string]any)["resources"].([]any)[0].(map[string]any)
 		if status == "" {
 			delete(res, "status")
@@ -331,19 +335,19 @@ func TestArgoTrackingCopiedAnnotation(t *testing.T) {
 		return &fakeArgoCD{served: true, apps: []map[string]any{app}}
 	}
 	for _, copied := range []string{
-		testArgoApp + ":operators.coreos.com/CatalogSource:" + CatalogNS + "/" + CatalogName,
-		testArgoApp + ":example.com/Subscription:" + SubNS + "/" + SubName,
+		testArgoApp + ":operators.coreos.com/CatalogSource:" + rhoai.CatalogNS + "/" + rhoai.CatalogName,
+		testArgoApp + ":example.com/Subscription:" + rhoai.SubNS + "/" + rhoai.SubName,
 	} {
-		ann := map[string]string{argoTrackingAnnotation: copied}
-		if got := newArgoCheck(argoClient(t, listing(""))).object(ann, nil, argoSubscriptionObject); got.managedBy() != "" || got.info() != nil {
+		ann := map[string]string{argo.TrackingAnnotation: copied}
+		if got := argo.NewCheck(argoClient(t, listing(""))).Object(ann, nil, argo.SubscriptionObject); got.ManagedBy() != "" || got.Info() != nil {
 			t.Errorf("%s, listed without status: %+v", copied, got)
 		}
-		if got := newArgoCheck(argoClient(t, listing("OutOfSync"))).object(ann, nil, argoSubscriptionObject); got.state != types.ArgoCDManaged {
+		if got := argo.NewCheck(argoClient(t, listing("OutOfSync"))).Object(ann, nil, argo.SubscriptionObject); got.State != types.ArgoCDManaged {
 			t.Errorf("%s, in Git (OutOfSync): %+v", copied, got)
 		}
 	}
 	// Without a copied annotation, an entry without a status still counts.
-	if got := newArgoCheck(argoClient(t, listing(""))).object(subTracked(testArgoApp), nil, argoSubscriptionObject); got.state != types.ArgoCDManaged {
+	if got := argo.NewCheck(argoClient(t, listing(""))).Object(subTracked(testArgoApp), nil, argo.SubscriptionObject); got.State != types.ArgoCDManaged {
 		t.Errorf("own annotation, listed without status: %+v", got)
 	}
 }
@@ -352,12 +356,12 @@ func TestArgoTrackingCopiedAnnotation(t *testing.T) {
 // "<namespace>_<name>", and only that namespace's Application matches it.
 func TestArgoTrackingNamespacedApplication(t *testing.T) {
 	f := &fakeArgoCD{served: true, apps: []map[string]any{
-		argoApplicationListing("team-a", argoSubscriptionObject),
+		argoApplicationListing("team-a", argo.SubscriptionObject),
 		// Same name in Argo CD's own namespace, not listing it.
 		argoApplicationListing("openshift-gitops"),
 	}}
-	got := newArgoCheck(argoClient(t, f)).object(subTracked("team-a_"+testArgoApp), nil, argoSubscriptionObject)
-	if got.state != types.ArgoCDManaged || got.namespace != "team-a" || got.managedBy() != "team-a_"+testArgoApp {
+	got := argo.NewCheck(argoClient(t, f)).Object(subTracked("team-a_"+testArgoApp), nil, argo.SubscriptionObject)
+	if got.State != types.ArgoCDManaged || got.Namespace != "team-a" || got.ManagedBy() != "team-a_"+testArgoApp {
 		t.Fatalf("verdict = %+v", got)
 	}
 	if reqs := f.requested(); len(reqs) != 2 || reqs[1] != argoDiscoveryPath+"/applications" {
@@ -367,8 +371,8 @@ func TestArgoTrackingNamespacedApplication(t *testing.T) {
 	// Gone from its namespace (another namespace's same-named application
 	// does not count).
 	f.setApps(argoApplicationListing("openshift-gitops"))
-	got = newArgoCheck(argoClient(t, f)).object(subTracked("team-a_"+testArgoApp), nil, argoSubscriptionObject)
-	if got.state != types.ArgoCDStale || got.staleReason != types.ArgoCDApplicationGone {
+	got = argo.NewCheck(argoClient(t, f)).Object(subTracked("team-a_"+testArgoApp), nil, argo.SubscriptionObject)
+	if got.State != types.ArgoCDStale || got.StaleReason != types.ArgoCDApplicationGone {
 		t.Fatalf("gone: %+v", got)
 	}
 }
@@ -381,8 +385,8 @@ func TestArgoTrackingTruncatedLabel(t *testing.T) {
 	app := argoApplicationListing("openshift-gitops")
 	app["metadata"].(map[string]any)["name"] = long
 	app["status"].(map[string]any)["sync"] = map[string]any{"status": "Unknown"}
-	got := newArgoCheck(argoClient(t, &fakeArgoCD{served: true, apps: []map[string]any{app}})).object(nil, subLabelled(long[:63]), argoSubscriptionObject)
-	if got.state != types.ArgoCDUnconfirmed || got.namespace != "openshift-gitops" {
+	got := argo.NewCheck(argoClient(t, &fakeArgoCD{served: true, apps: []map[string]any{app}})).Object(nil, subLabelled(long[:63]), argo.SubscriptionObject)
+	if got.State != types.ArgoCDUnconfirmed || got.Namespace != "openshift-gitops" {
 		t.Fatalf("verdict = %+v", got)
 	}
 }
@@ -391,9 +395,9 @@ func TestArgoTrackingTruncatedLabel(t *testing.T) {
 // CD's list decides as for any other.
 func TestArgoTrackingInvalidApplicationName(t *testing.T) {
 	for _, app := range []string{"Upper", "a/b", "a%2Fb", "ns_Bad", "x_"} {
-		f := argoManagingAll(argoSubscriptionObject)
-		got := newArgoCheck(argoClient(t, f)).object(subTracked(app), nil, argoSubscriptionObject)
-		if got.state != types.ArgoCDManaged || got.managedBy() != testArgoApp {
+		f := argoManagingAll(argo.SubscriptionObject)
+		got := argo.NewCheck(argoClient(t, f)).Object(subTracked(app), nil, argo.SubscriptionObject)
+		if got.State != types.ArgoCDManaged || got.ManagedBy() != testArgoApp {
 			t.Errorf("%q, listed: verdict = %+v", app, got)
 		}
 		for _, p := range f.requested() {
@@ -402,7 +406,7 @@ func TestArgoTrackingInvalidApplicationName(t *testing.T) {
 			}
 		}
 		f = &fakeArgoCD{served: true}
-		if got := newArgoCheck(argoClient(t, f)).object(subTracked(app), nil, argoSubscriptionObject); got.state != types.ArgoCDStale || got.staleReason != types.ArgoCDApplicationGone {
+		if got := argo.NewCheck(argoClient(t, f)).Object(subTracked(app), nil, argo.SubscriptionObject); got.State != types.ArgoCDStale || got.StaleReason != types.ArgoCDApplicationGone {
 			t.Errorf("%q, not listed: verdict = %+v", app, got)
 		}
 	}
@@ -412,21 +416,21 @@ func TestArgoTrackingInvalidApplicationName(t *testing.T) {
 // namespace in the tracking id and none in status.resources.
 func TestArgoTrackingClusterScopedDSC(t *testing.T) {
 	dsc := map[string]any{"metadata": map[string]any{"name": "default-dsc", "annotations": map[string]any{
-		argoTrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:redhat-ods-applications/default-dsc"}}}
-	f := argoManagingAll(argoDSCObject("default-dsc"))
-	if got := argoTrackingOf(argoClient(t, f), dsc, dscGroup, "DataScienceCluster"); got.state != types.ArgoCDManaged {
+		argo.TrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:redhat-ods-applications/default-dsc"}}}
+	f := argoManagingAll(argo.DSCObject("default-dsc"))
+	if got := argo.TrackingOf(argoClient(t, f), dsc, rhoai.DSCGroup, "DataScienceCluster"); got.State != types.ArgoCDManaged {
 		t.Fatalf("verdict = %+v", got)
 	}
-	f = argoManagingAll(argoDSCObject("other-dsc"))
-	if got := argoTrackingOf(argoClient(t, f), dsc, dscGroup, "DataScienceCluster"); got.state != types.ArgoCDStale || got.staleReason != types.ArgoCDNotAmongResources {
+	f = argoManagingAll(argo.DSCObject("other-dsc"))
+	if got := argo.TrackingOf(argoClient(t, f), dsc, rhoai.DSCGroup, "DataScienceCluster"); got.State != types.ArgoCDStale || got.StaleReason != types.ArgoCDNotAmongResources {
 		t.Fatalf("another DSC listed: %+v", got)
 	}
 	untracked := map[string]any{"metadata": map[string]any{"name": "default-dsc"}}
-	if got := argoTrackingOf(argoClient(t, f), untracked, dscGroup, "DataScienceCluster"); got.app != "" || got.managedBy() != "" || got.info() != nil {
+	if got := argo.TrackingOf(argoClient(t, f), untracked, rhoai.DSCGroup, "DataScienceCluster"); got.App != "" || got.ManagedBy() != "" || got.Info() != nil {
 		t.Fatalf("untracked, not listed: %+v", got)
 	}
-	labelled := map[string]any{"metadata": map[string]any{"name": "default-dsc", "labels": map[string]any{argoInstanceLabel: testArgoApp}}}
-	if got := argoTrackingOf(argoClient(t, argoManagingAll(argoDSCObject("default-dsc"))), labelled, dscGroup, "DataScienceCluster"); got.state != types.ArgoCDManaged || got.managedBy() != testArgoApp {
+	labelled := map[string]any{"metadata": map[string]any{"name": "default-dsc", "labels": map[string]any{argo.InstanceLabel: testArgoApp}}}
+	if got := argo.TrackingOf(argoClient(t, argoManagingAll(argo.DSCObject("default-dsc"))), labelled, rhoai.DSCGroup, "DataScienceCluster"); got.State != types.ArgoCDManaged || got.ManagedBy() != testArgoApp {
 		t.Fatalf("label tracking: %+v", got)
 	}
 }
@@ -435,30 +439,30 @@ func TestArgoTrackingClusterScopedDSC(t *testing.T) {
 // cost one request each.
 func TestArgoTrackingReadsOncePerCheck(t *testing.T) {
 	f := &fakeArgoCD{}
-	argo := newArgoCheck(argoClient(t, f))
-	dsc := map[string]string{argoTrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:x/default-dsc"}
-	cat := map[string]string{argoTrackingAnnotation: testArgoApp + ":operators.coreos.com/CatalogSource:" + CatalogNS + "/" + CatalogName}
-	for _, got := range []argoTracking{
-		argo.object(subTracked(testArgoApp), nil, argoSubscriptionObject),
-		argo.object(cat, nil, argoCatalogObject),
-		argo.object(dsc, nil, argoDSCObject("default-dsc")),
+	argoCD := argo.NewCheck(argoClient(t, f))
+	dsc := map[string]string{argo.TrackingAnnotation: testArgoApp + ":datasciencecluster.opendatahub.io/DataScienceCluster:x/default-dsc"}
+	cat := map[string]string{argo.TrackingAnnotation: testArgoApp + ":operators.coreos.com/CatalogSource:" + rhoai.CatalogNS + "/" + rhoai.CatalogName}
+	for _, got := range []argo.Tracking{
+		argoCD.Object(subTracked(testArgoApp), nil, argo.SubscriptionObject),
+		argoCD.Object(cat, nil, argo.CatalogObject),
+		argoCD.Object(dsc, nil, argo.DSCObject("default-dsc")),
 	} {
-		if got.state != types.ArgoCDStale || got.staleReason != types.ArgoCDNotInstalled {
+		if got.State != types.ArgoCDStale || got.StaleReason != types.ArgoCDNotInstalled {
 			t.Fatalf("verdict = %+v", got)
 		}
 	}
-	want := []string{argoDiscoveryPath, acmWorkAPI, "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings?fieldSelector=metadata.name%3D" + argoCDManagerBinding,
-		managerRoleBindingPath(SubNS), managerRoleBindingPath(CatalogNS)}
+	want := []string{argoDiscoveryPath, argo.ACMWorkAPI, "/apis/rbac.authorization.k8s.io/v1/clusterrolebindings?fieldSelector=metadata.name%3D" + argo.ManagerBinding,
+		managerRoleBindingPath(rhoai.SubNS), managerRoleBindingPath(rhoai.CatalogNS)}
 	if reqs := f.requested(); strings.Join(reqs, " ") != strings.Join(want, " ") {
 		t.Fatalf("requests = %v, want %v", reqs, want)
 	}
 
 	// Served: discovery and one list of every Application for all three.
 	f = argoManagingAll(argoGitOpsObjects...)
-	argo = newArgoCheck(argoClient(t, f))
-	argo.object(subTracked(testArgoApp), nil, argoSubscriptionObject)
-	argo.object(nil, nil, argoCatalogObject)
-	argo.object(dsc, nil, argoDSCObject("default-dsc"))
+	argoCD = argo.NewCheck(argoClient(t, f))
+	argoCD.Object(subTracked(testArgoApp), nil, argo.SubscriptionObject)
+	argoCD.Object(nil, nil, argo.CatalogObject)
+	argoCD.Object(dsc, nil, argo.DSCObject("default-dsc"))
 	if reqs := f.requested(); len(reqs) != 2 {
 		t.Fatalf("requests = %v, want discovery and one list", reqs)
 	}
@@ -467,11 +471,11 @@ func TestArgoTrackingReadsOncePerCheck(t *testing.T) {
 // The RoleBinding of `argocd cluster add --namespace` in the object's own
 // namespace (another operator's Subscription) is a remote sign too.
 func TestArgoTrackingRemoteSignInTheObjectsNamespace(t *testing.T) {
-	o := argoObject{group: "operators.coreos.com", kind: "Subscription", namespace: "kuadrant-system", name: "rhcl-operator"}
-	ann := map[string]string{argoTrackingAnnotation: testArgoApp + ":operators.coreos.com/Subscription:kuadrant-system/rhcl-operator"}
+	o := argo.Object{Group: "operators.coreos.com", Kind: "Subscription", Namespace: "kuadrant-system", Name: "rhcl-operator"}
+	ann := map[string]string{argo.TrackingAnnotation: testArgoApp + ":operators.coreos.com/Subscription:kuadrant-system/rhcl-operator"}
 	f := &fakeArgoCD{managerRoleBindings: []string{"kuadrant-system"}}
-	got := newArgoCheck(argoClient(t, f)).object(ann, nil, o)
-	if got.state != types.ArgoCDUnconfirmed || !strings.Contains(got.reason, "namespace kuadrant-system") {
+	got := argo.NewCheck(argoClient(t, f)).Object(ann, nil, o)
+	if got.State != types.ArgoCDUnconfirmed || !strings.Contains(got.Reason, "namespace kuadrant-system") {
 		t.Fatalf("verdict = %+v", got)
 	}
 }
@@ -506,18 +510,18 @@ func TestOperatorOperationsWithLeftOverArgoCDTracking(t *testing.T) {
 	}
 	f := gitOpsFake(t)
 	f.argo = &fakeArgoCD{served: true, apps: []map[string]any{argoApplicationListing("openshift-gitops")}}
-	if r := redeploy(f.client(context.Background())); r.ErrorCode == ErrorCodeGitOpsManaged {
+	if r := redeploy(f.client(context.Background())); r.ErrorCode == kube.ErrorCodeGitOpsManaged {
 		t.Fatalf("refused for a left-over annotation: %+v", r)
 	}
-	g, err := readOperatorGitOps(f.client(context.Background()))
-	if err != nil || g.active() || g.catalogArgo.staleReason != types.ArgoCDNotAmongResources {
+	g, err := argo.ReadOperatorGitOps(f.client(context.Background()))
+	if err != nil || g.Active() || g.CatalogArgo.StaleReason != types.ArgoCDNotAmongResources {
 		t.Fatalf("gitOps = %+v, %v", g, err)
 	}
 
 	f = gitOpsFake(t)
 	f.argo = &fakeArgoCD{fail: map[string]int{argoDiscoveryPath: http.StatusServiceUnavailable}}
 	r := redeploy(f.client(context.Background()))
-	if r.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(r.Message, "could not confirm this with Argo CD") || !strings.Contains(r.Message, "503") {
+	if r.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(r.Message, "could not confirm this with Argo CD") || !strings.Contains(r.Message, "503") {
 		t.Fatalf("unconfirmed: %+v", r)
 	}
 	if w := f.writes(); len(w) != 0 {
@@ -532,16 +536,16 @@ func TestOperatorOperationsUnderLabelTracking(t *testing.T) {
 	f := gitOpsFake(t)
 	for _, obj := range []map[string]any{f.sub, f.catalog} {
 		meta := obj["metadata"].(map[string]any)
-		delete(meta["annotations"].(map[string]any), argoTrackingAnnotation)
+		delete(meta["annotations"].(map[string]any), argo.TrackingAnnotation)
 		labels, _ := meta["labels"].(map[string]any)
 		if labels == nil {
 			labels = map[string]any{}
 			meta["labels"] = labels
 		}
-		labels[argoInstanceLabel] = testArgoApp
+		labels[argo.InstanceLabel] = testArgoApp
 	}
 	r, _ := RefreshOperatorStreamWithOptions(f.client(context.Background()), OperationOptions{}, func(UpdateStepEvent) {})
-	if r.ErrorCode != ErrorCodeGitOpsManaged || !strings.Contains(r.Message, `Argo CD application "`+testArgoApp+`"`) {
+	if r.ErrorCode != kube.ErrorCodeGitOpsManaged || !strings.Contains(r.Message, `Argo CD application "`+testArgoApp+`"`) {
 		t.Fatalf("result = %+v", r)
 	}
 	if w := f.writes(); len(w) != 0 {
@@ -552,13 +556,11 @@ func TestOperatorOperationsUnderLabelTracking(t *testing.T) {
 // Update with a left-over annotation is the plain Update: it may install
 // any build (it writes the catalog), not only the one Git's catalog serves.
 func TestUpdateWithLeftOverArgoCDTracking(t *testing.T) {
-	oldLookup := lookupTargetBundle
-	t.Cleanup(func() { lookupTargetBundle = oldLookup })
-	lookupTargetBundle = func(*Client, string) (string, error) { return gitOpsCSV, nil }
+	t.Cleanup(operator.SetLookupTargetBundleForTest(func(*Client, string) (string, error) { return gitOpsCSV, nil }))
 	f := gitOpsFake(t)
 	f.argo = &fakeArgoCD{}
 	result, err := Update(f.client(context.Background()), testNightlyImage, true)
-	if err != nil || result.ErrorCode == ErrorCodeGitOpsManaged {
+	if err != nil || result.ErrorCode == kube.ErrorCodeGitOpsManaged {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	if logs := strings.Join(result.Logs, "\n"); !result.Success || strings.Contains(logs, "as Git sets it") || !strings.Contains(logs, "Would delete and recreate Subscription") {

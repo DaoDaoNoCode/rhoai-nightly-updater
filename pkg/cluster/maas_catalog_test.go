@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -53,12 +54,12 @@ func TestMaaSPublish_TheChosenModel(t *testing.T) {
 	if !strings.Contains(string(sub), `"name":"qwen25-05b-instruct"`) || !strings.Contains(string(sub), `"name":"smollm2-135m-instruct"`) {
 		t.Fatalf("subscription %s", sub)
 	}
-	rec, _ := readMaaSRecord(mc.c)
+	rec, _ := serving.ReadMaaSRecord(mc.c)
 	if strings.Join(rec.Published, " ") != "proj/qwen25-05b-instruct proj/smollm2-135m-instruct" {
 		t.Fatalf("record %v", rec.Published)
 	}
 	// Only the published model is routed through the MaaS gateway.
-	if m, _, _ := readToolModel(mc.c, "proj", "smollm2-135m-instruct"); !modelHasMaaSRef(m) {
+	if m, _, _ := serving.ReadToolModel(mc.c, "proj", "smollm2-135m-instruct"); !serving.ModelHasMaaSRef(m) {
 		t.Error("smollm2 is not routed through the MaaS gateway")
 	}
 	st, _ := GetMaaSStatus(mc.c)
@@ -67,7 +68,7 @@ func TestMaaSPublish_TheChosenModel(t *testing.T) {
 	}
 
 	// The model of a published one cannot be deleted; the other one can.
-	if res, _ := TeardownModels(mc.c, "proj", "smollm2-135m-instruct"); res.Success || res.ErrorCode != "in_use" {
+	if res, _ := serving.TeardownModels(mc.c, "proj", "smollm2-135m-instruct"); res.Success || res.ErrorCode != "in_use" {
 		t.Fatalf("teardown while published: %+v", res)
 	}
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj", Model: "smollm2-135m-instruct"}); !res.Success {
@@ -84,7 +85,7 @@ func TestMaaSPublish_TheChosenModel(t *testing.T) {
 	if !strings.Contains(string(gw), `"proj"`) {
 		t.Fatalf("the gateway no longer admits proj while qwen25 is published: %s", gw)
 	}
-	if m, _, _ := readToolModel(mc.c, "proj", "smollm2-135m-instruct"); modelHasMaaSRef(m) {
+	if m, _, _ := serving.ReadToolModel(mc.c, "proj", "smollm2-135m-instruct"); serving.ModelHasMaaSRef(m) {
 		t.Error("smollm2 still routes through the MaaS gateway")
 	}
 }
@@ -107,7 +108,7 @@ func TestMaaS_OnlyChatModelsArePublishable(t *testing.T) {
 	// Its teardown does not look for a MaaS reference it can never have
 	// (the ServiceAccount may not read one of that name).
 	mc.f.fail["GET "+tMaaSRefs+"granite-embedding-125m-english"] = 403
-	if res, _ := TeardownModels(mc.c, "proj", "granite-embedding-125m-english"); !res.Success {
+	if res, _ := serving.TeardownModels(mc.c, "proj", "granite-embedding-125m-english"); !res.Success {
 		t.Fatalf("teardown: %+v", res)
 	}
 }
@@ -132,11 +133,11 @@ func TestMaaSRecord_ReadsAProjectOnlyEntryAsTheDefaultModel(t *testing.T) {
 	mc := newMaaSCluster(t)
 	mc.f.putJSON(testRecordPath, `{"metadata":{"name":"rhoai-nightly-updater-snapshot"},"data":{"maas":"{\"published\":[\"proj\"]}"}}`)
 	t.Setenv("NAMESPACE", "rhoai-nightly-updater")
-	rec, err := readMaaSRecord(mc.c)
+	rec, err := serving.ReadMaaSRecord(mc.c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !rec.published("proj", "qwen25-05b-instruct") || rec.published("proj", "smollm2-135m-instruct") || strings.Join(rec.projects(), " ") != "proj" {
+	if !rec.IsPublished("proj", "qwen25-05b-instruct") || rec.IsPublished("proj", "smollm2-135m-instruct") || strings.Join(rec.Projects(), " ") != "proj" {
 		t.Fatalf("record %+v", rec)
 	}
 }
@@ -149,13 +150,13 @@ func TestUnpublishMaaSModel_UnpublishesEveryModelOfTheProject(t *testing.T) {
 			t.Fatalf("publish %s: %+v", name, res)
 		}
 	}
-	if res, _ := UnpublishMaaSModel(mc.c, "proj"); !res.Success {
+	if res, _ := serving.UnpublishMaaSModel(mc.c, "proj"); !res.Success {
 		t.Fatalf("unpublish: %+v", res)
 	}
 	if mc.f.has(tMaaSRef) || mc.f.has(tMaaSRefs+"qwen3-1-7b") || mc.f.has(tMaaSSub) {
 		t.Fatal("a publication is left")
 	}
-	if res, _ := TeardownModels(mc.c, "proj"); !res.Success {
+	if res, _ := serving.TeardownModels(mc.c, "proj"); !res.Success {
 		t.Fatalf("models teardown after the clean-up's unpublish: %+v", res)
 	}
 }

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // repairGuardMock answers the removal preconditions with a healthy
@@ -21,7 +23,7 @@ func repairGuardMock(w http.ResponseWriter, r *http.Request) bool {
 	case strings.HasSuffix(r.URL.Path, "/clusterserviceversions/rhods-operator.test"):
 		// The installed CSV names the operator's Deployment.
 		_, _ = io.WriteString(w, `{"metadata":{"name":"rhods-operator.test"},"spec":{"version":"3.6.0","install":{"spec":{"deployments":[{"name":"rhods-operator"}]}}}}`)
-	case r.URL.Path == "/apis/"+componentAPIGroup || r.URL.Path == "/apis/"+servicesAPIGroup:
+	case r.URL.Path == "/apis/"+rhoai.ComponentAPIGroup || r.URL.Path == "/apis/"+rhoai.ServicesAPIGroup:
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(w, `{"kind":"Status","code":404}`)
 	case r.URL.Path == "/apis/apiextensions.k8s.io/v1/customresourcedefinitions":
@@ -56,12 +58,12 @@ func dscCRDWith(t *testing.T, names ...string) string {
 // mcplifecycleoperator enabled (the fix for the live D3) must not lose it to
 // a reset or an extra-component removal: the Service would go away again,
 // the CRD would not (R5-F1).
-func dscRepairD3Server(t *testing.T, dsc string, patched *bool, mu *sync.Mutex, argo ...*fakeArgoCD) *Client {
+func dscRepairD3Server(t *testing.T, dsc string, patched *bool, mu *sync.Mutex, argoCD ...*fakeArgoCD) *Client {
 	crd := dscCRDWith(t, "mcplifecycleoperator", "trainingoperator")
 	conv := `{"items":[{"metadata":{"name":"mcpservers.mcp.x-k8s.io"},"spec":{"conversion":{"strategy":"Webhook","webhook":{"clientConfig":{"service":{"namespace":"redhat-ods-applications","name":"mcp-lifecycle-operator-webhook-service"}}}}},"status":{"storedVersions":["v1alpha1","v1beta1"]}}]}`
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case len(argo) > 0 && argo[0].serve(w, r):
+		case len(argoCD) > 0 && argoCD[0].serve(w, r):
 		case r.Method == http.MethodPatch:
 			mu.Lock()
 			*patched = true
@@ -84,7 +86,7 @@ func dscRepairD3Server(t *testing.T, dsc string, patched *bool, mu *sync.Mutex, 
 		}
 	}))
 	t.Cleanup(server.Close)
-	return &Client{baseURL: server.URL, httpClient: server.Client(), ctx: context.Background()}
+	return newTestClient(testClientOptions{BaseURL: server.URL, HTTPClient: server.Client(), Ctx: context.Background()})
 }
 
 func TestRepairDSC_RefusesRemovalsThatFailPreconditions(t *testing.T) {
@@ -176,8 +178,8 @@ func dscRepairMCPServer(t *testing.T, dsc, items string, patched *bool, mu *sync
 		}
 	}))
 	t.Cleanup(server.Close)
-	c := &Client{baseURL: server.URL, token: "sa-token", httpClient: server.Client(), ctx: context.Background()}
-	c.SetSignedInUser(&Client{baseURL: server.URL, token: "admin-token", httpClient: server.Client(), ctx: context.Background(), asUser: true})
+	c := newTestClient(testClientOptions{BaseURL: server.URL, Token: "sa-token", HTTPClient: server.Client(), Ctx: context.Background()})
+	c.SetSignedInUser(newTestClient(testClientOptions{BaseURL: server.URL, Token: "admin-token", HTTPClient: server.Client(), Ctx: context.Background(), AsUser: true}))
 	return c, func() []string {
 		mu.Lock()
 		defer mu.Unlock()
@@ -211,7 +213,7 @@ func TestRepairPreviewListsConversionObjectsWithTheUsersToken(t *testing.T) {
 		}
 		// The repair runs with the admin's own client and goes through.
 		user := c.SignedInUser()
-		user.signedInUser = nil
+		editTestClient(user, func(o *testClientOptions) { o.SignedInUser = nil })
 		r, err := RepairDSC(user, "my-dsc", "reset-defaults", "3.6.0", "datasciencecluster.opendatahub.io/v2", nil, []string{"mcplifecycleoperator"})
 		mu.Lock()
 		defer mu.Unlock()

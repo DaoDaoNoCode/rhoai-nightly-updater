@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/node"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -29,7 +31,7 @@ func TestScopeIsNestedInsideScope(t *testing.T) {
 		{"registry.redhat.io:443/rhoai", "*.redhat.io", true},
 		{"foo.redhat.io/x:1/y", "*.redhat.io", false},
 	} {
-		if got := scopeIsNestedInsideScope(tc.sub, tc.super); got != tc.want {
+		if got := node.ScopeIsNestedInsideScope(tc.sub, tc.super); got != tc.want {
 			t.Errorf("scopeIsNestedInsideScope(%q, %q) = %v, want %v", tc.sub, tc.super, got, tc.want)
 		}
 	}
@@ -61,7 +63,7 @@ func TestMirrorCreateRefusesOverAParentScope(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := nodeSetupFake(t, "HighlyAvailable", false)
 			f.putJSON(tc.path, tc.obj)
-			plan, err := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+			plan, err := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorCreate})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -73,7 +75,7 @@ func TestMirrorCreateRefusesOverAParentScope(t *testing.T) {
 					t.Errorf("refusal lacks %q:\n%s", s, plan.Refusal)
 				}
 			}
-			res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+			res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.MirrorCreate})
 			if res.Success || res.ErrorCode != "parent_scope" || len(writes(f)) != 0 {
 				t.Fatalf("run %+v, writes %v", res, writes(f))
 			}
@@ -86,7 +88,7 @@ func TestMirrorCreateRefusesOverAParentScope(t *testing.T) {
 		f, c := nodeSetupFake(t, "HighlyAvailable", false)
 		f.putJSON(nsIDMSList+"/corp-mirrors", `{"spec":{"imageDigestMirrors":[{"source":"registry.redhat.io","mirrors":["mirror.corp.example/redhat"]}]}}`)
 		f.putJSON(nsITMSList+"/tags", `{"spec":{"imageTagMirrors":[{"source":"registry.redhat.io","mirrors":["mirror.corp.example/redhat"]}]}}`)
-		plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+		plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorCreate})
 		if plan.RefusalCode != "parent_scope" || !strings.Contains(plan.Refusal, "ImageDigestMirrorSet corp-mirrors") || !strings.Contains(plan.Refusal, "ImageTagMirrorSet tags") ||
 			!strings.Contains(plan.Refusal, "by digest would go to quay.io/rhoai") || !strings.Contains(plan.Refusal, "by tag would go to registry.redhat.io itself") {
 			t.Fatalf("plan %+v", plan)
@@ -106,11 +108,11 @@ func TestMirrorCreateRefusesAConflictingSourcePolicy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := nodeSetupFake(t, "HighlyAvailable", false)
 			f.putJSON(tc.path, tc.obj)
-			plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+			plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorCreate})
 			if plan.Ready || plan.RefusalCode != "policy_conflict" || !strings.Contains(plan.Refusal, tc.want) || !strings.Contains(plan.Refusal, "Nothing was changed") {
 				t.Fatalf("plan %+v", plan)
 			}
-			res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+			res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.MirrorCreate})
 			if res.Success || res.ErrorCode != "policy_conflict" || len(f.callsTo(http.MethodPost, nsIDMSList)) != 0 {
 				t.Fatalf("run %+v", res)
 			}
@@ -119,7 +121,7 @@ func TestMirrorCreateRefusesAConflictingSourcePolicy(t *testing.T) {
 	t.Run("the default policy spelled out is no conflict", func(t *testing.T) {
 		f, c := nodeSetupFake(t, "HighlyAvailable", false)
 		f.putJSON(nsITMSList+"/tags", `{"spec":{"imageTagMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["mirror.corp.example/rhoai"],"mirrorSourcePolicy":"AllowContactingSource"}]}}`)
-		if plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate}); !plan.Ready {
+		if plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorCreate}); !plan.Ready {
 			t.Fatalf("plan %+v", plan)
 		}
 	})
@@ -131,7 +133,7 @@ func TestDocsMockParentScopeRefusalIsTheBackends(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := parentScopeRefusal([]mirrorRule{{Kind: mirrorKindIDMS, Name: "corp-mirrors", Source: "registry.redhat.io", Mirrors: []string{"mirror.corp.example/redhat"}}})
+	want := node.ParentScopeRefusal([]node.MirrorRule{{Kind: node.KindIDMS, Name: "corp-mirrors", Source: "registry.redhat.io", Mirrors: []string{"mirror.corp.example/redhat"}}})
 	if !strings.Contains(string(raw), `export const MIRROR_PARENT_SCOPE_REFUSAL = "`+want+`";`) {
 		t.Fatalf("docs/tools/mock/fixtures.mjs MIRROR_PARENT_SCOPE_REFUSAL is not:\n%s", want)
 	}
@@ -164,7 +166,7 @@ func TestMirrorCreateGoesAheadWithoutAParentScope(t *testing.T) {
 			for p, obj := range tc.files {
 				f.putJSON(p, obj)
 			}
-			plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+			plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorCreate})
 			if !plan.Ready {
 				t.Fatalf("plan %+v", plan)
 			}
@@ -173,7 +175,7 @@ func TestMirrorCreateGoesAheadWithoutAParentScope(t *testing.T) {
 	t.Run("a parent, and the source already redirected to quay.io/rhoai", func(t *testing.T) {
 		f, c := nodeSetupFake(t, "HighlyAvailable", false)
 		f.putJSON(nsIDMSList+"/corp", `{"spec":{"imageDigestMirrors":[{"source":"registry.redhat.io","mirrors":["mirror.corp.example/redhat"]},{"source":"registry.redhat.io/rhoai","mirrors":["mirror.corp.example/redhat/rhoai","quay.io/rhoai"]}]}}`)
-		if plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate}); !plan.NothingToDo {
+		if plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorCreate}); !plan.NothingToDo {
 			t.Fatalf("the administrator's own entry sets it up: plan %+v", plan)
 		}
 	})
@@ -197,7 +199,7 @@ func TestMirrorCreateListsFailClosed(t *testing.T) {
 		t.Run(tc.path+" "+http.StatusText(tc.status), func(t *testing.T) {
 			f, c := nodeSetupFake(t, "HighlyAvailable", false)
 			f.fail["GET "+tc.path] = tc.status
-			plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+			plan, _ := PlanNodeSetup(c, types.NodeSetupRequest{Action: node.MirrorCreate})
 			if plan.Ready != tc.wantReady || plan.RefusalCode != tc.wantCode {
 				t.Fatalf("plan %+v", plan)
 			}
@@ -215,16 +217,16 @@ func TestGetIDMSCountsAnImageContentSourcePolicy(t *testing.T) {
 	t.Run("an ICSP", func(t *testing.T) {
 		f, c := newResourceFake(t)
 		f.putJSON(nsICSPList+"/legacy", `{"spec":{"repositoryDigestMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["quay.io/rhoai"]}]}}`)
-		got, err := getIDMS(c)
-		if err != nil || !got.Exists || got.Kind != mirrorKindICSP || got.Name != "legacy" || got.Source != IDMSSource {
+		got, err := node.ImageMirror(c)
+		if err != nil || !got.Exists || got.Kind != node.KindICSP || got.Name != "legacy" || got.Source != rhoai.IDMSSource {
 			t.Fatalf("got %+v, %v", got, err)
 		}
 	})
 	t.Run("an IDMS: the ICSPs are not read", func(t *testing.T) {
 		f, c := newResourceFake(t)
 		f.putJSON(nsIDMSPath, `{"spec":{"imageDigestMirrors":[{"source":"registry.redhat.io/rhoai","mirrors":["quay.io/rhoai"]}]}}`)
-		got, err := getIDMS(c)
-		if err != nil || !got.Exists || got.Kind != mirrorKindIDMS || got.Name != MirrorName {
+		got, err := node.ImageMirror(c)
+		if err != nil || !got.Exists || got.Kind != node.KindIDMS || got.Name != node.MirrorName {
 			t.Fatalf("got %+v, %v", got, err)
 		}
 		if n := len(f.callsTo(http.MethodGet, nsICSPList)); n != 0 {
@@ -234,14 +236,14 @@ func TestGetIDMSCountsAnImageContentSourcePolicy(t *testing.T) {
 	t.Run("ICSPs not served", func(t *testing.T) {
 		f, c := newResourceFake(t)
 		f.fail["GET "+nsICSPList] = 404
-		if got, err := getIDMS(c); err != nil || got.Exists {
+		if got, err := node.ImageMirror(c); err != nil || got.Exists {
 			t.Fatalf("got %+v, %v", got, err)
 		}
 	})
 	t.Run("ICSPs unreadable", func(t *testing.T) {
 		f, c := newResourceFake(t)
 		f.fail["GET "+nsICSPList] = 403
-		if got, err := getIDMS(c); err == nil || got.Exists {
+		if got, err := node.ImageMirror(c); err == nil || got.Exists {
 			t.Fatalf("an unreadable list must be an error: got %+v, %v", got, err)
 		}
 	})

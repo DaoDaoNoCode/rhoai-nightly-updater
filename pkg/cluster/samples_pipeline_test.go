@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"gopkg.in/yaml.v3"
 	"strings"
 	"testing"
@@ -9,8 +10,8 @@ import (
 // The spec carries the image SAMPLE_PIPELINE_IMAGE names, else the pinned
 // default, and is offered under the pipeline's own name.
 func TestPipelineSampleSpec_Image(t *testing.T) {
-	if got := PipelineSampleSpec(); got.Image != pipelineSampleDefaultImage || got.YAML != pipelineSampleSpec(pipelineSampleDefaultImage) ||
-		got.Name != pipelineSampleName || got.FileName != pipelineSampleName+".yaml" || got.Description != pipelineSampleDescription {
+	if got := PipelineSampleSpec(); got.Image != mlflow.PipelineSampleDefaultImage || got.YAML != mlflow.PipelineIR(mlflow.PipelineSampleDefaultImage) ||
+		got.Name != mlflow.PipelineSampleName || got.FileName != mlflow.PipelineSampleName+".yaml" || got.Description != mlflow.PipelineSampleDescription {
 		t.Errorf("default spec = %+v", got)
 	}
 	t.Setenv("SAMPLE_PIPELINE_IMAGE", " mirror.example/ubi9/ubi-minimal@sha256:abc ")
@@ -43,10 +44,10 @@ func TestPipelineSampleSpec_IsValidIR(t *testing.T) {
 			} `yaml:"dag"`
 		} `yaml:"root"`
 	}
-	if err := yaml.Unmarshal([]byte(pipelineSampleSpec(image)), &spec); err != nil {
+	if err := yaml.Unmarshal([]byte(mlflow.PipelineIR(image)), &spec); err != nil {
 		t.Fatalf("the sample spec is not valid YAML: %v", err)
 	}
-	if spec.PipelineInfo.Name != pipelineSampleName || spec.PipelineInfo.Description != pipelineSampleDescription || !strings.Contains(spec.PipelineInfo.Description, ": ") {
+	if spec.PipelineInfo.Name != mlflow.PipelineSampleName || spec.PipelineInfo.Description != mlflow.PipelineSampleDescription || !strings.Contains(spec.PipelineInfo.Description, ": ") {
 		t.Errorf("pipelineInfo = %+v (the description must survive its \": \")", spec.PipelineInfo)
 	}
 	if spec.SchemaVersion != "2.1.0" {

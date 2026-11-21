@@ -1,0 +1,52 @@
+package serving
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+)
+
+// deleteInfraNamespace deletes the infrastructure namespace setup created,
+// only when it is still the tool's, MaaS is off (RHOAI's operator does not
+// use it), and nothing else this tool can see is in it (fail closed: a read
+// that fails keeps it). It returns why it was kept ("" when deleted or
+// gone); the record keeps the namespace while it stays, so a later Remove
+// tries again. The error is a failed record write.
+func (m *Run) deleteInfraNamespace(rec *MaaSRecord, ns string) (string, error) {
+	c := m.Client
+	forget := func() error {
+		rec.InfraNamespace = ""
+		return WriteMaaSRecord(c, *rec)
+	}
+	path, ok := maasInfraNamespacePath(ns)
+	if !ok {
+		return "", forget()
+	}
+	meta, found, err := kube.ReadObjectMeta(c, path)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("Kept namespace %s, which this tool created: it cannot be read (%v). Remove again to retry.", ns, err), nil
+	case !found:
+		return "", forget()
+	case !ToolOwned(meta):
+		return fmt.Sprintf("Kept namespace %s: it no longer carries this tool's label.", ns), forget()
+	case meta.Terminating():
+		return "", forget()
+	}
+	if dsc, err := readMaaSDSC(c); err != nil || dsc.maas == "Managed" {
+		return fmt.Sprintf("Kept namespace %s, which this tool created: MaaS is still on in the DataScienceCluster (or it cannot be read), and RHOAI's operator uses the namespace then.", ns), nil
+	}
+	left, err := infraNamespaceLeftovers(c, ns)
+	if err != nil {
+		return fmt.Sprintf("Kept namespace %s, which this tool created: this tool cannot tell whether anything else is in it (%v). Remove again to retry.", ns, err), nil
+	}
+	if len(left) > 0 {
+		return fmt.Sprintf("Kept namespace %s, which this tool created: it still holds %s. Remove again once they are gone.", ns, strings.Join(left, ", ")), nil
+	}
+	if _, err := kube.DeleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
+		return fmt.Sprintf("Kept namespace %s: deleting it failed (%v). Remove again to retry.", ns, err), nil
+	}
+	m.Logs = append(m.Logs, "OK: Namespace "+ns+" deleted")
+	return "", forget()
+}

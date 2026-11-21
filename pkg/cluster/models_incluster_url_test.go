@@ -8,10 +8,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-func llmisvcWithAddresses(t *testing.T, ns, name string, urls ...string) llmisvcObject {
+func llmisvcWithAddresses(t *testing.T, ns, name string, urls ...string) serving.LLMISvcObject {
 	t.Helper()
 	addrs := make([]map[string]string, 0, len(urls))
 	for _, u := range urls {
@@ -21,7 +22,7 @@ func llmisvcWithAddresses(t *testing.T, ns, name string, urls ...string) llmisvc
 		"metadata": map[string]any{"namespace": ns, "name": name},
 		"status":   map[string]any{"addresses": addrs},
 	})
-	var m llmisvcObject
+	var m serving.LLMISvcObject
 	if err := json.Unmarshal(raw, &m); err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +52,7 @@ func TestModelInClusterURL(t *testing.T) {
 		{"not https", []string{"http://smollm2-135m-instruct-kserve-workload-svc.e2e-400.svc.cluster.local"}, ""},
 	} {
 		m := llmisvcWithAddresses(t, "e2e-400", "smollm2-135m-instruct", c.urls...)
-		if got := modelInClusterURL(m); got != c.want {
+		if got := serving.ModelInClusterURL(m); got != c.want {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 		}
 	}
@@ -79,7 +80,7 @@ func TestWithServicePort(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"kind":"Status","code":404}`)
 	}))
 	defer srv.Close()
-	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+	c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 	for _, x := range []struct{ in, want string }{
 		{"https://smollm2-135m-instruct-kserve-workload-svc.e2e-400.svc.cluster.local", "https://smollm2-135m-instruct-kserve-workload-svc.e2e-400.svc.cluster.local:8000"},
 		{"https://only-one.e2e-400.svc", "https://only-one.e2e-400.svc:8443"},
@@ -90,7 +91,7 @@ func TestWithServicePort(t *testing.T) {
 		{"https://x.e2e-400.svc.cluster.local:9443", "https://x.e2e-400.svc.cluster.local:9443"},
 		{"", ""},
 	} {
-		if got := withServicePort(c, x.in); got != x.want {
+		if got := serving.WithServicePort(c, x.in); got != x.want {
 			t.Errorf("withServicePort(%q) = %q, want %q", x.in, got, x.want)
 		}
 	}
@@ -111,13 +112,13 @@ func TestAddModelRouting_NoRouteHasNoOutsideAddress(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"kind":"Status","code":404}`)
 	}))
 	defer srv.Close()
-	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+	c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 	m := llmisvcWithAddresses(t, "p", "m", "https://m-kserve-workload-svc.p.svc.cluster.local")
 	m.Status.URL = "https://maas.apps.example.com/p/m"
 	s := types.ModelState{}
 	s.URL = m.Status.URL
-	addModelRouting(c, &s, m, kserveGateway{}, map[string]string{})
-	if s.Exposure != exposureInternal || s.URL != "" || s.InternalURL != "https://m-kserve-workload-svc.p.svc.cluster.local:8000" {
+	serving.AddModelRouting(c, &s, m, serving.KServeGateway{}, map[string]string{})
+	if s.Exposure != serving.ExposureInternal || s.URL != "" || s.InternalURL != "https://m-kserve-workload-svc.p.svc.cluster.local:8000" {
 		t.Fatalf("exposure %q, url %q, internal %q", s.Exposure, s.URL, s.InternalURL)
 	}
 }

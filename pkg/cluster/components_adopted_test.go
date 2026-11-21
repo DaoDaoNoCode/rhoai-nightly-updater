@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -50,10 +52,8 @@ func (s *rsServer) client(t *testing.T) *Client {
 		_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
 	}))
 	t.Cleanup(srv.Close)
-	old := replicaSetOwnerCache
-	replicaSetOwnerCache = newLRU[string, string](512)
-	t.Cleanup(func() { replicaSetOwnerCache = old })
-	return &Client{baseURL: srv.URL, token: "t", httpClient: srv.Client(), ctx: context.Background()}
+	t.Cleanup(components.UseFreshReplicaSetOwnerCacheForTest())
+	return newTestClient(testClientOptions{BaseURL: srv.URL, Token: "t", HTTPClient: srv.Client(), Ctx: context.Background()})
 }
 
 func replicaSet(name, uid, deploymentUID string) map[string]any {
@@ -96,7 +96,7 @@ func TestOwnedByDeployment_AdoptedReplicaSet(t *testing.T) {
 		{"a ReplicaSet recreated under the same name (other UID)", adoptedPod("handmade-rs-old", "handmade-rs", "rs-gone", cmLabels), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := podMatchesDeployment(c, tc.pod, dep); got != tc.want {
+			if got := components.PodMatchesDeployment(c, tc.pod, dep); got != tc.want {
 				t.Errorf("podMatchesDeployment = %v, want %v", got, tc.want)
 			}
 		})
@@ -118,7 +118,7 @@ func TestOwnedByDeployment_LookupFailureFailsClosed(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(old) })
 
-	if podMatchesDeployment(c, adoptedPod("handmade-rs-abcde", "handmade-rs", "rs-adopted", cmLabels), trustyDeployment()) {
+	if components.PodMatchesDeployment(c, adoptedPod("handmade-rs-abcde", "handmade-rs", "rs-adopted", cmLabels), trustyDeployment()) {
 		t.Fatal("a pod whose ReplicaSet cannot be read was matched")
 	}
 	if log := buf.String(); !strings.Contains(log, "level=DEBUG") || !strings.Contains(log, "replicaset=handmade-rs") {
@@ -129,8 +129,45 @@ func TestOwnedByDeployment_LookupFailureFailsClosed(t *testing.T) {
 	s.fail = false
 	s.sets = []map[string]any{replicaSet("handmade-rs", "rs-adopted", "dep-trusty")}
 	s.mu.Unlock()
-	if !podMatchesDeployment(c, adoptedPod("handmade-rs-abcde", "handmade-rs", "rs-adopted", cmLabels), trustyDeployment()) {
+	if !components.PodMatchesDeployment(c, adoptedPod("handmade-rs-abcde", "handmade-rs", "rs-adopted", cmLabels), trustyDeployment()) {
 		t.Error("the pod is not matched once its ReplicaSet can be read")
+	}
+}
+
+// UseFreshReplicaSetOwnerCacheForTest empties the declared cache, and
+// empties it again on restore, rather than making a cache per call: a made
+// cache registered its purge function for good, so the registry grew with
+// every call. The lookups always use the one registered cache, so nothing
+// cached under the hook is read after it.
+func TestUseFreshReplicaSetOwnerCacheRegistersNoCache(t *testing.T) {
+	before := kube.RegisteredCachesForTest()
+	s := &rsServer{sets: []map[string]any{replicaSet("handmade-rs", "rs-adopted", "dep-trusty")}}
+	c := s.client(t) // the hook, restored when the test ends
+	lookups := func() int {
+		t.Helper()
+		if !components.PodMatchesDeployment(c, adoptedPod("handmade-rs-abcde", "handmade-rs", "rs-adopted", cmLabels), trustyDeployment()) {
+			t.Fatal("the adopted pod is not matched")
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.calls
+	}
+	if n := lookups(); n != 1 {
+		t.Fatalf("first lookup: %d API calls, want 1", n)
+	}
+	if n := lookups(); n != 1 {
+		t.Fatalf("second lookup: %d API calls, want 1 (cached)", n)
+	}
+	restore := components.UseFreshReplicaSetOwnerCacheForTest()
+	if n := lookups(); n != 2 {
+		t.Errorf("lookup under the hook: %d API calls, want 2 (an empty cache)", n)
+	}
+	restore()
+	if n := lookups(); n != 3 {
+		t.Errorf("lookup after restore: %d API calls, want 3 (nothing cached before or under the hook is kept)", n)
+	}
+	if got := kube.RegisteredCachesForTest(); got != before {
+		t.Errorf("the cache registry holds %d purge functions, %d before the hooks: a hook registered a cache", got, before)
 	}
 }
 
@@ -154,7 +191,7 @@ func TestMatchPodsToDeployments_LookupCost(t *testing.T) {
 
 	refresh := func() []types.PodInfo {
 		deps := []types.DeploymentInfo{trustyDeployment()}
-		matchPodsToDeployments(c, pods, "ns", deps)
+		components.MatchPodsToDeployments(c, pods, "ns", deps)
 		return deps[0].Pods
 	}
 	if got := refresh(); len(got) != 1 || got[0].Name != "trustyai-operator-module-controller-manager-b57d5b597-x" {

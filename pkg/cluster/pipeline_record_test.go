@@ -4,6 +4,11 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 )
 
 // putForgedDSPA is a project editor's own pipeline server in project evil,
@@ -11,7 +16,7 @@ import (
 // manager (a client names its own fieldManager), on the old storage. The
 // tool never recorded it.
 func putForgedDSPA(f *resourceFake) {
-	putDSPAOn(f, "evil", dspaName, toolLabelJSON, toolFieldManager, dspaSecretName)
+	putDSPAOn(f, "evil", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, storage.DSPASecretName)
 }
 
 func noWriteInProject(t *testing.T, f *resourceFake, project string) {
@@ -21,7 +26,7 @@ func noWriteInProject(t *testing.T, f *resourceFake, project string) {
 			t.Errorf("written in %s: %s", project, m)
 		}
 	}
-	for _, s := range []string{dspaSecretName, connectionSecretName} {
+	for _, s := range []string{storage.DSPASecretName, storage.ConnectionSecretName} {
 		if f.has(secretPath(project, s)) {
 			t.Errorf("Secret %s/%s with the storage's keys was created", project, s)
 		}
@@ -51,11 +56,11 @@ func TestMigrate_AForgedPipelineServerGetsNoKeys(t *testing.T) {
 	if !ok {
 		t.Fatalf("migrate failed: %s (%s)", msg, code)
 	}
-	if !strings.Contains(msg, "evil/dspa ("+unrecordedReason+")") || !strings.Contains(msg, "2 pipeline servers now use it: juntao-test/dspa, team-a/nightly-dspa") {
+	if !strings.Contains(msg, "evil/dspa ("+storage.UnrecordedReason+")") || !strings.Contains(msg, "2 pipeline servers now use it: juntao-test/dspa, team-a/nightly-dspa") {
 		t.Fatalf("message: %s", msg)
 	}
 	noWriteInProject(t, f, "evil")
-	if host := externalStorage(t, f, "evil", dspaName)["host"]; host != legacyS3Host() {
+	if host := externalStorage(t, f, "evil", storage.DSPAName)["host"]; host != storage.LegacyS3Host() {
 		t.Fatalf("the forged pipeline server was repointed to %v", host)
 	}
 	// Confirming another project changes nothing for it.
@@ -77,14 +82,14 @@ func TestMigrate_AConfirmedProjectIsMovedAndRecorded(t *testing.T) {
 	if !ok {
 		t.Fatalf("migrate failed: %s (%s)", msg, code)
 	}
-	if host := externalStorage(t, f, "evil", dspaName)["host"]; host != s3Host() {
+	if host := externalStorage(t, f, "evil", storage.DSPAName)["host"]; host != storage.S3Host() {
 		t.Fatalf("not moved: %v (%s)", host, msg)
 	}
-	rec, err := readPipelineRecord(c)
+	rec, err := storage.ReadPipelineRecord(c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	uid, _ := ensureMap(f.get(dspaPath("evil", dspaName)), "metadata")["uid"].(string)
+	uid, _ := ensureMap(f.get(dspaPath("evil", storage.DSPAName)), "metadata")["uid"].(string)
 	if rec["evil/dspa"].UID != uid || uid == "" {
 		t.Fatalf("record = %+v, uid %q", rec, uid)
 	}
@@ -97,7 +102,7 @@ func TestMigrate_AnUnreadableRecordStopsBeforeAnyWrite(t *testing.T) {
 	f, c := newResourceFake(t)
 	putMigrationCase(f)
 	simulateMigrate(f, &migrateSim{result: copyOK, objectStore: "True"})
-	f.fail["GET "+namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName)] = http.StatusInternalServerError
+	f.fail["GET "+rhoai.NamespacedPath("v1", "configmaps", record.GetActivityNamespace(), record.SnapshotConfigMapName)] = http.StatusInternalServerError
 	f.requests = nil
 	ok, msg, _, _ := runMigrate(t, c, MigrateOptions{ConfirmProjects: []string{"juntao-test"}})
 	if ok || !strings.Contains(msg, "nothing was changed") {
@@ -118,8 +123,8 @@ func TestPipelineServer_SetupRecordsAndTeardownForgets(t *testing.T) {
 	if res, err := SetupPipelineServer(c, "proj"); err != nil || !res.Success {
 		t.Fatalf("setup: %+v, %v", res, err)
 	}
-	rec, _ := readPipelineRecord(c)
-	uid, _ := ensureMap(f.get(dspaPath("proj", dspaName)), "metadata")["uid"].(string)
+	rec, _ := storage.ReadPipelineRecord(c)
+	uid, _ := ensureMap(f.get(dspaPath("proj", storage.DSPAName)), "metadata")["uid"].(string)
 	if uid == "" || rec["proj/dspa"].UID != uid {
 		t.Fatalf("record = %+v, uid %q", rec, uid)
 	}
@@ -127,7 +132,7 @@ func TestPipelineServer_SetupRecordsAndTeardownForgets(t *testing.T) {
 	if res, err := TeardownPipelineServer(c, "proj"); err != nil || !res.Success {
 		t.Fatalf("teardown: %+v, %v", res, err)
 	}
-	if rec, _ := readPipelineRecord(c); len(rec) != 0 {
+	if rec, _ := storage.ReadPipelineRecord(c); len(rec) != 0 {
 		t.Fatalf("record after teardown = %+v", rec)
 	}
 }

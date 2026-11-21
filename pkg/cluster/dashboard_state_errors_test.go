@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 )
 
 // legacyAnnotationServer simulates a cluster without dashboard-operator whose
@@ -58,7 +60,7 @@ func legacyAnnotationServer(t *testing.T, initial map[string]string) (*Client, f
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}, func() map[string]string {
+	return newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()}), func() map[string]string {
 		mu.Lock()
 		defer mu.Unlock()
 		out := map[string]string{}
@@ -84,7 +86,7 @@ func TestLegacyRevertRestoresOriginalManagedAnnotation(t *testing.T) {
 		{name: "user-set-false-is-preserved", initial: map[string]string{"opendatahub.io/managed": "false"}, deploys: 2, want: "false", wantSet: true},
 		// Without a record the original is unknown: left unchanged.
 		{name: "revert-without-deploy-record", initial: map[string]string{"opendatahub.io/managed": "false"}, deploys: 0, want: "false", wantSet: true},
-		{name: "corrupt-record", initial: map[string]string{"opendatahub.io/managed": "false", legacyOriginalManagedAnnotation: "{not json"}, deploys: 0, want: "false", wantSet: true},
+		{name: "corrupt-record", initial: map[string]string{"opendatahub.io/managed": "false", dashdev.LegacyOriginalManagedAnnotation: "{not json"}, deploys: 0, want: "false", wantSet: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			allPRImagesPublished(t)
@@ -107,7 +109,7 @@ func TestLegacyRevertRestoresOriginalManagedAnnotation(t *testing.T) {
 			if set != tc.wantSet || value != tc.want {
 				t.Fatalf("managed after revert = %q (set=%v), want %q (set=%v)", value, set, tc.want, tc.wantSet)
 			}
-			if _, ok := got[legacyOriginalManagedAnnotation]; ok {
+			if _, ok := got[dashdev.LegacyOriginalManagedAnnotation]; ok {
 				t.Fatal("revert left the saved original")
 			}
 		})
@@ -136,7 +138,7 @@ func TestDashboardStateErrorMapping(t *testing.T) {
 				_, _ = fmt.Fprintf(w, `{"kind":"Status","status":"Failure","code":%d}`, tc.status)
 			}))
 			defer srv.Close()
-			c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+			c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 			_, err := GetDashboardState(c)
 			if err == nil {
 				t.Fatal("expected an error")
@@ -155,7 +157,7 @@ func TestDashboardStateErrorMapping(t *testing.T) {
 		srv := httptest.NewServer(http.NotFoundHandler())
 		url := srv.URL
 		srv.Close()
-		c := &Client{baseURL: url, httpClient: &http.Client{}, ctx: context.Background()}
+		c := newTestClient(testClientOptions{BaseURL: url, HTTPClient: &http.Client{}, Ctx: context.Background()})
 		_, err := GetDashboardState(c)
 		if status, code, _ := DashboardStateError(err); status != http.StatusServiceUnavailable || code != "network" {
 			t.Fatalf("err=%v status=%d code=%q", err, status, code)
@@ -171,7 +173,7 @@ func TestDashboardStateErrorMapping(t *testing.T) {
 		}))
 		defer srv.Close()
 		defer close(release)
-		c := &Client{baseURL: srv.URL, httpClient: &http.Client{Timeout: 50 * time.Millisecond}, ctx: context.Background()}
+		c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: &http.Client{Timeout: 50 * time.Millisecond}, Ctx: context.Background()})
 		_, err := GetDashboardState(c)
 		if status, code, _ := DashboardStateError(err); status != http.StatusGatewayTimeout || code != "timeout" {
 			t.Fatalf("err=%v status=%d code=%q", err, status, code)
@@ -182,9 +184,9 @@ func TestDashboardStateErrorMapping(t *testing.T) {
 			io.WriteString(w, `not json`)
 		}))
 		defer srv.Close()
-		c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+		c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 		_, err := GetDashboardState(c)
-		if status, code, _ := DashboardStateError(err); status != http.StatusInternalServerError || code != "internal" || errors.Is(err, ErrDashboardNotDeployed) {
+		if status, code, _ := DashboardStateError(err); status != http.StatusInternalServerError || code != "internal" || errors.Is(err, dashdev.ErrNotDeployed) {
 			t.Fatalf("err=%v status=%d code=%q", err, status, code)
 		}
 	})

@@ -7,6 +7,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 func specOf(t *testing.T, components string) map[string]any {
@@ -46,14 +49,14 @@ func TestRemovedComponents_V3ManagementPaths(t *testing.T) {
 		{"a part switched on is no removal", strings.Replace(v3Components, `"wva":{"managementState":"Removed"}`, `"wva":{"managementState":"Managed"}`, 1), nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := removedComponents(old, specOf(t, tc.next), true); !reflect.DeepEqual(got, tc.want) {
+			if got := components.RemovedComponents(old, specOf(t, tc.next), true); !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("got %v, want %v", got, tc.want)
 			}
 		})
 	}
 	// A part of a component that is already Removed is not enabled.
 	off := specOf(t, `{"kserve":{"managementState":"Removed","nim":{"managementState":"Managed"}}}`)
-	if got := removedComponents(off, specOf(t, `{}`), true); got != nil {
+	if got := components.RemovedComponents(off, specOf(t, `{}`), true); got != nil {
 		t.Fatalf("removed component's part counted: %v", got)
 	}
 }
@@ -68,7 +71,7 @@ func TestRemovedComponents_V2Unchanged(t *testing.T) {
 		{`{"kserve":{"managementState":"Removed","nim":{"managementState":"Managed"}},"ray":{"managementState":"Managed"},"modelregistry":{}}`, []string{"kserve"}},
 		{`{"kserve":{"managementState":"Managed"}}`, []string{"modelregistry", "ray"}},
 	} {
-		if got := removedComponents(old, specOf(t, tc.next), dscNestsComponents("datasciencecluster.opendatahub.io/v2")); !reflect.DeepEqual(got, tc.want) {
+		if got := components.RemovedComponents(old, specOf(t, tc.next), components.DSCNestsComponents("datasciencecluster.opendatahub.io/v2")); !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("next %s: got %v, want %v", tc.next, got, tc.want)
 		}
 	}
@@ -76,7 +79,7 @@ func TestRemovedComponents_V2Unchanged(t *testing.T) {
 		"datasciencecluster.opendatahub.io/v1": false, "datasciencecluster.opendatahub.io/v2": false,
 		"datasciencecluster.opendatahub.io/v3": true, "datasciencecluster.opendatahub.io/v4": true, "other.io/v3": false, "": false,
 	} {
-		if got := dscNestsComponents(apiVersion); got != want {
+		if got := components.DSCNestsComponents(apiVersion); got != want {
 			t.Errorf("dscNestsComponents(%q) = %v", apiVersion, got)
 		}
 	}
@@ -87,7 +90,7 @@ func TestGuardModule(t *testing.T) {
 		"dashboard.standard": "dashboard", "dashboard.maasPortal": "dashboard", "kserve.nim": "kserve", "kserve": "kserve",
 		"data.featureStore": "feastoperator", "aiHub": "aihub", "workbenches.workbenchesV2": "workbenches", "trainer": "trainer",
 	} {
-		if got := guardModule(path); got != want {
+		if got := components.GuardModule(path); got != want {
 			t.Errorf("guardModule(%q) = %q, want %q", path, got, want)
 		}
 	}
@@ -99,8 +102,8 @@ func TestGuardModule(t *testing.T) {
 // CR with a finalizer whose operator has no Deployment.
 func v3RepairWorld(t *testing.T, defaults string) (*fakeAPI, *Client) {
 	t.Helper()
-	apiVersionsCache.Purge()
-	t.Cleanup(apiVersionsCache.Purge)
+	rhoai.APIVersionsCache.Purge()
+	t.Cleanup(rhoai.APIVersionsCache.Purge)
 	f, c := newFakeAPI(t)
 	serveLive36ModuleOperators(f)
 	f.json("GET", "/apis/datasciencecluster.opendatahub.io", 200, dscGroupDoc)
@@ -120,9 +123,9 @@ func v3RepairWorld(t *testing.T, defaults string) (*fakeAPI, *Client) {
 		"apiVersion": "datasciencecluster.opendatahub.io/v3", "kind": "DataScienceCluster", "metadata": map[string]any{"name": "default-dsc"},
 		"spec": json.RawMessage(`{"components":` + defaults + `}`),
 	}})
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
-	f.json("GET", namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, "rhods-operator.3.6.0"), 200, installedCSVBody(string(alm)))
-	f.json("GET", namespacedPath("apps/v1", "deployments", SubNS, "rhods-operator"), 200, `{"status":{"readyReplicas":1}}`)
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "subscriptions", rhoai.SubNS, rhoai.SubName), 200, `{"status":{"installedCSV":"rhods-operator.3.6.0"}}`)
+	f.json("GET", rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", rhoai.SubNS, "rhods-operator.3.6.0"), 200, installedCSVBody(string(alm)))
+	f.json("GET", rhoai.NamespacedPath("apps/v1", "deployments", rhoai.SubNS, "rhods-operator"), 200, `{"status":{"readyReplicas":1}}`)
 	f.json("GET", "/apis/apiextensions.k8s.io/v1/customresourcedefinitions", 200, `{"items":[]}`)
 	serveComponentGroup(f)
 	f.json("GET", "/apis/components.platform.opendatahub.io/v1alpha1", 200,
@@ -316,7 +319,7 @@ func TestSchemaComponents_ChecksEveryPathSegment(t *testing.T) {
 		"data":      map[string]any{"additionalProperties": false},
 		"trainer":   state,
 	}}}}
-	got := schemaComponents(schema, []string{"aigateway.anything", "dashboard", "dashboard.legacyPart", "dashboard.standard", "data.featureStore", "kserve.nim", "trainer", "unknown", "unknown.part"})
+	got := components.SchemaComponents(schema, []string{"aigateway.anything", "dashboard", "dashboard.legacyPart", "dashboard.standard", "data.featureStore", "kserve.nim", "trainer", "unknown", "unknown.part"})
 	want := []string{"aigateway.anything", "dashboard", "dashboard.standard", "kserve.nim", "trainer"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
@@ -341,7 +344,7 @@ func TestSchemaComponents_FreeFormComponentsLevel(t *testing.T) {
 			[]string{"dashboard.standard"}},
 	} {
 		schema := map[string]any{"properties": map[string]any{"components": c.components}}
-		if got := schemaComponents(schema, names); !reflect.DeepEqual(got, c.want) {
+		if got := components.SchemaComponents(schema, names); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
 	}

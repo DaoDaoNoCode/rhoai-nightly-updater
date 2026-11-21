@@ -31,6 +31,9 @@ jobs:
       # gofmt, go mod verify, go vet, the race tests (scripts/test-go.sh),
       # govulncheck: the GitLab go job's target, so both run the same.
       - run: make ci-go
+      # The tests of scripts/test-go.sh need Go, so they run here (GitLab:
+      # the script-tests job, in the Go image).
+      - run: sh scripts/test-test-go.sh
 
   golangci-lint:
     runs-on: ubuntu-latest

@@ -2,6 +2,10 @@ package cluster
 
 import (
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 )
 
 const (
@@ -49,7 +53,7 @@ func TestDashboardBaseURL(t *testing.T) {
 			f, c := newResourceFake(t)
 			f.putJSON(dsciV2List+"/default-dsci", `{"metadata":{"name":"default-dsci"},"spec":{"applicationsNamespace":"redhat-ods-applications"}}`)
 			tc.setup(f)
-			if got := dashboardBaseURL(c); got != tc.want {
+			if got := dashdev.DashboardURL(c); got != tc.want {
 				t.Errorf("dashboardBaseURL = %q, want %q", got, tc.want)
 			}
 		})
@@ -78,7 +82,7 @@ func TestGetResourcesStatus_PipelineLinkUsesTheDashboardAddress(t *testing.T) {
 			f.putJSON(dsciV2List+"/default-dsci", `{"metadata":{"name":"default-dsci"},"spec":{"applicationsNamespace":"redhat-ods-applications"}}`)
 			putReadyManagedS3(f)
 			putDSProject(f, "team-a")
-			putDSPA(f, "team-a", dspaName, toolLabelJSON, toolFieldManager, "Apply", s3Host(), dspaSecretName, "", `{"conditions":[{"type":"Ready","status":"True"}]}`)
+			putDSPA(f, "team-a", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, "", `{"conditions":[{"type":"Ready","status":"True"}]}`)
 			tc.setup(f)
 			st, err := GetResourcesStatus(c)
 			if err != nil {
@@ -94,21 +98,21 @@ func TestGetResourcesStatus_PipelineLinkUsesTheDashboardAddress(t *testing.T) {
 // A transient read error is cached only briefly: once the read works, the
 // link shows without waiting out the five minutes an answer is kept.
 func TestCachedDashboardURL_ReadErrorIsCachedBriefly(t *testing.T) {
-	cacheTime := fakeCacheClock(t, dashboardURLCache)
+	cacheTime := fakeCacheClock(t, dashdev.URLCache)
 	f, c := newResourceFake(t)
 	f.putJSON(dashboardsPath+"/default-dashboard", `{"status":{"url":"https://rh-ai.apps.example.com"}}`)
 	f.fail["GET "+dashboardsPath] = 500
-	if got := cachedDashboardURL(c); got != "" {
+	if got := dashdev.CachedURL(c); got != "" {
 		t.Fatalf("cachedDashboardURL = %q during the error", got)
 	}
 	delete(f.fail, "GET "+dashboardsPath)
-	cacheTime.Advance(dashboardURLErrorTTL)
-	if got := cachedDashboardURL(c); got != "https://rh-ai.apps.example.com" {
+	cacheTime.Advance(dashdev.URLErrorTTL)
+	if got := dashdev.CachedURL(c); got != "https://rh-ai.apps.example.com" {
 		t.Errorf("cachedDashboardURL = %q after the error cleared", got)
 	}
 	// An answer is kept for the full lifetime.
 	f.fail["GET "+dashboardsPath] = 500
-	if got := cachedDashboardURL(c); got != "https://rh-ai.apps.example.com" {
+	if got := dashdev.CachedURL(c); got != "https://rh-ai.apps.example.com" {
 		t.Errorf("a cached answer was not used: %q", got)
 	}
 }
@@ -116,16 +120,16 @@ func TestCachedDashboardURL_ReadErrorIsCachedBriefly(t *testing.T) {
 // The status (both profiles) uses the CR only: the gitops profile cannot
 // read the Route.
 func TestCachedDashboardURL_UsesTheCROnly(t *testing.T) {
-	dashboardURLCache.Purge()
-	t.Cleanup(dashboardURLCache.Purge)
+	dashdev.URLCache.Purge()
+	t.Cleanup(dashdev.URLCache.Purge)
 	f, c := newResourceFake(t)
 	f.putJSON(dashboardRoutePath, `{"spec":{"host":"rhods-dashboard-redhat-ods-applications.apps.example.com"}}`)
-	if got := cachedDashboardURL(c); got != "" {
+	if got := dashdev.CachedURL(c); got != "" {
 		t.Errorf("without a CR URL the status must not fall back to the Route: %q", got)
 	}
-	dashboardURLCache.Purge()
+	dashdev.URLCache.Purge()
 	f.putJSON(dashboardsPath+"/default-dashboard", `{"status":{"url":"https://rh-ai.apps.example.com"}}`)
-	if got := cachedDashboardURL(c); got != "https://rh-ai.apps.example.com" {
+	if got := dashdev.CachedURL(c); got != "https://rh-ai.apps.example.com" {
 		t.Errorf("cachedDashboardURL = %q", got)
 	}
 }

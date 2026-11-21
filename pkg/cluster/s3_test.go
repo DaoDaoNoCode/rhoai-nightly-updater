@@ -3,6 +3,8 @@ package cluster
 import (
 	"encoding/hex"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 )
 
 func TestHmacSHA256(t *testing.T) {
@@ -34,7 +36,7 @@ func TestHmacSHA256(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := hmacSHA256([]byte(tt.key), []byte(tt.data))
+			got := storage.HMACSHA256([]byte(tt.key), []byte(tt.data))
 			gotHex := hex.EncodeToString(got)
 			if gotHex != tt.wantHex {
 				t.Errorf("hmacSHA256(%q, %q) = %s, want %s", tt.key, tt.data, gotHex, tt.wantHex)
@@ -73,7 +75,7 @@ func TestDecodeBase64Field(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := decodeBase64Field(tt.input)
+			got := storage.DecodeBase64Field(tt.input)
 			if got != tt.want {
 				t.Errorf("decodeBase64Field(%q) = %q, want %q", tt.input, got, tt.want)
 			}
