@@ -327,10 +327,9 @@ func cleanupStuckComponentCRs(c *Client) (int, []string) {
 			// under the same name, or whose finalizers changed since they
 			// were inspected, is left alone. A recreated CR always has a new
 			// resourceVersion (and uid, which is immutable).
-			patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{
+			if err := c.patchJSON(listPath+"/"+m.Name, map[string]any{"metadata": map[string]any{
 				"uid": m.UID, "resourceVersion": m.ResourceVersion, "finalizers": []string{},
-			}})
-			if _, _, err := c.patch(listPath+"/"+m.Name, patch); err != nil {
+			}}); err != nil {
 				switch {
 				case isK8sConflict(err), isK8sNotFound(err), IsK8sError(err, 422):
 					warnings = append(warnings, fmt.Sprintf("%s changed or was replaced after it was checked; its finalizers were left untouched", id))

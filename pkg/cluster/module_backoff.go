@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"slices"
@@ -345,13 +344,12 @@ func applyFixRestartModuleOperator(c *Client, module string) (*types.OperationRe
 	if !b.Restart.OK {
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Not restarting %s: %s. Nothing was changed.", d.ref(), b.Restart.Reason), Logs: logs, ErrorCode: "prerequisites"}, nil
 	}
-	patch, _ := json.Marshal(map[string]any{
+	err = c.patchJSON(namespacedPath("apps/v1", "deployments", d.Namespace, d.Name), map[string]any{
 		"metadata": map[string]any{"uid": d.UID, "resourceVersion": d.ResourceVersion},
 		"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
 			"annotations": map[string]string{restartAnnotation: nowRFC3339()},
 		}}},
 	})
-	_, _, err = c.patch(namespacedPath("apps/v1", "deployments", d.Namespace, d.Name), patch)
 	switch {
 	case err == nil:
 	case isK8sConflict(err) || IsK8sError(err, http.StatusUnprocessableEntity):

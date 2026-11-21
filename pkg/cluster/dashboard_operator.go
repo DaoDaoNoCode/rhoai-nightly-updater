@@ -834,15 +834,10 @@ func patchDashboardOperator(c *Client, operator *dashboardDeployment, replicas i
 		}
 		annotations[dashboardDevLastActionAnnotation] = string(raw)
 	}
-	data, err := json.Marshal(map[string]any{
+	return c.patchJSON(namespacedPath("apps/v1", "deployments", operator.Metadata.Namespace, operator.Metadata.Name), map[string]any{
 		"metadata": map[string]any{"uid": operator.Metadata.UID, "resourceVersion": operator.Metadata.ResourceVersion, "annotations": annotations},
 		"spec":     map[string]any{"replicas": replicas},
 	})
-	if err != nil {
-		return err
-	}
-	_, _, err = c.patch(namespacedPath("apps/v1", "deployments", operator.Metadata.Namespace, operator.Metadata.Name), data)
-	return err
 }
 
 func waitDashboardOperatorStopped(c *Client, operator *dashboardDeployment) error {
@@ -1271,8 +1266,8 @@ func clearDashboardManagedAnnotations(c *Client, ns, operatorName string) (clear
 		if _, ok := d.Metadata.Annotations["opendatahub.io/managed"]; !ok {
 			continue
 		}
-		data, _ := json.Marshal(map[string]any{"metadata": map[string]any{"uid": d.Metadata.UID, "annotations": map[string]any{"opendatahub.io/managed": nil}}})
-		if _, _, err := c.patch(namespacedPath("apps/v1", "deployments", ns, d.Metadata.Name), data); err != nil && !isK8sNotFound(err) {
+		patch := map[string]any{"metadata": map[string]any{"uid": d.Metadata.UID, "annotations": map[string]any{"opendatahub.io/managed": nil}}}
+		if err := c.patchJSON(namespacedPath("apps/v1", "deployments", ns, d.Metadata.Name), patch); err != nil && !isK8sNotFound(err) {
 			failures = append(failures, d.Metadata.Name+": "+err.Error())
 			continue
 		}

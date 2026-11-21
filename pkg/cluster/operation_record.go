@@ -281,12 +281,8 @@ func patchOperationRecord(c *Client, resourceVersion string, data map[string]str
 	if resourceVersion != "" {
 		body["metadata"] = map[string]any{"resourceVersion": resourceVersion}
 	}
-	patch, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
 	ns := getActivityNamespace()
-	_, _, err = c.bookkeeping().patch(namespacedPath("v1", "configmaps", ns, operationConfigMapName), patch)
+	err := c.bookkeeping().patchJSON(namespacedPath("v1", "configmaps", ns, operationConfigMapName), body)
 	if resourceVersion == "" && isK8sNotFound(err) {
 		return writeOperationRecord(c, &OperationRecord{}, data)
 	}

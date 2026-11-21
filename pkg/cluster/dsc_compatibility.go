@@ -547,14 +547,10 @@ func RepairDSC(c *Client, name, mode, expectedOperatorVersion, expectedAPIVersio
 		}
 		detail += ". Components set to Removed: " + strings.Join(removals, ", ")
 	}
-	patch, err := json.Marshal(map[string]any{
+	if err := c.patchJSON(path, map[string]any{
 		"metadata": map[string]any{"resourceVersion": resourceVersion},
 		"spec":     replacementMergePatch(oldSpec, nextSpec),
-	})
-	if err != nil {
-		return nil, err
-	}
-	if _, _, err := c.patch(path, patch); err != nil {
+	}); err != nil {
 		return nil, err
 	}
 	RecordActivity(c, types.ActivityEntry{Timestamp: nowRFC3339(), User: getUser(c), Action: "repair-dsc", Detail: name + ": " + detail, Success: true})

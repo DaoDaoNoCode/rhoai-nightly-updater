@@ -99,6 +99,18 @@ func (c *Client) listInto(path string, items any) error {
 	return nil
 }
 
+// patchJSON sends patch, marshalled to JSON, as a merge patch (patch). A
+// marshal error is json.Marshal's, before any request; any other error is
+// patch's.
+func (c *Client) patchJSON(path string, patch any) error {
+	data, err := json.Marshal(patch)
+	if err != nil {
+		return err
+	}
+	_, _, err = c.patch(path, data)
+	return err
+}
+
 // deleteIfExists deletes the object at path. An object that is already gone
 // (404) is no error: existed is then false. Other errors are delete's.
 func (c *Client) deleteIfExists(path string) (existed bool, err error) {

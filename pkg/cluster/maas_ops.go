@@ -449,10 +449,9 @@ func maasControllerGone(c *Client) string {
 // a changed maas-db-config (maas-setup.md "Restarting maas-api"). A
 // missing Deployment needs nothing: the operator starts it with the Secret.
 func restartMaaSAPI(c *Client, ns string) (bool, error) {
-	patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
+	err := c.patchJSON(namespacedPath("apps/v1", "deployments", ns, "maas-api"), map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
 		"annotations": map[string]string{restartAnnotation: clk.Now().UTC().Format(time.RFC3339)},
 	}}}})
-	_, _, err := c.patch(namespacedPath("apps/v1", "deployments", ns, "maas-api"), patch)
 	if isK8sNotFound(err) {
 		return false, nil
 	}
@@ -1414,8 +1413,8 @@ func (m *maasRun) unpublishModelRef(u *maasUnpublish) (*types.OperationResponse,
 						rest = append(rest, f)
 					}
 				}
-				patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"resourceVersion": meta.ResourceVersion, "finalizers": rest}})
-				if _, _, err := c.patch(path, patch); err != nil && !isK8sNotFound(err) {
+				patch := map[string]any{"metadata": map[string]any{"resourceVersion": meta.ResourceVersion, "finalizers": rest}}
+				if err := c.patchJSON(path, patch); err != nil && !isK8sNotFound(err) {
 					return m.fail("maas", fmt.Sprintf("MaaSModelRef %s/%s is being deleted and maas-controller cannot finish it (%s); removing its finalizer failed: %v. Unpublish again to retry.", project, name, why, err), maasWriteCode(err), "finalizer patch failed")
 				}
 				m.logs = append(m.logs, fmt.Sprintf("maas-controller cannot finish deleting MaaSModelRef %s/%s (%s), so this tool removed the finalizer %s from its own reference. Policies maas-controller generated for the model may be left in %s: oc get authpolicy,tokenratelimitpolicy -n %s -l maas.opendatahub.io/model=%s,app.kubernetes.io/managed-by=maas-controller", project, name, why, maasModelFinalizer, project, project, name))

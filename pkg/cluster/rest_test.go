@@ -9,6 +9,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -196,6 +197,29 @@ func TestListInto(t *testing.T) {
 	}()
 	var notSlice struct{}
 	_ = c.listInto("/ok", &notSlice)
+}
+
+func TestPatchJSON(t *testing.T) {
+	c, s := newRESTClient(t, map[string]restAnswer{
+		"/there": {200, `{}`},
+		"/no":    {403, forbiddenBody},
+	})
+	if err := c.patchJSON("/there", map[string]any{"metadata": map[string]any{"resourceVersion": "7"}}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, wantErr := c.patch("/no", []byte(`{}`))
+	if err := c.patchJSON("/no", map[string]any{}); err == nil || err.Error() != wantErr.Error() || !IsK8sError(err, 403) {
+		t.Fatalf("refused patch: %v, want patch's %v", err, wantErr)
+	}
+	bad := map[string]any{"replicas": math.Inf(1)}
+	_, wantMarshal := json.Marshal(bad)
+	if err := c.patchJSON("/there", bad); err == nil || wantMarshal == nil || err.Error() != wantMarshal.Error() {
+		t.Fatalf("unmarshalable patch: %v, want json.Marshal's %v", err, wantMarshal)
+	}
+	want := []string{`PATCH /there {"metadata":{"resourceVersion":"7"}}`, "PATCH /no {}", "PATCH /no {}"}
+	if fmt.Sprint(s.requests) != fmt.Sprint(want) {
+		t.Fatalf("requests %v, want %v (no request for a patch that does not marshal)", s.requests, want)
+	}
 }
 
 func TestDeleteIfExists(t *testing.T) {

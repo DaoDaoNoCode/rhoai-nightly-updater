@@ -446,9 +446,7 @@ func patchMLflowCR(c *Client, cr mlflowCR, annotations, spec map[string]any) err
 	if spec != nil {
 		body["spec"] = spec
 	}
-	patch, _ := json.Marshal(body)
-	_, _, err := c.patch(clusterPath(mlflowAPIGroup, "mlflows", mlflowCRName), patch)
-	return err
+	return c.patchJSON(clusterPath(mlflowAPIGroup, "mlflows", mlflowCRName), body)
 }
 
 // imageSpec is the spec patch that sets spec.image.image (nil removes it).

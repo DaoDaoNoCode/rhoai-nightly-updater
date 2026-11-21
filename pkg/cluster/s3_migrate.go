@@ -170,9 +170,7 @@ func migrationCopied(c *Client) (bool, error) {
 // recordMigrationCopied sets migrationCopiedAnnotation (a merge patch of
 // one annotation: setup's server-side apply owns the rest of the Secret).
 func recordMigrationCopied(c *Client) error {
-	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{migrationCopiedAnnotation: clk.Now().UTC().Format(time.RFC3339)}}})
-	_, _, err := c.patch(namespacedPath("v1", "secrets", s3Namespace, s3Secret), patch)
-	return err
+	return c.patchJSON(namespacedPath("v1", "secrets", s3Namespace, s3Secret), map[string]any{"metadata": map[string]any{"annotations": map[string]string{migrationCopiedAnnotation: clk.Now().UTC().Format(time.RFC3339)}}})
 }
 
 // rcloneImage returns the copy Job's image, overridable with RCLONE_IMAGE
@@ -781,12 +779,10 @@ func ownMigrateSource(c *Client, jobUID string) error {
 	if !found || !meta.hasToolLabel() {
 		return fmt.Errorf("secret %s/%s is gone or not this tool's", s3Namespace, migrateSourceSecret)
 	}
-	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{
+	return c.patchJSON(migrateSourcePath(), map[string]any{"metadata": map[string]any{
 		"resourceVersion": meta.ResourceVersion,
 		"ownerReferences": []any{map[string]any{"apiVersion": "batch/v1", "kind": "Job", "name": migrateJobName, "uid": jobUID}},
 	}})
-	_, _, err = c.patch(migrateSourcePath(), patch)
-	return err
 }
 
 // deleteMigrateJob deletes the copy Job by UID; its pod goes with it
