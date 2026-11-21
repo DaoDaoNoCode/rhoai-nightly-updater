@@ -35,7 +35,7 @@ func TestPlaygroundStream(t *testing.T) {
 		`{"action":"teardown","project":"p","models":[{"name":"m","source":"maas"}]}`,
 	} {
 		w := httptest.NewRecorder()
-		HandlePlaygroundStream(w, postJSON("/api/resources/playground/stream", "user-token", body))
+		HandlePlaygroundStream(w, postJSON(t, "/api/resources/playground/stream", "user-token", body))
 		if w.Code != http.StatusBadRequest || clusterMutationInProgress.Load() {
 			t.Errorf("%s: %d %s", body, w.Code, w.Body.String())
 		}
@@ -43,7 +43,7 @@ func TestPlaygroundStream(t *testing.T) {
 	w := httptest.NewRecorder()
 	// A Models as a Service model is accepted again: Set up runs with the
 	// user's own token.
-	HandlePlaygroundStream(w, postJSON("/api/resources/playground/stream", "user-token", `{"action":"setup","project":"p","models":[{"name":"m","source":"namespace"},{"name":"gpt","source":"maas"}]}`))
+	HandlePlaygroundStream(w, postJSON(t, "/api/resources/playground/stream", "user-token", `{"action":"setup","project":"p","models":[{"name":"m","source":"namespace"},{"name":"gpt","source":"maas"}]}`))
 	out := w.Body.String()
 	if w.Code != http.StatusOK || !strings.Contains(out, `"step":"install"`) || !strings.Contains(out, `"step":"operation_complete"`) {
 		t.Errorf("%d %s", w.Code, out)
@@ -70,12 +70,12 @@ func TestPlaygroundStatusHandler(t *testing.T) {
 		return &types.PlaygroundStatus{Project: project}, nil
 	}
 	w := httptest.NewRecorder()
-	HandlePlaygroundStatus(w, postJSONMethod(http.MethodGet, "/api/resources/playground?project=Bad_Name", "tok", ""))
+	HandlePlaygroundStatus(w, postJSONMethod(t, http.MethodGet, "/api/resources/playground?project=Bad_Name", "tok", ""))
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("bad project: %d", w.Code)
 	}
 	w = httptest.NewRecorder()
-	HandlePlaygroundStatus(w, postJSONMethod(http.MethodGet, "/api/resources/playground?project=proj", "tok", ""))
+	HandlePlaygroundStatus(w, postJSONMethod(t, http.MethodGet, "/api/resources/playground?project=proj", "tok", ""))
 	// The status reads the projects and calls the gen-ai API with the
 	// user's own client; the ServiceAccount's only finds the dashboard.
 	if w.Code != http.StatusOK || gotProject != "proj" || saUser || !uUser || strings.Contains(w.Body.String(), "test-cluster-token") {
@@ -86,7 +86,7 @@ func TestPlaygroundStatusHandler(t *testing.T) {
 		return nil, fmt.Errorf("%w: '%s' is not one of your data science projects", cluster.ErrNotDSProject, project)
 	}
 	w = httptest.NewRecorder()
-	HandlePlaygroundStatus(w, postJSONMethod(http.MethodGet, "/api/resources/playground?project=other", "tok", ""))
+	HandlePlaygroundStatus(w, postJSONMethod(t, http.MethodGet, "/api/resources/playground?project=other", "tok", ""))
 	if w.Code != http.StatusForbidden || decodeError(t, w)["errorCode"] != cluster.ErrorCodeForbiddenForUser {
 		t.Errorf("not the user's project: %d %s", w.Code, w.Body.String())
 	}

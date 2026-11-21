@@ -16,7 +16,7 @@ func TestSecurityHeaders_SetsXContentTypeOptions(t *testing.T) {
 	handler := SecurityHeaders(inner)
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	handler.ServeHTTP(rr, req)
 
 	got := rr.Header().Get("X-Content-Type-Options")
@@ -32,7 +32,7 @@ func TestSecurityHeaders_SetsXFrameOptions(t *testing.T) {
 	handler := SecurityHeaders(inner)
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	handler.ServeHTTP(rr, req)
 
 	got := rr.Header().Get("X-Frame-Options")
@@ -48,7 +48,7 @@ func TestSecurityHeaders_SetsCacheControl(t *testing.T) {
 	handler := SecurityHeaders(inner)
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	handler.ServeHTTP(rr, req)
 
 	want := "no-store, no-cache, must-revalidate"
@@ -65,7 +65,7 @@ func TestSecurityHeaders_SetsPragma(t *testing.T) {
 	handler := SecurityHeaders(inner)
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	handler.ServeHTTP(rr, req)
 
 	got := rr.Header().Get("Pragma")
@@ -84,7 +84,7 @@ func TestSecurityHeaders_PassesThroughToNextHandler(t *testing.T) {
 	handler := SecurityHeaders(inner)
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/test-path", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/test-path", nil)
 	handler.ServeHTTP(rr, req)
 
 	if !called {
@@ -103,7 +103,7 @@ func TestSecurityHeaders_PassesThroughToNextHandler(t *testing.T) {
 func TestSecurityHeaders_CSPDirectives(t *testing.T) {
 	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+	handler.ServeHTTP(rr, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
 	directives := map[string]string{}
 	for d := range strings.SplitSeq(rr.Header().Get("Content-Security-Policy"), ";") {
 		name, value, _ := strings.Cut(strings.TrimSpace(d), " ")
@@ -139,7 +139,7 @@ func TestSecurityHeaders_StaticCacheControl(t *testing.T) {
 	handler := SecurityHeaders(StaticFiles(dir))
 	for path, want := range map[string]string{"/": "no-cache", "/bundle.435605b5.js": "public, max-age=31536000, immutable"} {
 		rr := httptest.NewRecorder()
-		handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+		handler.ServeHTTP(rr, httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil))
 		if got := rr.Header().Get("Cache-Control"); got != want {
 			t.Errorf("%s: Cache-Control = %q, want %q", path, got, want)
 		}

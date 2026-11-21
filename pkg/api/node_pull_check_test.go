@@ -25,7 +25,7 @@ func TestNodePullCheckValidatesTheImage(t *testing.T) {
 		`{"image":"quay.io/rhoai/rhoai-fbc-fragment@sha256:` + strings.Repeat("a", 64) + `"}`,
 	} {
 		w := httptest.NewRecorder()
-		HandleNodePullCheck(w, postJSON("/api/setup/node-pull-check", "tok", body))
+		HandleNodePullCheck(w, postJSON(t, "/api/setup/node-pull-check", "tok", body))
 		if w.Code != 400 {
 			t.Errorf("%s: status %d %s", body, w.Code, w.Body.String())
 		}

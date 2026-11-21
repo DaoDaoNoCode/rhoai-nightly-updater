@@ -44,7 +44,7 @@ func TestBuildExplorerContainsValidation(t *testing.T) {
 	for name, query := range cases {
 		t.Run(name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			r := httptest.NewRequest("GET", "/api/build-explorer/contains?"+query, nil)
+			r := httptest.NewRequestWithContext(t.Context(), "GET", "/api/build-explorer/contains?"+query, nil)
 			r.Header.Set("X-Forwarded-Access-Token", "tok")
 			HandleBuildExplorerContains(w, r)
 			if w.Code != 400 {
@@ -64,7 +64,7 @@ func TestBuildExplorerContainsValidation(t *testing.T) {
 func TestBuildExplorerContainsRepositoryOutsideTheAllowlist(t *testing.T) {
 	setupDevMode(t)
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/api/build-explorer/contains?pr=1&repo="+url.QueryEscape("evil/repo"), nil)
+	r := httptest.NewRequestWithContext(t.Context(), "GET", "/api/build-explorer/contains?pr=1&repo="+url.QueryEscape("evil/repo"), nil)
 	r.Header.Set("X-Forwarded-Access-Token", "tok")
 	HandleBuildExplorerContains(w, r)
 	if w.Code != 400 {

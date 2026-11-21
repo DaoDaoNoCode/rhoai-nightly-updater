@@ -19,7 +19,7 @@ import (
 func getOperation(t *testing.T) (OperationStatus, map[string]json.RawMessage) {
 	t.Helper()
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/api/operation", nil)
+	r := httptest.NewRequestWithContext(t.Context(), "GET", "/api/operation", nil)
 	r.Header.Set("X-Forwarded-Access-Token", "user:bob")
 	HandleOperation(w, r)
 	if w.Code != 200 {
@@ -76,7 +76,7 @@ func TestLastCompletedContract(t *testing.T) {
 
 	refreshResult(&types.OperationResponse{Success: false, Message: "The CSV did not become ready"})
 	w := httptest.NewRecorder()
-	HandleRefreshStream(w, postJSON("/api/refresh/stream", "user:alice", "{}"))
+	HandleRefreshStream(w, postJSON(t, "/api/refresh/stream", "user:alice", "{}"))
 	if w.Code != 200 {
 		t.Fatalf("refresh: %d", w.Code)
 	}
@@ -116,7 +116,7 @@ func TestLastCompletedContract(t *testing.T) {
 	// A later success replaces it.
 	refreshResult(&types.OperationResponse{Success: true, Message: "Operator refreshed"})
 	mutationLimiter = newRateLimiter()
-	HandleRefreshStream(httptest.NewRecorder(), postJSON("/api/refresh/stream", "user:carol", "{}"))
+	HandleRefreshStream(httptest.NewRecorder(), postJSON(t, "/api/refresh/stream", "user:carol", "{}"))
 	if status, _ := getOperation(t); status.LastCompleted == nil || !status.LastCompleted.Success ||
 		status.LastCompleted.User != "carol" || status.LastCompleted.ID == last.ID {
 		t.Fatalf("after a second operation: %+v", status.LastCompleted)
@@ -152,7 +152,7 @@ func TestLastCompletedSurvivesRestart(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		HandleRefreshStream(httptest.NewRecorder(), postJSON("/api/refresh/stream", "user:dave", "{}"))
+		HandleRefreshStream(httptest.NewRecorder(), postJSON(t, "/api/refresh/stream", "user:dave", "{}"))
 	}()
 	<-started
 	before := reads
@@ -191,7 +191,7 @@ func TestRejectedAndDryRunRequestsWriteNoMarker(t *testing.T) {
 		{"dry run", HandleUpdate, "/api/update", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6","dryRun":true}`, 200},
 	} {
 		w := httptest.NewRecorder()
-		tc.h(w, postJSON(tc.path, "user:alice", tc.body))
+		tc.h(w, postJSON(t, tc.path, "user:alice", tc.body))
 		if w.Code != tc.code {
 			t.Errorf("%s: %d %s", tc.name, w.Code, w.Body.String())
 		}
@@ -241,7 +241,7 @@ func TestFailedMarkerClearIsRetried(t *testing.T) {
 	}
 
 	refreshResult(&types.OperationResponse{Success: true, Message: "refreshed"})
-	HandleRefreshStream(httptest.NewRecorder(), postJSON("/api/refresh/stream", "user:alice", "{}"))
+	HandleRefreshStream(httptest.NewRecorder(), postJSON(t, "/api/refresh/stream", "user:alice", "{}"))
 	// The marker of this process is not an interruption, even while the
 	// clear is still failing.
 	if status, _ := getOperation(t); status.Interrupted != nil {
@@ -272,7 +272,7 @@ func TestFailedMarkerClearIsRetried(t *testing.T) {
 	attempts, failures = 0, 100
 	mu.Unlock()
 	mutationLimiter = newRateLimiter()
-	HandleRefreshStream(httptest.NewRecorder(), postJSON("/api/refresh/stream", "user:alice", "{}"))
+	HandleRefreshStream(httptest.NewRecorder(), postJSON(t, "/api/refresh/stream", "user:alice", "{}"))
 	runRetries := func() {
 		for _, d := range []time.Duration{time.Second, 2 * time.Second, 5 * time.Second} {
 			testClock.WaitForSleepers(1)
@@ -326,7 +326,7 @@ func TestNewOperationSupersedesPendingClear(t *testing.T) {
 		return nil
 	}
 	refreshResult(&types.OperationResponse{Success: true, Message: "first"})
-	HandleRefreshStream(httptest.NewRecorder(), postJSON("/api/refresh/stream", "user:alice", "{}"))
+	HandleRefreshStream(httptest.NewRecorder(), postJSON(t, "/api/refresh/stream", "user:alice", "{}"))
 	first := inflight.lastCompleted().ID
 
 	release, started := make(chan struct{}), make(chan struct{})
@@ -338,7 +338,7 @@ func TestNewOperationSupersedesPendingClear(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		HandleRefreshStream(httptest.NewRecorder(), postJSON("/api/refresh/stream", "user:bob", "{}"))
+		HandleRefreshStream(httptest.NewRecorder(), postJSON(t, "/api/refresh/stream", "user:bob", "{}"))
 	}()
 	<-started
 	mu.Lock()

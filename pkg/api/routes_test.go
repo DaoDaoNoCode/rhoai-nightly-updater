@@ -40,7 +40,7 @@ func TestEveryNonGetRouteIsGated(t *testing.T) {
 
 		mutationPermission = func(context.Context, string) (bool, error) { return false, nil }
 		w := httptest.NewRecorder()
-		mux.ServeHTTP(w, postJSONMethod(method, path, "user:reader", "{}"))
+		mux.ServeHTTP(w, postJSONMethod(t, method, path, "user:reader", "{}"))
 		if w.Code != http.StatusForbidden || decodeError(t, w)["errorCode"] != "forbidden" {
 			t.Errorf("%s without cluster-admin: %d %s", rt.Pattern, w.Code, w.Body.String())
 		}
@@ -53,7 +53,7 @@ func TestEveryNonGetRouteIsGated(t *testing.T) {
 			t.Fatal("lock unexpectedly held")
 		}
 		w = httptest.NewRecorder()
-		mux.ServeHTTP(w, postJSONMethod(method, path, "user:admin", "{}"))
+		mux.ServeHTTP(w, postJSONMethod(t, method, path, "user:admin", "{}"))
 		releaseClusterMutationLock()
 		if w.Code != http.StatusConflict || decodeError(t, w)["errorCode"] != "cluster_busy" {
 			t.Errorf("%s while another operation runs: %d %s", rt.Pattern, w.Code, w.Body.String())
@@ -69,8 +69,8 @@ func TestEveryNonGetRouteIsGated(t *testing.T) {
 	}
 }
 
-func postJSONMethod(method, path, token, body string) *http.Request {
-	r := postJSON(path, token, body)
+func postJSONMethod(t testing.TB, method, path, token, body string) *http.Request {
+	r := postJSON(t, path, token, body)
 	r.Method = method
 	return r
 }

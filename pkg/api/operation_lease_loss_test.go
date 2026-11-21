@@ -29,11 +29,11 @@ func refreshUntilStopped() (started chan struct{}, cause chan error, release cha
 	return started, cause, release
 }
 
-func runRefreshInBackground() chan struct{} {
+func runRefreshInBackground(t testing.TB) chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		HandleRefreshStream(httptest.NewRecorder(), postJSON("/api/refresh/stream", "user:alice", "{}"))
+		HandleRefreshStream(httptest.NewRecorder(), postJSON(t, "/api/refresh/stream", "user:alice", "{}"))
 	}()
 	return done
 }
@@ -46,7 +46,7 @@ func TestLeaseTakeoverStopsTheOperation(t *testing.T) {
 	allowMutations(t)
 	f := installFakeRecord(t)
 	started, cause, _ := refreshUntilStopped()
-	done := runRefreshInBackground()
+	done := runRefreshInBackground(t)
 	<-started
 	f.setLease(otherPodLease(clk.Now())) // another pod took the lock over
 	f.beat(t)
@@ -76,7 +76,7 @@ func TestRenewalFailuresStopTheOperationOnlyPastTheThreshold(t *testing.T) {
 	// One failure, then renewals succeed again: the operation goes on (a
 	// stopped heartbeat would not make the second renewal).
 	started, _, release := refreshUntilStopped()
-	done := runRefreshInBackground()
+	done := runRefreshInBackground(t)
 	<-started
 	f.mu.Lock()
 	f.failNext = 1
@@ -96,7 +96,7 @@ func TestRenewalFailuresStopTheOperationOnlyPastTheThreshold(t *testing.T) {
 	// the heartbeat of the last successful write (here the acquire's).
 	mutationLimiter = newRateLimiter()
 	started, cause, _ := refreshUntilStopped()
-	done = runRefreshInBackground()
+	done = runRefreshInBackground(t)
 	<-started
 	stamped := testClock.Now()
 	f.mu.Lock()

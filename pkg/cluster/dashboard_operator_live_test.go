@@ -25,7 +25,7 @@ func TestDashboardBuildDiscoveryLive(t *testing.T) {
 			w.WriteHeader(405)
 			return
 		}
-		body, err := exec.Command("oc", "get", "--raw", r.URL.RequestURI()).Output()
+		body, err := exec.CommandContext(r.Context(), "oc", "get", "--raw", r.URL.RequestURI()).Output()
 		if err != nil {
 			w.WriteHeader(404)
 			fmt.Fprintf(w, `{"kind":"Status","code":404,"message":%q}`, err.Error())

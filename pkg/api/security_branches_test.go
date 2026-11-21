@@ -40,7 +40,7 @@ func TestGitOpsDryRunImageAllowlist(t *testing.T) {
 			}
 			mux := gitOpsMux(t)
 			w := httptest.NewRecorder()
-			mux.ServeHTTP(w, postJSON("/api/update", "user:admin", `{"image":"`+tc.image+`","dryRun":true}`))
+			mux.ServeHTTP(w, postJSON(t, "/api/update", "user:admin", `{"image":"`+tc.image+`","dryRun":true}`))
 			if w.Code != tc.status || called != (tc.status == http.StatusOK) {
 				t.Fatalf("status %d (called %v): %s", w.Code, called, w.Body.String())
 			}
@@ -65,7 +65,7 @@ func TestUpdateStreamRefusesEmptyAndMalformedImages(t *testing.T) {
 			return &types.OperationResponse{Success: true}, nil
 		}
 		w := httptest.NewRecorder()
-		HandleUpdateStream(w, postJSON("/api/update/stream", "user:admin", body))
+		HandleUpdateStream(w, postJSON(t, "/api/update/stream", "user:admin", body))
 		if w.Code != http.StatusBadRequest || called || decodeError(t, w)["errorCode"] != "validation" {
 			t.Errorf("%s: status %d called=%v %s", body, w.Code, called, w.Body.String())
 		}
@@ -99,7 +99,7 @@ func TestWithAdminReadRefusesOnItsOwn(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 			})
 			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodGet, "/api/resources/s3/admin-password", nil)
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/resources/s3/admin-password", nil)
 			r.Header.Set("X-Forwarded-Access-Token", "user:alice")
 			h(w, r)
 			if w.Code != tc.status || called != (tc.status == http.StatusOK) {
@@ -130,7 +130,7 @@ func TestAdminReadRoutesCheckThePermissionOnce(t *testing.T) {
 				mux := http.NewServeMux()
 				Register(mux)
 				w := httptest.NewRecorder()
-				mux.ServeHTTP(w, postJSONMethod(http.MethodGet, path, "user:alice", ""))
+				mux.ServeHTTP(w, postJSONMethod(t, http.MethodGet, path, "user:alice", ""))
 				if calls != 1 {
 					t.Fatalf("%d permission checks for one request (status %d)", calls, w.Code)
 				}
@@ -163,7 +163,7 @@ func TestWrappersRefuseWithoutTheServiceAccountToken(t *testing.T) {
 				h = withMutationAuth(fn)
 			}
 			w := httptest.NewRecorder()
-			h(w, postJSON("/api/x", "user:alice", `{}`))
+			h(w, postJSON(t, "/api/x", "user:alice", `{}`))
 			if w.Code != http.StatusInternalServerError || called || decodeError(t, w)["errorCode"] != "internal" {
 				t.Fatalf("status %d called %v: %s", w.Code, called, w.Body.String())
 			}
@@ -255,14 +255,14 @@ func TestHandlePageView(t *testing.T) {
 	}
 	t.Run("no token", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		HandlePageView(w, postJSON("/api/pageview", "", `{"page":"status"}`))
+		HandlePageView(w, postJSON(t, "/api/pageview", "", `{"page":"status"}`))
 		if w.Code != http.StatusUnauthorized {
 			t.Fatalf("status %d", w.Code)
 		}
 	})
 	t.Run("expired session", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		HandlePageView(w, postJSON("/api/pageview", expiredToken, `{"page":"status"}`))
+		HandlePageView(w, postJSON(t, "/api/pageview", expiredToken, `{"page":"status"}`))
 		if w.Code != http.StatusUnauthorized || decodeError(t, w)["errorCode"] != "session_expired" {
 			t.Fatalf("status %d %s", w.Code, w.Body.String())
 		}
@@ -270,7 +270,7 @@ func TestHandlePageView(t *testing.T) {
 	t.Run("too large", func(t *testing.T) {
 		before := count("other")
 		w := httptest.NewRecorder()
-		HandlePageView(w, postJSON("/api/pageview", "user:alice", `{"page":"`+strings.Repeat("x", 300)+`"}`))
+		HandlePageView(w, postJSON(t, "/api/pageview", "user:alice", `{"page":"`+strings.Repeat("x", 300)+`"}`))
 		if w.Code != http.StatusBadRequest || count("other") != before {
 			t.Fatalf("status %d", w.Code)
 		}
@@ -292,13 +292,13 @@ func TestHandlePageView(t *testing.T) {
 		}
 		featureBefore := featureMade()
 		w := httptest.NewRecorder()
-		HandlePageView(w, postJSON("/api/pageview", "user:alice", `{"action":"made-up-action"}`))
+		HandlePageView(w, postJSON(t, "/api/pageview", "user:alice", `{"action":"made-up-action"}`))
 		if w.Code != http.StatusNoContent || featureMade() != featureBefore+1 {
 			t.Fatalf("action: status %d, other %d -> %d", w.Code, featureBefore, featureMade())
 		}
 		for _, body := range []string{`{"page":"` + known + `"}`, `{"page":"made-up-page"}`} {
 			w := httptest.NewRecorder()
-			HandlePageView(w, postJSON("/api/pageview", "user:alice", body))
+			HandlePageView(w, postJSON(t, "/api/pageview", "user:alice", body))
 			if w.Code != http.StatusNoContent {
 				t.Fatalf("%s: status %d", body, w.Code)
 			}

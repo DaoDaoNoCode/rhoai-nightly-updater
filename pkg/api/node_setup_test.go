@@ -32,22 +32,22 @@ func TestNodeSetupValidatesTheRequest(t *testing.T) {
 		body    string
 	}{
 		{func(w *httptest.ResponseRecorder, b string) {
-			HandleNodeSetupPlan(w, postJSON("/api/setup/nodes/plan", "tok", b))
+			HandleNodeSetupPlan(w, postJSON(t, "/api/setup/nodes/plan", "tok", b))
 		}, `{}`},
 		{func(w *httptest.ResponseRecorder, b string) {
-			HandleNodeSetupPlan(w, postJSON("/api/setup/nodes/plan", "tok", b))
+			HandleNodeSetupPlan(w, postJSON(t, "/api/setup/nodes/plan", "tok", b))
 		}, `{"action":"delete-everything"}`},
 		{func(w *httptest.ResponseRecorder, b string) {
-			HandleNodeSetupPlan(w, postJSON("/api/setup/nodes/plan", "tok", b))
+			HandleNodeSetupPlan(w, postJSON(t, "/api/setup/nodes/plan", "tok", b))
 		}, `{"action":"mirror-create","uid":"a/b"}`},
 		{func(w *httptest.ResponseRecorder, b string) {
-			HandleNodeSetupStream(w, postJSON("/api/setup/nodes/stream", "tok", b))
+			HandleNodeSetupStream(w, postJSON(t, "/api/setup/nodes/stream", "tok", b))
 		}, `{"action":"pull-secret-add"}`},
 		{func(w *httptest.ResponseRecorder, b string) {
-			HandleNodeSetupStream(w, postJSON("/api/setup/nodes/stream", "tok", b))
+			HandleNodeSetupStream(w, postJSON(t, "/api/setup/nodes/stream", "tok", b))
 		}, `{"action":"mirror-remove","uid":"u"}`},
 		{func(w *httptest.ResponseRecorder, b string) {
-			HandleNodeSetupStream(w, postJSON("/api/setup/nodes/stream", "tok", b))
+			HandleNodeSetupStream(w, postJSON(t, "/api/setup/nodes/stream", "tok", b))
 		}, `not json`},
 	} {
 		w := httptest.NewRecorder()
@@ -83,13 +83,13 @@ func TestNodeSetupPlanThenStream(t *testing.T) {
 		return &types.OperationResponse{Success: true, Message: "Added."}, nil
 	}
 	w := httptest.NewRecorder()
-	HandleNodeSetupPlan(w, postJSON("/api/setup/nodes/plan", "tok", `{"action":"pull-secret-add"}`))
+	HandleNodeSetupPlan(w, postJSON(t, "/api/setup/nodes/plan", "tok", `{"action":"pull-secret-add"}`))
 	var plan types.NodeSetupPlan
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &plan) != nil || plan.ResourceVersion != "42" || planned.ReplaceExisting {
 		t.Fatalf("plan: %d %s (%+v)", w.Code, w.Body.String(), planned)
 	}
 	w = httptest.NewRecorder()
-	HandleNodeSetupStream(w, postJSON("/api/setup/nodes/stream", "tok", `{"action":"pull-secret-add","resourceVersion":"42"}`))
+	HandleNodeSetupStream(w, postJSON(t, "/api/setup/nodes/stream", "tok", `{"action":"pull-secret-add","resourceVersion":"42"}`))
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"step":"operation_complete"`) || !strings.Contains(w.Body.String(), `"status":"success"`) {
 		t.Fatalf("stream: %d %s", w.Code, w.Body.String())
 	}
@@ -115,12 +115,12 @@ func TestNodeSetupCarriesTheReplaceAcknowledgement(t *testing.T) {
 		return &types.OperationResponse{Success: true, Message: "Replaced."}, nil
 	}
 	w := httptest.NewRecorder()
-	HandleNodeSetupPlan(w, postJSON("/api/setup/nodes/plan", "tok", `{"action":"pull-secret-add","replaceExisting":true}`))
+	HandleNodeSetupPlan(w, postJSON(t, "/api/setup/nodes/plan", "tok", `{"action":"pull-secret-add","replaceExisting":true}`))
 	if w.Code != 200 || !planned.ReplaceExisting {
 		t.Fatalf("plan: %d %s (%+v)", w.Code, w.Body.String(), planned)
 	}
 	w = httptest.NewRecorder()
-	HandleNodeSetupStream(w, postJSON("/api/setup/nodes/stream", "tok", `{"action":"pull-secret-add","resourceVersion":"42","replaceExisting":true}`))
+	HandleNodeSetupStream(w, postJSON(t, "/api/setup/nodes/stream", "tok", `{"action":"pull-secret-add","resourceVersion":"42","replaceExisting":true}`))
 	if w.Code != 200 || !ran.ReplaceExisting || ran.ResourceVersion != "42" {
 		t.Fatalf("stream: %d %s (%+v)", w.Code, w.Body.String(), ran)
 	}

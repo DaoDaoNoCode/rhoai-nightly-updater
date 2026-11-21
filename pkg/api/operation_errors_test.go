@@ -50,7 +50,7 @@ func TestRepairDSCAnswersTheErrorsClass(t *testing.T) {
 			mux := http.NewServeMux()
 			Register(mux)
 			w := httptest.NewRecorder()
-			mux.ServeHTTP(w, postJSON("/api/components/dsc/repair", "user:admin", repairBody))
+			mux.ServeHTTP(w, postJSON(t, "/api/components/dsc/repair", "user:admin", repairBody))
 			body := decodeError(t, w)
 			if w.Code != tc.status || (tc.errorCode != "" && body["errorCode"] != tc.errorCode) {
 				t.Fatalf("status=%d body=%s; want %d %s", w.Code, w.Body.String(), tc.status, tc.errorCode)
@@ -91,7 +91,7 @@ func TestFixAcknowledgedAnswersTheErrorsClass(t *testing.T) {
 			mux := http.NewServeMux()
 			Register(mux)
 			w := httptest.NewRecorder()
-			mux.ServeHTTP(w, postJSON("/api/diagnostics/fix/acknowledged", "user:admin", `{"problemId":"p","acknowledged":true,"binding":{"hash":"h"}}`))
+			mux.ServeHTTP(w, postJSON(t, "/api/diagnostics/fix/acknowledged", "user:admin", `{"problemId":"p","acknowledged":true,"binding":{"hash":"h"}}`))
 			body := decodeError(t, w)
 			if w.Code != tc.status || body["errorCode"] != tc.errorCode {
 				t.Fatalf("status=%d body=%s; want %d %s", w.Code, w.Body.String(), tc.status, tc.errorCode)

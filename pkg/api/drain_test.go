@@ -30,7 +30,7 @@ func TestDrainWaitsForRunningMutation(t *testing.T) {
 	})
 	go func() {
 		defer close(finished)
-		r := httptest.NewRequest("POST", "/api/drain-running", nil)
+		r := httptest.NewRequestWithContext(t.Context(), "POST", "/api/drain-running", nil)
 		r.Header.Set("X-Forwarded-Access-Token", "user-token")
 		h(httptest.NewRecorder(), r)
 	}()
@@ -43,7 +43,7 @@ func TestDrainWaitsForRunningMutation(t *testing.T) {
 	// New mutations are refused while draining, and readiness fails.
 	called := false
 	refused := withMutationAuth(func(*cluster.Client, http.ResponseWriter, *http.Request) { called = true })
-	r := httptest.NewRequest("POST", "/api/drain-new", nil)
+	r := httptest.NewRequestWithContext(t.Context(), "POST", "/api/drain-new", nil)
 	r.Header.Set("X-Forwarded-Access-Token", "user-token")
 	w := httptest.NewRecorder()
 	refused(w, r)
@@ -51,7 +51,7 @@ func TestDrainWaitsForRunningMutation(t *testing.T) {
 		t.Fatalf("new mutation during drain: status=%d called=%v", w.Code, called)
 	}
 	ready := httptest.NewRecorder()
-	HandleReady(ready, httptest.NewRequest("GET", "/api/health/ready", nil))
+	HandleReady(ready, httptest.NewRequestWithContext(t.Context(), "GET", "/api/health/ready", nil))
 	if ready.Code != http.StatusServiceUnavailable {
 		t.Fatalf("readiness during drain = %d", ready.Code)
 	}

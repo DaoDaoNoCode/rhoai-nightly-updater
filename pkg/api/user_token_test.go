@@ -83,7 +83,7 @@ func TestMutationClientActsAsTheUser(t *testing.T) {
 			writeJSON(w, types.OperationResponse{Success: true}, "t")
 		})
 		w := httptest.NewRecorder()
-		h(w, postJSON("/api/refresh/stream", "sha256~alice-token", "{}"))
+		h(w, postJSON(t, "/api/refresh/stream", "sha256~alice-token", "{}"))
 		if w.Code != http.StatusOK {
 			t.Fatalf("%s: %d %s", tc.name, w.Code, w.Body.String())
 		}
@@ -147,7 +147,7 @@ func TestMutationRefusedWhenTheSignInCannotCarryIt(t *testing.T) {
 				return &types.OperationResponse{Success: true}, nil
 			}
 			w := httptest.NewRecorder()
-			HandleUpdate(w, postJSON("/api/update", "sha256~alice-token", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6","dryRun":true}`))
+			HandleUpdate(w, postJSON(t, "/api/update", "sha256~alice-token", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6","dryRun":true}`))
 			if w.Code != tc.status || ran != (tc.status == 200) {
 				t.Fatalf("status %d ran %v: %s", w.Code, ran, w.Body.String())
 			}
@@ -171,7 +171,7 @@ func TestUserPermissionsReportsTheSignIn(t *testing.T) {
 	allowMutations(t)
 	fakeSession(t, &cluster.SessionToken{Scopes: []string{"user:info"}}, nil)
 	w := httptest.NewRecorder()
-	HandleUserPermissions(w, postJSONMethod(http.MethodGet, "/api/user/permissions", "sha256~alice-token", ""))
+	HandleUserPermissions(w, postJSONMethod(t, http.MethodGet, "/api/user/permissions", "sha256~alice-token", ""))
 	var body map[string]any
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if w.Code != 200 || body["canMutate"] != false || body["reasonCode"] != signInAgainCode || !strings.Contains(fmt.Sprint(body["reason"]), "Log out and log in again") {
@@ -179,7 +179,7 @@ func TestUserPermissionsReportsTheSignIn(t *testing.T) {
 	}
 	fakeSession(t, fullToken(sessionNow), nil)
 	w = httptest.NewRecorder()
-	HandleUserPermissions(w, postJSONMethod(http.MethodGet, "/api/user/permissions", "sha256~alice-token", ""))
+	HandleUserPermissions(w, postJSONMethod(t, http.MethodGet, "/api/user/permissions", "sha256~alice-token", ""))
 	body = nil
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["canMutate"] != true || body["reason"] != nil {
@@ -189,7 +189,7 @@ func TestUserPermissionsReportsTheSignIn(t *testing.T) {
 	reads := fakeSession(t, nil, errors.New("must not be read"))
 	mutationPermission = func(context.Context, string) (bool, error) { return false, nil }
 	w = httptest.NewRecorder()
-	HandleUserPermissions(w, postJSONMethod(http.MethodGet, "/api/user/permissions", "sha256~bob-token", ""))
+	HandleUserPermissions(w, postJSONMethod(t, http.MethodGet, "/api/user/permissions", "sha256~bob-token", ""))
 	if *reads != 0 {
 		t.Fatal("the sign-in of a read-only user was read")
 	}
@@ -207,7 +207,7 @@ func TestGitOpsProfileWorksWithAScopedSignIn(t *testing.T) {
 	mux := gitOpsMux(t)
 
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, postJSONMethod(http.MethodGet, "/api/user/permissions", "sha256~alice-token", ""))
+	mux.ServeHTTP(w, postJSONMethod(t, http.MethodGet, "/api/user/permissions", "sha256~alice-token", ""))
 	var body map[string]any
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if w.Code != http.StatusOK || body["canMutate"] != true || body["reason"] != nil || body["reasonCode"] != nil {
@@ -221,7 +221,7 @@ func TestGitOpsProfileWorksWithAScopedSignIn(t *testing.T) {
 		return &types.OperationResponse{Success: true, Message: "Dry run complete. No changes were made."}, nil
 	}
 	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, postJSON("/api/update", "sha256~alice-token", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6","dryRun":true}`))
+	mux.ServeHTTP(w, postJSON(t, "/api/update", "sha256~alice-token", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6","dryRun":true}`))
 	if w.Code != http.StatusOK || asUser == nil || *asUser {
 		t.Fatalf("update dry run: %d, acted as the user: %v: %s", w.Code, asUser, w.Body.String())
 	}
@@ -232,7 +232,7 @@ func TestGitOpsProfileWorksWithAScopedSignIn(t *testing.T) {
 	// The same scoped sign-in in the full profile cannot change anything.
 	SetProfile(ProfileFull)
 	w = httptest.NewRecorder()
-	HandleUserPermissions(w, postJSONMethod(http.MethodGet, "/api/user/permissions", "sha256~alice-token", ""))
+	HandleUserPermissions(w, postJSONMethod(t, http.MethodGet, "/api/user/permissions", "sha256~alice-token", ""))
 	body = nil
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body["canMutate"] != false || body["reasonCode"] != signInAgainCode {
@@ -262,7 +262,7 @@ func TestUserTokenIsNeverLoggedOrEchoed(t *testing.T) {
 	} {
 		fakeSession(t, nil, err)
 		w := httptest.NewRecorder()
-		HandleRefreshStream(w, postJSON("/api/refresh/stream", secret, "{}"))
+		HandleRefreshStream(w, postJSON(t, "/api/refresh/stream", secret, "{}"))
 		if strings.Contains(w.Body.String(), secret) {
 			t.Fatalf("response shows the token: %s", w.Body.String())
 		}
@@ -275,7 +275,7 @@ func TestUserTokenIsNeverLoggedOrEchoed(t *testing.T) {
 		return &types.OperationResponse{Success: false, Message: err.Error()}, err
 	}
 	w := httptest.NewRecorder()
-	HandleRefreshStream(w, postJSON("/api/refresh/stream", secret, "{}"))
+	HandleRefreshStream(w, postJSON(t, "/api/refresh/stream", secret, "{}"))
 	out := w.Body.String()
 	if !strings.Contains(out, "Log out of the updater and log in again") {
 		t.Errorf("a mid-operation 401 does not say to sign in again: %s", out)

@@ -156,7 +156,7 @@ func TestLiveForeignLeaseRefusesWithTheRemoteOperation(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	HandleUpdate(w, postJSON("/api/update", "user:bob", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6","dryRun":true}`))
+	HandleUpdate(w, postJSON(t, "/api/update", "user:bob", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6","dryRun":true}`))
 	if w.Code != 409 || ran {
 		t.Fatalf("status %d ran=%v body %s", w.Code, ran, w.Body.String())
 	}
@@ -181,7 +181,7 @@ func TestLiveForeignLeaseRefusesWithTheRemoteOperation(t *testing.T) {
 	// The refusal does not use up the user's rate-limit slot.
 	f.setLease(nil)
 	w = httptest.NewRecorder()
-	HandleUpdate(w, postJSON("/api/update", "user:bob", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6","dryRun":true}`))
+	HandleUpdate(w, postJSON(t, "/api/update", "user:bob", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6","dryRun":true}`))
 	if w.Code != 200 || !ran {
 		t.Fatalf("after the remote operation: %d %s", w.Code, w.Body.String())
 	}
@@ -231,7 +231,7 @@ func TestExpiredLeaseIsTakenOver(t *testing.T) {
 	f.setLease(otherPodLease(clk.Now().Add(-2 * leaseTTL)))
 	refreshResult(&types.OperationResponse{Success: true, Message: "refreshed"})
 	w := httptest.NewRecorder()
-	HandleRefreshStream(w, postJSON("/api/refresh/stream", "user:bob", "{}"))
+	HandleRefreshStream(w, postJSON(t, "/api/refresh/stream", "user:bob", "{}"))
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "operation_complete") {
 		t.Fatalf("status %d body %s", w.Code, w.Body.String())
 	}
@@ -255,7 +255,7 @@ func TestLeaseRenewalCarriesTheStep(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		HandleRefreshStream(httptest.NewRecorder(), postJSON("/api/refresh/stream", "user:alice", "{}"))
+		HandleRefreshStream(httptest.NewRecorder(), postJSON(t, "/api/refresh/stream", "user:alice", "{}"))
 	}()
 	<-started
 	first := f.currentLease()
@@ -304,7 +304,7 @@ func TestDrainingProcessKeepsRenewing(t *testing.T) {
 		mutations.mu.Unlock()
 	})
 	started, release := blockingRefresh()
-	go HandleRefreshStream(httptest.NewRecorder(), postJSON("/api/refresh/stream", "user:alice", "{}"))
+	go HandleRefreshStream(httptest.NewRecorder(), postJSON(t, "/api/refresh/stream", "user:alice", "{}"))
 	<-started
 
 	drained := make(chan int)
@@ -342,7 +342,7 @@ func TestDryRunReleasesItsLease(t *testing.T) {
 		return &types.OperationResponse{Success: true, Message: "ok"}, nil
 	}
 	w := httptest.NewRecorder()
-	HandleUpdate(w, postJSON("/api/update", "user:bob", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6","dryRun":true}`))
+	HandleUpdate(w, postJSON(t, "/api/update", "user:bob", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6","dryRun":true}`))
 	if w.Code != 200 {
 		t.Fatalf("%d %s", w.Code, w.Body.String())
 	}
@@ -368,7 +368,7 @@ func TestLeaseErrorPolicy(t *testing.T) {
 			return &types.OperationResponse{Success: true}, nil
 		}
 		w := httptest.NewRecorder()
-		HandleRefreshStream(w, postJSON("/api/refresh/stream", "user:alice", "{}"))
+		HandleRefreshStream(w, postJSON(t, "/api/refresh/stream", "user:alice", "{}"))
 		var body struct{ Error, ErrorCode string }
 		_ = json.Unmarshal(w.Body.Bytes(), &body)
 		if w.Code != 503 || ran || body.ErrorCode != "lock_unavailable" || w.Header().Get("Retry-After") == "" ||
@@ -383,7 +383,7 @@ func TestLeaseErrorPolicy(t *testing.T) {
 		f.writeErr = nil
 		f.mu.Unlock()
 		w = httptest.NewRecorder()
-		HandleRefreshStream(w, postJSON("/api/refresh/stream", "user:alice", "{}"))
+		HandleRefreshStream(w, postJSON(t, "/api/refresh/stream", "user:alice", "{}"))
 		if w.Code != 200 || !ran {
 			t.Fatalf("%v: retry %d %s", leaseErr, w.Code, w.Body.String())
 		}
@@ -464,7 +464,7 @@ func TestLastCompletedFreshness(t *testing.T) {
 		return errors.New("unavailable")
 	}
 	refreshResult(&types.OperationResponse{Success: true, Message: "refreshed"})
-	HandleRefreshStream(httptest.NewRecorder(), postJSON("/api/refresh/stream", "user:carol", "{}"))
+	HandleRefreshStream(httptest.NewRecorder(), postJSON(t, "/api/refresh/stream", "user:carol", "{}"))
 	if status, _ := getOperation(t); status.LastCompleted == nil || status.LastCompleted.User != "carol" {
 		t.Fatalf("own newer operation not preferred: %+v", status.LastCompleted)
 	}

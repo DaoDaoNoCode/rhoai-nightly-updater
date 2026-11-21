@@ -15,7 +15,7 @@ func TestSamplesStatusNeedsAValidProject(t *testing.T) {
 	setupDevMode(t)
 	for _, h := range []http.HandlerFunc{HandleMLflowSamplesStatus} {
 		for _, q := range []string{"", "?project=", "?project=Bad_Name", "?project=a/b"} {
-			req := httptest.NewRequest(http.MethodGet, "/api/resources/samples/x"+q, nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/resources/samples/x"+q, nil)
 			rec := httptest.NewRecorder()
 			h(rec, req)
 			if rec.Code != http.StatusBadRequest {
@@ -37,7 +37,7 @@ func stubMLflowSamples(t *testing.T, fn func(*cluster.Client, types.MLflowSample
 func TestPipelineSampleSpecRoute(t *testing.T) {
 	setupDevMode(t)
 	w := httptest.NewRecorder()
-	HandlePipelineSampleSpec(w, httptest.NewRequest(http.MethodGet, "/api/resources/samples/pipeline/spec", nil))
+	HandlePipelineSampleSpec(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/resources/samples/pipeline/spec", nil))
 	var got types.PipelineSampleSpec
 	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil || got.FileName != "rhoai-nightly-sample.yaml" || !strings.Contains(got.YAML, "schemaVersion: 2.1.0") {
 		t.Fatalf("%d %s", w.Code, w.Body.String())
@@ -61,14 +61,14 @@ func TestMLflowSamplesStream(t *testing.T) {
 
 	for _, body := range []string{`{`, `{"project":"Bad","action":"add","samples":["training"]}`, `{"project":"p","action":"remove","samples":["genai-demo"]}`, `{"project":"p","action":"add","samples":[]}`} {
 		w := httptest.NewRecorder()
-		HandleMLflowSamplesStream(w, postJSON("/api/resources/samples/mlflow/stream", "tok", body))
+		HandleMLflowSamplesStream(w, postJSON(t, "/api/resources/samples/mlflow/stream", "tok", body))
 		if w.Code != http.StatusBadRequest || clusterMutationInProgress.Load() {
 			t.Errorf("%s: %d %s", body, w.Code, w.Body.String())
 		}
 	}
 
 	w := httptest.NewRecorder()
-	HandleMLflowSamplesStream(w, postJSON("/api/resources/samples/mlflow/stream", "tok", `{"project":"p","action":"add","samples":["training","mcp-server"]}`))
+	HandleMLflowSamplesStream(w, postJSON(t, "/api/resources/samples/mlflow/stream", "tok", `{"project":"p","action":"add","samples":["training","mcp-server"]}`))
 	out := w.Body.String()
 	if w.Code != http.StatusOK || !strings.Contains(out, `"step":"training"`) || !strings.Contains(out, `"step":"operation_complete"`) || !strings.Contains(out, `"status":"success"`) {
 		t.Errorf("%d %s", w.Code, out)

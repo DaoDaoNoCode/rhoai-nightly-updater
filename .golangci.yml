@@ -14,6 +14,11 @@ linters:
     - unparam
     - wastedassign
     - misspell
+    # Requests, commands and listeners carry the caller's context (tests:
+    # t.Context()), so they stop with it.
+    - noctx
+    # An `if err != nil` branch that returns nil instead of err.
+    - nilnesserr
   settings:
     errcheck:
       exclude-functions:

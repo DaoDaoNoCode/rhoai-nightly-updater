@@ -72,7 +72,7 @@ func TestLeaseLostOneIntervalBeforeExpiryAfterASlowRenewal(t *testing.T) {
 		return holder, err
 	}
 	started, cause, _ := refreshUntilStopped()
-	done := runRefreshInBackground()
+	done := runRefreshInBackground(t)
 	<-started
 	start := testClock.Now()
 	f.beat(t) // renewal stamped at start+10s, returns at start+15s
@@ -135,7 +135,7 @@ func TestLeaseLostOneIntervalBeforeExpiryDuringAHangingRenewal(t *testing.T) {
 	}
 	stamped := testClock.Now()
 	started, cause, _ := refreshUntilStopped()
-	done := runRefreshInBackground()
+	done := runRefreshInBackground(t)
 	<-started
 	f.mu.Lock()
 	f.failNext = 1 << 30
@@ -223,7 +223,7 @@ func TestLeaseLostAtTheDeadlineWhileARenewalIgnoresItsContext(t *testing.T) {
 		<-finish
 		return &types.OperationResponse{Success: false, Message: "stopped"}, c.Context().Err()
 	}
-	done := runRefreshInBackground()
+	done := runRefreshInBackground(t)
 	<-started
 	stamped := testClock.Now()
 	testClock.Advance(leaseHeartbeatInterval) // the first renewal starts and hangs
@@ -267,7 +267,7 @@ func TestLeaseDeadlineFollowsTheHeartbeatTruncatedToTheSecond(t *testing.T) {
 	leaseHeartbeatInterval, leaseTTL = 10*time.Second, 45*time.Second
 	testClock.Advance(700 * time.Millisecond) // every stamp below falls at .7s
 	started, cause, _ := refreshUntilStopped()
-	done := runRefreshInBackground()
+	done := runRefreshInBackground(t)
 	<-started
 	f.beat(t) // the renewal at 10.7s succeeds: heartbeatAt 10s
 	f.mu.Lock()
