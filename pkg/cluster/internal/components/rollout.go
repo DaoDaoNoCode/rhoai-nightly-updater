@@ -564,7 +564,7 @@ func assistTargets(c *kube.Client, targets []string, logs []string) (*types.Oper
 	}
 
 	if len(patched) > 0 {
-		record.RecordActivity(c, types.ActivityEntry{
+		record.Activity(c, types.ActivityEntry{
 			Timestamp: kube.NowRFC3339(),
 			User:      kube.GetUser(c),
 			Action:    "assist-rollout",
@@ -660,7 +660,7 @@ func RestoreRolloutStrategy(c *kube.Client, namespace, name string) (*types.Oper
 	if !restoring {
 		msg = fmt.Sprintf("maxUnavailable on %s is already %s (changed by its owner), so it was left as is; the saved note was removed.", target, kube.NonEmpty(current, "unset"))
 	}
-	record.RecordActivity(c, types.ActivityEntry{
+	record.Activity(c, types.ActivityEntry{
 		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "restore-rollout-strategy",

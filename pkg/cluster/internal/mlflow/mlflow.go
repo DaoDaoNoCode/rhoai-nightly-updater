@@ -299,7 +299,7 @@ func Setup(c *kube.Client) (*types.OperationResponse, error) {
 	// A component that is not Managed leaves its CRD behind: the CR would
 	// be created and never start.
 	if block := envkit.SetupComponentBlock(c, envkit.MLflowComponent); block != nil {
-		record.RecordAction(c, "setup-mlflow", "component not managed", false)
+		record.Action(c, "setup-mlflow", "component not managed", false)
 		return &types.OperationResponse{Success: false, Message: block.Reason + " Nothing was changed.", Logs: logs, ErrorCode: "prerequisites"}, nil
 	}
 
@@ -350,7 +350,7 @@ func Setup(c *kube.Client) (*types.OperationResponse, error) {
 			msg = "MLflow was created by someone else in the meantime. Refresh the status."
 			code = "conflict"
 		}
-		record.RecordAction(c, "setup-mlflow", fmt.Sprintf("CR creation failed: %v", err), false)
+		record.Action(c, "setup-mlflow", fmt.Sprintf("CR creation failed: %v", err), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 	logs = append(logs, "OK: MLflow CR created")
@@ -360,7 +360,7 @@ func Setup(c *kube.Client) (*types.OperationResponse, error) {
 	if ns, err := mlflowNamespace(c); err == nil {
 		detail += "; the server runs in " + ns
 	}
-	record.RecordAction(c, "setup-mlflow", detail, true)
+	record.Action(c, "setup-mlflow", detail, true)
 
 	return &types.OperationResponse{
 		Success: true, Message: "MLflow CR created. The operator will deploy MLflow shortly.",
@@ -374,7 +374,7 @@ func Setup(c *kube.Client) (*types.OperationResponse, error) {
 func Teardown(c *kube.Client) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
-		record.RecordAction(c, "teardown-mlflow", activity, false)
+		record.Action(c, "teardown-mlflow", activity, false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 
@@ -417,7 +417,7 @@ func Teardown(c *kube.Client) (*types.OperationResponse, error) {
 		dataNote = fmt.Sprintf(" %s %v (tracking database, model registry and artifacts) %s garbage-collected with it.", kube.Verb(len(pvcs), "PVC", "PVCs"), pvcs, kube.Verb(len(pvcs), "is", "are"))
 	}
 	slog.Info("mlflow teardown", "user", kube.GetUser(c))
-	record.RecordAction(c, "teardown-mlflow", "MLflow CR deleted", true)
+	record.Action(c, "teardown-mlflow", "MLflow CR deleted", true)
 
 	gone, waitErr := kube.WaitForDeletion(c, crPath, DeleteTimeout, DeletePoll)
 	if waitErr != nil {
@@ -464,7 +464,7 @@ func imageSpec(image any) map[string]any {
 func DeployPR(c *kube.Client, prNumber int) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
-		record.RecordAction(c, "deploy-mlflow-pr", fmt.Sprintf("PR #%d (%s)", prNumber, activity), false)
+		record.Action(c, "deploy-mlflow-pr", fmt.Sprintf("PR #%d (%s)", prNumber, activity), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 
@@ -499,7 +499,7 @@ func DeployPR(c *kube.Client, prNumber int) (*types.OperationResponse, error) {
 
 	if cr.image() == image {
 		logs = append(logs, "MLflow already runs this build")
-		record.RecordAction(c, "deploy-mlflow-pr", fmt.Sprintf("PR #%d (%s, unchanged)", prNumber, image), true)
+		record.Action(c, "deploy-mlflow-pr", fmt.Sprintf("PR #%d (%s, unchanged)", prNumber, image), true)
 		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("MLflow already runs the latest PR #%d build.", prNumber), Logs: logs}, nil
 	}
 
@@ -527,7 +527,7 @@ func DeployPR(c *kube.Client, prNumber int) (*types.OperationResponse, error) {
 	logs = append(logs, "OK: MLflow CR patched with PR image")
 
 	slog.Info("mlflow PR deployed", "pr", prNumber, "image", image, "user", kube.GetUser(c))
-	record.RecordAction(c, "deploy-mlflow-pr", fmt.Sprintf("PR #%d (%s)", prNumber, image), true)
+	record.Action(c, "deploy-mlflow-pr", fmt.Sprintf("PR #%d (%s)", prNumber, image), true)
 
 	return &types.OperationResponse{
 		Success: true, Message: fmt.Sprintf("MLflow PR #%d image deployed.", prNumber),
@@ -540,7 +540,7 @@ func DeployPR(c *kube.Client, prNumber int) (*types.OperationResponse, error) {
 func RevertImage(c *kube.Client) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
-		record.RecordAction(c, "revert-mlflow", activity, false)
+		record.Action(c, "revert-mlflow", activity, false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 
@@ -587,7 +587,7 @@ func RevertImage(c *kube.Client) (*types.OperationResponse, error) {
 	logs = append(logs, fmt.Sprintf("OK: Image reverted to %s", target))
 
 	slog.Info("mlflow image reverted", "target", target, "user", kube.GetUser(c))
-	record.RecordAction(c, "revert-mlflow", target, true)
+	record.Action(c, "revert-mlflow", target, true)
 
 	return &types.OperationResponse{
 		Success: true, Message: fmt.Sprintf("MLflow image reverted to %s.", target),

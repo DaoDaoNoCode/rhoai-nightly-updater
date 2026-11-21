@@ -92,10 +92,10 @@ func LoadSubscriptionSnapshot(c *kube.Client) (*SubscriptionSnapshot, error) {
 	return &snap, nil
 }
 
-// RecordLiveSubscription records the current Subscription after a
+// LiveSubscription records the current Subscription after a
 // successful operation, on its own short context (the operation's may have
 // ended; see postOperationContext). Errors are only logged.
-func RecordLiveSubscription(c *kube.Client) {
+func LiveSubscription(c *kube.Client) {
 	ctx, cancel := PostOperationContext(c, subscriptionRecordTimeout)
 	defer cancel()
 	c = c.WithContext(ctx)

@@ -1176,7 +1176,7 @@ func DeployBuild(c *kube.Client, mode string, pr int, flavor string) (*types.Ope
 		}
 		message = fmt.Sprintf("Partial deployment of %s: %s failed. Retry %s to finish, or Revert to default to resume operator reconciliation.", label, kube.CountNoun(len(failures), "deployment", "deployments"), retry)
 	}
-	record.RecordActivity(c, types.ActivityEntry{Timestamp: now, User: user, Action: "deploy-dashboard-" + mode, Detail: message, Success: success})
+	record.Activity(c, types.ActivityEntry{Timestamp: now, User: user, Action: "deploy-dashboard-" + mode, Detail: message, Success: success})
 	code := ""
 	if !success {
 		code = "partial_failure"

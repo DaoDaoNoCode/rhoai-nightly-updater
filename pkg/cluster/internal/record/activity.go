@@ -205,12 +205,12 @@ func GetActivityNamespace() string {
 	return "rhoai-nightly-updater"
 }
 
-// RecordActivity appends an activity entry to the ConfigMap-backed log.
+// Activity appends an activity entry to the ConfigMap-backed log.
 // It uses optimistic concurrency (resourceVersion) to prevent lost updates
 // when multiple replicas attempt concurrent writes. On 409 Conflict the
 // read-modify-write cycle is retried up to maxConflictRetries times.
 // It never returns an error to callers — failures are logged as warnings.
-func RecordActivity(c *kube.Client, entry types.ActivityEntry) {
+func Activity(c *kube.Client, entry types.ActivityEntry) {
 	// Not cancelled with the request (for example an SSE connection drop),
 	// but bounded: activityWriteTimeout for the whole call, retries
 	// included, and never past the operation's shared post-deadline end
@@ -221,9 +221,9 @@ func RecordActivity(c *kube.Client, entry types.ActivityEntry) {
 	recordActivityWithClient(c.WithContext(ctx), entry)
 }
 
-// RecordAction records an action of the signed-in user, stamped now.
-func RecordAction(c *kube.Client, action, detail string, success bool) {
-	RecordActivity(c, types.ActivityEntry{
+// Action records an action of the signed-in user, stamped now.
+func Action(c *kube.Client, action, detail string, success bool) {
+	Activity(c, types.ActivityEntry{
 		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    action,

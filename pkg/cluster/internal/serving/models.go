@@ -758,7 +758,7 @@ func (m *modelsRun) fail(id, msg, code, activity string) (*types.OperationRespon
 	}
 	m.logs = append(m.logs, msg)
 	slog.Warn("models operation stopped", "step", id, "reason", activity, "user", kube.GetUser(m.c))
-	record.RecordAction(m.c, m.activity, fmt.Sprintf("%s (%s)", m.target, activity), false)
+	record.Action(m.c, m.activity, fmt.Sprintf("%s (%s)", m.target, activity), false)
 	return &types.OperationResponse{Success: false, Message: msg, Logs: m.logs, ErrorCode: code}, nil
 }
 
@@ -905,7 +905,7 @@ func (m *modelsRun) callable(project, name string, rec ModelsRecord) (*types.Ope
 	default:
 		return m.fail("callable", callFailureWords("The model is set up", check), "not_callable", "model not callable ("+check.Result+")")
 	}
-	record.RecordAction(m.c, m.activity, m.target, true)
+	record.Action(m.c, m.activity, m.target, true)
 	return &types.OperationResponse{Success: true, Message: check.Message, Logs: m.logs}, nil
 }
 
@@ -955,7 +955,7 @@ func (m *modelsRun) allow(project string) (*types.OperationResponse, error) {
 	done := fmt.Sprintf("The inference gateway now allows %s; models there attach to it. Projects it allows: %s.", project, strings.Join(written.names, ", "))
 	m.step("gateway", "success", done)
 	slog.Info("models allow", "project", project, "user", kube.GetUser(c))
-	record.RecordAction(c, m.activity, m.target, true)
+	record.Action(c, m.activity, m.target, true)
 	return &types.OperationResponse{Success: true, Message: done, Logs: m.logs}, nil
 }
 
@@ -1086,7 +1086,7 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 		}
 	}
 	slog.Info("models setup", "target", m.target, "user", kube.GetUser(c))
-	record.RecordAction(c, "setup-models", m.target, true)
+	record.Action(c, "setup-models", m.target, true)
 	return &types.OperationResponse{Success: true, Message: strings.Join(s.summary, " "), Logs: m.logs}, nil
 }
 
@@ -1462,7 +1462,7 @@ func TeardownModels(c *kube.Client, project string, names ...string) (*types.Ope
 		detail += " model=" + strings.Join(names, ",")
 	}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
-		record.RecordAction(c, "teardown-model", fmt.Sprintf("%s (%s)", detail, activity), false)
+		record.Action(c, "teardown-model", fmt.Sprintf("%s (%s)", detail, activity), false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 	var entries []CatalogModel
@@ -1535,7 +1535,7 @@ func TeardownModels(c *kube.Client, project string, names ...string) (*types.Ope
 	if len(deleted) == 0 && len(kept) > 0 {
 		return fail(fmt.Sprintf("The model %s in %s was not created by this tool, so it was not deleted.", strings.Join(kept, ", "), project), "not_managed", "not managed")
 	}
-	record.RecordAction(c, "teardown-model", detail, true)
+	record.Action(c, "teardown-model", detail, true)
 	if len(deleted) == 0 {
 		what := "No model of this tool"
 		if len(names) > 0 {

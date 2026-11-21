@@ -15,11 +15,11 @@ import (
 )
 
 // TestRecordActivityConcurrent verifies that optimistic concurrency in
-// RecordActivity properly handles concurrent callers so that no entries are lost.
+// record.Activity properly handles concurrent callers so that no entries are lost.
 //
 // It spins up a mock K8s API server that stores ConfigMap state in memory
 // and enforces resourceVersion checks (returning 409 Conflict on mismatch).
-// It launches goroutines that each call RecordActivity once.  After all
+// It launches goroutines that each call record.Activity once.  After all
 // goroutines finish, it reads the ConfigMap and asserts that all entries
 // are present.
 //
@@ -167,13 +167,13 @@ func TestRecordActivityConcurrent(t *testing.T) {
 		Ctx:        context.Background(),
 	})
 
-	// Launch numGoroutines concurrent RecordActivity calls.
+	// Launch numGoroutines concurrent record.Activity calls.
 	var wg sync.WaitGroup
 	wg.Add(numGoroutines)
 	for i := range numGoroutines {
 		go func(idx int) {
 			defer wg.Done()
-			record.RecordActivity(client, types.ActivityEntry{
+			record.Activity(client, types.ActivityEntry{
 				Timestamp: fmt.Sprintf("2025-01-01T00:00:%02dZ", idx),
 				User:      fmt.Sprintf("user-%d", idx),
 				Action:    "test",
@@ -313,9 +313,9 @@ func TestRecordActivityExceedsMax(t *testing.T) {
 		Ctx:        context.Background(),
 	})
 
-	// Call RecordActivity sequentially to isolate trimming behavior
+	// Call record.Activity sequentially to isolate trimming behavior
 	for i := range numEntries {
-		record.RecordActivity(client, types.ActivityEntry{
+		record.Activity(client, types.ActivityEntry{
 			Timestamp: fmt.Sprintf("2025-01-01T00:00:%02dZ", i%60),
 			User:      fmt.Sprintf("user-%d", i),
 			Action:    "test",

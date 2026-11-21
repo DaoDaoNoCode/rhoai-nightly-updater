@@ -194,7 +194,7 @@ func fixLeftoverStoredFields(c *kube.Client, target string, ack *report.AckBindi
 		}
 	}
 	logs = append(logs, "Patched "+st.ref()+": "+strings.Join(summary, ", "))
-	record.RecordActivity(c, types.ActivityEntry{
+	record.Activity(c, types.ActivityEntry{
 		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "fix-leftover-fields",
@@ -281,7 +281,7 @@ func fixLeftoverRetryDSC(c *kube.Client, name string) *types.OperationResponse {
 	logs := []string{fmt.Sprintf("Added the annotation %s=%s to DataScienceCluster %s", LeftoverRetryAnno, stamp, name)}
 	remove, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]any{LeftoverRetryAnno: nil}}})
 	_, _, rmErr := c.Do(http.MethodPatch, path, "application/merge-patch+json", remove, url.Values{"fieldManager": {leftoverManager}})
-	record.RecordActivity(c, types.ActivityEntry{
+	record.Activity(c, types.ActivityEntry{
 		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "fix-retry-dsc-reconcile",
@@ -411,7 +411,7 @@ func fixLeftoverRecreateWorkload(c *kube.Client, target string, ack *report.AckB
 		return leftoverWriteError(err, r.ref(), false)
 	}
 	logs = append(logs, fmt.Sprintf("Deleted %s (UID %s, propagation Background)", r.ref(), uid))
-	record.RecordActivity(c, types.ActivityEntry{
+	record.Activity(c, types.ActivityEntry{
 		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "fix-recreate-leftover",

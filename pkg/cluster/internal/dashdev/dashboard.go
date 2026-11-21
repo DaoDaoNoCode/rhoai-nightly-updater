@@ -393,7 +393,7 @@ func DeployPR(c *kube.Client, prNumber int, flavor string) (*types.OperationResp
 		return &types.OperationResponse{Success: false, Message: "Could not verify all PR images on Quay. Retry after the registry issue is resolved; no images were patched.", Logs: logs, ErrorCode: "network"}, nil
 	}
 	if len(found) == 0 {
-		record.RecordActivity(c, types.ActivityEntry{
+		record.Activity(c, types.ActivityEntry{
 			Timestamp: kube.NowRFC3339(),
 			User:      kube.GetUser(c),
 			Action:    "deploy-pr",
@@ -456,7 +456,7 @@ func DeployPR(c *kube.Client, prNumber int, flavor string) (*types.OperationResp
 		deployPath := rhoai.NamespacedPath("apps/v1", "deployments", ns, DeploymentName)
 		_, _, err = c.StrategicPatch(deployPath, patchData)
 		if err != nil {
-			record.RecordActivity(c, types.ActivityEntry{
+			record.Activity(c, types.ActivityEntry{
 				Timestamp: kube.NowRFC3339(),
 				User:      kube.GetUser(c),
 				Action:    "deploy-pr",
@@ -494,7 +494,7 @@ func DeployPR(c *kube.Client, prNumber int, flavor string) (*types.OperationResp
 	slog.Info("dashboard PR deployed", "pr", prNumber, "containers", len(patched), "user", kube.GetUser(c))
 
 	sort.Strings(failedModules)
-	record.RecordActivity(c, types.ActivityEntry{
+	record.Activity(c, types.ActivityEntry{
 		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "deploy-pr",
@@ -680,7 +680,7 @@ func Revert(c *kube.Client) (*types.OperationResponse, error) {
 
 	slog.Info("dashboard reverted", "containers", totalReverted, "user", kube.GetUser(c))
 
-	record.RecordActivity(c, types.ActivityEntry{
+	record.Activity(c, types.ActivityEntry{
 		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "revert-dashboard",

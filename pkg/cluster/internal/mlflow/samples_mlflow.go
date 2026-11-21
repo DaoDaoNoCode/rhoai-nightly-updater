@@ -355,7 +355,7 @@ func RunSamples(c *kube.Client, req types.MLflowSamplesRequest, onStep func(type
 	activity := fmt.Sprintf("%s %s in %s", req.Action, strings.Join(req.Samples, ","), req.Project)
 	fail := func(step, msg, code string) (*types.OperationResponse, error) {
 		emit(types.UpdateStepEvent{Step: step, Status: "failed", Message: msg, ErrorCode: code})
-		record.RecordAction(c, "mlflow-samples", activity, false)
+		record.Action(c, "mlflow-samples", activity, false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 	if problem := ValidateSamplesRequest(req); problem != "" {
@@ -427,10 +427,10 @@ func RunSamples(c *kube.Client, req types.MLflowSamplesRequest, onStep func(type
 	}
 	slog.Info("mlflow samples", "action", req.Action, "samples", req.Samples, "project", req.Project, "failed", failed, "user", kube.GetUser(c))
 	if len(failed) > 0 {
-		record.RecordAction(c, "mlflow-samples", activity+" (failed: "+strings.Join(failed, ", ")+")", false)
+		record.Action(c, "mlflow-samples", activity+" (failed: "+strings.Join(failed, ", ")+")", false)
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Failed: %s. See the steps for the reason.", strings.Join(failed, ", ")), Logs: logs, ErrorCode: code}, nil
 	}
-	record.RecordAction(c, "mlflow-samples", activity, true)
+	record.Action(c, "mlflow-samples", activity, true)
 	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Samples %s in project '%s'.", verbPast(req.Action), req.Project), Logs: logs}, nil
 }
 

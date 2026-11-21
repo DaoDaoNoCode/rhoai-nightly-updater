@@ -950,7 +950,7 @@ func RunSetup(c *kube.Client, req types.NodeSetupRequest, emit func(types.Update
 	emit(types.UpdateStepEvent{Step: "apply", Status: "running", Message: strings.Join(w.plan.Changes, " ")})
 	if err := writeNodeSetup(c, w, false); err != nil {
 		msg := writeRefusal(w, err, false)
-		record.RecordAction(c, activity, msg, false)
+		record.Action(c, activity, msg, false)
 		return fail("apply", writeRefusalCode(err), msg)
 	}
 	done := w.done
@@ -962,7 +962,7 @@ func RunSetup(c *kube.Client, req types.NodeSetupRequest, emit func(types.Update
 		}
 	}
 	emit(types.UpdateStepEvent{Step: "apply", Status: "success", Message: done})
-	record.RecordAction(c, activity, done, true)
+	record.Action(c, activity, done, true)
 
 	emit(types.UpdateStepEvent{Step: "verify", Status: "running", Message: "Reading it back"})
 	if err := w.verify(c); err != nil {

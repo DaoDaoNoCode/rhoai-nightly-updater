@@ -1179,7 +1179,7 @@ func applyFixDeleteStaleInstallPlans(c *kube.Client) (*types.OperationResponse, 
 	}
 
 	if len(deleted) > 0 {
-		record.RecordActivity(c, types.ActivityEntry{
+		record.Activity(c, types.ActivityEntry{
 			Timestamp: kube.NowRFC3339(),
 			User:      kube.GetUser(c),
 			Action:    "fix-delete-stale-installplans",

@@ -48,13 +48,13 @@ func (m *Run) Fail(id, msg, code, activity string) (*types.OperationResponse, er
 	}
 	m.Logs = append(m.Logs, msg)
 	slog.Warn("maas operation stopped", "step", id, "reason", activity, "user", kube.GetUser(m.Client))
-	record.RecordAction(m.Client, m.Activity, fmt.Sprintf("%s (%s)", m.Target, activity), false)
+	record.Action(m.Client, m.Activity, fmt.Sprintf("%s (%s)", m.Target, activity), false)
 	return &types.OperationResponse{Success: false, Message: msg, Logs: m.Logs, ErrorCode: code}, nil
 }
 
 func (m *Run) Done(msg string) (*types.OperationResponse, error) {
 	slog.Info("maas operation", "action", m.Activity, "target", m.Target, "user", kube.GetUser(m.Client))
-	record.RecordAction(m.Client, m.Activity, m.Target, true)
+	record.Action(m.Client, m.Activity, m.Target, true)
 	return &types.OperationResponse{Success: true, Message: msg, Logs: m.Logs}, nil
 }
 

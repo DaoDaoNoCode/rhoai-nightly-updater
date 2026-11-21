@@ -174,7 +174,7 @@ func cleanupStopped(c *Client, notDone []cleanupPart, done, logs []string, reaso
 }
 
 func recordCleanupActivity(c *Client, detail string, success bool) {
-	record.RecordActivity(c, types.ActivityEntry{
+	record.Activity(c, types.ActivityEntry{
 		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "cleanup",

@@ -92,7 +92,7 @@ func CreateDefault(c *kube.Client) (*types.OperationResponse, error) {
 	logs = append(logs, "OK: DataScienceCluster created")
 
 	// Step 3: Record activity
-	record.RecordActivity(c, types.ActivityEntry{
+	record.Activity(c, types.ActivityEntry{
 		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "create-dsc",

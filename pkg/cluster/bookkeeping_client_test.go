@@ -60,7 +60,7 @@ func TestBookkeepingUsesTheServiceAccount(t *testing.T) {
 	srv := rec.server(t)
 	c := userClientWithBookkeeper(srv)
 
-	record.RecordActivity(c, types.ActivityEntry{Action: "update", User: "alice", Success: true})
+	record.Activity(c, types.ActivityEntry{Action: "update", User: "alice", Success: true})
 	if _, err := GetActivity(c); err != nil {
 		t.Fatal(err)
 	}

@@ -363,7 +363,7 @@ func ApplyFixRestartModuleOperator(c *kube.Client, module string) (*types.Operat
 	default:
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Could not restart %s: %v.%s", d.Ref(), err, kube.TemplateHint(err)), Logs: logs, ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
-	record.RecordActivity(c, types.ActivityEntry{
+	record.Activity(c, types.ActivityEntry{
 		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "fix-restart-module-operator",

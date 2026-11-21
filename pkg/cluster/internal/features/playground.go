@@ -1134,7 +1134,7 @@ func (p *playgroundRun) fail(id, msg, code, activity string) (*types.OperationRe
 }
 
 func (p *playgroundRun) record(detail string, success bool) {
-	record.RecordActivity(p.c, types.ActivityEntry{
+	record.Activity(p.c, types.ActivityEntry{
 		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(p.c),
 		Action:    p.action + "-playground",

@@ -758,7 +758,7 @@ func (t *StepTracker) Finish(c *kube.Client, result **types.OperationResponse, o
 	if recovery != nil {
 		recovery.Restore(c, r, t.Send)
 		if r.Success {
-			record.RecordLiveSubscription(c)
+			record.LiveSubscription(c)
 		}
 	}
 	if recordOutcome != nil {

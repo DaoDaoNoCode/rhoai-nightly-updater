@@ -75,9 +75,9 @@ func TestRecordActivity_StalledOrConflictingAPIIsBounded(t *testing.T) {
 	t.Run("stalled API server", func(t *testing.T) {
 		c := stallServer(t, 0) // every request takes 5s
 		start := kube.Clock().Now()
-		record.RecordActivity(c, types.ActivityEntry{Action: "test"})
+		record.Activity(c, types.ActivityEntry{Action: "test"})
 		if d := kube.Clock().Since(start); d != record.ActivityWriteTimeout {
-			t.Fatalf("RecordActivity took %s with a %s budget", d, record.ActivityWriteTimeout)
+			t.Fatalf("record.Activity took %s with a %s budget", d, record.ActivityWriteTimeout)
 		}
 	})
 	t.Run("conflict retries share the budget", func(t *testing.T) {
@@ -96,9 +96,9 @@ func TestRecordActivity_StalledOrConflictingAPIIsBounded(t *testing.T) {
 		// 900ms. Bounded, the GET is answered and the budget ends the PUT.
 		c := withLatency(newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()}), 150*time.Millisecond)
 		start := kube.Clock().Now()
-		record.RecordActivity(c, types.ActivityEntry{Action: "test"})
+		record.Activity(c, types.ActivityEntry{Action: "test"})
 		if d := kube.Clock().Since(start); d != record.ActivityWriteTimeout || calls.Load() != 1 {
-			t.Fatalf("RecordActivity took %s (%d calls) with a %s budget", d, calls.Load(), record.ActivityWriteTimeout)
+			t.Fatalf("record.Activity took %s (%d calls) with a %s budget", d, calls.Load(), record.ActivityWriteTimeout)
 		}
 	})
 	t.Run("after the shared end nothing is written", func(t *testing.T) {
@@ -111,7 +111,7 @@ func TestRecordActivity_StalledOrConflictingAPIIsBounded(t *testing.T) {
 		ctx, cancel := kube.Clock().WithDeadline(context.Background(), kube.Clock().Now().Add(-record.PostDeadlineWork()-time.Second))
 		defer cancel()
 		c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: ctx})
-		record.RecordActivity(c, types.ActivityEntry{Action: "test"})
+		record.Activity(c, types.ActivityEntry{Action: "test"})
 		if n := calls.Load(); n != 0 {
 			t.Fatalf("%d requests after the operation's shared end", n)
 		}

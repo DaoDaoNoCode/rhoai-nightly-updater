@@ -297,23 +297,23 @@ func HardReset(c *kube.Client, req types.DSCPlanRequest, emit func(types.UpdateS
 		}
 		return r.fail("delete", "Deleting the DataScienceCluster failed: "+rhoai.ConversionMessage(err)+". Nothing was changed.", kube.ErrorCodeFromK8sErr(err)), nil
 	}
-	record.RecordAction(c, "hard-reset-dsc", v.name+": deleted (uid "+v.uid+") for a hard reset", true)
+	record.Action(c, "hard-reset-dsc", v.name+": deleted (uid "+v.uid+") for a hard reset", true)
 	r.step("delete", "success", "Deleted DataScienceCluster "+v.name+" (propagation Background); the operator marks its modules Removed")
 
 	r.step("wait_deleted", "running", "Waiting until the DataScienceCluster is gone and the platform has cleaned up its modules")
 	if res := waitDSCGone(c, path, v, ops, r, createYAML); res != nil {
-		record.RecordAction(c, "hard-reset-dsc", v.name+": "+firstLine(res.Message), false)
+		record.Action(c, "hard-reset-dsc", v.name+": "+firstLine(res.Message), false)
 		return res, nil
 	}
 
 	r.step("create", "running", "Creating the release default DataScienceCluster "+v.name)
 	if msg, code := createPlannedDSC(c, v.version, obj); msg != "" {
 		res := r.fail("create", "The old DataScienceCluster was deleted, but "+msg+" "+finishHelp(createYAML), code)
-		record.RecordAction(c, "hard-reset-dsc", v.name+": deleted, creating the release default failed", false)
+		record.Action(c, "hard-reset-dsc", v.name+": deleted, creating the release default failed", false)
 		return res, nil
 	}
 	record.ClearDSCHardResetRecord(c)
-	record.RecordAction(c, "hard-reset-dsc", v.name+": the release default of operator "+v.op.Version+" created", true)
+	record.Action(c, "hard-reset-dsc", v.name+": the release default of operator "+v.op.Version+" created", true)
 	r.step("create", "success", "Created the release default DataScienceCluster "+v.name)
 
 	r.step("wait_ready", "running", "Waiting for the components to be ready")
@@ -644,7 +644,7 @@ func FinishHardReset(c *kube.Client, req types.DSCFinishRequest) (*types.Operati
 		return refuse("The hard reset is not finished: "+msg, code)
 	}
 	record.ClearDSCHardResetRecord(c)
-	record.RecordAction(c, "finish-hard-reset-dsc", rec.Name+": the release default of operator "+rec.OperatorVersion+" created (hard reset finished)", true)
+	record.Action(c, "finish-hard-reset-dsc", rec.Name+": the release default of operator "+rec.OperatorVersion+" created (hard reset finished)", true)
 	slog.Info("dsc hard reset finished", "dsc", rec.Name, "user", kube.GetUser(c))
 	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Created DataScienceCluster %s: the hard reset is finished. The operator brings the components up; this page shows each as it comes up.", rec.Name)}, nil
 }

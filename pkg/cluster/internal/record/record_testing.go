@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// SetActivityWriteTimeoutForTest makes d the bound of one RecordActivity
+// SetActivityWriteTimeoutForTest makes d the bound of one Activity
 // call and returns the function that puts the previous one back. It panics
 // outside a test binary.
 func SetActivityWriteTimeoutForTest(d time.Duration) (restore func()) {

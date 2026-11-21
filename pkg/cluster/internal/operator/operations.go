@@ -907,7 +907,7 @@ var lookupTargetBundle = func(c *kube.Client, image string) (string, error) {
 }
 
 func RecordUpdateActivity(c *kube.Client, image string, success bool, reason string) {
-	record.RecordActivity(c, types.ActivityEntry{
+	record.Activity(c, types.ActivityEntry{
 		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "update",
@@ -1570,7 +1570,7 @@ func rhoaiCSVExists(c *kube.Client) (bool, error) {
 }
 
 func recordRefreshActivity(c *kube.Client, csvName string, success bool, reason string) {
-	record.RecordActivity(c, types.ActivityEntry{
+	record.Activity(c, types.ActivityEntry{
 		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "refresh",
@@ -1587,7 +1587,7 @@ func recordReinstallActivity(c *kube.Client, targetType, image string, success b
 	} else if targetType == "nightly" || targetType == "custom" {
 		detail = fmt.Sprintf("to %s %s", targetType, image)
 	}
-	record.RecordActivity(c, types.ActivityEntry{
+	record.Activity(c, types.ActivityEntry{
 		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "reinstall",
@@ -2058,7 +2058,7 @@ func CreatePullSecret(c *kube.Client, auth string) (*types.OperationResponse, er
 		logs = append(logs, "OK: Pull secret verified — contains quay.io/rhoai credentials")
 	}
 
-	record.RecordActivity(c, types.ActivityEntry{
+	record.Activity(c, types.ActivityEntry{
 		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
 		Action:    "create-pull-secret",

@@ -324,7 +324,7 @@ func ReleaseGoneMaaSProjects(c *kube.Client) []string {
 }
 
 // recordPruneActivity records the background run's entry; tests replace it.
-var recordPruneActivity = record.RecordActivity
+var recordPruneActivity = record.Activity
 
 // PruneGoneMaaSPublicationsInBackground is the background run (pkg/api
 // holds the cluster lock and lease around it): it records an activity

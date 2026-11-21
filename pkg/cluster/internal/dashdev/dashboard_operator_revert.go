@@ -87,7 +87,7 @@ func RevertOperatorTo(c *kube.Client, target Target) (*types.OperationResponse, 
 			code = "partial_failure"
 		}
 		logs = append(logs, message)
-		record.RecordActivity(c, types.ActivityEntry{Timestamp: now, User: kube.GetUser(c), Action: "revert-dashboard", Detail: message, Success: len(failures) == 0})
+		record.Activity(c, types.ActivityEntry{Timestamp: now, User: kube.GetUser(c), Action: "revert-dashboard", Detail: message, Success: len(failures) == 0})
 		return &types.OperationResponse{Success: len(failures) == 0, Message: message, ErrorCode: code, Logs: logs}, replicas
 	}
 }

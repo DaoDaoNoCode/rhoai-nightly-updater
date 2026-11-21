@@ -219,7 +219,7 @@ type requestRecord struct {
 // newRecordingMockClient creates a test Client that records every request and
 // routes responses by "METHOD path" key. Falls back to GET-only path matching
 // for backward compatibility, then to 200 with empty JSON object for any
-// unmatched request (to keep side-effect calls like RecordActivity happy).
+// unmatched request (to keep side-effect calls like record.Activity happy).
 func newRecordingMockClient(responses map[string]mockResponse) (*Client, *[]requestRecord, func()) {
 	var mu sync.Mutex
 	var records []requestRecord

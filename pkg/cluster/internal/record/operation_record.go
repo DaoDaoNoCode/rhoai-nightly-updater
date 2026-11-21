@@ -119,14 +119,14 @@ func ReadOperationRecord(c *kube.Client) (*OperationRecord, error) {
 		return &OperationRecord{}, nil
 	}
 	return &OperationRecord{
-		Marker:          DecodeRecordValue[types.OperationMarker](cm.Data, OperationKey),
-		LastCompleted:   DecodeRecordValue[types.CompletedOperation](cm.Data, LastCompletedKey),
-		Lease:           DecodeRecordValue[types.OperationLease](cm.Data, LeaseKey),
+		Marker:          DecodeValue[types.OperationMarker](cm.Data, OperationKey),
+		LastCompleted:   DecodeValue[types.CompletedOperation](cm.Data, LastCompletedKey),
+		Lease:           DecodeValue[types.OperationLease](cm.Data, LeaseKey),
 		resourceVersion: cm.Metadata.ResourceVersion,
 	}, nil
 }
 
-func DecodeRecordValue[T any](data map[string]string, key string) *T {
+func DecodeValue[T any](data map[string]string, key string) *T {
 	raw := data[key]
 	if raw == "" {
 		return nil

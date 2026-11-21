@@ -1350,7 +1350,7 @@ func (v *View) setManagementState(c *kube.Client, req types.DSCToggleRequest, ac
 		return res
 	}
 	detail := v.name + ": " + changeSummary(p.plan.Changes)
-	record.RecordAction(c, activity, detail, true)
+	record.Action(c, activity, detail, true)
 	slog.Info("dsc management state set", "dsc", v.name, "path", req.Path, "to", req.To, "user", kube.GetUser(c))
 	msg := "Set " + changeSummary(p.plan.Changes) + "."
 	if len(p.plan.Warnings) > 0 {
@@ -1420,7 +1420,7 @@ func runPlanned(c *kube.Client, req types.DSCPlanRequest, action, activity strin
 	if len(p.plan.Kept) > 0 {
 		detail += "; kept " + strings.Join(p.plan.Kept, ", ")
 	}
-	record.RecordAction(c, activity, detail, true)
+	record.Action(c, activity, detail, true)
 	slog.Info("dsc changed", "action", action, "dsc", v.name, "user", kube.GetUser(c))
 	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Changed %s.%s", changeSummary(p.plan.Changes), keptText(p.plan.Kept)), Logs: []string{detail}}, nil
 }

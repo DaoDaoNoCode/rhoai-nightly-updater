@@ -1303,7 +1303,7 @@ func waitInferenceGateway(c *kube.Client, host string, progress func(string)) (r
 func TeardownInferenceGateway(c *kube.Client, modelsJustDeleted bool) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) *types.OperationResponse {
-		record.RecordAction(c, "teardown-inference-gateway", activity, false)
+		record.Action(c, "teardown-inference-gateway", activity, false)
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}
 	}
 	type current struct {
@@ -1422,7 +1422,7 @@ func TeardownInferenceGateway(c *kube.Client, modelsJustDeleted bool) (*types.Op
 		}
 	}
 	slog.Info("inference gateway teardown", "user", kube.GetUser(c))
-	record.RecordAction(c, "teardown-inference-gateway", strings.Join(deleted, ", "), true)
+	record.Action(c, "teardown-inference-gateway", strings.Join(deleted, ", "), true)
 	return &types.OperationResponse{
 		Success: true,
 		Message: strings.TrimSpace("Inference gateway deleted: " + kube.JoinTitles(deleted) + ". OpenShift removes its load balancer and the ingress operator its DNS record. " + strings.Join(kept, " ")),

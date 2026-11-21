@@ -106,7 +106,7 @@ func (f *fakeOperationConfigMap) ServeHTTP(w http.ResponseWriter, r *http.Reques
 func (f *fakeOperationConfigMap) lease() *types.OperationLease {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return record.DecodeRecordValue[types.OperationLease](f.data, record.LeaseKey)
+	return record.DecodeValue[types.OperationLease](f.data, record.LeaseKey)
 }
 
 func (f *fakeOperationConfigMap) get(key string) string {

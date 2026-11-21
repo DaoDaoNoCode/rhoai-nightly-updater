@@ -59,7 +59,7 @@ const (
 
 // Bounds of the bookkeeping writes. Variables so tests can shorten them.
 var (
-	// ActivityWriteTimeout bounds one RecordActivity call, its conflict
+	// ActivityWriteTimeout bounds one Activity call, its conflict
 	// retries included.
 	ActivityWriteTimeout = 5 * time.Second
 	// subscriptionRecordTimeout bounds recordLiveSubscription.
