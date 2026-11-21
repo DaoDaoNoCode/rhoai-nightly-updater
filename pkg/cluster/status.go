@@ -425,7 +425,7 @@ func readSubscription(c *Client) (subscriptionDetails, error) {
 	path := namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName)
 	body, _, err := c.get(path)
 	if err != nil {
-		if IsK8sError(err, 404) {
+		if isK8sNotFound(err) {
 			return subscriptionDetails{info: types.SubscriptionInfo{State: "Not Installed", Namespace: SubNS}}, nil
 		}
 		return subscriptionDetails{}, fmt.Errorf("request failed: %w", err)
@@ -521,7 +521,7 @@ func csvForInstalledName(c *Client, installedName string) (types.CSVInfo, error)
 			if csv.Metadata.Name == installedName {
 				return csv.info(), nil
 			}
-		} else if !IsK8sError(err, 404) {
+		} else if !isK8sNotFound(err) {
 			return types.CSVInfo{}, fmt.Errorf("request failed: %w", err)
 		}
 	}
@@ -586,7 +586,7 @@ func readCatalogSource(c *Client) (types.CatalogSourceInfo, *objectMeta, error) 
 	body, _, err := c.get(path)
 	if err != nil {
 		// 404 is expected when the CatalogSource does not exist yet
-		if IsK8sError(err, 404) {
+		if isK8sNotFound(err) {
 			return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, nil
 		}
 		return types.CatalogSourceInfo{Exists: false, Name: CatalogName}, nil, fmt.Errorf("request failed: %w", err)
@@ -700,7 +700,7 @@ func readPullSecret(c *Client) (types.PullSecretInfo, string, error) {
 	path := namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret")
 	body, _, err := c.get(path)
 	if err != nil {
-		if IsK8sError(err, 404) {
+		if isK8sNotFound(err) {
 			return types.PullSecretInfo{Exists: false, Detail: "Secret not found"}, "", nil
 		}
 		return types.PullSecretInfo{Exists: false}, "", err
@@ -754,7 +754,7 @@ func getInstallPlan(c *Client) (*types.InstallPlanInfo, error) {
 	path := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, "")
 	body, _, err := c.get(path)
 	if err != nil {
-		if IsK8sError(err, 404) {
+		if isK8sNotFound(err) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("request failed: %w", err)

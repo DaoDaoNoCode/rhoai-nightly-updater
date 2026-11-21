@@ -202,7 +202,7 @@ func getMLflowStatus(c *Client) types.ResourceState {
 	state := types.ResourceState{Namespace: ns}
 
 	cr, err := getMLflowCR(c)
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		state.Message = "Not deployed"
 		return state
 	}
@@ -345,10 +345,10 @@ func SetupMLflow(c *Client) (*types.OperationResponse, error) {
 		msg := fmt.Sprintf("Failed to create MLflow CR: %v", err)
 		code := errorCodeFromK8sErr(err)
 		switch {
-		case IsK8sError(err, 404):
+		case isK8sNotFound(err):
 			msg = "The MLflow CRD is not installed. Set the mlflowoperator component to Managed in the DataScienceCluster first."
 			code = "prerequisites"
-		case IsK8sError(err, 409):
+		case isK8sConflict(err):
 			msg = "MLflow was created by someone else in the meantime. Refresh the status."
 			code = "conflict"
 		}
@@ -381,7 +381,7 @@ func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
 	}
 
 	cr, err := getMLflowCR(c)
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		logs = append(logs, "MLflow CR already absent")
 		return &types.OperationResponse{Success: true, Message: "MLflow is not deployed; nothing to remove.", Logs: logs}, nil
 	}
@@ -405,9 +405,9 @@ func TeardownMLflow(c *Client) (*types.OperationResponse, error) {
 	}
 	logs = append(logs, "Deleting MLflow CR...")
 	crPath := clusterPath(mlflowAPIGroup, "mlflows", mlflowCRName)
-	if _, delErr := deleteWithUID(c, crPath, cr.Metadata.UID); delErr != nil && !IsK8sError(delErr, 404) {
+	if _, delErr := deleteWithUID(c, crPath, cr.Metadata.UID); delErr != nil && !isK8sNotFound(delErr) {
 		code := errorCodeFromK8sErr(delErr)
-		if IsK8sError(delErr, 409) {
+		if isK8sConflict(delErr) {
 			code = "conflict"
 		}
 		return fail(fmt.Sprintf("Failed to delete MLflow CR: %v", delErr), code, fmt.Sprintf("CR delete failed: %v", delErr))
@@ -480,7 +480,7 @@ func DeployMLflowPR(c *Client, prNumber int) (*types.OperationResponse, error) {
 	}
 
 	cr, err := getMLflowCR(c)
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return fail("MLflow is not deployed. Set it up first.", "prerequisites", "not deployed")
 	}
 	if err != nil {
@@ -522,7 +522,7 @@ func DeployMLflowPR(c *Client, prNumber int) (*types.OperationResponse, error) {
 	if err := patchMLflowCR(c, cr, annotations, imageSpec(image)); err != nil {
 		code := errorCodeFromK8sErr(err)
 		msg := fmt.Sprintf("Failed to patch MLflow CR: %v", err)
-		if IsK8sError(err, 409) {
+		if isK8sConflict(err) {
 			code = "conflict"
 			msg = "MLflow changed while the PR was being deployed. Nothing was changed; refresh and retry."
 		}
@@ -549,7 +549,7 @@ func RevertMLflowImage(c *Client) (*types.OperationResponse, error) {
 	}
 
 	cr, err := getMLflowCR(c)
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return fail("MLflow is not deployed.", "prerequisites", "not deployed")
 	}
 	if err != nil {
@@ -582,7 +582,7 @@ func RevertMLflowImage(c *Client) (*types.OperationResponse, error) {
 	if err := patchMLflowCR(c, cr, map[string]any{mlflowOriginalImageAnnotation: nil}, imageSpec(image)); err != nil {
 		code := errorCodeFromK8sErr(err)
 		msg := fmt.Sprintf("Failed to revert MLflow image: %v", err)
-		if IsK8sError(err, 409) {
+		if isK8sConflict(err) {
 			code = "conflict"
 			msg = "MLflow changed during the revert. Nothing was changed; refresh and retry."
 		}

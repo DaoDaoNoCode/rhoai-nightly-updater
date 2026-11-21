@@ -742,7 +742,7 @@ func CreateDefaultDSC(c *Client) (*types.OperationResponse, error) {
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Failed to encode DSC: %v", err), Logs: logs, ErrorCode: "internal"}, nil
 	}
 	_, _, createErr := c.post("/apis/"+apiVersion+"/datascienceclusters?fieldManager=rhoai-nightly-updater", body)
-	if IsK8sError(createErr, http.StatusConflict) {
+	if isK8sConflict(createErr) {
 		logs = append(logs, "DataScienceCluster already exists (created concurrently)")
 		return &types.OperationResponse{Success: true, Message: "DataScienceCluster already exists", Logs: logs}, nil
 	}

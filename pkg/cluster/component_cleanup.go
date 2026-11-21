@@ -196,7 +196,7 @@ func discoverComponentAPI(c *Client) (componentAPI, error) {
 	api := componentAPI{Groups: map[string]string{}}
 	for _, group := range moduleAPIGroups {
 		body, _, err := c.get("/apis/" + group)
-		if IsK8sError(err, 404) {
+		if isK8sNotFound(err) {
 			continue
 		}
 		if err != nil {
@@ -338,7 +338,7 @@ func cleanupStuckComponentCRs(c *Client) (int, []string) {
 			}})
 			if _, _, err := c.patch(listPath+"/"+m.Name, patch); err != nil {
 				switch {
-				case IsK8sError(err, 409), IsK8sError(err, 404), IsK8sError(err, 422):
+				case isK8sConflict(err), isK8sNotFound(err), IsK8sError(err, 422):
 					warnings = append(warnings, fmt.Sprintf("%s changed or was replaced after it was checked; its finalizers were left untouched", id))
 				default:
 					warnings = append(warnings, fmt.Sprintf("remove finalizers from %s: %v", id, err))

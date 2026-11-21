@@ -57,7 +57,7 @@ func createKuadrant(c *Client, version, ns string, dryRun bool) error {
 		query = url.Values{"dryRun": {"All"}}
 	}
 	_, _, err := c.do(http.MethodPost, withToolFieldManager("/apis/kuadrant.io/"+version+"/namespaces/"+ns+"/kuadrants"), "application/json", data, query)
-	if IsK8sError(err, 409) {
+	if isK8sConflict(err) {
 		return nil
 	}
 	return err
@@ -177,7 +177,7 @@ const authorinoDefaultSecret = "authorino-server-cert"
 // made (none when all was set).
 func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) {
 	read, err := getServed(c, authorinoGroup, "/apis/"+authorinoGroup+"/%s/namespaces/"+ns+"/authorinos/authorino", []string{"v1beta1"})
-	if IsK8sError(err, 404) || (err == nil && read.Body == nil) {
+	if isK8sNotFound(err) || (err == nil && read.Body == nil) {
 		return nil, fmt.Errorf("%w: no Authorino authorino in %s", errAuthorinoNotYet, ns)
 	}
 	if err != nil {
@@ -231,7 +231,7 @@ func configureAuthorinoTLS(c *Client, ns string, dryRun bool) ([]string, error) 
 		changes = append(changes, "Authorino's listener serves TLS with "+secret)
 	}
 	body, _, err := c.get(namespacedPath("apps/v1", "deployments", ns, "authorino"))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return changes, fmt.Errorf("%w: no Deployment %s/authorino", errAuthorinoNotYet, ns)
 	}
 	if err != nil {

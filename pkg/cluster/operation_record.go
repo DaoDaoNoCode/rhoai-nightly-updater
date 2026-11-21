@@ -60,7 +60,7 @@ func clearDSCHardResetRecord(c *Client) {
 // none. A record that cannot be parsed is an error: it is never guessed at.
 func readDSCHardResetRecord(c *Client) (*types.DSCHardResetRecord, error) {
 	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return nil, nil
 	}
 	if err != nil {
@@ -101,7 +101,7 @@ type OperationRecord struct {
 // hiding the others.
 func ReadOperationRecord(c *Client) (*OperationRecord, error) {
 	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), operationConfigMapName))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return &OperationRecord{}, nil
 	}
 	if err != nil {
@@ -220,7 +220,7 @@ func SaveCompletedOperation(c *Client, done *types.CompletedOperation, owner *Le
 			return nil
 		}
 		err = writeOperationRecord(c, rec, data)
-		if IsK8sError(err, 409) {
+		if isK8sConflict(err) {
 			continue
 		}
 		if err != nil {
@@ -287,7 +287,7 @@ func patchOperationRecord(c *Client, resourceVersion string, data map[string]str
 	}
 	ns := getActivityNamespace()
 	_, _, err = c.bookkeeping().patch(namespacedPath("v1", "configmaps", ns, operationConfigMapName), patch)
-	if resourceVersion == "" && IsK8sError(err, 404) {
+	if resourceVersion == "" && isK8sNotFound(err) {
 		return writeOperationRecord(c, &OperationRecord{}, data)
 	}
 	return err
@@ -337,7 +337,7 @@ func WriteOperationLease(c *Client, lease *types.OperationLease, heldElsewhere f
 			return rec.Lease, nil
 		}
 		err = writeOperationRecord(c, rec, map[string]string{leaseKey: string(value)})
-		if IsK8sError(err, 409) {
+		if isK8sConflict(err) {
 			slog.Debug("operation lease write conflict, retrying", "attempt", attempt+1)
 			continue
 		}
@@ -362,7 +362,7 @@ func ReleaseOperationLease(c *Client, owner LeaseOwner) error {
 			return nil
 		}
 		err = writeOperationRecord(c, rec, map[string]string{leaseKey: ""})
-		if IsK8sError(err, 409) {
+		if isK8sConflict(err) {
 			continue
 		}
 		if err != nil {

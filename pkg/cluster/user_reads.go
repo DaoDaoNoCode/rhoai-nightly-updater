@@ -186,7 +186,7 @@ func listProjectLLMInferenceServices(u *Client, project string) ([]llmisvcObject
 		return nil, errNotUserClient
 	}
 	body, _, err := u.get(namespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, ""))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return nil, errLLMISvcAPIMissing
 	}
 	if err != nil {
@@ -210,7 +210,7 @@ func listProjectInferenceServices(u *Client, project string) ([]types.ProjectInf
 	}
 	out := []types.ProjectInferenceService{}
 	body, _, err := u.get(namespacedPath("serving.kserve.io/v1beta1", "inferenceservices", project, ""))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return out, nil
 	}
 	if err != nil {

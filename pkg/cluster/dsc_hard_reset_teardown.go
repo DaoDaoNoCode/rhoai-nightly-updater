@@ -3,7 +3,6 @@ package cluster
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"sort"
 	"strings"
 )
@@ -173,7 +172,7 @@ func operatorsLeft(c *Client, ops []hardResetOperator) ([]hardResetOperator, err
 	var left []hardResetOperator
 	for _, o := range ops {
 		body, _, err := c.get(namespacedPath("apps/v1", "deployments", o.Namespace, o.Name))
-		if IsK8sError(err, http.StatusNotFound) {
+		if isK8sNotFound(err) {
 			continue
 		}
 		if err != nil {
@@ -203,7 +202,7 @@ func operatorsLeft(c *Client, ops []hardResetOperator) ([]hardResetOperator, err
 func platformModulesSettled(c *Client) (bool, string, error) {
 	r, err := listServed(c, platformGroup, platformListFmt, nil, platformFallbackVersions)
 	switch {
-	case IsK8sError(err, http.StatusNotFound), err == nil && r.Version == "":
+	case isK8sNotFound(err), err == nil && r.Version == "":
 		return true, "no Platform API is served", nil
 	case err != nil:
 		return false, "", fmt.Errorf("read the Platform: %w", err)
@@ -533,7 +532,7 @@ func (r *ownerResolver) read(ref ownerRef, group, version, what string, unknown 
 		return unknown("cannot be looked up: " + why)
 	}
 	body, _, err := r.c.get(apiPath)
-	if IsK8sError(err, http.StatusNotFound) {
+	if isK8sNotFound(err) {
 		return ownerVerdict{fate: ownerNotSolid} // dangling (K :431-437)
 	}
 	if err != nil {

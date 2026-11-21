@@ -49,7 +49,7 @@ func (r pipelineRecord) owns(meta objectMeta) bool {
 // readPipelineRecord reads the record (empty when nothing is recorded).
 func readPipelineRecord(c *Client) (pipelineRecord, error) {
 	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
-	if IsK8sError(err, http.StatusNotFound) {
+	if isK8sNotFound(err) {
 		return pipelineRecord{}, nil
 	}
 	if err != nil {

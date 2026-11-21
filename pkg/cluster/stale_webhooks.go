@@ -131,7 +131,7 @@ func (h serviceHealth) describe(ref string) string {
 func checkServiceHealth(c *Client, ref string, grace time.Duration) serviceHealth {
 	ns, name, _ := strings.Cut(ref, "/")
 	body, _, err := c.get(namespacedPath("v1", "services", ns, name))
-	if IsK8sError(err, http.StatusNotFound) {
+	if isK8sNotFound(err) {
 		return serviceHealth{state: serviceMissing}
 	}
 	if err != nil {
@@ -403,7 +403,7 @@ type moduleState struct {
 // an install or upgrade in flight, or "".
 func rhoaiInstallInFlight(c *Client) (string, error) {
 	csvs, err := listOperatorCSVs(c)
-	if IsK8sError(err, http.StatusNotFound) {
+	if isK8sNotFound(err) {
 		return "", nil
 	}
 	if err != nil {
@@ -428,7 +428,7 @@ func (e *webhookEnv) csvPresent(ns, name string) csvPresence {
 	var p csvPresence
 	body, _, err := e.c.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", ns, name))
 	switch {
-	case IsK8sError(err, http.StatusNotFound):
+	case isK8sNotFound(err):
 	case err != nil:
 		p.err = err
 	default:
@@ -646,9 +646,9 @@ func deleteStaleWebhookConfigs(c *Client, verdicts []webhookVerdict) webhookDele
 		case err == nil:
 			d.Deleted = append(d.Deleted, v.Config.ref())
 			d.Logs = append(d.Logs, fmt.Sprintf("Deleted %s (Service %s; %s)", v.Config.ref(), v.downText(), v.Reason))
-		case IsK8sError(err, http.StatusNotFound):
+		case isK8sNotFound(err):
 			d.Logs = append(d.Logs, fmt.Sprintf("%s was already gone", v.Config.ref()))
-		case IsK8sError(err, http.StatusConflict):
+		case isK8sConflict(err):
 			d.Changed = append(d.Changed, v.Config.ref())
 			d.Logs = append(d.Logs, fmt.Sprintf("Kept %s: it changed after it was checked", v.Config.ref()))
 		default:

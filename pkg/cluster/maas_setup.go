@@ -314,9 +314,9 @@ func (m *maasRun) createMaaSInfraNamespace(rec *maasRecord, infra string) (*type
 	if err := writeMaaSRecord(c, *rec); err != nil {
 		return m.fail("database", err.Error(), errorCodeFromK8sErr(err), "record write failed")
 	}
-	if err := createInfraNamespace(c, infra, false); err != nil && !IsK8sError(err, 409) {
+	if err := createInfraNamespace(c, infra, false); err != nil && !isK8sConflict(err) {
 		return m.fail("database", fmt.Sprintf("Failed to create namespace %s: %v. Set up again to retry.", infra, err), maasWriteCode(err), "namespace create failed")
-	} else if IsK8sError(err, 409) {
+	} else if isK8sConflict(err) {
 		// Made meanwhile (by RHOAI, or someone): it is not this tool's.
 		rec.InfraNamespace = ""
 		if err := writeMaaSRecord(c, *rec); err != nil {

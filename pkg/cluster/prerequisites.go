@@ -568,7 +568,7 @@ func readSingletonOperand(c *Client, e almExample) (operandState, error) {
 	switch {
 	case err == nil:
 		return operandPresent, nil
-	case IsK8sError(err, http.StatusNotFound):
+	case isK8sNotFound(err):
 		return operandMissing, nil
 	default:
 		return operandUnverified, err
@@ -605,7 +605,7 @@ func operandManagementState(c *Client, e almExample) (string, error) {
 // discovery (readable by every authenticated user).
 func discoverPlural(c *Client, version, kind string) (string, bool, error) {
 	body, _, err := c.get("/apis/" + operandAPIGroup + "/" + version)
-	if IsK8sError(err, http.StatusNotFound) {
+	if isK8sNotFound(err) {
 		return "", false, nil
 	}
 	if err != nil {
@@ -1089,7 +1089,7 @@ func (og operatorGroup) installMode(ns string) string {
 // it does not exist).
 func listOperatorGroups(c *Client, namespace string) ([]operatorGroup, error) {
 	body, _, err := c.get(namespacedPath("operators.coreos.com/v1", "operatorgroups", namespace, ""))
-	if IsK8sError(err, http.StatusNotFound) {
+	if isK8sNotFound(err) {
 		return nil, nil
 	}
 	if err != nil {

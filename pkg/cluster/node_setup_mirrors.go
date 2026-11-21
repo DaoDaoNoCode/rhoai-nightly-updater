@@ -3,7 +3,6 @@ package cluster
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"slices"
 	"strings"
 )
@@ -121,7 +120,7 @@ func idmsRules(items []idmsItem) []mirrorRule {
 // is not served, so no such object exists; any other failure is an error.
 func listICSPRules(c *Client) ([]mirrorRule, error) {
 	body, _, err := c.get(clusterPath("operator.openshift.io/v1alpha1", "imagecontentsourcepolicies", ""))
-	if IsK8sError(err, http.StatusNotFound) {
+	if isK8sNotFound(err) {
 		return nil, nil
 	}
 	if err != nil {
@@ -156,7 +155,7 @@ func listICSPRules(c *Client) ([]mirrorRule, error) {
 // with the same 404 handling as listICSPRules.
 func listITMSRules(c *Client) ([]mirrorRule, error) {
 	body, _, err := c.get(clusterPath("config.openshift.io/v1", "imagetagmirrorsets", ""))
-	if IsK8sError(err, http.StatusNotFound) {
+	if isK8sNotFound(err) {
 		return nil, nil
 	}
 	if err != nil {

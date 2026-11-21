@@ -717,7 +717,7 @@ func updateApplyCatalog(c *Client, image string, recovery *operatorRecovery, log
 	emit(UpdateStepEvent{Step: "apply_catalog_source", Status: "running", Message: "Applying CatalogSource..."})
 	if recovery.subscription != nil {
 		recovery.subscriptionChanged = true
-		if _, err := c.delete(subscriptionPath()); err != nil && !IsK8sError(err, 404) {
+		if _, err := c.delete(subscriptionPath()); err != nil && !isK8sNotFound(err) {
 			return fail("Cannot remove the current Subscription: "+err.Error(), errorCodeFromK8sErr(err))
 		}
 		*logs = append(*logs, "OK: Subscription removed while the catalog is replaced (the operator keeps running)")
@@ -728,7 +728,7 @@ func updateApplyCatalog(c *Client, image string, recovery *operatorRecovery, log
 	recovery.noteCatalogChanged()
 	// Recreate this source so READY and PackageManifest cannot describe its
 	// previous image. The verified temporary catalog remains separate.
-	if _, deleteErr := c.delete(csPath); deleteErr != nil && !IsK8sError(deleteErr, 404) {
+	if _, deleteErr := c.delete(csPath); deleteErr != nil && !isK8sNotFound(deleteErr) {
 		return fail("Cannot replace nightly catalog: "+deleteErr.Error(), errorCodeFromK8sErr(deleteErr))
 	}
 	if _, _, err := c.apply(csPath, buildCatalogSourceSpec(image)); err != nil {
@@ -801,13 +801,13 @@ func updateDeleteCSV(c *Client, currentCSV types.CSVInfo, recovery *operatorReco
 	emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting old CSV and InstallPlan..."})
 	if ipName := recovery.installPlanName(); ipName != "" {
 		ipPath := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ipName)
-		if _, err := c.delete(ipPath); err != nil && !IsK8sError(err, 404) {
+		if _, err := c.delete(ipPath); err != nil && !isK8sNotFound(err) {
 			return fail("Cannot delete old InstallPlan: "+err.Error(), errorCodeFromK8sErr(err))
 		}
 		*logs = append(*logs, fmt.Sprintf("OK: InstallPlan %s deleted", ipName))
 	}
 	if currentCSV.Name != "" {
-		if _, err := c.delete(csvPath(currentCSV.Name)); err != nil && !IsK8sError(err, 404) {
+		if _, err := c.delete(csvPath(currentCSV.Name)); err != nil && !isK8sNotFound(err) {
 			return fail("Cannot delete current CSV: "+err.Error(), errorCodeFromK8sErr(err))
 		}
 		recovery.noteCSVRemoved(currentCSV.Name)
@@ -1450,7 +1450,7 @@ func reinstallRemoveOperator(c *Client, csv types.CSVInfo, recovery *operatorRec
 	emit(UpdateStepEvent{Step: "delete_catalog_source", Status: "running", Message: "Removing nightly CatalogSource..."})
 	csPath := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName)
 	if _, delErr := c.delete(csPath); delErr != nil {
-		if !IsK8sError(delErr, 404) {
+		if !isK8sNotFound(delErr) {
 			return fail("Cannot remove nightly CatalogSource: "+delErr.Error(), errorCodeFromK8sErr(delErr))
 		}
 		*logs = append(*logs, "OK: nightly CatalogSource already absent")
@@ -1464,7 +1464,7 @@ func reinstallRemoveOperator(c *Client, csv types.CSVInfo, recovery *operatorRec
 	// --- Step 4: delete_subscription ---
 	emit(UpdateStepEvent{Step: "delete_subscription", Status: "running", Message: "Removing operator Subscription..."})
 	if _, delErr := c.delete(subscriptionPath()); delErr != nil {
-		if !IsK8sError(delErr, 404) {
+		if !isK8sNotFound(delErr) {
 			return fail(fmt.Sprintf("Failed to delete Subscription: %v", delErr), errorCodeFromK8sErr(delErr))
 		}
 		*logs = append(*logs, "OK: Subscription already absent")
@@ -1478,7 +1478,7 @@ func reinstallRemoveOperator(c *Client, csv types.CSVInfo, recovery *operatorRec
 	// --- Step 5: delete_csv ---
 	emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Removing current CSV..."})
 	if csv.Name != "" {
-		if _, err := c.delete(csvPath(csv.Name)); err != nil && !IsK8sError(err, 404) {
+		if _, err := c.delete(csvPath(csv.Name)); err != nil && !isK8sNotFound(err) {
 			return fail("Cannot delete current CSV: "+err.Error(), errorCodeFromK8sErr(err))
 		}
 		recovery.noteCSVRemoved(csv.Name)
@@ -1713,7 +1713,7 @@ func patchCRDConversionWebhooks(c *Client) (int, []string) {
 	for _, crd := range crds {
 		path := clusterPath("apiextensions.k8s.io/v1", "customresourcedefinitions", crd)
 		body, _, err := c.get(path)
-		if IsK8sError(err, 404) {
+		if isK8sNotFound(err) {
 			continue
 		}
 		if err != nil {
@@ -1744,7 +1744,7 @@ func patchCRDConversionWebhooks(c *Client) (int, []string) {
 		if conv.Strategy != "Webhook" || svc.Name == "" || svc.Namespace == "" {
 			continue
 		}
-		if _, _, err := c.get(namespacedPath("v1", "services", svc.Namespace, svc.Name)); !IsK8sError(err, 404) {
+		if _, _, err := c.get(namespacedPath("v1", "services", svc.Namespace, svc.Name)); !isK8sNotFound(err) {
 			if err != nil {
 				warnings = append(warnings, fmt.Sprintf("check conversion Service of CRD %s: %v", crd, err))
 			}
@@ -1763,7 +1763,7 @@ func patchCRDConversionWebhooks(c *Client) (int, []string) {
 // operator namespace.
 func rhoaiCSVExists(c *Client) (bool, error) {
 	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return false, nil
 	}
 	if err != nil {
@@ -1971,7 +1971,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	// new InstallPlan as soon as the CSV disappears, and deleting the
 	// Subscription afterwards would garbage-collect that plan mid-install.
 	emit(UpdateStepEvent{Step: "delete_subscription", Status: "running", Message: "Deleting Subscription..."})
-	if _, subDelErr := c.delete(subscriptionPath()); subDelErr != nil && !IsK8sError(subDelErr, 404) {
+	if _, subDelErr := c.delete(subscriptionPath()); subDelErr != nil && !isK8sNotFound(subDelErr) {
 		return fail(fmt.Sprintf("Failed to delete Subscription: %v", subDelErr), errorCodeFromK8sErr(subDelErr))
 	}
 	recovery.subscriptionChanged = true
@@ -1984,7 +1984,7 @@ func RefreshOperatorStreamWithOptions(c *Client, opts OperationOptions, emit fun
 	} else {
 		emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting CSV to trigger a fresh install..."})
 		logs = append(logs, fmt.Sprintf("Deleting CSV %s...", csv.Name))
-		if _, csvDelErr := c.delete(csvPath(csv.Name)); csvDelErr != nil && !IsK8sError(csvDelErr, 404) {
+		if _, csvDelErr := c.delete(csvPath(csv.Name)); csvDelErr != nil && !isK8sNotFound(csvDelErr) {
 			return fail(fmt.Sprintf("Failed to delete CSV %s: %v", csv.Name, csvDelErr), errorCodeFromK8sErr(csvDelErr))
 		}
 		recovery.noteCSVRemoved(csv.Name)
@@ -2144,7 +2144,7 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 	existingBody, _, getErr := c.get(secretPath)
 	secretExists := true
 	if getErr != nil {
-		if IsK8sError(getErr, 404) {
+		if isK8sNotFound(getErr) {
 			secretExists = false
 		} else {
 			return &types.OperationResponse{

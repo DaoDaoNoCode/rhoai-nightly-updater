@@ -32,7 +32,7 @@ var refusedComponents = map[string]string{
 
 func deploymentReady(c *Client, namespace, name string) (bool, string) {
 	body, _, err := c.get(namespacedPath("apps/v1", "deployments", namespace, name))
-	if IsK8sError(err, http.StatusNotFound) {
+	if isK8sNotFound(err) {
 		return false, fmt.Sprintf("Deployment %s/%s does not exist", namespace, name)
 	}
 	if err != nil {
@@ -507,7 +507,7 @@ func (rc *removalChecker) conversionCRDsServedBy(component string) ([]conversion
 	if !rc.convLoaded {
 		rc.convLoaded = true
 		crds, err := listRHOAIConversionCRDs(rc.c)
-		if err != nil && !IsK8sError(err, http.StatusNotFound) {
+		if err != nil && !isK8sNotFound(err) {
 			rc.convErr = err
 		}
 		rc.convCRDs = crds
@@ -544,7 +544,7 @@ func (rc *removalChecker) serviceComponent(ref string) (string, error) {
 	owner := ""
 	body, _, err := rc.c.get(namespacedPath("v1", "services", ns, name))
 	switch {
-	case IsK8sError(err, http.StatusNotFound):
+	case isK8sNotFound(err):
 		err = nil
 	case err != nil:
 		err = fmt.Errorf("read Service %s: %w", ref, err)

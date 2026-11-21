@@ -219,7 +219,7 @@ func (r *operatorRecovery) restoreNightlyCatalog(c *Client) []string {
 		}
 		return nil
 	}
-	if _, err := c.delete(catalogPath); err != nil && !IsK8sError(err, 404) {
+	if _, err := c.delete(catalogPath); err != nil && !isK8sNotFound(err) {
 		return []string{"remove the new CatalogSource: " + err.Error()}
 	}
 	return nil
@@ -272,7 +272,7 @@ func captureOperatorRecovery(c *Client) (*operatorRecovery, error) {
 		{namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, CatalogName), &r.catalog},
 	} {
 		body, _, err := c.get(resource.path)
-		if IsK8sError(err, 404) {
+		if isK8sNotFound(err) {
 			continue
 		}
 		if err != nil {
@@ -523,7 +523,7 @@ type rhoaiCSV struct {
 // operator namespace. A missing namespace is an empty list.
 func listRHOAICSVs(c *Client) ([]rhoaiCSV, error) {
 	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "clusterserviceversions", SubNS, ""))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return nil, nil
 	}
 	if err != nil {
@@ -602,7 +602,7 @@ func (r *operatorRecovery) attemptCSVsToRemove(c *Client) ([]rhoaiCSV, error) {
 	// deleted, read one by one for their UIDs.
 	for _, name := range append(append([]string{}, r.attemptCSVs...), r.removedCSVs...) {
 		body, _, getErr := c.get(csvPath(name))
-		if IsK8sError(getErr, 404) {
+		if isK8sNotFound(getErr) {
 			continue
 		}
 		if getErr != nil {
@@ -631,9 +631,9 @@ func deleteCSVByUIDAndWait(c *Client, csv rhoaiCSV) (gone bool, err error) {
 	path := csvPath(csv.Name)
 	if _, err := deleteWithUID(c, path, csv.UID); err != nil {
 		switch {
-		case IsK8sError(err, 404):
+		case isK8sNotFound(err):
 			return true, nil
-		case IsK8sError(err, 409):
+		case isK8sConflict(err):
 			return false, errReplacedMeanwhile
 		default:
 			return false, err
@@ -714,9 +714,9 @@ func deleteSubscriptionWithUID(c *Client, uid string) error {
 	}
 	if _, err := deleteWithUID(c, subscriptionPath(), uid); err != nil {
 		switch {
-		case IsK8sError(err, 404):
+		case isK8sNotFound(err):
 			return nil
-		case IsK8sError(err, 409):
+		case isK8sConflict(err):
 			return errReplacedMeanwhile
 		default:
 			return err

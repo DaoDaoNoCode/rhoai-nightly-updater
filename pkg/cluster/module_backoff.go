@@ -240,7 +240,7 @@ func webhooksServedBy(c *Client, d operatorDeployment) ([]string, error) {
 
 func serviceSelects(c *Client, namespace, name string, podLabels map[string]string) (bool, error) {
 	body, _, err := c.get(namespacedPath("v1", "services", namespace, name))
-	if IsK8sError(err, http.StatusNotFound) {
+	if isK8sNotFound(err) {
 		return false, nil
 	}
 	if err != nil {
@@ -355,9 +355,9 @@ func applyFixRestartModuleOperator(c *Client, module string) (*types.OperationRe
 	_, _, err = c.patch(namespacedPath("apps/v1", "deployments", d.Namespace, d.Name), patch)
 	switch {
 	case err == nil:
-	case IsK8sError(err, http.StatusConflict) || IsK8sError(err, http.StatusUnprocessableEntity):
+	case isK8sConflict(err) || IsK8sError(err, http.StatusUnprocessableEntity):
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Deployment %s changed after it was checked, so it was not restarted. Run diagnostics again.", d.ref()), Logs: logs, ErrorCode: "conflict"}, nil
-	case IsK8sError(err, http.StatusNotFound):
+	case isK8sNotFound(err):
 		return nothingToDo(fmt.Sprintf("Deployment %s no longer exists. Nothing was restarted.", d.ref()), logs), nil
 	default:
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Could not restart %s: %v.%s", d.ref(), err, templateHint(err)), Logs: logs, ErrorCode: errorCodeFromK8sErr(err)}, nil

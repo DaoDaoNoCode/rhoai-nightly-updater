@@ -237,7 +237,7 @@ func checkCertificates(c *Client) checkOutput {
 	served := true
 	for _, ns := range namespaces {
 		body, _, err := c.get(namespacedPath("cert-manager.io/v1", "certificates", ns, ""))
-		if IsK8sError(err, http.StatusNotFound) {
+		if isK8sNotFound(err) {
 			served = false
 			break
 		}

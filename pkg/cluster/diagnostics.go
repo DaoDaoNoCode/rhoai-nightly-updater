@@ -472,7 +472,7 @@ type subscriptionState struct {
 func readSubscriptionState(c *Client) (subscriptionState, error) {
 	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "subscriptions", SubNS, SubName))
 	if err != nil {
-		if IsK8sError(err, http.StatusNotFound) {
+		if isK8sNotFound(err) {
 			return subscriptionState{}, nil
 		}
 		return subscriptionState{}, err
@@ -861,7 +861,7 @@ func checkInstallPlanHealth(c *Client) checkOutput {
 
 	plans, err := listInstallPlans(c)
 	if err != nil {
-		if IsK8sError(err, http.StatusNotFound) {
+		if isK8sNotFound(err) {
 			return missing()
 		}
 		return checkOutput{check: CheckResult{Name: name, Status: "fail", Detail: fmt.Sprintf("Failed to check install plans: %v", err)}}
@@ -1233,7 +1233,7 @@ func nothingToDo(msg string, logs []string) *types.OperationResponse {
 func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error) {
 	plans, err := listInstallPlans(c)
 	if err != nil {
-		if IsK8sError(err, http.StatusNotFound) {
+		if isK8sNotFound(err) {
 			return nothingToDo("there are no install plans. Nothing was deleted.", nil), nil
 		}
 		return &types.OperationResponse{
@@ -1259,9 +1259,9 @@ func applyFixDeleteStaleInstallPlans(c *Client) (*types.OperationResponse, error
 		case err == nil:
 			deleted = append(deleted, ip.Metadata.Name)
 			logs = append(logs, fmt.Sprintf("Deleted install plan %s (phase Failed)", ip.Metadata.Name))
-		case IsK8sError(err, http.StatusNotFound):
+		case isK8sNotFound(err):
 			logs = append(logs, fmt.Sprintf("Install plan %s was already gone", ip.Metadata.Name))
-		case IsK8sError(err, http.StatusConflict):
+		case isK8sConflict(err):
 			changed = append(changed, ip.Metadata.Name)
 			logs = append(logs, fmt.Sprintf("Kept install plan %s: it changed after it was checked", ip.Metadata.Name))
 		default:

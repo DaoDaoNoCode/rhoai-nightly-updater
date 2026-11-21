@@ -58,7 +58,7 @@ func maasWriteCode(err error) string {
 	switch {
 	case errors.As(err, &foreign):
 		return "not_managed"
-	case errors.Is(err, errObjectChanged) || IsK8sError(err, 409):
+	case errors.Is(err, errObjectChanged) || isK8sConflict(err):
 		return "conflict"
 	}
 	return errorCodeFromK8sErr(err)
@@ -266,7 +266,7 @@ func planMaaSGateway(c *Client, infraNS string, published []string) (*maasGatewa
 	// OpenShift's own controller's.
 	body, _, err := c.get(maasGatewayClassPath())
 	switch {
-	case IsK8sError(err, 404):
+	case isK8sNotFound(err):
 		plan.classMissing = true
 	case err != nil:
 		return nil, fmt.Sprintf("Cannot read GatewayClass %s; nothing was changed: %v.", maasGatewayClass, err), errorCodeFromK8sErr(err)
@@ -302,7 +302,7 @@ func (m *maasRun) applyGateway(plan *maasGatewayPlan, dryRun bool) (string, stri
 		if dryRun {
 			query = url.Values{"dryRun": {"All"}}
 		}
-		if _, _, err := m.c.do(http.MethodPost, withToolFieldManager(clusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "")), "application/json", data, query); err != nil && !IsK8sError(err, 409) {
+		if _, _, err := m.c.do(http.MethodPost, withToolFieldManager(clusterPath("gateway.networking.k8s.io/v1", "gatewayclasses", "")), "application/json", data, query); err != nil && !isK8sConflict(err) {
 			return fmt.Sprintf("Failed to create GatewayClass %s: %v.%s", maasGatewayClass, err, templateHint(err)), maasWriteCode(err)
 		}
 		if !dryRun {
@@ -456,7 +456,7 @@ func restartMaaSAPI(c *Client, ns string) (bool, error) {
 		"annotations": map[string]string{restartAnnotation: clk.Now().UTC().Format(time.RFC3339)},
 	}}}})
 	_, _, err := c.patch(namespacedPath("apps/v1", "deployments", ns, "maas-api"), patch)
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return false, nil
 	}
 	return err == nil, err
@@ -527,7 +527,7 @@ func (m *maasRun) teardownCheck(t *maasTeardown) (*types.OperationResponse, erro
 	// database has no object here; one this tool did not create is kept.
 	for _, kind := range []string{"Gateway", "ConfigMap", "Secret", "Cluster", "PostgresDeployment", "PostgresService"} {
 		meta, found, err := readObjectMeta(c, maasObjectPath(kind, infra))
-		if err != nil && (kind != "Cluster" || !IsK8sError(err, 404)) {
+		if err != nil && (kind != "Cluster" || !isK8sNotFound(err)) {
 			return m.fail("check", fmt.Sprintf("Cannot read %s; nothing was deleted: %v.", maasDesc(kind, infra), err), errorCodeFromK8sErr(err), "read failed")
 		}
 		objs = append(objs, maasTeardownObj{kind, meta, found})
@@ -651,7 +651,7 @@ func (m *maasRun) teardownDelete(step, infra string, o maasTeardownObj) (bool, *
 	}
 	path := maasObjectPath(o.kind, infra)
 	m.step(step, "running", "Deleting "+maasDesc(o.kind, infra)+"...")
-	if _, err := deleteWithUID(c, path, o.meta.UID); err != nil && !IsK8sError(err, 404) {
+	if _, err := deleteWithUID(c, path, o.meta.UID); err != nil && !isK8sNotFound(err) {
 		res, _ := m.fail(step, fmt.Sprintf("Failed to delete %s: %v. Remove again to retry.", maasDesc(o.kind, infra), err), maasWriteCode(err), "delete failed")
 		return false, res
 	}
@@ -1383,7 +1383,7 @@ func (m *maasRun) unpublishAccess(u *maasUnpublish) (*types.OperationResponse, e
 			continue
 		}
 		if len(live) == 0 {
-			if _, err := deleteWithUID(c, path, meta.UID); err != nil && !IsK8sError(err, 404) {
+			if _, err := deleteWithUID(c, path, meta.UID); err != nil && !isK8sNotFound(err) {
 				return m.fail("maas", fmt.Sprintf("Failed to delete %s: %v.", w.desc, err), maasWriteCode(err), "delete failed")
 			}
 			_, _ = waitForDeletion(c, path, MaaSDeleteTimeout, MaaSPoll)
@@ -1403,7 +1403,7 @@ func (m *maasRun) unpublishModelRef(u *maasUnpublish) (*types.OperationResponse,
 	c, project, name, say, refPath, ref, refFound := m.c, u.project, u.name, u.say, u.refPath, u.ref, u.refFound
 	if refFound {
 		path := refPath
-		if _, err := deleteWithUID(c, path, ref.Metadata.UID); err != nil && !IsK8sError(err, 404) {
+		if _, err := deleteWithUID(c, path, ref.Metadata.UID); err != nil && !isK8sNotFound(err) {
 			return m.fail("maas", fmt.Sprintf("Failed to delete MaaSModelRef %s/%s: %v.", project, name, err), maasWriteCode(err), "delete failed")
 		}
 		// maas-controller removes its finalizer after deleting the policies it
@@ -1418,7 +1418,7 @@ func (m *maasRun) unpublishModelRef(u *maasUnpublish) (*types.OperationResponse,
 					}
 				}
 				patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"resourceVersion": meta.ResourceVersion, "finalizers": rest}})
-				if _, _, err := c.patch(path, patch); err != nil && !IsK8sError(err, 404) {
+				if _, _, err := c.patch(path, patch); err != nil && !isK8sNotFound(err) {
 					return m.fail("maas", fmt.Sprintf("MaaSModelRef %s/%s is being deleted and maas-controller cannot finish it (%s); removing its finalizer failed: %v. Unpublish again to retry.", project, name, why, err), maasWriteCode(err), "finalizer patch failed")
 				}
 				m.logs = append(m.logs, fmt.Sprintf("maas-controller cannot finish deleting MaaSModelRef %s/%s (%s), so this tool removed the finalizer %s from its own reference. Policies maas-controller generated for the model may be left in %s: oc get authpolicy,tokenratelimitpolicy -n %s -l maas.opendatahub.io/model=%s,app.kubernetes.io/managed-by=maas-controller", project, name, why, maasModelFinalizer, project, project, name))

@@ -164,7 +164,7 @@ func dspaCollectionPath(namespace string) string {
 func listDSPAs(c *Client, namespace string) ([]dspaInfo, error) {
 	body, _, err := c.get(dspaCollectionPath(namespace))
 	if err != nil {
-		if IsK8sError(err, 404) {
+		if isK8sNotFound(err) {
 			return nil, errDSPACRDMissing
 		}
 		return nil, fmt.Errorf("list pipeline servers: %w", err)
@@ -248,7 +248,7 @@ type routeSpec struct {
 func readRoute(c *Client, namespace, name string) (routeSpec, error) {
 	body, _, err := c.get(namespacedPath("route.openshift.io/v1", "routes", namespace, name))
 	switch {
-	case IsK8sError(err, 404):
+	case isK8sNotFound(err):
 		return routeSpec{}, nil
 	case err != nil:
 		return routeSpec{}, fmt.Errorf("read Route %s: %w", name, err)
@@ -514,7 +514,7 @@ func setupPipelineServer(c *Client, project string, recreate bool) (*types.Opera
 	dspaPath := namespacedPath(dspaAPIGroup, "datasciencepipelinesapplications", project, dspaName)
 	readDSPA := func() (objectMeta, bool, error) {
 		body, _, getErr := c.get(dspaPath)
-		if IsK8sError(getErr, 404) {
+		if isK8sNotFound(getErr) {
 			return objectMeta{}, false, nil
 		}
 		if getErr != nil {
@@ -727,9 +727,9 @@ func TeardownPipelineServer(c *Client, project string) (*types.OperationResponse
 			}
 		}
 		logs = append(logs, fmt.Sprintf("Deleting pipeline server %s...", target.Meta.Name))
-		if _, delErr := deleteWithUID(c, dspaPath, target.Meta.UID); delErr != nil && !IsK8sError(delErr, 404) {
+		if _, delErr := deleteWithUID(c, dspaPath, target.Meta.UID); delErr != nil && !isK8sNotFound(delErr) {
 			code := errorCodeFromK8sErr(delErr)
-			if IsK8sError(delErr, 409) {
+			if isK8sConflict(delErr) {
 				code = "conflict"
 			}
 			return fail(fmt.Sprintf("Failed to delete pipeline server: %v", delErr), code, "DSPA delete failed")
@@ -800,7 +800,7 @@ func deleteDSPASecret(c *Client, project string, target *dspaInfo, all []dspaInf
 		return ""
 	}
 	body, _, err := c.get(path)
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		*logs = append(*logs, "OK: Secret already absent")
 		return ""
 	}
@@ -818,7 +818,7 @@ func deleteDSPASecret(c *Client, project string, target *dspaInfo, all []dspaInf
 		return ""
 	}
 	*logs = append(*logs, fmt.Sprintf("Deleting secret %s...", name))
-	if _, err := deleteWithUID(c, path, meta.UID); err != nil && !IsK8sError(err, 404) {
+	if _, err := deleteWithUID(c, path, meta.UID); err != nil && !isK8sNotFound(err) {
 		*logs = append(*logs, fmt.Sprintf("Warning: failed to delete secret: %v", err))
 		return fmt.Sprintf(" The credentials secret %s could not be deleted: %v. Re-run teardown or delete it manually.", name, err)
 	}
@@ -1107,7 +1107,7 @@ func deleteConnection(c *Client, project string, logs *[]string) string {
 		return ""
 	}
 	*logs = append(*logs, fmt.Sprintf("Deleting dashboard connection %s...", connectionSecretName))
-	if _, err := deleteWithUID(c, path, meta.UID); err != nil && !IsK8sError(err, 404) {
+	if _, err := deleteWithUID(c, path, meta.UID); err != nil && !isK8sNotFound(err) {
 		*logs = append(*logs, fmt.Sprintf("Warning: failed to delete connection: %v", err))
 		return fmt.Sprintf(" The dashboard connection %s could not be deleted: %v. Re-run teardown or delete it manually.", connectionSecretName, err)
 	}
@@ -1124,7 +1124,7 @@ func pipelineWriteFailure(what, project string, err error) (string, string) {
 		return fmt.Sprintf("A %s was created in %s by someone else while setup was running. It was left unchanged.", what, project), "not_managed"
 	case errors.Is(err, errObjectChanged):
 		return fmt.Sprintf("The %s in %s kept changing while setup was updating it, so it was not changed. Re-run setup.", what, project), "conflict"
-	case IsK8sError(err, 409):
+	case isK8sConflict(err):
 		return fmt.Sprintf("The %s in %s changed while setup was updating it, so it was not changed. Re-run setup.", what, project), "conflict"
 	}
 	return fmt.Sprintf("Failed to create or update the %s in %s: %v.", what, project, err), errorCodeFromK8sErr(err)

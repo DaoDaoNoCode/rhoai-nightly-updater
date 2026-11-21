@@ -234,7 +234,7 @@ func modelRoutePath(project, name string) (string, bool) {
 func readModelRoute(c *Client, project, name string) ([]string, bool, error) {
 	path, _ := modelRoutePath(project, name)
 	body, _, err := c.get(path)
-	if IsK8sError(err, http.StatusNotFound) {
+	if isK8sNotFound(err) {
 		return nil, false, nil
 	}
 	if err != nil {

@@ -167,7 +167,7 @@ func parseObjectMeta(body []byte) (objectMeta, error) {
 // 404; any other error is returned.
 func readObjectMeta(c *Client, path string) (meta objectMeta, found bool, err error) {
 	body, _, err := c.get(path)
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return objectMeta{}, false, nil
 	}
 	if err != nil {
@@ -267,7 +267,7 @@ func ensureToolObject(c *Client, desc, path, createPath string, obj map[string]a
 				current, found = afterWrite(created, current, found, dryRun)
 				return "created", current, found, nil
 			}
-			if !IsK8sError(postErr, http.StatusConflict) {
+			if !isK8sConflict(postErr) {
 				return "", current, found, postErr
 			}
 			if current, found, err = read(); err != nil {
@@ -283,7 +283,7 @@ func ensureToolObject(c *Client, desc, path, createPath string, obj map[string]a
 		}
 		upgraded, upErr := upgradeToolFieldOwnership(c, path, current)
 		if upErr != nil {
-			if !IsK8sError(upErr, http.StatusConflict) {
+			if !isK8sConflict(upErr) {
 				return "", current, found, fmt.Errorf("upgrade the field ownership of %s to server-side apply: %w", desc, upErr)
 			}
 			if current, found, err = read(); err != nil {
@@ -313,7 +313,7 @@ func ensureToolObject(c *Client, desc, path, createPath string, obj map[string]a
 			current, found = afterWrite(appliedBody, current, found, dryRun)
 			return "updated", current, found, nil
 		}
-		if !IsK8sError(applyErr, http.StatusConflict) {
+		if !isK8sConflict(applyErr) {
 			return "", current, found, applyErr
 		}
 		if current, found, err = read(); err != nil {
@@ -504,7 +504,7 @@ func waitForGone(c *Client, timeout, interval time.Duration, gone func(cc *Clien
 func waitForDeletion(c *Client, path string, timeout, interval time.Duration) (bool, error) {
 	return waitForGone(c, timeout, interval, func(cc *Client) (bool, error) {
 		_, _, err := cc.get(path)
-		if IsK8sError(err, http.StatusNotFound) {
+		if isK8sNotFound(err) {
 			return true, nil
 		}
 		return false, err

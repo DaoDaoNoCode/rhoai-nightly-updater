@@ -479,7 +479,7 @@ const (
 func listMaaSPlaygroundModels(c *Client) []types.PlaygroundModel {
 	body, _, err := c.get("/apis/" + maasAPI(c) + "/maasmodelrefs")
 	if err != nil {
-		if !IsK8sError(err, http.StatusNotFound) {
+		if !isK8sNotFound(err) {
 			slog.Debug("cannot list the MaaS models for the playground", "error", err)
 		}
 		return nil
@@ -601,7 +601,7 @@ func readPlaygroundServer(c *Client, project, name string) (objectMeta, bool, er
 		return objectMeta{}, false, nil
 	}
 	r, err := getServed(c, "ogx.io", "/apis/ogx.io/%s/namespaces/"+project+"/ogxservers/"+playgroundServerName, []string{"v1beta1"})
-	if IsK8sError(err, http.StatusNotFound) {
+	if isK8sNotFound(err) {
 		return objectMeta{}, false, nil
 	}
 	if err != nil {
@@ -646,7 +646,7 @@ func playgroundOwnership(c *Client, project string, rec playgroundRecord, has bo
 // recorded).
 func readPlaygroundRecords(c *Client) (map[string]playgroundRecord, error) {
 	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return map[string]playgroundRecord{}, nil
 	}
 	if err != nil {
@@ -756,7 +756,7 @@ func genAIUIState(c *Client) string {
 		return ""
 	}
 	body, _, err := c.get(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, genAIUIDeployment))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return "missing"
 	}
 	if err != nil {

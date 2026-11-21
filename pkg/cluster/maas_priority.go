@@ -24,7 +24,7 @@ const maasDocsSamplePriority = 10
 // others' names. The API server validates the value (the publish dry run).
 func maasSubscriptionPriority(c *Client) (int, []string, error) {
 	body, _, err := c.get(namespacedPath(maasAPI(c), "maassubscriptions", maasTenantNamespace, ""))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return maasDocsSamplePriority, nil, nil
 	}
 	if err != nil {

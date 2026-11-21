@@ -110,7 +110,7 @@ func GetDashboardState(c *Client) (*types.DashboardState, error) {
 	}
 	deployPath := namespacedPath("apps/v1", "deployments", ns, dashboardDeploymentName)
 	body, _, err := c.get(deployPath)
-	if IsK8sError(err, http.StatusNotFound) {
+	if isK8sNotFound(err) {
 		return nil, fmt.Errorf("%w (no %s Deployment in %s)", ErrDashboardNotDeployed, dashboardDeploymentName, ns)
 	}
 	if err != nil {
@@ -542,7 +542,7 @@ func splitLegacyDashboardTargets(c *Client, ns string, images map[string]string,
 		if standalone && moduleContainers[name] {
 			moduleNames, moduleErr := getDeploymentContainerNames(c, ns, name)
 			switch {
-			case IsK8sError(moduleErr, 404):
+			case isK8sNotFound(moduleErr):
 				*logs = append(*logs, fmt.Sprintf("  %s: module not installed; unchanged", name))
 			case moduleErr != nil:
 				*logs = append(*logs, fmt.Sprintf("  %s: cannot read module deployment (%v)", name, moduleErr))

@@ -143,6 +143,11 @@ var methodVerbs = map[string][]string{
 	// "get" becomes "get" or "list" depending on the path.
 }
 
+// requestSourceFiles define the Client request methods (client.go) and the
+// REST helpers on top of them (rest.go). Their calls take a path parameter,
+// not a path: the scans attribute each request to the helper's call site.
+var requestSourceFiles = map[string]bool{"client.go": true, "rest.go": true}
+
 // rawMethods maps the http.Method constants passed to Client.do to the
 // Client method with the same RBAC verbs.
 var rawMethods = map[string]string{
@@ -950,7 +955,7 @@ func scanRequests(t *testing.T, only map[string]bool, onlyBookkeeping bool) ([]r
 	for _, file := range names {
 		for _, decl := range p.files[file].Decls {
 			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Body == nil || file == "client.go" || !p.scans(fn) {
+			if !ok || fn.Body == nil || requestSourceFiles[file] || !p.scans(fn) {
 				continue
 			}
 			fnPos := p.funcPos(fn)

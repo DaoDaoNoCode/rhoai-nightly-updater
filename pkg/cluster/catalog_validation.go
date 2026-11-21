@@ -190,7 +190,7 @@ func createVerificationCatalog(c *Client, image string) (name, path string, remo
 	remove = func() {
 		ctx, cancel := postOperationContext(c, 30*time.Second)
 		defer cancel()
-		if _, err := c.WithContext(ctx).delete(path); err != nil && !IsK8sError(err, 404) {
+		if _, err := c.WithContext(ctx).delete(path); err != nil && !isK8sNotFound(err) {
 			slog.Warn("failed to delete verification CatalogSource; the next operation removes it", "name", name, "error", err)
 		}
 	}
@@ -273,7 +273,7 @@ func cleanupStaleVerificationCatalogs(c *Client) {
 			continue
 		}
 		path := namespacedPath("operators.coreos.com/v1alpha1", "catalogsources", CatalogNS, m.Name)
-		if _, err := c.delete(path); err != nil && !IsK8sError(err, 404) {
+		if _, err := c.delete(path); err != nil && !isK8sNotFound(err) {
 			slog.Warn("failed to delete stale verification CatalogSource", "name", m.Name, "error", err)
 			continue
 		}

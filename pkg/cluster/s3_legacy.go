@@ -199,7 +199,7 @@ func readLegacyStorage(c *Client) (*legacyStorage, error) {
 // namespace minio this tool did not make (foreign), for the status.
 func readLegacyStorageOwner(c *Client) (*legacyStorage, bool, error) {
 	body, _, err := c.get("/api/v1/namespaces/" + legacyNamespace)
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return nil, false, nil
 	}
 	if err != nil {
@@ -244,7 +244,7 @@ func readLegacyStorageOwner(c *Client) (*legacyStorage, bool, error) {
 			path, _ := legacyGetPath(kind, name)
 			b, _, err := c.get(path)
 			switch {
-			case IsK8sError(err, 404):
+			case isK8sNotFound(err):
 			case err != nil:
 				results[i].err = err
 			default:

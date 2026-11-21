@@ -68,7 +68,7 @@ func probeCRDObjects(c *Client, listPath string) (crdObjects, string) {
 // missing, or has had no ready endpoint for longer than the grace period.
 func findStaleConversions(c *Client) ([]staleConversion, []string, error) {
 	crds, err := listRHOAIConversionCRDs(c)
-	if IsK8sError(err, http.StatusNotFound) {
+	if isK8sNotFound(err) {
 		return nil, nil, nil
 	}
 	if err != nil {

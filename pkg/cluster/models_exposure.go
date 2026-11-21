@@ -72,7 +72,7 @@ func ValidExposure(e string) bool {
 // list is the one otherGatewaysOfClass reads).
 func listAllGateways(c *Client) ([]gatewayObject, error) {
 	body, _, err := c.get(clusterPath("gateway.networking.k8s.io/v1", "gateways", ""))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return nil, nil
 	}
 	if err != nil {

@@ -449,7 +449,7 @@ func dashboardExternalPauseWarning(op string) string {
 // A missing CRD means there is nothing to delete.
 func dashboardCRDeleting(c *Client) (bool, error) {
 	r, err := listServed(c, componentAPIGroup, "/apis/components.platform.opendatahub.io/%s/dashboards", nil, []string{"v1alpha1"})
-	if IsK8sError(err, http.StatusNotFound) || (err == nil && r.Version == "") {
+	if isK8sNotFound(err) || (err == nil && r.Version == "") {
 		return false, nil
 	}
 	if err != nil {
@@ -1257,7 +1257,7 @@ func patchControlledDashboardImages(c *Client, operator *dashboardDeployment, pa
 		if err == nil {
 			return nil
 		}
-		if !IsK8sError(err, http.StatusConflict) || attempt == 4 {
+		if !isK8sConflict(err) || attempt == 4 {
 			return err
 		}
 		if err := clk.Sleep(c.ctx, time.Duration(attempt+1)*100*time.Millisecond); err != nil {
@@ -1285,7 +1285,7 @@ func clearDashboardManagedAnnotations(c *Client, ns, operatorName string) (clear
 			continue
 		}
 		data, _ := json.Marshal(map[string]any{"metadata": map[string]any{"uid": d.Metadata.UID, "annotations": map[string]any{"opendatahub.io/managed": nil}}})
-		if _, _, err := c.patch(namespacedPath("apps/v1", "deployments", ns, d.Metadata.Name), data); err != nil && !IsK8sError(err, http.StatusNotFound) {
+		if _, _, err := c.patch(namespacedPath("apps/v1", "deployments", ns, d.Metadata.Name), data); err != nil && !isK8sNotFound(err) {
 			failures = append(failures, d.Metadata.Name+": "+err.Error())
 			continue
 		}

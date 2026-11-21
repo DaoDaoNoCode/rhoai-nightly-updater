@@ -259,7 +259,7 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 		// Step 1: GET the ConfigMap with its resourceVersion
 		body, _, err := c.bookkeeping().get(cmPath)
 		if err != nil {
-			if !IsK8sError(err, 404) {
+			if !isK8sNotFound(err) {
 				slog.Warn("failed to get activity configmap", "error", err)
 				return
 			}
@@ -331,7 +331,7 @@ func recordActivityWithClient(c *Client, entry types.ActivityEntry) {
 
 		if err != nil {
 			// Step 4: If 409 Conflict, retry from step 1
-			if IsK8sError(err, 409) {
+			if isK8sConflict(err) {
 				slog.Warn("activity configmap conflict, will retry", "attempt", attempt+1)
 				continue
 			}
@@ -353,7 +353,7 @@ func GetActivity(c *Client) ([]types.ActivityEntry, error) {
 
 	body, _, err := c.bookkeeping().get(cmPath)
 	if err != nil {
-		if IsK8sError(err, 404) {
+		if isK8sNotFound(err) {
 			return []types.ActivityEntry{}, nil
 		}
 		return nil, fmt.Errorf("get activity configmap: %w", err)

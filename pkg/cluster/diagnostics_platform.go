@@ -25,7 +25,7 @@ func checkPlatformModules(c *Client) checkOutput {
 	r, err := listServed(c, platformGroup, platformListFmt, nil, platformFallbackVersions)
 	body := r.Body
 	switch {
-	case IsK8sError(err, http.StatusNotFound), err == nil && r.Version == "":
+	case isK8sNotFound(err), err == nil && r.Version == "":
 		details = append(details, "no Platform API (operator older than 3.6 or not installed)")
 	case IsK8sError(err, http.StatusForbidden):
 		details = append(details, "Platform not checked: this app cannot read platforms (RBAC)")
@@ -249,7 +249,7 @@ func checkManagedConfig(c *Client) checkOutput {
 	}
 	for _, ns := range namespaces {
 		body, _, err := c.do(http.MethodGet, namespacedPath("apps/v1", "deployments", ns, ""), "", nil, url.Values{})
-		if IsK8sError(err, http.StatusNotFound) {
+		if isK8sNotFound(err) {
 			continue
 		}
 		if err != nil {

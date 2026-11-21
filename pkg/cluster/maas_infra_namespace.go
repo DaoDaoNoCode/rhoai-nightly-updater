@@ -42,7 +42,7 @@ func (m *maasRun) deleteInfraNamespace(rec *maasRecord, ns string) (string, erro
 	if len(left) > 0 {
 		return fmt.Sprintf("Kept namespace %s, which this tool created: it still holds %s. Remove again once they are gone.", ns, strings.Join(left, ", ")), nil
 	}
-	if _, err := deleteWithUID(c, path, meta.UID); err != nil && !IsK8sError(err, 404) {
+	if _, err := deleteWithUID(c, path, meta.UID); err != nil && !isK8sNotFound(err) {
 		return fmt.Sprintf("Kept namespace %s: deleting it failed (%v). Remove again to retry.", ns, err), nil
 	}
 	m.logs = append(m.logs, "OK: Namespace "+ns+" deleted")

@@ -118,7 +118,7 @@ func imageMirrored(c *Client, repo string) (bool, error) {
 		clusterPath("config.openshift.io/v1", "imagetagmirrorsets", ""),
 	} {
 		body, _, err := c.get(path)
-		if IsK8sError(err, 404) {
+		if isK8sNotFound(err) {
 			continue
 		}
 		if err != nil {

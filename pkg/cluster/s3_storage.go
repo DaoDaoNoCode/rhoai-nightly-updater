@@ -155,7 +155,7 @@ type s3Keys struct {
 // when the Secret does not exist.
 func readS3Keys(c *Client) (keys s3Keys, found bool, err error) {
 	body, _, err := c.get(namespacedPath("v1", "secrets", s3Namespace, s3Secret))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return s3Keys{}, false, nil
 	}
 	if err != nil {
@@ -207,7 +207,7 @@ func S3AdminLogin(c *Client) (login S3Login, err error) {
 		return unavailable(fmt.Sprintf("Namespace %s was not created by this tool, so it does not read the password there.", s3Namespace))
 	}
 	body, _, err := c.get(namespacedPath("v1", "secrets", s3Namespace, s3Secret))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return unavailable(fmt.Sprintf("Secret %s does not exist in namespace %s. Repair re-creates it.", s3Secret, s3Namespace))
 	}
 	if err != nil {
@@ -305,7 +305,7 @@ func (n s3NamespaceInfo) terminating() bool {
 // lookupS3Namespace reads the storage namespace.
 func lookupS3Namespace(c *Client) (s3NamespaceInfo, error) {
 	body, _, err := c.get("/api/v1/namespaces/" + s3Namespace)
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return s3NamespaceInfo{}, nil
 	}
 	if err != nil {
@@ -497,7 +497,7 @@ type serviceSpec struct {
 func readService(c *Client, namespace, name string) (serviceSpec, error) {
 	body, _, err := c.get(namespacedPath("v1", "services", namespace, name))
 	switch {
-	case IsK8sError(err, 404):
+	case isK8sNotFound(err):
 		return serviceSpec{}, nil
 	case err != nil:
 		return serviceSpec{}, fmt.Errorf("read Service %s: %w", name, err)
@@ -663,7 +663,7 @@ func s3StatusAndEndpoints(c *Client) (types.ResourceState, s3Endpoints, error) {
 	}
 
 	if deployErr != nil {
-		if IsK8sError(deployErr, 404) {
+		if isK8sNotFound(deployErr) {
 			state.Message = "Namespace exists but the S3 storage is not deployed"
 		} else {
 			state.Message = fmt.Sprintf("Cannot read the SeaweedFS deployment: %v", deployErr)
@@ -1142,7 +1142,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 		case err == nil:
 			log.add("OK: Namespace created")
 			ns = s3NamespaceInfo{Exists: true, Managed: true}
-		case IsK8sError(err, 409):
+		case isK8sConflict(err):
 			// Created concurrently: decide ownership again.
 			if ns, err = lookupS3Namespace(c); err != nil {
 				return fail(fmt.Sprintf("Cannot check namespace %s: %v.%s", s3Namespace, err, templateHint(err)), errorCodeFromK8sErr(err), "namespace check failed"), nil
@@ -1219,7 +1219,7 @@ func setupS3Storage(c *Client, keys s3Keys, log *opLog, retry s3Retry) (*types.O
 				return fail(fmt.Sprintf("%s was created by someone else while setup was running, so it was left unchanged. Already applied: %s. %s", foreignErr.Desc, done, retry.foreignHint()), "not_managed", r.name+" became foreign")
 			}
 			code := errorCodeFromK8sErr(err)
-			if errors.Is(err, errObjectChanged) || IsK8sError(err, 409) {
+			if errors.Is(err, errObjectChanged) || isK8sConflict(err) {
 				code = "conflict"
 			}
 			if dryRun {
@@ -1362,7 +1362,7 @@ func waitS3Ready(c *Client, image string) (workloadPodIssue, error) {
 					}
 				}
 			}
-		} else if !IsK8sError(err, 404) && !IsNetworkError(err) {
+		} else if !isK8sNotFound(err) && !IsNetworkError(err) {
 			return last, err
 		}
 		if clk.Sleep(ctx, S3ReadyPoll) != nil {
@@ -1468,7 +1468,7 @@ func (d *storageDeletion) deleteOwnedObject(c *Client, namespace, kind, name str
 			return
 		}
 		*logs = append(*logs, fmt.Sprintf("Deleting %s...", desc))
-		if _, err := deleteWithUID(c, path, meta.UID); err != nil && !IsK8sError(err, 404) {
+		if _, err := deleteWithUID(c, path, meta.UID); err != nil && !isK8sNotFound(err) {
 			d.failed = append(d.failed, fmt.Sprintf("%s: %v", desc, err))
 			*logs = append(*logs, fmt.Sprintf("Failed to delete %s: %v", desc, err))
 			if IsK8sError(err, http.StatusForbidden) {
@@ -1670,7 +1670,7 @@ func TeardownS3Storage(c *Client, opts types.S3TeardownRequest) (*types.Operatio
 		if ok, reason := toolNamespaceDeletable(s3Namespace, ns.Meta); !ok {
 			nsNote = " " + reason
 			logs = append(logs, reason)
-		} else if _, err := deleteWithUID(c, "/api/v1/namespaces/"+s3Namespace, ns.Meta.UID); err != nil && !IsK8sError(err, 404) {
+		} else if _, err := deleteWithUID(c, "/api/v1/namespaces/"+s3Namespace, ns.Meta.UID); err != nil && !isK8sNotFound(err) {
 			d.failed = append(d.failed, fmt.Sprintf("namespace %s: %v", s3Namespace, err))
 			d.forbidden = err
 		} else {

@@ -84,7 +84,7 @@ func updateGitOpsPlan(c *Client, image string, currentCSV types.CSVInfo, logs *[
 // refuses rather than delete a Subscription OLM may still be working on.
 func pendingInstallPlan(c *Client) (name, phase string, err error) {
 	body, _, err := c.get(subscriptionPath())
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return "", "", nil
 	}
 	if err != nil {
@@ -105,7 +105,7 @@ func pendingInstallPlan(c *Client) (name, phase string, err error) {
 	}
 	name = sub.Status.InstallPlanRef.Name
 	body, _, err = c.get(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, name))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return "", "", nil
 	}
 	if err != nil {
@@ -231,7 +231,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 	emit(UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting old CSV and InstallPlan..."})
 	if ipName := recovery.installPlanName(); ipName != "" {
 		ipPath := namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ipName)
-		if _, err := c.delete(ipPath); err != nil && !IsK8sError(err, 404) {
+		if _, err := c.delete(ipPath); err != nil && !isK8sNotFound(err) {
 			return fail("Cannot delete old InstallPlan: "+err.Error(), errorCodeFromK8sErr(err))
 		}
 		*logs = append(*logs, fmt.Sprintf("OK: InstallPlan %s deleted", ipName))
@@ -344,7 +344,7 @@ func updateUnderGitOps(c *Client, image string, target catalogTarget, currentCSV
 // readSubscriptionObject reads the operator Subscription as a decoded object.
 func readSubscriptionObject(c *Client) (obj map[string]any, found bool, err error) {
 	body, _, err := c.get(subscriptionPath())
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return nil, false, nil
 	}
 	if err != nil {

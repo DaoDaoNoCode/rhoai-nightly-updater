@@ -171,7 +171,7 @@ func assessRolloutBlock(c *Client, namespace, name string) (rolloutAssessment, e
 
 	body, _, err := c.get(namespacedPath("apps/v1", "deployments", namespace, name))
 	if err != nil {
-		if IsK8sError(err, http.StatusNotFound) {
+		if isK8sNotFound(err) {
 			return notApplicable(a, "the Deployment no longer exists"), nil
 		}
 		return a, fmt.Errorf("read deployment: %w", err)
@@ -480,7 +480,7 @@ func patchMaxUnavailable(c *Client, namespace, name string) (rolloutAssessment, 
 	})
 	respBody, _, err := c.strategicPatch(namespacedPath("apps/v1", "deployments", namespace, name), patch)
 	if err != nil {
-		if IsK8sError(err, http.StatusConflict) {
+		if isK8sConflict(err) {
 			return a, false, fmt.Sprintf("%s: the Deployment changed while it was being checked; nothing was patched. Run diagnostics again.", a.target())
 		}
 		return a, false, fmt.Sprintf("%s: patch failed: %v", a.target(), err)
@@ -602,7 +602,7 @@ func RestoreRolloutStrategy(c *Client, namespace, name string) (*types.Operation
 	target := namespace + "/" + name
 	path := namespacedPath("apps/v1", "deployments", namespace, name)
 	body, _, err := c.get(path)
-	if IsK8sError(err, http.StatusNotFound) {
+	if isK8sNotFound(err) {
 		return nothingToDo(fmt.Sprintf("Deployment %s no longer exists. Nothing was changed.", target), nil), nil
 	}
 	if err != nil {
@@ -642,7 +642,7 @@ func RestoreRolloutStrategy(c *Client, namespace, name string) (*types.Operation
 	}
 	patch, _ := json.Marshal(patchObj)
 	if _, _, err := c.strategicPatch(path, patch); err != nil {
-		if IsK8sError(err, http.StatusConflict) {
+		if isK8sConflict(err) {
 			return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Deployment %s changed while it was being checked; nothing was changed. Run diagnostics again.", target), ErrorCode: "conflict"}, nil
 		}
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Failed to patch Deployment %s: %v", target, err), ErrorCode: errorCodeFromK8sErr(err)}, nil

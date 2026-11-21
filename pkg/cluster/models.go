@@ -259,7 +259,7 @@ func (m llmisvcObject) mainImage() string {
 
 func listLLMInferenceServices(c *Client) ([]llmisvcObject, error) {
 	body, _, err := c.get(clusterPath("serving.kserve.io/v1alpha2", "llminferenceservices", ""))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return nil, errLLMISvcAPIMissing
 	}
 	if err != nil {
@@ -280,7 +280,7 @@ func readToolModel(c *Client, project, name string) (llmisvcObject, bool, error)
 		return llmisvcObject{}, false, fmt.Errorf("%s is not a model of this tool's catalog", name)
 	}
 	body, _, err := c.get(path)
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return llmisvcObject{}, false, nil
 	}
 	if err != nil {
@@ -516,7 +516,7 @@ func discoverCPUPreset(c *Client) cpuPreset {
 		return cpuPreset{problem: fmt.Sprintf("Cannot tell which namespace RHOAI's applications (KServe's controller and presets) run in: %v.", err)}
 	}
 	body, _, err := c.get(namespacedPath("apps/v1", "deployments", ns, "llmisvc-controller-manager"))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return cpuPreset{problem: fmt.Sprintf("KServe's LLMInferenceService controller (Deployment %s in %s) is not there: LLM serving is not installed.", llmisvcControllerName, ns)}
 	}
 	if err != nil {
@@ -552,7 +552,7 @@ func discoverCPUPreset(c *Client) cpuPreset {
 	}
 	name := prefix + cpuPresetSuffix
 	body, _, err = c.get(namespacedPath("serving.kserve.io/v1alpha2", "llminferenceserviceconfigs", ns, name))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return cpuPreset{name: name, problem: fmt.Sprintf("This RHOAI release has no CPU preset: LLMInferenceServiceConfig %s does not exist in %s.", name, ns)}
 	}
 	if err != nil {
@@ -696,7 +696,7 @@ func modelManifest(project string, entry catalogModel, preset string, img imageP
 // only there). It returns a refusal, or "".
 func projectNamespace(c *Client, project string) (map[string]string, string, string) {
 	body, _, err := c.get("/api/v1/namespaces/" + project)
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return nil, fmt.Sprintf("Project %s does not exist. Choose a data science project, or create one in the dashboard.", project), "validation"
 	}
 	if err != nil {
@@ -1398,7 +1398,7 @@ func (m *modelsRun) applyModel(p *modelPlan, dryRun bool) (string, string) {
 		// Its UID is what makes it the tool's (models_record.go). A model
 		// that cannot be recorded would be nobody's: it is deleted again.
 		if recErr := recordModel(c, meta); recErr != nil {
-			if _, delErr := deleteWithUID(c, path, meta.UID); delErr != nil && !IsK8sError(delErr, 404) {
+			if _, delErr := deleteWithUID(c, path, meta.UID); delErr != nil && !isK8sNotFound(delErr) {
 				return fmt.Sprintf("%s was created, but this tool could not record it (%v) nor delete it again (%v). Delete it yourself (oc delete llminferenceservice %s -n %s), then set up again.", desc, recErr, delErr, p.entry.Name, p.project), errorCodeFromK8sErr(recErr)
 			}
 			return fmt.Sprintf("%s was created, but this tool could not record it as its own (%v), so it was deleted again. Set up again to retry.", desc, recErr), firstNonEmpty(errorCodeFromK8sErr(recErr), "internal")
@@ -1413,7 +1413,7 @@ func (m *modelsRun) applyModel(p *modelPlan, dryRun bool) (string, string) {
 	switch {
 	case errors.As(err, &foreign):
 		code = "not_managed"
-	case errors.Is(err, errObjectChanged) || IsK8sError(err, 409):
+	case errors.Is(err, errObjectChanged) || isK8sConflict(err):
 		code = "conflict"
 	}
 	if dryRun {
@@ -1439,7 +1439,7 @@ func (m *modelsRun) applyToken(p *modelPlan) (string, string) {
 	}
 	if err := recordTokenSecret(c, p.project, p.entry.Name, secretUID); err != nil {
 		path := tokenSecretPathOf(p.project, p.entry.Name)
-		if _, delErr := deleteWithUID(c, path, secretUID); delErr != nil && !IsK8sError(delErr, 404) {
+		if _, delErr := deleteWithUID(c, path, secretUID); delErr != nil && !isK8sNotFound(delErr) {
 			slog.Warn("cannot delete the unrecorded token Secret; garbage collection removes it with the model", "error", delErr)
 		}
 		return fmt.Sprintf("Secret %s/%s was created, but this tool could not record it (%v), so it was deleted again. Set up again to retry.", p.project, tokenSecretName(p.entry.Name), err), firstNonEmpty(errorCodeFromK8sErr(err), "internal")
@@ -1505,9 +1505,9 @@ func TeardownModels(c *Client, project string, names ...string) (*types.Operatio
 		if !model.Metadata.terminating() {
 			logs = append(logs, deleteModelToken(c, project, entry.Name, model.Metadata.UID, rec[modelRecordKey(project, entry.Name)].TokenSecretUID)...)
 			logs = append(logs, fmt.Sprintf("Deleting LLMInferenceService %s/%s...", project, entry.Name))
-			if _, err := deleteWithUID(c, path, model.Metadata.UID); err != nil && !IsK8sError(err, 404) {
+			if _, err := deleteWithUID(c, path, model.Metadata.UID); err != nil && !isK8sNotFound(err) {
 				code := errorCodeFromK8sErr(err)
-				if IsK8sError(err, 409) {
+				if isK8sConflict(err) {
 					code = "conflict"
 				}
 				return fail(fmt.Sprintf("Failed to delete LLMInferenceService %s/%s: %v.%s", project, entry.Name, err, templateHint(err)), code, "delete failed")

@@ -159,13 +159,13 @@ type rhoaiOperatorGroup struct {
 func readOperatorNamespaceAndGroups(c *Client) (nsMissing bool, groups []rhoaiOperatorGroup, problem string, errorCode string) {
 	_, _, err := c.get("/api/v1/namespaces/" + SubNS)
 	switch {
-	case IsK8sError(err, 404):
+	case isK8sNotFound(err):
 		return true, nil, "", ""
 	case err != nil:
 		return false, nil, fmt.Sprintf("Failed to check namespace %s: %v", SubNS, err), errorCodeFromK8sErr(err)
 	}
 	body, _, err := c.get(namespacedPath("operators.coreos.com/v1", "operatorgroups", SubNS, ""))
-	if err != nil && !IsK8sError(err, 404) {
+	if err != nil && !isK8sNotFound(err) {
 		return false, nil, fmt.Sprintf("Failed to check OperatorGroups in %s: %v", SubNS, err), errorCodeFromK8sErr(err)
 	}
 	if err == nil {
@@ -209,7 +209,7 @@ func waitForCSVGone(c *Client, name string) (bool, error) {
 	deadline := clk.Now().Add(CSVDeletionTimeout)
 	for {
 		_, _, err := c.get(csvPath(name))
-		if IsK8sError(err, 404) {
+		if isK8sNotFound(err) {
 			return true, nil
 		}
 		if clk.Now().After(deadline) {
@@ -298,7 +298,7 @@ func waitForOperatorInstall(c *Client, emit func(UpdateStepEvent), logs *[]strin
 		}
 
 		body, _, err := c.get(subscriptionPath())
-		if IsK8sError(err, 404) {
+		if isK8sNotFound(err) {
 			return failed("olm_install_failed", "The Subscription was deleted while OLM was installing the operator; another user or tool may have changed it.")
 		}
 		if err != nil {
@@ -467,7 +467,7 @@ func (w *installWait) subscriptionConditions(sub installWaitSubscription) (resol
 func (w *installWait) checkCSV(name, installedCSV string, deadline, waitStart time.Time) (installOutcome, bool) {
 	c, progress, failed, logs, ipName := w.c, w.progress, w.failed, w.logs, w.ipName
 	csvBody, _, err := c.get(csvPath(name))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		if ipName != "" {
 			progress(fmt.Sprintf("InstallPlan %s: waiting for OLM to create CSV %s", ipName, name))
 		}
@@ -947,7 +947,7 @@ func upgradeGateMessage(gates []string, hedge string) string {
 // there is none; a failed lookup refuses, since nothing was changed yet.
 func foreignSubscriptionRefusal(c *Client) string {
 	body, _, err := c.get(namespacedPath("operators.coreos.com/v1alpha1", "installplans", SubNS, ""))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return ""
 	}
 	if err != nil {

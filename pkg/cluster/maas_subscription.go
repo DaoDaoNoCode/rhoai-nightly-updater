@@ -489,7 +489,7 @@ type maasToolSub struct {
 
 func readMaaSToolSubscription(c *Client) (maasToolSub, error) {
 	body, _, err := c.get(maasAccessPath(c, "MaaSSubscription"))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return maasToolSub{audience: maasAudience{everyone: true}, limits: map[string]maasLimit{}}, nil
 	}
 	if err != nil {

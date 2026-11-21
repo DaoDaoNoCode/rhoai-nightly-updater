@@ -148,7 +148,7 @@ func getInstalledOperator(c *Client) (*installedOperator, error) {
 			}
 			return op, nil
 		}
-	} else if !IsK8sError(err, http.StatusNotFound) {
+	} else if !isK8sNotFound(err) {
 		return nil, err
 	}
 	csv, err := getCSV(c)

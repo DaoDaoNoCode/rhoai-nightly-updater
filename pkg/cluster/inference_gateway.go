@@ -446,7 +446,7 @@ func readGatewayObject(c *Client, kind string) (objectMeta, bool, error) {
 func readInferenceGateway(c *Client) (gatewayObject, bool, error) {
 	path := gatewayObjectPath("Gateway")
 	body, _, err := c.get(path)
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return gatewayObject{}, false, nil
 	}
 	if err != nil {
@@ -486,7 +486,7 @@ func clusterAppsDomain(c *Client) (string, error) {
 // generates. The Gateway references it; its content is never read.
 func defaultIngressCertificate(c *Client) (string, error) {
 	body, _, err := c.get(namespacedPath("operator.openshift.io/v1", "ingresscontrollers", "openshift-ingress-operator", "default"))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return defaultRouterCert, nil
 	}
 	if err != nil {
@@ -607,7 +607,7 @@ func authPolicyStateOf(c *Client, ns, gateway string) string {
 	var err error
 	if ns == inferenceGatewayNamespace && gateway == inferenceGatewayName {
 		body, _, err = c.get(namespacedPath("kuadrant.io/"+versions.Versions[0], "authpolicies", "openshift-ingress", "openshift-ai-inference-authn"))
-		if IsK8sError(err, 404) {
+		if isK8sNotFound(err) {
 			return "missing"
 		}
 	} else {
@@ -729,7 +729,7 @@ func readKServeGateway(c *Client) (kserveGateway, error) {
 		return kserveGateway{}, fmt.Errorf("find ConfigMap %s: %w", kserveConfigMap, err)
 	}
 	body, _, err := c.get(namespacedPath("v1", "configmaps", ns, kserveConfigMap))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return kserveGateway{}, nil
 	}
 	if err != nil {
@@ -998,7 +998,7 @@ func attachedRoutesReason(n int) string {
 func gatewayServiceWarning(c *Client) string {
 	body, _, err := c.get(namespacedPath("v1", "services", "openshift-ingress", "openshift-ai-inference-openshift-ai-inference"))
 	missing := fmt.Sprintf("The gateway's Service is not named %s, so the in-cluster listener (%s) does not match it and callers inside the cluster (the dashboard's playground) may be refused. Report this with the output of `oc get svc -n %s -l %s=%s`.", inferenceGatewayService, inferenceGatewayInternalHost, inferenceGatewayNamespace, gatewayNameLabel, inferenceGatewayName)
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return missing
 	}
 	if err != nil {
@@ -1242,7 +1242,7 @@ func applyInferenceGateway(c *Client, plan *gatewayPlan, dryRun bool, logf func(
 			switch {
 			case errors.As(err, &foreign):
 				code = "not_managed"
-			case errors.Is(err, errObjectChanged) || errors.Is(err, errGatewayChanged) || IsK8sError(err, 409):
+			case errors.Is(err, errObjectChanged) || errors.Is(err, errGatewayChanged) || isK8sConflict(err):
 				code = "conflict"
 			}
 			if dryRun {
@@ -1419,13 +1419,13 @@ func TeardownInferenceGateway(c *Client, modelsJustDeleted bool) (*types.Operati
 		}
 		path := gatewayObjectPath(kind)
 		logs = append(logs, fmt.Sprintf("Deleting %s...", gatewayDesc(kind)))
-		if _, err := deleteWithUID(c, path, cur.meta.UID); err != nil && !IsK8sError(err, 404) {
+		if _, err := deleteWithUID(c, path, cur.meta.UID); err != nil && !isK8sNotFound(err) {
 			done := ""
 			if len(deleted) > 0 {
 				done = " Deleted before: " + strings.Join(deleted, ", ") + "."
 			}
 			code := errorCodeFromK8sErr(err)
-			if IsK8sError(err, 409) {
+			if isK8sConflict(err) {
 				code = "conflict"
 			}
 			return fail(fmt.Sprintf("Failed to delete %s: %v.%s Delete again to retry.%s", gatewayDesc(kind), err, done, templateHint(err)), code, "delete failed"), nil

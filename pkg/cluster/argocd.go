@@ -316,7 +316,7 @@ func (a *argoCheck) applicationsServed() argoRead[bool] {
 	var r argoRead[bool]
 	body, _, err := a.c.get(argoAPI)
 	switch {
-	case IsK8sError(err, 404):
+	case isK8sNotFound(err):
 	case err != nil:
 		r.err = fmt.Sprintf("reading the API server's list of Argo CD APIs failed: %v", err)
 	default:
@@ -571,7 +571,7 @@ func (a *argoCheck) remoteCluster() argoRead[string] {
 	defer func() { a.remote = &r }()
 	body, _, err := a.c.get(acmWorkAPI)
 	switch {
-	case IsK8sError(err, 404):
+	case isK8sNotFound(err):
 	case err != nil:
 		r.err = fmt.Sprintf("whether an ACM hub manages this cluster could not be read: %v", err)
 		return r
@@ -613,7 +613,7 @@ func (a *argoCheck) managerRoleBinding(ns string) argoRead[string] {
 	var r argoRead[string]
 	_, _, err := a.c.get(namespacedPath("rbac.authorization.k8s.io/v1", "rolebindings", ns, argoCDManagerBinding))
 	switch {
-	case IsK8sError(err, 404):
+	case isK8sNotFound(err):
 	case err != nil:
 		r.err = fmt.Sprintf("whether an Argo CD on another cluster manages namespace %s could not be read: %v", ns, err)
 	default:

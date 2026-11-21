@@ -447,7 +447,7 @@ func prepareMirrorRemove(c *Client, w *nodeSetupWork) {
 	w.done = "Deleted ImageDigestMirrorSet " + MirrorName + "."
 	w.verify = func(c *Client) error {
 		_, _, err := c.get(clusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName))
-		if IsK8sError(err, http.StatusNotFound) {
+		if isK8sNotFound(err) {
 			return nil
 		}
 		if err == nil {
@@ -464,7 +464,7 @@ func prepareMirrorRemove(c *Client, w *nodeSetupWork) {
 func updaterQuayToken(c *Client) (string, string, string) {
 	body, _, err := c.get(namespacedPath("v1", "secrets", "kube-system", "additional-pull-secret"))
 	if err != nil {
-		if IsK8sError(err, http.StatusNotFound) {
+		if isK8sNotFound(err) {
 			return "", "no_token", "The updater has no quay.io/rhoai token yet: save it under Pull secret first. Nothing was changed."
 		}
 		return "", refusalCodeFor(err), "Cannot read the updater's token in kube-system/additional-pull-secret: " + err.Error() + ". Nothing was changed."

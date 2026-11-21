@@ -135,7 +135,7 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 			continue
 		}
 		path, _ := maasModelRefPath(c, g.pub.project, g.pub.model)
-		if _, err := deleteWithUID(c, path, ref.Metadata.UID); err != nil && !IsK8sError(err, http.StatusNotFound) {
+		if _, err := deleteWithUID(c, path, ref.Metadata.UID); err != nil && !isK8sNotFound(err) {
 			failed = append(failed, fmt.Errorf("delete MaaSModelRef %s: %w", g.pub.key(), err))
 			continue
 		}
@@ -177,7 +177,7 @@ func pruneGoneMaaSPublications(c *Client) (changed bool, logs []string, err erro
 				continue
 			}
 			if len(live) == 0 {
-				if _, err := deleteWithUID(c, accessPath, meta.UID); err != nil && !IsK8sError(err, http.StatusNotFound) {
+				if _, err := deleteWithUID(c, accessPath, meta.UID); err != nil && !isK8sNotFound(err) {
 					failed = append(failed, fmt.Errorf("delete %s: %w", w.kind, err))
 					continue
 				}
@@ -294,7 +294,7 @@ func updateToolObject(c *Client, desc, path string, obj map[string]any, current 
 				return nil
 			}
 		}
-		if !IsK8sError(err, http.StatusConflict) {
+		if !isK8sConflict(err) {
 			return err
 		}
 		var found bool

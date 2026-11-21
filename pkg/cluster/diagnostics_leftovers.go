@@ -918,7 +918,7 @@ func readDeploymentForScan(c *Client, kind, namespace, name string) (workloadObj
 
 func decodeWorkload(body []byte, err error) (workloadObject, bool, bool, error) {
 	var w workloadObject
-	if IsK8sError(err, http.StatusNotFound) {
+	if isK8sNotFound(err) {
 		return w, false, true, nil
 	}
 	if err != nil {

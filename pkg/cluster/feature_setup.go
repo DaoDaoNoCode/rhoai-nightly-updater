@@ -181,7 +181,7 @@ func writePrereqRecord(c *Client, rec prereqRecord) error {
 // it or the ConfigMap is missing).
 func readSnapshotKey(c *Client, key string) (string, error) {
 	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return "", nil
 	}
 	if err != nil {
@@ -986,7 +986,7 @@ func componentUsers(c *Client, key string) ([]string, error) {
 		}
 	case "mlflowoperator":
 		cr, err := getMLflowCR(c)
-		if IsK8sError(err, 404) {
+		if isK8sNotFound(err) {
 			return nil, nil
 		}
 		if err != nil {
@@ -1004,7 +1004,7 @@ func componentUsers(c *Client, key string) ([]string, error) {
 			live(m.Metadata, "LLMInferenceService")
 		}
 		body, _, err := c.get(clusterPath("serving.kserve.io/v1beta1", "inferenceservices", ""))
-		if err != nil && !IsK8sError(err, 404) {
+		if err != nil && !isK8sNotFound(err) {
 			return nil, fmt.Errorf("list InferenceServices: %w", err)
 		}
 		if err == nil {
@@ -1181,7 +1181,7 @@ func RestoreComponents(c *Client, keys []string) (*types.OperationResponse, erro
 				logs = append(logs, "OK: "+key+" "+v.prev)
 				break
 			}
-			if !IsK8sError(err, http.StatusConflict) {
+			if !isK8sConflict(err) {
 				return stop(fmt.Sprintf("Failed to turn %s back to %s: %v.%s", key, v.prev, err, templateHint(err)), errorCodeFromK8sErr(err))
 			}
 			if attempt == 3 {

@@ -282,7 +282,7 @@ func HardResetDSC(c *Client, req types.DSCPlanRequest, emit func(UpdateStepEvent
 	r.step("delete", "running", "Deleting DataScienceCluster "+v.name)
 	if _, _, err := c.do(http.MethodDelete, path, "application/json", dscDeleteBody(v.uid), nil); err != nil {
 		clearDSCHardResetRecord(c)
-		if IsK8sError(err, http.StatusNotFound) || IsK8sError(err, http.StatusConflict) {
+		if isK8sNotFound(err) || isK8sConflict(err) {
 			return r.fail("delete", "DataScienceCluster "+v.name+" was deleted or replaced by someone else since the check, so nothing was changed by this reset. Reload the page.", "conflict"), nil
 		}
 		return r.fail("delete", "Deleting the DataScienceCluster failed: "+conversionMessage(err)+". Nothing was changed.", errorCodeFromK8sErr(err)), nil
@@ -365,7 +365,7 @@ type dscWaitState struct {
 
 func readDSCWaitState(c *Client, path string) (dscWaitState, error) {
 	body, _, err := c.get(path)
-	if IsK8sError(err, http.StatusNotFound) {
+	if isK8sNotFound(err) {
 		return dscWaitState{}, nil
 	}
 	if err != nil {

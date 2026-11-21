@@ -68,7 +68,7 @@ func ownsModel(c *Client, meta objectMeta) (bool, error) {
 // readModelsRecord reads the record (empty when nothing is recorded).
 func readModelsRecord(c *Client) (modelsRecord, error) {
 	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
-	if IsK8sError(err, http.StatusNotFound) {
+	if isK8sNotFound(err) {
 		return modelsRecord{}, nil
 	}
 	if err != nil {

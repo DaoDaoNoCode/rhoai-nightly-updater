@@ -80,7 +80,7 @@ func GetDeploymentSnapshot(c *Client) (map[string]string, string) {
 
 	body, _, err := c.bookkeeping().get(cmPath)
 	if err != nil {
-		if !IsK8sError(err, 404) {
+		if !isK8sNotFound(err) {
 			slog.Warn("snapshot: failed to read", "error", err)
 		}
 		return nil, ""
@@ -183,7 +183,7 @@ func saveSubscriptionSnapshot(c *Client, sub map[string]any) error {
 // none was recorded.
 func loadSubscriptionSnapshot(c *Client) (*subscriptionSnapshot, error) {
 	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return nil, nil
 	}
 	if err != nil {

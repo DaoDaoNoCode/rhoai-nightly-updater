@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"net/url"
 	"slices"
 	"sort"
@@ -185,7 +184,7 @@ func (r *maasRecord) setShared(key, what string) {
 func readMaaSRecord(c *Client) (maasRecord, error) {
 	var rec maasRecord
 	body, _, err := c.bookkeeping().get(namespacedPath("v1", "configmaps", getActivityNamespace(), snapshotConfigMapName))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return rec, nil
 	}
 	if err != nil {
@@ -365,7 +364,7 @@ func maasInfraNamespace(c *Client) (string, error) {
 		if tc.Status.InfraNamespace != "" {
 			return tc.Status.InfraNamespace, nil
 		}
-	case IsK8sError(err, http.StatusNotFound):
+	case isK8sNotFound(err):
 	default:
 		return "", fmt.Errorf("cannot tell where maas-api and its database go: %s cannot be read (%w)", what, err)
 	}
@@ -624,7 +623,7 @@ type maasGatewayState struct {
 
 func readMaaSGateway(c *Client) (maasGatewayState, error) {
 	body, _, err := c.get(maasObjectPath("Gateway", ""))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return maasGatewayState{}, nil
 	}
 	if err != nil {
@@ -831,7 +830,7 @@ func maasConnectionURL(c *Client, ns string) (string, error) {
 // readMaaSDBCluster reads the database: found, owned, ready, a message.
 func readMaaSDBCluster(c *Client, ns string) (objectMeta, bool, bool, string, error) {
 	body, _, err := c.get(maasObjectPath("Cluster", ns))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return objectMeta{}, false, false, "", nil
 	}
 	if err != nil {
@@ -858,7 +857,7 @@ func readMaaSDBCluster(c *Client, ns string) (objectMeta, bool, bool, string, er
 // "False", "missing" or "" (unreadable).
 func deploymentAvailable(c *Client, ns, name string) string {
 	body, _, err := c.get(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, name))
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return "missing"
 	}
 	if err != nil {
@@ -882,7 +881,7 @@ func deploymentAvailable(c *Client, ns, name string) string {
 // "missing" or "" (unreadable or not reported), with its message.
 func readyCondition(c *Client, path string) (string, string) {
 	body, _, err := c.get(path)
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return "missing", ""
 	}
 	if err != nil {
@@ -932,7 +931,7 @@ func groupServed(c *Client, group string) (bool, error) {
 		return true, nil
 	}
 	body, _, err := c.get("/apis/" + group)
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return false, nil
 	}
 	if err != nil {
@@ -1771,7 +1770,7 @@ func readMaaSModelRef(c *Client, project, name string) (maasModelRefObject, bool
 func readMaaSObject(c *Client, path string) (maasModelRefObject, bool, error) {
 	var obj maasModelRefObject
 	body, _, err := c.get(path)
-	if IsK8sError(err, 404) {
+	if isK8sNotFound(err) {
 		return obj, false, nil
 	}
 	if err != nil {
@@ -1804,7 +1803,7 @@ func MaaSPublishedIn(c *Client, project, name string) (bool, error) {
 		return false, nil
 	}
 	_, found, err := readObjectMeta(c, refPath)
-	if err != nil && !IsK8sError(err, 404) {
+	if err != nil && !isK8sNotFound(err) {
 		return false, err
 	}
 	if found {
