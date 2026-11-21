@@ -21,12 +21,12 @@ What the tool itself changes: [docs/CLUSTER_CHANGES.md](docs/CLUSTER_CHANGES.md)
 
 | What you see in the app | Section |
 |---|---|
-| The app does not load, the pod does not start, Route 503 | [§3](#3-app-down-or-pod-not-starting) |
+| The app does not load, the pod does not start, Route 503, "This page could not be loaded" | [§3](#3-app-down-or-pod-not-starting) |
 | 403 after login, "Read-only access", "Only cluster-admins can see this page", "Sign in again", "Log out and log in again", a change stopped because your sign-in ended or your account was refused | [§4](#4-sign-in-and-permissions) |
 | An OAuth error page (`unauthorized_client`, `invalid_request`, `scope denied`), an OAuthClient left after deleting the namespace | [§4, Sign-in and the OAuthClient](#sign-in-and-the-oauthclient) |
 | "vX.Y.Z is available", "this updater's deployment is out of date" | [§2](#2-upgrade-roll-back-or-remove-the-updater) |
-| "... is running ... on updater pod ...", "... was interrupted", 409 `cluster_busy`, 503 `lock_unavailable` | [§5](#5-operations-busy-stuck-interrupted) |
-| **Operator failed**, **No Subscription**, a failed Update or Install a different build step | [§6](#6-update--install-a-different-build-failed) |
+| "... is running ... on updater pod ...", "... was interrupted", 409 `cluster_busy`, 503 `lock_unavailable`, "The operation stopped on an internal error in the updater" | [§5](#5-operations-busy-stuck-interrupted) |
+| **Operator failed**, **No Subscription**, a failed Update or Install a different build step, "the API server's response is larger than 50 MiB" | [§6](#6-update--install-a-different-build-failed) |
 | A PR shows "Does not contain" in Build Explorer, tags or commit dates do not load | [§8](#8-build-explorer-quay-and-github) |
 | "Dashboard Dev session active", "Distance from main unknown" | [§9](#9-dashboard-dev) |
 | Storage **Needs attention** (Migrate storage or Repair), **Error**, Delete disabled, a pipeline server or sample problem | [§10](#10-environment-page), [§10.1](#101-migrate-storage-from-an-earlier-version) |
@@ -127,6 +127,7 @@ oc logs -n $NS deploy/$APP -c app --previous
 | `Pending` | Node capacity (`oc describe pod`). Requests are 60m CPU / 96Mi |
 | `Terminating` for minutes | Expected while an operation drains (§2) |
 | Route 503 | Pods not Ready, or the NetworkPolicy no longer admits the router: `oc get netpol $APP -n $NS -o yaml` |
+| A page says "This page could not be loaded" with **Reload**; the masthead and navigation stay | The tab could not load that page's files: usually the updater was updated since the tab was opened, and the old version's files are gone (the backend answers them 404), or the connection dropped. **Reload** loads the running version; going to another page also clears the message. If it comes back after a reload, check the pod and the Route as above |
 
 ## 4. Sign-in and permissions
 
@@ -181,6 +182,7 @@ An operation whose pod stopped before it finished:
 - **The lease:** every operation records a lease (key `lock` in ConfigMap `rhoai-nightly-updater-operation`) and renews its heartbeat every 10 s, also while the pod drains at shutdown. A lease whose heartbeat is older than **45 s** is free: that is how long a crashed pod's operation blocks a new one. A lease of an earlier container of the same pod (kubelet restart) is free at once. The lock fails closed: a lease of another pod refuses with 409 `cluster_busy`, and a lease that cannot be read or written (API errors, or write conflicts through every retry) refuses with **503 `lock_unavailable`** ("Cannot verify that no other updater pod is running an operation"). Nothing was changed; retry after a few seconds (`Retry-After`). If it persists, check that the updater can reach the API and patch ConfigMap `rhoai-nightly-updater-operation`.
 - **"Stopped: another updater pod took over" (`lock_lost`):** while an operation runs, a renewal found another pod's lease, or no renewal succeeded for 35 s (the TTL minus one heartbeat) so the lease may soon expire. The 35 s count from the heartbeat time written by the last successful renewal, the time other pods compare with the 45 s TTL. The stop comes at that moment even if a renewal is still in flight, 10 s before another pod may take the lease over. The lock compares heartbeat times written by different pods, so it assumes their clocks agree to well within those 10 s; OpenShift nodes keep them synchronised with chronyd, so this only matters for a `DEV_MODE` process on a machine whose clock is off. The operation stops at once and makes no further change, **not even the automatic restore**, because the other pod may be changing the same Subscription and catalog. Check the cluster state, wait for the other operation, then re-run.
 - **"Stopped: your sign-in ended" (`sign_in_ended`):** the API server rejected your own token while the change ran; part of it may have run. See [§4](#4-sign-in-and-permissions).
+- **"The operation stopped on an internal error in the updater, so how far it got is not known. Check what it changed before you retry"** (errorCode `internal`; the update dry run answers it as a 500): a bug in the updater stopped the change part-way, and the updater does not know which steps ran. The lock and your 30-second slot are free again, so you can retry at once, but first check what it changed (the Status page, the page of what you changed, the activity log). The updater's log has the panic with its stack: `oc logs -n $NS deploy/$APP -c app | grep -A40 'panic in operation handler'`. Report it with that stack.
 - **"*X* was interrupted":** the operation's marker is still recorded and the process that wrote it holds no live lease: the pod or its container stopped mid-operation (SIGKILL, node loss, OOM), or an updater version without leases left it. An operation that still runs in another pod is not reported as interrupted. Check the operator status, then run the same operation again. Every step is safe to repeat; Update and Install a different build recreate a missing Subscription with the settings recorded before the last operation. For Dashboard Dev, run **Revert**.
 - **Operation deadline:** 15 minutes. OLM gets 8 minutes to reach `Succeeded`, and the CSV must then stay `Succeeded` for 20 seconds: right after an install OLM can briefly move it back to `Pending` (NeedsReinstall) while its webhooks come up. A failure restores the previous catalog and Subscription within about 1 minute.
 
@@ -282,6 +284,7 @@ oc get installplan,csv -n redhat-ods-operator
 | Re-deploy refuses: "channel head moved" (Automatic approval) | Use Update (it changes the version) |
 | `BundleUnpackFailed` keeps recurring | See §11.5 |
 | Webhook "connection refused / no endpoints" errors | Diagnostics → stale webhooks. For a CRD conversion webhook see §11.2 |
+| "*METHOD path*: the API server's response is larger than 50 MiB" (on any page or step) | The updater reads at most 50 MiB of one API server answer, and this one was larger; before 5.0.0 it failed as "unexpected end of JSON input". The message names the request. See what makes it that big: `oc get --raw '<path from the message>' \| wc -c` (for example the PackageManifest list of `openshift-marketplace` grows with every CatalogSource). Remove what is stale (old CatalogSources, leftover objects), then retry. Nothing configures the limit; if the objects are all needed, report it |
 
 **Downgrades.** OLM cannot downgrade, so a confirmed install of an older version removes the operator and installs the older bundle. OLM applies every CRD in that bundle, so the CRDs it ships are **replaced by their older versions**:
 - fields only the newer version knows can be pruned from stored objects such as the DataScienceCluster, and are not restored by going back;
