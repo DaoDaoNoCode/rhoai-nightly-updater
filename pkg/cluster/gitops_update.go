@@ -80,7 +80,8 @@ func updateGitOpsPlan(c *Client, image string, currentCSV types.CSVInfo, logs *[
 
 // pendingInstallPlan returns the Subscription's current InstallPlan and its
 // phase while OLM is still working on it ("" once it is Complete or Failed,
-// or when there is none).
+// or when there is none). An answer it cannot parse is an error, so Update
+// refuses rather than delete a Subscription OLM may still be working on.
 func pendingInstallPlan(c *Client) (name, phase string, err error) {
 	body, _, err := c.get(subscriptionPath())
 	if IsK8sError(err, 404) {
@@ -96,7 +97,10 @@ func pendingInstallPlan(c *Client) (name, phase string, err error) {
 			} `json:"installPlanRef"`
 		} `json:"status"`
 	}
-	if json.Unmarshal(body, &sub) != nil || sub.Status.InstallPlanRef.Name == "" {
+	if err := json.Unmarshal(body, &sub); err != nil {
+		return "", "", fmt.Errorf("parse Subscription %s: %w", SubName, err)
+	}
+	if sub.Status.InstallPlanRef.Name == "" {
 		return "", "", nil
 	}
 	name = sub.Status.InstallPlanRef.Name
@@ -112,8 +116,8 @@ func pendingInstallPlan(c *Client) (name, phase string, err error) {
 			Phase string `json:"phase"`
 		} `json:"status"`
 	}
-	if json.Unmarshal(body, &ip) != nil {
-		return "", "", nil
+	if err := json.Unmarshal(body, &ip); err != nil {
+		return "", "", fmt.Errorf("parse InstallPlan %s: %w", name, err)
 	}
 	switch ip.Status.Phase {
 	case "Complete", "Failed":

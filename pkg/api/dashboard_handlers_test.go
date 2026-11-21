@@ -14,7 +14,7 @@ import (
 // dashboard is not deployed" (A04-9).
 func TestHandleDashboardStateReportsNetworkErrors(t *testing.T) {
 	setupDevMode(t)
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +23,7 @@ func TestHandleDashboardStateReportsNetworkErrors(t *testing.T) {
 	t.Setenv("KUBERNETES_SERVICE_HOST", host)
 	t.Setenv("KUBERNETES_SERVICE_PORT", port)
 
-	r := httptest.NewRequest("GET", "/api/dashboard/state", nil)
+	r := httptest.NewRequestWithContext(t.Context(), "GET", "/api/dashboard/state", nil)
 	r.Header.Set("X-Forwarded-Access-Token", "user-token")
 	w := httptest.NewRecorder()
 	HandleDashboardState(w, r)
@@ -51,7 +51,7 @@ func TestHandleDashboardBuilds(t *testing.T) {
 	})
 	t.Run("network-error", func(t *testing.T) {
 		setupDevMode(t)
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -59,7 +59,7 @@ func TestHandleDashboardBuilds(t *testing.T) {
 		_ = listener.Close()
 		t.Setenv("KUBERNETES_SERVICE_HOST", host)
 		t.Setenv("KUBERNETES_SERVICE_PORT", port)
-		r := httptest.NewRequest("GET", "/api/dashboard/builds", nil)
+		r := httptest.NewRequestWithContext(t.Context(), "GET", "/api/dashboard/builds", nil)
 		r.Header.Set("X-Forwarded-Access-Token", "user-token")
 		w := httptest.NewRecorder()
 		HandleDashboardBuilds(w, r)
@@ -72,7 +72,7 @@ func TestHandleDashboardBuilds(t *testing.T) {
 		calls := countingAPIServer(t)
 		mux := gitOpsMux(t)
 		w := httptest.NewRecorder()
-		mux.ServeHTTP(w, postJSONMethod(http.MethodGet, "/api/dashboard/builds", "user:admin", ""))
+		mux.ServeHTTP(w, postJSONMethod(t, http.MethodGet, "/api/dashboard/builds", "user:admin", ""))
 		body := decodeError(t, w)
 		if w.Code != http.StatusForbidden || body["errorCode"] != "profile_gitops" || !strings.HasPrefix(body["error"].(string), "Dashboard Dev is off") {
 			t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
@@ -99,7 +99,7 @@ func TestDashboardDeployHandlersValidateFlavor(t *testing.T) {
 		{"main-invalid-body", HandleDashboardDeployMain, "/api/dashboard/deploy-main", `{"flavor":`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := httptest.NewRequest("POST", tc.path, strings.NewReader(tc.body))
+			r := httptest.NewRequestWithContext(t.Context(), "POST", tc.path, strings.NewReader(tc.body))
 			r.Header.Set("X-Forwarded-Access-Token", "user-token")
 			r.Header.Set("X-Forwarded-User", "flavor-"+tc.name)
 			r.Header.Set("Content-Type", "application/json")

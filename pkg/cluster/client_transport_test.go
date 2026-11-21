@@ -36,7 +36,12 @@ func TestAPIServerTransportUsesHTTP2AndReusesConnections(t *testing.T) {
 
 	// Warm one connection, then fan out like GetStatus does.
 	get := func() string {
-		resp, err := client.Get(srv.URL)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
+		if err != nil {
+			t.Error(err)
+			return ""
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			t.Error(err)
 			return ""

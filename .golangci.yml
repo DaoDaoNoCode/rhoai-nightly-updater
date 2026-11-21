@@ -14,7 +14,32 @@ linters:
     - unparam
     - wastedassign
     - misspell
+    # Requests, commands and listeners carry the caller's context (tests:
+    # t.Context()), so they stop with it.
+    - noctx
+    # An `if err != nil` branch that returns nil instead of err.
+    - nilnesserr
+    # host:port built with Sprintf breaks on an IPv6 host.
+    - nosprintfhostport
+    # Bug classes with no finding today, kept out from now on: a []any
+    # passed as one variadic any, Trojan Source bidi characters, a
+    # Duration multiplied by a Duration, a malformed //go: directive,
+    # append to a slice made with a length, reassigned package variables
+    # of other packages (io.EOF), a loop variable copy Go 1.22 made
+    # needless.
+    - asasalint
+    - bidichk
+    - durationcheck
+    - gocheckcompilerdirectives
+    - makezero
+    - reassign
+    - copyloopvar
+    # A //nolint must name its linter and say why.
+    - nolintlint
   settings:
+    nolintlint:
+      require-explanation: true
+      require-specific: true
     errcheck:
       exclude-functions:
         # Closing a response body or writing to a ResponseWriter/metrics

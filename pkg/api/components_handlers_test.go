@@ -43,7 +43,7 @@ func TestComponentsReadCarriesTheSignedInAdminsClient(t *testing.T) {
 				mux = http.NewServeMux()
 				Register(mux)
 			}
-			r := httptest.NewRequest(http.MethodGet, "/api/components", nil)
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/components", nil)
 			r.Header.Set("X-Forwarded-Access-Token", "sha256~admin-token")
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, r)

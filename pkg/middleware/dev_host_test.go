@@ -29,7 +29,7 @@ func TestLocalOnlyBlocksDNSRebinding(t *testing.T) {
 		{"127.0.0.1:8080", "http://127.0.0.1:1234", 403},
 		{"127.0.0.1:8080", "null", 403},
 	} {
-		r := httptest.NewRequest("POST", "/api/update/stream", nil)
+		r := httptest.NewRequestWithContext(t.Context(), "POST", "/api/update/stream", nil)
 		r.Host = tc.host
 		if tc.origin != "" {
 			r.Header.Set("Origin", tc.origin)
@@ -46,7 +46,7 @@ func TestRequestIDRejectsMalformedClientIDs(t *testing.T) {
 	var seen string
 	h := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { seen = RequestIDFrom(r.Context()) }))
 	for _, id := range []string{strings.Repeat("a", 5000), "bad id", "x\ny", "<script>"} {
-		r := httptest.NewRequest("GET", "/", nil)
+		r := httptest.NewRequestWithContext(t.Context(), "GET", "/", nil)
 		r.Header.Set("X-Request-Id", id)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
@@ -65,7 +65,7 @@ func TestAccessLogIncludesRequestID(t *testing.T) {
 	h := RequestID(AccessLog(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
 	})))
-	r := httptest.NewRequest("GET", "/api/status", nil)
+	r := httptest.NewRequestWithContext(t.Context(), "GET", "/api/status", nil)
 	r.Header.Set("X-Request-Id", "req-123")
 	h.ServeHTTP(httptest.NewRecorder(), r)
 	line := buf.String()

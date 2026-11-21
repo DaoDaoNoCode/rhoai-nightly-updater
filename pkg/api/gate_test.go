@@ -22,8 +22,8 @@ func allowMutations(t *testing.T) {
 	mutationPermission = func(context.Context, string) (bool, error) { return true, nil }
 }
 
-func postJSON(path, token, body string) *http.Request {
-	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+func postJSON(t testing.TB, path, token, body string) *http.Request {
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	if token != "" {
 		r.Header.Set("X-Forwarded-Access-Token", token)
@@ -75,7 +75,7 @@ func TestAuthGate(t *testing.T) {
 				if wrapper == "withMutationAuth" {
 					h = withMutationAuth(fn)
 				}
-				r := postJSON("/api/gate-"+strings.ReplaceAll(tc.name, " ", "-"), tc.token, "{}")
+				r := postJSON(t, "/api/gate-"+strings.ReplaceAll(tc.name, " ", "-"), tc.token, "{}")
 				// A spoofed header never overrides the verified identity.
 				r.Header.Set("X-Forwarded-User", "mallory")
 				w := httptest.NewRecorder()
@@ -112,7 +112,7 @@ func TestMutationPermissionErrorsMapToSessionExpiredOr503(t *testing.T) {
 			"permissions": HandleUserPermissions,
 		} {
 			w := httptest.NewRecorder()
-			h(w, postJSON("/api/perm-"+name, "user:bob", "{}"))
+			h(w, postJSON(t, "/api/perm-"+name, "user:bob", "{}"))
 			want := tc.status
 			if name == "permissions" && tc.err == nil {
 				want = 200 // {"canMutate":false}
@@ -180,7 +180,7 @@ func TestImageAllowlistOnEveryImageEndpoint(t *testing.T) {
 				h = HandleUpdateStream
 			}
 			w := httptest.NewRecorder()
-			h(w, postJSON(path, "tok", `{"image":"`+image+`","dryRun":true}`))
+			h(w, postJSON(t, path, "tok", `{"image":"`+image+`","dryRun":true}`))
 			if w.Code != 400 || called {
 				t.Errorf("%s %s: status %d called=%v", path, image, w.Code, called)
 			}
@@ -188,7 +188,7 @@ func TestImageAllowlistOnEveryImageEndpoint(t *testing.T) {
 	}
 	setupDevMode(t)
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/api/build-explorer/content?image=docker.io/evil/fbc:1", nil)
+	r := httptest.NewRequestWithContext(t.Context(), "GET", "/api/build-explorer/content?image=docker.io/evil/fbc:1", nil)
 	r.Header.Set("X-Forwarded-Access-Token", "tok")
 	HandleBuildExplorerContent(w, r)
 	if w.Code != 400 {
@@ -218,13 +218,13 @@ func TestUpdateEndpointOnlyRunsDryRuns(t *testing.T) {
 		return &types.OperationResponse{Success: true, Message: "Dry run complete"}, nil
 	}
 	w := httptest.NewRecorder()
-	HandleUpdate(w, postJSON("/api/update", "tok", `{"image":"`+image+`","dryRun":false}`))
+	HandleUpdate(w, postJSON(t, "/api/update", "tok", `{"image":"`+image+`","dryRun":false}`))
 	if w.Code != 400 || calls != 0 {
 		t.Fatalf("non-dry-run update: status %d calls %d", w.Code, calls)
 	}
 	for i := range 2 { // dry runs do not use up the rate limit
 		w = httptest.NewRecorder()
-		HandleUpdate(w, postJSON("/api/update", "tok", `{"image":"`+image+`","dryRun":true}`))
+		HandleUpdate(w, postJSON(t, "/api/update", "tok", `{"image":"`+image+`","dryRun":true}`))
 		if w.Code != 200 {
 			t.Fatalf("dry run %d: %d %s", i, w.Code, w.Body.String())
 		}
@@ -272,13 +272,13 @@ func TestBusyClusterReturnsRunningOperation(t *testing.T) {
 	done := make(chan *httptest.ResponseRecorder)
 	go func() {
 		w := httptest.NewRecorder()
-		HandleUpdateStream(w, postJSON("/api/update/stream", "user:alice", `{"image":"`+image+`"}`))
+		HandleUpdateStream(w, postJSON(t, "/api/update/stream", "user:alice", `{"image":"`+image+`"}`))
 		done <- w
 	}()
 	<-stepped // the operation started (a hang fails at go test's -timeout)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/api/operation", nil)
+	r := httptest.NewRequestWithContext(t.Context(), "GET", "/api/operation", nil)
 	r.Header.Set("X-Forwarded-Access-Token", "user:bob")
 	HandleOperation(w, r)
 	var status OperationStatus
@@ -292,7 +292,7 @@ func TestBusyClusterReturnsRunningOperation(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	HandleDashboardRevert(w, postJSON("/api/dashboard/revert", "user:bob", "{}"))
+	HandleDashboardRevert(w, postJSON(t, "/api/dashboard/revert", "user:bob", "{}"))
 	body := decodeError(t, w)
 	busyOp, _ := body["operation"].(map[string]any)
 	if w.Code != 409 || body["errorCode"] != "cluster_busy" || busyOp["user"] != "alice" || busyOp["type"] != "update" {
@@ -333,7 +333,7 @@ func TestLockReleasedWhenOperationPanics(t *testing.T) {
 		panic("boom")
 	}
 	w := httptest.NewRecorder()
-	HandleRefreshStream(w, postJSON("/api/refresh/stream", "tok", "{}"))
+	HandleRefreshStream(w, postJSON(t, "/api/refresh/stream", "tok", "{}"))
 	if clusterMutationInProgress.Load() || inflight.snapshot() != nil {
 		t.Fatal("lock held after a panic")
 	}
@@ -367,7 +367,7 @@ func TestInterruptedOperationReportedAfterRestart(t *testing.T) {
 			return &cluster.OperationRecord{Marker: tc.marker}, nil
 		}
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest("GET", "/api/operation", nil)
+		r := httptest.NewRequestWithContext(t.Context(), "GET", "/api/operation", nil)
 		r.Header.Set("X-Forwarded-Access-Token", "tok")
 		HandleOperation(w, r)
 		var status OperationStatus
@@ -396,7 +396,7 @@ func TestConcurrentDuplicateMutationsRunOnce(t *testing.T) {
 	for range 3 {
 		wg.Go(func() {
 			w := httptest.NewRecorder()
-			h(w, postJSON("/api/dup", "user:alice", "{}"))
+			h(w, postJSON(t, "/api/dup", "user:alice", "{}"))
 			codes <- w.Code
 		})
 	}
@@ -417,7 +417,7 @@ func TestConcurrentDuplicateMutationsRunOnce(t *testing.T) {
 	w := httptest.NewRecorder()
 	release2 := make(chan struct{})
 	close(release2)
-	withMutationAuth(func(*cluster.Client, http.ResponseWriter, *http.Request) {})(w, postJSON("/api/dup", "user:bob", "{}"))
+	withMutationAuth(func(*cluster.Client, http.ResponseWriter, *http.Request) {})(w, postJSON(t, "/api/dup", "user:bob", "{}"))
 	if w.Code != 200 {
 		t.Fatalf("other user: %d", w.Code)
 	}
@@ -431,7 +431,7 @@ func TestRateLimitSlotReturnedOnFailure(t *testing.T) {
 	})
 	for i := range 3 {
 		w := httptest.NewRecorder()
-		h(w, postJSON("/api/fails", "tok", "{}"))
+		h(w, postJSON(t, "/api/fails", "tok", "{}"))
 		if w.Code != 400 {
 			t.Fatalf("attempt %d: %d (a failed request must not block a retry)", i, w.Code)
 		}
@@ -451,13 +451,13 @@ func TestRateLimitIsTheToolsOwnWithTheRealWait(t *testing.T) {
 	t.Cleanup(func() { mutationLimiter = orig })
 	h := withMutationAuth(func(_ *cluster.Client, w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	w := httptest.NewRecorder()
-	h(w, postJSON("/api/once", "tok", "{}"))
+	h(w, postJSON(t, "/api/once", "tok", "{}"))
 	if w.Code != 200 {
 		t.Fatalf("first: %d", w.Code)
 	}
 	now = now.Add(12*time.Second + 300*time.Millisecond)
 	w = httptest.NewRecorder()
-	h(w, postJSON("/api/once", "tok", "{}"))
+	h(w, postJSON(t, "/api/once", "tok", "{}"))
 	var body struct{ Error, ErrorCode string }
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if w.Code != http.StatusTooManyRequests || body.ErrorCode != "user_rate_limited" || w.Header().Get("Retry-After") != "18" ||
@@ -514,7 +514,7 @@ func TestFiveFormerlyUnlockedMutationsTakeTheClusterLock(t *testing.T) {
 		"/api/resources/pipeline-server/teardown": HandlePipelineServerTeardown,
 	} {
 		w := httptest.NewRecorder()
-		h(w, postJSON(path, "tok", `{"auth":"`+base64.StdEncoding.EncodeToString([]byte("user:pass"))+`","project":"my-project"}`))
+		h(w, postJSON(t, path, "tok", `{"auth":"`+base64.StdEncoding.EncodeToString([]byte("user:pass"))+`","project":"my-project"}`))
 		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "cluster_busy") {
 			t.Errorf("%s while another operation runs: %d %s", path, w.Code, w.Body.String())
 		}
@@ -534,7 +534,7 @@ func TestReadinessCachesTheAPICheck(t *testing.T) {
 	}
 	probe := func() int {
 		w := httptest.NewRecorder()
-		HandleReady(w, httptest.NewRequest("GET", "/api/health/ready", nil))
+		HandleReady(w, httptest.NewRequestWithContext(t.Context(), "GET", "/api/health/ready", nil))
 		return w.Code
 	}
 	for i := range 5 {
@@ -587,7 +587,7 @@ func TestMetricLabelsAreBounded(t *testing.T) {
 func TestVersionEndpoint(t *testing.T) {
 	t.Setenv("TEMPLATE_REVISION", ExpectedTemplateRevision)
 	w := httptest.NewRecorder()
-	HandleVersion(w, httptest.NewRequest("GET", "/api/version", nil))
+	HandleVersion(w, httptest.NewRequestWithContext(t.Context(), "GET", "/api/version", nil))
 	var v VersionInfo
 	if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil || v.Version == "" || v.Commit == "" || v.GoVersion == "" ||
 		v.TemplateRevision != ExpectedTemplateRevision || v.TemplateOutdated {
@@ -606,7 +606,7 @@ func TestVersionInstallMethod(t *testing.T) {
 	} {
 		t.Setenv("INSTALL_METHOD", tc.env)
 		w := httptest.NewRecorder()
-		HandleVersion(w, httptest.NewRequest("GET", "/api/version", nil))
+		HandleVersion(w, httptest.NewRequestWithContext(t.Context(), "GET", "/api/version", nil))
 		var v VersionInfo
 		if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil || v.InstallMethod != tc.want {
 			t.Errorf("INSTALL_METHOD=%q: installMethod %q, want %q (%s)", tc.env, v.InstallMethod, tc.want, w.Body.String())

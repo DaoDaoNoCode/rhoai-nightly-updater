@@ -80,7 +80,7 @@ func TestGitOpsProfileAllowlist(t *testing.T) {
 // counts connections, so a test can prove that no API call was made.
 func countingAPIServer(t *testing.T) *atomic.Int32 {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestGitOpsProfileRefusesEveryOtherRoute(t *testing.T) {
 		method, path, _ := strings.Cut(pattern, " ")
 		for _, token := range []string{"", "user:admin"} {
 			w := httptest.NewRecorder()
-			mux.ServeHTTP(w, postJSONMethod(method, path, token, "{}"))
+			mux.ServeHTTP(w, postJSONMethod(t, method, path, token, "{}"))
 			body := decodeError(t, w)
 			if w.Code != http.StatusForbidden || body["errorCode"] != cluster.ErrorCodeProfileGitOps ||
 				!strings.HasPrefix(body["error"].(string), feature+" is off") || !strings.Contains(body["error"].(string), "gitops profile") {
@@ -161,7 +161,7 @@ func TestGitOpsProfileReadsNeedClusterAdmin(t *testing.T) {
 		}
 		checked++
 		w := httptest.NewRecorder()
-		mux.ServeHTTP(w, postJSONMethod(method, path, "user:reader", ""))
+		mux.ServeHTTP(w, postJSONMethod(t, method, path, "user:reader", ""))
 		if body := decodeError(t, w); w.Code != http.StatusForbidden || body["errorCode"] != "forbidden" || body["error"] != gitOpsAdminMessage {
 			t.Errorf("%s as a non-admin: %d %s", pattern, w.Code, w.Body.String())
 		}
@@ -174,7 +174,7 @@ func TestGitOpsProfileReadsNeedClusterAdmin(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, postJSONMethod(http.MethodGet, "/api/user/permissions", "user:reader", ""))
+	mux.ServeHTTP(w, postJSONMethod(t, http.MethodGet, "/api/user/permissions", "user:reader", ""))
 	var perms map[string]any
 	_ = json.Unmarshal(w.Body.Bytes(), &perms)
 	if w.Code != http.StatusOK || perms["canMutate"] != false || perms["user"] != "reader" {
@@ -184,7 +184,7 @@ func TestGitOpsProfileReadsNeedClusterAdmin(t *testing.T) {
 	// A permission check that cannot be answered fails closed (503), as for mutations.
 	mutationPermission = func(context.Context, string) (bool, error) { return false, context.DeadlineExceeded }
 	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, postJSONMethod(http.MethodGet, "/api/status", "user:admin", ""))
+	mux.ServeHTTP(w, postJSONMethod(t, http.MethodGet, "/api/status", "user:admin", ""))
 	if body := decodeError(t, w); w.Code != http.StatusServiceUnavailable || body["errorCode"] != "authorization_unavailable" {
 		t.Fatalf("status with an unanswered permission check: %d %s", w.Code, w.Body.String())
 	}
@@ -199,7 +199,7 @@ func TestGitOpsProfileReadForClusterAdmin(t *testing.T) {
 	allowMutations(t)
 	mux := gitOpsMux(t)
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, postJSONMethod(http.MethodGet, "/api/operation", "user:admin", ""))
+	mux.ServeHTTP(w, postJSONMethod(t, http.MethodGet, "/api/operation", "user:admin", ""))
 	var op OperationStatus
 	if err := json.Unmarshal(w.Body.Bytes(), &op); w.Code != http.StatusOK || err != nil {
 		t.Fatalf("operation for an admin: %d %s", w.Code, w.Body.String())
@@ -214,7 +214,7 @@ func TestGitOpsProfileUpdateStream(t *testing.T) {
 
 	mutationPermission = func(context.Context, string) (bool, error) { return false, nil }
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, postJSON("/api/update/stream", "user:reader", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6"}`))
+	mux.ServeHTTP(w, postJSON(t, "/api/update/stream", "user:reader", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6"}`))
 	if w.Code != http.StatusForbidden || decodeError(t, w)["errorCode"] != "forbidden" {
 		t.Fatalf("without cluster-admin: %d %s", w.Code, w.Body.String())
 	}
@@ -224,7 +224,7 @@ func TestGitOpsProfileUpdateStream(t *testing.T) {
 		t.Fatal("lock unexpectedly held")
 	}
 	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, postJSON("/api/update/stream", "user:admin", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6"}`))
+	mux.ServeHTTP(w, postJSON(t, "/api/update/stream", "user:admin", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6"}`))
 	releaseClusterMutationLock()
 	if w.Code != http.StatusConflict || decodeError(t, w)["errorCode"] != "cluster_busy" {
 		t.Fatalf("while another operation runs: %d %s", w.Code, w.Body.String())
@@ -240,14 +240,14 @@ func TestGitOpsProfileUpdateStream(t *testing.T) {
 		return &types.OperationResponse{Success: true, Message: "installed"}, nil
 	}
 	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, postJSON("/api/update/stream", "user:admin", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6","revertDashboardDev":true}`))
+	mux.ServeHTTP(w, postJSON(t, "/api/update/stream", "user:admin", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6","revertDashboardDev":true}`))
 	if w.Code != http.StatusOK || image != "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6" || !strings.Contains(w.Body.String(), `"status":"success"`) {
 		t.Fatalf("update: %d image=%q %s", w.Code, image, w.Body.String())
 	}
 
 	// The same validation as the full profile's Update.
 	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, postJSON("/api/update/stream", "user:admin2", `{"image":"docker.io/evil/catalog:1"}`))
+	mux.ServeHTTP(w, postJSON(t, "/api/update/stream", "user:admin2", `{"image":"docker.io/evil/catalog:1"}`))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("an image outside the allowed registries: %d %s", w.Code, w.Body.String())
 	}
@@ -260,7 +260,7 @@ func TestGitOpsProfileDryRun(t *testing.T) {
 	mux := gitOpsMux(t)
 	mutationPermission = func(context.Context, string) (bool, error) { return false, nil }
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, postJSON("/api/update", "user:reader", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6","dryRun":true}`))
+	mux.ServeHTTP(w, postJSON(t, "/api/update", "user:reader", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6","dryRun":true}`))
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("without cluster-admin: %d %s", w.Code, w.Body.String())
 	}
@@ -273,12 +273,12 @@ func TestGitOpsProfileDryRun(t *testing.T) {
 		return &types.OperationResponse{Success: true, Message: "Dry run complete. No changes were made."}, nil
 	}
 	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, postJSON("/api/update", "user:admin", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6","dryRun":true}`))
+	mux.ServeHTTP(w, postJSON(t, "/api/update", "user:admin", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6","dryRun":true}`))
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "No changes were made") {
 		t.Fatalf("dry run: %d %s", w.Code, w.Body.String())
 	}
 	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, postJSON("/api/update", "user:admin", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6"}`))
+	mux.ServeHTTP(w, postJSON(t, "/api/update", "user:admin", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6"}`))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("not a dry run: %d %s", w.Code, w.Body.String())
 	}
@@ -297,7 +297,7 @@ func TestFullProfileRegistersEveryHandler(t *testing.T) {
 	Register(mux)
 	mutationPermission = func(context.Context, string) (bool, error) { return false, nil }
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, postJSON("/api/reinstall/stream", "user:reader", "{}"))
+	mux.ServeHTTP(w, postJSON(t, "/api/reinstall/stream", "user:reader", "{}"))
 	if w.Code != http.StatusForbidden || decodeError(t, w)["errorCode"] != "forbidden" {
 		t.Fatalf("full profile, Reinstall without cluster-admin: %d %s", w.Code, w.Body.String())
 	}
@@ -308,7 +308,7 @@ func TestVersionReportsTheProfile(t *testing.T) {
 	for _, p := range []Profile{ProfileFull, ProfileGitOps} {
 		SetProfile(p)
 		w := httptest.NewRecorder()
-		HandleVersion(w, httptest.NewRequest(http.MethodGet, "/api/version", nil))
+		HandleVersion(w, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/version", nil))
 		var v map[string]any
 		_ = json.Unmarshal(w.Body.Bytes(), &v)
 		if v["profile"] != string(p) {
@@ -332,7 +332,7 @@ func TestGitOpsProfileUpdateNeedsTheAdmissionPolicy(t *testing.T) {
 		return errors.New("read ValidatingAdmissionPolicy x: not found")
 	}
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, postJSON("/api/update/stream", "user:admin", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6"}`))
+	mux.ServeHTTP(w, postJSON(t, "/api/update/stream", "user:admin", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6"}`))
 	if body := decodeError(t, w); w.Code != http.StatusServiceUnavailable || body["errorCode"] != "admission_policy_missing" || ran {
 		t.Fatalf("without the policy: %d %s ran=%v", w.Code, w.Body.String(), ran)
 	}
@@ -340,14 +340,14 @@ func TestGitOpsProfileUpdateNeedsTheAdmissionPolicy(t *testing.T) {
 		t.Fatal("the refused Update took the lock")
 	}
 	v := httptest.NewRecorder()
-	HandleVersion(v, httptest.NewRequest(http.MethodGet, "/api/version", nil))
+	HandleVersion(v, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/version", nil))
 	if !strings.Contains(v.Body.String(), "admission policy is not in place") {
 		t.Fatalf("/api/version = %s", v.Body.String())
 	}
 
 	checkGitOpsPolicy = func(*cluster.Client) error { return nil }
 	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, postJSON("/api/update/stream", "user:admin2", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6"}`))
+	mux.ServeHTTP(w, postJSON(t, "/api/update/stream", "user:admin2", `{"image":"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6"}`))
 	if w.Code != http.StatusOK || !ran {
 		t.Fatalf("with the policy: %d %s", w.Code, w.Body.String())
 	}

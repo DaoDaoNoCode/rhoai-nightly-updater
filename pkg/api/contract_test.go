@@ -63,7 +63,7 @@ func TestFrontendContract(t *testing.T) {
 	written := map[string]bool{}
 	for _, tc := range cases {
 		w := httptest.NewRecorder()
-		tc.h(w, getAs(tc.path, tc.token))
+		tc.h(w, getAs(t, tc.path, tc.token))
 		if w.Code != http.StatusOK {
 			t.Fatalf("%s: %d %s", tc.file, w.Code, w.Body.String())
 		}

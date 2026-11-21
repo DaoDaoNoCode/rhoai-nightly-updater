@@ -66,7 +66,7 @@ func TestOnlyTheProxySessionTokenIsTrusted(t *testing.T) {
 					allowMutations(t)
 					h = withMutationAuth(fn)
 				}
-				r := postJSON("/api/proxy-token-"+wrapper, tc.forwarded, "{}")
+				r := postJSON(t, "/api/proxy-token-"+wrapper, tc.forwarded, "{}")
 				if tc.auth != "" {
 					r.Header.Set("Authorization", tc.auth)
 				}

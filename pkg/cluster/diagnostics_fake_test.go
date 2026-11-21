@@ -3,9 +3,11 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -189,6 +191,14 @@ func serveToggleDSC(f *fakeAPI, version, dsc, patchBody string, components ...st
 	}
 	meta, _ := obj["metadata"].(map[string]any)
 	name, _ := meta["name"].(string)
+	// The API server sets a uid and a resourceVersion on every object, and
+	// moves the resourceVersion on every write.
+	if meta["uid"] == nil {
+		meta["uid"] = "uid-" + name
+	}
+	if meta["resourceVersion"] == nil {
+		meta["resourceVersion"] = "1"
+	}
 	var mu sync.Mutex
 	current := func() string {
 		raw, _ := json.Marshal(obj)
@@ -221,6 +231,9 @@ func serveToggleDSC(f *fakeAPI, version, dsc, patchBody string, components ...st
 			return 422, `{"kind":"Status","status":"Failure","code":422,"message":"` + err.Error() + `"}`
 		}
 		if r.URL.Query().Get("dryRun") != "All" {
+			m, _ := next["metadata"].(map[string]any)
+			n, _ := strconv.Atoi(fmt.Sprint(m["resourceVersion"]))
+			m["resourceVersion"] = strconv.Itoa(n + 1)
 			obj = next
 		}
 		raw, _ := json.Marshal(next)

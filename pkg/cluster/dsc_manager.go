@@ -1155,15 +1155,21 @@ func (v *dscView) keepsProtectedBelow(path []string, obj map[string]any) bool {
 
 // --- writes ------------------------------------------------------------------
 
-// dscWriteError turns the API server's refusal of a patch into a result:
-// a failed test is a change made since the user looked; anything else is
-// shown verbatim (validation rules, webhooks).
+// isPatchTestFailure says whether the API server refused a JSON Patch
+// because one of its "test" operations failed (422, "testing value <path>
+// failed: test failed"; k8s.io/apiserver endpoints/handlers/patch.go
+// applies the patch with gopkg.in/evanphx/json-patch): the object is not
+// what the patch was built on, and nothing was changed.
+func isPatchTestFailure(err error) bool {
+	var k *K8sError
+	return errors.As(err, &k) && k.Status == http.StatusUnprocessableEntity && (strings.Contains(k.K8sMessage, "testing value") || strings.Contains(k.K8sMessage, "test failed"))
+}
+
+// dscWriteError turns the API server's refusal of a patch into a result,
+// verbatim (validation rules, webhooks). A failed test is not shown: write
+// reports it as stale, and writeChecked checks again.
 func dscWriteError(err error, dryRun bool) *types.OperationResponse {
 	var k *K8sError
-	if errors.As(err, &k) && k.Status == http.StatusUnprocessableEntity && (strings.Contains(k.K8sMessage, "testing value") || strings.Contains(k.K8sMessage, "test failed")) {
-		return &types.OperationResponse{Success: false, ErrorCode: "conflict", Logs: []string{k.K8sMessage},
-			Message: "The DataScienceCluster changed since you looked, so nothing was changed. Reload the page and review the change again."}
-	}
 	what := "The API server refused the change"
 	if dryRun {
 		what = "The API server refused the change in its dry run"
@@ -1175,6 +1181,12 @@ func dscWriteError(err error, dryRun bool) *types.OperationResponse {
 	return &types.OperationResponse{Success: false, ErrorCode: nonEmpty(errorCodeFromK8sErr(err), "validation"), Logs: []string{msg},
 		Message: what + ": " + msg + ". Nothing was changed."}
 }
+
+// dscWriteAttempts bounds the patches of one change. The operator's
+// status writes move the DataScienceCluster's resourceVersion too, so a
+// patch bound to the version that was checked may meet one; the DSC is
+// then read again and every check runs again before the next patch.
+const dscWriteAttempts = 3
 
 // dscObjectPath is the API path of the DSC name at version ("v3"). A
 // package function, so the RBAC coverage test resolves it.
@@ -1198,28 +1210,83 @@ func patchDSCFields(c *Client, path string, ops []jsonPatchOp, dryRun bool) ([]b
 	return resp, err
 }
 
-// write runs the plan's patch: a dry run, then the patch, then a check that
-// the API server kept every value set.
-func (v *dscView) write(c *Client, p *dscPlanned) *types.OperationResponse {
-	path := dscObjectPath(v.version, v.name)
-	if _, err := patchDSCFields(c, path, p.ops, true); err != nil {
-		return dscWriteError(err, true)
+// write runs the plan's patch on the DataScienceCluster the plan was
+// checked on: the patch tests its uid and resourceVersion first (the
+// version of the read every check was made on), then the plan's own tests
+// and changes. A dry run, then the patch, then a check that the API server
+// kept every value set. stale: a test failed, so the DSC is no longer what
+// was checked and nothing was changed (a JSON Patch applies whole or not
+// at all); writeChecked then reads it again and checks again. A read
+// without a uid or resourceVersion (an API server always sets both) is
+// refused before anything is sent: the patch could not be bound to it.
+func (v *dscView) write(c *Client, p *dscPlanned) (res *types.OperationResponse, stale bool) {
+	if v.uid == "" || v.meta.ResourceVersion == "" {
+		return &types.OperationResponse{Success: false, ErrorCode: "internal",
+			Message: fmt.Sprintf("DataScienceCluster %s was read without a uid or resourceVersion, so the change cannot be limited to the object that was checked. Nothing was changed.", v.name)}, false
 	}
-	body, err := patchDSCFields(c, path, p.ops, false)
+	ops := append([]jsonPatchOp{
+		patchOp("test", []string{"metadata", "uid"}, v.uid),
+		patchOp("test", []string{"metadata", "resourceVersion"}, v.meta.ResourceVersion),
+	}, p.ops...)
+	path := dscObjectPath(v.version, v.name)
+	if _, err := patchDSCFields(c, path, ops, true); err != nil {
+		return dscWriteError(err, true), isPatchTestFailure(err)
+	}
+	body, err := patchDSCFields(c, path, ops, false)
 	if err != nil {
-		return dscWriteError(err, false)
+		return dscWriteError(err, false), isPatchTestFailure(err)
 	}
 	var after map[string]any
 	if err := json.Unmarshal(body, &after); err != nil {
-		return &types.OperationResponse{Success: false, ErrorCode: "internal", Message: "The change was sent, but the API server's answer could not be read: " + err.Error() + ". Reload the page to see the DataScienceCluster."}
+		return &types.OperationResponse{Success: false, ErrorCode: "internal", Message: "The change was sent, but the API server's answer could not be read: " + err.Error() + ". Reload the page to see the DataScienceCluster."}, false
 	}
 	for _, s := range p.sets {
 		if got, ok := lookupPath(after, s.Path); !ok || !jsonEqual(got, s.Value) {
 			return &types.OperationResponse{Success: false, ErrorCode: "internal",
-				Message: fmt.Sprintf("The API server accepted the change, but %s is %s instead of %s in the DataScienceCluster it returned. Reload the page and check it.", strings.Join(s.Path[2:], "."), nonEmpty(fieldText(got), "unset"), fieldText(s.Value))}
+				Message: fmt.Sprintf("The API server accepted the change, but %s is %s instead of %s in the DataScienceCluster it returned. Reload the page and check it.", strings.Join(s.Path[2:], "."), nonEmpty(fieldText(got), "unset"), fieldText(s.Value))}, false
 		}
 	}
-	return nil
+	return nil, false
+}
+
+// writeChecked plans a change on the read v and writes it (write). When
+// the patch finds the DataScienceCluster changed since that read, nothing
+// was changed: the DSC is read again and plan runs again on the new read,
+// with every check of the change (the removal preconditions, which are
+// about other objects than the DSC; the reviewed plan's token), before the
+// next patch. At most dscWriteAttempts patches, and only while it is the
+// same DSC (uid). A plan that refuses, or a read that fails, ends the
+// change with nothing changed. It returns the read and the plan that were
+// written, or the result that ended the change.
+func writeChecked(c *Client, v *dscView, plan func(v *dscView) (*dscPlanned, *types.OperationResponse)) (*dscView, *dscPlanned, *types.OperationResponse) {
+	uid, name := v.uid, v.name
+	for attempt := 1; ; attempt++ {
+		p, res := plan(v)
+		if res != nil {
+			return nil, nil, res
+		}
+		res, stale := v.write(c, p)
+		switch {
+		case res == nil:
+			return v, p, nil
+		case !stale:
+			return nil, nil, res
+		case attempt == dscWriteAttempts:
+			return nil, nil, &types.OperationResponse{Success: false, ErrorCode: "conflict", Logs: res.Logs,
+				Message: fmt.Sprintf("DataScienceCluster %s kept changing while the change was checked (%d attempts; the operator writes its status, or someone else is editing it). Nothing was changed. Try again.", name, attempt)}
+		}
+		slog.Info("dsc changed since it was checked; reading it again", "dsc", name, "attempt", attempt)
+		next, err := readDSCView(c)
+		switch {
+		case err != nil:
+			return nil, nil, &types.OperationResponse{Success: false, ErrorCode: errorCodeFromK8sErr(err),
+				Message: fmt.Sprintf("DataScienceCluster %s changed after the change was checked, and it could not be read again: %v. Nothing was changed.", name, err)}
+		case next.state != DSCStatePresent || next.uid != uid:
+			return nil, nil, &types.OperationResponse{Success: false, ErrorCode: "conflict",
+				Message: fmt.Sprintf("DataScienceCluster %s was deleted or created again after the change was checked. Nothing was changed. Reload the page and review the change again.", name)}
+		}
+		v = next
+	}
 }
 
 // changeSummary words the toggles a plan changes.
@@ -1271,24 +1338,10 @@ func SetDSCManagementState(c *Client, req types.DSCToggleRequest) (*types.Operat
 // now (Diagnostics' disable-component fix has its own confirmation and no
 // plan).
 func (v *dscView) setManagementState(c *Client, req types.DSCToggleRequest, activity string, reviewed bool) *types.OperationResponse {
-	if v.state == DSCStatePresent && req.Name != "" && req.Name != v.name {
-		return &types.OperationResponse{Success: false, ErrorCode: "conflict", Message: fmt.Sprintf("The DataScienceCluster is %s now, not %s. Reload the page. Nothing was changed.", v.name, req.Name)}
-	}
-	if t, ok := v.byKey[req.Path]; ok && t.Toggle && v.state == DSCStatePresent {
-		if cur, _ := lookupState(v.components(), t.Path); cur != req.From {
-			return &types.OperationResponse{Success: false, ErrorCode: "conflict",
-				Message: fmt.Sprintf("%s changed since you looked: it is %s now, not %s. Reload the page and try again. Nothing was changed.", req.Path, nonEmpty(cur, "not set"), nonEmpty(req.From, "not set"))}
-		}
-	}
-	p := v.planToggle(c, req.Path, req.To, req.WithParent)
-	if p.plan.Refusal != "" || len(p.plan.Blocked) > 0 {
-		return refusedResult(p.plan)
-	}
-	if reviewed && (req.UID != v.uid || req.Token == "" || req.Token != p.plan.Token) {
-		return &types.OperationResponse{Success: false, ErrorCode: "conflict",
-			Message: "The DataScienceCluster changed since you reviewed this change, so nothing was changed. Review it again."}
-	}
-	if res := v.write(c, p); res != nil {
+	v, p, res := writeChecked(c, v, func(v *dscView) (*dscPlanned, *types.OperationResponse) {
+		return v.checkToggle(c, req, reviewed)
+	})
+	if res != nil {
 		return res
 	}
 	detail := v.name + ": " + changeSummary(p.plan.Changes)
@@ -1301,6 +1354,30 @@ func (v *dscView) setManagementState(c *Client, req types.DSCToggleRequest, acti
 	return &types.OperationResponse{Success: true, Message: msg, Logs: []string{detail}}
 }
 
+// checkToggle checks a toggle request against the read v and plans it:
+// the DSC and the field are still what the request saw, the plan's checks
+// pass and, when reviewed, it is the plan the user reviewed.
+func (v *dscView) checkToggle(c *Client, req types.DSCToggleRequest, reviewed bool) (*dscPlanned, *types.OperationResponse) {
+	if v.state == DSCStatePresent && req.Name != "" && req.Name != v.name {
+		return nil, &types.OperationResponse{Success: false, ErrorCode: "conflict", Message: fmt.Sprintf("The DataScienceCluster is %s now, not %s. Reload the page. Nothing was changed.", v.name, req.Name)}
+	}
+	if t, ok := v.byKey[req.Path]; ok && t.Toggle && v.state == DSCStatePresent {
+		if cur, _ := lookupState(v.components(), t.Path); cur != req.From {
+			return nil, &types.OperationResponse{Success: false, ErrorCode: "conflict",
+				Message: fmt.Sprintf("%s changed since you looked: it is %s now, not %s. Reload the page and try again. Nothing was changed.", req.Path, nonEmpty(cur, "not set"), nonEmpty(req.From, "not set"))}
+		}
+	}
+	p := v.planToggle(c, req.Path, req.To, req.WithParent)
+	if p.plan.Refusal != "" || len(p.plan.Blocked) > 0 {
+		return nil, refusedResult(p.plan)
+	}
+	if reviewed && (req.UID != v.uid || req.Token == "" || req.Token != p.plan.Token) {
+		return nil, &types.OperationResponse{Success: false, ErrorCode: "conflict",
+			Message: "The DataScienceCluster changed since you reviewed this change, so nothing was changed. Review it again."}
+	}
+	return p, nil
+}
+
 // runPlanned runs a fix or a soft reset after checking it is the plan the
 // user reviewed.
 func runPlanned(c *Client, req types.DSCPlanRequest, action, activity string) (*types.OperationResponse, error) {
@@ -1308,26 +1385,30 @@ func runPlanned(c *Client, req types.DSCPlanRequest, action, activity string) (*
 	if err != nil {
 		return nil, err
 	}
-	var p *dscPlanned
+	var planned func(v *dscView) *dscPlanned
 	switch action {
 	case "fix":
-		p = v.planFix(c)
+		planned = func(v *dscView) *dscPlanned { return v.planFix(c) }
 	case "soft-reset":
 		if req.KeepEnabled == nil {
 			return keepEnabledMissing(), nil
 		}
-		p = v.planSoftReset(c, *req.KeepEnabled)
+		planned = func(v *dscView) *dscPlanned { return v.planSoftReset(c, *req.KeepEnabled) }
 	default:
 		return nil, fmt.Errorf("unknown action %q", action)
 	}
-	if p.plan.Refusal != "" || len(p.plan.Blocked) > 0 {
-		return refusedResult(p.plan), nil
-	}
-	if req.Name != v.name || req.UID != v.uid || req.Token == "" || req.Token != p.plan.Token {
-		return &types.OperationResponse{Success: false, ErrorCode: "conflict",
-			Message: "The DataScienceCluster or the release default changed since you reviewed this change, so nothing was changed. Review it again."}, nil
-	}
-	if res := v.write(c, p); res != nil {
+	v, p, res := writeChecked(c, v, func(v *dscView) (*dscPlanned, *types.OperationResponse) {
+		p := planned(v)
+		if p.plan.Refusal != "" || len(p.plan.Blocked) > 0 {
+			return nil, refusedResult(p.plan)
+		}
+		if req.Name != v.name || req.UID != v.uid || req.Token == "" || req.Token != p.plan.Token {
+			return nil, &types.OperationResponse{Success: false, ErrorCode: "conflict",
+				Message: "The DataScienceCluster or the release default changed since you reviewed this change, so nothing was changed. Review it again."}
+		}
+		return p, nil
+	})
+	if res != nil {
 		return res, nil
 	}
 	detail := v.name + ": " + changeSummary(p.plan.Changes)

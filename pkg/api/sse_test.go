@@ -32,7 +32,7 @@ func TestMutationAuthStreamsProgressAndCompletion(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	req := httptest.NewRequest("POST", "/api/test-mutation-stream", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "POST", "/api/test-mutation-stream", nil)
 	req.Header.Set("Authorization", "Bearer test-token")
 	handler.ServeHTTP(rec, req)
 	if !called {

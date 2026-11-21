@@ -111,6 +111,32 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **A DataScienceCluster change applies only to the DSC it was checked
+  on.** The Components page's changes (a component's state, Fix, soft
+  reset) and Diagnostics' disable-component fix tested only the fields
+  they change, so a DSC deleted and created again with the same name, or
+  changed elsewhere after the removal checks ran, was still patched. The
+  JSON Patch now also tests the DSC's uid and resourceVersion (the read
+  every check was made on). The operator's status writes move the
+  resourceVersion too, so when the patch finds the DSC changed (nothing
+  was changed), the DSC is read again and the whole change is checked
+  again on that read (the removal preconditions, and for a reviewed change
+  its plan) before the next patch, at most 3 patches and only on the same
+  DSC (uid); a check that now fails stops it, and a read that fails says
+  that nothing was changed. This was the unmerged October fix for the
+  disable-component fix, carried over to the rework.
+
+- **IPv6 clusters.** The API server address was built as
+  `https://<KUBERNETES_SERVICE_HOST>:<port>`, which is not a valid URL when
+  the host is an IPv6 address (IPv6 or IPv6-primary dual-stack clusters),
+  so every call failed. The address is now bracketed (`https://[fd02::1]:443`),
+  as client-go does.
+
+- **Update under Argo CD refuses when it cannot read OLM's progress.** The
+  check that keeps Update from deleting a Subscription OLM is still
+  installing took a Subscription or InstallPlan it could not parse for
+  "nothing pending". It now refuses with "Nothing was changed".
+
 - **A component that serves a CRD conversion webhook can be set to
   Removed again when that CRD holds no objects.** Setting
   `mcplifecycleoperator` (or any component whose Service converts a CRD)

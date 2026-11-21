@@ -55,7 +55,7 @@ func TestValidateReinstallRequestCustomBuilds(t *testing.T) {
 }
 
 func TestResolveUsername_XForwardedUser(t *testing.T) {
-	req, _ := http.NewRequest("GET", "/", nil)
+	req, _ := http.NewRequestWithContext(t.Context(), "GET", "/", nil)
 	req.Header.Set("X-Forwarded-User", "jsmith")
 	got := resolveUsername(req)
 	if got != "jsmith" {
@@ -64,7 +64,7 @@ func TestResolveUsername_XForwardedUser(t *testing.T) {
 }
 
 func TestResolveUsername_DevUser(t *testing.T) {
-	req, _ := http.NewRequest("GET", "/", nil)
+	req, _ := http.NewRequestWithContext(t.Context(), "GET", "/", nil)
 	// No X-Forwarded-User header, and DEV_MODE not set
 	got := resolveUsername(req)
 	if got != "unknown" {
@@ -73,7 +73,7 @@ func TestResolveUsername_DevUser(t *testing.T) {
 }
 
 func TestResolveUsername_FallbackUnknown(t *testing.T) {
-	req, _ := http.NewRequest("GET", "/", nil)
+	req, _ := http.NewRequestWithContext(t.Context(), "GET", "/", nil)
 	got := resolveUsername(req)
 	if got != "unknown" {
 		t.Errorf("expected 'unknown', got %q", got)
@@ -272,7 +272,7 @@ func TestDecodeBody(t *testing.T) {
 		{"over the limit", `{"name":"` + strings.Repeat("x", 64) + `"}`, true, false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.body))
+			r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", strings.NewReader(tc.body))
 			w := httptest.NewRecorder()
 			var got body
 			if ok := decodeBody(w, r, 32, &got, tc.allowEmpty); ok != tc.ok {

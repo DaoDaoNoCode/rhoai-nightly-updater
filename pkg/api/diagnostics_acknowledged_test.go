@@ -33,7 +33,7 @@ func TestDiagnosticsFixAcknowledgedRequiresTheBinding(t *testing.T) {
 		{`{"problemId":"fix-leftover-fields:TrustyAI/default-trustyai","acknowledged":true,"binding":{"uid":"u","resourceVersion":"1","hash":"h"}}`, http.StatusOK},
 	} {
 		w := httptest.NewRecorder()
-		mux.ServeHTTP(w, postJSON("/api/diagnostics/fix/acknowledged", "user:admin", tc.body))
+		mux.ServeHTTP(w, postJSON(t, "/api/diagnostics/fix/acknowledged", "user:admin", tc.body))
 		if w.Code != tc.want {
 			t.Errorf("%s: %d %s", tc.body, w.Code, w.Body.String())
 		}

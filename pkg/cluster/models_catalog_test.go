@@ -179,7 +179,7 @@ func TestModelCatalog_Qwen3ArgumentsSurviveThePresetsEval(t *testing.T) {
 		t.Skip("no bash to check the preset's eval with")
 	}
 	eval := func(args string) []string {
-		cmd := exec.Command(bash, "-c", `eval "set -- serve \
+		cmd := exec.CommandContext(t.Context(), bash, "-c", `eval "set -- serve \
   ${VLLM_ADDITIONAL_ARGS} \
   --port 8000"; printf '%s\n' "$@"`)
 		cmd.Env = []string{"VLLM_ADDITIONAL_ARGS=" + args}
