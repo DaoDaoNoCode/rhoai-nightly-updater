@@ -117,7 +117,7 @@ func TestOperationMarkerRoundTrip(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: t.Context()}
+	c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: t.Context()})
 
 	marker := &types.OperationMarker{Type: "update", Label: "Update to nightly", User: "alice", StartedAt: "2026-10-05T10:00:00Z", Pod: "p1"}
 	if err := SaveOperationMarker(c, marker); err != nil {

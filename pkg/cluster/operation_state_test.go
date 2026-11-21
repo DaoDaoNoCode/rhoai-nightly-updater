@@ -58,7 +58,7 @@ func TestCompletedOperationRoundTrip(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: t.Context()}
+	c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: t.Context()})
 
 	done := &types.CompletedOperation{ID: "op1", Type: "update", Label: "Update to nightly", User: "alice",
 		Target: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6", StartedAt: "2026-10-05T10:00:00Z", FinishedAt: "2026-10-05T10:05:00Z", Success: true, Message: "done"}

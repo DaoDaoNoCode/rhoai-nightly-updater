@@ -457,7 +457,7 @@ func TestDashboardOverrideSummaryStates(t *testing.T) {
 					io.WriteString(w, `{"kind":"Status","status":"Failure"}`)
 				}))
 				t.Cleanup(srv.Close)
-				c = &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+				c = newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 			}
 			override, err := DashboardOverrideSummary(c)
 			if (err != nil) != tc.wantErr || (override == nil) != (tc.wantNil || tc.wantErr) {
@@ -568,7 +568,7 @@ func TestDashboardRevertReportsFailures(t *testing.T) {
 			io.WriteString(w, `{"kind":"Status","status":"Failure","message":"forbidden"}`)
 		}))
 		defer srv.Close()
-		c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+		c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 		result, _ := revertDashboardOperatorTo(c, dashboardTarget{Operator: &moduleOperator{Namespace: fixtureAppsNS, Name: fixtureOperatorName}})
 		var err error
 		if err != nil || result.Success || result.ErrorCode != "forbidden" {
@@ -628,7 +628,7 @@ func TestDashboardInterruptedDeployCanBeRetried(t *testing.T) {
 	}
 	// A restarted updater has a new client and no in-memory state.
 	f.failWorkload = ""
-	restarted := &Client{baseURL: c.baseURL, httpClient: c.httpClient, ctx: context.Background()}
+	restarted := newTestClient(testClientOptions{BaseURL: c.baseURL, HTTPClient: c.httpClient, Ctx: context.Background()})
 	restarted.SetUsername("bob")
 	mustDeploy(t, restarted, "pr", 7, "")
 	session, _ := dashboardSession(&f.operator)

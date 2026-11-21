@@ -224,7 +224,7 @@ func TestClientReturns429WithoutWaitingForRetryAfter(t *testing.T) {
 		_, _ = w.Write([]byte(liveDSCv3Conversion429))
 	}))
 	defer srv.Close()
-	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+	c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 	start := clk.Now()
 	_, status, err := c.Get("/apis/datasciencecluster.opendatahub.io/v3/datascienceclusters")
 	if elapsed := clk.Since(start); elapsed != 0 {

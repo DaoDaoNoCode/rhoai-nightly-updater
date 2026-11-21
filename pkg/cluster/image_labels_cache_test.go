@@ -33,7 +33,7 @@ func pullSecretCountingClient(t *testing.T) (*Client, *atomic.Int32) {
 		reads.Add(1)
 		_, _ = w.Write([]byte(secret))
 	})
-	return &Client{baseURL: "https://api.test", httpClient: &http.Client{Transport: handlerTransport{api}}, ctx: context.Background()}, &reads
+	return newTestClient(testClientOptions{BaseURL: "https://api.test", HTTPClient: &http.Client{Transport: handlerTransport{api}}, Ctx: context.Background()}), &reads
 }
 
 func relatedImages(n int, prefix string) []types.RelatedImage {

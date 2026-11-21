@@ -247,7 +247,7 @@ func pullSecretServer(t *testing.T, existing string) (*Client, func() []map[stri
 		}
 	}))
 	t.Cleanup(srv.Close)
-	client := &Client{baseURL: srv.URL, token: "t", httpClient: srv.Client(), ctx: context.Background()}
+	client := newTestClient(testClientOptions{BaseURL: srv.URL, Token: "t", HTTPClient: srv.Client(), Ctx: context.Background()})
 	return client, func() []map[string]any {
 		mu.Lock()
 		defer mu.Unlock()

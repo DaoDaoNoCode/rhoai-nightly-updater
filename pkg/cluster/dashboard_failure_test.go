@@ -50,7 +50,7 @@ func TestDashboardPartialDeployAndRevertReportActualFailures(t *testing.T) {
 				io.WriteString(w, `{}`)
 			}))
 			defer srv.Close()
-			c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+			c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 			result, err := DeployPRImage(c, 123)
 			if action == "revert" {
 				mainPatched = false

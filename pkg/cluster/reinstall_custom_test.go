@@ -71,7 +71,7 @@ func TestCustomReinstallPinsOldBuildAndSelectsOlderChannel(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			c := &Client{baseURL: server.URL, httpClient: server.Client(), ctx: context.Background()}
+			c := newTestClient(testClientOptions{BaseURL: server.URL, HTTPClient: server.Client(), Ctx: context.Background()})
 			// 3.6.0 -> 3.3 is a downgrade, which needs explicit confirmation.
 			if refused, _ := Reinstall(c, tc.target, image, override); refused.ErrorCode != errorCodeDowngrade || deletedCSV {
 				t.Fatalf("unconfirmed downgrade: %+v deletedCSV=%v", refused, deletedCSV)

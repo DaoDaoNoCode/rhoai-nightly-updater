@@ -25,7 +25,7 @@ func TestS3TeardownDependencyFailure(t *testing.T) {
 		io.WriteString(w, `{}`)
 	}))
 	defer server.Close()
-	c := &Client{baseURL: server.URL, httpClient: server.Client(), ctx: context.Background()}
+	c := newTestClient(testClientOptions{BaseURL: server.URL, HTTPClient: server.Client(), Ctx: context.Background()})
 	result, err := TeardownS3Storage(c, types.S3TeardownRequest{})
 	if err != nil || result.Success || deleted {
 		t.Fatalf("dependency lookup failed but result success=%v deleted=%v error=%v", result.Success, deleted, err)
@@ -46,7 +46,7 @@ func TestMLflowQuay503DoesNotDeploy(t *testing.T) {
 		io.WriteString(w, `{}`)
 	}))
 	defer server.Close()
-	c := &Client{baseURL: server.URL, httpClient: server.Client(), ctx: context.Background()}
+	c := newTestClient(testClientOptions{BaseURL: server.URL, HTTPClient: server.Client(), Ctx: context.Background()})
 	result, err := DeployMLflowPR(c, 123)
 	if err != nil || result.Success || patched {
 		t.Fatalf("Quay returned 503 but result success=%v CRPatched=%v error=%v", result.Success, patched, err)

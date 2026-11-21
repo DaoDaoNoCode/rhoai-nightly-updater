@@ -41,7 +41,7 @@ func TestPostOperationContext(t *testing.T) {
 				// bookkeeping.
 				cancel()
 			}
-			c := &Client{ctx: parent}
+			c := newTestClient(testClientOptions{Ctx: parent})
 			ctx, cancel := postOperationContext(c, tc.timeout)
 			defer cancel()
 			if ctx.Value(ctxKey{}) != "v" {
@@ -94,7 +94,7 @@ func TestRecordActivity_StalledOrConflictingAPIIsBounded(t *testing.T) {
 		t.Cleanup(srv.Close)
 		// Every call takes 150ms: unbounded, 3 attempts of GET+PUT take
 		// 900ms. Bounded, the GET is answered and the budget ends the PUT.
-		c := withLatency(&Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}, 150*time.Millisecond)
+		c := withLatency(newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()}), 150*time.Millisecond)
 		start := clk.Now()
 		RecordActivity(c, types.ActivityEntry{Action: "test"})
 		if d := clk.Since(start); d != activityWriteTimeout || calls.Load() != 1 {
@@ -110,7 +110,7 @@ func TestRecordActivity_StalledOrConflictingAPIIsBounded(t *testing.T) {
 		t.Cleanup(srv.Close)
 		ctx, cancel := clk.WithDeadline(context.Background(), clk.Now().Add(-postDeadlineWork()-time.Second))
 		defer cancel()
-		c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: ctx}
+		c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: ctx})
 		RecordActivity(c, types.ActivityEntry{Action: "test"})
 		if n := calls.Load(); n != 0 {
 			t.Fatalf("%d requests after the operation's shared end", n)

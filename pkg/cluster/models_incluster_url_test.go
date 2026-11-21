@@ -79,7 +79,7 @@ func TestWithServicePort(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"kind":"Status","code":404}`)
 	}))
 	defer srv.Close()
-	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+	c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 	for _, x := range []struct{ in, want string }{
 		{"https://smollm2-135m-instruct-kserve-workload-svc.e2e-400.svc.cluster.local", "https://smollm2-135m-instruct-kserve-workload-svc.e2e-400.svc.cluster.local:8000"},
 		{"https://only-one.e2e-400.svc", "https://only-one.e2e-400.svc:8443"},
@@ -111,7 +111,7 @@ func TestAddModelRouting_NoRouteHasNoOutsideAddress(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"kind":"Status","code":404}`)
 	}))
 	defer srv.Close()
-	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+	c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 	m := llmisvcWithAddresses(t, "p", "m", "https://m-kserve-workload-svc.p.svc.cluster.local")
 	m.Status.URL = "https://maas.apps.example.com/p/m"
 	s := types.ModelState{}

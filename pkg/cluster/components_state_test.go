@@ -62,7 +62,7 @@ func componentsAPI(t *testing.T, gate *callGate, dscV2, dscV1 mockResponse, almE
 		_, _ = fmt.Fprint(w, resp.body)
 	})
 	isolateClusterCaches(t)
-	return &Client{baseURL: "https://api.test", httpClient: &http.Client{Transport: handlerTransport{api}}, ctx: context.Background()}, &requests
+	return newTestClient(testClientOptions{BaseURL: "https://api.test", HTTPClient: &http.Client{Transport: handlerTransport{api}}, Ctx: context.Background()}), &requests
 }
 
 var notFoundResp = mockResponse{statusCode: 404, body: `{"kind":"Status","status":"Failure","reason":"NotFound","code":404}`}

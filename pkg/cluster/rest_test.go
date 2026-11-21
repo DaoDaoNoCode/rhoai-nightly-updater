@@ -46,7 +46,7 @@ func newRESTClient(t *testing.T, answers map[string]restAnswer) (*Client, *restS
 		io.WriteString(w, a.body)
 	}))
 	t.Cleanup(srv.Close)
-	return &Client{baseURL: srv.URL, token: "tok", httpClient: srv.Client(), ctx: context.Background()}, s
+	return newTestClient(testClientOptions{BaseURL: srv.URL, Token: "tok", HTTPClient: srv.Client(), Ctx: context.Background()}), s
 }
 
 const forbiddenBody = `{"kind":"Status","status":"Failure","message":"no","reason":"Forbidden","code":403}`

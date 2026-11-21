@@ -40,8 +40,8 @@ func (rec *tokenRecorder) server(t *testing.T) *httptest.Server {
 // keeps its records with the ServiceAccount's, as pkg/api builds it for a
 // mutation.
 func userClientWithBookkeeper(srv *httptest.Server) *Client {
-	sa := &Client{baseURL: srv.URL, token: "sa-token", httpClient: srv.Client(), ctx: context.Background()}
-	c := &Client{baseURL: srv.URL, token: "user-token", httpClient: srv.Client(), ctx: context.Background(), username: "alice"}
+	sa := newTestClient(testClientOptions{BaseURL: srv.URL, Token: "sa-token", HTTPClient: srv.Client(), Ctx: context.Background()})
+	c := newTestClient(testClientOptions{BaseURL: srv.URL, Token: "user-token", HTTPClient: srv.Client(), Ctx: context.Background(), Username: "alice"})
 	c.SetBookkeeping(sa)
 	return c
 }
@@ -126,8 +126,8 @@ func TestBookkeepingUsesTheServiceAccount(t *testing.T) {
 // context and user, and the client itself when none was set.
 func TestBookkeepingClient(t *testing.T) {
 	ctx := t.Context()
-	sa := &Client{token: "sa-token", ctx: context.Background()}
-	c := &Client{token: "user-token", ctx: ctx, username: "alice"}
+	sa := newTestClient(testClientOptions{Token: "sa-token", Ctx: context.Background()})
+	c := newTestClient(testClientOptions{Token: "user-token", Ctx: ctx, Username: "alice"})
 	if got := c.bookkeeping(); got != c {
 		t.Fatal("without a bookkeeper the client keeps its own records")
 	}

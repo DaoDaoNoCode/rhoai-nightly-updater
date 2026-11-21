@@ -34,7 +34,7 @@ func TestDashboardBuildDiscoveryLive(t *testing.T) {
 		w.Write(body)
 	}))
 	defer server.Close()
-	c := &Client{baseURL: server.URL, httpClient: server.Client(), ctx: context.Background()}
+	c := newTestClient(testClientOptions{BaseURL: server.URL, HTTPClient: server.Client(), Ctx: context.Background()})
 	target, operator, err := loadDashboardOperator(c, true)
 	if err != nil || operator == nil {
 		t.Fatalf("dashboard module operator: %+v %v", target, err)

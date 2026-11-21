@@ -53,7 +53,7 @@ func (s *rsServer) client(t *testing.T) *Client {
 	old := replicaSetOwnerCache
 	replicaSetOwnerCache = newLRU[string, string](512)
 	t.Cleanup(func() { replicaSetOwnerCache = old })
-	return &Client{baseURL: srv.URL, token: "t", httpClient: srv.Client(), ctx: context.Background()}
+	return newTestClient(testClientOptions{BaseURL: srv.URL, Token: "t", HTTPClient: srv.Client(), Ctx: context.Background()})
 }
 
 func replicaSet(name, uid, deploymentUID string) map[string]any {

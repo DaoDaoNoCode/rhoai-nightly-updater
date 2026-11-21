@@ -58,7 +58,7 @@ func legacyAnnotationServer(t *testing.T, initial map[string]string) (*Client, f
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}, func() map[string]string {
+	return newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()}), func() map[string]string {
 		mu.Lock()
 		defer mu.Unlock()
 		out := map[string]string{}
@@ -136,7 +136,7 @@ func TestDashboardStateErrorMapping(t *testing.T) {
 				_, _ = fmt.Fprintf(w, `{"kind":"Status","status":"Failure","code":%d}`, tc.status)
 			}))
 			defer srv.Close()
-			c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+			c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 			_, err := GetDashboardState(c)
 			if err == nil {
 				t.Fatal("expected an error")
@@ -155,7 +155,7 @@ func TestDashboardStateErrorMapping(t *testing.T) {
 		srv := httptest.NewServer(http.NotFoundHandler())
 		url := srv.URL
 		srv.Close()
-		c := &Client{baseURL: url, httpClient: &http.Client{}, ctx: context.Background()}
+		c := newTestClient(testClientOptions{BaseURL: url, HTTPClient: &http.Client{}, Ctx: context.Background()})
 		_, err := GetDashboardState(c)
 		if status, code, _ := DashboardStateError(err); status != http.StatusServiceUnavailable || code != "network" {
 			t.Fatalf("err=%v status=%d code=%q", err, status, code)
@@ -171,7 +171,7 @@ func TestDashboardStateErrorMapping(t *testing.T) {
 		}))
 		defer srv.Close()
 		defer close(release)
-		c := &Client{baseURL: srv.URL, httpClient: &http.Client{Timeout: 50 * time.Millisecond}, ctx: context.Background()}
+		c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: &http.Client{Timeout: 50 * time.Millisecond}, Ctx: context.Background()})
 		_, err := GetDashboardState(c)
 		if status, code, _ := DashboardStateError(err); status != http.StatusGatewayTimeout || code != "timeout" {
 			t.Fatalf("err=%v status=%d code=%q", err, status, code)
@@ -182,7 +182,7 @@ func TestDashboardStateErrorMapping(t *testing.T) {
 			io.WriteString(w, `not json`)
 		}))
 		defer srv.Close()
-		c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+		c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 		_, err := GetDashboardState(c)
 		if status, code, _ := DashboardStateError(err); status != http.StatusInternalServerError || code != "internal" || errors.Is(err, ErrDashboardNotDeployed) {
 			t.Fatalf("err=%v status=%d code=%q", err, status, code)

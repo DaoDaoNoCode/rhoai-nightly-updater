@@ -24,7 +24,7 @@ func TestClientRequestsWireFormat(t *testing.T) {
 		io.WriteString(w, `{"ok":true}`)
 	}))
 	defer srv.Close()
-	c := &Client{baseURL: srv.URL, token: "tok", httpClient: srv.Client(), ctx: context.Background()}
+	c := newTestClient(testClientOptions{BaseURL: srv.URL, Token: "tok", HTTPClient: srv.Client(), Ctx: context.Background()})
 
 	cases := []struct {
 		name string

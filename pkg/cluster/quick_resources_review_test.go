@@ -123,7 +123,7 @@ func stallServer(t *testing.T, status int) *Client {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+	c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 	if status == 0 {
 		return withLatency(c, 5*time.Second)
 	}

@@ -37,7 +37,7 @@ func newFakeOperationConfigMap(t *testing.T) (*fakeOperationConfigMap, *Client) 
 	f := &fakeOperationConfigMap{t: t}
 	srv := newFakePlainServer(f)
 	t.Cleanup(srv.Close)
-	return f, &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: t.Context()}
+	return f, newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: t.Context()})
 }
 
 func (f *fakeOperationConfigMap) status(w http.ResponseWriter, code int, reason string) {
@@ -238,7 +238,7 @@ func TestWriteOperationLease(t *testing.T) {
 		t.Setenv("NAMESPACE", "test-ns")
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) }))
 		defer srv.Close()
-		c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: t.Context()}
+		c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: t.Context()})
 		if holder, err := WriteOperationLease(c, testLease("op1", "boot-a", now), heldBy()); holder != nil || err == nil || errors.Is(err, ErrOperationRecordContended) {
 			t.Fatalf("holder %+v err %v", holder, err)
 		}

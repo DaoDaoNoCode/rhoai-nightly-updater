@@ -306,7 +306,7 @@ func TestCleanupStuckComponentCRs_NoComponentAPI(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"kind":"Status","code":404}`)
 	}))
 	defer srv.Close()
-	c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+	c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 	if n, warnings := cleanupStuckComponentCRs(c); n != 0 || len(warnings) != 0 {
 		t.Fatalf("fresh cluster: unstuck=%d warnings=%v", n, warnings)
 	}

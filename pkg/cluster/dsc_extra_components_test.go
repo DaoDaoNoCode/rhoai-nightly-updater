@@ -111,7 +111,7 @@ func TestRepairDSCRemoveExtraComponentsPreservesRemainingSettings(t *testing.T) 
 				}
 			}))
 			defer server.Close()
-			c := &Client{baseURL: server.URL, httpClient: server.Client(), ctx: context.Background()}
+			c := newTestClient(testClientOptions{BaseURL: server.URL, HTTPClient: server.Client(), Ctx: context.Background()})
 			result, err := RepairDSC(c, "my-dsc", "remove-extra-components", tc.version, "datasciencecluster.opendatahub.io/v2", tc.expected, nil)
 			if (err != nil) != tc.wantError {
 				t.Fatalf("unexpected result: %+v, %v", result, err)

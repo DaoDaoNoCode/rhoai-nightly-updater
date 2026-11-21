@@ -159,12 +159,12 @@ func TestRecordActivityConcurrent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &Client{
-		baseURL:    server.URL,
-		token:      "test-token",
-		httpClient: &http.Client{},
-		ctx:        context.Background(),
-	}
+	client := newTestClient(testClientOptions{
+		BaseURL:    server.URL,
+		Token:      "test-token",
+		HTTPClient: &http.Client{},
+		Ctx:        context.Background(),
+	})
 
 	// Launch numGoroutines concurrent RecordActivity calls.
 	var wg sync.WaitGroup
@@ -305,12 +305,12 @@ func TestRecordActivityExceedsMax(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &Client{
-		baseURL:    server.URL,
-		token:      "test-token",
-		httpClient: &http.Client{},
-		ctx:        context.Background(),
-	}
+	client := newTestClient(testClientOptions{
+		BaseURL:    server.URL,
+		Token:      "test-token",
+		HTTPClient: &http.Client{},
+		Ctx:        context.Background(),
+	})
 
 	// Call RecordActivity sequentially to isolate trimming behavior
 	for i := range numEntries {

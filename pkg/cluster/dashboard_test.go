@@ -633,12 +633,12 @@ func TestGetDashboardPods_URLEncodesLabelSelector(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &Client{
-		baseURL:    server.URL,
-		token:      "test-token",
-		httpClient: server.Client(),
-		ctx:        context.Background(),
-	}
+	client := newTestClient(testClientOptions{
+		BaseURL:    server.URL,
+		Token:      "test-token",
+		HTTPClient: server.Client(),
+		Ctx:        context.Background(),
+	})
 
 	// Labels with special characters that need URL encoding
 	labels := map[string]string{

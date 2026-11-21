@@ -33,7 +33,7 @@ func TestClientRefusesAResponseOverTheLimit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := serve(tc.size)
 			defer srv.Close()
-			c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+			c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 			body, status, err := c.Get("/apis/packages.operators.coreos.com/v1/packagemanifests")
 			if tc.refused {
 				if err == nil || !strings.Contains(err.Error(), "larger than") || body != nil || status != http.StatusOK {

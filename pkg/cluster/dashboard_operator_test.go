@@ -68,7 +68,7 @@ func newDashboardDevFixture(t *testing.T) (*dashboardDevFixture, *Client) {
 	f.discovery = dashboardModuleDiscoveryRoutes(fixtureAppsNS)
 	srv := newFakePlainServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
-	return f, &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+	return f, newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 }
 
 func (f *dashboardDevFixture) serve(w http.ResponseWriter, r *http.Request) {

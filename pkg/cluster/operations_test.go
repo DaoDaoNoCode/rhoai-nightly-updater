@@ -44,12 +44,12 @@ func newMockClient(responses map[string]mockResponse) (*Client, func()) {
 		w.Write([]byte(resp.body))
 	}))
 
-	client := &Client{
-		baseURL:    server.URL,
-		token:      "test-token",
-		httpClient: server.Client(),
-		ctx:        context.Background(),
-	}
+	client := newTestClient(testClientOptions{
+		BaseURL:    server.URL,
+		Token:      "test-token",
+		HTTPClient: server.Client(),
+		Ctx:        context.Background(),
+	})
 	// A new server may reuse an earlier test's address, which keys the cache.
 	controlPlaneCache.Purge()
 
@@ -261,12 +261,12 @@ func newRecordingMockClient(responses map[string]mockResponse) (*Client, *[]requ
 		w.Write([]byte(resp.body))
 	}))
 
-	client := &Client{
-		baseURL:    server.URL,
-		token:      "test-token",
-		httpClient: server.Client(),
-		ctx:        context.Background(),
-	}
+	client := newTestClient(testClientOptions{
+		BaseURL:    server.URL,
+		Token:      "test-token",
+		HTTPClient: server.Client(),
+		Ctx:        context.Background(),
+	})
 
 	return client, &records, server.Close
 }
@@ -1288,12 +1288,12 @@ func TestRefreshOperator_RetriesSubscriptionCreation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &Client{
-		baseURL:    server.URL,
-		token:      "test-token",
-		httpClient: server.Client(),
-		ctx:        context.Background(),
-	}
+	client := newTestClient(testClientOptions{
+		BaseURL:    server.URL,
+		Token:      "test-token",
+		HTTPClient: server.Client(),
+		Ctx:        context.Background(),
+	})
 
 	result, err := RefreshOperator(client)
 	if err != nil {
@@ -1380,7 +1380,7 @@ func TestRefreshOperator_ContextCancellation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &Client{baseURL: server.URL, token: "test-token", httpClient: server.Client(), ctx: ctx}
+	client := newTestClient(testClientOptions{BaseURL: server.URL, Token: "test-token", HTTPClient: server.Client(), Ctx: ctx})
 	result, _ := RefreshOperator(client)
 	if result == nil || result.Success {
 		t.Fatalf("expected failure on context cancellation, got %+v", result)
@@ -1804,12 +1804,12 @@ func TestUpdateStream_CatalogSourceTimeout(t *testing.T) {
 	ctx, cancel := clk.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	client := &Client{
-		baseURL:    server.URL,
-		token:      "test-token",
-		httpClient: server.Client(),
-		ctx:        ctx,
-	}
+	client := newTestClient(testClientOptions{
+		BaseURL:    server.URL,
+		Token:      "test-token",
+		HTTPClient: server.Client(),
+		Ctx:        ctx,
+	})
 
 	var events []UpdateStepEvent
 	emit := func(event UpdateStepEvent) {

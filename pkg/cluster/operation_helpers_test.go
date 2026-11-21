@@ -17,7 +17,7 @@ func helperServer(t *testing.T, h http.HandlerFunc) (*Client, context.CancelFunc
 	t.Cleanup(srv.Close)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	return &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: ctx}, cancel
+	return newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: ctx}), cancel
 }
 
 func TestApplySubscriptionWithRetry(t *testing.T) {

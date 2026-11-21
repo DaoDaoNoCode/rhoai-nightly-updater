@@ -117,10 +117,10 @@ func newResourceFake(t *testing.T) (*resourceFake, *Client) {
 	f := &resourceFake{t: t, objects: map[fakeKey]map[string]any{}, fail: map[string]int{}, failAs: map[string]int{}, failDryRun: map[string]int{}, failEcho: map[string]int{}, failMessage: map[string]string{}}
 	srv := newFakeServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
-	c := &Client{baseURL: srv.URL, token: fakeSAToken, httpClient: srv.Client(), ctx: context.Background()}
+	c := newTestClient(testClientOptions{BaseURL: srv.URL, Token: fakeSAToken, HTTPClient: srv.Client(), Ctx: context.Background()})
 	// The signed-in user's own client, as pkg/api withAdminRead attaches it
 	// (the hard reset's namespace guard reads with it).
-	c.SetSignedInUser(&Client{baseURL: srv.URL, token: fakeUserToken, httpClient: srv.Client(), ctx: context.Background(), asUser: true})
+	c.SetSignedInUser(newTestClient(testClientOptions{BaseURL: srv.URL, Token: fakeUserToken, HTTPClient: srv.Client(), Ctx: context.Background(), AsUser: true}))
 	// An installed RHOAI: its DSCInitialization names the applications
 	// namespace these fixtures put RHOAI's objects in (delete it to test a
 	// cluster without one).

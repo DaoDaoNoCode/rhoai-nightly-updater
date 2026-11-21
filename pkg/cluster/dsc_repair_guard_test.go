@@ -84,7 +84,7 @@ func dscRepairD3Server(t *testing.T, dsc string, patched *bool, mu *sync.Mutex, 
 		}
 	}))
 	t.Cleanup(server.Close)
-	return &Client{baseURL: server.URL, httpClient: server.Client(), ctx: context.Background()}
+	return newTestClient(testClientOptions{BaseURL: server.URL, HTTPClient: server.Client(), Ctx: context.Background()})
 }
 
 func TestRepairDSC_RefusesRemovalsThatFailPreconditions(t *testing.T) {
@@ -176,8 +176,8 @@ func dscRepairMCPServer(t *testing.T, dsc, items string, patched *bool, mu *sync
 		}
 	}))
 	t.Cleanup(server.Close)
-	c := &Client{baseURL: server.URL, token: "sa-token", httpClient: server.Client(), ctx: context.Background()}
-	c.SetSignedInUser(&Client{baseURL: server.URL, token: "admin-token", httpClient: server.Client(), ctx: context.Background(), asUser: true})
+	c := newTestClient(testClientOptions{BaseURL: server.URL, Token: "sa-token", HTTPClient: server.Client(), Ctx: context.Background()})
+	c.SetSignedInUser(newTestClient(testClientOptions{BaseURL: server.URL, Token: "admin-token", HTTPClient: server.Client(), Ctx: context.Background(), AsUser: true}))
 	return c, func() []string {
 		mu.Lock()
 		defer mu.Unlock()

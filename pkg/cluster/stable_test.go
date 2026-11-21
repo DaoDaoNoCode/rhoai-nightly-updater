@@ -90,7 +90,7 @@ func TestStableDiscoveryScopesCatalogAndRefreshes(t *testing.T) {
 		json.NewEncoder(w).Encode(stable)
 	}))
 	defer server.Close()
-	c := &Client{baseURL: server.URL, httpClient: server.Client(), ctx: context.Background()}
+	c := newTestClient(testClientOptions{BaseURL: server.URL, HTTPClient: server.Client(), Ctx: context.Background()})
 	for _, currentVersion := range []string{"3.5.0", "3.7.0"} {
 		version = currentVersion
 		target, err := resolveStableTarget(c)
@@ -120,7 +120,7 @@ func TestStableDiscoveryFailureDoesNotRemoveOperator(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	c := &Client{baseURL: server.URL, httpClient: server.Client(), ctx: context.Background()}
+	c := newTestClient(testClientOptions{BaseURL: server.URL, HTTPClient: server.Client(), Ctx: context.Background()})
 	var failedValidation bool
 	result, err := ReinstallStream(c, "stable", "", "", func(event UpdateStepEvent) {
 		if event.Step == "validate_target" && event.Status == "failed" {
@@ -189,7 +189,7 @@ func TestStableReinstallMovesOlderChannelToLatestGA(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	c := &Client{baseURL: server.URL, httpClient: server.Client(), ctx: context.Background()}
+	c := newTestClient(testClientOptions{BaseURL: server.URL, HTTPClient: server.Client(), Ctx: context.Background()})
 	result, err := Reinstall(c, "stable", "", "")
 	if err != nil || !result.Success || appliedChannel != "stable-3.5" {
 		t.Fatalf("result=%+v error=%v channel=%q", result, err, appliedChannel)

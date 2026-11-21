@@ -93,8 +93,8 @@ func TestArgoApplicationsChangeChecksReadFresh(t *testing.T) {
 	fakeCacheClock(t, argoApplicationsCache)
 	f := &fakeArgoCD{served: true, apps: []map[string]any{argoApplicationListing("openshift-gitops")}}
 	status := statusReadClient(t, f)
-	change := &Client{baseURL: status.baseURL, httpClient: status.httpClient, ctx: status.ctx}
-	user := &Client{baseURL: status.baseURL, httpClient: status.httpClient, ctx: status.ctx, asUser: true}
+	change := newTestClient(testClientOptions{BaseURL: status.baseURL, HTTPClient: status.httpClient, Ctx: status.ctx})
+	user := newTestClient(testClientOptions{BaseURL: status.baseURL, HTTPClient: status.httpClient, Ctx: status.ctx, AsUser: true})
 
 	if got := dscVerdict(status); got.state != "" {
 		t.Fatalf("status read: %+v", got)

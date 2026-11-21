@@ -50,7 +50,7 @@ func TestCreatePullSecret_RedactsTheCredentialFromWriteErrors(t *testing.T) {
 				_, _ = w.Write(msg)
 			}))
 			defer srv.Close()
-			c := &Client{baseURL: srv.URL, token: "test-token", httpClient: srv.Client(), ctx: context.Background()}
+			c := newTestClient(testClientOptions{BaseURL: srv.URL, Token: "test-token", HTTPClient: srv.Client(), Ctx: context.Background()})
 			res, err := CreatePullSecret(c, auth)
 			if err != nil || res.Success {
 				t.Fatalf("got %+v, %v", res, err)

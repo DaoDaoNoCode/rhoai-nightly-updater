@@ -13,7 +13,7 @@ func argoClient(t *testing.T, f *fakeArgoCD) *Client {
 	t.Helper()
 	srv := newFakePlainServer(f.handler())
 	t.Cleanup(srv.Close)
-	return &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+	return newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 }
 
 // subTracked is the Subscription's annotations with a tracking id naming app.

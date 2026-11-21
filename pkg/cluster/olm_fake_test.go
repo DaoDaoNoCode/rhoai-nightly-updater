@@ -128,7 +128,7 @@ func (f *fakeOLM) client(ctx context.Context) *Client {
 	f.t.Cleanup(srv.Close)
 	// A new server may reuse an earlier test's address, which keys the cache.
 	controlPlaneCache.Purge()
-	return &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: ctx}
+	return newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: ctx})
 }
 
 func notFound(w http.ResponseWriter) {

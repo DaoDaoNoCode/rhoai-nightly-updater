@@ -507,7 +507,7 @@ func TestDeleteWithUIDPropagation_SendsPreconditionAndPolicy(t *testing.T) {
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer srv.Close()
-	c := &Client{baseURL: srv.URL, token: "t", httpClient: srv.Client(), ctx: context.Background()}
+	c := newTestClient(testClientOptions{BaseURL: srv.URL, Token: "t", HTTPClient: srv.Client(), Ctx: context.Background()})
 	if _, err := deleteWithUIDPropagation(c, migrateJobPath(), "job-uid", "Foreground"); err != nil {
 		t.Fatal(err)
 	}

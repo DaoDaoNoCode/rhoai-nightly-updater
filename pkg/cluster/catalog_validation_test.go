@@ -24,7 +24,7 @@ func verificationCatalogServer(t *testing.T, state, channels string) *Client {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+	return newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 }
 
 func TestPreflightReinstallCatalog_ExplainsFailure(t *testing.T) {

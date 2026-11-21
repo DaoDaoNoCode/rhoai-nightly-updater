@@ -32,7 +32,7 @@ func TestNightlyCatalogNeverFallsBackToStable(t *testing.T) {
 				io.WriteString(w, tc.body)
 			}))
 			defer srv.Close()
-			c := &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}
+			c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 			ch, _ := detectNightlyChannel(c, "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.7")
 			exists, _ := channelExistsInCatalog(c, "fast")
 			if ch != "" || exists || ambiguousQuery {

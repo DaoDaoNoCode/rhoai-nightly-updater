@@ -117,7 +117,7 @@ func newStatusAPI(t *testing.T, a *statusAPI) *Client {
 	t.Cleanup(stableTargetCache.Purge)
 	t.Cleanup(consoleURLCache.Purge)
 	t.Cleanup(controlPlaneCache.Purge)
-	return &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background(), username: "tester"}
+	return newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background(), Username: "tester"})
 }
 
 const csv360 = `{"metadata":{"name":"rhods-operator.3.6.0"},"spec":{"version":"3.6.0","displayName":"Red Hat OpenShift AI"},"status":{"phase":"Succeeded"}}`

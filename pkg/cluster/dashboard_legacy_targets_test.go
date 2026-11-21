@@ -75,7 +75,7 @@ func legacyDashboardServer(t *testing.T, deployments map[string][]string) (*Clie
 		io.WriteString(w, `{}`)
 	}))
 	t.Cleanup(srv.Close)
-	return &Client{baseURL: srv.URL, httpClient: srv.Client(), ctx: context.Background()}, func() map[string][]string {
+	return newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()}), func() map[string][]string {
 		mu.Lock()
 		defer mu.Unlock()
 		out := map[string][]string{}

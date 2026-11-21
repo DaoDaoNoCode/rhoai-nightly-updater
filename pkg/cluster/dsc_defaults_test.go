@@ -239,7 +239,7 @@ func TestRepairDSCPrunesOrResetsWithExplicitDeletions(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			c := &Client{baseURL: server.URL, httpClient: server.Client(), ctx: context.Background()}
+			c := newTestClient(testClientOptions{BaseURL: server.URL, HTTPClient: server.Client(), Ctx: context.Background()})
 			result, err := RepairDSC(c, "my-dsc", mode, "3.6.0", "datasciencecluster.opendatahub.io/v2", nil, []string{})
 			if err != nil || !result.Success {
 				t.Fatalf("repair: %+v %v", result, err)
