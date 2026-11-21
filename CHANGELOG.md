@@ -82,6 +82,32 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 - A refusal of a read made with the user's own token is
   `forbidden_for_user` ("your account may not see this"), never the
   ServiceAccount's "re-apply the template" hint.
+- CI: every job has a timeout. GitLab: 20 minutes for the test jobs, 30
+  for the image builds, 10 for the crane, installer and release-notes
+  jobs; GitHub: 20 minutes per job, 45 for the release job. The crane jobs
+  take crane v0.22.1 from its release tarball, checked against its
+  SHA-256, instead of `go install` from a Go cache that a branch pipeline
+  could write, right before `crane auth login`. GitHub checkouts no longer
+  keep the token in `.git/config` (`persist-credentials: false`).
+- Internal, CI only: faster pipelines with every check kept. The image
+  jobs (`build-main`, `release-build`) start with the test jobs and only
+  build a tarball; the publish jobs wait for every test job (on a tag also
+  the release guard) and the build, so nothing is pushed unless all of
+  them passed. The docs, chart and script checks run in two jobs instead
+  of four (`checks`, `script-tests`), since each job waited about two
+  minutes for its runner. Tag pipelines only read the Go caches. The npm
+  cache is restored again: without a key prefix GitLab named it after the
+  lock file's path, and the runner refused to restore a key with a `/`.
+  The race tests run the shared fake API servers in memory (no TLS, no
+  sockets) and split `pkg/cluster` over up to four processes
+  (`scripts/test-go.sh`).
+- The CI jobs' checks are Makefile targets, so they run the same way
+  locally: `make ci-go` (gofmt, `go mod verify`, `go vet`, the race tests,
+  govulncheck; GitHub's `go` job runs it too, so it now verifies the
+  modules as well), `make -k ci-checks`, `make -k ci-script-tests` and
+  `make release-check TAG=vX.Y.Z`. The frontend targets say when
+  `frontend/node_modules` is missing (`cd frontend && npm ci`) instead of
+  failing on a TypeScript option.
 
 ### Fixed
 
@@ -158,6 +184,29 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   until 5 s, 2 s or 0 s before the lease expired instead of 10 s before
   it. It now stops 35 s after that heartbeat, between renewals or during
   one.
+- **A page that cannot load after the updater was updated keeps the
+  masthead and offers Reload.** A tab opened before an update of the
+  updater asks for the old version's files of a page it has not opened
+  yet, and they are gone: the whole app, masthead and navigation included,
+  was replaced by "Something went wrong: Loading chunk N failed" until a
+  reload. That page now says "This page could not be loaded" with
+  **Reload**, under the masthead and navigation, and going to another page
+  clears it; any other error still shows the app-wide message
+  ([RUNBOOK §3](RUNBOOK.md#3-app-down-or-pod-not-starting)).
+- **Polls stop when your session ends, and an older answer no longer
+  replaces a newer one.** After the OpenShift session expired, the app
+  kept asking for the operation, the status and the Dashboard Dev state
+  every few seconds, for answers that could only be a sign-in page; it now
+  stops polling until you sign in again. A slower, older answer could
+  replace a newer one on the MaaS tab, a project's playground and MLflow
+  samples, and in Diagnostics when a fix's rescan overtook the scan; the
+  newest request's answer now wins. Leaving a page cancels its reads,
+  which ran on for up to the client's 120 s timeout. While the Dashboard
+  Dev page is open, the app takes the dashboard state from it instead of
+  reading it a second time.
+- Pages no longer render again on every poll whose answer did not
+  change: a page that reads none of the polled state rendered again every
+  15 s while idle and every 3 s while an operation ran.
 
 ### Security
 

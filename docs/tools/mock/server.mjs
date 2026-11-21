@@ -634,11 +634,13 @@ async function api(req, res, u) {
   if (key === "POST /api/pageview") { res.writeHead(204); res.end(); return; }
   if (world.signIn) {
     // An expired sign-in fails the identity check; a sign-in from before
-    // 4.0.0 passes it, so permissions answer with the reason instead.
+    // 4.0.0 passes it, so permissions answer with the reason instead. The
+    // role stays the cluster-admin's: pkg/api HandleUserPermissions decides
+    // it before the session check, which only adds the reason.
     const { status, code, message } = world.signIn;
     if (key === "GET /api/user/permissions") {
       if (code === "session_expired") return json(res, status, { error: message, errorCode: code });
-      return json(res, 200, { canMutate: false, user: F.USER, reason: message, reasonCode: code });
+      return json(res, 200, { canMutate: false, user: F.USER, role: "admin", reason: message, reasonCode: code });
     }
     if (req.method !== "GET") return json(res, status, { error: code === "session_expired" ? message : `${message} Nothing was changed.`, errorCode: code });
   }
