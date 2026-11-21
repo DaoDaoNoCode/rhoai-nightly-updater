@@ -141,7 +141,7 @@ func installRecipeFake(t *testing.T) (*recipeFake, *fakeRecord) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.saves++
-		if !replace && f.record != nil && f.record.ID != run.ID {
+		if !replace && f.record != nil && (f.record.ID != run.ID || f.record.OperationID != run.OperationID) {
 			return cluster.ErrRecipeRunReplaced
 		}
 		f.record = copyRecipeRun(run)

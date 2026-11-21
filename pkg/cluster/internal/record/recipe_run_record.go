@@ -23,11 +23,14 @@ const MaxRecipeRunBytes = 32 << 10
 // ErrRecipeRunReplaced: the record holds another run now (a newer run
 // started, in this or another updater pod), so this run's record is not
 // written over it.
-var ErrRecipeRunReplaced = errors.New("the recipe run record holds another run")
+var ErrRecipeRunReplaced = errors.New("the recipe run record holds another run, or another attempt of it")
 
 // SaveRecipeRun records run. With replace the record is written whatever
-// it holds (a run that starts, under the cluster lock, replaces the last
-// one); otherwise only while it holds this run (same ID) or none. The
+// it holds (a run, or an attempt of one (Resume), that starts under the
+// cluster lock replaces the last one); otherwise only while it holds this
+// very attempt (the same run ID, operation ID and boot ID) or none, so a
+// late write of an earlier attempt never overwrites the attempt that
+// resumed it. The
 // write is conditional on the ConfigMap's resourceVersion and retried on a
 // conflict, like the lease, so it never overwrites a newer run another pod
 // recorded in between. A run larger than MaxRecipeRunBytes has its step
@@ -44,7 +47,7 @@ func SaveRecipeRun(c *kube.Client, run *types.RecipeRun, replace bool) error {
 		if err != nil && (rec == nil || !replace) {
 			return fmt.Errorf("save the recipe run: %w", err)
 		}
-		if !replace && current != nil && current.ID != run.ID {
+		if !replace && current != nil && (current.ID != run.ID || current.OperationID != run.OperationID || current.BootID != run.BootID) {
 			return ErrRecipeRunReplaced
 		}
 		err = writeOperationRecord(c, rec, map[string]string{RecipeRunKey: value})
