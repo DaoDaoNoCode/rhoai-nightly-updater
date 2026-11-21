@@ -8,6 +8,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/node"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -172,10 +173,10 @@ func TestGetStatusGitOps_DoesNotReadControlPlane(t *testing.T) {
 func TestGetStatus_NodePullRecord(t *testing.T) {
 	t.Setenv("STABLE_SOURCE", "redhat-operators")
 	t.Setenv("STABLE_CHANNEL", "")
-	saved := paddedAuth(exampleAuth("user:pass"))
+	saved := node.PaddedAuth(exampleAuth("user:pass"))
 	pullRecord := func(auth string) string {
-		raw, _ := json.Marshal(nodePullRecord{SecretUID: "u", Key: "quay.io/rhoai", Salt: "aa", AuthSHA256: hashPullAuth("aa", auth), At: "2026-11-18T10:00:00Z", By: "admin"})
-		cm, _ := json.Marshal(map[string]any{"data": map[string]string{nodePullRecordKey: string(raw)}})
+		raw, _ := json.Marshal(node.PullRecord{SecretUID: "u", Key: "quay.io/rhoai", Salt: "aa", AuthSHA256: node.HashPullAuth("aa", auth), At: "2026-11-18T10:00:00Z", By: "admin"})
+		cm, _ := json.Marshal(map[string]any{"data": map[string]string{node.PullRecordKey: string(raw)}})
 		return string(cm)
 	}
 	snapshotPath := rhoai.NamespacedPath("v1", "configmaps", record.GetActivityNamespace(), record.SnapshotConfigMapName)

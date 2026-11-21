@@ -19,6 +19,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/node"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -971,7 +972,7 @@ func nodePullSecretHealth(c *Client, controlPlane string) checkOutput {
 }
 
 func checkImageMirror(c *Client) checkOutput {
-	idms, err := getIDMS(c)
+	idms, err := node.ImageMirror(c)
 	if err != nil {
 		return checkOutput{
 			check: CheckResult{Name: "Image mirror", Status: "fail", Detail: fmt.Sprintf("Failed to check image mirror: %v", err)},

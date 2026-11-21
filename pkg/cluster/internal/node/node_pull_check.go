@@ -1,4 +1,4 @@
-package cluster
+package node
 
 import (
 	"fmt"
@@ -10,7 +10,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// NodePullCheckImageProblem says why image cannot prove that the nodes can
+// PullCheckImageProblem says why image cannot prove that the nodes can
 // pull ("" when it can). OLM's registry pod pulls a digest reference only
 // if it is not on the node yet (operator-framework-olm @9822880e
 // staging/operator-lifecycle-manager/pkg/lib/image/image.go:9-17,
@@ -18,25 +18,25 @@ import (
 // PullAlways), so a node that has the image cached would pass without
 // using any credential. Only a tag reference, always pulled, asks the
 // registry with the node's pull secret.
-func NodePullCheckImageProblem(image string) string {
+func PullCheckImageProblem(image string) string {
 	if strings.Contains(image, "@") {
 		return "The check needs the image by tag, not by digest (" + image + "): a node that already has a digest's image would not pull it again, so the check could pass without the nodes' pull secret."
 	}
 	return ""
 }
 
-// CheckNodePull checks that the cluster's nodes can pull image, a nightly
+// CheckPull checks that the cluster's nodes can pull image, a nightly
 // catalog image, with their own pull secret: the same check as Update's
-// catalog verification (preflightReinstallCatalog), without its channel
+// catalog verification (catalog.PreflightReinstall), without its channel
 // checks. It creates a temporary verification CatalogSource for image
 // (labelled, removed at the end, and by the next operation if this one is
 // killed), waits until OLM's registry pod serves it (READY: the image was
-// pulled) or until that pod fails to pull it (pullFailureWatch), and deletes
+// pulled) or until that pod fails to pull it (catalog.PullFailureWatch), and deletes
 // it. Nothing else changes. It is the only way to tell from inside the
 // updater, which has no access to openshift-config/pull-secret, that the
 // nodes of a self-managed cluster have the quay.io/rhoai credentials.
-func CheckNodePull(c *Client, image string) (*types.OperationResponse, error) {
-	if msg := NodePullCheckImageProblem(image); msg != "" {
+func CheckPull(c *kube.Client, image string) (*types.OperationResponse, error) {
+	if msg := PullCheckImageProblem(image); msg != "" {
 		return &types.OperationResponse{Success: false, Message: msg + " Nothing was changed.", Logs: []string{}, ErrorCode: "validation"}, nil
 	}
 	logs := []string{"Image: " + image}

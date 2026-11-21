@@ -1,4 +1,4 @@
-package cluster
+package node
 
 import (
 	"encoding/base64"
@@ -76,25 +76,25 @@ import (
 
 // The one-click setup actions (types.NodeSetupRequest.Action).
 const (
-	NodeSetupMirrorCreate = "mirror-create"
-	NodeSetupMirrorRemove = "mirror-remove"
-	NodeSetupPullAdd      = "pull-secret-add"
-	NodeSetupPullRemove   = "pull-secret-remove"
+	MirrorCreate = "mirror-create"
+	MirrorRemove = "mirror-remove"
+	PullAdd      = "pull-secret-add"
+	PullRemove   = "pull-secret-remove"
 )
 
-// ValidNodeSetupAction reports whether a is one of the actions.
-func ValidNodeSetupAction(a string) bool {
+// ValidAction reports whether a is one of the actions.
+func ValidAction(a string) bool {
 	switch a {
-	case NodeSetupMirrorCreate, NodeSetupMirrorRemove, NodeSetupPullAdd, NodeSetupPullRemove:
+	case MirrorCreate, MirrorRemove, PullAdd, PullRemove:
 		return true
 	}
 	return false
 }
 
-// NodeSetupNeedsVersion: the action changes an existing object, so its
+// NeedsVersion: the action changes an existing object, so its
 // stream request must carry the version the plan was made on.
-func NodeSetupNeedsVersion(a string) bool {
-	return a != NodeSetupMirrorCreate
+func NeedsVersion(a string) bool {
+	return a != MirrorCreate
 }
 
 const (
@@ -152,12 +152,12 @@ const (
 	mirrorRemoveKeptImpact = "%s also redirects registry.redhat.io/rhoai to quay.io/rhoai and stays: the Machine Config Operator merges the mirrors of every object with the same source, so the nodes keep quay.io/rhoai. Unless those objects list their mirrors in conflicting orders, /etc/containers/registries.conf stays exactly as it is, the Machine Config Operator does not change the nodes' configuration, and no node is drained or updated."
 )
 
-// nodeSetupActivity names each action in the activity log.
-var nodeSetupActivity = map[string]string{
-	NodeSetupMirrorCreate: "create-image-mirror",
-	NodeSetupMirrorRemove: "remove-image-mirror",
-	NodeSetupPullAdd:      "add-node-pull-secret",
-	NodeSetupPullRemove:   "remove-node-pull-secret",
+// SetupActivity names each action in the activity log.
+var SetupActivity = map[string]string{
+	MirrorCreate: "create-image-mirror",
+	MirrorRemove: "remove-image-mirror",
+	PullAdd:      "add-node-pull-secret",
+	PullRemove:   "remove-node-pull-secret",
 }
 
 // nodeSetupWork is what one action would do: the plan's words, and the
@@ -165,14 +165,14 @@ var nodeSetupActivity = map[string]string{
 type nodeSetupWork struct {
 	plan types.NodeSetupPlan
 	// write sends the change; query is ?dryRun=All for the dry run.
-	write func(c *Client, query url.Values) error
+	write func(c *kube.Client, query url.Values) error
 	// verify reads the object back after the write.
-	verify func(c *Client) error
+	verify func(c *kube.Client) error
 	// done says what was done, for the outcome and the activity log.
 	done string
 	// record, when set, updates the tool's own record after the write
 	// (node_pull_record.go); recordFailed says what its failure means.
-	record       func(c *Client) error
+	record       func(c *kube.Client) error
 	recordFailed string
 	// credentials to redact from every message.
 	credentials []string
@@ -191,10 +191,10 @@ func (w *nodeSetupWork) redact(err error) string {
 	return kube.RedactSecrets(err.Error(), w.credentials...)
 }
 
-// PlanNodeSetup works out what req's action would do, with c (the user's
+// PlanSetup works out what req's action would do, with c (the user's
 // client): the reads, the decision and a server-side dry run of the write.
 // It changes nothing.
-func PlanNodeSetup(c *Client, req types.NodeSetupRequest) (*types.NodeSetupPlan, error) {
+func PlanSetup(c *kube.Client, req types.NodeSetupRequest) (*types.NodeSetupPlan, error) {
 	w, err := prepareNodeSetup(c, req)
 	if err != nil {
 		return nil, err
@@ -211,9 +211,9 @@ func PlanNodeSetup(c *Client, req types.NodeSetupRequest) (*types.NodeSetupPlan,
 // prepareNodeSetup does the reads and the decision of action. An error is
 // for a request that cannot be answered at all; every refusal is in the
 // plan.
-func prepareNodeSetup(c *Client, req types.NodeSetupRequest) (*nodeSetupWork, error) {
+func prepareNodeSetup(c *kube.Client, req types.NodeSetupRequest) (*nodeSetupWork, error) {
 	action := req.Action
-	if !ValidNodeSetupAction(action) {
+	if !ValidAction(action) {
 		return nil, fmt.Errorf("unknown action %q", action)
 	}
 	w := &nodeSetupWork{plan: types.NodeSetupPlan{Action: action}}
@@ -223,12 +223,12 @@ func prepareNodeSetup(c *Client, req types.NodeSetupRequest) (*nodeSetupWork, er
 		return w.refuse(code, refusal), nil
 	}
 	switch action {
-	case NodeSetupMirrorCreate:
+	case MirrorCreate:
 		prepareMirrorCreate(c, w)
-	case NodeSetupMirrorRemove:
+	case MirrorRemove:
 		prepareMirrorRemove(c, w)
-	case NodeSetupPullAdd, NodeSetupPullRemove:
-		preparePullSecret(c, w, action == NodeSetupPullAdd, req.ReplaceExisting)
+	case PullAdd, PullRemove:
+		preparePullSecret(c, w, action == PullAdd, req.ReplaceExisting)
 	}
 	return w, nil
 }
@@ -248,8 +248,8 @@ func prepareNodeSetup(c *Client, req types.NodeSetupRequest) (*nodeSetupWork, er
 // build/resources.go:1022-1078 packages every HypershiftEnabled webhook for
 // hosted clusters, with the same names as the classic SelectorSyncSet
 // (:937). Only the topology tells them apart (TestNodeSetupHostedCheckComesFirst).
-func nodeSetupPlatform(c *Client, action string) (cp, refusal, code string) {
-	mirror := action == NodeSetupMirrorCreate || action == NodeSetupMirrorRemove
+func nodeSetupPlatform(c *kube.Client, action string) (cp, refusal, code string) {
+	mirror := action == MirrorCreate || action == MirrorRemove
 	hosted, err := rhoai.ReadTopologyHosted(c)
 	if err != nil {
 		return "", "The updater cannot read whether this cluster has a hosted control plane (" + err.Error() + "). On a hosted control plane this would not reach the nodes, so it is not done. Nothing was changed; use the instructions instead.", "unknown_topology"
@@ -321,7 +321,7 @@ func (m idmsItem) isSetupMirror() bool {
 		(e.MirrorSourcePolicy == "" || e.MirrorSourcePolicy == "AllowContactingSource")
 }
 
-func listIDMS(c *Client) ([]idmsItem, error) {
+func listIDMS(c *kube.Client) ([]idmsItem, error) {
 	var items []idmsItem
 	if err := c.ListInto(rhoai.ClusterPath("config.openshift.io/v1", "imagedigestmirrorsets", ""), &items); err != nil {
 		if kube.IsDecodeError(err) {
@@ -341,7 +341,7 @@ func listIDMS(c *Client) ([]idmsItem, error) {
 //     parent scope: refused ("parent_scope"), since the new, more specific
 //     entry would take those pulls away from that mirror;
 //   - an IDMS named rhoai-quay-mirror that is not done: refused.
-func prepareMirrorCreate(c *Client, w *nodeSetupWork) {
+func prepareMirrorCreate(c *kube.Client, w *nodeSetupWork) {
 	items, rules, what, err := listMirrorRules(c)
 	if err != nil {
 		w.refuse(refusalCodeFor(err), "Cannot list the "+what+": "+err.Error()+". Nothing was changed.")
@@ -358,7 +358,7 @@ func prepareMirrorCreate(c *Client, w *nodeSetupWork) {
 		return
 	}
 	if parents := parentScopeRules(rules); len(parents) > 0 {
-		w.refuse("parent_scope", parentScopeRefusal(parents))
+		w.refuse("parent_scope", ParentScopeRefusal(parents))
 		return
 	}
 	for _, m := range items {
@@ -368,7 +368,7 @@ func prepareMirrorCreate(c *Client, w *nodeSetupWork) {
 		}
 	}
 	body, _ := json.Marshal(mirrorObject())
-	w.write = func(c *Client, query url.Values) error {
+	w.write = func(c *kube.Client, query url.Values) error {
 		_, _, err := c.Do(http.MethodPost, rhoai.ClusterPath("config.openshift.io/v1", "imagedigestmirrorsets", ""), "application/json", body, query)
 		return err
 	}
@@ -386,7 +386,7 @@ func prepareMirrorCreate(c *Client, w *nodeSetupWork) {
 	w.plan.NodeImpact = mirrorCreateImpact
 	w.plan.Undo = "Remove the image mirror (the same item offers it once it exists), or oc delete imagedigestmirrorset " + MirrorName + ". Removing it drains the nodes, " + poolPace + "."
 	w.done = "Created ImageDigestMirrorSet " + MirrorName + "."
-	w.verify = func(c *Client) error {
+	w.verify = func(c *kube.Client) error {
 		_, _, err := c.Get(rhoai.ClusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName))
 		return err
 	}
@@ -398,7 +398,7 @@ func prepareMirrorCreate(c *Client, w *nodeSetupWork) {
 // redirects the source to quay.io/rhoai keeps registries.conf as it is;
 // otherwise the remaining mirrors of the source, or of a parent scope,
 // serve it, or none.
-func prepareMirrorRemove(c *Client, w *nodeSetupWork) {
+func prepareMirrorRemove(c *kube.Client, w *nodeSetupWork) {
 	items, rules, what, err := listMirrorRules(c)
 	if err != nil {
 		w.refuse(refusalCodeFor(err), "Cannot list the "+what+": "+err.Error()+". Nothing was changed.")
@@ -411,10 +411,10 @@ func prepareMirrorRemove(c *Client, w *nodeSetupWork) {
 		}
 	}
 	// What stays: every rule but those of the IDMS this setup creates.
-	var remaining []mirrorRule
+	var remaining []MirrorRule
 	var others []string
 	for _, r := range rules {
-		if r.Kind == mirrorKindIDMS && r.Name == MirrorName {
+		if r.Kind == KindIDMS && r.Name == MirrorName {
 			continue
 		}
 		remaining = append(remaining, r)
@@ -436,7 +436,7 @@ func prepareMirrorRemove(c *Client, w *nodeSetupWork) {
 	}
 	opts, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "DeleteOptions",
 		"preconditions": map[string]any{"uid": ours.Metadata.UID, "resourceVersion": ours.Metadata.ResourceVersion}})
-	w.write = func(c *Client, query url.Values) error {
+	w.write = func(c *kube.Client, query url.Values) error {
 		_, _, err := c.Do(http.MethodDelete, rhoai.ClusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName), "application/json", opts, query)
 		return err
 	}
@@ -446,7 +446,7 @@ func prepareMirrorRemove(c *Client, w *nodeSetupWork) {
 	w.plan.Changes = []string{fmt.Sprintf("Delete ImageDigestMirrorSet %s (cluster-wide).", MirrorName)}
 	w.plan.NodeImpact, w.plan.Undo = mirrorRemoveImpactFor(remaining, others)
 	w.done = "Deleted ImageDigestMirrorSet " + MirrorName + "."
-	w.verify = func(c *Client) error {
+	w.verify = func(c *kube.Client) error {
 		_, found, err := c.GetOptional(rhoai.ClusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName))
 		if err != nil {
 			return err
@@ -462,7 +462,7 @@ func prepareMirrorRemove(c *Client, w *nodeSetupWork) {
 // kube-system/additional-pull-secret (the one the Pull secret item saved
 // and its Quay lookups use), padded as CRI-O needs it; "" with the reason
 // when there is none.
-func updaterQuayToken(c *Client) (string, string, string) {
+func updaterQuayToken(c *kube.Client) (string, string, string) {
 	body, found, err := c.GetOptional(rhoai.NamespacedPath("v1", "secrets", "kube-system", "additional-pull-secret"))
 	if err != nil {
 		return "", refusalCodeFor(err), "Cannot read the updater's token in kube-system/additional-pull-secret: " + err.Error() + ". Nothing was changed."
@@ -479,7 +479,7 @@ func updaterQuayToken(c *Client) (string, string, string) {
 	if auth == "" {
 		return "", "no_token", "kube-system/additional-pull-secret has no quay.io/rhoai token: save it under Pull secret first. Nothing was changed."
 	}
-	auth = paddedAuth(auth)
+	auth = PaddedAuth(auth)
 	decoded, err := base64.StdEncoding.DecodeString(auth)
 	if err != nil {
 		return "", "no_token", "The updater's quay.io/rhoai token is not base64: replace it under Pull secret first. Nothing was changed."
@@ -490,9 +490,9 @@ func updaterQuayToken(c *Client) (string, string, string) {
 	return auth, "", ""
 }
 
-// paddedAuth is auth with its base64 = padding, which CRI-O needs (auth
+// PaddedAuth is auth with its base64 = padding, which CRI-O needs (auth
 // as it is when it is not base64 without padding).
-func paddedAuth(auth string) string {
+func PaddedAuth(auth string) string {
 	if _, err := base64.StdEncoding.DecodeString(auth); err == nil {
 		return auth
 	}
@@ -512,7 +512,7 @@ type clusterPullSecret struct {
 
 // readClusterPullSecret reads openshift-config/pull-secret and refuses
 // (code, message) unless it is safe to change only one entry of it.
-func readClusterPullSecret(c *Client) (*clusterPullSecret, []string, string, string) {
+func readClusterPullSecret(c *kube.Client) (*clusterPullSecret, []string, string, string) {
 	body, _, err := c.Get(rhoai.NamespacedPath("v1", "secrets", clusterPullSecretNS, clusterPullSecretName))
 	if err != nil {
 		return nil, nil, refusalCodeFor(err), "Cannot read " + clusterPullSecretRef + ": " + err.Error() + ". Nothing was changed in it."
@@ -591,7 +591,7 @@ func rhoaiKeys(auths map[string]any) []string {
 	return keys
 }
 
-func preparePullSecret(c *Client, w *nodeSetupWork, add, replaceExisting bool) {
+func preparePullSecret(c *kube.Client, w *nodeSetupWork, add, replaceExisting bool) {
 	token := ""
 	if add {
 		var code, msg string
@@ -621,7 +621,7 @@ func preparePullSecret(c *Client, w *nodeSetupWork, add, replaceExisting bool) {
 	w.plan.ResourceVersion, w.plan.UID = ps.resourceVersion, ps.uid
 	// Whose the entry is decides everything below: without the record the
 	// tool cannot tell, so it changes nothing.
-	rec, err := readNodePullRecord(c)
+	rec, err := ReadPullRecord(c)
 	if err != nil {
 		w.refuse("unreadable", "Cannot read this tool's own record of the entry it added to "+clusterPullSecretRef+" ("+w.redact(err)+"), so it cannot tell who set the quay.io/rhoai entry there. Nothing was changed.")
 		return
@@ -656,7 +656,7 @@ func preparePullSecret(c *Client, w *nodeSetupWork, add, replaceExisting bool) {
 		"metadata": map[string]any{"resourceVersion": ps.resourceVersion},
 		"data":     map[string]any{".dockerconfigjson": encoded},
 	})
-	w.write = func(c *Client, query url.Values) error {
+	w.write = func(c *kube.Client, query url.Values) error {
 		_, _, err := c.Do(http.MethodPatch, rhoai.NamespacedPath("v1", "secrets", clusterPullSecretNS, clusterPullSecretName), "application/merge-patch+json", patch, query)
 		return err
 	}
@@ -670,7 +670,7 @@ func preparePullSecret(c *Client, w *nodeSetupWork, add, replaceExisting bool) {
 			keptRHOAI[k] = true
 		}
 	}
-	w.verify = func(c *Client) error {
+	w.verify = func(c *kube.Client) error {
 		got, _, code, msg := readClusterPullSecret(c)
 		if got == nil {
 			return fmt.Errorf("%s (%s)", msg, code)
@@ -696,7 +696,7 @@ func keptLogins(n int) string {
 }
 
 // recordedWhen words when and by whom the record says the entry was added.
-func recordedWhen(rec *nodePullRecord) string {
+func recordedWhen(rec *PullRecord) string {
 	if rec == nil {
 		return ""
 	}
@@ -721,7 +721,7 @@ func recordedWhen(rec *nodePullRecord) string {
 //     with another token: refused ("foreign_entry", Replaceable), unless the
 //     request acknowledges replacing it (ReplaceExisting); the replacement
 //     is then recorded as the tool's.
-func planPullAdd(w *nodeSetupWork, ps *clusterPullSecret, rec *nodePullRecord, entries pullEntries, token string, replaceExisting bool) map[string]any {
+func planPullAdd(w *nodeSetupWork, ps *clusterPullSecret, rec *PullRecord, entries pullEntries, token string, replaceExisting bool) map[string]any {
 	same := len(entries.keys) > 0
 	for _, k := range entries.keys {
 		if registry.AuthFromEntry(ps.auths[k]) != token {
@@ -773,8 +773,8 @@ func planPullAdd(w *nodeSetupWork, ps *clusterPullSecret, rec *nodePullRecord, e
 		w.done = "Replaced the quay.io/rhoai entry of " + clusterPullSecretRef + ", which this tool did not add, with one that has the token saved under Pull secret."
 	}
 	w.plan.NodeImpact = pullSecretNodeImpact
-	w.record = func(c *Client) error {
-		r, err := newNodePullRecord(c, ps.uid, token)
+	w.record = func(c *kube.Client) error {
+		r, err := NewPullRecord(c, ps.uid, token)
 		if err != nil {
 			return err
 		}
@@ -788,7 +788,7 @@ func planPullAdd(w *nodeSetupWork, ps *clusterPullSecret, rec *nodePullRecord, e
 // entry the tool added (classifyPullEntries) goes; any other quay.io/rhoai
 // entry is left, and when there is no entry of the tool's at all, nothing
 // is written ("not_owned"), with how to remove it by hand.
-func planPullRemove(w *nodeSetupWork, ps *clusterPullSecret, rec *nodePullRecord, entries pullEntries) map[string]any {
+func planPullRemove(w *nodeSetupWork, ps *clusterPullSecret, rec *PullRecord, entries pullEntries) map[string]any {
 	if len(entries.keys) == 0 {
 		w.nothing(clusterPullSecretRef + " has no quay.io/rhoai entry.")
 		return nil
@@ -826,7 +826,7 @@ func refusalCodeFor(err error) string {
 
 // writeNodeSetup sends the work's write, as a server-side dry run or for
 // real.
-func writeNodeSetup(c *Client, w *nodeSetupWork, dryRun bool) error {
+func writeNodeSetup(c *kube.Client, w *nodeSetupWork, dryRun bool) error {
 	var q url.Values
 	if dryRun {
 		q = url.Values{"dryRun": {"All"}}
@@ -836,7 +836,7 @@ func writeNodeSetup(c *Client, w *nodeSetupWork, dryRun bool) error {
 
 // dryRunNodeSetup runs the server-side dry run and turns its refusal into
 // the plan's.
-func dryRunNodeSetup(c *Client, w *nodeSetupWork) {
+func dryRunNodeSetup(c *kube.Client, w *nodeSetupWork) {
 	if err := writeNodeSetup(c, w, true); err != nil {
 		w.refuse(writeRefusalCode(err), writeRefusal(w, err, true))
 	}
@@ -847,7 +847,7 @@ func dryRunNodeSetup(c *Client, w *nodeSetupWork) {
 // or a 422 that names an admission check; "conflict" for a 409;
 // otherwise "failed".
 func writeRefusalCode(err error) string {
-	var k *K8sError
+	var k *kube.K8sError
 	if errors.As(err, &k) {
 		switch {
 		case k.Status == http.StatusForbidden:
@@ -878,7 +878,7 @@ func writeRefusal(w *nodeSetupWork, err error, dryRun bool) string {
 // stuckMachineConfigPools names the machine config pools that will not
 // take a change until someone acts: paused, or Degraded. Read with the
 // user's token; an unreadable list names none.
-func stuckMachineConfigPools(c *Client) []string {
+func stuckMachineConfigPools(c *kube.Client) []string {
 	var items []struct {
 		Metadata struct {
 			Name string `json:"name"`
@@ -915,39 +915,39 @@ func stuckMachineConfigPools(c *Client) []string {
 	return out
 }
 
-// RunNodeSetup runs action with c (the user's client), streaming its steps:
+// RunSetup runs action with c (the user's client), streaming its steps:
 // "check" (the reads and the decision, and that nothing changed since the
 // plan), "dry_run", "apply", "verify". It records the outcome in the
 // activity log, unless there was nothing to do.
-func RunNodeSetup(c *Client, req types.NodeSetupRequest, emit func(UpdateStepEvent)) (*types.OperationResponse, error) {
+func RunSetup(c *kube.Client, req types.NodeSetupRequest, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	fail := func(step, code, msg string) (*types.OperationResponse, error) {
-		emit(UpdateStepEvent{Step: step, Status: "failed", Message: msg, ErrorCode: code})
+		emit(types.UpdateStepEvent{Step: step, Status: "failed", Message: msg, ErrorCode: code})
 		return &types.OperationResponse{Success: false, Message: msg, ErrorCode: code, Logs: []string{}}, nil
 	}
-	emit(UpdateStepEvent{Step: "check", Status: "running", Message: "Reading what is on the cluster"})
+	emit(types.UpdateStepEvent{Step: "check", Status: "running", Message: "Reading what is on the cluster"})
 	w, err := prepareNodeSetup(c, req)
 	if err != nil {
 		return nil, err
 	}
-	activity := nodeSetupActivity[req.Action]
+	activity := SetupActivity[req.Action]
 	switch {
 	case w.plan.NothingToDo:
-		emit(UpdateStepEvent{Step: "check", Status: "success", Message: w.plan.State})
+		emit(types.UpdateStepEvent{Step: "check", Status: "success", Message: w.plan.State})
 		return &types.OperationResponse{Success: true, Message: "Nothing to change: " + w.plan.State, Logs: []string{}}, nil
 	case !w.plan.Ready:
 		return fail("check", w.plan.RefusalCode, w.plan.Refusal)
-	case NodeSetupNeedsVersion(req.Action) && (req.ResourceVersion != w.plan.ResourceVersion || (req.UID != "" && req.UID != w.plan.UID)):
+	case NeedsVersion(req.Action) && (req.ResourceVersion != w.plan.ResourceVersion || (req.UID != "" && req.UID != w.plan.UID)):
 		return fail("check", "conflict", "It changed since you reviewed it, so nothing was changed. Review it again.")
 	}
-	emit(UpdateStepEvent{Step: "check", Status: "success", Message: w.plan.State})
+	emit(types.UpdateStepEvent{Step: "check", Status: "success", Message: w.plan.State})
 
-	emit(UpdateStepEvent{Step: "dry_run", Status: "running", Message: "Asking the API server to check the change (dry run)"})
+	emit(types.UpdateStepEvent{Step: "dry_run", Status: "running", Message: "Asking the API server to check the change (dry run)"})
 	if err := writeNodeSetup(c, w, true); err != nil {
 		return fail("dry_run", writeRefusalCode(err), writeRefusal(w, err, true))
 	}
-	emit(UpdateStepEvent{Step: "dry_run", Status: "success", Message: "The API server accepts it"})
+	emit(types.UpdateStepEvent{Step: "dry_run", Status: "success", Message: "The API server accepts it"})
 
-	emit(UpdateStepEvent{Step: "apply", Status: "running", Message: strings.Join(w.plan.Changes, " ")})
+	emit(types.UpdateStepEvent{Step: "apply", Status: "running", Message: strings.Join(w.plan.Changes, " ")})
 	if err := writeNodeSetup(c, w, false); err != nil {
 		msg := writeRefusal(w, err, false)
 		record.RecordAction(c, activity, msg, false)
@@ -961,19 +961,19 @@ func RunNodeSetup(c *Client, req types.NodeSetupRequest, emit func(UpdateStepEve
 			done += " " + w.recordFailed + " (" + w.redact(err) + ")."
 		}
 	}
-	emit(UpdateStepEvent{Step: "apply", Status: "success", Message: done})
+	emit(types.UpdateStepEvent{Step: "apply", Status: "success", Message: done})
 	record.RecordAction(c, activity, done, true)
 
-	emit(UpdateStepEvent{Step: "verify", Status: "running", Message: "Reading it back"})
+	emit(types.UpdateStepEvent{Step: "verify", Status: "running", Message: "Reading it back"})
 	if err := w.verify(c); err != nil {
 		msg := done + " Reading it back did not show the change: " + w.redact(err) + ". Check the Status page."
-		emit(UpdateStepEvent{Step: "verify", Status: "failed", Message: msg})
+		emit(types.UpdateStepEvent{Step: "verify", Status: "failed", Message: msg})
 		return &types.OperationResponse{Success: false, Message: msg, ErrorCode: "verify", Logs: []string{}}, nil
 	}
 	note := "The nodes take it " + poolPace + ": oc get mcp shows UPDATED True for every pool once all have it."
 	if pools := stuckMachineConfigPools(c); len(pools) > 0 {
 		note = "These machine config pools will not take it until that is resolved: " + strings.Join(pools, ", ") + ". The others take it " + poolPace + " (oc get mcp)."
 	}
-	emit(UpdateStepEvent{Step: "verify", Status: "success", Message: note})
+	emit(types.UpdateStepEvent{Step: "verify", Status: "success", Message: note})
 	return &types.OperationResponse{Success: true, Message: done + " " + note, Logs: []string{}}, nil
 }

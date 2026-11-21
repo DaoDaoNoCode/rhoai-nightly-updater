@@ -236,7 +236,7 @@ func writeMaaSRecord(c *Client, rec maasRecord) error {
 	if err != nil {
 		return err
 	}
-	if err := writeSnapshotKey(c, maasRecordKey, maasRecordManager, string(data)); err != nil {
+	if err := record.WriteSnapshotKey(c, maasRecordKey, maasRecordManager, string(data)); err != nil {
 		return fmt.Errorf("record this tool's MaaS changes: %w", err)
 	}
 	return nil

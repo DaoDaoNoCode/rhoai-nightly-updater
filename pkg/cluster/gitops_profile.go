@@ -10,6 +10,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/node"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -91,7 +92,7 @@ func UpdateStreamGitOpsProfile(c *Client, image string, emit func(UpdateStepEven
 	logs = append(logs, gitOpsProfileNoPullSecret)
 	emit(UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: gitOpsProfileNoPullSecret})
 
-	idms, err := getIDMS(c)
+	idms, err := node.ImageMirror(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Failed to check IDMS: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
@@ -232,7 +233,7 @@ func UpdateDryRunGitOpsProfile(c *Client, image string) (*types.OperationRespons
 		logs = append(logs, "[DRY-RUN] WARNING: A Dashboard Dev session is active. Update refuses to run while it is (the gitops profile cannot end it).")
 	}
 	logs = append(logs, gitOpsProfileNoPullSecret)
-	idms, err := getIDMS(c)
+	idms, err := node.ImageMirror(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Failed to check IDMS: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}

@@ -61,10 +61,10 @@ func TestBookkeepingUsesTheServiceAccount(t *testing.T) {
 	if _, err := GetActivity(c); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readSnapshotKey(c, "k"); err != nil {
+	if _, err := record.ReadSnapshotKey(c, "k"); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeSnapshotKey(c, "k", "m", "v"); err != nil {
+	if err := record.WriteSnapshotKey(c, "k", "m", "v"); err != nil {
 		t.Fatal(err)
 	}
 	if err := record.SaveSubscriptionSnapshot(c, map[string]any{"spec": map[string]any{"channel": "x"}}); err != nil {

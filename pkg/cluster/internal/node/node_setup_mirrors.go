@@ -1,4 +1,4 @@
-package cluster
+package node
 
 import (
 	"fmt"
@@ -7,6 +7,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 // The image mirror objects that the nodes' /etc/containers/registries.conf
@@ -30,14 +31,14 @@ import (
 
 // The kinds of mirror objects.
 const (
-	mirrorKindIDMS = "ImageDigestMirrorSet"
-	mirrorKindICSP = "ImageContentSourcePolicy"
+	KindIDMS       = "ImageDigestMirrorSet"
+	KindICSP       = "ImageContentSourcePolicy"
 	mirrorKindITMS = "ImageTagMirrorSet"
 )
 
-// mirrorRule is one source entry of an ImageDigestMirrorSet,
+// MirrorRule is one source entry of an ImageDigestMirrorSet,
 // ImageContentSourcePolicy or ImageTagMirrorSet.
-type mirrorRule struct {
+type MirrorRule struct {
 	Kind, Name string
 	Source     string
 	Mirrors    []string
@@ -48,14 +49,14 @@ type mirrorRule struct {
 
 // digest: the rule's mirrors serve pulls by digest (IDMS, ICSP); an ITMS's
 // serve pulls by tag.
-func (r mirrorRule) digest() bool { return r.Kind != mirrorKindITMS }
+func (r MirrorRule) digest() bool { return r.Kind != mirrorKindITMS }
 
-func (r mirrorRule) ref() string { return r.Kind + " " + r.Name }
+func (r MirrorRule) ref() string { return r.Kind + " " + r.Name }
 
 // hasRealMirror: at least one mirror that is not the source itself
 // (runtime-utils registries.go mirrorsContainsARealMirror); a rule without
 // one is ignored when registries.conf is rendered.
-func (r mirrorRule) hasRealMirror() bool {
+func (r MirrorRule) hasRealMirror() bool {
 	for _, m := range r.Mirrors {
 		if m != r.Source {
 			return true
@@ -66,14 +67,14 @@ func (r mirrorRule) hasRealMirror() bool {
 
 // redirectsToQuay: the rule serves pulls of IDMSSource by digest from
 // MirrorTarget, which is what the image mirror of this setup is for.
-func (r mirrorRule) redirectsToQuay() bool {
+func (r MirrorRule) redirectsToQuay() bool {
 	return r.digest() && r.Source == rhoai.IDMSSource && slices.Contains(r.Mirrors, MirrorTarget)
 }
 
-// scopeIsNestedInsideScope is runtime-utils registries.go
+// ScopeIsNestedInsideScope is runtime-utils registries.go
 // ScopeIsNestedInsideScope (:13-36): subScope is superScope, a namespace or
 // repository inside it, or matches its wildcard host ("*.example.com").
-func scopeIsNestedInsideScope(subScope, superScope string) bool {
+func ScopeIsNestedInsideScope(subScope, superScope string) bool {
 	if superScope == subScope {
 		return true
 	}
@@ -98,7 +99,7 @@ func scopeIsNestedInsideScope(subScope, superScope string) bool {
 // (types_image_digest_mirror_set.go:117-119: source *.redhat.io, mirror
 // mirror.local/redhat, image registry.redhat.io/product/repo:
 // mirror.local/redhat/product/repo).
-func (r mirrorRule) pathFor(m string) string {
+func (r MirrorRule) pathFor(m string) string {
 	if strings.HasPrefix(r.Source, "*.") {
 		host, _, _ := strings.Cut(rhoai.IDMSSource, "/")
 		return m + rhoai.IDMSSource[len(host):]
@@ -107,11 +108,11 @@ func (r mirrorRule) pathFor(m string) string {
 }
 
 // idmsRules are the rules of the ImageDigestMirrorSets listed.
-func idmsRules(items []idmsItem) []mirrorRule {
-	var out []mirrorRule
+func idmsRules(items []idmsItem) []MirrorRule {
+	var out []MirrorRule
 	for _, m := range items {
 		for _, e := range m.Spec.ImageDigestMirrors {
-			out = append(out, mirrorRule{Kind: mirrorKindIDMS, Name: m.Metadata.Name, Source: e.Source, Mirrors: e.Mirrors, Policy: e.MirrorSourcePolicy})
+			out = append(out, MirrorRule{Kind: KindIDMS, Name: m.Metadata.Name, Source: e.Source, Mirrors: e.Mirrors, Policy: e.MirrorSourcePolicy})
 		}
 	}
 	return out
@@ -120,7 +121,7 @@ func idmsRules(items []idmsItem) []mirrorRule {
 // listICSPRules lists the ImageContentSourcePolicies' rules
 // (spec.repositoryDigestMirrors). A 404 for the collection means the API
 // is not served, so no such object exists; any other failure is an error.
-func listICSPRules(c *Client) ([]mirrorRule, error) {
+func listICSPRules(c *kube.Client) ([]MirrorRule, error) {
 	var list struct {
 		Items []struct {
 			Metadata struct {
@@ -144,10 +145,10 @@ func listICSPRules(c *Client) ([]mirrorRule, error) {
 	if !found {
 		return nil, nil
 	}
-	var out []mirrorRule
+	var out []MirrorRule
 	for _, p := range list.Items {
 		for _, e := range p.Spec.RepositoryDigestMirrors {
-			out = append(out, mirrorRule{Kind: mirrorKindICSP, Name: p.Metadata.Name, Source: e.Source, Mirrors: e.Mirrors})
+			out = append(out, MirrorRule{Kind: KindICSP, Name: p.Metadata.Name, Source: e.Source, Mirrors: e.Mirrors})
 		}
 	}
 	return out, nil
@@ -155,7 +156,7 @@ func listICSPRules(c *Client) ([]mirrorRule, error) {
 
 // listITMSRules lists the ImageTagMirrorSets' rules (spec.imageTagMirrors),
 // with the same 404 handling as listICSPRules.
-func listITMSRules(c *Client) ([]mirrorRule, error) {
+func listITMSRules(c *kube.Client) ([]MirrorRule, error) {
 	var list struct {
 		Items []struct {
 			Metadata struct {
@@ -180,10 +181,10 @@ func listITMSRules(c *Client) ([]mirrorRule, error) {
 	if !found {
 		return nil, nil
 	}
-	var out []mirrorRule
+	var out []MirrorRule
 	for _, s := range list.Items {
 		for _, e := range s.Spec.ImageTagMirrors {
-			out = append(out, mirrorRule{Kind: mirrorKindITMS, Name: s.Metadata.Name, Source: e.Source, Mirrors: e.Mirrors, Policy: e.MirrorSourcePolicy})
+			out = append(out, MirrorRule{Kind: mirrorKindITMS, Name: s.Metadata.Name, Source: e.Source, Mirrors: e.Mirrors, Policy: e.MirrorSourcePolicy})
 		}
 	}
 	return out, nil
@@ -193,7 +194,7 @@ func listITMSRules(c *Client) ([]mirrorRule, error) {
 // ImageDigestMirrorSets (also returned as read, for the removal's
 // preconditions), the ImageContentSourcePolicies and the
 // ImageTagMirrorSets. what names the list that failed.
-func listMirrorRules(c *Client) (items []idmsItem, rules []mirrorRule, what string, err error) {
+func listMirrorRules(c *kube.Client) (items []idmsItem, rules []MirrorRule, what string, err error) {
 	if items, err = listIDMS(c); err != nil {
 		return nil, nil, "ImageDigestMirrorSets", err
 	}
@@ -215,8 +216,8 @@ func listMirrorRules(c *Client) (items []idmsItem, rules []mirrorRule, what stri
 // in (a parent namespace, the registry, a wildcard host), while no rule of
 // any kind with a real mirror has exactly IDMSSource as its source (with
 // one, the nodes already use only that entry; registries.go:331-345).
-func parentScopeRules(rules []mirrorRule) []mirrorRule {
-	var parents []mirrorRule
+func parentScopeRules(rules []MirrorRule) []MirrorRule {
+	var parents []MirrorRule
 	for _, r := range rules {
 		if !r.hasRealMirror() {
 			continue
@@ -224,7 +225,7 @@ func parentScopeRules(rules []mirrorRule) []mirrorRule {
 		if r.Source == rhoai.IDMSSource {
 			return nil
 		}
-		if scopeIsNestedInsideScope(rhoai.IDMSSource, r.Source) {
+		if ScopeIsNestedInsideScope(rhoai.IDMSSource, r.Source) {
 			parents = append(parents, r)
 		}
 	}
@@ -241,8 +242,8 @@ func parentScopeRules(rules []mirrorRule) []mirrorRule {
 // :590-596), and the setup's IDMS has the default (an ICSP counts as the
 // default too: convertICSPToIDMS sets none). Creating it next to one of
 // these would stop every mirror change from reaching the nodes.
-func policyConflictRules(rules []mirrorRule) []mirrorRule {
-	var out []mirrorRule
+func policyConflictRules(rules []MirrorRule) []MirrorRule {
+	var out []MirrorRule
 	for _, r := range rules {
 		if r.Source == rhoai.IDMSSource && r.Policy != "" && r.Policy != "AllowContactingSource" {
 			out = append(out, r)
@@ -252,7 +253,7 @@ func policyConflictRules(rules []mirrorRule) []mirrorRule {
 }
 
 // policyConflictRefusal explains the refusal of policyConflictRules.
-func policyConflictRefusal(conflicts []mirrorRule) string {
+func policyConflictRefusal(conflicts []MirrorRule) string {
 	names := make([]string, len(conflicts))
 	for i, r := range conflicts {
 		names[i] = r.ref()
@@ -261,10 +262,10 @@ func policyConflictRefusal(conflicts []mirrorRule) string {
 		"To use %s, the cluster's administrator adds it to the mirrors of an ImageDigestMirrorSet entry for %s that has the same mirrorSourcePolicy (the entry there, if it is an ImageDigestMirrorSet's).", strings.Join(names, ", "), conflicts[0].Policy, rhoai.IDMSSource, MirrorName, MirrorTarget, rhoai.IDMSSource)
 }
 
-// parentScopeRefusal explains why the mirror is not created over parents:
+// ParentScopeRefusal explains why the mirror is not created over parents:
 // which object, what it maps, what creating the mirror would change, and
 // what to do instead.
-func parentScopeRefusal(parents []mirrorRule) string {
+func ParentScopeRefusal(parents []MirrorRule) string {
 	var b strings.Builder
 	digest, tag := false, false
 	for _, r := range parents {
@@ -300,7 +301,7 @@ func parentScopeRefusal(parents []mirrorRule) string {
 // mirrorRemoveImpactFor words what the nodes do when the setup's IDMS is
 // deleted and remaining stays, and how to undo it. others are the
 // remaining objects that redirect IDMSSource to MirrorTarget.
-func mirrorRemoveImpactFor(remaining []mirrorRule, others []string) (impact, undo string) {
+func mirrorRemoveImpactFor(remaining []MirrorRule, others []string) (impact, undo string) {
 	undo = "Create the image mirror again (one click, no drain)."
 	if len(others) > 0 {
 		return fmt.Sprintf(mirrorRemoveKeptImpact, strings.Join(others, ", ")), undo
@@ -333,7 +334,7 @@ func mirrorRemoveImpactFor(remaining []mirrorRule, others []string) (impact, und
 }
 
 // mirrorPaths are r's real mirrors as the paths that serve IDMSSource.
-func (r mirrorRule) mirrorPaths() []string {
+func (r MirrorRule) mirrorPaths() []string {
 	var out []string
 	for _, m := range r.Mirrors {
 		if m != r.Source {
@@ -349,8 +350,8 @@ func (r mirrorRule) mirrorPaths() []string {
 // MirrorTarget after it, which also sets up the image mirror (this item
 // then counts it as done). An ImageTagMirrorSet's entry keeps its tag
 // mirror; the image mirror can then be created here.
-func manualEntryHint(r mirrorRule) string {
-	field := map[string]string{mirrorKindIDMS: "spec.imageDigestMirrors", mirrorKindICSP: "spec.repositoryDigestMirrors", mirrorKindITMS: "spec.imageTagMirrors"}[r.Kind]
+func manualEntryHint(r MirrorRule) string {
+	field := map[string]string{KindIDMS: "spec.imageDigestMirrors", KindICSP: "spec.repositoryDigestMirrors", mirrorKindITMS: "spec.imageTagMirrors"}[r.Kind]
 	mirrors := r.mirrorPaths()
 	after := "then Create the image mirror works here"
 	if r.digest() {
@@ -358,4 +359,45 @@ func manualEntryHint(r mirrorRule) string {
 		after = "that also sets up the image mirror"
 	}
 	return fmt.Sprintf("in %s of %s: source %s, mirrors %s (%s)", field, r.ref(), rhoai.IDMSSource, strings.Join(mirrors, ", "), after)
+}
+
+func ImageMirror(c *kube.Client) (types.ImageMirrorInfo, error) {
+	path := rhoai.ClusterPath("config.openshift.io/v1", "imagedigestmirrorsets", "")
+	var items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Spec struct {
+			ImageDigestMirrors []struct {
+				Source string `json:"source"`
+			} `json:"imageDigestMirrors"`
+		} `json:"spec"`
+	}
+	if err := c.ListInto(path, &items); err != nil {
+		if kube.IsDecodeError(err) {
+			return types.ImageMirrorInfo{Exists: false}, fmt.Errorf("unmarshal: %w", err)
+		}
+		return types.ImageMirrorInfo{Exists: false}, fmt.Errorf("request failed: %w", err)
+	}
+	for _, item := range items {
+		for _, mirror := range item.Spec.ImageDigestMirrors {
+			if mirror.Source == rhoai.IDMSSource {
+				return types.ImageMirrorInfo{Exists: true, Kind: KindIDMS, Name: item.Metadata.Name, Source: mirror.Source}, nil
+			}
+		}
+	}
+	// An ImageContentSourcePolicy mirrors the source just as well: the
+	// Machine Config Operator merges its mirrors with the IDMSs' (runtime-utils
+	// @7bdb5b9c pkg/registries/registries.go mergedDigestMirrorSets,
+	// :165-183).
+	icsp, err := listICSPRules(c)
+	if err != nil {
+		return types.ImageMirrorInfo{Exists: false}, fmt.Errorf("list ImageContentSourcePolicies: %w", err)
+	}
+	for _, r := range icsp {
+		if r.Source == rhoai.IDMSSource {
+			return types.ImageMirrorInfo{Exists: true, Kind: KindICSP, Name: r.Name, Source: r.Source}, nil
+		}
+	}
+	return types.ImageMirrorInfo{Exists: false}, nil
 }

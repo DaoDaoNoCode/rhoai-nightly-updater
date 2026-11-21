@@ -1,4 +1,4 @@
-package cluster
+package node
 
 import (
 	"crypto/rand"
@@ -42,12 +42,12 @@ import (
 // the tool cannot restore it. An entry that already has the updater's
 // token but that the tool did not write is left unclaimed.
 const (
-	nodePullRecordKey     = "nodePullSecretEntry"
+	PullRecordKey         = "nodePullSecretEntry"
 	nodePullRecordManager = "rhoai-nightly-updater-node-pull-secret"
 )
 
-// nodePullRecord is the tool's record of the entry it wrote.
-type nodePullRecord struct {
+// PullRecord is the tool's record of the entry it wrote.
+type PullRecord struct {
 	// SecretUID is openshift-config/pull-secret's UID when the entry was
 	// written.
 	SecretUID string `json:"secretUID"`
@@ -60,44 +60,44 @@ type nodePullRecord struct {
 	By         string `json:"by,omitempty"`
 }
 
-// hashPullAuth is the record's hash of auth.
-func hashPullAuth(salt, auth string) string {
+// HashPullAuth is the record's hash of auth.
+func HashPullAuth(salt, auth string) string {
 	sum := sha256.Sum256([]byte(salt + auth))
 	return hex.EncodeToString(sum[:])
 }
 
-// matches: auth is the value the tool recorded.
-func (r *nodePullRecord) matches(auth string) bool {
+// Matches: auth is the value the tool recorded.
+func (r *PullRecord) Matches(auth string) bool {
 	if r == nil || auth == "" || r.Salt == "" || r.AuthSHA256 == "" {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(hashPullAuth(r.Salt, auth)), []byte(r.AuthSHA256)) == 1
+	return subtle.ConstantTimeCompare([]byte(HashPullAuth(r.Salt, auth)), []byte(r.AuthSHA256)) == 1
 }
 
-// newNodePullRecord records that the tool wrote auth under quay.io/rhoai into the
+// NewPullRecord records that the tool wrote auth under quay.io/rhoai into the
 // Secret with UID uid.
-func newNodePullRecord(c *Client, uid, auth string) (nodePullRecord, error) {
+func NewPullRecord(c *kube.Client, uid, auth string) (PullRecord, error) {
 	if uid == "" {
-		return nodePullRecord{}, fmt.Errorf("%s has no UID", clusterPullSecretRef)
+		return PullRecord{}, fmt.Errorf("%s has no UID", clusterPullSecretRef)
 	}
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
-		return nodePullRecord{}, err
+		return PullRecord{}, err
 	}
 	s := hex.EncodeToString(salt)
-	return nodePullRecord{SecretUID: uid, Key: registry.QuayRHOAI, Salt: s, AuthSHA256: hashPullAuth(s, auth), At: record.NowRFC3339(), By: kube.GetUser(c)}, nil
+	return PullRecord{SecretUID: uid, Key: registry.QuayRHOAI, Salt: s, AuthSHA256: HashPullAuth(s, auth), At: record.NowRFC3339(), By: kube.GetUser(c)}, nil
 }
 
-// readNodePullRecord reads the record (nil when there is none).
-func readNodePullRecord(c *Client) (*nodePullRecord, error) {
-	raw, err := readSnapshotKey(c, nodePullRecordKey)
+// ReadPullRecord reads the record (nil when there is none).
+func ReadPullRecord(c *kube.Client) (*PullRecord, error) {
+	raw, err := record.ReadSnapshotKey(c, PullRecordKey)
 	if err != nil {
 		return nil, fmt.Errorf("read this tool's record of the entry it added to %s: %w", clusterPullSecretRef, err)
 	}
 	if raw == "" {
 		return nil, nil
 	}
-	var rec nodePullRecord
+	var rec PullRecord
 	if err := json.Unmarshal([]byte(raw), &rec); err != nil {
 		return nil, fmt.Errorf("parse this tool's record of the entry it added to %s: %w", clusterPullSecretRef, err)
 	}
@@ -108,19 +108,19 @@ func readNodePullRecord(c *Client) (*nodePullRecord, error) {
 }
 
 // writeNodePullRecord records rec; clearNodePullRecord drops it.
-func writeNodePullRecord(c *Client, rec nodePullRecord) error {
+func writeNodePullRecord(c *kube.Client, rec PullRecord) error {
 	data, err := json.Marshal(rec)
 	if err != nil {
 		return err
 	}
-	if err := writeSnapshotKey(c, nodePullRecordKey, nodePullRecordManager, string(data)); err != nil {
+	if err := record.WriteSnapshotKey(c, PullRecordKey, nodePullRecordManager, string(data)); err != nil {
 		return fmt.Errorf("record the entry added to %s: %w", clusterPullSecretRef, err)
 	}
 	return nil
 }
 
-func clearNodePullRecord(c *Client) error {
-	if err := writeSnapshotKey(c, nodePullRecordKey, nodePullRecordManager, ""); err != nil {
+func clearNodePullRecord(c *kube.Client) error {
+	if err := record.WriteSnapshotKey(c, PullRecordKey, nodePullRecordManager, ""); err != nil {
 		return fmt.Errorf("clear the record of the entry added to %s: %w", clusterPullSecretRef, err)
 	}
 	return nil
@@ -147,7 +147,7 @@ type pullEntries struct {
 }
 
 // classifyPullEntries splits the entries of ps by rec.
-func classifyPullEntries(ps *clusterPullSecret, rec *nodePullRecord) pullEntries {
+func classifyPullEntries(ps *clusterPullSecret, rec *PullRecord) pullEntries {
 	e := pullEntries{keys: rhoaiKeys(ps.auths)}
 	if len(e.keys) == 0 {
 		return e
@@ -163,7 +163,7 @@ func classifyPullEntries(ps *clusterPullSecret, rec *nodePullRecord) pullEntries
 		switch {
 		case entry == nil:
 			e.why = "the entry this tool added is gone; the one there now was added by someone else"
-		case !rec.matches(auth):
+		case !rec.Matches(auth):
 			e.why = "its token was changed since this tool added it"
 		default:
 			e.own = rec.Key
@@ -188,13 +188,13 @@ func (e pullEntries) setBy() string {
 	return EntrySetByOther
 }
 
-// nodePullRecordInfo is the record for the status, read with the
+// PullRecordInfo is the record for the status, read with the
 // ServiceAccount (the record is the tool's own; the cluster pull secret is
 // not readable by it): nil when there is none. auth is the updater's
 // token now, to say whether the recorded entry has it.
-func nodePullRecordInfo(rec *nodePullRecord, auth string) *types.NodePullSecretRecord {
+func PullRecordInfo(rec *PullRecord, auth string) *types.NodePullSecretRecord {
 	if rec == nil {
 		return nil
 	}
-	return &types.NodePullSecretRecord{At: rec.At, By: rec.By, SameToken: auth != "" && rec.matches(paddedAuth(auth))}
+	return &types.NodePullSecretRecord{At: rec.At, By: rec.By, SameToken: auth != "" && rec.Matches(PaddedAuth(auth))}
 }

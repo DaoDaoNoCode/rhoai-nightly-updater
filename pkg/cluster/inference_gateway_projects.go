@@ -55,7 +55,7 @@ const (
 )
 
 func readGatewayProjects(c *Client) ([]string, error) {
-	raw, err := readSnapshotKey(c, gatewayProjectsKey)
+	raw, err := record.ReadSnapshotKey(c, gatewayProjectsKey)
 	if err != nil {
 		return nil, fmt.Errorf("read this tool's record of the projects it added to the inference gateway: %w", err)
 	}
@@ -73,7 +73,7 @@ func readGatewayProjects(c *Client) ([]string, error) {
 func writeGatewayProjects(c *Client, projects []string) error {
 	sort.Strings(projects)
 	data, _ := json.Marshal(map[string]any{"projects": projects})
-	if err := writeSnapshotKey(c, gatewayProjectsKey, gatewayProjectsManager, string(data)); err != nil {
+	if err := record.WriteSnapshotKey(c, gatewayProjectsKey, gatewayProjectsManager, string(data)); err != nil {
 		return fmt.Errorf("record the projects this tool added to the inference gateway: %w", err)
 	}
 	return nil

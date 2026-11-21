@@ -14,6 +14,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/node"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -166,12 +167,12 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 	// The tool's record of the entry it added to the nodes' pull secret
 	// (node_pull_record.go), for the nodes' part below. An unreadable
 	// record shows none, so the removal is not offered.
-	var nodeRecord *nodePullRecord
+	var nodeRecord *node.PullRecord
 	run(func() {
 		if reads.controlPlane == nil {
 			return
 		}
-		rec, err := readNodePullRecord(c)
+		rec, err := node.ReadPullRecord(c)
 		if err != nil {
 			slog.Debug("node pull secret record unreadable", "error", err)
 			return
@@ -182,7 +183,7 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 	})
 
 	run(func() {
-		if idms, err := getIDMS(c); err != nil {
+		if idms, err := node.ImageMirror(c); err != nil {
 			addErr(fmt.Sprintf("image mirror: %v", err))
 		} else {
 			mu.Lock()
@@ -262,7 +263,7 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 		status.Cluster.ControlPlane = controlPlane
 		status.PullSecret.Nodes = rhoai.NodePullInfo(controlPlane, status.CatalogSource)
 		if status.PullSecret.Nodes != nil {
-			status.PullSecret.Nodes.AddedByTool = nodePullRecordInfo(nodeRecord, quayAuth)
+			status.PullSecret.Nodes.AddedByTool = node.PullRecordInfo(nodeRecord, quayAuth)
 		}
 	}
 
@@ -532,47 +533,6 @@ func getCatalogPod(c *Client) (*types.CatalogPodInfo, error) {
 		info.RestartCount += cs.RestartCount
 	}
 	return info, nil
-}
-
-func getIDMS(c *Client) (types.ImageMirrorInfo, error) {
-	path := rhoai.ClusterPath("config.openshift.io/v1", "imagedigestmirrorsets", "")
-	var items []struct {
-		Metadata struct {
-			Name string `json:"name"`
-		} `json:"metadata"`
-		Spec struct {
-			ImageDigestMirrors []struct {
-				Source string `json:"source"`
-			} `json:"imageDigestMirrors"`
-		} `json:"spec"`
-	}
-	if err := c.ListInto(path, &items); err != nil {
-		if kube.IsDecodeError(err) {
-			return types.ImageMirrorInfo{Exists: false}, fmt.Errorf("unmarshal: %w", err)
-		}
-		return types.ImageMirrorInfo{Exists: false}, fmt.Errorf("request failed: %w", err)
-	}
-	for _, item := range items {
-		for _, mirror := range item.Spec.ImageDigestMirrors {
-			if mirror.Source == rhoai.IDMSSource {
-				return types.ImageMirrorInfo{Exists: true, Kind: mirrorKindIDMS, Name: item.Metadata.Name, Source: mirror.Source}, nil
-			}
-		}
-	}
-	// An ImageContentSourcePolicy mirrors the source just as well: the
-	// Machine Config Operator merges its mirrors with the IDMSs' (runtime-utils
-	// @7bdb5b9c pkg/registries/registries.go mergedDigestMirrorSets,
-	// :165-183).
-	icsp, err := listICSPRules(c)
-	if err != nil {
-		return types.ImageMirrorInfo{Exists: false}, fmt.Errorf("list ImageContentSourcePolicies: %w", err)
-	}
-	for _, r := range icsp {
-		if r.Source == rhoai.IDMSSource {
-			return types.ImageMirrorInfo{Exists: true, Kind: mirrorKindICSP, Name: r.Name, Source: r.Source}, nil
-		}
-	}
-	return types.ImageMirrorInfo{Exists: false}, nil
 }
 
 // checkDSCExists returns the metadata of the first DataScienceCluster,

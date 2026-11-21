@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/node"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -111,21 +112,21 @@ func nsSetPullSecret(t *testing.T, f *resourceFake, extra map[string]any) {
 // into the Secret with uid.
 func nsPutRecord(t *testing.T, f *resourceFake, uid, auth string) {
 	t.Helper()
-	rec := nodePullRecord{SecretUID: uid, Key: "quay.io/rhoai", Salt: "5a17", AuthSHA256: hashPullAuth("5a17", auth), At: "2026-11-18T10:00:00Z", By: "admin"}
+	rec := node.PullRecord{SecretUID: uid, Key: "quay.io/rhoai", Salt: "5a17", AuthSHA256: node.HashPullAuth("5a17", auth), At: "2026-11-18T10:00:00Z", By: "admin"}
 	raw, _ := json.Marshal(rec)
-	f.put(testSnapshotCM, map[string]any{"data": map[string]any{nodePullRecordKey: string(raw), "snapshot": `{"images":{}}`}})
+	f.put(testSnapshotCM, map[string]any{"data": map[string]any{node.PullRecordKey: string(raw), "snapshot": `{"images":{}}`}})
 }
 
 // nsReadRecord reads the tool's record from the fake (nil when none).
-func nsReadRecord(t *testing.T, f *resourceFake) *nodePullRecord {
+func nsReadRecord(t *testing.T, f *resourceFake) *node.PullRecord {
 	t.Helper()
 	cm := f.get(testSnapshotCM)
 	data, _ := cm["data"].(map[string]any)
-	raw, _ := data[nodePullRecordKey].(string)
+	raw, _ := data[node.PullRecordKey].(string)
 	if raw == "" {
 		return nil
 	}
-	var rec nodePullRecord
+	var rec node.PullRecord
 	if err := json.Unmarshal([]byte(raw), &rec); err != nil {
 		t.Fatal(err)
 	}
@@ -171,14 +172,14 @@ func TestPullSecretAddLeavesAnEntryItDidNotAdd(t *testing.T) {
 			tc.record(t, f)
 			before := nsReadRecord(t, f)
 
-			plan := nsPlan(t, c, types.NodeSetupRequest{Action: NodeSetupPullAdd})
-			if plan.Ready || plan.RefusalCode != "foreign_entry" || !plan.Replaceable || plan.EntrySetBy != EntrySetByOther ||
+			plan := nsPlan(t, c, types.NodeSetupRequest{Action: node.PullAdd})
+			if plan.Ready || plan.RefusalCode != "foreign_entry" || !plan.Replaceable || plan.EntrySetBy != node.EntrySetByOther ||
 				!slices.Equal(plan.ExistingKeys, []string{tc.key}) || !strings.Contains(plan.Refusal, "that this tool did not add") ||
 				!strings.Contains(plan.Refusal, tc.why) || !strings.Contains(plan.Refusal, "Check that the nodes can pull") ||
 				!strings.Contains(plan.Refusal, "Nothing was changed") {
 				t.Fatalf("plan %+v", plan)
 			}
-			res, steps := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupPullAdd, ResourceVersion: "42"})
+			res, steps := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.PullAdd, ResourceVersion: "42"})
 			if res.Success || res.ErrorCode != "foreign_entry" {
 				t.Fatalf("result %+v", res)
 			}
@@ -207,8 +208,8 @@ func TestPullSecretAddReplacesAForeignEntryOnlyWhenAcknowledged(t *testing.T) {
 	captureNodeSetupLogs(t)
 	nsSetPullSecret(t, f, map[string]any{"https://quay.io/rhoai/": map[string]any{"auth": nsOldRHOAI}})
 
-	plan := nsPlan(t, c, types.NodeSetupRequest{Action: NodeSetupPullAdd, ReplaceExisting: true})
-	if !plan.Ready || !plan.Replacing || plan.EntrySetBy != EntrySetByOther || len(plan.Changes) != 1 ||
+	plan := nsPlan(t, c, types.NodeSetupRequest{Action: node.PullAdd, ReplaceExisting: true})
+	if !plan.Ready || !plan.Replacing || plan.EntrySetBy != node.EntrySetByOther || len(plan.Changes) != 1 ||
 		!strings.Contains(plan.Changes[0], "replace its quay.io/rhoai entry (https://quay.io/rhoai/), which this tool did not add") ||
 		!strings.Contains(plan.Undo, "is not kept, and this tool cannot restore it") {
 		t.Fatalf("plan %+v", plan)
@@ -216,7 +217,7 @@ func TestPullSecretAddReplacesAForeignEntryOnlyWhenAcknowledged(t *testing.T) {
 	if len(writes(f)) != 0 || nsReadRecord(t, f) != nil {
 		t.Fatal("the plan changed something")
 	}
-	res, steps := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupPullAdd, ResourceVersion: "42", ReplaceExisting: true})
+	res, steps := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.PullAdd, ResourceVersion: "42", ReplaceExisting: true})
 	if !res.Success || !strings.Contains(res.Message, "which this tool did not add") {
 		t.Fatalf("result %+v", res)
 	}
@@ -225,10 +226,10 @@ func TestPullSecretAddReplacesAForeignEntryOnlyWhenAcknowledged(t *testing.T) {
 		t.Fatalf("auths %v", auths)
 	}
 	rec := nsReadRecord(t, f)
-	if rec == nil || rec.SecretUID != nsPullSecretUID || rec.Key != "quay.io/rhoai" || !rec.matches(nsTokenPadded) || rec.matches(nsOldRHOAI) {
+	if rec == nil || rec.SecretUID != nsPullSecretUID || rec.Key != "quay.io/rhoai" || !rec.Matches(nsTokenPadded) || rec.Matches(nsOldRHOAI) {
 		t.Fatalf("record %+v", rec)
 	}
-	if remove := nsPlan(t, c, types.NodeSetupRequest{Action: NodeSetupPullRemove}); !remove.Ready || remove.EntrySetBy != EntrySetByTool {
+	if remove := nsPlan(t, c, types.NodeSetupRequest{Action: node.PullRemove}); !remove.Ready || remove.EntrySetBy != node.EntrySetByTool {
 		t.Fatalf("remove plan %+v", remove)
 	}
 	assertNoCredentials(t, f, plan, res, steps)
@@ -244,21 +245,21 @@ func TestPullSecretAddLeavesAnEqualEntryUnclaimed(t *testing.T) {
 		// The unpadded form is the same token only once padded: CRI-O
 		// needs the padding, so it is not counted as the same.
 		nsSetPullSecret(t, f, map[string]any{"quay.io/rhoai": map[string]any{"auth": existing}})
-		plan := nsPlan(t, c, types.NodeSetupRequest{Action: NodeSetupPullAdd})
+		plan := nsPlan(t, c, types.NodeSetupRequest{Action: node.PullAdd})
 		if existing == nsToken {
 			if plan.RefusalCode != "foreign_entry" {
 				t.Fatalf("unpadded: plan %+v", plan)
 			}
 			continue
 		}
-		if !plan.NothingToDo || plan.Ready || plan.EntrySetBy != EntrySetByOther || !strings.Contains(plan.State, "This tool did not add it") {
+		if !plan.NothingToDo || plan.Ready || plan.EntrySetBy != node.EntrySetByOther || !strings.Contains(plan.State, "This tool did not add it") {
 			t.Fatalf("plan %+v", plan)
 		}
-		res, steps := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupPullAdd, ResourceVersion: "42"})
+		res, steps := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.PullAdd, ResourceVersion: "42"})
 		if !res.Success || !strings.HasPrefix(res.Message, "Nothing to change") || len(writes(f)) != 0 || f.has(testSnapshotCM) {
 			t.Fatalf("result %+v, writes %v, record written %v", res, writes(f), f.has(testSnapshotCM))
 		}
-		if remove := nsPlan(t, c, types.NodeSetupRequest{Action: NodeSetupPullRemove}); remove.Ready || remove.RefusalCode != "not_owned" {
+		if remove := nsPlan(t, c, types.NodeSetupRequest{Action: node.PullRemove}); remove.Ready || remove.RefusalCode != "not_owned" {
 			t.Fatalf("remove plan %+v", remove)
 		}
 		assertNoCredentials(t, f, plan, res, steps)
@@ -274,20 +275,20 @@ func TestPullSecretAddUpdatesItsOwnEntry(t *testing.T) {
 	nsSetPullSecret(t, f, map[string]any{"quay.io/rhoai": map[string]any{"auth": nsOldRHOAI}})
 	nsPutRecord(t, f, nsPullSecretUID, nsOldRHOAI)
 
-	plan := nsPlan(t, c, types.NodeSetupRequest{Action: NodeSetupPullAdd})
-	if !plan.Ready || plan.Replaceable || plan.Replacing || plan.EntrySetBy != EntrySetByTool ||
+	plan := nsPlan(t, c, types.NodeSetupRequest{Action: node.PullAdd})
+	if !plan.Ready || plan.Replaceable || plan.Replacing || plan.EntrySetBy != node.EntrySetByTool ||
 		!strings.Contains(plan.State, "this tool added on 2026-11-18T10:00:00Z by admin, with an earlier token") ||
 		!strings.Contains(plan.Changes[0], "update the quay.io/rhoai entry this tool added") {
 		t.Fatalf("plan %+v", plan)
 	}
-	res, steps := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupPullAdd, ResourceVersion: "42"})
+	res, steps := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.PullAdd, ResourceVersion: "42"})
 	if !res.Success || !strings.Contains(res.Message, "Updated the quay.io/rhoai entry this tool added") {
 		t.Fatalf("result %+v", res)
 	}
 	if got := registry.AuthFromEntry(pullSecretAuths(t, f)["quay.io/rhoai"]); got != nsTokenPadded {
 		t.Fatal("the entry was not updated")
 	}
-	if rec := nsReadRecord(t, f); rec == nil || !rec.matches(nsTokenPadded) || rec.matches(nsOldRHOAI) || rec.SecretUID != nsPullSecretUID {
+	if rec := nsReadRecord(t, f); rec == nil || !rec.Matches(nsTokenPadded) || rec.Matches(nsOldRHOAI) || rec.SecretUID != nsPullSecretUID {
 		t.Fatalf("record %+v", rec)
 	}
 	// The record's own write keeps the other keys of the snapshot ConfigMap.
@@ -309,14 +310,14 @@ func TestPullSecretRemoveTakesOutOnlyItsOwnEntry(t *testing.T) {
 	})
 	nsPutRecord(t, f, nsPullSecretUID, nsTokenPadded)
 
-	plan := nsPlan(t, c, types.NodeSetupRequest{Action: NodeSetupPullRemove})
-	if !plan.Ready || plan.EntrySetBy != EntrySetByOther || !strings.Contains(plan.State, "this tool added on 2026-11-18T10:00:00Z by admin") ||
+	plan := nsPlan(t, c, types.NodeSetupRequest{Action: node.PullRemove})
+	if !plan.Ready || plan.EntrySetBy != node.EntrySetByOther || !strings.Contains(plan.State, "this tool added on 2026-11-18T10:00:00Z by admin") ||
 		!strings.Contains(plan.State, "https://quay.io/rhoai/, which this tool did not add, stays") ||
 		!strings.Contains(plan.Changes[0], "remove the quay.io/rhoai entry this tool added; the other 4 registry logins stay") ||
 		!strings.Contains(plan.NodeImpact, "images already on a node stay") {
 		t.Fatalf("plan %+v", plan)
 	}
-	res, steps := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupPullRemove, ResourceVersion: "42"})
+	res, steps := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.PullRemove, ResourceVersion: "42"})
 	if !res.Success {
 		t.Fatalf("result %+v", res)
 	}
@@ -328,7 +329,7 @@ func TestPullSecretRemoveTakesOutOnlyItsOwnEntry(t *testing.T) {
 		t.Fatalf("the record was not cleared: %+v", rec)
 	}
 	// What stays is not the tool's: a second Remove refuses.
-	if again := nsPlan(t, c, types.NodeSetupRequest{Action: NodeSetupPullRemove}); again.Ready || again.RefusalCode != "not_owned" {
+	if again := nsPlan(t, c, types.NodeSetupRequest{Action: node.PullRemove}); again.Ready || again.RefusalCode != "not_owned" {
 		t.Fatalf("second plan %+v", again)
 	}
 	assertNoCredentials(t, f, plan, res, steps)
@@ -360,13 +361,13 @@ func TestPullSecretRemoveRefusesAnEntryItDidNotAdd(t *testing.T) {
 			nsSetPullSecret(t, f, map[string]any{tc.key: map[string]any{"auth": nsOldRHOAI}})
 			tc.record(t, f)
 			before := nsReadRecord(t, f)
-			plan := nsPlan(t, c, types.NodeSetupRequest{Action: NodeSetupPullRemove})
-			if plan.Ready || plan.RefusalCode != "not_owned" || plan.EntrySetBy != EntrySetByOther ||
+			plan := nsPlan(t, c, types.NodeSetupRequest{Action: node.PullRemove})
+			if plan.Ready || plan.RefusalCode != "not_owned" || plan.EntrySetBy != node.EntrySetByOther ||
 				!strings.HasPrefix(plan.Refusal, "The quay.io/rhoai entry in openshift-config/pull-secret was not added by this tool (or was changed since), so it is not removed here") ||
 				!strings.Contains(plan.Refusal, tc.why) || !strings.Contains(plan.Refusal, "removal command under Do it yourself instead") {
 				t.Fatalf("plan %+v", plan)
 			}
-			res, steps := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupPullRemove, ResourceVersion: "42"})
+			res, steps := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.PullRemove, ResourceVersion: "42"})
 			if res.Success || res.ErrorCode != "not_owned" || len(writes(f)) != 0 || len(f.callsTo(http.MethodPatch, nsPullSecretPath)) != 0 {
 				t.Fatalf("result %+v, writes %v", res, writes(f))
 			}
@@ -384,7 +385,7 @@ func TestPullSecretRemoveRefusesAnEntryItDidNotAdd(t *testing.T) {
 // Without the record the tool cannot tell whose the entry is: both actions
 // refuse before any write.
 func TestPullSecretOwnershipFailsClosedWithoutTheRecord(t *testing.T) {
-	for _, action := range []string{NodeSetupPullAdd, NodeSetupPullRemove} {
+	for _, action := range []string{node.PullAdd, node.PullRemove} {
 		for _, entry := range []map[string]any{nil, {"quay.io/rhoai": map[string]any{"auth": nsOldRHOAI}}} {
 			f, c := nodeSetupFake(t, "HighlyAvailable", false)
 			nsSetPullSecret(t, f, entry)
@@ -407,14 +408,14 @@ func TestPullSecretOwnershipFailsClosedWithoutTheRecord(t *testing.T) {
 func TestPullSecretAddSaysWhenItCannotRecordTheEntry(t *testing.T) {
 	f, c := nodeSetupFake(t, "HighlyAvailable", false)
 	f.fail["PATCH "+testSnapshotCM] = 403
-	res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupPullAdd, ResourceVersion: "42"})
+	res, _ := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.PullAdd, ResourceVersion: "42"})
 	if !res.Success || !strings.Contains(res.Message, "could not record that it added the entry, so it will not remove it") {
 		t.Fatalf("result %+v", res)
 	}
 	if registry.AuthFromEntry(pullSecretAuths(t, f)["quay.io/rhoai"]) != nsTokenPadded {
 		t.Fatal("the entry was not added")
 	}
-	if remove := nsPlan(t, c, types.NodeSetupRequest{Action: NodeSetupPullRemove}); remove.RefusalCode != "not_owned" {
+	if remove := nsPlan(t, c, types.NodeSetupRequest{Action: node.PullRemove}); remove.RefusalCode != "not_owned" {
 		t.Fatalf("remove plan %+v", remove)
 	}
 }
@@ -437,46 +438,46 @@ func TestNodeSetupOnAClusterProvisionedBySomeoneElse(t *testing.T) {
 	nsSetPullSecret(t, f, map[string]any{"quay.io/rhoai": map[string]any{"auth": nsOldRHOAI}})
 
 	// The status reads the same mirror.
-	if im, err := getIDMS(c); err != nil || !im.Exists || im.Name != "quay-registry" || im.Source != "registry.redhat.io/rhoai" {
+	if im, err := node.ImageMirror(c); err != nil || !im.Exists || im.Name != "quay-registry" || im.Source != "registry.redhat.io/rhoai" {
 		t.Fatalf("status mirror %+v, %v", im, err)
 	}
 
 	var outputs []any
-	create := nsPlan(t, c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+	create := nsPlan(t, c, types.NodeSetupRequest{Action: node.MirrorCreate})
 	if !create.NothingToDo || create.Ready || !strings.Contains(create.State, "ImageDigestMirrorSet quay-registry already redirects registry.redhat.io/rhoai") {
 		t.Fatalf("mirror create plan %+v", create)
 	}
-	res, steps := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupMirrorCreate})
+	res, steps := runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.MirrorCreate})
 	if !res.Success || !strings.HasPrefix(res.Message, "Nothing to change") {
 		t.Fatalf("mirror create %+v", res)
 	}
 	outputs = append(outputs, create, res, steps)
 
-	remove := nsPlan(t, c, types.NodeSetupRequest{Action: NodeSetupMirrorRemove})
+	remove := nsPlan(t, c, types.NodeSetupRequest{Action: node.MirrorRemove})
 	if remove.Ready || remove.RefusalCode != "foreign" || !strings.Contains(remove.Refusal, "quay-registry, which this setup did not create") {
 		t.Fatalf("mirror remove plan %+v", remove)
 	}
-	res, steps = runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupMirrorRemove, ResourceVersion: "1"})
+	res, steps = runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.MirrorRemove, ResourceVersion: "1"})
 	if res.Success {
 		t.Fatalf("mirror remove %+v", res)
 	}
 	outputs = append(outputs, remove, res, steps)
 
-	add := nsPlan(t, c, types.NodeSetupRequest{Action: NodeSetupPullAdd})
+	add := nsPlan(t, c, types.NodeSetupRequest{Action: node.PullAdd})
 	if add.RefusalCode != "foreign_entry" || !add.Replaceable || !slices.Equal(add.ExistingKeys, []string{"quay.io/rhoai"}) {
 		t.Fatalf("add plan %+v", add)
 	}
-	res, steps = runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupPullAdd, ResourceVersion: "42"})
+	res, steps = runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.PullAdd, ResourceVersion: "42"})
 	if res.Success || res.ErrorCode != "foreign_entry" {
 		t.Fatalf("add %+v", res)
 	}
 	outputs = append(outputs, add, res, steps)
 
-	pullRemove := nsPlan(t, c, types.NodeSetupRequest{Action: NodeSetupPullRemove})
+	pullRemove := nsPlan(t, c, types.NodeSetupRequest{Action: node.PullRemove})
 	if pullRemove.RefusalCode != "not_owned" {
 		t.Fatalf("pull remove plan %+v", pullRemove)
 	}
-	res, steps = runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: NodeSetupPullRemove, ResourceVersion: "42"})
+	res, steps = runNodeSetupCollect(t, c, types.NodeSetupRequest{Action: node.PullRemove, ResourceVersion: "42"})
 	if res.Success || res.ErrorCode != "not_owned" {
 		t.Fatalf("pull remove %+v", res)
 	}
@@ -498,17 +499,17 @@ func TestNodeSetupOnAClusterProvisionedBySomeoneElse(t *testing.T) {
 // that entry has the token saved under Pull secret now.
 func TestNodePullRecordInfo(t *testing.T) {
 	saved := exampleAuth("user:pass")
-	padded := paddedAuth(saved)
+	padded := node.PaddedAuth(saved)
 	for _, tc := range []struct {
 		name string
-		rec  *nodePullRecord
+		rec  *node.PullRecord
 		want *types.NodePullSecretRecord
 	}{
 		{"no record", nil, nil},
-		{"the saved token", &nodePullRecord{Salt: "aa", AuthSHA256: hashPullAuth("aa", padded), At: "t", By: "u"}, &types.NodePullSecretRecord{At: "t", By: "u", SameToken: true}},
-		{"an earlier token", &nodePullRecord{Salt: "aa", AuthSHA256: hashPullAuth("aa", nsOldRHOAI), At: "t", By: "u"}, &types.NodePullSecretRecord{At: "t", By: "u"}},
+		{"the saved token", &node.PullRecord{Salt: "aa", AuthSHA256: node.HashPullAuth("aa", padded), At: "t", By: "u"}, &types.NodePullSecretRecord{At: "t", By: "u", SameToken: true}},
+		{"an earlier token", &node.PullRecord{Salt: "aa", AuthSHA256: node.HashPullAuth("aa", nsOldRHOAI), At: "t", By: "u"}, &types.NodePullSecretRecord{At: "t", By: "u"}},
 	} {
-		if got := nodePullRecordInfo(tc.rec, saved); !kube.JSONEqual(got, tc.want) {
+		if got := node.PullRecordInfo(tc.rec, saved); !kube.JSONEqual(got, tc.want) {
 			t.Errorf("%s: %+v, want %+v", tc.name, got, tc.want)
 		}
 	}
@@ -517,12 +518,12 @@ func TestNodePullRecordInfo(t *testing.T) {
 // The salt makes two records of one token differ, and neither holds it.
 func TestNodePullRecordHoldsNoToken(t *testing.T) {
 	_, c := nodeSetupFake(t, "HighlyAvailable", false)
-	a, err := newNodePullRecord(c, "u", nsTokenPadded)
+	a, err := node.NewPullRecord(c, "u", nsTokenPadded)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := newNodePullRecord(c, "u", nsTokenPadded)
-	if a.Salt == b.Salt || a.AuthSHA256 == b.AuthSHA256 || !a.matches(nsTokenPadded) || !b.matches(nsTokenPadded) || a.matches(nsOldRHOAI) {
+	b, _ := node.NewPullRecord(c, "u", nsTokenPadded)
+	if a.Salt == b.Salt || a.AuthSHA256 == b.AuthSHA256 || !a.Matches(nsTokenPadded) || !b.Matches(nsTokenPadded) || a.Matches(nsOldRHOAI) {
 		t.Fatalf("records %+v %+v", a, b)
 	}
 	raw, _ := json.Marshal(a)
@@ -531,7 +532,7 @@ func TestNodePullRecordHoldsNoToken(t *testing.T) {
 			t.Fatalf("the record holds %q: %s", cred, raw)
 		}
 	}
-	if _, err := newNodePullRecord(c, "", nsTokenPadded); err == nil {
+	if _, err := node.NewPullRecord(c, "", nsTokenPadded); err == nil {
 		t.Fatal("a record without the Secret's UID")
 	}
 }

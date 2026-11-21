@@ -158,7 +158,7 @@ type prereqComponent struct {
 
 func readPrereqRecord(c *Client) (prereqRecord, error) {
 	var rec prereqRecord
-	raw, err := readSnapshotKey(c, prereqRecordKey)
+	raw, err := record.ReadSnapshotKey(c, prereqRecordKey)
 	if err != nil {
 		return rec, fmt.Errorf("read this tool's record of the prerequisites it set up: %w", err)
 	}
@@ -176,44 +176,10 @@ func writePrereqRecord(c *Client, rec prereqRecord) error {
 	if err != nil {
 		return err
 	}
-	if err := writeSnapshotKey(c, prereqRecordKey, prereqRecordManager, string(data)); err != nil {
+	if err := record.WriteSnapshotKey(c, prereqRecordKey, prereqRecordManager, string(data)); err != nil {
 		return fmt.Errorf("record the prerequisites this tool set up: %w", err)
 	}
 	return nil
-}
-
-// readSnapshotKey reads one key of this tool's snapshot ConfigMap ("" when
-// it or the ConfigMap is missing).
-func readSnapshotKey(c *Client, key string) (string, error) {
-	var cm struct {
-		Data map[string]string `json:"data"`
-	}
-	found, err := c.Bookkeeping().GetIntoOptional(rhoai.NamespacedPath("v1", "configmaps", record.GetActivityNamespace(), record.SnapshotConfigMapName), &cm)
-	if err != nil {
-		if kube.IsDecodeError(err) {
-			return "", fmt.Errorf("parse the snapshot ConfigMap: %w", err)
-		}
-		return "", err
-	}
-	if !found {
-		return "", nil
-	}
-	return cm.Data[key], nil
-}
-
-// writeSnapshotKey applies one key of the snapshot ConfigMap as manager:
-// server-side apply keeps the keys other managers own.
-func writeSnapshotKey(c *Client, key, manager, value string) error {
-	ns := record.GetActivityNamespace()
-	cm, _ := json.Marshal(map[string]any{
-		"apiVersion": "v1",
-		"kind":       "ConfigMap",
-		"metadata":   map[string]any{"name": record.SnapshotConfigMapName, "namespace": ns},
-		"data":       map[string]any{key: value},
-	})
-	query := url.Values{"fieldManager": {manager}, "force": {"true"}}
-	_, _, err := c.Bookkeeping().Do(http.MethodPatch, rhoai.NamespacedPath("v1", "configmaps", ns, record.SnapshotConfigMapName), "application/apply-patch+yaml", cm, query)
-	return err
 }
 
 // --- DataScienceCluster components ---------------------------------------------------

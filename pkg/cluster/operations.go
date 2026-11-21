@@ -14,6 +14,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/node"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -188,7 +189,7 @@ func VerifyNodeReadiness(c *Client) (*types.OperationResponse, error) {
 	logs = append(logs, "OK: Pull secret exists and contains quay.io/rhoai credentials")
 
 	// Step 2: Check IDMS exists
-	idms, err := getIDMS(c)
+	idms, err := node.ImageMirror(c)
 	if err != nil {
 		return &types.OperationResponse{
 			Success:   false,
@@ -398,7 +399,7 @@ func updateCheckCluster(c *Client, image string, opts OperationOptions, chk *upd
 		*logs = append(*logs, "OK: additional-pull-secret exists and Quay accepts its credentials")
 	}
 
-	idms, err := getIDMS(c)
+	idms, err := node.ImageMirror(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Failed to check IDMS: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
@@ -752,7 +753,7 @@ func Update(c *Client, image string, dryRun bool) (*types.OperationResponse, err
 	}
 	logs = append(logs, "OK: additional-pull-secret exists")
 
-	idms, err := getIDMS(c)
+	idms, err := node.ImageMirror(c)
 	if err != nil {
 		return &types.OperationResponse{
 			Success:   false,
