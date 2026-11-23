@@ -930,3 +930,49 @@ func TestPlayground_StatusWithoutReadableMaaSModels(t *testing.T) {
 		t.Fatalf("got %+v (%s)", st.Models, st.ModelsProblem)
 	}
 }
+
+// N4: a record with no UID (the install never confirmed a server) claims a
+// playground by the time rule only within the install's own window after
+// the request. One made later in the project (an install that failed, or a
+// project made again before the sweep) is not this tool's: shown as not
+// managed, never deleted, and the record is dropped.
+func TestPlayground_AnUnconfirmedRecordClaimsOnlyWithinTheInstallWindow(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	requested := kube.Clock().Now().Add(-time.Hour)
+	if err := features.WritePlaygroundRecords(e.c, map[string]features.PlaygroundRecord{"proj": {RequestedAt: requested.UTC().Format(time.RFC3339)}}); err != nil {
+		t.Fatal(err)
+	}
+	e.g.servers["proj"] = &features.GenAIServer{Name: "lsd-genai-playground", Phase: "Ready"}
+	e.putServer("proj", "uid-made-later", requested.Add(30*time.Minute))
+	features.PurgePlaygroundStatus()
+	st, err := GetPlaygroundStatus(e.c, e.reader, "proj")
+	if err != nil || len(st.Items) != 1 || st.Items[0].ManagedByTool {
+		t.Fatalf("status %+v, %v", st, err)
+	}
+	if res, _ := e.run(t, types.PlaygroundRequest{Action: "teardown", Project: "proj"}); res.Success || res.ErrorCode != "not_managed" {
+		t.Fatalf("teardown: %+v", res)
+	}
+	if len(e.g.deletes) != 0 {
+		t.Errorf("deleted %v", e.g.deletes)
+	}
+	if _, ok := e.records(t)["proj"]; ok {
+		t.Error("the unconfirmed record was kept")
+	}
+}
+
+// Within the window the time rule still claims it (the install's own
+// server, whose UID was not recorded yet).
+func TestPlayground_AnUnconfirmedRecordClaimsTheInstallsServer(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	requested := kube.Clock().Now().Add(-time.Hour)
+	if err := features.WritePlaygroundRecords(e.c, map[string]features.PlaygroundRecord{"proj": {RequestedAt: requested.UTC().Format(time.RFC3339)}}); err != nil {
+		t.Fatal(err)
+	}
+	e.g.servers["proj"] = &features.GenAIServer{Name: "lsd-genai-playground", Phase: "Ready"}
+	e.putServer("proj", "uid-installed", requested.Add(2*time.Minute))
+	features.PurgePlaygroundStatus()
+	st, err := GetPlaygroundStatus(e.c, e.reader, "proj")
+	if err != nil || len(st.Items) != 1 || !st.Items[0].ManagedByTool {
+		t.Fatalf("status %+v, %v", st, err)
+	}
+}

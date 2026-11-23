@@ -232,6 +232,13 @@ Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#u
   tab now says so on a plain line ("Project X no longer exists; it is
   removed from the gateway at the next Models change", or that this tool
   did not add it), with a Remove that runs at once, with your sign-in.
+- **A playground made later is not taken for this tool's.** When this
+  tool's record of a playground had no server UID yet (the install never
+  confirmed one), any playground created after the request counted as the
+  tool's, so one someone made in that project days later was offered to
+  Clean up. That rule now holds only within the install's own window (its
+  retries and its wait, 9 minutes); past it the playground is not this
+  tool's and the next playground operation drops the record.
 - **A DataScienceCluster change applies only to the DSC it was checked
   on.** The Components page's changes (a component's state, Fix, soft
   reset) and Diagnostics' disable-component fix tested only the fields
