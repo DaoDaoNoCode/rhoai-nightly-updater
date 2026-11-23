@@ -454,20 +454,37 @@ describe("Models tab", () => {
     expect(within(part).queryByText("Cannot be called")).not.toBeInTheDocument();
   });
 
-  it("the gateway names projects no model uses or that no longer exist, and removes one after confirmation", async () => {
+  it("the gateway names projects no model uses, and removes one after confirmation", async () => {
     const api = stubApi({
-      "/api/resources/status": status({ inferenceGateway: { ...gateway, allowedProjects: ["openshift-ingress", "e2e-v300", "old"], unusedProjects: ["e2e-v300", "old"], goneProjects: ["e2e-v300"] } }),
+      "/api/resources/status": status({ inferenceGateway: { ...gateway, allowedProjects: ["openshift-ingress", "old"], unusedProjects: ["old"] } }),
       "/api/resources/projects": { projects: ["dev"] }, ...routing,
       "POST /api/resources/models/stream": sse({ step: "operation_complete", status: "success", message: "done", elapsedMs: 1 }),
     });
     renderAt("/test-resources?tab=models&project=dev");
-    const alert = await screen.findByText("The gateway accepts projects that don't use it");
-    expect(alert).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Remove old from the inference gateway" })).toBeInTheDocument();
+    expect(await screen.findByText("The gateway accepts projects that don't use it")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove old from the inference gateway" }));
+    const dialog = await screen.findByRole("dialog", { name: /Remove old from the inference gateway's projects\?/ });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove old" }));
+    await screen.findByRole("dialog", { name: "Remove old from the gateway's projects" });
+    expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "disallow", project: "old" }]);
+  });
+
+  // Change 7: a project on the gateway's list that no longer exists is not
+  // something to attend to: the next Models change takes it off (the ones
+  // this tool added), and until then its row says so, with a Remove that
+  // runs at once (it only narrows the list).
+  it("a project that no longer exists is said plainly, with a one-click Remove", async () => {
+    const api = stubApi({
+      "/api/resources/status": status({ inferenceGateway: { ...gateway, allowedProjects: ["openshift-ingress", "e2e-v300", "theirs"], unusedProjects: ["e2e-v300", "theirs"], goneProjects: ["e2e-v300", "theirs"], addedProjects: ["e2e-v300"] } }),
+      "/api/resources/projects": { projects: ["dev"] }, ...routing,
+      "POST /api/resources/models/stream": sse({ step: "operation_complete", status: "success", message: "done", elapsedMs: 1 }),
+    });
+    renderAt("/test-resources?tab=models&project=dev");
+    expect(await screen.findByText(/Project e2e-v300 no longer exists; it is removed from the gateway at the next Models change\./)).toBeInTheDocument();
+    expect(screen.getByText(/Project theirs no longer exists; this tool did not add it to the gateway/)).toBeInTheDocument();
+    expect(screen.queryByText("The gateway accepts projects that don't use it")).not.toBeInTheDocument();
+    expect(screen.queryByText(/needs attention/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Remove e2e-v300 from the inference gateway" }));
-    const dialog = await screen.findByRole("dialog", { name: /Remove e2e-v300 from the inference gateway's projects\?/ });
-    expect(within(dialog).getByText(/was deleted, but the gateway still accepts it/)).toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Remove e2e-v300" }));
     await screen.findByRole("dialog", { name: "Remove e2e-v300 from the gateway's projects" });
     expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "disallow", project: "e2e-v300" }]);
   });

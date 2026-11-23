@@ -225,6 +225,13 @@ Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#u
   (never while it is hidden, at once when you come back, one read at a
   time), and opening Clean up reads the status again before it lists what
   goes.
+- **A deleted project on the inference gateway's list is no longer a
+  warning.** The Models tab showed it as "deleted — Remove" in a warning
+  that asked you to confirm its removal. A project this tool added is
+  already taken off the list at the next Models change or Clean up; the
+  tab now says so on a plain line ("Project X no longer exists; it is
+  removed from the gateway at the next Models change", or that this tool
+  did not add it), with a Remove that runs at once, with your sign-in.
 - **A DataScienceCluster change applies only to the DSC it was checked
   on.** The Components page's changes (a component's state, Fix, soft
   reset) and Diagnostics' disable-component fix tested only the fields

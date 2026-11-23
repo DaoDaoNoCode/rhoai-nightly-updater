@@ -42,6 +42,8 @@ export interface ModelsTabProps {
   readOnly: boolean;
   consoleURL?: string;
   setPending: (p: Pending) => void;
+  /** Runs a change at once, without a confirmation: only for one that only narrows access (a deleted project off the gateway's list). */
+  onRun?: (p: Pending) => void;
   onSetUp: (setup: Pending[]) => void;
   onCleanup: () => void;
   /** Opens the MaaS tab (a published model is used through MaaS). */

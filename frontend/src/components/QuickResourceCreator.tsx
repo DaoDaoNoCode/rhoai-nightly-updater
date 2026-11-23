@@ -342,7 +342,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                   onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
                   model={modelsModel} onModel={chooseModel}
                   state={headerWithPrerequisites(models, prereq?.features?.models)} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}
-                  setPending={setPending} onSetUp={(setup) => setUp("Models", setup)} onCleanup={() => setCleanupScope("models")}
+                  setPending={setPending} onRun={execute} onSetUp={(setup) => setUp("Models", setup)} onCleanup={() => setCleanupScope("models")}
                   onMaaS={() => navigate({ tab: "maas" })} onCheckModel={checkModel} checking={checking} checkError={checkError} />
               )}
               {tab === "playground" && resStatus && (
