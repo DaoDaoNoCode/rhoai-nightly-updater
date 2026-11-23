@@ -12,6 +12,8 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -794,6 +796,22 @@ func TestRestoreComponents(t *testing.T) {
 		// Recorded still: a later Clean up can turn it back.
 		if st := prereqStatus(t, pc.c, "pipelines"); len(st.Restorable) != 1 {
 			t.Fatalf("restorable = %+v", st.Restorable)
+		}
+	})
+	t.Run("MLflow in use", func(t *testing.T) {
+		// A recipe's Clean up leaves MLflow in place (it is the
+		// cluster's): the component it needs stays on while it exists.
+		pc := setUp(t, "mlflow")
+		pc.f.putJSON(rhoai.ClusterPath(mlflow.APIGroup, "mlflows", mlflow.CRName), `{"metadata":{"name":"mlflow"}}`)
+		n := len(pc.f.mutations())
+		res, _ := features.RestoreComponents(pc.c, []string{"mlflowoperator"})
+		if !res.Success || !strings.Contains(res.Message, "mlflowoperator (in use: MLflow mlflow)") || componentState(pc.f, "mlflowoperator") != "Managed" {
+			t.Fatalf("restore: %+v", res)
+		}
+		for _, m := range pc.f.mutations()[n:] {
+			if strings.HasPrefix(m, "PATCH "+tDSC) {
+				t.Fatalf("turned a component in use back: %s", m)
+			}
 		}
 	})
 	t.Run("the check fails", func(t *testing.T) {
