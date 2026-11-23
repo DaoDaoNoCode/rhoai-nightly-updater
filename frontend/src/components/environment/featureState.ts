@@ -129,6 +129,8 @@ export const lostAccessLabel = (n: number) => (n > 1 ? `${n} servers lost access
 export function storageKeyWarning(status: ResourcesStatus | null): string | null {
   const keys = status?.s3Keys;
   if (!keys?.secured || keys.needsSecuring || !status?.minio?.ready || status.legacyStorage?.stage === "migrate") return null;
+  // A storage that needs Repair (or has a warning) shows that, never only a key warning.
+  if (status.minio.repairNeeded || status.minio.warning) return null;
   if ((keys.leftoverUsers ?? []).length > 0) return LEFTOVER_KEYS;
   const lost = (keys.keepOldKey ?? []).length;
   return lost > 0 ? lostAccessLabel(lost) : null;

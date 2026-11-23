@@ -260,4 +260,15 @@ describe("S3 storage that is not secured", () => {
       tab.unmount();
     }
   });
+
+  it("a storage that needs Repair is never shown as only Leftover keys, and Pipelines is not green", async () => {
+    const minio = { ...readyMinio, repairNeeded: "NetworkPolicy seaweedfs-ingress is missing." };
+    stubApi({ "/api/resources/status": statusOf({ minio, pipelineServers: [dspa], s3Keys: { secured: true, needsSecuring: false, ownKey: ["dev/dspa"], leftoverUsers: ["rnu-dspa-gone"], leftovers: [{ user: "rnu-dspa-gone", project: "gone", connectionInUse: false }] } }), "/api/resources/projects": { projects: ["dev"] } });
+    renderAt("/test-resources");
+    const s3 = (await screen.findByRole("link", { name: "S3 storage" })).closest("tr") as HTMLElement;
+    await waitFor(() => expect(s3.querySelector(".pf-v6-c-label")).not.toBeNull());
+    expect(s3.querySelector(".pf-v6-c-label")!.textContent).not.toBe("Leftover keys");
+    const pipelines = (await screen.findByRole("link", { name: "Pipelines" })).closest("tr") as HTMLElement;
+    expect(pipelines.querySelector(".pf-v6-c-label")!.textContent).not.toMatch(/^Ready/);
+  });
 });

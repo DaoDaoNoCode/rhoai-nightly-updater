@@ -719,7 +719,11 @@ func TeardownPipelineServer(c *kube.Client, project, confirmedUID string) (*type
 	}
 
 	all, err := ListDSPAs(c, project)
-	if errors.Is(err, ErrDSPACRDMissing) {
+	// No DSPA list (the CRD or its version is not served): nothing proves
+	// the project has no pipeline server, so its SeaweedFS user is kept (as
+	// the leftover paths decide); Remove leftover keys can remove it later.
+	listMissing := errors.Is(err, ErrDSPACRDMissing)
+	if listMissing {
 		all, err = nil, nil
 	}
 	if err != nil {
@@ -743,7 +747,10 @@ func TeardownPipelineServer(c *kube.Client, project, confirmedUID string) (*type
 		logs = append(logs, "No pipeline server created by this tool in this project")
 		// A previous run may have removed the DSPA but not its secret.
 		orphan := &DSPA{Meta: kube.ObjectMeta{UID: "none"}, SecretName: DSPASecretName}
-		note := deleteDSPASecret(c, project, orphan, all, &logs) + deleteConnection(c, project, &logs) + deleteProjectKey(c, project, nil, all, &logs)
+		note := deleteDSPASecret(c, project, orphan, all, &logs) + deleteConnection(c, project, &logs)
+		if !listMissing {
+			note += deleteProjectKey(c, project, nil, all, &logs)
+		}
 		if note != "" {
 			return fail(fmt.Sprintf("No pipeline server created by this tool remains in %s.%s", project, note), "partial_failure", "orphan secret")
 		}

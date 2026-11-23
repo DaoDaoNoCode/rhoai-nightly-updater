@@ -150,12 +150,6 @@ func storageSecured(c *kube.Client) (bool, error) {
 // (per userProject) are left alone. Such accounts exist only under secured storage.
 // On failure to delete, a message is returned for the API response.
 func deleteProjectKey(c *kube.Client, project string, target *DSPA, all []DSPA, logs *[]string) string {
-	for _, d := range all {
-		if (target == nil || d.Meta.UID != target.Meta.UID) && !d.Meta.Terminating() {
-			*logs = append(*logs, fmt.Sprintf("Kept SeaweedFS user %s: pipeline server %s remains in %s", ScopedUserName(project), d.Meta.Name, project))
-			return ""
-		}
-	}
 	user := ScopedUserName(project)
 	secured, err := storageSecured(c)
 	if err == nil && !secured {
@@ -165,15 +159,26 @@ func deleteProjectKey(c *kube.Client, project string, target *DSPA, all []DSPA, 
 	if err == nil {
 		sw, err = adminSeaweed(c)
 	}
+	var tags map[string]string
+	exists := false
 	if err == nil {
-		var owner string
-		var known bool
-		if owner, known, err = userProject(sw, user); err == nil && known && owner != project {
+		tags, exists, err = sw.ListUserTags(user)
+	}
+	if err == nil && !exists {
+		return ""
+	}
+	if err == nil {
+		for _, d := range all {
+			if (target == nil || d.Meta.UID != target.Meta.UID) && !d.Meta.Terminating() {
+				*logs = append(*logs, fmt.Sprintf("Kept SeaweedFS user %s: pipeline server %s remains in %s", user, d.Meta.Name, project))
+				return ""
+			}
+		}
+		// A tag naming another project, hashed name or not: that project's.
+		if owner := tags[scopedNamespaceTag]; owner != "" && owner != project {
 			*logs = append(*logs, fmt.Sprintf("Kept SeaweedFS user %s: it belongs to project %s", user, owner))
 			return ""
 		}
-	}
-	if err == nil {
 		err = deleteScopedUser(sw, project)
 	}
 	if err != nil {
