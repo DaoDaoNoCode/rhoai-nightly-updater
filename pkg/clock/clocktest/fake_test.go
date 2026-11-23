@@ -313,3 +313,24 @@ func TestRealClock(t *testing.T) {
 	tk := c.NewTicker(time.Hour)
 	tk.Stop()
 }
+
+// A parent that has already ended ends the context before WithDeadline
+// returns, with the parent's error, as context.WithDeadline does: a
+// caller that checks the context first must not see it live
+// (TestWaitDashboardDeploymentsReady_ContextEnded failed under load when
+// the fake ended it later, from a goroutine).
+func TestFakeDeadlineWithAnEndedParentIsDoneAtOnce(t *testing.T) {
+	f := NewFake()
+	parent, cancel := context.WithCancel(context.Background())
+	cancel()
+	ctx, stop := f.WithDeadline(parent, f.Now().Add(time.Minute))
+	defer stop()
+	if err := ctx.Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err %v right after WithDeadline", err)
+	}
+	child, stopChild := context.WithCancel(ctx)
+	defer stopChild()
+	if !errors.Is(child.Err(), context.Canceled) {
+		t.Fatalf("child err %v", child.Err())
+	}
+}
