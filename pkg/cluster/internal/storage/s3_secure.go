@@ -223,7 +223,7 @@ func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.Operat
 		msg += fmt.Sprintf(" Deleted the keys of pipeline servers that are gone: %s.", strings.Join(left, ", "))
 	}
 	if len(done) > 0 {
-		msg += fmt.Sprintf(" Restart the workbenches and model deployments that use Connection %s, and workbenches that run pipelines, so they pick up the new key.", ConnectionSecretName)
+		msg += fmt.Sprintf(" Restart the workbenches and model deployments that use Connection %s, and workbenches that run Elyra pipelines, so they pick up the new key.", ConnectionSecretName)
 	}
 	slog.Info("s3 storage secured", "user", kube.GetUser(c), "rekeyed", len(done), "failed", len(failed))
 	record.Action(c, "secure-s3", fmt.Sprintf("namespace=%s (%d pipeline servers rekeyed, %d failed)", S3Namespace, len(done), len(failed)), len(failed) == 0)

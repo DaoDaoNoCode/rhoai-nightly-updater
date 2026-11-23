@@ -30,10 +30,10 @@ const codes = (items: string[]) => items.map((n, i) => <React.Fragment key={n}>{
  * The ordered steps of a run. The step that stopped the run shows no text
  * of its own when the outcome alert says the same.
  */
-export const RunProgress: React.FC<{ run: MigrateRun }> = ({ run }) => (
+export const RunProgress: React.FC<{ run: MigrateRun; formatMessage?: (message: string) => React.ReactNode }> = ({ run, formatMessage }) => (
   <StepProgress idPrefix={run.kind} aria-label={run.kind === "migrate" ? "Migrate storage progress" : run.kind === "secure" ? "Secure S3 storage progress" : "Delete old storage progress"}
     steps={runSteps(run)} states={run.steps} running={run.running}
-    shownElsewhere={run.result && !run.result.success ? run.result.message : undefined} />
+    shownElsewhere={run.result && !run.result.success ? run.result.message : undefined} formatMessage={formatMessage} />
 );
 
 /** What Migrate storage does, before it runs. */

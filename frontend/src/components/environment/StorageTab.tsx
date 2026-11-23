@@ -32,6 +32,7 @@ import {
 } from "./resourceRow";
 import { CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, READ_ONLY_SETUP } from "./FeatureLayout";
 import { CopyS3EnvButton, S3SecretField } from "./AdminLogin";
+import { Id, KeptServer, joinAnd, keptEntry } from "./s3KeysText";
 import { notManaged } from "./resourceStatus";
 import { STORAGE_HREF, TAB_TITLES } from "./environmentTabs";
 import { type Busy, type FeatureState, storageNeedsSecuring, storageStatus, storageStatusText } from "./featureState";
@@ -143,37 +144,49 @@ const MigrationAlert: React.FC<{ legacy: LegacyStorageState; reason: string | nu
   );
 };
 
-/** Tab-top banner while the storage is not secured: why it matters and what Secure S3 storage does. */
-const NotSecuredAlert: React.FC<{ keys: S3KeysState; readOnly: boolean }> = ({ keys, readOnly }) => (
-  <Alert variant="warning" isInline component="div" title={keys.secured ? "Some pipeline servers still use the old admin key" : "Every pipeline project holds the S3 storage's admin key"}>
-    <Content component="p">
-      {keys.secured
-        ? "Secure S3 storage stopped before every pipeline server this tool set up had a key of its own. Running it again finishes the rest."
-        : "An earlier version gave the storage's admin key to every pipeline project: anyone who can read a Secret in one of them can read, change or delete everything in the storage. Secure S3 storage gives the storage a new admin key and each pipeline server this tool set up a key of its own; new pipeline servers can be set up once it has run."}
-    </Content>
-    {readOnly && <Content component="p">A cluster-admin runs it.</Content>}
-  </Alert>
-);
-
-/** The name and the reason of a KeepOldKey entry ("ns/name (reason)"). */
-const keptEntry = (entry: string) => {
-  const i = entry.indexOf(" (");
-  return i < 0 ? { name: entry, reason: "" } : { name: entry.slice(0, i), reason: entry.slice(i + 2, -1) };
+/** Tab-top banner while the storage is not secured, or servers still use the old key: why it matters and what Secure S3 storage does. */
+const NotSecuredAlert: React.FC<{ keys: S3KeysState; readOnly: boolean }> = ({ keys, readOnly }) => {
+  const kept = keys.keepOldKey ?? [];
+  return (
+    <Alert variant="warning" isInline component="div" title={keys.secured ? "Some pipeline servers still use the old admin key" : "Every pipeline project holds the S3 storage's admin key"}>
+      <Content component="p">
+        {keys.secured
+          ? "Secure S3 storage stopped before every pipeline server this tool set up had a key of its own. Running it again finishes the rest."
+          : "An earlier version gave the storage's admin key to every pipeline project: anyone who can read a Secret in one of them can read, change or delete everything in the storage. Secure S3 storage gives the storage a new admin key and each pipeline server this tool set up a key of its own; new pipeline servers can be set up once it has run."}
+      </Content>
+      {!keys.secured && kept.length > 0 && (
+        <Content component="p">
+          After Secure S3 storage, {joinAnd(kept.map((e) => <KeptServer key={e} entry={e} />))} {kept.length > 1 ? "lose" : "loses"} S3 access: {kept.length > 1 ? "their owners must give them" : "its owner must give it"} new S3 keys.
+        </Content>
+      )}
+      {readOnly && <Content component="p">A cluster-admin runs it.</Content>}
+    </Alert>
+  );
 };
 
 /** After Secure S3 storage: pipeline servers this tool did not give a key of their own, whose old admin key no longer works. */
 const OldKeyAlert: React.FC<{ keys: S3KeysState }> = ({ keys }) => {
-  const kept = (keys.keepOldKey ?? []).map(keptEntry);
+  const kept = keys.keepOldKey ?? [];
+  const many = kept.length > 1;
   return (
-    <Alert variant="warning" isInline component="div" title={kept.length > 1 ? "These pipeline servers lost their S3 access" : "This pipeline server lost its S3 access"}>
+    <Alert variant="warning" isInline component="div" title={many ? "These pipeline servers lost their S3 access" : "This pipeline server lost its S3 access"}>
       <Content component="p">
-        {joinNodes(kept.map((k) => <React.Fragment key={k.name}><code>{k.name}</code>{k.reason && <> <span style={{ whiteSpace: "nowrap" }}>({k.reason})</span></>}</React.Fragment>))}{" "}
-        {kept.length > 1 ? "use" : "uses"} the S3 storage, but this tool did not set {kept.length > 1 ? "them" : "it"} up, so Secure S3 storage did not give {kept.length > 1 ? "them keys" : "it a key"} of {kept.length > 1 ? "their" : "its"} own.
-        The old admin key no longer works: {kept.length > 1 ? "their owners must give them" : "its owner must give that pipeline server"} new S3 keys.
+        {joinAnd(kept.map((e) => <KeptServer key={e} entry={e} />))} {many ? "use" : "uses"} the S3 storage, so Secure S3 storage did not give {many ? "them keys" : "it a key"} of {many ? "their" : "its"} own.
+        The old admin key no longer works: {many ? "their owners must give them" : "its owner must give it"} new S3 keys.
       </Content>
     </Alert>
   );
 };
+
+/** Users of pipeline servers that are gone: their keys still work until Secure S3 storage or Repair deletes them. */
+const LeftoverAlert: React.FC<{ users: string[]; readOnly: boolean }> = ({ users, readOnly }) => (
+  <Alert variant="warning" isInline component="div" title={users.length > 1 ? "Keys of deleted pipeline servers still work" : "A key of a deleted pipeline server still works"}>
+    <Content component="p">
+      SeaweedFS {users.length > 1 ? "users" : "user"} {joinAnd(users.map((u) => <Id key={u}>{u}</Id>))} {users.length > 1 ? "belong to pipeline servers" : "belongs to a pipeline server"} that no longer {users.length > 1 ? "exist" : "exists"} (deleted while SeaweedFS did not answer, or outside this tool).{" "}
+      {readOnly ? "A cluster-admin deletes them with Secure S3 storage or Repair." : "Secure S3 storage deletes them, and so does Repair."}
+    </Content>
+  </Alert>
+);
 
 /** What key one pipeline server on the storage uses, in words, or null without the key state. */
 function keyStateOf(name: string, keys: S3KeysState | null | undefined): React.ReactNode {
@@ -183,7 +196,9 @@ function keyStateOf(name: string, keys: S3KeysState | null | undefined): React.R
   const kept = (keys.keepOldKey ?? []).map(keptEntry).find((k) => k.name === name);
   if (kept) {
     const why = kept.reason ? <> <span style={{ whiteSpace: "nowrap" }}>({kept.reason})</span></> : null;
-    return keys.secured ? <>the old admin key, which no longer works{why}</> : <>the shared admin key, kept after Secure S3 storage{why}</>;
+    return keys.secured
+      ? <>the old admin key, which no longer works{why}</>
+      : <>the shared admin key; it stops working after Secure S3 storage{why}</>;
   }
   return null;
 }
@@ -194,7 +209,7 @@ const UsedBy: React.FC<{ usedBy: string[]; keys: S3KeysState | null | undefined 
     <List isPlain>
       {usedBy.map((u) => {
         const state = keyStateOf(u, keys);
-        return <ListItem key={u}><code>{u}</code>{state && <>: {state}</>}</ListItem>;
+        return <ListItem key={u}><Id>{u}</Id>{state && <>: {state}</>}</ListItem>;
       })}
     </List>
   ) : <>{joinNodes(usedBy.map((u) => <code key={u}>{u}</code>))}</>
@@ -352,7 +367,8 @@ export const StorageTab: React.FC<StorageTabProps> = (props) => {
         </Content>
       </StackItem>
       {legacy && <StackItem><MigrationAlert legacy={legacy} readOnly={readOnly} reason={busy.migrating ? "Migrate storage is running." : baseReason} /></StackItem>}
-      {storageNeedsSecuring(status) && status.s3Keys && <StackItem><NotSecuredAlert keys={status.s3Keys} readOnly={readOnly} /></StackItem>}
+      {storageNeedsSecuring(status) && status.s3Keys && (!status.s3Keys.secured || (status.s3Keys.oldKey ?? []).length > 0) && <StackItem><NotSecuredAlert keys={status.s3Keys} readOnly={readOnly} /></StackItem>}
+      {(status.s3Keys?.leftoverUsers ?? []).length > 0 && !legacy && <StackItem><LeftoverAlert users={status.s3Keys!.leftoverUsers!} readOnly={readOnly} /></StackItem>}
       {status.s3Keys?.secured && (status.s3Keys.keepOldKey ?? []).length > 0 && !legacy && <StackItem><OldKeyAlert keys={status.s3Keys} /></StackItem>}
       <StackItem>
         <PartList aria-label={`What ${TAB_TITLES.storage} needs`}>

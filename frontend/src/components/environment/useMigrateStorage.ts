@@ -73,6 +73,8 @@ export function useMigrateStorage(onFinished: () => void) {
     trackFeature(kind === "migrate" ? "migrate-storage" : kind === "remove" ? "remove-old-storage" : "secure-minio");
     setRun({ kind, startedAt: Date.now(), steps: {}, extraSteps, running: true, result: null });
     let finalMessage = "";
+    // A success may carry a code too ("partial": secured, some servers left).
+    let finalCode: string | undefined;
     const finish = (success: boolean, message: string, errorCode?: string) => {
       controller.current = null;
       setRun((r) => (r ? { ...r, running: false, result: { success, message, errorCode } } : r));
@@ -81,6 +83,7 @@ export function useMigrateStorage(onFinished: () => void) {
     const onStep = (step: UpdateStep) => {
       if (step.step === "operation_complete") {
         finalMessage = step.message;
+        finalCode = step.errorCode;
         return;
       }
       setRun((r) => {
@@ -91,7 +94,7 @@ export function useMigrateStorage(onFinished: () => void) {
         return { ...r, extraSteps: extra, steps: { ...r.steps, [step.step]: { status: step.status, message: step.message } } };
       });
     };
-    const onDone = (success: boolean, error?: string, apiError?: { errorCode?: string }) => finish(success, success ? finalMessage : error || finalMessage || "The operation failed.", apiError?.errorCode);
+    const onDone = (success: boolean, error?: string, apiError?: { errorCode?: string }) => finish(success, success ? finalMessage : error || finalMessage || "The operation failed.", success ? finalCode : apiError?.errorCode);
     const onDrop = () => finish(false, "The connection to the server was lost. The operation continues on the server; the S3 storage tab shows the outcome when it ends.", "detached");
     controller.current = kind === "secure" ? streamSecureStorage(onStep, onDone, onDrop) : streamMigrateStorage(options, onStep, onDone, onDrop);
   }, [onFinished]);

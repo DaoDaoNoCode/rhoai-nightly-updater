@@ -656,6 +656,8 @@ export interface S3KeysState {
   oldKey?: string[];
   /** Other pipeline servers on the storage, each with why the tool leaves its key ("ns/name (reason)"). */
   keepOldKey?: string[];
+  /** SeaweedFS users of pipeline servers that are gone; their keys still work until Secure S3 storage or Repair deletes them. */
+  leftoverUsers?: string[];
   /** Why the key of a pipeline server could not be read. */
   checkError?: string;
   /** Why Secure S3 storage cannot run now. */

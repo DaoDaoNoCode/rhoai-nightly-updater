@@ -22,13 +22,16 @@ export const StepProgress: React.FC<{
   states: Record<string, StepState>;
   running: boolean;
   shownElsewhere?: string;
-}> = ({ idPrefix, "aria-label": ariaLabel, steps, states, running, shownElsewhere }) => (
+  /** Renders a step's message (for example with its identifiers as code); plain text by default. */
+  formatMessage?: (message: string) => React.ReactNode;
+}> = ({ idPrefix, "aria-label": ariaLabel, steps, states, running, shownElsewhere, formatMessage }) => (
   <ProgressStepper isVertical aria-label={ariaLabel}>
     {steps.map(({ id, title, pending }) => {
       const s = states[id];
       const current = running && s?.status === "running";
       const variant = !s ? "pending" : s.status === "success" ? "success" : s.status === "failed" ? "danger" : s.status === "skipped" ? "default" : "info";
-      const description = !s ? pending : !((s.status === "failed" || s.status === "success") && s.message === shownElsewhere) ? s.message : undefined;
+      const message = !s ? pending : !((s.status === "failed" || s.status === "success") && s.message === shownElsewhere) ? s.message : undefined;
+      const description = message && formatMessage ? formatMessage(message) : message;
       return (
         <ProgressStep key={id} id={`${idPrefix}-${id}`} titleId={`${idPrefix}-${id}-title`} variant={variant} isCurrent={current}
           aria-label={current ? `${title}: in progress` : undefined} description={description}>

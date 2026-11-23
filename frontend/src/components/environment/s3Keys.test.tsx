@@ -12,7 +12,7 @@ const none: ResourceState = { deployed: false, ready: false, managedByTool: fals
 const dspa: ResourceState = { deployed: true, ready: true, managedByTool: true, namespace: "dev", name: "dspa", message: "Running", uiRoute: "https://dash/dev" };
 const notSecured: S3KeysState = {
   secured: false, needsSecuring: true, oldKey: ["dev/dspa", "team-b/dspa"],
-  keepOldKey: ["hand/dspa (not created by this tool)", "unrec/dspa (not recorded as this tool's)"],
+  keepOldKey: ["hand/dspa (not set up by this tool)", "unrec/dspa (not set up by this tool)"],
 };
 const secured: S3KeysState = { secured: true, needsSecuring: false, ownKey: ["dev/dspa", "team-b/dspa"] };
 const statusOf = (over: Partial<ResourcesStatus>): ResourcesStatus => ({ minio: none, mlflow: none, pipelineServers: [], ...over });
@@ -35,11 +35,12 @@ describe("S3 storage that is not secured", () => {
     const storage = await part("SeaweedFS");
     expect(within(storage).getByText(NOT_SECURED)).toBeInTheDocument();
     expect(screen.getByText("Every pipeline project holds the S3 storage's admin key")).toBeInTheDocument();
+    expect(screen.getByText("Every pipeline project holds the S3 storage's admin key").closest(".pf-v6-c-alert")).toHaveTextContent("After Secure S3 storage, hand/dspa (not set up by this tool) and unrec/dspa (not set up by this tool) lose S3 access: their owners must give them new S3 keys.");
     // One list: each server that uses the storage with the key it uses; the reason is words, not code.
     const usedBy = storage.querySelector('dl[aria-label="S3 storage details"]') as HTMLElement;
     expect(usedBy).toHaveTextContent("dev/dspa: the shared admin key");
-    expect(usedBy).toHaveTextContent("unrec/dspa: the shared admin key, kept after Secure S3 storage (not recorded as this tool's)");
-    expect(within(usedBy).getByText("(not recorded as this tool's)").closest("code")).toBeNull();
+    expect(usedBy).toHaveTextContent("unrec/dspa: the shared admin key; it stops working after Secure S3 storage (not set up by this tool)");
+    expect(within(usedBy).getAllByText("(not set up by this tool)").every((el) => el.closest("code") === null)).toBe(true);
     expect(usedBy).toHaveTextContent("Admin access key");
     unmount();
 
@@ -65,8 +66,8 @@ describe("S3 storage that is not secured", () => {
     fireEvent.click(within(await part("SeaweedFS")).getByRole("button", { name: "Secure S3 storage..." }));
     const dialog = await screen.findByRole("dialog", { name: "Secure the S3 storage?" });
     expect(dialog).toHaveTextContent("The old admin key, which every pipeline project holds, stops working.");
-    expect(dialog).toHaveTextContent(/These pipeline servers get a key of their own.*dev\/dspa, team-b\/dspa/);
-    expect(dialog).toHaveTextContent(/they keep the old admin key, which then no longer works, and their owner must give them new S3 keys: hand\/dspa \(not created by this tool\), unrec\/dspa \(not recorded as this tool's\)/);
+    expect(dialog).toHaveTextContent(/These pipeline servers get a key of their own.*dev\/dspa and team-b\/dspa/);
+    expect(dialog).toHaveTextContent("unrec/dspa (not set up by this tool) keeps the old admin key, which then stops working; its owner must give it new S3 keys.");
     expect(dialog).not.toHaveTextContent(/IAM/);
     expect(dialog).toHaveTextContent("Pipeline runs in progress may fail");
     expect(dialog).toHaveTextContent("restart them afterwards");
@@ -129,7 +130,9 @@ describe("S3 storage that is not secured", () => {
     expect(dialog.textContent!.split("did not get its own key").length - 1).toBe(1);
     fireEvent.click(within(dialog).getByRole("button", { name: "Run Secure S3 storage again" }));
     expect(await within(dialog).findByText("The S3 storage is secured")).toBeInTheDocument();
-    expect(await within(dialog).findByText("OK: dev/dspa already uses its own key")).toBeInTheDocument();
+    await waitFor(() => expect(dialog).toHaveTextContent("OK: dev/dspa already uses its own key"));
+    // Identifiers in the operation's own text are code.
+    expect(within(dialog).getAllByText("dev/dspa").some((el) => el.tagName === "CODE")).toBe(true);
     expect(api.bodies["POST /api/resources/s3/secure/stream"]).toEqual([{}, {}]);
   });
 
@@ -153,16 +156,26 @@ describe("S3 storage that is not secured", () => {
   });
 
   it("after Secure: servers this tool did not set up are named as having lost their S3 access; the storage says it is secured", async () => {
-    const after: S3KeysState = { secured: true, needsSecuring: false, ownKey: ["dev/dspa", "team-b/dspa"], keepOldKey: ["unrec/dspa (not recorded as this tool's)"] };
+    const after: S3KeysState = { secured: true, needsSecuring: false, ownKey: ["dev/dspa", "team-b/dspa"], keepOldKey: ["unrec/dspa (not set up by this tool)"] };
     stubApi({ "/api/resources/status": statusOf({ minio: { ...readyMinio, usedBy: ["dev/dspa", "team-b/dspa", "unrec/dspa"] }, pipelineServers: [dspa], s3Keys: after }), "/api/resources/projects": { projects: ["dev"] } });
     renderAt("/test-resources?tab=storage");
     const alert = (await screen.findByText("This pipeline server lost its S3 access")).closest(".pf-v6-c-alert") as HTMLElement;
-    expect(alert).toHaveTextContent("unrec/dspa (not recorded as this tool's) uses the S3 storage");
-    expect(alert).toHaveTextContent("The old admin key no longer works: its owner must give that pipeline server new S3 keys.");
+    expect(alert).toHaveTextContent("unrec/dspa (not set up by this tool) uses the S3 storage");
+    expect(alert).toHaveTextContent("The old admin key no longer works: its owner must give it new S3 keys.");
     const details = (await part("SeaweedFS")).querySelector('dl[aria-label="S3 storage details"]') as HTMLElement;
-    expect(details).toHaveTextContent("unrec/dspa: the old admin key, which no longer works (not recorded as this tool's)");
+    expect(details).toHaveTextContent("unrec/dspa: the old admin key, which no longer works (not set up by this tool)");
     expect(details).toHaveTextContent("dev/dspa: its own key");
     expect(details).toHaveTextContent("Each pipeline server this tool set up has its own key");
+  });
+
+  it("leftover keys of deleted pipeline servers are shown, with what removes them", async () => {
+    stubApi({ "/api/resources/status": statusOf({ minio: readyMinio, pipelineServers: [dspa], s3Keys: { secured: true, needsSecuring: true, ownKey: ["dev/dspa"], leftoverUsers: ["rnu-dspa-gone"] } }), "/api/resources/projects": { projects: ["dev"] } });
+    renderAt("/test-resources?tab=storage");
+    const alert = (await screen.findByText("A key of a deleted pipeline server still works")).closest(".pf-v6-c-alert") as HTMLElement;
+    expect(alert).toHaveTextContent("SeaweedFS user rnu-dspa-gone belongs to a pipeline server that no longer exists");
+    expect(alert).toHaveTextContent("Secure S3 storage deletes them, and so does Repair.");
+    expect(screen.queryByText("Some pipeline servers still use the old admin key")).not.toBeInTheDocument();
+    expect(headerLabel("S3 storage")).toHaveTextContent(/^Not secured$/);
   });
 
   it("a reader sees the state but no Secure action", async () => {

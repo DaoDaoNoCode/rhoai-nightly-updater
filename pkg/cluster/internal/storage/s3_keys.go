@@ -381,8 +381,9 @@ func keyServers(ep S3Endpoints, dspas []DSPA, rec PipelineRecord) (recorded []DS
 		switch {
 		case ok && rec.Owns(d.Meta):
 			recorded = append(recorded, d)
-		case ok:
-			kept = append(kept, name+" (not recorded as this tool's)")
+		case ok, why == "not created by this tool":
+			// Unrecorded, or made by someone else: one short phrase for both.
+			kept = append(kept, name+" (not set up by this tool)")
 		default:
 			kept = append(kept, name+" ("+why+")")
 		}

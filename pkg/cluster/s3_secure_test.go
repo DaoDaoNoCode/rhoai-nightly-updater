@@ -115,7 +115,7 @@ func TestSecureS3_GivesEachRecordedPipelineServerItsOwnKey(t *testing.T) {
 	if ks == nil || ks.Secured || !ks.NeedsSecuring || strings.Join(ks.OldKey, ",") != "team-a/dspa,team-b/dspa" || len(ks.OwnKey) != 0 {
 		t.Fatalf("before: %+v", ks)
 	}
-	if got := strings.Join(ks.KeepOldKey, "; "); got != "dashboard/dspa (not created by this tool); unrecorded/dspa (not recorded as this tool's)" {
+	if got := strings.Join(ks.KeepOldKey, "; "); got != "dashboard/dspa (not set up by this tool); unrecorded/dspa (not set up by this tool)" {
 		t.Errorf("kept = %q", got)
 	}
 	// Status reads alone must not mutate the cluster or auto-run securing.
@@ -161,7 +161,7 @@ func TestSecureS3_GivesEachRecordedPipelineServerItsOwnKey(t *testing.T) {
 	if !sawEvent("rollout", "Waiting up to") {
 		t.Error("the rollout's progress is not streamed")
 	}
-	for _, want := range []string{"On a key of their own: team-a/dspa, team-b/dspa.", "unrecorded/dspa (not recorded as this tool's)", "Restart the workbenches"} {
+	for _, want := range []string{"On a key of their own: team-a/dspa, team-b/dspa.", "unrecorded/dspa (not set up by this tool)", "Restart the workbenches"} {
 		if !strings.Contains(resp.Message, want) {
 			t.Errorf("message lacks %q: %s", want, resp.Message)
 		}
