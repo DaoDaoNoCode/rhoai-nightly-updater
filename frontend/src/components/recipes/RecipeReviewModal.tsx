@@ -1,10 +1,12 @@
 import React from "react";
 import { Alert, Content, List, ListItem, Skeleton, Stack, StackItem } from "@patternfly/react-core";
+import { Link } from "react-router-dom";
+import { NAV_ITEMS } from "../../constants";
 import { ConfirmActionModal } from "../ConfirmActionModal";
 import { StepsPreview } from "../StepsPreview";
 import type { PipelineStepDef } from "../../operationSteps";
 import type { ApiError } from "../../services/api";
-import type { RecipePlan, RecipePlanStep, RecipeProblem } from "../../types";
+import type { RecipeFix, RecipePlan, RecipePlanStep, RecipeProblem } from "../../types";
 import { shortDigest } from "../../build";
 import { runTakes, usually } from "./recipeForm";
 
@@ -24,13 +26,25 @@ const FIELD_NAMES: Record<string, string> = {
   "spec.project.displayName": "Display name",
 };
 
+/** The page names of the app's routes a fix can name ("/environment" is the Environment page's own route). */
+const PAGE_NAMES: Record<string, string> = {
+  ...Object.fromEntries(NAV_ITEMS.map((n) => [n.path, n.label])),
+  "/environment": "Environment",
+};
+
+/** "Open Status": a link to the page that fixes a problem; nothing when no page of the app does (or it is one this UI does not know). */
+export const RecipeFixLink: React.FC<{ fix?: RecipeFix }> = ({ fix }) => {
+  const name = fix?.page ? PAGE_NAMES[fix.page] : undefined;
+  return name && fix?.page ? <> <Link to={fix.page}>Open {name}</Link></> : null;
+};
+
 function stepDef(step: RecipePlanStep): PipelineStepDef {
   const time = usually(step.typicalSeconds, step.maxSeconds);
   switch (step.action) {
     case "skip":
       return { id: step.id, label: step.title, variant: "success", description: `Already set up${step.reason ? `: ${step.reason}` : "."}` };
     case "blocked":
-      return { id: step.id, label: step.title, variant: "danger", description: `Blocked: ${step.reason ?? "the run would stop here."}` };
+      return { id: step.id, label: step.title, variant: "danger", description: <>Blocked: {step.reason ?? "the run would stop here."}<RecipeFixLink fix={step.fix} /></> };
     case "later":
       return { id: step.id, label: step.title, description: `Checked when the run gets there; if it runs, ${time}.` };
     default:
@@ -43,7 +57,7 @@ export const RecipeProblems: React.FC<{ problems: RecipeProblem[]; title?: strin
   <Alert variant="danger" isInline component="p" title={title}>
     <List>
       {problems.map((p, i) => (
-        <ListItem key={i}>{p.field && FIELD_NAMES[p.field] ? `${FIELD_NAMES[p.field]}: ` : ""}{p.message}</ListItem>
+        <ListItem key={i}>{p.field && FIELD_NAMES[p.field] ? `${FIELD_NAMES[p.field]}: ` : ""}{p.message}<RecipeFixLink fix={p.fix} /></ListItem>
       ))}
     </List>
   </Alert>

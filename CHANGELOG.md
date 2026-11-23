@@ -50,6 +50,13 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#environment-recipes-the-recipe-project-500),
   [RUNBOOK §5.1](RUNBOOK.md#51-environment-recipe-runs-resume-interrupted-sign-in-again)).
 
+- **Recipes page (cluster-admins).** Build a recipe in a form, review what
+  the run would do (each step with how long it usually takes and at most,
+  each problem with a link to the page that fixes it), then follow the run
+  step by step, stop it after a step, resume it, and clean up what it
+  created: its parts, the project the recipe created (with what it holds,
+  once confirmed) and the DataScienceCluster components it turned on.
+
 - **Pre-releases.** A version can now be tried out before it is released:
   `make release VERSION=v5.0.0-rc.1` tags a pre-release (`-alpha.N`,
   `-beta.N` or `-rc.N`, numbered from 1), on `main` or on an `integ/*`

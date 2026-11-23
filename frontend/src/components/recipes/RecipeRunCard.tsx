@@ -26,7 +26,7 @@ import { StatusLabel, type StatusKind } from "../StatusLabel";
 import { TooltipButton } from "../TooltipButton";
 import { StepProgress, type StepState } from "../environment/StepProgress";
 import { shortDigest } from "../../build";
-import { formatClock, resumeStep } from "./recipeForm";
+import { formatClock, resumeStep, usuallySentence } from "./recipeForm";
 import { RecipeProblems, refusalOf } from "./RecipeReviewModal";
 
 /** Ticks once a second while `active`, so elapsed times stay current. */
@@ -112,7 +112,9 @@ export const RecipeRunCard: React.FC<{
     if (s.status === "running" && live) {
       const started = s.startedAt ? Date.parse(s.startedAt) : NaN;
       const progress = status.step?.message || "Starting...";
-      message = Number.isFinite(started) ? `${progress} (${formatClock(now - started)})` : progress;
+      // "Waiting for SeaweedFS (1/1 pods starting) (1:12). Usually 1 minute, up to 5 minutes."
+      const shown = Number.isFinite(started) ? `${progress} (${formatClock(now - started)})` : progress;
+      message = `${/[.!?]$/.test(shown) ? shown : `${shown}.`} ${usuallySentence(s.typicalSeconds, s.maxSeconds)}`;
     } else if (s.status === "running") {
       // An interrupted run's record: the step that was running when its updater pod stopped.
       message = "Was running when the updater stopped.";
@@ -185,8 +187,9 @@ export const RecipeRunCard: React.FC<{
         <Alert variant="warning" isInline component="p" isLiveRegion title="Sign in again, then Resume"
           // The user menu's Log out: oauth-proxy's sign_out clears its session cookie (App).
           actionLinks={<AlertActionLink component="a" href="/oauth/sign_out">Log out</AlertActionLink>}>
-          {next ? `The run stopped before step ${stepNumber(run, next)}, ${next.title}: ` : "The run stopped: "}
-          your sign-in expires before that step could finish, or it ended. Nothing of that step started. Log out and log in again, then Resume.
+          {/* The backend's reason names the step and says what to do ("Stopped before S3 storage: Your sign-in expires ..., then Resume."). */}
+          {run.stopReason || <>{next ? `The run stopped before step ${stepNumber(run, next)}, ${next.title}: ` : "The run stopped: "}
+            your sign-in ended or expires before that step could finish. Nothing of that step started. Log out and log in again, then Resume.</>}
         </Alert>
       );
       break;
@@ -241,7 +244,8 @@ export const RecipeRunCard: React.FC<{
             </StackItem>
           )}
           <StackItem>
-            <StepProgress idPrefix="recipe-run" aria-label={`Recipe ${name}: steps`} steps={run.steps} states={states} running={live}
+            <StepProgress idPrefix="recipe-run" aria-label={`Recipe ${name}: steps`} states={states} running={live}
+              steps={run.steps.map((s) => ({ id: s.id, title: s.title, pending: usuallySentence(s.typicalSeconds, s.maxSeconds) }))}
               shownElsewhere={phase === "failed" ? failed?.message || run.stopReason : undefined} />
           </StackItem>
           {outcome && <StackItem>{outcome}</StackItem>}

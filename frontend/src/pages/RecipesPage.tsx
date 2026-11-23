@@ -87,7 +87,7 @@ export const RecipesPage: React.FC = () => {
   };
 
   const running = !!status?.running;
-  const hasCleanup = !!run && !running && cleanupParts(run).length > 0;
+  const hasCleanup = !!run && !running && cleanupParts(run, status?.cleanup).length > 0;
 
   return (
     <>
@@ -135,7 +135,7 @@ export const RecipesPage: React.FC = () => {
         onCancel={() => setReviewOpen(false)}
       />
       {run && cleanupOpen && (
-        <RecipeCleanupModal run={run} isOpen blocker={blocker} onClose={() => setCleanupOpen(false)} onDone={changed} onClusterBusy={onClusterBusy} />
+        <RecipeCleanupModal run={run} ready={status?.cleanup} isOpen blocker={blocker} onClose={() => setCleanupOpen(false)} onDone={changed} onClusterBusy={onClusterBusy} />
       )}
     </>
   );

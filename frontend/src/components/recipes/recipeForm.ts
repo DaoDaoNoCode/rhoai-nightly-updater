@@ -144,6 +144,12 @@ export function runTakes(typicalSeconds: number, maxSeconds: number): string {
   return `The run usually takes ${formatDuration(typicalSeconds)}, at most ${formatDuration(maxSeconds)}.`;
 }
 
+/** "Usually 7 minutes, up to 15 minutes.": a step still to come. */
+export function usuallySentence(typicalSeconds: number, maxSeconds: number): string {
+  const u = usually(typicalSeconds, maxSeconds);
+  return `${u[0].toUpperCase()}${u.slice(1)}.`;
+}
+
 /** "usually 7 minutes, up to 15 minutes". */
 export function usually(typicalSeconds: number, maxSeconds: number): string {
   return `usually ${formatDuration(typicalSeconds)}, up to ${formatDuration(maxSeconds)}`;
@@ -165,7 +171,7 @@ export function resumeStep(run: RecipeRun): RecipeRunStep | null {
 
 /** One part Clean up can delete for a recipe run. */
 export interface RecipeCleanupPart {
-  /** The clean-up stream's step ID (pkg/cluster CleanupStepID). */
+  /** The clean-up stream's step ID (pkg/cluster CleanupStepID), or "components". */
   id: string;
   title: string;
   /** Whether this run set it up (else it was there before, and stays unless chosen). */
@@ -173,33 +179,47 @@ export interface RecipeCleanupPart {
 }
 
 /**
- * What Clean up can delete for a run: the parts its steps set up, in the
- * clean-up's own order, and the project the recipe created. A part a step
- * found already set up was there before the run (or before a resume), so
- * it is offered but not chosen.
+ * What Clean up can delete for a run, in the clean-up's own order: what the
+ * run created (its steps' created, the backend's clean-up request `ready`:
+ * the parts, the project the recipe created and the DataScienceCluster
+ * components it turned on), and the parts its steps found already set up,
+ * which were there before the run and are offered but not chosen.
  */
-export function cleanupParts(run: RecipeRun): RecipeCleanupPart[] {
-  const status = (id: string) => run.steps.find((s) => s.id === id)?.status;
-  const done = (id: string) => status(id) === "success" || status(id) === "skipped";
+export function cleanupParts(run: RecipeRun, ready: CleanupRequest | undefined): RecipeCleanupPart[] {
+  const step = (id: string) => run.steps.find((s) => s.id === id);
+  // A part the run created, or one its step found set up.
+  const offered = (id: string) => {
+    const s = step(id);
+    return !!s && (!!s.created || s.status === "success" || s.status === "skipped");
+  };
   const project = run.project?.name;
   const parts: RecipeCleanupPart[] = [];
-  if (project && done("pipeline-server")) parts.push({ id: `pipeline-server:${project}`, title: `The pipeline server in ${project}`, setUpByRun: status("pipeline-server") === "success" });
-  if (done("s3")) parts.push({ id: "storage", title: "The S3 storage", setUpByRun: status("s3") === "success" });
-  if (done("mlflow")) parts.push({ id: "mlflow", title: "MLflow", setUpByRun: status("mlflow") === "success" });
-  if (project && run.project?.owned) parts.push({ id: `recipe-project:${project}`, title: `Project ${project}, which the recipe created`, setUpByRun: true });
+  if (project && offered("pipeline-server")) parts.push({ id: `pipeline-server:${project}`, title: `The pipeline server in ${project}`, setUpByRun: !!step("pipeline-server")?.created });
+  if (offered("s3")) parts.push({ id: "storage", title: "The S3 storage", setUpByRun: !!step("s3")?.created });
+  if (offered("mlflow")) parts.push({ id: "mlflow", title: "MLflow", setUpByRun: !!step("mlflow")?.created });
+  if (ready?.recipeProject) parts.push({ id: `recipe-project:${ready.recipeProject}`, title: `Project ${ready.recipeProject}, which the recipe created`, setUpByRun: true });
+  if (ready?.components?.length) parts.push({ id: "components", title: `The DataScienceCluster components the run turned on: ${ready.components.join(", ")}`, setUpByRun: true });
   return parts;
 }
 
-/** The clean-up request for the chosen parts. */
-export function cleanupRequest(run: RecipeRun, chosen: ReadonlySet<string>, confirmed: string[] = []): CleanupRequest {
+/**
+ * The clean-up request for the chosen parts: the backend's request for
+ * what the run created (`ready`), without the parts the user left out,
+ * with the ones found set up that the user chose, and with what the
+ * project holds once the user confirmed it.
+ */
+export function cleanupRequest(ready: CleanupRequest | undefined, run: RecipeRun, chosen: ReadonlySet<string>, confirmed: string[] = []): CleanupRequest {
   const project = run.project?.name ?? "";
-  const req: CleanupRequest = {};
-  if (chosen.has(`pipeline-server:${project}`)) req.pipelineServers = [project];
-  if (chosen.has("storage")) req.storage = true;
-  if (chosen.has("mlflow")) req.mlflow = true;
-  if (chosen.has(`recipe-project:${project}`)) {
-    req.recipeProject = project;
-    if (confirmed.length > 0) req.confirmProjectContents = confirmed;
-  }
+  const req: CleanupRequest = { ...ready };
+  const part = <K extends keyof CleanupRequest>(id: string, key: K, value: CleanupRequest[K]) => {
+    if (chosen.has(id)) req[key] = req[key] ?? value;
+    else delete req[key];
+  };
+  part(`pipeline-server:${project}`, "pipelineServers", [project]);
+  part("storage", "storage", true);
+  part("mlflow", "mlflow", true);
+  part(`recipe-project:${ready?.recipeProject ?? ""}`, "recipeProject", undefined);
+  part("components", "components", undefined);
+  if (req.recipeProject && confirmed.length > 0) req.confirmProjectContents = confirmed;
   return req;
 }

@@ -10,6 +10,7 @@ import playgroundProblemJson from "./contract/playground-problem-user.json";
 import samplesJson from "./contract/samples-mlflow-user.json";
 import recipeRunJson from "./contract/recipe-run-admin.json";
 import recipePlanJson from "./contract/recipe-plan-admin.json";
+import recipeRunEndedJson from "./contract/recipe-run-ended-admin.json";
 
 /*
  * The backend's answers to a user who is not a cluster-admin, as the Go
@@ -47,8 +48,10 @@ export const contract = {
   playgroundProblem: (project = CONTRACT_DENIED_PROJECT): PlaygroundStatus => forProject<PlaygroundStatus>(playgroundProblemJson, CONTRACT_DENIED_PROJECT, project),
   mlflowSamples: (project = CONTRACT_PROJECT): MLflowSamplesStatus => forProject<MLflowSamplesStatus>(samplesJson, CONTRACT_PROJECT, project),
   // A cluster-admin's (recipes are admin-only): GET /api/recipes/run of a
-  // run another updater pod runs, and POST /api/recipes/plan with problems.
+  // run another updater pod runs, of a failed run with its ready clean-up
+  // request, and POST /api/recipes/plan with problems.
   recipeRun: (): RecipeRunStatus => clone<RecipeRunStatus>(recipeRunJson),
+  recipeRunEnded: (): RecipeRunStatus => clone<RecipeRunStatus>(recipeRunEndedJson),
   recipePlan: (): RecipePlan => clone<RecipePlan>(recipePlanJson),
 };
 
@@ -68,6 +71,7 @@ const typed: {
   playgroundProblem: Widen<PlaygroundStatus>;
   samples: Widen<MLflowSamplesStatus>;
   recipeRun: Widen<RecipeRunStatus>;
+  recipeRunEnded: Widen<RecipeRunStatus>;
   recipePlan: Widen<RecipePlan>;
 } = {
   summary: summaryJson,
@@ -79,6 +83,7 @@ const typed: {
   playgroundProblem: playgroundProblemJson,
   samples: samplesJson,
   recipeRun: recipeRunJson,
+  recipeRunEnded: recipeRunEndedJson,
   recipePlan: recipePlanJson,
 };
 void typed;

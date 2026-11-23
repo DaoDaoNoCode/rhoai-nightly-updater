@@ -2,6 +2,9 @@
 // diagnostics). A Go slice field without omitempty encodes nil as null, so
 // such fields are typed `T[] | null` and read with `?? []`.
 
+// The clean-up request is defined with its endpoint (a type-only import: no cycle at run time).
+import type { CleanupRequest } from "./services/api/environment";
+
 export interface ActivityEntry {
   timestamp: string;
   user: string;
@@ -1806,10 +1809,22 @@ export interface EnvironmentRecipe {
   };
 }
 
+/**
+ * Where a plan's problem or a blocked step is fixed (pkg/types RecipeFix):
+ * a stable code, and the app's route of the page that fixes it ("/",
+ * "/components"), absent when nothing in the app does.
+ */
+export interface RecipeFix {
+  code: string;
+  page?: string;
+}
+
 /** One reason a recipe is refused (pkg/types RecipeProblem); field is the recipe path ("spec.project.name"). */
 export interface RecipeProblem {
   field?: string;
   message: string;
+  /** Absent when the recipe itself is to change (field says where). */
+  fix?: RecipeFix;
 }
 
 /** What a planned step would do: run, skip (already set up), blocked (Reason), later (checked when the run gets there). */
@@ -1820,6 +1835,8 @@ export interface RecipePlanStep {
   title: string;
   action: RecipePlanAction;
   reason?: string;
+  /** Where a blocked step is fixed. */
+  fix?: RecipeFix;
   typicalSeconds: number;
   maxSeconds: number;
 }
@@ -1852,6 +1869,11 @@ export interface RecipeRunStep {
   errorCode?: string;
   startedAt?: string;
   finishedAt?: string;
+  /** How long the step usually takes, and at most (the plan's figures). */
+  typicalSeconds: number;
+  maxSeconds: number;
+  /** The run (any of its attempts) set the step's part up; absent when it was there already. */
+  created?: boolean;
 }
 
 /** The record of the last recipe run (pkg/types RecipeRun). */
@@ -1874,6 +1896,8 @@ export interface RecipeRun {
   /** The run's project; owned when the recipe created it. */
   project?: { name: string; uid?: string; owned?: boolean };
   steps: RecipeRunStep[];
+  /** The DataScienceCluster components the run turned on, which its Clean up turns back. */
+  components?: string[];
 }
 
 /** GET /api/recipes/run. */
@@ -1889,6 +1913,8 @@ export interface RecipeRunStatus {
   stopRequested?: boolean;
   /** The running step's latest progress. */
   step?: { step: string; status: string; message: string; detail?: string; errorCode?: string };
+  /** The clean-up request for what the run created, once it is not running and created anything. */
+  cleanup?: CleanupRequest;
 }
 
 /** The 202 answer of POST /api/recipes/run and /api/recipes/resume. */
