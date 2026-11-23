@@ -442,7 +442,8 @@ func (m *migrateRun) secureNewStorage(dspas []DSPA, rec PipelineRecord) *types.O
 		}
 		res, err := setupS3Storage(m.c, keys, m.stepLog("storage"), s3RetryMigrate, true)
 		if err != nil || !res.Success {
-			msg, code := "", "internal"
+			code := "internal"
+			var msg string
 			if res != nil {
 				msg, code = res.Message, res.ErrorCode
 			} else {

@@ -78,14 +78,14 @@ func (sw *seaweedFake) secured() bool {
 		return false
 	}
 	ctrs, _ := obj["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)
-	for _, c := range ctrs {
-		var args []string
-		for _, a := range c.(map[string]any)["args"].([]any) {
-			args = append(args, a.(string))
-		}
-		return storage.ArgsSecured(args)
+	if len(ctrs) == 0 {
+		return false
 	}
-	return false
+	var args []string
+	for _, a := range ctrs[0].(map[string]any)["args"].([]any) {
+		args = append(args, a.(string))
+	}
+	return storage.ArgsSecured(args)
 }
 
 // userOf looks up which user owns a given access key ID.
