@@ -41,9 +41,9 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   (`POST /api/recipes/stop`) does. `POST /api/recipes/resume` continues a
   failed, stopped or interrupted run, skipping what is set up and keeping
   the pinned build and what earlier attempts set up. `GET /api/recipes/run`
-  has the run record and, once it ended, its Clean up request: what the
-  run set up, its project, and the DataScienceCluster components it turned
-  on. All are admin-only and refused in the gitops profile. A project the recipe
+  has the run record and, once it ended, its Clean up request as the
+  cluster shows it: the project a recipe created and the
+  DataScienceCluster components the run turned on that are still Managed. All are admin-only and refused in the gitops profile. A project the recipe
   created is removed by Clean up (`recipeProject`) only with its label,
   its recorded UID and every leftover confirmed. No new ServiceAccount
   permission ([SECURITY.md](SECURITY.md#environment-recipes-500),
