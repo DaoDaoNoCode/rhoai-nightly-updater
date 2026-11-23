@@ -1733,16 +1733,29 @@ const RECIPE_STEPS = [
 
 export const recipePinned = () => ({ tag: "rhoai-3.6", image: LATEST_IMAGE, digest: digest(latestBuild.seed) });
 
-/** POST /api/recipes/plan on a cluster with RHOAI and nothing else: RHOAI is kept, the DSC and later steps are checked when the run gets there. */
-export function recipePlan(rcp = recipe(), installed = true) {
+/** The one-time cluster setup is missing: the Status page fixes it (pkg/types RecipeFix). */
+const ONE_TIME_SETUP_FIX = { code: "one_time_setup_missing", page: "/" };
+
+/**
+ * POST /api/recipes/plan on a cluster with RHOAI and nothing else: RHOAI is
+ * kept, the DSC and later steps are checked when the run gets there. With
+ * `blocked`, the one-time cluster setup is missing: a problem and a blocked
+ * step, each with the page that fixes it, and one the recipe fixes.
+ */
+export function recipePlan(rcp = recipe(), installed = true, blocked = false) {
   const steps = RECIPE_STEPS.map(([id, title, typicalSeconds, maxSeconds], i) => {
+    if (id === "rhoai" && blocked) return { id, title, action: "blocked", reason: "The one-time cluster setup is not done: additional-pull-secret is missing in kube-system.", fix: ONE_TIME_SETUP_FIX, typicalSeconds, maxSeconds };
     if (id === "rhoai" && installed) return { id, title, action: "skip", reason: "RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).", typicalSeconds, maxSeconds };
     if (i <= 2) return { id, title, action: "run", typicalSeconds, maxSeconds };
     return { id, title, action: "later", reason: "Checked when the run gets here: it depends on a step before it.", typicalSeconds, maxSeconds };
   });
   const counted = steps.filter((s) => s.action !== "skip");
   return {
-    recipe: rcp, steps, problems: [], pinned: recipePinned(),
+    recipe: rcp, steps, pinned: recipePinned(),
+    problems: blocked ? [
+      { message: "The one-time cluster setup is not done: additional-pull-secret is missing in kube-system. Run the one-time setup on the Status page first.", fix: ONE_TIME_SETUP_FIX },
+      { field: "spec.rhoai.build", message: "Cannot resolve the build on Quay.", fix: { code: "build_unresolvable" } },
+    ] : [],
     typicalSeconds: counted.reduce((n, s) => n + s.typicalSeconds, 0), maxSeconds: counted.reduce((n, s) => n + s.maxSeconds, 0),
   };
 }
@@ -1750,24 +1763,51 @@ export function recipePlan(rcp = recipe(), installed = true) {
 /**
  * A run record: the first `done` steps set up (RHOAI kept), step `done`
  * with `current` (and its message), the rest pending. Times count back
- * from NOW: each finished step took a few minutes.
+ * from NOW: each finished step took a few minutes. The run created every
+ * part it set up, and the failed pipeline server (it is there, not ready);
+ * the prerequisite steps it ran turned their components on.
  */
 export function recipeRun({ done = 0, current = "running", message = "", state = "running", stopReason = "", errorCode = "", pod = "rhoai-nightly-updater-6f7b8c9d5-x2k4p" } = {}) {
   const start = 2 + done * 2.5;
-  const steps = RECIPE_STEPS.map(([id, title], i) => {
+  const steps = RECIPE_STEPS.map(([id, title, typicalSeconds, maxSeconds], i) => {
+    const times = { typicalSeconds, maxSeconds };
     if (i < done) {
       return id === "rhoai"
-        ? { id, title, status: "skipped", message: "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).", startedAt: ago(start), finishedAt: ago(start) }
-        : { id, title, status: "success", message: RECIPE_DONE[id], startedAt: ago(start - i * 2.5), finishedAt: ago(start - (i + 1) * 2.5) };
+        ? { id, title, ...times, status: "skipped", message: "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).", startedAt: ago(start), finishedAt: ago(start) }
+        : { id, title, ...times, status: "success", created: true, message: RECIPE_DONE[id], startedAt: ago(start - i * 2.5), finishedAt: ago(start - (i + 1) * 2.5) };
     }
-    if (i === done && current) return { id, title, status: current, ...(message ? { message } : {}), ...(current === "failed" ? { errorCode: "timeout", finishedAt: ago(0.5) } : {}), startedAt: ago(1.2) };
-    return { id, title, status: "pending" };
+    if (i === done && current) {
+      return { id, title, ...times, status: current, ...(message ? { message } : {}), ...(current === "failed" ? { errorCode: "timeout", created: true, finishedAt: ago(0.5) } : {}), startedAt: ago(1.2) };
+    }
+    return { id, title, ...times, status: "pending" };
   });
+  const components = Object.entries(RECIPE_COMPONENTS).filter(([id]) => steps.some((s) => s.id === id && s.created)).map(([, key]) => key);
   return {
     id: "run-7c1e", operationId: "op-recipe", bootId: "b-4e2a", pod, user: USER, startedAt: ago(start),
     ...(state !== "running" ? { finishedAt: ago(0.5) } : {}), state, ...(stopReason ? { stopReason } : {}), ...(errorCode ? { errorCode } : {}),
     recipe: recipe(), pinned: recipePinned(), project: { name: "recipe-dev", uid: "5d1c0a3e-9b7f-4c2e-8a61-2f0d9e4b7c13", owned: true }, steps,
+    ...(components.length ? { components } : {}),
   };
+}
+
+/** The DataScienceCluster component each prerequisite step turns on. */
+const RECIPE_COMPONENTS = { "pipelines-prereq": "aipipelines", "mlflow-prereq": "mlflowoperator" };
+
+/**
+ * GET /api/recipes/run's clean-up request for what an ended run created
+ * (pkg/api recipeCleanup): the parts whose step created them, the project
+ * the recipe created, the components it turned on; null when none.
+ */
+export function recipeCleanup(run) {
+  const created = (id) => run.steps.some((s) => s.id === id && s.created);
+  const req = {
+    ...(created("pipeline-server") ? { pipelineServers: [run.project.name] } : {}),
+    ...(created("s3") ? { storage: true } : {}),
+    ...(created("mlflow") ? { mlflow: true } : {}),
+    ...(run.project?.owned ? { recipeProject: run.project.name } : {}),
+    ...(run.components?.length ? { components: run.components } : {}),
+  };
+  return Object.keys(req).length ? req : null;
 }
 
 const RECIPE_DONE = {

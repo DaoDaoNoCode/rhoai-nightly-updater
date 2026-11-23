@@ -16,7 +16,7 @@ import {
   Stack,
   StackItem,
 } from "@patternfly/react-core";
-import { streamCleanup } from "../../services/api";
+import { streamCleanup, type CleanupRequest } from "../../services/api";
 import type { RecipeRun } from "../../types";
 import { StepProgress, type StepState } from "../environment/StepProgress";
 import { cleanupSteps } from "../environment/CleanupModal";
@@ -34,15 +34,19 @@ interface Outcome {
 
 /**
  * Clean up what a recipe run set up, as one clean-up operation (the
- * Environment page's, POST /api/resources/cleanup/stream): the parts its
- * steps set up are chosen, the ones that were there before are offered,
- * and the project the recipe created goes last. A project that holds what
+ * Environment page's, POST /api/resources/cleanup/stream). It sends the
+ * backend's request for what the run created (`ready`: the parts, the
+ * project the recipe created, the DataScienceCluster components it turned
+ * on), less what the user leaves out; the parts that were there before the
+ * run are offered, not chosen. A project that holds what
  * this tool did not create (a workbench, a claim) is refused before
  * anything is deleted; the dialog lists it, and deletes it with the
  * project only once the user confirms.
  */
 export const RecipeCleanupModal: React.FC<{
   run: RecipeRun;
+  /** The backend's clean-up request for what the run created (GET /api/recipes/run cleanup). */
+  ready: CleanupRequest | undefined;
   isOpen: boolean;
   /** Why a change cannot start now, or null. */
   blocker: string | null;
@@ -50,9 +54,9 @@ export const RecipeCleanupModal: React.FC<{
   /** The clean-up ended (the run and the operation state may have changed). */
   onDone: () => void;
   onClusterBusy: (res: { errorCode?: string }) => void;
-}> = ({ run, isOpen, blocker, onClose, onDone, onClusterBusy }) => {
+}> = ({ run, ready, isOpen, blocker, onClose, onDone, onClusterBusy }) => {
   const titleId = React.useId();
-  const parts = cleanupParts(run);
+  const parts = cleanupParts(run, ready);
   const [chosen, setChosen] = useState<ReadonlySet<string>>(() => new Set(parts.filter((p) => p.setUpByRun).map((p) => p.id)));
   const [running, setRunning] = useState(false);
   const [states, setStates] = useState<Record<string, StepState>>({});
@@ -63,9 +67,9 @@ export const RecipeCleanupModal: React.FC<{
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
 
-  const project = run.project?.name ?? "";
+  const project = ready?.recipeProject ?? "";
   const projectId = `recipe-project:${project}`;
-  const req = cleanupRequest(run, chosen, confirmed ? contents : []);
+  const req = cleanupRequest(ready, run, chosen, confirmed ? contents : []);
   const steps = cleanupSteps(req);
   const started = running || outcome !== null;
 
@@ -118,8 +122,7 @@ export const RecipeCleanupModal: React.FC<{
             <>
               <StackItem>
                 <Content component="p">
-                  Deletes what you choose, as one operation, in this order. RHOAI and the DataScienceCluster stay, and so do the DataScienceCluster
-                  components the run turned on: Clean up everything on the Environment page turns them back.
+                  Deletes what you choose, as one operation, in this order. RHOAI and the DataScienceCluster stay.
                 </Content>
               </StackItem>
               <StackItem>
@@ -127,7 +130,8 @@ export const RecipeCleanupModal: React.FC<{
                   <FormGroup role="group" isStack fieldId="recipe-cleanup-parts" label="Delete">
                     {parts.map((p) => (
                       <Checkbox key={p.id} id={`recipe-cleanup-${p.id}`} label={p.title} isChecked={chosen.has(p.id)} onChange={(_e, v) => toggle(p.id, v)}
-                        description={p.setUpByRun ? undefined : "It was set up before this run: someone may use it."} />
+                        description={p.id === "components" ? "Each goes back to what it was, unless something on the cluster uses it."
+                          : p.setUpByRun ? undefined : "It was set up before this run: someone may use it."} />
                     ))}
                   </FormGroup>
                 </Form>

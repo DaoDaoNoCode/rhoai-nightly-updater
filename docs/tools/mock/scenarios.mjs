@@ -585,6 +585,7 @@ const RECIPE_OPERATION = (w, step, title) => {
 };
 scenarios["recipe-new"] = (w) => { scenarios["no-dsc"](w); w.resources = { minio: F.s3States.none, mlflow: F.mlflowStates.none, pipelineServers: [] }; };
 scenarios["recipe-review"] = (w) => { scenarios["recipe-new"](w); };
+scenarios["recipe-review-blocked"] = (w) => { scenarios["recipe-new"](w); w.recipePlanBlocked = true; };
 scenarios["recipe-running"] = (w) => {
   w.recipeRun = { run: F.recipeRun({ done: 4 }), running: true, pod: "rhoai-nightly-updater-6f7b8c9d5-x2k4p", step: { step: "s3", status: "running", message: "Waiting for SeaweedFS to start (1/1 pods starting)" } };
   RECIPE_OPERATION(w, 5, "S3 storage");
@@ -592,6 +593,9 @@ scenarios["recipe-running"] = (w) => {
 scenarios["recipe-failed"] = (w) => {
   const why = "The pipeline server did not become ready in 10 minutes: pod ds-pipeline-dspa-6c9f7d8b5-k8w2n is in ImagePullBackOff (registry.redhat.io/rhoai/odh-ml-pipelines-api-server-v2-rhel9).";
   w.recipeRun = { run: F.recipeRun({ done: 5, current: "failed", message: why, state: "failed", errorCode: "timeout", stopReason: `Step 6 of 8 (Pipeline server) failed: ${why}` }), running: false };
+};
+scenarios["recipe-succeeded"] = (w) => {
+  w.recipeRun = { run: F.recipeRun({ done: 8, current: "", state: "succeeded", stopReason: "Every step of dev is set up." }), running: false };
 };
 scenarios["recipe-interrupted"] = (w) => {
   w.recipeRun = { run: F.recipeRun({ done: 3, pod: "rhoai-nightly-updater-6f7b8c9d5-q9m3z" }), running: false, interrupted: true };
@@ -645,5 +649,9 @@ export const reads = {
   "GET /api/resources/projects": (w) => ({ projects: w.projects ?? F.projects }),
   "GET /api/resources/maas": (w) => w.maas,
   "GET /api/activity": (w) => w.status.activity ?? [],
-  "GET /api/recipes/run": (w) => w.recipeRun,
+  // The clean-up request for what the run created, once it is not running.
+  "GET /api/recipes/run": (w) => {
+    const cleanup = w.recipeRun.run && !w.recipeRun.running ? F.recipeCleanup(w.recipeRun.run) : null;
+    return cleanup ? { ...w.recipeRun, cleanup } : w.recipeRun;
+  },
 };

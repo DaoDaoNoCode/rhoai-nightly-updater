@@ -42,12 +42,22 @@ const STEPS: [string, string][] = [
   ["s3", "S3 storage"], ["pipeline-server", "Pipeline server"], ["mlflow-prereq", "What MLflow needs"], ["mlflow", "MLflow"],
 ];
 
-/** The run's steps: the first `done` set up (RHOAI skipped), then `current` with its status, the rest pending. */
+/** How long each step usually takes and at most, in seconds (pkg/cluster internal/recipe Step.Seconds). */
+const SECONDS: Record<string, [number, number]> = {
+  rhoai: [420, 900], dsc: [60, 420], project: [10, 60], "pipelines-prereq": [120, 600], s3: [60, 300], "pipeline-server": [120, 600], "mlflow-prereq": [120, 600], mlflow: [120, 600],
+};
+
+/** The run's steps: the first `done` set up by the run (RHOAI found installed), then `current` with its status, the rest pending. */
 function steps(done: number, current: RecipeRunStep["status"] = "running", message = ""): RecipeRunStep[] {
   return STEPS.map(([id, title], i) => {
-    if (i < done) return { id, title, status: id === "rhoai" ? "skipped" : "success", message: id === "rhoai" ? "Already set up: RHOAI 3.6.0 is installed." : `${title} is set up.`, startedAt: "2026-11-20T14:05:00Z", finishedAt: "2026-11-20T14:06:00Z" };
-    if (i === done) return { id, title, status: current, message, startedAt: new Date(Date.now() - 65_000).toISOString() };
-    return { id, title, status: "pending" };
+    const [typicalSeconds, maxSeconds] = SECONDS[id];
+    if (i < done) {
+      return id === "rhoai"
+        ? { id, title, typicalSeconds, maxSeconds, status: "skipped", message: "Already set up: RHOAI 3.6.0 is installed.", startedAt: "2026-11-20T14:05:00Z", finishedAt: "2026-11-20T14:06:00Z" }
+        : { id, title, typicalSeconds, maxSeconds, status: "success", created: true, message: `${title} is set up.`, startedAt: "2026-11-20T14:05:00Z", finishedAt: "2026-11-20T14:06:00Z" };
+    }
+    if (i === done) return { id, title, typicalSeconds, maxSeconds, status: current, message, startedAt: new Date(Date.now() - 65_000).toISOString() };
+    return { id, title, typicalSeconds, maxSeconds, status: "pending" };
   });
 }
 
@@ -127,8 +137,11 @@ describe("Recipes page", () => {
     expect(screen.getByText(/Checking RHOAI\.\.\./)).toBeInTheDocument();
   });
 
-  it("review: a plan with problems lists them and Run recipe stays off; nothing was changed", async () => {
-    const api = stubApi({ ...editorReads, "GET /api/recipes/run": NO_RUN, "POST /api/recipes/plan": contract.recipePlan() });
+  it("review: a plan with problems lists them, with a link to the page that fixes each, and Run recipe stays off; nothing was changed", async () => {
+    const plan = contract.recipePlan();
+    // A blocked step the Components page fixes (the contract's blocked step has no page).
+    plan.steps[1] = { ...plan.steps[1], action: "blocked", reason: "There is no DataScienceCluster, and the recipe creates none.", fix: { code: "dsc_missing", page: "/components" } };
+    const api = stubApi({ ...editorReads, "GET /api/recipes/run": NO_RUN, "POST /api/recipes/plan": plan });
     renderPage(<RecipesPage />, "/recipes");
     await settleApps();
     fireEvent.click(screen.getByRole("button", { name: "Review and run" }));
@@ -137,7 +150,13 @@ describe("Recipes page", () => {
     expect(within(dialog).getByText("The recipe cannot run on this cluster now. Nothing was changed.")).toBeInTheDocument();
     expect(dialog).toHaveTextContent("Project recipe-dev: Project recipe-dev exists and was not created by a recipe.");
     expect(dialog).toHaveTextContent("Build: Cannot resolve the build on Quay.");
-    expect(within(dialog).getByRole("list", { name: "Steps of this operation" })).toHaveTextContent("Project recipe-devBlocked: Project recipe-dev exists and was not created by a recipe.");
+    // Only the problem a page fixes links there; the others are fixed in the recipe or by trying again.
+    const problems = within(dialog).getByText("The recipe cannot run on this cluster now. Nothing was changed.").closest(".pf-v6-c-alert") as HTMLElement;
+    expect(within(problems).getAllByRole("link").map((a) => [a.textContent, a.getAttribute("href")])).toEqual([["Open Status", "/"]]);
+    const stepList = within(dialog).getByRole("list", { name: "Steps of this operation" });
+    expect(stepList).toHaveTextContent("Project recipe-devBlocked: Project recipe-dev exists and was not created by a recipe.");
+    expect(stepList).toHaveTextContent("DataScienceClusterBlocked: There is no DataScienceCluster, and the recipe creates none. Open Components");
+    expect(within(stepList).getAllByRole("link").map((a) => [a.textContent, a.getAttribute("href")])).toEqual([["Open Components", "/components"]]);
     expect(within(dialog).getByRole("button", { name: "Run recipe" })).toBeDisabled();
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await settle();
@@ -182,7 +201,10 @@ describe("Recipes page", () => {
     await settleApps();
     await settle();
     const list = screen.getByRole("list", { name: "Recipe dev: steps" });
-    expect(list).toHaveTextContent(/What Pipelines needsTurning on aipipelines in the DataScienceCluster \(1:0\d\)/);
+    expect(list).toHaveTextContent(/What Pipelines needsTurning on aipipelines in the DataScienceCluster \(1:0\d; usually 2 minutes, up to 10 minutes\)/);
+    // The steps still to come say how long they usually take; the ones done say what they did.
+    expect(list).toHaveTextContent("S3 storageUsually 1 minute, up to 5 minutes.");
+    expect(list).toHaveTextContent("Project recipe-devProject recipe-dev is set up.");
     expect(screen.getByText(/The steps run on the updater: you can leave this page or close the browser/)).toHaveTextContent("Logging out does not stop the run; Stop after this step does.");
     expect(screen.getByText("Running", { selector: ".pf-v6-c-label__text" })).toBeInTheDocument();
     // The run's own notice is the page: not repeated in the banners here.
@@ -282,13 +304,14 @@ describe("Recipes page", () => {
   it("sign in again: the run stopped before a step; log out and log in, then Resume", async () => {
     stubApi({ ...editorReads, "GET /api/recipes/run": runStatus({
       state: "stopped", errorCode: "sign_in_again", finishedAt: new Date().toISOString(), steps: steps(4, "pending"),
-      stopReason: "Stopped before S3 storage: Your sign-in expires in 4 minutes, and a change may take up to 21 minutes. Log out and log in again, then retry. Then Resume.",
+      stopReason: "Stopped before S3 storage: Your sign-in expires before the next step could finish. Log out and log in again, then Resume.",
     }) });
     renderPage(<RecipesPage />, "/recipes");
     await settleApps();
     await settle();
     const alert = screen.getByText("Sign in again, then Resume").closest(".pf-v6-c-alert") as HTMLElement;
-    expect(alert).toHaveTextContent("The run stopped before step 5 of 8, S3 storage: your sign-in expires before that step could finish, or it ended. Nothing of that step started. Log out and log in again, then Resume.");
+    // The backend's reason says what happened and what to do.
+    expect(alert).toHaveTextContent(/^Warning alert:Sign in again, then ResumeStopped before S3 storage: Your sign-in expires before the next step could finish\. Log out and log in again, then Resume\.Log out$/);
     expect(within(alert).getByRole("link", { name: "Log out" })).toHaveAttribute("href", "/oauth/sign_out");
     expect(screen.getByRole("button", { name: "Resume" })).toBeEnabled();
     await settleApps();
@@ -320,23 +343,25 @@ describe("Recipes page", () => {
     expect(screen.getByRole("button", { name: "Review and run" })).toHaveAttribute("aria-disabled", "true");
   });
 
-  it("clean up: deletes what the run set up; a project with a workbench is deleted only once it is confirmed", async () => {
-    const run = runStatus({ state: "succeeded", stopReason: "Every step of dev is set up.", steps: steps(8), finishedAt: new Date().toISOString() });
+  it("clean up: sends the backend's clean-up request for what the run created; a project with a workbench is deleted only once it is confirmed", async () => {
+    // A failed run: its pipeline server was created but is not ready; it turned aipipelines on.
+    const ended = contract.recipeRunEnded();
     const streams: ReturnType<typeof sseResponse>[] = [];
     const api = stubApi({
       ...editorReads,
-      "GET /api/recipes/run": run,
+      "GET /api/recipes/run": ended,
       "POST /api/resources/cleanup/stream": () => { const s = sseResponse(); streams.push(s); return s.response; },
     });
     renderPage(<RecipesPage />, "/recipes");
     await settleApps();
     await settle();
-    expect(screen.getByText("Project recipe-dev is ready to use.")).toBeInTheDocument();
+    expect(screen.getByText("Step 5 of 5 failed: Pipeline server")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up..." }));
     const dialog = screen.getByRole("dialog", { name: /Clean up what recipe dev set up\?/ });
     expect(within(dialog).getAllByRole("checkbox").map((c) => [c.getAttribute("id"), (c as HTMLInputElement).checked])).toEqual([
-      ["recipe-cleanup-pipeline-server:recipe-dev", true], ["recipe-cleanup-storage", true], ["recipe-cleanup-mlflow", true], ["recipe-cleanup-recipe-project:recipe-dev", true],
+      ["recipe-cleanup-pipeline-server:recipe-dev", true], ["recipe-cleanup-storage", true], ["recipe-cleanup-recipe-project:recipe-dev", true], ["recipe-cleanup-components", true],
     ]);
+    expect(within(dialog).getByRole("checkbox", { name: "The DataScienceCluster components the run turned on: aipipelines" })).toBeChecked();
     expect(dialog).toHaveTextContent("Deleting project recipe-dev deletes everything in it.");
     fireEvent.click(within(dialog).getByRole("button", { name: "Clean up" }));
     await settle();
@@ -357,20 +382,25 @@ describe("Recipes page", () => {
     expect(streams).toHaveLength(2);
     await act(async () => {
       streams[1].push(sseEvent("recipe-project:recipe-dev", "success", "Deleted project recipe-dev; OpenShift removes what it holds."));
-      streams[1].push(sseEvent("operation_complete", "success", "Deleted the pipeline server, the S3 storage, MLflow and project recipe-dev."));
+      streams[1].push(sseEvent("operation_complete", "success", "Deleted the pipeline server, the S3 storage and project recipe-dev, and turned aipipelines back."));
       streams[1].close();
     });
     await settle();
     expect(within(dialog).getByText("Cleaned up")).toBeInTheDocument();
     expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([
-      { pipelineServers: ["recipe-dev"], storage: true, mlflow: true, recipeProject: "recipe-dev" },
-      { pipelineServers: ["recipe-dev"], storage: true, mlflow: true, recipeProject: "recipe-dev", confirmProjectContents: ["Notebook wb", "PersistentVolumeClaim wb-data"] },
+      ended.cleanup,
+      { ...ended.cleanup, confirmProjectContents: ["Notebook wb", "PersistentVolumeClaim wb-data"] },
     ]);
   });
 
-  it("clean up offers what was there before the run, unchosen", async () => {
-    const before = steps(8).map((s) => (s.id === "s3" || s.id === "mlflow" ? { ...s, status: "skipped" as const } : s));
-    stubApi({ ...editorReads, "GET /api/recipes/run": runStatus({ state: "succeeded", steps: before, project: { name: "team-a" } }) });
+  it("clean up offers what the run found set up, unchosen, even when its step succeeded; a part chosen there joins the backend's request", async () => {
+    // S3 and MLflow were there before: their steps succeeded without creating them.
+    const before = steps(8).map((s) => (s.id === "s3" || s.id === "mlflow" ? { ...s, created: undefined } : s));
+    const api = stubApi({
+      ...editorReads,
+      "GET /api/recipes/run": runStatus({ state: "succeeded", steps: before, project: { name: "team-a" } }, { cleanup: { pipelineServers: ["team-a"], components: ["aipipelines"] } }),
+      "POST /api/resources/cleanup/stream": () => sseResponse().response,
+    });
     renderPage(<RecipesPage />, "/recipes");
     await settleApps();
     await settle();
@@ -379,9 +409,14 @@ describe("Recipes page", () => {
     expect(within(dialog).getByRole("checkbox", { name: "The S3 storage" })).not.toBeChecked();
     expect(within(dialog).getByRole("checkbox", { name: "MLflow" })).not.toBeChecked();
     expect(within(dialog).getByRole("checkbox", { name: "The pipeline server in team-a" })).toBeChecked();
+    expect(within(dialog).getByRole("checkbox", { name: "The DataScienceCluster components the run turned on: aipipelines" })).toBeChecked();
     // A project the recipe did not create is never offered.
     expect(within(dialog).queryByText(/Project team-a/)).not.toBeInTheDocument();
-    await settleApps();
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "MLflow" }));
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "The DataScienceCluster components the run turned on: aipipelines" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Clean up" }));
+    await settle();
+    expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([{ pipelineServers: ["team-a"], mlflow: true }]);
   });
 });
 

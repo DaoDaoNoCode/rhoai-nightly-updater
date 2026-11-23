@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 /** Operator operations that stream progress from the backend. */
 export type OperationKind =
   | "update"
@@ -15,7 +17,8 @@ export function reconcileKindFor(kind: OperationKind): ReconcileKind {
 export interface PipelineStepDef {
   id: string;
   label: string;
-  description: string;
+  /** Text, or text with a link (a recipe's blocked step links the page that fixes it). */
+  description: ReactNode;
   /** How the preview draws it (default pending): a recipe's plan marks what is set up or blocked. */
   variant?: "pending" | "success" | "danger" | "default";
 }
