@@ -25,7 +25,7 @@ func fakeTeardowns(t *testing.T, fail map[string]*types.OperationResponse) *[]st
 		}
 		return &types.OperationResponse{Success: true, Message: msg}
 	}
-	cleanupPipelineServer = func(_ *Client, project string) (*types.OperationResponse, error) {
+	cleanupPipelineServer = func(_ *Client, project, _ string) (*types.OperationResponse, error) {
 		return result(CleanupStepID("pipeline-server", project), "Pipeline server removed from '"+project+"'."), nil
 	}
 	cleanupStorage = func(_ *Client, req types.S3TeardownRequest) (*types.OperationResponse, error) {

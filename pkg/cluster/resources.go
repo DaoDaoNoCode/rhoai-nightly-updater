@@ -111,6 +111,16 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	unmanaged := map[string]bool{}
 	for _, d := range dspas {
 		if !visible[d.Meta.Namespace] {
+			// This tool's, in a project that is not (or no longer) a Data
+			// Science project: listed apart, so it can still be deleted.
+			if d.ManagedByTool() && !d.Meta.Terminating() {
+				ps := storage.PipelineServerState(d, dashURL)
+				ps.Unrecorded = !pipelineRec.Owns(d.Meta)
+				if ps.Unrecorded {
+					ps.UID = d.Meta.UID
+				}
+				status.OutsidePipelineServers = append(status.OutsidePipelineServers, ps)
+			}
 			continue
 		}
 		if !d.ManagedByTool() {
@@ -124,6 +134,9 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		}
 		ps := storage.PipelineServerState(d, dashURL)
 		ps.Unrecorded = !pipelineRec.Owns(d.Meta)
+		if ps.Unrecorded {
+			ps.UID = d.Meta.UID
+		}
 		status.PipelineServers = append(status.PipelineServers, ps)
 	}
 	for ns := range unmanaged {
@@ -139,6 +152,9 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	})
 	sort.Slice(status.PipelineServers, func(i, j int) bool {
 		return status.PipelineServers[i].Namespace < status.PipelineServers[j].Namespace
+	})
+	sort.Slice(status.OutsidePipelineServers, func(i, j int) bool {
+		return status.OutsidePipelineServers[i].Namespace < status.OutsidePipelineServers[j].Namespace
 	})
 
 	// Storage an earlier version left in namespace minio: Migrate storage

@@ -468,8 +468,10 @@ func TestValidateMaaSRequest(t *testing.T) {
 		{Action: "publish"}:                          "a valid project is required",
 		{Action: "publish", Project: "Bad_Name"}:     "a valid project is required",
 		{Action: "unpublish", Project: "p"}:          "",
-		{Action: "nope"}:                             "action must be setup, teardown, publish, unpublish, change-limit, change-access, change-database, upgrade-rhcl, rhcl-memory, rhcl-deny-on-failure, authorino-tls or remove-tier-policies",
+		{Action: "nope"}:                             "action must be setup, teardown, publish, unpublish, restore-routing, change-limit, change-access, change-database, upgrade-rhcl, rhcl-memory, rhcl-deny-on-failure, authorino-tls or remove-tier-policies",
 		{Action: "upgrade-rhcl"}:                     "",
+		{Action: "restore-routing", Project: "p"}:    "",
+		{Action: "restore-routing"}:                  "a valid project is required",
 		{Action: "remove-tier-policies", Model: "m"}: "the platform takes no model",
 	} {
 		if got := ValidateMaaSRequest(req); got != want {
@@ -542,7 +544,7 @@ func TestMaaSUnpublish_FinishesAHalfUndonePublication(t *testing.T) {
 	delete(mc.f.objects, fakeKey{gv: "maas.opendatahub.io/v1alpha1", ns: "proj", plural: "maasmodelrefs", name: "qwen25-05b-instruct"})
 	mc.f.mu.Unlock()
 	st, err := GetMaaSStatus(mc.c)
-	if err != nil || len(st.Items) != 1 || !st.Items[0].Published || st.Items[0].Ready || !strings.Contains(st.Items[0].Message, "Partly published") {
+	if err != nil || len(st.Items) != 1 || st.Items[0].Published || !st.Items[0].RoutingPending {
 		t.Fatalf("status = %+v, %v", st.Items, err)
 	}
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"}); !res.Success {

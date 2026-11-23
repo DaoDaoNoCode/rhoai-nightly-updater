@@ -87,7 +87,7 @@ func TestMaaSUnpublish_ModelRefsWriteHasAResourceVersionPrecondition(t *testing.
 }
 
 // Finding 11: a model left only with the MaaS gateway ref (no reference, no
-// record) shows "Partly published", and Unpublish then takes the ref off.
+// record) shows its routing as pending, and Unpublish then takes the ref off.
 // With nothing recorded, the model on the MaaS gateway alone is taken to
 // have had no route (routeBefore: what a setup through MaaS only whose
 // publish stopped leaves), so it goes back to none, never onto a gateway
@@ -99,7 +99,7 @@ func TestMaaSUnpublish_RemovesALeftOverGatewayRef(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, err := GetMaaSStatus(mc.c)
-	if err != nil || len(st.Items) != 1 || !strings.Contains(st.Items[0].Message, "Partly published") {
+	if err != nil || len(st.Items) != 1 || !st.Items[0].RoutingPending {
 		t.Fatalf("status = %+v, %v", st.Items, err)
 	}
 	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"})
@@ -148,9 +148,10 @@ func TestMaaSPublish_LeavesStaleRecordsOutOfTheSubscription(t *testing.T) {
 	}
 }
 
-// Finding 2: a recorded publication whose model is gone still has a row, so
-// Unpublish can clear it.
-func TestMaaSStatus_ShowsARecordedPublicationWithoutItsModel(t *testing.T) {
+// A recorded publication whose project is gone has no row (the record
+// alone builds none): the status names it as being removed automatically,
+// and an Unpublish (of a stale tab) still clears it.
+func TestMaaSStatus_ARecordedPublicationWithoutItsProjectHasNoRow(t *testing.T) {
 	mc := newMaaSCluster(t)
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
 		t.Fatalf("setup: %+v", res)
@@ -161,14 +162,14 @@ func TestMaaSStatus_ShowsARecordedPublicationWithoutItsModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, err := GetMaaSStatus(mc.c)
-	if err != nil || len(st.Items) != 1 || st.Items[0].Namespace != "gone" || !st.Items[0].Published || !st.Items[0].Partly {
-		t.Fatalf("status items = %+v, %v", st.Items, err)
+	if err != nil || len(st.Items) != 0 || len(st.Removing) != 1 || st.Removing[0].Namespace != "gone" {
+		t.Fatalf("status items = %+v, removing %+v, %v", st.Items, st.Removing, err)
 	}
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "gone"}); !res.Success {
 		t.Fatalf("unpublish: %+v", res)
 	}
-	if st, _ := GetMaaSStatus(mc.c); len(st.Items) != 0 {
-		t.Fatalf("status items after unpublish = %+v", st.Items)
+	if st, _ := GetMaaSStatus(mc.c); len(st.Items) != 0 || len(st.Removing) != 0 {
+		t.Fatalf("status after unpublish = %+v, %+v", st.Items, st.Removing)
 	}
 }
 

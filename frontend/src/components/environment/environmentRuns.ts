@@ -50,7 +50,6 @@ export function useRunState() {
   const [resAction, setResAction] = useState<string | null>(null);
   const [actionProject, setActionProject] = useState<string | null>(null);
   // errorCode of this tab's last storage deletion that did not succeed.
-  const [lastMinIOTeardown, setLastMinIOTeardown] = useState<string | null>(null);
   const run = useGoalRun();
   const [runOpen, setRunOpen] = useState(false);
   const [setupConfirm, setSetupConfirm] = useState<SetupConfirm | null>(null);
@@ -84,7 +83,7 @@ export function useRunState() {
   const [checking, setChecking] = useState<{ project: string; model: string } | null>(null);
   const [checkError, setCheckError] = useState<string | null>(null);
   return {
-    resAction, setResAction, actionProject, setActionProject, lastMinIOTeardown, setLastMinIOTeardown,
+    resAction, setResAction, actionProject, setActionProject,
     run, runOpen, setRunOpen, setupConfirm, setSetupConfirm, cleanupScope, setCleanupScope, cleanupRetry, setCleanupRetry,
     sampleOp, setSampleOp, sampleRun, setSampleRun, samplesRefresh, setSamplesRefresh,
     modelsOp, setModelsOp, modelsRun, setModelsRun,
@@ -123,7 +122,7 @@ export interface EnvironmentActionsContext {
 export function environmentActions(ctx: EnvironmentActionsContext) {
   const { runs, status: resStatus, statusRef, fetchResources, readFresh, restartPolling, pg, maas, prereq, confirmOf, setPending, projectNames, onResult } = ctx;
   const {
-    setResAction, setActionProject, setLastMinIOTeardown, run, setRunOpen, setupConfirm, setSetupConfirm, setCleanupScope, setCleanupRetry,
+    setResAction, setActionProject, run, setRunOpen, setupConfirm, setSetupConfirm, setCleanupScope, setCleanupRetry,
     setSampleOp, setSampleRun, setSamplesRefresh, setModelsOp, setModelsRun, setPlaygroundOp, setPlaygroundRun, setPlaygroundRefresh,
     setMaaSOp, setMaaSRun, setRunFeature, setMaaSRefresh, setPrereqRefresh, checking, setChecking, setCheckError,
   } = runs;
@@ -142,8 +141,6 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     }
     setResAction(null);
     setActionProject(null);
-    if (action === "teardown-minio") setLastMinIOTeardown(res.success ? null : res.errorCode || "failed");
-    else if (action === "setup-minio" && res.success) setLastMinIOTeardown(null);
     onResult?.(res);
     void fetchResources();
     return res;

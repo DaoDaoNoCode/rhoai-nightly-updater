@@ -29,6 +29,12 @@ export const RESOURCE_POLL_BASE_MS = 5_000;
 export const RESOURCE_POLL_MAX_MS = 30_000;
 /** Stop polling a resource that is still not ready after this long (ms). */
 export const RESOURCE_SETTLE_MAX_MS = 10 * 60_000;
+/**
+ * While nothing settles, the Environment page still reads its status, MaaS and
+ * prerequisites again this often while the browser tab is visible (and at once
+ * when it becomes visible again), so a change made elsewhere shows on its own.
+ */
+export const IDLE_REFRESH_MS = 45_000;
 
 /**
  * GET /api/operation polling. The endpoint makes no cluster call while an

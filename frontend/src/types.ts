@@ -1160,6 +1160,8 @@ export interface ResourcesStatus {
   recipeProjects?: RecipeOwnedProject[] | null;
   /** Why those could not be read (none is offered then). */
   recipeProjectsError?: string;
+  /** This tool's pipeline servers in projects that are no longer data science projects (not in the project picker). */
+  outsidePipelineServers?: ResourceState[] | null;
 }
 
 export interface ResourceState {
@@ -1168,7 +1170,11 @@ export interface ResourceState {
   /** False: the tool did not create it and will not tear it down. */
   managedByTool?: boolean;
   /** A pipeline server with this tool's label but no record of its UID (set up before 3.0.1, or labelled by a project's editor): Set up again adopts it. */
+  /** The S3 storage: this tool's objects still in its namespace once the Deployment is gone ("Kind name"), what a deletion left. */
+  leftovers?: string[] | null;
   unrecorded?: boolean;
+  /** An unrecorded pipeline server's UID: what the user's confirmation names (one made again since is not it). */
+  uid?: string;
   terminating?: boolean;
   setupBlockedReason?: string;
   teardownBlockedReason?: string;
@@ -1328,6 +1334,8 @@ export interface ModelsStatus {
   imagePlanReason?: string;
   catalog: CatalogModel[] | null;
   items?: ModelState[] | null;
+  /** This tool's models in projects that are no longer data science projects (not in the project picker). */
+  outside?: ModelState[] | null;
 }
 
 /** The body of POST /api/resources/models/stream (pkg/types ModelsRequest). */
@@ -1597,6 +1605,10 @@ export interface MaaSModel extends ResourceState {
   maasOnlySetup?: boolean;
   /** What is left of a publication undone half-way (message says what); Unpublish finishes it. */
   partly?: boolean;
+  /** Its publication is gone (the project is being deleted): removed automatically, so the row offers nothing. */
+  removing?: boolean;
+  /** No MaaSModelRef of this tool's (deleted outside it) while the model still routes through the MaaS gateway: "Restore direct routing" puts back what it had before publishing. */
+  routingPending?: boolean;
   phase?: string;
   endpoint?: string;
   access?: string;
@@ -1670,6 +1682,17 @@ export interface MaaSStatus {
   access?: MaaSAudience & { groupProblems?: MaaSGroupProblem[] };
   /** The cluster's MaaSSubscription API has no unlimited model reference (read from its CRD). */
   noUnlimited?: boolean;
+  /** This tool's publications whose project or model is gone: the background check removes what is left. */
+  removing?: MaaSRemoval[];
+  /** The error of the last automatic removal, when it failed. */
+  removalProblem?: string;
+}
+
+/** A publication of this tool that is gone, and why (pkg/types MaaSRemoval). */
+export interface MaaSRemoval {
+  namespace: string;
+  name: string;
+  reason: string;
 }
 
 /** A group with no OpenShift Group (missing), or one that could not be checked (pkg/types MaaSGroupProblem). */
@@ -1683,7 +1706,7 @@ export interface MaaSGroupProblem {
 
 /** The body of POST /api/resources/maas/stream. */
 export interface MaaSRequest {
-  action: "setup" | "teardown" | "publish" | "unpublish" | "change-limit" | "change-access" | MaaSActionId;
+  action: "setup" | "teardown" | "publish" | "unpublish" | "restore-routing" | "change-limit" | "change-access" | MaaSActionId;
   project?: string;
   /** The catalog name of the chat model to publish or unpublish; absent: the default. */
   model?: string;

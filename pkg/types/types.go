@@ -1107,6 +1107,12 @@ type ResourcesStatus struct {
 	// they could not be read (none is offered then).
 	RecipeProjects      []RecipeOwnedProject `json:"recipeProjects,omitempty"`
 	RecipeProjectsError string               `json:"recipeProjectsError,omitempty"`
+	// OutsidePipelineServers are this tool's pipeline servers in projects
+	// that are not (or no longer) Data Science projects (the dashboard's
+	// label was removed): the project picker does not list them, but they
+	// are on the cluster and may use the S3 storage. Delete and Clean up
+	// remove them.
+	OutsidePipelineServers []ResourceState `json:"outsidePipelineServers,omitempty"`
 	// LegacyStorage is the S3 storage an earlier version of this tool left
 	// in namespace minio, until Migrate storage (or teardown) removes it.
 	LegacyStorage *LegacyStorageState `json:"legacyStorage,omitempty"`
@@ -1210,6 +1216,9 @@ type ModelsStatus struct {
 	// Items are the catalog's models in data science projects: this tool's,
 	// and those of the same name it did not create.
 	Items []ModelState `json:"items,omitempty"`
+	// Outside are this tool's models in projects that are not (or no
+	// longer) Data Science projects (ResourcesStatus.OutsidePipelineServers).
+	Outside []ModelState `json:"outside,omitempty"`
 }
 
 // CatalogModel is a model the Models feature sets up.
@@ -1478,6 +1487,18 @@ type MaaSStatus struct {
 	// NoUnlimited: the cluster's MaaSSubscription API has no unlimited
 	// model reference (read from its CRD; false when that cannot be told).
 	NoUnlimited bool `json:"noUnlimited,omitempty"`
+	// Removing are this tool's publications whose project or model is
+	// gone: the background check removes what is left of them on its own.
+	// RemovalProblem is the error of its last try, when that failed.
+	Removing       []MaaSRemoval `json:"removing,omitempty"`
+	RemovalProblem string        `json:"removalProblem,omitempty"`
+}
+
+// MaaSRemoval is a publication of this tool that is gone, and why.
+type MaaSRemoval struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Reason    string `json:"reason"`
 }
 
 // MaaSAction is a change a platform part offers on its own (POST
@@ -1536,6 +1557,14 @@ type MaaSModel struct {
 	// Partly: what is left of a publication undone half-way (Message says
 	// what); Unpublish finishes it. Nothing about it settles on its own.
 	Partly bool `json:"partly,omitempty"`
+	// Removing: its publication is gone (the project is being deleted);
+	// the background check removes what is left, so it offers nothing.
+	Removing bool `json:"removing,omitempty"`
+	// RoutingPending: this tool has no MaaSModelRef for it (deleted outside
+	// the tool) while the model still routes through the MaaS gateway, so
+	// its direct address does not answer; "Restore direct routing" puts
+	// back the gateways and Gen AI metadata it had before publishing.
+	RoutingPending bool `json:"routingPending,omitempty"`
 	// Phase is the MaaSModelRef's phase ("Ready", ...).
 	Phase string `json:"phase,omitempty"`
 	// Endpoint is the MaaSModelRef's status.endpoint.
@@ -1727,8 +1756,12 @@ type ComponentBlock struct {
 // CleanupRequest is the body of POST /api/resources/cleanup/stream: what
 // to delete of what this tool created, in this order.
 type CleanupRequest struct {
-	// PipelineServers are the projects whose pipeline server goes.
-	PipelineServers []string `json:"pipelineServers,omitempty"`
+	// PipelineServers are the projects whose pipeline server goes;
+	// ConfirmUnrecorded maps each project whose unrecorded pipeline server
+	// the user confirmed as this tool's to that server's UID
+	// (PipelineServerRequest.ConfirmUnrecorded).
+	PipelineServers   []string          `json:"pipelineServers,omitempty"`
+	ConfirmUnrecorded map[string]string `json:"confirmUnrecorded,omitempty"`
 	// Storage deletes the S3 storage (and storage an earlier version left).
 	Storage bool `json:"storage,omitempty"`
 	// DeleteNamespace also deletes namespace seaweedfs (needs Storage).
@@ -1858,12 +1891,19 @@ type ResourceState struct {
 	// ManagedByTool is true when this tool created the resource. Teardown is
 	// offered only for managed resources.
 	ManagedByTool bool `json:"managedByTool"`
+	// Leftovers (the S3 storage) are this tool's storage objects still in
+	// its namespace once the Deployment is gone, as "Kind name": what a
+	// teardown that did not finish left. Delete is offered for them.
+	Leftovers []string `json:"leftovers,omitempty"`
 	// Unrecorded (a pipeline server) is true when it carries this tool's
 	// label but this tool has no record of its UID (set up before 3.0.1, or
 	// labelled by someone else, which a project editor can do): Set up again
 	// adopts it, and Migrate storage moves it only when its project is
 	// confirmed.
 	Unrecorded bool `json:"unrecorded,omitempty"`
+	// UID (an unrecorded pipeline server) is the object's UID: what the
+	// user's confirmation names (PipelineServerRequest.ConfirmUnrecorded).
+	UID string `json:"uid,omitempty"`
 	// Terminating is true while the resource is being deleted.
 	Terminating bool `json:"terminating,omitempty"`
 	// SetupBlockedReason explains why setup cannot run (for example a
@@ -1949,6 +1989,12 @@ type PipelineServerRequest struct {
 	// Recreate (setup only) replaces the tool's pipeline server named
 	// nightly-dspa with one named dspa.
 	Recreate bool `json:"recreate,omitempty"`
+	// ConfirmUnrecorded (teardown and Recreate) is the UID of the pipeline
+	// server the user confirmed as this tool's although this tool has no
+	// record of it (ResourceState.Unrecorded and UID). Only a server with
+	// that UID is deleted without the record; another one (made again
+	// since) is not.
+	ConfirmUnrecorded string `json:"confirmUnrecorded,omitempty"`
 }
 
 // DiagnosticsFixRequest is the JSON body for POST /api/diagnostics/fix.

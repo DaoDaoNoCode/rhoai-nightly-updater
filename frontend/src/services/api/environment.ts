@@ -54,19 +54,23 @@ export function getS3AdminLogin(): Promise<{ user: string; password: string; acc
   return request('/api/resources/s3/admin-password', { cache: 'no-store' });
 }
 
-/** Sets up the pipeline server in project; recreate replaces one named nightly-dspa with dspa. */
-export function setupPipelineServer(project: string, recreate = false): Promise<OperationResponse> {
+/**
+ * Sets up the pipeline server in project; recreate replaces one named nightly-dspa with dspa.
+ * confirmUnrecorded: the UID of the pipeline server this tool has no record of that the user confirmed as its own (Recreate deletes it).
+ */
+export function setupPipelineServer(project: string, recreate = false, confirmUnrecorded = ""): Promise<OperationResponse> {
   return request('/api/resources/pipeline-server/setup', {
     method: 'POST',
-    body: JSON.stringify(recreate ? { project, recreate: true } : { project }),
+    body: JSON.stringify(recreate ? { project, recreate: true, ...(confirmUnrecorded ? { confirmUnrecorded } : {}) } : { project }),
     acceptStatuses: [422],
   });
 }
 
-export function teardownPipelineServer(project: string): Promise<OperationResponse> {
+/** Deletes the pipeline server in project; confirmUnrecorded: the UID of the one this tool has no record of that the user confirmed as its own. */
+export function teardownPipelineServer(project: string, confirmUnrecorded = ""): Promise<OperationResponse> {
   return request('/api/resources/pipeline-server/teardown', {
     method: 'POST',
-    body: JSON.stringify({ project }),
+    body: JSON.stringify(confirmUnrecorded ? { project, confirmUnrecorded } : { project }),
     acceptStatuses: [422],
   });
 }
@@ -100,6 +104,8 @@ export function streamMigrateStorage(
 export interface CleanupRequest {
   /** The projects whose pipeline server goes. */
   pipelineServers?: string[];
+  /** Those of them whose pipeline server this tool has no record of, confirmed by the user as this tool's: project to that server's UID. */
+  confirmUnrecorded?: Record<string, string>;
   storage?: boolean;
   /** Also delete namespace seaweedfs (needs storage). */
   deleteNamespace?: boolean;

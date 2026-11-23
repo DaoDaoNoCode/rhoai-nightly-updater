@@ -54,7 +54,7 @@ import { PrerequisitesSection, RECOMMENDED_EXPOSURE, headerWithPrerequisites, pr
 import type { ModelExposureKind, PrerequisiteFeature } from "../types";
 import { BUSY_REASON, PROJECT_TABS, TAB_PARTS, TAB_TITLES, ENVIRONMENT_TABS, type EnvironmentTab } from "./environment/environmentTabs";
 import { useEnvironmentLocation } from "./environment/useEnvironmentLocation";
-import { useResourceStatus, useSettlePolling } from "./environment/useResourceStatus";
+import { useResourcePolling, useResourceStatus } from "./environment/useResourceStatus";
 import { environmentActions, useRunState } from "./environment/environmentRuns";
 import { environmentProjectNames, modelsProjectOptions, pipelinesProjectOptions, playgroundProjectOptions } from "./environment/projectOptions";
 import { overviewRows as buildOverviewRows } from "./environment/overviewRows";
@@ -107,11 +107,12 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const resourcesSettling = allResources.some((r) => isTerminating(r) || (r.deployed && !r.ready && !terminalReason(r)));
 
   const runs = useRunState();
-  const { resAction, actionProject, lastMinIOTeardown, run, runOpen, setRunOpen, setupConfirm, setSetupConfirm, cleanupScope, setCleanupScope, cleanupRetry, setCleanupRetry,
+  const { resAction, actionProject, run, runOpen, setRunOpen, setupConfirm, setSetupConfirm, cleanupScope, setCleanupScope, cleanupRetry, setCleanupRetry,
     sampleOp, samplesRefresh, modelsOp, playgroundOp, playgroundRefresh, maasOp, maasRefresh, prereqRefresh, checking, checkError } = runs;
-  // Poll quickly after a change, back off to 30 s, stop after 10 minutes or
-  // once nothing is settling; hidden tabs don't poll (A06-5).
-  const polling = useSettlePolling(fetchResources, !!resAction || resourcesSettling || !!run.run?.running);
+  // One poller: quickly after a change, backing off to 30 s, for 10 minutes;
+  // otherwise a slow re-read; hidden tabs don't poll (A06-5).
+  const settlingNow = !!resAction || resourcesSettling || !!run.run?.running;
+  const polling = useResourcePolling(fetchResources, settlingNow);
 
   const [migrateKind, setMigrateKind] = useState<MigrateKind | null>(null);
   const migration = useMigrateStorage(useCallback(() => { void fetchResources(); }, [fetchResources]));
@@ -129,11 +130,28 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const [modelsExposure, setModelsExposure] = useState<ModelExposureKind | null>(null);
   const prereqRead = usePrerequisites(prereqRefresh, tab === "models" ? modelsExposure : RECOMMENDED_EXPOSURE, tab !== "maas");
   const prereq = prereqRead.data;
+  // Clean up lists what a fresh read finds, not the last snapshot: opening it
+  // reads the status, MaaS and the playgrounds again (a read that is enabled
+  // only for Clean up starts on its own).
+  const freshReads = useRef({ resources: fetchResources, maas: maasRead.reload, playground: playgroundRead.reload });
+  freshReads.current = { resources: fetchResources, maas: maasRead.reload, playground: playgroundRead.reload };
+  const cleanupOpen = !!cleanupScope;
+  useEffect(() => {
+    if (!cleanupOpen) return;
+    const r = freshReads.current;
+    void r.resources();
+    if (tab === "overview") {
+      void r.maas();
+      void r.playground();
+    }
+    // Only when Clean up opens; tab is the one it opened on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cleanupOpen]);
   useEffect(() => {
     if (!searchParams.has("project")) setPlaygroundDefault(defaultPlaygroundProject(pg, null));
   }, [pg, searchParams]);
 
-  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, pipelineServers) ?? modelsConfirm(p, resStatus) ?? playgroundConfirm(p, pg) ?? maasConfirm(p, maas, setPending) ?? prerequisitesConfirm(p, prereq) ?? samplesConfirm(p);
+  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, [...pipelineServers, ...(resStatus?.outsidePipelineServers ?? [])]) ?? modelsConfirm(p, resStatus) ?? playgroundConfirm(p, pg) ?? maasConfirm(p, maas, setPending) ?? prerequisitesConfirm(p, prereq) ?? samplesConfirm(p);
 
   // A run that ends while its dialog is closed reports in a toast, with a
   // way back to the dialog: the outcome is never lost, and nothing pushes
@@ -161,11 +179,10 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const busy: Busy = { resAction, actionProject, migrating, models: modelsOp, playground: playgroundOp, maas: maasOp };
   const baseReason = mutateBlocker ?? (runningSomething ? BUSY_REASON : null);
   // After a deletion the namespace stays (deployed:false, managedByTool:true).
-  // Offer Delete again while tool objects are still reported (the data
-  // PVC, a Route) or the last deletion from this tab did not finish.
+  // Offer Delete again while the cluster still has this tool's storage
+  // objects (the data PVC, a Route, or what a deletion left: leftovers).
   const minioLeftovers = !!minio && !minio.deployed && minio.managedByTool === true && (
-    (minio.dataPVCs ?? []).length > 0 || !!minio.uiRoute || !!minio.apiRoute ||
-    (lastMinIOTeardown !== null && ["partial_failure", "delete_failed", "in_progress", "forbidden", "unauthorized", "network"].includes(lastMinIOTeardown))
+    (minio.dataPVCs ?? []).length > 0 || !!minio.uiRoute || !!minio.apiRoute || (minio.leftovers ?? []).length > 0
   );
   const modal = pending ? confirmOf(pending) : null;
 
@@ -323,7 +340,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                   onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
                   model={modelsModel} onModel={chooseModel}
                   state={headerWithPrerequisites(models, prereq?.features?.models)} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}
-                  setPending={setPending} onSetUp={(setup) => setUp("Models", setup)} onCleanup={() => setCleanupScope("models")}
+                  setPending={setPending} onRun={execute} onSetUp={(setup) => setUp("Models", setup)} onCleanup={() => setCleanupScope("models")}
                   onMaaS={() => navigate({ tab: "maas" })} onCheckModel={checkModel} checking={checking} checkError={checkError} />
               )}
               {tab === "playground" && resStatus && (

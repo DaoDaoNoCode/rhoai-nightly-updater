@@ -456,3 +456,52 @@ func TestInferenceGateway_DisallowNeverChangesAForeignGateway(t *testing.T) {
 		t.Errorf("wrote %v", m)
 	}
 }
+
+// N7: the record binds each project it added to the namespace's UID. A
+// project of that name made again (deleted and created anew) is not the
+// one this tool added: the status does not call it the tool's, and the
+// teardown never takes it off the list (someone else's entry now).
+func TestGatewayProjects_AreBoundToTheNamespaceUID(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.f.putJSON("/api/v1/namespaces/proj", `{"metadata":{"uid":"ns-1","labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	if st, _ := GetResourcesStatus(mc.c); strings.Join(st.InferenceGateway.AddedProjects, ",") != "proj" {
+		t.Fatalf("added before = %v", st.InferenceGateway.AddedProjects)
+	}
+	mc.f.putJSON("/api/v1/namespaces/proj", `{"metadata":{"uid":"ns-2","labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`)
+	if st, _ := GetResourcesStatus(mc.c); len(st.InferenceGateway.AddedProjects) != 0 {
+		t.Fatalf("added after the project was made again = %v", st.InferenceGateway.AddedProjects)
+	}
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "teardown", Project: "proj"})
+	if !res.Success || strings.Contains(res.Message, "taken off the projects") {
+		t.Fatalf("teardown: %+v", res)
+	}
+	wantAllowed(t, mc, "openshift-ingress", "proj")
+	if rec, _ := serving.ReadGatewayProjects(mc.c); len(rec) != 0 {
+		t.Errorf("record kept the old project: %v", rec)
+	}
+}
+
+// A deleted project this tool added (its UID recorded) is still the tool's
+// entry: no namespace of another UID claims the name. The status names it as
+// added, so the Models tab says the next Models change removes it, not that
+// this tool did not add it.
+func TestGatewayProjects_ADeletedProjectTheToolAddedIsStillItsEntry(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.f.putJSON("/api/v1/namespaces/proj", `{"metadata":{"uid":"ns-1","labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	deleteFakeObject(mc, testModelPath)
+	deleteFakeObject(mc, "/api/v1/namespaces/proj")
+	st, err := GetResourcesStatus(mc.c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw := st.InferenceGateway
+	if strings.Join(gw.GoneProjects, ",") != "proj" || strings.Join(gw.AddedProjects, ",") != "proj" {
+		t.Fatalf("gone %v, added %v", gw.GoneProjects, gw.AddedProjects)
+	}
+}

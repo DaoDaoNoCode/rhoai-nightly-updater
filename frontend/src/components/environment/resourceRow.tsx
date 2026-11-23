@@ -216,10 +216,14 @@ export type Pending =
   /** deleteNamespace: also delete namespace seaweedfs (the user's informed choice). */
   | { kind: "teardown-minio"; deleteNamespace?: boolean }
   | { kind: "deploy-mlflow-pr"; pr: number }
-  /** again: set up an existing pipeline server again (for example to recreate its Connection). */
-  | { kind: "setup-pipeline-server" | "teardown-pipeline-server"; project: string; name?: string; again?: boolean }
+  /**
+   * again: set up an existing pipeline server again (for example to recreate its Connection).
+   * unrecorded: the pipeline server carries this tool's label but this tool has no record of it; the dialog
+   * says so, and confirming it is what lets Delete (and Recreate) remove it: the server with uid (one made again since is not).
+   */
+  | { kind: "setup-pipeline-server" | "teardown-pipeline-server"; project: string; name?: string; again?: boolean; unrecorded?: boolean; uid?: string }
   /** Replace the tool's pipeline server named nightly-dspa with one named dspa (workbench pipelines need it). */
-  | { kind: "recreate-pipeline-server"; project: string; name: string }
+  | { kind: "recreate-pipeline-server"; project: string; name: string; unrecorded?: boolean; uid?: string }
   /** MLflow samples in a project's workspace (one request for all of them). */
   | { kind: "mlflow-samples"; project: string; action: MLflowSampleAction; samples: MLflowSampleId[]; repairs?: string[] }
   /** Models: the inference gateway and/or the model in a project, as one streamed operation. */
@@ -248,6 +252,8 @@ export type Pending =
   /** access: only for the first published model (the audience is the subscription's). */
   | { kind: "publish-maas"; project: string; model: string; access?: AudienceForm; limit?: LimitForm }
   | { kind: "unpublish-maas"; project: string; model: string }
+  /** MaaS: the routing of a model whose MaaS reference was deleted outside the tool. */
+  | { kind: "restore-routing-maas"; project: string; model: string }
   /** MaaS: a published model's limit, who can use the published models, the database (every key is lost). */
   | { kind: "maas-limit"; project: string; model: string; limit?: LimitForm }
   | { kind: "maas-access"; access?: AudienceForm }
@@ -265,8 +271,8 @@ export const isPrerequisitesPending = (p: Pending): p is PrerequisitesPending =>
 /** A Playground change: one streamed request (pkg/api HandlePlaygroundStream). */
 export type PlaygroundPending = Extract<Pending, { kind: "setup-playground" | "teardown-playground" }>;
 /** A MaaS change: one streamed request (pkg/api HandleMaaSStream). */
-export type MaaSPending = Extract<Pending, { kind: "setup-maas" | "teardown-maas" | "publish-maas" | "unpublish-maas" | "maas-action" | "maas-limit" | "maas-access" | "maas-database" }>;
-const MAAS_KINDS: string[] = ["setup-maas", "teardown-maas", "publish-maas", "unpublish-maas", "maas-action", "maas-limit", "maas-access", "maas-database"];
+export type MaaSPending = Extract<Pending, { kind: "setup-maas" | "teardown-maas" | "publish-maas" | "unpublish-maas" | "restore-routing-maas" | "maas-action" | "maas-limit" | "maas-access" | "maas-database" }>;
+const MAAS_KINDS: string[] = ["setup-maas", "teardown-maas", "publish-maas", "unpublish-maas", "restore-routing-maas", "maas-action", "maas-limit", "maas-access", "maas-database"];
 export const isMaaSPending = (p: Pending): p is MaaSPending => MAAS_KINDS.includes(p.kind);
 export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending | PlaygroundPending | MaaSPending | PrerequisitesPending>;
 export const isPlaygroundPending = (p: Pending): p is PlaygroundPending => p.kind === "setup-playground" || p.kind === "teardown-playground";

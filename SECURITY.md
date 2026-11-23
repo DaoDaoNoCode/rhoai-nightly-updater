@@ -454,7 +454,7 @@ oc auth can-i patch groups.user.openshift.io/ml-team --as=$SA     # no
 
 ### The MaaS prune job (4.0.0)
 
-The background job (`pkg/api` `StartMaaSPruneJob`, every 5 minutes, under the cluster lock and lease, off in the gitops profile) drops the publications whose project or model is gone, so a project made again with the same name cannot attach routes to the MaaS gateway. It runs with the SA because no user is there. Since 4.0.0 it only updates or deletes existing objects (`updateToolObject`: the ownership check, field-ownership upgrade and `resourceVersion` guard of every tool write, a server-side apply sent as a PATCH, never a create):
+The background job (`pkg/api` `StartMaaSPruneJob`, every 5 minutes, and at most once a minute when a MaaS status read finds a publication that is gone (5.0.0), under the cluster lock and lease, off in the gitops profile) drops the publications whose project or model is gone, so a project made again with the same name cannot attach routes to the MaaS gateway. The gateway's list of projects is those of the tool's MaaSModelRefs on the cluster, not of its record (5.0.0). The same run then forgets the entries of the models, pipeline server and playground records whose project no longer exists (its own ConfigMap, the existing grant; namespaces `get`, already granted). It runs with the SA because no user is there. Since 4.0.0 it only updates or deletes existing objects (`updateToolObject`: the ownership check, field-ownership upgrade and `resourceVersion` guard of every tool write, a server-side apply sent as a PATCH, never a create):
 
 | Rule | What it allows | Worst case if the SA token leaks |
 |---|---|---|

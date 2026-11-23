@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ResourcesStatus } from "../../types";
 import { getDSProjects, getResourcesStatus, toApiError, type ApiError } from "../../services/api";
 import { exponentialBackoff, usePolling } from "../../hooks/usePolling";
-import { RESOURCE_POLL_BASE_MS, RESOURCE_POLL_MAX_MS, RESOURCE_SETTLE_MAX_MS } from "../../constants";
+import { IDLE_REFRESH_MS, RESOURCE_POLL_BASE_MS, RESOURCE_POLL_MAX_MS, RESOURCE_SETTLE_MAX_MS } from "../../constants";
 import { useLatestRequest } from "../../hooks/useLatestRequest";
 
 /**
@@ -73,27 +73,41 @@ export function useResourceStatus(initialPipelinesProject: string | null) {
 }
 
 /**
- * While `active`, reads again: quickly after a change, backing off to 30 s,
- * stopping after 10 minutes (gaveUp); hidden tabs don't poll (A06-5).
- * restart() starts that again from the quick end.
+ * The status's one poller, so two of its reads never overlap. While
+ * `settling`: quickly after a change, backing off to 30 s, for 10 minutes
+ * (then gaveUp); otherwise, and after giving up, a slow re-read every
+ * IDLE_REFRESH_MS, so something deleted or changed elsewhere goes away on
+ * its own. Hidden tabs don't poll (A06-5); showing the tab reads at once.
+ * Each settling period starts from the quick end with its own 10 minutes;
+ * restart() starts the current pace again. A read still in flight when the
+ * pace changes is waited for, not doubled.
  */
-export function useSettlePolling(fetch: () => Promise<void>, active: boolean) {
+export function useResourcePolling(fetch: () => Promise<void>, settling: boolean) {
   const [round, setRound] = useState(0);
-  const [gaveUp, setGaveUp] = useState(false);
-  usePolling(fetch, {
-    enabled: active,
-    restartKey: round,
+  // Each start or end of settling is a new period (React's "adjust state
+  // when a prop changes"): one that gave up does not make the next give up.
+  const [phase, setPhase] = useState({ settling, n: 0 });
+  if (phase.settling !== settling) setPhase({ settling, n: phase.n + 1 });
+  const period = `${round}|${phase.n}`;
+  const [gaveUpIn, setGaveUpIn] = useState<string | null>(null);
+  const inFlight = useRef<Promise<void> | null>(null);
+  const read = useCallback(() => {
+    inFlight.current ??= fetch().finally(() => { inFlight.current = null; });
+    return inFlight.current;
+  }, [fetch]);
+  usePolling(read, {
+    restartKey: period,
+    pauseWhenHidden: true,
+    refreshOnVisible: true,
     delay: ({ attempt, elapsedMs }) => {
+      if (!settling || gaveUpIn === period) return IDLE_REFRESH_MS;
       if (elapsedMs >= RESOURCE_SETTLE_MAX_MS) {
-        setGaveUp(true);
-        return null;
+        setGaveUpIn(period);
+        return IDLE_REFRESH_MS;
       }
       return exponentialBackoff(attempt, RESOURCE_POLL_BASE_MS, RESOURCE_POLL_MAX_MS);
     },
   });
-  const restart = () => {
-    setGaveUp(false);
-    setRound((n) => n + 1);
-  };
-  return { gaveUp, restart };
+  const restart = () => setRound((n) => n + 1);
+  return { gaveUp: settling && gaveUpIn === period, restart };
 }

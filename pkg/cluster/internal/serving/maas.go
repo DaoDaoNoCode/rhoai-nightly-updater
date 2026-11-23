@@ -150,6 +150,13 @@ type MaaSRecord struct {
 	// GenAI is, by publication, the genai label and annotation publish
 	// removed from the model (maas_genai.go); Unpublish puts them back.
 	GenAI map[string]maasGenAI `json:"genAI,omitempty"`
+	// ModelUIDs is, by publication, the UID of the model publish read: the
+	// publication and its values above are that model's only. A model
+	// deleted and made again under its name (also by this tool) has
+	// another UID, so its publication is gone (goneMaaSPublications) and
+	// the values are never written back to it. A publication by an earlier
+	// build has none.
+	ModelUIDs map[string]string `json:"modelUIDs,omitempty"`
 	// DBNamespace is where setup put the database and maas-db-config, so
 	// removal and the status look there even when the infrastructure
 	// namespace reads differently later.
@@ -292,6 +299,30 @@ func (r MaaSRecord) ModelRefsOf(project, model string) (MaaSModelRefs, bool) {
 	return refs, ok
 }
 
+// staleFor: the publication of model in project was of another model than
+// the one whose UID is uid (deleted and made again since).
+func (r MaaSRecord) staleFor(project, model, uid string) bool {
+	recorded := r.ModelUIDs[MaaSPub{project, model}.Key()]
+	return recorded != "" && uid != "" && recorded != uid
+}
+
+// forget drops the publication's values (SetPublished false keeps the
+// rest of the record).
+func (r *MaaSRecord) forget(project, model string) {
+	published := r.IsPublished(project, model)
+	r.SetPublished(project, model, false)
+	if published {
+		r.SetPublished(project, model, true)
+	}
+}
+
+func (r *MaaSRecord) setModelUID(project, model, uid string) {
+	if r.ModelUIDs == nil {
+		r.ModelUIDs = map[string]string{}
+	}
+	r.ModelUIDs[MaaSPub{project, model}.Key()] = uid
+}
+
 func (r *MaaSRecord) setModelRefs(project, model string, refs MaaSModelRefs) {
 	if r.ModelRefs == nil {
 		r.ModelRefs = map[string]MaaSModelRefs{}
@@ -312,6 +343,10 @@ func (r *MaaSRecord) SetPublished(project, model string, on bool) {
 	} else {
 		delete(r.ModelRefs, key)
 		delete(r.GenAI, key)
+		delete(r.ModelUIDs, key)
+		if len(r.ModelUIDs) == 0 {
+			r.ModelUIDs = nil
+		}
 		if len(r.GenAI) == 0 {
 			r.GenAI = nil
 		}
@@ -321,6 +356,56 @@ func (r *MaaSRecord) SetPublished(project, model string, on bool) {
 	}
 	sort.Strings(out)
 	r.Published = out
+}
+
+// dropPublishedKeepRestore takes the publication off the record's list
+// and keeps what restoring its model's routing writes back (its refs, Gen
+// AI values and UID): its MaaSModelRef went outside the tool while the
+// model still routes through the MaaS gateway (maas_prune.go).
+func (r *MaaSRecord) dropPublishedKeepRestore(project, model string) {
+	key := MaaSPub{project, model}.Key()
+	var out []string
+	for _, p := range r.Pubs() {
+		if p.Key() != key {
+			out = append(out, p.Key())
+		}
+	}
+	r.Published = out
+}
+
+// restorePending are the models the record keeps restore values for (refs,
+// Gen AI values or UID) without listing their publication: what "Restore
+// direct routing" writes back (dropPublishedKeepRestore).
+func (r MaaSRecord) restorePending() []MaaSPub {
+	seen := map[string]bool{}
+	for _, p := range r.Pubs() {
+		seen[p.Key()] = true
+	}
+	var keys []string
+	for _, m := range []map[string]bool{keysOf(r.ModelRefs), keysOf(r.GenAI), keysOf(r.ModelUIDs)} {
+		for k := range m {
+			if !seen[k] {
+				seen[k] = true
+				keys = append(keys, k)
+			}
+		}
+	}
+	sort.Strings(keys)
+	var out []MaaSPub
+	for _, k := range keys {
+		if project, model, ok := strings.Cut(k, "/"); ok {
+			out = append(out, MaaSPub{project, model})
+		}
+	}
+	return out
+}
+
+func keysOf[V any](m map[string]V) map[string]bool {
+	out := make(map[string]bool, len(m))
+	for k := range m {
+		out[k] = true
+	}
+	return out
 }
 
 // Projects are the projects with a recorded publication: the MaaS gateway
@@ -1114,6 +1199,7 @@ func GetMaaSStatus(c *kube.Client) (*types.MaaSStatus, error) {
 	}
 	dsc, dscErr := readMaaSDSC(c)
 	r := &maasStatusRun{c: c, st: st, rec: rec}
+	r.gone, r.modelsErr = goneMaaSPublications(c, rec)
 	r.infra, r.infraErr = MaaSInfraNamespace(c)
 	if r.infraErr != nil {
 		r.blockers = append(r.blockers, kube.SentenceStart(r.infraErr.Error())+".")
@@ -1151,6 +1237,39 @@ type maasStatusRun struct {
 	// denyNote is the Connectivity Link part's own offer, added to the
 	// plan when Set up changes anything.
 	denyNote string
+	// gone are the recorded publications whose project or model is gone
+	// (goneMaaSPublications); modelsErr says the models record cannot be
+	// read.
+	gone      []maasGonePub
+	modelsErr error
+	// terminating are the projects read for the rows, and whether each is
+	// being deleted.
+	terminating map[string]bool
+}
+
+// goneOf is the gone publication of name in project, if it is gone.
+func (r *maasStatusRun) goneOf(project, name string) (maasGonePub, bool) {
+	for _, g := range r.gone {
+		if g.pub.Project == project && g.pub.Model == name {
+			return g, true
+		}
+	}
+	return maasGonePub{}, false
+}
+
+// projectTerminating: project is being deleted (false when it cannot be
+// read: the row is then the model's live one).
+func (r *maasStatusRun) projectTerminating(project string) bool {
+	if t, ok := r.terminating[project]; ok {
+		return t
+	}
+	meta, found, err := kube.ReadObjectMeta(r.c, "/api/v1/namespaces/"+project)
+	t := err == nil && found && meta.Terminating()
+	if r.terminating == nil {
+		r.terminating = map[string]bool{}
+	}
+	r.terminating[project] = t
+	return t
 }
 
 func (r *maasStatusRun) part(p types.MaaSPart) { r.st.Parts = append(r.st.Parts, p) }
@@ -1315,7 +1434,11 @@ func (r *maasStatusRun) statusGateway() {
 			gwPart.State = "problem"
 			gwPart.Message = "This gateway, which this tool did not create, admits routes from every namespace, so any project editor could put a route on MaaS's gateway. The MaaS docs' gateway (setup-gateway.sh) lists the namespaces instead. This tool publishes nothing through it until its owner applies the command below; it does not change a gateway it did not create."
 			if r.infraErr == nil {
-				gwPart.Commands = gatewayAllowedRoutesCommand(gw.gw, maasGatewayNamespaces(infra, rec.Projects()))
+				projects, err := maasLiveProjects(c, rec, MaaSPub{}, MaaSPub{})
+				if err != nil {
+					projects = rec.Projects()
+				}
+				gwPart.Commands = gatewayAllowedRoutesCommand(gw.gw, maasGatewayNamespaces(infra, projects))
 			}
 		case gw.acceptedErr != "":
 			gwPart.State, gwPart.Message = "problem", "Not accepted: "+kube.TruncateText(gw.acceptedErr, 300)
@@ -1329,7 +1452,7 @@ func (r *maasStatusRun) statusGateway() {
 				st.URL = "https://" + h
 			}
 		}
-		gone, modelsErr := goneMaaSPublications(c, rec)
+		gone, modelsErr := r.gone, r.modelsErr
 		var warnings []string
 		if len(gone) > 0 {
 			w := "It still admits routes from published projects that are gone (" + goneMaaSText(gone) + "). Anyone who creates a project of such a name could attach routes to it. The background check (every few minutes) or the next MaaS change, Models change or Clean up removes them."
@@ -1433,7 +1556,10 @@ func (r *maasStatusRun) statusDSC(dsc maasDSC, dscErr error) {
 		st.Blocked = &types.ComponentBlock{Component: "aigateway", Reason: "MaaS needs RHOAI's DataScienceCluster, and this cluster has none. A cluster-admin creates one on the Components page."}
 		dscPart.State, dscPart.Message = "problem", "No DataScienceCluster"
 	case dsc.maas == "Managed" && dsc.aigateway == "Managed":
-		dscPart.ManagedByTool, dscPart.NotManaged = rec.DSCChanged, !rec.DSCChanged
+		// This tool's while it recorded the change and still owns the field
+		// (as the prerequisites' parts): someone who set it since owns it.
+		owned := rec.DSCChanged && dscMaaSOwned(dsc)
+		dscPart.ManagedByTool, dscPart.NotManaged = owned, !owned
 		switch dsc.ready {
 		case "False":
 			dscPart.State, dscPart.Message = "waiting", "modelsAsAService is Managed; not ready: "+kube.TruncateText(dsc.readyMsg, 300)
@@ -1451,7 +1577,7 @@ func (r *maasStatusRun) statusDSC(dsc maasDSC, dscErr error) {
 		dscPart.State = "missing"
 		dscPart.Message = fmt.Sprintf("aigateway is %s and modelsAsAService is %s. Set up sets them to Managed, last, as the docs' DataScienceCluster step does; Remove puts back what this tool changed.", kube.FirstNonEmpty(dsc.aigateway, "not set"), kube.FirstNonEmpty(dsc.maas, "not set"))
 		dscPart.Commands = maasDSCCommand(dsc.name)
-		dscPart.ManagedByTool = rec.AIGatewayChanged
+		dscPart.ManagedByTool = rec.AIGatewayChanged && dsc.aigateway == "Managed" && dscAIGatewayOwned(dsc)
 		if dsc.argoApp != "" {
 			dscPart.State = "problem"
 			dscPart.Message = argo.GitOpsRefusal("The DataScienceCluster", dsc.argoApp, "turning on Models as a Service") + " Set " + strings.Join(fields, " and ") + " in Git." + dsc.argo.UnconfirmedNote()
@@ -1526,7 +1652,9 @@ func (r *maasStatusRun) statusPlatform(dsc maasDSC) {
 			}
 		}
 	}
-	if rec.DSCChanged || rec.AIGatewayChanged || rec.InfraNamespace != "" {
+	// The DataScienceCluster counts while this tool still owns a field it
+	// recorded changing (teardown restores only those).
+	if (rec.DSCChanged && dscMaaSOwned(dsc)) || (rec.AIGatewayChanged && dscAIGatewayOwned(dsc)) || rec.InfraNamespace != "" {
 		p.ManagedByTool = true
 	}
 	switch {
@@ -1587,10 +1715,15 @@ func (r *maasStatusRun) statusModels() {
 		}
 		st.Items = append(st.Items, r.modelRow(m, entry, v))
 	}
-	// A recorded publication whose model is gone (the model or its project
-	// was deleted elsewhere): a row, so Unpublish can clear what is left.
-	if recErr == nil {
-		r.goneRows(rec)
+	// A recorded publication whose project or model is gone gets no row
+	// (nothing of it is on the cluster to show): the background check
+	// removes what is left on its own (maas_prune.go). Only its failure
+	// needs attention.
+	for _, g := range r.gone {
+		st.Removing = append(st.Removing, types.MaaSRemoval{Namespace: g.pub.Project, Name: g.pub.Model, Reason: g.why})
+	}
+	if len(r.gone) > 0 {
+		st.RemovalProblem = lastPruneFailure()
 	}
 	sort.Slice(st.Items, func(i, j int) bool {
 		if st.Items[i].Namespace != st.Items[j].Namespace {
@@ -1620,9 +1753,30 @@ func (r *maasStatusRun) modelRow(m LLMISvcObject, entry CatalogModel, v maasMode
 	if cond, ok := kube.FindCondition(m.Status.Conditions, "Ready"); ok && cond.Status == "True" {
 		item.ModelReady = true
 	}
+	// Its project, or the model, is being deleted: whatever the record
+	// says (the background check empties it within a second of the first
+	// read), what is left goes with it, so the row offers nothing.
+	if r.projectTerminating(m.Metadata.Namespace) || m.Metadata.Terminating() {
+		item.Removing = true
+		item.Message = "Being removed with its project"
+		if !r.projectTerminating(m.Metadata.Namespace) {
+			item.Message = "Being removed"
+		}
+		item.SetupBlockedReason = item.Message + "."
+		return item
+	}
 	if entry.Type != ModelTypeChat {
 		item.Message = "Not offered for MaaS"
 		item.SetupBlockedReason = maasEmbeddingReason
+		return item
+	}
+	// Its publication is gone (the model was made again): what is left
+	// goes on its own, so the row offers nothing. One of which nothing,
+	// or only the model's routing, is left: the live rows below.
+	if g, gone := r.goneOf(m.Metadata.Namespace, m.Metadata.Name); gone && !g.unpublished && !g.routingPending {
+		item.Removing = true
+		item.Message = "Being removed automatically: " + g.why + "."
+		item.SetupBlockedReason = item.Message
 		return item
 	}
 	ref, found, _ := readMaaSModelRef(c, m.Metadata.Namespace, m.Metadata.Name)
@@ -1652,12 +1806,18 @@ func (r *maasStatusRun) modelRow(m LLMISvcObject, entry CatalogModel, v maasMode
 		default:
 			item.Message = fmt.Sprintf("Published; waiting (model reference %s, access %s, subscription %s)", kube.FirstNonEmpty(item.Phase, "pending"), kube.FirstNonEmpty(authPhase, "pending"), kube.FirstNonEmpty(subPhase, "pending"))
 		}
-	} else if left := maasLeftovers(c, m, recErr == nil && rec.IsPublished(m.Metadata.Namespace, m.Metadata.Name)); !found && len(left) > 0 {
+	} else if !found && ModelHasMaaSRef(m) {
+		// Its MaaSModelRef went outside the tool (or a publish stopped
+		// before it): nothing of MaaS serves it, and the model's routing
+		// is what is left; Restore direct routing puts it back.
+		item.RoutingPending = true
+		item.Message = "No MaaS reference; the model still routes through the MaaS gateway, so its direct address does not answer."
+	} else if left, genAI := maasLeftovers(c, m, recErr == nil && rec.IsPublished(m.Metadata.Namespace, m.Metadata.Name)), recErr == nil && !rec.staleFor(m.Metadata.Namespace, m.Metadata.Name, m.Metadata.UID) && rec.genAIPending(MaaSPub{m.Metadata.Namespace, m.Metadata.Name}, m.Metadata); !found && (len(left) > 0 || genAI) {
 		// A publication undone half-way (live: Unpublish deleted the
 		// model reference, then failed on the model): Unpublish again
 		// finishes it, so the tab must still offer it.
 		item.Published, item.Deployed, item.Partly = true, true, true
-		item.Message = "Partly published: " + strings.Join(left, " and ") + " still in place. Unpublish to finish removing it."
+		item.Message = partlyUnpublishedText(left, genAI)
 	} else {
 		item.Message = "Not published"
 		if found {
@@ -1670,41 +1830,32 @@ func (r *maasStatusRun) modelRow(m LLMISvcObject, entry CatalogModel, v maasMode
 			item.SetupBlockedReason = kube.FirstNonEmpty(item.SetupBlockedReason, "The model is not ready yet.")
 		}
 	}
-	if recorded, ok := rec.RouteBefore(m.Metadata.Namespace, m.Metadata.Name, modelGatewayRefsOf(m)); item.Published && recErr == nil && ok {
+	if recorded, ok := rec.RouteBefore(m.Metadata.Namespace, m.Metadata.Name, m.Metadata.UID, modelGatewayRefsOf(m)); (item.Published || item.RoutingPending) && recErr == nil && ok {
 		item.MaaSOnlySetup = recorded.NoRoute
 	}
 	return item
 }
 
-// goneRows adds a row for each recorded publication whose model is gone.
-func (r *maasStatusRun) goneRows(rec MaaSRecord) {
-	c, st := r.c, r.st
-	for _, p := range rec.Pubs() {
-		shown := false
-		for _, it := range st.Items {
-			shown = shown || (it.Namespace == p.Project && it.Name == p.Model)
-		}
-		if shown {
-			continue
-		}
-		left := []string{"this tool's record of the publication"}
-		if ref, found, _ := readMaaSModelRef(c, p.Project, p.Model); found && ToolOwned(ref.Metadata) {
-			left = append([]string{"MaaSModelRef " + p.Model}, left...)
-		}
-		st.Items = append(st.Items, types.MaaSModel{
-			Namespace: p.Project, Name: p.Model, ManagedByTool: true, Deployed: true,
-			Message:     "Partly published: no model of this name is in project " + p.Project + " any more (it was deleted there, or the project was); " + strings.Join(left, " and ") + " still in place. Unpublish to finish removing it.",
-			DisplayName: p.Model,
-			Published:   true,
-			Partly:      true,
-		})
+// partlyUnpublishedText is the row of a publication undone half-way: what
+// is left of it (maasLeftovers), and genAI: the model is still out of Gen
+// AI studio's AI assets (MaaSRecord.genAIPending).
+func partlyUnpublishedText(left []string, genAI bool) string {
+	var parts []string
+	if len(left) > 0 {
+		parts = append(parts, strings.Join(left, " and ")+" still in place")
 	}
+	if genAI {
+		parts = append(parts, "the model not yet back in Gen AI studio's AI assets")
+	}
+	return "Partly published: " + strings.Join(parts, ", and ") + ". Unpublish to finish removing it."
 }
 
-// maasLeftovers names what is left of a publication of the tool's model
-// once its MaaSModelRef is gone: the model's route through the MaaS
-// gateway (its refs, or a route KServe has not moved yet, read only for a
-// recorded publication), and this tool's record of the publication.
+// maasLeftovers names what is left on the cluster of a publication of the
+// tool's model once its MaaSModelRef is gone: the model's route through
+// the MaaS gateway (its refs, or a route KServe has not moved yet, read
+// only for a recorded publication). This tool's record alone is no
+// leftover: it is not shown, and it settles with the next publication or
+// the background check.
 func maasLeftovers(c *kube.Client, m LLMISvcObject, recorded bool) []string {
 	var left []string
 	if ModelHasMaaSRef(m) {
@@ -1714,9 +1865,6 @@ func maasLeftovers(c *kube.Client, m LLMISvcObject, recorded bool) []string {
 		if err == nil && slices.Contains(parents, inferenceGatewayNamespace+"/"+MaaSGatewayName) {
 			left = append(left, "the model's route through "+MaaSGatewayName+" (KServe has not moved it yet)")
 		}
-	}
-	if recorded {
-		left = append(left, "this tool's record of the publication")
 	}
 	return left
 }
@@ -1791,11 +1939,12 @@ func maasPhase(c *kube.Client, path string) string {
 }
 
 // MaaSPublishedIn reports whether anything of a publication of this tool's
-// model name in project is left, for the Models teardown (never for a
-// model that is not publishable): its MaaSModelRef,
-// this tool's record of it, or the model's route through the MaaS gateway.
-// Unpublish removes all three (and the project from the shared
-// subscription, authorization policy and gateway), so the model goes after it.
+// model name in project is left on the cluster, for the Models teardown
+// (never for a model that is not publishable): its MaaSModelRef, or the
+// model's route through the MaaS gateway. Unpublish removes both (and the
+// project from the shared subscription, authorization policy and gateway),
+// so the model goes after it. This tool's record alone is not a
+// publication: the tab offers no Unpublish for it.
 func MaaSPublishedIn(c *kube.Client, project, name string) (bool, error) {
 	refPath, ok := maasModelRefPath(c, project, name)
 	if !ok {
@@ -1806,13 +1955,6 @@ func MaaSPublishedIn(c *kube.Client, project, name string) (bool, error) {
 		return false, err
 	}
 	if found {
-		return true, nil
-	}
-	rec, err := ReadMaaSRecord(c)
-	if err != nil {
-		return false, err
-	}
-	if rec.IsPublished(project, name) {
 		return true, nil
 	}
 	model, found, err := ReadToolModel(c, project, name)
@@ -1849,12 +1991,15 @@ func maasOnlySetup(c *kube.Client, project, name string) (bool, error) {
 	if found {
 		current = modelGatewayRefsOf(model)
 	}
-	refs, ok := rec.RouteBefore(project, name, current)
+	refs, ok := rec.RouteBefore(project, name, model.Metadata.UID, current)
 	return ok && refs.NoRoute, nil
 }
 
-// SetUpByTool: the record says this tool set MaaS up, or published a model,
-// and has not removed it (Clean up MaaS clears each of these as it goes).
+// SetUpByTool: the record says this tool set the MaaS platform up and has
+// not removed it (Clean up MaaS clears each of these as it goes). Its list
+// of publications does not count: a publication is its MaaSModelRef on the
+// cluster, and the record keeps one whose project is gone until the
+// background check drops it.
 func (r MaaSRecord) SetUpByTool() bool {
-	return r.DSCChanged || r.AIGatewayChanged || len(r.Published) > 0 || r.DBNamespace != "" || r.Database != "" || r.InfraNamespace != "" || r.POCCredsUID != ""
+	return r.DSCChanged || r.AIGatewayChanged || r.DBNamespace != "" || r.Database != "" || r.InfraNamespace != "" || r.POCCredsUID != ""
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/clock"
@@ -24,8 +25,10 @@ import (
 var (
 	maasPruneInterval             = 5 * time.Minute
 	maasPruneClock    clock.Clock = clock.Real
-	// pruneGoneMaaS runs one check with the client; tests replace it.
-	pruneGoneMaaS = cluster.PruneGoneMaaSPublicationsInBackground
+	// pruneGoneMaaS runs one check with the client: the MaaS publications
+	// that are gone, then the records' entries of projects that are gone
+	// (features records_sweep.go). Tests replace it.
+	pruneGoneMaaS = cluster.SweepGoneInBackground
 	// forgetGoneRecipeProjects drops recipe projects that are gone from
 	// their record, in the same check (the record is written only under
 	// the lock); tests replace it.
@@ -118,4 +121,58 @@ func runMaaSPruneOnce(ctx context.Context) bool {
 		slog.Info("background check: forgot the recipe projects that are gone", "projects", strings.Join(forgot, ", "))
 	}
 	return true
+}
+
+// A MaaS status read that finds publications that are gone starts the same
+// check at once (kickMaaSPrune), so the tab settles without waiting up to
+// maasPruneInterval: in the background, never holding up the read, under
+// the same lock and lease (runMaaSPruneOnce skips when either is taken),
+// at most one at a time and one per maasPruneDebounce (the tab reads every
+// few seconds while it settles), and never in the gitops profile.
+var maasPruneDebounce = time.Minute
+
+var (
+	maasPruneKick struct {
+		sync.Mutex
+		running bool
+		last    time.Time
+	}
+	// maasPruneKicks counts the checks kickMaaSPrune started that still run
+	// (tests wait on it).
+	maasPruneKicks sync.WaitGroup
+)
+
+// kickMaaSPrune starts one background check unless one runs, one started
+// less than maasPruneDebounce ago, or the profile is gitops. It reports
+// whether it started one.
+func kickMaaSPrune() bool {
+	if activeProfile == ProfileGitOps {
+		return false
+	}
+	maasPruneKick.Lock()
+	defer maasPruneKick.Unlock()
+	now := maasPruneClock.Now()
+	if maasPruneKick.running || (!maasPruneKick.last.IsZero() && now.Sub(maasPruneKick.last) < maasPruneDebounce) {
+		return false
+	}
+	maasPruneKick.running, maasPruneKick.last = true, now
+	maasPruneKicks.Add(1)
+	go func() {
+		defer maasPruneKicks.Done()
+		defer func() {
+			maasPruneKick.Lock()
+			maasPruneKick.running = false
+			maasPruneKick.Unlock()
+		}()
+		runMaaSPruneOnce(context.Background())
+	}()
+	return true
+}
+
+// resetMaaSPruneKick forgets the last kick (tests).
+func resetMaaSPruneKick() {
+	maasPruneKicks.Wait()
+	maasPruneKick.Lock()
+	defer maasPruneKick.Unlock()
+	maasPruneKick.running, maasPruneKick.last = false, time.Time{}
 }

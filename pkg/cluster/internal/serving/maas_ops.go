@@ -84,7 +84,7 @@ func ValidateMaaSRequest(req types.MaaSRequest) string {
 		}
 		takesDB = req.Action == "setup" || req.Action == "change-database"
 		takesAccess = req.Action == "change-access"
-	case "publish", "unpublish", "change-limit":
+	case "publish", "unpublish", "change-limit", "restore-routing":
 		if !ProjectNameRegex.MatchString(req.Project) {
 			return "a valid project is required"
 		}
@@ -98,7 +98,7 @@ func ValidateMaaSRequest(req types.MaaSRequest) string {
 		takesAccess = req.Action == "publish"
 		takesLimit = req.Action == "publish" || req.Action == "change-limit"
 	default:
-		return "action must be setup, teardown, publish, unpublish, change-limit, change-access, change-database, upgrade-rhcl, rhcl-memory, rhcl-deny-on-failure, authorino-tls or remove-tier-policies"
+		return "action must be setup, teardown, publish, unpublish, restore-routing, change-limit, change-access, change-database, upgrade-rhcl, rhcl-memory, rhcl-deny-on-failure, authorino-tls or remove-tier-policies"
 	}
 	switch {
 	case req.Database != nil && !takesDB:
@@ -146,7 +146,7 @@ func ValidateMaaSRequest(req types.MaaSRequest) string {
 // setup "check", "database", "gateway", "authorino-tls", "dsc", "ready";
 // teardown "check", "unpublish", "dsc", "gateway", "database"; publish
 // "check", "gateway", "model", "maas", "ready"; unpublish "check", "maas",
-// "model", "gateway".
+// "model", "gateway"; restore-routing "check", "model".
 func RunMaaS(c *kube.Client, req types.MaaSRequest, onStep func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	m := &Run{Client: c, Emit: onStep, Activity: req.Action + "-maas", Target: "MaaS platform"}
 	entry, _ := CatalogEntry(req.Model)
@@ -183,6 +183,8 @@ func RunMaaS(c *kube.Client, req types.MaaSRequest, onStep func(types.UpdateStep
 		return m.publish(req.Project, entry.Name, req.Access, req.Limit)
 	case "change-limit":
 		return m.changeLimit(req.Project, entry.Name, req.Limit)
+	case "restore-routing":
+		return m.restoreRouting(req.Project, entry.Name, true)
 	case "change-access":
 		m.Target = "who can use the published MaaS models"
 		return m.changeAccess(req.Access)
@@ -581,7 +583,21 @@ func (m *Run) teardownUnpublish(t *maasTeardown) (*types.OperationResponse, erro
 			return m.Fail("unpublish", res.Message, res.ErrorCode, "unpublish failed")
 		}
 	}
-	m.Step("unpublish", "success", fmt.Sprintf("%d %s unpublished.", len(pubs), kube.Verb(len(pubs), "model", "models")))
+	// Models whose MaaSModelRef went outside the tool still route through
+	// the gateway this removal deletes: their routing is restored first.
+	pending := rec.restorePending()
+	for _, p := range pending {
+		res, _ := (&Run{Client: c, Activity: "restore-routing-maas", Target: fmt.Sprintf("model %s in %s", p.Model, p.Project)}).restoreRouting(p.Project, p.Model, false)
+		m.Logs = append(m.Logs, res.Logs...)
+		if !res.Success {
+			return m.Fail("unpublish", res.Message, res.ErrorCode, "restore routing failed")
+		}
+	}
+	msg := fmt.Sprintf("%d %s unpublished.", len(pubs), kube.Verb(len(pubs), "model", "models"))
+	if len(pending) > 0 {
+		msg += fmt.Sprintf(" The routing of %d %s whose MaaS reference was deleted outside this tool is restored.", len(pending), kube.Verb(len(pending), "model", "models"))
+	}
+	m.Step("unpublish", "success", msg)
 	var err error
 	if *rec, err = ReadMaaSRecord(c); err != nil {
 		return m.Fail("dsc", err.Error(), kube.ErrorCodeFromK8sErr(err), "record read failed")
@@ -863,6 +879,31 @@ func maasLivePubs(c *kube.Client, rec MaaSRecord, with, without MaaSPub) ([]MaaS
 	return out, nil
 }
 
+// maasLiveProjects are the projects the MaaS gateway admits routes from
+// besides its own namespaces: those of maasLivePubs (this tool's
+// MaaSModelRefs on the cluster, plus with, minus without). A project only
+// the record still lists is not admitted: its editors could otherwise
+// attach routes to the MaaS gateway with nothing of the tool's published
+// there.
+func maasLiveProjects(c *kube.Client, rec MaaSRecord, with, without MaaSPub) ([]string, error) {
+	live, err := maasLivePubs(c, rec, with, without)
+	if err != nil {
+		return nil, err
+	}
+	return pubProjects(live), nil
+}
+
+// pubProjects are the projects of pubs, each once.
+func pubProjects(pubs []MaaSPub) []string {
+	var out []string
+	for _, p := range pubs {
+		if !slices.Contains(out, p.Project) {
+			out = append(out, p.Project)
+		}
+	}
+	return out
+}
+
 // maasPublish is what Publish's check step found, for the steps after it.
 type maasPublish struct {
 	project, name string
@@ -1023,6 +1064,11 @@ func (m *Run) publishRecordRefs(pl *maasPublish) (*types.OperationResponse, erro
 	if err != nil {
 		return m.Fail("check", fmt.Sprintf("Cannot read %s in %s: %v. Nothing was changed.", name, project, err), kube.ErrorCodeFromK8sErr(err), "model read failed")
 	}
+	// Values recorded for a model of this name that was deleted and made
+	// again are not this model's.
+	if rec.staleFor(project, name, model.Metadata.UID) {
+		rec.forget(project, name)
+	}
 	original, recorded := rec.ModelRefsOf(project, name)
 	switch {
 	case !specHasRoute(spec) && !refs.hasMaaS():
@@ -1042,6 +1088,7 @@ func (m *Run) publishRecordRefs(pl *maasPublish) (*types.OperationResponse, erro
 	if _, recordedGenAI := rec.GenAI[MaaSPub{project, name}.Key()]; !recordedGenAI {
 		rec.setGenAI(project, name, genAIOf(model.Metadata))
 	}
+	rec.setModelUID(project, name, model.Metadata.UID)
 	rec.SetPublished(project, name, true)
 	pl.rec, pl.original = rec, original
 	return nil, nil
@@ -1055,7 +1102,11 @@ func (m *Run) publishCheckGateway(pl *maasPublish) (*types.OperationResponse, er
 	if err != nil {
 		return m.Fail("check", kube.SentenceStart(err.Error())+". Nothing was changed.", "prerequisites", "infra namespace unknown")
 	}
-	gwPlan, msg, code := planMaaSGateway(c, infra, rec.Projects())
+	projects, err := maasLiveProjects(c, rec, MaaSPub{project, pl.name}, MaaSPub{})
+	if err != nil {
+		return m.Fail("check", fmt.Sprintf("Cannot check the other publications: %v. Nothing was changed.", err), kube.ErrorCodeFromK8sErr(err), "ref read failed")
+	}
+	gwPlan, msg, code := planMaaSGateway(c, infra, projects)
 	if msg != "" {
 		return m.Fail("check", msg, code, "gateway check failed")
 	}
@@ -1323,8 +1374,16 @@ func (m *Run) unpublishCheck(u *maasUnpublish) (*types.OperationResponse, error)
 			return m.Fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
 		}
 	}
+	// Values recorded for another model of this name are never written
+	// back to this one.
+	if modelFound && rec.staleFor(project, name, model.Metadata.UID) {
+		rec.forget(project, name)
+	}
 	routed := modelOwned && ModelHasMaaSRef(model)
-	if !refFound && !rec.IsPublished(project, name) && !routed {
+	// Gen AI metadata a restore of the model's routing did not put back
+	// (the record keeps it: maas_prune.go).
+	genAILeft := modelOwned && rec.genAIPending(MaaSPub{project, name}, model.Metadata)
+	if !refFound && !rec.IsPublished(project, name) && !routed && !genAILeft {
 		say("check", "success", "Not published.")
 		return m.Done(fmt.Sprintf("%s in %s is not published; nothing to undo.", name, project))
 	}
@@ -1340,7 +1399,7 @@ func (m *Run) unpublishCheck(u *maasUnpublish) (*types.OperationResponse, error)
 		}
 		// A setup through MaaS only whose publish stopped before it recorded
 		// anything goes back to no route too (RouteBefore).
-		recordedRefs, hasRecordedRefs = rec.RouteBefore(project, name, refs)
+		recordedRefs, hasRecordedRefs = rec.RouteBefore(project, name, model.Metadata.UID, refs)
 		if hasRecordedRefs && !refs.maasOnly() {
 			return m.Fail("check", refsChangedRefusal(project, name, refs, recordedRefs, "Then Unpublish again: it leaves the model's gateways as you set them."), "conflict", "model refs changed")
 		}
@@ -1354,6 +1413,96 @@ func (m *Run) unpublishCheck(u *maasUnpublish) (*types.OperationResponse, error)
 	u.rec, u.refPath, u.ref, u.refFound, u.model, u.modelFound, u.modelOwned = rec, refPath, ref, refFound, model, modelFound, modelOwned
 	u.recordedRefs, u.hasRecordedRefs, u.recordedGenAI, u.hasRecordedGenAI, u.live = recordedRefs, hasRecordedRefs, recordedGenAI, hasRecordedGenAI, live
 	return nil, nil
+}
+
+// restoreRouting is "Restore direct routing" for the tool's model name in
+// project whose MaaSModelRef was deleted outside the tool while it still
+// routes through the MaaS gateway: Unpublish's model step (the gateways
+// and Gen AI metadata it had before publishing, as recorded), on the
+// user's token, after which the record forgets those values. The
+// background check has taken the model out of MaaS already; while the
+// record still lists the publication (that check has not run, or failed)
+// it is a whole Unpublish. stepped is false when it runs as part of a
+// removal. Steps: "check", "model".
+func (m *Run) restoreRouting(project, name string, stepped bool) (*types.OperationResponse, error) {
+	c := m.Client
+	say := func(id, status, msg string) {
+		if stepped {
+			m.Step(id, status, msg)
+		} else {
+			m.Logs = append(m.Logs, msg)
+		}
+	}
+	say("check", "running", "Checking the model...")
+	rec, err := ReadMaaSRecord(c)
+	if err != nil {
+		return m.Fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
+	}
+	if rec.IsPublished(project, name) {
+		return m.unpublish(project, name, stepped)
+	}
+	ref, refFound, err := readMaaSModelRef(c, project, name)
+	if err != nil {
+		return m.Fail("check", fmt.Sprintf("Cannot read MaaSModelRef %s/%s: %v. Nothing was changed.", project, name, err), kube.ErrorCodeFromK8sErr(err), "ref read failed")
+	}
+	if refFound && ToolOwned(ref.Metadata) {
+		return m.Fail("check", fmt.Sprintf("%s in %s is published (its MaaSModelRef exists): Unpublish it instead. Nothing was changed.", name, project), "conflict", "published")
+	}
+	model, found, err := ReadToolModel(c, project, name)
+	if err != nil {
+		return m.Fail("check", fmt.Sprintf("Cannot read %s in %s: %v. Nothing was changed.", name, project, err), kube.ErrorCodeFromK8sErr(err), "model read failed")
+	}
+	if found {
+		owned, err := ownsModel(c, model.Metadata)
+		if err != nil {
+			return m.Fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
+		}
+		if !owned {
+			return m.Fail("check", fmt.Sprintf("%s in %s was not created by this tool; it is left alone.", name, project), "not_managed", "model foreign")
+		}
+		// Values recorded for another model of this name are never
+		// written back to this one.
+		if rec.staleFor(project, name, model.Metadata.UID) {
+			rec.forget(project, name)
+		}
+	}
+	pub := MaaSPub{project, name}
+	if !found || (!ModelHasMaaSRef(model) && !rec.genAIPending(pub, model.Metadata)) {
+		say("check", "success", "Nothing to restore.")
+		rec.SetPublished(project, name, false)
+		if err := WriteMaaSRecord(c, rec); err != nil {
+			return m.Fail("check", err.Error(), kube.ErrorCodeFromK8sErr(err), "record write failed")
+		}
+		return m.Done(fmt.Sprintf("%s in %s does not route through the MaaS gateway; nothing to restore.", name, project))
+	}
+	recordedRefs, hasRecordedRefs := rec.ModelRefsOf(project, name)
+	if ModelHasMaaSRef(model) {
+		refs := modelGatewayRefsOf(model)
+		// With nothing recorded, a model on the MaaS gateway alone goes
+		// back to no route (RouteBefore), as Unpublish does.
+		recordedRefs, hasRecordedRefs = rec.RouteBefore(project, name, model.Metadata.UID, refs)
+		if hasRecordedRefs && !refs.maasOnly() {
+			return m.Fail("check", refsChangedRefusal(project, name, refs, recordedRefs, "Then Restore direct routing again: it leaves the model's gateways as you set them."), "conflict", "model refs changed")
+		}
+	}
+	recordedGenAI, hasRecordedGenAI := rec.GenAI[pub.Key()]
+	say("check", "success", "Restoring the model's routing as before publishing.")
+	u := &maasUnpublish{project: project, name: name, say: say, model: model, modelFound: true, modelOwned: true,
+		recordedRefs: recordedRefs, hasRecordedRefs: hasRecordedRefs, recordedGenAI: recordedGenAI, hasRecordedGenAI: hasRecordedGenAI}
+	if r, err := m.unpublishModel(u); r != nil || err != nil {
+		return r, err
+	}
+	rec.SetPublished(project, name, false)
+	if err := WriteMaaSRecord(c, rec); err != nil {
+		return m.Fail("model", err.Error(), kube.ErrorCodeFromK8sErr(err), "record write failed")
+	}
+	note := ""
+	if !recordedRefs.NoRoute {
+		if note = directRouteNote(c, project, name); note != "" {
+			m.Logs = append(m.Logs, strings.TrimSpace(note))
+		}
+	}
+	return m.Done(fmt.Sprintf("%s in %s routes as before publishing.%s", name, project, note))
 }
 
 // unpublishAccess takes the model off the shared authorization policy and
@@ -1477,7 +1626,7 @@ func (m *Run) unpublishGateway(u *maasUnpublish) (*types.OperationResponse, erro
 	if infraErr != nil {
 		msg = kube.SentenceStart(infraErr.Error())
 	} else {
-		gwPlan, msg, code = planMaaSGateway(c, infra, rec.Projects())
+		gwPlan, msg, code = planMaaSGateway(c, infra, pubProjects(u.live))
 	}
 	switch {
 	case msg != "":
@@ -1489,7 +1638,7 @@ func (m *Run) unpublishGateway(u *maasUnpublish) (*types.OperationResponse, erro
 		say("gateway", "success", "The gateway someone else made is not changed.")
 	case !gwPlan.found["Gateway"]:
 		say("gateway", "success", "There is no MaaS gateway to update.")
-	case slices.Contains(rec.Projects(), project):
+	case slices.Contains(pubProjects(u.live), project):
 		say("gateway", "success", fmt.Sprintf("The MaaS gateway still admits routes from %s: another model of this tool is published there.", project))
 	default:
 		gwPlan.classMissing = false // only the gateway changes

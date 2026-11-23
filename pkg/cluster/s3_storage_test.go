@@ -996,3 +996,23 @@ func TestSourceGone_UncopiableAndTerminatingPVCs(t *testing.T) {
 		t.Errorf("message = %s", msg)
 	}
 }
+
+// N8: once the Deployment is gone, this tool's other storage objects a
+// teardown did not delete (it tries each one) are reported from the
+// cluster, so Delete is offered again because they are there, not because
+// the browser remembers that the last teardown failed.
+func TestS3Status_NamesTheToolsObjectsATeardownLeft(t *testing.T) {
+	f, c := newResourceFake(t)
+	putS3Namespace(f, toolLabelJSON)
+	f.putJSON(s3SecretPath, `{"metadata":{"labels":`+toolLabelJSON+`}}`)
+	f.putJSON("/api/v1/namespaces/seaweedfs/services/seaweedfs-s3", `{"metadata":{"labels":`+toolLabelJSON+`}}`)
+	st := storage.S3Status(c)
+	if st.Deployed || strings.Join(st.Leftovers, ",") != "Secret seaweedfs-s3-credentials,Service seaweedfs-s3" {
+		t.Fatalf("status = %+v", st)
+	}
+	// Someone else's object of the name is not this tool's leftover.
+	f.putJSON("/api/v1/namespaces/seaweedfs/services/seaweedfs-s3", `{"metadata":{}}`)
+	if st := storage.S3Status(c); strings.Join(st.Leftovers, ",") != "Secret seaweedfs-s3-credentials" {
+		t.Fatalf("leftovers = %v", st.Leftovers)
+	}
+}

@@ -144,8 +144,13 @@ func specHasRoute(spec map[string]any) bool {
 // MaaS only whose publish stopped before it recorded anything (it is
 // created on the MaaS gateway alone); a publication by an earlier build is
 // always recorded as published. false: nothing is known (an earlier
-// build's publication, or not published).
-func (r MaaSRecord) RouteBefore(project, name string, refs GatewayRefs) (MaaSModelRefs, bool) {
+// build's publication, or not published). uid is the model's: what was
+// recorded for another model of the name (made again since it was
+// published) is not known of this one.
+func (r MaaSRecord) RouteBefore(project, name, uid string, refs GatewayRefs) (MaaSModelRefs, bool) {
+	if r.staleFor(project, name, uid) {
+		return MaaSModelRefs{}, false
+	}
 	if rec, ok := r.ModelRefsOf(project, name); ok {
 		return rec, true
 	}

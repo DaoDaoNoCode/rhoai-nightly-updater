@@ -498,7 +498,35 @@ export const scenarios = {
   // Not turned on yet while Authorino TLS needs a cluster-admin: Set up is still offered.
   "env-maas-new-tls": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { tls: false, items: [F.maasModel(false)] }); },
   // A recorded publication whose model was deleted elsewhere: a row with Unpublish.
-  "env-maas-orphan": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(true), F.maasOrphanPublication("old-project")] }); },
+  "env-maas-orphan": (w) => { scenarios["env-models-ready"](w); w.maas = { ...F.maasWorld("ready", { items: [F.maasModel(true)] }), removing: [F.maasGonePublication("old-project")] }; },
+  // Cluster truth (batch 2): this tool's pipeline server with no record of its
+  // UID, its pipeline server and model in a project that is no longer a data
+  // science project, a deleted project still on the inference gateway's list,
+  // and a MaaS publication of which nothing is left on the cluster.
+  "env-cluster-truth": (w) => {
+    scenarios["env-models-ready"](w);
+    w.resources.pipelineServers = [F.pipelineServerIn("dev-project", { unrecorded: true, uid: "3f6c2a9e-dev-project-dspa" })];
+    w.resources.outsidePipelineServers = [F.pipelineServerIn("old-team")];
+    w.resources.minio = { ...F.s3States.running, usedBy: ["dev-project/dspa", "old-team/dspa"], teardownBlockedReason: "2 pipeline servers use this S3 storage: dev-project/dspa, old-team/dspa. Delete them first." };
+    w.resources.models = F.modelsStatus({ items: [F.modelStates.released("dev-project")], outside: [F.modelStates.released("old-team")] });
+    w.resources.inferenceGateway = { ...w.resources.inferenceGateway, allowedProjects: ["openshift-ingress", "dev-project", "e2e-old", "team-x"], unusedProjects: ["e2e-old", "team-x"], goneProjects: ["e2e-old"], addedProjects: ["dev-project", "e2e-old"] };
+    w.maas = { ...F.maasWorld("ready", { items: [F.maasModel(false)] }), removing: [{ namespace: "dev-project", name: "qwen25-05b-instruct", reason: "the MaaSModelRef of model qwen25-05b-instruct in dev-project no longer exists" }] };
+  },
+  // F6 and F2 (live, 2026-11-23): a model whose MaaSModelRef was deleted
+  // outside this tool while it still routes through the MaaS gateway, and a
+  // published model in a project being deleted.
+  "env-maas-routing-pending": (w) => {
+    scenarios["env-models-ready"](w);
+    w.maas = F.maasWorld("ready", { items: [
+      { ...F.maasModel(false), routingPending: true, message: "No MaaS reference; the model still routes through the MaaS gateway, so its direct address does not answer." },
+      { ...F.maasModel(false, { name: "smollm2-135m-instruct" }), namespace: "old-team", removing: true, message: "Being removed with its project", setupBlockedReason: "Being removed with its project." },
+    ] });
+  },
+  // A storage deletion that did not finish: the Deployment is gone, its Secret is left.
+  "env-s3-leftovers": (w) => {
+    w.resources.minio = { deployed: false, ready: false, namespace: "seaweedfs", managedByTool: true, message: "Namespace exists but the S3 storage is not deployed", leftovers: ["Secret seaweedfs-s3-credentials"], namespaceDeletable: true };
+    w.resources.pipelineServers = [];
+  },
   // Others publish through the platform: Remove refuses before changing anything.
   "env-maas-in-use": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(false)] }); w.maasRefusal = F.MAAS_IN_USE; },
   "env-playground-no-model": (w) => { w.playground.modelsByProject["dev-project"] = []; },

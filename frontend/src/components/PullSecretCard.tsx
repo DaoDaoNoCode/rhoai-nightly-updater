@@ -169,7 +169,9 @@ const NodePullSecret: React.FC<{
   const setBy = own ? "tool" : canPull ? "other" : "unknown";
   const ownWhen = own ? [own.by && own.by !== "unknown" ? `by ${own.by}` : "", formatBuildDate(own.at)].filter(Boolean).join(", ") : "";
   const setByText = {
-    tool: `This tool${ownWhen ? ` (${ownWhen})` : ""}${own && !own.sameToken ? ", with an earlier token than the one saved above" : ""}`,
+    // Only this tool's record: the updater cannot read the cluster pull
+    // secret, so the dialogs check the entry itself with the user's token.
+    tool: `Recorded as added by this tool${ownWhen ? ` (${ownWhen})` : ""}${own && !own.sameToken ? ", with an earlier token than the one saved above" : ""}. The updater cannot read the cluster pull secret: Add and Remove check the entry with your permissions before they change anything.`,
     other: "Someone else: the nodes can pull, and this tool did not add an entry",
     unknown: "Not known (not this tool): Add to the nodes' pull secret reads that secret with your permissions first, and asks before it replaces an entry it did not add",
   }[setBy];

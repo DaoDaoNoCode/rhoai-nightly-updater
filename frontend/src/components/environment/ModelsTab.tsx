@@ -12,6 +12,7 @@ import {
 import type { ModelExposureKind, ResourcesStatus } from "../../types";
 import { type Pending, isTerminating } from "./resourceRow";
 import { CleanupSection, CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartList, PrimaryAction } from "./FeatureLayout";
+import { OutsideProjectsAlert } from "./OutsideProjects";
 import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
 import { ComponentAlert, NoProjectsAlert } from "./UseIt";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
@@ -41,6 +42,8 @@ export interface ModelsTabProps {
   readOnly: boolean;
   consoleURL?: string;
   setPending: (p: Pending) => void;
+  /** Runs a change at once, without a confirmation: only for one that only narrows access (a deleted project off the gateway's list). */
+  onRun?: (p: Pending) => void;
   onSetUp: (setup: Pending[]) => void;
   onCleanup: () => void;
   /** Opens the MaaS tab (a published model is used through MaaS). */
@@ -75,7 +78,8 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
   const next = state.next;
   const noProjects = projectsLoaded && projects.length === 0;
   const toolModels = (models?.items ?? []).filter((m) => m.managedByTool !== false);
-  const anythingToClean = toolModels.length > 0 || gatewayManaged(status.inferenceGateway);
+  const outside = models?.outside ?? [];
+  const anythingToClean = toolModels.length > 0 || outside.length > 0 || gatewayManaged(status.inferenceGateway);
   // How a new model is reached: read when it is not set up yet, again when
   // the gateways change; the recommended one is chosen until the user
   // chooses.
@@ -110,6 +114,15 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
     <Stack hasGutter>
       <StackItem><FeatureHeader title="Models" purpose={FEATURE_PURPOSE.models} state={state} /></StackItem>
       {noProjects && <StackItem><NoProjectsAlert dashboardUrl={status.dashboardUrl} things="Models" /></StackItem>}
+      {outside.length > 0 && (
+        <StackItem>
+          <OutsideProjectsAlert readOnly={readOnly} reason={baseReason} items={outside.map((m) => ({
+            key: `${m.namespace}/${m.name}`,
+            text: <>Model <code>{m.name}</code> in project {m.namespace} (no longer a data science project)</>,
+            onDelete: () => props.setPending({ kind: "teardown-model", project: m.namespace!, model: m.name!, ...(m.maasOnlySetup ? { unpublish: true } : {}) }),
+          }))} />
+        </StackItem>
+      )}
       {missingProject && (
         <StackItem>
           <Alert variant="info" isInline component="p" title={`Project ${missingProject} no longer exists`}>
