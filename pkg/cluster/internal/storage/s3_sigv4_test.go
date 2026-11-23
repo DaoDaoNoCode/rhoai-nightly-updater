@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/url"
 	"strings"
@@ -27,7 +28,7 @@ func TestSignV4KnownAnswers(t *testing.T) {
 			[]byte(canonicalQuery(url.Values{"Action": {"ListAccessKeys"}, "UserName": {"rnu-dspa-team-a"}, "Version": {"2010-05-08"}}))},
 	}
 	for _, tc := range cases {
-		req, err := http.NewRequest(tc.method, tc.url, bytes.NewReader(tc.body))
+		req, err := http.NewRequestWithContext(context.Background(), tc.method, tc.url, bytes.NewReader(tc.body))
 		if err != nil {
 			t.Fatal(err)
 		}
