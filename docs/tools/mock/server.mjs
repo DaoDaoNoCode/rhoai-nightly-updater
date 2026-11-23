@@ -210,7 +210,7 @@ async function migrateStream(req, res) {
 
 /** Clean up: one step per part (pkg/cluster CleanUp); each waits for /__docs/advance in gated mode. */
 async function cleanupStream(req, res) {
-  const { pipelineServers = [], storage = false, deleteNamespace = false, mlflow = false, models = [], inferenceGateway = false, playgrounds = [], recipeProjects = [] } = await body(req);
+  const { pipelineServers = [], storage = false, deleteNamespace = false, mlflow = false, models = [], inferenceGateway = false, playgrounds = [], recipeProjects = [], components = [] } = await body(req);
   beginOperation("cleanup", "Clean up the environment", [pipelineServers.length ? `${pipelineServers.length} pipeline servers` : "", storage ? "S3 storage" : "", mlflow ? "MLflow" : ""].filter(Boolean).join(", "));
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   const parts = [
@@ -219,12 +219,15 @@ async function cleanupStream(req, res) {
     ...(mlflow ? [{ id: "mlflow", title: "MLflow", done: "MLflow removed.", apply: () => { world.resources.mlflow = F.mlflowStates.none; } }] : []),
     ...playgrounds.map((p) => ({ id: `playground:${p}`, title: `the playground in '${p}'`, done: `Playground deleted from ${p}: the dashboard removed its server, configuration and database. The project and its models stay.`, apply: () => removePlayground(p) })),
     ...models.map((p) => ({ id: `model:${p}`, title: `the models in '${p}'`, done: `Model ${(world.resources.models?.items ?? []).filter((i) => i.namespace === p && i.managedByTool !== false).map((i) => i.name).join(", ")} deleted from '${p}'; KServe removed its Deployment, Service and route. The project stays.`, apply: () => removeModel(p) })),
+    ...(inferenceGateway ? [{ id: "inference-gateway", title: "the inference gateway", done: "Inference gateway deleted: Gateway openshift-ingress/openshift-ai-inference, ConfigMap openshift-ingress/openshift-ai-inference-options and GatewayClass openshift-ai-inference. OpenShift removes its load balancer and the ingress operator its DNS record.", apply: () => { world.resources.inferenceGateway = F.gatewayStates.none; } }] : []),
     ...recipeProjects.map((p) => ({ id: `recipe-project:${p}`, title: `project '${p}', which a recipe created`, says: true, done: `Deleted project ${p}; OpenShift removes what it holds.`, apply: () => {
       world.recipeProjects = F.recipeProjects(world).filter((r) => r.name !== p);
       if (world.recipeRun?.run?.project?.name === p) world.recipeRun.run.project.owned = false;
       world.resources.pipelineServers = world.resources.pipelineServers.filter((ps) => ps.namespace !== p);
     } })),
-    ...(inferenceGateway ? [{ id: "inference-gateway", title: "the inference gateway", done: "Inference gateway deleted: Gateway openshift-ingress/openshift-ai-inference, ConfigMap openshift-ingress/openshift-ai-inference-options and GatewayClass openshift-ai-inference. OpenShift removes its load balancer and the ingress operator its DNS record.", apply: () => { world.resources.inferenceGateway = F.gatewayStates.none; } }] : []),
+    ...(components.length ? [{ id: "components", title: "the DataScienceCluster components this tool turned on", says: true, done: `${components.join(" and ")} ${components.length === 1 ? "is" : "are"} Removed again, as before setup.`, apply: () => {
+      if (world.recipeRun?.run) world.recipeRun.run.components = (world.recipeRun.run.components ?? []).filter((k) => !components.includes(k));
+    } }] : []),
   ];
   let n = 0;
   const send = (ev) => res.write(`data: ${JSON.stringify({ ...ev, elapsedMs: ++n * 3000 })}\n\n`);
