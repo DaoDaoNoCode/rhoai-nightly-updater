@@ -41,11 +41,14 @@ describe("Environment page", () => {
     renderPage("/test-resources");
     expect(screen.getByRole("heading", { level: 1, name: "Environment" })).toBeInTheDocument();
     expect(document.title).toBe("Environment — RHOAI Nightly Updater");
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Overview", "Pipelines", "MLflow", "Models", "Playground", "MaaS"]);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Overview", "S3 storage", "Pipelines", "MLflow", "Models", "Playground", "MaaS"]);
     expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
-    expect(await screen.findByText("0 of 5 ready")).toBeInTheDocument();
+    expect(await screen.findByText("0 of 6 ready")).toBeInTheDocument();
     const table = screen.getByRole("grid", { name: "Features" });
-    expect(within(table).getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["Pipelines", "MLflow", "Models", "Playground", "MaaS"]);
+    expect(within(table).getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["S3 storage", "Pipelines", "MLflow", "Models", "Playground", "MaaS"]);
+    // The S3 storage is its own row: the cluster's, set up on its own.
+    expect(await row("S3 storage")).toHaveTextContent(/Not set up\s*Set up S3 storage/);
+    expect(within(await row("S3 storage")).getByRole("link", { name: "S3 storage" })).toHaveAttribute("href", "/test-resources?tab=storage");
     expect(await row("MaaS")).toHaveTextContent(/Not set up\s*Set up MaaS/);
     expect(await row("Pipelines")).toHaveTextContent("Not set up in any project");
     expect(within(await row("Pipelines")).getByRole("button", { name: "Choose a project" })).toHaveClass("pf-m-inline");
@@ -61,7 +64,8 @@ describe("Environment page", () => {
       "/api/resources/playground": { items: [] },
     });
     const router = renderPage("/test-resources");
-    expect(await screen.findByText("2 of 5 ready")).toBeInTheDocument();
+    expect(await screen.findByText("3 of 6 ready")).toBeInTheDocument();
+    expect(within(await row("S3 storage")).getByRole("link", { name: /Open admin UI/ })).toHaveAttribute("href", readyMinio.uiRoute);
     const mlflow = await row("MLflow");
     // Ownership under the status label, in its own words.
     expect(mlflow.querySelector(".pf-v6-c-label")).toHaveTextContent(/^Ready$/);
@@ -205,11 +209,14 @@ describe("Environment page", () => {
       "/api/resources/projects": { projects: ["dev-project"] },
     });
     const router = renderPage("/test-resources");
+    expect(await row("S3 storage")).toHaveTextContent("Error");
     const pipelines = await row("Pipelines");
     expect(pipelines).toHaveTextContent("Error");
+    // Pipelines needs the storage, but the storage's issue is shown on its own tab.
     fireEvent.click(within(pipelines).getByRole("button", { name: "Show issue" }));
-    await waitFor(() => expect(router.state.location.search).toContain("tab=pipelines"));
+    await waitFor(() => expect(router.state.location.search).toBe("?tab=storage"));
     const title = await screen.findByRole("heading", { level: 3, name: "S3 storage" });
     await waitFor(() => expect(title).toHaveFocus());
+    expect(screen.queryByRole("combobox", { name: "Project" })).not.toBeInTheDocument();
   });
 });

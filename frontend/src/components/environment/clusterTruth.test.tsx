@@ -152,7 +152,7 @@ describe("a storage deletion that did not finish", () => {
       "/api/resources/status": { minio: { deployed: false, ready: false, namespace: "seaweedfs", managedByTool: true, message: "Namespace exists but the S3 storage is not deployed", leftovers: ["Secret seaweedfs-s3-credentials"] }, mlflow: noMlflow, pipelineServers: [] } satisfies ResourcesStatus,
       "/api/resources/projects": { projects: ["juntao-test"] },
     });
-    renderAt("/test-resources?tab=pipelines&project=juntao-test");
+    renderAt("/test-resources?tab=storage");
     const storage = await part("S3 storage");
     expect(storage).toHaveTextContent("A deletion that did not finish left Secret seaweedfs-s3-credentials in namespace seaweedfs; Delete S3 storage removes it.");
     expect(await menuItem("S3 storage", /Delete S3 storage/)).not.toBeNull();

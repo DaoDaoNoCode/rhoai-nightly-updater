@@ -28,11 +28,15 @@ import { EnvStatusLabel, NotManagedLabel, type EnvStatus } from "./resourceStatu
 import type { FeatureState } from "./featureState";
 import { LabelSkeleton } from "./Loading";
 
-/** The id of a part's title: "Show issue" moves the focus there. */
+/** Explains why viewers with read-only rights cannot use Set up. */
+export const READ_ONLY_SETUP = "Read-only access: setting this up needs a cluster-admin. Ask one to set it up for you.";
+
+/** Builds the DOM id for a part heading so "Show issue" can target focus there. */
 export const partTitleId = (part: string) => `environment-part-${part}`;
 
-/** What each feature is for, in one sentence: its tab's header says it, also while the tab loads. */
+/** Single-sentence blurbs per feature—the tab header shows each one, including during load. */
 export const FEATURE_PURPOSE = {
+  storage: "S3-compatible object storage (SeaweedFS) shared by the whole cluster, in namespace seaweedfs.",
   pipelines: "Run data science pipelines in a project; their artifacts go to the cluster's S3 storage.",
   mlflow: "Track experiments: log runs, metrics and models to an MLflow server on the cluster, with a workspace per data science project.",
   models: "Serve small models on CPU in a project: chat, tool calling and embeddings. Call them with each model's own token or from the dashboard's Gen AI playground.",
@@ -41,9 +45,9 @@ export const FEATURE_PURPOSE = {
 } as const;
 
 /**
- * A feature tab's header: its title with the feature's state for the
- * selected project (from the same state function as the Overview), and
- * one sentence on what it is for. A state still loading is a Skeleton.
+ * Renders a feature tab header: title plus project-specific state (same
+ * source as Overview), plus the one-line purpose blurb. While state is
+ * loading, the status slot uses a Skeleton.
  */
 export const FeatureHeader: React.FC<{ title: string; purpose: string; state: FeatureState }> = ({ title, purpose, state }) => (
   <Stack>
@@ -58,7 +62,7 @@ export const FeatureHeader: React.FC<{ title: string; purpose: string; state: Fe
   </Stack>
 );
 
-/** The parts a feature needs, in dependency order. */
+/** Feature parts listed in the order their dependencies require. */
 export const PartList: React.FC<{ "aria-label": string; children: React.ReactNode }> = ({ "aria-label": label, children }) => (
   <Card>
     <CardBody>
@@ -67,21 +71,21 @@ export const PartList: React.FC<{ "aria-label": string; children: React.ReactNod
   </Card>
 );
 
-/** One entry of a part's menu: a change it offers, with why it cannot run now. */
+/** Describes one kebab-menu choice for a part, including when it is blocked and why. */
 export interface PartMenuItem {
   key: string;
   label: string;
   onClick: () => void;
-  /** Why it cannot run now, shown in the menu under the label; null when it can. */
+  /** Shown beneath the label when the action is blocked; omitted when the item is enabled. */
   disabledReason?: string | null;
   isDanger?: boolean;
 }
 
 /**
- * A part's less frequent changes (Delete, Repair when it is not the fix
- * shown above) in a kebab menu: one click away, never in the way. A
- * disabled entry says why under its label, so the reason is visible on
- * touch screens too.
+ * Infrequent part actions (Delete, Repair when not the inline fix) live
+ * in a kebab: reachable in one tap without cluttering the row. Disabled
+ * rows surface the blockage reason under the label for touch users as
+ * well as mouse users.
  */
 export const PartMenu: React.FC<{ part: string; items: PartMenuItem[] }> = ({ part, items }) => {
   const [open, setOpen] = useState(false);
@@ -101,23 +105,24 @@ export const PartMenu: React.FC<{ part: string; items: PartMenuItem[] }> = ({ pa
 };
 
 /**
- * One part: its name, where it lives and its health, ownership apart (it
- * only limits actions), its actions and menu, and its details inline.
+ * Single part row: title, textual placement and health, ownership called
+ * out separately (affects actions only), primary actions plus overflow
+ * menu, and expandable detail children.
  */
 export const PartItem: React.FC<{
   id: string;
   title: string;
-  /** Where it lives, in words: "Shared by the cluster", "In project dev-project". */
+  /** Human-readable placement, e.g. "Shared by the cluster", "In project dev-project". */
   scope: string;
   status: EnvStatus;
   unmanaged: boolean;
-  /** ActionListItems. */
+  /** Nodes to render as ActionListItems. */
   actions?: React.ReactNode;
-  /** The part's menu entries (Delete, ...). */
+  /** Overflow entries for this part (Delete, …). */
   menu?: PartMenuItem[];
-  /** Its status is still loading: a Skeleton instead of the status label. */
+  /** When true, swap the status label for a Skeleton until data arrives. */
   loading?: boolean;
-  /** Words for the status label instead of the status word ("Waiting"). */
+  /** Custom label text for the status chip instead of the default status word ("Waiting"). */
   statusText?: string;
   children?: React.ReactNode;
 }> = ({ id, title, scope, status, unmanaged, actions, menu, loading, statusText, children }) => {
@@ -149,9 +154,9 @@ export const PartItem: React.FC<{
 };
 
 /**
- * The feature's one primary action (Set up what is missing), as an action
- * row. When it cannot run, the reason is shown under it, not only in a
- * tooltip: a newcomer does not hover, and touch screens cannot.
+ * Wraps the feature's main call-to-action (set up missing pieces) in an
+ * action row. If blocked, the explanation sits below the button—not only
+ * in a tooltip—so first-time users and touch devices still see why.
  */
 export const PrimaryAction: React.FC<{ label: string; onClick: () => void; reason: string | null; variant?: "primary" | "secondary"; isDanger?: boolean }> = ({ label, onClick, reason, variant = "primary", isDanger }) => {
   const reasonId = React.useId();
@@ -177,7 +182,7 @@ export const PrimaryAction: React.FC<{ label: string; onClick: () => void; reaso
   );
 };
 
-/** A collapsed section ("What this creates", "Technical details", "Test an MLflow PR build"). */
+/** Expandable block for titles like "What this creates", "Technical details", "Test an MLflow PR build". */
 export const FeatureSection: React.FC<{ title: string; isIndented?: boolean; children: React.ReactNode }> = ({ title, isIndented, children }) => {
   const [expanded, setExpanded] = React.useState(false);
   return (
@@ -187,14 +192,14 @@ export const FeatureSection: React.FC<{ title: string; isIndented?: boolean; chi
   );
 };
 
-/** "What this creates": the objects, one per line. */
+/** Renders the "What this creates" inventory—one list item per object. */
 export const CreatesList: React.FC<{ items: React.ReactNode[] }> = ({ items }) => (
   <List>{items.map((item, i) => <ListItem key={i}>{item}</ListItem>)}</List>
 );
 
 /**
- * A titled section of a tab ("Use it", "What next", "Clean up"): an h3
- * heading and its content.
+ * Named chunk within a tab ("Use it", "What next", "Clean up"): level-three
+ * heading plus stacked body content.
  */
 export const TabSection: React.FC<{ title: string; id: string; children: React.ReactNode }> = ({ title, id, children }) => (
   <section aria-labelledby={id}>
@@ -206,8 +211,8 @@ export const TabSection: React.FC<{ title: string; id: string; children: React.R
 );
 
 /**
- * "What next": the steps that make a ready feature useful, as an ordered
- * list. Samples (one-click example runs and data) add their items here.
+ * "What next" section: ordered steps to turn a ready feature into
+ * something useful. Sample flows plug extra list items in here.
  */
 export const WhatNext: React.FC<{ id: string; items: React.ReactNode[] }> = ({ id, items }) => (
   <TabSection title="What next" id={id}>
@@ -216,8 +221,9 @@ export const WhatNext: React.FC<{ id: string; items: React.ReactNode[] }> = ({ i
 );
 
 /**
- * "Clean up": the feature's (or the page's) one action that deletes what
- * this tool created, after a confirmation that lists it.
+ * "Clean up" section: the single destructive action for the feature (or
+ * page) that removes what this app provisioned, gated by a confirmation
+ * that enumerates what will go away.
  */
 export const CleanupSection: React.FC<{ id: string; text: string; label: string; onClick: () => void; reason: string | null }> = ({ id, text, label, onClick, reason }) => (
   <TabSection title="Clean up" id={id}>

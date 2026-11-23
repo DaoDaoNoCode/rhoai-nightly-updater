@@ -4,14 +4,18 @@ import type { OverviewRow } from "./Overview";
 import { withPrerequisites } from "./Prerequisites";
 import { MLFLOW_SAMPLES_ID } from "./MLflowSamples";
 import { PIPELINE_SAMPLE_ID } from "./PipelineSample";
+import { STORAGE_HREF, TAB_TITLES } from "./environmentTabs";
 
 /** The Overview's rows: each feature's summary state (with its prerequisites) and its tab's address. */
-export function overviewRows(summaries: { pipelines: FeatureState; mlflow: FeatureState; models: FeatureState; playground: FeatureState; maas: FeatureState }, prereq: PrerequisitesStatus | null): OverviewRow[] {
-  const { pipelines: pipelinesSummary, mlflow: mlflowNow, models: modelsSummary, playground: playgroundSummary, maas: maasNow } = summaries;
+export function overviewRows(summaries: { storage: FeatureState; pipelines: FeatureState; mlflow: FeatureState; models: FeatureState; playground: FeatureState; maas: FeatureState }, prereq: PrerequisitesStatus | null): OverviewRow[] {
+  const { storage: storageNow, pipelines: pipelinesSummary, mlflow: mlflowNow, models: modelsSummary, playground: playgroundSummary, maas: maasNow } = summaries;
   // Once a feature works, its samples are the natural next step.
   const pipelinesSamples = pipelinesSummary.status === "ready" && !!pipelinesSummary.project;
   const prereqFor = (feature: PrerequisiteFeature) => prereq?.features?.[feature];
   return [
+    {
+      id: "storage", name: TAB_TITLES.storage, gives: "Object storage (S3) shared by the cluster, for pipeline artifacts", state: storageNow, href: STORAGE_HREF,
+    },
     {
       id: "pipelines", name: "Pipelines", gives: "Run data science pipelines; artifacts in S3", state: withPrerequisites(pipelinesSummary, prereqFor("pipelines"), "pipelines"),
       href: `?tab=pipelines${pipelinesSummary.project ? `&project=${encodeURIComponent(pipelinesSummary.project)}` : ""}`,

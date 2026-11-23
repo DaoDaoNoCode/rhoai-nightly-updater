@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LegacyStorageState, ResourceState, ResourcesStatus } from "../../types";
-import { defaultProject, IDLE, loadingState, maasPartLabelStatus, maasState, mlflowState, modelsState, pipelinesState, playgroundState, setUpBlocked, unreadableState } from "./featureState";
+import { defaultProject, IDLE, loadingState, maasPartLabelStatus, maasState, mlflowState, modelsState, pipelinesState, playgroundState, setUpBlocked, storageState, unreadableState } from "./featureState";
 
 describe("A platform part's own label", () => {
   it("a ready part with a warning needs attention; without one it is ready", () => {
@@ -177,5 +177,23 @@ describe("pipelinesState and mlflowState", () => {
     const starting: ResourcesStatus = { ...FIXTURES.storageOnly, pipelineServers: [{ deployed: true, ready: false, managedByTool: true, namespace: "a-test-project", name: "nightly-dspa", message: "Provisioning" }] };
     expect(pipelinesState(starting, "a-test-project", projects)).toMatchObject({ status: "setting-up", next: null });
     expect(setUpBlocked(pipelinesState(starting, "a-test-project", projects))).toMatch(/nothing left to set up/);
+  });
+});
+
+describe("The S3 storage on its own (its tab and its Overview row)", () => {
+  it("loading, not set up, ready, starting, broken, migration needed and someone else's", () => {
+    expect(storageState(null)).toMatchObject({ loading: true, project: null });
+    expect(storageState(FIXTURES.none)).toEqual({ status: "not-set-up", label: "Not set up", next: { kind: "set-up", label: "Set up S3 storage", setup: [{ kind: "setup-minio" }], reason: null }, project: null });
+    expect(storageState({ ...FIXTURES.storageOnly, minio: { ...storage, uiRoute: "https://admin" } })).toEqual({ status: "ready", label: "Ready", next: { kind: "open", label: "Open admin UI", href: "https://admin" }, project: null });
+    expect(storageState(FIXTURES.starting)).toMatchObject({ status: "setting-up", next: null });
+    expect(storageState(FIXTURES.storageError)).toMatchObject({ status: "error", label: "Error", next: { kind: "show-issue", part: "storage" } });
+    expect(storageState({ ...FIXTURES.none, legacyStorage: legacy("migrate") })).toMatchObject({ status: "needs-attention", label: "Migration needed", next: { kind: "migrate" } });
+    const blocked: ResourceState = { ...none, setupBlockedReason: "Namespace 'seaweedfs' exists but was not created by this tool." };
+    expect(storageState({ ...FIXTURES.none, minio: blocked })).toEqual({ status: "not-set-up", label: "Not set up", unmanaged: true, next: null, project: null });
+  });
+
+  it("Set up running from this page reads Setting up, with nothing to do", () => {
+    expect(storageState(FIXTURES.none, { ...IDLE, resAction: "setup-minio" })).toMatchObject({ status: "setting-up", next: null });
+    expect(storageState(FIXTURES.storageOnly, { ...IDLE, resAction: "teardown-minio" })).toMatchObject({ status: "deleting", next: null });
   });
 });

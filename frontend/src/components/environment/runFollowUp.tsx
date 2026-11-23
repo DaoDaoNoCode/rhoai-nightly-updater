@@ -52,6 +52,8 @@ export function runFollowUp({ run, runFeature, sampleRun, modelsRun, playgroundR
     ? <Content component="p">{modelsRun?.project
       ? `On the Models tab, Use it has the model's address and commands that call it with your OpenShift token. In the dashboard, ${modelsRun.project} lists the model, and Gen AI studio offers it in the playground.`
       : "Choose a project on the Models tab and set up a model there: it routes through this gateway."}</Content>
+    : run?.kind === "setup" && runFeature === "storage"
+    ? <Content component="p">Pipeline servers set up on the Pipelines tab keep their artifacts in it. The S3 storage tab has its endpoint and, for cluster-admins, its keys.</Content>
     : run?.kind === "setup" && (runFeature === "mlflow" || runFeature === "pipelines")
     ? <Content component="p">{runFeature === "mlflow"
       ? "Open MLflow workspaces to choose a project and see its experiments. On the MLflow tab, Sample data adds example experiments, traces and a model to a project in one click."

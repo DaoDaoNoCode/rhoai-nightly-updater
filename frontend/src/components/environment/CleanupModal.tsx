@@ -22,7 +22,8 @@ import type { PlaygroundStatus, ResourcesStatus, MaaSStatus, RestorableComponent
 import type { CleanupRequest } from "../../services/api";
 import { TooltipButton } from "../TooltipButton";
 import { isTerminating } from "./resourceRow";
-import { S3_NAMESPACE, storageTeardownOffered, unrecordedPipelineServerNote } from "./PipelinesTab";
+import { unrecordedPipelineServerNote } from "./PipelinesTab";
+import { S3_NAMESPACE, storageTeardownOffered } from "./StorageTab";
 import { gatewayListRelease } from "./modelsConfirm";
 
 /** This tool's pipeline servers: in the data science projects, and in projects that are no longer ones. */

@@ -20,10 +20,10 @@ import { maasConfirm, maasRequestOf, maasSteps } from "./MaaSTab";
 import { type SampleOp, mlflowSampleSteps, samplesConfirm } from "./samples";
 import { useGoalRun, type GoalRunStep } from "./useGoalRun";
 import { type CleanupRetry, type CleanupScope, cleanupSteps } from "./CleanupModal";
-import { type FeatureState, type MaaSOp, type ModelsOp, type PlaygroundOp, mlflowState, pipelinesState, setUpBlocked } from "./featureState";
+import { type FeatureState, type MaaSOp, type ModelsOp, type PlaygroundOp, mlflowState, pipelinesState, setUpBlocked, storageState } from "./featureState";
 import { prerequisitesConfirm, prerequisitesSteps } from "./Prerequisites";
 import { modelsOpOf, modelsRequest, resourceRequest, setUpWait } from "./runRequests";
-import type { RunFeature } from "./environmentTabs";
+import { TAB_TITLES, type RunFeature } from "./environmentTabs";
 
 /** A Set up waiting for its confirmation. */
 export interface SetupConfirm {
@@ -369,7 +369,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     const project = setup.flatMap((p) => (p.kind === "setup-pipeline-server" ? [p.project] : []))[0];
     const done = project ? `Pipelines are ready in ${project}.` : `${feature} is ready.`;
     const title = steps.length === 1 ? steps[0].title : project ? `Set up ${feature} in ${project}` : `Set up ${feature}`;
-    const recheck = (s: ResourcesStatus | null, projects: string[]) => (feature === "MLflow" ? mlflowState(s) : pipelinesState(s, project ?? null, projects));
+    const recheck = (s: ResourcesStatus | null, projects: string[]) => (feature === "MLflow" ? mlflowState(s) : feature === TAB_TITLES.storage ? storageState(s) : pipelinesState(s, project ?? null, projects));
     if (steps.length > 0) setSetupConfirm({ feature, title, specs, steps, done, recheck });
   };
 
@@ -378,7 +378,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     if (!setupConfirm) return;
     const { feature, title, steps, done, recheck } = setupConfirm;
     setSetupConfirm(null);
-    setRunFeature(feature === "MLflow" ? "mlflow" : "pipelines");
+    setRunFeature(feature === "MLflow" ? "mlflow" : feature === TAB_TITLES.storage ? "storage" : "pipelines");
     setSampleRun(null);
     setRunOpen(true);
     void run.start(title, steps, {
