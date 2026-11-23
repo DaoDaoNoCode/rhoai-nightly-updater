@@ -209,6 +209,14 @@ Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#u
   only when you confirm it: the Delete and Recreate dialogs say so, and
   Clean up lists it unticked with the reason. The server refuses without
   the confirmation, and also while it cannot read its record.
+- **This tool's pipeline servers and models in a project that is no longer
+  a Data Science project are shown.** Once the RHOAI dashboard's label was
+  removed from a project, the project picker dropped it, and this tool's
+  pipeline server and models there vanished from the page while still
+  using the S3 storage and the inference gateway; Clean up then called the
+  pipeline server one "this tool did not create". The Pipelines and Models
+  tabs now name them ("no longer a data science project") with Delete, and
+  Clean up offers them as this tool's.
 - **A DataScienceCluster change applies only to the DSC it was checked
   on.** The Components page's changes (a component's state, Fix, soft
   reset) and Diagnostics' disable-component fix tested only the fields

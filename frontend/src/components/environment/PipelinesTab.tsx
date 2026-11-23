@@ -35,6 +35,7 @@ import {
   terminalReason,
 } from "./resourceRow";
 import { CleanupSection, CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
+import { OutsideProjectsAlert } from "./OutsideProjects";
 import { CopyS3EnvButton, S3SecretField } from "./AdminLogin";
 import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
 import { notManaged } from "./resourceStatus";
@@ -415,7 +416,8 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
   const server = project ? pipelineServerIn(status, project) : undefined;
   const next = state.next;
   const toolServers = (status.pipelineServers ?? []).filter((ps) => ps.managedByTool !== false);
-  const anythingToClean = toolServers.length > 0 || storageTeardownOffered(minio, legacy, minioLeftovers);
+  const outside = status.outsidePipelineServers ?? [];
+  const anythingToClean = toolServers.length > 0 || outside.length > 0 || storageTeardownOffered(minio, legacy, minioLeftovers);
   const noProjects = projectsLoaded && projects.length === 0;
   return (
     <Stack hasGutter>
@@ -424,6 +426,15 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
       {status.pipelinesBlocked && <StackItem><ComponentAlert feature="Data Science Pipelines" block={status.pipelinesBlocked} /></StackItem>}
       {legacy && <StackItem><MigrationAlert legacy={legacy} onMigrate={onMigrate} readOnly={readOnly} reason={busy.migrating ? "Migrate storage is running." : baseReason} /></StackItem>}
       {noProjects && <StackItem><NoProjectsAlert dashboardUrl={status.dashboardUrl} things="Pipeline servers" /></StackItem>}
+      {outside.length > 0 && (
+        <StackItem>
+          <OutsideProjectsAlert readOnly={readOnly} reason={baseReason} items={outside.map((ps) => ({
+            key: `${ps.namespace}/${ps.name}`,
+            text: <>Pipeline server <code>{ps.name ?? DSPA_NAME}</code> in project {ps.namespace} (no longer a data science project)</>,
+            onDelete: () => props.setPending({ kind: "teardown-pipeline-server", project: ps.namespace!, name: ps.name, ...(ps.unrecorded ? { unrecorded: true } : {}) }),
+          }))} />
+        </StackItem>
+      )}
       {missingProject && (
         <StackItem>
           <Alert variant="info" isInline component="p" title={`Project ${missingProject} no longer exists`}>

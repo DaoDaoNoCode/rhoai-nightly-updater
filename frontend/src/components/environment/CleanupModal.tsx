@@ -25,6 +25,16 @@ import { isTerminating } from "./resourceRow";
 import { S3_NAMESPACE, storageTeardownOffered, unrecordedPipelineServerNote } from "./PipelinesTab";
 import { gatewayListRelease } from "./modelsConfirm";
 
+/** This tool's pipeline servers: in the data science projects, and in projects that are no longer ones. */
+function toolServers(status: ResourcesStatus) {
+  return [...(status.pipelineServers ?? []), ...(status.outsidePipelineServers ?? [])].filter((ps) => ps.managedByTool !== false);
+}
+
+/** This tool's models: in the data science projects, and in projects that are no longer ones. */
+function toolModels(status: ResourcesStatus) {
+  return [...(status.models?.items ?? []), ...(status.models?.outside ?? [])].filter((m) => m.managedByTool !== false);
+}
+
 /** What a Clean up offers: one feature's parts, or everything. */
 export type CleanupScope = "pipelines" | "mlflow" | "models" | "playground" | "all";
 
@@ -42,12 +52,12 @@ export function cleanupCandidates(status: ResourcesStatus, scope: CleanupScope, 
   const pipelines = scope === "pipelines" || scope === "all";
   const modelsScope = scope === "models" || scope === "all";
   const models = modelsScope
-    ? [...new Set((status.models?.items ?? []).filter((m) => m.managedByTool !== false && !isTerminating(m) && m.namespace).map((m) => m.namespace!))]
+    ? [...new Set(toolModels(status).filter((m) => !isTerminating(m) && m.namespace).map((m) => m.namespace!))]
     : [];
   const gw = status.inferenceGateway;
   const gateway = modelsScope && gw?.managedByTool === true && !isTerminating(gw);
   const servers = pipelines
-    ? (status.pipelineServers ?? []).filter((ps) => ps.managedByTool !== false && !isTerminating(ps) && ps.namespace).map((ps) => ps.namespace!)
+    ? toolServers(status).filter((ps) => !isTerminating(ps) && ps.namespace).map((ps) => ps.namespace!)
     : [];
   const storage = pipelines && storageTeardownOffered(status.minio, status.legacyStorage, minioLeftovers);
   const minio = status.minio;
@@ -83,7 +93,7 @@ export function cleanupBlocked(status: ResourcesStatus, req: CleanupRequest, pub
   }
   if (req.inferenceGateway) {
     const selected = new Set(req.models ?? []);
-    const users = (status.inferenceGateway?.usedBy ?? []).filter((u) => !selected.has(u.split("/")[0]) || !(status.models?.items ?? []).some((m) => `${m.namespace}/${m.name}` === u && m.managedByTool !== false));
+    const users = (status.inferenceGateway?.usedBy ?? []).filter((u) => !selected.has(u.split("/")[0]) || !toolModels(status).some((m) => `${m.namespace}/${m.name}` === u));
     if (users.length > 0) {
       return `Models route through the inference gateway: ${users.join(", ")}. Select ${users.length > 1 ? "those models" : "that model"} too if this tool created ${users.length > 1 ? "them" : "it"}, or keep the gateway.`;
     }
@@ -92,7 +102,7 @@ export function cleanupBlocked(status: ResourcesStatus, req: CleanupRequest, pub
   const selected = new Set(req.pipelineServers ?? []);
   const users = (status.minio?.usedBy ?? []).filter((u) => !selected.has(u.split("/")[0]));
   if (users.length > 0) {
-    const ours = new Set((status.pipelineServers ?? []).filter((ps) => ps.managedByTool !== false).map((ps) => ps.namespace));
+    const ours = new Set(toolServers(status).map((ps) => ps.namespace));
     const foreign = users.filter((u) => !ours.has(u.split("/")[0]));
     return foreign.length > 0
       ? `The S3 storage is used by ${foreign.join(", ")}, which this tool did not create. That pipeline server must be deleted or moved to other storage first.`
@@ -140,7 +150,7 @@ export const CleanupModal: React.FC<{
   const chosenPlaygrounds = playgrounds.filter((p) => offered.playgrounds.includes(p));
   const togglePlayground = (p: string, v: boolean) => setPlaygrounds((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
   // A pipeline server this tool has no record of is unticked: ticking it is the user's confirmation that it is this tool's.
-  const unrecordedServers = (status.pipelineServers ?? []).filter((ps) => ps.unrecorded && ps.namespace && offered.servers.includes(ps.namespace)).map((ps) => ps.namespace!);
+  const unrecordedServers = toolServers(status).filter((ps) => ps.unrecorded && ps.namespace && offered.servers.includes(ps.namespace)).map((ps) => ps.namespace!);
   const [servers, setServers] = useState<string[]>(offered.servers.filter((p) => !unrecordedServers.includes(p)));
   const [storage, setStorage] = useState(offered.storage);
   const [namespace, setNamespace] = useState(false);
@@ -233,7 +243,7 @@ export const CleanupModal: React.FC<{
                   <FormGroup role="group" isStack label="Models" fieldId="cleanup-models">
                     {offered.models.map((p) => (
                       <Checkbox key={p} id={`cleanup-model-${p}`} label={<>Models in {p}</>} isChecked={models.includes(p)} onChange={(_e, v) => toggleModel(p, v)}
-                        description={<>{(status.models?.items ?? []).filter((m) => m.namespace === p && m.managedByTool !== false).map((m) => m.name).join(", ")}{gatewayListRelease(status, p, (status.models?.items ?? []).filter((m) => m.namespace === p && m.managedByTool !== false).map((m) => m.name!)) ? <>. {p} is taken off the gateway&apos;s projects; routes made by hand there stop attaching.</> : null}</>} />
+                        description={<>{toolModels(status).filter((m) => m.namespace === p).map((m) => m.name).join(", ")}{gatewayListRelease(status, p, toolModels(status).filter((m) => m.namespace === p).map((m) => m.name!)) ? <>. {p} is taken off the gateway&apos;s projects; routes made by hand there stop attaching.</> : null}</>} />
                     ))}
                     {offered.gateway && (
                       <Checkbox id="cleanup-gateway" label="Inference gateway" description="With its cloud load balancer and DNS record. Deleted after the models." isChecked={gateway} onChange={(_e, v) => setGateway(v)} />

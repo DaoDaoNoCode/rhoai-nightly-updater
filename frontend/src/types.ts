@@ -1153,6 +1153,8 @@ export interface ResourcesStatus {
   unmanagedPipelineProjects?: string[] | null;
   /** The health of those pipeline servers (managedByTool false); the tool never changes them. */
   unmanagedPipelineServers?: ResourceState[] | null;
+  /** This tool's pipeline servers in projects that are no longer data science projects (not in the project picker). */
+  outsidePipelineServers?: ResourceState[] | null;
 }
 
 export interface ResourceState {
@@ -1321,6 +1323,8 @@ export interface ModelsStatus {
   imagePlanReason?: string;
   catalog: CatalogModel[] | null;
   items?: ModelState[] | null;
+  /** This tool's models in projects that are no longer data science projects (not in the project picker). */
+  outside?: ModelState[] | null;
 }
 
 /** The body of POST /api/resources/models/stream (pkg/types ModelsRequest). */

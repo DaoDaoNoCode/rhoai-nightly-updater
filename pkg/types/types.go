@@ -1102,6 +1102,12 @@ type ResourcesStatus struct {
 	// (ManagedByTool false): whether a server works does not depend on who
 	// created it. The tool never changes or deletes them.
 	UnmanagedPipelineServers []ResourceState `json:"unmanagedPipelineServers,omitempty"`
+	// OutsidePipelineServers are this tool's pipeline servers in projects
+	// that are not (or no longer) Data Science projects (the dashboard's
+	// label was removed): the project picker does not list them, but they
+	// are on the cluster and may use the S3 storage. Delete and Clean up
+	// remove them.
+	OutsidePipelineServers []ResourceState `json:"outsidePipelineServers,omitempty"`
 	// LegacyStorage is the S3 storage an earlier version of this tool left
 	// in namespace minio, until Migrate storage (or teardown) removes it.
 	LegacyStorage *LegacyStorageState `json:"legacyStorage,omitempty"`
@@ -1205,6 +1211,9 @@ type ModelsStatus struct {
 	// Items are the catalog's models in data science projects: this tool's,
 	// and those of the same name it did not create.
 	Items []ModelState `json:"items,omitempty"`
+	// Outside are this tool's models in projects that are not (or no
+	// longer) Data Science projects (ResourcesStatus.OutsidePipelineServers).
+	Outside []ModelState `json:"outside,omitempty"`
 }
 
 // CatalogModel is a model the Models feature sets up.

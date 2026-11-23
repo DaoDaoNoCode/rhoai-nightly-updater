@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { QuickResourceCreator } from "../QuickResourceCreator";
 import { stubApi, jsonResponse } from "../../test/apiStub";
 import type { ResourceState, ResourcesStatus } from "../../types";
-import { CleanupModal, cleanupCandidates } from "./CleanupModal";
+import { CleanupModal, cleanupBlocked, cleanupCandidates } from "./CleanupModal";
 
 const readyMinio: ResourceState = { deployed: true, ready: true, managedByTool: true, namespace: "seaweedfs", message: "Running", uiUser: "admin" };
 const noMlflow: ResourceState = { deployed: false, ready: false, managedByTool: false, message: "Not deployed" };
@@ -60,5 +60,41 @@ describe("an unrecorded pipeline server", () => {
     fireEvent.click(box);
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(onConfirm).toHaveBeenLastCalledWith({ pipelineServers: ["kept", "juntao-test"], confirmUnrecorded: ["juntao-test"] });
+  });
+});
+
+// N3: this tool's objects in a project that is no longer a Data Science
+// project are listed apart (the project picker does not show them), can be
+// deleted, and count as this tool's in Clean up.
+describe("this tool's objects outside Data Science projects", () => {
+  const outsideDspa: ResourceState = { deployed: true, ready: true, namespace: "plain", name: "dspa", managedByTool: true, message: "Running" };
+  const usedMinio: ResourceState = { ...readyMinio, usedBy: ["plain/dspa"], teardownBlockedReason: "1 pipeline server uses this S3 storage: plain/dspa." };
+
+  it("the Pipelines tab names the pipeline server and deletes it", async () => {
+    const api = stubApi({
+      "/api/resources/status": { minio: usedMinio, mlflow: noMlflow, pipelineServers: [], outsidePipelineServers: [outsideDspa] } satisfies ResourcesStatus,
+      "/api/resources/projects": { projects: ["juntao-test"] },
+      "POST /api/resources/pipeline-server/teardown": () => jsonResponse({ success: true, message: "Deleted.", logs: [] }),
+    });
+    renderAt("/test-resources?tab=pipelines&project=juntao-test");
+    const alert = (await screen.findByText("Set up by this tool outside data science projects")).closest(".pf-v6-c-alert") as HTMLElement;
+    expect(alert).toHaveTextContent("Pipeline server dspa in project plain (no longer a data science project)");
+    fireEvent.click(within(alert).getByRole("button", { name: /Delete/ }));
+    const dialog = await screen.findByRole("dialog", { name: /Delete the pipeline server in plain\?/ });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await screen.findByRole("dialog", { name: "Delete the pipeline server in plain" });
+    expect(api.bodies["POST /api/resources/pipeline-server/teardown"]).toEqual([{ project: "plain" }]);
+  });
+
+  it("Clean up offers them and the storage blocker counts them as this tool's", () => {
+    const status: ResourcesStatus = {
+      minio: usedMinio, mlflow: noMlflow, pipelineServers: [], outsidePipelineServers: [outsideDspa],
+      models: { catalog: [], outside: [{ deployed: true, ready: true, namespace: "plain", name: "qwen3-1-7b", managedByTool: true, message: "Running" }] },
+    };
+    const c = cleanupCandidates(status, "all", false);
+    expect(c.servers).toEqual(["plain"]);
+    expect(c.models).toEqual(["plain"]);
+    expect(cleanupBlocked(status, { storage: true })).toMatch(/Select that pipeline server too/);
+    expect(cleanupBlocked(status, { storage: true, pipelineServers: ["plain"] })).toBeNull();
   });
 });
