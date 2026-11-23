@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { CLIENT_ERROR_CODES, getRecipeRun, toApiError, type ApiError } from "../../services/api";
-import { RECIPE_RUN_POLL_MS } from "../../constants";
+import { RECIPE_RUN_IDLE_POLL_MS, RECIPE_RUN_POLL_MS } from "../../constants";
 import { useLatestRequest } from "../../hooks/useLatestRequest";
 import { usePolling } from "../../hooks/usePolling";
 import type { RecipeRunStatus } from "../../types";
@@ -18,7 +18,8 @@ export interface RecipeRunValue {
 
 /**
  * The last recipe run (GET /api/recipes/run): read once, then every
- * RECIPE_RUN_POLL_MS while it runs. The run goes on on the server whether
+ * RECIPE_RUN_POLL_MS while it runs and every RECIPE_RUN_IDLE_POLL_MS
+ * otherwise, while the tab is visible. The run goes on on the server whether
  * or not this page follows it.
  */
 export function useRecipeRun(): RecipeRunValue {
@@ -44,7 +45,12 @@ export function useRecipeRun(): RecipeRunValue {
   }, [latest]);
 
   useEffect(() => { void refresh(); }, [refresh]);
-  usePolling(refresh, { delay: RECIPE_RUN_POLL_MS, enabled: !!status?.running });
+  // One sequential poller: every RECIPE_RUN_POLL_MS while the run runs,
+  // otherwise every RECIPE_RUN_IDLE_POLL_MS, so a run started or resumed
+  // elsewhere shows on its own; none while the tab is hidden, at once when
+  // it is shown again. A run that starts or ends restarts it at its pace.
+  const running = !!status?.running;
+  usePolling(refresh, { delay: () => (running ? RECIPE_RUN_POLL_MS : RECIPE_RUN_IDLE_POLL_MS), pauseWhenHidden: true, refreshOnVisible: true, restartKey: running });
 
   return { status, error, loading, refresh };
 }
