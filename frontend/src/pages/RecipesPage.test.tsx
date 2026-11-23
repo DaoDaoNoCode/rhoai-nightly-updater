@@ -412,7 +412,7 @@ describe("Recipes page", () => {
     expect(within(dialog).getByText("Cleaned up")).toBeInTheDocument();
     expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([
       ended.cleanup,
-      { ...ended.cleanup, confirmProjectContents: ["Notebook wb", "PersistentVolumeClaim wb-data"] },
+      { ...ended.cleanup, confirmProjectContents: { "recipe-dev": ["Notebook wb", "PersistentVolumeClaim wb-data"] } },
     ]);
   });
 

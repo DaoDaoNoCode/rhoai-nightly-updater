@@ -1156,6 +1156,10 @@ export interface ResourcesStatus {
   unmanagedPipelineProjects?: string[] | null;
   /** The health of those pipeline servers (managedByTool false); the tool never changes them. */
   unmanagedPipelineServers?: ResourceState[] | null;
+  /** The projects recipes created that the cluster has now (Clean up everything offers them). */
+  recipeProjects?: RecipeOwnedProject[] | null;
+  /** Why those could not be read (none is offered then). */
+  recipeProjectsError?: string;
 }
 
 export interface ResourceState {
@@ -1915,6 +1919,19 @@ export interface RecipeRunStatus {
   step?: { step: string; status: string; message: string; detail?: string; errorCode?: string };
   /** The clean-up request for what the run created, once it is not running and created anything. */
   cleanup?: CleanupRequest;
+  /** The projects recipes created (this run's and earlier ones') that the cluster has now, once no run runs. */
+  projects?: RecipeOwnedProject[];
+  /** Why those could not be read (none is offered then). */
+  projectsError?: string;
+}
+
+/** A project a recipe created, as the cluster still shows it (pkg/types RecipeOwnedProject). */
+export interface RecipeOwnedProject {
+  name: string;
+  uid: string;
+  /** The recipe that created it. */
+  recipe: string;
+  createdAt?: string;
 }
 
 /** The 202 answer of POST /api/recipes/run and /api/recipes/resume. */

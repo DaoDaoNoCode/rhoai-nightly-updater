@@ -116,15 +116,15 @@ export interface CleanupRequest {
   maasPlatform?: boolean;
   /** One-click prerequisites: the DataScienceCluster components this tool turned on that go back to what they were, last (each only while nothing uses it). */
   components?: string[];
-  /** A project a recipe created, deleted after the parts in it (only while it is still the recipe's). */
-  recipeProject?: string;
+  /** Projects recipes created, each deleted after the parts in it (only while it is still the recipe's). */
+  recipeProjects?: string[];
   /**
-   * What the recipe project holds that this tool did not create, as the
-   * refusal listed them (errorCode confirm_project_contents; the failed
-   * step's detail, one per line): the project goes with them only when
-   * every one is confirmed.
+   * Per recipe project, what it holds that this tool did not create, as the
+   * refusal listed them (errorCode confirm_project_contents; the project's
+   * failed step's detail, one per line): a project goes with them only when
+   * every one is confirmed for it.
    */
-  confirmProjectContents?: string[];
+  confirmProjectContents?: Record<string, string[]>;
 }
 
 /**

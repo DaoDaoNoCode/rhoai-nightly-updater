@@ -187,7 +187,7 @@ export interface RecipeCleanupPart {
  */
 export function cleanupParts(ready: CleanupRequest | undefined): RecipeCleanupPart[] {
   const parts: RecipeCleanupPart[] = [];
-  if (ready?.recipeProject) parts.push({ id: `recipe-project:${ready.recipeProject}`, title: `Project ${ready.recipeProject}, which the recipe created` });
+  for (const p of ready?.recipeProjects ?? []) parts.push({ id: `recipe-project:${p}`, title: `Project ${p}, which the recipe created` });
   if (ready?.components?.length) parts.push({ id: "components", title: `The DataScienceCluster components the run turned on: ${ready.components.join(", ")}` });
   return parts;
 }
@@ -197,11 +197,13 @@ export function cleanupParts(ready: CleanupRequest | undefined): RecipeCleanupPa
  * what the run created (`ready`), without the parts the user left out,
  * and with what the project holds once the user confirmed it.
  */
-export function cleanupRequest(ready: CleanupRequest | undefined, chosen: ReadonlySet<string>, confirmed: string[] = []): CleanupRequest {
+export function cleanupRequest(ready: CleanupRequest | undefined, chosen: ReadonlySet<string>, confirmed: Record<string, string[]> = {}): CleanupRequest {
   const req: CleanupRequest = {};
-  if (ready?.recipeProject && chosen.has(`recipe-project:${ready.recipeProject}`)) {
-    req.recipeProject = ready.recipeProject;
-    if (confirmed.length > 0) req.confirmProjectContents = confirmed;
+  const projects = (ready?.recipeProjects ?? []).filter((p) => chosen.has(`recipe-project:${p}`));
+  if (projects.length > 0) {
+    req.recipeProjects = projects;
+    const confirm = Object.fromEntries(projects.filter((p) => (confirmed[p] ?? []).length > 0).map((p) => [p, confirmed[p]]));
+    if (Object.keys(confirm).length > 0) req.confirmProjectContents = confirm;
   }
   if (ready?.components?.length && chosen.has("components")) req.components = ready.components;
   return req;
@@ -217,7 +219,7 @@ export function leftInPlace(status: ResourcesStatus, run: RecipeRun, req: Cleanu
   const up = (r: ResourceState | null | undefined) => !!r?.deployed && !isTerminating(r);
   const out: string[] = [];
   const project = run.project?.name;
-  if (project && project !== req.recipeProject && (status.pipelineServers ?? []).some((ps) => ps.namespace === project && up(ps))) {
+  if (project && !(req.recipeProjects ?? []).includes(project) && (status.pipelineServers ?? []).some((ps) => ps.namespace === project && up(ps))) {
     out.push(`The pipeline server in ${project}`);
   }
   if (up(status.minio)) out.push("The S3 storage");

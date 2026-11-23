@@ -7,6 +7,7 @@ import { RecipeEditor } from "../components/recipes/RecipeEditor";
 import { RecipeReviewModal } from "../components/recipes/RecipeReviewModal";
 import { RecipeRunCard } from "../components/recipes/RecipeRunCard";
 import { RecipeCleanupModal } from "../components/recipes/RecipeCleanupModal";
+import { RecipeProjects } from "../components/recipes/RecipeProjects";
 import { useRecipeRun } from "../components/recipes/useRecipeRun";
 import { DEFAULT_RECIPE_FORM, cleanupParts, formFromRecipe, recipeFromForm, type RecipeForm } from "../components/recipes/recipeForm";
 import { planRecipe, runRecipe, toApiError, type ApiError } from "../services/api";
@@ -44,6 +45,8 @@ export const RecipesPage: React.FC = () => {
   const [starting, setStarting] = useState(false);
   const [runError, setRunError] = useState<ApiError | null>(null);
   const [cleanupOpen, setCleanupOpen] = useState(false);
+  // A project of the list to delete on its own, or null.
+  const [projectCleanup, setProjectCleanup] = useState<string | null>(null);
 
   const review = async () => {
     setReviewOpen(true);
@@ -88,6 +91,7 @@ export const RecipesPage: React.FC = () => {
 
   const running = !!status?.running;
   const hasCleanup = !!run && !running && cleanupParts(status?.cleanup).length > 0;
+  const projects = status?.projects ?? [];
 
   return (
     <>
@@ -108,6 +112,11 @@ export const RecipesPage: React.FC = () => {
             <PageSection aria-label="Recipe run">
               <RecipeRunCard status={status} run={run} blocker={blocker} permissionReason={permissionReason} onChanged={changed}
                 onClusterBusy={onClusterBusy} onCleanup={hasCleanup ? () => setCleanupOpen(true) : null} />
+            </PageSection>
+          )}
+          {!running && (projects.length > 0 || status.projectsError) && (
+            <PageSection>
+              <RecipeProjects projects={projects} error={status.projectsError} blocker={blocker} onDelete={setProjectCleanup} />
             </PageSection>
           )}
           {!running && (
@@ -135,7 +144,12 @@ export const RecipesPage: React.FC = () => {
         onCancel={() => setReviewOpen(false)}
       />
       {run && cleanupOpen && (
-        <RecipeCleanupModal run={run} ready={status?.cleanup} isOpen blocker={blocker} onClose={() => setCleanupOpen(false)} onDone={changed} onClusterBusy={onClusterBusy} />
+        <RecipeCleanupModal run={run} title={`Clean up what recipe ${run.recipe.metadata.name} set up?`} ready={status?.cleanup} isOpen blocker={blocker}
+          onClose={() => setCleanupOpen(false)} onDone={changed} onClusterBusy={onClusterBusy} />
+      )}
+      {projectCleanup && (
+        <RecipeCleanupModal run={null} title={`Delete project ${projectCleanup}?`} ready={{ recipeProjects: [projectCleanup] }} isOpen blocker={blocker}
+          onClose={() => setProjectCleanup(null)} onDone={changed} onClusterBusy={onClusterBusy} />
       )}
     </>
   );
