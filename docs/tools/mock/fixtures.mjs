@@ -1804,10 +1804,21 @@ const RECIPE_COMPONENTS = { "pipelines-prereq": "aipipelines", "mlflow-prereq": 
  */
 export function recipeCleanup(run) {
   const req = {
-    ...(run.project?.owned ? { recipeProject: run.project.name } : {}),
+    ...(run.project?.owned ? { recipeProjects: [run.project.name] } : {}),
     ...(run.components?.length ? { components: run.components } : {}),
   };
   return Object.keys(req).length ? req : null;
+}
+
+/**
+ * The projects recipes created that the cluster has (GET /api/recipes/run
+ * projects, GET /api/resources/status recipeProjects): the scenario's, or
+ * the last run's own project when the recipe created it.
+ */
+export function recipeProjects(w) {
+  if (w.recipeProjects) return w.recipeProjects;
+  const run = w.recipeRun?.run;
+  return run?.project?.owned ? [{ name: run.project.name, uid: run.project.uid || "uid-recipe-dev", recipe: run.recipe.metadata.name, createdAt: run.startedAt }] : [];
 }
 
 const RECIPE_DONE = {

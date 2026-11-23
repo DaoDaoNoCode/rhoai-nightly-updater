@@ -19,7 +19,7 @@ import { playgroundConfirm, playgroundSteps } from "./PlaygroundTab";
 import { maasConfirm, maasRequestOf, maasSteps } from "./MaaSTab";
 import { type SampleOp, mlflowSampleSteps, samplesConfirm } from "./samples";
 import { useGoalRun, type GoalRunStep } from "./useGoalRun";
-import { type CleanupScope, cleanupSteps } from "./CleanupModal";
+import { type CleanupRetry, type CleanupScope, cleanupSteps } from "./CleanupModal";
 import { type FeatureState, type MaaSOp, type ModelsOp, type PlaygroundOp, mlflowState, pipelinesState, setUpBlocked } from "./featureState";
 import { prerequisitesConfirm, prerequisitesSteps } from "./Prerequisites";
 import { modelsOpOf, modelsRequest, resourceRequest, setUpWait } from "./runRequests";
@@ -42,6 +42,9 @@ export interface SetupConfirm {
  * last run of each (for the run dialog's next step), and the keys that make
  * a feature read its state again.
  */
+/** The clean-up's refusal of a recipe project that holds what this tool did not create (pkg/cluster recipe.ErrorCodeConfirmContents). */
+const CONFIRM_PROJECT_CONTENTS = "confirm_project_contents";
+
 export function useRunState() {
   // The action running from this page ("setup-minio", ...) and its project.
   const [resAction, setResAction] = useState<string | null>(null);
@@ -52,6 +55,9 @@ export function useRunState() {
   const [runOpen, setRunOpen] = useState(false);
   const [setupConfirm, setSetupConfirm] = useState<SetupConfirm | null>(null);
   const [cleanupScope, setCleanupScope] = useState<CleanupScope | null>(null);
+  // A clean-up refused because recipe projects hold what this tool did not
+  // create: Clean up opens again with its choices and asks (null otherwise).
+  const [cleanupRetry, setCleanupRetry] = useState<CleanupRetry | null>(null);
   // The sample operation running now (its rows show it), the last sample
   // run (for the run dialog's next step), and a key that changes when one
   // ends, so the tabs read the sample state again.
@@ -79,7 +85,7 @@ export function useRunState() {
   const [checkError, setCheckError] = useState<string | null>(null);
   return {
     resAction, setResAction, actionProject, setActionProject, lastMinIOTeardown, setLastMinIOTeardown,
-    run, runOpen, setRunOpen, setupConfirm, setSetupConfirm, cleanupScope, setCleanupScope,
+    run, runOpen, setRunOpen, setupConfirm, setSetupConfirm, cleanupScope, setCleanupScope, cleanupRetry, setCleanupRetry,
     sampleOp, setSampleOp, sampleRun, setSampleRun, samplesRefresh, setSamplesRefresh,
     modelsOp, setModelsOp, modelsRun, setModelsRun,
     playgroundOp, setPlaygroundOp, playgroundRun, setPlaygroundRun, playgroundRefresh, setPlaygroundRefresh,
@@ -117,7 +123,7 @@ export interface EnvironmentActionsContext {
 export function environmentActions(ctx: EnvironmentActionsContext) {
   const { runs, status: resStatus, statusRef, fetchResources, readFresh, restartPolling, pg, maas, prereq, confirmOf, setPending, projectNames, onResult } = ctx;
   const {
-    setResAction, setActionProject, setLastMinIOTeardown, run, setRunOpen, setupConfirm, setSetupConfirm, setCleanupScope,
+    setResAction, setActionProject, setLastMinIOTeardown, run, setRunOpen, setupConfirm, setSetupConfirm, setCleanupScope, setCleanupRetry,
     setSampleOp, setSampleRun, setSamplesRefresh, setModelsOp, setModelsRun, setPlaygroundOp, setPlaygroundRun, setPlaygroundRefresh,
     setMaaSOp, setMaaSRun, setRunFeature, setMaaSRefresh, setPrereqRefresh, checking, setChecking, setCheckError,
   } = runs;
@@ -388,6 +394,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
 
   const startCleanup = (req: CleanupRequest) => {
     setCleanupScope(null);
+    setCleanupRetry(null);
     setRunFeature("other");
     setSampleRun(null);
     setModelsRun(null);
@@ -395,11 +402,25 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     setRunOpen(true);
     trackFeature("cleanup");
     restartPolling();
-    run.follow("Clean up", cleanupSteps(req), (onStep, onDone, onDetach) => streamCleanup(req, onStep, (success, error, apiError) => {
+    // Recipe projects the server refused because they hold what this tool
+    // did not create, with what to confirm (the step's detail, one per line).
+    const refusals: Record<string, string[]> = {};
+    run.follow("Clean up", cleanupSteps(req), (onStep, onDone, onDetach) => streamCleanup(req, (step) => {
+      if (step.step.startsWith("recipe-project:") && step.errorCode === CONFIRM_PROJECT_CONTENTS) {
+        refusals[step.step.slice("recipe-project:".length)] = (step.detail ?? "").split("\n").filter(Boolean);
+      }
+      onStep(step);
+    }, (success, error, apiError) => {
       void fetchResources();
       setPlaygroundRefresh((n) => n + 1);
       setMaaSRefresh((n) => n + 1);
       onDone(success, error, apiError);
+      if (apiError?.errorCode === CONFIRM_PROJECT_CONTENTS && Object.keys(refusals).length > 0) {
+        // Nothing was deleted: back to Clean up, with the same choices, to confirm.
+        setCleanupRetry({ req, contents: refusals });
+        setRunOpen(false);
+        setCleanupScope("all");
+      }
     }, (reason) => {
       void fetchResources();
       setPlaygroundRefresh((n) => n + 1);

@@ -598,6 +598,11 @@ scenarios["recipe-succeeded"] = (w) => {
   w.recipeRun = { run: F.recipeRun({ done: 8, current: "", state: "succeeded", stopReason: "Every step of dev is set up." }), running: false };
   // What the run set up is there: MLflow, and the pipeline server in its project.
   w.resources = { ...w.resources, mlflow: F.mlflowStates.running, pipelineServers: [...w.resources.pipelineServers, { ...F.pipelineServer, namespace: "recipe-dev", apiRoute: undefined, uiRoute: undefined }] };
+  // An earlier run's project is still there too.
+  w.recipeProjects = [
+    { name: "recipe-dev", uid: "uid-recipe-dev", recipe: "dev", createdAt: F.ago(40) },
+    { name: "recipe-review", uid: "uid-recipe-review", recipe: "review", createdAt: F.ago(60 * 26) },
+  ];
 };
 scenarios["recipe-interrupted"] = (w) => {
   w.recipeRun = { run: F.recipeRun({ done: 3, pod: "rhoai-nightly-updater-6f7b8c9d5-q9m3z" }), running: false, interrupted: true };
@@ -647,13 +652,14 @@ export const reads = {
   "GET /api/components/dsc": (w) => (w.components.dscExists === false ? { exists: false, state: w.components.dscState || "no-dsc", dscCount: 0, conditions: [], nodes: [], mismatches: [] } : w.dscManager ?? F.dscManager()),
   "GET /api/diagnostics": (w) => w.diagnostics,
   "GET /api/dashboard/state": (w) => w.dashboard,
-  "GET /api/resources/status": (w) => ({ dashboardUrl: F.DASHBOARD_URL, inferenceGateway: F.gatewayStates.none, models: F.modelsStatus(), ...w.resources }),
+  "GET /api/resources/status": (w) => ({ dashboardUrl: F.DASHBOARD_URL, inferenceGateway: F.gatewayStates.none, models: F.modelsStatus(), ...w.resources, recipeProjects: F.recipeProjects(w) }),
   "GET /api/resources/projects": (w) => ({ projects: w.projects ?? F.projects }),
   "GET /api/resources/maas": (w) => w.maas,
   "GET /api/activity": (w) => w.status.activity ?? [],
   // The clean-up request for what the run created, once it is not running.
   "GET /api/recipes/run": (w) => {
     const cleanup = w.recipeRun.run && !w.recipeRun.running ? F.recipeCleanup(w.recipeRun.run) : null;
-    return cleanup ? { ...w.recipeRun, cleanup } : w.recipeRun;
+    const projects = w.recipeRun.running ? undefined : F.recipeProjects(w);
+    return { ...w.recipeRun, ...(cleanup ? { cleanup } : {}), ...(projects?.length ? { projects } : {}) };
   },
 };

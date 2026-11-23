@@ -107,7 +107,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const resourcesSettling = allResources.some((r) => isTerminating(r) || (r.deployed && !r.ready && !terminalReason(r)));
 
   const runs = useRunState();
-  const { resAction, actionProject, lastMinIOTeardown, run, runOpen, setRunOpen, setupConfirm, setSetupConfirm, cleanupScope, setCleanupScope,
+  const { resAction, actionProject, lastMinIOTeardown, run, runOpen, setRunOpen, setupConfirm, setSetupConfirm, cleanupScope, setCleanupScope, cleanupRetry, setCleanupRetry,
     sampleOp, samplesRefresh, modelsOp, playgroundOp, playgroundRefresh, maasOp, maasRefresh, prereqRefresh, checking, checkError } = runs;
   // Poll quickly after a change, back off to 30 s, stop after 10 minutes or
   // once nothing is settling; hidden tabs don't poll (A06-5).
@@ -142,9 +142,10 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const wasRunning = useRef(false);
   useEffect(() => {
     const now = !!run.run?.running;
-    if (wasRunning.current && !now && !runOpen) setToast(true);
+    // A clean-up refused to ask for confirmation reopens Clean up instead.
+    if (wasRunning.current && !now && !runOpen && !cleanupRetry) setToast(true);
     wasRunning.current = now;
-  }, [run.run?.running, runOpen]);
+  }, [run.run?.running, runOpen, cleanupRetry]);
 
   // While a run goes on with its dialog closed, the app's operation alert
   // names it and its step, with View progress to open the same dialog again.
@@ -213,7 +214,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const overviewRows = buildOverviewRows({ pipelines: pipelinesSummary, mlflow: mlflowNow, models: modelsSummary, playground: playgroundSummary, maas: maasNow }, prereq);
   const anythingToClean = !!resStatus && (() => {
     const c = cleanupCandidates(resStatus, "all", minioLeftovers, pg, maas);
-    return c.servers.length > 0 || c.storage || c.mlflow || c.models.length > 0 || c.gateway || c.playgrounds.length > 0 || c.maasPublished.length > 0 || c.maasPlatform;
+    return c.servers.length > 0 || c.storage || c.mlflow || c.models.length > 0 || c.gateway || c.playgrounds.length > 0 || c.maasPublished.length > 0 || c.maasPlatform || c.recipeProjects.length > 0;
   })();
 
   const { open: runNext, whatNext } = runFollowUp({
@@ -393,7 +394,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       {cleanupScope && resStatus && (
         <CleanupModal scope={cleanupScope} status={resStatus} playground={pg} maas={maas} minioLeftovers={minioLeftovers} baseReason={baseReason}
           restorable={Object.values(prereq?.features ?? {}).flatMap((f) => f?.restorable ?? [])}
-          onConfirm={startCleanup} onCancel={() => setCleanupScope(null)} />
+          retry={cleanupRetry} onConfirm={startCleanup} onCancel={() => { setCleanupScope(null); setCleanupRetry(null); }} />
       )}
 
       <RunModal run={run.run} isOpen={runOpen} open={runNext} whatNext={whatNext}
