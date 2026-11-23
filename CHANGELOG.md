@@ -174,6 +174,20 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **Recipe projects follow the cluster.** The Recipes page lists every
+  project recipes created that the cluster still has (not only the last
+  run's), and Clean up everything on the Environment page offers them, each
+  deleted with the same guards (recorded UID, the tool's label and the
+  recipe annotation, and the confirmation of what it holds that the tool did
+  not create, per project). The background check forgets a recorded recipe
+  project once its namespace is gone. The Recipes page reads the run every
+  15 seconds while it is visible, so a run resumed elsewhere shows without a
+  reload. A clean-up's result says what each part did ("Kept Managed:
+  aipipelines (this tool did not turn it on).") instead of "Deleted" for what
+  it kept, and the recipe Clean up no longer reads "Deleted the 0 parts".
+  The clean-up request takes `recipeProjects` (a list) and
+  `confirmProjectContents` per project.
+
 - **A DataScienceCluster change applies only to the DSC it was checked
   on.** The Components page's changes (a component's state, Fix, soft
   reset) and Diagnostics' disable-component fix tested only the fields
