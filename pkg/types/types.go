@@ -1756,6 +1756,11 @@ type CleanupRequest struct {
 	// a refusal listed them: the project is deleted with them only when
 	// every one is confirmed.
 	ConfirmProjectContents []string `json:"confirmProjectContents,omitempty"`
+	// RecipeRun, set by a recipe run's Clean up (its ID), makes the
+	// pipeline servers, the S3 storage and MLflow go only while they carry
+	// that run's annotation, checked right before each delete; Clean up
+	// everything leaves it empty.
+	RecipeRun string `json:"recipeRun,omitempty"`
 }
 
 // S3TeardownRequest is the body of POST /api/resources/s3/teardown.

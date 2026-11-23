@@ -49,8 +49,10 @@ type fakeRecipeStep struct {
 	clients  []*cluster.Client
 	onRun    func()
 	waitsCtx bool
-	// components: the DataScienceCluster components Run turns on.
+	// components: the DataScienceCluster components Run turns on; runID:
+	// the run ID Run was given.
 	components []string
+	runID      string
 }
 
 func (f *recipeFake) addStep(id string) *fakeRecipeStep {
@@ -72,7 +74,7 @@ func (f *recipeFake) clusterSteps() []cluster.RecipeStep {
 			},
 			Run: func(c *cluster.Client, st *cluster.RecipeState, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 				f.mu.Lock()
-				s.ran = true
+				s.ran, s.runID = true, st.RunID
 				f.mu.Unlock()
 				st.AddComponents(s.components...)
 				emit(cluster.UpdateStepEvent{Step: s.id + "-inner", Status: "running", Message: "working on " + s.id})
@@ -926,7 +928,8 @@ func TestRecipeResume_KeepsComponentsAndOwnershipIsLive(t *testing.T) {
 	f.steps = nil
 	f.mu.Unlock()
 	f.addStep("pipelines-prereq").done = true
-	f.addStep("pipeline-server").components = []string{"mlflowoperator"}
+	resumed := f.addStep("pipeline-server")
+	resumed.components = []string{"mlflowoperator"}
 	for _, s := range f.steps {
 		close(s.release)
 	}
@@ -941,6 +944,11 @@ func TestRecipeResume_KeepsComponentsAndOwnershipIsLive(t *testing.T) {
 	recipes.mu.Unlock()
 	waitDone(t, done)
 	run := f.saved()
+	// The resumed attempt marks what it creates with the run's own ID, so
+	// what earlier attempts marked stays the run's.
+	if resumed.runID != runID {
+		t.Errorf("the resumed step got run ID %q, want %q", resumed.runID, runID)
+	}
 	if strings.Join(run.Components, ",") != "aipipelines,mlflowoperator" {
 		t.Errorf("components %v", run.Components)
 	}

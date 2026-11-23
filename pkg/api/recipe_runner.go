@@ -264,6 +264,7 @@ func beginRecipeRun(c *cluster.Client, w http.ResponseWriter, st *recipeStart, r
 	if prior != nil {
 		keepComponents(run, &state, prior)
 	}
+	state.RunID = run.ID
 	// The run's own mutation slot, before anything is recorded: a run
 	// that cannot begin leaves no record of a running run.
 	if !mutations.begin() {
