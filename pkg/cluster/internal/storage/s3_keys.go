@@ -92,17 +92,38 @@ func ArgsSecured(args []string) bool {
 	return slices.Contains(args, S3IAMWritesArg) && slices.Contains(args, S3SelfServiceArg)
 }
 
-// s3SetupSecured chooses if setup (or Repair) should apply secured mini args.
-// Initial setup always does (no stored keys means no project already has them).
-// Later, only deployments already secured qualify: Repair must not enable IAM
-// writes while the saved admin key might still sit in pipeline projects; only
-// Secure S3 storage performs that transition, issuing a replacement admin key.
-func s3SetupSecured(c *kube.Client) (bool, error) {
-	_, found, err := ReadS3Keys(c)
-	if err != nil || !found {
-		return !found, err
+// s3SetupKeys returns the keys a setup (or Repair) writes and whether it
+// applies the secured args. Without a storage Deployment it is a first
+// setup, or one that stopped after writing the Secret: it is secured, and
+// a key stored before (a stopped first setup's, or one a teardown that did
+// not finish left behind, which pipeline projects may hold) is replaced by
+// a new one. An existing Deployment without both IAM flags is storage an
+// earlier version set up: Repair keeps it as it is (its stored key may be
+// in pipeline projects), and only Secure S3 storage moves it, with a new
+// key. Otherwise the stored keys are kept (S3Credentials).
+func s3SetupKeys(c *kube.Client) (keys S3Keys, secured bool, err error) {
+	body, exists, err := c.GetOptional(rhoai.NamespacedPath("apps/v1", "deployments", S3Namespace, S3Deployment))
+	if err != nil {
+		return S3Keys{}, false, err
 	}
-	return storageSecured(c)
+	if !exists {
+		_, found, err := ReadS3Keys(c)
+		if err != nil {
+			return S3Keys{}, false, err
+		}
+		if found {
+			keys, err = newAdminKeys(c)
+		} else {
+			keys, err = S3Credentials(c)
+		}
+		return keys, true, err
+	}
+	var deploy S3DeploymentSpec
+	if err := json.Unmarshal(body, &deploy); err != nil {
+		return S3Keys{}, false, fmt.Errorf("parse Deployment %s/%s: %w", S3Namespace, S3Deployment, err)
+	}
+	keys, err = S3Credentials(c)
+	return keys, deploy.Secured(), err
 }
 
 // storageSecured reads the storage's Deployment: false when it is missing.
@@ -412,8 +433,9 @@ func KeysState(c *kube.Client, state types.ResourceState, ep S3Endpoints, dspas 
 			continue
 		}
 		if !found {
-			// Deleted in the dashboard: nothing to tell from; Secure S3
-			// storage writes it again.
+			// Deleted in the dashboard: its pipeline Secret may still hold
+			// the old key. Secure S3 storage writes it again.
+			ks.OldKey = append(ks.OldKey, name)
 			continue
 		}
 		ids, _, err := sw.ListAccessKeys(ScopedUserName(d.Meta.Namespace))
@@ -421,7 +443,10 @@ func KeysState(c *kube.Client, state types.ResourceState, ep S3Endpoints, dspas 
 			ks.CheckError = fmt.Sprintf("Cannot check which key %s uses: %v", name, err)
 			continue
 		}
-		if keyID != "" && slices.Contains(ids, keyID) {
+		// Its own key, and the run that gave it finished: the DSPA names the
+		// key (an annotation is compared for the status only; it never
+		// decides who gets a key).
+		if keyID != "" && slices.Contains(ids, keyID) && d.Meta.Annotations[DSPAS3KeyAnnotation] == keyID {
 			ks.OwnKey = append(ks.OwnKey, name)
 		} else {
 			ks.OldKey = append(ks.OldKey, name)
@@ -458,10 +483,19 @@ func rekeyServer(c *kube.Client, sw *seaweedClient, d DSPA, progress func(string
 	if err != nil {
 		return false, err
 	}
-	if !fresh && current[ConnectionSecretName].found && current[ConnectionSecretName].keys == keys {
-		return false, nil
-	}
 	user := ScopedUserName(project)
+	if !fresh && current[ConnectionSecretName].found && current[ConnectionSecretName].keys == keys {
+		// Both Secrets hold its key; a run that stopped before the DSPA was
+		// annotated is finished here.
+		if d.Meta.Annotations[DSPAS3KeyAnnotation] == keys.AccessKey {
+			return false, nil
+		}
+		progress("Asking the data-science-pipelines operator to check the storage again...")
+		if err := annotateDSPAKey(c, d, user, keys.AccessKey); err != nil {
+			return true, fmt.Errorf("its Secrets have its key, but pipeline server %s/%s could not be annotated to check the storage again: %w", project, d.Meta.Name, err)
+		}
+		return true, nil
+	}
 	if fresh {
 		progress("Checking the new key against the storage...")
 		if err := probeScopedKey(c.Context(), keys, user); err != nil {

@@ -84,6 +84,13 @@ func sawEvent(step, text string) bool {
 	return false
 }
 
+// annotateKey writes the key annotation a finished run leaves on the DSPA.
+func annotateKey(f *resourceFake, ns, id string) {
+	obj := f.get(dspaPath(ns, storage.DSPAName))
+	ensureMap(ensureMap(obj, "metadata"), "annotations")[storage.DSPAS3KeyAnnotation] = id
+	f.put(dspaPath(ns, storage.DSPAName), obj)
+}
+
 func dspaAnnotations(f *resourceFake, ns string) map[string]any {
 	a, _ := ensureMap(f.get(dspaPath(ns, storage.DSPAName)), "metadata")["annotations"].(map[string]any)
 	return a
@@ -372,6 +379,7 @@ func TestS3KeysStatus_FromLiveKeys(t *testing.T) {
 	recordDSPAs(f, "own/dspa", "old/dspa")
 	id, secret := f.sw.giveScopedKey("own")
 	putProjectS3Secrets(f, "own", id, secret)
+	annotateKey(f, "own", id)
 	// old: IAM user owns one key while the Secret still points elsewhere.
 	f.sw.giveScopedKey("old")
 	putProjectS3Secrets(f, "old", oldAdminID, oldAdminSecret)
@@ -441,5 +449,80 @@ func TestS3NetworkPolicyAllowsOnlyS3AndAdminUI(t *testing.T) {
 		if !slices.Equal(ports, []int{8333, 12535}) {
 			t.Errorf("secured=%v: the NetworkPolicy admits ports %v, want only 8333 and 12535", secured, ports)
 		}
+	}
+}
+
+// Review 1: a run whose annotation of the DSPA failed (both Secrets hold
+// the new key) is not done; the next run annotates it instead of
+// skipping the server as finished.
+func TestSecureS3_RetriesAFailedAnnotation(t *testing.T) {
+	fastS3Timings(t)
+	f, c := newResourceFake(t)
+	putUnsecuredStorage(f)
+	readyAfterApply(f)
+	f.fail["PATCH "+dspaPath("team-b", storage.DSPAName)] = 500
+	resp, _ := secureRun(t, c)
+	if resp.Success || !strings.Contains(resp.Message, "Still on the old key: team-b/dspa") {
+		t.Fatalf("first run: %+v", resp)
+	}
+	id := assertScopedKey(t, f, "team-b")
+	// Review 2: the status shows it unfinished: the annotation does not name the key yet.
+	st, _ := GetResourcesStatus(c)
+	if ks := st.S3Keys; !ks.NeedsSecuring || strings.Join(ks.OldKey, ",") != "team-b/dspa" {
+		t.Errorf("status after the failed annotation: %+v", ks)
+	}
+	delete(f.fail, "PATCH "+dspaPath("team-b", storage.DSPAName))
+	resp, _ = secureRun(t, c)
+	if !resp.Success {
+		t.Fatalf("re-run: %+v", resp)
+	}
+	if a := dspaAnnotations(f, "team-b"); a[storage.DSPAS3KeyAnnotation] != id {
+		t.Errorf("the re-run did not annotate team-b: %v", a)
+	}
+	if !sawEvent("server:team-b/dspa", "Asking the data-science-pipelines operator") {
+		t.Error("the re-run did not say it asks the operator again")
+	}
+	st, _ = GetResourcesStatus(c)
+	if ks := st.S3Keys; ks.NeedsSecuring || strings.Join(ks.OwnKey, ",") != "team-a/dspa,team-b/dspa" {
+		t.Errorf("status after the re-run: %+v", ks)
+	}
+}
+
+// Review 2: rotation done, one server's key check failed (its pipeline
+// Secret still holds the dead admin key), and its Connection was deleted
+// in the dashboard: the storage still needs Secure S3 storage.
+func TestS3KeysStatus_MissingConnectionStillNeedsSecuring(t *testing.T) {
+	fastS3Timings(t)
+	f, c := newResourceFake(t)
+	putUnsecuredStorage(f)
+	readyAfterApply(f)
+	f.sw.failUserObjects[storage.ScopedUserName("team-b")] = 500
+	if resp, _ := secureRun(t, c); resp.Success {
+		t.Fatalf("expected a stop at team-b: %+v", resp)
+	}
+	f.deleteObject(secretPath("team-b", storage.ConnectionSecretName))
+	st, _ := GetResourcesStatus(c)
+	if ks := st.S3Keys; !ks.Secured || !ks.NeedsSecuring || strings.Join(ks.OldKey, ",") != "team-b/dspa" {
+		t.Errorf("status = %+v, want team-b still to secure", ks)
+	}
+}
+
+// Review 3: a first setup that stopped after writing the credentials
+// Secret but before the Deployment is retried secured, with a new key.
+func TestSetupS3Storage_RetryOfAFirstSetupIsSecured(t *testing.T) {
+	fastS3Timings(t)
+	f, c := newResourceFake(t)
+	putReadyManagedS3(f)
+	f.deleteObject(s3DeployPath)
+	readyAfterApply(f)
+	resp, err := SetupS3Storage(c)
+	if err != nil || !resp.Success {
+		t.Fatalf("setup: %+v %v", resp, err)
+	}
+	if !f.sw.secured() {
+		t.Error("the retried first setup is not secured")
+	}
+	if got := secretValue(t, f, s3SecretPath, storage.S3AccessKeyField); got == oldAdminID {
+		t.Error("a storage set up secured kept a key that was stored before its Deployment")
 	}
 }

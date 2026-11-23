@@ -600,13 +600,9 @@ func (m *migrateRun) migrate(legacy *Legacy, dspas []DSPA, confirmed []string) (
 	if ready {
 		m.step("storage", "success", "OK: The new storage is already set up")
 	} else {
-		keys, err := S3Credentials(m.c)
+		keys, secured, err := s3SetupKeys(m.c)
 		if err != nil {
 			return m.fail("storage", fmt.Sprintf("Cannot make the new storage's keys; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "keys")
-		}
-		secured, err := s3SetupSecured(m.c)
-		if err != nil {
-			return m.fail("storage", fmt.Sprintf("Cannot check how the new storage runs; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "secured check")
 		}
 		res, err := setupS3Storage(m.c, keys, m.stepLog("storage"), s3RetryMigrate, secured)
 		if err != nil {
@@ -1243,6 +1239,13 @@ func (m *migrateRun) repoint(legacy *Legacy, dspas []DSPA, sw *seaweedClient, ow
 		}
 		p.secrets[0].obj = dspaS3Secret(project, keys)
 		p.secrets[1].obj = dashboardS3Connection(project, keys)
+		// The move's patch names the key too, as a finished Secure S3
+		// storage leaves it (KeysState compares it).
+		var patch map[string]any
+		if json.Unmarshal(p.patch, &patch) == nil {
+			patch["metadata"].(map[string]any)["annotations"].(map[string]any)[DSPAS3KeyAnnotation] = keys.AccessKey
+			p.patch, _ = json.Marshal(patch)
+		}
 		for _, s := range p.secrets {
 			setDSPAOwner(s.obj, p.d.Meta.Name, p.d.Meta.UID)
 		}

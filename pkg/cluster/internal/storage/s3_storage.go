@@ -1117,15 +1117,10 @@ func SetupS3(c *kube.Client) (*types.OperationResponse, error) {
 		record.Action(c, "setup-s3", fmt.Sprintf("namespace=%s (earlier storage present)", S3Namespace), false)
 		return &types.OperationResponse{Success: false, Message: reason + " Nothing was changed.", ErrorCode: "prerequisites"}, nil
 	}
-	keys, err := S3Credentials(c)
+	keys, secured, err := s3SetupKeys(c)
 	if err != nil {
 		record.Action(c, "setup-s3", fmt.Sprintf("namespace=%s (credentials)", S3Namespace), false)
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot determine the S3 credentials; nothing was changed: %v.%s", err, kube.TemplateHint(err)), ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
-	}
-	secured, err := s3SetupSecured(c)
-	if err != nil {
-		record.Action(c, "setup-s3", fmt.Sprintf("namespace=%s (secured check)", S3Namespace), false)
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot check how the S3 storage runs; nothing was changed: %v.%s", err, kube.TemplateHint(err)), ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
 	return setupS3Storage(c, keys, &opLog{}, s3RetrySetup, secured)
 }
