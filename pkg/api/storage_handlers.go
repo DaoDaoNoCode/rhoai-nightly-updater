@@ -27,24 +27,31 @@ var HandleS3StorageSetup = withMutationAuth(func(c *cluster.Client, w http.Respo
 	writeOperationResult(w, result, "setup-s3")
 })
 
-// HandleS3StorageSecure runs Secure S3 storage: a new admin key with IAM
-// writes on, then a key of its own for every pipeline server this tool
+// runSecureStorage runs Secure S3 storage; tests replace it.
+var runSecureStorage = cluster.SecureS3Storage
+
+// HandleS3StorageSecureStream runs Secure S3 storage: a new admin key with
+// IAM writes on, then a key of its own for every pipeline server this tool
 // recorded (storage an earlier version set up gave its admin key to every
-// pipeline project).
-var HandleS3StorageSecure = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+// pipeline project), streaming each step via SSE: "check", "rollout", then
+// "server:<namespace>/<name>" per pipeline server.
+var HandleS3StorageSecureStream = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	if !lockCluster(w) {
 		return
 	}
 	defer releaseClusterMutationLock()
-	beginOperation(w, "")
-	slog.Info("mutation", "op", "secure-s3")
-	result, err := cluster.SecureS3Storage(c)
-	if err != nil {
-		slog.Error("secure-s3 failed", "error", err)
-		writeOperationError(w, "Secure S3 storage failed", err)
+	var req struct{}
+	if !decodeBody(w, r, 4096, &req, true) {
 		return
 	}
-	writeOperationResult(w, result, "secure-s3")
+	beginOperation(w, "")
+	slog.Info("mutation", "op", "secure-s3")
+	_, err := streamOperation(w, "secure-s3", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		return runSecureStorage(c, emit)
+	})
+	if err != nil {
+		slog.Error("secure-s3 failed", "error", err)
+	}
 })
 
 // readS3AdminLogin reads the SeaweedFS admin UI login; tests replace it.

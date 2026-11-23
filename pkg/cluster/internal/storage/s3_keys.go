@@ -437,7 +437,10 @@ func KeysState(c *kube.Client, state types.ResourceState, ep S3Endpoints, dspas 
 // apply, DSPA ownership), and annotate the DSPA to force another storage
 // check. Servers whose Secrets already match the scoped user are untouched
 // (changed false). Failed probes abort before Secret mutation.
-func rekeyServer(c *kube.Client, sw *seaweedClient, d DSPA) (changed bool, err error) {
+func rekeyServer(c *kube.Client, sw *seaweedClient, d DSPA, progress func(string)) (changed bool, err error) {
+	if progress == nil {
+		progress = func(string) {}
+	}
 	project := d.Meta.Namespace
 	current := map[string]projectS3Secret{}
 	for _, name := range []string{DSPASecretName, ConnectionSecretName} {
@@ -450,6 +453,7 @@ func rekeyServer(c *kube.Client, sw *seaweedClient, d DSPA) (changed bool, err e
 		}
 		current[name] = s
 	}
+	progress(fmt.Sprintf("Making sure of SeaweedFS user %s and its key...", ScopedUserName(project)))
 	keys, fresh, err := provisionScopedKey(sw, project, current[DSPASecretName].keys)
 	if err != nil {
 		return false, err
@@ -459,10 +463,12 @@ func rekeyServer(c *kube.Client, sw *seaweedClient, d DSPA) (changed bool, err e
 	}
 	user := ScopedUserName(project)
 	if fresh {
+		progress("Checking the new key against the storage...")
 		if err := probeScopedKey(c.Context(), keys, user); err != nil {
 			return false, fmt.Errorf("the new key of SeaweedFS user %s does not work (%w), so the project's Secrets were left unchanged", user, err)
 		}
 	}
+	progress(fmt.Sprintf("Writing the key into Secrets %s and %s...", DSPASecretName, ConnectionSecretName))
 	for _, s := range []*projectSecret{
 		{c: c, project: project, name: DSPASecretName, what: "secret", obj: dspaS3Secret(project, keys)},
 		{c: c, project: project, name: ConnectionSecretName, what: "connection", obj: dashboardS3Connection(project, keys)},
@@ -474,6 +480,7 @@ func rekeyServer(c *kube.Client, sw *seaweedClient, d DSPA) (changed bool, err e
 			return true, fmt.Errorf("%s", strings.TrimSuffix(msg, "."))
 		}
 	}
+	progress("Asking the data-science-pipelines operator to check the storage again...")
 	if err := annotateDSPAKey(c, d, user, keys.AccessKey); err != nil {
 		return true, fmt.Errorf("its Secrets have the new key, but pipeline server %s/%s could not be annotated to check the storage again: %w", project, d.Meta.Name, err)
 	}

@@ -74,6 +74,8 @@ export interface StorageTabProps {
   setPending: (p: Pending) => void;
   onMigrate: () => void;
   onRemoveOldStorage: () => void;
+  /** Opens Secure S3 storage's dialog. */
+  onSecure: () => void;
   onSetUp: (setup: Pending[]) => void;
 }
 
@@ -188,7 +190,7 @@ const KeysDetails: React.FC<{ keys: S3KeysState }> = ({ keys }) => {
 };
 
 /** Cluster-scoped S3 block: SeaweedFS in seaweedfs, or legacy storage awaiting migration. */
-const StoragePart: React.FC<StorageTabProps> = ({ status, busy, baseReason, readOnly, readReason, minioLeftovers, consoleURL, setPending, onMigrate, onRemoveOldStorage }) => {
+const StoragePart: React.FC<StorageTabProps> = ({ status, busy, baseReason, readOnly, readReason, minioLeftovers, consoleURL, setPending, onMigrate, onRemoveOldStorage, onSecure }) => {
   const { minio, legacyStorage: legacy } = status;
   const unmanaged = notManaged(minio);
   const deployed = !!minio?.deployed;
@@ -201,7 +203,7 @@ const StoragePart: React.FC<StorageTabProps> = ({ status, busy, baseReason, read
   const keys = status.s3Keys;
   const needsSecuring = storageNeedsSecuring(status);
   if (needsSecuring && !readOnly) {
-    actions.push(<ActionListItem key="secure"><TooltipButton variant="primary" onClick={() => setPending({ kind: "secure-minio" })} isLoading={busy.resAction === "secure-minio"}
+    actions.push(<ActionListItem key="secure"><TooltipButton variant="primary" onClick={onSecure} isLoading={busy.resAction === "secure-minio"}
       disabledReason={busy.resAction === "secure-minio" ? null : baseReason ?? keys?.secureBlockedReason ?? null}>Secure S3 storage...</TooltipButton></ActionListItem>);
   }
   const canRepair = deployed && !unmanaged && !legacy && (!!terminalReason(minio) || !!minio?.repairNeeded) && !isTerminating(minio);
@@ -388,34 +390,8 @@ export const StoragePrerequisitePart: React.FC<{ status: ResourcesStatus; busy: 
 };
 
 /** Build confirm dialog copy for a pending storage action; null if pending is unrelated. */
-export function storageConfirm(pending: Pending, minio: ResourceState | undefined, legacy?: LegacyStorageState | null, setPending?: (p: Pending) => void, keys?: S3KeysState | null): ConfirmSpec | null {
+export function storageConfirm(pending: Pending, minio: ResourceState | undefined, legacy?: LegacyStorageState | null, setPending?: (p: Pending) => void): ConfirmSpec | null {
   switch (pending.kind) {
-    case "secure-minio": {
-      const servers = keys?.oldKey ?? [];
-      const kept = keys?.keepOldKey ?? [];
-      return {
-        title: "Secure the S3 storage?", confirm: "Secure", runTitle: "Secure the S3 storage", changesOpen: true,
-        summary: (
-          <Content component="p">
-            {keys?.secured
-              ? "Finishes giving each pipeline server this tool set up a key of its own. Takes a few seconds."
-              : <>Gives the S3 storage a new admin key, which goes into no project, and gives each pipeline server this tool set up a SeaweedFS key of its own. The old admin key, which every pipeline project holds, stops working. Takes up to 2 minutes; stored data is kept.</>}
-          </Content>
-        ),
-        changes: [
-          ...(keys?.secured ? [] : [<>SeaweedFS restarts with a new admin key in Secret <code>seaweedfs-s3-credentials</code>, and with IAM writes on, so the admin key can make a key for each pipeline server.</>]),
-          servers.length > 0
-            ? <>These pipeline servers get a key of their own, checked against the storage before it is written into their Secrets <code>nightly-dspa-s3</code> and <code>rhoai-nightly-updater-s3</code> (the dashboard Connection): {joinNodes(servers.map((n) => <code key={n}>{n}</code>))}.</>
-            : <>No pipeline server this tool recorded uses the storage.</>,
-          ...(kept.length > 0 ? [<>Not changed by this tool; they keep the old key, which then no longer works: {joinNodes(kept.map((n) => <code key={n}>{n}</code>))}.</>] : []),
-        ],
-        extra: (
-          <Alert variant="warning" isInline component="div" title="Running pipelines and open workbenches">
-            <Content component="p">Pipeline runs in progress may fail while the storage restarts and the keys change. Workbenches and model deployments that use the Connection or run pipelines (Elyra) keep the old key until they restart: restart them afterwards. This tool restarts none of them.</Content>
-          </Alert>
-        ),
-      };
-    }
     case "setup-minio":
     case "repair-minio":
       return {

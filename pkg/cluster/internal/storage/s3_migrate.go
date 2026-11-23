@@ -465,7 +465,7 @@ func (m *migrateRun) secureNewStorage(dspas []DSPA, rec PipelineRecord) *types.O
 	}
 	for _, d := range recorded {
 		name := d.Meta.Namespace + "/" + d.Meta.Name
-		changed, err := rekeyServer(m.c, sw, d)
+		changed, err := rekeyServer(m.c, sw, d, nil)
 		if err != nil {
 			resp, _ := m.fail("storage", fmt.Sprintf("Pipeline server %s, already on the new storage, could not get a key of its own: %v. Run Migrate storage again.", name, err), "s3_keys", "rekey failed")
 			return resp

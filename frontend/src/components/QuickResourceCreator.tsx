@@ -28,6 +28,7 @@ import { MLflowTab, mlflowConfirm } from "./environment/MLflowTab";
 import { Overview } from "./environment/Overview";
 import { FEATURE_PURPOSE, READ_ONLY_SETUP, partTitleId } from "./environment/FeatureLayout";
 import { MigrateStorageModal } from "./environment/MigrateStorageModal";
+import { SecureStorageModal, secureExtraSteps } from "./environment/SecureStorageModal";
 import { MIGRATE_TITLES, migrateStepNow, useMigrateStorage, type MigrateKind } from "./environment/useMigrateStorage";
 import { type ProjectOption } from "./environment/ProjectSelect";
 import { RunModal, runOutcome } from "./environment/SetupRun";
@@ -116,7 +117,9 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
 
   const [migrateKind, setMigrateKind] = useState<MigrateKind | null>(null);
   const migration = useMigrateStorage(useCallback(() => { void fetchResources(); }, [fetchResources]));
-  const migrating = !!migration.run?.running;
+  // Secure S3 storage runs the same way but is not a migration: it shows as the storage's own action.
+  const migrating = !!migration.run?.running && migration.run.kind !== "secure";
+  const securing = !!migration.run?.running && migration.run.kind === "secure";
 
   // Cached default project for Playground after playground inventory arrives.
   const [playgroundDefault, setPlaygroundDefault] = useState<string | null>(null);
@@ -149,7 +152,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     if (!searchParams.has("project")) setPlaygroundDefault(defaultPlaygroundProject(pg, null));
   }, [pg, searchParams]);
 
-  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending, resStatus?.s3Keys) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, [...pipelineServers, ...(resStatus?.outsidePipelineServers ?? [])]) ?? modelsConfirm(p, resStatus) ?? playgroundConfirm(p, pg) ?? maasConfirm(p, maas, setPending) ?? prerequisitesConfirm(p, prereq) ?? samplesConfirm(p);
+  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, [...pipelineServers, ...(resStatus?.outsidePipelineServers ?? [])]) ?? modelsConfirm(p, resStatus) ?? playgroundConfirm(p, pg) ?? maasConfirm(p, maas, setPending) ?? prerequisitesConfirm(p, prereq) ?? samplesConfirm(p);
 
   // Finished runs whose dialog was dismissed surface as toast with a path back—outcomes stay
   // visible without shifting page layout.
@@ -172,8 +175,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     ? { title: goal.title, startedAt: goal.startedAt, step: runStepNow(goal), open: reopenRun }
     : migration.run?.running ? { title: MIGRATE_TITLES[migration.run.kind], startedAt: migration.run.startedAt, step: migrateStepNow(migration.run), open: reopenMigration } : null);
 
-  const runningSomething = !!resAction || migrating || !!run.run?.running || !!checking;
-  const busy: Busy = { resAction, actionProject, migrating, models: modelsOp, playground: playgroundOp, maas: maasOp };
+  const runningSomething = !!resAction || migrating || securing || !!run.run?.running || !!checking;
+  const busy: Busy = { resAction: securing ? "secure-minio" : resAction, actionProject, migrating, models: modelsOp, playground: playgroundOp, maas: maasOp };
   const baseReason = mutateBlocker ?? (runningSomething ? BUSY_REASON : null);
   // Post-delete the namespace may remain (deployed:false, managedByTool:true). Keep Delete
   // available while tool-owned storage artifacts persist—data PVC, Routes, or other leftovers.
@@ -319,7 +322,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
               {tab === "overview" && overview}
               {tab === "storage" && resStatus && (
                 <StorageTab status={resStatus} state={storageNow} busy={busy} baseReason={baseReason} readOnly={readOnly} readReason={readBlocker} minioLeftovers={minioLeftovers} consoleURL={consoleURL}
-                  setPending={setPending} onMigrate={() => setMigrateKind("migrate")} onRemoveOldStorage={() => setMigrateKind("remove")}
+                  setPending={setPending} onMigrate={() => setMigrateKind("migrate")} onRemoveOldStorage={() => setMigrateKind("remove")} onSecure={() => setMigrateKind("secure")}
                   onSetUp={(setup) => setUp(TAB_TITLES.storage, setup)} />
               )}
               {tab === "pipelines" && resStatus && (
@@ -362,7 +365,21 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
         </Stack>
       </PageSection>
 
-      {migrateKind && (
+      {migrateKind === "secure" && (
+        <SecureStorageModal
+          isOpen
+          keys={resStatus?.s3Keys}
+          run={migration.run}
+          baseReason={securing ? null : mutateBlocker ?? (resAction || migrating || run.run?.running ? BUSY_REASON : null)}
+          onStart={() => migration.start("secure", {}, secureExtraSteps(resStatus?.s3Keys))}
+          onClose={() => {
+            setMigrateKind(null);
+            migration.reset();
+          }}
+        />
+      )}
+
+      {migrateKind && migrateKind !== "secure" && (
         <MigrateStorageModal
           isOpen
           kind={migrateKind}

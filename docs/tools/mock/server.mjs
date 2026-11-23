@@ -208,6 +208,37 @@ async function migrateStream(req, res) {
   res.end();
 }
 
+/** Secure S3 storage: the checks, the rollout, one step per recorded pipeline server; each waits for /__docs/advance in gated mode. */
+async function secureStream(req, res) {
+  await body(req);
+  beginOperation("secure-s3", "Secure S3 storage", "");
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+  const servers = world.resources.s3Keys?.oldKey ?? [];
+  const kept = world.resources.s3Keys?.keepOldKey ?? [];
+  const steps = [
+    { step: "check", status: "success", message: `OK: ${servers.length} pipeline servers to give a key of their own; left on the old key: ${kept.join("; ")}` },
+    { step: "rollout", status: "running", message: "Waiting up to 1m30s for SeaweedFS to become ready..." },
+    { step: "rollout", status: "success", message: "OK: The S3 storage runs with the new admin key; the old key no longer works" },
+    ...servers.flatMap((n) => [
+      { step: `server:${n}`, status: "running", message: "Checking the new key against the storage..." },
+      { step: `server:${n}`, status: "success", message: `OK: ${n} uses SeaweedFS user rnu-dspa-${n.split("/")[0]}` },
+    ]),
+  ];
+  const done = `The S3 storage is secured: it has a new admin key, which is in no project. On a key of their own: ${servers.join(", ")}.${kept.length ? ` Not changed by this tool, their old key no longer works: ${kept.join("; ")}.` : ""} Restart the workbenches and model deployments that use Connection rhoai-nightly-updater-s3, and workbenches that run pipelines, so they pick up the new key.`;
+  let n = 0;
+  for (const step of [...steps, { step: "operation_complete", status: "success", message: done }]) {
+    n += 1;
+    await nextStep();
+    if (res.destroyed) return;
+    if (step.step === "operation_complete") {
+      world.resources.s3Keys = { secured: true, needsSecuring: false, ownKey: servers, keepOldKey: kept };
+      endOperation(true, done);
+    }
+    res.write(`data: ${JSON.stringify({ ...step, elapsedMs: n * 3000 })}\n\n`);
+  }
+  res.end();
+}
+
 /** Clean up: one step per part (pkg/cluster CleanUp); each waits for /__docs/advance in gated mode. */
 async function cleanupStream(req, res) {
   const { pipelineServers = [], storage = false, deleteNamespace = false, mlflow = false, models = [], inferenceGateway = false, playgrounds = [], recipeProjects = [], components = [] } = await body(req);
@@ -703,11 +734,7 @@ async function api(req, res, u) {
   if (key.startsWith("POST /api/recipes/")) return recipeRoute(req, res, key);
   if (key === "POST /api/update/stream") return updateStream(req, res);
   if (key === "POST /api/resources/s3/setup") return mutation(res, "setup-s3", "Set up S3 storage", minioSetup);
-  if (key === "POST /api/resources/s3/secure") return mutation(res, "secure-s3", "Secure S3 storage", () => {
-    const done = world.resources.s3Keys?.oldKey ?? [];
-    world.resources.s3Keys = { secured: true, needsSecuring: false, ownKey: done, keepOldKey: world.resources.s3Keys?.keepOldKey };
-    return { success: true, message: `The S3 storage is secured: it has a new admin key, which is in no project. Now on a key of their own: ${done.join(", ")}.`, logs: ["OK: The S3 storage runs with the new admin key; the old key no longer works"] };
-  });
+  if (key === "POST /api/resources/s3/secure/stream") return secureStream(req, res);
   if (key === "POST /api/resources/s3/migrate/stream") return migrateStream(req, res);
   if (key === "POST /api/resources/cleanup/stream") return cleanupStream(req, res);
   if (key === "POST /api/resources/models/stream") return modelsStream(req, res);

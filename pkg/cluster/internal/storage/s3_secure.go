@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
@@ -37,17 +38,30 @@ import (
 // is now invalid; the success message names them. Workloads still using the
 // old credential in running pods (workbenches, model deployments, pipeline
 // API server) retain it until they recycle; this action does not restart them.
-func SecureS3(c *kube.Client) (*types.OperationResponse, error) {
-	log := &opLog{}
-	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
-		slog.Warn("secure s3 storage stopped", "reason", activity, "user", kube.GetUser(c))
+func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+	var logs []string
+	step := func(id, status, msg string) {
+		logs = append(logs, msg)
+		if onStep != nil {
+			onStep(types.UpdateStepEvent{Step: id, Status: status, Message: msg})
+		}
+	}
+	stop := func(id, msg, code, activity string) (*types.OperationResponse, error) {
+		if onStep != nil {
+			onStep(types.UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: code})
+		}
+		logs = append(logs, msg)
+		slog.Warn("secure s3 storage stopped", "step", id, "reason", activity, "user", kube.GetUser(c))
 		record.Action(c, "secure-s3", fmt.Sprintf("namespace=%s (%s)", S3Namespace, activity), false)
-		return &types.OperationResponse{Success: false, Message: msg, Logs: log.lines, ErrorCode: code}, nil
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
 	}
 	unchanged := " Nothing was changed."
+	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
+		return stop(SecureStepCheck, msg, code, activity)
+	}
 
-	// Phase one: run all validation before applying changes.
-	log.add("Checking the S3 storage and its pipeline servers...")
+	// Step 1: every check before any change.
+	step(SecureStepCheck, "running", "Checking the S3 storage and its pipeline servers...")
 	legacy, err := ReadLegacy(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Cannot check for storage from an earlier version in namespace %s: %v.%s%s", LegacyNamespace, err, kube.TemplateHint(err), unchanged), kube.ErrorCodeFromK8sErr(err), "earlier storage check failed")
@@ -95,68 +109,99 @@ func SecureS3(c *kube.Client) (*types.OperationResponse, error) {
 			}
 		}
 	}
-	log.add(fmt.Sprintf("OK: %s to give a key of its own", kube.CountNoun(len(recorded), "pipeline server", "pipeline servers")))
+	names := make([]string, 0, len(recorded))
+	for _, d := range recorded {
+		names = append(names, d.Meta.Namespace+"/"+d.Meta.Name)
+	}
+	check := fmt.Sprintf("OK: %s to give a key of its own", kube.CountNoun(len(recorded), "pipeline server", "pipeline servers"))
+	if len(kept) > 0 {
+		check += fmt.Sprintf("; left on the old key: %s", strings.Join(kept, "; "))
+	}
+	step(SecureStepCheck, "success", check)
 
-	// Phase two: single rollout for the admin credential and enabled IAM writes.
+	// summary says which servers have their own key and which still use the
+	// old one, for the outcome of a run that ended or stopped.
+	summary := func(done, skipped []string) string {
+		var own, old, parts []string
+		for _, n := range names {
+			if slices.Contains(done, n) || slices.Contains(skipped, n) {
+				own = append(own, n)
+			} else {
+				old = append(old, n)
+			}
+		}
+		if len(own) > 0 {
+			parts = append(parts, fmt.Sprintf("On a key of their own: %s.", strings.Join(own, ", ")))
+		}
+		if len(old) > 0 {
+			parts = append(parts, fmt.Sprintf("Still on the old key: %s; run Secure S3 storage again: it skips the servers already done.", strings.Join(old, ", ")))
+		}
+		if len(kept) > 0 {
+			parts = append(parts, fmt.Sprintf("Not changed by this tool, their old key no longer works: %s.", strings.Join(kept, "; ")))
+		}
+		return strings.Join(parts, " ")
+	}
+
+	// Step 2: the new admin key, with IAM writes on, in one rollout.
 	if ep.Secured {
-		log.add("OK: The S3 storage already runs with a new admin key and IAM writes on")
+		step(SecureStepRollout, "skipped", "The S3 storage already runs with a new admin key and IAM writes on")
 	} else {
-		log.add("Rolling out a new admin key with IAM writes on...")
+		step(SecureStepRollout, "running", "Rolling out a new admin key with IAM writes on...")
 		keys, err := newAdminKeys(c)
 		if err != nil {
-			return fail(fmt.Sprintf("Cannot make the new admin key: %v.%s", err, unchanged), "internal", "keys")
+			return stop(SecureStepRollout, fmt.Sprintf("Cannot make the new admin key: %v.%s", err, unchanged), "internal", "keys")
 		}
-		res, err := setupS3Storage(c, keys, log, s3RetrySecure, true)
+		res, err := setupS3Storage(c, keys, &opLog{observe: func(line string) { step(SecureStepRollout, "running", line) }}, s3RetrySecure, true)
 		if err != nil {
 			return nil, err
 		}
 		if !res.Success {
-			return fail("The new admin key was not rolled out: "+res.Message+" No pipeline server got its own key yet.", res.ErrorCode, "rollout failed")
+			return stop(SecureStepRollout, "The new admin key was not rolled out: "+res.Message+" No pipeline server got its own key yet.", res.ErrorCode, "rollout failed")
 		}
-		log.add("OK: The S3 storage runs with the new admin key; the old key no longer works")
+		step(SecureStepRollout, "success", "OK: The S3 storage runs with the new admin key; the old key no longer works")
 	}
 
-	// Phase three: issue per-server keys for each entry in the record.
+	// Step 3: a key of its own for every recorded pipeline server.
 	sw, err := adminSeaweed(c)
 	if err != nil {
-		return fail(fmt.Sprintf("Cannot read the new admin key: %v.%s No pipeline server got its own key yet; run Secure S3 storage again.", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "admin key unreadable")
+		return stop(SecureStepRollout, fmt.Sprintf("Cannot read the new admin key: %v.%s No pipeline server got its own key yet; run Secure S3 storage again.", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "admin key unreadable")
 	}
 	var done, skipped []string
 	for _, d := range recorded {
 		name := d.Meta.Namespace + "/" + d.Meta.Name
-		log.add(fmt.Sprintf("Giving pipeline server %s a key of its own...", name))
-		changed, err := rekeyServer(c, sw, d)
+		id := SecureServerStep(name)
+		step(id, "running", fmt.Sprintf("Giving pipeline server %s a key of its own...", name))
+		changed, err := rekeyServer(c, sw, d, func(line string) { step(id, "running", line) })
 		if err != nil {
-			already := "none"
-			if len(done)+len(skipped) > 0 {
-				already = strings.Join(append(append([]string{}, done...), skipped...), ", ")
-			}
-			log.add(fmt.Sprintf("Stopped at %s: %v", name, err))
-			return fail(fmt.Sprintf("Pipeline server %s did not get its own key: %v. Already done: %s. The storage is secured; run Secure S3 storage again to finish the rest.", name, err, already), "s3_keys", "rekey failed")
+			return stop(id, fmt.Sprintf("Pipeline server %s did not get its own key: %v. The storage is secured. %s", name, err, summary(done, skipped)), "s3_keys", "rekey failed")
 		}
 		if changed {
 			done = append(done, name)
-			log.add(fmt.Sprintf("OK: %s uses SeaweedFS user %s", name, ScopedUserName(d.Meta.Namespace)))
+			step(id, "success", fmt.Sprintf("OK: %s uses SeaweedFS user %s", name, ScopedUserName(d.Meta.Namespace)))
 		} else {
 			skipped = append(skipped, name)
-			log.add(fmt.Sprintf("OK: %s already uses its own key", name))
+			step(id, "success", fmt.Sprintf("OK: %s already uses its own key", name))
 		}
 	}
 
 	msg := "The S3 storage is secured: it has a new admin key, which is in no project."
-	if len(done) > 0 {
-		msg += fmt.Sprintf(" Now on a key of their own: %s.", strings.Join(done, ", "))
-	}
-	if len(skipped) > 0 {
-		msg += fmt.Sprintf(" Already on their own key: %s.", strings.Join(skipped, ", "))
-	}
-	if len(kept) > 0 {
-		msg += fmt.Sprintf(" Not changed by this tool, their old key no longer works: %s.", strings.Join(kept, "; "))
+	if s := summary(done, skipped); s != "" {
+		msg += " " + s
 	}
 	if len(done) > 0 {
 		msg += fmt.Sprintf(" Restart the workbenches and model deployments that use Connection %s, and workbenches that run pipelines, so they pick up the new key.", ConnectionSecretName)
 	}
 	slog.Info("s3 storage secured", "user", kube.GetUser(c), "rekeyed", len(done))
 	record.Action(c, "secure-s3", fmt.Sprintf("namespace=%s (%d pipeline servers rekeyed)", S3Namespace, len(done)), true)
-	return &types.OperationResponse{Success: true, Message: msg, Logs: log.lines}, nil
+	return &types.OperationResponse{Success: true, Message: msg, Logs: logs}, nil
 }
+
+// The steps Secure S3 storage streams: the checks, the rollout, then one
+// per recorded pipeline server (SecureServerStep).
+const (
+	SecureStepCheck   = "check"
+	SecureStepRollout = "rollout"
+)
+
+// SecureServerStep is the step of one pipeline server ("namespace/name").
+func SecureServerStep(name string) string { return "server:" + name }

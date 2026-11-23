@@ -38,11 +38,6 @@ export function setupMinIO(): Promise<OperationResponse> {
   return request('/api/resources/s3/setup', { method: 'POST', acceptStatuses: [422] });
 }
 
-/** Secure S3 storage: a new admin key with IAM writes on, then a key of its own for every pipeline server this tool recorded. */
-export function secureMinIO(): Promise<OperationResponse> {
-  return request('/api/resources/s3/secure', { method: 'POST', acceptStatuses: [422] });
-}
-
 /** Removes S3 storage; deleteNamespace also drops namespace seaweedfs when this tool originally created it. */
 export function teardownMinIO(deleteNamespace = false): Promise<OperationResponse> {
   return request('/api/resources/s3/teardown', { method: 'POST', body: JSON.stringify(deleteNamespace ? { deleteNamespace: true } : {}), acceptStatuses: [422] });
@@ -103,6 +98,20 @@ export function streamMigrateStorage(
   onConnectionDrop?: StreamDetachHandler,
 ): AbortController {
   return streamSSE('/api/resources/s3/migrate/stream', options, onStep, onDone, onConnectionDrop);
+}
+
+/**
+ * Runs Secure S3 storage over SSE: steps "check", "rollout" (a new admin key
+ * with IAM writes on), then "server:<namespace>/<name>" for each pipeline
+ * server this tool recorded. Yields an AbortController so the client can
+ * detach; work keeps running on the server.
+ */
+export function streamSecureStorage(
+  onStep: (step: UpdateStep) => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+): AbortController {
+  return streamSSE('/api/resources/s3/secure/stream', {}, onStep, onDone, onConnectionDrop);
 }
 
 /** Matches pkg/types CleanupRequest: resources clean-up removes, in sequence. */

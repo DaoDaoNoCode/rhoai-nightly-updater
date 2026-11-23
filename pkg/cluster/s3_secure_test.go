@@ -7,6 +7,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 // Admin credentials wired into storage by putReadyManagedS3.
@@ -47,6 +48,42 @@ func putUnsecuredStorage(f *resourceFake) {
 	recordDSPAs(f, "team-a/dspa", "team-b/dspa")
 }
 
+// secureEvents are the step events of the last secureRun.
+var secureEvents []UpdateStepEvent
+
+// secureRun runs Secure S3 storage and keeps its step events.
+func secureRun(t *testing.T, c *Client) (*types.OperationResponse, error) {
+	t.Helper()
+	secureEvents = nil
+	return SecureS3Storage(c, func(e UpdateStepEvent) { secureEvents = append(secureEvents, e) })
+}
+
+// lastStatuses is each step's last status, in the order the steps began.
+func lastStatuses() []string {
+	var order []string
+	last := map[string]string{}
+	for _, e := range secureEvents {
+		if _, ok := last[e.Step]; !ok {
+			order = append(order, e.Step)
+		}
+		last[e.Step] = e.Status
+	}
+	out := make([]string, len(order))
+	for i, id := range order {
+		out[i] = id + "=" + last[id]
+	}
+	return out
+}
+
+func sawEvent(step, text string) bool {
+	for _, e := range secureEvents {
+		if e.Step == step && strings.Contains(e.Message, text) {
+			return true
+		}
+	}
+	return false
+}
+
 func dspaAnnotations(f *resourceFake, ns string) map[string]any {
 	a, _ := ensureMap(f.get(dspaPath(ns, storage.DSPAName)), "metadata")["annotations"].(map[string]any)
 	return a
@@ -76,7 +113,7 @@ func TestSecureS3_GivesEachRecordedPipelineServerItsOwnKey(t *testing.T) {
 		t.Fatalf("the status changed something: %v %v", m, f.sw.iamCalls())
 	}
 
-	resp, err := SecureS3Storage(c)
+	resp, err := secureRun(t, c)
 	if err != nil || !resp.Success {
 		t.Fatalf("secure: %+v %v", resp, err)
 	}
@@ -102,7 +139,19 @@ func TestSecureS3_GivesEachRecordedPipelineServerItsOwnKey(t *testing.T) {
 	if slices.Contains(f.sw.userNames(), storage.ScopedUserName("unrecorded")) {
 		t.Error("a user was made for the unrecorded server")
 	}
-	for _, want := range []string{"team-a/dspa, team-b/dspa", "unrecorded/dspa (not recorded as this tool's)", "Restart the workbenches"} {
+	// The steps the user sees: the checks, the rollout, one per server.
+	if got := strings.Join(lastStatuses(), " "); got != "check=success rollout=success server:team-a/dspa=success server:team-b/dspa=success" {
+		t.Errorf("steps = %s", got)
+	}
+	for _, line := range []string{"Checking the new key against the storage", "Writing the key into Secrets", "Asking the data-science-pipelines operator"} {
+		if !sawEvent("server:team-a/dspa", line) {
+			t.Errorf("no %q progress for team-a", line)
+		}
+	}
+	if !sawEvent("rollout", "Waiting up to") {
+		t.Error("the rollout's progress is not streamed")
+	}
+	for _, want := range []string{"On a key of their own: team-a/dspa, team-b/dspa.", "unrecorded/dspa (not recorded as this tool's)", "Restart the workbenches"} {
 		if !strings.Contains(resp.Message, want) {
 			t.Errorf("message lacks %q: %s", want, resp.Message)
 		}
@@ -116,9 +165,12 @@ func TestSecureS3_GivesEachRecordedPipelineServerItsOwnKey(t *testing.T) {
 
 	// Idempotent re-invocation must leave existing scoped keys unchanged.
 	before := f.sw.keysOf(storage.ScopedUserName("team-a"))
-	resp, _ = SecureS3Storage(c)
-	if !resp.Success || !strings.Contains(resp.Message, "Already on their own key: team-a/dspa, team-b/dspa") {
+	resp, _ = secureRun(t, c)
+	if !resp.Success || !strings.Contains(resp.Message, "On a key of their own: team-a/dspa, team-b/dspa.") || strings.Contains(resp.Message, "Restart") {
 		t.Errorf("re-run: %+v", resp)
+	}
+	if got := strings.Join(lastStatuses(), " "); got != "check=success rollout=skipped server:team-a/dspa=success server:team-b/dspa=success" || !sawEvent("server:team-a/dspa", "already uses its own key") {
+		t.Errorf("re-run steps = %s", got)
 	}
 	if after := f.sw.keysOf(storage.ScopedUserName("team-a")); !slices.Equal(before, after) {
 		t.Errorf("a re-run changed the key: %v -> %v", before, after)
@@ -151,9 +203,12 @@ func TestSecureS3_PreflightFailuresChangeNothing(t *testing.T) {
 			putUnsecuredStorage(f)
 			readyAfterApply(f)
 			tc.setup(f)
-			resp, err := SecureS3Storage(c)
+			resp, err := secureRun(t, c)
 			if err != nil || resp.Success || !strings.Contains(resp.Message, tc.want) || !strings.Contains(resp.Message, "Nothing was changed") {
 				t.Fatalf("got %+v %v, want a refusal with %q", resp, err, tc.want)
+			}
+			if got := strings.Join(lastStatuses(), " "); got != "check=failed" {
+				t.Errorf("steps = %s, want only the checks, failed", got)
 			}
 			if m := f.mutations(); len(m) != 0 {
 				t.Errorf("changes: %v", m)
@@ -177,9 +232,13 @@ func TestSecureS3_StopsOnAFailedProbeAndResumes(t *testing.T) {
 	readyAfterApply(f)
 	f.sw.failUserObjects[storage.ScopedUserName("team-b")] = 500
 
-	resp, _ := SecureS3Storage(c)
-	if resp.Success || resp.ErrorCode != "s3_keys" || !strings.Contains(resp.Message, "team-b/dspa did not get its own key") || !strings.Contains(resp.Message, "Already done: team-a/dspa") {
+	resp, _ := secureRun(t, c)
+	if resp.Success || resp.ErrorCode != "s3_keys" || !strings.Contains(resp.Message, "team-b/dspa did not get its own key") ||
+		!strings.Contains(resp.Message, "On a key of their own: team-a/dspa.") || !strings.Contains(resp.Message, "Still on the old key: team-b/dspa; run Secure S3 storage again") {
 		t.Fatalf("first run: %+v", resp)
+	}
+	if got := strings.Join(lastStatuses(), " "); got != "check=success rollout=success server:team-a/dspa=success server:team-b/dspa=failed" {
+		t.Errorf("steps = %s", got)
 	}
 	idA := assertScopedKey(t, f, "team-a")
 	for _, name := range []string{storage.DSPASecretName, storage.ConnectionSecretName} {
@@ -198,9 +257,12 @@ func TestSecureS3_StopsOnAFailedProbeAndResumes(t *testing.T) {
 	}
 
 	delete(f.sw.failUserObjects, storage.ScopedUserName("team-b"))
-	resp, _ = SecureS3Storage(c)
-	if !resp.Success || !strings.Contains(resp.Message, "Now on a key of their own: team-b/dspa") || !strings.Contains(resp.Message, "Already on their own key: team-a/dspa") {
+	resp, _ = secureRun(t, c)
+	if !resp.Success || !strings.Contains(resp.Message, "On a key of their own: team-a/dspa, team-b/dspa.") || strings.Contains(resp.Message, "Still on the old key") {
 		t.Fatalf("resume: %+v", resp)
+	}
+	if got := strings.Join(lastStatuses(), " "); got != "check=success rollout=skipped server:team-a/dspa=success server:team-b/dspa=success" || !sawEvent("server:team-a/dspa", "already uses its own key") {
+		t.Errorf("resume steps = %s", got)
 	}
 	if got := assertScopedKey(t, f, "team-a"); got != idA {
 		t.Errorf("the resume replaced team-a's working key")

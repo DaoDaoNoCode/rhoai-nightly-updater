@@ -1833,7 +1833,7 @@ type MigrateStorageRequest struct {
 // project; each pipeline server this tool records then has a SeaweedFS
 // user and key of its own. Storage an earlier version set up gave its
 // admin key to every pipeline project: Secure S3 storage moves it to the
-// secured state (POST /api/resources/s3/secure).
+// secured state (POST /api/resources/s3/secure/stream).
 type S3KeysState struct {
 	// Secured is true once the storage runs with the secured IAM settings
 	// and a new admin key.
