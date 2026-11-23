@@ -529,6 +529,21 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   on InferenceServices.
 - The MLflow samples status was cached per project for every user; caches
   of reads made with a user's token are now keyed by that token.
+- **A SeaweedFS key of its own for each pipeline server.** The S3 storage's
+  admin key no longer goes into pipeline projects. A first setup runs
+  SeaweedFS with IAM writes on and self-service off; each pipeline server
+  the tool records gets user `rnu-dspa-<project>` (list, read, write and
+  delete in bucket `pipelines`), and its key, checked against the storage
+  first, goes into `nightly-dspa-s3` and the dashboard Connection. Deleting
+  the pipeline server deletes the user. Migrate storage ends in the same
+  state. Storage an earlier version set up shows **Not secured** (S3
+  storage tab, Pipelines tab, Overview) with **Secure S3 storage...**: a new
+  admin key and a key per recorded pipeline server, never run on its own;
+  until then a new pipeline server is not set up. Restart workbenches and
+  model deployments that use the Connection afterwards. Any project's key
+  still reaches every project's artifacts in the bucket (SECURITY.md).
+  `make test-seaweedfs-podman` checks it against the pinned SeaweedFS image.
+  No RBAC change.
 
 ## [4.0.0] - 2026-11-20
 
