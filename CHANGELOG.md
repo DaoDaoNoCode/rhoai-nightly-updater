@@ -248,6 +248,13 @@ Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#u
   project with another UID is not the tool's entry, is never taken off by
   it, and is dropped from the record. Entries recorded by earlier versions
   keep their name-only meaning.
+- **Delete S3 storage is offered for what is on the cluster.** After a
+  deletion that did not finish, Delete stayed offered because this browser
+  remembered the failure: in another browser it was gone, and here it
+  stayed even with nothing left. The status now names this tool's storage
+  objects a deletion left (its Secret, Service and NetworkPolicy, besides
+  the data volume and the Route), and Delete is offered while they are
+  there.
 - **A DataScienceCluster change applies only to the DSC it was checked
   on.** The Components page's changes (a component's state, Fix, soft
   reset) and Diagnostics' disable-component fix tested only the fields

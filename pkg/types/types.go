@@ -1871,6 +1871,10 @@ type ResourceState struct {
 	// ManagedByTool is true when this tool created the resource. Teardown is
 	// offered only for managed resources.
 	ManagedByTool bool `json:"managedByTool"`
+	// Leftovers (the S3 storage) are this tool's storage objects still in
+	// its namespace once the Deployment is gone, as "Kind name": what a
+	// teardown that did not finish left. Delete is offered for them.
+	Leftovers []string `json:"leftovers,omitempty"`
 	// Unrecorded (a pipeline server) is true when it carries this tool's
 	// label but this tool has no record of its UID (set up before 3.0.1, or
 	// labelled by someone else, which a project editor can do): Set up again

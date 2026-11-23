@@ -107,7 +107,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const resourcesSettling = allResources.some((r) => isTerminating(r) || (r.deployed && !r.ready && !terminalReason(r)));
 
   const runs = useRunState();
-  const { resAction, actionProject, lastMinIOTeardown, run, runOpen, setRunOpen, setupConfirm, setSetupConfirm, cleanupScope, setCleanupScope,
+  const { resAction, actionProject, run, runOpen, setRunOpen, setupConfirm, setSetupConfirm, cleanupScope, setCleanupScope,
     sampleOp, samplesRefresh, modelsOp, playgroundOp, playgroundRefresh, maasOp, maasRefresh, prereqRefresh, checking, checkError } = runs;
   // Poll quickly after a change, back off to 30 s, stop after 10 minutes or
   // once nothing is settling; hidden tabs don't poll (A06-5).
@@ -180,11 +180,10 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const busy: Busy = { resAction, actionProject, migrating, models: modelsOp, playground: playgroundOp, maas: maasOp };
   const baseReason = mutateBlocker ?? (runningSomething ? BUSY_REASON : null);
   // After a deletion the namespace stays (deployed:false, managedByTool:true).
-  // Offer Delete again while tool objects are still reported (the data
-  // PVC, a Route) or the last deletion from this tab did not finish.
+  // Offer Delete again while the cluster still has this tool's storage
+  // objects (the data PVC, a Route, or what a deletion left: leftovers).
   const minioLeftovers = !!minio && !minio.deployed && minio.managedByTool === true && (
-    (minio.dataPVCs ?? []).length > 0 || !!minio.uiRoute || !!minio.apiRoute ||
-    (lastMinIOTeardown !== null && ["partial_failure", "delete_failed", "in_progress", "forbidden", "unauthorized", "network"].includes(lastMinIOTeardown))
+    (minio.dataPVCs ?? []).length > 0 || !!minio.uiRoute || !!minio.apiRoute || (minio.leftovers ?? []).length > 0
   );
   const modal = pending ? confirmOf(pending) : null;
 

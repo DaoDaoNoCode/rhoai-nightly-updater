@@ -1163,6 +1163,8 @@ export interface ResourceState {
   /** False: the tool did not create it and will not tear it down. */
   managedByTool?: boolean;
   /** A pipeline server with this tool's label but no record of its UID (set up before 3.0.1, or labelled by a project's editor): Set up again adopts it. */
+  /** The S3 storage: this tool's objects still in its namespace once the Deployment is gone ("Kind name"), what a deletion left. */
+  leftovers?: string[] | null;
   unrecorded?: boolean;
   terminating?: boolean;
   setupBlockedReason?: string;
