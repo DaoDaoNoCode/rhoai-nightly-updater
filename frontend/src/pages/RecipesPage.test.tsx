@@ -12,7 +12,7 @@ import { jsonResponse, stubApi } from "../test/apiStub";
 import { contract } from "../test/contract";
 import { IDLE_OPERATION, nightlyStatus, renderPage, settleApps } from "../test/providers";
 import { sseEvent, sseResponse } from "../test/utils";
-import type { OperationStatusResponse, RecipePlan, RecipeRun, RecipeRunStatus, RecipeRunStep } from "../types";
+import type { OperationStatusResponse, RecipePlan, RecipeRun, RecipeRunStatus, RecipeRunStep, ResourcesStatus } from "../types";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -84,6 +84,17 @@ const editorReads = {
 };
 
 const NO_RUN: RecipeRunStatus = { run: null, running: false };
+
+/** The Environment status with the S3 storage, MLflow and a pipeline server in each of `servers` up. */
+const environmentUp = (...servers: string[]): ResourcesStatus => ({
+  minio: { deployed: true, ready: true },
+  mlflow: { deployed: true, ready: true },
+  pipelineServers: servers.map((namespace) => ({ deployed: true, ready: true, namespace })),
+});
+
+/** The texts of the dialog's "Left in place" list. */
+const leftInPlaceItems = (dialog: HTMLElement) =>
+  within(within(dialog).getByText("Left in place").closest(".pf-v6-c-alert") as HTMLElement).getAllByRole("listitem").map((li) => li.textContent);
 
 describe("Recipes page", () => {
   it("new: the editor's defaults, Review and run plans the recipe, and Run recipe starts it", async () => {
@@ -344,13 +355,14 @@ describe("Recipes page", () => {
   });
 
   it("clean up: sends the backend's clean-up request for what the run created; a project with a workbench is deleted only once it is confirmed", async () => {
-    // A failed run: the cluster still shows as its own the pipeline server and the storage (they carry
-    // the run's annotation), the project it created and the aipipelines it turned on.
+    // A failed run: the cluster still shows the project it created and the aipipelines it turned on as its own;
+    // the storage and MLflow are the cluster's, and the pipeline server goes with the project.
     const ended = contract.recipeRunEnded();
     const streams: ReturnType<typeof sseResponse>[] = [];
     const api = stubApi({
       ...editorReads,
       "GET /api/recipes/run": ended,
+      "GET /api/resources/status": environmentUp("recipe-dev", "team-b"),
       "POST /api/resources/cleanup/stream": () => { const s = sseResponse(); streams.push(s); return s.response; },
     });
     renderPage(<RecipesPage />, "/recipes");
@@ -359,11 +371,21 @@ describe("Recipes page", () => {
     expect(screen.getByText("Step 5 of 5 failed: Pipeline server")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up..." }));
     const dialog = screen.getByRole("dialog", { name: /Clean up what recipe dev set up\?/ });
+    await settle();
     expect(within(dialog).getAllByRole("checkbox").map((c) => [c.getAttribute("id"), (c as HTMLInputElement).checked])).toEqual([
-      ["recipe-cleanup-pipeline-server:recipe-dev", true], ["recipe-cleanup-storage", true], ["recipe-cleanup-recipe-project:recipe-dev", true], ["recipe-cleanup-components", true],
+      ["recipe-cleanup-recipe-project:recipe-dev", true], ["recipe-cleanup-components", true],
     ]);
     expect(within(dialog).getByRole("checkbox", { name: "The DataScienceCluster components the run turned on: aipipelines" })).toBeChecked();
+    expect(dialog).toHaveTextContent("Removes everything in the project, including its pipeline server.");
     expect(dialog).toHaveTextContent("Deleting project recipe-dev deletes everything in it.");
+    // Left in place, from the live status: the shared parts; the project's pipeline server goes with it,
+    // and one in a project the run never used is not the run's to name.
+    expect(leftInPlaceItems(dialog)).toEqual(["The S3 storage", "MLflow"]);
+    expect(within(dialog).getByRole("link", { name: "Environment page" })).toHaveAttribute("href", "/environment");
+    // Keeping the project keeps its pipeline server too.
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Project recipe-dev, which the recipe created" }));
+    expect(leftInPlaceItems(dialog)).toEqual(["The pipeline server in recipe-dev", "The S3 storage", "MLflow"]);
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Project recipe-dev, which the recipe created" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Clean up" }));
     await settle();
     expect(streams).toHaveLength(1);
@@ -383,7 +405,7 @@ describe("Recipes page", () => {
     expect(streams).toHaveLength(2);
     await act(async () => {
       streams[1].push(sseEvent("recipe-project:recipe-dev", "success", "Deleted project recipe-dev; OpenShift removes what it holds."));
-      streams[1].push(sseEvent("operation_complete", "success", "Deleted the pipeline server, the S3 storage and project recipe-dev, and turned aipipelines back."));
+      streams[1].push(sseEvent("operation_complete", "success", "Deleted project recipe-dev, and turned aipipelines back."));
       streams[1].close();
     });
     await settle();
@@ -394,12 +416,12 @@ describe("Recipes page", () => {
     ]);
   });
 
-  it("clean up offers only the backend's request: nothing the run found set up, whatever its step's status", async () => {
-    // S3 and MLflow were there before: their steps succeeded without creating them.
-    const before = steps(8).map((s) => (s.id === "s3" || s.id === "mlflow" ? { ...s, created: undefined } : s));
+  it("clean up in an existing project: offers only the components; the pipeline server, the storage and MLflow are left in place", async () => {
+    // The run set up all of them, in a project it did not create: none of them is only the run's.
     const api = stubApi({
       ...editorReads,
-      "GET /api/recipes/run": runStatus({ state: "succeeded", steps: before, project: { name: "team-a" } }, { cleanup: { pipelineServers: ["team-a"], components: ["aipipelines"], recipeRun: "run1" } }),
+      "GET /api/recipes/run": runStatus({ state: "succeeded", steps: steps(8), project: { name: "team-a" } }, { cleanup: { components: ["aipipelines"] } }),
+      "GET /api/resources/status": environmentUp("team-a"),
       "POST /api/resources/cleanup/stream": () => sseResponse().response,
     });
     renderPage(<RecipesPage />, "/recipes");
@@ -407,17 +429,29 @@ describe("Recipes page", () => {
     await settle();
     fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up..." }));
     const dialog = screen.getByRole("dialog");
-    expect(within(dialog).queryByRole("checkbox", { name: "The S3 storage" })).not.toBeInTheDocument();
-    expect(within(dialog).queryByRole("checkbox", { name: "MLflow" })).not.toBeInTheDocument();
-    expect(within(dialog).getByRole("checkbox", { name: "The pipeline server in team-a" })).toBeChecked();
-    expect(within(dialog).getByRole("checkbox", { name: "The DataScienceCluster components the run turned on: aipipelines" })).toBeChecked();
-    // A project the recipe did not create is never offered.
+    await settle();
+    expect(within(dialog).getAllByRole("checkbox").map((c) => c.getAttribute("id"))).toEqual(["recipe-cleanup-components"]);
     expect(within(dialog).queryByText(/Project team-a/)).not.toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("checkbox", { name: "The DataScienceCluster components the run turned on: aipipelines" }));
+    expect(leftInPlaceItems(dialog)).toEqual(["The pipeline server in team-a", "The S3 storage", "MLflow"]);
     fireEvent.click(within(dialog).getByRole("button", { name: "Clean up" }));
     await settle();
-    // The run's ID goes with the request: Clean up re-checks the run's annotation before each delete.
-    expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([{ pipelineServers: ["team-a"], recipeRun: "run1" }]);
+    expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([{ components: ["aipipelines"] }]);
+  });
+
+  it("clean up says what it leaves in place even when the Environment status cannot be read", async () => {
+    stubApi({
+      ...editorReads,
+      "GET /api/recipes/run": runStatus({ state: "succeeded", steps: steps(8), project: { name: "team-a" } }, { cleanup: { components: ["aipipelines"] } }),
+      "GET /api/resources/status": () => jsonResponse({ error: "forbidden", errorCode: "forbidden" }, 403),
+    });
+    renderPage(<RecipesPage />, "/recipes");
+    await settleApps();
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up..." }));
+    const dialog = screen.getByRole("dialog");
+    await settle();
+    expect(dialog).toHaveTextContent("This clean-up does not delete the S3 storage, MLflow or a pipeline server in a project the recipe did not create. Their status could not be read.");
+    expect(within(dialog).getByRole("link", { name: "Environment page" })).toHaveAttribute("href", "/environment");
   });
 });
 

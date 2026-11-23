@@ -125,12 +125,6 @@ export interface CleanupRequest {
    * every one is confirmed.
    */
   confirmProjectContents?: string[];
-  /**
-   * A recipe run's Clean up (its ID, from GET /api/recipes/run `cleanup`):
-   * the pipeline servers, the S3 storage and MLflow go only while they
-   * still carry that run's annotation. Clean up everything leaves it out.
-   */
-  recipeRun?: string;
 }
 
 /**

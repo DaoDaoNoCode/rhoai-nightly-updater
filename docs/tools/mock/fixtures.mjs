@@ -1763,9 +1763,10 @@ export function recipePlan(rcp = recipe(), installed = true, blocked = false) {
 /**
  * A run record: the first `done` steps set up (RHOAI kept), step `done`
  * with `current` (and its message), the rest pending. Times count back
- * from NOW: each finished step took a few minutes. The run created every
- * part it set up, and the failed pipeline server (it is there, not ready);
- * the prerequisite steps it ran turned their components on.
+ * from NOW: each finished step took a few minutes. Only the project and
+ * the prerequisite steps it ran are `created` (the project is the recipe's,
+ * the prerequisites turned their components on); the S3 storage, MLflow and
+ * a pipeline server are never a run's.
  */
 export function recipeRun({ done = 0, current = "running", message = "", state = "running", stopReason = "", errorCode = "", pod = "rhoai-nightly-updater-6f7b8c9d5-x2k4p" } = {}) {
   const start = 2 + done * 2.5;
@@ -1774,10 +1775,10 @@ export function recipeRun({ done = 0, current = "running", message = "", state =
     if (i < done) {
       return id === "rhoai"
         ? { id, title, ...times, status: "skipped", message: "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).", startedAt: ago(start), finishedAt: ago(start) }
-        : { id, title, ...times, status: "success", created: true, message: RECIPE_DONE[id], startedAt: ago(start - i * 2.5), finishedAt: ago(start - (i + 1) * 2.5) };
+        : { id, title, ...times, status: "success", ...(RECIPE_OWNS.has(id) ? { created: true } : {}), message: RECIPE_DONE[id], startedAt: ago(start - i * 2.5), finishedAt: ago(start - (i + 1) * 2.5) };
     }
     if (i === done && current) {
-      return { id, title, ...times, status: current, ...(message ? { message } : {}), ...(current === "failed" ? { errorCode: "timeout", created: true, finishedAt: ago(0.5) } : {}), startedAt: ago(1.2) };
+      return { id, title, ...times, status: current, ...(message ? { message } : {}), ...(current === "failed" ? { errorCode: "timeout", ...(RECIPE_OWNS.has(id) ? { created: true } : {}), finishedAt: ago(0.5) } : {}), startedAt: ago(1.2) };
     }
     return { id, title, ...times, status: "pending" };
   });
@@ -1790,20 +1791,19 @@ export function recipeRun({ done = 0, current = "running", message = "", state =
   };
 }
 
+/** The steps whose part a run can own: the project and the prerequisites. */
+const RECIPE_OWNS = new Set(["project", "pipelines-prereq", "mlflow-prereq"]);
+
 /** The DataScienceCluster component each prerequisite step turns on. */
 const RECIPE_COMPONENTS = { "pipelines-prereq": "aipipelines", "mlflow-prereq": "mlflowoperator" };
 
 /**
  * GET /api/recipes/run's clean-up request for what an ended run created
- * (pkg/api recipeCleanup): the parts whose step created them, the project
- * the recipe created, the components it turned on; null when none.
+ * (pkg/cluster/internal/recipe Ownership): the project the recipe created
+ * and the components it turned on; null when none.
  */
 export function recipeCleanup(run) {
-  const created = (id) => run.steps.some((s) => s.id === id && s.created);
   const req = {
-    ...(created("pipeline-server") ? { pipelineServers: [run.project.name] } : {}),
-    ...(created("s3") ? { storage: true } : {}),
-    ...(created("mlflow") ? { mlflow: true } : {}),
     ...(run.project?.owned ? { recipeProject: run.project.name } : {}),
     ...(run.components?.length ? { components: run.components } : {}),
   };

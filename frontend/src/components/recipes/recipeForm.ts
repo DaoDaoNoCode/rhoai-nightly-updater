@@ -1,5 +1,6 @@
 import type { CleanupRequest } from "../../services/api";
-import type { EnvironmentRecipe, RecipeRun, RecipeRunStep } from "../../types";
+import type { EnvironmentRecipe, RecipeRun, RecipeRunStep, ResourceState, ResourcesStatus } from "../../types";
+import { isTerminating } from "../environment/resourceRow";
 
 /** The schema version this UI writes (pkg/cluster internal/recipe APIVersion). */
 export const RECIPE_API_VERSION = "rhoai-nightly-updater/v1alpha1";
@@ -174,45 +175,52 @@ export interface RecipeCleanupPart {
   /** The clean-up stream's step ID (pkg/cluster CleanupStepID), or "components". */
   id: string;
   title: string;
-  /** Whether this run set it up (else it was there before, and stays unless chosen). */
-  setUpByRun: boolean;
 }
 
 /**
- * What Clean up can delete for a run, in the clean-up's own order: only what
- * the backend's clean-up request `ready` names, which is what the cluster
- * still shows as the run's (the parts carrying the run's annotation, the
- * project the recipe created, the DataScienceCluster components it turned
- * on). Nothing the run found already set up is offered.
+ * What Clean up can delete for a run, in the clean-up's own order: what the
+ * backend's clean-up request `ready` names, the parts that are only the
+ * run's: the project the recipe created (its pipeline server goes with it)
+ * and the DataScienceCluster components it turned on. The S3 storage,
+ * MLflow and a pipeline server in a project the recipe did not create are
+ * never offered (leftInPlace names them).
  */
 export function cleanupParts(ready: CleanupRequest | undefined): RecipeCleanupPart[] {
   const parts: RecipeCleanupPart[] = [];
-  for (const project of ready?.pipelineServers ?? []) parts.push({ id: `pipeline-server:${project}`, title: `The pipeline server in ${project}`, setUpByRun: true });
-  if (ready?.storage) parts.push({ id: "storage", title: "The S3 storage", setUpByRun: true });
-  if (ready?.mlflow) parts.push({ id: "mlflow", title: "MLflow", setUpByRun: true });
-  if (ready?.recipeProject) parts.push({ id: `recipe-project:${ready.recipeProject}`, title: `Project ${ready.recipeProject}, which the recipe created`, setUpByRun: true });
-  if (ready?.components?.length) parts.push({ id: "components", title: `The DataScienceCluster components the run turned on: ${ready.components.join(", ")}`, setUpByRun: true });
+  if (ready?.recipeProject) parts.push({ id: `recipe-project:${ready.recipeProject}`, title: `Project ${ready.recipeProject}, which the recipe created` });
+  if (ready?.components?.length) parts.push({ id: "components", title: `The DataScienceCluster components the run turned on: ${ready.components.join(", ")}` });
   return parts;
 }
 
 /**
  * The clean-up request for the chosen parts: the backend's request for
  * what the run created (`ready`), without the parts the user left out,
- * with the ones found set up that the user chose, and with what the
- * project holds once the user confirmed it.
+ * and with what the project holds once the user confirmed it.
  */
-export function cleanupRequest(ready: CleanupRequest | undefined, run: RecipeRun, chosen: ReadonlySet<string>, confirmed: string[] = []): CleanupRequest {
-  const project = run.project?.name ?? "";
-  const req: CleanupRequest = { ...ready };
-  const part = <K extends keyof CleanupRequest>(id: string, key: K, value: CleanupRequest[K]) => {
-    if (chosen.has(id)) req[key] = req[key] ?? value;
-    else delete req[key];
-  };
-  part(`pipeline-server:${project}`, "pipelineServers", [project]);
-  part("storage", "storage", true);
-  part("mlflow", "mlflow", true);
-  part(`recipe-project:${ready?.recipeProject ?? ""}`, "recipeProject", undefined);
-  part("components", "components", undefined);
-  if (req.recipeProject && confirmed.length > 0) req.confirmProjectContents = confirmed;
+export function cleanupRequest(ready: CleanupRequest | undefined, chosen: ReadonlySet<string>, confirmed: string[] = []): CleanupRequest {
+  const req: CleanupRequest = {};
+  if (ready?.recipeProject && chosen.has(`recipe-project:${ready.recipeProject}`)) {
+    req.recipeProject = ready.recipeProject;
+    if (confirmed.length > 0) req.confirmProjectContents = confirmed;
+  }
+  if (ready?.components?.length && chosen.has("components")) req.components = ready.components;
   return req;
+}
+
+/**
+ * What the run set up that this Clean up leaves in place, as the cluster
+ * shows it now (`status`, GET /api/resources/status): the S3 storage and
+ * MLflow, which the whole cluster shares, and the pipeline server in the
+ * run's project when that project is not deleted with this request.
+ */
+export function leftInPlace(status: ResourcesStatus, run: RecipeRun, req: CleanupRequest): string[] {
+  const up = (r: ResourceState | null | undefined) => !!r?.deployed && !isTerminating(r);
+  const out: string[] = [];
+  const project = run.project?.name;
+  if (project && project !== req.recipeProject && (status.pipelineServers ?? []).some((ps) => ps.namespace === project && up(ps))) {
+    out.push(`The pipeline server in ${project}`);
+  }
+  if (up(status.minio)) out.push("The S3 storage");
+  if (up(status.mlflow)) out.push("MLflow");
+  return out;
 }

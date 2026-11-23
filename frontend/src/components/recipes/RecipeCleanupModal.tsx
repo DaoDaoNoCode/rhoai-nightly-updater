@@ -16,12 +16,13 @@ import {
   Stack,
   StackItem,
 } from "@patternfly/react-core";
-import { streamCleanup, type CleanupRequest } from "../../services/api";
-import type { RecipeRun } from "../../types";
+import { Link } from "react-router-dom";
+import { getResourcesStatus, streamCleanup, type CleanupRequest } from "../../services/api";
+import type { RecipeRun, ResourcesStatus } from "../../types";
 import { StepProgress, type StepState } from "../environment/StepProgress";
 import { cleanupSteps } from "../environment/CleanupModal";
 import { TooltipButton } from "../TooltipButton";
-import { cleanupParts, cleanupRequest } from "./recipeForm";
+import { cleanupParts, cleanupRequest, leftInPlace } from "./recipeForm";
 
 /** The clean-up's refusal of a recipe project that still holds what the tool did not create (pkg/cluster recipe.ErrorCodeConfirmContents). */
 const CONFIRM_CONTENTS = "confirm_project_contents";
@@ -35,10 +36,12 @@ interface Outcome {
 /**
  * Clean up what a recipe run set up, as one clean-up operation (the
  * Environment page's, POST /api/resources/cleanup/stream). It sends the
- * backend's request for what the run created (`ready`: the parts, the
- * project the recipe created, the DataScienceCluster components it turned
- * on), less what the user leaves out; the parts that were there before the
- * run are offered, not chosen. A project that holds what
+ * backend's request for what is only the run's (`ready`: the project the
+ * recipe created, with everything in it, and the DataScienceCluster
+ * components it turned on), less what the user leaves out. What it leaves
+ * in place (the S3 storage, MLflow, a pipeline server in a project the
+ * recipe did not create) is listed from the live Environment status, for
+ * Clean up everything on the Environment page. A project that holds what
  * this tool did not create (a workbench, a claim) is refused before
  * anything is deleted; the dialog lists it, and deletes it with the
  * project only once the user confirms.
@@ -57,7 +60,9 @@ export const RecipeCleanupModal: React.FC<{
 }> = ({ run, ready, isOpen, blocker, onClose, onDone, onClusterBusy }) => {
   const titleId = React.useId();
   const parts = cleanupParts(ready);
-  const [chosen, setChosen] = useState<ReadonlySet<string>>(() => new Set(parts.filter((p) => p.setUpByRun).map((p) => p.id)));
+  const [chosen, setChosen] = useState<ReadonlySet<string>>(() => new Set(parts.map((p) => p.id)));
+  // What stays, from the live status (null until it is read; false when it cannot be).
+  const [resources, setResources] = useState<ResourcesStatus | false | null>(null);
   const [running, setRunning] = useState(false);
   const [states, setStates] = useState<Record<string, StepState>>({});
   const [outcome, setOutcome] = useState<Outcome | null>(null);
@@ -66,10 +71,16 @@ export const RecipeCleanupModal: React.FC<{
   const [confirmed, setConfirmed] = useState(false);
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
+  useEffect(() => {
+    const ticket = new AbortController();
+    getResourcesStatus(null, ticket.signal).then(setResources, () => !ticket.signal.aborted && setResources(false));
+    return () => ticket.abort();
+  }, []);
 
   const project = ready?.recipeProject ?? "";
   const projectId = `recipe-project:${project}`;
-  const req = cleanupRequest(ready, run, chosen, confirmed ? contents : []);
+  const req = cleanupRequest(ready, chosen, confirmed ? contents : []);
+  const stays = resources ? leftInPlace(resources, run, req) : [];
   const steps = cleanupSteps(req);
   const started = running || outcome !== null;
 
@@ -131,7 +142,7 @@ export const RecipeCleanupModal: React.FC<{
                     {parts.map((p) => (
                       <Checkbox key={p.id} id={`recipe-cleanup-${p.id}`} label={p.title} isChecked={chosen.has(p.id)} onChange={(_e, v) => toggle(p.id, v)}
                         description={p.id === "components" ? "Each goes back to what it was, unless something on the cluster uses it."
-                          : p.setUpByRun ? undefined : "It was set up before this run: someone may use it."} />
+                          : "Removes everything in the project, including its pipeline server."} />
                     ))}
                   </FormGroup>
                 </Form>
@@ -140,6 +151,30 @@ export const RecipeCleanupModal: React.FC<{
                 <StackItem>
                   <Alert variant="danger" isInline component="p" title="Data is deleted and cannot be recovered">
                     Deleting project {project} deletes everything in it. It is deleted only while it is still the one the recipe created.
+                  </Alert>
+                </StackItem>
+              )}
+              {(stays.length > 0 || resources === false) && (
+                <StackItem>
+                  <Alert variant="info" isInline title="Left in place">
+                    <Stack hasGutter>
+                      {stays.length > 0 ? (
+                        <>
+                          <StackItem>This clean-up does not delete what the cluster shares or what is in a project the recipe did not create:</StackItem>
+                          <StackItem>
+                            <List>{stays.map((s) => <ListItem key={s}>{s}</ListItem>)}</List>
+                          </StackItem>
+                        </>
+                      ) : (
+                        <StackItem>
+                          This clean-up does not delete the S3 storage, MLflow or a pipeline server in a project the recipe did not create.
+                          Their status could not be read.
+                        </StackItem>
+                      )}
+                      <StackItem>
+                        To delete them, use Clean up everything on the <Link to="/environment">Environment page</Link>.
+                      </StackItem>
+                    </Stack>
                   </Alert>
                 </StackItem>
               )}
