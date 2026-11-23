@@ -164,3 +164,27 @@ func TestMaaSGateway_AdmitsOnlyProjectsWithALivePublication(t *testing.T) {
 		t.Fatal("the record alone put proj back on the gateway")
 	}
 }
+
+// The DataScienceCluster part is this tool's only while the record says it
+// changed the field and its field manager still owns it (as the
+// prerequisites' parts): once someone else sets modelsAsAService, the part
+// is not managed by this tool.
+func TestMaaSStatus_DSCPartIsTheToolsOnlyWhileItOwnsTheField(t *testing.T) {
+	mc := newMaaSCluster(t)
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	st, _ := GetMaaSStatus(mc.c)
+	if p := maasPart(t, st, "dsc"); !p.ManagedByTool {
+		t.Fatalf("after setup: %+v", p)
+	}
+	mc.f.mu.Lock()
+	k, _ := parseFakePath(tMaaSDSC)
+	ensureMap(mc.f.objects[k], "metadata")["managedFields"] = []any{map[string]any{"manager": "someone-else", "operation": "Update",
+		"fieldsV1": map[string]any{"f:spec": map[string]any{"f:components": map[string]any{"f:aigateway": map[string]any{"f:managementState": map[string]any{}, "f:modelsAsAService": map[string]any{"f:managementState": map[string]any{}}}}}}}}
+	mc.f.mu.Unlock()
+	st, _ = GetMaaSStatus(mc.c)
+	if p := maasPart(t, st, "dsc"); p.ManagedByTool || !p.NotManaged {
+		t.Fatalf("after someone else set it: %+v", p)
+	}
+}

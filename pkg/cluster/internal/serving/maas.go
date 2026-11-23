@@ -1453,7 +1453,10 @@ func (r *maasStatusRun) statusDSC(dsc maasDSC, dscErr error) {
 		st.Blocked = &types.ComponentBlock{Component: "aigateway", Reason: "MaaS needs RHOAI's DataScienceCluster, and this cluster has none. A cluster-admin creates one on the Components page."}
 		dscPart.State, dscPart.Message = "problem", "No DataScienceCluster"
 	case dsc.maas == "Managed" && dsc.aigateway == "Managed":
-		dscPart.ManagedByTool, dscPart.NotManaged = rec.DSCChanged, !rec.DSCChanged
+		// This tool's while it recorded the change and still owns the field
+		// (as the prerequisites' parts): someone who set it since owns it.
+		owned := rec.DSCChanged && dscMaaSOwned(dsc)
+		dscPart.ManagedByTool, dscPart.NotManaged = owned, !owned
 		switch dsc.ready {
 		case "False":
 			dscPart.State, dscPart.Message = "waiting", "modelsAsAService is Managed; not ready: "+kube.TruncateText(dsc.readyMsg, 300)
@@ -1471,7 +1474,7 @@ func (r *maasStatusRun) statusDSC(dsc maasDSC, dscErr error) {
 		dscPart.State = "missing"
 		dscPart.Message = fmt.Sprintf("aigateway is %s and modelsAsAService is %s. Set up sets them to Managed, last, as the docs' DataScienceCluster step does; Remove puts back what this tool changed.", kube.FirstNonEmpty(dsc.aigateway, "not set"), kube.FirstNonEmpty(dsc.maas, "not set"))
 		dscPart.Commands = maasDSCCommand(dsc.name)
-		dscPart.ManagedByTool = rec.AIGatewayChanged
+		dscPart.ManagedByTool = rec.AIGatewayChanged && dsc.aigateway == "Managed" && dscAIGatewayOwned(dsc)
 		if dsc.argoApp != "" {
 			dscPart.State = "problem"
 			dscPart.Message = argo.GitOpsRefusal("The DataScienceCluster", dsc.argoApp, "turning on Models as a Service") + " Set " + strings.Join(fields, " and ") + " in Git." + dsc.argo.UnconfirmedNote()
@@ -1546,7 +1549,9 @@ func (r *maasStatusRun) statusPlatform(dsc maasDSC) {
 			}
 		}
 	}
-	if rec.DSCChanged || rec.AIGatewayChanged || rec.InfraNamespace != "" {
+	// The DataScienceCluster counts while this tool still owns a field it
+	// recorded changing (teardown restores only those).
+	if (rec.DSCChanged && dscMaaSOwned(dsc)) || (rec.AIGatewayChanged && dscAIGatewayOwned(dsc)) || rec.InfraNamespace != "" {
 		p.ManagedByTool = true
 	}
 	switch {

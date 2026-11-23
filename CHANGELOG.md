@@ -161,6 +161,12 @@ Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#u
   publication only the record still listed kept (or put back) its project
   on the gateway, whose editors could then attach routes to it. The list
   is now the projects of this tool's MaaSModelRefs on the cluster.
+- **The MaaS tab's DataScienceCluster part is this tool's only while it
+  owns the field.** It said "set up by this tool" from the record alone,
+  also after someone else set `modelsAsAService` or `aigateway`. As for the
+  prerequisites, the part (and the platform) now counts as this tool's
+  only while the record says it changed the field and its field manager
+  still owns it.
 - **A DataScienceCluster change applies only to the DSC it was checked
   on.** The Components page's changes (a component's state, Fix, soft
   reset) and Diagnostics' disable-component fix tested only the fields
