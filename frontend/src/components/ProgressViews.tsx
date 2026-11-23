@@ -4,6 +4,7 @@ import InProgressIcon from "@patternfly/react-icons/dist/esm/icons/in-progress-i
 import type { ServerOperation } from "../types";
 import { formatElapsed } from "../utils";
 import { ServerOperationModal } from "./ServerOperationModal";
+import { withIds } from "./environment/s3KeysText";
 
 /**
  * A run this tab started whose progress dialog can be closed while it goes
@@ -119,14 +120,14 @@ const midSentence = (title: string) => (/^[A-Z][a-z]/.test(title) ? title.charAt
 export const BackgroundRunAlert: React.FC<{ run: BackgroundRun }> = ({ run }) => {
   const now = useNow();
   // A one-step run's step is the run itself: its name says it.
-  const step = !run.step ? ": starting" : run.step.count > 1 ? `: step ${run.step.index} of ${run.step.count}, ${midSentence(run.step.title)}` : "";
+  const step: React.ReactNode = !run.step ? ": starting" : run.step.count > 1 ? <>: step {run.step.index} of {run.step.count}, {withIds(midSentence(run.step.title))}</> : "";
   return (
     <Alert
       variant="info"
       isInline
       component="p"
       customIcon={<InProgressIcon />}
-      title={`${run.title} is running${step} (${formatElapsed(run.startedAt, now)})`}
+      title={<>{run.title} is running{step} ({formatElapsed(run.startedAt, now)})</>}
       actionLinks={<ViewProgressLink onOpen={run.open} />}
     >
       Closing its dialog does not stop it. Cluster changes from this tool are disabled until it finishes.

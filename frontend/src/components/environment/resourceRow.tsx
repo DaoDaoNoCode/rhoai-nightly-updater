@@ -215,6 +215,8 @@ export type Pending =
   | { kind: "setup-minio" | "repair-minio" | "setup-mlflow" | "revert-mlflow" | "teardown-mlflow" }
   /** deleteNamespace: also delete namespace seaweedfs (the user's informed choice). */
   | { kind: "teardown-minio"; deleteNamespace?: boolean }
+  /** Delete the SeaweedFS users of pipeline servers that no longer exist (S3KeysState.leftoverUsers), as listed. */
+  | { kind: "remove-leftover-keys"; users: string[] }
   | { kind: "deploy-mlflow-pr"; pr: number }
   /**
    * again: set up an existing pipeline server again (for example to recreate its Connection).

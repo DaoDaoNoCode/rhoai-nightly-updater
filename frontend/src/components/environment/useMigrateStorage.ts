@@ -40,6 +40,11 @@ export interface MigrateStepState {
 /** Each run's dialog title. */
 export const MIGRATE_TITLES: Record<MigrateKind, string> = { migrate: "Migrate storage", remove: "Delete the old storage", secure: "Secure S3 storage" };
 
+/** What a Secure S3 storage run also does: the leftover keys its confirmation listed. */
+export interface SecureOptions {
+  removeLeftoverKeys?: string[];
+}
+
 export interface MigrateRun {
   kind: MigrateKind;
   /** When it started (epoch ms). */
@@ -69,7 +74,7 @@ export function useMigrateStorage(onFinished: () => void) {
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
 
-  const start = useCallback((kind: MigrateKind, options: MigrateStorageOptions, extraSteps: { id: string; title: string }[] = []) => {
+  const start = useCallback((kind: MigrateKind, options: MigrateStorageOptions & SecureOptions, extraSteps: { id: string; title: string }[] = []) => {
     trackFeature(kind === "migrate" ? "migrate-storage" : kind === "remove" ? "remove-old-storage" : "secure-minio");
     setRun({ kind, startedAt: Date.now(), steps: {}, extraSteps, running: true, result: null });
     let finalMessage = "";
@@ -96,7 +101,7 @@ export function useMigrateStorage(onFinished: () => void) {
     };
     const onDone = (success: boolean, error?: string, apiError?: { errorCode?: string }) => finish(success, success ? finalMessage : error || finalMessage || "The operation failed.", success ? finalCode : apiError?.errorCode);
     const onDrop = () => finish(false, "The connection to the server was lost. The operation continues on the server; the S3 storage tab shows the outcome when it ends.", "detached");
-    controller.current = kind === "secure" ? streamSecureStorage(onStep, onDone, onDrop) : streamMigrateStorage(options, onStep, onDone, onDrop);
+    controller.current = kind === "secure" ? streamSecureStorage(options.removeLeftoverKeys ?? [], onStep, onDone, onDrop) : streamMigrateStorage(options, onStep, onDone, onDrop);
   }, [onFinished]);
 
   const reset = useCallback(() => setRun((r) => (r && !r.running ? null : r)), []);

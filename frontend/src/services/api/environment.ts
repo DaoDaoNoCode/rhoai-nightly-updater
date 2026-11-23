@@ -107,11 +107,17 @@ export function streamMigrateStorage(
  * detach; work keeps running on the server.
  */
 export function streamSecureStorage(
+  removeLeftoverKeys: string[],
   onStep: (step: UpdateStep) => void,
   onDone: StreamDoneHandler,
   onConnectionDrop?: StreamDetachHandler,
 ): AbortController {
-  return streamSSE('/api/resources/s3/secure/stream', {}, onStep, onDone, onConnectionDrop);
+  return streamSSE('/api/resources/s3/secure/stream', removeLeftoverKeys.length > 0 ? { removeLeftoverKeys } : {}, onStep, onDone, onConnectionDrop);
+}
+
+/** Remove leftover keys: deletes the listed SeaweedFS users whose projects still have no pipeline server. */
+export function removeLeftoverKeys(users: string[]): Promise<OperationResponse> {
+  return request('/api/resources/s3/leftover-keys/remove', { method: 'POST', body: JSON.stringify({ users }), acceptStatuses: [422] });
 }
 
 /** Matches pkg/types CleanupRequest: resources clean-up removes, in sequence. */

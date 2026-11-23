@@ -1,5 +1,6 @@
 import React from "react";
 import { ProgressStep, ProgressStepper } from "@patternfly/react-core";
+import InProgressIcon from "@patternfly/react-icons/dist/esm/icons/in-progress-icon";
 import type { UpdateStep } from "../../types";
 
 export interface StepState {
@@ -34,8 +35,10 @@ export const StepProgress: React.FC<{
       const description = message && formatMessage ? formatMessage(message) : message;
       return (
         <ProgressStep key={id} id={`${idPrefix}-${id}`} titleId={`${idPrefix}-${id}-title`} variant={variant} isCurrent={current}
-          aria-label={current ? `${title}: in progress` : undefined} description={description}>
-          {title}
+          aria-label={current ? `${title}: in progress` : undefined} description={description}
+          // The same in-progress icon as the running banner and the Running label (PatternFly's custom-icon example).
+          icon={current ? <InProgressIcon /> : undefined}>
+          {formatMessage ? formatMessage(title) : title}
         </ProgressStep>
       );
     })}

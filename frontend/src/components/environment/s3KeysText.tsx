@@ -24,7 +24,7 @@ export function joinAnd(nodes: React.ReactNode[]): React.ReactNode {
 
 // Patterns that denote names inside operation messages: pipeline servers ("project/name"),
 // SeaweedFS users, and Secret objects this app creates or references.
-const IDENTIFIER = /([a-z0-9](?:[-a-z0-9]*[a-z0-9])?\/[a-z0-9](?:[-a-z0-9]*[a-z0-9])?|rnu-dspa-[a-z0-9.-]*[a-z0-9]|rhoai-nightly-updater-s3|nightly-dspa-s3|seaweedfs-s3-credentials)/g;
+const IDENTIFIER = /((?=[a-z0-9-]*[a-z])[a-z0-9](?:[-a-z0-9]*[a-z0-9])?\/[a-z0-9](?:[-a-z0-9]*[a-z0-9])?|rnu-dspa-[a-z0-9.-]*[a-z0-9]|rhoai-nightly-updater-s3|nightly-dspa-s3|seaweedfs-s3-credentials|(?<=namespace )(?:minio|seaweedfs)\b)/g;
 
 /** Converts plain backend strings into React, highlighting known identifiers as code. */
 export function withIds(text: string): React.ReactNode {

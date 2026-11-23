@@ -289,18 +289,18 @@ export const scenarios = {
   // Secured storage: each recorded pipeline server on its own key, one server this tool did not set up lost access.
   "s3-secured": (w) => {
     w.resources.minio = { ...F.s3States.running, usedBy: ["dev-project/dspa", "team-b/dspa", "old-team/dspa"] };
-    w.resources.s3Keys = { secured: true, needsSecuring: false, ownKey: ["dev-project/dspa", "team-b/dspa"], keepOldKey: ["old-team/dspa (not set up by this tool)"] };
+    w.resources.s3Keys = { secured: true, needsSecuring: false, ownKey: ["dev-project/dspa", "team-b/dspa"], keepOldKey: ["old-team/dspa (not recorded by this tool)"] };
     w.gated = true;
   },
   // Secured storage with the key of a pipeline server deleted outside this tool.
   "s3-leftover": (w) => {
     w.resources.minio = { ...F.s3States.running, usedBy: ["dev-project/dspa"] };
-    w.resources.s3Keys = { secured: true, needsSecuring: true, ownKey: ["dev-project/dspa"], leftoverUsers: ["rnu-dspa-gone-team"] };
+    w.resources.s3Keys = { secured: true, needsSecuring: false, ownKey: ["dev-project/dspa"], leftoverUsers: ["rnu-dspa-gone-team"] };
     w.gated = true;
   },
   "s3-not-secured": (w) => {
     w.resources.minio = { ...F.s3States.running, usedBy: ["dev-project/dspa", "team-b/dspa", "old-team/dspa"] };
-    w.resources.s3Keys = { secured: false, needsSecuring: true, oldKey: ["dev-project/dspa", "team-b/dspa"], keepOldKey: ["old-team/dspa (not set up by this tool)"] };
+    w.resources.s3Keys = { secured: false, needsSecuring: true, oldKey: ["dev-project/dspa", "team-b/dspa"], keepOldKey: ["old-team/dspa (not recorded by this tool)"] };
     w.gated = true;
   },
   mlflow: (w) => { w.resources.mlflow = F.mlflowStates.running; },

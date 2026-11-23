@@ -113,7 +113,25 @@ const MOVING: EnvStatus[] = ["setting-up", "deleting"];
 /** Storage health; legacy buckets retaining data warrant attention. */
 export function storageStatus(status: ResourcesStatus | null, busy: Busy): EnvStatus {
   const b = busy.migrating || busy.resAction === "setup-minio" || busy.resAction === "secure-minio" ? "setting-up" : busy.resAction === "teardown-minio" ? "deleting" : null;
-  return envStatus(status?.minio, { busy: b, attention: status?.legacyStorage?.stage === "migrate" || storageNeedsSecuring(status) });
+  return envStatus(status?.minio, { busy: b, attention: status?.legacyStorage?.stage === "migrate" || storageNeedsSecuring(status) || storageKeyWarning(status) !== null });
+}
+
+/** The label of secured storage that holds keys of pipeline servers that no longer exist (S3KeysState.leftoverUsers). */
+export const LEFTOVER_KEYS = "Leftover keys";
+
+/** The label of secured storage used by pipeline servers whose old admin key no longer works (S3KeysState.keepOldKey). */
+export const lostAccessLabel = (n: number) => (n > 1 ? `${n} servers lost access` : "1 server lost access");
+
+/**
+ * The warning of secured storage that is otherwise fine (pipeline servers can be set up): its label, or null.
+ * Leftover keys come first: Remove leftover keys is the one action that fixes something here.
+ */
+export function storageKeyWarning(status: ResourcesStatus | null): string | null {
+  const keys = status?.s3Keys;
+  if (!keys?.secured || keys.needsSecuring || !status?.minio?.ready || status.legacyStorage?.stage === "migrate") return null;
+  if ((keys.leftoverUsers ?? []).length > 0) return LEFTOVER_KEYS;
+  const lost = (keys.keepOldKey ?? []).length;
+  return lost > 0 ? lostAccessLabel(lost) : null;
 }
 
 /** The one label of running storage whose admin key may still be in pipeline projects (S3KeysState.needsSecuring): the same on every tab and row. */
@@ -132,11 +150,11 @@ export const MIGRATION_NEEDED = "Migration needed";
 
 /** A storage problem's label: the cluster's, so it names no project. */
 const storageProblemLabel = (status: ResourcesStatus | null, s: EnvStatus) =>
-  status?.legacyStorage?.stage === "migrate" ? MIGRATION_NEEDED : storageNeedsSecuring(status) ? NOT_SECURED : envStatusText(s);
+  status?.legacyStorage?.stage === "migrate" ? MIGRATION_NEEDED : storageNeedsSecuring(status) ? NOT_SECURED : storageKeyWarning(status) ?? envStatusText(s);
 
 /** The storage's status text where it differs from its status's (Migration needed, Not secured), else undefined. */
 export const storageStatusText = (status: ResourcesStatus | null): string | undefined =>
-  status?.legacyStorage?.stage === "migrate" ? MIGRATION_NEEDED : storageNeedsSecuring(status) ? NOT_SECURED : undefined;
+  status?.legacyStorage?.stage === "migrate" ? MIGRATION_NEEDED : storageNeedsSecuring(status) ? NOT_SECURED : storageKeyWarning(status) ?? undefined;
 
 export function storageCanSetUp(status: ResourcesStatus | null, busy: Busy): boolean {
   return storageStatus(status, busy) === "not-set-up" && !status?.legacyStorage && !status?.minio?.setupBlockedReason;
@@ -232,17 +250,20 @@ function pipelinesIn(status: ResourcesStatus | null, project: string, busy: Busy
   // Not secured, with no pipeline server here yet: Set up stays, disabled with why (Secure S3 storage first).
   const newServer = server.status === "not-set-up" && !server.unmanaged;
   if (problem?.id === "storage" && storageNeedsSecuring(status) && status?.s3Keys?.secured === false && newServer) {
-    return { status: problem.status, label: NOT_SECURED, next: { kind: "set-up", label: `Set up Pipelines in ${project}`, setup: [], reason: SECURE_FIRST }, project };
+    return { status: problem.status, label: NOT_SECURED, next: { kind: "set-up", label: `Set up the pipeline server in ${project}`, setup: [], reason: SECURE_FIRST }, project };
   }
   // Secured storage with servers still on the old key: a new pipeline server gets its own key, so Set up stays
   // (the storage's own label and the Secure action say what is unfinished).
-  const secureUnfinished = problem?.id === "storage" && storageNeedsSecuring(status) && status?.s3Keys?.secured === true && newServer;
+  // Leftover keys or servers that lost access are the storage's own warning: the project's pipelines work, and
+  // a new pipeline server gets its own key.
+  const warnOnly = problem?.id === "storage" && storageKeyWarning(status) !== null;
+  const secureUnfinished = warnOnly || (problem?.id === "storage" && storageNeedsSecuring(status) && status?.s3Keys?.secured === true && newServer);
   if (problem?.id === "storage" && !secureUnfinished) return { status: problem.status, label: storageProblemLabel(status, problem.status), ...owner(problem.unmanaged), next: { kind: "show-issue", part: "storage" }, project };
   if (problem && !secureUnfinished) return { status: problem.status, label: `${envStatusText(problem.status)} in ${project}`, ...owner(problem.unmanaged), next: issueStep(status, problem.id), project };
   const moving = parts.find((p) => MOVING.includes(p.status));
   // Ready once the pipeline server is, atop ready storage; foreign servers store
   // artifacts elsewhere, so our storage is not a prerequisite for them.
-  if (server.status === "ready" && (storage.status === "ready" || server.unmanaged)) {
+  if (server.status === "ready" && (storage.status === "ready" || warnOnly || server.unmanaged)) {
     const href = pipelineServerIn(status, project)?.uiRoute;
     return { status: "ready", label: `Ready in ${project}`, ...owner(unmanaged), next: href ? { kind: "open", label: "Open pipelines", href } : null, project };
   }

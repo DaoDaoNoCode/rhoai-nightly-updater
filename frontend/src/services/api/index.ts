@@ -12,7 +12,7 @@ export type { DSCPreviewResponse } from './components';
 export { getBuildExplorerTags, getBuildExplorerContent, getBuildContains } from './buildExplorer';
 export type { ContainsQuery } from './buildExplorer';
 export { getDashboardState, revertDashboard, deployDashboardPR, getDashboardBuilds, deployDashboardLatestMain } from './dashboard';
-export { getProjectStatus, getResourcesStatus, getDSProjects, setupMLflow, teardownMLflow, deployMLflowPR, revertMLflow, setupMinIO, teardownMinIO, getS3AdminLogin, setupPipelineServer, teardownPipelineServer, streamMigrateStorage, streamSecureStorage, streamCleanup, streamModels, getModelExposures, getPrerequisites, streamPrerequisites, getPlayground, streamPlayground, getMaaS, checkMaaSGroups, streamMaaS, getMLflowSamples, streamMLflowSamples, getPipelineSampleSpec } from './environment';
+export { getProjectStatus, getResourcesStatus, getDSProjects, setupMLflow, teardownMLflow, deployMLflowPR, revertMLflow, setupMinIO, removeLeftoverKeys, teardownMinIO, getS3AdminLogin, setupPipelineServer, teardownPipelineServer, streamMigrateStorage, streamSecureStorage, streamCleanup, streamModels, getModelExposures, getPrerequisites, streamPrerequisites, getPlayground, streamPlayground, getMaaS, checkMaaSGroups, streamMaaS, getMLflowSamples, streamMLflowSamples, getPipelineSampleSpec } from './environment';
 export type { MigrateStorageOptions, CleanupRequest, MLflowSamplesRequest } from './environment';
 export { getDiagnostics, fixProblem } from './diagnostics';
 export { getRecipeRun, planRecipe, runRecipe, resumeRecipe, stopRecipe } from './recipes';

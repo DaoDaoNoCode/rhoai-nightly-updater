@@ -20,6 +20,7 @@ import { TooltipButton } from "../TooltipButton";
 import { S3_ENDPOINT, S3_NAMESPACE } from "./StorageTab";
 import { runSteps, type MigrateKind, type MigrateRun } from "./useMigrateStorage";
 import { StepProgress } from "./StepProgress";
+import { withIds } from "./s3KeysText";
 
 /** The project of a "project/name" pipeline server. */
 const projectOf = (n: string) => n.split("/")[0];
@@ -190,7 +191,7 @@ export const MigrateStorageModal: React.FC<{
         <Stack hasGutter>
           {ownRun && (
             <StackItem>
-              <RunProgress run={ownRun} />
+              <RunProgress run={ownRun} formatMessage={withIds} />
             </StackItem>
           )}
           {ownRun?.result && (
