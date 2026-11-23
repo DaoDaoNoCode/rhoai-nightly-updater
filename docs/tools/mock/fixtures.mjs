@@ -1361,10 +1361,9 @@ export const maasEmbeddingModel = () => ({
   setupBlockedReason: "This tool publishes chat models only. Use the embedding model at its own address (the Models tab shows it), or add it to the Gen AI playground.",
 });
 
-/** A recorded publication whose model is gone (GetMaaSStatus's extra row). */
-export function maasOrphanPublication(namespace) {
-  return { namespace, name: "qwen25-05b-instruct", displayName: "qwen25-05b-instruct", deployed: true, ready: false, managedByTool: true, modelReady: false, published: true, partly: true,
-    message: `Partly published: no model of this name is in project ${namespace} any more (it was deleted there, or the project was); this tool's record of the publication still in place. Unpublish to finish removing it.` };
+/** A publication whose project is gone: no row, named in GetMaaSStatus's removing list (removed automatically). */
+export function maasGonePublication(namespace) {
+  return { namespace, name: "qwen25-05b-instruct", reason: `project ${namespace} no longer exists` };
 }
 
 /** Removal refused because others use MaaS (pkg/cluster teardown, foreignMaaSObjects). */

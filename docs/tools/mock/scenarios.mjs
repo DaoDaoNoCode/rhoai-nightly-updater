@@ -496,7 +496,7 @@ export const scenarios = {
   // Not turned on yet while Authorino TLS needs a cluster-admin: Set up is still offered.
   "env-maas-new-tls": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { tls: false, items: [F.maasModel(false)] }); },
   // A recorded publication whose model was deleted elsewhere: a row with Unpublish.
-  "env-maas-orphan": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(true), F.maasOrphanPublication("old-project")] }); },
+  "env-maas-orphan": (w) => { scenarios["env-models-ready"](w); w.maas = { ...F.maasWorld("ready", { items: [F.maasModel(true)] }), removing: [F.maasGonePublication("old-project")] }; },
   // Others publish through the platform: Remove refuses before changing anything.
   "env-maas-in-use": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(false)] }); w.maasRefusal = F.MAAS_IN_USE; },
   "env-playground-no-model": (w) => { w.playground.modelsByProject["dev-project"] = []; },
