@@ -24,8 +24,10 @@ import (
 var (
 	maasPruneInterval             = 5 * time.Minute
 	maasPruneClock    clock.Clock = clock.Real
-	// pruneGoneMaaS runs one check with the client; tests replace it.
-	pruneGoneMaaS = cluster.PruneGoneMaaSPublicationsInBackground
+	// pruneGoneMaaS runs one check with the client: the MaaS publications
+	// that are gone, then the records' entries of projects that are gone
+	// (features records_sweep.go). Tests replace it.
+	pruneGoneMaaS = cluster.SweepGoneInBackground
 )
 
 // maasPruneTimeout bounds one background check.

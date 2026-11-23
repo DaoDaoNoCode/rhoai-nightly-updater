@@ -1,10 +1,14 @@
 package cluster
 
 import (
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -224,5 +228,54 @@ func TestMaaS_APublicationIsBoundToTheModelsUID(t *testing.T) {
 	rec, _ = serving.ReadMaaSRecord(mc.c)
 	if len(rec.Published) != 0 || len(rec.ModelRefs) != 0 || len(rec.GenAI) != 0 || len(rec.ModelUIDs) != 0 {
 		t.Fatalf("record kept the old model's values: %+v", rec)
+	}
+}
+
+// The background sweep forgets the entries of the models, pipeline server
+// and playground records whose project no longer exists (a project made
+// again gets new UIDs, so they prove nothing), and keeps the rest: a
+// project that exists, is being deleted or cannot be read, and a model
+// whose MaaS publication is still recorded (the prune drops that first).
+func TestSweepGoneProjectRecords(t *testing.T) {
+	mc := newMaaSCluster(t)
+	c := mc.c
+	mc.f.putJSON("/api/v1/namespaces/kept", `{}`)
+	mc.f.putJSON("/api/v1/namespaces/leaving", `{"metadata":{"deletionTimestamp":"2026-11-22T10:00:00Z"}}`)
+	mc.f.fail["GET /api/v1/namespaces/unreadable"] = 500
+	models := serving.ModelsRecord{}
+	for _, p := range []string{"gone", "kept", "leaving", "unreadable", "published"} {
+		models[serving.ModelRecordKey(p, tModel)] = serving.RecordedModel{UID: "u-" + p}
+	}
+	if err := serving.WriteModelsRecord(c, models); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := serving.ReadMaaSRecord(c)
+	rec.SetPublished("published", tModel, true)
+	if err := serving.WriteMaaSRecord(c, rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.WritePipelineRecord(c, storage.PipelineRecord{"gone/dspa": {UID: "a"}, "kept/dspa": {UID: "b"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := features.WritePlaygroundRecords(c, map[string]features.PlaygroundRecord{"gone": {RequestedAt: "t"}, "kept": {RequestedAt: "t"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	SweepGoneProjectRecords(c)
+
+	models, _ = serving.ReadModelsRecord(c)
+	var kept []string
+	for k := range models {
+		kept = append(kept, k)
+	}
+	sort.Strings(kept)
+	if want := []string{"kept/" + tModel, "leaving/" + tModel, "published/" + tModel, "unreadable/" + tModel}; !reflect.DeepEqual(kept, want) {
+		t.Fatalf("models record = %v, want %v", kept, want)
+	}
+	if pipes, _ := storage.ReadPipelineRecord(c); len(pipes) != 1 || pipes["kept/dspa"].UID != "b" {
+		t.Fatalf("pipeline record = %+v", pipes)
+	}
+	if pgs, _ := features.ReadPlaygroundRecords(c); len(pgs) != 1 || pgs["kept"].RequestedAt != "t" {
+		t.Fatalf("playground record = %+v", pgs)
 	}
 }

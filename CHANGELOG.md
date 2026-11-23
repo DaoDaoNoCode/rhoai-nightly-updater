@@ -172,6 +172,12 @@ Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#u
   writes back. A model deleted and made again under its name, also by this
   tool, is not the published one: its old publication is removed
   automatically, and the old values are never written to the new model.
+- **The records forget projects that are gone.** The background check
+  (at start and every five minutes) now also drops the entries of the
+  models, pipeline server and playground records whose project no longer
+  exists; they only piled up. An entry is kept while its project exists, is
+  being deleted or cannot be read, and a model's while its MaaS publication
+  is still recorded.
 - **A DataScienceCluster change applies only to the DSC it was checked
   on.** The Components page's changes (a component's state, Fix, soft
   reset) and Diagnostics' disable-component fix tested only the fields
