@@ -343,7 +343,9 @@ export function pipelinesState(status: ResourcesStatus | null, project: string |
   if (!status) return loadingState(project);
   if (project) return pipelinesIn(status, project, busy);
   const storage = storageStatus(status, busy);
-  if (PROBLEM.includes(storage)) return { status: storage, label: storageProblemLabel(status, storage), ...owner(notManaged(status?.minio)), next: { kind: "show-issue", part: "storage" }, project: defaultProject(status, projects, null) };
+  // One rule with the Pipelines tab (pipelinesIn): a storage warning that does not stop pipelines (leftover keys,
+  // servers that lost access) is the S3 storage's own label, not the Pipelines feature's.
+  if (PROBLEM.includes(storage) && storageKeyWarning(status) === null) return { status: storage, label: storageProblemLabel(status, storage), ...owner(notManaged(status?.minio)), next: { kind: "show-issue", part: "storage" }, project: defaultProject(status, projects, null) };
   const states = projectsWithServers(status, projects).map((p) => pipelinesIn(status, p, busy));
   const running = busy.actionProject ? pipelinesIn(status, busy.actionProject, busy) : null;
   const summary = acrossProjects(states, running);

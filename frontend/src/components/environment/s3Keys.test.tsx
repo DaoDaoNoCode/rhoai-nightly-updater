@@ -69,7 +69,7 @@ describe("S3 storage that is not secured", () => {
     expect(dialog).toHaveTextContent("The old admin key, which every pipeline project holds, stops working.");
     // One bullet per server, each starting with the server.
     const bullets = within(dialog).getAllByRole("listitem").map((li) => li.textContent);
-    expect(bullets).toContain("dev/dspa gets a key of its own (SeaweedFS user rnu-dspa-dev), checked against the storage before it goes into its Secrets nightly-dspa-s3 and rhoai-nightly-updater-s3.");
+    expect(bullets).toContain("dev/dspa gets a key of its own (SeaweedFS user rnu-dspa-dev), checked against the storage before it goes into its Secret nightly-dspa-s3 and its Connection rhoai-nightly-updater-s3.");
     expect(bullets).toContain("unrec/dspa (not recorded by this tool) keeps the old admin key, which then stops working; its owner must give it new S3 keys, or delete it and set it up again with this tool.");
     expect(dialog).not.toHaveTextContent(/IAM/);
     expect(dialog).toHaveTextContent("Pipeline runs in progress may fail");
@@ -163,7 +163,9 @@ describe("S3 storage that is not secured", () => {
     stubApi({ "/api/resources/status": statusOf({ minio: { ...readyMinio, usedBy: ["dev/dspa", "team-b/dspa", "unrec/dspa"] }, pipelineServers: [dspa], s3Keys: after }), "/api/resources/projects": { projects: ["dev"] } });
     const { unmount } = renderAt("/test-resources?tab=storage");
     const alert = (await screen.findByText((_, el) => el?.classList.contains("pf-v6-c-alert__title") === true && /Pipeline server unrec\/dspa lost its S3 access/.test(el.textContent ?? ""))).closest(".pf-v6-c-alert") as HTMLElement;
-    expect(alert).toHaveTextContent("unrec/dspa: this tool has no record of it, so Secure S3 storage did not give it a key.");
+    // One sentence, no one-item list repeating the name.
+    expect(alert).toHaveTextContent("This tool has no record of it, so Secure S3 storage did not give it a key.");
+    expect(within(alert).queryByRole("list")).toBeNull();
     expect(alert).toHaveTextContent("The old admin key no longer works: its owner must give it new S3 keys, or delete it and set it up again with this tool.");
     const details = (await part("SeaweedFS")).querySelector('dl[aria-label="S3 storage details"]') as HTMLElement;
     expect(details).toHaveTextContent("unrec/dspa (not recorded by this tool): the old admin key, which no longer works");
@@ -176,7 +178,7 @@ describe("S3 storage that is not secured", () => {
   });
 
   it("leftover keys: their own label, one action that lists them, and Set up still works", async () => {
-    const status = statusOf({ minio: readyMinio, pipelineServers: [dspa], s3Keys: { secured: true, needsSecuring: false, ownKey: ["dev/dspa"], leftoverUsers: ["rnu-dspa-gone"] } });
+    const status = statusOf({ minio: readyMinio, pipelineServers: [dspa], s3Keys: { secured: true, needsSecuring: false, ownKey: ["dev/dspa"], leftoverUsers: ["rnu-dspa-gone"], leftovers: [{ user: "rnu-dspa-gone", project: "gone", connectionInUse: true }] } });
     const api = stubApi({
       "/api/resources/status": () => jsonResponse(status),
       "/api/resources/projects": { projects: ["dev", "new"] },
@@ -184,14 +186,15 @@ describe("S3 storage that is not secured", () => {
     });
     const { unmount } = renderAt("/test-resources?tab=storage");
     const alert = (await screen.findByText("1 key of a deleted pipeline server still works")).closest(".pf-v6-c-alert") as HTMLElement;
-    expect(alert).toHaveTextContent("SeaweedFS user rnu-dspa-gone belongs to a project that has no pipeline server any more");
+    expect(alert).toHaveTextContent("Project gone has no pipeline server any more (deleted while SeaweedFS did not answer, or outside this tool), but its S3 key still works. Remove leftover keys deletes it.");
+    expect(alert).toHaveTextContent("The Connection rhoai-nightly-updater-s3 in gone still holds this key: workbenches and model deployments using it lose S3 access when it is removed.");
     expect(headerLabel("S3 storage")).toHaveTextContent(/^Leftover keys$/);
     expect(screen.queryByRole("button", { name: "Secure S3 storage..." })).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "Remove leftover keys..." }));
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("Remove leftover keys?");
-    expect(dialog).toHaveTextContent("Deletes the S3 keys of pipeline servers that no longer exist.");
-    expect(dialog).toHaveTextContent("rnu-dspa-gone");
+    expect(dialog).toHaveTextContent("Deletes the S3 key of a project that has no pipeline server any more");
+    expect(dialog).toHaveTextContent("The S3 key of project gone (SeaweedFS user rnu-dspa-gone): project gone has no pipeline server any more. Its Connection rhoai-nightly-updater-s3 still holds this key");
     fireEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(api.bodies["POST /api/resources/s3/leftover-keys/remove"]).toEqual([{ users: ["rnu-dspa-gone"] }]));
     unmount();
@@ -234,5 +237,27 @@ describe("S3 storage that is not secured", () => {
     await waitFor(() => expect(headerLabel("S3 storage")).toHaveTextContent(/^Not secured$/));
     expect(screen.getByText("Some pipeline servers still use the old admin key")).toBeInTheDocument();
     expect(await part("SeaweedFS")).toHaveTextContent("dev/dspa: its own key");
+  });
+
+  it("the Overview's Pipelines row and the Pipelines tab heading say the same in every S3 key state", async () => {
+    const states: Record<string, S3KeysState> = {
+      "not secured": notSecured,
+      secured,
+      "lost access": { secured: true, needsSecuring: false, ownKey: ["dev/dspa"], keepOldKey: ["unrec/dspa (not recorded by this tool)"] },
+      leftover: { secured: true, needsSecuring: false, ownKey: ["dev/dspa"], leftoverUsers: ["rnu-dspa-gone"], leftovers: [{ user: "rnu-dspa-gone", project: "gone", connectionInUse: false }] },
+      unfinished: { secured: true, needsSecuring: true, ownKey: ["dev/dspa"], oldKey: ["team-b/dspa"] },
+    };
+    for (const [name, keys] of Object.entries(states)) {
+      stubApi({ "/api/resources/status": statusOf({ minio: readyMinio, pipelineServers: [dspa], s3Keys: keys }), "/api/resources/projects": { projects: ["dev"] } });
+      const overview = renderAt("/test-resources");
+      const row = (await screen.findByRole("link", { name: "Pipelines" })).closest("tr") as HTMLElement;
+      await waitFor(() => expect(row.querySelector(".pf-v6-c-label")).not.toBeNull());
+      const rowLabel = row.querySelector(".pf-v6-c-label")!.textContent;
+      overview.unmount();
+      const tab = renderAt("/test-resources?tab=pipelines&project=dev");
+      await waitFor(() => expect(headerLabel("Pipelines")).not.toBeNull());
+      expect(headerLabel("Pipelines")!.textContent, name).toBe(rowLabel);
+      tab.unmount();
+    }
   });
 });

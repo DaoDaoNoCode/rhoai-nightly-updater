@@ -217,7 +217,7 @@ async function secureStream(req, res) {
   const kept = world.resources.s3Keys?.keepOldKey ?? [];
   const keptNames = kept;
   const steps = [
-    { step: "check", status: "success", message: `OK: Found ${servers.length} pipeline servers to give a key of its own; left on the old key: ${keptNames.join(", ")}` },
+    { step: "check", status: "success", message: `${servers.length === 1 ? "OK: Found 1 pipeline server to give a key of its own" : `OK: Found ${servers.length} pipeline servers to give each a key of its own`}; left on the old key: ${keptNames.join(", ")}` },
     { step: "rollout", status: "running", message: "Waiting up to 1m30s for SeaweedFS to become ready..." },
     { step: "rollout", status: "success", message: "OK: The S3 storage runs with the new admin key; the old key no longer works" },
     ...servers.flatMap((n) => [
@@ -738,7 +738,7 @@ async function api(req, res, u) {
   if (key === "POST /api/resources/s3/secure/stream") return secureStream(req, res);
   if (key === "POST /api/resources/s3/leftover-keys/remove") return mutation(res, "remove-leftover-s3-keys", "Remove leftover S3 keys", () => {
     const gone = world.resources.s3Keys?.leftoverUsers ?? [];
-    world.resources.s3Keys = { ...world.resources.s3Keys, leftoverUsers: [] };
+    world.resources.s3Keys = { ...world.resources.s3Keys, leftoverUsers: [], leftovers: [] };
     return { success: true, message: `Removed the keys of pipeline servers that no longer exist: ${gone.join(", ")}.`, logs: [] };
   });
   if (key === "POST /api/resources/s3/migrate/stream") return migrateStream(req, res);

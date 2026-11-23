@@ -29,7 +29,7 @@ export const secureExtraSteps = (keys: S3KeysState | null | undefined) => secure
 const SecurePlan: React.FC<{ keys: S3KeysState }> = ({ keys }) => {
   const servers = keys.oldKey ?? [];
   const kept = keys.keepOldKey ?? [];
-  const left = keys.leftoverUsers ?? [];
+  const left = keys.leftovers ?? [];
   return (
     <Stack hasGutter>
       <StackItem>
@@ -41,29 +41,31 @@ const SecurePlan: React.FC<{ keys: S3KeysState }> = ({ keys }) => {
       </StackItem>
       <StackItem>
         <Alert variant="warning" isInline component="div" title="Running pipelines and open workbenches">
-          <Content component="p">Pipeline runs in progress may fail while the storage restarts and the keys change. Workbenches and model deployments that use the Connection, and Elyra pipelines in workbenches, keep the old key until they restart: restart them afterwards. This tool restarts none of them.</Content>
+          <Content component="p">Pipeline runs in progress may fail while the storage restarts and the keys change. Workbenches and model deployments that use the Connection <Id>rhoai-nightly-updater-s3</Id>, and Elyra pipelines in workbenches, keep the old key until they restart: restart them afterwards. This tool restarts none of them.</Content>
         </Alert>
       </StackItem>
       <StackItem>
         <Content component="p">This changes the shared cluster:</Content>
         <List>
-          {!keys.secured && <ListItem>SeaweedFS restarts with a new admin key in Secret <Id>seaweedfs-s3-credentials</Id> and with per-server keys turned on: the admin key can then make a key for each pipeline server, and a pipeline server&apos;s key cannot make keys.</ListItem>}
+          {!keys.secured && <ListItem>SeaweedFS restarts with a new admin key in Secret <Id>seaweedfs-s3-credentials</Id> and with per-server keys turned on, so the admin key can make a key for each pipeline server.</ListItem>}
           {servers.map((n) => (
-            <ListItem key={n}><Id>{n}</Id> gets a key of its own (SeaweedFS user <Id>{secureUserOf(n)}</Id>), checked against the storage before it goes into its Secrets <Id>nightly-dspa-s3</Id> and <Id>rhoai-nightly-updater-s3</Id>.</ListItem>
+            <ListItem key={n}><Id>{n}</Id> gets a key of its own (SeaweedFS user <Id>{keys.users?.[n] ?? `rnu-dspa-${n.split("/")[0]}`}</Id>), checked against the storage before it goes into its Secret <Id>nightly-dspa-s3</Id> and its Connection <Id>rhoai-nightly-updater-s3</Id>.</ListItem>
           ))}
           {kept.map((entry) => (
             <ListItem key={entry}><KeptServer entry={entry} /> keeps the old admin key, which then stops working; its owner must give it new S3 keys, or delete it and set it up again with this tool.</ListItem>
           ))}
-          {left.map((u) => <ListItem key={u}><Id>{u}</Id>, whose project has no pipeline server any more: its keys and the user are deleted.</ListItem>)}
+          {left.map((l) => (
+            <ListItem key={l.user}>
+              The S3 key of project <Id>{l.project}</Id> (SeaweedFS user <Id>{l.user}</Id>), which has no pipeline server any more, is deleted.
+              {l.connectionInUse && <> Its Connection <Id>rhoai-nightly-updater-s3</Id> still holds this key: workbenches and model deployments using it lose S3 access.</>}
+            </ListItem>
+          ))}
           <ListItem>If it stops part-way, the storage is secured, and the pipeline servers not done yet keep their old key, which no longer works until Secure S3 storage is run again.</ListItem>
         </List>
       </StackItem>
     </Stack>
   );
 };
-
-/** The SeaweedFS user of a pipeline server "project/name" (pkg/cluster ScopedUserName, for names it does not hash). */
-const secureUserOf = (server: string) => `rnu-dspa-${server.split("/")[0]}`;
 
 /**
  * Secure S3 storage dialog: plan first, then live step list (checks, rollout,

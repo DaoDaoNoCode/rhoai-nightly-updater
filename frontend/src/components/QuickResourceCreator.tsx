@@ -371,7 +371,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
           keys={resStatus?.s3Keys}
           run={migration.run}
           baseReason={securing ? null : mutateBlocker ?? (resAction || migrating || run.run?.running ? BUSY_REASON : null)}
-          onStart={() => migration.start("secure", { removeLeftoverKeys: resStatus?.s3Keys?.leftoverUsers ?? [] }, secureExtraSteps(resStatus?.s3Keys))}
+          onStart={() => migration.start("secure", { removeLeftoverKeys: (resStatus?.s3Keys?.leftovers ?? []).map((l) => l.user) }, secureExtraSteps(resStatus?.s3Keys))}
           onClose={() => {
             setMigrateKind(null);
             migration.reset();

@@ -35,7 +35,7 @@ export function resourceRequest(p: ResourcePending): [string, () => Promise<Oper
   switch (p.kind) {
     case "setup-minio": return ["setup-minio", setupMinIO, null];
     case "repair-minio": return ["setup-minio", setupMinIO, null];
-    case "remove-leftover-keys": return ["remove-leftover-keys", () => removeLeftoverKeys(p.users), null];
+    case "remove-leftover-keys": return ["remove-leftover-keys", () => removeLeftoverKeys(p.leftovers.map((l) => l.user)), null];
     case "teardown-minio": return ["teardown-minio", () => teardownMinIO(!!p.deleteNamespace), null];
     case "setup-mlflow": return ["setup-mlflow", setupMLflow, null];
     case "teardown-mlflow": return ["teardown-mlflow", teardownMLflow, null];

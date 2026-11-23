@@ -295,7 +295,7 @@ export const scenarios = {
   // Secured storage with the key of a pipeline server deleted outside this tool.
   "s3-leftover": (w) => {
     w.resources.minio = { ...F.s3States.running, usedBy: ["dev-project/dspa"] };
-    w.resources.s3Keys = { secured: true, needsSecuring: false, ownKey: ["dev-project/dspa"], leftoverUsers: ["rnu-dspa-gone-team"] };
+    w.resources.s3Keys = { secured: true, needsSecuring: false, ownKey: ["dev-project/dspa"], leftoverUsers: ["rnu-dspa-gone-team"], leftovers: [{ user: "rnu-dspa-gone-team", project: "gone-team", connectionInUse: true }] };
     w.gated = true;
   },
   "s3-not-secured": (w) => {

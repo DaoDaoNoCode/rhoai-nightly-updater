@@ -654,14 +654,29 @@ export interface S3KeysState {
   ownKey?: string[];
   /** Recorded pipeline servers still on the old shared key: Secure S3 storage gives each its own. */
   oldKey?: string[];
-  /** Other pipeline servers on the storage, each with why the tool leaves its key ("ns/name (reason)"). */
+  /** Other pipeline servers on the storage, each with why the tool leaves its key ("ns/name (not recorded by this tool)"). */
   keepOldKey?: string[];
-  /** SeaweedFS users of pipeline servers that are gone; their keys still work until Secure S3 storage or Repair deletes them. */
+  /**
+   * SeaweedFS users whose project has no pipeline server at all (none that is not being deleted, whoever made it):
+   * their keys still work. Only Remove leftover keys and Secure S3 storage delete them, after a confirmation listing them.
+   */
   leftoverUsers?: string[];
+  /** The same leftover users with their project and whether its Connection still holds one of their keys. */
+  leftovers?: S3LeftoverKey[];
+  /** The SeaweedFS user of each recorded pipeline server ("project/name" to rnu-dspa-<project>, hashed for long names). */
+  users?: Record<string, string>;
   /** Why the key of a pipeline server could not be read. */
   checkError?: string;
   /** Why Secure S3 storage cannot run now. */
   secureBlockedReason?: string;
+}
+
+/** A SeaweedFS user of a project with no pipeline server (pkg/types S3LeftoverKey). */
+export interface S3LeftoverKey {
+  user: string;
+  project: string;
+  /** The project's Connection rhoai-nightly-updater-s3 still holds one of its keys (or that could not be read). */
+  connectionInUse: boolean;
 }
 
 /** The S3 storage an earlier version set up in namespace minio (pkg/types LegacyStorageState). */
