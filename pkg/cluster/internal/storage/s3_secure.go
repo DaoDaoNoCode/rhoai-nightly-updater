@@ -112,9 +112,15 @@ func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.Operat
 	for _, d := range recorded {
 		names = append(names, d.Meta.Namespace+"/"+d.Meta.Name)
 	}
+	// The kept servers by name, with a reason only when it is another one
+	// than "not set up by this tool" (which the sentence says already).
+	var keptNames []string
+	for _, k := range kept {
+		keptNames = append(keptNames, strings.TrimSuffix(k, " (not set up by this tool)"))
+	}
 	check := fmt.Sprintf("OK: %s to give a key of its own", kube.CountNoun(len(recorded), "pipeline server", "pipeline servers"))
 	if len(kept) > 0 {
-		check += fmt.Sprintf("; not set up by this tool, left on the old key: %s", strings.Join(kept, "; "))
+		check += fmt.Sprintf("; not set up by this tool, left on the old key: %s", strings.Join(keptNames, ", "))
 	}
 	step(SecureStepCheck, "success", check)
 
@@ -145,7 +151,7 @@ func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.Operat
 			parts = append(parts, "Run Secure S3 storage again: it skips the servers already done.")
 		}
 		if len(kept) > 0 {
-			parts = append(parts, fmt.Sprintf("Not set up by this tool: %s. The old admin key no longer works there: %s.", strings.Join(kept, "; "),
+			parts = append(parts, fmt.Sprintf("Not set up by this tool: %s. The old admin key no longer works there: %s.", strings.Join(keptNames, ", "),
 				kube.Verb(len(kept), "its owner must give that pipeline server new S3 keys", "their owners must give those pipeline servers new S3 keys")))
 		}
 		return strings.Join(parts, " ")

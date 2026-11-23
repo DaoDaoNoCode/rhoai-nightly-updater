@@ -161,7 +161,7 @@ func TestSecureS3_GivesEachRecordedPipelineServerItsOwnKey(t *testing.T) {
 	if !sawEvent("rollout", "Waiting up to") {
 		t.Error("the rollout's progress is not streamed")
 	}
-	for _, want := range []string{"On a key of their own: team-a/dspa, team-b/dspa.", "unrecorded/dspa (not set up by this tool)", "Restart the workbenches"} {
+	for _, want := range []string{"On a key of their own: team-a/dspa, team-b/dspa.", "Not set up by this tool: dashboard/dspa, unrecorded/dspa.", "Restart the workbenches"} {
 		if !strings.Contains(resp.Message, want) {
 			t.Errorf("message lacks %q: %s", want, resp.Message)
 		}

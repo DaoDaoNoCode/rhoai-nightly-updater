@@ -405,7 +405,9 @@ export const StoragePrerequisitePart: React.FC<{ status: ResourcesStatus; busy: 
     // Migration needed: the alert at the top of the tab says it, with the way there.
     : legacy?.stage === "migrate" ? null
     : notSecured ? (status.s3Keys?.secured
-      ? "Some pipeline servers still use the old shared key; Secure S3 storage, on the S3 storage tab, finishes giving each its own."
+      ? ((status.s3Keys.oldKey ?? []).length > 0
+        ? "Some pipeline servers still use the old shared key; Secure S3 storage, on the S3 storage tab, finishes giving each its own."
+        : "Keys of deleted pipeline servers still work; Secure S3 storage, on the S3 storage tab, deletes them.")
       : "Every pipeline project still holds the S3 storage's admin key. Secure S3 storage, on the S3 storage tab, gives each pipeline server this tool set up a key of its own; new pipeline servers can be set up after that.")
     : s === "not-set-up" ? (minio?.setupBlockedReason ? "It can't be set up now; the S3 storage tab says why." : "Setting up a pipeline server sets it up first.")
     : s === "error" || s === "needs-attention" ? "The S3 storage tab says what needs attention."

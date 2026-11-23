@@ -215,8 +215,9 @@ async function secureStream(req, res) {
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   const servers = world.resources.s3Keys?.oldKey ?? [];
   const kept = world.resources.s3Keys?.keepOldKey ?? [];
+  const keptNames = kept.map((k) => k.replace(" (not set up by this tool)", ""));
   const steps = [
-    { step: "check", status: "success", message: `OK: ${servers.length} pipeline servers to give a key of their own; not set up by this tool, left on the old key: ${kept.join("; ")}` },
+    { step: "check", status: "success", message: `OK: ${servers.length} pipeline servers to give a key of their own; not set up by this tool, left on the old key: ${keptNames.join(", ")}` },
     { step: "rollout", status: "running", message: "Waiting up to 1m30s for SeaweedFS to become ready..." },
     { step: "rollout", status: "success", message: "OK: The S3 storage runs with the new admin key; the old key no longer works" },
     ...servers.flatMap((n) => [
@@ -224,7 +225,7 @@ async function secureStream(req, res) {
       { step: `server:${n}`, status: "success", message: `OK: ${n} uses SeaweedFS user rnu-dspa-${n.split("/")[0]}` },
     ]),
   ];
-  const done = `New admin key, kept out of every project. On a key of their own: ${servers.join(", ")}.${kept.length ? ` Not set up by this tool: ${kept.join("; ")}. The old admin key no longer works there: ${kept.length > 1 ? "their owners must give those pipeline servers new S3 keys" : "its owner must give that pipeline server new S3 keys"}.` : ""} Restart the workbenches and model deployments that use Connection rhoai-nightly-updater-s3, and workbenches that run Elyra pipelines, so they pick up the new key.`;
+  const done = `New admin key, kept out of every project. On a key of their own: ${servers.join(", ")}.${kept.length ? ` Not set up by this tool: ${keptNames.join(", ")}. The old admin key no longer works there: ${kept.length > 1 ? "their owners must give those pipeline servers new S3 keys" : "its owner must give that pipeline server new S3 keys"}.` : ""} Restart the workbenches and model deployments that use Connection rhoai-nightly-updater-s3, and workbenches that run Elyra pipelines, so they pick up the new key.`;
   let n = 0;
   for (const step of [...steps, { step: "operation_complete", status: "success", message: done }]) {
     n += 1;
