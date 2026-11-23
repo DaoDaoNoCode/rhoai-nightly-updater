@@ -703,6 +703,11 @@ async function api(req, res, u) {
   if (key.startsWith("POST /api/recipes/")) return recipeRoute(req, res, key);
   if (key === "POST /api/update/stream") return updateStream(req, res);
   if (key === "POST /api/resources/s3/setup") return mutation(res, "setup-s3", "Set up S3 storage", minioSetup);
+  if (key === "POST /api/resources/s3/secure") return mutation(res, "secure-s3", "Secure S3 storage", () => {
+    const done = world.resources.s3Keys?.oldKey ?? [];
+    world.resources.s3Keys = { secured: true, needsSecuring: false, ownKey: done, keepOldKey: world.resources.s3Keys?.keepOldKey };
+    return { success: true, message: `The S3 storage is secured: it has a new admin key, which is in no project. Now on a key of their own: ${done.join(", ")}.`, logs: ["OK: The S3 storage runs with the new admin key; the old key no longer works"] };
+  });
   if (key === "POST /api/resources/s3/migrate/stream") return migrateStream(req, res);
   if (key === "POST /api/resources/cleanup/stream") return cleanupStream(req, res);
   if (key === "POST /api/resources/models/stream") return modelsStream(req, res);

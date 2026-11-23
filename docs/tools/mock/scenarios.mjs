@@ -285,6 +285,12 @@ export const scenarios = {
     w.gated = true;
   },
   "s3-incomplete": (w) => { w.resources.minio = F.s3States.incomplete; w.gated = true; },
+  // Storage an earlier version set up: its admin key is in every pipeline project until Secure S3 storage runs.
+  "s3-not-secured": (w) => {
+    w.resources.minio = { ...F.s3States.running, usedBy: ["dev-project/dspa", "team-b/dspa", "old-team/dspa"] };
+    w.resources.s3Keys = { secured: false, needsSecuring: true, oldKey: ["dev-project/dspa", "team-b/dspa"], keepOldKey: ["old-team/dspa (not recorded as this tool's)"] };
+    w.gated = true;
+  },
   mlflow: (w) => { w.resources.mlflow = F.mlflowStates.running; },
   // The Environment page's other states, one scenario each.
   "env-ready": (w) => { w.resources.mlflow = F.mlflowStates.running; },
