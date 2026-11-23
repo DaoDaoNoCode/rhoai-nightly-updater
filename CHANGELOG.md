@@ -239,6 +239,15 @@ Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#u
   Clean up. That rule now holds only within the install's own window (its
   retries and its wait, 9 minutes); past it the playground is not this
   tool's and the next playground operation drops the record.
+- **A project made again is not the one this tool added to the inference
+  gateway.** The record of the projects this tool added to the gateway's
+  list held names only, so a project deleted and created again under the
+  name (and put on the list by someone else) counted as the tool's: the
+  Delete dialog said deleting the last model takes it off the list, and the
+  teardown did. The record now keeps each project's namespace UID; a
+  project with another UID is not the tool's entry, is never taken off by
+  it, and is dropped from the record. Entries recorded by earlier versions
+  keep their name-only meaning.
 - **A DataScienceCluster change applies only to the DSC it was checked
   on.** The Components page's changes (a component's state, Fix, soft
   reset) and Diagnostics' disable-component fix tested only the fields
