@@ -166,10 +166,7 @@ func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.Operat
 		if err != nil {
 			return stop(SecureStepRollout, fmt.Sprintf("Cannot make the new admin key: %v.%s", err, unchanged), "internal", "keys"), nil
 		}
-		res, err := setupS3Storage(c, keys, &opLog{observe: func(line string) { step(SecureStepRollout, "running", line) }}, s3RetrySecure, true)
-		if err != nil {
-			return nil, err
-		}
+		res := setupS3Storage(c, keys, &opLog{observe: func(line string) { step(SecureStepRollout, "running", line) }}, s3RetrySecure, true)
 		if !res.Success {
 			return stop(SecureStepRollout, "The new admin key was not rolled out: "+res.Message+" No pipeline server got its own key yet.", res.ErrorCode, "rollout failed"), nil
 		}

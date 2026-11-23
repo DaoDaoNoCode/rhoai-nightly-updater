@@ -1200,25 +1200,26 @@ func SetupS3(c *kube.Client) (*types.OperationResponse, error) {
 			}
 		}
 	}
-	log := &opLog{}
-	res, err := setupS3Storage(c, keys, log, s3RetrySetup, secured)
-	if err != nil || !res.Success || !secured {
-		return res, err
-	}
-	if rotated {
-		res.Message += " The storage's Deployment was missing, so it was set up again with a new admin key and per-server keys turned on: the old admin key no longer works."
-		if len(holders) > 0 {
-			res.Message += fmt.Sprintf(" %s used it and lost S3 access: %s. Run Secure S3 storage to give each pipeline server this tool set up a key of its own.", kube.Verb(len(holders), "This pipeline server", "These pipeline servers"), strings.Join(holders, ", "))
+	finish := func(res *types.OperationResponse) (*types.OperationResponse, error) {
+		if !res.Success || !secured {
+			return res, nil
 		}
+		if rotated {
+			res.Message += " The storage's Deployment was missing, so it was set up again with a new admin key and per-server keys turned on: the old admin key no longer works."
+			if len(holders) > 0 {
+				res.Message += fmt.Sprintf(" %s used it and lost S3 access: %s. Run Secure S3 storage to give each pipeline server this tool set up a key of its own.", kube.Verb(len(holders), "This pipeline server", "These pipeline servers"), strings.Join(holders, ", "))
+			}
+		}
+		// Users of pipeline servers that are gone: their keys still work.
+		if left, err := removeLeftoverUsers(c); err != nil {
+			res.Message += fmt.Sprintf(" The keys of deleted pipeline servers could not be checked: %v.", err)
+		} else if len(left) > 0 {
+			res.Message += fmt.Sprintf(" Deleted the keys of pipeline servers that are gone: %s.", strings.Join(left, ", "))
+			res.Logs = append(res.Logs, "OK: Deleted SeaweedFS users "+strings.Join(left, ", "))
+		}
+		return res, nil
 	}
-	// Users of pipeline servers that are gone: their keys still work.
-	if left, err := removeLeftoverUsers(c); err != nil {
-		res.Message += fmt.Sprintf(" The keys of deleted pipeline servers could not be checked: %v.", err)
-	} else if len(left) > 0 {
-		res.Message += fmt.Sprintf(" Deleted the keys of pipeline servers that are gone: %s.", strings.Join(left, ", "))
-		res.Logs = append(res.Logs, "OK: Deleted SeaweedFS users "+strings.Join(left, ", "))
-	}
-	return res, nil
+	return finish(setupS3Storage(c, keys, &opLog{}, s3RetrySetup, secured))
 }
 
 // opLog collects an operation's log lines for its response, and passes each
@@ -1246,7 +1247,7 @@ func (l *opLog) add(line string) {
 // nothing (the namespace, which the dry runs need, is created before them).
 // retry names the action that continues a setup that stopped. secured
 // applies the IAM flags of the secured storage (see s3SetupSecured).
-func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry, secured bool) (*types.OperationResponse, error) {
+func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry, secured bool) *types.OperationResponse {
 	fail := func(msg, code, activity string) *types.OperationResponse {
 		slog.Warn("s3 storage setup failed", "reason", activity, "user", kube.GetUser(c))
 		record.Action(c, "setup-s3", fmt.Sprintf("namespace=%s (%s)", S3Namespace, activity), false)
@@ -1256,14 +1257,14 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry, secu
 	// UI password: keep the stored one, or make one.
 	keys, err := withAdminPassword(c, keys)
 	if err != nil {
-		return fail(fmt.Sprintf("Cannot determine the admin UI password; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "credentials"), nil
+		return fail(fmt.Sprintf("Cannot determine the admin UI password; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "credentials")
 	}
 
 	// Step 1: Namespace. Never adopt a namespace this tool did not create.
 	log.add(fmt.Sprintf("Creating namespace %s...", S3Namespace))
 	ns, err := lookupS3Namespace(c)
 	if err != nil {
-		return fail(fmt.Sprintf("Cannot check namespace %s: %v.%s", S3Namespace, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "namespace check failed"), nil
+		return fail(fmt.Sprintf("Cannot check namespace %s: %v.%s", S3Namespace, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "namespace check failed")
 	}
 	if !ns.Exists {
 		nsData, _ := json.Marshal(map[string]any{
@@ -1279,19 +1280,19 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry, secu
 		case kube.IsK8sConflict(err):
 			// Created concurrently: decide ownership again.
 			if ns, err = lookupS3Namespace(c); err != nil {
-				return fail(fmt.Sprintf("Cannot check namespace %s: %v.%s", S3Namespace, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "namespace check failed"), nil
+				return fail(fmt.Sprintf("Cannot check namespace %s: %v.%s", S3Namespace, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "namespace check failed")
 			}
 		default:
-			return fail(fmt.Sprintf("Failed to create namespace %s: %v.%s", S3Namespace, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "namespace creation failed"), nil
+			return fail(fmt.Sprintf("Failed to create namespace %s: %v.%s", S3Namespace, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "namespace creation failed")
 		}
 	} else if ns.Managed && !ns.terminating() {
 		log.add("Namespace already exists (created by this tool) — reusing")
 	}
 	if ns.terminating() {
-		return fail(fmt.Sprintf("Namespace %s is still being deleted. Wait until it is gone, then %s.", S3Namespace, retry.again), "terminating", "namespace terminating"), nil
+		return fail(fmt.Sprintf("Namespace %s is still being deleted. Wait until it is gone, then %s.", S3Namespace, retry.again), "terminating", "namespace terminating")
 	}
 	if !ns.Managed {
-		return fail(fmt.Sprintf("Namespace %s already exists and was not created by this tool. Nothing was changed. Remove it yourself, or use a cluster without it.", S3Namespace), "not_managed", "namespace not managed"), nil
+		return fail(fmt.Sprintf("Namespace %s already exists and was not created by this tool. Nothing was changed. Remove it yourself, or use a cluster without it.", S3Namespace), "not_managed", "namespace not managed")
 	}
 
 	// Step 2: Check every object the tool writes before writing any, so a
@@ -1307,7 +1308,7 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry, secu
 		name, _ := r.Obj["metadata"].(map[string]any)["name"].(string)
 		meta, found, err := readS3Object(c, r.Kind, name)
 		if err != nil {
-			return fail(fmt.Sprintf("Cannot read %s %s/%s; nothing was changed: %v.%s", r.Kind, S3Namespace, name, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "read failed"), nil
+			return fail(fmt.Sprintf("Cannot read %s %s/%s; nothing was changed: %v.%s", r.Kind, S3Namespace, name, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "read failed")
 		}
 		existing[r.Kind+"/"+name] = current{meta, found}
 		switch {
@@ -1319,10 +1320,10 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry, secu
 		}
 	}
 	if len(foreign) > 0 {
-		return fail(fmt.Sprintf("Namespace %s already contains %s, not created by this tool. Nothing was changed. %s", S3Namespace, strings.Join(foreign, ", "), retry.foreignHint()), "not_managed", "foreign objects: "+strings.Join(foreign, ", ")), nil
+		return fail(fmt.Sprintf("Namespace %s already contains %s, not created by this tool. Nothing was changed. %s", S3Namespace, strings.Join(foreign, ", "), retry.foreignHint()), "not_managed", "foreign objects: "+strings.Join(foreign, ", "))
 	}
 	if len(deleting) > 0 {
-		return fail(fmt.Sprintf("%s in namespace %s is still being deleted. Wait until it is gone, then %s.", strings.Join(deleting, ", "), S3Namespace, retry.again), "terminating", "objects terminating"), nil
+		return fail(fmt.Sprintf("%s in namespace %s is still being deleted. Wait until it is gone, then %s.", strings.Join(deleting, ", "), S3Namespace, retry.again), "terminating", "objects terminating")
 	}
 
 	// Step 3: Create or update the server objects. The Service and the
@@ -1375,7 +1376,7 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry, secu
 	log.add("Checking every change with the API server (dry run)...")
 	for _, r := range resources {
 		if resp := write(r, true); resp != nil {
-			return resp, nil
+			return resp
 		}
 	}
 	log.add("OK: The API server accepts every change")
@@ -1384,7 +1385,7 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry, secu
 			continue
 		}
 		if resp := write(r, false); resp != nil {
-			return resp, nil
+			return resp
 		}
 	}
 
@@ -1401,7 +1402,7 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry, secu
 				}
 			}
 			log.add("SeaweedFS is not ready: " + reason)
-			return fail(fmt.Sprintf("SeaweedFS was deployed but is not ready after %s (%s). The status shows the current state; %s once it is ready.", S3ReadyTimeout, reason, retry.again), "timeout", "not ready"), nil
+			return fail(fmt.Sprintf("SeaweedFS was deployed but is not ready after %s (%s). The status shows the current state; %s once it is ready.", S3ReadyTimeout, reason, retry.again), "timeout", "not ready")
 		}
 		if errors.Is(err, errS3CannotStart) {
 			msg := issue.Reason
@@ -1409,9 +1410,9 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry, secu
 				msg += ": " + kube.TruncateText(issue.Message, 300)
 			}
 			log.add("SeaweedFS cannot start: " + msg)
-			return fail(fmt.Sprintf("SeaweedFS was deployed but its pod cannot start (%s). Fix the cause (for example set SEAWEEDFS_IMAGE to a pullable image) and %s, or delete the storage.", msg, retry.again), "not_ready", issue.Reason), nil
+			return fail(fmt.Sprintf("SeaweedFS was deployed but its pod cannot start (%s). Fix the cause (for example set SEAWEEDFS_IMAGE to a pullable image) and %s, or delete the storage.", msg, retry.again), "not_ready", issue.Reason)
 		}
-		return fail(fmt.Sprintf("Stopped waiting for SeaweedFS: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "wait failed"), nil
+		return fail(fmt.Sprintf("Stopped waiting for SeaweedFS: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "wait failed")
 	}
 	log.add("OK: SeaweedFS is running")
 
@@ -1422,7 +1423,7 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry, secu
 			continue
 		}
 		if resp := write(r, false); resp != nil {
-			return resp, nil
+			return resp
 		}
 	}
 
@@ -1438,7 +1439,7 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry, secu
 	}
 	if bucketErr != nil {
 		log.add(fmt.Sprintf("Bucket creation failed: %v — you can create it from the SeaweedFS admin UI.", bucketErr))
-		return fail(fmt.Sprintf("SeaweedFS deployed but bucket creation failed: %v. %s to retry, or create bucket %s from the admin UI.", bucketErr, retry.Again, s3Bucket), kube.ErrorCodeFromK8sErr(bucketErr), "bucket failed"), nil
+		return fail(fmt.Sprintf("SeaweedFS deployed but bucket creation failed: %v. %s to retry, or create bucket %s from the admin UI.", bucketErr, retry.Again, s3Bucket), kube.ErrorCodeFromK8sErr(bucketErr), "bucket failed")
 	}
 	log.add(fmt.Sprintf("OK: Bucket %s created", s3Bucket))
 
@@ -1448,7 +1449,7 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry, secu
 		Success: true,
 		Message: fmt.Sprintf("S3 storage (SeaweedFS) deployed with bucket %s; pipeline servers reach it at %s. Sign in to the admin UI as %s; its password (a value of its own) and the admin S3 keys are in Secret %s in namespace %s.", s3Bucket, S3Endpoint(), S3AdminUser, S3Secret, S3Namespace),
 		Logs:    log.lines,
-	}, nil
+	}
 }
 
 var (

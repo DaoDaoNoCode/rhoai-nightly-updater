@@ -440,16 +440,8 @@ func (m *migrateRun) secureNewStorage(dspas []DSPA, rec PipelineRecord) *types.O
 			resp, _ := m.fail("storage", fmt.Sprintf("Cannot make the new storage's admin key; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "keys")
 			return resp
 		}
-		res, err := setupS3Storage(m.c, keys, m.stepLog("storage"), s3RetryMigrate, true)
-		if err != nil || !res.Success {
-			code := "internal"
-			var msg string
-			if res != nil {
-				msg, code = res.Message, res.ErrorCode
-			} else {
-				msg = err.Error()
-			}
-			resp, _ := m.fail("storage", "Securing the new storage did not finish: "+msg+" The old storage is unchanged.", code, "secure failed")
+		if res := setupS3Storage(m.c, keys, m.stepLog("storage"), s3RetryMigrate, true); !res.Success {
+			resp, _ := m.fail("storage", "Securing the new storage did not finish: "+res.Message+" The old storage is unchanged.", res.ErrorCode, "secure failed")
 			return resp
 		}
 		m.step("storage", "running", "OK: The new storage is secured")
@@ -604,10 +596,7 @@ func (m *migrateRun) migrate(legacy *Legacy, dspas []DSPA, confirmed []string) (
 		if err != nil {
 			return m.fail("storage", fmt.Sprintf("Cannot make the new storage's keys; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "keys")
 		}
-		res, err := setupS3Storage(m.c, keys, m.stepLog("storage"), s3RetryMigrate, secured)
-		if err != nil {
-			return nil, err
-		}
+		res := setupS3Storage(m.c, keys, m.stepLog("storage"), s3RetryMigrate, secured)
 		if !res.Success {
 			// res.Message names Migrate storage as the way to continue (s3RetryMigrate).
 			return m.fail("storage", "Setting up the new storage did not finish: "+res.Message+" The old storage is unchanged.", res.ErrorCode, "setup failed")
