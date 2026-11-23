@@ -191,6 +191,16 @@ Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#u
   and the background check drops it (and its subscription entry); the
   model's row is "Not published". A deleted MaaSModelRef whose model still
   routes through the MaaS gateway stays "Partly published" with Unpublish.
+- **"Through MaaS only" belongs to the model that was published.** The
+  Models tab's "Through MaaS only" and the unpublish step of its Delete
+  came from the MaaS record by name, so a model made again under the name
+  before the background check ran inherited them. They now count only for
+  the model whose UID the publication recorded.
+- **Delete model names a MaaSModelRef someone else made.** It said
+  "Unpublish it on the MaaS tab first", but the MaaS tab leaves such a
+  reference alone and offers no Unpublish. Delete still refuses (the
+  reference would point at nothing), and now says the reference is not
+  this tool's and whoever made it removes it.
 - **A DataScienceCluster change applies only to the DSC it was checked
   on.** The Components page's changes (a component's state, Fix, soft
   reset) and Diagnostics' disable-component fix tested only the fields

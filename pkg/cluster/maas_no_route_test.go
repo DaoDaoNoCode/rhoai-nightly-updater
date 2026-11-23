@@ -109,15 +109,15 @@ func TestMaaSOnlyPublishStopped_SetUpAgainThenUnpublish(t *testing.T) {
 // replaced.
 func TestMaaSPublish_UnrecordedMaaSOnlyRecordsNoRoute(t *testing.T) {
 	var rec serving.MaaSRecord
-	if got, ok := rec.RouteBefore("proj", "m", serving.MaaSOnlyRefs()); !ok || !got.NoRoute {
+	if got, ok := rec.RouteBefore("proj", "m", "", serving.MaaSOnlyRefs()); !ok || !got.NoRoute {
 		t.Fatalf("unrecorded = %+v, %v", got, ok)
 	}
 	rec.SetPublished("proj", "m", true)
-	if got, ok := rec.RouteBefore("proj", "m", serving.MaaSOnlyRefs()); ok {
+	if got, ok := rec.RouteBefore("proj", "m", "", serving.MaaSOnlyRefs()); ok {
 		t.Fatalf("earlier build's publication = %+v", got)
 	}
 	var none serving.MaaSRecord
-	if got, ok := none.RouteBefore("proj", "m", nil); ok {
+	if got, ok := none.RouteBefore("proj", "m", "", nil); ok {
 		t.Fatalf("not on the MaaS gateway = %+v", got)
 	}
 }

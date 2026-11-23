@@ -1745,7 +1745,7 @@ func (r *maasStatusRun) modelRow(m LLMISvcObject, entry CatalogModel, v maasMode
 			item.SetupBlockedReason = kube.FirstNonEmpty(item.SetupBlockedReason, "The model is not ready yet.")
 		}
 	}
-	if recorded, ok := rec.RouteBefore(m.Metadata.Namespace, m.Metadata.Name, modelGatewayRefsOf(m)); item.Published && recErr == nil && ok {
+	if recorded, ok := rec.RouteBefore(m.Metadata.Namespace, m.Metadata.Name, m.Metadata.UID, modelGatewayRefsOf(m)); item.Published && recErr == nil && ok {
 		item.MaaSOnlySetup = recorded.NoRoute
 	}
 	return item
@@ -1892,7 +1892,7 @@ func maasOnlySetup(c *kube.Client, project, name string) (bool, error) {
 	if found {
 		current = modelGatewayRefsOf(model)
 	}
-	refs, ok := rec.RouteBefore(project, name, current)
+	refs, ok := rec.RouteBefore(project, name, model.Metadata.UID, current)
 	return ok && refs.NoRoute, nil
 }
 

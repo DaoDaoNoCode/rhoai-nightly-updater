@@ -279,3 +279,28 @@ func TestSweepGoneProjectRecords(t *testing.T) {
 		t.Fatalf("playground record = %+v", pgs)
 	}
 }
+
+// N5: "Through MaaS only" (and so the unpublish step of the Models tab's
+// Delete) comes from the publication's recorded refs only while the model
+// is the one published: a model this tool made again under the name before
+// the prune ran is not said to be set up through MaaS only.
+func TestModelItems_MaaSOnlySetupIsBoundToTheModelsUID(t *testing.T) {
+	mc := maasOnlyModel(t)
+	if items := toolModelItems(t, mc); len(items) != 1 || !items[0].MaaSOnlySetup {
+		t.Fatalf("before = %+v", items)
+	}
+	k, _ := parseFakePath(testModelPath)
+	mc.f.mu.Lock()
+	ensureMap(mc.f.objects[k], "metadata")["uid"] = "made-again"
+	mc.f.mu.Unlock()
+	models, _ := serving.ReadModelsRecord(mc.c)
+	e := models[serving.ModelRecordKey("proj", tModel)]
+	e.UID = "made-again"
+	models[serving.ModelRecordKey("proj", tModel)] = e
+	if err := serving.WriteModelsRecord(mc.c, models); err != nil {
+		t.Fatal(err)
+	}
+	if items := toolModelItems(t, mc); len(items) != 1 || items[0].MaaSOnlySetup {
+		t.Fatalf("made again = %+v", items)
+	}
+}

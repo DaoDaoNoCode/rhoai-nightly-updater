@@ -1380,7 +1380,7 @@ func (m *Run) unpublishCheck(u *maasUnpublish) (*types.OperationResponse, error)
 		}
 		// A setup through MaaS only whose publish stopped before it recorded
 		// anything goes back to no route too (RouteBefore).
-		recordedRefs, hasRecordedRefs = rec.RouteBefore(project, name, refs)
+		recordedRefs, hasRecordedRefs = rec.RouteBefore(project, name, model.Metadata.UID, refs)
 		if hasRecordedRefs && !refs.maasOnly() {
 			return m.Fail("check", refsChangedRefusal(project, name, refs, recordedRefs, "Then Unpublish again: it leaves the model's gateways as you set them."), "conflict", "model refs changed")
 		}

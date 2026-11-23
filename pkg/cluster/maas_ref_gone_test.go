@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 // N2: cluster-side artifacts for a publication may all be absent even when
@@ -73,5 +74,24 @@ func TestMaaS_ARecordOnlyPublicationIsKeptWhileItsRouteCannotBeRead(t *testing.T
 	}
 	if rec, _ := serving.ReadMaaSRecord(mc.c); !rec.IsPublished("proj", tModel) {
 		t.Fatal("dropped although the route could not be read")
+	}
+}
+
+// N6: a MaaSModelRef of the model's name that someone else made still
+// stops the Models tab's Delete (it would point at nothing), but the
+// refusal names it as theirs to remove: the MaaS tab leaves it alone and
+// offers no Unpublish for it.
+func TestModelsTeardown_AForeignMaaSModelRefIsNamedAsSomeoneElses(t *testing.T) {
+	mc := newMaaSCluster(t)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("model: %+v", res)
+	}
+	mc.f.putJSON(tMaaSRef, `{"metadata":{"name":"`+tModel+`","namespace":"proj"}}`)
+	res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "teardown", Project: "proj", Model: tModel})
+	if res.Success || strings.Contains(res.Message, "Unpublish it on the MaaS tab") || !strings.Contains(res.Message, "did not create") || !strings.Contains(res.Message, "MaaSModelRef") {
+		t.Fatalf("teardown = %+v", res)
+	}
+	if !mc.f.has(testModelPath) {
+		t.Fatal("the model was deleted")
 	}
 }

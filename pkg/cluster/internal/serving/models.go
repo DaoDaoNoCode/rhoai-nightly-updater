@@ -441,7 +441,7 @@ func ModelItems(c *kube.Client, models []LLMISvcObject, visible map[string]bool,
 				maas = &r
 			}
 			if !maasErr {
-				refs, ok := maas.RouteBefore(m.Metadata.Namespace, m.Metadata.Name, modelGatewayRefsOf(m))
+				refs, ok := maas.RouteBefore(m.Metadata.Namespace, m.Metadata.Name, m.Metadata.UID, modelGatewayRefsOf(m))
 				s.MaaSOnlySetup = ok && refs.NoRoute
 			}
 		}
@@ -1477,6 +1477,11 @@ func TeardownModels(c *kube.Client, project string, names ...string) (*types.Ope
 		if published, err := MaaSPublishedIn(c, project, entry.Name); err != nil {
 			return fail(fmt.Sprintf("Cannot check whether %s in %s is published to MaaS; nothing was deleted: %v.", entry.Name, project, err), kube.ErrorCodeFromK8sErr(err), "maas check failed")
 		} else if published {
+			// A MaaSModelRef someone else made has no Unpublish on the
+			// MaaS tab (it is left alone): it is theirs to remove.
+			if ref, found, err := readMaaSModelRef(c, project, entry.Name); err == nil && found && !ToolOwned(ref.Metadata) {
+				return fail(fmt.Sprintf("MaaSModelRef %s in %s, which this tool did not create, points at the model. Whoever made it removes it first (the MaaS tab leaves it alone); nothing was deleted.", entry.Name, project), "in_use", "foreign maas model ref")
+			}
 			return fail(fmt.Sprintf("%s in %s is published to Models as a Service. Unpublish it on the MaaS tab first; nothing was deleted.", entry.Name, project), "in_use", "published to maas")
 		}
 	}
