@@ -395,28 +395,46 @@ func kueueManaged(c *kube.Client) (bool, error) {
 // patch whose first operation tests the namespace's UID: a namespace made
 // again under the name (another UID) is not labelled.
 func labelProject(c *kube.Client, name, uid, recipeName string, kueue bool) error {
-	meta, found, err := kube.ReadObjectMeta(c, namespacePath(name))
-	switch {
-	case err != nil:
-		return err
-	case !found || meta.UID != uid:
-		return fmt.Errorf("namespace %s is not the one the recipe created (its UID changed)", name)
-	}
 	labels := map[string]string{dashboardProjectLabel: "true", kube.ManagedByLabelKey: kube.ManagedByLabelValue}
 	if kueue {
 		labels[kueueProjectLabel] = "true"
 	}
 	rawUID, _ := json.Marshal(uid)
-	ops := []kube.JSONPatchOp{{Op: "test", Path: "/metadata/uid", Value: rawUID}}
-	ops = append(ops, setMapOps("/metadata/labels", meta.Labels == nil, labels)...)
-	ops = append(ops, setMapOps("/metadata/annotations", meta.Annotations == nil, map[string]string{projectAnnotation: recipeName})...)
-	patch, err := json.Marshal(ops)
-	if err != nil {
-		return err
+	var err error
+	for range labelPatchAttempts {
+		var (
+			meta  kube.ObjectMeta
+			found bool
+		)
+		meta, found, err = kube.ReadObjectMeta(c, namespacePath(name))
+		switch {
+		case err != nil:
+			return err
+		case !found || meta.UID != uid:
+			return fmt.Errorf("namespace %s is not the one the recipe created (its UID changed)", name)
+		}
+		// The resourceVersion read is a precondition (409 when another
+		// writer changed the namespace since): an absent map is added
+		// whole, which must not replace one added meanwhile.
+		rawRV, _ := json.Marshal(meta.ResourceVersion)
+		ops := []kube.JSONPatchOp{{Op: "test", Path: "/metadata/uid", Value: rawUID}, {Op: "replace", Path: "/metadata/resourceVersion", Value: rawRV}}
+		ops = append(ops, setMapOps("/metadata/labels", meta.Labels == nil, labels)...)
+		ops = append(ops, setMapOps("/metadata/annotations", meta.Annotations == nil, map[string]string{projectAnnotation: recipeName})...)
+		patch, mErr := json.Marshal(ops)
+		if mErr != nil {
+			return mErr
+		}
+		_, _, err = c.Do(http.MethodPatch, namespacePath(name), "application/json-patch+json", patch, url.Values{"fieldManager": {envkit.ToolFieldManager}})
+		if !kube.IsK8sConflict(err) {
+			return err
+		}
 	}
-	_, _, err = c.Do(http.MethodPatch, namespacePath(name), "application/json-patch+json", patch, url.Values{"fieldManager": {envkit.ToolFieldManager}})
 	return err
 }
+
+// labelPatchAttempts bounds labelProject's tries when another writer
+// changes the namespace between its read and its patch.
+const labelPatchAttempts = 3
 
 // setMapOps are the JSON patch operations that set entries of the string
 // map at path (the whole map when it is absent).

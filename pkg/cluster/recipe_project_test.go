@@ -371,3 +371,39 @@ func TestRecipeProject_GoneProjectIsCreatedAgain(t *testing.T) {
 		t.Fatalf("ensure %+v, project %+v", res, s.Project)
 	}
 }
+
+// The label patch of the recipe's project keeps what another writer added
+// after it was read: a map that was absent then is not replaced whole.
+func TestRecipeProject_LabelPatchKeepsAConcurrentWritersMap(t *testing.T) {
+	f, c := projectFake(t)
+	intercept := f.intercept
+	f.intercept = func(w http.ResponseWriter, r *http.Request, body []byte) bool {
+		if !intercept(w, r, body) {
+			return false
+		}
+		// The namespace comes without annotations (intercept runs under
+		// the fake's lock).
+		delete(f.objects[fakeKey{gv: "v1", plural: "namespaces", name: "recipe-dev"}]["metadata"].(map[string]any), "annotations")
+		return true
+	}
+	patched := false
+	f.beforeServe = func(method, path string) {
+		if method != http.MethodPatch || path != tRecipeNS || patched {
+			return
+		}
+		patched = true
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		meta := f.objects[fakeKey{gv: "v1", plural: "namespaces", name: "recipe-dev"}]["metadata"].(map[string]any)
+		meta["annotations"] = map[string]any{"someone/else": "x"}
+		meta["resourceVersion"] = "7"
+	}
+	res := ensureProject(t, c, &recipe.State{Recipe: tRecipe(t, "create")})
+	if !res.Success {
+		t.Fatalf("ensure %+v", res)
+	}
+	ann := f.get(tRecipeNS)["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if ann["someone/else"] != "x" || len(ann) < 2 {
+		t.Fatalf("annotations %v", ann)
+	}
+}
