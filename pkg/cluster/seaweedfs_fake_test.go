@@ -1,7 +1,10 @@
 package cluster
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -38,6 +41,9 @@ type seaweedFake struct {
 	failIAM map[string]int
 	// per-user override for object-call HTTP status (simulates an invalid key).
 	failUserObjects map[string]int
+	// adminSecretOverride, when set, is the admin secret the server
+	// expects instead of the Secret's (a client signing with another one).
+	adminSecretOverride string
 	// audit trail: "ACTION user" on IAM, "METHOD path (who)" on S3.
 	calls []string
 }
@@ -60,13 +66,16 @@ func newSeaweedFake(t *testing.T, f *resourceFake) *seaweedFake {
 }
 
 // adminKeyID pulls the access key from the storage Secret—the same value the pod sees.
-func (sw *seaweedFake) adminKeyID() string {
+func (sw *seaweedFake) adminKeyID() string { return sw.adminField(storage.S3AccessKeyField) }
+
+// adminField reads one key of the storage Secret, as the pod has it.
+func (sw *seaweedFake) adminField(field string) string {
 	obj := sw.f.get(s3SecretPath)
 	if obj == nil {
 		return ""
 	}
 	data, _ := obj["data"].(map[string]any)
-	raw, _ := data["AWS_ACCESS_KEY_ID"].(string)
+	raw, _ := data[field].(string)
 	b, _ := base64.StdEncoding.DecodeString(raw)
 	return string(b)
 }
@@ -143,6 +152,7 @@ func (sw *seaweedFake) serve(w http.ResponseWriter, r *http.Request) {
 		id = strings.SplitN(auth[i+len("Credential="):], "/", 2)[0]
 	}
 	admin := sw.adminKeyID()
+	adminSecret := sw.adminField(storage.S3SecretKeyField)
 	secured := sw.secured()
 	body, _ := io.ReadAll(r.Body)
 	sw.mu.Lock()
@@ -152,6 +162,18 @@ func (sw *seaweedFake) serve(w http.ResponseWriter, r *http.Request) {
 	if !isAdmin && user == "" {
 		sw.calls = append(sw.calls, r.Method+" "+r.URL.Path+" (unknown key)")
 		sw.xmlError(w, http.StatusForbidden, "InvalidAccessKeyId")
+		return
+	}
+	secret := adminSecret
+	if sw.adminSecretOverride != "" {
+		secret = sw.adminSecretOverride
+	}
+	if !isAdmin {
+		secret = sw.users[user].keys[id]
+	}
+	if err := verifySigV4(r, body, id, secret); err != nil {
+		sw.calls = append(sw.calls, r.Method+" "+r.URL.Path+" (bad signature: "+err.Error()+")")
+		sw.xmlError(w, http.StatusForbidden, "SignatureDoesNotMatch")
 		return
 	}
 	if r.Method == http.MethodPost && r.URL.Path == "/" {
@@ -340,4 +362,74 @@ func assertScopedKey(t *testing.T, f *resourceFake, project string) string {
 		}
 	}
 	return ids[0]
+}
+
+// verifySigV4 checks a request's AWS Signature Version 4 with secret, as
+// SeaweedFS does, written apart from the tool's signer (s3_iam.go) so a
+// signing mistake there fails here: the Authorization header's scope,
+// signed headers and signature, the payload hash and the date.
+func verifySigV4(r *http.Request, body []byte, id, secret string) error {
+	auth := r.Header.Get("Authorization")
+	const algo = "AWS4-HMAC-SHA256 "
+	if !strings.HasPrefix(auth, algo) {
+		return fmt.Errorf("not SigV4: %q", auth)
+	}
+	fields := map[string]string{}
+	for _, part := range strings.Split(strings.TrimPrefix(auth, algo), ", ") {
+		k, v, _ := strings.Cut(part, "=")
+		fields[k] = v
+	}
+	scope := strings.Split(fields["Credential"], "/")
+	if len(scope) != 5 || scope[0] != id || scope[2] != "us-east-1" || scope[4] != "aws4_request" || (scope[3] != "s3" && scope[3] != "iam") {
+		return fmt.Errorf("bad credential scope %q", fields["Credential"])
+	}
+	amzDate := r.Header.Get("X-Amz-Date")
+	if !strings.HasPrefix(amzDate, scope[1]) {
+		return fmt.Errorf("date %q outside scope %q", amzDate, scope[1])
+	}
+	sum := sha256.Sum256(body)
+	payload := hex.EncodeToString(sum[:])
+	if r.Header.Get("X-Amz-Content-Sha256") != payload {
+		return fmt.Errorf("payload hash does not match the body")
+	}
+	signed := strings.Split(fields["SignedHeaders"], ";")
+	var canonHeaders strings.Builder
+	for _, h := range signed {
+		v := r.Header.Get(h)
+		if h == "host" {
+			v = r.Host
+		}
+		canonHeaders.WriteString(h + ":" + strings.TrimSpace(v) + "\n")
+	}
+	// The query, as SigV4 wants it: each key and value URI-encoded (spaces
+	// as %20), sorted.
+	q, _ := url.ParseQuery(r.URL.RawQuery)
+	var pairs []string
+	for k, vs := range q {
+		for _, v := range vs {
+			pairs = append(pairs, sigEscape(k)+"="+sigEscape(v))
+		}
+	}
+	sort.Strings(pairs)
+	canonical := strings.Join([]string{r.Method, r.URL.EscapedPath(), strings.Join(pairs, "&"), canonHeaders.String(), fields["SignedHeaders"], payload}, "\n")
+	creq := sha256.Sum256([]byte(canonical))
+	toSign := "AWS4-HMAC-SHA256\n" + amzDate + "\n" + strings.Join(scope[1:], "/") + "\n" + hex.EncodeToString(creq[:])
+	mac := func(key []byte, data string) []byte {
+		h := hmac.New(sha256.New, key)
+		h.Write([]byte(data))
+		return h.Sum(nil)
+	}
+	k := mac([]byte("AWS4"+secret), scope[1])
+	k = mac(k, scope[2])
+	k = mac(k, scope[3])
+	k = mac(k, "aws4_request")
+	if want := hex.EncodeToString(mac(k, toSign)); !hmac.Equal([]byte(want), []byte(fields["Signature"])) {
+		return fmt.Errorf("signature does not match")
+	}
+	return nil
+}
+
+// sigEscape is RFC 3986 encoding: unreserved characters stay.
+func sigEscape(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(url.QueryEscape(s), "+", "%20"), "%7E", "~")
 }

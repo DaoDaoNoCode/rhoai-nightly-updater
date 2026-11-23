@@ -526,3 +526,23 @@ func TestSetupS3Storage_RetryOfAFirstSetupIsSecured(t *testing.T) {
 		t.Error("a storage set up secured kept a key that was stored before its Deployment")
 	}
 }
+
+// The fake checks every signature with the secret (verifySigV4), so a
+// signing mistake fails the tests: a request signed with another secret
+// is refused and changes nothing.
+func TestSeaweedFake_RefusesAWrongSignature(t *testing.T) {
+	fastS3Timings(t)
+	f, c := newResourceFake(t)
+	putManagedDSC(f)
+	putReadyManagedS3(f)
+	putDSProject(f, "proj")
+	f.sw.adminSecretOverride = "another-secret"
+	resp, _ := SetupPipelineServer(c, "proj")
+	if resp.Success || !strings.Contains(resp.Message, "SignatureDoesNotMatch") {
+		t.Fatalf("got %+v", resp)
+	}
+	if len(f.sw.userNames()) != 0 {
+		t.Errorf("users made with a bad signature: %v", f.sw.userNames())
+	}
+	noWritesIn(t, f, "proj")
+}
