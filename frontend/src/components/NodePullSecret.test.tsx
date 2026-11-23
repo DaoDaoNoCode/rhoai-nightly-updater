@@ -132,7 +132,9 @@ describe("The pull secret's node part, by control plane", () => {
   it("offers the removal only for the entry this tool recorded adding, and says who added it", async () => {
     const own = { ...unchecked, pulled: true, addedByTool: { at: "2026-11-18T10:00:00Z", by: "admin", sameToken: true } };
     await renderWithApp(<PullSecretSetup pullSecret={saved(own)} controlPlane="self-managed" />).settled();
-    expect(screen.getByText(/^This tool \(by admin, /)).toBeInTheDocument();
+    // Only recorded: the updater cannot read openshift-config/pull-secret,
+    // so the card says the dialog checks the entry itself.
+    expect(screen.getByText(/^Recorded as added by this tool \(by admin, .*\)\. The updater cannot read the cluster pull secret: Add and Remove check the entry with your permissions before they change anything\.$/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add to the nodes' pull secret" })).toHaveClass("pf-m-secondary");
     expect(screen.getByRole("button", { name: "Remove from the nodes' pull secret" })).toHaveClass("pf-m-danger");
   });

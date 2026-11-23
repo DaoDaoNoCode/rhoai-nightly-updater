@@ -178,6 +178,11 @@ Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#u
   exists; they only piled up. An entry is kept while its project exists, is
   being deleted or cannot be read, and a model's while its MaaS publication
   is still recorded.
+- **The nodes' pull secret card says what it knows.** "Entry set by: This
+  tool" came from this tool's record alone: the updater may not read
+  `openshift-config/pull-secret` (SECURITY.md). The card now says the entry
+  is recorded as added by this tool and that Add and Remove check it with
+  your permissions before they change anything.
 - **A DataScienceCluster change applies only to the DSC it was checked
   on.** The Components page's changes (a component's state, Fix, soft
   reset) and Diagnostics' disable-component fix tested only the fields
