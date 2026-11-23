@@ -1,5 +1,5 @@
 import React from "react";
-import { ProgressStep, ProgressStepper, Spinner } from "@patternfly/react-core";
+import { ProgressStep, ProgressStepper } from "@patternfly/react-core";
 import type { UpdateStep } from "../../types";
 
 export interface StepState {
@@ -31,7 +31,7 @@ export const StepProgress: React.FC<{
       const description = !s ? pending : !((s.status === "failed" || s.status === "success") && s.message === shownElsewhere) ? s.message : undefined;
       return (
         <ProgressStep key={id} id={`${idPrefix}-${id}`} titleId={`${idPrefix}-${id}-title`} variant={variant} isCurrent={current}
-          icon={current ? <Spinner size="sm" aria-label="In progress" /> : undefined} description={description}>
+          aria-label={current ? `${title}: in progress` : undefined} description={description}>
           {title}
         </ProgressStep>
       );

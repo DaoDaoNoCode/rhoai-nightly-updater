@@ -259,7 +259,7 @@ const StoragePart: React.FC<StorageTabProps> = ({ status, busy, baseReason, read
       )}
       {deployed && !minio?.ready && !terminalReason(minio) && !isTerminating(minio) && <StartingNote state={minio!} typical="under a minute" />}
       {deployed && (
-        <DescriptionList isCompact isHorizontal aria-label="S3 storage details">
+        <DescriptionList isCompact isHorizontal termWidth="10rem" aria-label="S3 storage details">
           <DescriptionListGroup>
             <DescriptionListTerm>Endpoint</DescriptionListTerm>
             <DescriptionListDescription><ImageRef image={S3_ENDPOINT} what="S3 endpoint" truncate={false} /></DescriptionListDescription>
