@@ -1,86 +1,84 @@
 # Changelog
 
-All notable changes to the RHOAI Nightly Updater. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
-`vMAJOR.MINOR.PATCH`:
+Every significant change to RHOAI Nightly Updater is recorded here. Layout
+matches [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
+numbers use `vMAJOR.MINOR.PATCH`:
 
-- **MAJOR**: the deploy contract changed (`TEMPLATE_REVISION` in
-  `deploy/template.yaml`, RBAC, anything that needs the template re-applied).
-  Upgrading needs a full redeploy: the release's `install.sh`, or
-  `git checkout vX.Y.Z && make upgrade`.
-- **MINOR**: features, same template.
-- **PATCH**: fixes.
+- **MAJOR**: use when the deploy contract changes (`TEMPLATE_REVISION` in
+  `deploy/template.yaml`, RBAC, or anything that requires re-applying the
+  template). Upgrading then means a full redeploy—via the release's
+  `install.sh`, or `git checkout vX.Y.Z && make upgrade`.
+- **MINOR**: new behaviour; template unchanged.
+- **PATCH**: bug fixes only.
 
-A section reads `- unreleased` until the release commit replaces it with the
-release date (`YYYY-MM-DD`); the release guard (`scripts/release.sh check`)
-only accepts a tag whose version is the top dated section. Pre-releases of a
-version (`vX.Y.Z-alpha.N`, `-beta.N`, `-rc.N`, from 4.1.0 on) are tagged
-while its section still reads `- unreleased`, and get no section of their
-own. See [CONTRIBUTING.md](CONTRIBUTING.md#releases).
+Until the release commit lands, a section shows `- unreleased`; that line
+becomes the release date (`YYYY-MM-DD`). The release guard (`scripts/release.sh check`)
+accepts only a tag whose version is the top dated section. Pre-releases of a
+given version (`vX.Y.Z-alpha.N`, `-beta.N`, `-rc.N`, from 4.1.0 onward) are
+tagged while its section still says `- unreleased`, and they do not get their
+own section. See [CONTRIBUTING.md](CONTRIBUTING.md#releases).
 
 ## [5.0.0] - unreleased
 
-Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-to-v500)).
+Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#upgrade-to-v500)).
 
 ### Added
 
-- **Pre-releases.** A version can now be tried out before it is released:
-  `make release VERSION=v5.0.0-rc.1` tags a pre-release (`-alpha.N`,
-  `-beta.N` or `-rc.N`, numbered from 1), on `main` or on an `integ/*`
-  branch; the release itself is still tagged on `main` only. A template
-  change still needs a new MAJOR version, but it is now checked against the
-  last release only: the pre-releases of one version may change the template
-  among themselves, so a new major is iterated with pre-releases and
-  released once, instead of a new major for every iteration (1.0.0 on
-  2026-10-06 to 4.0.0 on 2026-11-20). The release guard wants the
-  version's CHANGELOG section still `- unreleased`, the version above the
+- **Pre-releases.** You can exercise a version before it ships:
+  `make release VERSION=v5.0.0-rc.1` creates a pre-release tag (`-alpha.N`,
+  `-beta.N` or `-rc.N`, counted from 1) on `main` or an `integ/*`
+  branch; only `main` receives the final release tag. Template changes still
+  demand a MAJOR bump, yet comparison is now to the prior release alone:
+  pre-releases under one version may revise the template relative to each
+  other, so one major line is exercised through pre-releases and shipped
+  once—rather than bumping major on every try (from 1.0.0 on
+  2026-10-06 through 4.0.0 on 2026-11-20). The release guard expects that
+  version's CHANGELOG section to remain `- unreleased`, the number to exceed the
   last release, and
-  `deploy/chart/Chart.yaml` naming the pre-release itself
-  (`version: 5.0.0-rc.1`, `appVersion: "v5.0.0-rc.1"`). A pre-release
-  publishes its own image tag (`:v5.0.0-rc.1`, written once), `install.sh`
-  and release notes that start by saying it is not for general use; it
-  never moves `:v5` or `:latest`, and `promote-latest` refuses it. On
-  GitHub it is marked as a pre-release and never "Latest", so
-  `releases/latest` (the README's install command) stays on the last
-  release; GitLab Releases have no such flag, so it is named
-  "v5.0.0-rc.1 (pre-release)". The app's update check never offers a
-  pre-release; an updater that runs one is offered its release (or a later
-  one) once it is out. `install.sh`, `make deploy`/`upgrade` on a
-  pre-release checkout, and `make rollback TAG=v5.0.0-rc.1` take
-  pre-release versions. The Helm chart's tag check reads pre-release tags
-  too: a chart refuses an `IMAGE` tagged with another pre-release or with
-  its release (`:v5.0.0-rc.1@sha256:...` in a 5.0.0 chart, and the other
-  way round), since their templates may differ; before, a tag with a suffix
-  passed the check. How to: [CONTRIBUTING.md](CONTRIBUTING.md#pre-releases).
+  `deploy/chart/Chart.yaml` to name the pre-release itself
+  (`version: 5.0.0-rc.1`, `appVersion: "v5.0.0-rc.1"`). Each pre-release
+  gets its own image tag (`:v5.0.0-rc.1`, recorded once), plus `install.sh`
+  and release notes that open with a not-for-general-use warning; it does not
+  advance `:v5` or `:latest`, and `promote-latest` turns it down. GitHub lists
+  it as pre-release and never "Latest", leaving
+  `releases/latest` (the README install path) on the prior
+  release; GitLab Releases lack that flag, so the title becomes
+  "v5.0.0-rc.1 (pre-release)". In-app update checks skip pre-releases; an
+  instance on one is prompted toward its release (or a newer
+  release) when that ships. `install.sh`, `make deploy`/`upgrade` from a
+  pre-release checkout, and `make rollback TAG=v5.0.0-rc.1` all accept
+  pre-release versions. Helm's tag validation understands pre-release tags
+  as well: a chart rejects `IMAGE` values tagged with a different pre-release or
+  with its release (`:v5.0.0-rc.1@sha256:...` inside a 5.0.0 chart, and
+  vice versa), because templates may diverge; formerly, any suffixed tag
+  cleared the check. How to: [CONTRIBUTING.md](CONTRIBUTING.md#pre-releases).
 
 ### Changed
 
 - **Every RHOAI user can sign in, and sees what is theirs.** oauth-proxy's
-  sign-in gate is now "may `get` `auths.services.platform.opendatahub.io`",
-  which RHOAI grants to its Auth CR's allowed groups (by default every
-  OpenShift user); before, only users who could list pods in
-  `redhat-ods-operator` got in. Cluster-admins see everything as before.
-  Everyone else gets a reviewed cluster summary (new `GET /api/summary`:
-  the updater's version, RHOAI's version, channel and phase, the installed
+  sign-in gate is now whether you may `get` `auths.services.platform.opendatahub.io`,
+  which RHOAI hands to its Auth CR's allowed groups (by default every
+  OpenShift user); previously, admission required listing pods in
+  `redhat-ods-operator`. Cluster-admins still see the full app.
+  Other users receive a reviewed cluster summary (new `GET /api/summary`:
+  updater version, RHOAI version, channel and phase, installed
   and newest nightly build, the DataScienceCluster and its components),
-  Build Explorer, and the Environment page for their own projects, read
-  with their own token. Every other read answers 403 `admin_only`; a GET
-  route nobody classified is admin-only, and a test fails until it is
-  classified ([SECURITY.md](SECURITY.md#per-user-views-500)). Their Help
-  dialog describes only the pages they can open, with no update or upgrade
-  steps. The README shows these pages
+  Build Explorer, and the Environment page scoped to their projects, fetched
+  with their own token. All other reads return 403 `admin_only`; an unclassified GET
+  route is treated as admin-only, and tests fail until someone classifies it
+  ([SECURITY.md](SECURITY.md#per-user-views-500)). Their Help
+  dialog lists only pages they may open, omitting update or upgrade
+  steps. The README illustrates these views
   ([Not a cluster-admin?](README.md#not-a-cluster-admin-what-you-see)).
-- `GET /api/user/permissions` reports `role`: `admin` or `user`.
-- `GET /api/operation` gives a user who is not a cluster-admin only
-  `{running, label, startedAt}`: never who started it or what it acts on.
-- The projects list (`GET /api/resources/projects`) comes from the
-  OpenShift projects API with the user's own token, for everyone; the
-  Playground and MLflow samples status read with the user's own token
-  (the Playground's projects are the user's only), and a user who is not a
-  cluster-admin gets `GET /api/resources/status?project=` for one of their
-  projects, read with their token.
-- A refusal of a read made with the user's own token is
-  `forbidden_for_user` ("your account may not see this"), never the
+- `GET /api/user/permissions` exposes `role`: `admin` or `user`.
+- `GET /api/operation` returns to non-cluster-admins only
+  `{running, label, startedAt}`—not who started it or what it acts on.
+- The projects list (`GET /api/resources/projects`) is built from the
+  OpenShift projects API with each user's token, for all users; Playground and MLflow sample status also use the user's token
+  (Playground projects are limited to the user's set), and non-cluster-admins may call `GET /api/resources/status?project=` for a project they belong to,
+  again with their token.
+- A denied read issued with the user's own token uses
+  `forbidden_for_user` ("your account may not see this"), not the
   ServiceAccount's "re-apply the template" hint.
 - CI: every job has a timeout. GitLab: 20 minutes for the test jobs, 30
   for the image builds, 10 for the crane, installer and release-notes
@@ -146,6 +144,12 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   model as being removed, with no buttons. A publication only the record
   still lists is "Not published" (Publish is offered), and the Models
   tab's teardown no longer refuses such a model.
+- **Gone MaaS publications are removed within seconds of opening the
+  tab.** A MaaS status read that finds a publication whose project or model
+  is gone starts the background check at once instead of waiting up to
+  five minutes: in the background (the read does not wait), under the same
+  cluster lock and cross-pod lease, at most one per minute, and never in
+  the gitops profile.
 - **A DataScienceCluster change applies only to the DSC it was checked
   on.** The Components page's changes (a component's state, Fix, soft
   reset) and Diagnostics' disable-component fix tested only the fields

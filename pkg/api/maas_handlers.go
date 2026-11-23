@@ -23,6 +23,11 @@ var HandleMaaSStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r
 		writeError(w, "Cannot read the MaaS state: "+err.Error(), code, errorCode)
 		return
 	}
+	// Publications that are gone: the check that removes them starts now,
+	// in the background (maas_prune_job.go).
+	if len(st.Removing) > 0 {
+		kickMaaSPrune()
+	}
 	writeJSON(w, st, "maas")
 })
 
