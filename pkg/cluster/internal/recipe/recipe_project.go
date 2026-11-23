@@ -152,6 +152,10 @@ func refusedProjectName(c *kube.Client, name string) (string, error) {
 	return "", nil
 }
 
+// projectFix: the recipe's spec.project is to change (or, for a project
+// being deleted, to wait).
+func projectFix() *types.RecipeFix { return fixAt(types.RecipeFixProjectForeign, "") }
+
 // foreignProjectMessage refuses a project the recipe did not create.
 func foreignProjectMessage(name string) string {
 	return fmt.Sprintf("Project %s exists and was not created by a recipe. Choose another name, or set project.mode: existing to use it as it is. Nothing was changed.", name)
@@ -211,7 +215,7 @@ func checkProjectStep(c *kube.Client, s *State) (Check, error) {
 			return Check{}, fmt.Errorf("list the data science projects: %w", err)
 		}
 		if !ok {
-			return Check{Blocked: fmt.Sprintf("Project %s is not a data science project (or does not exist). Create it in the RHOAI dashboard, or set project.mode: create. Nothing was changed.", p.Name)}, nil
+			return Check{Blocked: fmt.Sprintf("Project %s is not a data science project (or does not exist). Create it in the RHOAI dashboard, or set project.mode: create. Nothing was changed.", p.Name), Fix: projectFix()}, nil
 		}
 		s.Project = &types.RecipeProjectRef{Name: p.Name}
 		return Check{Done: true, Reason: fmt.Sprintf("Uses your data science project %s.", p.Name)}, nil
@@ -221,7 +225,7 @@ func checkProjectStep(c *kube.Client, s *State) (Check, error) {
 		return Check{}, err
 	}
 	if why != "" {
-		return Check{Blocked: why + " Nothing was changed."}, nil
+		return Check{Blocked: why + " Nothing was changed.", Fix: projectFix()}, nil
 	}
 	found, _, err := findProject(c, p.Name)
 	if err != nil {
@@ -234,9 +238,9 @@ func checkProjectStep(c *kube.Client, s *State) (Check, error) {
 		s.Project = nil
 		return Check{}, nil
 	case !found.ours:
-		return Check{Blocked: foreignProjectMessage(p.Name)}, nil
+		return Check{Blocked: foreignProjectMessage(p.Name), Fix: projectFix()}, nil
 	case found.meta.Terminating():
-		return Check{Blocked: fmt.Sprintf("Project %s, which a recipe created, is being deleted; wait until it is gone, then run the recipe again.", p.Name)}, nil
+		return Check{Blocked: fmt.Sprintf("Project %s, which a recipe created, is being deleted; wait until it is gone, then run the recipe again.", p.Name), Fix: projectFix()}, nil
 	}
 	s.Project = &types.RecipeProjectRef{Name: p.Name, UID: found.meta.UID, Owned: true}
 	if !found.complete() {
@@ -302,6 +306,7 @@ func EnsureProject(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (
 			return fail(fmt.Sprintf("Project %s was created, but recording it as the recipe's failed (%v), so Clean up will not delete it. Delete it in the console, then run the recipe again.", name, err), kube.ErrorCodeOr(err, "prerequisites"))
 		}
 		s.Project = &types.RecipeProjectRef{Name: name, UID: uid, Owned: true}
+		s.MarkCreated(StepProject)
 	}
 	if err := labelProject(c, name, uid, s.Recipe.Metadata.Name, kueue); err != nil {
 		return fail(fmt.Sprintf("Project %s was created, but setting its labels failed: %v. Resume sets them again.", name, err), kube.ErrorCodeOr(err, "prerequisites"))

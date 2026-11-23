@@ -51,9 +51,9 @@ func Plan(c *kube.Client, r types.EnvironmentRecipe, pinned *types.RecipePinnedB
 	notInThisVersion(&p, r)
 
 	if g, err := argo.ReadOperatorGitOps(c); err != nil {
-		p.add("", "Cannot check whether Argo CD manages the RHOAI operator: %v. Nothing was changed.", err)
+		p.addFix(checkFailed(), "", "Cannot check whether Argo CD manages the RHOAI operator: %v. Nothing was changed.", err)
 	} else if g.Active() {
-		p.add("", "%s manages the RHOAI operator on this cluster, so a recipe does not install or change it. Nothing was changed.", gitOpsManager(g))
+		p.addFix(fixAt(types.RecipeFixArgoManaged, ""), "", "%s manages the RHOAI operator on this cluster, so a recipe does not install or change it. Nothing was changed.", gitOpsManager(g))
 	}
 
 	// A pinned build comes from the run record, which the ServiceAccount
@@ -61,7 +61,7 @@ func Plan(c *kube.Client, r types.EnvironmentRecipe, pinned *types.RecipePinnedB
 	// a pinned build that is not the recipe's refuses (fail closed).
 	if pinned != nil {
 		if problem := PinnedBuildProblem(r.Spec.RHOAI.Build, pinned); problem != "" {
-			p.add("spec.rhoai.build", "%s", problem)
+			p.addFix(fixAt(types.RecipeFixPinnedBuildRefused, ""), "spec.rhoai.build", "%s", problem)
 			pinned = nil
 		}
 	}
@@ -73,7 +73,7 @@ func Plan(c *kube.Client, r types.EnvironmentRecipe, pinned *types.RecipePinnedB
 		}
 		resolved = true
 		if b, problem := resolveBuild(c, r.Spec.RHOAI.Build); problem != "" {
-			p.add("spec.rhoai.build", "%s", problem)
+			p.addFix(fixAt(types.RecipeFixBuildUnresolvable, ""), "spec.rhoai.build", "%s", problem)
 		} else {
 			s.Pinned = b
 		}
@@ -84,7 +84,8 @@ func Plan(c *kube.Client, r types.EnvironmentRecipe, pinned *types.RecipePinnedB
 	}
 	willRun := map[string]bool{}
 	for _, step := range Steps(r) {
-		ps := types.RecipePlanStep{ID: step.ID, Title: step.Title, TypicalSeconds: int(step.Typical / time.Second), MaxSeconds: int(step.Max / time.Second)}
+		ps := types.RecipePlanStep{ID: step.ID, Title: step.Title}
+		ps.TypicalSeconds, ps.MaxSeconds = step.Seconds()
 		later := false
 		for _, dep := range stepDependsOn[step.ID] {
 			later = later || willRun[dep]
@@ -96,9 +97,9 @@ func Plan(c *kube.Client, r types.EnvironmentRecipe, pinned *types.RecipePinnedB
 			chk, err := step.Check(c, &s)
 			switch {
 			case err != nil:
-				ps.Action, ps.Reason = types.RecipeStepBlocked, fmt.Sprintf("Cannot check it: %v.", err)
+				ps.Action, ps.Reason, ps.Fix = types.RecipeStepBlocked, fmt.Sprintf("Cannot check it: %v.", err), checkFailed()
 			case chk.Blocked != "":
-				ps.Action, ps.Reason = types.RecipeStepBlocked, chk.Blocked
+				ps.Action, ps.Reason, ps.Fix = types.RecipeStepBlocked, chk.Blocked, chk.Fix
 			case chk.Done:
 				ps.Action, ps.Reason = types.RecipeStepSkip, chk.Reason
 			default:
@@ -107,7 +108,7 @@ func Plan(c *kube.Client, r types.EnvironmentRecipe, pinned *types.RecipePinnedB
 			}
 		}
 		if ps.Action == types.RecipeStepBlocked {
-			p.add("", "%s: %s", step.Title, ps.Reason)
+			p.addFix(ps.Fix, "", "%s: %s", step.Title, ps.Reason)
 		}
 		if step.ID == StepRHOAI && willRun[StepRHOAI] {
 			oneTimeSetup(c, &p)
@@ -160,20 +161,27 @@ func oneTimeSetup(c *kube.Client, p *problems) {
 	ps, err := registry.PullSecret(c)
 	switch {
 	case err != nil:
-		p.add("", "Cannot check the pull secret: %v. Nothing was changed.", err)
+		p.addFix(checkFailed(), "", "Cannot check the pull secret: %v. Nothing was changed.", err)
 	case !ps.Exists:
-		p.add("", "The one-time cluster setup is not done: additional-pull-secret is missing in kube-system. Run the one-time setup on the Status page first.")
+		p.addFix(oneTimeSetupFix(), "", "The one-time cluster setup is not done: additional-pull-secret is missing in kube-system. Run the one-time setup on the Status page first.")
 	case !ps.Valid && !strings.HasPrefix(ps.Detail, "Could not verify credentials with Quay"):
-		p.add("", "The pull secret cannot pull from quay.io/rhoai: %s. Fix it in the one-time setup first.", ps.Detail)
+		p.addFix(oneTimeSetupFix(), "", "The pull secret cannot pull from quay.io/rhoai: %s. Fix it in the one-time setup first.", ps.Detail)
 	}
 	idms, err := node.ImageMirror(c)
 	switch {
 	case err != nil:
-		p.add("", "Cannot check the image mirror: %v. Nothing was changed.", err)
+		p.addFix(checkFailed(), "", "Cannot check the image mirror: %v. Nothing was changed.", err)
 	case !idms.Exists:
-		p.add("", "The one-time cluster setup is not done: no image mirror (IDMS) for %s. Run the one-time setup on the Status page first.", rhoai.IDMSSource)
+		p.addFix(oneTimeSetupFix(), "", "The one-time cluster setup is not done: no image mirror (IDMS) for %s. Run the one-time setup on the Status page first.", rhoai.IDMSSource)
 	}
 }
+
+func oneTimeSetupFix() *types.RecipeFix {
+	return fixAt(types.RecipeFixOneTimeSetupMissing, pageStatus)
+}
+
+// checkFailed: a read of the cluster failed; trying again may work.
+func checkFailed() *types.RecipeFix { return fixAt(types.RecipeFixCheckFailed, "") }
 
 // resolveBuild pins the recipe's build: the newest nightly (latest), the
 // newest build of a line (tag), or the given image, by digest. It returns

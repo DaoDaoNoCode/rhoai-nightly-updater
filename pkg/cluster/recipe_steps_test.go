@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -118,4 +119,61 @@ func TestRecipeDSCStep_Failures(t *testing.T) {
 			t.Fatalf("%+v %v", chk, err)
 		}
 	})
+}
+
+// The prerequisite steps record the DataScienceCluster components they
+// turned on (what Set up's record gained for their feature), and that they
+// set their part up. A component recorded before the run is not the run's.
+func TestRecipePrereqSteps_RecordTheComponentsTheyTurnedOn(t *testing.T) {
+	pc := newPrereqCluster(t)
+	r, problems := recipe.Validate([]byte(tRecipeBase + `{"rhoai":{"build":"latest"},"dataScienceCluster":{"create":true},"project":{"mode":"create","name":"recipe-dev"},
+"features":{"pipelines":{"enabled":true},"mlflow":{"enabled":true}}}}`))
+	if len(problems) > 0 {
+		t.Fatal(problems)
+	}
+	// MLflow's component was set up on the Environment page before.
+	if res, _ := runPrereqs(t, pc.c, "mlflow"); !res.Success {
+		t.Fatalf("mlflow setup: %+v", res)
+	}
+	st := &recipe.State{Recipe: r}
+	for _, id := range []string{recipe.StepPipelinesPrereq, recipe.StepMLflowPrereq} {
+		res, err := recipeStep(t, r, id).Run(pc.c, st, func(types.UpdateStepEvent) {})
+		if err != nil || !res.Success {
+			t.Fatalf("%s: %+v %v", id, res, err)
+		}
+	}
+	if strings.Join(st.Components, ",") != "aipipelines" || !st.Created[recipe.StepPipelinesPrereq] || !st.Created[recipe.StepMLflowPrereq] {
+		t.Errorf("components %v, created %v", st.Components, st.Created)
+	}
+}
+
+// A run's Clean up asks for what its steps set up (any attempt), the
+// project a recipe created, and the components it turned on; nothing
+// found there. A run that set up nothing Clean up removes has none.
+func TestRecipeCleanupRequest(t *testing.T) {
+	run := &types.RecipeRun{
+		Project: &types.RecipeProjectRef{Name: "recipe-dev", UID: "u1", Owned: true},
+		Steps: []types.RecipeRunStep{
+			{ID: recipe.StepRHOAI, Created: true}, {ID: recipe.StepProject, Created: true}, {ID: recipe.StepS3},
+			{ID: recipe.StepPipelineServer, Created: true}, {ID: recipe.StepMLflow, Created: true},
+		},
+		Components: []string{"aipipelines", "mlflowoperator"},
+	}
+	got := recipe.CleanupRequest(run)
+	want := types.CleanupRequest{PipelineServers: []string{"recipe-dev"}, MLflow: true, RecipeProject: "recipe-dev", Components: []string{"aipipelines", "mlflowoperator"}}
+	if got == nil || !reflect.DeepEqual(*got, want) {
+		t.Errorf("cleanup %+v", got)
+	}
+	// A project the run uses but no recipe created stays.
+	run.Project.Owned = false
+	if got := recipe.CleanupRequest(run); got == nil || got.RecipeProject != "" {
+		t.Errorf("foreign project %+v", got)
+	}
+	none := &types.RecipeRun{Project: &types.RecipeProjectRef{Name: "mine"}, Steps: []types.RecipeRunStep{{ID: recipe.StepRHOAI, Created: true}, {ID: recipe.StepS3}}}
+	if got := recipe.CleanupRequest(none); got != nil {
+		t.Errorf("nothing to clean up: %+v", got)
+	}
+	if recipe.CleanupRequest(nil) != nil {
+		t.Error("no run")
+	}
 }

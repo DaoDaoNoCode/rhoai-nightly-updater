@@ -171,7 +171,12 @@ func defaults(r *types.EnvironmentRecipe) {
 type problems []types.RecipeProblem
 
 func (p *problems) add(field, format string, args ...any) {
-	*p = append(*p, types.RecipeProblem{Field: field, Message: fmt.Sprintf(format, args...)})
+	p.addFix(nil, field, format, args...)
+}
+
+// addFix adds a problem with where it is fixed.
+func (p *problems) addFix(fix *types.RecipeFix, field, format string, args ...any) {
+	*p = append(*p, types.RecipeProblem{Field: field, Message: fmt.Sprintf(format, args...), Fix: fix})
 }
 
 // check reports every rule a decoded recipe (with its defaults) breaks.

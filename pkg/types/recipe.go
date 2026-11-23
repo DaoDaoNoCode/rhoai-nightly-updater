@@ -203,7 +203,55 @@ type RecipeProblem struct {
 	// the source as a whole.
 	Field   string `json:"field,omitempty"`
 	Message string `json:"message"`
+	// Fix says where the problem is fixed, for the UI's link; nil when
+	// the recipe itself is to change (Field says where).
+	Fix *RecipeFix `json:"fix,omitempty"`
 }
+
+// RecipeFix is where a plan's problem, or a blocked step, is fixed: a
+// stable code the UI maps to its words and link (never parsed from the
+// message), and the app page that fixes it, when one does.
+type RecipeFix struct {
+	Code string `json:"code"`
+	// Page is the app's route ("/", "/components", ...); "" when nothing
+	// in the app fixes it.
+	Page string `json:"page,omitempty"`
+}
+
+// The codes of RecipeFix.
+const (
+	// The one-time cluster setup (pull secret, image mirror) is missing or
+	// broken: the Status page.
+	RecipeFixOneTimeSetupMissing = "one_time_setup_missing"
+	// Argo CD or an ACM policy manages the RHOAI operator: change it in
+	// Git, not in the app.
+	RecipeFixArgoManaged = "argo_managed"
+	// The recipe's build cannot be resolved on Quay: try again, or choose
+	// another build.
+	RecipeFixBuildUnresolvable = "build_unresolvable"
+	// The build a run recorded is not the recipe's: resume with the build
+	// resolved again.
+	RecipeFixPinnedBuildRefused = "pinned_build_refused"
+	// The recipe's project exists and is not the recipe's, is being
+	// deleted, or has a reserved name: change spec.project.
+	RecipeFixProjectForeign = "project_foreign"
+	// This updater runs the gitops profile: recipes need the full one.
+	RecipeFixProfileGitOps = "profile_gitops"
+	// A Dashboard Dev session is active: revert it on the Dashboard Dev
+	// page.
+	RecipeFixDashboardDevActive = "dashboard_dev_active"
+	// The RHOAI operator is half installed: the Status page.
+	RecipeFixOperatorHalfInstalled = "operator_half_installed"
+	// There is no DataScienceCluster and the recipe creates none: the
+	// Components page.
+	RecipeFixDSCMissing = "dsc_missing"
+	// A feature's setup refuses (its prerequisites, the storage, a
+	// pipeline server the tool did not create, MLflow): the Environment
+	// page.
+	RecipeFixFeatureBlocked = "feature_blocked"
+	// A read of the cluster failed: try again.
+	RecipeFixCheckFailed = "check_failed"
+)
 
 // RecipeRequest is the body of POST /api/recipes/plan and /api/recipes/run:
 // the recipe as a JSON object, read strictly (pkg/cluster internal/recipe
@@ -254,6 +302,8 @@ type RecipePlanStep struct {
 	Title  string `json:"title"`
 	Action string `json:"action"` // RecipeStepRun, Skip, Blocked or Later
 	Reason string `json:"reason,omitempty"`
+	// Fix: where a blocked step is fixed.
+	Fix *RecipeFix `json:"fix,omitempty"`
 	// TypicalSeconds and MaxSeconds: how long the step usually takes, and
 	// at most.
 	TypicalSeconds int `json:"typicalSeconds"`
@@ -320,6 +370,10 @@ type RecipeRun struct {
 	Pinned    *RecipePinnedBuild `json:"pinned,omitempty"`
 	Project   *RecipeProjectRef  `json:"project,omitempty"`
 	Steps     []RecipeRunStep    `json:"steps"`
+	// Components are the DataScienceCluster components this run (any of
+	// its attempts) turned on (the prerequisites record's), which its
+	// Clean up turns back.
+	Components []string `json:"components,omitempty"`
 }
 
 // RecipeRunStep is one step of a run.
@@ -331,6 +385,13 @@ type RecipeRunStep struct {
 	ErrorCode  string `json:"errorCode,omitempty"`
 	StartedAt  string `json:"startedAt,omitempty"`
 	FinishedAt string `json:"finishedAt,omitempty"`
+	// TypicalSeconds and MaxSeconds: how long the step usually takes, and
+	// at most (the plan's figures).
+	TypicalSeconds int `json:"typicalSeconds"`
+	MaxSeconds     int `json:"maxSeconds"`
+	// Created: this run (any of its attempts) set the step's part up;
+	// false when it was there already. Kept across Resume.
+	Created bool `json:"created,omitempty"`
 }
 
 // RecipeRunStatus is the answer of GET /api/recipes/run.
@@ -350,6 +411,11 @@ type RecipeRunStatus struct {
 	// Step is the latest progress of the running step (from the
 	// operation), when it runs.
 	Step *UpdateStepEvent `json:"step,omitempty"`
+	// Cleanup is the clean-up request for what the run created (POST
+	// /api/resources/cleanup/stream), when the run is not running and
+	// created anything; the user confirms it, and the project's contents
+	// when Clean up asks.
+	Cleanup *CleanupRequest `json:"cleanup,omitempty"`
 }
 
 // RecipeOwnedProject is a project a recipe created: Clean up deletes it

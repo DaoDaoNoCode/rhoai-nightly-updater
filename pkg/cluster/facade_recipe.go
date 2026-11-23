@@ -35,3 +35,8 @@ func RecipeSteps(r types.EnvironmentRecipe) []RecipeStep { return recipe.Steps(r
 func RecordRecipeActivity(c *Client, action, detail string, success bool) {
 	recipe.RecordActivity(c, action, detail, success)
 }
+
+// RecipeCleanupRequest is recipe.CleanupRequest.
+func RecipeCleanupRequest(run *types.RecipeRun) *types.CleanupRequest {
+	return recipe.CleanupRequest(run)
+}

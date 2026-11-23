@@ -42,6 +42,20 @@ func problemText(p *types.RecipePlan) string {
 	return strings.Join(out, "\n")
 }
 
+// problemFixes lists the problems' fix hints, "code@page" ("-" for none).
+func problemFixes(p *types.RecipePlan) string {
+	var out []string
+	for _, pr := range p.Problems {
+		switch {
+		case pr.Fix == nil:
+			out = append(out, "-")
+		default:
+			out = append(out, pr.Fix.Code+"@"+pr.Fix.Page)
+		}
+	}
+	return strings.Join(out, " ")
+}
+
 // installedRHOAI puts an installed operator (Subscription and a Succeeded
 // CSV) and a DataScienceCluster with conditions.
 func installedRHOAI(f *resourceFake) {
@@ -62,6 +76,9 @@ func TestRecipePlan_FreshClusterWithoutTheOneTimeSetup(t *testing.T) {
 	}
 	if !strings.Contains(problemText(plan), "additional-pull-secret is missing") || !strings.Contains(problemText(plan), "no image mirror") {
 		t.Fatalf("problems %s", problemText(plan))
+	}
+	if got := problemFixes(plan); got != "one_time_setup_missing@/ one_time_setup_missing@/" {
+		t.Errorf("fixes %s", got)
 	}
 	if state.Pinned == nil || state.Pinned.Image != tRecipeFBC || state.Pinned.Digest != "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" {
 		t.Fatalf("pinned %+v", state.Pinned)
@@ -101,6 +118,9 @@ func TestRecipePlan_ForeignProjectBlocks(t *testing.T) {
 	if got := planActions(plan); got != "rhoai=skip dsc=skip project=blocked" || !strings.Contains(problemText(plan), "was not created by a recipe") {
 		t.Fatalf("actions %s, problems %s", got, problemText(plan))
 	}
+	if got := problemFixes(plan); got != "project_foreign@" || plan.Steps[2].Fix == nil || *plan.Steps[2].Fix != *plan.Problems[0].Fix {
+		t.Errorf("fixes %s, step %+v", got, plan.Steps[2])
+	}
 }
 
 // A half installed operator (a Subscription whose CSV did not succeed)
@@ -112,6 +132,9 @@ func TestRecipePlan_HalfInstalledOperatorBlocks(t *testing.T) {
 	plan, _ := planRecipeFor(t, c, `{"rhoai":{"build":"latest"},"dataScienceCluster":{"create":true},"features":{}}`)
 	if got := planActions(plan); !strings.HasPrefix(got, "rhoai=blocked") || !strings.Contains(problemText(plan), "half installed") {
 		t.Fatalf("actions %s, problems %s", got, problemText(plan))
+	}
+	if got := problemFixes(plan); got != "operator_half_installed@/" {
+		t.Errorf("fixes %s", got)
 	}
 }
 
@@ -132,6 +155,11 @@ func TestRecipePlan_ArgoCDAndLaterFeaturesRefuse(t *testing.T) {
 	if !strings.Contains(text, "Argo CD application") || !strings.Contains(text, "manages the RHOAI operator") {
 		t.Errorf("Argo CD's management did not refuse: %s", text)
 	}
+	// The parts of a later version are fixed in the recipe (Field), Argo
+	// CD in Git.
+	if got := problemFixes(plan); got != "- - - - argo_managed@" {
+		t.Errorf("fixes %s", got)
+	}
 }
 
 // A tampered run record cannot choose what Resume installs: a pinned build
@@ -148,11 +176,33 @@ func TestRecipePlan_TamperedPinnedBuildRefuses(t *testing.T) {
 	if !strings.Contains(problemText(plan), "is not a build of quay.io/rhoai/rhoai-fbc-fragment") || state.Pinned == evil || plan.Pinned == evil {
 		t.Fatalf("problems %s, pinned %+v", problemText(plan), state.Pinned)
 	}
+	if got := problemFixes(plan); !strings.HasPrefix(got, "pinned_build_refused@") {
+		t.Errorf("fixes %s", got)
+	}
 	res, err := recipeStep(t, r, recipe.StepRHOAI).Run(c, &recipe.State{Recipe: r, Pinned: evil}, func(types.UpdateStepEvent) {})
 	if err != nil || res.Success || res.ErrorCode != "validation" {
 		t.Fatalf("run %+v %v", res, err)
 	}
 	if m := f.mutations(); len(m) != 0 {
 		t.Fatalf("changed %v", m)
+	}
+}
+
+// The run record's step figures and the plan's come from the same
+// constants (Step.Seconds).
+func TestRecipePlan_StepSecondsAreTheSteps(t *testing.T) {
+	f, c := projectFake(t)
+	installedRHOAI(f)
+	plan, state := planRecipeFor(t, c, `{"rhoai":{"build":"latest"},"dataScienceCluster":{"create":true},"project":{"mode":"create","name":"recipe-dev"},
+"features":{"pipelines":{"enabled":true},"mlflow":{"enabled":true}}}`)
+	steps := recipe.Steps(state.Recipe)
+	if len(steps) != len(plan.Steps) {
+		t.Fatalf("%d steps, plan %d", len(steps), len(plan.Steps))
+	}
+	for i, s := range steps {
+		typical, most := s.Seconds()
+		if p := plan.Steps[i]; p.TypicalSeconds != typical || p.MaxSeconds != most || typical <= 0 || most < typical {
+			t.Errorf("%s: plan %d/%d, step %d/%d", s.ID, p.TypicalSeconds, p.MaxSeconds, typical, most)
+		}
 	}
 }

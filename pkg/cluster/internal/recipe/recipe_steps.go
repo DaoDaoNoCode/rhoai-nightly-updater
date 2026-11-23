@@ -1,8 +1,10 @@
 package recipe
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -39,6 +41,60 @@ type State struct {
 	Recipe  types.EnvironmentRecipe
 	Pinned  *types.RecipePinnedBuild
 	Project *types.RecipeProjectRef
+	// Created are the steps whose part the run set up (or began to: a
+	// failed attempt may have left part of it), as opposed to found there;
+	// Components are the DataScienceCluster components its prerequisite
+	// steps turned on. The runner keeps both across Resume.
+	Created    map[string]bool
+	Components []string
+}
+
+// MarkCreated records that the run sets step's part up.
+func (s *State) MarkCreated(step string) {
+	if s.Created == nil {
+		s.Created = map[string]bool{}
+	}
+	s.Created[step] = true
+}
+
+// AddComponents records components the run turned on (once each, sorted).
+func (s *State) AddComponents(keys ...string) {
+	for _, k := range keys {
+		if !slices.Contains(s.Components, k) {
+			s.Components = append(s.Components, k)
+		}
+	}
+	slices.Sort(s.Components)
+}
+
+// CleanupRequest is the Clean up (POST /api/resources/cleanup/stream) of
+// what run set up, as Clean up everything would ask for it: the pipeline
+// server, the S3 storage and MLflow when a step of the run set them up
+// (RecipeRunStep.Created), the project when a recipe created it, and the
+// DataScienceCluster components the run turned on. nil when there is
+// none. Clean up's own guards still decide what goes (the tool's labels,
+// the recorded UID, who owns a component's field).
+func CleanupRequest(run *types.RecipeRun) *types.CleanupRequest {
+	if run == nil {
+		return nil
+	}
+	created := map[string]bool{}
+	for _, s := range run.Steps {
+		created[s.ID] = s.Created
+	}
+	req := &types.CleanupRequest{Storage: created[StepS3], MLflow: created[StepMLflow], Components: slices.Clone(run.Components)}
+	if p := run.Project; p != nil && p.Name != "" {
+		if created[StepPipelineServer] {
+			req.PipelineServers = []string{p.Name}
+		}
+		if p.Owned {
+			req.RecipeProject = p.Name
+		}
+	}
+	if !req.Storage && !req.MLflow && len(req.Components) == 0 && len(req.PipelineServers) == 0 && req.RecipeProject == "" {
+		return nil
+	}
+	return req
 }
 
 // Check is what a step's read-only check found.
@@ -50,7 +106,22 @@ type Check struct {
 	Blocked string
 	// Reason says what was found, for a step that is done.
 	Reason string
+	// Fix says where a blocked step is fixed.
+	Fix *types.RecipeFix
 }
+
+// fixAt is the RecipeFix of code, fixed on page ("" for none).
+func fixAt(code, page string) *types.RecipeFix {
+	return &types.RecipeFix{Code: code, Page: page}
+}
+
+// The app's pages a RecipeFix links.
+const (
+	pageStatus       = "/"
+	pageComponents   = "/components"
+	pageDashboardDev = "/dashboard-dev"
+	pageEnvironment  = "/environment"
+)
 
 // Step is one step of a run. Check only reads; Run sets the step up and
 // may assume Check found it not done and not blocked. A Run's
@@ -62,6 +133,12 @@ type Step struct {
 	Typical, Max time.Duration
 	Check        func(c *kube.Client, s *State) (Check, error)
 	Run          func(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error)
+}
+
+// Seconds are how long the step usually takes and at most, in seconds:
+// the figures both the plan and the run record show.
+func (s Step) Seconds() (typical, most int) {
+	return int(s.Typical / time.Second), int(s.Max / time.Second)
 }
 
 // Steps returns the steps of a recipe in run order: the RHOAI build, the
@@ -134,14 +211,14 @@ func checkRHOAI(c *kube.Client, s *State) (Check, error) {
 		}
 	default:
 		what := fmt.Sprintf("Subscription %s, CSV phase %s", map[bool]string{true: "present", false: "missing"}[sub.Found], kube.FirstNonEmpty(csv.Phase, "unknown"))
-		return Check{Blocked: fmt.Sprintf(halfInstalledMessage, what)}, nil
+		return Check{Blocked: fmt.Sprintf(halfInstalledMessage, what), Fix: fixAt(types.RecipeFixOperatorHalfInstalled, pageStatus)}, nil
 	}
 	active, op, err := dashdev.ActiveOperator(c)
 	if err != nil {
 		return Check{}, fmt.Errorf("check for a Dashboard Dev session: %w", err)
 	}
 	if active {
-		return Check{Blocked: fmt.Sprintf("A Dashboard Dev session is active (%s), and installing or updating RHOAI under it would keep the dashboard paused. Revert the dashboard on the Dashboard Dev page first. Nothing was changed.", dashdev.PausedOperatorText(op))}, nil
+		return Check{Blocked: fmt.Sprintf("A Dashboard Dev session is active (%s), and installing or updating RHOAI under it would keep the dashboard paused. Revert the dashboard on the Dashboard Dev page first. Nothing was changed.", dashdev.PausedOperatorText(op)), Fix: fixAt(types.RecipeFixDashboardDevActive, pageDashboardDev)}, nil
 	}
 	return Check{}, nil
 }
@@ -156,6 +233,7 @@ func runRHOAI(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*type
 	if problem := PinnedBuildProblem(s.Recipe.Spec.RHOAI.Build, s.Pinned); problem != "" {
 		return fail(problem, "validation")
 	}
+	s.MarkCreated(StepRHOAI)
 	return operator.UpdateStreamWithOptions(c, s.Pinned.Image, operator.OperationOptions{}, emit)
 }
 
@@ -187,7 +265,7 @@ func checkDSC(c *kube.Client, s *State) (Check, error) {
 		return Check{Done: true, Reason: fmt.Sprintf("DataScienceCluster %s exists.", dscName(read.Object))}, nil
 	}
 	if !s.Recipe.Spec.DataScienceCluster.Create {
-		return Check{Blocked: "There is no DataScienceCluster, and the recipe does not create one (dataScienceCluster.create: false). Create it on the Components page, or set dataScienceCluster.create: true."}, nil
+		return Check{Blocked: "There is no DataScienceCluster, and the recipe does not create one (dataScienceCluster.create: false). Create it on the Components page, or set dataScienceCluster.create: true.", Fix: fixAt(types.RecipeFixDSCMissing, pageComponents)}, nil
 	}
 	return Check{}, nil
 }
@@ -204,7 +282,8 @@ func dscName(obj map[string]any) string {
 // runDSC creates the installed release's default DataScienceCluster
 // (dsc.CreateDefault: the Components page's Create), trying a transient
 // failure again, then waits until the operator reports its conditions.
-func runDSC(c *kube.Client, _ *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+func runDSC(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+	s.MarkCreated(StepDSC)
 	emit(types.UpdateStepEvent{Step: StepDSC, Status: "running", Message: "Creating the release's default DataScienceCluster..."})
 	retryCtx, cancel := kube.Clock().WithTimeout(c.Context(), dscCreateRetry)
 	defer cancel()
@@ -295,7 +374,7 @@ func checkPrereq(c *kube.Client, feature string) (Check, error) {
 	case fp.Ready:
 		return Check{Done: true, Reason: "Everything it needs is set up."}, nil
 	case fp.SetupBlockedReason != "":
-		return Check{Blocked: fp.SetupBlockedReason}, nil
+		return Check{Blocked: fp.SetupBlockedReason, Fix: fixAt(types.RecipeFixFeatureBlocked, pageEnvironment)}, nil
 	}
 	return Check{}, nil
 }
@@ -306,13 +385,42 @@ func checkPipelinesPrereq(c *kube.Client, _ *State) (Check, error) {
 func checkMLflowPrereq(c *kube.Client, _ *State) (Check, error) { return checkPrereq(c, "mlflow") }
 
 // runPipelinesPrereq is Set up what Pipelines needs.
-func runPipelinesPrereq(c *kube.Client, _ *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
-	return features.RunPrerequisites(c, types.PrerequisitesRequest{Feature: "pipelines"}, emit)
+func runPipelinesPrereq(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+	return runPrereq(c, s, StepPipelinesPrereq, "pipelines", emit)
 }
 
 // runMLflowPrereq is Set up what MLflow needs.
-func runMLflowPrereq(c *kube.Client, _ *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
-	return features.RunPrerequisites(c, types.PrerequisitesRequest{Feature: "mlflow"}, emit)
+func runMLflowPrereq(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+	return runPrereq(c, s, StepMLflowPrereq, "mlflow", emit)
+}
+
+// prereqRecordReadTimeout bounds the read of the prerequisites record
+// after the setup, which also runs when the step's context has ended.
+const prereqRecordReadTimeout = 10 * time.Second
+
+// runPrereq runs Set up what feature needs and records the
+// DataScienceCluster components it turned on (State.Components): the keys
+// of feature that its record of the prerequisites it set up gained, also
+// when the setup then failed (it records a component before it turns it
+// on, and Clean up turns back only what it still owns). When either read
+// of that record fails nothing is claimed; Clean up everything still
+// offers them.
+func runPrereq(c *kube.Client, s *State, step, feature string, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+	s.MarkCreated(step)
+	before, beforeErr := features.ReadPrereqRecord(c)
+	res, err := features.RunPrerequisites(c, types.PrerequisitesRequest{Feature: feature}, emit)
+	if beforeErr == nil {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Context()), prereqRecordReadTimeout)
+		defer cancel()
+		if after, readErr := features.ReadPrereqRecord(c.WithContext(ctx)); readErr == nil {
+			for key, comp := range after.Components {
+				if _, had := before.Components[key]; !had && comp.Feature == feature {
+					s.AddComponents(key)
+				}
+			}
+		}
+	}
+	return res, err
 }
 
 // --- Pipelines ---------------------------------------------------------------
@@ -325,13 +433,14 @@ func checkS3(c *kube.Client, _ *State) (Check, error) {
 	case st.Deployed && st.ManagedByTool && st.Ready:
 		return Check{Done: true, Reason: "The S3 storage is set up and ready."}, nil
 	case st.SetupBlockedReason != "":
-		return Check{Blocked: st.SetupBlockedReason}, nil
+		return Check{Blocked: st.SetupBlockedReason, Fix: fixAt(types.RecipeFixFeatureBlocked, pageEnvironment)}, nil
 	}
 	return Check{}, nil
 }
 
 // runS3 is the Pipelines tab's Set up of the S3 storage, which waits for it.
-func runS3(c *kube.Client, _ *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+func runS3(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+	s.MarkCreated(StepS3)
 	emit(types.UpdateStepEvent{Step: StepS3, Status: "running", Message: "Setting up the S3 storage..."})
 	return storage.SetupS3(c)
 }
@@ -357,7 +466,7 @@ func checkPipelineServer(c *kube.Client, s *State) (Check, error) {
 	}
 	for _, d := range dspas {
 		if !d.ManagedByTool() {
-			return Check{Blocked: fmt.Sprintf("Project %s has a pipeline server this tool did not create (%s); the dashboard shows only one per project. Nothing was changed.", project, d.Meta.Name)}, nil
+			return Check{Blocked: fmt.Sprintf("Project %s has a pipeline server this tool did not create (%s); the dashboard shows only one per project. Nothing was changed.", project, d.Meta.Name), Fix: fixAt(types.RecipeFixFeatureBlocked, pageEnvironment)}, nil
 		}
 		if storage.PipelineServerState(d, "").Ready {
 			return Check{Done: true, Reason: fmt.Sprintf("The pipeline server in %s is ready.", project)}, nil
@@ -371,6 +480,7 @@ func checkPipelineServer(c *kube.Client, s *State) (Check, error) {
 func runPipelineServer(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	project := projectOf(s)
 	emit(types.UpdateStepEvent{Step: StepPipelineServer, Status: "running", Message: fmt.Sprintf("Setting up the pipeline server in %s...", project)})
+	s.MarkCreated(StepPipelineServer)
 	res, err := storage.SetupPipelineServer(c, project)
 	if err != nil || !res.Success {
 		return res, err
@@ -402,14 +512,15 @@ func checkMLflow(c *kube.Client, _ *State) (Check, error) {
 		return Check{Done: true, Reason: "MLflow is ready."}, nil
 	}
 	if st.SetupBlockedReason != "" && !st.Deployed {
-		return Check{Blocked: st.SetupBlockedReason}, nil
+		return Check{Blocked: st.SetupBlockedReason, Fix: fixAt(types.RecipeFixFeatureBlocked, pageEnvironment)}, nil
 	}
 	return Check{}, nil
 }
 
 // runMLflow is the MLflow tab's Set up (when MLflow is not deployed), then
-// the wait the page makes in the browser.
-func runMLflow(c *kube.Client, _ *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+// the wait the page makes in the browser. Only the Set up makes MLflow the
+// run's: one found deployed is waited for, not taken over.
+func runMLflow(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	var logs []string
 	st, err := mlflow.ReadStatus(c)
 	if err != nil {
@@ -417,6 +528,7 @@ func runMLflow(c *kube.Client, _ *State, emit func(types.UpdateStepEvent)) (*typ
 	}
 	if !st.Deployed {
 		emit(types.UpdateStepEvent{Step: StepMLflow, Status: "running", Message: "Setting up MLflow..."})
+		s.MarkCreated(StepMLflow)
 		res, err := mlflow.Setup(c)
 		if err != nil || !res.Success {
 			return res, err
