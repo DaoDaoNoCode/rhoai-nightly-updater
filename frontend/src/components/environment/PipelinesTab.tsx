@@ -38,7 +38,7 @@ import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
 import { ComponentAlert, CopyableCode, NoProjectsAlert, kfpClientSnippet } from "./UseIt";
 import { PipelineSample, pipelineTokenCommands, pipelineTokenRemoval } from "./PipelineSample";
 import type { SampleOp } from "./samples";
-import { MigrationPointer, S3_NAMESPACE, StoragePrerequisitePart, storageTeardownOffered } from "./StorageTab";
+import { MigrationPointer, S3_NAMESPACE, StoragePrerequisitePart } from "./StorageTab";
 import {
   type Busy,
   type FeatureState,
@@ -83,8 +83,6 @@ export interface PipelinesTabProps {
   baseReason: string | null;
   /** View-only mode: hide change controls; Set up surfaces who can perform setup. */
   readOnly: boolean;
-  /** After storage teardown, leftover tool objects still warrant offering storage removal under Clean up Pipelines. */
-  minioLeftovers: boolean;
   /** OpenShift console base URL used for pod log links. */
   consoleURL?: string;
   setPending: (p: Pending) => void;
@@ -231,13 +229,14 @@ const UsePipelines: React.FC<{ server: ResourceState; project: string }> = ({ se
  * to use it once ready; what it creates; and Clean up.
  */
 export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
-  const { status, project, projects, projectsLoaded, onProject, onClearProject, missingProject, state, busy, baseReason, readOnly, onSetUp, onCleanup, minioLeftovers } = props;
-  const { minio, legacyStorage: legacy } = status;
+  const { status, project, projects, projectsLoaded, onProject, onClearProject, missingProject, state, busy, baseReason, readOnly, onSetUp, onCleanup } = props;
+  const legacy = status.legacyStorage;
   const server = project ? pipelineServerIn(status, project) : undefined;
   const next = state.next;
   const toolServers = (status.pipelineServers ?? []).filter((ps) => ps.managedByTool !== false);
   const outside = status.outsidePipelineServers ?? [];
-  const anythingToClean = toolServers.length > 0 || outside.length > 0 || storageTeardownOffered(minio, legacy, minioLeftovers);
+  // The S3 storage is the cluster's, not Pipelines': its Delete is on its own tab and in Clean up everything.
+  const anythingToClean = toolServers.length > 0 || outside.length > 0;
   const noProjects = projectsLoaded && projects.length === 0;
   return (
     <Stack hasGutter>
@@ -310,7 +309,7 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
       {!readOnly && anythingToClean && (
         <StackItem>
           <CleanupSection id="pipelines-cleanup" label="Clean up Pipelines…" onClick={onCleanup} reason={baseReason}
-            text="Deletes what this tool created for Pipelines: the pipeline servers in every project, then the S3 storage. You choose what goes, then it runs as one operation." />
+            text="Deletes the pipeline servers this tool set up, in every project. You choose which, then it runs as one operation. The S3 storage stays: other features can use it. Delete it on the S3 storage tab, or with Clean up everything." />
         </StackItem>
       )}
     </Stack>

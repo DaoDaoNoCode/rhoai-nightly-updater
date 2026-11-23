@@ -326,7 +326,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                 <PipelinesTab prerequisites={prereqNode("pipelines")} status={resStatus} project={project} projects={projectOptions} projectsLoaded={projectList !== null}
                   onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
                   connectionLoading={!!project && statusProject !== project}
-                  state={headerWithPrerequisites(pipelines, prereq?.features?.pipelines)} prerequisitesReason={prerequisitesReason(prereq?.features?.pipelines, "pipelines")} busy={busy} baseReason={baseReason} readOnly={readOnly} minioLeftovers={minioLeftovers} consoleURL={consoleURL}
+                  state={headerWithPrerequisites(pipelines, prereq?.features?.pipelines)} prerequisitesReason={prerequisitesReason(prereq?.features?.pipelines, "pipelines")} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}
                   setPending={setPending} onSetUp={(setup) => setUp("Pipelines", setup)} onCleanup={() => setCleanupScope("pipelines")}
                   sampleOp={sampleOp} samplesRefresh={samplesRefresh} />
               )}

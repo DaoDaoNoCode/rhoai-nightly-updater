@@ -208,6 +208,7 @@ export const RecipeCleanupModal: React.FC<{
                       <StackItem>
                         <List>{contents[project].map((c) => <ListItem key={c}>{c}</ListItem>)}</List>
                       </StackItem>
+                      <StackItem>Only workbenches, models, volumes and pods are listed; anything else in the project is deleted with it.</StackItem>
                       <StackItem>
                         <Checkbox id={`recipe-cleanup-confirm-${project}`} label={`Delete ${contents[project].length === 1 ? "it" : "them"} with the project`}
                           isChecked={confirmed.has(project)} onChange={(_e, v) => toggleConfirmed(project, v)} />

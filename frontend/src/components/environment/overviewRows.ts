@@ -14,7 +14,7 @@ export function overviewRows(summaries: { storage: FeatureState; pipelines: Feat
   const prereqFor = (feature: PrerequisiteFeature) => prereq?.features?.[feature];
   return [
     {
-      id: "storage", name: TAB_TITLES.storage, gives: "Object storage (S3) shared by the cluster, for pipeline artifacts", state: storageNow, href: STORAGE_HREF,
+      id: "storage", name: TAB_TITLES.storage, gives: "Object storage (S3) for the whole cluster: pipelines and other features", state: storageNow, href: STORAGE_HREF,
     },
     {
       id: "pipelines", name: "Pipelines", gives: "Run data science pipelines; artifacts in S3", state: withPrerequisites(pipelinesSummary, prereqFor("pipelines"), "pipelines"),

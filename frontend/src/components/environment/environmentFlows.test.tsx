@@ -58,12 +58,27 @@ describe("Clean up", () => {
     expect(api.calls.filter((c) => c.startsWith("POST /api/resources/pipeline-server/teardown"))).toHaveLength(0);
   });
 
-  it("the storage cannot go while an unselected pipeline server uses it: Delete says why, inline", async () => {
-    stubApi({ "/api/resources/status": everything, "/api/resources/projects": { projects: ["a", "b"] } });
+  it("Clean up Pipelines offers only the pipeline servers, never the S3 storage the cluster shares", async () => {
+    const api = stubApi({
+      "/api/resources/status": everything, "/api/resources/projects": { projects: ["a", "b"] },
+      "POST /api/resources/cleanup/stream": () => new Response("", { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+    });
     renderAt("/test-resources?tab=pipelines&project=a");
-    fireEvent.click(await screen.findByRole("button", { name: "Clean up Pipelines…" }));
+    expect(await screen.findByText(/The S3 storage stays: other features can use it/)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: /^Clean up Pipelines/ }));
     const dialog = await screen.findByRole("dialog", { name: /Clean up Pipelines\?/ });
     expect(within(dialog).queryByRole("checkbox", { name: "MLflow server" })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("checkbox", { name: /S3 storage/ })).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Pipeline server in b" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([{ pipelineServers: ["a"] }]));
+  });
+
+  it("Clean up everything: the storage cannot go while an unselected pipeline server uses it: Delete says why, inline", async () => {
+    stubApi({ "/api/resources/status": everything, "/api/resources/projects": { projects: ["a", "b"] } });
+    renderAt("/test-resources");
+    fireEvent.click(await screen.findByRole("button", { name: /^Clean up everything/ }));
+    const dialog = await screen.findByRole("dialog", { name: /Clean up everything\?/ });
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Pipeline server in b" }));
     const del = within(dialog).getByRole("button", { name: "Delete" });
     expect(del).toHaveAttribute("aria-disabled", "true");

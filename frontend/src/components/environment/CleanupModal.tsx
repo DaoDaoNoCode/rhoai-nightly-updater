@@ -60,7 +60,8 @@ export function cleanupCandidates(status: ResourcesStatus, scope: CleanupScope, 
   const servers = pipelines
     ? toolServers(status).filter((ps) => !isTerminating(ps) && ps.namespace).map((ps) => ps.namespace!)
     : [];
-  const storage = pipelines && storageTeardownOffered(status.minio, status.legacyStorage, minioLeftovers);
+  // The S3 storage is the cluster's (pipelines, MaaS observability, other teams): only Clean up everything offers it, besides Delete S3 storage on its own tab.
+  const storage = scope === "all" && storageTeardownOffered(status.minio, status.legacyStorage, minioLeftovers);
   const minio = status.minio;
   const namespace = storage && minio?.managedByTool !== false && !!minio?.deployed && !!minio?.namespaceDeletable;
   const mlflow = (scope === "mlflow" || scope === "all") && !!status.mlflow?.deployed && status.mlflow.managedByTool !== false && !isTerminating(status.mlflow);
@@ -337,6 +338,7 @@ export const CleanupModal: React.FC<{
                   <StackItem>
                     <List>{retry!.contents[p].map((c) => <ListItem key={c}>{c}</ListItem>)}</List>
                   </StackItem>
+                  <StackItem>Only workbenches, models, volumes and pods are listed; anything else in the project is deleted with it.</StackItem>
                   <StackItem>
                     <Checkbox id={`cleanup-confirm-${p}`} label={`Delete ${retry!.contents[p].length === 1 ? "it" : "them"} with project ${p}`} isChecked={confirmedContents.includes(p)} onChange={(_e, v) => toggleConfirmedContents(p, v)} />
                   </StackItem>
