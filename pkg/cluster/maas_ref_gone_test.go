@@ -20,7 +20,7 @@ func TestMaaS_ARecordOnlyPublicationIsGoneAndPruned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	it, ok := maasItem(st, "proj", tModel)
+	it, ok := maasItem(st)
 	if !ok || it.Removing || it.Published || it.Message != "Not published" {
 		t.Fatalf("row = %+v (found %t)", it, ok)
 	}

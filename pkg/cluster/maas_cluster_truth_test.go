@@ -30,9 +30,10 @@ func deleteProject(mc *modelsCluster, project string) {
 	}
 }
 
-func maasItem(st *types.MaaSStatus, project, name string) (types.MaaSModel, bool) {
+// maasItem is the row of model tModel in project "proj".
+func maasItem(st *types.MaaSStatus) (types.MaaSModel, bool) {
 	for _, it := range st.Items {
-		if it.Namespace == project && it.Name == name {
+		if it.Namespace == "proj" && it.Name == tModel {
 			return it, true
 		}
 	}
@@ -48,7 +49,7 @@ func TestMaaSStatus_AGoneProjectHasNoRow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if it, ok := maasItem(st, "proj", tModel); ok {
+	if it, ok := maasItem(st); ok {
 		t.Fatalf("a row for a publication whose project is gone: %+v", it)
 	}
 	want := []types.MaaSRemoval{{Namespace: "proj", Name: tModel, Reason: "project proj no longer exists"}}
@@ -114,7 +115,7 @@ func TestMaaSStatus_TheRecordAloneIsNotAPublication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	it, ok := maasItem(st, "proj", tModel)
+	it, ok := maasItem(st)
 	if !ok {
 		t.Fatal("no row for the tool's model")
 	}
@@ -144,7 +145,7 @@ func TestMaaSStatus_AProjectBeingDeletedIsRemoving(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	it, ok := maasItem(st, "proj", tModel)
+	it, ok := maasItem(st)
 	if !ok {
 		t.Fatal("no row for the listed model")
 	}
