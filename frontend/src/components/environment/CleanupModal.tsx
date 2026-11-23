@@ -22,7 +22,8 @@ import type { PlaygroundStatus, ResourcesStatus, MaaSStatus, RestorableComponent
 import type { CleanupRequest } from "../../services/api";
 import { TooltipButton } from "../TooltipButton";
 import { isTerminating } from "./resourceRow";
-import { S3_NAMESPACE, storageTeardownOffered, unrecordedPipelineServerNote } from "./PipelinesTab";
+import { unrecordedPipelineServerNote } from "./PipelinesTab";
+import { S3_NAMESPACE, storageTeardownOffered } from "./StorageTab";
 import { gatewayListRelease } from "./modelsConfirm";
 
 /** This tool's pipeline servers: in the data science projects, and in projects that are no longer ones. */
@@ -59,7 +60,8 @@ export function cleanupCandidates(status: ResourcesStatus, scope: CleanupScope, 
   const servers = pipelines
     ? toolServers(status).filter((ps) => !isTerminating(ps) && ps.namespace).map((ps) => ps.namespace!)
     : [];
-  const storage = pipelines && storageTeardownOffered(status.minio, status.legacyStorage, minioLeftovers);
+  // The S3 storage is the cluster's (pipelines, MaaS observability, other teams): only Clean up everything offers it, besides Delete S3 storage on its own tab.
+  const storage = scope === "all" && storageTeardownOffered(status.minio, status.legacyStorage, minioLeftovers);
   const minio = status.minio;
   const namespace = storage && minio?.managedByTool !== false && !!minio?.deployed && !!minio?.namespaceDeletable;
   const mlflow = (scope === "mlflow" || scope === "all") && !!status.mlflow?.deployed && status.mlflow.managedByTool !== false && !isTerminating(status.mlflow);
@@ -244,7 +246,9 @@ export const CleanupModal: React.FC<{
             <Content component="p">
               {nothingOffered
                 ? "This tool created nothing here that is left to delete."
-                : "Deletes what this tool created, in this order. Something this tool did not create is never deleted. The parts run one after another as one operation; a part that fails stops the rest."}
+                : scope === "pipelines"
+                  ? "Deletes the pipeline servers you tick, as one operation. Something this tool did not create is never deleted."
+                  : "Deletes what this tool created, in this order. Something this tool did not create is never deleted. The parts run one after another as one operation; a part that fails stops the rest."}
             </Content>
           </StackItem>
           {!nothingOffered && (
@@ -336,6 +340,7 @@ export const CleanupModal: React.FC<{
                   <StackItem>
                     <List>{retry!.contents[p].map((c) => <ListItem key={c}>{c}</ListItem>)}</List>
                   </StackItem>
+                  <StackItem>Only Notebooks (workbenches), InferenceServices and LLMInferenceServices (models), PersistentVolumeClaims (volumes) and Pods are listed; anything else in the project is deleted with it.</StackItem>
                   <StackItem>
                     <Checkbox id={`cleanup-confirm-${p}`} label={`Delete ${retry!.contents[p].length === 1 ? "it" : "them"} with project ${p}`} isChecked={confirmedContents.includes(p)} onChange={(_e, v) => toggleConfirmedContents(p, v)} />
                   </StackItem>

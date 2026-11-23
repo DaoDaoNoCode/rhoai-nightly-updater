@@ -1,15 +1,17 @@
-/** The tabs, in the URL as ?tab= (overview is the default and is left out). */
-export const ENVIRONMENT_TABS = ["overview", "pipelines", "mlflow", "models", "playground", "maas"] as const;
+/** Tabs are selected via ?tab= in the query string; omit the parameter for overview. */
+export const ENVIRONMENT_TABS = ["overview", "storage", "pipelines", "mlflow", "models", "playground", "maas"] as const;
 export type EnvironmentTab = (typeof ENVIRONMENT_TABS)[number];
-export const TAB_TITLES: Record<EnvironmentTab, string> = { overview: "Overview", pipelines: "Pipelines", mlflow: "MLflow", models: "Models", playground: "Playground", maas: "MaaS" };
-/** How many parts each feature tab lists: as many skeleton rows show while its status loads. */
-export const TAB_PARTS: Record<Exclude<EnvironmentTab, "overview" | "maas">, number> = { pipelines: 2, mlflow: 1, models: 2, playground: 2 };
-/** The tabs with a project picker. */
+export const TAB_TITLES: Record<EnvironmentTab, string> = { overview: "Overview", storage: "S3 storage", pipelines: "Pipelines", mlflow: "MLflow", models: "Models", playground: "Playground", maas: "MaaS" };
+/** Each feature tab's part count drives how many skeleton rows appear until status finishes loading. */
+export const TAB_PARTS: Record<Exclude<EnvironmentTab, "overview" | "maas">, number> = { storage: 1, pipelines: 2, mlflow: 1, models: 2, playground: 2 };
+/** Only these tabs expose a project picker; S3 storage is cluster-wide and does not. */
 export const PROJECT_TABS: EnvironmentTab[] = ["pipelines", "mlflow", "models", "playground"];
-/** Tabs of the earlier layout: links to them open Pipelines. */
+/** Names from a prior navigation scheme; hits on these routes land on Pipelines instead. */
 export const OLD_TABS = ["cluster", "projects"];
+/** Href for the S3 storage tab—point any storage-related link here. */
+export const STORAGE_HREF = "?tab=storage";
 
 export const BUSY_REASON = "Another operation is in progress";
 
-/** The feature a run of the dialog belongs to. */
-export type RunFeature = "pipelines" | "mlflow" | "models" | "playground" | "maas" | "samples" | "other";
+/** Which product area a particular dialog invocation is tied to. */
+export type RunFeature = "storage" | "pipelines" | "mlflow" | "models" | "playground" | "maas" | "samples" | "other";

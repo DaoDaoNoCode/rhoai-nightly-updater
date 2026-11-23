@@ -29,7 +29,7 @@ What the tool itself changes: [docs/CLUSTER_CHANGES.md](docs/CLUSTER_CHANGES.md)
 | **Operator failed**, **No Subscription**, a failed Update or Install a different build step, "the API server's response is larger than 50 MiB" | [§6](#6-update--install-a-different-build-failed) |
 | A PR shows "Does not contain" in Build Explorer, tags or commit dates do not load | [§8](#8-build-explorer-quay-and-github) |
 | "Dashboard Dev session active", "Distance from main unknown" | [§9](#9-dashboard-dev) |
-| Storage **Needs attention** (Migrate storage or Repair), **Error**, Delete disabled, a pipeline server or sample problem | [§10](#10-environment-page), [§10.1](#101-migrate-storage-from-an-earlier-version) |
+| Storage **Migration needed** (Migrate storage), **Needs attention** (Repair), **Error**, Delete disabled, a pipeline server or sample problem | [§10](#10-environment-page), [§10.1](#101-migrate-storage-from-an-earlier-version) |
 | A model **Error** or **Needs attention**, "Can it be called?" fails, the gateway's list of projects | [§10.2](#102-models-the-inference-gateway-and-cpu-models) |
 | A playground that cannot be set up or deleted | [§10.3](#103-playground-the-dashboards-gen-ai-playground) |
 | MaaS setup, Publish or Unpublish refused, API keys that stop working, 429 | [§10.4](#104-maas-models-as-a-service) |
@@ -347,7 +347,7 @@ Alerts: `NightlyUpdaterDown` (target down or absent for 5 m), `NightlyUpdateFail
 
 The S3 storage is SeaweedFS in namespace `seaweedfs` (Deployment `seaweedfs`, PVC `seaweedfs-data`, Service `seaweedfs-s3`, Route `seaweedfs-admin`). Storage an earlier version set up in namespace `minio` is moved with **Migrate storage** (§10.1). Objects and ports: [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#8-environment-page).
 
-The page has an **Overview** (each feature's state and next step) and one tab per feature: **Pipelines** (S3 storage and a project's pipeline server), **MLflow**, **Models** (the inference gateway and a project's CPU models, §10.2), **Playground** (§10.3) and **MaaS** (§10.4). The tab and the project are in the address. Each part shows its health, its actions and its details inline (endpoint, login, the reason for an error or a repair, the pod's reason under **Technical details**); its menu (⋮) has **Delete** and **Repair**. **Clean up** (each tab, and **Clean up everything** on the Overview) deletes several parts as one operation (`POST /api/resources/cleanup/stream`): first the MaaS publications (Unpublish), then the pipeline servers, the storage, MLflow, the playgrounds, the models, the inference gateway, and the MaaS platform last, stopping at the first part that fails and saying what was and was not deleted. Health and ownership are separate: something this tool did not create can be **Ready**; it only gets no Delete or Repair. Every change shows its steps and outcome in one dialog; closed early, the alert at the top names the run and its step with **View progress** to reopen it, and a notification brings the outcome back.
+The page has an **Overview** (each feature's state and next step) and one tab per feature: **S3 storage** (the cluster's SeaweedFS, which pipeline servers use; no project picker), **Pipelines** (a project's pipeline server), **MLflow**, **Models** (the inference gateway and a project's CPU models, §10.2), **Playground** (§10.3) and **MaaS** (§10.4). The tab and the project are in the address. Each part shows its health, its actions and its details inline (endpoint, login, the reason for an error or a repair, the pod's reason under **Technical details**); its menu (⋮) has **Delete** and **Repair**. **Clean up** (each tab, and **Clean up everything** on the Overview) deletes several parts as one operation (`POST /api/resources/cleanup/stream`): first the MaaS publications (Unpublish), then the pipeline servers, the storage, MLflow, the playgrounds, the models, the inference gateway, and the MaaS platform last, stopping at the first part that fails and saying what was and was not deleted. **Clean up Pipelines** deletes only pipeline servers: the S3 storage, which other features can use too, goes only with **Delete S3 storage** on its tab or **Clean up everything**. Health and ownership are separate: something this tool did not create can be **Ready**; it only gets no Delete or Repair. Every change shows its steps and outcome in one dialog; closed early, the alert at the top names the run and its step with **View progress** to reopen it, and a notification brings the outcome back.
 
 While the page reads the cluster, each Overview row and each tab shows loading placeholders where its state and parts will be: nothing reads **Not set up** or empty until the status that says so has been read. A status that cannot be read (the playground's or MaaS's) reads **Unknown: cannot be read** on the Overview, with the reason and **Try again** above the table. **Refresh** reads everything again and keeps what is shown until the new answers are in; if that read fails, the last data stays with a warning that it may be out of date, and **Retry**.
 
@@ -359,20 +359,26 @@ While the page reads the cluster, each Overview row and each tab shows loading p
 
 <img src="docs/images/s3-repair.gif" alt="Repair, confirm Repair S3 storage, the storage is Running again" width="760">
 
-<img src="docs/images/environment-pipelines.png" alt="Pipelines tab: Ready in dev-project, S3 storage with endpoint and masked admin password, pipeline server with Open pipelines" width="760">
+<img src="docs/images/environment-storage.png" alt="S3 storage tab: Ready, the endpoint and bucket, the pipeline server that uses it, masked keys and admin UI password, and Open admin UI" width="760">
+
+1. The S3 storage's state (the **S3 storage** tab).
+2. The S3 endpoint; the bucket, region and the pipeline servers that use it are under it.
+3. The keys and the admin UI password, masked: show or copy them (cluster-admins only; read from the server only then).
+4. **Open admin UI**. In the storage's menu, **Delete S3 storage** stays disabled while a pipeline server uses it, and says which.
+
+<img src="docs/images/environment-pipelines.png" alt="Pipelines tab: Ready in dev-project, the S3 storage's health with Open S3 storage, pipeline server with Open pipelines" width="760">
 
 1. The state in the selected project.
 2. The project.
-3. The S3 endpoint and the bucket.
-4. The admin UI password, masked: show or copy it (cluster-admins only; it is read from the server only then).
-5. The dashboard S3 Connection `rhoai-nightly-updater-s3` set up with the pipeline server (owned by it; in-cluster address).
-6. **Open pipelines**. In the storage's menu, **Delete** stays disabled while a pipeline server uses it, and says which.
+3. The S3 storage's health; **Open S3 storage** opens its tab.
+4. The dashboard S3 Connection `rhoai-nightly-updater-s3` set up with the pipeline server (owned by it; in-cluster address).
+5. **Open pipelines**.
 
 | Problem | Fix |
 |---|---|
 | S3 storage setup: "not created by this tool" | Namespace `seaweedfs` holds foreign objects (or was not created by this tool). Nothing was changed. Remove them or use another cluster |
 | "The updater's ServiceAccount is not allowed to do this ... run `make upgrade`" | A read the updater makes with its ServiceAccount (a status, an ownership check) was refused: the image is newer than the template (the banner says the template is outdated). An admin runs `make upgrade`, then retry. A refusal of a setup or teardown step itself says "your OpenShift account is not allowed to do this" instead, since changes run with your own token ([§4](#4-sign-in-and-permissions)) |
-| Storage "Needs attention" with **Migrate storage** | Storage from an earlier version is in namespace `minio`. **Migrate storage** moves it (§10.1); Set up, and a new pipeline server, wait until it has copied the data |
+| Storage "Migration needed" with **Migrate storage** | Storage from an earlier version is in namespace `minio`. **Migrate storage** moves it (§10.1); Set up, and a new pipeline server, wait until it has copied the data |
 | Migrate storage stopped: "The copy is not complete" | Nothing else changed. The message says what differs and whether a retry can help. Objects or buckets missing, or unreadable: run it again (the copy never deletes). Before the first verified copy, while nothing uses the new storage, changed objects are copied again. Objects "different in the new storage" after that (a migration finished, pipeline servers write there, or Delete old storage's final copy): the copy never overwrites them, so a retry gives the same result; for each path named, copy the old version into `seaweedfs` yourself or delete it from `minio`, then run it again. Extra objects in `seaweedfs` are only reported |
 | Migrate storage: "The copy is still running" | A large storage: the Job keeps running (up to an hour). Run Migrate storage again to wait for it |
 | Delete old storage: "The final copy and check are still running" | Nothing was deleted and the copy keeps running (Job `seaweedfs-migrate`, marked as a final copy). Run Delete old storage again: it waits for that copy instead of starting over, and deletes the old storage only once it passed |
@@ -399,7 +405,7 @@ While the page reads the cluster, each Overview row and each tab shows loading p
 | Namespace left after deletion | Delete keeps namespace `seaweedfs` unless you tick **Also delete namespace seaweedfs (created by this tool)**; it is offered only when the namespace carries the tool label and the tool wrote it, and deletes everything in it. Otherwise `oc delete project seaweedfs` (or `minio`) once `oc get all,pvc,secret -n <namespace>` is empty |
 | Pipelines tab: the project picker is empty after clearing it | Expected: a clear is kept in the address (`project=` with no value), so the default project does not come back; choose a project, or open the tab without `project=` for the default |
 | Reach the S3 API from your laptop | `oc port-forward -n seaweedfs svc/seaweedfs-s3 8333`, endpoint `http://localhost:8333`, path-style, region `us-east-1`. Keys: `oc extract secret/seaweedfs-s3-credentials -n seaweedfs --to=-` |
-| Admin UI login | **Open admin UI**; user `admin`. The password is on the Pipelines tab under S3 storage: the eye shows it, the copy button copies it (cluster-admins only; a password of its own, not the S3 secret key). "There is no admin UI password yet": the storage was set up by an earlier version, whose admin UI used the S3 secret key; **Repair** writes one and keeps the S3 keys and the data. Disabled with "Read-only access": you are not a cluster-admin |
+| Admin UI login | **Open admin UI**; user `admin`. The password is on the **S3 storage** tab: the eye shows it, the copy button copies it (cluster-admins only; a password of its own, not the S3 secret key). "There is no admin UI password yet": the storage was set up by an earlier version, whose admin UI used the S3 secret key; **Repair** writes one and keeps the S3 keys and the data. Disabled with "Read-only access": you are not a cluster-admin |
 | **Set up** disabled: "Available once ..." | The storage is not ready, or Migrate storage has not copied the old storage yet, or namespace `seaweedfs` is not this tool's; the reason is under the button |
 | The Pipelines tab opens another project | Without `?project=` it opens the first project with a ready pipeline server (else the first with one). Pick the project; the address keeps it |
 | Pipeline server: "already has a pipeline server" | Projects get one DSPA; the existing one was left unchanged |
@@ -421,9 +427,9 @@ While the page reads the cluster, each Overview row and each tab shows loading p
 
 Versions before 3.0.0 kept the S3 storage in namespace `minio`, behind MinIO-era names. 3.0.0 moves it, with its data, to namespace `seaweedfs`:
 
-<img src="docs/images/s3-migration-needed.png" alt="S3 storage Needs attention, with Migrate storage, and the old storage's objects in its section" width="760">
+<img src="docs/images/s3-migration-needed.png" alt="SeaweedFS on the S3 storage tab: Migration needed, with Migrate storage, and the old storage's objects in its section" width="760">
 
-1. **Needs attention**: the old storage still holds the data and serves its pipeline servers.
+1. **Migration needed**: the old storage still holds the data and serves its pipeline servers.
 2. **Migrate storage** opens the plan; nothing changes until you confirm.
 3. **Storage of an earlier version** names the old storage's objects and volumes (the only place with MinIO-era names).
 
@@ -447,7 +453,7 @@ flowchart TD
 
 What each step does, and what is never touched: [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#s3-storage-of-an-earlier-version-namespace-minio). Every run starts with a dry run and does only what is still missing, so after any stop you run **Migrate storage** again.
 
-Before you remove the old storage, update what this tool did not create (data connections, workbenches, other pipeline servers): the endpoint becomes `http://seaweedfs-s3.seaweedfs.svc:8333` and the keys are the new storage's (the Pipelines tab shows them); bucket names and object paths stay. Anything still on `minio-service.minio.svc` stops working after the removal. A pipeline server the tool did not create is listed in the dialog and blocks the removal until it moves.
+Before you remove the old storage, update what this tool did not create (data connections, workbenches, other pipeline servers): the endpoint becomes `http://seaweedfs-s3.seaweedfs.svc:8333` and the keys are the new storage's (the S3 storage tab shows them); bucket names and object paths stay. Anything still on `minio-service.minio.svc` stops working after the removal. A pipeline server the tool did not create is listed in the dialog and blocks the removal until it moves.
 
 <img src="docs/images/s3-remove-dialog.png" alt="Dialog: Remove the old storage?, with the checklist, what is deleted, and the choice to delete namespace minio" width="760">
 

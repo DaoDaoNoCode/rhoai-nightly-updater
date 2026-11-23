@@ -100,25 +100,33 @@ It deploys RHOAI Konflux builds (`odh-pr-<N>`, `odh-stable`) or ODH OpenShift CI
 
 ### Environment: S3 storage, pipeline servers, MLflow, models
 
-One tab per feature after an **Overview**, kept in the address so a link opens the same view (`?tab=pipelines&project=<name>`, `?tab=mlflow`, `?tab=models&project=<name>`).
+One tab per feature after an **Overview**, kept in the address so a link opens the same view (`?tab=storage`, `?tab=pipelines&project=<name>`, `?tab=mlflow`, `?tab=models&project=<name>`).
 
-<img src="docs/images/environment-overview.png" alt="Overview: 2 of 5 ready; Pipelines Ready in dev-project with Open pipelines and Run a sample pipeline; MLflow Ready, Not managed by this tool under the label, with Open MLflow experiments and Add sample data; Models and Playground Not set up in any project, with Choose a project; MaaS Not set up, with Set up MaaS" width="760">
+<img src="docs/images/environment-overview.png" alt="Overview: 3 of 6 ready; S3 storage Ready with Open admin UI; Pipelines Ready in dev-project with Open pipelines and Run a sample pipeline; MLflow Ready, Not managed by this tool under the label, with Open MLflow experiments and Add sample data; Models and Playground Not set up in any project, with Choose a project; MaaS Not set up, with Set up MaaS" width="760">
 
 1. How many features are ready.
 2. Each feature links to its tab (a project-scoped one with its project).
 3. Its state, from the same function as the tab: **Ready**, **Not set up**, **Needs attention**, **Error**, ... Something this tool did not create reads **Ready**, with **Not managed by this tool** under the label: ownership never counts as not ready. A project-scoped feature summarises the projects that have it ("Ready in juntao-test", "Ready in 3 projects", "Error in 1 of 3 projects", "Not set up in any project"); with several, **Show projects** lists each one with its state and a link to the tab there.
-4. The next step, a link in the row: **Open pipelines** in its one ready project (with several ready projects, **Choose a project**: the tab's picker decides; with a problem in one of several, **Open** that project), **Open MLflow experiments** (MLflow's experiments in the dashboard), **Set up** (confirm, then a check that every part can be set up, then the missing parts in order, each counted only once it works), **Migrate storage**, **Show issue** (opens the tab at that part) or **Choose a project**. A step that cannot run says why under it.
+4. The next step, a link in the row: **Open pipelines** in its one ready project (with several ready projects, **Choose a project**: the tab's picker decides; with a problem in one of several, **Open** that project), **Open MLflow experiments** (MLflow's experiments in the dashboard), **Open admin UI** (the S3 storage's), **Set up** (confirm, then a check that every part can be set up, then the missing parts in order, each counted only once it works), **Migrate storage**, **Show issue** (opens the tab at that part; a problem with the S3 storage opens the S3 storage tab, from its row or from Pipelines) or **Choose a project**. A step that cannot run says why under it.
 
 Under the table, **Clean up everything** deletes what this tool created (first the MaaS publications, then the pipeline servers, the S3 storage, MLflow, the playgrounds, the models, the inference gateway, and the MaaS platform last) in one confirmed operation, with a checkbox per part.
 
-<img src="docs/images/environment-pipelines.png" alt="Pipelines tab: Ready in dev-project, the project picker, S3 storage with endpoint and masked admin password, and the pipeline server with Open pipelines" width="760">
+<img src="docs/images/environment-storage.png" alt="S3 storage tab: Ready; the endpoint, bucket, region and the pipeline server that uses it; masked access key, secret key and admin UI password; Copy as environment variables; Open admin UI" width="760">
+
+The **S3 storage** tab is the cluster's S3 storage (SeaweedFS in namespace `seaweedfs`), so it has no project picker. Every pipeline server this tool sets up keeps its artifacts there, in bucket `pipelines`; other features can use it too.
+
+1. Its state. **Set up S3 storage** sets it up on its own; **Set up Pipelines** sets it up first when it is missing.
+2. Its details inline: the S3 endpoint (`http://seaweedfs-s3.seaweedfs.svc:8333`), the bucket, the region and the pipeline servers that use it.
+3. The S3 access key and secret key are masked: the eye shows one and the copy button copies it; **Copy as environment variables** copies the whole connection (`AWS_ENDPOINT_URL`, the keys, region, bucket) as shell assignments with single-quoted values, to paste into a shell or `source`. The admin UI (user `admin`) has a password of its own, shown the same way. Each is read from the server only then (cluster-admins only), and gone when you hide it or leave the tab.
+4. **Open admin UI**. The menu (⋮) has **Delete S3 storage** (disabled while a pipeline server uses it, saying which) and **Repair** when it applies. Storage from an earlier version shows **Migrate storage** and, later, **Delete old storage** here ([RUNBOOK §10.1](RUNBOOK.md#101-migrate-storage-from-an-earlier-version)).
+
+<img src="docs/images/environment-pipelines.png" alt="Pipelines tab: Ready in dev-project, the project picker, the S3 storage's health with Open S3 storage, and the pipeline server with its dashboard Connection and Open pipelines" width="760">
 
 1. The feature's state in the selected project. Without `?project=` the tab opens the first project with a ready pipeline server.
 2. The project picker (type to filter; each project says what it has).
-3. Each part shows its health, its actions and its details inline: the S3 endpoint (`http://seaweedfs-s3.seaweedfs.svc:8333`), the bucket and the admin UI user.
-4. The S3 access key and secret key are masked: the eye shows one and the copy button copies it; **Copy as environment variables** copies the whole connection (`AWS_ENDPOINT_URL`, the keys, region, bucket) as shell assignments with single-quoted values, to paste into a shell or `source`. The admin UI (user `admin`) has a password of its own, shown the same way. Each is read from the server only then (cluster-admins only), and gone when you hide it or leave the tab.
-5. The pipeline server is set up as the dashboard sets one up: named `dspa` (the only name workbench pipelines find), with the dashboard's settings, its S3 Secret owned by it, and a dashboard S3 **Connection** `rhoai-nightly-updater-s3` ("Shared S3 storage (RHOAI Nightly Updater)") that workbenches and model deployments in the project can use. The Connection carries the in-cluster address, so it works from pods only. Deleting the pipeline server, here or in the dashboard, deletes both.
-6. **Open pipelines** (and **Open admin UI**). Each part's menu (⋮) has **Delete** (and **Repair** when it applies), only for what this tool created; a disabled entry says why.
+3. The S3 storage as Pipelines needs it: its health only, with **Open S3 storage** for its details, keys and changes.
+4. The pipeline server is set up as the dashboard sets one up: named `dspa` (the only name workbench pipelines find), with the dashboard's settings, its S3 Secret owned by it, and a dashboard S3 **Connection** `rhoai-nightly-updater-s3` ("Shared S3 storage (RHOAI Nightly Updater)") that workbenches and model deployments in the project can use. The Connection carries the in-cluster address, so it works from pods only. Deleting the pipeline server, here or in the dashboard, deletes both.
+5. **Open pipelines**. The pipeline server's menu (⋮) has **Delete**, only for what this tool created; a disabled entry says why.
 
 A pipeline server an earlier version set up is named `nightly-dspa`. It keeps working (the dashboard's pipelines pages, the KFP SDK, Migrate storage, Delete), but workbench pipelines (Elyra) cannot find it, so the tab says so and offers **Recreate with the standard name**:
 
@@ -133,7 +141,7 @@ Everything the new server needs is checked first; nothing is deleted if it would
 
 Before **Set up**, the tab shows what it needs: a DataScienceCluster component that is not Managed (with **Open Components**), no data science project (with a link to the dashboard's Projects page), or a namespace `seaweedfs` that is someone else's. Set up stays disabled, with the reason under it. Once the pipeline server is ready, **Use it** shows where its runs are, its API endpoint and a KFP SDK snippet, followed by **What next**. Problems read in plain words, with the fix (Repair, Revert, View logs) on the alert and the pod's reasons under **Technical details**. Every change runs in one dialog with its steps and outcome. If you close it, the alert at the top of the page names the run and its step, with **View progress** to open the dialog again, and a notification brings the outcome back.
 
-Storage an earlier version set up in namespace `minio` reads **Needs attention**; a warning at the top of the tab says why and offers **Migrate storage**, which moves it, with its data and pipeline servers, and ends there. **Delete old storage** is a separate, later action in the storage's menu ([RUNBOOK §10.1](RUNBOOK.md#101-migrate-storage-from-an-earlier-version)).
+Storage an earlier version set up in namespace `minio` reads **Migration needed** (on the Overview, the S3 storage tab and the Pipelines tab); a warning at the top of the S3 storage tab says why, and the storage's **Migrate storage** button moves it, with its data and pipeline servers, and ends there. **Delete old storage** is a separate, later action in the storage's menu ([RUNBOOK §10.1](RUNBOOK.md#101-migrate-storage-from-an-earlier-version)).
 
 <img src="docs/images/environment-mlflow.png" alt="MLflow tab: the MLflow server Ready and Not managed by this tool, with its image, address and Deploy PR" width="760">
 

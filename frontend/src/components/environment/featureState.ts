@@ -4,130 +4,159 @@ import type { Pending } from "./resourceRow";
 import { mlflowOpenHref } from "./UseIt";
 
 /**
- * The state of each Environment feature, computed in one place: the
- * feature's tab and the Overview both render what these functions return,
- * so they cannot disagree. Readiness is health; ownership ("not managed by
- * this tool") is reported apart (FeatureState.unmanaged) and only limits
- * actions.
+ * Each Environment feature's state is derived here once; both the dedicated
+ * tab and Overview display these function results, which keeps them aligned.
+ * Health maps to readiness; whether something was not created by this tool
+ * surfaces separately on FeatureState.unmanaged and gates actions only.
  */
 
-/** What this page is doing now, for the parts it changes. */
+/** In-flight work initiated from this page for the components it manages. */
 export interface Busy {
-  /** The action running from this page ("setup-minio", ...), or null. */
+  /** Which action this page is running ("setup-minio", ...), if any. */
   resAction: string | null;
-  /** The project that action is for. */
+  /** Namespace that in-flight action targets. */
   actionProject: string | null;
-  /** Migrate storage runs from this page. */
+  /** Whether Migrate storage was kicked off here. */
   migrating: boolean;
-  /** A Models operation runs from this page: what it changes. */
+  /** Models work in progress from this page and what it mutates. */
   models?: ModelsOp | null;
-  /** A Playground operation runs from this page: its action and project. */
+  /** Playground work in progress from this page: action plus project. */
   playground?: PlaygroundOp | null;
-  /** A MaaS operation runs from this page: its action and project (publish). */
+  /** MaaS work in progress from this page: action, project (e.g. publish). */
   maas?: MaaSOp | null;
 }
 
-/** What a running MaaS operation changes. */
+/** Fields a MaaS in-flight operation is allowed to change. */
 export interface MaaSOp {
   action: MaaSRequest["action"];
   project: string | null;
-  /** The model a publish or unpublish is about. */
+  /** Catalog model involved in publish or unpublish. */
   model?: string | null;
 }
 
-/** What a running Playground operation changes. */
+/** Fields a Playground in-flight operation is allowed to change. */
 export interface PlaygroundOp {
   action: "setup" | "teardown";
   project: string;
 }
 
-/** What a running Models operation changes. */
+/** Fields a Models in-flight operation is allowed to change. */
 export interface ModelsOp {
-  /** allow / disallow: adds allowProject to (takes it off) the gateway's list (a gateway change; gateway is true); check: calls the model once. */
+  /** allow / disallow: put allowProject on or off the gateway list (gateway true); check: single model invocation. */
   action: "setup" | "teardown" | "allow" | "disallow" | "check";
   gateway: boolean;
   project: string | null;
-  /** The catalog name of the model in project. */
+  /** Catalog model name within the project. */
   model?: string | null;
   allowProject?: string;
 }
 
 export const IDLE: Busy = { resAction: null, actionProject: null, migrating: false, models: null };
 
-/** The next thing to do about a feature. */
+/** Suggested user action for a feature. */
 export type NextStep =
   | { kind: "open"; label: string; href: string }
-  /** Set up the missing parts (setup); reason, when set, is why it cannot run now (a dependency). */
+  /** Provision missing pieces (setup); reason explains blocking dependencies when present. */
   | { kind: "set-up"; label: string; setup: Pending[]; reason: string | null }
   /**
-   * A part needs attention: show it. project is set when the state covers
-   * several projects: the step names the project with the problem.
+   * Surface a component that needs attention. When state spans projects,
+   * project pins the one with the issue.
    */
   | { kind: "show-issue"; part: string; project?: string }
-  /** Storage of an earlier version holds the data: Migrate storage moves it. */
+  /** Legacy storage still holds data; run Migrate storage. */
   | { kind: "migrate" }
-  /** A project-scoped feature with no project chosen. */
+  /** Project-scoped feature with no project selected yet. */
   | { kind: "choose-project" };
 
 export interface FeatureState {
-  /** The feature's health: the worst part that is not fine, or Ready. */
+  /** Overall health: worst non-healthy part, otherwise Ready. */
   status: EnvStatus;
   /** "Ready in juntao-test", "Ready in 3 projects", "Not set up in any project", ... */
   label: string;
-  /** The part the state is about was not created by this tool (shown apart from the label). Absent when it was. */
+  /** Present when the underlying part was not created by this tool (shown beside the label). Omitted otherwise. */
   unmanaged?: boolean;
   next: NextStep | null;
-  /** The project this state is about (project-scoped features). */
+  /** Project namespace for project-scoped features. */
   project: string | null;
-  /** When the state summarises several projects: each one's own state, in the projects' order. */
+  /** Per-project breakdown when summarising many projects, ordered like the project list. */
   projects?: FeatureState[];
   /**
-   * The status this state comes from has not been read yet: the state is
-   * not known, so it is shown as loading (a Skeleton), never as a state.
+   * Underlying status has not arrived yet, so UI shows a loading Skeleton
+   * rather than pretending to know the feature state.
    */
   loading?: true;
 }
 
-/** The state of a feature whose status has not been read yet. */
+/** Placeholder while feature status is still being fetched. */
 export const loadingState = (project: string | null = null): FeatureState => ({ status: "unknown", label: "Loading", next: null, project, loading: true });
 
-/** The state of a feature whose status could not be read, and never was: not a state, and nothing to do but read it again. */
-/** A project tab after the project was cleared (or is gone): the tab says so instead of a summary across projects. */
+/** Status never became available; only recovery is to fetch again. */
+/** After clearing or losing the project: tab copy reflects that instead of a multi-project rollup. */
 export const noProjectState = (): FeatureState => ({ status: "unknown", label: "No project chosen", next: { kind: "choose-project" }, project: null });
 
 export const unreadableState = (project: string | null = null): FeatureState => ({ status: "unknown", label: "Unknown: cannot be read", next: null, project });
 
-/** One part of a feature, with its health and ownership. */
+/** Single feature slice: health plus whether this tool owns it. */
 export interface PartState {
   id: string;
   status: EnvStatus;
   unmanaged: boolean;
 }
 
-/** FeatureState.unmanaged, set only when true. */
+/** Populates FeatureState.unmanaged only when the flag is true. */
 const owner = (unmanaged: boolean): { unmanaged?: true } => (unmanaged ? { unmanaged: true } : {});
 const PROBLEM: EnvStatus[] = ["error", "needs-attention"];
 const MOVING: EnvStatus[] = ["setting-up", "deleting"];
 
-// --- Pipelines: S3 storage (cluster) and a pipeline server (project) -------------
+// --- Pipelines: cluster S3 storage and per-project pipeline server -------------
 
-/** The storage's health. Storage of an earlier version still holding the data needs attention. */
+/** Storage health; legacy buckets retaining data warrant attention. */
 export function storageStatus(status: ResourcesStatus | null, busy: Busy): EnvStatus {
   const b = busy.migrating || busy.resAction === "setup-minio" ? "setting-up" : busy.resAction === "teardown-minio" ? "deleting" : null;
   return envStatus(status?.minio, { busy: b, attention: status?.legacyStorage?.stage === "migrate" });
 }
 
-/** Setup can create the storage: nothing is there, and nothing blocks it. */
+/** True when setup may provision storage: absent and unblocked. */
+/** The one label of the storage while an earlier version's storage still holds the data: the same on every tab and row. */
+export const MIGRATION_NEEDED = "Migration needed";
+
+/** A storage problem's label: the cluster's, so it names no project. */
+const storageProblemLabel = (status: ResourcesStatus | null, s: EnvStatus) => (status?.legacyStorage?.stage === "migrate" ? MIGRATION_NEEDED : envStatusText(s));
+
 export function storageCanSetUp(status: ResourcesStatus | null, busy: Busy): boolean {
   return storageStatus(status, busy) === "not-set-up" && !status?.legacyStorage && !status?.minio?.setupBlockedReason;
 }
 
 /**
- * Why a new pipeline server cannot be set up on the storage yet, or null.
- * The storage must be ready and this tool's (pipeline servers get a copy of
- * its keys), and a migration must have copied the old storage first: the
- * copy's check compares both sides, so a server writing to the new storage
- * before it would make the check fail.
+ * S3 storage in isolation (dedicated tab and Overview row): cluster scope,
+ * hence no project. Legacy data still resident triggers Migrate storage;
+ * missing storage exposes Set up alone—the same prerequisite Set up Pipelines
+ * runs first.
+ */
+export function storageState(status: ResourcesStatus | null, busy: Busy = IDLE): FeatureState {
+  if (!status) return loadingState();
+  const s = storageStatus(status, busy);
+  const unmanaged = notManaged(status.minio);
+  if (PROBLEM.includes(s)) {
+    const migrate = status.legacyStorage?.stage === "migrate";
+    return { status: s, label: migrate ? MIGRATION_NEEDED : envStatusText(s), ...owner(unmanaged), next: issueStep(status, "storage"), project: null };
+  }
+  if (s === "ready") {
+    const href = status.minio?.uiRoute;
+    return { status: s, label: envStatusText(s), ...owner(unmanaged), next: href && !unmanaged ? { kind: "open", label: "Open admin UI", href } : null, project: null };
+  }
+  if (s === "not-set-up" && !unmanaged) {
+    const reason = status.minio?.setupBlockedReason ?? null;
+    return { status: s, label: envStatusText(s), next: { kind: "set-up", label: "Set up S3 storage", setup: [{ kind: "setup-minio" }], reason }, project: null };
+  }
+  return { status: s, label: envStatusText(s), ...owner(unmanaged), next: null, project: null };
+}
+
+/**
+ * Explanation when pipeline server setup on storage must wait, else null.
+ * Storage must be ready and owned here (servers receive key material), and
+ * migration must finish copying legacy data—the integrity check compares both
+ * sides, so premature writes to the new bucket would fail it.
  */
 export function storageNotReadyReason(minio: ResourceState | undefined, legacy: ResourcesStatus["legacyStorage"], migrating: boolean): string | null {
   if (migrating) return "Migrate storage is running. Wait until it has finished.";
@@ -137,13 +166,13 @@ export function storageNotReadyReason(minio: ResourceState | undefined, legacy: 
   return null;
 }
 
-/** A project's pipeline server: this tool's, else someone else's (its health only). */
+/** Pipeline server in a project: prefer this tool's record, otherwise external (health only). */
 export function pipelineServerIn(status: ResourcesStatus | null, project: string): ResourceState | undefined {
   return (status?.pipelineServers ?? []).find((ps) => ps.namespace === project)
     ?? (status?.unmanagedPipelineServers ?? []).find((ps) => ps.namespace === project);
 }
 
-/** The project has a pipeline server this tool did not create. */
+/** True when the namespace hosts a pipeline server outside this tool's management. */
 export function pipelineServerUnmanaged(status: ResourcesStatus | null, project: string): boolean {
   return (status?.unmanagedPipelineProjects ?? []).includes(project) && !(status?.pipelineServers ?? []).some((ps) => ps.namespace === project);
 }
@@ -152,12 +181,12 @@ export function pipelineServerStatus(status: ResourcesStatus | null, project: st
   const mine = busy.actionProject === project;
   const b = mine && busy.resAction === "setup-pipeline-server" ? "setting-up" : mine && busy.resAction === "teardown-pipeline-server" ? "deleting" : null;
   const server = pipelineServerIn(status, project);
-  // Someone else's server whose health is not reported (an older backend).
+  // Externally managed server with no health from an older API.
   if (!server && pipelineServerUnmanaged(status, project) && !b) return "unknown";
   return envStatus(server, { busy: b });
 }
 
-/** The parts of Pipelines in a project, in dependency order. */
+/** Pipelines components for one project, ordered by dependency. */
 export function pipelinesParts(status: ResourcesStatus | null, project: string, busy: Busy): PartState[] {
   return [
     { id: "storage", status: storageStatus(status, busy), unmanaged: notManaged(status?.minio) },
@@ -169,8 +198,8 @@ const projectsWithServers = (status: ResourcesStatus | null, projects: string[])
   projects.filter((p) => !!pipelineServerIn(status, p) || pipelineServerUnmanaged(status, p));
 
 /**
- * The project the Pipelines tab opens with: the URL's; else the first
- * project with a pipeline server, preferring a ready one; else none.
+ * Initial project for the Pipelines tab: URL param if present, otherwise
+ * first namespace with a pipeline server (ready wins), else none.
  */
 export function defaultProject(status: ResourcesStatus | null, projects: string[], fromUrl: string | null): string | null {
   if (fromUrl) return fromUrl;
@@ -178,16 +207,18 @@ export function defaultProject(status: ResourcesStatus | null, projects: string[
   return withServers.find((p) => pipelineServerIn(status, p)?.ready) ?? withServers[0] ?? null;
 }
 
-/** Pipelines in one project. */
+/** Pipelines feature state scoped to one project. */
 function pipelinesIn(status: ResourcesStatus | null, project: string, busy: Busy): FeatureState {
   const parts = pipelinesParts(status, project, busy);
   const [storage, server] = parts;
   const unmanaged = parts.some((p) => p.unmanaged);
   const problem = parts.find((p) => PROBLEM.includes(p.status));
+  if (problem?.id === "storage") return { status: problem.status, label: storageProblemLabel(status, problem.status), ...owner(problem.unmanaged), next: { kind: "show-issue", part: "storage" }, project };
+  if (problem?.id === "storage") return { status: problem.status, label: storageProblemLabel(status, problem.status), ...owner(problem.unmanaged), next: { kind: "show-issue", part: "storage" }, project };
   if (problem) return { status: problem.status, label: `${envStatusText(problem.status)} in ${project}`, ...owner(problem.unmanaged), next: issueStep(status, problem.id), project };
   const moving = parts.find((p) => MOVING.includes(p.status));
-  // Ready when the pipeline server is, on ready storage; someone else's server keeps its
-  // artifacts in storage of its own, so this tool's storage is not its dependency.
+  // Ready once the pipeline server is, atop ready storage; foreign servers store
+  // artifacts elsewhere, so our storage is not a prerequisite for them.
   if (server.status === "ready" && (storage.status === "ready" || server.unmanaged)) {
     const href = pipelineServerIn(status, project)?.uiRoute;
     return { status: "ready", label: `Ready in ${project}`, ...owner(unmanaged), next: href ? { kind: "open", label: "Open pipelines", href } : null, project };
@@ -200,13 +231,13 @@ function pipelinesIn(status: ResourcesStatus | null, project: string, busy: Busy
   if (server.status === "not-set-up" && !server.unmanaged && (storageReason === null || storageSetUp)) setup.push({ kind: "setup-pipeline-server", project });
   const status_: EnvStatus = moving ? "setting-up" : "not-set-up";
   const label = moving ? `Setting up in ${project}` : `Not set up in ${project}`;
-  // Every part exists and one is still starting: nothing is left to set up.
+  // All parts exist while one is still provisioning: no further setup steps.
   if (moving && parts.every((p) => p.status !== "not-set-up")) return { status: status_, label, next: null, project };
   let reason: string | null = null;
   if (server.status === "not-set-up" && status?.pipelinesBlocked) reason = status.pipelinesBlocked.reason;
   else if (moving) reason = `${moving.id === "storage" ? "The S3 storage" : "The pipeline server"} is still ${moving.status === "deleting" ? "being deleted" : "setting up"}. Wait until it is ready.`;
   else if (setup.length === 0) reason = storage.status === "not-set-up" ? (status?.minio?.setupBlockedReason ?? "The S3 storage cannot be set up here.") : storageReason ?? "Nothing can be set up here.";
-  // Name what Set up sets up: the whole feature, or the one part missing.
+  // Label Set up for the full feature versus the lone missing piece.
   const onlyServer = setup.length === 1 && setup[0].kind === "setup-pipeline-server";
   return {
     status: status_,
@@ -216,15 +247,15 @@ function pipelinesIn(status: ResourcesStatus | null, project: string, busy: Busy
   };
 }
 
-/** The next step for a part that needs attention: Migrate storage for storage of an earlier version, else show it. */
+/** Next step when a part needs attention: migrate legacy storage if applicable, otherwise surface the part. */
 function issueStep(status: ResourcesStatus | null, part: string): NextStep {
   return part === "storage" && status?.legacyStorage?.stage === "migrate" ? { kind: "migrate" } : { kind: "show-issue", part };
 }
 
 /**
- * Why the set-up a run is about to start cannot run on the latest status,
- * or null: its first check, so that no part is created when a later part
- * cannot be (a component that is off, storage that is gone).
+ * Message when a pending set-up cannot proceed on fresh status, or null.
+ * Evaluated up front so upstream pieces are not created if downstream ones
+ * would fail (disabled component, missing storage).
  */
 export function setUpBlocked(state: FeatureState): string | null {
   if (state.next?.kind !== "set-up") return "There is nothing left to set up here; the page shows the current state.";
@@ -232,17 +263,14 @@ export function setUpBlocked(state: FeatureState): string | null {
 }
 
 /**
- * A project-scoped feature summarised across the projects that have it (the
- * Overview), in the order someone scanning the table needs: the operation
- * running from this page; then problems, which ready projects never hide
- * (an error before a warning); then ready; then anything moving or unknown.
- * Counts are of the projects that have the feature, never of every project
- * on the cluster: a problem counts the projects in its state ("Error in 1
- * of 3 projects"), and its next step names the project with the problem
- * (show-issue with project: "Open zeta"); ready ones are counted ("Ready in
- * 3 projects") and the next step is the tab's picker. With several
- * projects, projects lists each one's own state, as its tab shows it.
- * Null when no project has it.
+ * Roll up a project-scoped feature for Overview rows, prioritised for table
+ * scanning: in-flight work from this page; then problems (errors beat
+ * warnings even across ready namespaces); then ready; then transitional or
+ * unknown. Counts include only projects that actually host the feature, not
+ * every cluster namespace—e.g. "Error in 1 of 3 projects" with show-issue
+ * naming the offender ("Open zeta"); multiple ready rows become "Ready in 3
+ * projects" with choose-project as the step. projects mirrors per-tab detail
+ * when several namespaces qualify. Null if none do.
  */
 function acrossProjects(states: FeatureState[], running: FeatureState | null): FeatureState | null {
   if (running && MOVING.includes(running.status)) return running;
@@ -254,7 +282,7 @@ function acrossProjects(states: FeatureState[], running: FeatureState | null): F
     if (states.length === 1) return first;
     const count = problems.filter((s) => s.status === first.status).length;
     const next: NextStep | null = first.next?.kind === "show-issue" && first.project ? { ...first.next, project: first.project } : first.next;
-    // About the project with the problem: its row and step open the tab there.
+    // Tie the row and next step to the namespace carrying the problem.
     return { status: first.status, label: `${envStatusText(first.status)} in ${count} of ${states.length} projects`, next, project: first.project, ...several };
   }
   if (ready.length > 1) return { status: "ready", label: `Ready in ${ready.length} projects`, next: { kind: "choose-project" }, project: null, ...several };
@@ -263,15 +291,15 @@ function acrossProjects(states: FeatureState[], running: FeatureState | null): F
 }
 
 /**
- * Pipelines: in a project (the tab), or, without one, summarised across
- * the projects (the Overview): "Ready in juntao-test", "Ready in 2
+ * Pipelines state for a chosen project (tab) or aggregated across namespaces
+ * (Overview), producing labels like "Ready in juntao-test", "Ready in 2
  * projects", "Error in 1 of 3 projects", "Not set up in any project".
  */
 export function pipelinesState(status: ResourcesStatus | null, project: string | null, projects: string[], busy: Busy = IDLE): FeatureState {
   if (!status) return loadingState(project);
   if (project) return pipelinesIn(status, project, busy);
   const storage = storageStatus(status, busy);
-  if (PROBLEM.includes(storage)) return { status: storage, label: envStatusText(storage), ...owner(notManaged(status?.minio)), next: issueStep(status, "storage"), project: defaultProject(status, projects, null) };
+  if (PROBLEM.includes(storage)) return { status: storage, label: storageProblemLabel(status, storage), ...owner(notManaged(status?.minio)), next: { kind: "show-issue", part: "storage" }, project: defaultProject(status, projects, null) };
   const states = projectsWithServers(status, projects).map((p) => pipelinesIn(status, p, busy));
   const running = busy.actionProject ? pipelinesIn(status, busy.actionProject, busy) : null;
   const summary = acrossProjects(states, running);
@@ -289,9 +317,9 @@ export function mlflowStatus(status: ResourcesStatus | null, busy: Busy): EnvSta
 }
 
 /**
- * The label of a link to MLflow's root: with workspaces on, its root is the
- * list of workspaces, one per project (opendatahub-io/mlflow server/js
- * MlflowRouter: "/" is a global route, WorkspacesHomeView).
+ * Copy for the MLflow root link: with workspaces enabled, "/" lists workspaces
+ * per project (opendatahub-io/mlflow server/js MlflowRouter: global route,
+ * WorkspacesHomeView).
  */
 export const MLFLOW_WORKSPACES = "Open MLflow experiments";
 
@@ -316,39 +344,39 @@ export function mlflowState(status: ResourcesStatus | null, busy: Busy = IDLE): 
   }
 }
 
-// --- Models: the inference gateway (cluster) and a model (project) --------------------
+// --- Models: cluster inference gateway and per-project model --------------------
 
 const modelsBusy = (busy: Busy, part: "gateway" | "model", project?: string, model?: string): "setting-up" | "deleting" | null => {
   const op = busy.models;
-  // Check again changes nothing: the model is not setting up meanwhile.
+  // Recheck is side-effect free; the model does not enter setup during it.
   if (!op || op.action === "check" || (part === "gateway" ? !op.gateway : op.project !== project || (!!model && !!op.model && op.model !== model))) return null;
   return op.action === "teardown" ? "deleting" : "setting-up";
 };
 
-/** The default catalog name, before the status has loaded (pkg/cluster modelCatalog). */
+/** Fallback catalog name until status loads (pkg/cluster modelCatalog). */
 export const DEFAULT_MODEL = "qwen25-05b-instruct";
 
-/** The catalog's model of that name, or undefined. */
+/** Catalog entry matching name, if any. */
 export function catalogModel(status: ResourcesStatus | null | undefined, name: string): CatalogModel | undefined {
   return (status?.models?.catalog ?? []).find((c) => c.name === name);
 }
 
-/** A display name without its "(CPU, ...)" note, for buttons and titles. */
+/** Strip trailing "(CPU, ...)" parenthetical from display names for UI chrome. */
 export function shortModelName(status: ResourcesStatus | null | undefined, name: string): string {
   const c = catalogModel(status, name);
   return c ? c.displayName.replace(/\s*\([^)]*\)\s*$/, "") : name;
 }
 
-/** What a catalog model is, in words: "Chat", "Chat, tool calling", "Embedding (768 dimensions)". */
+/** Human-readable model kind, e.g. "Chat", "Chat, tool calling", "Embedding (768 dimensions)". */
 export function modelTypeWords(c: CatalogModel): string {
   if (c.type === "embedding") return c.embeddingDimension ? `Embedding (${c.embeddingDimension} dimensions)` : "Embedding";
   return c.toolCalling ? "Chat, tool calling" : "Chat";
 }
 
 /**
- * Why a catalog model cannot be set up in the project now, or null: no
- * worker has room for it. A model the project already has is never
- * blocked (setting it up again replaces its own pod).
+ * Reason setup is blocked for a catalog model in the project, or null when
+ * capacity allows it. Redeploying an existing model is never blocked because
+ * setup replaces that pod.
  */
 export function modelOptionReason(status: ResourcesStatus | null, project: string | null, name: string): string | null {
   const c = catalogModel(status, name);
@@ -358,10 +386,9 @@ export function modelOptionReason(status: ResourcesStatus | null, project: strin
 }
 
 /**
- * A model (anyone's, such as one deployed from the dashboard) that routes
- * through this tool's gateway from a project the gateway does not list
- * (in project, when given): its route is rejected, so it never becomes
- * Ready. Allow, which adds the project to the list, is the next step.
+ * State when a model—perhaps dashboard-deployed—hits this tool's gateway from
+ * a namespace absent from the allow list (scoped to project when passed):
+ * routing fails, so Ready never applies; Allow is the remediation.
  */
 function notAllowedState(status: ResourcesStatus | null, project?: string): FeatureState | null {
   const gw = status?.inferenceGateway;
@@ -377,7 +404,7 @@ function notAllowedState(status: ResourcesStatus | null, project?: string): Feat
   };
 }
 
-/** RHOAI's documented step for a gateway this tool did not create, in words. */
+/** Plain-language instructions mirroring RHOAI docs for gateways we do not manage. */
 export const foreignGatewayStep = (project: string) =>
   `A cluster admin adds ${project} to the projects the Gateway's listeners allow (the values array of allowedRoutes, as RHOAI documents it); this tool does not change a gateway it did not create.`;
 
@@ -386,23 +413,23 @@ export function gatewayStatus(status: ResourcesStatus | null, busy: Busy): EnvSt
 }
 
 /**
- * The project's catalog model of that name: this tool's, else one of the
- * same name someone else made. Without a name: any of the project's
- * catalog models (this tool's first).
+ * Model record in a project by catalog name: prefer tool-managed, else any
+ * match. Omit name to pick any catalog model in the namespace (tool-managed
+ * first).
  */
 export function modelIn(status: ResourcesStatus | null, project: string, name?: string): ModelState | undefined {
   const items = (status?.models?.items ?? []).filter((m) => m.namespace === project && (!name || m.name === name));
   return items.find((m) => m.managedByTool !== false) ?? items[0];
 }
 
-/** The catalog names of the models in the project, in the catalog's order. */
+/** Model catalog names present in the project, sorted like the catalog. */
 export function modelNamesIn(status: ResourcesStatus | null, project: string): string[] {
   const names = new Set((status?.models?.items ?? []).filter((m) => m.namespace === project).map((m) => m.name!));
   const order = (status?.models?.catalog ?? []).map((c) => c.name);
   return [...names].sort((a, b) => order.indexOf(a) - order.indexOf(b));
 }
 
-/** The model's last "Can it be called?" failed: a caller would not get an answer (or would without a token). */
+/** Latest callability check failed, so invocations would error (or lack auth). */
 export function callCheckFailed(m: ModelState | undefined): boolean {
   const check = m?.callCheck;
   return !!check && !check.ok && check.result !== "not-checked";
@@ -411,11 +438,11 @@ export function callCheckFailed(m: ModelState | undefined): boolean {
 export function modelStatus(status: ResourcesStatus | null, project: string, busy: Busy, name: string = DEFAULT_MODEL): EnvStatus {
   const m = modelIn(status, project, name);
   const s = envStatus(m, { busy: modelsBusy(busy, "model", project, name) });
-  // Ready but not callable is not Ready: its card says so too.
+  // Callable failure downgrades Ready; the card reflects that.
   return s === "ready" && callCheckFailed(m) ? "needs-attention" : s;
 }
 
-/** The parts of Models in a project for one model, in dependency order. */
+/** Gateway plus model parts for one catalog model in a project, dependency order. */
 export function modelsParts(status: ResourcesStatus | null, project: string, busy: Busy, name: string = DEFAULT_MODEL): PartState[] {
   return [
     { id: "gateway", status: gatewayStatus(status, busy), unmanaged: notManaged(status?.inferenceGateway) },
@@ -424,9 +451,8 @@ export function modelsParts(status: ResourcesStatus | null, project: string, bus
 }
 
 /**
- * The model the Models tab shows: the URL's (a catalog name); else the
- * project's first model, preferring a ready one; else the catalog's
- * default.
+ * Default model for the Models tab: URL catalog name if valid, else first
+ * deployed model in the project (ready preferred), else catalog default.
  */
 export function defaultModelName(status: ResourcesStatus | null, project: string | null, fromUrl: string | null): string {
   const catalog = status?.models?.catalog ?? [];

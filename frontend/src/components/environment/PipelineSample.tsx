@@ -116,7 +116,7 @@ export const PipelineSample: React.FC<PipelineSampleProps> = ({ project, dspa, a
   const section = (body: React.ReactNode) => (
     <TabSection title="Run a sample pipeline" id={PIPELINE_SAMPLE_ID}>
       <Content component="p">
-        A two-step pipeline that checks the pipeline server works end to end: the first step writes a small file to the S3 storage, the second reads it back. It usually finishes in 1 to 2 minutes.
+        A two-step pipeline that checks the pipeline server works end to end: the first step writes a small file to the pipeline server&apos;s storage, the second reads it back. It usually finishes in 1 to 2 minutes.
         You run it yourself, in the dashboard or with the commands below; this tool does not run it for you.
         They do not send your OpenShift token to the pipeline server, because whoever can edit {project} controls what answers at its address: they make a ServiceAccount that may only use this server&apos;s API, and a token for it that expires in 15 minutes.
       </Content>

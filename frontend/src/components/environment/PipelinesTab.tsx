@@ -3,7 +3,6 @@ import {
   ActionListItem,
   Alert,
   AlertActionLink,
-  Checkbox,
   ClipboardCopy,
   Content,
   DescriptionList,
@@ -19,9 +18,8 @@ import {
   Stack,
   StackItem,
 } from "@patternfly/react-core";
-import type { KeptPVC, LegacyStorageState, ResourceState, ResourcesStatus } from "../../types";
+import type { ResourceState, ResourcesStatus } from "../../types";
 import { TooltipButton } from "../TooltipButton";
-import { ImageRef } from "../ImageRef";
 import {
   type ConfirmSpec,
   type Pending,
@@ -34,256 +32,72 @@ import {
   pvcsLost,
   terminalReason,
 } from "./resourceRow";
-import { CleanupSection, CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
+import { CleanupSection, CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, READ_ONLY_SETUP, TabSection, WhatNext } from "./FeatureLayout";
 import { OutsideProjectsAlert } from "./OutsideProjects";
-import { CopyS3EnvButton, S3SecretField } from "./AdminLogin";
 import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
-import { notManaged } from "./resourceStatus";
 import { ComponentAlert, CopyableCode, NoProjectsAlert, kfpClientSnippet } from "./UseIt";
 import { PipelineSample, pipelineTokenCommands, pipelineTokenRemoval } from "./PipelineSample";
 import type { SampleOp } from "./samples";
+import { MigrationPointer, S3_NAMESPACE, StoragePrerequisitePart } from "./StorageTab";
 import {
   type Busy,
   type FeatureState,
   pipelineServerIn,
   pipelineServerStatus,
   pipelineServerUnmanaged,
-  storageStatus,
 } from "./featureState";
 
-/** The storage's namespace and in-cluster address (pkg/cluster s3Namespace, s3Host). */
-export const S3_NAMESPACE = "seaweedfs";
-export const S3_ENDPOINT = "http://seaweedfs-s3.seaweedfs.svc:8333";
-/** The pipeline server's name (pkg/cluster dspaName, the dashboard's and the one workbenches need), the earlier one (previousDSPAName) and its S3 Secret (dspaSecretName). */
+export { READ_ONLY_SETUP } from "./FeatureLayout";
+
+/** Standard DataSciencePipelinesApplication name (pkg/cluster dspaName) that the dashboard and workbenches look for, the older default (previousDSPAName), and the S3 Secret object name (dspaSecretName). */
 export const DSPA_NAME = "dspa";
 export const PREVIOUS_DSPA_NAME = "nightly-dspa";
 export const DSPA_SECRET_NAME = "nightly-dspa-s3";
-/** The dashboard S3 Connection set up with each pipeline server (pkg/cluster connectionSecretName, connectionDisplayName). */
+/** Dashboard S3 Connection bundled with every pipeline server install (pkg/cluster connectionSecretName, connectionDisplayName). */
 export const CONNECTION_NAME = "rhoai-nightly-updater-s3";
 export const CONNECTION_DISPLAY_NAME = "Shared S3 storage (RHOAI Nightly Updater)";
 
-const pvcWithSize = (p: KeptPVC) => <><code>{p.name}</code>{p.size ? ` (${p.size})` : ""}</>;
-
-const joinNodes = (nodes: React.ReactNode[]) => nodes.map((n, i) => <React.Fragment key={i}>{i > 0 ? ", " : ""}{n}</React.Fragment>);
-
-/** What the Pipelines tab needs from the page. */
+/** Props the Pipelines tab receives from its parent page. */
 export interface PipelinesTabProps {
-  /** What Pipelines needs on the cluster (one-click prerequisites), above the parts. */
+  /** Cluster-side one-click prerequisites for Pipelines, rendered above the part list. */
   prerequisites?: React.ReactNode;
-  /** Why the feature cannot be set up until its cluster prerequisites are, or null. */
+  /** When set, explains why setup must wait until cluster prerequisites finish; otherwise null. */
   prerequisitesReason?: string | null;
   status: ResourcesStatus;
-  /** The selected project (the URL's, else the default), or null. */
+  /** Active project from the URL when present, otherwise the default; null if unset. */
   project: string | null;
   projects: ProjectOption[];
-  /** The project list has loaded (an empty list then means there are none). */
+  /** True once the project dropdown has finished loading—an empty array then means zero projects. */
   projectsLoaded: boolean;
   onProject: (project: string) => void;
-  /** Clears the project (the URL keeps an empty project=). */
+  /** Drops the current project selection while leaving project= empty in the URL. */
   onClearProject: () => void;
-  /** A project in the address that no longer exists (deleted elsewhere), or null. */
+  /** Project slug from the URL that is not in the list anymore (removed outside this UI), or null. */
   missingProject: string | null;
-  /** The status shown was read for another project: the project's Connection is still loading. */
+  /** Displayed status belongs to a different project while that project's Connection fetch is in flight. */
   connectionLoading?: boolean;
-  /** pipelinesState for the project: the same as the Overview's. */
+  /** Per-project pipelinesState, matching what Overview shows. */
   state: FeatureState;
   busy: Busy;
-  /** Why changes are disabled now, or null. */
+  /** Present when mutations are blocked; explains why, or null when edits are allowed. */
   baseReason: string | null;
-  /** The user may only read: changes are hidden, and Set up says who can help. */
+  /** View-only mode: hide change controls; Set up surfaces who can perform setup. */
   readOnly: boolean;
-  /** Why this user cannot read the S3 keys, or null. */
-  readReason: string | null;
-  /** Tool objects left after a storage deletion: Delete stays offered. */
-  minioLeftovers: boolean;
-  /** The OpenShift console's address, for links to pod logs. */
+  /** OpenShift console base URL used for pod log links. */
   consoleURL?: string;
   setPending: (p: Pending) => void;
-  onMigrate: () => void;
-  onRemoveOldStorage: () => void;
   onSetUp: (setup: Pending[]) => void;
   onCleanup: () => void;
-  /** The sample operation running now, if any. */
+  /** In-flight sample operation, if one is running. */
   sampleOp: SampleOp | null;
-  /** Changes when a sample operation ends, so the sample pipeline is read again. */
+  /** Bumped when a sample operation completes so the sample pipeline state is re-fetched. */
   samplesRefresh: number;
 }
 
-/** Delete is offered: the tool's storage exists, or storage of an earlier version does. */
-export const storageTeardownOffered = (minio: ResourceState | undefined, legacy: LegacyStorageState | null | undefined, leftovers: boolean) =>
-  !!minio && !isTerminating(minio) && ((minio.managedByTool !== false && (minio.deployed || leftovers)) || !!legacy);
-
-/** Why Set up is not available to someone who may only read. */
-export const READ_ONLY_SETUP = "Read-only access: setting this up needs a cluster-admin. Ask one to set it up for you.";
-
-/** The storage an earlier version left in namespace minio: the only place that names MinIO-era objects. */
-const LegacyStorageDetails: React.FC<{ legacy: LegacyStorageState }> = ({ legacy }) => {
-  const pvcs = legacy.dataPVCs ?? [];
-  const usedBy = legacy.usedBy ?? [];
-  const uncopied = legacy.uncopiedPVCs ?? [];
-  return (
-    <FeatureSection title="Storage of an earlier version">
-      <DescriptionList isCompact isHorizontal aria-label="Storage from an earlier version">
-        <DescriptionListGroup>
-          <DescriptionListTerm>Server</DescriptionListTerm>
-          <DescriptionListDescription>{legacy.server ? `${legacy.server}${legacy.ready ? "" : " (not running)"}` : "No server"} in namespace <code>{legacy.namespace}</code>, at <code>{legacy.endpoint}</code></DescriptionListDescription>
-        </DescriptionListGroup>
-        {usedBy.length > 0 && (
-          <DescriptionListGroup>
-            <DescriptionListTerm>Used by</DescriptionListTerm>
-            <DescriptionListDescription>{joinNodes(usedBy.map((u) => <code key={u}>{u}</code>))}</DescriptionListDescription>
-          </DescriptionListGroup>
-        )}
-        <DescriptionListGroup>
-          <DescriptionListTerm>Created by this tool</DescriptionListTerm>
-          <DescriptionListDescription>{joinNodes(legacy.objects.map((o) => <code key={o}>{o}</code>))}</DescriptionListDescription>
-        </DescriptionListGroup>
-        {pvcs.length > 0 && (
-          <DescriptionListGroup>
-            <DescriptionListTerm>Data volumes</DescriptionListTerm>
-            <DescriptionListDescription>
-              {joinNodes(pvcs.map((p) => <React.Fragment key={p.name}>{pvcWithSize(p)}</React.Fragment>))}
-              {uncopied.length > 0 && <>. {joinNodes(uncopied.map((n) => <code key={n}>{n}</code>))} holds MinIO&apos;s files from before SeaweedFS and cannot be copied.</>}
-            </DescriptionListDescription>
-          </DescriptionListGroup>
-        )}
-      </DescriptionList>
-    </FeatureSection>
-  );
-};
-
-/** Why migration is needed, at the top of the tab: the reason, that nothing stops meanwhile, and what Migrate does. */
-const MigrationAlert: React.FC<{ legacy: LegacyStorageState; onMigrate: () => void; reason: string | null; readOnly: boolean }> = ({ legacy, onMigrate, reason, readOnly }) => {
-  if (legacy.stage === "migrate") {
-    return (
-      <Alert variant="warning" isInline component="div" title="Your pipeline data is in storage from an earlier version"
-        actionLinks={!readOnly && !reason ? <AlertActionLink onClick={onMigrate}>Migrate storage</AlertActionLink> : undefined}>
-        <Content component="p">
-          This version keeps pipeline data in the S3 storage in namespace <code>{S3_NAMESPACE}</code>; an earlier version put it in namespace <code>{legacy.namespace}</code>.
-          Your pipeline servers keep working on the old storage meanwhile. Migrate storage copies every object to the new storage, checks each copy, and then moves the pipeline servers this tool created; nothing is deleted.
-        </Content>
-        {readOnly ? <Content component="p">A cluster-admin runs the migration.</Content> : reason && <Content component="p">Migrate storage is not available now: {reason}</Content>}
-      </Alert>
-    );
-  }
-  return (
-    <Alert variant="info" isInline component="div" title="The old storage can be deleted">
-      <Content component="p">
-        The data was moved to the S3 storage. The storage of the earlier version, in namespace <code>{legacy.namespace}</code>, is kept until you delete it from the S3 storage&apos;s menu, after updating anything else that still uses it.
-      </Content>
-    </Alert>
-  );
-};
-
-/** S3 storage (cluster): SeaweedFS in namespace seaweedfs, or storage of an earlier version to migrate. */
-const StoragePart: React.FC<PipelinesTabProps> = ({ status, busy, baseReason, readOnly, readReason, minioLeftovers, consoleURL, setPending, onMigrate, onRemoveOldStorage }) => {
-  const { minio, legacyStorage: legacy } = status;
-  const unmanaged = notManaged(minio);
-  const deployed = !!minio?.deployed;
-  const actions: React.ReactNode[] = [];
-  const menu: PartMenuItem[] = [];
-  const legacyReason = busy.migrating ? "Migrate storage is running." : baseReason ?? (legacy?.terminating ? `Namespace ${legacy.namespace} is being deleted.` : null);
-  if (legacy?.stage === "migrate" && !readOnly) {
-    actions.push(<ActionListItem key="migrate"><TooltipButton variant="primary" onClick={onMigrate} isLoading={busy.migrating} disabledReason={busy.migrating ? null : legacyReason}>Migrate storage</TooltipButton></ActionListItem>);
-  }
-  const canRepair = deployed && !unmanaged && !legacy && (!!terminalReason(minio) || !!minio?.repairNeeded) && !isTerminating(minio);
-  const repairReason = baseReason ?? minio?.setupBlockedReason ?? null;
-  if (minio?.ready && minio.uiRoute) actions.push(<ActionListItem key="open"><ExternalLink href={minio.uiRoute}>Open admin UI</ExternalLink></ActionListItem>);
-  if (!readOnly) {
-    if (canRepair) menu.push({ key: "repair", label: "Repair", onClick: () => setPending({ kind: "repair-minio" }), disabledReason: repairReason });
-    if (legacy?.stage === "remove") menu.push({ key: "remove-old", label: "Delete old storage…", onClick: onRemoveOldStorage, disabledReason: legacyReason || legacy.removeBlockedReason || null, isDanger: true });
-    if (storageTeardownOffered(minio, legacy, minioLeftovers)) {
-      menu.push({ key: "delete", label: "Delete S3 storage…", onClick: () => setPending({ kind: "teardown-minio" }), disabledReason: baseReason ?? minio!.teardownBlockedReason ?? null, isDanger: true });
-    }
-  }
-  const blocked = !deployed && minio?.setupBlockedReason;
-  return (
-    <PartItem id="storage" title="S3 storage" scope="Shared by the cluster" status={storageStatus(status, busy)} unmanaged={unmanaged} actions={actions.length ? actions : undefined} menu={menu}>
-      <Content component="p">Keeps pipeline artifacts and test files. Every pipeline server this tool sets up stores its artifacts here, in bucket <code>pipelines</code>.</Content>
-      {!minio?.deployed && (minio?.leftovers ?? []).length > 0 && (
-        <Content component="p">A deletion that did not finish left {joinNodes((minio?.leftovers ?? []).map((l) => <code key={l}>{l}</code>))} in namespace <code>{S3_NAMESPACE}</code>{readOnly ? "." : "; Delete S3 storage removes it."}</Content>
-      )}
-      {blocked && (
-        <Alert variant="warning" isInline component="div" title={`The S3 storage can't be set up: namespace ${S3_NAMESPACE} belongs to someone else`}>
-          <Content component="p">{minio!.setupBlockedReason}</Content>
-          <Content component="p">If nothing in it is used, a cluster-admin can delete it with <code>oc delete project {S3_NAMESPACE}</code>; otherwise ask its owner.</Content>
-        </Alert>
-      )}
-      {legacy?.stage === "migrate" && (
-        <Content component="p">Not set up yet: Migrate storage creates it, with new keys, and gives them to the pipeline servers it moves.</Content>
-      )}
-      {status.foreignLegacyNamespace && !legacy && (
-        <Alert variant="info" isInline component="div" title="Namespace minio is not this tool's">
-          <Content component="p">
-            Namespace <code>minio</code> exists, but this tool did not create it (for example someone ran <code>oc new-project minio</code>), so whatever is in it is not used as storage from an earlier version: nothing is copied from it and nothing in it is changed. Setting up the S3 storage is not affected.
-          </Content>
-        </Alert>
-      )}
-      {minio && (!legacy || deployed) && (
-        <ProblemAlerts kind="minio" state={minio} fix={canRepair && !readOnly ? { label: "Repair", onClick: () => setPending({ kind: "repair-minio" }), reason: repairReason } : null}
-          logsHref={consolePodsHref(consoleURL, S3_NAMESPACE, "seaweedfs")} />
-      )}
-      {deployed && !minio?.ready && !terminalReason(minio) && !isTerminating(minio) && <StartingNote state={minio!} typical="under a minute" />}
-      {deployed && (
-        <DescriptionList isCompact isHorizontal aria-label="S3 storage details">
-          <DescriptionListGroup>
-            <DescriptionListTerm>Endpoint</DescriptionListTerm>
-            <DescriptionListDescription><ImageRef image={S3_ENDPOINT} what="S3 endpoint" truncate={false} /></DescriptionListDescription>
-          </DescriptionListGroup>
-          <DescriptionListGroup>
-            <DescriptionListTerm>Bucket</DescriptionListTerm>
-            <DescriptionListDescription><ImageRef image="pipelines" what="bucket name" truncate={false} /></DescriptionListDescription>
-          </DescriptionListGroup>
-          <DescriptionListGroup>
-            <DescriptionListTerm>Region</DescriptionListTerm>
-            <DescriptionListDescription><code>us-east-1</code>, path-style addressing</DescriptionListDescription>
-          </DescriptionListGroup>
-          {!unmanaged && !readOnly && (
-            <>
-              <DescriptionListGroup>
-                <DescriptionListTerm>Access key</DescriptionListTerm>
-                <DescriptionListDescription><S3SecretField id="storage-access-key" field="accessKey" label="S3 access key" disabledReason={readReason} /></DescriptionListDescription>
-              </DescriptionListGroup>
-              <DescriptionListGroup>
-                <DescriptionListTerm>Secret key</DescriptionListTerm>
-                <DescriptionListDescription>
-                  <S3SecretField id="storage-secret-key" field="secretKey" label="S3 secret key" disabledReason={readReason} />
-                </DescriptionListDescription>
-              </DescriptionListGroup>
-              {minio?.uiUser && (
-                <DescriptionListGroup>
-                  <DescriptionListTerm>Admin UI login</DescriptionListTerm>
-                  <DescriptionListDescription>
-                    <Stack>
-                      <StackItem><Content component="p">User <code>{minio.uiUser}</code>, with a password of its own:</Content></StackItem>
-                      <StackItem><S3SecretField id="storage-admin-password" field="password" label="admin UI password" disabledReason={readReason} /></StackItem>
-                    </Stack>
-                  </DescriptionListDescription>
-                </DescriptionListGroup>
-              )}
-              <DescriptionListGroup>
-                <DescriptionListTerm>For a client</DescriptionListTerm>
-                <DescriptionListDescription><CopyS3EnvButton endpoint={S3_ENDPOINT} disabledReason={readReason} /></DescriptionListDescription>
-              </DescriptionListGroup>
-            </>
-          )}
-          {!unmanaged && readOnly && (
-            <DescriptionListGroup>
-              <DescriptionListTerm>Keys</DescriptionListTerm>
-              <DescriptionListDescription>Only cluster-admins can read the S3 keys here. Ask one for them.</DescriptionListDescription>
-            </DescriptionListGroup>
-          )}
-        </DescriptionList>
-      )}
-      {legacy && <LegacyStorageDetails legacy={legacy} />}
-    </PartItem>
-  );
-};
-
 /**
- * The dashboard Connection as the Secret itself says (connectionState, read
- * for the selected project), never from the DSPA's annotation alone: it may
- * have been deleted in the dashboard since.
+ * Reflect the dashboard Connection from what the Secret actually reports
+ * (connectionState, scoped to the selected project)—not from DSPA annotations alone,
+ * since the Connection may have been removed in the dashboard afterward.
  */
 const ConnectionState: React.FC<{ server: ResourceState; project: string; readOnly: boolean; baseReason: string | null; onSetUpAgain: () => void }> = ({ server, project, readOnly, baseReason, onSetUpAgain }) => {
   const name = <code>{CONNECTION_NAME}</code>;
@@ -307,7 +121,7 @@ const ConnectionState: React.FC<{ server: ResourceState; project: string; readOn
   }
 };
 
-/** The project's pipeline server, or a placeholder until a project is chosen. */
+/** Renders the selected project's pipeline server, or guidance until a project is picked. */
 const PipelineServerPart: React.FC<PipelinesTabProps> = ({ status, project, busy, baseReason, readOnly, consoleURL, setPending, connectionLoading }) => {
   if (!project) {
     return (
@@ -332,7 +146,7 @@ const PipelineServerPart: React.FC<PipelinesTabProps> = ({ status, project, busy
       {unmanaged
         ? <Content component="p">Created outside this tool (for example in the dashboard); this tool leaves it alone.</Content>
         : server
-          ? <Content component="p">Runs your pipelines in {project} and keeps their artifacts in {old ? <>the storage of an earlier version, until Migrate storage moves it to the S3 storage</> : "the S3 storage"}.</Content>
+          ? <Content component="p">Runs your pipelines in {project} and keeps their artifacts in {old ? <>the storage of an earlier version, until Migrate storage moves them to the S3 storage</> : "the S3 storage"}.</Content>
           : <Content component="p">Not set up in {project} yet. Set up creates one that keeps its artifacts in the S3 storage.</Content>}
       {server && managed && server.nonStandardName && !isTerminating(server) && (
         <Alert variant="warning" isInline component="div" title="Workbench pipelines don't work with this pipeline server"
@@ -370,7 +184,7 @@ const PipelineServerPart: React.FC<PipelinesTabProps> = ({ status, project, busy
   );
 };
 
-/** How to use a ready pipeline server: the dashboard, and the KFP SDK. */
+/** Instructions for a ready pipeline server: dashboard UI and KFP SDK usage. */
 const UsePipelines: React.FC<{ server: ResourceState; project: string }> = ({ server, project }) => (
   <TabSection title="Use it" id="pipelines-use">
     <DescriptionList aria-label="How to use the pipeline server">
@@ -408,26 +222,32 @@ const UsePipelines: React.FC<{ server: ResourceState; project: string }> = ({ se
 );
 
 /**
- * The Pipelines tab: what it needs (a turned-on component, a project), S3
- * storage (cluster) and the selected project's pipeline server, each with
- * its health, actions and details; Set up for what is missing; how to use
- * it once ready; what it creates; and Clean up.
+ * The Pipelines tab: what it needs (a turned-on component, a project), the
+ * S3 storage's health (its details and changes are on its own tab) and the
+ * selected project's pipeline server, with its health, actions and details;
+ * Set up for what is missing (the storage first, when it is missing); how
+ * to use it once ready; what it creates; and Clean up.
  */
 export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
-  const { status, project, projects, projectsLoaded, onProject, onClearProject, missingProject, state, busy, baseReason, readOnly, onSetUp, onMigrate, onCleanup, minioLeftovers } = props;
-  const { minio, legacyStorage: legacy } = status;
+  const { status, project, projects, projectsLoaded, onProject, onClearProject, missingProject, state, busy, baseReason, readOnly, onSetUp, onCleanup } = props;
+  const legacy = status.legacyStorage;
+  const migrating = legacy?.stage === "migrate";
   const server = project ? pipelineServerIn(status, project) : undefined;
   const next = state.next;
   const toolServers = (status.pipelineServers ?? []).filter((ps) => ps.managedByTool !== false);
   const outside = status.outsidePipelineServers ?? [];
-  const anythingToClean = toolServers.length > 0 || outside.length > 0 || storageTeardownOffered(minio, legacy, minioLeftovers);
+  // The S3 storage is the cluster's, not Pipelines': its Delete is on its own tab and in Clean up everything.
+  const anythingToClean = toolServers.length > 0 || outside.length > 0;
   const noProjects = projectsLoaded && projects.length === 0;
   return (
     <Stack hasGutter>
-      <StackItem><FeatureHeader title="Pipelines" purpose={FEATURE_PURPOSE.pipelines} state={state} /></StackItem>
+      <StackItem>
+        <FeatureHeader title="Pipelines" state={state}
+          purpose={migrating ? "Run data science pipelines in a project; their artifacts stay in the storage of an earlier version until Migrate storage moves them to the cluster's S3 storage." : FEATURE_PURPOSE.pipelines} />
+      </StackItem>
       {props.prerequisites && <StackItem>{props.prerequisites}</StackItem>}
       {status.pipelinesBlocked && <StackItem><ComponentAlert feature="Data Science Pipelines" block={status.pipelinesBlocked} /></StackItem>}
-      {legacy && <StackItem><MigrationAlert legacy={legacy} onMigrate={onMigrate} readOnly={readOnly} reason={busy.migrating ? "Migrate storage is running." : baseReason} /></StackItem>}
+      {migrating && <StackItem><MigrationPointer /></StackItem>}
       {noProjects && <StackItem><NoProjectsAlert dashboardUrl={status.dashboardUrl} things="Pipeline servers" /></StackItem>}
       {outside.length > 0 && (
         <StackItem>
@@ -457,7 +277,7 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
       </StackItem>
       <StackItem>
         <PartList aria-label="What Pipelines needs">
-          <StoragePart {...props} />
+          <StoragePrerequisitePart status={status} busy={busy} />
           <PipelineServerPart {...props} />
         </PartList>
       </StackItem>
@@ -476,7 +296,7 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
             <WhatNext id="pipelines-next" items={[
               <>Run the sample pipeline above to check that runs and their artifacts work in {project}.</>,
               <>Open pipelines in {project}, then choose Import pipeline to upload a compiled pipeline.</>,
-              <>Create a run; its steps write their artifacts to the S3 storage.</>,
+              <>Create a run; its steps write their artifacts to the pipeline server&apos;s storage.</>,
               <>Follow the run and open its artifacts from the run&apos;s page.</>,
             ]} />
           </StackItem>
@@ -485,7 +305,7 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
       <StackItem>
         <FeatureSection title="What this creates">
           <CreatesList items={[
-            <>On the cluster: namespace <code>{S3_NAMESPACE}</code>, labelled as managed by this tool, with Deployment <code>seaweedfs</code>, PersistentVolumeClaim <code>seaweedfs-data</code> (20Gi), Secret <code>seaweedfs-s3-credentials</code> (the S3 keys), Service <code>seaweedfs-s3</code>, Route <code>seaweedfs-admin</code> (admin UI), NetworkPolicy <code>seaweedfs-ingress</code> and bucket <code>pipelines</code></>,
+            <>On the cluster, when it is missing: the S3 storage in namespace <code>{S3_NAMESPACE}</code> (the S3 storage tab lists its objects)</>,
             <>In the project: DataSciencePipelinesApplication <code>{DSPA_NAME}</code> (the pipeline server) and Secret <code>{DSPA_SECRET_NAME}</code> (a copy of the S3 keys), and the dashboard S3 Connection <code>{CONNECTION_NAME}</code> (the same keys, for workbenches and model deployments), both owned by the pipeline server</>,
           ]} />
         </FeatureSection>
@@ -493,77 +313,14 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
       {!readOnly && anythingToClean && (
         <StackItem>
           <CleanupSection id="pipelines-cleanup" label="Clean up Pipelines…" onClick={onCleanup} reason={baseReason}
-            text="Deletes what this tool created for Pipelines: the pipeline servers in every project, then the S3 storage. You choose what goes, then it runs as one operation." />
+            text={migrating
+              ? "Deletes the pipeline servers this tool set up, in every project. You choose which, then it runs as one operation. The storage they use, from an earlier version, stays; delete it on the S3 storage tab."
+              : "Deletes the pipeline servers this tool set up, in every project. You choose which, then it runs as one operation. The S3 storage stays: other features can use it. Delete it on the S3 storage tab, or with Clean up everything."} />
         </StackItem>
       )}
     </Stack>
   );
 };
-
-/** The confirmation of a Storage change, or null for another feature's change. */
-export function storageConfirm(pending: Pending, minio: ResourceState | undefined, legacy?: LegacyStorageState | null, setPending?: (p: Pending) => void): ConfirmSpec | null {
-  switch (pending.kind) {
-    case "setup-minio":
-    case "repair-minio":
-      return {
-        title: pending.kind === "repair-minio" ? "Repair the S3 storage?" : "Set up the S3 storage?",
-        confirm: pending.kind === "repair-minio" ? "Repair" : "Set up",
-        runTitle: pending.kind === "repair-minio" ? "Repair the S3 storage" : "Set up the S3 storage",
-        summary: pending.kind === "repair-minio"
-          ? <Content component="p">Sets up the S3 storage again with this version&apos;s settings and image, and starts it. Stored data is kept. Takes up to 90 seconds.</Content>
-          : <Content component="p">On the cluster: S3 storage (20 GiB), shared by every pipeline server this tool sets up. Takes up to 90 seconds.</Content>,
-        changes: [
-          <>Namespace <code>{S3_NAMESPACE}</code> {pending.kind === "repair-minio" || minio?.managedByTool ? "is kept and reused" : "is created"}, labelled as managed by this tool.</>,
-          <>SeaweedFS: Deployment <code>seaweedfs</code>, PersistentVolumeClaim <code>seaweedfs-data</code>, Secret <code>seaweedfs-s3-credentials</code> (the S3 keys) and NetworkPolicy <code>seaweedfs-ingress</code> are applied with the image the server is configured to use.</>,
-          <>Once SeaweedFS is ready: Service <code>seaweedfs-s3</code> (the S3 endpoint <code>{S3_ENDPOINT}</code>), the admin UI Route <code>seaweedfs-admin</code> and the bucket <code>pipelines</code>.</>,
-        ],
-      };
-    case "teardown-minio": {
-      const current = !!minio && (minio.deployed || pvcList(minio).length > 0);
-      // Namespace seaweedfs goes too only when the user ticks it, and it is
-      // offered only for the namespace this tool created (pkg/cluster
-      // toolNamespaceDeletable): the same informed choice as for minio.
-      const offerNamespace = current && minio?.managedByTool !== false && !!minio?.namespaceDeletable;
-      const deleteNamespace = offerNamespace && pending.deleteNamespace === true;
-      const others = minio?.otherObjects ?? [];
-      const namespaces = [...(current && !deleteNamespace ? [S3_NAMESPACE] : []), ...(legacy ? [legacy.namespace] : [])];
-      const pvcs = [...(current ? pvcList(minio).map((n) => `${S3_NAMESPACE}/${n}`) : []), ...(legacy?.dataPVCs ?? []).map((p) => `${legacy!.namespace}/${p.name}`)];
-      return {
-        title: "Delete the S3 storage?", confirm: "Delete", danger: true, runTitle: "Delete the S3 storage",
-        summary: (
-          <Content component="p">
-            Deletes the S3 storage{legacy ? ", and the storage of an earlier version," : ""} with every file in it.{" "}
-            {namespaces.length > 0
-              ? <>{namespaces.length > 1 ? "Namespaces" : "Namespace"} {joinNodes(namespaces.map((n) => <code key={n}>{n}</code>))} {namespaces.length > 1 ? "are" : "is"} kept{offerNamespace && !deleteNamespace ? " unless you tick the box below" : ""}.</>
-              : <>Namespace <code>{S3_NAMESPACE}</code> is deleted too.</>}
-          </Content>
-        ),
-        changes: [
-          ...(current ? [<>The S3 storage objects this tool created in namespace <code>{S3_NAMESPACE}</code> are deleted: Deployment <code>seaweedfs</code>, NetworkPolicy <code>seaweedfs-ingress</code>, Route <code>seaweedfs-admin</code>, Service <code>seaweedfs-s3</code>, Secret <code>seaweedfs-s3-credentials</code> and PersistentVolumeClaim <code>seaweedfs-data</code>.</>] : []),
-          ...(legacy ? [<>The storage an earlier version left in namespace <code>{legacy.namespace}</code> is deleted: {joinNodes(legacy.objects.map((o) => <code key={o}>{o}</code>))}.</>] : []),
-          ...(deleteNamespace ? [<>Then namespace <code>{S3_NAMESPACE}</code> is deleted, with everything in it.</>] : []),
-          <>Objects with these names that the tool did not create are kept.{namespaces.length > 0 && <> To delete a kept namespace later: {joinNodes(namespaces.map((n) => <code key={n}>oc delete project {n}</code>))}, once it is empty.</>}</>,
-        ],
-        choice: !current ? undefined : offerNamespace ? (
-          <Checkbox id="teardown-delete-namespace" label={<>Also delete namespace <code>{S3_NAMESPACE}</code> (created by this tool)</>}
-            description={<>
-              Deletes namespace <code>{S3_NAMESPACE}</code> and everything in it, including anything this tool did not create.{" "}
-              {others.length > 0
-                ? <>Besides the storage&apos;s objects, this tool sees there: {joinNodes(others.map((o) => <code key={o}>{o}</code>))}.</>
-                : <>Besides the storage&apos;s objects, this tool sees no Deployments or PersistentVolumeClaims there.</>}{" "}
-              It cannot list every kind (Secrets, ConfigMaps and others): check with <code>oc get all,pvc,secret,configmap -n {S3_NAMESPACE}</code>.
-            </>}
-            isChecked={deleteNamespace} onChange={(_e, v) => setPending?.({ kind: "teardown-minio", deleteNamespace: v })} />
-        ) : minio?.namespaceKeptReason ? <Content component="p">{minio.namespaceKeptReason}</Content> : undefined,
-        dataLoss: pvcs.length > 0
-          ? <>Every object stored in it: pipeline artifacts and uploaded files{legacy ? ", and the data of earlier versions" : ""} (volume{pvcs.length > 1 ? "s" : ""} {joinNodes(pvcs.map((n) => <code key={n}>{n}</code>))}).</>
-          : <>Every object stored in the S3 storage (pipeline artifacts, uploaded files).</>,
-      };
-    }
-    default:
-      return null;
-  }
-}
 
 /** A pipeline server with this tool's label that this tool has no record of: deleting it is the user's confirmation that it is this tool's. */
 export function unrecordedPipelineServerNote(project: string): React.ReactNode {

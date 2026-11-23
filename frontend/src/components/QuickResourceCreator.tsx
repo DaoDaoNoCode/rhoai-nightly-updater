@@ -22,10 +22,11 @@ import { modelsConfirm } from "./environment/modelsConfirm";
 import { PlaygroundTab, playgroundConfirm } from "./environment/PlaygroundTab";
 import { MaaSTab, maasConfirm, useMaaSStatus } from "./environment/MaaSTab";
 import { usePlaygroundStatus } from "./environment/usePlaygroundStatus";
-import { PipelinesTab, READ_ONLY_SETUP, pipelineServerConfirm, storageConfirm } from "./environment/PipelinesTab";
+import { PipelinesTab, pipelineServerConfirm } from "./environment/PipelinesTab";
+import { StorageTab, storageConfirm } from "./environment/StorageTab";
 import { MLflowTab, mlflowConfirm } from "./environment/MLflowTab";
 import { Overview } from "./environment/Overview";
-import { FEATURE_PURPOSE, partTitleId } from "./environment/FeatureLayout";
+import { FEATURE_PURPOSE, READ_ONLY_SETUP, partTitleId } from "./environment/FeatureLayout";
 import { MigrateStorageModal } from "./environment/MigrateStorageModal";
 import { MIGRATE_TITLES, migrateStepNow, useMigrateStorage, type MigrateKind } from "./environment/useMigrateStorage";
 import { type ProjectOption } from "./environment/ProjectSelect";
@@ -46,6 +47,7 @@ import {
   playgroundState,
   maasState,
   pipelinesState,
+  storageState,
   unreadableState,
   noProjectState,
 } from "./environment/featureState";
@@ -66,29 +68,27 @@ export { ENVIRONMENT_TABS, type EnvironmentTab } from "./environment/environment
 
 interface QuickResourceCreatorProps {
   /**
-   * Why cluster changes are disabled now, or null: the app-wide
-   * useMutationBlocker (permissions, session, the operation lock).
+   * Null when mutations are allowed; otherwise a message from the global
+   * useMutationBlocker (permissions, session, or an in-flight operation).
    */
   mutateBlocker: string | null;
-  /** Why this user cannot read credentials or change anything through the updater (not a cluster-admin), or null. */
+  /** When set, the user is not a cluster-admin and cannot read credentials or mutate via the updater. */
   readBlocker?: string | null;
-  /** The OpenShift console's address, for links to pod logs. */
+  /** OpenShift console base URL for external pod-log links. */
   consoleURL?: string;
-  /** Sees every action result (e.g. to pick up a cluster_busy refusal). */
+  /** Notified on each operation response (including cluster_busy rejections). */
   onResult?: (res: OperationResponse) => void;
-  /** The page header, given the refresh state of the resource status. */
+  /** Optional header slot driven by resource-status loading and refresh controls. */
   renderHeader?: (header: { loading: boolean; lastRefreshed: Date | null; onRefresh: () => void }) => React.ReactNode;
 }
 
 /**
- * The Environment page: one tab per feature (Pipelines, MLflow) after an
- * Overview of them all. The feature's state comes from one function per
- * feature (environment/featureState.ts), which the Overview and the tab
- * both render. The tab and the project are in the URL (?tab=, ?project=),
- * so links, reloads and back and forward keep the view
- * (useEnvironmentLocation). It loads and polls the status and the projects
- * (useResourceStatus), and runs every change in one dialog that shows its
- * progress and outcome (environmentRuns).
+ * Environment UI: Overview first, then a tab per feature (S3 storage, Pipelines,
+ * MLflow, ...). Each feature shares one state builder in environment/featureState.ts
+ * between Overview rows and its tab body. ?tab= and ?project= in the URL preserve
+ * navigation across reloads and history (useEnvironmentLocation). Status and project
+ * lists load and poll via useResourceStatus; mutations run through a single progress
+ * dialog (environmentRuns).
  */
 export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, readBlocker = null, consoleURL, onResult, renderHeader }) => {
   const { searchParams, tab, urlProject, navigate, setFocusTarget, chooseModel } = useEnvironmentLocation();
@@ -102,15 +102,15 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const legacy = resStatus?.legacyStorage;
   const pipelineServers = resStatus?.pipelineServers ?? [];
   const allResources = resStatus ? [resStatus.minio, resStatus.mlflow, ...pipelineServers, ...(resStatus.inferenceGateway ? [resStatus.inferenceGateway] : []), ...(resStatus.models?.items ?? [])] : [];
-  // Settling: something is starting or terminating and may still change on its
-  // own. Terminal states are not settling: they need a change (A08-3).
+  // "Settling" means a resource is booting or winding down and may flip without user
+  // action. Steady terminal states are not settling—they await an explicit change (A08-3).
   const resourcesSettling = allResources.some((r) => isTerminating(r) || (r.deployed && !r.ready && !terminalReason(r)));
 
   const runs = useRunState();
   const { resAction, actionProject, run, runOpen, setRunOpen, setupConfirm, setSetupConfirm, cleanupScope, setCleanupScope, cleanupRetry, setCleanupRetry,
     sampleOp, samplesRefresh, modelsOp, playgroundOp, playgroundRefresh, maasOp, maasRefresh, prereqRefresh, checking, checkError } = runs;
-  // One poller: quickly after a change, backing off to 30 s, for 10 minutes;
-  // otherwise a slow re-read; hidden tabs don't poll (A06-5).
+  // Single poll loop: aggressive right after activity, then 30 s cadence for ten minutes,
+  // else leisurely refresh; inactive tabs skip polling (A06-5).
   const settlingNow = !!resAction || resourcesSettling || !!run.run?.running;
   const polling = useResourcePolling(fetchResources, settlingNow);
 
@@ -118,21 +118,19 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const migration = useMigrateStorage(useCallback(() => { void fetchResources(); }, [fetchResources]));
   const migrating = !!migration.run?.running;
 
-  // The Playground tab's default project, once the playgrounds are known.
+  // Cached default project for Playground after playground inventory arrives.
   const [playgroundDefault, setPlaygroundDefault] = useState<string | null>(null);
   const playgroundProjectParam = searchParams.has("project") ? urlProject : playgroundDefault;
   const playgroundRead = usePlaygroundStatus(tab === "playground" ? playgroundProjectParam : null, playgroundRefresh, !!playgroundOp, tab === "overview" || tab === "playground" || !!cleanupScope);
   const pg = playgroundRead.data;
   const maasRead = useMaaSStatus(maasRefresh, !!maasOp, tab === "overview" || tab === "maas" || !!cleanupScope);
   const maas = maasRead.data;
-  // One-click prerequisites: read for the feature tabs and the Overview;
-  // Models' plan depends on how the model about to be set up is reached.
+  // Prerequisites feed Overview and feature tabs; on Models, exposure picks which plan applies.
   const [modelsExposure, setModelsExposure] = useState<ModelExposureKind | null>(null);
   const prereqRead = usePrerequisites(prereqRefresh, tab === "models" ? modelsExposure : RECOMMENDED_EXPOSURE, tab !== "maas");
   const prereq = prereqRead.data;
-  // Clean up lists what a fresh read finds, not the last snapshot: opening it
-  // reads the status, MaaS and the playgrounds again (a read that is enabled
-  // only for Clean up starts on its own).
+  // Cleanup uses live data, not stale snapshots—opening it retriggers status, MaaS, and
+  // playground reads (those fetches wake only while Clean up is open).
   const freshReads = useRef({ resources: fetchResources, maas: maasRead.reload, playground: playgroundRead.reload });
   freshReads.current = { resources: fetchResources, maas: maasRead.reload, playground: playgroundRead.reload };
   const cleanupOpen = !!cleanupScope;
@@ -144,7 +142,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       void r.maas();
       void r.playground();
     }
-    // Only when Clean up opens; tab is the one it opened on.
+    // Fires when Clean up opens, on whichever tab was active then.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cleanupOpen]);
   useEffect(() => {
@@ -153,20 +151,19 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
 
   const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, [...pipelineServers, ...(resStatus?.outsidePipelineServers ?? [])]) ?? modelsConfirm(p, resStatus) ?? playgroundConfirm(p, pg) ?? maasConfirm(p, maas, setPending) ?? prerequisitesConfirm(p, prereq) ?? samplesConfirm(p);
 
-  // A run that ends while its dialog is closed reports in a toast, with a
-  // way back to the dialog: the outcome is never lost, and nothing pushes
-  // the page down.
+  // Finished runs whose dialog was dismissed surface as toast with a path back—outcomes stay
+  // visible without shifting page layout.
   const [toast, setToast] = useState(false);
   const wasRunning = useRef(false);
   useEffect(() => {
     const now = !!run.run?.running;
-    // A clean-up refused to ask for confirmation reopens Clean up instead.
+    // When cleanup aborts before confirmation, reopen the Clean up flow.
     if (wasRunning.current && !now && !runOpen && !cleanupRetry) setToast(true);
     wasRunning.current = now;
   }, [run.run?.running, runOpen, cleanupRetry]);
 
-  // While a run goes on with its dialog closed, the app's operation alert
-  // names it and its step, with View progress to open the same dialog again.
+  // Background runs (dialog closed) still appear in the global operation strip with step text
+  // and View progress to restore the run dialog.
   const reopenRun = useCallback(() => { setToast(false); setRunOpen(true); }, [setRunOpen]);
   const migrationKind = migration.run?.running ? migration.run.kind : null;
   const reopenMigration = useCallback(() => { if (migrationKind) setMigrateKind(migrationKind); }, [migrationKind]);
@@ -178,21 +175,18 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const runningSomething = !!resAction || migrating || !!run.run?.running || !!checking;
   const busy: Busy = { resAction, actionProject, migrating, models: modelsOp, playground: playgroundOp, maas: maasOp };
   const baseReason = mutateBlocker ?? (runningSomething ? BUSY_REASON : null);
-  // After a deletion the namespace stays (deployed:false, managedByTool:true).
-  // Offer Delete again while the cluster still has this tool's storage
-  // objects (the data PVC, a Route, or what a deletion left: leftovers).
+  // Post-delete the namespace may remain (deployed:false, managedByTool:true). Keep Delete
+  // available while tool-owned storage artifacts persist—data PVC, Routes, or other leftovers.
   const minioLeftovers = !!minio && !minio.deployed && minio.managedByTool === true && (
     (minio.dataPVCs ?? []).length > 0 || !!minio.uiRoute || !!minio.apiRoute || (minio.leftovers ?? []).length > 0
   );
   const modal = pending ? confirmOf(pending) : null;
 
   const projectNames = environmentProjectNames(projectList, resStatus);
-  // A project in the address that is gone (deleted elsewhere) is not
-  // chosen: Set up would create it again.
+  // URL project names that no longer exist are ignored so Set up does not recreate them.
   const missingProject = urlProject && projectList !== null && !projectNames.includes(urlProject) ? urlProject : null;
-  // One state for the picker and the content: the URL's project; an empty
-  // project= after a clear means none; only without project= at all (a
-  // first visit) the default applies.
+  // Picker and body share one project: from the URL, explicit empty project= means none, and
+  // omitting project= entirely falls back to the default on first visit.
   const project = missingProject ? null : searchParams.has("project") ? urlProject : defaultProject(resStatus, projectNames, null);
   const pipelinesProject = tab === "pipelines" ? project : null;
   useEffect(() => {
@@ -203,18 +197,19 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const projectOptions = pipelinesProjectOptions(resStatus, projectNames, busy);
   const workspaceOptions: ProjectOption[] = projectNames.map((name) => ({ name }));
   const modelOptions = modelsProjectOptions(resStatus, projectNames);
-  // The Models tab's own default: the first project with a model, preferring a ready one.
+  // Models tab default project: earliest project holding a model, favoring a ready instance.
   const modelsProject = missingProject ? null : searchParams.has("project") ? urlProject : defaultModelsProject(resStatus, projectNames, null);
-  // The Models tab's model: the URL's (model=<catalog name>), else the project's first, else the default.
+  // Models selection: model= query if present, otherwise first model in the project, else the built-in default.
   const modelsModel = defaultModelName(resStatus, modelsProject, searchParams.get("model"));
 
-  // After an explicit clear the tab says so instead of the cross-project
-  // summary, which names a project the picker no longer shows.
+  // Cleared or missing projects switch the tab to an explicit empty state rather than a
+  // cross-project summary that references a hidden picker entry.
   const cleared = (searchParams.has("project") && !project) || !!missingProject;
   const pipelines: FeatureState = cleared
     ? noProjectState()
     : pipelinesState(resStatus, project, projectNames, busy);
   const pipelinesSummary = pipelinesState(resStatus, null, projectNames, busy);
+  const storageNow = storageState(resStatus, busy);
   const mlflowNow = mlflowState(resStatus, busy);
   const models: FeatureState = cleared
     ? noProjectState()
@@ -224,11 +219,11 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const playgroundNow: FeatureState = cleared
     ? noProjectState()
     : !pg && playgroundRead.error ? unreadableState(playgroundProject) : playgroundState(resStatus, pg, playgroundProject, busy);
-  // A status that was never read is loading; one that could not be read says so.
+  // Missing playground payload with no error yet reads as loading; failures get an unreadable state.
   const playgroundSummary = !pg && playgroundRead.error ? unreadableState() : playgroundState(resStatus, pg, null, busy);
   const maasNow = !maas && maasRead.error ? unreadableState() : maasState(maas, busy);
   const playgroundOptions = playgroundProjectOptions(pg, projectNames);
-  const overviewRows = buildOverviewRows({ pipelines: pipelinesSummary, mlflow: mlflowNow, models: modelsSummary, playground: playgroundSummary, maas: maasNow }, prereq);
+  const overviewRows = buildOverviewRows({ storage: storageNow, pipelines: pipelinesSummary, mlflow: mlflowNow, models: modelsSummary, playground: playgroundSummary, maas: maasNow }, prereq);
   const anythingToClean = !!resStatus && (() => {
     const c = cleanupCandidates(resStatus, "all", minioLeftovers, pg, maas);
     return c.servers.length > 0 || c.storage || c.mlflow || c.models.length > 0 || c.gateway || c.playgrounds.length > 0 || c.maasPublished.length > 0 || c.maasPlatform || c.recipeProjects.length > 0;
@@ -245,18 +240,23 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     pg, maas, prereq, confirmOf, setPending, projectNames, onResult,
   });
 
-  // One-click prerequisites on each feature's tab, above its parts.
+  // Shared prerequisites block rendered above each feature tab's sections.
   const prereqNode = (feature: PrerequisiteFeature, exposure?: ModelExposureKind | null) => (
     <PrerequisitesSection feature={feature} prereq={prereq?.features?.[feature]} error={prereqRead.error} onRetry={() => void prereqRead.reload()}
       exposure={exposure ?? undefined} stale={feature === "models" && prereqRead.stale} readOnly={readOnly} baseReason={baseReason} setPending={setPending} />
   );
   const onModelsExposure = useCallback((e: ModelExposureKind | null) => setModelsExposure(e), []);
 
-  // Rows still loading (the status, the playground's, MaaS's) show Skeletons.
+  // Overview skeleton placeholders while status, playground, or MaaS data is still in flight.
   const overview = (
     <Overview rows={overviewRows} baseReason={baseReason} setUpReason={readOnly ? READ_ONLY_SETUP : null}
       onSetUp={(row, setup) => setUp(row.name, setup)}
-      onShowIssue={(row, part) => { navigate({ tab: row.id as EnvironmentTab, ...(row.state.project ? { project: row.state.project } : {}) }); setFocusTarget(partTitleId(part)); }}
+      onShowIssue={(row, part) => {
+        // Storage problems always land on the storage tab even when another row links them (e.g. Pipelines).
+        if (part === "storage") navigate({ tab: "storage" });
+        else navigate({ tab: row.id as EnvironmentTab, ...(row.state.project ? { project: row.state.project } : {}) });
+        setFocusTarget(partTitleId(part));
+      }}
       onOpenTab={(row) => { navigate({ tab: row.id as EnvironmentTab, project: "" }); setFocusTarget(`${row.id}-project`); }}
       onMigrate={() => setMigrateKind("migrate")}
       onSamples={(row, focus) => { navigate({ tab: row.id as EnvironmentTab, ...(row.state.project ? { project: row.state.project } : {}) }); setFocusTarget(focus); }}
@@ -274,11 +274,9 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
         </Tabs>
       </PageSection>
       {/*
-        Only the active tab is rendered: leaving a tab clears what it
-        fetched on request (the storage's keys). Until a tab's status is
-        read, it shows where its data will be (Skeletons), never an empty
-        or "not set up" state; a status that cannot be read shows why,
-        with Retry.
+        Mount only the selected tab so on-demand fetches drop when you leave (e.g. storage keys).
+        Before data arrives, show skeleton layout—not blank or "not set up". Unreadable status
+        surfaces an error with Retry instead.
       */}
       <PageSection isFilled id="environment-tab-content" role="tabpanel" aria-labelledby={`environment-tab-${tab}`}>
         <Stack hasGutter>
@@ -319,13 +317,17 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
           ) : (
             <StackItem>
               {tab === "overview" && overview}
+              {tab === "storage" && resStatus && (
+                <StorageTab status={resStatus} state={storageNow} busy={busy} baseReason={baseReason} readOnly={readOnly} readReason={readBlocker} minioLeftovers={minioLeftovers} consoleURL={consoleURL}
+                  setPending={setPending} onMigrate={() => setMigrateKind("migrate")} onRemoveOldStorage={() => setMigrateKind("remove")}
+                  onSetUp={(setup) => setUp(TAB_TITLES.storage, setup)} />
+              )}
               {tab === "pipelines" && resStatus && (
                 <PipelinesTab prerequisites={prereqNode("pipelines")} status={resStatus} project={project} projects={projectOptions} projectsLoaded={projectList !== null}
                   onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
                   connectionLoading={!!project && statusProject !== project}
-                  state={headerWithPrerequisites(pipelines, prereq?.features?.pipelines)} prerequisitesReason={prerequisitesReason(prereq?.features?.pipelines, "pipelines")} busy={busy} baseReason={baseReason} readOnly={readOnly} readReason={readBlocker} minioLeftovers={minioLeftovers} consoleURL={consoleURL}
-                  setPending={setPending} onMigrate={() => setMigrateKind("migrate")} onRemoveOldStorage={() => setMigrateKind("remove")}
-                  onSetUp={(setup) => setUp("Pipelines", setup)} onCleanup={() => setCleanupScope("pipelines")}
+                  state={headerWithPrerequisites(pipelines, prereq?.features?.pipelines)} prerequisitesReason={prerequisitesReason(prereq?.features?.pipelines, "pipelines")} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}
+                  setPending={setPending} onSetUp={(setup) => setUp("Pipelines", setup)} onCleanup={() => setCleanupScope("pipelines")}
                   sampleOp={sampleOp} samplesRefresh={samplesRefresh} />
               )}
               {tab === "mlflow" && resStatus && (

@@ -94,6 +94,25 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Changed
 
+- **The S3 storage has its own Environment tab.** It was part of the
+  Pipelines tab; it is the cluster's, and other features can use it too,
+  so it now has an **S3 storage** tab (`?tab=storage`, no project picker)
+  with its health, endpoint, keys, admin UI login, **Migrate storage**,
+  **Delete old storage**, **Repair**, **Delete S3 storage** and its own
+  **Set up S3 storage**, and a row of its own on the Overview. The
+  Pipelines tab shows the storage's health only, with **Open S3
+  storage**, and while a migration is needed a short alert that points
+  there. **Set up Pipelines** still sets the storage up first when it is
+  missing; **Show issue** for the storage, from either row, opens the S3
+  storage tab. **Clean up Pipelines** now deletes only pipeline servers:
+  the S3 storage goes only with **Delete S3 storage** or **Clean up
+  everything**. A recipe project's "holds what this tool did not create"
+  confirmation says that only Notebooks, InferenceServices,
+  LLMInferenceServices, PersistentVolumeClaims and Pods are listed, and anything else in the project is deleted with it. While an
+  earlier version's storage still holds the data, the S3 storage, its
+  SeaweedFS part, the Pipelines tab and both Overview rows all read
+  **Migration needed**, and only the S3 storage tab offers **Migrate
+  storage**. No API or permission changed.
 - **Every RHOAI user can sign in, and sees what is theirs.** oauth-proxy's
   sign-in gate is now "may `get` `auths.services.platform.opendatahub.io`",
   which RHOAI grants to its Auth CR's allowed groups (by default every

@@ -28,6 +28,8 @@ describe("a refused clean-up with an unrecorded pipeline server", () => {
     expect(box()).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "S3 storage" })).not.toBeChecked();
     const ask = screen.getByText("Project recipe-old holds what this tool did not create").closest(".pf-v6-c-alert") as HTMLElement;
+    // The list's limits are visible: it names only the kinds the tool checks.
+    expect(ask).toHaveTextContent("Only Notebooks (workbenches), InferenceServices and LLMInferenceServices (models), PersistentVolumeClaims (volumes) and Pods are listed; anything else in the project is deleted with it.");
     fireEvent.click(within(ask).getByRole("checkbox", { name: "Delete it with project recipe-old" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(onConfirm).toHaveBeenLastCalledWith({

@@ -54,7 +54,8 @@ describe("an unrecorded pipeline server", () => {
     expect(box).not.toBeChecked();
     expect(screen.getByRole("checkbox", { name: /Pipeline server in kept/ })).toBeChecked();
     expect(screen.getByText(/no record that it set it up/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("checkbox", { name: "S3 storage" }));
+    // The S3 storage is the cluster's: Clean up Pipelines never offers it.
+    expect(screen.queryByRole("checkbox", { name: "S3 storage" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(onConfirm).toHaveBeenLastCalledWith({ pipelineServers: ["kept"] });
     fireEvent.click(box);
@@ -71,7 +72,8 @@ describe("an unrecorded pipeline server", () => {
     const onConfirm = vi.fn();
     const modal = (status: ResourcesStatus) => <CleanupModal scope="pipelines" status={status} minioLeftovers={false} baseReason={null} onConfirm={onConfirm} onCancel={() => {}} />;
     const { rerender } = render(modal(at(recorded)));
-    fireEvent.click(screen.getByRole("checkbox", { name: "S3 storage" }));
+    // The S3 storage is the cluster's: Clean up Pipelines never offers it.
+    expect(screen.queryByRole("checkbox", { name: "S3 storage" })).not.toBeInTheDocument();
     const box = () => screen.getByRole("checkbox", { name: /Pipeline server in kept/ });
     expect(box()).toBeChecked();
     // The record lost it: unticked, not sent, and not confirmed.
@@ -152,9 +154,9 @@ describe("a storage deletion that did not finish", () => {
       "/api/resources/status": { minio: { deployed: false, ready: false, namespace: "seaweedfs", managedByTool: true, message: "Namespace exists but the S3 storage is not deployed", leftovers: ["Secret seaweedfs-s3-credentials"] }, mlflow: noMlflow, pipelineServers: [] } satisfies ResourcesStatus,
       "/api/resources/projects": { projects: ["juntao-test"] },
     });
-    renderAt("/test-resources?tab=pipelines&project=juntao-test");
-    const storage = await part("S3 storage");
+    renderAt("/test-resources?tab=storage");
+    const storage = await part("SeaweedFS");
     expect(storage).toHaveTextContent("A deletion that did not finish left Secret seaweedfs-s3-credentials in namespace seaweedfs; Delete S3 storage removes it.");
-    expect(await menuItem("S3 storage", /Delete S3 storage/)).not.toBeNull();
+    expect(await menuItem("SeaweedFS", /Delete S3 storage/)).not.toBeNull();
   });
 });

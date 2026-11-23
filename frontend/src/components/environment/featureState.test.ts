@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LegacyStorageState, ResourceState, ResourcesStatus } from "../../types";
-import { defaultProject, IDLE, loadingState, maasPartLabelStatus, maasState, mlflowState, modelsState, pipelinesState, playgroundState, setUpBlocked, unreadableState } from "./featureState";
+import { defaultProject, IDLE, loadingState, maasPartLabelStatus, maasState, mlflowState, modelsState, pipelinesState, playgroundState, setUpBlocked, storageState, unreadableState } from "./featureState";
 
 describe("A platform part's own label", () => {
   it("a ready part with a warning needs attention; without one it is ready", () => {
@@ -80,7 +80,7 @@ describe("pipelinesState and mlflowState", () => {
     ["storageError", "error", "Error"],
     ["serverError", "error", "Error in zeta"],
     ["foreign", "ready", "Ready in zeta"],
-    ["migrate", "needs-attention", "Needs attention"],
+    ["migrate", "needs-attention", "Migration needed"],
     ["migrateRemove", "ready", "Ready in juntao-test"],
     ["incomplete", "needs-attention", "Needs attention"],
   ])("%s: the Overview reads %s, %s", (name, status, label) => {
@@ -98,7 +98,8 @@ describe("pipelinesState and mlflowState", () => {
     if (tabProject) {
       const tab = pipelinesState(s, tabProject, projects);
       expect(tab.status).toBe(overview.status);
-      if (!overview.label.includes(" of ")) expect(tab.label).toBe(overview.label.startsWith("Needs attention") || overview.label.startsWith("Error") && !overview.label.includes(" in ") ? `${overview.label} in ${tabProject}` : overview.label);
+      // A storage problem is the cluster's: the tab names no project for it either.
+      if (!overview.label.includes(" of ")) expect(tab.label).toBe(overview.label);
       expect(tab.unmanaged).toBe(overview.unmanaged);
       // The label already names the project: the link does not repeat it, and the Overview's is the tab's.
       if (overview.next?.kind === "open") {
@@ -177,5 +178,23 @@ describe("pipelinesState and mlflowState", () => {
     const starting: ResourcesStatus = { ...FIXTURES.storageOnly, pipelineServers: [{ deployed: true, ready: false, managedByTool: true, namespace: "a-test-project", name: "nightly-dspa", message: "Provisioning" }] };
     expect(pipelinesState(starting, "a-test-project", projects)).toMatchObject({ status: "setting-up", next: null });
     expect(setUpBlocked(pipelinesState(starting, "a-test-project", projects))).toMatch(/nothing left to set up/);
+  });
+});
+
+describe("The S3 storage on its own (its tab and its Overview row)", () => {
+  it("loading, not set up, ready, starting, broken, migration needed and someone else's", () => {
+    expect(storageState(null)).toMatchObject({ loading: true, project: null });
+    expect(storageState(FIXTURES.none)).toEqual({ status: "not-set-up", label: "Not set up", next: { kind: "set-up", label: "Set up S3 storage", setup: [{ kind: "setup-minio" }], reason: null }, project: null });
+    expect(storageState({ ...FIXTURES.storageOnly, minio: { ...storage, uiRoute: "https://admin" } })).toEqual({ status: "ready", label: "Ready", next: { kind: "open", label: "Open admin UI", href: "https://admin" }, project: null });
+    expect(storageState(FIXTURES.starting)).toMatchObject({ status: "setting-up", next: null });
+    expect(storageState(FIXTURES.storageError)).toMatchObject({ status: "error", label: "Error", next: { kind: "show-issue", part: "storage" } });
+    expect(storageState({ ...FIXTURES.none, legacyStorage: legacy("migrate") })).toMatchObject({ status: "needs-attention", label: "Migration needed", next: { kind: "migrate" } });
+    const blocked: ResourceState = { ...none, setupBlockedReason: "Namespace 'seaweedfs' exists but was not created by this tool." };
+    expect(storageState({ ...FIXTURES.none, minio: blocked })).toEqual({ status: "not-set-up", label: "Not set up", unmanaged: true, next: null, project: null });
+  });
+
+  it("Set up running from this page reads Setting up, with nothing to do", () => {
+    expect(storageState(FIXTURES.none, { ...IDLE, resAction: "setup-minio" })).toMatchObject({ status: "setting-up", next: null });
+    expect(storageState(FIXTURES.storageOnly, { ...IDLE, resAction: "teardown-minio" })).toMatchObject({ status: "deleting", next: null });
   });
 });

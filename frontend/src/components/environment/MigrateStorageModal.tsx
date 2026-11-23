@@ -17,7 +17,7 @@ import {
 } from "@patternfly/react-core";
 import type { LegacyStorageState } from "../../types";
 import { TooltipButton } from "../TooltipButton";
-import { S3_ENDPOINT, S3_NAMESPACE } from "./PipelinesTab";
+import { S3_ENDPOINT, S3_NAMESPACE } from "./StorageTab";
 import { MIGRATE_STEPS, type MigrateKind, type MigrateRun } from "./useMigrateStorage";
 import { StepProgress } from "./StepProgress";
 
@@ -91,7 +91,7 @@ const MigratePlan: React.FC<{ legacy: LegacyStorageState; confirmed: string[]; s
         </StackItem>
       )}
       <StackItem>
-        <Content component="p">Anything else that uses the old keys, such as your own S3 clients, needs the new ones: the S3 storage on the Pipelines tab shows them after the migration.</Content>
+        <Content component="p">Anything else that uses the old keys, such as your own S3 clients, needs the new ones: the S3 storage tab shows them after the migration.</Content>
       </StackItem>
       <StackItem>
         <Content component="p">Each pipeline server it moves restarts on the new storage; the others keep running. How long the copy takes depends on how much data there is. The old storage is kept: you delete it later, from the S3 storage&apos;s menu, once nothing else uses it.</Content>
@@ -112,7 +112,7 @@ const RemovePlan: React.FC<{ legacy: LegacyStorageState; deleteNamespace: boolea
         <Content component="p">Update anything this tool did not create that still uses the old storage, such as data connections, workbenches and other pipeline servers:</Content>
         <List>
           <ListItem>Endpoint: <code>{S3_ENDPOINT}</code> instead of <code>http://{legacy.endpoint}</code>.</ListItem>
-          <ListItem>Access key and secret key: the new ones, shown under S3 storage on the Pipelines tab. The old keys do not work on the new storage.</ListItem>
+          <ListItem>Access key and secret key: the new ones, shown on the S3 storage tab. The old keys do not work on the new storage.</ListItem>
           <ListItem>Bucket names and object paths are the same (pipeline artifacts stay in <code>pipelines</code>).</ListItem>
           <ListItem>Anything that still uses <code>{legacy.endpoint.split(":")[0]}</code> stops working after this step.</ListItem>
         </List>

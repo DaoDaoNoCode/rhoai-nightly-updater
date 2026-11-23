@@ -60,7 +60,7 @@ function renderAt(path: string) {
 
 const panel = () => screen.getByRole("tabpanel");
 /** Not one empty, missing or not-set-up word while the data that would say so is not in. */
-const NEGATIVE = /Not set up|No data science projects|No model of this tool yet|no ready chat model|Not published|of 5 ready/;
+const NEGATIVE = /Not set up|No data science projects|No model of this tool yet|no ready chat model|Not published|of 6 ready/;
 
 /** Picks a project in the tab's project picker. */
 async function chooseProject(name: string) {
@@ -87,7 +87,7 @@ describe("Environment loading: the Overview", () => {
     expect(screen.getByRole("tab", { name: "MaaS" })).toBeInTheDocument();
     const table = screen.getByRole("grid", { name: "Features" });
     expect(table).toHaveAttribute("aria-busy", "true");
-    for (const name of ["Pipelines", "MLflow", "Models", "Playground", "MaaS"]) {
+    for (const name of ["S3 storage", "Pipelines", "MLflow", "Models", "Playground", "MaaS"]) {
       expect(within(table).getByText(`Loading the state of ${name}`)).toBeInTheDocument();
     }
     expect(panel()).not.toHaveTextContent(NEGATIVE);
@@ -100,13 +100,13 @@ describe("Environment loading: the Overview", () => {
     expect(within(table).getAllByText("Not set up in any project", { selector: ".pf-v6-c-label *" })).toHaveLength(2);
     expect(within(table).getByText("Loading the state of Playground")).toBeInTheDocument();
     expect(within(table).getByText("Loading the state of MaaS")).toBeInTheDocument();
-    expect(panel()).not.toHaveTextContent(/of 5 ready/);
+    expect(panel()).not.toHaveTextContent(/of 6 ready/);
 
     await g.playground.send(playground);
     await g.maas.send(maas);
     expect(within(table).queryByText(/^Loading the state of/)).toBeNull();
     expect(table).toHaveAttribute("aria-busy", "false");
-    expect(panel()).toHaveTextContent("0 of 5 ready");
+    expect(panel()).toHaveTextContent("0 of 6 ready");
     expect(screen.getByRole("button", { name: /^Set up MaaS/ })).toBeInTheDocument();
   });
 
@@ -123,7 +123,8 @@ describe("Environment loading: the Overview", () => {
     await g.projects.send(projects);
     await g.status.send(status);
     expect(screen.queryByRole("heading", { name: "Can't load the environment" })).toBeNull();
-    expect(within(screen.getByRole("grid", { name: "Features" })).getByText("Not set up", { selector: ".pf-v6-c-label *" })).toBeInTheDocument();
+    // The S3 storage and MLflow.
+    expect(within(screen.getByRole("grid", { name: "Features" })).getAllByText("Not set up", { selector: ".pf-v6-c-label *" })).toHaveLength(2);
   });
 
   it("Refresh reads every status again and keeps showing the current states meanwhile", async () => {
@@ -142,17 +143,18 @@ describe("Environment loading: the Overview", () => {
     expect(g.maas.pending()).toHaveLength(1);
     const table = screen.getByRole("grid", { name: "Features" });
     expect(within(table).queryByText(/^Loading the state of/)).toBeNull();
-    expect(panel()).toHaveTextContent("0 of 5 ready");
+    expect(panel()).toHaveTextContent("0 of 6 ready");
     await g.status.send({ ...status, mlflow: { deployed: true, ready: true, managedByTool: true, uiRoute: "https://mlflow.example.com" } });
-    expect(panel()).toHaveTextContent("0 of 5 ready");
+    expect(panel()).toHaveTextContent("0 of 6 ready");
     await g.projects.send(projects);
-    expect(panel()).toHaveTextContent("1 of 5 ready");
+    expect(panel()).toHaveTextContent("1 of 6 ready");
   });
 });
 
 describe("Environment loading: the feature tabs", () => {
   it.each([
-    ["pipelines", "Pipelines", /^S3 storage/],
+    ["storage", "S3 storage", /^SeaweedFS/],
+    ["pipelines", "Pipelines", /^Pipeline server/],
     ["mlflow", "MLflow", /^MLflow server/],
     ["models", "Models", /^Inference gateway/],
   ])("%s: a Skeleton for the state and the parts until the status is in", async (tab, title, part) => {

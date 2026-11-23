@@ -74,7 +74,7 @@ export function useMigrateStorage(onFinished: () => void) {
         setRun((r) => (r ? { ...r, steps: { ...r.steps, [step.step]: { status: step.status, message: step.message } } } : r));
       },
       (success, error, apiError) => finish(success, success ? finalMessage : error || finalMessage || "The operation failed.", apiError?.errorCode),
-      () => finish(false, "The connection to the server was lost. The operation continues on the server; the S3 storage on the Pipelines tab shows the outcome when it ends.", "detached"),
+      () => finish(false, "The connection to the server was lost. The operation continues on the server; the S3 storage tab shows the outcome when it ends.", "detached"),
     );
   }, [onFinished]);
 
