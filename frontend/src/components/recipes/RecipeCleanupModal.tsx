@@ -160,7 +160,7 @@ export const RecipeCleanupModal: React.FC<{
                     <Stack hasGutter>
                       {stays.length > 0 ? (
                         <>
-                          <StackItem>This clean-up does not delete what the cluster shares or what is in a project the recipe did not create:</StackItem>
+                          <StackItem>This clean-up does not delete these:</StackItem>
                           <StackItem>
                             <List>{stays.map((s) => <ListItem key={s}>{s}</ListItem>)}</List>
                           </StackItem>

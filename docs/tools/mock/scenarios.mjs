@@ -596,6 +596,8 @@ scenarios["recipe-failed"] = (w) => {
 };
 scenarios["recipe-succeeded"] = (w) => {
   w.recipeRun = { run: F.recipeRun({ done: 8, current: "", state: "succeeded", stopReason: "Every step of dev is set up." }), running: false };
+  // What the run set up is there: MLflow, and the pipeline server in its project.
+  w.resources = { ...w.resources, mlflow: F.mlflowStates.running, pipelineServers: [...w.resources.pipelineServers, { ...F.pipelineServer, namespace: "recipe-dev", apiRoute: undefined, uiRoute: undefined }] };
 };
 scenarios["recipe-interrupted"] = (w) => {
   w.recipeRun = { run: F.recipeRun({ done: 3, pod: "rhoai-nightly-updater-6f7b8c9d5-q9m3z" }), running: false, interrupted: true };
