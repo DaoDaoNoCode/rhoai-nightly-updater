@@ -103,10 +103,13 @@ func WriteGatewayProjects(c *kube.Client, projects []string) error {
 	return writeGatewayRecord(c, gatewayRecord{Projects: projects})
 }
 
-// addedHere: project is recorded, and its namespace is the one this tool
-// added (the recorded UID, when there is one, is the live namespace's).
-// A namespace that cannot be read is not (fail closed: an entry that may
-// be someone else's is not taken off).
+// addedHere: project is recorded, and no other namespace than the one this
+// tool added has its name: the live namespace has the recorded UID (when
+// there is one), or there is none (deleted: the entry is still the tool's,
+// and releaseGoneGatewayProjects takes it off). A namespace of another UID
+// was made again since, so the entry is not the tool's. A namespace that
+// cannot be read is not (fail closed: an entry that may be someone else's
+// is not taken off).
 func (r gatewayRecord) addedHere(c *kube.Client, project string) bool {
 	if !slices.Contains(r.Projects, project) {
 		return false
@@ -116,7 +119,7 @@ func (r gatewayRecord) addedHere(c *kube.Client, project string) bool {
 		return true
 	}
 	meta, found, err := kube.ReadObjectMeta(c, rhoai.ClusterPath("v1", "namespaces", project))
-	return err == nil && found && meta.UID == uid
+	return err == nil && (!found || meta.UID == uid)
 }
 
 // recordGatewayProject records that this tool adds project to the list,

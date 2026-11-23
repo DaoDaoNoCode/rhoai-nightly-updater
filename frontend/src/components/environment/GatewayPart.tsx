@@ -125,7 +125,7 @@ const GoneProjects: React.FC<{ gw: InferenceGatewayState; reason: string | null;
           <Content component="small" className="pf-v6-u-text-color-subtle">
             {added.includes(p)
               ? <>Project {p} no longer exists; it is removed from the gateway at the next Models change.</>
-              : <>Project {p} no longer exists; this tool did not add it to the gateway, so it stays on the gateway&apos;s list until it is removed.</>}
+              : <>Project {p} no longer exists; this tool has no record that it added it to the gateway, so it stays on the gateway&apos;s list until it is removed.</>}
             {!readOnly && <>{" "}<Button variant="link" isInline isAriaDisabled={!!reason} aria-label={`Remove ${p} from the inference gateway`} onClick={() => onRemove(p)}>Remove</Button></>}
           </Content>
         </StackItem>

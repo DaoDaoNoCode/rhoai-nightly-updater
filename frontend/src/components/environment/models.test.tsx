@@ -481,7 +481,7 @@ describe("Models tab", () => {
     });
     renderAt("/test-resources?tab=models&project=dev");
     expect(await screen.findByText(/Project e2e-v300 no longer exists; it is removed from the gateway at the next Models change\./)).toBeInTheDocument();
-    expect(screen.getByText(/Project theirs no longer exists; this tool did not add it to the gateway/)).toBeInTheDocument();
+    expect(screen.getByText(/Project theirs no longer exists; this tool has no record that it added it to the gateway/)).toBeInTheDocument();
     expect(screen.queryByText("The gateway accepts projects that don't use it")).not.toBeInTheDocument();
     expect(screen.queryByText(/needs attention/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Remove e2e-v300 from the inference gateway" }));

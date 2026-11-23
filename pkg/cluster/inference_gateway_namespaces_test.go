@@ -483,3 +483,25 @@ func TestGatewayProjects_AreBoundToTheNamespaceUID(t *testing.T) {
 		t.Errorf("record kept the old project: %v", rec)
 	}
 }
+
+// A deleted project this tool added (its UID recorded) is still the tool's
+// entry: no namespace of another UID claims the name. The status names it as
+// added, so the Models tab says the next Models change removes it, not that
+// this tool did not add it.
+func TestGatewayProjects_ADeletedProjectTheToolAddedIsStillItsEntry(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.f.putJSON("/api/v1/namespaces/proj", `{"metadata":{"uid":"ns-1","labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	deleteFakeObject(mc, testModelPath)
+	deleteFakeObject(mc, "/api/v1/namespaces/proj")
+	st, err := GetResourcesStatus(mc.c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw := st.InferenceGateway
+	if strings.Join(gw.GoneProjects, ",") != "proj" || strings.Join(gw.AddedProjects, ",") != "proj" {
+		t.Fatalf("gone %v, added %v", gw.GoneProjects, gw.AddedProjects)
+	}
+}

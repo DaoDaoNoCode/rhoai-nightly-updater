@@ -133,6 +133,13 @@ Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#u
 
 ### Fixed
 
+- **A deleted project this tool added to the inference gateway reads as
+  this tool's.** When the project's namespace UID was recorded and the
+  project had been deleted, the Models tab said "this tool did not add
+  it". It now says the next Models change removes it, as it does; a
+  project made again under the name (another UID) is still not the tool's
+  entry. The other line now reads "this tool has no record that it added
+  it".
 - **The Environment page reads its status one request at a time.** After
   quick polling had stopped at 10 minutes, a later change that started
   settling again ran the quick polling beside the 45-second re-read, so two
