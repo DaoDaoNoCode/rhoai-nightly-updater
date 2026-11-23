@@ -133,6 +133,14 @@ Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#u
 
 ### Fixed
 
+- **An Unpublish that failed on the model's Gen AI studio label is
+  finished by Unpublish again.** When Unpublish routed the model back but
+  could not put back its `opendatahub.io/genai-asset` label and
+  `opendatahub.io/genai-use-case` annotation, the background check took the
+  publication for gone and dropped what Unpublish had to put back, so the
+  model stayed out of Gen AI studio's AI assets. The publication now stays
+  while the tool's model still lacks them: the row reads Partly published
+  and offers Unpublish, which puts them back.
 - **The MaaS tab shows what is on the cluster, not this tool's record.**
   A project deleted while its model was published left a "Needs attention:
   Partly published ... this tool's record of the publication still in

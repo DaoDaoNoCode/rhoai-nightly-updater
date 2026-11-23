@@ -1727,12 +1727,12 @@ func (r *maasStatusRun) modelRow(m LLMISvcObject, entry CatalogModel, v maasMode
 		default:
 			item.Message = fmt.Sprintf("Published; waiting (model reference %s, access %s, subscription %s)", kube.FirstNonEmpty(item.Phase, "pending"), kube.FirstNonEmpty(authPhase, "pending"), kube.FirstNonEmpty(subPhase, "pending"))
 		}
-	} else if left := maasLeftovers(c, m, recErr == nil && rec.IsPublished(m.Metadata.Namespace, m.Metadata.Name)); !found && len(left) > 0 {
+	} else if left, genAI := maasLeftovers(c, m, recErr == nil && rec.IsPublished(m.Metadata.Namespace, m.Metadata.Name)), recErr == nil && rec.IsPublished(m.Metadata.Namespace, m.Metadata.Name) && rec.genAIPending(MaaSPub{m.Metadata.Namespace, m.Metadata.Name}, m.Metadata); !found && (len(left) > 0 || genAI) {
 		// A publication undone half-way (live: Unpublish deleted the
 		// model reference, then failed on the model): Unpublish again
 		// finishes it, so the tab must still offer it.
 		item.Published, item.Deployed, item.Partly = true, true, true
-		item.Message = "Partly published: " + strings.Join(left, " and ") + " still in place. Unpublish to finish removing it."
+		item.Message = partlyUnpublishedText(left, genAI)
 	} else {
 		item.Message = "Not published"
 		if found {
@@ -1749,6 +1749,20 @@ func (r *maasStatusRun) modelRow(m LLMISvcObject, entry CatalogModel, v maasMode
 		item.MaaSOnlySetup = recorded.NoRoute
 	}
 	return item
+}
+
+// partlyUnpublishedText is the row of a publication undone half-way: what
+// is left of it (maasLeftovers), and genAI: the model is still out of Gen
+// AI studio's AI assets (MaaSRecord.genAIPending).
+func partlyUnpublishedText(left []string, genAI bool) string {
+	var parts []string
+	if len(left) > 0 {
+		parts = append(parts, strings.Join(left, " and ")+" still in place")
+	}
+	if genAI {
+		parts = append(parts, "the model not yet back in Gen AI studio's AI assets")
+	}
+	return "Partly published: " + strings.Join(parts, ", and ") + ". Unpublish to finish removing it."
 }
 
 // maasLeftovers names what is left on the cluster of a publication of the

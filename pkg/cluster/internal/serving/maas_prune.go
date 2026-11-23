@@ -42,8 +42,11 @@ import (
 // while project and model are there: no MaaSModelRef of this tool's, and
 // the model neither on the MaaS gateway nor routed through it (its
 // reference deleted outside the tool, or a publish that stopped before
-// it). Anything that cannot be read keeps the publication (fail closed:
-// it stays as it is, and the next run looks again).
+// it). Not gone either while the model of the tool still lacks the genai
+// label or annotation publish took off (an Unpublish that failed before it
+// put them back): its row offers Unpublish to finish. Anything that cannot
+// be read keeps the publication (fail closed: it stays as it is, and the
+// next run looks again).
 
 // maasGonePub is a publication that is gone, and why. projectGone: its
 // project no longer exists or is being deleted (nothing of the tool's is
@@ -92,6 +95,14 @@ func goneMaaSPublications(c *kube.Client, rec MaaSRecord) ([]maasGonePub, error)
 			out = append(out, maasGonePub{p, fmt.Sprintf("model %s in %s was deleted and made again since it was published", p.Model, p.Project), false, false})
 		default:
 			if left, err := maasPublicationLeft(c, model); err == nil && !left {
+				// An Unpublish that routed the model back but stopped
+				// before it put back the genai label or annotation is not
+				// finished: the record keeps what Unpublish again puts
+				// back on this model (fail closed while the models record
+				// cannot tell whether it is the tool's).
+				if rec.genAIPending(p, model.Metadata) && (modelsErr != nil || models.Owns(model.Metadata)) {
+					continue
+				}
 				out = append(out, maasGonePub{p, fmt.Sprintf("the MaaSModelRef of model %s in %s no longer exists", p.Model, p.Project), false, true})
 			}
 		}

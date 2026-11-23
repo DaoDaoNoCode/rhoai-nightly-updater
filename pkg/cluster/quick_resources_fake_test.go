@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -54,7 +55,7 @@ type resourceFake struct {
 	// between the tool's check and its write).
 	beforeServe func(method, path string)
 	// beforeRequest is beforeServe with the whole request (its query tells
-	// a server-side dry run from the write).
+	// a server-side dry run from the write; its body can be read again).
 	beforeRequest func(r *http.Request)
 	// failDryRun maps "METHOD /path" to an HTTP status to return for a
 	// server-side dry run (?dryRun=All) of that request.
@@ -325,6 +326,7 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 		f.beforeServe(r.Method, r.URL.Path)
 	}
 	if f.beforeRequest != nil {
+		r.Body = io.NopCloser(bytes.NewReader(body))
 		f.beforeRequest(r)
 	}
 	f.mu.Lock()

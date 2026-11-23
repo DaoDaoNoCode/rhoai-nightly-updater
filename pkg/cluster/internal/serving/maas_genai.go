@@ -109,3 +109,15 @@ func restoreModelGenAI(c *kube.Client, project, name string, g maasGenAI) error 
 	}
 	return nil
 }
+
+// genAIPending: publish took the genai label or annotation off the model
+// of p (recorded) and it is still off: Unpublish has not put it back.
+func (r MaaSRecord) genAIPending(p MaaSPub, meta kube.ObjectMeta) bool {
+	g, ok := r.GenAI[p.Key()]
+	if !ok {
+		return false
+	}
+	_, hasAsset := meta.Labels[genAIAssetLabel]
+	_, hasUseCase := meta.Annotations[GenAIUseCaseAnnotation]
+	return (g.HadAsset && !hasAsset) || (g.HadUseCase && !hasUseCase)
+}
