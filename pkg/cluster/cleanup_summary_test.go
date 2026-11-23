@@ -8,10 +8,10 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// F3: the aggregate clean-up message reflects what each stage actually did.
-// Handlers for components and recipe projects supply wording that fits the
-// situation—something kept, a namespace already absent—and must not say
-// "Deleted" when nothing was removed.
+// F3: the rolled-up cleanup message should match what happened in every phase.
+// Component and recipe-project handlers choose phrasing for the case at hand—
+// e.g. retained resources or a namespace that was already missing—and must not
+// claim "Deleted" when no removal occurred.
 func TestCleanUp_SaysWhatEachPartDid(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
@@ -43,7 +43,7 @@ func TestCleanUp_SaysWhatEachPartDid(t *testing.T) {
 			cleanupComponents = func(*Client, []string) (*types.OperationResponse, error) {
 				return &types.OperationResponse{Success: true, Message: tc.components}, nil
 			}
-			cleanupProject = func(*Client, string, []string) (*types.OperationResponse, error) {
+			cleanupProject = func(*Client, string, string, []string) (*types.OperationResponse, error) {
 				return &types.OperationResponse{Success: true, Message: tc.project}, nil
 			}
 			_, c := newResourceFake(t)
@@ -55,7 +55,7 @@ func TestCleanUp_SaysWhatEachPartDid(t *testing.T) {
 	}
 }
 
-// If clean-up aborts once a step has only reported status, the response names that step.
+// When cleanup stops after a step has only emitted status, the reply identifies that step.
 func TestCleanUp_StoppedNamesWhatThePartsSaid(t *testing.T) {
 	ran := fakeTeardowns(t, map[string]*types.OperationResponse{"mlflow": {Success: false, Message: "MLflow is still being deleted.", ErrorCode: "in_progress"}})
 	fakeRecipeProjectTeardown(t, ran, nil)
@@ -70,11 +70,10 @@ func TestCleanUp_StoppedNamesWhatThePartsSaid(t *testing.T) {
 	}
 }
 
-// F4: cleaning everything may target multiple recipe projects. Every project is
-// validated before deletions run; confirmations are scoped per project (a workbench
-// acknowledged in one namespace does not satisfy confirmation for the same name in
-// another), and any project still needing confirmation appears on its own step so the
-// client prompts separately for each.
+// F4: a full cleanup can hit several recipe projects. Validation runs per project
+// ahead of any deletion; confirmation is not shared across namespaces (confirming a
+// workbench in one namespace does not cover the same name elsewhere). Projects that
+// still lack confirmation surface as distinct steps so the UI can ask once per project.
 func TestCleanUp_SeveralRecipeProjects(t *testing.T) {
 	ran := fakeTeardowns(t, nil)
 	holds := map[string][]string{"a": {"Notebook wb"}, "b": {"Notebook wb", "PersistentVolumeClaim data"}}
@@ -89,12 +88,18 @@ func TestCleanUp_SeveralRecipeProjects(t *testing.T) {
 	if len(*ran) != 0 || len(f.mutations()) != 0 {
 		t.Fatalf("ran %v, changed %v", *ran, f.mutations())
 	}
-	if len(events) != 1 || events[0].Step != "recipe-project:b" || events[0].Detail != "Notebook wb\nPersistentVolumeClaim data" {
+	// Each project appears complete in the event lists—including a, once fully
+	// confirmed—and the browser overwrites prior confirmations from those lists.
+	if len(events) != 2 || events[0].Step != "recipe-project:a" || events[0].ErrorCode != "confirm_project_contents" || events[0].Detail != "Notebook wb" ||
+		events[1].Step != "recipe-project:b" || events[1].Detail != "Notebook wb\nPersistentVolumeClaim data" {
 		t.Fatalf("events %+v", events)
 	}
+	if strings.Contains(res.Message, "Project a") {
+		t.Errorf("the refusal names a, whose contents were confirmed: %q", res.Message)
+	}
 
-	// After both projects are confirmed: resources inside projects go first,
-	// then each project's confirmation pass, then component teardown.
+	// With both projects confirmed, teardown order is: in-project resources,
+	// per-project confirmation stages, then component cleanup.
 	events = nil
 	req.ConfirmProjectContents["b"] = []string{"Notebook wb", "PersistentVolumeClaim data"}
 	req.Components = []string{"aipipelines"}

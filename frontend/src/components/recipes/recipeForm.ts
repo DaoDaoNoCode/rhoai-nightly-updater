@@ -2,34 +2,34 @@ import type { CleanupRequest } from "../../services/api";
 import type { EnvironmentRecipe, RecipeRun, RecipeRunStep, ResourceState, ResourcesStatus } from "../../types";
 import { isTerminating } from "../environment/resourceRow";
 
-/** The schema version this UI writes (pkg/cluster internal/recipe APIVersion). */
+/** apiVersion string produced here for pkg/cluster internal/recipe. */
 export const RECIPE_API_VERSION = "rhoai-nightly-updater/v1alpha1";
 export const RECIPE_KIND = "EnvironmentRecipe";
 
-/** The catalog repository a recipe's image must be a build of, pinned by digest (internal/recipe fbcImage). */
+/** Required catalog origin for digest-pinned recipe images (internal/recipe fbcImage). */
 export const RECIPE_IMAGE_PREFIX = "quay.io/rhoai/rhoai-fbc-fragment";
 
-/** A Kubernetes namespace name (DNS-1123 label), as the backend checks it. */
+/** DNS-1123 label pattern used when validating Kubernetes namespace names on the server. */
 const DNS1123_LABEL = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
 const DIGEST_IMAGE = /^quay\.io\/rhoai\/rhoai-fbc-fragment(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}$/;
 
 export type BuildChoice = "latest" | "tag" | "image";
 export type ProjectChoice = "create" | "existing" | "none";
 
-/** What the editor holds: the MVP part of a recipe (phase 1 of environment recipes). */
+/** In-editor representation of the recipe MVP (environment recipes phase 1). */
 export interface RecipeForm {
   name: string;
   build: BuildChoice;
   tag: string;
   image: string;
-  /** keep: an installed RHOAI stays as it is; update: it is updated to the build. */
+  /** keep preserves the current RHOAI install; update aligns it with the chosen build. */
   ifInstalled: "keep" | "update";
   createDSC: boolean;
   project: ProjectChoice;
-  /** The project to create. */
+  /** Identifier assigned when creating a new project. */
   newProject: string;
   displayName: string;
-  /** The data science project to use. */
+  /** Selected existing data science project. */
   existingProject: string;
   pipelines: boolean;
   mlflow: boolean;
@@ -50,7 +50,7 @@ export const DEFAULT_RECIPE_FORM: RecipeForm = {
   mlflow: true,
 };
 
-/** The editor's form for a recipe (the last run's), keeping what the editor does not show at its default. */
+/** Map a stored recipe into editor fields; UI-hidden values remain at defaults. */
 export function formFromRecipe(r: EnvironmentRecipe): RecipeForm {
   const b = r.spec.rhoai.build;
   const project = r.spec.project;
@@ -70,7 +70,7 @@ export function formFromRecipe(r: EnvironmentRecipe): RecipeForm {
   };
 }
 
-/** The recipe the form describes, as the backend reads it. */
+/** Serialize the form into the EnvironmentRecipe shape the backend expects. */
 export function recipeFromForm(f: RecipeForm): EnvironmentRecipe {
   const build = f.build === "latest" ? "latest" as const : f.build === "tag" ? { tag: f.tag } : { image: f.image.trim() };
   const project = f.project === "create"
@@ -96,7 +96,7 @@ export function recipeFromForm(f: RecipeForm): EnvironmentRecipe {
   };
 }
 
-/** The form's fields with a problem, as the field's error text. The backend checks the same again. */
+/** Invalid fields keyed to their client-side message; server validation matches. */
 export type FormProblems = Partial<Record<"name" | "tag" | "image" | "newProject" | "existingProject", string>>;
 
 function nameProblem(name: string, what: string): string | undefined {
@@ -120,17 +120,17 @@ export function formProblems(f: RecipeForm): FormProblems {
   return p;
 }
 
-/** Why Pipelines cannot be turned on, or null. */
+/** Blocking reason for enabling Pipelines, or null when allowed. */
 export function pipelinesReason(f: RecipeForm): string | null {
   return f.project === "none" ? "Pipelines needs a project: choose one under Project." : null;
 }
 
-/** Why the recipe cannot go without a project, or null. */
+/** Reason the recipe must have a project, or null when omission is fine. */
 export function noProjectReason(f: RecipeForm): string | null {
   return f.pipelines ? "Pipelines needs a project. Turn Pipelines off to run without one." : null;
 }
 
-/** "under a minute", "1 minute", "7 minutes", "1 hour 5 minutes". */
+/** Seconds rendered as phrases like "under a minute", "7 minutes", or "1 hour 5 minutes". */
 export function formatDuration(seconds: number): string {
   if (seconds < 60) return "under a minute";
   const minutes = Math.round(seconds / 60);
@@ -140,23 +140,23 @@ export function formatDuration(seconds: number): string {
   return `${h} ${h === 1 ? "hour" : "hours"}${m ? ` ${m} ${m === 1 ? "minute" : "minutes"}` : ""}`;
 }
 
-/** "The run usually takes 10 minutes, at most 53 minutes." */
+/** Full sentence comparing typical versus maximum run duration. */
 export function runTakes(typicalSeconds: number, maxSeconds: number): string {
   return `The run usually takes ${formatDuration(typicalSeconds)}, at most ${formatDuration(maxSeconds)}.`;
 }
 
-/** "Usually 7 minutes, up to 15 minutes.": a step still to come. */
+/** Pending-step label: capitalized variant of usually(). */
 export function usuallySentence(typicalSeconds: number, maxSeconds: number): string {
   const u = usually(typicalSeconds, maxSeconds);
   return `${u[0].toUpperCase()}${u.slice(1)}.`;
 }
 
-/** "usually 7 minutes, up to 15 minutes". */
+/** Inline phrase: typical duration and upper bound without leading capitalization. */
 export function usually(typicalSeconds: number, maxSeconds: number): string {
   return `usually ${formatDuration(typicalSeconds)}, up to ${formatDuration(maxSeconds)}`;
 }
 
-/** Elapsed time as m:ss ("12:05"), or h:mm:ss from an hour. */
+/** Wall-clock display for elapsed ms: m:ss below one hour, otherwise h:mm:ss. */
 export function formatClock(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
   const h = Math.floor(total / 3600);
@@ -165,25 +165,23 @@ export function formatClock(ms: number): string {
   return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
 }
 
-/** The step a resume continues at: the first one that is not set up, or null when all are. */
+/** Resume target: earliest step neither successful nor skipped; null if the run finished cleanly. */
 export function resumeStep(run: RecipeRun): RecipeRunStep | null {
   return run.steps.find((s) => s.status !== "success" && s.status !== "skipped") ?? null;
 }
 
-/** One part Clean up can delete for a recipe run. */
+/** Selectable cleanup slice for a recipe run. */
 export interface RecipeCleanupPart {
-  /** The clean-up stream's step ID (pkg/cluster CleanupStepID), or "components". */
+  /** pkg/cluster CleanupStepID from the cleanup stream, or "components". */
   id: string;
   title: string;
 }
 
 /**
- * What Clean up can delete for a run, in the clean-up's own order: what the
- * backend's clean-up request `ready` names, the parts that are only the
- * run's: the project the recipe created (its pipeline server goes with it)
- * and the DataScienceCluster components it turned on. The S3 storage,
- * MLflow and a pipeline server in a project the recipe did not create are
- * never offered (leftInPlace names them).
+ * Ordered cleanup options for a run: entries named in the backend `ready` request,
+ * limited to run-owned assets—the recipe-created project (pipeline server included)
+ * and DataScienceCluster components the run enabled. Shared S3 storage, MLflow, and
+ * pipeline servers outside recipe-created projects are omitted (see leftInPlace).
  */
 export function cleanupParts(ready: CleanupRequest | undefined): RecipeCleanupPart[] {
   const parts: RecipeCleanupPart[] = [];
@@ -193,15 +191,16 @@ export function cleanupParts(ready: CleanupRequest | undefined): RecipeCleanupPa
 }
 
 /**
- * The clean-up request for the chosen parts: the backend's request for
- * what the run created (`ready`), without the parts the user left out,
- * and with what the project holds once the user confirmed it.
+ * Build the cleanup payload for user-selected parts: start from backend `ready`,
+ * drop unchecked items, and attach confirmed project contents after review.
  */
 export function cleanupRequest(ready: CleanupRequest | undefined, chosen: ReadonlySet<string>, confirmed: Record<string, string[]> = {}): CleanupRequest {
   const req: CleanupRequest = {};
   const projects = (ready?.recipeProjects ?? []).filter((p) => chosen.has(`recipe-project:${p}`));
   if (projects.length > 0) {
     req.recipeProjects = projects;
+    // Project UIDs captured during review; without them the backend rejects the entry.
+    req.recipeProjectUIDs = Object.fromEntries(projects.map((p) => [p, ready?.recipeProjectUIDs?.[p] ?? ""]));
     const confirm = Object.fromEntries(projects.filter((p) => (confirmed[p] ?? []).length > 0).map((p) => [p, confirmed[p]]));
     if (Object.keys(confirm).length > 0) req.confirmProjectContents = confirm;
   }
@@ -210,10 +209,9 @@ export function cleanupRequest(ready: CleanupRequest | undefined, chosen: Readon
 }
 
 /**
- * What the run set up that this Clean up leaves in place, as the cluster
- * shows it now (`status`, GET /api/resources/status): the S3 storage and
- * MLflow, which the whole cluster shares, and the pipeline server in the
- * run's project when that project is not deleted with this request.
+ * Resources the run provisioned but this cleanup keeps, per current cluster
+ * status (GET /api/resources/status): cluster-wide S3 and MLflow, plus the
+ * pipeline server in the run project when that project is not part of the delete request.
  */
 export function leftInPlace(status: ResourcesStatus, run: RecipeRun, req: CleanupRequest): string[] {
   const up = (r: ResourceState | null | undefined) => !!r?.deployed && !isTerminating(r);

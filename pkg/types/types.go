@@ -1789,10 +1789,16 @@ type CleanupRequest struct {
 	// parts that live in it and before the components: only while it
 	// carries the recipe's label and the UID the recipe recorded.
 	RecipeProjects []string `json:"recipeProjects,omitempty"`
+	// RecipeProjectUIDs maps each of RecipeProjects to the UID of the
+	// project the user reviewed (RecipeOwnedProject.UID): it is deleted
+	// only while the record and the namespace still have that UID, so one
+	// deleted and made again since is kept. Every recipe project needs one.
+	RecipeProjectUIDs map[string]string `json:"recipeProjectUIDs,omitempty"`
 	// ConfirmProjectContents maps a recipe project to what it still holds
 	// that this tool did not create ("Pod x", "PersistentVolumeClaim y",
 	// ...), as a refusal listed them: a project is deleted with them only
-	// when every one is confirmed for that project.
+	// when every one is confirmed for that project. A refusal lists all of
+	// them, for every project that has any, confirmed or not.
 	ConfirmProjectContents map[string][]string `json:"confirmProjectContents,omitempty"`
 }
 

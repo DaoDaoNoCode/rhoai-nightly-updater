@@ -18,12 +18,12 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// Project namespaces owned by recipes.
+// Recipe-owned OpenShift/Kubernetes project namespaces.
 //
-// Ordinarily the updater does not provision projects; the sole case where it
-// does is a recipe whose spec.project.mode is create. Provisioning follows the
-// dashboard Create project flow using the signed-in user's token so the
-// cluster project template and the caller's admin binding take effect:
+// By default this updater never creates projects; it only does when a recipe
+// sets spec.project.mode to create. Creation tracks the dashboard's Create
+// project path and uses the signed-in user's token so cluster templates and
+// the caller's admin binding apply as they would in the UI:
 //
 //   - odh-dashboard frontend/src/api/k8s/projects.ts createProject (main at
 //     7a6f65a, 2026-11-21) creates a ProjectRequest (project.openshift.io/v1,
@@ -35,37 +35,37 @@ import (
 //     kueue.openshift.io/managed=true unless the OdhDashboardConfig sets
 //     disableKueue. It refuses names starting with openshift or kube.
 //
-// Label application mirrors the dashboard: the Kueue tag appears only when
-// dashboard logic would add it (kueueManaged reads OdhDashboardConfig); the
-// updater also stamps its managed-by label and projectAnnotation with the
-// recipe name.
+// Labels follow dashboard rules: kueue.openshift.io/managed is applied only
+// when the dashboard would (kueueManaged consults OdhDashboardConfig); the
+// updater additionally sets managed-by and projectAnnotation to the recipe
+// name.
 //
-// Name and UID from the ProjectRequest response land in the snapshot ConfigMap
-// under projectRecordKey before labeling, so an interrupted run still knows
-// ownership. Labeling uses a JSON patch whose first op tests that UID, avoiding
-// labels on a re-created namespace with the same name. Clean up removes the
-// project only when the UID, tool label, and recipe annotation still match,
-// deletion is not in progress, and listable leftovers are absent or user-
+// The ProjectRequest's name and UID are persisted in the snapshot ConfigMap at
+// projectRecordKey ahead of labeling, so a partial run still remembers
+// ownership. Labels go on via JSON patch with an initial UID test, which
+// prevents tagging a namespace recreated under the same name. Teardown deletes
+// the project only if UID, tool label, and recipe annotation still agree,
+// deletion is not underway, and anything listable inside is gone or explicitly
 // confirmed (DeleteProject).
 const (
 	projectAnnotation = "rhoai-nightly-updater/recipe"
-	// dashboardProjectLabel marks odh-dashboard data-science projects
-	// (KnownLabels.DASHBOARD_RESOURCE; envkit.DSProjects selects on it).
+	// dashboardProjectLabel is the odh-dashboard data-science project marker
+	// (KnownLabels.DASHBOARD_RESOURCE; envkit.DSProjects filters on it).
 	dashboardProjectLabel = "opendatahub.io/dashboard"
-	// kueueProjectLabel matches odh-dashboard KnownLabels.KUEUE_MANAGED.
+	// kueueProjectLabel is the same key as odh-dashboard KnownLabels.KUEUE_MANAGED.
 	kueueProjectLabel = "kueue.openshift.io/managed"
 
 	projectRecordKey     = "recipeProject"
 	projectRecordManager = "rhoai-nightly-updater-recipe-projects"
-	// maxRecordedProjects bounds the record.
+	// maxRecordedProjects caps how many projects the snapshot retains.
 	maxRecordedProjects = 50
 )
 
-// ErrorCodeConfirmContents is the errorCode of a project clean-up that
-// needs the user to confirm what the project still holds.
+// ErrorCodeConfirmContents is returned when project teardown must have the
+// user acknowledge remaining contents before deletion proceeds.
 const ErrorCodeConfirmContents = "confirm_project_contents"
 
-// projectRecord is the snapshot key's value.
+// projectRecord is what gets stored under the snapshot key.
 type projectRecord struct {
 	Projects []types.RecipeOwnedProject `json:"projects"`
 }
@@ -99,7 +99,7 @@ func writeProjectRecord(c *kube.Client, rec projectRecord) error {
 	return nil
 }
 
-// recorded returns the record of project name.
+// recorded looks up the stored entry for project name, if any.
 func (r projectRecord) recorded(name string) (types.RecipeOwnedProject, bool) {
 	for _, p := range r.Projects {
 		if p.Name == name {
@@ -109,27 +109,27 @@ func (r projectRecord) recorded(name string) (types.RecipeOwnedProject, bool) {
 	return types.RecipeOwnedProject{}, false
 }
 
-// with is r with p recorded (replacing a record of the same name).
+// with copies r but stores p, dropping any prior entry with p's name.
 func (r projectRecord) with(p types.RecipeOwnedProject) projectRecord {
 	out := projectRecord{Projects: slices.DeleteFunc(slices.Clone(r.Projects), func(o types.RecipeOwnedProject) bool { return o.Name == p.Name })}
 	out.Projects = append(out.Projects, p)
 	return out
 }
 
-// without is r without a record of name.
+// without returns r with the entry for name removed.
 func (r projectRecord) without(name string) projectRecord {
 	return projectRecord{Projects: slices.DeleteFunc(slices.Clone(r.Projects), func(o types.RecipeOwnedProject) bool { return o.Name == name })}
 }
 
 func namespacePath(name string) string { return rhoai.ClusterPath("v1", "namespaces", name) }
 
-// refusedProjectName says why a recipe must not create (or delete) project
-// name, "" when it may: a name of Kubernetes, OpenShift, Red Hat products
-// or the tool's storage (reservedProjectName), the updater's own
-// namespace, the RHOAI operator's, and RHOAI's applications and monitoring
-// namespaces as the DSCInitialization names them. When the
-// DSCInitialization cannot be read it returns the error (fail closed);
-// without one RHOAI has no such namespace yet.
+// refusedProjectName yields a reason a recipe cannot create or delete project
+// name, or "" when allowed. Blocked names include platform and product
+// reservations (reservedProjectName), this updater's namespace, the RHOAI
+// operator namespace, and applications/monitoring namespaces from
+// DSCInitialization. If DSCInitialization cannot be read the error is
+// returned (fail closed); when none exists RHOAI may not have those namespaces
+// yet.
 func refusedProjectName(c *kube.Client, name string) (string, error) {
 	switch {
 	case reservedProjectName(name):
@@ -151,17 +151,17 @@ func refusedProjectName(c *kube.Client, name string) (string, error) {
 	return "", nil
 }
 
-// projectFix: the recipe's spec.project is to change (or, for a project
-// being deleted, to wait).
+// projectFix points the user at changing spec.project—or waiting if deletion
+// is still in flight.
 func projectFix() *types.RecipeFix { return fixAt(types.RecipeFixProjectForeign, "") }
 
-// foreignProjectMessage refuses a project the recipe did not create.
+// foreignProjectMessage explains that an existing project was not recipe-created.
 func foreignProjectMessage(name string) string {
 	return fmt.Sprintf("Project %s exists and was not created by a recipe. Choose another name, or set project.mode: existing to use it as it is. Nothing was changed.", name)
 }
 
-// projectFound is a project as checked: the namespace's metadata, and
-// whether the recipe created it (its UID is recorded).
+// projectFound captures namespace metadata from a lookup plus whether the
+// recipe owns it (recorded UID matches).
 type projectFound struct {
 	meta  kube.ObjectMeta
 	found bool
@@ -184,25 +184,25 @@ func findProject(c *kube.Client, name string) (projectFound, projectRecord, erro
 	return p, rec, nil
 }
 
-// complete reports whether a project the recipe created carries every
-// label and annotation the recipe sets.
+// complete is true when a recipe-owned project has all labels and annotations
+// this step applies.
 func (p projectFound) complete() bool {
 	return p.meta.HasToolLabel() && p.meta.Labels[dashboardProjectLabel] == "true" && p.meta.Annotations[projectAnnotation] != ""
 }
 
-// deletable reports whether Clean up may delete a project found as p: the
-// recipe's (recorded UID), with the tool's label and the recipe
-// annotation, which only a writer of the namespace (not the
-// ServiceAccount, which can write the record) can set.
+// deletable is true when Clean up may remove p: recipe ownership (recorded UID),
+// the tool managed-by label, and the recipe annotation—markers only a
+// namespace writer can set, not the ServiceAccount that owns the snapshot
+// record.
 func (p projectFound) deletable() bool {
 	return p.found && p.ours && p.meta.HasToolLabel() && p.meta.Annotations[projectAnnotation] != ""
 }
 
-// checkProjectStep is the project step's check. A project of mode existing
-// must be a data science project of the user's; the recipe owns nothing of
-// it. A project of mode create is done when the recipe created it (its UID
-// is recorded) and it carries the labels; it is refused when it is someone
-// else's, is being deleted, or has a reserved name.
+// checkProjectStep validates the project portion of a recipe. Mode existing
+// requires an existing user data-science project with no recipe ownership.
+// Mode create succeeds once the recipe-created namespace (recorded UID) has
+// required labels; it blocks on foreign namespaces, terminating projects, or
+// reserved names.
 func checkProjectStep(c *kube.Client, s *State) (Check, error) {
 	p := s.Recipe.Spec.Project
 	if p == nil {
@@ -232,8 +232,8 @@ func checkProjectStep(c *kube.Client, s *State) (Check, error) {
 	}
 	switch {
 	case !found.found:
-		// Gone (or never made): a project a run recorded earlier is not
-		// this one; it is created again.
+		// Missing (or never existed): an earlier recorded project is not
+		// present; creation will run again.
 		s.Project = nil
 		return Check{}, nil
 	case !found.ours:
@@ -243,16 +243,16 @@ func checkProjectStep(c *kube.Client, s *State) (Check, error) {
 	}
 	s.Project = &types.RecipeProjectRef{Name: p.Name, UID: found.meta.UID, Owned: true}
 	if !found.complete() {
-		return Check{}, nil // the labels are set again
+		return Check{}, nil // labels will be reconciled on ensure
 	}
 	return Check{Done: true, Reason: fmt.Sprintf("Project %s was created by a recipe.", p.Name)}, nil
 }
 
-// EnsureProject creates the recipe's project (mode create) as the
-// dashboard does, with the signed-in user's token (see the package's notes
-// above), records it, and labels it. A project the recipe created before
-// keeps its UID and gets its labels set again; any other refuses (fail
-// closed: checkProjectStep's rules).
+// EnsureProject provisions a mode-create project like the dashboard, using the
+// signed-in user's token (see package comment), persists ownership, and
+// applies labels. Previously created recipe projects keep their UID and only
+// need label reconciliation; anything else is rejected per checkProjectStep
+// (fail closed).
 func EnsureProject(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	p := s.Recipe.Spec.Project
 	fail := func(msg, code string) (*types.OperationResponse, error) {
@@ -271,14 +271,14 @@ func EnsureProject(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (
 		return fail("The recipe does not create its project.", "validation")
 	}
 	name := p.Name
-	// The dashboard's Kueue choice, before anything is created.
+	// Resolve whether Kueue labeling matches dashboard settings before create.
 	kueue, err := kueueManaged(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Cannot read the dashboard's settings to label project %s as the dashboard does: %v. Nothing was changed.", name, err), kube.ErrorCodeOr(err, "prerequisites"))
 	}
 	var uid string
 	if s.Project != nil && s.Project.Owned && s.Project.UID != "" {
-		uid = s.Project.UID // created before (its UID recorded); only its labels are missing
+		uid = s.Project.UID // already created and recorded; labels may be incomplete
 	} else {
 		emit(types.UpdateStepEvent{Step: StepProject, Status: "running", Message: fmt.Sprintf("Creating project %s...", name)})
 		created, err := requestProject(c, name, p.DisplayName, s.Recipe.Metadata.Description)
@@ -288,11 +288,10 @@ func EnsureProject(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (
 		if err != nil {
 			return fail(fmt.Sprintf("Creating project %s failed: %v. Nothing was changed.", name, err), kube.ErrorCodeOr(err, "prerequisites"))
 		}
-		// The UID of the Project the API server answered the request with
-		// (openshift-apiserver projectrequest/delegated Create returns the
-		// project it created, read by name in the same request): the
-		// identity the record, the label patch's test and Clean up's
-		// precondition all use.
+		// UID from the Project in the ProjectRequest response (delegated Create
+		// returns the new project, fetched by name in the same call)—the
+		// identifier used in the snapshot, the label patch UID test, and
+		// teardown preconditions.
 		uid = created.UID
 		if uid == "" {
 			return fail(fmt.Sprintf("Project %s was created, but the API server's answer has no UID, so it is not recorded as the recipe's and Clean up will not delete it. Delete it in the console, then run the recipe again.", name), "prerequisites")
@@ -455,21 +454,27 @@ func setMapOps(path string, absent bool, entries map[string]string) []kube.JSONP
 }
 
 // ProjectTeardownProblem says why Clean up does not delete recipe project
-// name now, with its errorCode, or "" when it may: the project must be
-// recorded as a recipe's with its current UID, carry the tool's label, and
-// hold nothing the tool did not create that the user did not confirm
+// name now, with its errorCode, or "" when it may: the project must be the
+// one the user reviewed (uid, the UID the browser showed: the record and
+// the namespace both still have it), carry the tool's label, and hold
+// nothing the tool did not create that the user did not confirm
 // (projectLeftovers). A project that is gone, or being deleted, needs
 // nothing. A read that fails refuses (fail closed). CleanUp runs it
-// before any part, and DeleteProject again just before the delete. With
-// ErrorCodeConfirmContents it also returns what the user has not confirmed,
-// as confirmProjectContents takes it.
-func ProjectTeardownProblem(c *kube.Client, name string, confirmed []string) (string, string, []string, error) {
+// before any part, and DeleteProject again just before the delete.
+// Whenever it lists the project's leftovers it also returns all of them,
+// confirmed or not, as confirmProjectContents takes them: a refusal names
+// the unconfirmed ones, and the browser replaces its confirmation with the
+// whole list.
+func ProjectTeardownProblem(c *kube.Client, name, uid string, confirmed []string) (string, string, []string, error) {
 	why, err := refusedProjectName(c, name)
 	if err != nil {
 		return "", "", nil, err
 	}
 	if why != "" {
 		return why + " Clean up does not delete it.", "validation", nil, nil
+	}
+	if uid == "" {
+		return fmt.Sprintf("The clean-up does not say which project %s you reviewed (its UID), so Clean up does not delete it. Reload the page and try again.", name), "validation", nil, nil
 	}
 	found, rec, err := findProject(c, name)
 	if err != nil {
@@ -479,10 +484,10 @@ func ProjectTeardownProblem(c *kube.Client, name string, confirmed []string) (st
 	switch {
 	case !recorded:
 		return fmt.Sprintf("Project %s was not created by a recipe (there is no record of it), so Clean up does not delete it.", name), "validation", nil, nil
+	case r.UID != uid || (found.found && found.meta.UID != uid):
+		return fmt.Sprintf("Project %s is not the one you reviewed: it was deleted and made again since, so Clean up does not delete it. Reload the page to see the project there now.", name), "prerequisites", nil, nil
 	case !found.found || found.meta.Terminating():
 		return "", "", nil, nil
-	case found.meta.UID != r.UID:
-		return fmt.Sprintf("Project %s is not the one a recipe created (it was deleted and made again), so Clean up does not delete it.", name), "prerequisites", nil, nil
 	case !found.deletable():
 		return fmt.Sprintf("Project %s no longer carries this tool's label and the recipe annotation, so Clean up does not delete it.", name), "prerequisites", nil, nil
 	}
@@ -497,9 +502,9 @@ func ProjectTeardownProblem(c *kube.Client, name string, confirmed []string) (st
 		}
 	}
 	if len(unconfirmed) > 0 {
-		return fmt.Sprintf("Project %s still holds what this tool did not create: %s. Deleting the project deletes them too; confirm them to go ahead.", name, strings.Join(unconfirmed, ", ")), ErrorCodeConfirmContents, unconfirmed, nil
+		return fmt.Sprintf("Project %s still holds what this tool did not create: %s. Deleting the project deletes them too; confirm them to go ahead.", name, strings.Join(unconfirmed, ", ")), ErrorCodeConfirmContents, left, nil
 	}
-	return "", "", nil, nil
+	return "", "", left, nil
 }
 
 // ProjectLeftovers lists what is in recipe project name that this tool did
@@ -517,6 +522,15 @@ func ProjectLeftovers(c *kube.Client, name string) ([]string, error) {
 // DSPA as owner of what it creates) and the pods of the tool's models
 // (KServe's part-of and name labels) are left out. A kind whose API is not
 // served has none. A read that fails is returned (fail closed).
+//
+// The trust model: what leaves an object out is a label or field that an
+// editor of the project can set (the tool's label, dspa=<name>, KServe's
+// part-of and name labels on a pod of the tool's model). These are
+// trusted: whoever forges one on an object can already delete that
+// object, so the forgery only lets this tool delete, with the project,
+// the forger's own object without asking. Nothing else in the project is
+// listed either (Secrets, ConfigMaps, Deployments, ...): it goes with the
+// project unlisted.
 func projectLeftovers(c *kube.Client, ns string) ([]string, error) {
 	toolDSPAs := map[string]bool{}
 	toolUIDs := map[string]bool{}
@@ -585,15 +599,16 @@ func projectLeftovers(c *kube.Client, ns string) ([]string, error) {
 }
 
 // DeleteProject is Clean up's part for a recipe project: it deletes the
-// namespace with its recorded UID as a precondition (kube.DeleteWithUID),
-// after ProjectTeardownProblem allows it, and forgets the record. A project
+// namespace with the UID the user reviewed (uid, which the record also
+// holds) as a precondition (kube.DeleteWithPreconditions), after
+// ProjectTeardownProblem allows it, and forgets the record. A project
 // that is gone or being deleted only loses its record.
-func DeleteProject(c *kube.Client, name string, confirmed []string) (*types.OperationResponse, error) {
+func DeleteProject(c *kube.Client, name, uid string, confirmed []string) (*types.OperationResponse, error) {
 	fail := func(msg, code string) (*types.OperationResponse, error) {
 		record.Action(c, "delete-recipe-project", fmt.Sprintf("project=%s (%s)", name, msg), false)
 		return &types.OperationResponse{Success: false, Message: msg, ErrorCode: code}, nil
 	}
-	problem, code, _, err := ProjectTeardownProblem(c, name, confirmed)
+	problem, code, _, err := ProjectTeardownProblem(c, name, uid, confirmed)
 	if err != nil {
 		return fail(fmt.Sprintf("Kept project %s: %v.", name, err), kube.ErrorCodeOr(err, "prerequisites"))
 	}
@@ -607,16 +622,18 @@ func DeleteProject(c *kube.Client, name string, confirmed []string) (*types.Oper
 	r, _ := rec.recorded(name)
 	msg := fmt.Sprintf("Project %s is gone.", name)
 	switch {
+	case r.UID != uid || (found.found && found.meta.UID != uid):
+		return fail(fmt.Sprintf("Kept project %s: it changed while it was checked (it was deleted and made again). Reload the page to see the project there now.", name), "prerequisites")
 	case found.found && found.meta.Terminating():
 		msg = fmt.Sprintf("Project %s is being deleted.", name)
-	case found.found && (!found.deletable() || found.meta.UID != r.UID):
-		return fail(fmt.Sprintf("Kept project %s: it changed while it was checked (its UID, the tool's label or the recipe annotation).", name), "prerequisites")
+	case found.found && !found.deletable():
+		return fail(fmt.Sprintf("Kept project %s: it changed while it was checked (the tool's label or the recipe annotation).", name), "prerequisites")
 	case found.found:
-		// The recorded UID and the resourceVersion just checked as the
-		// preconditions: a namespace made again under the name, or one
-		// whose label or annotation was removed since this read, is not
-		// deleted (409).
-		if _, err := kube.DeleteWithPreconditions(c, namespacePath(name), r.UID, found.meta.ResourceVersion); err != nil && !kube.IsK8sNotFound(err) {
+		// The reviewed UID (the record's too) and the resourceVersion
+		// just checked as the preconditions: a namespace made again under
+		// the name, or one whose label or annotation was removed since
+		// this read, is not deleted (409).
+		if _, err := kube.DeleteWithPreconditions(c, namespacePath(name), uid, found.meta.ResourceVersion); err != nil && !kube.IsK8sNotFound(err) {
 			return fail(fmt.Sprintf("Deleting project %s failed: %v.", name, err), kube.ErrorCodeOr(err, "prerequisites"))
 		}
 		msg = fmt.Sprintf("Deleted project %s; OpenShift removes what it holds.", name)

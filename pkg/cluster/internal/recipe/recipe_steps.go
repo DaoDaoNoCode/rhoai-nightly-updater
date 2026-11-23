@@ -20,11 +20,11 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// The steps of a run, in the order the runner takes them. Every step but
-// the project calls the function the matching button of the app calls
-// (Install latest nightly, Create DataScienceCluster, Set up what a
-// feature needs, Set up on the Environment page), so a recipe changes
-// nothing a person could not change in the app.
+// Below, run steps follow runner order. Except for the project step, each
+// invokes the same handler as its UI control (Install latest nightly,
+// Create DataScienceCluster, prerequisite setup for a feature, Environment
+// page setup), so recipes cannot alter anything someone could not set in
+// the app.
 const (
 	StepRHOAI           = "rhoai"
 	StepDSC             = "dsc"
@@ -36,18 +36,18 @@ const (
 	StepMLflow          = "mlflow"
 )
 
-// State is what a run carries from step to step, and records: the recipe,
-// the build pinned when the run started, and the project once known.
+// State is per-run data that flows across steps and what gets recorded:
+// the recipe, the build pinned at start, and the project when identified.
 type State struct {
 	Recipe  types.EnvironmentRecipe
 	Pinned  *types.RecipePinnedBuild
 	Project *types.RecipeProjectRef
-	// Components are the DataScienceCluster components the run's
-	// prerequisite steps turned on. The runner keeps them across Resume.
+	// Components names DataScienceCluster pieces enabled by prerequisite
+	// steps; the runner retains the slice when Resume runs.
 	Components []string
 }
 
-// AddComponents records components the run turned on (once each, sorted).
+// AddComponents logs newly enabled components (deduplicated, sorted).
 func (s *State) AddComponents(keys ...string) {
 	for _, k := range keys {
 		if !slices.Contains(s.Components, k) {
@@ -57,33 +57,37 @@ func (s *State) AddComponents(keys ...string) {
 	slices.Sort(s.Components)
 }
 
-// Ownership is what run set up, as the cluster shows it now: per step,
-// whether its part exists as the run's (created), and the Clean up (POST
-// /api/resources/cleanup/stream) of those parts, nil when there is none.
-// Nothing of it comes from the run record but the names to look for:
-//   - the project, while it is the one a recipe created (deletable: the
-//     tool's label, the recipe annotation, the UID the recipes' project
-//     record holds) and not being deleted;
-//   - the DataScienceCluster components the run turned on that are still
-//     as it set them (liveComponents); a prerequisite step is created
-//     while one of its feature's is.
+// Ownership reflects what a run provisioned, matching current cluster state:
+// per step, whether its slice still counts as created by this run, and a
+// Clean up request (POST /api/resources/cleanup/stream) for those slices,
+// or nil when nothing qualifies. Only the run record supplies lookup
+// names—nothing else:
+//   - the project counts while it remains the recipe-created one
+//     (deletable via the tool label, recipe annotation, UID stored on the
+//     recipes project record), still bears the run-recorded UID, and is not
+//     terminating; clean-up includes that UID (RecipeProjectUIDs);
+//   - DataScienceCluster components the run enabled and that still match
+//     that configuration (liveComponents); a prerequisite step reads as
+//     created while any of its feature components do.
 //
-// The S3 storage, MLflow and a pipeline server are never the run's: the
-// storage and MLflow are shared by the whole cluster, and the cluster keeps
-// no record of who created an object, so a mark saying a run did could be
-// forged. The pipeline server in the recipe's own project goes with the
-// project; any other is removed with Clean up everything on the
-// Environment page.
+// S3 storage, MLflow, and pipeline servers are never attributed to the
+// run: storage and MLflow are cluster-wide, and the cluster does not track
+// creator identity—claims of run ownership could be faked. A pipeline server
+// in the recipe project is cleaned with the project; others fall under
+// Clean up everything on the Environment page.
 func Ownership(c *kube.Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
 	created := map[string]bool{}
 	if run == nil {
 		return created, nil
 	}
 	req := &types.CleanupRequest{}
-	if p := run.Project; p != nil && p.Name != "" && p.Owned {
-		if found, _, err := findProject(c, p.Name); err == nil && found.deletable() && !found.meta.Terminating() {
+	if p := run.Project; p != nil && p.Name != "" && p.Owned && p.UID != "" {
+		// Match only the project this run created (UID): if it was
+		// removed and recreated later by another run, it is not ours.
+		if found, _, err := findProject(c, p.Name); err == nil && found.deletable() && !found.meta.Terminating() && found.meta.UID == p.UID {
 			created[StepProject] = true
 			req.RecipeProjects = []string{p.Name}
+			req.RecipeProjectUIDs = map[string]string{p.Name: p.UID}
 		}
 	}
 	for key, feature := range liveComponents(c, run.Components) {
@@ -98,14 +102,13 @@ func Ownership(c *kube.Client, run *types.RecipeRun) (map[string]bool, *types.Cl
 	return created, req
 }
 
-// prereqStepOf is the prerequisite step of a feature.
+// prereqStepOf maps a feature name to its prerequisite step id.
 var prereqStepOf = map[string]string{"pipelines": StepPipelinesPrereq, "mlflow": StepMLflowPrereq}
 
-// liveComponents are the keys still in the state the run set, with the
-// feature that turned each on: Managed in the DataScienceCluster, and in
-// the tool's record of the prerequisites it set up (what Clean up turns a
-// component back from). A read that fails offers none (Clean up
-// everything still can).
+// liveComponents returns component keys the run still owns, each paired
+// with the enabling feature: Managed on the DataScienceCluster and
+// present in the tool's prerequisite record (what Clean up reverts). Failed
+// reads yield an empty map (Clean up everything remains available).
 func liveComponents(c *kube.Client, keys []string) map[string]string {
 	if len(keys) == 0 {
 		return nil
@@ -130,25 +133,25 @@ func liveComponents(c *kube.Client, keys []string) map[string]string {
 	return out
 }
 
-// Check is what a step's read-only check found.
+// Check holds the outcome of a step's read-only precondition probe.
 type Check struct {
-	// Done: what the step sets up is there; the run skips it.
+	// Done means the step's target already exists; the run skips execution.
 	Done bool
-	// Blocked says why the step cannot run (the run stops there); "" when
-	// it can.
+	// Blocked explains why the step cannot proceed (run halts); empty when
+	// allowed.
 	Blocked string
-	// Reason says what was found, for a step that is done.
+	// Reason describes cluster state when Done is true.
 	Reason string
-	// Fix says where a blocked step is fixed.
+	// Fix points the operator at where to unblock the step.
 	Fix *types.RecipeFix
 }
 
-// fixAt is the RecipeFix of code, fixed on page ("" for none).
+// fixAt builds a RecipeFix for code, targeting page (empty page if none).
 func fixAt(code, page string) *types.RecipeFix {
 	return &types.RecipeFix{Code: code, Page: page}
 }
 
-// The app's pages a RecipeFix links.
+// In-app routes that RecipeFix values reference.
 const (
 	pageStatus       = "/"
 	pageComponents   = "/components"
@@ -156,11 +159,11 @@ const (
 	pageEnvironment  = "/environment"
 )
 
-// Step is one step of a run. Check only reads; Run sets the step up and
-// may assume Check found it not done and not blocked. A Run's
-// *types.OperationResponse reports the outcome (Success false: the run
-// stops there); its error is the context's end or an error it could not
-// report itself (see CONTRIBUTING, Errors and operation results).
+// Step describes a single run stage. Check is read-only; Run performs setup
+// and may assume Check reported not done and not blocked. Run returns
+// *types.OperationResponse for the outcome (Success false halts the run);
+// the error slot carries context cancellation or an failure Run could not
+// encode (see CONTRIBUTING, Errors and operation results).
 type Step struct {
 	ID, Title    string
 	Typical, Max time.Duration
@@ -168,15 +171,15 @@ type Step struct {
 	Run          func(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error)
 }
 
-// Seconds are how long the step usually takes and at most, in seconds:
-// the figures both the plan and the run record show.
+// Seconds exposes typical and maximum durations in whole seconds—the same
+// numbers shown on the plan and in the run record.
 func (s Step) Seconds() (typical, most int) {
 	return int(s.Typical / time.Second), int(s.Max / time.Second)
 }
 
-// Steps returns the steps of a recipe in run order: the RHOAI build, the
-// DataScienceCluster, the project, then each feature's prerequisites and
-// setup.
+// Steps lists a recipe's stages in execution order: RHOAI build,
+// DataScienceCluster, optional project, then per-feature prerequisite and
+// setup steps.
 func Steps(r types.EnvironmentRecipe) []Step {
 	steps := []Step{
 		{ID: StepRHOAI, Title: "RHOAI", Typical: 7 * time.Minute, Max: 15 * time.Minute, Check: checkRHOAI, Run: runRHOAI},

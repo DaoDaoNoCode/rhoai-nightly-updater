@@ -181,8 +181,18 @@ export const CleanupModal: React.FC<{
   const [models, setModels] = useState<string[]>(was ? was.models ?? [] : offered.models);
   const [gateway, setGateway] = useState(was ? !!was.inferenceGateway : offered.gateway);
   const [recipeProjects, setRecipeProjects] = useState<string[]>(was ? was.recipeProjects ?? [] : offered.recipeProjects);
-  const chosenRecipeProjects = offered.recipeProjects.filter((p) => recipeProjects.includes(p));
-  const toggleRecipeProject = (p: string, v: boolean) => setRecipeProjects((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
+  // Each recipe project is deleted as the user reviewed it (its UID): pinned when the dialog opens (or kept from the
+  // refused clean-up), and when the user ticks it. A refresh that shows one made again since (another UID) unticks it,
+  // as for an unrecorded pipeline server: only the user's own tick of the project now there confirms it.
+  const recipeProjectUID = new Map((status.recipeProjects ?? []).map((p) => [p.name, p.uid]));
+  const [reviewedUIDs, setReviewedUIDs] = useState<Record<string, string>>(
+    () => (was ? was.recipeProjectUIDs ?? {} : Object.fromEntries(offered.recipeProjects.map((p) => [p, recipeProjectUID.get(p) ?? ""]))));
+  const recipeProjectTicked = (p: string) => recipeProjects.includes(p) && offered.recipeProjects.includes(p) && !!reviewedUIDs[p] && reviewedUIDs[p] === recipeProjectUID.get(p);
+  const chosenRecipeProjects = offered.recipeProjects.filter(recipeProjectTicked);
+  const toggleRecipeProject = (p: string, v: boolean) => {
+    setRecipeProjects((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
+    setReviewedUIDs(({ [p]: _dropped, ...rest }) => (v ? { ...rest, [p]: recipeProjectUID.get(p) ?? "" } : rest));
+  };
   // The recipe projects to confirm (chosen ones the server refused), and those the user confirmed.
   const asking = chosenRecipeProjects.filter((p) => (retry?.contents[p] ?? []).length > 0);
   const [confirmedContents, setConfirmedContents] = useState<string[]>([]);
@@ -201,7 +211,7 @@ export const CleanupModal: React.FC<{
     ...(chosenModels.length ? { models: chosenModels } : {}),
     ...(gateway && offered.gateway ? { inferenceGateway: true } : {}),
     ...(maasPlatform && offered.maasPlatform ? { maasPlatform: true } : {}),
-    ...(chosenRecipeProjects.length ? { recipeProjects: chosenRecipeProjects } : {}),
+    ...(chosenRecipeProjects.length ? { recipeProjects: chosenRecipeProjects, recipeProjectUIDs: Object.fromEntries(chosenRecipeProjects.map((p) => [p, reviewedUIDs[p]])) } : {}),
     ...(Object.keys(confirmProjectContents).length ? { confirmProjectContents } : {}),
     ...(chosenComponents.length ? { components: chosenComponents } : {}),
   };
@@ -297,7 +307,7 @@ export const CleanupModal: React.FC<{
                 {offered.recipeProjects.length > 0 && (
                   <FormGroup role="group" isStack label="Projects recipes created" fieldId="cleanup-recipe-projects">
                     {(status.recipeProjects ?? []).map((p) => (
-                      <Checkbox key={p.name} id={`cleanup-recipe-project-${p.name}`} label={<>Project {p.name}</>} isChecked={recipeProjects.includes(p.name)} onChange={(_e, v) => toggleRecipeProject(p.name, v)}
+                      <Checkbox key={p.name} id={`cleanup-recipe-project-${p.name}`} label={<>Project {p.name}</>} isChecked={recipeProjectTicked(p.name)} onChange={(_e, v) => toggleRecipeProject(p.name, v)}
                         description={<>Created by recipe {p.recipe}. Deleted with everything in it, after the parts above, only while it is still the one the recipe created.</>} />
                     ))}
                   </FormGroup>

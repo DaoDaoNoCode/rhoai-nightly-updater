@@ -25,9 +25,9 @@ func recipeStep(t *testing.T, r types.EnvironmentRecipe, id string) recipe.Step 
 	return recipe.Step{}
 }
 
-// dscStepFake is an installed operator whose CSV ships the default DSC,
-// and whose webhook refuses the first creates as one that is not serving
-// yet. The DSC reports conditions once it was read reportAfter times.
+// dscStepFake models an operator that is already installed: its CSV includes
+// the default DSC, and the webhook blocks initial create calls while it is
+// not yet serving. After reportAfter GETs, the DSC object exposes conditions.
 func dscStepFake(t *testing.T, refusals, reportAfter int) (*resourceFake, *Client) {
 	t.Helper()
 	mockDSCSamples(t, func(*http.Request) (int, string) { return 500, "" })
@@ -61,9 +61,9 @@ func dscStepFake(t *testing.T, refusals, reportAfter int) (*resourceFake, *Clien
 	return f, c
 }
 
-// The DataScienceCluster step tries a create the webhook refuses because
-// it does not serve yet again, then waits until the operator reports
-// conditions (not until Ready).
+// For DataScienceCluster, the step re-attempts create after a not-yet-serving
+// webhook rejection, then blocks until the operator publishes conditions
+// (Ready is not required).
 func TestRecipeDSCStep_RetriesTheWebhookAndWaitsForConditions(t *testing.T) {
 	defer recipe.SetDSCTimingForTest(time.Minute, time.Second, time.Minute, time.Second)()
 	f, c := dscStepFake(t, 2, 3)
@@ -89,8 +89,8 @@ func TestRecipeDSCStep_RetriesTheWebhookAndWaitsForConditions(t *testing.T) {
 	}
 }
 
-// A refusal that is not transient is not retried; conditions that never
-// come end the step failed after the wait, saying Resume waits again.
+// Non-transient refusals skip retry; if conditions never appear, the step
+// fails once the wait elapses, with a message that Resume will wait again.
 func TestRecipeDSCStep_Failures(t *testing.T) {
 	defer recipe.SetDSCTimingForTest(time.Minute, time.Second, time.Minute, time.Second)()
 	t.Run("not transient", func(t *testing.T) {
@@ -121,9 +121,10 @@ func TestRecipeDSCStep_Failures(t *testing.T) {
 	})
 }
 
-// The prerequisite steps record the DataScienceCluster components they
-// turned on (what Set up's record gained for their feature), and that they
-// set their part up. A component recorded before the run is not the run's.
+// Prerequisite steps write into state which DataScienceCluster components
+// they enabled (matching what Set up's record added for that feature) and
+// mark their slice of work complete. Components pre-recorded are excluded
+// from what the run claims.
 func TestRecipePrereqSteps_RecordTheComponentsTheyTurnedOn(t *testing.T) {
 	pc := newPrereqCluster(t)
 	r, problems := recipe.Validate([]byte(tRecipeBase + `{"rhoai":{"build":"latest"},"dataScienceCluster":{"create":true},"project":{"mode":"create","name":"recipe-dev"},
@@ -131,7 +132,7 @@ func TestRecipePrereqSteps_RecordTheComponentsTheyTurnedOn(t *testing.T) {
 	if len(problems) > 0 {
 		t.Fatal(problems)
 	}
-	// MLflow's component was set up on the Environment page before.
+	// MLflow was already configured on the Environment page.
 	if res, _ := runPrereqs(t, pc.c, "mlflow"); !res.Success {
 		t.Fatalf("mlflow setup: %+v", res)
 	}
@@ -147,11 +148,11 @@ func TestRecipePrereqSteps_RecordTheComponentsTheyTurnedOn(t *testing.T) {
 	}
 }
 
-// What a run owns is read from the cluster, not from its record: the
-// components it turned on while they are still Managed and recorded by
-// Set up, the project while it is the one a recipe created. The S3
-// storage, a pipeline server and MLflow are never claimed, whatever the
-// record says.
+// Ownership comes from live cluster state, not the run record alone:
+// components count only while still Managed and listed in Set up's record;
+// the project counts only if it is the one the recipe created. S3 storage,
+// pipeline server, and MLflow steps are never attributed to the run,
+// regardless of what the record shows.
 func TestRecipeOwnership_FromTheCluster(t *testing.T) {
 	t.Run("components", func(t *testing.T) {
 		pc := newPrereqCluster(t)
@@ -162,7 +163,7 @@ func TestRecipeOwnership_FromTheCluster(t *testing.T) {
 			Steps: []types.RecipeRunStep{
 				{ID: recipe.StepPipelinesPrereq}, {ID: recipe.StepS3, Created: true}, {ID: recipe.StepPipelineServer, Created: true}, {ID: recipe.StepMLflow, Created: true},
 			},
-			// mlflowoperator: Removed, and not in Set up's record.
+			// mlflowoperator is Removed and absent from Set up's record.
 			Components: []string{"aipipelines", "mlflowoperator"},
 		}
 		created, req := recipe.Ownership(pc.c, run)
@@ -170,7 +171,7 @@ func TestRecipeOwnership_FromTheCluster(t *testing.T) {
 		if req == nil || !reflect.DeepEqual(*req, want) || !reflect.DeepEqual(created, map[string]bool{recipe.StepPipelinesPrereq: true}) {
 			t.Fatalf("created %v, cleanup %+v", created, req)
 		}
-		// Someone else sets it back: no longer as the run set it.
+		// Another actor reverts management state: no longer what this run left.
 		k, _ := parseFakePath(tDSC)
 		pc.f.mu.Lock()
 		ensureMap(ensureMap(ensureMap(pc.f.objects[k], "spec"), "components"), "aipipelines")["managementState"] = "Removed"
@@ -190,7 +191,20 @@ func TestRecipeOwnership_FromTheCluster(t *testing.T) {
 		if req == nil || len(req.RecipeProjects) != 1 || req.RecipeProjects[0] != "recipe-dev" || !created[recipe.StepProject] {
 			t.Fatalf("created %v, cleanup %+v", created, req)
 		}
-		// Replaced by someone else (another UID, no recipe annotation).
+		// Clean-up includes the UID belonging to the run's project.
+		if !reflect.DeepEqual(req.RecipeProjectUIDs, map[string]string{"recipe-dev": s.Project.UID}) {
+			t.Fatalf("cleanup UIDs %v", req.RecipeProjectUIDs)
+		}
+		// A later run deletes and recreates the namespace: names match the
+		// record, but the project no longer belongs to this run.
+		f.deleteObject(tRecipeNS)
+		if res := ensureProject(t, c, &recipe.State{Recipe: tRecipe(t, "create")}); !res.Success {
+			t.Fatalf("again %+v", res)
+		}
+		if created, req := recipe.Ownership(c, run); req != nil || created[recipe.StepProject] {
+			t.Fatalf("another run's: created %v, cleanup %+v", created, req)
+		}
+		// Another party replaces the namespace (different UID, no recipe annotation).
 		f.putJSON(tRecipeNS, `{"metadata":{"uid":"someone-else"}}`)
 		if created, req := recipe.Ownership(c, run); req != nil || created[recipe.StepProject] {
 			t.Fatalf("replaced: created %v, cleanup %+v", created, req)
@@ -201,9 +215,9 @@ func TestRecipeOwnership_FromTheCluster(t *testing.T) {
 	}
 }
 
-// When the prerequisites record cannot be read, the step says that its
-// components are not known to the run (and so not in its Clean up)
-// instead of losing them silently.
+// If the prerequisites snapshot cannot be fetched, the step reports that
+// component ownership is unknown for the run (so they stay out of Clean up)
+// rather than dropping that information without notice.
 func TestRecipePrereqSteps_UnreadableRecordIsSaid(t *testing.T) {
 	pc := newPrereqCluster(t)
 	r := tRecipe(t, "create")

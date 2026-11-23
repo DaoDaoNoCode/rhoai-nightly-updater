@@ -9,8 +9,9 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// fakeTeardowns replaces the teardowns a clean-up runs; fail maps a step id
-// to the response that fails it. It returns the steps in the order they ran.
+// fakeTeardowns stubs out each teardown step that CleanUp invokes; entries in fail
+// tie a step id to a response that makes that step fail. The returned slice lists
+// steps in execution order.
 func fakeTeardowns(t *testing.T, fail map[string]*types.OperationResponse) *[]string {
 	t.Helper()
 	ps, st, ml, md, gw, pg := cleanupPipelineServer, cleanupStorage, cleanupMLflow, cleanupModels, cleanupGateway, cleanupPlayground
@@ -50,8 +51,8 @@ func fakeTeardowns(t *testing.T, fail map[string]*types.OperationResponse) *[]st
 	return &ran
 }
 
-// The models go before the inference gateway they route through, whose
-// teardown refuses while one is left.
+// Model teardown must run ahead of the inference gateway they depend on, because
+// gateway removal is blocked until every model is gone.
 func TestCleanUp_DeletesTheModelsBeforeTheGateway(t *testing.T) {
 	ran := fakeTeardowns(t, nil)
 	_, c := newResourceFake(t)
@@ -67,8 +68,8 @@ func TestCleanUp_DeletesTheModelsBeforeTheGateway(t *testing.T) {
 	}
 }
 
-// The playgrounds go before the models they use, with the user's client
-// (its token is what the gen-ai API is called with).
+// Playground removal precedes the models it references; the step must receive
+// the user-scoped client so gen-ai calls use that user's token.
 func TestCleanUp_DeletesThePlaygroundsBeforeTheModels(t *testing.T) {
 	ran := fakeTeardowns(t, nil)
 	_, c := newResourceFake(t)
@@ -82,7 +83,7 @@ func TestCleanUp_DeletesThePlaygroundsBeforeTheModels(t *testing.T) {
 	}
 }
 
-// A model that cannot be deleted stops the run before the gateway.
+// When model deletion fails, the sequence halts and never reaches the gateway step.
 func TestCleanUp_KeepsTheGatewayWhenAModelStays(t *testing.T) {
 	ran := fakeTeardowns(t, map[string]*types.OperationResponse{
 		"model:a": {Success: false, Message: "The model a/qwen25-05b-instruct is still being deleted after 2:00.", ErrorCode: "in_progress"},
@@ -111,7 +112,7 @@ func TestCleanUp_RunsThePartsInDependencyOrder(t *testing.T) {
 	if res.Message != "Deleted the pipeline server in 'a', the pipeline server in 'b', the S3 storage and MLflow." {
 		t.Errorf("message: %q", res.Message)
 	}
-	// Each part is reported as running, then with its own result.
+	// Progress callbacks should show a running status for each step, then that step's outcome.
 	if len(events) != 8 || events[0].Status != "running" || events[5].Message != "S3 storage and namespace removed." {
 		t.Errorf("events: %+v", events)
 	}
@@ -152,8 +153,8 @@ func TestCleanUp_StopsWhenTheOperationIsCancelled(t *testing.T) {
 	}
 }
 
-// The real teardowns, on a cluster where nothing of this tool is left:
-// each part says so and succeeds.
+// Against a cluster with no resources from this tool installed, the live teardown
+// functions still report success and indicate nothing remained to remove.
 func TestCleanUp_NothingLeftSucceeds(t *testing.T) {
 	_, c := newResourceFake(t)
 	res, err := CleanUp(c, types.CleanupRequest{PipelineServers: []string{"p1"}, Storage: true, MLflow: true}, nil)
@@ -162,14 +163,15 @@ func TestCleanUp_NothingLeftSucceeds(t *testing.T) {
 	}
 }
 
-// fakeRecipeProjectTeardown replaces the recipe project's check and part;
-// holds maps a project to what it holds that the tool did not create: the
-// check refuses it until each is confirmed (nil allows every project).
+// fakeRecipeProjectTeardown overrides the recipe-project problem check and teardown;
+// holds lists per-project resources the tool never created. The check blocks until
+// the user confirms each item (nil holds means no block), and returns the full hold
+// list like recipe.ProjectTeardownProblem. Teardown appends the UID suffix after "@".
 func fakeRecipeProjectTeardown(t *testing.T, ran *[]string, holds map[string][]string) {
 	t.Helper()
 	pr, cp, co := recipeProjectProblem, cleanupProject, cleanupComponents
 	t.Cleanup(func() { recipeProjectProblem, cleanupProject, cleanupComponents = pr, cp, co })
-	recipeProjectProblem = func(_ *Client, name string, confirmed []string) (string, string, []string, error) {
+	recipeProjectProblem = func(_ *Client, name, _ string, confirmed []string) (string, string, []string, error) {
 		var unconfirmed []string
 		for _, h := range holds[name] {
 			if !slices.Contains(confirmed, h) {
@@ -177,12 +179,16 @@ func fakeRecipeProjectTeardown(t *testing.T, ran *[]string, holds map[string][]s
 			}
 		}
 		if len(unconfirmed) > 0 {
-			return "Project " + name + " still holds what this tool did not create: " + strings.Join(unconfirmed, ", ") + ".", "confirm_project_contents", unconfirmed, nil
+			return "Project " + name + " still holds what this tool did not create: " + strings.Join(unconfirmed, ", ") + ".", "confirm_project_contents", holds[name], nil
 		}
-		return "", "", nil, nil
+		return "", "", holds[name], nil
 	}
-	cleanupProject = func(_ *Client, name string, confirmed []string) (*types.OperationResponse, error) {
-		*ran = append(*ran, CleanupStepID("recipe-project", name)+":"+strings.Join(confirmed, "|"))
+	cleanupProject = func(_ *Client, name, uid string, confirmed []string) (*types.OperationResponse, error) {
+		id := CleanupStepID("recipe-project", name)
+		if uid != "" {
+			id += "@" + uid
+		}
+		*ran = append(*ran, id+":"+strings.Join(confirmed, "|"))
 		return &types.OperationResponse{Success: true, Message: "Deleted project " + name + "."}, nil
 	}
 	cleanupComponents = func(*Client, []string) (*types.OperationResponse, error) {
@@ -191,28 +197,28 @@ func fakeRecipeProjectTeardown(t *testing.T, ran *[]string, holds map[string][]s
 	}
 }
 
-// A recipe project goes after the parts that live in it (here the
-// pipeline server, playground and model in it) and before the components,
-// with the confirmations of the request.
+// Recipe-project deletion runs only after in-project parts (pipeline server,
+// playground, model here) finish, and before components restore, carrying
+// ConfirmProjectContents from the request.
 func TestCleanUp_RecipeProjectAfterItsPartsBeforeTheComponents(t *testing.T) {
 	ran := fakeTeardowns(t, nil)
 	fakeRecipeProjectTeardown(t, ran, nil)
 	_, c := newResourceFake(t)
 	res, err := CleanUp(c.SignedInUser(), types.CleanupRequest{
 		PipelineServers: []string{"recipe-dev"}, Storage: true, MLflow: true, Playgrounds: []string{"recipe-dev"}, Models: []string{"recipe-dev"},
-		RecipeProjects: []string{"recipe-dev"}, ConfirmProjectContents: map[string][]string{"recipe-dev": {"Notebook wb"}}, Components: []string{"aipipelines"},
+		RecipeProjects: []string{"recipe-dev"}, RecipeProjectUIDs: map[string]string{"recipe-dev": "u1"}, ConfirmProjectContents: map[string][]string{"recipe-dev": {"Notebook wb"}}, Components: []string{"aipipelines"},
 	}, nil)
 	if err != nil || !res.Success {
 		t.Fatalf("got %+v, %v", res, err)
 	}
-	want := "pipeline-server:recipe-dev storage mlflow playground:recipe-dev model:recipe-dev recipe-project:recipe-dev:Notebook wb components"
+	want := "pipeline-server:recipe-dev storage mlflow playground:recipe-dev model:recipe-dev recipe-project:recipe-dev@u1:Notebook wb components"
 	if got := strings.Join(*ran, " "); got != want {
 		t.Fatalf("order\n got %s\nwant %s", got, want)
 	}
 }
 
-// A recipe project that would be refused refuses the whole clean-up
-// before any part runs: nothing is deleted.
+// If the recipe-project check would reject the project, CleanUp aborts upfront
+// without running any teardown step or mutating cluster state.
 func TestCleanUp_RecipeProjectRefusalDeletesNothing(t *testing.T) {
 	ran := fakeTeardowns(t, nil)
 	fakeRecipeProjectTeardown(t, ran, map[string][]string{"recipe-dev": {"Notebook wb", "PersistentVolumeClaim wb-data"}})
@@ -225,7 +231,7 @@ func TestCleanUp_RecipeProjectRefusalDeletesNothing(t *testing.T) {
 	if len(*ran) != 0 || len(f.mutations()) != 0 {
 		t.Fatalf("ran %v, changed %v", *ran, f.mutations())
 	}
-	// The browser reads what to confirm from Detail, one per line.
+	// The UI surfaces confirmable items from the failed step's Detail field, one entry per line.
 	if len(events) != 1 || events[0].Step != "recipe-project:recipe-dev" || events[0].Status != "failed" || events[0].Detail != "Notebook wb\nPersistentVolumeClaim wb-data" {
 		t.Fatalf("events %+v", events)
 	}

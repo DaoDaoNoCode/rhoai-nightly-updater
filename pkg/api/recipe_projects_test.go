@@ -24,9 +24,15 @@ func TestCleanupStream_RecipeProjectsValidation(t *testing.T) {
 		"invalid recipe project":             `{"recipeProjects":["Bad_Name"]}`,
 		"a recipe project twice":             `{"recipeProjects":["a","a"]}`,
 		"too many recipe projects":           `{"recipeProjects":[` + strings.Repeat(`"p",`, maxCleanupProjects) + `"p"]}`,
-		"confirmation of an unnamed project": `{"recipeProjects":["a"],"confirmProjectContents":{"b":["Notebook wb"]}}`,
-		"empty confirmation":                 `{"recipeProjects":["a"],"confirmProjectContents":{"a":[""]}}`,
-		"too many confirmations":             `{"recipeProjects":["a"],"confirmProjectContents":{"a":[` + strings.Repeat(`"Pod p",`, maxConfirmedContents) + `"Pod p"]}}`,
+		"confirmation of an unnamed project": `{"recipeProjects":["a"],"recipeProjectUIDs":{"a":"ua"},"confirmProjectContents":{"b":["Notebook wb"]}}`,
+		"empty confirmation":                 `{"recipeProjects":["a"],"recipeProjectUIDs":{"a":"ua"},"confirmProjectContents":{"a":[""]}}`,
+		"too many confirmations":             `{"recipeProjects":["a"],"recipeProjectUIDs":{"a":"ua"},"confirmProjectContents":{"a":[` + strings.Repeat(`"Pod p",`, maxConfirmedContents) + `"Pod p"]}}`,
+		// The UID of the project the user reviewed is required for each.
+		"no UIDs":                     `{"recipeProjects":["a"],"mlflow":true}`,
+		"a project without its UID":   `{"recipeProjects":["a","b"],"recipeProjectUIDs":{"a":"ua"}}`,
+		"an empty UID":                `{"recipeProjects":["a"],"recipeProjectUIDs":{"a":""}}`,
+		"a UID of an unnamed project": `{"recipeProjects":["a"],"recipeProjectUIDs":{"a":"ua","b":"ub"}}`,
+		"a UID too long":              `{"recipeProjects":["a"],"recipeProjectUIDs":{"a":"` + strings.Repeat("u", maxUIDLength+1) + `"}}`,
 	} {
 		w := httptest.NewRecorder()
 		HandleCleanupStream(w, postJSON(t, "/api/resources/cleanup/stream", "user:"+strings.ReplaceAll(name, " ", "-"), body))
@@ -39,12 +45,13 @@ func TestCleanupStream_RecipeProjectsValidation(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	HandleCleanupStream(w, postJSON(t, "/api/resources/cleanup/stream", "user:ok", `{"recipeProjects":["a","b"],"confirmProjectContents":{"b":["Notebook wb"]}}`))
+	HandleCleanupStream(w, postJSON(t, "/api/resources/cleanup/stream", "user:ok", `{"recipeProjects":["a","b"],"recipeProjectUIDs":{"a":"ua","b":"ub"},"confirmProjectContents":{"b":["Notebook wb"]}}`))
 	if w.Code != http.StatusOK || len(*calls) != 1 {
 		t.Fatalf("%d %s", w.Code, w.Body.String())
 	}
 	got := (*calls)[0]
-	if strings.Join(got.RecipeProjects, ",") != "a,b" || strings.Join(got.ConfirmProjectContents["b"], ",") != "Notebook wb" || len(got.ConfirmProjectContents["a"]) != 0 {
+	if strings.Join(got.RecipeProjects, ",") != "a,b" || strings.Join(got.ConfirmProjectContents["b"], ",") != "Notebook wb" || len(got.ConfirmProjectContents["a"]) != 0 ||
+		got.RecipeProjectUIDs["a"] != "ua" || got.RecipeProjectUIDs["b"] != "ub" {
 		t.Fatalf("request %+v", got)
 	}
 }

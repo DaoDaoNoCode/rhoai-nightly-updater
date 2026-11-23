@@ -13,7 +13,7 @@ import { DEFAULT_RECIPE_FORM, cleanupParts, formFromRecipe, recipeFromForm, type
 import { planRecipe, runRecipe, toApiError, type ApiError } from "../services/api";
 import { useClusterBusyHandler, useMutationBlocker, usePermissions } from "../state/AppInfo";
 import { useOperation } from "../state/AppState";
-import type { RecipePlan } from "../types";
+import type { RecipeOwnedProject, RecipePlan } from "../types";
 
 /**
  * Recipes (cluster-admins, full profile): set up this cluster in one run,
@@ -45,8 +45,8 @@ export const RecipesPage: React.FC = () => {
   const [starting, setStarting] = useState(false);
   const [runError, setRunError] = useState<ApiError | null>(null);
   const [cleanupOpen, setCleanupOpen] = useState(false);
-  // A project of the list to delete on its own, or null.
-  const [projectCleanup, setProjectCleanup] = useState<string | null>(null);
+  // A project of the list to delete on its own (with the UID the list showed), or null.
+  const [projectCleanup, setProjectCleanup] = useState<RecipeOwnedProject | null>(null);
 
   const review = async () => {
     setReviewOpen(true);
@@ -148,7 +148,8 @@ export const RecipesPage: React.FC = () => {
           onClose={() => setCleanupOpen(false)} onDone={changed} onClusterBusy={onClusterBusy} />
       )}
       {projectCleanup && (
-        <RecipeCleanupModal run={null} title={`Delete project ${projectCleanup}?`} ready={{ recipeProjects: [projectCleanup] }} isOpen blocker={blocker}
+        <RecipeCleanupModal run={null} title={`Delete project ${projectCleanup.name}?`}
+          ready={{ recipeProjects: [projectCleanup.name], recipeProjectUIDs: { [projectCleanup.name]: projectCleanup.uid } }} isOpen blocker={blocker}
           onClose={() => setProjectCleanup(null)} onDone={changed} onClusterBusy={onClusterBusy} />
       )}
     </>

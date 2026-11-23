@@ -18,7 +18,8 @@ export const RecipeProjects: React.FC<{
   error?: string;
   /** Human-readable reason an operation cannot begin yet; null when unblocked. */
   blocker: string | null;
-  onDelete: (project: string) => void;
+  /** Delete this project: the one the row shows (its UID too). */
+  onDelete: (project: RecipeOwnedProject) => void;
 }> = ({ projects, error, blocker, onDelete }) => {
   const titleId = React.useId();
   return (
@@ -55,7 +56,7 @@ export const RecipeProjects: React.FC<{
                     <Td dataLabel="Recipe">{p.recipe}</Td>
                     <Td dataLabel="Created">{p.createdAt ? <RelativeTime date={p.createdAt} /> : "Not recorded"}</Td>
                     <Td dataLabel="Actions" isActionCell>
-                      <TooltipButton variant="secondary" isDanger size="sm" aria-label={`Delete project ${p.name}...`} disabledReason={blocker} onClick={() => onDelete(p.name)}>
+                      <TooltipButton variant="secondary" isDanger size="sm" aria-label={`Delete project ${p.name}...`} disabledReason={blocker} onClick={() => onDelete(p)}>
                         Delete...
                       </TooltipButton>
                     </Td>

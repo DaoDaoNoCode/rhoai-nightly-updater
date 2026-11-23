@@ -65,9 +65,80 @@ describe("Clean up everything with recipe projects", () => {
     expect(await within(run).findByText("Deleted MLflow. Deleted project recipe-dev; OpenShift removes what it holds. Deleted project recipe-old; OpenShift removes what it holds.")).toBeInTheDocument();
     expect(within(run).getByText("Delete project recipe-old, which a recipe created")).toBeInTheDocument();
     expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([
-      { mlflow: true, recipeProjects: ["recipe-dev", "recipe-old"] },
-      { mlflow: true, recipeProjects: ["recipe-dev", "recipe-old"], confirmProjectContents: { "recipe-old": ["Notebook wb"] } },
+      { mlflow: true, recipeProjects: ["recipe-dev", "recipe-old"], recipeProjectUIDs: { "recipe-dev": "u1", "recipe-old": "u2" } },
+      { mlflow: true, recipeProjects: ["recipe-dev", "recipe-old"], recipeProjectUIDs: { "recipe-dev": "u1", "recipe-old": "u2" }, confirmProjectContents: { "recipe-old": ["Notebook wb"] } },
     ]);
+  });
+
+  /** A clean-up refused to confirm: per project, everything it holds that the tool did not create (the backend lists all of it). */
+  const refusal = (lists: Record<string, string[]>) => sse(
+    ...Object.entries(lists).map(([p, items]) => ({ step: `recipe-project:${p}`, status: "failed", message: `Project ${p} still holds what this tool did not create.`, errorCode: "confirm_project_contents", detail: items.join("\n") })),
+    { step: "operation_complete", status: "failed", message: "Nothing was deleted.", errorCode: "confirm_project_contents" },
+  );
+  const done = () => sse({ step: "operation_complete", status: "success", message: "Deleted the projects." });
+  const asked = (dialog: HTMLElement, p: string) => within(dialog).getByText(`Project ${p} holds what this tool did not create`).closest(".pf-v6-c-alert") as HTMLElement;
+  const listed = (alert: HTMLElement) => within(alert).getAllByRole("listitem").map((li) => li.textContent);
+  const onlyProjects = (projects: ResourcesStatus["recipeProjects"]): ResourcesStatus => ({ minio: none, mlflow: none, pipelineServers: [], recipeProjects: projects, recipeProjectsError: "" });
+
+  it("two refusals in a row: the second lists what was confirmed too, and confirming all of it goes ahead", async () => {
+    const answers = [refusal({ "recipe-old": ["Notebook wb"] }), refusal({ "recipe-old": ["Notebook wb", "PersistentVolumeClaim data"] }), done()];
+    const api = stubApi({
+      "/api/resources/status": onlyProjects([status.recipeProjects![1]]),
+      "/api/resources/projects": { projects: ["a"] },
+      "POST /api/resources/cleanup/stream": () => answers.shift()!,
+    });
+    renderAt("/test-resources");
+    fireEvent.click(await screen.findByRole("button", { name: "Clean up everything…" }));
+    let dialog = await screen.findByRole("dialog", { name: /Clean up everything\?/ });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    dialog = await screen.findByRole("dialog", { name: /Clean up everything\?/ });
+    fireEvent.click(within(asked(dialog, "recipe-old")).getByRole("checkbox", { name: "Delete it with project recipe-old" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    // A claim appeared meanwhile: the notebook, confirmed, is listed again with it.
+    dialog = await screen.findByRole("dialog", { name: /Clean up everything\?/ });
+    await waitFor(() => expect(listed(asked(dialog, "recipe-old"))).toEqual(["Notebook wb", "PersistentVolumeClaim data"]));
+    expect(within(dialog).getByRole("button", { name: "Delete" })).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(within(asked(dialog, "recipe-old")).getByRole("checkbox", { name: "Delete them with project recipe-old" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    expect(await within(await screen.findByRole("dialog", { name: "Clean up" })).findByText("Deleted the projects.")).toBeInTheDocument();
+    const uids = { recipeProjectUIDs: { "recipe-old": "u2" } };
+    expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([
+      { recipeProjects: ["recipe-old"], ...uids },
+      { recipeProjects: ["recipe-old"], ...uids, confirmProjectContents: { "recipe-old": ["Notebook wb"] } },
+      { recipeProjects: ["recipe-old"], ...uids, confirmProjectContents: { "recipe-old": ["Notebook wb", "PersistentVolumeClaim data"] } },
+    ]);
+  });
+
+  it("two projects, only one gains an object: both come back in full, and the retry confirms both", async () => {
+    const answers = [
+      refusal({ "recipe-dev": ["Pod a"], "recipe-old": ["Notebook wb"] }),
+      refusal({ "recipe-dev": ["Pod a"], "recipe-old": ["Notebook wb", "Pod b"] }),
+      done(),
+    ];
+    const api = stubApi({
+      "/api/resources/status": onlyProjects(status.recipeProjects),
+      "/api/resources/projects": { projects: ["a"] },
+      "POST /api/resources/cleanup/stream": () => answers.shift()!,
+    });
+    renderAt("/test-resources");
+    fireEvent.click(await screen.findByRole("button", { name: "Clean up everything…" }));
+    let dialog = await screen.findByRole("dialog", { name: /Clean up everything\?/ });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    dialog = await screen.findByRole("dialog", { name: /Clean up everything\?/ });
+    for (const p of ["recipe-dev", "recipe-old"]) fireEvent.click(within(asked(dialog, p)).getByRole("checkbox", { name: `Delete it with project ${p}` }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    // Only recipe-old gained a pod; recipe-dev, all of it confirmed, is listed again too.
+    dialog = await screen.findByRole("dialog", { name: /Clean up everything\?/ });
+    await waitFor(() => expect(listed(asked(dialog, "recipe-old"))).toEqual(["Notebook wb", "Pod b"]));
+    expect(listed(asked(dialog, "recipe-dev"))).toEqual(["Pod a"]);
+    fireEvent.click(within(asked(dialog, "recipe-dev")).getByRole("checkbox", { name: "Delete it with project recipe-dev" }));
+    fireEvent.click(within(asked(dialog, "recipe-old")).getByRole("checkbox", { name: "Delete them with project recipe-old" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    expect(await within(await screen.findByRole("dialog", { name: "Clean up" })).findByText("Deleted the projects.")).toBeInTheDocument();
+    expect(api.bodies["POST /api/resources/cleanup/stream"]?.[2]).toEqual({
+      recipeProjects: ["recipe-dev", "recipe-old"], recipeProjectUIDs: { "recipe-dev": "u1", "recipe-old": "u2" },
+      confirmProjectContents: { "recipe-dev": ["Pod a"], "recipe-old": ["Notebook wb", "Pod b"] },
+    });
   });
 
   it("only recipe projects left: Clean up everything is still offered; a list that cannot be read is said", async () => {

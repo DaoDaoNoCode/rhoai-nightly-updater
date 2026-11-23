@@ -14,7 +14,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// The teardowns a clean-up runs; tests replace them.
+// Teardown hooks invoked during a clean-up; tests may substitute them.
 var (
 	cleanupPipelineServer = TeardownPipelineServer
 	cleanupStorage        = TeardownS3Storage
@@ -28,11 +28,11 @@ var (
 	cleanupMaaSPlatform = serving.TeardownMaaSPlatform
 	cleanupComponents   = features.RestoreComponents
 	cleanupProject      = recipe.DeleteProject
-	// recipeProjectProblem is recipe.ProjectTeardownProblem; tests replace it.
+	// Bound to recipe.ProjectTeardownProblem; swappable in tests.
 	recipeProjectProblem = recipe.ProjectTeardownProblem
 )
 
-// CleanupStepID is the step id of each part of a clean-up, as streamed:
+// CleanupStepID identifies each clean-up slice in the stream, e.g.
 // "pipeline-server:<project>", "storage", "mlflow", "playground:<project>",
 // "model:<project>", "inference-gateway", "maas-unpublish:<project>"
 // (first), "maas-platform", "recipe-project:<project>", and "components"
@@ -47,22 +47,22 @@ func CleanupStepID(part, project string) string {
 type cleanupPart struct {
 	id, title string
 	run       func() (*types.OperationResponse, error)
-	// says: the part's own result message is what the clean-up's result
-	// says it did (it may have changed nothing: a component kept, a
-	// project already gone), instead of "Deleted <title>".
+	// When true, the overall clean-up message quotes this part's own result
+	// (which may report no change—component retained, project already
+	// absent) rather than wording like "Deleted <title>".
 	says bool
 }
 
-// cleanupParts lists the parts of a clean-up in the order they run: the
-// pipeline servers first (the storage teardown refuses while one uses the
-// storage), then the storage, then MLflow, which depends on neither, then
-// the playgrounds (which use the models), then the models and, after them, the inference gateway they route through
-// (its teardown refuses while a model uses it). A model published to MaaS
-// is unpublished before anything else (the Models teardown refuses while it
-// is published), and the MaaS platform goes last but for a project a
-// recipe created, which goes once the parts that live in it are gone, and
-// the DataScienceCluster components this tool turned on, which go back to
-// what they were once nothing of the clean-up uses them.
+// cleanupParts returns clean-up slices in execution order: pipeline servers
+// first (storage teardown blocks while one still references storage), then
+// storage, then MLflow (independent of both), then playgrounds (which
+// depend on models), then models and—after those—the inference gateway they
+// traffic through (its teardown blocks while a model still routes via it).
+// A MaaS-published model is unpublished ahead of everything else (Models
+// teardown blocks while publication remains), and the MaaS platform runs
+// near the end except for recipe-provisioned projects, which run once
+// in-project resources are gone, and DataScienceCluster components this
+// tool enabled, which revert once nothing in the clean-up still needs them.
 func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 	var parts []cleanupPart
 	for _, project := range req.MaaSPublished {
@@ -114,34 +114,34 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 		parts = append(parts, cleanupPart{id: CleanupStepID("maas-platform", ""), title: "the MaaS platform", run: func() (*types.OperationResponse, error) { return cleanupMaaSPlatform(c) }})
 	}
 	for _, project := range req.RecipeProjects {
-		// After every part that lives in a project (MaaS publications,
-		// pipeline servers, playgrounds, models), so its own teardown
-		// runs first; each with its own confirmations.
+		// Scheduled after every in-project slice (MaaS publications,
+		// pipeline servers, playgrounds, models) so project teardown runs
+		// once those finish; each carries its own confirmations.
 		parts = append(parts, cleanupPart{
 			id:    CleanupStepID("recipe-project", project),
 			title: fmt.Sprintf("project '%s', which a recipe created", project),
 			run: func() (*types.OperationResponse, error) {
-				return cleanupProject(c, project, req.ConfirmProjectContents[project])
+				return cleanupProject(c, project, req.RecipeProjectUIDs[project], req.ConfirmProjectContents[project])
 			},
 			says: true,
 		})
 	}
 	if len(req.Components) > 0 {
-		// Last: what used the components is gone by now.
+		// Final step: component consumers are already removed.
 		parts = append(parts, cleanupPart{id: CleanupStepID("components", ""), title: "the DataScienceCluster components this tool turned on", run: func() (*types.OperationResponse, error) { return cleanupComponents(c, req.Components) }, says: true})
 	}
 	return parts
 }
 
-// CleanUp deletes what this tool created, as one operation: the pipeline
-// servers in the given projects, then the S3 storage (with storage an
-// earlier version left, and namespace seaweedfs when asked), then MLflow,
-// then the playgrounds and the models in the given projects, then the
-// inference gateway.
-// Each part runs the part's own teardown, with all its guards (only what
-// this tool created, never while something still uses it). Each part is a
-// streamed step; the first part that does not succeed stops the run, and
-// the result names what was deleted and what was not.
+// CleanUp removes resources this tool created as a single operation: pipeline
+// servers in the named projects, then S3 storage (including legacy storage
+// from an earlier version and the seaweedfs namespace when requested), then
+// MLflow, then playgrounds and models in those projects, then the inference
+// gateway.
+// Each slice runs its dedicated teardown with the usual guards (only what
+// this tool created, never while a dependent still exists). Progress streams
+// per slice; the run halts on the first failure, and the response states
+// what was removed versus what was left intact.
 func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
 	emit := func(e UpdateStepEvent) {
 		if onStep != nil {
@@ -150,30 +150,51 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 	}
 	parts := cleanupParts(c, req)
 	var done, said []string
-	// A recipe project that would be refused (not the recipe's any more,
-	// or holding what the user did not confirm) refuses the whole clean-up
-	// before anything is deleted; its part checks again before deleting.
-	// Every project is checked, so each one to confirm is named at once.
+	// When a recipe project would be rejected (not the reviewed instance,
+	// no longer owned by the recipe, or still holding unconfirmed content),
+	// the entire clean-up aborts before any deletion; that slice re-checks
+	// immediately before delete. All projects are validated up front so every
+	// confirmation prompt names its targets together.
+	type projectCheck struct {
+		project, problem, code string
+		left                   []string
+	}
+	var checks []projectCheck
 	var problems []string
 	refusalCode := ""
 	for _, project := range req.RecipeProjects {
-		problem, code, unconfirmed, err := recipeProjectProblem(c, project, req.ConfirmProjectContents[project])
+		problem, code, left, err := recipeProjectProblem(c, project, req.RecipeProjectUIDs[project], req.ConfirmProjectContents[project])
 		if err != nil {
-			problem, code = fmt.Sprintf("Cannot check project %s: %v.", project, err), kube.ErrorCodeOr(err, "prerequisites")
+			problem, code, left = fmt.Sprintf("Cannot check project %s: %v.", project, err), kube.ErrorCodeOr(err, "prerequisites"), nil
 		}
+		checks = append(checks, projectCheck{project: project, problem: problem, code: code, left: left})
 		if problem == "" {
 			continue
 		}
-		// Detail lists what is to confirm, one per line, exactly as
-		// confirmProjectContents takes it for the project (names cannot
-		// hold a line break): the browser shows the list and sends it
-		// back.
-		emit(UpdateStepEvent{Step: CleanupStepID("recipe-project", project), Status: "failed", Message: problem, ErrorCode: code, Detail: strings.Join(unconfirmed, "\n")})
 		problems = append(problems, problem)
-		// A refusal that is not only a confirmation to give names its
-		// own code.
+		// Refusals beyond “needs confirmation” keep a distinct error code.
 		if refusalCode == "" || refusalCode == recipe.ErrorCodeConfirmContents {
 			refusalCode = code
+		}
+	}
+	for _, chk := range checks {
+		// Detail enumerates non-tool resources still in the project, one
+		// line each, in the shape confirmProjectContents expects (names
+		// cannot contain newlines): the UI swaps its confirmation prompt
+		// for these lists. A confirmation refusal therefore lists every
+		// project holding any such resource, including one whose contents
+		// were fully confirmed: a retry must confirm again.
+		switch {
+		case chk.problem != "":
+			detail := ""
+			if chk.code == recipe.ErrorCodeConfirmContents {
+				detail = strings.Join(chk.left, "\n")
+			}
+			emit(UpdateStepEvent{Step: CleanupStepID("recipe-project", chk.project), Status: "failed", Message: chk.problem, ErrorCode: chk.code, Detail: detail})
+		case refusalCode == recipe.ErrorCodeConfirmContents && len(chk.left) > 0:
+			emit(UpdateStepEvent{Step: CleanupStepID("recipe-project", chk.project), Status: "failed", ErrorCode: recipe.ErrorCodeConfirmContents,
+				Message: fmt.Sprintf("Project %s holds what this tool did not create, all of it confirmed: %s. It was not deleted, as the clean-up asks to confirm what another project holds.", chk.project, strings.Join(chk.left, ", ")),
+				Detail:  strings.Join(chk.left, "\n")})
 		}
 	}
 	if len(problems) > 0 {
@@ -181,8 +202,8 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 		recordCleanupActivity(c, "refused: "+problem, false)
 		return &types.OperationResponse{Success: false, Message: problem + " Nothing was deleted.", ErrorCode: refusalCode}, nil
 	}
-	// Projects of MaaS publications that are gone leave the MaaS gateway
-	// first (maas_prune.go), whatever is selected.
+	// Orphaned MaaS publication projects trigger gateway cleanup first
+	// (maas_prune.go), regardless of selection.
 	logs := serving.ReleaseGoneMaaSProjects(c)
 	for i, p := range parts {
 		if err := c.Context().Err(); err != nil {
@@ -212,9 +233,9 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 	return &types.OperationResponse{Success: true, Message: msg, Logs: logs}, nil
 }
 
-// cleanupSummary says what a clean-up did: the parts it deleted, then
-// what the parts that speak for themselves (the components, a recipe
-// project) said, so nothing kept or already gone reads as deleted.
+// cleanupSummary builds the user-facing outcome: deleted slices first, then
+// messages from self-describing slices (components, recipe projects) so
+// retained or already-absent items are not described as deleted.
 func cleanupSummary(done, said []string) string {
 	var out []string
 	if len(done) > 0 {
@@ -231,8 +252,8 @@ func cleanupSummary(done, said []string) string {
 	return strings.Join(out, " ")
 }
 
-// cleanupStopped is the result of a clean-up that stopped: why, what was
-// deleted before, and what was not done.
+// cleanupStopped assembles the response when a clean-up halts mid-run: cause,
+// what completed beforehand, and what never ran.
 func cleanupStopped(c *Client, notDone []cleanupPart, done, said, logs []string, reason, code string) *types.OperationResponse {
 	msg := strings.TrimSpace(reason)
 	if len(done) > 0 {
