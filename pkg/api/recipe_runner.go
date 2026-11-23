@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -145,6 +146,7 @@ func (rr *recipeRunner) update(fn func(run *types.RecipeRun)) *types.RecipeRun {
 func copyRecipeRun(run *types.RecipeRun) *types.RecipeRun {
 	cp := *run
 	cp.Steps = append([]types.RecipeRunStep(nil), run.Steps...)
+	cp.Components = slices.Clone(run.Components)
 	if run.Pinned != nil {
 		p := *run.Pinned
 		cp.Pinned = &p
@@ -223,7 +225,8 @@ func writeRecipeRefusal(w http.ResponseWriter, status int, code, msg string, pro
 func planForRun(c *cluster.Client, rcp types.EnvironmentRecipe, pinned *types.RecipePinnedBuild) (*types.RecipePlan, cluster.RecipeState) {
 	plan, state := planRecipe(c, rcp, pinned)
 	if activeProfile != ProfileFull {
-		plan.Problems = append(plan.Problems, types.RecipeProblem{Message: "Environment recipes run only in the full profile of the updater."})
+		plan.Problems = append(plan.Problems, types.RecipeProblem{Message: "Environment recipes run only in the full profile of the updater.",
+			Fix: &types.RecipeFix{Code: types.RecipeFixProfileGitOps}})
 	}
 	return plan, state
 }
@@ -254,7 +257,11 @@ func beginRecipeRun(c *cluster.Client, w http.ResponseWriter, st *recipeStart, r
 		run.ID, run.StartedAt, run.ResumedAt = prior.ID, prior.StartedAt, now
 	}
 	for _, s := range steps {
-		run.Steps = append(run.Steps, types.RecipeRunStep{ID: s.ID, Title: s.Title, Status: types.RecipeStepPending})
+		typical, most := s.Seconds()
+		run.Steps = append(run.Steps, types.RecipeRunStep{ID: s.ID, Title: s.Title, Status: types.RecipeStepPending, TypicalSeconds: typical, MaxSeconds: most})
+	}
+	if prior != nil {
+		keepOwnership(run, &state, prior)
 	}
 	// The run's own mutation slot, before anything is recorded: a run
 	// that cannot begin leaves no record of a running run.
@@ -295,6 +302,29 @@ func beginRecipeRun(c *cluster.Client, w http.ResponseWriter, st *recipeStart, r
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	writeJSON(w, types.RecipeRunAccepted{RunID: run.ID}, "recipe-run")
+}
+
+// keepOwnership carries what earlier attempts of the run set up into the
+// resumed one (merged, never reset): a step's part one of them created
+// stays the run's when this attempt finds it there and skips the step, and
+// so do the DataScienceCluster components they turned on. Clean up then
+// offers them as the run's own.
+func keepOwnership(run *types.RecipeRun, state *cluster.RecipeState, prior *types.RecipeRun) {
+	for _, p := range prior.Steps {
+		if p.Created {
+			state.MarkCreated(p.ID)
+		}
+	}
+	state.AddComponents(prior.Components...)
+	takeOwnership(run, state)
+}
+
+// takeOwnership copies what the state says the run set up into its record.
+func takeOwnership(run *types.RecipeRun, state *cluster.RecipeState) {
+	for i := range run.Steps {
+		run.Steps[i].Created = run.Steps[i].Created || state.Created[run.Steps[i].ID]
+	}
+	run.Components = slices.Clone(state.Components)
 }
 
 // recipeTarget is the operation's target: "<recipe>: step k of n
@@ -396,7 +426,7 @@ func (x *recipeExec) beforeStep(i int) (recipeEnd, bool) {
 		return recipeEnd{types.RecipeRunFailed, fmt.Sprintf("Stopped %s: the run took longer than its limit (%s).", where, recipeRunCap(len(x.steps))), "timeout"}, true
 	}
 	if msg, code := x.gate(x.runCtx); msg != "" {
-		return recipeEnd{types.RecipeRunStopped, fmt.Sprintf("Stopped before %s: %s Then Resume.", title, msg), code}, true
+		return recipeEnd{types.RecipeRunStopped, fmt.Sprintf("Stopped before %s: %s", title, msg), code}, true
 	}
 	return recipeEnd{}, false
 }
@@ -491,6 +521,7 @@ func (x *recipeExec) stepEnded(i int, status, msg, code string) {
 			p := *x.state.Pinned
 			run.Pinned = &p
 		}
+		takeOwnership(run, &x.state)
 	})
 	inflight.recordStep(x.opID, UpdateStep{Step: x.steps[i].ID, Status: status, Message: msg, ErrorCode: code})
 }
@@ -551,7 +582,18 @@ func (x *recipeExec) finish(end recipeEnd) {
 // process's: running there while that process holds a live lease of the
 // run's own operation (its boot ID and operation ID), otherwise
 // interrupted.
+//
+// A run that is not running carries its Clean up request
+// (cluster.RecipeCleanupRequest).
 func recipeRunStatus(c *cluster.Client) types.RecipeRunStatus {
+	st := recordedRecipeRunStatus(c)
+	if !st.Running && st.Run != nil {
+		st.Cleanup = cluster.RecipeCleanupRequest(st.Run)
+	}
+	return st
+}
+
+func recordedRecipeRunStatus(c *cluster.Client) types.RecipeRunStatus {
 	local := recipes.status()
 	if local != nil && local.Running {
 		return *local

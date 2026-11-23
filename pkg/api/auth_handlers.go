@@ -191,16 +191,16 @@ func mutationAuth(asUser bool, fn func(c *cluster.Client, w http.ResponseWriter,
 			// the token of the request that started it.
 			gate: func(ctx context.Context) (string, string) {
 				if asUser {
-					if msg, code, _ := sessionProblem(ctx, userToken); msg != "" {
+					if msg, code := stepSessionProblem(ctx, userToken); msg != "" {
 						return msg, code
 					}
 				}
 				allowed, err := mutationPermission(ctx, userToken)
 				switch {
 				case err != nil:
-					return fmt.Sprintf("Cannot verify that you may still change the cluster (%v).", err), "authorization_unavailable"
+					return fmt.Sprintf("Cannot verify that you may still change the cluster (%v). Resume once the API server answers.", err), "authorization_unavailable"
 				case !allowed:
-					return readOnlyMessage, "forbidden"
+					return readOnlyMessage + " A cluster-admin can Resume.", "forbidden"
 				}
 				return "", ""
 			}}

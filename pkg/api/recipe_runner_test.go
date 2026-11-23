@@ -49,6 +49,10 @@ type fakeRecipeStep struct {
 	clients  []*cluster.Client
 	onRun    func()
 	waitsCtx bool
+	// created: Run sets the part up (not found there); components: the
+	// DataScienceCluster components it turns on.
+	created    bool
+	components []string
 }
 
 func (f *recipeFake) addStep(id string) *fakeRecipeStep {
@@ -68,10 +72,14 @@ func (f *recipeFake) clusterSteps() []cluster.RecipeStep {
 				s.clients = append(s.clients, c)
 				return cluster.RecipeCheck{Done: s.done, Reason: s.id + " is there"}, nil
 			},
-			Run: func(c *cluster.Client, _ *cluster.RecipeState, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+			Run: func(c *cluster.Client, st *cluster.RecipeState, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 				f.mu.Lock()
 				s.ran = true
 				f.mu.Unlock()
+				if s.created {
+					st.MarkCreated(s.id)
+				}
+				st.AddComponents(s.components...)
 				emit(cluster.UpdateStepEvent{Step: s.id + "-inner", Status: "running", Message: "working on " + s.id})
 				if s.onRun != nil {
 					s.onRun()
@@ -865,5 +873,141 @@ func TestRecipeRun_LeaseRenewalsUseAFreshToken(t *testing.T) {
 	defer mu.Unlock()
 	if len(tokens) < 2 || tokens[0] != "sa-token" || tokens[len(tokens)-1] != "sa-token-rotated" {
 		t.Errorf("lease writes with tokens %v", tokens)
+	}
+}
+
+// Each step of a run carries the plan's figures: how long it usually
+// takes and at most.
+func TestRecipeRun_StepsCarryTheirDurations(t *testing.T) {
+	f, _ := installRecipeFake(t)
+	close(f.addStep("one").release)
+	_, done := startRun(t)
+	waitDone(t, done)
+	if st := f.saved().Steps[0]; st.TypicalSeconds != 60 || st.MaxSeconds != 900 {
+		t.Errorf("step %+v", st)
+	}
+}
+
+// The sign-in stop says what to do next in the app's words: log out and
+// in again, then Resume (not "retry"), and no minutes (the record keeps
+// the message long after they were true).
+func TestRecipeRun_SignInStopSaysResume(t *testing.T) {
+	f, _ := installRecipeFake(t)
+	s1 := f.addStep("one")
+	f.addStep("two")
+	s1.onRun = func() {
+		readSessionToken = func(context.Context, string) (*cluster.SessionToken, error) {
+			return fullToken(sessionNow.Add(-24*time.Hour + 4*time.Minute + 30*time.Second)), nil
+		}
+	}
+	close(s1.release)
+	_, done := startRun(t)
+	waitDone(t, done)
+	want := "Stopped before Step two: Your sign-in expires before the next step could finish. Log out and log in again, then Resume."
+	if got := f.saved().StopReason; got != want {
+		t.Errorf("stop reason\n got %q\nwant %q", got, want)
+	}
+}
+
+// Resume keeps what an earlier attempt created: a step skipped now as
+// "already set up" stays the run's own, and the components it turned on
+// stay recorded. The status offers the clean-up of exactly those parts.
+func TestRecipeResume_KeepsWhatEarlierAttemptsCreated(t *testing.T) {
+	f, _ := installRecipeFake(t)
+	f.addStep("s3").created = true
+	pre := f.addStep("pipelines-prereq")
+	pre.created, pre.components = true, []string{"aipipelines"}
+	ps := f.addStep("pipeline-server")
+	ps.result = &types.OperationResponse{Success: false, Message: "not ready", ErrorCode: "timeout"}
+	for _, s := range f.steps {
+		close(s.release)
+	}
+	runID, done := startRun(t)
+	waitDone(t, done)
+
+	f.mu.Lock()
+	f.steps = nil
+	f.mu.Unlock()
+	f.addStep("s3").done = true
+	f.addStep("pipelines-prereq").done = true
+	ps2 := f.addStep("pipeline-server")
+	ps2.created = true
+	f.addStep("mlflow").done = true // found there: not the run's
+	for _, s := range f.steps {
+		close(s.release)
+	}
+	mutationLimiter = newRateLimiter()
+	w := httptest.NewRecorder()
+	HandleRecipeResume(w, postJSON(t, "/api/recipes/resume", "user:admin", `{"runId":"`+runID+`"}`))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("resume: %d %s", w.Code, w.Body.String())
+	}
+	recipes.mu.Lock()
+	done = recipes.done
+	recipes.mu.Unlock()
+	waitDone(t, done)
+	run := f.saved()
+	created := map[string]bool{}
+	for _, s := range run.Steps {
+		created[s.ID] = s.Created
+	}
+	if !created["s3"] || !created["pipelines-prereq"] || !created["pipeline-server"] || created["mlflow"] {
+		t.Errorf("created %v", created)
+	}
+	if strings.Join(run.Components, ",") != "aipipelines" {
+		t.Errorf("components %v", run.Components)
+	}
+	st := recipeRunStatus(nil)
+	c := st.Cleanup
+	if c == nil || !c.Storage || strings.Join(c.PipelineServers, ",") != "recipe-dev" || c.MLflow || strings.Join(c.Components, ",") != "aipipelines" {
+		t.Errorf("cleanup %+v", c)
+	}
+}
+
+// Before a step every sign-in refusal ends in what to do there: log in
+// again, then Resume. The refusals of a request keep their own words.
+func TestStepSessionProblem_EndsInResume(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		tok           *cluster.SessionToken
+		err           error
+		code          string
+		step, request string
+	}{
+		{"expiring", fullToken(sessionNow.Add(-24*time.Hour + 4*time.Minute)), nil, signInAgainCode,
+			"Your sign-in expires before the next step could finish. Log out and log in again, then Resume.",
+			"Your sign-in expires in 4 minutes, and a change may take up to 21 minutes. Log out and log in again, then retry."},
+		{"expired", nil, fmt.Errorf("x: %w", cluster.ErrUnauthenticated), "session_expired",
+			"Your OpenShift session has expired. Log in again, then Resume.",
+			"Your OpenShift session has expired. Log in again."},
+		{"revoked", nil, fmt.Errorf("x: %w", cluster.ErrSessionTokenGone), "session_expired",
+			"Your OpenShift sign-in was revoked or has ended. Log in again, then Resume.",
+			"Your OpenShift sign-in was revoked or has ended. Log in again."},
+		{"scoped", &cluster.SessionToken{Created: sessionNow, ExpiresIn: 86400, Scopes: []string{"user:info"}}, nil, signInAgainCode,
+			"Your sign-in cannot make changes: it was made before this updater acted with your own OpenShift permissions. Log out and log in again, then Resume.",
+			"Your sign-in cannot make changes: it was made before this updater acted with your own OpenShift permissions. Log out and log in again."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inCluster(t)
+			fakeSession(t, tc.tok, tc.err)
+			if msg, code := stepSessionProblem(context.Background(), "tok"); msg != tc.step || code != tc.code {
+				t.Errorf("step: %q %q", msg, code)
+			}
+			if msg, code, _ := sessionProblem(context.Background(), "tok"); msg != tc.request || code != tc.code {
+				t.Errorf("request: %q %q", msg, code)
+			}
+		})
+	}
+}
+
+// In the gitops profile the plan refuses with a fix code the UI can link.
+func TestRecipePlan_GitOpsProfileFix(t *testing.T) {
+	installRecipeFake(t)
+	orig := activeProfile
+	activeProfile = ProfileGitOps
+	t.Cleanup(func() { activeProfile = orig })
+	plan, _ := planForRun(nil, types.EnvironmentRecipe{}, nil)
+	if n := len(plan.Problems); n != 1 || plan.Problems[0].Fix == nil || *plan.Problems[0].Fix != (types.RecipeFix{Code: types.RecipeFixProfileGitOps}) {
+		t.Errorf("problems %+v", plan.Problems)
 	}
 }

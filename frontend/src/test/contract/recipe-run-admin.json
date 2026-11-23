@@ -3,6 +3,9 @@
   "remote": true,
   "run": {
     "bootId": "another-process",
+    "components": [
+      "aipipelines"
+    ],
     "id": "run1",
     "operationId": "op1",
     "pinned": {
@@ -64,38 +67,50 @@
       {
         "finishedAt": "2026-11-20T14:14:00Z",
         "id": "rhoai",
+        "maxSeconds": 900,
         "message": "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).",
         "startedAt": "2026-11-20T14:14:00Z",
         "status": "skipped",
-        "title": "RHOAI"
+        "title": "RHOAI",
+        "typicalSeconds": 420
       },
       {
+        "created": true,
         "finishedAt": "2026-11-20T14:15:00Z",
         "id": "dsc",
+        "maxSeconds": 420,
         "message": "DataScienceCluster created with default components",
         "startedAt": "2026-11-20T14:14:00Z",
         "status": "success",
-        "title": "DataScienceCluster"
+        "title": "DataScienceCluster",
+        "typicalSeconds": 60
       },
       {
         "errorCode": "forbidden",
         "finishedAt": "2026-11-20T14:15:00Z",
         "id": "project",
+        "maxSeconds": 60,
         "message": "Creating project recipe-dev failed.",
         "startedAt": "2026-11-20T14:15:00Z",
         "status": "failed",
-        "title": "Project recipe-dev"
+        "title": "Project recipe-dev",
+        "typicalSeconds": 10
       },
       {
+        "created": true,
         "id": "pipelines-prereq",
+        "maxSeconds": 600,
         "startedAt": "2026-11-20T14:16:00Z",
         "status": "running",
-        "title": "What Pipelines needs"
+        "title": "What Pipelines needs",
+        "typicalSeconds": 120
       },
       {
         "id": "s3",
+        "maxSeconds": 300,
         "status": "pending",
-        "title": "S3 storage"
+        "title": "S3 storage",
+        "typicalSeconds": 60
       }
     ],
     "user": "alice"
