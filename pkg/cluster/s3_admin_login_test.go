@@ -104,9 +104,13 @@ func TestResourcesStatusDoesNotCarryTheAdminPassword(t *testing.T) {
 	if strings.Contains(string(b), `"pass"`) || strings.Contains(string(b), exampleAuth("pass")) {
 		t.Fatalf("status carries the password: %s", b)
 	}
-	for _, r := range f.requests {
-		if strings.Contains(r, "/secrets/"+storage.S3Secret) {
-			t.Errorf("status read the storage's Secret: %s", r)
+	_ = storage.S3Secret // the Secret the status may read (below)
+	// The status reads the storage's Secret on secured storage, for the
+	// SeaweedFS lookups of which key each pipeline server uses (SECURITY.md,
+	// "S3 storage keys"); the keys and the password never reach the status.
+	for _, k := range []string{exampleAuth("seaweedfs-key"), "seaweedfs-key", exampleAuth("admin-pass"), "admin-pass"} {
+		if strings.Contains(string(b), k) {
+			t.Errorf("status carries %q: %s", k, b)
 		}
 	}
 }

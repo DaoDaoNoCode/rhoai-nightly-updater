@@ -404,13 +404,24 @@ func verifySigV4(r *http.Request, body []byte, id, secret string) error {
 	// The query, as SigV4 wants it: each key and value URI-encoded (spaces
 	// as %20), sorted.
 	q, _ := url.ParseQuery(r.URL.RawQuery)
-	var pairs []string
+	type kv struct{ k, v string }
+	var kvs []kv
 	for k, vs := range q {
 		for _, v := range vs {
-			pairs = append(pairs, sigEscape(k)+"="+sigEscape(v))
+			kvs = append(kvs, kv{sigEscape(k), sigEscape(v)})
 		}
 	}
-	sort.Strings(pairs)
+	// By encoded key, then value, as SeaweedFS and AWS sort them.
+	sort.Slice(kvs, func(i, j int) bool {
+		if kvs[i].k != kvs[j].k {
+			return kvs[i].k < kvs[j].k
+		}
+		return kvs[i].v < kvs[j].v
+	})
+	var pairs []string
+	for _, p := range kvs {
+		pairs = append(pairs, p.k+"="+p.v)
+	}
 	canonical := strings.Join([]string{r.Method, r.URL.EscapedPath(), strings.Join(pairs, "&"), canonHeaders.String(), fields["SignedHeaders"], payload}, "\n")
 	creq := sha256.Sum256([]byte(canonical))
 	toSign := "AWS4-HMAC-SHA256\n" + amzDate + "\n" + strings.Join(scope[1:], "/") + "\n" + hex.EncodeToString(creq[:])

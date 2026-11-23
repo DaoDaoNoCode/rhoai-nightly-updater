@@ -1853,6 +1853,12 @@ type S3KeysState struct {
 	// why the tool leaves its key ("ns/name (not recorded as this
 	// tool's)"): after Secure S3 storage their old key no longer works.
 	KeepOldKey []string `json:"keepOldKey,omitempty"`
+	// LeftoverUsers are SeaweedFS users this tool made (rnu-dspa-*) whose
+	// project has no live pipeline server of this tool any more (deleted
+	// while SeaweedFS failed, or outside this tool): their keys still work.
+	// Secure S3 storage and Repair delete them. Empty when the pipeline
+	// servers, the record or the users cannot be read (fail closed).
+	LeftoverUsers []string `json:"leftoverUsers,omitempty"`
 	// CheckError says why which key a pipeline server uses could not be
 	// read (the state is then not changed by it).
 	CheckError string `json:"checkError,omitempty"`

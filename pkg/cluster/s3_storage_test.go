@@ -91,11 +91,21 @@ func putS3Serving(f *resourceFake) {
 	f.putJSON(s3RoutePath, `{"metadata":{"labels":`+toolLabelJSON+`},"spec":{"host":"seaweedfs-admin-seaweedfs.apps.example.com","to":{"kind":"Service","name":"seaweedfs-s3"},"port":{"targetPort":"ui"}}}`)
 }
 
+// putS3NetworkPolicy puts NetworkPolicy seaweedfs-ingress as setup applies it.
+func putS3NetworkPolicy(f *resourceFake) {
+	for _, r := range storage.S3Resources(storage.S3Keys{}, true) {
+		if r.Kind == "NetworkPolicy" {
+			f.putJSON(s3NPPath, mustJSON(r.Obj))
+		}
+	}
+}
+
 // putReadyManagedS3 puts a running storage the tool set up, with its keys.
 func putReadyManagedS3(f *resourceFake) {
 	putS3Namespace(f, toolLabelJSON)
 	putS3Deployment(f, 1)
 	putS3Serving(f)
+	putS3NetworkPolicy(f)
 	f.putJSON(s3SecretPath, `{"metadata":{"labels":`+toolLabelJSON+`},"data":{"AWS_ACCESS_KEY_ID":"`+exampleAuth("seaweedfs-key")+`","AWS_SECRET_ACCESS_KEY":"`+exampleAuth("pass")+`","WEED_ADMIN_PASSWORD":"`+exampleAuth("admin-pass")+`"}}`)
 }
 

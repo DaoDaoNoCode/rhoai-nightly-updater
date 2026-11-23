@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -83,8 +84,10 @@ func ScopedUserName(project string) string {
 	if len(name) <= 64 {
 		return name
 	}
+	// "." cannot be in a namespace name, so no project's own name can end
+	// up as another project's hashed one.
 	sum := sha256.Sum256([]byte(project))
-	return name[:55] + "-" + hex.EncodeToString(sum[:4])
+	return name[:55] + "." + hex.EncodeToString(sum[:4])
 }
 
 // ArgsSecured is true when the "weed mini" argument list enables IAM writes and disables self-service.
@@ -101,29 +104,29 @@ func ArgsSecured(args []string) bool {
 // earlier version set up: Repair keeps it as it is (its stored key may be
 // in pipeline projects), and only Secure S3 storage moves it, with a new
 // key. Otherwise the stored keys are kept (S3Credentials).
-func s3SetupKeys(c *kube.Client) (keys S3Keys, secured bool, err error) {
+func s3SetupKeys(c *kube.Client) (keys S3Keys, secured, rotated bool, err error) {
 	body, exists, err := c.GetOptional(rhoai.NamespacedPath("apps/v1", "deployments", S3Namespace, S3Deployment))
 	if err != nil {
-		return S3Keys{}, false, err
+		return S3Keys{}, false, false, err
 	}
 	if !exists {
 		_, found, err := ReadS3Keys(c)
 		if err != nil {
-			return S3Keys{}, false, err
+			return S3Keys{}, false, false, err
 		}
 		if found {
 			keys, err = newAdminKeys(c)
 		} else {
 			keys, err = S3Credentials(c)
 		}
-		return keys, true, err
+		return keys, true, found, err
 	}
 	var deploy S3DeploymentSpec
 	if err := json.Unmarshal(body, &deploy); err != nil {
-		return S3Keys{}, false, fmt.Errorf("parse Deployment %s/%s: %w", S3Namespace, S3Deployment, err)
+		return S3Keys{}, false, false, fmt.Errorf("parse Deployment %s/%s: %w", S3Namespace, S3Deployment, err)
 	}
 	keys, err = S3Credentials(c)
-	return keys, deploy.Secured(), err
+	return keys, deploy.Secured(), false, err
 }
 
 // storageSecured reads the storage's Deployment: false when it is missing.
@@ -401,23 +404,24 @@ func keyServers(ep S3Endpoints, dspas []DSPA, rec PipelineRecord) (recorded []DS
 // already and gets no new grant for this. Unsecured storage marks every
 // recorded server on the legacy key without live lookups. Returns nil when
 // storage is foreign, absent, or pending migration.
-func KeysState(c *kube.Client, state types.ResourceState, ep S3Endpoints, dspas []DSPA, rec PipelineRecord) *types.S3KeysState {
+func KeysState(c *kube.Client, state types.ResourceState, ep S3Endpoints, dspas []DSPA, rec PipelineRecord, recOK bool) *types.S3KeysState {
 	if !state.Deployed || !state.ManagedByTool || state.Terminating {
 		return nil
 	}
 	recorded, kept := keyServers(ep, dspas, rec)
 	ks := &types.S3KeysState{Secured: ep.Secured, KeepOldKey: kept}
-	if !state.Ready {
-		ks.SecureBlockedReason = "The S3 storage is not ready."
-	}
 	if !ep.Secured {
 		for _, d := range recorded {
 			ks.OldKey = append(ks.OldKey, d.Meta.Namespace+"/"+d.Meta.Name)
 		}
 		ks.NeedsSecuring = true
+	}
+	if !state.Ready {
+		// No live lookups against storage that is not running.
+		ks.SecureBlockedReason = "The S3 storage is not ready."
 		return ks
 	}
-	if len(recorded) == 0 {
+	if !ep.Secured {
 		return ks
 	}
 	sw, err := adminSeaweed(c)
@@ -425,12 +429,15 @@ func KeysState(c *kube.Client, state types.ResourceState, ep S3Endpoints, dspas 
 		ks.CheckError = "Cannot check which key each pipeline server uses: " + err.Error()
 		return ks
 	}
+	// One request per server at most; the first failure ends the lookups
+	// (a storage that does not answer must not hold the status up per
+	// server).
 	for _, d := range recorded {
 		name := d.Meta.Namespace + "/" + d.Meta.Name
 		keyID, found, err := connectionKeyID(c, d.Meta.Namespace)
 		if err != nil {
 			ks.CheckError = fmt.Sprintf("Cannot check which key %s uses: %v", name, err)
-			continue
+			break
 		}
 		if !found {
 			// Deleted in the dashboard: its pipeline Secret may still hold
@@ -441,7 +448,7 @@ func KeysState(c *kube.Client, state types.ResourceState, ep S3Endpoints, dspas 
 		ids, _, err := sw.ListAccessKeys(ScopedUserName(d.Meta.Namespace))
 		if err != nil {
 			ks.CheckError = fmt.Sprintf("Cannot check which key %s uses: %v", name, err)
-			continue
+			break
 		}
 		// Its own key, and the run that gave it finished: the DSPA names the
 		// key (an annotation is compared for the status only; it never
@@ -452,8 +459,91 @@ func KeysState(c *kube.Client, state types.ResourceState, ep S3Endpoints, dspas 
 			ks.OldKey = append(ks.OldKey, name)
 		}
 	}
-	ks.NeedsSecuring = len(ks.OldKey) > 0
+	if recOK && ks.CheckError == "" {
+		// Fail closed: a user is leftover only when the users, the pipeline
+		// servers and the record could all be read.
+		if left, err := leftoverUsers(sw, recorded); err == nil {
+			ks.LeftoverUsers = left
+		}
+	}
+	ks.NeedsSecuring = len(ks.OldKey) > 0 || len(ks.LeftoverUsers) > 0
 	return ks
+}
+
+// leftoverUsers lists the users this tool made (ScopedUserPrefix) whose
+// project has no recorded, live pipeline server of this tool on the
+// storage (recorded, from keyServers). Never the static admin.
+func leftoverUsers(sw *seaweedClient, recorded []DSPA) ([]string, error) {
+	users, err := sw.ListUsers()
+	if err != nil {
+		return nil, err
+	}
+	live := map[string]bool{}
+	for _, d := range recorded {
+		live[ScopedUserName(d.Meta.Namespace)] = true
+	}
+	var out []string
+	for _, u := range users {
+		if strings.HasPrefix(u, ScopedUserPrefix) && !live[u] {
+			out = append(out, u)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// deleteUsers deletes users by name: their keys, then the user.
+func deleteUsers(sw *seaweedClient, users []string) error {
+	for _, u := range users {
+		if !strings.HasPrefix(u, ScopedUserPrefix) {
+			continue
+		}
+		ids, _, err := sw.ListAccessKeys(u)
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if err := sw.DeleteAccessKey(u, id); err != nil {
+				return err
+			}
+		}
+		if err := sw.DeleteUser(u); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// removeLeftoverUsers deletes the leftover users (leftoverUsers) of secured
+// storage, reading the pipeline servers, the record and the Service first;
+// any read that fails deletes nothing (fail closed). It returns the names
+// deleted.
+func removeLeftoverUsers(c *kube.Client) ([]string, error) {
+	ep, err := readS3Endpoints(c)
+	if err != nil {
+		return nil, err
+	}
+	dspas, err := ListDSPAs(c, "")
+	if err != nil && !errors.Is(err, ErrDSPACRDMissing) {
+		return nil, err
+	}
+	rec, err := ReadPipelineRecord(c)
+	if err != nil {
+		return nil, err
+	}
+	sw, err := adminSeaweed(c)
+	if err != nil {
+		return nil, err
+	}
+	recorded, _ := keyServers(ep, dspas, rec)
+	left, err := leftoverUsers(sw, recorded)
+	if err != nil || len(left) == 0 {
+		return nil, err
+	}
+	if err := deleteUsers(sw, left); err != nil {
+		return nil, err
+	}
+	return left, nil
 }
 
 // rekeyServer assigns dedicated credentials to one recorded pipeline server:

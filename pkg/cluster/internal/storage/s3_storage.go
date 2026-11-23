@@ -2,6 +2,7 @@ package storage
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -747,6 +749,9 @@ func S3StatusAndEndpoints(c *kube.Client) (types.ResourceState, S3Endpoints, err
 		if deploy.AdminPasswordIsS3Key() && state.RepairNeeded == "" {
 			state.RepairNeeded = "The admin UI's password is the S3 secret key, which every pipeline project's copy of the keys holds. Repair gives the admin UI a password of its own; the S3 keys and the data stay."
 		}
+		if state.RepairNeeded == "" {
+			state.RepairNeeded = networkPolicyProblem(c)
+		}
 	}
 	switch {
 	case ns.Managed && scaledDown:
@@ -970,7 +975,10 @@ func S3Resources(keys S3Keys, secured bool) []s3Resource {
 				"selector": map[string]any{"matchLabels": podLabels},
 				"strategy": map[string]any{"type": "Recreate"},
 				"template": map[string]any{
-					"metadata": map[string]any{"labels": podLabels},
+					// The checksum of the admin keys: a new key in the
+					// Secret changes the template, so the pod restarts with
+					// it (env from a Secret is read at start only).
+					"metadata": map[string]any{"labels": podLabels, "annotations": map[string]any{S3KeyChecksumAnnotation: keyChecksum(keys)}},
 					"spec": map[string]any{
 						"volumes": []map[string]any{
 							{"name": "data", "persistentVolumeClaim": map[string]any{"claimName": s3PVC}},
@@ -1059,6 +1067,66 @@ func S3Resources(keys S3Keys, secured bool) []s3Resource {
 	}
 }
 
+// networkPolicyProblem explains how NetworkPolicy seaweedfs-ingress differs
+// from what setup applies, or returns "" (also when it cannot be read: the
+// status then says nothing). It is a security control: only the S3 port
+// and the admin UI port may be reachable (see S3Resources).
+func networkPolicyProblem(c *kube.Client) string {
+	body, found, err := c.GetOptional(rhoai.NamespacedPath("networking.k8s.io/v1", "networkpolicies", S3Namespace, s3NetworkPolicy))
+	if err != nil {
+		return ""
+	}
+	repair := fmt.Sprintf(" Only the S3 port %d and the admin UI port %d may be reachable; Repair applies it again.", s3Port, s3AdminPort)
+	if !found {
+		return fmt.Sprintf("NetworkPolicy %s is missing, so every port of SeaweedFS is reachable from the pod network.", s3NetworkPolicy) + repair
+	}
+	var np struct {
+		Spec struct {
+			PodSelector struct {
+				MatchLabels map[string]string `json:"matchLabels"`
+			} `json:"podSelector"`
+			PolicyTypes []string `json:"policyTypes"`
+			Ingress     []struct {
+				From  []json.RawMessage            `json:"from"`
+				Ports []map[string]json.RawMessage `json:"ports"`
+			} `json:"ingress"`
+		} `json:"spec"`
+	}
+	changed := fmt.Sprintf("NetworkPolicy %s was changed.", s3NetworkPolicy) + repair
+	if json.Unmarshal(body, &np) != nil || np.Spec.PodSelector.MatchLabels["app"] != s3AppLabel || len(np.Spec.PodSelector.MatchLabels) != 1 ||
+		!slices.Equal(np.Spec.PolicyTypes, []string{"Ingress"}) {
+		return changed
+	}
+	var ports []string
+	for _, rule := range np.Spec.Ingress {
+		if len(rule.From) == 0 || len(rule.Ports) == 0 {
+			return changed
+		}
+		for _, p := range rule.Ports {
+			if len(p) != 2 || string(p["protocol"]) != `"TCP"` || p["port"] == nil {
+				return changed
+			}
+			ports = append(ports, string(p["port"]))
+		}
+	}
+	sort.Strings(ports)
+	// Sorted as text: "12535" before "8333".
+	if !slices.Equal(ports, []string{strconv.Itoa(s3AdminPort), strconv.Itoa(s3Port)}) {
+		return changed
+	}
+	return ""
+}
+
+// S3KeyChecksumAnnotation on the storage's pod template is keyChecksum of
+// the admin keys it was started with.
+const S3KeyChecksumAnnotation = "rhoai-nightly-updater/admin-key-checksum"
+
+// keyChecksum is a short SHA-256 of the admin key pair (not reversible).
+func keyChecksum(keys S3Keys) string {
+	sum := sha256.Sum256([]byte(keys.AccessKey + "\n" + keys.SecretKey))
+	return hex.EncodeToString(sum[:8])
+}
+
 // restrictedSecurityContext is a container securityContext that passes
 // Pod Security "restricted" and OpenShift's restricted-v2 SCC, without a
 // fixed UID so the SCC assigns one.
@@ -1117,12 +1185,40 @@ func SetupS3(c *kube.Client) (*types.OperationResponse, error) {
 		record.Action(c, "setup-s3", fmt.Sprintf("namespace=%s (earlier storage present)", S3Namespace), false)
 		return &types.OperationResponse{Success: false, Message: reason + " Nothing was changed.", ErrorCode: "prerequisites"}, nil
 	}
-	keys, secured, err := s3SetupKeys(c)
+	keys, secured, rotated, err := s3SetupKeys(c)
 	if err != nil {
 		record.Action(c, "setup-s3", fmt.Sprintf("namespace=%s (credentials)", S3Namespace), false)
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot determine the S3 credentials; nothing was changed: %v.%s", err, kube.TemplateHint(err)), ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
-	return setupS3Storage(c, keys, &opLog{}, s3RetrySetup, secured)
+	// Who held the stored key, when this setup replaces it (read before).
+	var holders []string
+	if rotated {
+		if dspas, err := ListDSPAs(c, ""); err == nil {
+			if ep, err := readS3Endpoints(c); err == nil {
+				live, _ := Users(dspas, ep.Address)
+				holders = live
+			}
+		}
+	}
+	log := &opLog{}
+	res, err := setupS3Storage(c, keys, log, s3RetrySetup, secured)
+	if err != nil || !res.Success || !secured {
+		return res, err
+	}
+	if rotated {
+		res.Message += " The storage's Deployment was missing, so it was set up again with a new admin key and per-server keys turned on: the old admin key no longer works."
+		if len(holders) > 0 {
+			res.Message += fmt.Sprintf(" %s used it and lost S3 access: %s. Run Secure S3 storage to give each pipeline server this tool set up a key of its own.", kube.Verb(len(holders), "This pipeline server", "These pipeline servers"), strings.Join(holders, ", "))
+		}
+	}
+	// Users of pipeline servers that are gone: their keys still work.
+	if left, err := removeLeftoverUsers(c); err != nil {
+		res.Message += fmt.Sprintf(" The keys of deleted pipeline servers could not be checked: %v.", err)
+	} else if len(left) > 0 {
+		res.Message += fmt.Sprintf(" Deleted the keys of pipeline servers that are gone: %s.", strings.Join(left, ", "))
+		res.Logs = append(res.Logs, "OK: Deleted SeaweedFS users "+strings.Join(left, ", "))
+	}
+	return res, nil
 }
 
 // opLog collects an operation's log lines for its response, and passes each
@@ -1350,7 +1446,7 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry, secu
 	record.Action(c, "setup-s3", fmt.Sprintf("namespace=%s bucket=%s", S3Namespace, s3Bucket), true)
 	return &types.OperationResponse{
 		Success: true,
-		Message: fmt.Sprintf("S3 storage (SeaweedFS) deployed with bucket %s; pipeline servers reach it at %s. Sign in to the admin UI as %s; the password (the S3 secret key) and the S3 keys are in Secret %s in namespace %s.", s3Bucket, S3Endpoint(), S3AdminUser, S3Secret, S3Namespace),
+		Message: fmt.Sprintf("S3 storage (SeaweedFS) deployed with bucket %s; pipeline servers reach it at %s. Sign in to the admin UI as %s; its password (a value of its own) and the admin S3 keys are in Secret %s in namespace %s.", s3Bucket, S3Endpoint(), S3AdminUser, S3Secret, S3Namespace),
 		Logs:    log.lines,
 	}, nil
 }

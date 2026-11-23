@@ -600,7 +600,7 @@ func (m *migrateRun) migrate(legacy *Legacy, dspas []DSPA, confirmed []string) (
 	if ready {
 		m.step("storage", "success", "OK: The new storage is already set up")
 	} else {
-		keys, secured, err := s3SetupKeys(m.c)
+		keys, secured, _, err := s3SetupKeys(m.c)
 		if err != nil {
 			return m.fail("storage", fmt.Sprintf("Cannot make the new storage's keys; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "keys")
 		}

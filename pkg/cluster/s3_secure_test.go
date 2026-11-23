@@ -1,11 +1,14 @@
 package cluster
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -240,8 +243,10 @@ func TestSecureS3_StopsOnAFailedProbeAndResumes(t *testing.T) {
 	f.sw.failUserObjects[storage.ScopedUserName("team-b")] = 500
 
 	resp, _ := secureRun(t, c)
-	if resp.Success || resp.ErrorCode != "s3_keys" || !strings.Contains(resp.Message, "team-b/dspa did not get its own key") ||
-		!strings.Contains(resp.Message, "On a key of their own: team-a/dspa.") || !strings.Contains(resp.Message, "Still on the old key: team-b/dspa; run Secure S3 storage again") {
+	// The storage is secured; one server is left: a warning outcome
+	// ("partial") that names it and says a re-run finishes it.
+	if !resp.Success || resp.ErrorCode != "partial" || !strings.Contains(resp.Message, "team-b/dspa still uses the old key") ||
+		!strings.Contains(resp.Message, "On a key of their own: team-a/dspa.") || !strings.Contains(resp.Message, "Run Secure S3 storage again") {
 		t.Fatalf("first run: %+v", resp)
 	}
 	if got := strings.Join(lastStatuses(), " "); got != "check=success rollout=success server:team-a/dspa=success server:team-b/dspa=failed" {
@@ -441,6 +446,9 @@ func TestS3NetworkPolicyAllowsOnlyS3AndAdminUI(t *testing.T) {
 					t.Fatalf("an ingress rule without ports admits every port: %v", rule)
 				}
 				for _, port := range p {
+					if len(port) != 2 || port["protocol"] != "TCP" || port["endPort"] != nil {
+						t.Errorf("a port entry must be exactly protocol TCP and port: %v", port)
+					}
 					ports = append(ports, port["port"].(int))
 				}
 			}
@@ -462,7 +470,7 @@ func TestSecureS3_RetriesAFailedAnnotation(t *testing.T) {
 	readyAfterApply(f)
 	f.fail["PATCH "+dspaPath("team-b", storage.DSPAName)] = 500
 	resp, _ := secureRun(t, c)
-	if resp.Success || !strings.Contains(resp.Message, "Still on the old key: team-b/dspa") {
+	if resp.ErrorCode != "partial" || !strings.Contains(resp.Message, "team-b/dspa still uses the old key") {
 		t.Fatalf("first run: %+v", resp)
 	}
 	id := assertScopedKey(t, f, "team-b")
@@ -497,8 +505,8 @@ func TestS3KeysStatus_MissingConnectionStillNeedsSecuring(t *testing.T) {
 	putUnsecuredStorage(f)
 	readyAfterApply(f)
 	f.sw.failUserObjects[storage.ScopedUserName("team-b")] = 500
-	if resp, _ := secureRun(t, c); resp.Success {
-		t.Fatalf("expected a stop at team-b: %+v", resp)
+	if resp, _ := secureRun(t, c); resp.ErrorCode != "partial" {
+		t.Fatalf("expected team-b to fail: %+v", resp)
 	}
 	f.deleteObject(secretPath("team-b", storage.ConnectionSecretName))
 	st, _ := GetResourcesStatus(c)
@@ -545,4 +553,167 @@ func TestSeaweedFake_RefusesAWrongSignature(t *testing.T) {
 		t.Errorf("users made with a bad signature: %v", f.sw.userNames())
 	}
 	noWritesIn(t, f, "proj")
+}
+
+// M1: once the storage is secured, one project's problem does not hold
+// the others back: it is reported and the rest get their keys.
+func TestSecureS3_OnSecuredStorageOneBadProjectDoesNotBlockTheOthers(t *testing.T) {
+	fastS3Timings(t)
+	f, c := newResourceFake(t)
+	putUnsecuredStorage(f)
+	readyAfterApply(f)
+	f.sw.failUserObjects[storage.ScopedUserName("team-a")] = 500
+	if resp, _ := secureRun(t, c); resp.ErrorCode != "partial" {
+		t.Fatalf("first run: %+v", resp)
+	}
+	delete(f.sw.failUserObjects, storage.ScopedUserName("team-a"))
+	// team-a's Connection now belongs to someone else.
+	f.putJSON(secretPath("team-a", storage.ConnectionSecretName), `{"metadata":{"labels":{}},"data":{}}`)
+	resp, _ := secureRun(t, c)
+	if !strings.Contains(resp.Message, "team-a/dspa") || !strings.Contains(resp.Message, "not created by this tool") {
+		t.Errorf("the outcome does not name team-a's problem: %+v", resp)
+	}
+	assertScopedKey(t, f, "team-b")
+	if got := strings.Join(lastStatuses(), " "); got != "check=success rollout=skipped server:team-a/dspa=failed server:team-b/dspa=success" {
+		t.Errorf("steps = %s", got)
+	}
+}
+
+// L5: a run that has too little time left stops before a server, cleanly.
+func TestSecureS3_StopsBeforeAServerWhenTimeRunsOut(t *testing.T) {
+	fastS3Timings(t)
+	f, c := newResourceFake(t)
+	putUnsecuredStorage(f)
+	readyAfterApply(f)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	secureEvents = nil
+	resp, _ := SecureS3Storage(c.WithContext(ctx), func(e UpdateStepEvent) { secureEvents = append(secureEvents, e) })
+	if resp.Success || resp.ErrorCode != "in_progress" || !strings.Contains(resp.Message, "run Secure S3 storage again") {
+		t.Fatalf("got %+v", resp)
+	}
+	if got := secretValue(t, f, secretPath("team-a", storage.DSPASecretName), storage.S3AccessKeyField); got != oldAdminID {
+		t.Errorf("a server was changed without time to finish it: %q", got)
+	}
+}
+
+// M2: a pipeline server deleted while SeaweedFS failed leaves its user;
+// the status lists it and Repair deletes it (keys first).
+func TestS3Keys_LeftoverUserListedAndRemovedByRepair(t *testing.T) {
+	fastS3Timings(t)
+	fastPipelineTimings(t)
+	f, c := newResourceFake(t)
+	putManagedDSC(f)
+	putReadyManagedS3(f)
+	putDSPO(f, 1)
+	putDSProject(f, "proj")
+	if resp, _ := SetupPipelineServer(c, "proj"); !resp.Success {
+		t.Fatalf("setup: %+v", resp)
+	}
+	f.finalizeOnGet = true
+	f.sw.failIAM["ListAccessKeys"] = 503
+	if down, _ := TeardownPipelineServer(c, "proj", ""); down.Success {
+		t.Fatalf("teardown should report the key it could not delete: %+v", down)
+	}
+	delete(f.sw.failIAM, "ListAccessKeys")
+	user := storage.ScopedUserName("proj")
+	st, _ := GetResourcesStatus(c)
+	if ks := st.S3Keys; ks == nil || strings.Join(ks.LeftoverUsers, ",") != user || !ks.NeedsSecuring {
+		t.Fatalf("status: %+v", ks)
+	}
+	readyAfterApply(f)
+	if resp, _ := SetupS3Storage(c); !resp.Success || !strings.Contains(resp.Message, user) {
+		t.Fatalf("repair: %+v", resp)
+	}
+	if slices.Contains(f.sw.userNames(), user) {
+		t.Error("Repair left the user")
+	}
+	st, _ = GetResourcesStatus(c)
+	if ks := st.S3Keys; len(ks.LeftoverUsers) != 0 {
+		t.Errorf("status after Repair: %+v", ks)
+	}
+}
+
+// M2: a failure to list pipeline servers shows nothing as leftover (fail closed).
+func TestS3Keys_NoLeftoversWithoutTheRecord(t *testing.T) {
+	f, c := newResourceFake(t)
+	putManagedDSC(f)
+	putReadyManagedS3(f)
+	f.sw.giveScopedKey("gone")
+	f.fail["GET /api/v1/namespaces/"+record.GetActivityNamespace()+"/configmaps/"+record.SnapshotConfigMapName] = 500
+	st, _ := GetResourcesStatus(c)
+	if ks := st.S3Keys; ks != nil && len(ks.LeftoverUsers) != 0 {
+		t.Errorf("leftovers without a readable record: %+v", ks)
+	}
+}
+
+// L1: a crafted project name cannot take another project's hashed user name.
+func TestScopedUserName_NoCollision(t *testing.T) {
+	long := strings.Repeat("a", 63)
+	hashed := storage.ScopedUserName(long)
+	if len(hashed) > 64 {
+		t.Fatalf("%q is longer than 64", hashed)
+	}
+	crafted := strings.TrimPrefix(hashed, storage.ScopedUserPrefix)
+	crafted = strings.ReplaceAll(crafted, ".", "-")
+	if len(crafted) <= 63 && storage.ScopedUserName(crafted) == hashed {
+		t.Errorf("project %q gets the user of %q: %s", crafted, long, hashed)
+	}
+}
+
+// L2: a new admin key rolls the pod: the template carries a checksum of it.
+func TestS3Resources_PodTemplateFollowsTheAdminKey(t *testing.T) {
+	ann := func(keys storage.S3Keys) string {
+		for _, r := range storage.S3Resources(keys, true) {
+			if r.Kind == "Deployment" {
+				tmpl := r.Obj["spec"].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)
+				a, _ := tmpl["annotations"].(map[string]any)
+				s, _ := a[storage.S3KeyChecksumAnnotation].(string)
+				return s
+			}
+		}
+		return ""
+	}
+	a, b := ann(storage.S3Keys{AccessKey: "k1", SecretKey: "s"}), ann(storage.S3Keys{AccessKey: "k2", SecretKey: "s"})
+	if a == "" || a == b || a != ann(storage.S3Keys{AccessKey: "k1", SecretKey: "s"}) {
+		t.Errorf("checksums %q %q", a, b)
+	}
+	if strings.Contains(a, "k1") {
+		t.Error("the annotation holds the key itself")
+	}
+}
+
+// L7: a Repair that had to make a new admin key says who lost access.
+func TestSetupS3Storage_RotatedKeyNamesWhoLostAccess(t *testing.T) {
+	fastS3Timings(t)
+	f, c := newResourceFake(t)
+	putUnsecuredStorage(f)
+	f.deleteObject(s3DeployPath)
+	readyAfterApply(f)
+	resp, _ := SetupS3Storage(c)
+	if !resp.Success || !strings.Contains(resp.Message, "team-a/dspa") || !strings.Contains(resp.Message, "Secure S3 storage") {
+		t.Fatalf("got %+v", resp)
+	}
+}
+
+// L4: the status asks for Repair when the NetworkPolicy is missing or
+// admits another port.
+func TestS3Status_NetworkPolicyIsChecked(t *testing.T) {
+	f, c := newResourceFake(t)
+	putReadyManagedS3(f)
+	if st := storage.S3Status(c); st.RepairNeeded != "" {
+		t.Fatalf("as set up: %q", st.RepairNeeded)
+	}
+	np := f.get(s3NPPath)
+	rules := np["spec"].(map[string]any)["ingress"].([]any)
+	rule := rules[0].(map[string]any)
+	rule["ports"] = append(rule["ports"].([]any), map[string]any{"protocol": "TCP", "port": 18888})
+	f.put(s3NPPath, np)
+	if st := storage.S3Status(c); !strings.Contains(st.RepairNeeded, "NetworkPolicy seaweedfs-ingress was changed") {
+		t.Errorf("with port 18888: %q", st.RepairNeeded)
+	}
+	f.deleteObject(s3NPPath)
+	if st := storage.S3Status(c); !strings.Contains(st.RepairNeeded, "NetworkPolicy seaweedfs-ingress is missing") {
+		t.Errorf("missing: %q", st.RepairNeeded)
+	}
 }

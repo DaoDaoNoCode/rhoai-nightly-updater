@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
@@ -87,26 +88,24 @@ func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.Operat
 		return fail(fmt.Sprintf("Cannot read this tool's record of its pipeline servers: %v.%s%s", err, kube.TemplateHint(err), unchanged), kube.ErrorCodeFromK8sErr(err), "pipeline record unreadable"), nil
 	}
 	recorded, kept := keyServers(ep, dspas, rec)
+	// Each server's Secrets are checked (and their writes dry-run). Before
+	// the rollout any problem stops the run with nothing changed. Once the
+	// storage is secured (a re-run), a problem holds back only that server:
+	// the others still get their keys.
+	blocked := map[string]string{}
 	for _, d := range recorded {
 		project := d.Meta.Namespace
-		for _, name := range []string{DSPASecretName, ConnectionSecretName} {
-			cur, err := readProjectS3Secret(c, project, name)
-			if err != nil {
-				return fail(fmt.Sprintf("Cannot read Secret %s/%s: %v.%s%s", project, name, err, kube.TemplateHint(err), unchanged), kube.ErrorCodeFromK8sErr(err), "secret read failed"), nil
+		name := project + "/" + d.Meta.Name
+		for _, secretName := range []string{DSPASecretName, ConnectionSecretName} {
+			msg, code, activity := checkProjectSecret(c, d, secretName)
+			if msg == "" {
+				continue
 			}
-			if cur.found && !cur.meta.HasToolLabel() {
-				return fail(fmt.Sprintf("Secret %s/%s exists and was not created by this tool, so pipeline server %s/%s cannot get its own key.%s", project, name, project, d.Meta.Name, unchanged), "not_managed", "foreign secret"), nil
+			if !ep.Secured {
+				return fail(msg+unchanged, code, activity), nil
 			}
-			obj := dspaS3Secret(project, S3Keys{})
-			if name == ConnectionSecretName {
-				obj = dashboardS3Connection(project, S3Keys{})
-			}
-			setDSPAOwner(obj, d.Meta.Name, d.Meta.UID)
-			s := &projectSecret{c: c, project: project, name: name, obj: obj, meta: cur.meta, found: cur.found}
-			if _, err := writeProjectSecret(s, projectSecretPath(project, name), envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "secrets", project, "")), true); err != nil {
-				msg, code := pipelineWriteFailure(fmt.Sprintf("secret %s", name), project, err)
-				return fail(msg+unchanged, code, "secret dry run failed"), nil
-			}
+			blocked[name] = msg
+			break
 		}
 	}
 	names := make([]string, 0, len(recorded))
@@ -115,29 +114,39 @@ func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.Operat
 	}
 	check := fmt.Sprintf("OK: %s to give a key of its own", kube.CountNoun(len(recorded), "pipeline server", "pipeline servers"))
 	if len(kept) > 0 {
-		check += fmt.Sprintf("; left on the old key: %s", strings.Join(kept, "; "))
+		check += fmt.Sprintf("; not set up by this tool, left on the old key: %s", strings.Join(kept, "; "))
 	}
 	step(SecureStepCheck, "success", check)
 
-	// summary says which servers have their own key and which still use the
-	// old one, for the outcome of a run that ended or stopped.
-	summary := func(done, skipped []string) string {
+	// summary says which servers have their own key, which failed and which
+	// still use the old one, for the outcome of a run that ended or stopped.
+	summary := func(done, skipped []string, failed map[string]string) string {
 		var own, old, parts []string
 		for _, n := range names {
-			if slices.Contains(done, n) || slices.Contains(skipped, n) {
+			switch {
+			case slices.Contains(done, n) || slices.Contains(skipped, n):
 				own = append(own, n)
-			} else {
+			case failed[n] == "":
 				old = append(old, n)
 			}
 		}
 		if len(own) > 0 {
 			parts = append(parts, fmt.Sprintf("On a key of their own: %s.", strings.Join(own, ", ")))
 		}
+		for _, n := range names {
+			if why := failed[n]; why != "" {
+				parts = append(parts, fmt.Sprintf("%s still uses the old key: %s.", n, strings.TrimSuffix(why, ".")))
+			}
+		}
 		if len(old) > 0 {
-			parts = append(parts, fmt.Sprintf("Still on the old key: %s; run Secure S3 storage again: it skips the servers already done.", strings.Join(old, ", ")))
+			parts = append(parts, fmt.Sprintf("Still on the old key: %s.", strings.Join(old, ", ")))
+		}
+		if len(old) > 0 || len(failed) > 0 {
+			parts = append(parts, "Run Secure S3 storage again: it skips the servers already done.")
 		}
 		if len(kept) > 0 {
-			parts = append(parts, fmt.Sprintf("Not changed by this tool: %s. The old admin key no longer works there: their owner must give those pipeline servers new S3 keys.", strings.Join(kept, "; ")))
+			parts = append(parts, fmt.Sprintf("Not set up by this tool: %s. The old admin key no longer works there: %s.", strings.Join(kept, "; "),
+				kube.Verb(len(kept), "its owner must give that pipeline server new S3 keys", "their owners must give those pipeline servers new S3 keys")))
 		}
 		return strings.Join(parts, " ")
 	}
@@ -161,39 +170,98 @@ func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.Operat
 		step(SecureStepRollout, "success", "OK: The S3 storage runs with the new admin key; the old key no longer works")
 	}
 
-	// Step 3: a key of its own for every recorded pipeline server.
+	// Step 3: a key of its own for every recorded pipeline server. A server
+	// that fails is reported and the others go on.
 	sw, err := adminSeaweed(c)
 	if err != nil {
 		return stop(SecureStepRollout, fmt.Sprintf("Cannot read the new admin key: %v.%s No pipeline server got its own key yet; run Secure S3 storage again.", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "admin key unreadable"), nil
 	}
 	var done, skipped []string
+	failed := map[string]string{}
 	for _, d := range recorded {
 		name := d.Meta.Namespace + "/" + d.Meta.Name
 		id := SecureServerStep(name)
+		if why := blocked[name]; why != "" {
+			failed[name] = why
+			step(id, "failed", why)
+			continue
+		}
+		// Like Migrate storage: a server is started only while the time for
+		// its key check (up to s3SlowHTTPClient's wait per call) is left.
+		if deadline, ok := c.Context().Deadline(); ok && kube.Clock().Until(deadline) < secureServerBudget {
+			return stop(id, fmt.Sprintf("Not enough time is left in this run to give pipeline server %s its own key. %s run Secure S3 storage again to continue.", name, summary(done, skipped, failed)), "in_progress", "out of time"), nil
+		}
 		step(id, "running", fmt.Sprintf("Giving pipeline server %s a key of its own...", name))
 		changed, err := rekeyServer(c, sw, d, func(line string) { step(id, "running", line) })
-		if err != nil {
-			return stop(id, fmt.Sprintf("Pipeline server %s did not get its own key: %v. The storage is secured. %s", name, err, summary(done, skipped)), "s3_keys", "rekey failed"), nil
-		}
-		if changed {
+		switch {
+		case err != nil:
+			failed[name] = err.Error()
+			step(id, "failed", fmt.Sprintf("%s did not get its own key: %v", name, err))
+		case changed:
 			done = append(done, name)
 			step(id, "success", fmt.Sprintf("OK: %s uses SeaweedFS user %s", name, ScopedUserName(d.Meta.Namespace)))
-		} else {
+		default:
 			skipped = append(skipped, name)
 			step(id, "success", fmt.Sprintf("OK: %s already uses its own key", name))
 		}
 	}
 
+	// Users of pipeline servers that are gone (deleted while SeaweedFS
+	// failed, or outside this tool): their keys still work until deleted.
+	left, leftErr := leftoverUsers(sw, recorded)
+	if leftErr == nil && len(left) > 0 {
+		leftErr = deleteUsers(sw, left)
+	}
+
 	msg := "New admin key, kept out of every project."
-	if s := summary(done, skipped); s != "" {
+	if s := summary(done, skipped, failed); s != "" {
 		msg += " " + s
+	}
+	if leftErr != nil {
+		msg += fmt.Sprintf(" The keys of deleted pipeline servers could not be checked or deleted: %v.", leftErr)
+	} else if len(left) > 0 {
+		msg += fmt.Sprintf(" Deleted the keys of pipeline servers that are gone: %s.", strings.Join(left, ", "))
 	}
 	if len(done) > 0 {
 		msg += fmt.Sprintf(" Restart the workbenches and model deployments that use Connection %s, and workbenches that run pipelines, so they pick up the new key.", ConnectionSecretName)
 	}
-	slog.Info("s3 storage secured", "user", kube.GetUser(c), "rekeyed", len(done))
-	record.Action(c, "secure-s3", fmt.Sprintf("namespace=%s (%d pipeline servers rekeyed)", S3Namespace, len(done)), true)
+	slog.Info("s3 storage secured", "user", kube.GetUser(c), "rekeyed", len(done), "failed", len(failed))
+	record.Action(c, "secure-s3", fmt.Sprintf("namespace=%s (%d pipeline servers rekeyed, %d failed)", S3Namespace, len(done), len(failed)), len(failed) == 0)
+	if len(failed) > 0 {
+		// The storage is secured; some servers still need a run: a warning,
+		// not a stop.
+		return &types.OperationResponse{Success: true, Message: msg, Logs: logs, ErrorCode: "partial"}, nil
+	}
 	return &types.OperationResponse{Success: true, Message: msg, Logs: logs}, nil
+}
+
+// secureServerBudget is the time a server's key needs at most: its key
+// check makes up to five calls of up to s3SlowHTTPClient's wait.
+var secureServerBudget = 2 * time.Minute
+
+// checkProjectSecret checks one of a recorded pipeline server's Secrets
+// for Secure S3 storage: readable, this tool's, and its write accepted (a
+// dry run). It returns why not, or "".
+func checkProjectSecret(c *kube.Client, d DSPA, name string) (msg, code, activity string) {
+	project := d.Meta.Namespace
+	cur, err := readProjectS3Secret(c, project, name)
+	if err != nil {
+		return fmt.Sprintf("Cannot read Secret %s/%s: %v.%s", project, name, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "secret read failed"
+	}
+	if cur.found && !cur.meta.HasToolLabel() {
+		return fmt.Sprintf("Secret %s/%s exists and was not created by this tool, so pipeline server %s/%s cannot get its own key.", project, name, project, d.Meta.Name), "not_managed", "foreign secret"
+	}
+	obj := dspaS3Secret(project, S3Keys{})
+	if name == ConnectionSecretName {
+		obj = dashboardS3Connection(project, S3Keys{})
+	}
+	setDSPAOwner(obj, d.Meta.Name, d.Meta.UID)
+	s := &projectSecret{c: c, project: project, name: name, obj: obj, meta: cur.meta, found: cur.found}
+	if _, err := writeProjectSecret(s, projectSecretPath(project, name), envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "secrets", project, "")), true); err != nil {
+		msg, code := pipelineWriteFailure(fmt.Sprintf("secret %s", name), project, err)
+		return msg, code, "secret dry run failed"
+	}
+	return "", "", ""
 }
 
 // The steps Secure S3 storage streams: the checks, the rollout, then one

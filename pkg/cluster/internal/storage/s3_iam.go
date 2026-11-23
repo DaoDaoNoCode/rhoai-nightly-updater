@@ -48,14 +48,26 @@ func awsEscape(s string, keepSlash bool) string {
 // canonicalQuery builds a Signature Version 4 query string: keys sorted, then
 // values, with URI encoding on each component.
 func canonicalQuery(q url.Values) string {
-	var pairs []string
+	// Sorted by encoded key, then encoded value (not by the joined "k=v"
+	// text, where "a-b=" would sort before "a=").
+	type pair struct{ k, v string }
+	var pairs []pair
 	for k, vs := range q {
 		for _, v := range vs {
-			pairs = append(pairs, awsEscape(k, false)+"="+awsEscape(v, false))
+			pairs = append(pairs, pair{awsEscape(k, false), awsEscape(v, false)})
 		}
 	}
-	sort.Strings(pairs)
-	return strings.Join(pairs, "&")
+	sort.Slice(pairs, func(i, j int) bool {
+		if pairs[i].k != pairs[j].k {
+			return pairs[i].k < pairs[j].k
+		}
+		return pairs[i].v < pairs[j].v
+	})
+	out := make([]string, len(pairs))
+	for i, p := range pairs {
+		out[i] = p.k + "=" + p.v
+	}
+	return strings.Join(out, "&")
 }
 
 // signV4 produces an Authorization header for req (canonical path, RawQuery from
