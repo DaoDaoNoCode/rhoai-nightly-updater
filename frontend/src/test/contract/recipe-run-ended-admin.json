@@ -1,0 +1,145 @@
+{
+  "cleanup": {
+    "components": [
+      "aipipelines"
+    ],
+    "recipeProjectUIDs": {
+      "recipe-dev": "0f3c1d2e-uid"
+    },
+    "recipeProjects": [
+      "recipe-dev"
+    ]
+  },
+  "projects": [
+    {
+      "createdAt": "2026-11-20T14:15:00Z",
+      "name": "recipe-dev",
+      "recipe": "dev",
+      "uid": "0f3c1d2e-uid"
+    },
+    {
+      "createdAt": "2026-11-19T09:00:00Z",
+      "name": "recipe-old",
+      "recipe": "old",
+      "uid": "7a8b9c0d-uid"
+    }
+  ],
+  "run": {
+    "bootId": "another-process",
+    "components": [
+      "aipipelines"
+    ],
+    "errorCode": "timeout",
+    "finishedAt": "2026-11-20T14:36:00Z",
+    "id": "run1",
+    "operationId": "op2",
+    "pod": "pod-2",
+    "project": {
+      "name": "recipe-dev",
+      "owned": true,
+      "uid": "0f3c1d2e-uid"
+    },
+    "recipe": {
+      "apiVersion": "rhoai-nightly-updater/v1alpha1",
+      "kind": "EnvironmentRecipe",
+      "metadata": {
+        "name": "dev"
+      },
+      "spec": {
+        "dashboardDev": {
+          "deploy": "none",
+          "flavor": "rhoai"
+        },
+        "dataScienceCluster": {
+          "create": true
+        },
+        "features": {
+          "maas": {
+            "enabled": false
+          },
+          "mlflow": {
+            "enabled": true
+          },
+          "models": {
+            "enabled": false
+          },
+          "pipelines": {
+            "enabled": true
+          },
+          "playground": {
+            "enabled": false
+          }
+        },
+        "project": {
+          "mode": "create",
+          "name": "recipe-dev"
+        },
+        "rhoai": {
+          "build": "latest",
+          "ifInstalled": "keep"
+        }
+      }
+    },
+    "resumedAt": "2026-11-20T14:25:00Z",
+    "startedAt": "2026-11-20T14:05:00Z",
+    "state": "failed",
+    "steps": [
+      {
+        "finishedAt": "2026-11-20T14:25:00Z",
+        "id": "rhoai",
+        "maxSeconds": 900,
+        "message": "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).",
+        "startedAt": "2026-11-20T14:25:00Z",
+        "status": "skipped",
+        "title": "RHOAI",
+        "typicalSeconds": 420
+      },
+      {
+        "created": true,
+        "finishedAt": "2026-11-20T14:25:00Z",
+        "id": "project",
+        "maxSeconds": 60,
+        "message": "Already set up: Project recipe-dev was created by a recipe.",
+        "startedAt": "2026-11-20T14:25:00Z",
+        "status": "skipped",
+        "title": "Project recipe-dev",
+        "typicalSeconds": 10
+      },
+      {
+        "created": true,
+        "finishedAt": "2026-11-20T14:25:00Z",
+        "id": "pipelines-prereq",
+        "maxSeconds": 600,
+        "message": "Already set up: Everything it needs is set up.",
+        "startedAt": "2026-11-20T14:25:00Z",
+        "status": "skipped",
+        "title": "What Pipelines needs",
+        "typicalSeconds": 120
+      },
+      {
+        "finishedAt": "2026-11-20T14:26:00Z",
+        "id": "s3",
+        "maxSeconds": 300,
+        "message": "S3 storage is ready.",
+        "startedAt": "2026-11-20T14:25:00Z",
+        "status": "success",
+        "title": "S3 storage",
+        "typicalSeconds": 60
+      },
+      {
+        "errorCode": "timeout",
+        "finishedAt": "2026-11-20T14:36:00Z",
+        "id": "pipeline-server",
+        "maxSeconds": 600,
+        "message": "The pipeline server in recipe-dev was set up but is not ready. Resume waits again.",
+        "startedAt": "2026-11-20T14:26:00Z",
+        "status": "failed",
+        "title": "Pipeline server",
+        "typicalSeconds": 120
+      }
+    ],
+    "stopReason": "Step 5 of 5 (Pipeline server) failed: The pipeline server in recipe-dev was set up but is not ready. Resume waits again.",
+    "user": "alice"
+  },
+  "running": false
+}

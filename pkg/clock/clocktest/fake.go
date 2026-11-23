@@ -325,6 +325,12 @@ func (f *Fake) WithDeadline(parent context.Context, d time.Time) (context.Contex
 		return context.WithCancel(parent)
 	}
 	dc := &deadlineCtx{parent: parent, deadline: d, done: make(chan struct{}), funcs: map[*func()]struct{}{}}
+	// A parent that has ended already ends dc now: context.AfterFunc would
+	// run the function below in a new goroutine, so the context handed out
+	// would look live for a moment (context.WithDeadline is done at once).
+	if err := parent.Err(); err != nil {
+		dc.finish(err)
+	}
 	stopParent := context.AfterFunc(parent, func() { dc.finish(parent.Err()) })
 	t := f.addTimer(d, 0, func() { dc.finish(context.DeadlineExceeded) })
 	// The context handed out is a standard one: context.Cause and the

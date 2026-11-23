@@ -25,6 +25,8 @@ export function baseWorld() {
     maas: F.maasWorld("none"),
     // Sample states by project; a project not named has none of the samples.
     samples: { mlflow: {} },
+    // The last environment recipe run (GET /api/recipes/run).
+    recipeRun: { run: null, running: false },
     // gated: update steps and mutations wait for /__docs/advance and /__docs/release.
     gated: false,
   };
@@ -496,7 +498,35 @@ export const scenarios = {
   // Not turned on yet while Authorino TLS needs a cluster-admin: Set up is still offered.
   "env-maas-new-tls": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { tls: false, items: [F.maasModel(false)] }); },
   // A recorded publication whose model was deleted elsewhere: a row with Unpublish.
-  "env-maas-orphan": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(true), F.maasOrphanPublication("old-project")] }); },
+  "env-maas-orphan": (w) => { scenarios["env-models-ready"](w); w.maas = { ...F.maasWorld("ready", { items: [F.maasModel(true)] }), removing: [F.maasGonePublication("old-project")] }; },
+  // Cluster truth (batch 2): this tool's pipeline server with no record of its
+  // UID, its pipeline server and model in a project that is no longer a data
+  // science project, a deleted project still on the inference gateway's list,
+  // and a MaaS publication of which nothing is left on the cluster.
+  "env-cluster-truth": (w) => {
+    scenarios["env-models-ready"](w);
+    w.resources.pipelineServers = [F.pipelineServerIn("dev-project", { unrecorded: true, uid: "3f6c2a9e-dev-project-dspa" })];
+    w.resources.outsidePipelineServers = [F.pipelineServerIn("old-team")];
+    w.resources.minio = { ...F.s3States.running, usedBy: ["dev-project/dspa", "old-team/dspa"], teardownBlockedReason: "2 pipeline servers use this S3 storage: dev-project/dspa, old-team/dspa. Delete them first." };
+    w.resources.models = F.modelsStatus({ items: [F.modelStates.released("dev-project")], outside: [F.modelStates.released("old-team")] });
+    w.resources.inferenceGateway = { ...w.resources.inferenceGateway, allowedProjects: ["openshift-ingress", "dev-project", "e2e-old", "team-x"], unusedProjects: ["e2e-old", "team-x"], goneProjects: ["e2e-old"], addedProjects: ["dev-project", "e2e-old"] };
+    w.maas = { ...F.maasWorld("ready", { items: [F.maasModel(false)] }), removing: [{ namespace: "dev-project", name: "qwen25-05b-instruct", reason: "the MaaSModelRef of model qwen25-05b-instruct in dev-project no longer exists" }] };
+  },
+  // F6 and F2 (live, 2026-11-23): a model whose MaaSModelRef was deleted
+  // outside this tool while it still routes through the MaaS gateway, and a
+  // published model in a project being deleted.
+  "env-maas-routing-pending": (w) => {
+    scenarios["env-models-ready"](w);
+    w.maas = F.maasWorld("ready", { items: [
+      { ...F.maasModel(false), routingPending: true, message: "No MaaS reference; the model still routes through the MaaS gateway, so its direct address does not answer." },
+      { ...F.maasModel(false, { name: "smollm2-135m-instruct" }), namespace: "old-team", removing: true, message: "Being removed with its project", setupBlockedReason: "Being removed with its project." },
+    ] });
+  },
+  // A storage deletion that did not finish: the Deployment is gone, its Secret is left.
+  "env-s3-leftovers": (w) => {
+    w.resources.minio = { deployed: false, ready: false, namespace: "seaweedfs", managedByTool: true, message: "Namespace exists but the S3 storage is not deployed", leftovers: ["Secret seaweedfs-s3-credentials"], namespaceDeletable: true };
+    w.resources.pipelineServers = [];
+  },
   // Others publish through the platform: Remove refuses before changing anything.
   "env-maas-in-use": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(false)] }); w.maasRefusal = F.MAAS_IN_USE; },
   "env-playground-no-model": (w) => { w.playground.modelsByProject["dev-project"] = []; },
@@ -574,6 +604,39 @@ scenarios["user-update-running"] = (w) => {
 // Deployment is not running (the backend's prerequisites refusal).
 scenarios["diag-leftovers-refused"] = (w) => { scenarios["diag-leftovers"](w); w.leftoverRefusal = true; };
 
+// Environment recipes (the Recipes page): no run yet on a cluster with
+// RHOAI and no DataScienceCluster (new, and its review), a run at step 5
+// (POST /__docs/advance moves it on), one that failed at the pipeline
+// server, and one whose updater pod went away.
+const RECIPE_OPERATION = (w, step, title) => {
+  w.operation = { inProgress: true, operation: { id: "op-recipe", type: "recipe", label: "Environment recipe", user: F.USER, target: `dev: step ${step} of 8 (${title})`, startedAt: F.ago(12), updatedAt: F.ago(0.1) } };
+};
+scenarios["recipe-new"] = (w) => { scenarios["no-dsc"](w); w.resources = { minio: F.s3States.none, mlflow: F.mlflowStates.none, pipelineServers: [] }; };
+scenarios["recipe-review"] = (w) => { scenarios["recipe-new"](w); };
+scenarios["recipe-review-blocked"] = (w) => { scenarios["recipe-new"](w); w.recipePlanBlocked = true; };
+scenarios["recipe-running"] = (w) => {
+  w.recipeRun = { run: F.recipeRun({ done: 4 }), running: true, pod: "rhoai-nightly-updater-6f7b8c9d5-x2k4p", step: { step: "s3", status: "running", message: "Waiting for SeaweedFS to start (1/1 pods starting)" } };
+  RECIPE_OPERATION(w, 5, "S3 storage");
+};
+scenarios["recipe-failed"] = (w) => {
+  const why = "The pipeline server did not become ready in 10 minutes: pod ds-pipeline-dspa-6c9f7d8b5-k8w2n is in ImagePullBackOff (registry.redhat.io/rhoai/odh-ml-pipelines-api-server-v2-rhel9).";
+  w.recipeRun = { run: F.recipeRun({ done: 5, current: "failed", message: why, state: "failed", errorCode: "timeout", stopReason: `Step 6 of 8 (Pipeline server) failed: ${why}` }), running: false };
+};
+scenarios["recipe-succeeded"] = (w) => {
+  w.recipeRun = { run: F.recipeRun({ done: 8, current: "", state: "succeeded", stopReason: "Every step of dev is set up." }), running: false };
+  // What the run set up is there: MLflow, and the pipeline server in its project.
+  w.resources = { ...w.resources, mlflow: F.mlflowStates.running, pipelineServers: [...w.resources.pipelineServers, { ...F.pipelineServer, namespace: "recipe-dev", apiRoute: undefined, uiRoute: undefined }] };
+  // An earlier run's project is still there too.
+  w.recipeProjects = [
+    { name: "recipe-dev", uid: "uid-recipe-dev", recipe: "dev", createdAt: F.ago(40) },
+    { name: "recipe-review", uid: "uid-recipe-review", recipe: "review", createdAt: F.ago(60 * 26) },
+  ];
+};
+scenarios["recipe-interrupted"] = (w) => {
+  w.recipeRun = { run: F.recipeRun({ done: 3, pod: "rhoai-nightly-updater-6f7b8c9d5-q9m3z" }), running: false, interrupted: true };
+  w.operation = { inProgress: false, operation: null, interrupted: { type: "recipe", label: "Environment recipe", user: F.USER, target: "dev: step 4 of 8 (What Pipelines needs)", startedAt: F.ago(14), pod: "rhoai-nightly-updater-6f7b8c9d5-q9m3z", id: "op-recipe", bootId: "b-4e2a" } };
+};
+
 // The reads every page makes, as the server answers them; the frontend's
 // types check these (frontend/src/test/docsMockFixtures.test.ts).
 /** A nightly build as the summary names it (pkg/types SummaryBuild): tag and build date, no image. */
@@ -617,8 +680,14 @@ export const reads = {
   "GET /api/components/dsc": (w) => (w.components.dscExists === false ? { exists: false, state: w.components.dscState || "no-dsc", dscCount: 0, conditions: [], nodes: [], mismatches: [] } : w.dscManager ?? F.dscManager()),
   "GET /api/diagnostics": (w) => w.diagnostics,
   "GET /api/dashboard/state": (w) => w.dashboard,
-  "GET /api/resources/status": (w) => ({ dashboardUrl: F.DASHBOARD_URL, inferenceGateway: F.gatewayStates.none, models: F.modelsStatus(), ...w.resources }),
+  "GET /api/resources/status": (w) => ({ dashboardUrl: F.DASHBOARD_URL, inferenceGateway: F.gatewayStates.none, models: F.modelsStatus(), ...w.resources, recipeProjects: F.recipeProjects(w) }),
   "GET /api/resources/projects": (w) => ({ projects: w.projects ?? F.projects }),
   "GET /api/resources/maas": (w) => w.maas,
   "GET /api/activity": (w) => w.status.activity ?? [],
+  // The clean-up request for what the run created, once it is not running.
+  "GET /api/recipes/run": (w) => {
+    const cleanup = w.recipeRun.run && !w.recipeRun.running ? F.recipeCleanup(w.recipeRun.run) : null;
+    const projects = w.recipeRun.running ? undefined : F.recipeProjects(w);
+    return { ...w.recipeRun, ...(cleanup ? { cleanup } : {}), ...(projects?.length ? { projects } : {}) };
+  },
 };

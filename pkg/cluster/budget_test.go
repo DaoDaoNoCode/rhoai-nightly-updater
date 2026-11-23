@@ -39,6 +39,10 @@ func TestShutdownBudgetFitsTerminationGracePeriod(t *testing.T) {
 	if !strings.Contains(read("../api/auth_handlers.go"), "context.WithTimeout(context.WithoutCancel(r.Context()), 15*time.Minute)") || OperationDeadline != 15*time.Minute {
 		t.Fatal("the operation deadline in pkg/api/auth_handlers.go no longer matches OperationDeadline")
 	}
+	// A recipe run's steps have the same budget: pkg/api
+	// TestRecipeRun_StepBudgetFitsTheDrain checks it on a run, and
+	// TestRecipeRun_DrainDuringTheGateStopsBeforeTheStep that no step
+	// starts after a drain began.
 	mainSrc := read("../../main.go")
 	for _, want := range []string{
 		"drainTimeout := cluster.ShutdownDrainTimeout()",

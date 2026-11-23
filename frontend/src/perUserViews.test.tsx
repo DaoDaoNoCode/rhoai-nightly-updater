@@ -37,7 +37,7 @@ describe("navigation per role", () => {
   it("a cluster-admin sees every page, as before", async () => {
     stubApi({ "/api/status": nightlyStatus(), "/api/operation": { inProgress: false, operation: null }, "/api/version": { version: "dev", commit: "c", buildDate: "d", templateOutdated: false } });
     openApp("/builds");
-    await waitFor(() => expect(navLabels()).toEqual(["Status", "Components", "Build Explorer", "Dashboard Dev", "Environment", "Diagnostics"]));
+    await waitFor(() => expect(navLabels()).toEqual(["Status", "Components", "Build Explorer", "Dashboard Dev", "Environment", "Recipes", "Diagnostics"]));
   });
 
   it("a user sees Status, Build Explorer and Environment", async () => {
@@ -65,7 +65,7 @@ describe("navigation per role", () => {
     expect(await screen.findByRole("heading", { name: "Only cluster-admins can see this page" })).toBeInTheDocument();
   });
 
-  it.each([["/components"], ["/dashboard-dev"], ["/diagnostics"]])("a direct link to %s shows that only cluster-admins can see it", async (path) => {
+  it.each([["/components"], ["/dashboard-dev"], ["/recipes"], ["/diagnostics"]])("a direct link to %s shows that only cluster-admins can see it", async (path) => {
     const api = stubUserApi();
     openApp(path);
     expect(await screen.findByRole("heading", { name: "Only cluster-admins can see this page" })).toBeInTheDocument();

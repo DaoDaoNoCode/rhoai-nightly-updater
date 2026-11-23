@@ -90,7 +90,18 @@ type statusWriter struct {
 	bookkeeper *cluster.Client
 	// cancelOp ends the operation's context with a cause.
 	cancelOp context.CancelCauseFunc
-	opID     string // set by lockCluster
+	// newBookkeeper makes a ServiceAccount client of the updater's own
+	// records with the ServiceAccount token as it is now: for a recipe
+	// run, whose steps outlive the request (recipe_runner.go). It is part
+	// of the wrapper's bookkeeping, like bookkeeper.
+	newBookkeeper func(ctx context.Context) *cluster.Client
+	// gate checks again what the wrapper checked before the request was
+	// accepted: the user's sign-in can carry a change (sessionProblem)
+	// and they are still a cluster-admin (mutationPermission). It returns
+	// the refusal's message and errorCode, "" when the change may go on.
+	// A recipe run calls it before each step.
+	gate func(ctx context.Context) (msg, code string)
+	opID string // set by lockCluster
 
 	// The start of a JSON response body, from which the operation's
 	// outcome is read; streams report it in their final event instead.

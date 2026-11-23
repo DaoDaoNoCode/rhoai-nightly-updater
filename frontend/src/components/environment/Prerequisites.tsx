@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useState } from "react";
 import { Alert, AlertActionLink, Content, ExpandableSection, Skeleton, Stack, StackItem } from "@patternfly/react-core";
 import type { FeaturePrerequisites, ModelExposureKind, PrerequisiteFeature, PrerequisitePart, PrerequisitesStatus } from "../../types";
 import { getPrerequisites, toApiError } from "../../services/api";
+import { usePolling } from "../../hooks/usePolling";
+import { IDLE_REFRESH_MS } from "../../constants";
 import { type ConfirmSpec, type Pending, type PrerequisitesPending, WarningAlert } from "./resourceRow";
 import { FeatureSection, PartItem, PartList, PrimaryAction } from "./FeatureLayout";
 import { CopyableCode } from "./UseIt";
@@ -55,6 +57,8 @@ export function usePrerequisites(refreshKey: number, exposure: ModelExposureKind
   useEffect(() => {
     void fetchNow();
   }, [fetchNow, refreshKey]);
+  // A slow re-read while the browser tab is visible, so a change made elsewhere shows on its own.
+  usePolling(fetchNow, { enabled, delay: IDLE_REFRESH_MS, pauseWhenHidden: true, refreshOnVisible: true });
   const stale = !!data && !plannedFor(data, exposure);
   return { data, error, reload: fetchNow, stale };
 }

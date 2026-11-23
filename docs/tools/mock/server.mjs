@@ -210,7 +210,7 @@ async function migrateStream(req, res) {
 
 /** Clean up: one step per part (pkg/cluster CleanUp); each waits for /__docs/advance in gated mode. */
 async function cleanupStream(req, res) {
-  const { pipelineServers = [], storage = false, deleteNamespace = false, mlflow = false, models = [], inferenceGateway = false, playgrounds = [] } = await body(req);
+  const { pipelineServers = [], storage = false, deleteNamespace = false, mlflow = false, models = [], inferenceGateway = false, playgrounds = [], recipeProjects = [], components = [] } = await body(req);
   beginOperation("cleanup", "Clean up the environment", [pipelineServers.length ? `${pipelineServers.length} pipeline servers` : "", storage ? "S3 storage" : "", mlflow ? "MLflow" : ""].filter(Boolean).join(", "));
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   const parts = [
@@ -220,6 +220,14 @@ async function cleanupStream(req, res) {
     ...playgrounds.map((p) => ({ id: `playground:${p}`, title: `the playground in '${p}'`, done: `Playground deleted from ${p}: the dashboard removed its server, configuration and database. The project and its models stay.`, apply: () => removePlayground(p) })),
     ...models.map((p) => ({ id: `model:${p}`, title: `the models in '${p}'`, done: `Model ${(world.resources.models?.items ?? []).filter((i) => i.namespace === p && i.managedByTool !== false).map((i) => i.name).join(", ")} deleted from '${p}'; KServe removed its Deployment, Service and route. The project stays.`, apply: () => removeModel(p) })),
     ...(inferenceGateway ? [{ id: "inference-gateway", title: "the inference gateway", done: "Inference gateway deleted: Gateway openshift-ingress/openshift-ai-inference, ConfigMap openshift-ingress/openshift-ai-inference-options and GatewayClass openshift-ai-inference. OpenShift removes its load balancer and the ingress operator its DNS record.", apply: () => { world.resources.inferenceGateway = F.gatewayStates.none; } }] : []),
+    ...recipeProjects.map((p) => ({ id: `recipe-project:${p}`, title: `project '${p}', which a recipe created`, says: true, done: `Deleted project ${p}; OpenShift removes what it holds.`, apply: () => {
+      world.recipeProjects = F.recipeProjects(world).filter((r) => r.name !== p);
+      if (world.recipeRun?.run?.project?.name === p) world.recipeRun.run.project.owned = false;
+      world.resources.pipelineServers = world.resources.pipelineServers.filter((ps) => ps.namespace !== p);
+    } })),
+    ...(components.length ? [{ id: "components", title: "the DataScienceCluster components this tool turned on", says: true, done: `${components.join(" and ")} ${components.length === 1 ? "is" : "are"} Removed again, as before setup.`, apply: () => {
+      if (world.recipeRun?.run) world.recipeRun.run.components = (world.recipeRun.run.components ?? []).filter((k) => !components.includes(k));
+    } }] : []),
   ];
   let n = 0;
   const send = (ev) => res.write(`data: ${JSON.stringify({ ...ev, elapsedMs: ++n * 3000 })}\n\n`);
@@ -230,8 +238,12 @@ async function cleanupStream(req, res) {
     p.apply();
     send({ step: p.id, status: "success", message: p.done });
   }
-  const titles = parts.map((p) => p.title);
-  const message = `Deleted ${titles.length > 1 ? `${titles.slice(0, -1).join(", ")} and ${titles[titles.length - 1]}` : titles[0]}.`;
+  // As pkg/cluster cleanupSummary: the parts deleted, then what the parts that speak for themselves said.
+  const titles = parts.filter((p) => !p.says).map((p) => p.title);
+  const message = [
+    ...(titles.length ? [`Deleted ${titles.length > 1 ? `${titles.slice(0, -1).join(", ")} and ${titles[titles.length - 1]}` : titles[0]}.`] : []),
+    ...parts.filter((p) => p.says).map((p) => p.done),
+  ].join(" ");
   endOperation(true, message);
   send({ step: "operation_complete", status: "success", message });
   res.end();
@@ -526,6 +538,38 @@ async function mlflowSamplesStream(req, res) {
   return sampleStream(req, res, "mlflow-samples", "MLflow samples", events, apply, `Samples ${verb} in project '${project}'.`);
 }
 
+/**
+ * Environment recipes (pkg/api recipe_handlers.go): the plan, and a run
+ * that starts at its first step and moves one step on per
+ * POST /__docs/advance (the poll shows each), as the runner records it.
+ */
+async function recipeRoute(req, res, key) {
+  const { recipe } = await body(req);
+  const installed = !!world.status?.csv?.phase && world.status.csv.phase !== "Not Found";
+  if (key === "POST /api/recipes/plan") return json(res, 200, F.recipePlan(recipe ?? F.recipe(), installed, !!world.recipePlanBlocked));
+  if (key === "POST /api/recipes/stop") {
+    if (!world.recipeRun.running) return json(res, 409, { error: "No recipe runs in this updater process. Nothing was changed.", errorCode: "not_running" });
+    world.recipeRun = { ...world.recipeRun, stopRequested: true };
+    return json(res, 200, { stopRequested: true });
+  }
+  // run and resume: the run begins at the first step that is not set up.
+  const prior = world.recipeRun.run;
+  const done = key === "POST /api/recipes/resume" && prior ? prior.steps.filter((s) => s.status === "success" || s.status === "skipped").length : installed ? 1 : 0;
+  const titles = ["RHOAI", "DataScienceCluster", "Project recipe-dev", "What Pipelines needs", "S3 storage", "Pipeline server", "What MLflow needs", "MLflow"];
+  const advance = (n) => {
+    if (n >= 8) {
+      world.recipeRun = { run: { ...F.recipeRun({ done: 8, current: "", state: "succeeded", stopReason: "Every step of dev is set up." }) }, running: false };
+      world.operation = { inProgress: false, operation: null };
+      return;
+    }
+    world.recipeRun = { run: F.recipeRun({ done: n }), running: true, pod: world.recipeRun.run?.pod, step: { step: "", status: "running", message: `Checking ${titles[n]}...` } };
+    world.operation = { inProgress: true, operation: { id: "op-recipe", type: "recipe", label: "Environment recipe", user: F.USER, target: `dev: step ${n + 1} of 8 (${titles[n]})`, startedAt: new Date(F.NOW).toISOString(), updatedAt: new Date(F.NOW).toISOString() } };
+    nextStep().then(() => advance(n + 1));
+  };
+  advance(done);
+  return json(res, 202, { runId: "run-7c1e" });
+}
+
 const routes = {
   "GET /api/status": () => reads["GET /api/status"](world),
   "GET /api/operation": () => reads["GET /api/operation"](world),
@@ -557,6 +601,7 @@ const routes = {
   // Made up, like every value here.
   "GET /api/resources/s3/admin-password": () => ({ user: "admin", accessKey: "docs-mock-access-key", secretKey: "docs-mock-secret-key", password: "docs-mock-admin-password" }),
   "GET /api/activity": () => reads["GET /api/activity"](world),
+  "GET /api/recipes/run": () => reads["GET /api/recipes/run"](world),
   "GET /api/test-pull-secret": () => ({ success: true, message: "The pull secret can pull from quay.io/rhoai.", logs: [] }),
   "GET /api/verify-nodes": () => ({ success: true, message: "All 3 nodes have the pull secret and the image mirror.", logs: [] }),
   "POST /api/setup/node-pull-check": () => F.nodePullCheck(F.latestNightly().image, !world.nodePullFails),
@@ -580,7 +625,7 @@ const GITOPS_PROFILE_ROUTES = new Set([
 const ADMIN_ONLY_READS = [
   "/api/status", "/api/activity", "/api/components", "/api/debug", "/api/dashboard/", "/api/diagnostics", "/api/setup/dsc/preview",
   "/api/test-pull-secret", "/api/verify-nodes", "/api/latest-nightly", "/api/nightly-tags", "/api/resources/maas",
-  "/api/resources/prerequisites", "/api/resources/models/exposures", "/api/resources/s3/admin-password",
+  "/api/resources/prerequisites", "/api/resources/models/exposures", "/api/resources/s3/admin-password", "/api/recipes/",
 ];
 
 /**
@@ -655,6 +700,7 @@ async function api(req, res, u) {
     return json(res, 200, F.nodeSetupPlan(world, action, replaceExisting));
   }
   if (key === "POST /api/setup/nodes/stream") return nodeSetupStream(req, res);
+  if (key.startsWith("POST /api/recipes/")) return recipeRoute(req, res, key);
   if (key === "POST /api/update/stream") return updateStream(req, res);
   if (key === "POST /api/resources/s3/setup") return mutation(res, "setup-s3", "Set up S3 storage", minioSetup);
   if (key === "POST /api/resources/s3/migrate/stream") return migrateStream(req, res);

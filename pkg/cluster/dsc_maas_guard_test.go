@@ -501,3 +501,22 @@ func TestMaaSGuardPaths(t *testing.T) {
 		}
 	}
 }
+
+// A publication only the record lists (its project was deleted, and no
+// MaaSModelRef is left) is no use of MaaS: the guard counts the model
+// references on the cluster, not the record's list of publications.
+func TestMaaSGuardIgnoresAPublicationOnlyTheRecordLists(t *testing.T) {
+	f, c := managerWorld(t, nil)
+	maasServed(f)
+	putMaaSRecord(t, f, serving.MaaSRecord{Published: []string{"gone/qwen25-05b-instruct"}})
+	if plan := mustPlan(t, c, "toggle", "aigateway.modelsAsAService", "Removed", false); len(plan.Blocked) != 0 {
+		t.Fatalf("blocked by the record alone: %+v", plan.Blocked)
+	}
+	// With the platform set up by this tool, the block names no
+	// publication that is gone.
+	putMaaSRecord(t, f, serving.MaaSRecord{DSCChanged: true, Published: []string{"gone/qwen25-05b-instruct"}})
+	b := maasBlock(mustPlan(t, c, "toggle", "aigateway.modelsAsAService", "Removed", false), "aigateway.modelsAsAService")
+	if b == nil || strings.Contains(strings.Join(b.Reasons, " "), "gone/qwen25-05b-instruct") {
+		t.Fatalf("block = %+v", b)
+	}
+}

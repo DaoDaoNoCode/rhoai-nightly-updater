@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -54,7 +55,7 @@ type resourceFake struct {
 	// between the tool's check and its write).
 	beforeServe func(method, path string)
 	// beforeRequest is beforeServe with the whole request (its query tells
-	// a server-side dry run from the write).
+	// a server-side dry run from the write; its body can be read again).
 	beforeRequest func(r *http.Request)
 	// failDryRun maps "METHOD /path" to an HTTP status to return for a
 	// server-side dry run (?dryRun=All) of that request.
@@ -80,6 +81,10 @@ type resourceFake struct {
 	// argo answers Argo CD's (and ACM's) reads of argocd.go; nil = the
 	// generic handling.
 	argo *fakeArgoCD
+	// intercept, when set, may answer a request itself (under the lock,
+	// after it was recorded and its injected failures applied): it returns
+	// true when it did.
+	intercept func(w http.ResponseWriter, r *http.Request, body []byte) bool
 }
 
 // fakeCall is one request to resourceFake.
@@ -325,6 +330,7 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 		f.beforeServe(r.Method, r.URL.Path)
 	}
 	if f.beforeRequest != nil {
+		r.Body = io.NopCloser(bytes.NewReader(body))
 		f.beforeRequest(r)
 	}
 	f.mu.Lock()
@@ -354,6 +360,9 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if f.argo != nil && f.argo.serve(w, r) {
+		return
+	}
+	if f.intercept != nil && f.intercept(w, r, body) {
 		return
 	}
 	// A JSON patch (the field-ownership upgrade) carries no object to quote.
@@ -584,12 +593,17 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 		if len(body) > 0 {
 			var opts struct {
 				Preconditions struct {
-					UID string `json:"uid"`
+					UID             string `json:"uid"`
+					ResourceVersion string `json:"resourceVersion"`
 				} `json:"preconditions"`
 			}
 			_ = json.Unmarshal(body, &opts)
 			if opts.Preconditions.UID != "" && opts.Preconditions.UID != meta["uid"] {
 				f.status(w, 409, "Precondition failed: UID in precondition does not match")
+				return
+			}
+			if opts.Preconditions.ResourceVersion != "" && opts.Preconditions.ResourceVersion != fmt.Sprint(meta["resourceVersion"]) {
+				f.status(w, 409, "Precondition failed: ResourceVersion in precondition does not match")
 				return
 			}
 		}

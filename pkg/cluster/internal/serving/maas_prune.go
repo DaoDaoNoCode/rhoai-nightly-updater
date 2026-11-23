@@ -8,8 +8,10 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
@@ -36,17 +38,35 @@ import (
 // A publication is gone when its project no longer exists (or is being
 // deleted), or when the model it published is: absent, or another object
 // under its name than the one whose UID the tool recorded (deleted and
-// made again, as in a recreated project). Anything that cannot be read
-// keeps the publication (fail closed: it stays as it is, and the next
-// run looks again).
+// made again, as in a recreated project), or when nothing of it is left
+// while project and model are there: no MaaSModelRef of this tool's, and
+// the model neither on the MaaS gateway nor routed through it (its
+// reference deleted outside the tool, or a publish that stopped before
+// it). Not gone either while the model of the tool still lacks the genai
+// label or annotation publish took off (an Unpublish that failed before it
+// put them back): its row offers Unpublish to finish. With no MaaSModelRef
+// of this tool's while the tool's model (the recorded UID) still routes
+// through the MaaS gateway, the reference is gone and the routing pending:
+// the prune takes the model out of MaaS (subscription, access policy,
+// gateway) like any gone publication, but the record keeps the values
+// "Restore direct routing" writes back (its row, from the live model,
+// offers it), until that restore is applied or the model is gone
+// (settleRestoreValues). Anything that cannot be read keeps the
+// publication (fail closed: it stays as it is, and the next run looks
+// again).
 
 // maasGonePub is a publication that is gone, and why. projectGone: its
 // project no longer exists or is being deleted (nothing of the tool's is
-// left to delete there).
+// left to delete there). unpublished: the model is there and nothing of
+// the publication is (its row is the model's live one, Not published).
+// routingPending: the reference is gone and the model still routes through
+// the MaaS gateway (the record keeps its restore values).
 type maasGonePub struct {
-	pub         MaaSPub
-	why         string
-	projectGone bool
+	pub            MaaSPub
+	why            string
+	projectGone    bool
+	unpublished    bool
+	routingPending bool
 }
 
 // goneMaaSPublications reads, for each recorded publication, whether it is
@@ -66,10 +86,10 @@ func goneMaaSPublications(c *kube.Client, rec MaaSRecord) ([]maasGonePub, error)
 		case err != nil:
 			continue
 		case !found:
-			out = append(out, maasGonePub{p, fmt.Sprintf("project %s no longer exists", p.Project), true})
+			out = append(out, maasGonePub{pub: p, why: fmt.Sprintf("project %s no longer exists", p.Project), projectGone: true})
 			continue
 		case meta.Terminating():
-			out = append(out, maasGonePub{p, fmt.Sprintf("project %s is being deleted", p.Project), true})
+			out = append(out, maasGonePub{pub: p, why: fmt.Sprintf("project %s is being deleted", p.Project), projectGone: true})
 			continue
 		}
 		model, found, err := ReadToolModel(c, p.Project, p.Model)
@@ -77,14 +97,104 @@ func goneMaaSPublications(c *kube.Client, rec MaaSRecord) ([]maasGonePub, error)
 		case err != nil:
 			continue
 		case !found:
-			out = append(out, maasGonePub{p, fmt.Sprintf("model %s in %s no longer exists", p.Model, p.Project), false})
-		case modelsErr == nil:
-			if e, ok := models[ModelRecordKey(p.Project, p.Model)]; ok && e.UID != "" && e.UID != model.Metadata.UID {
-				out = append(out, maasGonePub{p, fmt.Sprintf("model %s in %s is not the one this tool published (it was deleted and made again)", p.Model, p.Project), false})
+			out = append(out, maasGonePub{pub: p, why: fmt.Sprintf("model %s in %s no longer exists", p.Model, p.Project)})
+		case modelsErr == nil && models.notTheToolsModel(p, model.Metadata.UID):
+			out = append(out, maasGonePub{pub: p, why: fmt.Sprintf("model %s in %s is not the one this tool published (it was deleted and made again)", p.Model, p.Project)})
+		case rec.staleFor(p.Project, p.Model, model.Metadata.UID):
+			// This tool made it again: its own, but not the one published.
+			out = append(out, maasGonePub{pub: p, why: fmt.Sprintf("model %s in %s was deleted and made again since it was published", p.Model, p.Project)})
+		default:
+			// Restore values are kept for the tool's model only (fail
+			// closed while the models record cannot tell).
+			toolsModel := modelsErr != nil || models.Owns(model.Metadata)
+			left, err := maasPublicationLeft(c, model)
+			switch {
+			case err != nil || left == maasRefLive || left == maasRouteLeft:
+			case left == maasRouted && toolsModel:
+				out = append(out, maasGonePub{pub: p, why: fmt.Sprintf("the MaaSModelRef of model %s in %s no longer exists (reference gone, routing pending)", p.Model, p.Project), routingPending: true})
+			case rec.genAIPending(p, model.Metadata) && toolsModel:
+				// An Unpublish that routed the model back but stopped
+				// before it put back the genai label or annotation is not
+				// finished: the record keeps what Unpublish again puts
+				// back on this model.
+			default:
+				out = append(out, maasGonePub{pub: p, why: fmt.Sprintf("the MaaSModelRef of model %s in %s no longer exists", p.Model, p.Project), unpublished: true})
 			}
 		}
 	}
 	return out, modelsErr
+}
+
+// maasLeft is what is on the cluster of a publication (maasPublicationLeft).
+type maasLeft int
+
+const (
+	maasNothingLeft maasLeft = iota
+	// maasRefLive: this tool's MaaSModelRef.
+	maasRefLive
+	// maasRouted: no such reference; the model's MaaS gateway ref.
+	maasRouted
+	// maasRouteLeft: neither; the model's route through the MaaS gateway
+	// (KServe has not moved it yet).
+	maasRouteLeft
+)
+
+// maasPublicationLeft says what of the publication of model is on the
+// cluster, the first found of: this tool's MaaSModelRef, the model's MaaS
+// gateway ref, its route through the MaaS gateway.
+func maasPublicationLeft(c *kube.Client, model LLMISvcObject) (maasLeft, error) {
+	ref, found, err := readMaaSModelRef(c, model.Metadata.Namespace, model.Metadata.Name)
+	if err != nil {
+		return maasNothingLeft, err
+	}
+	if found && ToolOwned(ref.Metadata) {
+		return maasRefLive, nil
+	}
+	if ModelHasMaaSRef(model) {
+		return maasRouted, nil
+	}
+	parents, _, err := readModelRoute(c, model.Metadata.Namespace, model.Metadata.Name)
+	if err != nil {
+		return maasNothingLeft, err
+	}
+	if slices.Contains(parents, inferenceGatewayNamespace+"/"+MaaSGatewayName) {
+		return maasRouteLeft, nil
+	}
+	return maasNothingLeft, nil
+}
+
+// settleRestoreValues drops the restore values the record keeps without a
+// publication (MaaSRecord.restorePending) once nothing is left to
+// restore: the model is gone, another one (its UID), not the tool's, or it
+// no longer routes through the MaaS gateway and has its Gen AI metadata
+// back (restored outside the tool). What cannot be read is kept. It
+// returns the keys it dropped.
+func settleRestoreValues(c *kube.Client, rec *MaaSRecord) []string {
+	pending := rec.restorePending()
+	if len(pending) == 0 {
+		return nil
+	}
+	models, modelsErr := ReadModelsRecord(c)
+	var settled []string
+	for _, p := range pending {
+		model, found, err := ReadToolModel(c, p.Project, p.Model)
+		if err != nil {
+			continue
+		}
+		if found && !rec.staleFor(p.Project, p.Model, model.Metadata.UID) && (modelsErr != nil || models.Owns(model.Metadata)) &&
+			(ModelHasMaaSRef(model) || rec.genAIPending(p, model.Metadata)) {
+			continue
+		}
+		rec.SetPublished(p.Project, p.Model, false)
+		settled = append(settled, p.Key())
+	}
+	return settled
+}
+
+// notTheToolsModel: the tool recorded another UID for p's model than uid.
+func (r ModelsRecord) notTheToolsModel(p MaaSPub, uid string) bool {
+	e, ok := r[ModelRecordKey(p.Project, p.Model)]
+	return ok && e.UID != "" && e.UID != uid
 }
 
 // goneMaaSText names the gone publications for people.
@@ -115,14 +225,31 @@ func PruneGoneMaaSPublications(c *kube.Client) (changed bool, logs []string, err
 	if err != nil {
 		return false, nil, err
 	}
+	settled := settleRestoreValues(c, &rec)
+	var settledLog []string
+	if len(settled) > 0 {
+		settledLog = []string{"Nothing is left to restore for " + strings.Join(settled, ", ") + "; the record no longer keeps its values."}
+	}
 	gone, _ := goneMaaSPublications(c, rec)
 	if len(gone) == 0 {
-		return false, nil, nil
+		setLastPruneFailure(nil)
+		if len(settled) == 0 {
+			return false, nil, nil
+		}
+		if err := WriteMaaSRecord(c, rec); err != nil {
+			return false, settledLog, err
+		}
+		return true, settledLog, nil
 	}
+	defer func() { setLastPruneFailure(err) }()
 	for _, g := range gone {
+		if g.routingPending {
+			rec.dropPublishedKeepRestore(g.pub.Project, g.pub.Model)
+			continue
+		}
 		rec.SetPublished(g.pub.Project, g.pub.Model, false)
 	}
-	logs = []string{"Publications that are gone, dropped from MaaS: " + goneMaaSText(gone) + "."}
+	logs = append(settledLog, "Publications that are gone, dropped from MaaS: "+goneMaaSText(gone)+".")
 	var failed []error
 
 	// The tool's references in projects that still exist.
@@ -148,7 +275,8 @@ func PruneGoneMaaSPublications(c *kube.Client) (changed bool, logs []string, err
 	}
 
 	// The access policy and the subscription.
-	live, err := maasLivePubs(c, rec, MaaSPub{}, MaaSPub{})
+	live, liveErr := maasLivePubs(c, rec, MaaSPub{}, MaaSPub{})
+	err = liveErr
 	var cur maasToolSub
 	if err == nil {
 		// The remaining publications keep their limits and who can use
@@ -206,7 +334,13 @@ func PruneGoneMaaSPublications(c *kube.Client) (changed bool, logs []string, err
 	if infra, err := MaaSInfraNamespace(c); err != nil {
 		msg = err.Error()
 	} else {
-		gwPlan, msg, code = planMaaSGateway(c, infra, rec.Projects())
+		// The projects of the publications left on the cluster; while
+		// they cannot be read, those the record still lists.
+		projects := rec.Projects()
+		if liveErr == nil {
+			projects = pubProjects(live)
+		}
+		gwPlan, msg, code = planMaaSGateway(c, infra, projects)
 	}
 	switch {
 	case msg != "":
@@ -310,6 +444,31 @@ func updateToolObject(c *kube.Client, desc, path string, obj map[string]any, cur
 		}
 	}
 	return fmt.Errorf("%s: %w", desc, envkit.ErrObjectChanged)
+}
+
+// lastPrune is the error of the last PruneGoneMaaSPublications that found
+// gone publications ("" when it succeeded), for the status: a removal that
+// is on its way needs no attention, one that failed does. It is this
+// process's (the updater runs one replica, deploy/template.yaml); after a
+// restart the background job runs at once.
+var lastPrune struct {
+	sync.Mutex
+	failure string
+}
+
+func setLastPruneFailure(err error) {
+	lastPrune.Lock()
+	defer lastPrune.Unlock()
+	lastPrune.failure = ""
+	if err != nil {
+		lastPrune.failure = err.Error()
+	}
+}
+
+func lastPruneFailure() string {
+	lastPrune.Lock()
+	defer lastPrune.Unlock()
+	return lastPrune.failure
 }
 
 // ReleaseGoneMaaSProjects runs PruneGoneMaaSPublications for an operation

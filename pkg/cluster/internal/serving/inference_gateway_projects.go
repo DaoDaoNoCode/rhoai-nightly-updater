@@ -54,60 +54,115 @@ const (
 	gatewayProjectsManager = "rhoai-nightly-updater-gateway-projects"
 )
 
-func ReadGatewayProjects(c *kube.Client) ([]string, error) {
-	raw, err := record.ReadSnapshotKey(c, gatewayProjectsKey)
-	if err != nil {
-		return nil, fmt.Errorf("read this tool's record of the projects it added to the inference gateway: %w", err)
-	}
-	var rec struct {
-		Projects []string `json:"projects"`
-	}
-	if raw != "" {
-		if err := json.Unmarshal([]byte(raw), &rec); err != nil {
-			return nil, fmt.Errorf("parse this tool's record of the projects it added to the inference gateway: %w", err)
-		}
-	}
-	return rec.Projects, nil
+// gatewayRecord is the record: the projects this tool added, and the UID
+// of each one's namespace when it added it (none for an entry an earlier
+// build wrote). A namespace of that name with another UID was made again:
+// it is not the project this tool added (gatewayRecord.addedHere).
+type gatewayRecord struct {
+	Projects []string          `json:"projects"`
+	UIDs     map[string]string `json:"uids,omitempty"`
 }
 
-func WriteGatewayProjects(c *kube.Client, projects []string) error {
-	sort.Strings(projects)
-	data, _ := json.Marshal(map[string]any{"projects": projects})
+func readGatewayRecord(c *kube.Client) (gatewayRecord, error) {
+	raw, err := record.ReadSnapshotKey(c, gatewayProjectsKey)
+	if err != nil {
+		return gatewayRecord{}, fmt.Errorf("read this tool's record of the projects it added to the inference gateway: %w", err)
+	}
+	var rec gatewayRecord
+	if raw != "" {
+		if err := json.Unmarshal([]byte(raw), &rec); err != nil {
+			return gatewayRecord{}, fmt.Errorf("parse this tool's record of the projects it added to the inference gateway: %w", err)
+		}
+	}
+	return rec, nil
+}
+
+func writeGatewayRecord(c *kube.Client, rec gatewayRecord) error {
+	sort.Strings(rec.Projects)
+	for p := range rec.UIDs {
+		if !slices.Contains(rec.Projects, p) {
+			delete(rec.UIDs, p)
+		}
+	}
+	if len(rec.UIDs) == 0 {
+		rec.UIDs = nil
+	}
+	data, _ := json.Marshal(rec)
 	if err := record.WriteSnapshotKey(c, gatewayProjectsKey, gatewayProjectsManager, string(data)); err != nil {
 		return fmt.Errorf("record the projects this tool added to the inference gateway: %w", err)
 	}
 	return nil
 }
 
+func ReadGatewayProjects(c *kube.Client) ([]string, error) {
+	rec, err := readGatewayRecord(c)
+	return rec.Projects, err
+}
+
+func WriteGatewayProjects(c *kube.Client, projects []string) error {
+	return writeGatewayRecord(c, gatewayRecord{Projects: projects})
+}
+
+// addedHere: project is recorded, and no other namespace than the one this
+// tool added has its name: the live namespace has the recorded UID (when
+// there is one), or there is none (deleted: the entry is still the tool's,
+// and releaseGoneGatewayProjects takes it off). A namespace of another UID
+// was made again since, so the entry is not the tool's. A namespace that
+// cannot be read is not (fail closed: an entry that may be someone else's
+// is not taken off).
+func (r gatewayRecord) addedHere(c *kube.Client, project string) bool {
+	if !slices.Contains(r.Projects, project) {
+		return false
+	}
+	uid := r.UIDs[project]
+	if uid == "" {
+		return true
+	}
+	meta, found, err := kube.ReadObjectMeta(c, rhoai.ClusterPath("v1", "namespaces", project))
+	return err == nil && (!found || meta.UID == uid)
+}
+
 // recordGatewayProject records that this tool adds project to the list,
 // before the Gateway is written: a project that cannot be recorded is not
 // added (it could never be taken off by this tool).
 func recordGatewayProject(c *kube.Client, project string) error {
-	projects, err := ReadGatewayProjects(c)
+	rec, err := readGatewayRecord(c)
 	if err != nil {
 		return err
 	}
-	if slices.Contains(projects, project) {
+	uid := ""
+	if meta, found, err := kube.ReadObjectMeta(c, rhoai.ClusterPath("v1", "namespaces", project)); err == nil && found {
+		uid = meta.UID
+	}
+	if slices.Contains(rec.Projects, project) && rec.UIDs[project] == uid {
 		return nil
 	}
-	return WriteGatewayProjects(c, append(projects, project))
+	if !slices.Contains(rec.Projects, project) {
+		rec.Projects = append(rec.Projects, project)
+	}
+	if rec.UIDs == nil {
+		rec.UIDs = map[string]string{}
+	}
+	rec.UIDs[project] = uid
+	return writeGatewayRecord(c, rec)
 }
 
 func forgetGatewayProject(c *kube.Client, project string) error {
-	projects, err := ReadGatewayProjects(c)
+	rec, err := readGatewayRecord(c)
 	if err != nil {
 		return err
 	}
 	var kept []string
-	for _, p := range projects {
+	for _, p := range rec.Projects {
 		if p != project {
 			kept = append(kept, p)
 		}
 	}
-	if len(kept) == len(projects) {
+	if len(kept) == len(rec.Projects) {
 		return nil
 	}
-	return WriteGatewayProjects(c, kept)
+	rec.Projects = kept
+	return writeGatewayRecord(c, rec)
 }
 
 // gatewayRoutedIn lists the models ("namespace/name", anyone's) in project
@@ -191,11 +246,18 @@ func removeGatewayProject(c *kube.Client, project string, logf func(string)) (st
 // It returns a sentence for the result: what was done, or why the project
 // stays ("" when there is nothing to say).
 func releaseGatewayProject(c *kube.Client, project string) string {
-	recorded, err := ReadGatewayProjects(c)
+	recorded, err := readGatewayRecord(c)
 	if err != nil {
 		return fmt.Sprintf(" %s stays on the inference gateway's list: %v. Remove it from the list on the Models tab.", project, err)
 	}
-	if !slices.Contains(recorded, project) {
+	if !slices.Contains(recorded.Projects, project) {
+		return ""
+	}
+	// Made again since this tool added it: the entry is not this tool's.
+	if !recorded.addedHere(c, project) {
+		if meta, found, err := kube.ReadObjectMeta(c, rhoai.ClusterPath("v1", "namespaces", project)); err == nil && found && meta.UID != recorded.UIDs[project] {
+			_ = forgetGatewayProject(c, project)
+		}
 		return ""
 	}
 	gw, found, err := readInferenceGateway(c)
@@ -302,9 +364,9 @@ func listedProjectsState(c *kube.Client, state *types.InferenceGatewayState, gw 
 	if !shaped {
 		return
 	}
-	if recorded, err := ReadGatewayProjects(c); err == nil {
-		for _, p := range recorded {
-			if slices.Contains(listed, p) {
+	if recorded, err := readGatewayRecord(c); err == nil {
+		for _, p := range recorded.Projects {
+			if slices.Contains(listed, p) && recorded.addedHere(c, p) {
 				state.AddedProjects = append(state.AddedProjects, p)
 			}
 		}

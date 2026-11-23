@@ -684,7 +684,7 @@ export function maasPlatformStatus(m: MaaSStatus | null, busy: Busy): EnvStatus 
   if (busy.maas?.action === "teardown") return "deleting";
   // Set up and a part's own fix change the platform.
   // (Publishing and the subscription's settings do not.)
-  if (busy.maas && !["publish", "unpublish", "change-limit", "change-access"].includes(busy.maas.action)) return "setting-up";
+  if (busy.maas && !["publish", "unpublish", "restore-routing", "change-limit", "change-access"].includes(busy.maas.action)) return "setting-up";
   const states = m.parts.map(maasPartStatus);
   if (states.every((s) => s === "ready")) return "ready";
   // Not turned on yet, with something setup makes still missing: setup

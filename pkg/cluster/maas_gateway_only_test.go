@@ -340,7 +340,8 @@ func TestMaaSPublish_RefusesWhenSomeoneAddedARefWhilePublished(t *testing.T) {
 
 // KServe never moves the route to the MaaS gateway alone: publish stops
 // before creating the MaaS objects, says "Partly published" and why, and
-// the tab shows it.
+// the tab shows the model's routing through the MaaS gateway with no MaaS
+// reference.
 func TestMaaSPublish_RouteThatNeverBecomesMaaSOnlyIsPartlyPublished(t *testing.T) {
 	mc := modelReadyForMaaS(t)
 	routeParents(t, mc)
@@ -353,7 +354,7 @@ func TestMaaSPublish_RouteThatNeverBecomesMaaSOnlyIsPartlyPublished(t *testing.T
 		t.Fatal("the model reference was created over a route on two gateways")
 	}
 	st, err := GetMaaSStatus(mc.c)
-	if err != nil || len(st.Items) != 1 || !st.Items[0].Partly || !strings.Contains(st.Items[0].Message, "Partly published") {
+	if err != nil || len(st.Items) != 1 || st.Items[0].Published || !st.Items[0].RoutingPending {
 		t.Fatalf("status = %+v, %v", st.Items, err)
 	}
 	mc.route.freeze(false)

@@ -26,6 +26,7 @@ var clusterLayers = [][]string{
 	{"serving", "gitops"},
 	{"dsc"},
 	{"features", "diagnostics"},
+	{"recipe"},
 }
 
 // layerViolations checks the imports of the internal packages (package path

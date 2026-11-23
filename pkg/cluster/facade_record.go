@@ -24,6 +24,7 @@ const (
 	MarkerFlushTimeout  = record.MarkerFlushTimeout
 	HTTPShutdownTimeout = record.HTTPShutdownTimeout
 	LockLostMessage     = record.LockLostMessage
+	MaxRecipeRunBytes   = record.MaxRecipeRunBytes
 )
 
 // RecoveryTimeout is record.RecoveryTimeout; the errors are record's
@@ -32,6 +33,7 @@ var (
 	RecoveryTimeout             = record.RecoveryTimeout
 	ErrOperationLockLost        = record.ErrOperationLockLost
 	ErrOperationRecordContended = record.ErrOperationRecordContended
+	ErrRecipeRunReplaced        = record.ErrRecipeRunReplaced
 )
 
 // ShutdownDrainTimeout is record.ShutdownDrainTimeout.
@@ -70,3 +72,11 @@ func WriteOperationLease(c *Client, lease *types.OperationLease, heldElsewhere f
 func ReleaseOperationLease(c *Client, owner LeaseOwner) error {
 	return record.ReleaseOperationLease(c, owner)
 }
+
+// SaveRecipeRun is record.SaveRecipeRun.
+func SaveRecipeRun(c *Client, run *types.RecipeRun, replace bool) error {
+	return record.SaveRecipeRun(c, run, replace)
+}
+
+// ReadRecipeRun is record.ReadRecipeRun.
+func ReadRecipeRun(c *Client) (*types.RecipeRun, error) { return record.ReadRecipeRun(c) }

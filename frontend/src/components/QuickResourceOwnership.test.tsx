@@ -280,7 +280,8 @@ describe("teardown confirmations state the data loss", () => {
 
 describe("S3 storage (names, login, kept namespace)", () => {
   const kept = "S3 storage removed. PVC seaweedfs/seaweedfs-data and all stored objects (pipeline artifacts, models, test files) are deleted with it. Namespace 'seaweedfs' was kept: it may hold objects this tool did not create. Delete it with `oc delete project seaweedfs` once you've checked it's empty.";
-  const afterTeardown: ResourceState = { deployed: false, ready: false, namespace: "seaweedfs", managedByTool: true, message: "Namespace exists but the S3 storage is not deployed" };
+  const afterTeardownBase: ResourceState = { deployed: false, ready: false, namespace: "seaweedfs", managedByTool: true, message: "Namespace exists but the S3 storage is not deployed" };
+  const afterTeardown = afterTeardownBase;
   const running: ResourceState = { ...readyMinio, dataPVCs: ["seaweedfs-data"] };
 
   it("a running storage shows its endpoint, bucket and login inline, its warning, and no MinIO-era name", async () => {
@@ -387,11 +388,15 @@ describe("S3 storage (names, login, kept namespace)", () => {
     expect(api.calls.filter((c) => c.startsWith("POST /api/resources/s3/teardown"))).toHaveLength(1);
   });
 
+  // N8: Delete stays available because the cluster still has what the
+  // deletion left (read from the cluster), not because this browser
+  // remembers that it failed.
   it.each([
-    ["partial_failure", "Delete the S3 storage: stopped", "Some S3 storage objects could not be removed: Secret seaweedfs/seaweedfs-s3-credentials: forbidden. Re-run teardown to retry."],
-    ["in_progress", "Still deleting", "The S3 storage objects were deleted, but PVC seaweedfs/seaweedfs-data is still terminating after 1m0s; re-run teardown to check again."],
-  ])("a %s deletion keeps Delete available", async (code, title, message) => {
+    ["partial_failure", "Delete the S3 storage: stopped", "Some S3 storage objects could not be removed: Secret seaweedfs/seaweedfs-s3-credentials: forbidden. Re-run teardown to retry.", { leftovers: ["Secret seaweedfs-s3-credentials"] }],
+    ["in_progress", "Still deleting", "The S3 storage objects were deleted, but PVC seaweedfs/seaweedfs-data is still terminating after 1m0s; re-run teardown to check again.", { dataPVCs: ["seaweedfs-data"] }],
+  ])("a %s deletion keeps Delete available while the cluster has what it left", async (code, title, message, left) => {
     let status: ResourceState = running;
+    const afterTeardown: ResourceState = { ...afterTeardownBase, ...left };
     const api = stubApi({
       "/api/resources/status": () => jsonResponse(live({ minio: status, pipelineServers: [] })),
       "/api/resources/projects": { projects: ["fresh"] },
@@ -407,6 +412,22 @@ describe("S3 storage (names, login, kept namespace)", () => {
     fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(api.calls.filter((c) => c.startsWith("POST /api/resources/s3/teardown"))).toHaveLength(2));
+  });
+
+  it("a deletion that failed but left nothing on the cluster offers no Delete", async () => {
+    let status: ResourceState = running;
+    stubApi({
+      "/api/resources/status": () => jsonResponse(live({ minio: status, pipelineServers: [] })),
+      "/api/resources/projects": { projects: ["fresh"] },
+      "POST /api/resources/s3/teardown": () => { status = afterTeardownBase; return jsonResponse({ success: false, errorCode: "network", message: "The connection dropped.", logs: [] }, 422); },
+    });
+    renderAt("/test-resources?tab=pipelines&project=fresh");
+    fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
+    const run = await screen.findByRole("dialog", { name: "Delete the S3 storage" });
+    fireEvent.click(footerClose(await waitFor(() => run)));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Set up Pipelines in fresh" })).toBeInTheDocument());
+    expect(await menuItem("S3 storage", /Delete S3 storage/)).toBeNull();
   });
 });
 

@@ -9,6 +9,7 @@ import { CleanupSection } from "./FeatureLayout";
 import { LabelSkeleton } from "./Loading";
 import type { FeatureState, NextStep } from "./featureState";
 import type { Pending } from "./resourceRow";
+import { RecipeRunNote } from "../recipes/RecipeEntry";
 
 /** One feature as the Overview lists it. */
 export interface OverviewRow {
@@ -134,6 +135,7 @@ export const Overview: React.FC<{
       <StackItem>
         <Content component="p">Set up what you need to develop or reproduce an issue on this cluster: each feature takes a few minutes and asks before it changes anything. Its tab shows how to use it.</Content>
       </StackItem>
+      <RecipeRunNote />
       <StackItem>
         {/* Below lg the rows stack (label: value), so the one-line State and Next step never squeeze the table. */}
         <Table variant="compact" aria-label="Features" gridBreakPoint="grid-lg" aria-busy={loading}>

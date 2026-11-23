@@ -80,40 +80,62 @@ function allowedWords(gw: InferenceGatewayState): React.ReactNode {
 }
 
 /**
- * Projects on this tool's gateway's list that no model uses (their editors
- * can still attach routes to the shared gateway), first those that no
- * longer exist (a new project of that name would be admitted at once), each
- * with Remove from the list.
+ * Projects on this tool's gateway's list that no model uses and that still
+ * exist (their editors can still attach routes to the shared gateway), each
+ * with Remove from the list after a confirmation.
  */
 const UnusedProjectsAlert: React.FC<{ gw: InferenceGatewayState; reason: string | null; setPending: (p: Pending) => void }> = ({ gw, reason, setPending }) => {
   const gone = gw.goneProjects ?? [];
   const unused = (gw.unusedProjects ?? []).filter((p) => !gone.includes(p));
-  if (gone.length === 0 && unused.length === 0) return null;
-  const row = (p: string, isGone: boolean) => (
-    <StackItem key={p}>
-      <code>{p}</code> — {isGone ? "deleted" : "no model uses the gateway"}{" "}
-      <Button variant="link" isInline isDanger isAriaDisabled={!!reason} aria-label={`Remove ${p} from the inference gateway`} onClick={() => setPending({ kind: "disallow-gateway-project", project: p, gone: isGone })}>Remove</Button>
-    </StackItem>
-  );
+  if (unused.length === 0) return null;
   return (
-    <Alert variant={gone.length > 0 ? "warning" : "info"} isInline component="div" title="The gateway accepts projects that don't use it">
+    <Alert variant="info" isInline component="div" title="The gateway accepts projects that don't use it">
       <Stack hasGutter>
         <StackItem>
           <Content component="p">
             Anyone who can edit a project on the list can attach routes to this shared gateway, and a route there can take another model&apos;s calls and tokens.
-            {gone.length > 0 ? " A project created later with a deleted project's name would be accepted at once." : ""}
           </Content>
         </StackItem>
-        {gone.map((p) => row(p, true))}
-        {unused.map((p) => row(p, false))}
+        {unused.map((p) => (
+          <StackItem key={p}>
+            <code>{p}</code> — no model uses the gateway{" "}
+            <Button variant="link" isInline isDanger isAriaDisabled={!!reason} aria-label={`Remove ${p} from the inference gateway`} onClick={() => setPending({ kind: "disallow-gateway-project", project: p, gone: false })}>Remove</Button>
+          </StackItem>
+        ))}
         {reason && <StackItem><Content component="small">Not available now: {reason}</Content></StackItem>}
       </Stack>
     </Alert>
   );
 };
 
+/**
+ * Projects on the gateway's list that no longer exist. Nothing to attend to:
+ * the next Models change takes those this tool added off the list on its own
+ * (pkg/cluster releaseGoneGatewayProjects). Until then each says so, with a
+ * Remove that runs at once (it only narrows the list), with your sign-in.
+ */
+const GoneProjects: React.FC<{ gw: InferenceGatewayState; reason: string | null; readOnly: boolean; onRemove: (project: string) => void }> = ({ gw, reason, readOnly, onRemove }) => {
+  const gone = gw.goneProjects ?? [];
+  if (gone.length === 0) return null;
+  const added = gw.addedProjects ?? [];
+  return (
+    <Stack>
+      {gone.map((p) => (
+        <StackItem key={p}>
+          <Content component="small" className="pf-v6-u-text-color-subtle">
+            {added.includes(p)
+              ? <>Project {p} no longer exists; it is removed from the gateway at the next Models change.</>
+              : <>Project {p} no longer exists; this tool has no record that it added it to the gateway, so it stays on the gateway&apos;s list until it is removed.</>}
+            {!readOnly && <>{" "}<Button variant="link" isInline isAriaDisabled={!!reason} aria-label={`Remove ${p} from the inference gateway`} onClick={() => onRemove(p)}>Remove</Button></>}
+          </Content>
+        </StackItem>
+      ))}
+    </Stack>
+  );
+};
+
 /** The inference gateway (cluster). */
-export const GatewayPart: React.FC<ModelsTabProps> = ({ status, busy, baseReason, readOnly, setPending }) => {
+export const GatewayPart: React.FC<ModelsTabProps> = ({ status, busy, baseReason, readOnly, setPending, onRun }) => {
   const gw = status.inferenceGateway;
   const unmanaged = notManaged(gw);
   const deployed = !!gw?.deployed;
@@ -140,6 +162,10 @@ export const GatewayPart: React.FC<ModelsTabProps> = ({ status, busy, baseReason
       </Content>
       {gw && <ProblemAlerts kind="gateway" state={gw} />}
       {gw?.deployed && gatewayManaged(gw) && !isTerminating(gw) && <UnusedProjectsAlert gw={gw} reason={readOnly ? READ_ONLY_SETUP : baseReason} setPending={setPending} />}
+      {gw?.deployed && gatewayManaged(gw) && !isTerminating(gw) && (
+        <GoneProjects gw={gw} reason={baseReason} readOnly={readOnly}
+          onRemove={(project) => (onRun ?? setPending)({ kind: "disallow-gateway-project", project, gone: true })} />
+      )}
       {gw?.deployed && !isTerminating(gw) && s !== "setting-up" && notAllowedByProject(gw).map(([ns, models]) => (
         <NotAllowedAlert key={ns} gw={gw} project={ns} models={models} baseReason={baseReason} readOnly={readOnly} setPending={setPending} />
       ))}

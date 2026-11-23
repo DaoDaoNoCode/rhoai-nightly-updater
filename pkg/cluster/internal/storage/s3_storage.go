@@ -327,6 +327,26 @@ func lookupS3Namespace(c *kube.Client) (s3NamespaceInfo, error) {
 	return s3NamespaceInfo{Exists: true, Meta: nsObj.Metadata, Phase: nsObj.Status.Phase, Managed: nsObj.Metadata.HasToolLabel()}, nil
 }
 
+// s3Leftovers names this tool's storage objects (besides the Deployment,
+// the PVC and the Route, which the status reads anyway) still in namespace
+// seaweedfs: what a teardown that did not finish left. One that cannot be
+// read is not named (the next read looks again).
+func s3Leftovers(c *kube.Client) []string {
+	var out []string
+	for _, o := range []struct{ kind, name, path string }{
+		{"NetworkPolicy", s3NetworkPolicy, rhoai.NamespacedPath("networking.k8s.io/v1", "networkpolicies", S3Namespace, s3NetworkPolicy)},
+		{"Service", s3Service, rhoai.NamespacedPath("v1", "services", S3Namespace, s3Service)},
+		{"Secret", S3Secret, rhoai.NamespacedPath("v1", "secrets", S3Namespace, S3Secret)},
+	} {
+		meta, found, err := kube.ReadObjectMeta(c, o.path)
+		if err == nil && found && storageObjectOwned(meta) {
+			out = append(out, o.kind+" "+o.name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // storageObjectOwned reports whether the tool created a storage object: it
 // carries the ownership label, or (an earlier version's unlabelled object)
 // the tool's field manager owns its content, spec or data (see
@@ -666,6 +686,9 @@ func S3StatusAndEndpoints(c *kube.Client) (types.ResourceState, S3Endpoints, err
 	if deployErr != nil {
 		if kube.IsK8sNotFound(deployErr) {
 			state.Message = "Namespace exists but the S3 storage is not deployed"
+			if ns.Managed {
+				state.Leftovers = s3Leftovers(c)
+			}
 		} else {
 			state.Message = fmt.Sprintf("Cannot read the SeaweedFS deployment: %v", deployErr)
 		}

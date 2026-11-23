@@ -23,7 +23,7 @@ function renderAt(path: string) {
 
 describe("Environment route, /test-resources", () => {
   it("has its own nav item after Dashboard Dev and before Diagnostics", () => {
-    expect(NAV_ITEMS.map((i) => i.label)).toEqual(["Status", "Components", "Build Explorer", "Dashboard Dev", "Environment", "Diagnostics"]);
+    expect(NAV_ITEMS.map((i) => i.label)).toEqual(["Status", "Components", "Build Explorer", "Dashboard Dev", "Environment", "Recipes", "Diagnostics"]);
     expect(NAV_ITEMS.find((i) => i.label === "Environment")?.path).toBe("/test-resources");
   });
 

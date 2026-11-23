@@ -23,7 +23,7 @@ import {
   useVersion,
 } from "../state/AppInfo";
 import { isRunning } from "../state/operation";
-import { OPERATION_NAMES, STEP_SETS, operationKindForServerType, stepLabel } from "../operationSteps";
+import { OPERATION_NAMES, RECIPE_OPERATION_TYPE, STEP_SETS, operationKindForServerType, recipeTarget, stepLabel } from "../operationSteps";
 import { formatClockTime, formatElapsed, formatRelativeTime } from "../utils";
 import { sentence, shortTarget } from "../build";
 import { BackgroundRunAlert, ViewProgressLink, useBackgroundRun, useViewServerOperation } from "./ProgressViews";
@@ -59,6 +59,7 @@ function useNow(active: boolean): number {
 /** Where to follow an operation of this backend type, as [path, link text]. */
 function followLink(type: string): [string, string] | null {
   if (operationKindForServerType(type)) return ["/", "View progress"];
+  if (type === RECIPE_OPERATION_TYPE || type === "recipe-plan") return ["/recipes", "Open Recipes"];
   if (type.includes("minio") || type.includes("mlflow") || type.includes("pipeline") || type === "migrate-storage" || type === "cleanup") return ["/test-resources", "Open Environment"];
   if (type.includes("dashboard")) return ["/dashboard-dev", "Open Dashboard Dev"];
   if (type === "diagnostics-fix" || type === "assist-rollout") return ["/diagnostics", "Open Diagnostics"];
@@ -71,6 +72,8 @@ function interruptedGuidance(op: InterruptedOperation): string {
   switch (operationKindForServerType(op.type, op.target) ? "operator" : op.type) {
     case "operator":
       return "The operator may be partly changed. Check the operator status on the Status page, then run the same operation again: every step is safe to repeat. Diagnostics can help if the operator does not come back.";
+    case RECIPE_OPERATION_TYPE:
+      return "Nothing resumes by itself. Resume it on the Recipes page: each step checks the cluster first, so what is set up stays and the run continues where it stopped.";
     case "deploy-dashboard-pr":
     case "deploy-dashboard-main":
     case "revert-dashboard":
@@ -155,6 +158,9 @@ function useOperationNotice(onStatusPage: boolean, pathname = ""): Notice | null
   const kind = operationKindForServerType(op.type, op.target);
   // On the Status page the progress card shows streamed operator operations.
   if (onStatusPage && kind) return null;
+  // A recipe run: the Recipes page shows its steps; elsewhere, its step and the page to follow it.
+  const recipe = op.type === RECIPE_OPERATION_TYPE ? recipeTarget(op.target) ?? { recipe: "", step: "" } : null;
+  if (recipe && pathname === "/recipes") return null;
   const step = serverOperationStep(op);
   const started = Date.parse(op.startedAt);
   const elapsed = Number.isFinite(started) ? ` (${formatElapsed(started, now)})` : "";
@@ -162,7 +168,7 @@ function useOperationNotice(onStatusPage: boolean, pathname = ""): Notice | null
   const followed = followLink(op.type);
   const link = followed && followed[0] !== pathname ? followed : null;
   // Streamed operator operations have their full progress on the Status page (the link); the others, what the server records.
-  const view = !kind && viewServerOperation ? <ViewProgressLink onOpen={() => viewServerOperation(op)} /> : null;
+  const view = !kind && !recipe && viewServerOperation ? <ViewProgressLink onOpen={() => viewServerOperation(op)} /> : null;
   return {
     key: "operation",
     priority: 1,
@@ -175,7 +181,8 @@ function useOperationNotice(onStatusPage: boolean, pathname = ""): Notice | null
         title={`${describeServerOperation(op, status?.cluster.user)}${step ? `: ${step}` : ""}${elapsed}`}
         actionLinks={link || view ? <>{view}{link && <AlertActionLink onClick={() => navigate(link[0])}>{link[1]}</AlertActionLink>}</> : undefined}
       >
-        {op.target && <>Target: <BuildId target={op.target} />. </>}
+        {op.target && !recipe && <>Target: <BuildId target={op.target} />. </>}
+        {recipe?.recipe && <>Recipe {recipe.recipe}. </>}
         {op.remote && op.message && <>Latest progress: {sentence(op.message)} </>}
         {op.remote && "Another updater pod runs it (for example one that is shutting down finishes its operation first). "}
         Cluster changes from this tool are disabled until it finishes.
@@ -184,11 +191,15 @@ function useOperationNotice(onStatusPage: boolean, pathname = ""): Notice | null
   };
 }
 
-function useInterruptedNotice(): Notice | null {
+function useInterruptedNotice(pathname: string): Notice | null {
   const { server } = useOperation();
+  const navigate = useNavigate();
   const op = server.inProgress ? null : server.interrupted;
   const [dismissed, setDismissed] = useState(() => readSession(INTERRUPTED_DISMISS_KEY));
   if (!op || dismissed === op.startedAt) return null;
+  // A recipe run: the Recipes page shows it with Resume.
+  const recipe = op.type === RECIPE_OPERATION_TYPE ? recipeTarget(op.target) ?? { recipe: "", step: "" } : null;
+  if (recipe && pathname === "/recipes") return null;
   return {
     key: "interrupted",
     priority: 3,
@@ -200,9 +211,11 @@ function useInterruptedNotice(): Notice | null {
         component="p"
         title={`"${op.label || op.type}" was interrupted`}
         actionClose={<AlertActionCloseButton onClose={() => { writeSession(INTERRUPTED_DISMISS_KEY, op.startedAt); setDismissed(op.startedAt); }} />}
+        actionLinks={recipe ? <AlertActionLink onClick={() => navigate("/recipes")}>Open Recipes to resume</AlertActionLink> : undefined}
       >
         {op.user || "Someone"} started it {formatRelativeTime(op.startedAt)}
-        {op.target && <> (target <BuildId target={op.target} />)</>}, and the updater pod
+        {op.target && !recipe && <> (target <BuildId target={op.target} />)</>}
+        {recipe?.recipe && <> (recipe {recipe.recipe}{recipe.step ? `, at ${recipe.step}` : ""})</>}, and the updater pod
         {op.pod ? ` ${op.pod}` : ""} stopped before it finished. {interruptedGuidance(op)}
       </Alert>
     ),
@@ -470,7 +483,7 @@ export const GlobalBanners: React.FC = () => {
   const notices = [
     useOperationNotice(pathname === "/", pathname),
     usePermissionNotice(),
-    useInterruptedNotice(),
+    useInterruptedNotice(pathname),
     useReconcileTimeoutNotice(),
     useDashboardOverrideNotice(pathname === "/dashboard-dev"),
     useTemplateNotice(),

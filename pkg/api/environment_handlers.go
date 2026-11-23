@@ -5,24 +5,25 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// HandleResourcesStatus returns the state of the Environment page (tier
-// per-role).
+// HandleResourcesStatus serves Environment-page state broken down by auth
+// tier and role.
 //
-// A cluster-admin gets the cluster-wide status (S3 storage, MLflow, the
-// inference gateway, every data science project's pipeline servers and
-// models), read by the ServiceAccount; ?project= is the Pipelines tab's
-// selected project, whose Connection is read too.
+// Cluster admins receive status for the entire cluster—S3 storage, MLflow,
+// the inference gateway, and pipeline servers plus models in every data
+// science project—assembled via the ServiceAccount. The Pipelines tab's
+// ?project= selection determines which project's Connection is included.
 //
-// Anyone else must name one of their projects (?project=) and gets
-// types.ProjectStatus: that project's objects, read with their own token
-// (cluster.GetProjectStatus). Without a project the answer is 403
-// admin_only: the cluster-wide status is admin-only.
+// Non-admins must supply one of their own projects (?project=) and receive
+// types.ProjectStatus for that namespace using their token
+// (cluster.GetProjectStatus). Omitting ?project= yields 403 admin_only
+// because the cluster-wide view is restricted to admins.
 var HandleResourcesStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	admin, ok := requestRole(w, r)
@@ -51,7 +52,7 @@ var HandleResourcesStatus = withAuth(func(c *cluster.Client, w http.ResponseWrit
 		writeJSON(w, st, "project-status")
 		return
 	}
-	// An invalid name reads nothing more.
+	// Bad project names are ignored rather than queried.
 	if !namespaceRegex.MatchString(project) {
 		project = ""
 	}
@@ -64,10 +65,10 @@ var HandleResourcesStatus = withAuth(func(c *cluster.Client, w http.ResponseWrit
 	writeJSON(w, status, "resources-status")
 })
 
-// HandleDSProjects lists the user's data science projects, read with
-// their own token through the OpenShift projects API (tier user-token;
-// cluster.ListUserDSProjects): a cluster-admin sees every project, anyone
-// else the projects they may see.
+// HandleDSProjects returns data science projects visible to the caller,
+// fetched with the user's token through OpenShift's projects API (tier
+// user-token; cluster.ListUserDSProjects). Admins see all projects; other
+// users see only what they are allowed to access.
 var HandleDSProjects = withUserRead(func(_, u *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	projects, err := listUserDSProjects(u)
 	if err != nil {
@@ -78,21 +79,21 @@ var HandleDSProjects = withUserRead(func(_, u *cluster.Client, w http.ResponseWr
 	writeJSON(w, map[string]any{"projects": projects}, "ds-projects")
 })
 
-// getProjectStatus reads a user's project; tests replace it.
+// getProjectStatus loads project status for a user; tests may stub this.
 var getProjectStatus = cluster.GetProjectStatus
 
-// listUserDSProjects lists the user's projects; tests replace it.
+// listUserDSProjects enumerates the caller's projects; tests may stub this.
 var listUserDSProjects = cluster.ListUserDSProjects
 
-// runPrerequisites sets up a feature's prerequisites; tests replace it.
+// runPrerequisites applies prerequisite setup for a feature; tests may stub this.
 var runPrerequisites = cluster.RunPrerequisites
 
-// getPrerequisitesStatus reads every feature's prerequisites; tests replace it.
+// getPrerequisitesStatus gathers prerequisite state for all features; tests may stub this.
 var getPrerequisitesStatus = cluster.GetPrerequisitesStatusFor
 
-// HandlePrerequisitesStatus reports what each Environment feature needs on
-// the cluster (DataScienceCluster components, operators) and what Set up
-// would change.
+// HandlePrerequisitesStatus describes cluster prerequisites for each
+// Environment feature (DataScienceCluster components, operators) and what
+// Set up would modify.
 var HandlePrerequisitesStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	exposure := r.URL.Query().Get("exposure")
 	if !cluster.ValidExposure(exposure) {
@@ -108,8 +109,8 @@ var HandlePrerequisitesStatus = withAuth(func(c *cluster.Client, w http.Response
 	writeJSON(w, st, "prerequisites")
 })
 
-// HandlePrerequisitesStream sets up what one feature needs on the cluster,
-// as one operation streaming its steps.
+// HandlePrerequisitesStream performs prerequisite setup for a single feature
+// as one streamed operation reporting progress step by step.
 var HandlePrerequisitesStream = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	if !lockCluster(w) {
 		return
@@ -133,18 +134,24 @@ var HandlePrerequisitesStream = withMutationAuth(func(c *cluster.Client, w http.
 	}
 })
 
-// runCleanUp runs a clean-up; tests replace it.
+// runCleanUp executes clean-up work; tests may stub this.
 var runCleanUp = cluster.CleanUp
 
-// maxCleanupProjects bounds the pipeline servers one clean-up deletes.
+// maxCleanupProjects limits how many pipeline servers a single clean-up may remove.
 const maxCleanupProjects = 200
 
-// HandleCleanupStream deletes what this tool created, as one operation
-// (one lock, one rate-limit slot): the pipeline servers in the given
-// projects, then the S3 storage, then MLflow, then the models in the given
-// projects, then the inference gateway, streaming each part via SSE.
-// A clean-up from the browser as separate requests would hit the per-user
-// rate limit on the second pipeline server.
+// maxConfirmedContents caps total confirmed content entries across recipe projects.
+const maxConfirmedContents = 500
+
+// maxUIDLength limits UID length in clean-up requests (Kubernetes UIDs are
+// 36-character UUIDs).
+const maxUIDLength = 128
+
+// HandleCleanupStream removes resources this tool provisioned in one locked,
+// rate-limited operation: pipeline servers in named projects, then S3 storage,
+// MLflow, models in those projects, then the inference gateway, with each
+// phase streamed over SSE. Splitting clean-up into multiple browser requests
+// would exhaust the per-user rate limit before the second pipeline server.
 var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	if !lockCluster(w) {
 		return
@@ -154,11 +161,11 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 	if !decodeBody(w, r, 16<<10, &req, false) {
 		return
 	}
-	if len(req.PipelineServers) > maxCleanupProjects || len(req.Models) > maxCleanupProjects || len(req.Playgrounds) > maxCleanupProjects || len(req.MaaSPublished) > maxCleanupProjects {
-		writeError(w, fmt.Sprintf("at most %d pipeline servers, models and playgrounds each per clean-up", maxCleanupProjects), http.StatusBadRequest, "validation")
+	if len(req.PipelineServers) > maxCleanupProjects || len(req.Models) > maxCleanupProjects || len(req.Playgrounds) > maxCleanupProjects || len(req.MaaSPublished) > maxCleanupProjects || len(req.RecipeProjects) > maxCleanupProjects {
+		writeError(w, fmt.Sprintf("at most %d pipeline servers, models, playgrounds and recipe projects each per clean-up", maxCleanupProjects), http.StatusBadRequest, "validation")
 		return
 	}
-	for _, list := range [][]string{req.PipelineServers, req.Models, req.Playgrounds, req.MaaSPublished} {
+	for _, list := range [][]string{req.PipelineServers, req.Models, req.Playgrounds, req.MaaSPublished, req.RecipeProjects} {
 		seen := map[string]bool{}
 		for _, p := range list {
 			if !namespaceRegex.MatchString(p) {
@@ -170,6 +177,35 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 				return
 			}
 			seen[p] = true
+		}
+	}
+	// Recipe projects are removed only when the submitted UID matches what
+	// the user confirmed on screen: missing UIDs and UIDs for unlisted
+	// projects are rejected (fail closed—no work starts).
+	for _, project := range req.RecipeProjects {
+		if req.RecipeProjectUIDs[project] == "" {
+			writeError(w, fmt.Sprintf("recipe project %s has no UID in recipeProjectUIDs: reload the page and try again", project), http.StatusBadRequest, "validation")
+			return
+		}
+	}
+	for project, uid := range req.RecipeProjectUIDs {
+		if !slices.Contains(req.RecipeProjects, project) || len(uid) > maxUIDLength {
+			writeError(w, "recipeProjectUIDs names only projects of recipeProjects, each with its UID", http.StatusBadRequest, "validation")
+			return
+		}
+	}
+	confirmed := 0
+	for project, contents := range req.ConfirmProjectContents {
+		confirmed += len(contents)
+		if !slices.Contains(req.RecipeProjects, project) || confirmed > maxConfirmedContents {
+			writeError(w, fmt.Sprintf("confirmProjectContents names only projects of recipeProjects, with at most %d entries in all", maxConfirmedContents), http.StatusBadRequest, "validation")
+			return
+		}
+		for _, c := range contents {
+			if c == "" || len(c) > 300 {
+				writeError(w, "invalid confirmProjectContents entry", http.StatusBadRequest, "validation")
+				return
+			}
 		}
 	}
 	if req.DeleteNamespace && !req.Storage {
@@ -184,7 +220,7 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 		}
 		seenComponents[k] = true
 	}
-	if len(req.PipelineServers) == 0 && !req.Storage && !req.MLflow && len(req.Models) == 0 && !req.InferenceGateway && len(req.Playgrounds) == 0 && len(req.MaaSPublished) == 0 && !req.MaaSPlatform && len(req.Components) == 0 {
+	if len(req.PipelineServers) == 0 && !req.Storage && !req.MLflow && len(req.Models) == 0 && !req.InferenceGateway && len(req.Playgrounds) == 0 && len(req.MaaSPublished) == 0 && !req.MaaSPlatform && len(req.Components) == 0 && len(req.RecipeProjects) == 0 {
 		writeError(w, "nothing to clean up was selected", http.StatusBadRequest, "validation")
 		return
 	}
@@ -216,11 +252,14 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 	if req.MaaSPlatform {
 		target = append(target, "MaaS platform")
 	}
+	if n := len(req.RecipeProjects); n > 0 {
+		target = append(target, map[bool]string{true: "recipe project ", false: "recipe projects "}[n == 1]+strings.Join(req.RecipeProjects, ", "))
+	}
 	if len(req.Components) > 0 {
 		target = append(target, "DataScienceCluster "+strings.Join(req.Components, ", "))
 	}
 	beginOperation(w, strings.Join(target, ", "))
-	slog.Info("mutation", "op", "cleanup", "pipelineServers", req.PipelineServers, "storage", req.Storage, "deleteNamespace", req.DeleteNamespace, "mlflow", req.MLflow, "models", req.Models, "inferenceGateway", req.InferenceGateway, "playgrounds", req.Playgrounds, "maasPublished", req.MaaSPublished, "maasPlatform", req.MaaSPlatform, "components", req.Components)
+	slog.Info("mutation", "op", "cleanup", "pipelineServers", req.PipelineServers, "storage", req.Storage, "deleteNamespace", req.DeleteNamespace, "mlflow", req.MLflow, "models", req.Models, "inferenceGateway", req.InferenceGateway, "playgrounds", req.Playgrounds, "maasPublished", req.MaaSPublished, "maasPlatform", req.MaaSPlatform, "components", req.Components, "recipeProjects", req.RecipeProjects, "recipeProjectUIDs", req.RecipeProjectUIDs)
 
 	_, cleanupErr := streamOperation(w, "cleanup", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 		return runCleanUp(c, req, emit)

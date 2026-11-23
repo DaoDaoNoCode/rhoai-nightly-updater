@@ -42,3 +42,13 @@ func ValidatePlaygroundRequest(req types.PlaygroundRequest) string {
 func RunPlayground(c *Client, req types.PlaygroundRequest, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
 	return features.RunPlayground(c, req, onStep)
 }
+
+// SweepGoneInBackground is features.SweepGoneInBackground.
+func SweepGoneInBackground(c *Client) {
+	features.SweepGoneInBackground(c)
+}
+
+// SweepGoneProjectRecords is features.SweepGoneProjectRecords.
+func SweepGoneProjectRecords(c *Client) {
+	features.SweepGoneProjectRecords(c)
+}

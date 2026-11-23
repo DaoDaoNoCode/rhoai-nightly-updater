@@ -48,7 +48,7 @@ func RecordReinstall() { reinstallsTotal.Add(1) }
 // are accepted for the resource actions the UI sends with hyphens.
 var (
 	knownPages = map[string]bool{
-		"dashboard": true, "components": true, "build_explorer": true, "dashboard_dev": true, "diagnostics": true,
+		"dashboard": true, "components": true, "build_explorer": true, "dashboard_dev": true, "diagnostics": true, "recipes": true,
 	}
 	knownFeatures = map[string]bool{
 		"update": true, "dry_run": true, "refresh_operator": true, "create_dsc": true,

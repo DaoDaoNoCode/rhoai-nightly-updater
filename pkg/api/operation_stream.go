@@ -73,3 +73,13 @@ func reportOperationPanic(w http.ResponseWriter, label string, rec any, sse *SSE
 		writeError(w, operationPanicMessage, http.StatusInternalServerError, "internal")
 	}
 }
+
+// recoverRun is deferred directly by a goroutine that runs an operation
+// with no request (a recipe run): a panic is logged with its stack and
+// onPanic ends the operation (its outcome, the lock).
+func recoverRun(label string, onPanic func()) {
+	if rec := recover(); rec != nil {
+		slog.Error("panic in operation", "op", label, "panic", rec, "stack", string(debug.Stack()))
+		onPanic()
+	}
+}

@@ -65,6 +65,8 @@ var getRouteTiers = map[string]readTier{
 	"GET /api/resources/prerequisites":     tierAdmin,
 	"GET /api/resources/models/exposures":  tierAdmin,
 	"GET /api/resources/s3/admin-password": tierAdmin,
+	// The recipe run: who runs it, its recipe, project and build.
+	"GET /api/recipes/run": tierAdmin,
 
 	"GET /api/summary":                 tierSummary,
 	"GET /api/build-explorer/tags":     tierSummary,

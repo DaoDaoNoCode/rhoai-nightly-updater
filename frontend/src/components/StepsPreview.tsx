@@ -6,8 +6,8 @@ import type { PipelineStepDef } from "../operationSteps";
  * The steps an operation will run, collapsed in a confirmation dialog
  * ("What happens (8 steps)"), drawn like the progress view that follows.
  */
-export const StepsPreview: React.FC<{ steps: PipelineStepDef[]; idPrefix: string }> = ({ steps, idPrefix }) => {
-  const [expanded, setExpanded] = useState(false);
+export const StepsPreview: React.FC<{ steps: PipelineStepDef[]; idPrefix: string; defaultExpanded?: boolean }> = ({ steps, idPrefix, defaultExpanded = false }) => {
+  const [expanded, setExpanded] = useState(defaultExpanded);
   return (
     <ExpandableSection
       toggleText={`What happens (${steps.length} steps)`}
@@ -20,7 +20,7 @@ export const StepsPreview: React.FC<{ steps: PipelineStepDef[]; idPrefix: string
             key={step.id}
             id={`${idPrefix}-${step.id}`}
             titleId={`${idPrefix}-${step.id}-title`}
-            variant="pending"
+            variant={step.variant ?? "pending"}
             description={step.description}
           >
             {step.label}

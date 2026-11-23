@@ -12,7 +12,7 @@ import { DASHBOARD_OVERRIDE_POLL_MS, GITOPS_POLICY_POLL_MS, UPDATE_CHECK_REFRESH
 import { usePermissions, useRole } from "./Permissions";
 import { usePolling } from "../hooks/usePolling";
 import { useLatestRequest } from "../hooks/useLatestRequest";
-import { OPERATION_NAMES, STEP_SETS, operationKindForServerType, stepLabel } from "../operationSteps";
+import { OPERATION_NAMES, RECIPE_OPERATION_TYPE, STEP_SETS, operationKindForServerType, recipeTarget, stepLabel } from "../operationSteps";
 import { isRunning } from "./operation";
 import { useClusterStatus, useOperation } from "./AppState";
 import { formatElapsed, isReleaseVersion, sameData } from "../utils";
@@ -295,6 +295,8 @@ export function remotePodSuffix(op: Pick<ServerOperation, "remote" | "pod">): st
 
 /** "Step 4 of 8: Wait for the catalog", for streamed operations that reported a step. */
 export function serverOperationStep(op: ServerOperation): string | null {
+  // A recipe run names its step in the target (the step's own progress is in message).
+  if (op.type === RECIPE_OPERATION_TYPE) return recipeTarget(op.target)?.step ?? null;
   const kind = operationKindForServerType(op.type, op.target);
   if (!kind || !op.step) return null;
   const index = STEP_SETS[kind].findIndex((s) => s.id === op.step);

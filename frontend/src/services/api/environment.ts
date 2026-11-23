@@ -1,15 +1,15 @@
-/** The Environment page: S3 storage, pipeline servers, MLflow, models, playground, MaaS, samples, prerequisites and clean-up. */
+/** Environment page coverage: S3 storage, pipeline servers, MLflow, models, playground, MaaS, samples, prerequisites, and clean-up. */
 
 import { OperationResponse, ProjectStatus, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, ModelsRequest, PlaygroundRequest, PlaygroundStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest } from '../../types';
 import { request } from './client';
 import { StreamDoneHandler, StreamDetachHandler, streamSSE } from './stream';
 
-/** A user's (not a cluster-admin's) status of one of their projects, read with their own token. */
+/** Fetches one project’s status for an ordinary user (not cluster-admin), using that user’s token. */
 export function getProjectStatus(project: string): Promise<ProjectStatus> {
   return request(`/api/resources/status?project=${encodeURIComponent(project)}`);
 }
 
-/** The Environment status; project (the Pipelines tab's selected one) also reads its dashboard Connection. */
+/** Overall Environment status; when project is set (Pipelines tab selection), the dashboard Connection is read for that project too. */
 export function getResourcesStatus(project?: string | null, signal?: AbortSignal): Promise<ResourcesStatus> {
   return request(project ? `/api/resources/status?project=${encodeURIComponent(project)}` : '/api/resources/status', { signal });
 }
@@ -38,54 +38,58 @@ export function setupMinIO(): Promise<OperationResponse> {
   return request('/api/resources/s3/setup', { method: 'POST', acceptStatuses: [422] });
 }
 
-/** Tear down the S3 storage; deleteNamespace also deletes namespace seaweedfs (only when this tool created it). */
+/** Removes S3 storage; deleteNamespace also drops namespace seaweedfs when this tool originally created it. */
 export function teardownMinIO(deleteNamespace = false): Promise<OperationResponse> {
   return request('/api/resources/s3/teardown', { method: 'POST', body: JSON.stringify(deleteNamespace ? { deleteNamespace: true } : {}), acceptStatuses: [422] });
 }
 
 /**
- * The S3 storage's credentials: the admin UI user and its own password
- * ("" on storage an earlier version set up, until Repair), the S3 access
- * key and the S3 secret key. The server reads them from the storage's
- * Secret on this request only (cluster-admins only, Cache-Control:
- * no-store); keep them out of state, logs and the DOM.
+ * Credentials for S3 storage: admin UI user plus its password
+ * (empty string when an older setup left storage until Repair), plus S3 access
+ * key and S3 secret key. The backend loads them from the storage
+ * Secret for this call only (cluster-admins only, Cache-Control:
+ * no-store); do not persist them in state, logs, or the DOM.
  */
 export function getS3AdminLogin(): Promise<{ user: string; password: string; accessKey: string; secretKey: string }> {
   return request('/api/resources/s3/admin-password', { cache: 'no-store' });
 }
 
-/** Sets up the pipeline server in project; recreate replaces one named nightly-dspa with dspa. */
-export function setupPipelineServer(project: string, recreate = false): Promise<OperationResponse> {
+/**
+ * Provisions the pipeline server in project; recreate swaps nightly-dspa for dspa.
+ * confirmUnrecorded: UID of a pipeline server this tool never tracked that the user acknowledged as theirs (Recreate removes it).
+ */
+export function setupPipelineServer(project: string, recreate = false, confirmUnrecorded = ""): Promise<OperationResponse> {
   return request('/api/resources/pipeline-server/setup', {
     method: 'POST',
-    body: JSON.stringify(recreate ? { project, recreate: true } : { project }),
+    body: JSON.stringify(recreate ? { project, recreate: true, ...(confirmUnrecorded ? { confirmUnrecorded } : {}) } : { project }),
     acceptStatuses: [422],
   });
 }
 
-export function teardownPipelineServer(project: string): Promise<OperationResponse> {
+/** Removes the pipeline server in project; confirmUnrecorded: UID of an unrecorded server the user confirmed as theirs. */
+export function teardownPipelineServer(project: string, confirmUnrecorded = ""): Promise<OperationResponse> {
   return request('/api/resources/pipeline-server/teardown', {
     method: 'POST',
-    body: JSON.stringify({ project }),
+    body: JSON.stringify(confirmUnrecorded ? { project, confirmUnrecorded } : { project }),
     acceptStatuses: [422],
   });
 }
 
-/** What a Migrate storage run does (pkg/types MigrateStorageRequest). */
+/** Mirrors pkg/types MigrateStorageRequest: what a Migrate storage run performs. */
 export interface MigrateStorageOptions {
-  /** The last part: remove the old storage. */
+  /** Final phase: tear down the previous storage. */
   removeOldStorage?: boolean;
-  /** Also delete namespace minio (only with removeOldStorage). */
+  /** When removeOldStorage is set, also remove namespace minio. */
   deleteNamespace?: boolean;
-  /** Projects whose unrecorded pipeline server the user confirmed as this tool's (Migrate only). */
+  /** During Migrate only: projects where the user affirmed an unrecorded pipeline server belongs to this tool. */
   confirmProjects?: string[];
 }
 
 /**
- * Stream Migrate storage via SSE: steps "check", "storage", "copy",
+ * Runs Migrate storage over SSE with steps "check", "storage", "copy",
  * "repoint", or with removeOldStorage "check", "copy", "remove",
- * "namespace". Returns an AbortController so the caller can stop listening;
- * the operation continues on the server.
+ * "namespace". Yields an AbortController so the client can detach;
+ * work keeps running on the server.
  */
 export function streamMigrateStorage(
   options: MigrateStorageOptions,
@@ -96,33 +100,49 @@ export function streamMigrateStorage(
   return streamSSE('/api/resources/s3/migrate/stream', options, onStep, onDone, onConnectionDrop);
 }
 
-/** What a clean-up deletes (pkg/types CleanupRequest), in this order. */
+/** Matches pkg/types CleanupRequest: resources clean-up removes, in sequence. */
 export interface CleanupRequest {
-  /** The projects whose pipeline server goes. */
+  /** Projects from which pipeline servers are removed. */
   pipelineServers?: string[];
+  /** Subset with unrecorded servers the user attributed to this tool: project mapped to that server’s UID. */
+  confirmUnrecorded?: Record<string, string>;
   storage?: boolean;
-  /** Also delete namespace seaweedfs (needs storage). */
+  /** When storage is selected, additionally remove namespace seaweedfs. */
   deleteNamespace?: boolean;
   mlflow?: boolean;
-  /** The projects whose model goes (after MLflow). */
+  /** Projects whose models are removed (after MLflow). */
   models?: string[];
-  /** The inference gateway, after the models. */
+  /** Inference gateway teardown, following the models. */
   inferenceGateway?: boolean;
-  /** The projects whose playground (this tool's) goes, before the models. */
+  /** Projects losing this tool’s playground, before models. */
   playgrounds?: string[];
-  /** The projects whose model this tool unpublishes from MaaS, first. */
+  /** Projects whose models this tool unpublishes from MaaS; runs first. */
   maasPublished?: string[];
-  /** The MaaS platform this tool set up, last. */
+  /** MaaS platform this tool installed; runs last. */
   maasPlatform?: boolean;
-  /** One-click prerequisites: the DataScienceCluster components this tool turned on that go back to what they were, last (each only while nothing uses it). */
+  /** One-click prerequisites: DataScienceCluster components this tool enabled and now revert when unused. */
   components?: string[];
+  /** Recipe-created projects; each is removed after its contents, only while still owned by the recipe. */
+  recipeProjects?: string[];
+  /**
+   * For each recipe project, UID from user review (RecipeOwnedProject uid): deletion happens only while that
+   * UID still matches, so a recreated project survives. Mandatory per recipe project.
+   */
+  recipeProjectUIDs?: Record<string, string>;
+  /**
+   * Per recipe project, non-tool artifacts the refusal path listed
+   * (errorCode confirm_project_contents; failed step detail for the project,
+   * one line each): the project is removed with them only when all are
+   * confirmed for that project.
+   */
+  confirmProjectContents?: Record<string, string[]>;
 }
 
 /**
- * Clean up: one operation on the server (one lock, one rate-limit slot)
- * that deletes the pipeline servers, then the S3 storage, then MLflow,
- * streaming one step per part ("pipeline-server:<project>", "storage",
- * "mlflow"); the first part that fails stops it.
+ * Clean-up is a single server operation (one lock, one rate-limit slot)
+ * removing pipeline servers, then S3 storage, then MLflow,
+ * emitting one streamed step per segment ("pipeline-server:<project>", "storage",
+ * "mlflow"); failure on any segment halts the rest.
  */
 export function streamCleanup(
   req: CleanupRequest,
@@ -134,9 +154,9 @@ export function streamCleanup(
 }
 
 /**
- * Models: sets up the inference gateway and/or a model in a project, or
- * deletes them, as one operation streaming "check", "gateway",
- * "gateway-ready", "model", "model-ready" (teardown: "model", then
+ * Models flow: provision or remove the inference gateway and/or a project model in
+ * one streamed operation ("check", "gateway",
+ * "gateway-ready", "model", "model-ready"; teardown streams "model", then
  * "gateway").
  */
 export function streamModels(
@@ -148,21 +168,21 @@ export function streamModels(
   return streamSSE('/api/resources/models/stream', req, onStep, onDone, onConnectionDrop);
 }
 
-// --- Models routing ---
+// --- Model exposure routes ---
 
-/** The ways a catalog model can be reached from a project, and the recommended one. */
+/** Catalog model reachability from a project, including the suggested path. */
 export function getModelExposures(project: string, model: string): Promise<ModelExposures> {
   return request(`/api/resources/models/exposures?project=${encodeURIComponent(project)}&model=${encodeURIComponent(model)}`);
 }
 
-// --- One-click prerequisites ---
+// --- One-click prerequisite setup ---
 
-/** What each feature needs on the cluster; Models planned for how its model is reached. */
+/** Cluster requirements per feature; Models also accounts for planned model exposure. */
 export function getPrerequisites(exposure?: ModelExposureKind | null, signal?: AbortSignal): Promise<PrerequisitesStatus> {
   return request(`/api/resources/prerequisites${exposure ? `?exposure=${encodeURIComponent(exposure)}` : ''}`, { signal });
 }
 
-/** Sets up what a feature needs, streaming "prerequisites", "dsc", one step per operator, "kuadrant", "ready". */
+/** Installs feature prerequisites, streaming "prerequisites", "dsc", one step per operator, "kuadrant", "ready". */
 export function streamPrerequisites(
   req: PrerequisitesRequest,
   onStep: (step: UpdateStep) => void,
@@ -173,17 +193,17 @@ export function streamPrerequisites(
 }
 
 /**
- * The Gen AI playground feature: what it needs, the playgrounds in the
- * projects, and the models a project's playground can use (cached on the
- * server for 10 s).
+ * Gen AI playground: prerequisites, playgrounds per
+ * project, and models available to a project playground (server-side cache
+ * TTL 10 s).
  */
 export function getPlayground(project: string | null, signal?: AbortSignal): Promise<PlaygroundStatus> {
   return request(`/api/resources/playground${project ? `?project=${encodeURIComponent(project)}` : ''}`, { signal });
 }
 
 /**
- * The playground: sets it up or deletes it through the RHOAI dashboard's
- * gen-ai API, streaming "check", "install", "ready" (teardown: "delete",
+ * Playground install or teardown via the RHOAI dashboard
+ * gen-ai API, steps "check", "install", "ready" (teardown: "delete",
  * "gone").
  */
 export function streamPlayground(
@@ -195,12 +215,12 @@ export function streamPlayground(
   return streamSSE('/api/resources/playground/stream', req, onStep, onDone, onConnectionDrop);
 }
 
-/** Models as a Service: the platform part by part, and this tool's models with their publication. */
+/** Models as a Service: platform pieces and this tool’s models with publication state. */
 export function getMaaS(signal?: AbortSignal): Promise<MaaSStatus> {
   return request('/api/resources/maas', { signal });
 }
 
-/** Which of the groups typed in a MaaS dialog have no OpenShift Group (cluster-admins only; at most 20 names). */
+/** For MaaS dialog group names: which lack an OpenShift Group (cluster-admins only; cap 20 names). */
 export function checkMaaSGroups(names: string[]): Promise<MaaSGroupProblem[]> {
   const q = new URLSearchParams();
   names.forEach((n) => q.append('name', n));
@@ -208,9 +228,9 @@ export function checkMaaSGroups(names: string[]): Promise<MaaSGroupProblem[]> {
 }
 
 /**
- * MaaS: sets up or removes the platform ("check", "database", "gateway",
+ * MaaS platform install or removal ("check", "database", "gateway",
  * "authorino-tls", "dsc", "ready"; removal "check", "unpublish", "dsc",
- * "gateway", "database"), or publishes or unpublishes this tool's model in
+ * "gateway", "database"), or publish/unpublish this tool’s model within
  * a project.
  */
 export function streamMaaS(
@@ -222,12 +242,12 @@ export function streamMaaS(
   return streamSSE('/api/resources/maas/stream', req, onStep, onDone, onConnectionDrop);
 }
 
-/** The MLflow samples of one project (named reads only; cached on the server for 15 s). */
+/** MLflow samples in one project (named query only; server cache 15 s). */
 export function getMLflowSamples(project: string, signal?: AbortSignal): Promise<MLflowSamplesStatus> {
   return request(`/api/resources/samples/mlflow?project=${encodeURIComponent(project)}`, { signal });
 }
 
-/** The body of POST /api/resources/samples/mlflow/stream (pkg/types MLflowSamplesRequest). */
+/** Payload shape for POST /api/resources/samples/mlflow/stream (pkg/types MLflowSamplesRequest). */
 export interface MLflowSamplesRequest {
   project: string;
   action: MLflowSampleAction;
@@ -235,8 +255,8 @@ export interface MLflowSamplesRequest {
 }
 
 /**
- * Adds, removes or regenerates MLflow samples in one project as one
- * operation (one rate-limit slot), streaming "check", then one step per
+ * Add, remove, or regenerate MLflow samples in one project as a
+ * single rate-limited operation, streaming "check" then one step per
  * sample id.
  */
 export function streamMLflowSamples(
@@ -248,7 +268,7 @@ export function streamMLflowSamples(
   return streamSSE('/api/resources/samples/mlflow/stream', req, onStep, onDone, onConnectionDrop);
 }
 
-/** The sample pipeline's file, for the user to run with their own token (no cluster request). */
+/** Sample pipeline specification for the user to execute with their own token (no cluster round-trip). */
 export function getPipelineSampleSpec(): Promise<PipelineSampleSpec> {
   return request('/api/resources/samples/pipeline/spec');
 }

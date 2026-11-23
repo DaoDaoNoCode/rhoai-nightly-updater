@@ -65,6 +65,10 @@ var ActivityActions = map[string][2]string{
 	"fix-dsc":                       {"setup", "DataScienceCluster fixed"},
 	"reset-dsc":                     {"setup", "DataScienceCluster reset in place"},
 	"hard-reset-dsc":                {"setup", "DataScienceCluster hard reset"},
+	"recipe-start":                  {"setup", "Environment recipe started"},
+	"recipe":                        {"setup", "Environment recipe finished"},
+	"create-recipe-project":         {"setup", "Recipe project created"},
+	"delete-recipe-project":         {"setup", "Recipe project deleted"},
 	"assist-rollout":                {"diagnostics", "Stuck rollout assisted"},
 	"fix-delete-stale-webhooks":     {"diagnostics", "Stale webhooks deleted"},
 	"fix-recreate-subscription":     {"diagnostics", "Subscription recreated"},
@@ -99,6 +103,9 @@ var ActivityFailedLabels = map[string]string{
 	"create-dsc":               "DataScienceCluster creation failed",
 	"repair-dsc":               "DataScienceCluster repair failed",
 	"hard-reset-dsc":           "DataScienceCluster hard reset failed",
+	"recipe":                   "Environment recipe stopped or failed",
+	"create-recipe-project":    "Creating the recipe project failed",
+	"delete-recipe-project":    "Deleting the recipe project failed",
 }
 
 // legacyActivityActions are the names earlier versions recorded for an

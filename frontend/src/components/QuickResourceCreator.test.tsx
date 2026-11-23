@@ -62,8 +62,86 @@ describe("QuickResourceCreator polling", () => {
     minio = { deployed: true, ready: true, message: "Running" };
     await tick(20_000);
     expect(statusCalls()).toBe(4);
-    await tick(10 * 60_000);
+    // Settled: the quick polling stops; only the slow idle re-read remains.
+    await tick(44_000);
     expect(statusCalls()).toBe(4);
+    await tick(1_000);
+    expect(statusCalls()).toBe(5);
+  });
+
+  // N1: an idle page reads again on its own, slowly, only while visible,
+  // at once when shown again, and never two reads at a time.
+  it("an idle page re-reads every 45 s while visible, not while hidden, and at once when shown", async () => {
+    const statusCalls = stubResources(() => statusWith(notDeployed));
+    renderAt("/test-resources?tab=pipelines");
+    await tick();
+    expect(statusCalls()).toBe(1);
+    await tick(44_000);
+    expect(statusCalls()).toBe(1);
+    await tick(1_000);
+    expect(statusCalls()).toBe(2);
+    act(() => setDocumentHidden(true));
+    await tick(10 * 60_000);
+    expect(statusCalls()).toBe(2);
+    act(() => setDocumentHidden(false));
+    await tick();
+    expect(statusCalls()).toBe(3);
+  });
+
+  it("an idle re-read waits for the one before it", async () => {
+    let release: (() => void) | null = null;
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url.includes("/api/resources/projects")) return jsonResponse({ projects: [] });
+      if (!url.includes("/api/resources/status")) return jsonResponse({});
+      calls += 1;
+      if (calls === 2) await new Promise<void>((r) => { release = r; });
+      return jsonResponse(statusWith(notDeployed));
+    }));
+    renderAt("/test-resources?tab=pipelines");
+    await tick();
+    await tick(45_000);
+    expect(calls).toBe(2);
+    await tick(5 * 60_000);
+    expect(calls).toBe(2);
+    await act(async () => { release!(); });
+    await tick(45_000);
+    expect(calls).toBe(3);
+  });
+
+  // One poller: settling again after an earlier settling gave up starts the
+  // quick reads again (its own 10 minutes), and the idle re-read does not
+  // run beside them, so a read never starts while one is in flight.
+  it("a new settling period after giving up polls quickly again, one read at a time", async () => {
+    const provisioning: ResourceState = { deployed: true, ready: false, message: "Provisioning" };
+    let minio = provisioning;
+    let hang = false;
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url.includes("/api/resources/projects")) return jsonResponse({ projects: [] });
+      if (!url.includes("/api/resources/status")) return jsonResponse({});
+      calls += 1;
+      if (hang) await new Promise<void>(() => {});
+      return jsonResponse(statusWith(minio));
+    }));
+    renderAt("/test-resources?tab=pipelines");
+    await tick();
+    await tick(11 * 60_000);
+    expect(screen.getByText("Stopped checking automatically after 10 minutes")).toBeInTheDocument();
+    minio = { deployed: true, ready: true, message: "Running" };
+    await tick(45_000);
+    await tick();
+    expect(screen.queryByText("Stopped checking automatically after 10 minutes")).toBeNull();
+    minio = provisioning;
+    await tick(45_000);
+    const settlingAgain = calls;
+    await tick(5_000);
+    expect(calls).toBe(settlingAgain + 1);
+    expect(screen.queryByText("Stopped checking automatically after 10 minutes")).toBeNull();
+    hang = true;
+    const before = calls;
+    await tick(5 * 60_000);
+    expect(calls).toBe(before + 1);
   });
 
   it("does not poll while the tab is hidden", async () => {
@@ -84,8 +162,11 @@ describe("QuickResourceCreator polling", () => {
     renderAt("/test-resources?tab=pipelines");
     await tick();
     expect(within(screen.getByRole("listitem", { name: /^S3 storage/ })).getByText("Error")).toBeInTheDocument();
-    await tick(10 * 60_000);
+    // No quick settle polling for a terminal state: only the idle re-read, every 45 s.
+    await tick(44_000);
     expect(statusCalls()).toBe(1);
+    await tick(10 * 60_000 - 44_000);
+    expect(statusCalls()).toBe(1 + Math.floor((10 * 60_000) / 45_000));
   });
 
   it("gives up after 10 minutes of settling and offers to check again", async () => {
@@ -94,11 +175,15 @@ describe("QuickResourceCreator polling", () => {
     await tick();
     await tick(11 * 60_000);
     const calls = statusCalls();
+    // Given up: no more quick polling (30 s), only the idle re-read (45 s).
     await tick(30 * 60_000);
-    expect(statusCalls()).toBe(calls);
+    expect(statusCalls() - calls).toBeLessThanOrEqual((30 * 60_000) / 45_000);
+    expect(statusCalls() - calls).toBeGreaterThanOrEqual((30 * 60_000) / 45_000 - 1);
+    expect(screen.getByText("Check again")).toBeInTheDocument();
+    const before = statusCalls();
     fireEvent.click(screen.getByText("Check again"));
     await tick();
-    expect(statusCalls()).toBe(calls + 1);
+    expect(statusCalls()).toBe(before + 1);
   });
 });
 

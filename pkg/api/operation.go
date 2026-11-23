@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -56,35 +57,94 @@ func releaseClusterMutationLock() {
 // operation (also one that runs in another updater pod). When it returns
 // true the caller must defer releaseClusterMutationLock.
 func lockCluster(w http.ResponseWriter) bool {
-	if !acquireClusterMutationLock() {
-		writeClusterBusy(w, inflight.snapshot(), "")
-		return false
-	}
 	sw, ok := w.(*statusWriter)
-	if !ok {
+	var cancelOp context.CancelCauseFunc
+	if ok {
+		cancelOp = sw.cancelOp
+	}
+	refusal := acquireRunnerLock(func() *Operation {
+		if !ok {
+			return nil
+		}
+		op := inflight.start(sw)
+		sw.opID = op.ID
+		return op
+	}, cancelOp)
+	if refusal == nil {
 		return true
 	}
-	op := inflight.start(sw)
-	sw.opID = op.ID
-	if sw.bookkeeper == nil {
-		return true
-	}
-	holder, err := leases.acquire(sw.bookkeeper, op, sw.cancelOp)
-	if holder == nil && err == nil {
-		return true
-	}
-	// Refused: forget the operation (it never began) and free the local lock.
-	inflight.finish()
-	clusterMutationInProgress.Store(false)
-	if holder != nil {
+	writeLockRefusal(w, refusal)
+	return false
+}
+
+// writeLockRefusal answers a refusal of acquireRunnerLock: 409
+// cluster_busy naming the operation that holds the lock (in this pod or
+// another), or 503 lock_unavailable when the lease could not be read or
+// written.
+func writeLockRefusal(w http.ResponseWriter, refusal *lockRefusal) {
+	switch {
+	case refusal.busy:
+		writeClusterBusy(w, inflight.snapshot(), "")
+		return
+	case refusal.holder != nil:
+		holder := refusal.holder
 		slog.Info("operation refused: another updater pod runs one", "holder", holder.ID, "holderPod", holder.Pod, "type", holder.Type)
 		writeClusterBusy(w, remoteOperation(holder), "")
-		return false
+		return
 	}
-	slog.Warn("operation refused: the cross-pod operation lock could not be read or written", "error", err)
+	slog.Warn("operation refused: the cross-pod operation lock could not be read or written", "error", refusal.err)
 	w.Header().Set("Retry-After", strconv.Itoa(int(lockUnavailableRetryAfter.Seconds())))
 	writeError(w, lockUnavailableMessage, http.StatusServiceUnavailable, "lock_unavailable")
-	return false
+}
+
+// lockRefusal is why acquireRunnerLock did not take the lock. Exactly one
+// of these is set.
+type lockRefusal struct {
+	// busy: another operation of this process holds the local lock.
+	busy bool
+	// holder is the live lease of another updater process that holds the
+	// cross-pod lock.
+	holder *types.OperationLease
+	// err kept the lease from being read or written (fail closed: without
+	// the lease the updater cannot tell whether another pod changes the
+	// cluster).
+	err error
+}
+
+// acquireRunnerLock takes the local lock, then records the operation start
+// returns as the one holding it, then takes the cross-pod lease for that
+// operation with its bookkeeper (the ServiceAccount's client). It is the
+// one way to take the lock: lockCluster for a request, and a holder that
+// runs without one or outlives it (the background MaaS check).
+//
+// cancelOp is what the lease heartbeat calls with
+// cluster.ErrOperationLockLost when the lease is lost: the request's cancel
+// for a handler, the holder's own for a holder that outlives the handler.
+//
+// start runs only once the local lock is held. It may return nil (nothing
+// to track, as for a response that is not a statusWriter in tests), and the
+// operation may have no bookkeeper (no ServiceAccount token): then no lease
+// is taken, as before.
+//
+// It returns nil when the lock is held; the caller must then call
+// releaseClusterMutationLock when it ends, which completes the marker of a
+// begun operation and releases the lease. On a refusal nothing is held: the
+// operation is forgotten (it never began) and the local lock is free again.
+func acquireRunnerLock(start func() *Operation, cancelOp context.CancelCauseFunc) *lockRefusal {
+	if !acquireClusterMutationLock() {
+		return &lockRefusal{busy: true}
+	}
+	op := start()
+	if op == nil || op.bookkeeper == nil {
+		return nil
+	}
+	holder, err := leases.acquire(op.bookkeeper, op, cancelOp)
+	if holder == nil && err == nil {
+		return nil
+	}
+	inflight.finish()
+	clusterMutationInProgress.Store(false)
+	return &lockRefusal{holder: holder, err: err}
 }
 
 // The refusal when the lease cannot be read or written (fail closed).
@@ -140,6 +200,24 @@ func beginOperation(w http.ResponseWriter, target string) {
 	}
 }
 
+// beginHeldOperation is beginOperation for the operation with this ID,
+// which holds the lock without a request (a recipe run): it records its
+// target and, the first time, writes its marker.
+func beginHeldOperation(id, target string) {
+	var marker *types.OperationMarker
+	var bookkeeper *cluster.Client
+	inflight.update(id, func(op *Operation) {
+		op.Target = truncateText(target, maxOperationTargetBytes)
+		if !op.begun {
+			op.begun = true
+			marker, bookkeeper = operationMarker(op), op.bookkeeper
+		}
+	})
+	if marker != nil && bookkeeper != nil {
+		markers.start(bookkeeper, marker)
+	}
+}
+
 // setOperationTarget records what an accepted request acts on without
 // making it an operation that can be interrupted: dry runs change nothing,
 // so they write no marker and are not reported as lastCompleted.
@@ -170,8 +248,14 @@ type Operation struct {
 	// bookkeeper writes the operation's lease and marker: always the
 	// ServiceAccount's client, which may outlive the request.
 	bookkeeper *cluster.Client
-	sw         *statusWriter // the response, for the outcome of non-streaming operations
-	begun      bool          // set by beginOperation
+	// freshBookkeeper, when set, makes the bookkeeper again with the
+	// ServiceAccount token as it is now: the lease heartbeat and the
+	// marker clear use it, so an operation that holds the lock for hours
+	// (a recipe run) does not keep writing with the token read at its
+	// start.
+	freshBookkeeper func(ctx context.Context) *cluster.Client
+	sw              *statusWriter // the response, for the outcome of non-streaming operations
+	begun           bool          // set by beginOperation
 	// lockLost: the lease heartbeat stopped the operation because its lease
 	// was lost; its outcome is cluster.LockLostMessage.
 	lockLost bool
@@ -215,6 +299,14 @@ var operationTypes = map[string][2]string{
 	"/api/resources/samples/mlflow/stream":    {"mlflow-samples", "MLflow samples"},
 	"/api/diagnostics/fix":                    {"diagnostics-fix", "Apply diagnostics fix"},
 	"/api/diagnostics/fix/acknowledged":       {"diagnostics-fix", "Apply diagnostics fix"},
+	"/api/recipes/plan":                       {"recipe-plan", "Review an environment recipe"},
+	// A run holds the lock for all its steps (recipe_runner.go) under
+	// this type and label; a user who is not a cluster-admin sees only
+	// the label.
+	"/api/recipes/run":    {"recipe", "Environment recipe"},
+	"/api/recipes/resume": {"recipe", "Environment recipe"},
+	// Stop takes no lock (it asks the running run to stop after its step).
+	"/api/recipes/stop": {"recipe-stop", "Stop an environment recipe"},
 }
 
 // Size bounds of what is kept and persisted about an operation.
@@ -251,7 +343,7 @@ func (t *operationTracker) start(sw *statusWriter) *Operation {
 	now := time.Now().UTC()
 	op := &Operation{
 		ID: newOperationID(), Type: kind[0], Label: kind[1], User: sw.user,
-		StartedAt: now, UpdatedAt: now, Pod: os.Getenv("HOSTNAME"), bookkeeper: sw.bookkeeper, sw: sw,
+		StartedAt: now, UpdatedAt: now, Pod: os.Getenv("HOSTNAME"), bookkeeper: sw.bookkeeper, sw: sw, freshBookkeeper: sw.newBookkeeper,
 	}
 	t.mu.Lock()
 	t.current = op
@@ -306,8 +398,12 @@ func (t *operationTracker) finish() (*types.CompletedOperation, *cluster.Client)
 	if op == nil {
 		return nil, nil
 	}
+	bookkeeper := op.bookkeeper
+	if op.freshBookkeeper != nil {
+		bookkeeper = op.freshBookkeeper(context.Background())
+	}
 	if !op.begun {
-		return nil, op.bookkeeper
+		return nil, bookkeeper
 	}
 	success, message := operationOutcome(op)
 	t.last = &types.CompletedOperation{
@@ -318,7 +414,7 @@ func (t *operationTracker) finish() (*types.CompletedOperation, *cluster.Client)
 		Message:    truncateText(message, maxOperationMessageBytes),
 	}
 	done := *t.last
-	return &done, op.bookkeeper
+	return &done, bookkeeper
 }
 
 // lastCompleted returns a copy of the last completed operation, or nil.
@@ -373,7 +469,7 @@ func (t *operationTracker) snapshot() *Operation {
 		return nil
 	}
 	cp := *t.current
-	cp.bookkeeper, cp.sw = nil, nil
+	cp.bookkeeper, cp.sw, cp.freshBookkeeper = nil, nil, nil
 	return &cp
 }
 

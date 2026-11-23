@@ -24,6 +24,45 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Added
 
+- **Environment recipes (backend, first version).** A recipe
+  (`rhoai-nightly-updater/v1alpha1`, YAML or JSON, no secrets) describes a
+  dev cluster: an RHOAI build (latest, a nightly line or an image; kept or
+  updated when one is installed), the release's default
+  DataScienceCluster, a project (created by the recipe or an existing
+  one), Pipelines and MLflow. `POST /api/recipes/plan` says what a run
+  would do and why it would refuse (one-time setup missing, Argo CD
+  managing the operator, a build that does not resolve, a project that is
+  not the recipe's, a half installed operator, a part this version does
+  not run yet), each refusal with a fix code and the page that fixes it,
+  and each step with its typical and longest duration.
+  `POST /api/recipes/run` runs it on the server as one operation that holds the cluster lock until its last step, each step
+  with its own 15-minute budget and the sign-in checked again before it;
+  closing the browser does not stop it, Stop after this step
+  (`POST /api/recipes/stop`) does. `POST /api/recipes/resume` continues a
+  failed, stopped or interrupted run, skipping what is set up and keeping
+  the pinned build and what earlier attempts set up. `GET /api/recipes/run`
+  has the run record and, once it ended, its Clean up request as the
+  cluster shows it: only what is the run's alone, the project a recipe
+  created (its pipeline server goes with it) and the DataScienceCluster
+  components the run turned on that are still Managed. The S3 storage,
+  MLflow and a pipeline server in an existing project are never in it:
+  Clean up everything on the Environment page removes them. All are admin-only and refused in the gitops profile. A project the recipe
+  created is removed by Clean up (`recipeProject`) only with its label,
+  its recorded UID and every leftover confirmed. No new ServiceAccount
+  permission ([SECURITY.md](SECURITY.md#environment-recipes-500),
+  [CLUSTER_CHANGES §8](docs/CLUSTER_CHANGES.md#environment-recipes-the-recipe-project-500),
+  [RUNBOOK §5.1](RUNBOOK.md#51-environment-recipe-runs-resume-interrupted-sign-in-again)).
+
+- **Recipes page (cluster-admins).** Build a recipe in a form, review what
+  the run would do (each step with how long it usually takes and at most,
+  each problem with a link to the page that fixes it), then follow the run
+  step by step, stop it after a step, resume it, and clean up what is only
+  its own: the project the recipe created (with everything in it,
+  including its pipeline server, once what it holds is confirmed) and the
+  DataScienceCluster components it turned on. The Clean up dialog lists
+  what it leaves in place (the S3 storage, MLflow, a pipeline server in an
+  existing project) and links to the Environment page.
+
 - **Pre-releases.** A version can now be tried out before it is released:
   `make release VERSION=v5.0.0-rc.1` tags a pre-release (`-alpha.N`,
   `-beta.N` or `-rc.N`, numbered from 1), on `main` or on an `integ/*`
@@ -135,6 +174,198 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **A recipe project's Clean up deletes the project you reviewed, and a
+  second confirmation no longer loses the first.** A dialog left open while
+  its project was deleted and a recipe made it again deleted the new
+  project; the request now carries the UID shown (`recipeProjectUIDs`,
+  required), and Clean up refuses, before anything runs, a project made
+  again since. A refusal to confirm a project's contents now lists all of
+  them for every project that holds any, so a project whose contents were
+  all confirmed is no longer refused again on the retry.
+
+- **Recipe projects follow the cluster.** The Recipes page lists every
+  project recipes created that the cluster still has (not only the last
+  run's), and Clean up everything on the Environment page offers them, each
+  deleted with the same guards (recorded UID, the tool's label and the
+  recipe annotation, and the confirmation of what it holds that the tool did
+  not create, per project). The background check forgets a recorded recipe
+  project once its namespace is gone. The Recipes page reads the run every
+  15 seconds while it is visible, so a run resumed elsewhere shows without a
+  reload. A clean-up's result says what each part did ("Kept Managed:
+  aipipelines (this tool did not turn it on).") instead of "Deleted" for what
+  it kept, and the recipe Clean up no longer reads "Deleted the 0 parts".
+  The clean-up request takes `recipeProjects` (a list) and
+  `confirmProjectContents` per project.
+
+- **A MaaSModelRef deleted outside this tool no longer leaves a "Partly
+  published" row and a Failed subscription.** Publish routes the model
+  through `maas-default-gateway` alone, so after `oc delete maasmodelref`
+  the background check never took the publication for gone: the tab asked
+  to Unpublish, and the subscription and access policy kept listing the
+  missing reference, which MaaS marks Failed for every published model.
+  The background check now takes the model out of the subscription, the
+  access policy and the gateway's projects, and the record keeps only what
+  restoring its routing writes back. The row, from the live model, reads
+  "No MaaS reference; the model still routes through the MaaS gateway, so
+  its direct address does not answer." with **Restore direct routing**,
+  which puts back its gateways and Gen AI studio label with your token.
+  Delete model and Clean up MaaS also work in this state.
+- **A published model in a project being deleted reads "Being removed
+  with its project".** For about 45 seconds the row showed "Published;
+  waiting" with Unpublish and Change limit, because the background check
+  empties the record within a second and the row then followed the
+  MaaSModelRef that is deleted with the project. The row now follows the
+  project (or the model) being deleted, whatever the record says.
+- **A deleted project this tool added to the inference gateway reads as
+  this tool's.** When the project's namespace UID was recorded and the
+  project had been deleted, the Models tab said "this tool did not add
+  it". It now says the next Models change removes it, as it does; a
+  project made again under the name (another UID) is still not the tool's
+  entry. The other line now reads "this tool has no record that it added
+  it".
+- **The Environment page reads its status one request at a time.** After
+  quick polling had stopped at 10 minutes, a later change that started
+  settling again ran the quick polling beside the 45-second re-read, so two
+  status requests could run at once, and the page said at once that it had
+  stopped checking. One poller now does both: each settling period polls
+  quickly again for its own 10 minutes, and a read still running is waited
+  for.
+- **Clean up confirms only the pipeline servers you ticked.** A refresh
+  while the Clean up dialog was open could turn a ticked pipeline server
+  into one this tool has no record of, and the dialog then sent it as
+  confirmed by you. The dialog now unticks such a server, and a
+  confirmation names the server's UID: Delete, Recreate and Clean up skip
+  the record check only for that server, so one deleted and made again
+  since is refused.
+- **An Unpublish that failed on the model's Gen AI studio label is
+  finished by Unpublish again.** When Unpublish routed the model back but
+  could not put back its `opendatahub.io/genai-asset` label and
+  `opendatahub.io/genai-use-case` annotation, the background check took the
+  publication for gone and dropped what Unpublish had to put back, so the
+  model stayed out of Gen AI studio's AI assets. The publication now stays
+  while the tool's model still lacks them: the row reads Partly published
+  and offers Unpublish, which puts them back.
+- **The MaaS tab shows what is on the cluster, not this tool's record.**
+  A project deleted while its model was published left a "Needs attention:
+  Partly published ... this tool's record of the publication still in
+  place. Unpublish to finish removing it" row, built from the record alone,
+  and the Unpublish dialog said the model keeps running. Such a publication
+  now has no row: the tab names it as being removed automatically (the
+  background check removes what is left) and shows a problem only when
+  that removal failed, with its error. A project being deleted shows its
+  model as being removed, with no buttons. A publication only the record
+  still lists is "Not published" (Publish is offered), and the Models
+  tab's teardown no longer refuses such a model.
+- **Gone MaaS publications are removed within seconds of opening the
+  tab.** A MaaS status read that finds a publication whose project or model
+  is gone starts the background check at once instead of waiting up to
+  five minutes: in the background (the read does not wait), under the same
+  cluster lock and cross-pod lease, at most one per minute, and never in
+  the gitops profile.
+- **A deleted MaaS project no longer keeps MaaS from being turned off.**
+  The Components page's MaaS guard counted the publications in this tool's
+  record, so one whose project was gone still blocked removing
+  `aigateway.modelsAsAService`. It now counts the MaaSModelRefs on the
+  cluster (anyone's) and this tool's platform setup only.
+- **The MaaS gateway admits only projects with a publication on the
+  cluster.** Set up, Publish, Unpublish and the background check wrote
+  `maas-default-gateway`'s list of projects from this tool's record, so a
+  publication only the record still listed kept (or put back) its project
+  on the gateway, whose editors could then attach routes to it. The list
+  is now the projects of this tool's MaaSModelRefs on the cluster.
+- **The MaaS tab's DataScienceCluster part is this tool's only while it
+  owns the field.** It said "set up by this tool" from the record alone,
+  also after someone else set `modelsAsAService` or `aigateway`. As for the
+  prerequisites, the part (and the platform) now counts as this tool's
+  only while the record says it changed the field and its field manager
+  still owns it.
+- **A MaaS publication belongs to the model it published.** Publish now
+  records the model's UID with the gateways and Gen AI metadata Unpublish
+  writes back. A model deleted and made again under its name, also by this
+  tool, is not the published one: its old publication is removed
+  automatically, and the old values are never written to the new model.
+- **The records forget projects that are gone.** The background check
+  (at start and every five minutes) now also drops the entries of the
+  models, pipeline server and playground records whose project no longer
+  exists; they only piled up. An entry is kept while its project exists, is
+  being deleted or cannot be read, and a model's while its MaaS publication
+  is still recorded.
+- **The nodes' pull secret card says what it knows.** "Entry set by: This
+  tool" came from this tool's record alone: the updater may not read
+  `openshift-config/pull-secret` (SECURITY.md). The card now says the entry
+  is recorded as added by this tool and that Add and Remove check it with
+  your permissions before they change anything.
+- **A MaaS publication of which nothing is left is dropped.** When the
+  project and model are still there but the MaaSModelRef is gone and the
+  model no longer routes through the MaaS gateway (the reference deleted
+  outside this tool, or a publish that stopped before it), the publication
+  stayed in this tool's record for good. It is now named as being removed
+  and the background check drops it (and its subscription entry); the
+  model's row is "Not published".
+- **"Through MaaS only" belongs to the model that was published.** The
+  Models tab's "Through MaaS only" and the unpublish step of its Delete
+  came from the MaaS record by name, so a model made again under the name
+  before the background check ran inherited them. They now count only for
+  the model whose UID the publication recorded.
+- **Delete model names a MaaSModelRef someone else made.** It said
+  "Unpublish it on the MaaS tab first", but the MaaS tab leaves such a
+  reference alone and offers no Unpublish. Delete still refuses (the
+  reference would point at nothing), and now says the reference is not
+  this tool's and whoever made it removes it.
+- **A pipeline server this tool has no record of is deleted only when you
+  confirm it.** Delete and Clean up took a pipeline server with this tool's
+  label as the tool's, although a project editor can set that label (or
+  make the server again under its name). One whose UID this tool did not
+  record (set up before 3.0.1, or labelled by someone else) is now deleted
+  only when you confirm it: the Delete and Recreate dialogs say so, and
+  Clean up lists it unticked with the reason. The server refuses without
+  the confirmation, and also while it cannot read its record.
+- **This tool's pipeline servers and models in a project that is no longer
+  a Data Science project are shown.** Once the RHOAI dashboard's label was
+  removed from a project, the project picker dropped it, and this tool's
+  pipeline server and models there vanished from the page while still
+  using the S3 storage and the inference gateway; Clean up then called the
+  pipeline server one "this tool did not create". The Pipelines and Models
+  tabs now name them ("no longer a data science project") with Delete, and
+  Clean up offers them as this tool's.
+- **The Environment page follows the cluster on its own.** Once nothing
+  was starting or being deleted, the page never read the cluster again
+  until you clicked Refresh, so something deleted elsewhere kept its row and
+  its Delete and Clean up buttons. The status, MaaS and the prerequisites
+  are now read again every 45 seconds while the browser tab is visible
+  (never while it is hidden, at once when you come back, one read at a
+  time), and opening Clean up reads the status again before it lists what
+  goes.
+- **A deleted project on the inference gateway's list is no longer a
+  warning.** The Models tab showed it as "deleted — Remove" in a warning
+  that asked you to confirm its removal. A project this tool added is
+  already taken off the list at the next Models change or Clean up; the
+  tab now says so on a plain line ("Project X no longer exists; it is
+  removed from the gateway at the next Models change", or that this tool
+  did not add it), with a Remove that runs at once, with your sign-in.
+- **A playground made later is not taken for this tool's.** When this
+  tool's record of a playground had no server UID yet (the install never
+  confirmed one), any playground created after the request counted as the
+  tool's, so one someone made in that project days later was offered to
+  Clean up. That rule now holds only within the install's own window (its
+  retries and its wait, 9 minutes); past it the playground is not this
+  tool's and the next playground operation drops the record.
+- **A project made again is not the one this tool added to the inference
+  gateway.** The record of the projects this tool added to the gateway's
+  list held names only, so a project deleted and created again under the
+  name (and put on the list by someone else) counted as the tool's: the
+  Delete dialog said deleting the last model takes it off the list, and the
+  teardown did. The record now keeps each project's namespace UID; a
+  project with another UID is not the tool's entry, is never taken off by
+  it, and is dropped from the record. Entries recorded by earlier versions
+  keep their name-only meaning.
+- **Delete S3 storage is offered for what is on the cluster.** After a
+  deletion that did not finish, Delete stayed offered because this browser
+  remembered the failure: in another browser it was gone, and here it
+  stayed even with nothing left. The status now names this tool's storage
+  objects a deletion left (its Secret, Service and NetworkPolicy, besides
+  the data volume and the Route), and Delete is offered while they are
+  there.
 - **A DataScienceCluster change applies only to the DSC it was checked
   on.** The Components page's changes (a component's state, Fix, soft
   reset) and Diagnostics' disable-component fix tested only the fields

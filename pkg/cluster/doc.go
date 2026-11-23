@@ -31,6 +31,8 @@
 //	dsc                     the DataScienceCluster's writes and their guards
 //	features, diagnostics   feature setups and the playground; the
 //	                        diagnostics runner, its checks and fixes
+//	recipe                  environment recipes: their schema checks, the
+//	                        plan, the steps of a run and the recipe project
 //
 // No internal package imports pkg/cluster. layers_test.go checks both rules
 // against its own copy of this list, and that this list and CONTRIBUTING.md

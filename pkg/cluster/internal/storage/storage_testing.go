@@ -81,6 +81,15 @@ func SetPipelineServerDeleteTimingForTest(timeout, poll time.Duration) (restore 
 	return func() { pipelineServerDeleteTimeout, pipelineServerDeletePoll = prevTimeout, prevPoll }
 }
 
+// SetPipelineServerReadyTimingForTest sets WaitPipelineServerReady's
+// timeout and poll.
+func SetPipelineServerReadyTimingForTest(timeout, poll time.Duration) (restore func()) {
+	mustBeTest("SetPipelineServerReadyTimingForTest")
+	prevTimeout, prevPoll := PipelineServerReadyTimeout, pipelineServerReadyPoll
+	PipelineServerReadyTimeout, pipelineServerReadyPoll = timeout, poll
+	return func() { PipelineServerReadyTimeout, pipelineServerReadyPoll = prevTimeout, prevPoll }
+}
+
 // mustBeTest panics unless the program is a test binary.
 func mustBeTest(what string) {
 	if !testing.Testing() {

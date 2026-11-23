@@ -565,6 +565,21 @@ func ModelsStatus(c *kube.Client, dsc rhoai.DSCRead, dscErr error, models []LLMI
 			slog.Warn("cannot read the models record", "error", err)
 		}
 		st.Items = ModelItems(c, models, visible, rec)
+		// This tool's models in projects that are not Data Science
+		// projects (any more): read only for those.
+		outside := map[string]bool{}
+		for _, m := range models {
+			if _, ok := ToolModelPath(m.Metadata.Namespace, m.Metadata.Name); ok && !visible[m.Metadata.Namespace] && err == nil && rec.Owns(m.Metadata) && !m.Metadata.Terminating() {
+				outside[m.Metadata.Namespace] = true
+			}
+		}
+		if len(outside) > 0 {
+			for _, s := range ModelItems(c, models, outside, rec) {
+				if s.ManagedByTool {
+					st.Outside = append(st.Outside, s)
+				}
+			}
+		}
 	}
 	if st.Blocked != nil {
 		return st

@@ -31,6 +31,7 @@ import type { LatestNightlyResponse, NightlyBuild, NightlyTag, OperationResponse
 import { createDSC, fetchLatestNightly, fetchNightlyTags, getDSCPreview, toApiError, trackFeature } from "../services/api";
 import { nodePullUnverified, prerequisitesMet as checkPrereqs, operatorInstalled, pullSecretReady } from "../utils";
 import { ClusterSetupCard, InstalledBuildCard } from "../components/StatusCards";
+import { RecipeEntryCard } from "../components/recipes/RecipeEntry";
 import { UpdateConfirmModal, UpdatePanel } from "../components/UpdatePanel";
 import { ReinstallPanel } from "../components/ReinstallPanel";
 import { SetupModal } from "../components/PrerequisitesPanel";
@@ -273,6 +274,7 @@ export const StatusPage: React.FC = () => {
       {/* --- One-time setup comes first while it is incomplete: nothing else works without it --- */}
       {status && setupFirst && <PageSection>{setupCard(false)}</PageSection>}
 
+
       {/* --- Installed vs latest, with the primary action --- */}
       {status && (
         <PageSection>
@@ -372,6 +374,11 @@ export const StatusPage: React.FC = () => {
             </ModalFooter>
           </Modal>
         </PageSection>
+      )}
+
+      {/* --- RHOAI or the DSC is missing: a recipe sets up the rest in one run (full profile only) --- */}
+      {status && !gitOpsProfile && (!installed || status.dscExists === false) && (
+        <PageSection><RecipeEntryCard setupDone={prerequisitesMet} /></PageSection>
       )}
 
       {status && (

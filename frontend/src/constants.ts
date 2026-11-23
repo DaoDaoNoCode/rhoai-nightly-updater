@@ -29,6 +29,12 @@ export const RESOURCE_POLL_BASE_MS = 5_000;
 export const RESOURCE_POLL_MAX_MS = 30_000;
 /** Stop polling a resource that is still not ready after this long (ms). */
 export const RESOURCE_SETTLE_MAX_MS = 10 * 60_000;
+/**
+ * While nothing settles, the Environment page still reads its status, MaaS and
+ * prerequisites again this often while the browser tab is visible (and at once
+ * when it becomes visible again), so a change made elsewhere shows on its own.
+ */
+export const IDLE_REFRESH_MS = 45_000;
 
 /**
  * GET /api/operation polling. The endpoint makes no cluster call while an
@@ -68,6 +74,7 @@ export const NAV_ITEMS = [
   { path: "/builds", label: "Build Explorer" },
   { path: "/dashboard-dev", label: "Dashboard Dev" },
   { path: "/test-resources", label: "Environment" },
+  { path: "/recipes", label: "Recipes" },
   { path: "/diagnostics", label: "Diagnostics" },
 ] as const;
 
@@ -76,7 +83,19 @@ export const NAV_ITEMS = [
  * every other user gets Status (the summary), Build Explorer and
  * Environment (their own projects).
  */
-export const ADMIN_ONLY_PAGES: ReadonlySet<string> = new Set(["/components", "/dashboard-dev", "/diagnostics"]);
+export const ADMIN_ONLY_PAGES: ReadonlySet<string> = new Set(["/components", "/dashboard-dev", "/recipes", "/diagnostics"]);
+
+/**
+ * How often the Recipes page reads the recipe run (GET /api/recipes/run)
+ * while it runs (ms). The run goes on on the server; this only follows it.
+ */
+export const RECIPE_RUN_POLL_MS = 2_000;
+/**
+ * While no run runs, the Recipes page still reads the run this often while
+ * the browser tab is visible (and at once when it is shown again), so a run
+ * started, resumed or cleaned up elsewhere shows without a reload (ms).
+ */
+export const RECIPE_RUN_IDLE_POLL_MS = 15_000;
 
 /** How often a user's Status page reads the cluster summary (GET /api/summary), in ms. */
 export const SUMMARY_POLL_MS = 60_000;

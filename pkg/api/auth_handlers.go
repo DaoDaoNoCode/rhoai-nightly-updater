@@ -174,7 +174,36 @@ func mutationAuth(asUser bool, fn func(c *cluster.Client, w http.ResponseWriter,
 		client.SetUsername(username)
 		client.SetBookkeeping(bookkeeper)
 
-		sw := &statusWriter{ResponseWriter: w, path: r.URL.Path, user: username, bookkeeper: bookkeeper, cancelOp: cancelOp}
+		sw := &statusWriter{ResponseWriter: w, path: r.URL.Path, user: username, bookkeeper: bookkeeper, cancelOp: cancelOp,
+			// A recipe run outlives the request: each of its steps gets a
+			// bookkeeper made now, with the ServiceAccount token read
+			// again (it rotates; getClusterToken caches it 5 minutes).
+			newBookkeeper: func(ctx context.Context) *cluster.Client {
+				token := getClusterToken()
+				if token == "" {
+					token = clusterToken
+				}
+				b := cluster.NewClientWithContext(ctx, token)
+				b.SetUsername(username)
+				return b
+			},
+			// A recipe run passes this gate again before each step, with
+			// the token of the request that started it.
+			gate: func(ctx context.Context) (string, string) {
+				if asUser {
+					if msg, code := stepSessionProblem(ctx, userToken); msg != "" {
+						return msg, code
+					}
+				}
+				allowed, err := mutationPermission(ctx, userToken)
+				switch {
+				case err != nil:
+					return fmt.Sprintf("Cannot verify that you may still change the cluster (%v). Resume once the API server answers.", err), "authorization_unavailable"
+				case !allowed:
+					return readOnlyMessage + " A cluster-admin can Resume.", "forbidden"
+				}
+				return "", ""
+			}}
 		completed := false
 		defer func() {
 			// Rejected requests (4xx/5xx status, including 409 busy),

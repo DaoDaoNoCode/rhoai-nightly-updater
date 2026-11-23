@@ -92,26 +92,46 @@ const signInAgainCode = "sign_in_again"
 // sign in again. Only a refusal that is known to be needed is made.
 // Never logs or returns the token.
 func sessionProblem(ctx context.Context, token string) (string, string, int) {
+	return checkSession(ctx, token, false)
+}
+
+// stepSessionProblem is sessionProblem before a step of a recipe run. Its
+// messages end in what to do next there, "..., then Resume.", and an
+// expiring sign-in names no minutes: the message stays in the run record
+// long after it was true.
+func stepSessionProblem(ctx context.Context, token string) (string, string) {
+	msg, code, _ := checkSession(ctx, token, true)
+	return msg, code
+}
+
+func checkSession(ctx context.Context, token string, step bool) (string, string, int) {
 	if devModeWithoutServiceAccount() {
 		return "", "", 0
+	}
+	then := "."
+	if step {
+		then = ", then Resume."
 	}
 	readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	tok, err := readSessionToken(readCtx, token)
 	switch {
 	case errors.Is(err, cluster.ErrUnauthenticated):
-		return "Your OpenShift session has expired. Log in again.", "session_expired", http.StatusUnauthorized
+		return "Your OpenShift session has expired. Log in again" + then, "session_expired", http.StatusUnauthorized
 	case errors.Is(err, cluster.ErrSessionTokenGone):
-		return "Your OpenShift sign-in was revoked or has ended. Log in again.", "session_expired", http.StatusUnauthorized
+		return "Your OpenShift sign-in was revoked or has ended. Log in again" + then, "session_expired", http.StatusUnauthorized
 	case cluster.IsK8sError(err, http.StatusForbidden):
-		return scopeRefusal, signInAgainCode, http.StatusUnauthorized
+		return scopeRefusal + then, signInAgainCode, http.StatusUnauthorized
 	case err != nil:
 		slog.Warn("cannot read the user's sign-in token; the change goes ahead without the expiry check", "error", err)
 		return "", "", 0
 	case !tok.FullScope():
-		return scopeRefusal, signInAgainCode, http.StatusUnauthorized
+		return scopeRefusal + then, signInAgainCode, http.StatusUnauthorized
 	}
 	if left, expires := tok.Remaining(sessionClock()); expires && left < sessionNeeded() {
+		if step {
+			return "Your sign-in expires before the next step could finish. Log out and log in again, then Resume.", signInAgainCode, http.StatusUnauthorized
+		}
 		mins := max(int(left/time.Minute), 0)
 		return fmt.Sprintf("Your sign-in expires in %d %s, and a change may take up to %d minutes. Log out and log in again, then retry.",
 			mins, map[bool]string{true: "minute", false: "minutes"}[mins == 1], int(sessionNeeded()/time.Minute)), signInAgainCode, http.StatusUnauthorized
@@ -119,8 +139,9 @@ func sessionProblem(ctx context.Context, token string) (string, string, int) {
 	return "", "", 0
 }
 
-// scopeRefusal: the session's token can identify the user but not act.
-const scopeRefusal = "Your sign-in cannot make changes: it was made before this updater acted with your own OpenShift permissions. Log out and log in again."
+// scopeRefusal: the session's token can identify the user but not act
+// (without the sentence's end: "." or ", then Resume.").
+const scopeRefusal = "Your sign-in cannot make changes: it was made before this updater acted with your own OpenShift permissions. Log out and log in again"
 
 // mutationPermission evaluates the gate for each request with the user's
 // own token.

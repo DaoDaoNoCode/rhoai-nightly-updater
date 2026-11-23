@@ -2,6 +2,9 @@
 // diagnostics). A Go slice field without omitempty encodes nil as null, so
 // such fields are typed `T[] | null` and read with `?? []`.
 
+// The clean-up request is defined with its endpoint (a type-only import: no cycle at run time).
+import type { CleanupRequest } from "./services/api/environment";
+
 export interface ActivityEntry {
   timestamp: string;
   user: string;
@@ -1153,6 +1156,12 @@ export interface ResourcesStatus {
   unmanagedPipelineProjects?: string[] | null;
   /** The health of those pipeline servers (managedByTool false); the tool never changes them. */
   unmanagedPipelineServers?: ResourceState[] | null;
+  /** The projects recipes created that the cluster has now (Clean up everything offers them). */
+  recipeProjects?: RecipeOwnedProject[] | null;
+  /** Why those could not be read (none is offered then). */
+  recipeProjectsError?: string;
+  /** This tool's pipeline servers in projects that are no longer data science projects (not in the project picker). */
+  outsidePipelineServers?: ResourceState[] | null;
 }
 
 export interface ResourceState {
@@ -1161,7 +1170,11 @@ export interface ResourceState {
   /** False: the tool did not create it and will not tear it down. */
   managedByTool?: boolean;
   /** A pipeline server with this tool's label but no record of its UID (set up before 3.0.1, or labelled by a project's editor): Set up again adopts it. */
+  /** The S3 storage: this tool's objects still in its namespace once the Deployment is gone ("Kind name"), what a deletion left. */
+  leftovers?: string[] | null;
   unrecorded?: boolean;
+  /** An unrecorded pipeline server's UID: what the user's confirmation names (one made again since is not it). */
+  uid?: string;
   terminating?: boolean;
   setupBlockedReason?: string;
   teardownBlockedReason?: string;
@@ -1321,6 +1334,8 @@ export interface ModelsStatus {
   imagePlanReason?: string;
   catalog: CatalogModel[] | null;
   items?: ModelState[] | null;
+  /** This tool's models in projects that are no longer data science projects (not in the project picker). */
+  outside?: ModelState[] | null;
 }
 
 /** The body of POST /api/resources/models/stream (pkg/types ModelsRequest). */
@@ -1590,6 +1605,10 @@ export interface MaaSModel extends ResourceState {
   maasOnlySetup?: boolean;
   /** What is left of a publication undone half-way (message says what); Unpublish finishes it. */
   partly?: boolean;
+  /** Its publication is gone (the project is being deleted): removed automatically, so the row offers nothing. */
+  removing?: boolean;
+  /** No MaaSModelRef of this tool's (deleted outside it) while the model still routes through the MaaS gateway: "Restore direct routing" puts back what it had before publishing. */
+  routingPending?: boolean;
   phase?: string;
   endpoint?: string;
   access?: string;
@@ -1663,6 +1682,17 @@ export interface MaaSStatus {
   access?: MaaSAudience & { groupProblems?: MaaSGroupProblem[] };
   /** The cluster's MaaSSubscription API has no unlimited model reference (read from its CRD). */
   noUnlimited?: boolean;
+  /** This tool's publications whose project or model is gone: the background check removes what is left. */
+  removing?: MaaSRemoval[];
+  /** The error of the last automatic removal, when it failed. */
+  removalProblem?: string;
+}
+
+/** A publication of this tool that is gone, and why (pkg/types MaaSRemoval). */
+export interface MaaSRemoval {
+  namespace: string;
+  name: string;
+  reason: string;
 }
 
 /** A group with no OpenShift Group (missing), or one that could not be checked (pkg/types MaaSGroupProblem). */
@@ -1676,7 +1706,7 @@ export interface MaaSGroupProblem {
 
 /** The body of POST /api/resources/maas/stream. */
 export interface MaaSRequest {
-  action: "setup" | "teardown" | "publish" | "unpublish" | "change-limit" | "change-access" | MaaSActionId;
+  action: "setup" | "teardown" | "publish" | "unpublish" | "restore-routing" | "change-limit" | "change-access" | MaaSActionId;
   project?: string;
   /** The catalog name of the chat model to publish or unpublish; absent: the default. */
   model?: string;
@@ -1774,4 +1804,160 @@ export interface PrerequisitesStatus {
 export interface PrerequisitesRequest {
   feature: PrerequisiteFeature;
   exposure?: ModelExposureKind;
+}
+
+// --- Environment recipes (match pkg/types recipe.go) ---
+
+/**
+ * The RHOAI build of a recipe: "latest" (the newest nightly), the newest
+ * nightly of a line ({tag}), or one catalog image pinned by digest
+ * ({image}).
+ */
+export type RecipeBuild = "latest" | { tag?: string; image?: string };
+
+/** An environment recipe, schema rhoai-nightly-updater/v1alpha1 (pkg/types EnvironmentRecipe). */
+export interface EnvironmentRecipe {
+  apiVersion: string;
+  kind: string;
+  metadata: { name: string; description?: string };
+  spec: {
+    rhoai: { build: RecipeBuild; ifInstalled?: string };
+    dataScienceCluster: { create: boolean };
+    /** Absent when no feature needs a project. */
+    project?: { mode: string; name: string; displayName?: string };
+    features: {
+      pipelines: { enabled: boolean };
+      mlflow: { enabled: boolean; samples?: boolean };
+      models: { enabled: boolean; model?: string; exposure?: string; releasedImage?: boolean };
+      playground: { enabled: boolean };
+      maas: { enabled: boolean; database?: string; publish?: boolean };
+    };
+    dashboardDev: { deploy?: string; pr?: number; flavor?: string };
+  };
+}
+
+/**
+ * Where a plan's problem or a blocked step is fixed (pkg/types RecipeFix):
+ * a stable code, and the app's route of the page that fixes it ("/",
+ * "/components"), absent when nothing in the app does.
+ */
+export interface RecipeFix {
+  code: string;
+  page?: string;
+}
+
+/** One reason a recipe is refused (pkg/types RecipeProblem); field is the recipe path ("spec.project.name"). */
+export interface RecipeProblem {
+  field?: string;
+  message: string;
+  /** Absent when the recipe itself is to change (field says where). */
+  fix?: RecipeFix;
+}
+
+/** What a planned step would do: run, skip (already set up), blocked (Reason), later (checked when the run gets there). */
+export type RecipePlanAction = "run" | "skip" | "blocked" | "later";
+
+export interface RecipePlanStep {
+  id: string;
+  title: string;
+  action: RecipePlanAction;
+  reason?: string;
+  /** Where a blocked step is fixed. */
+  fix?: RecipeFix;
+  typicalSeconds: number;
+  maxSeconds: number;
+}
+
+/** The build a run installs, resolved once so a resume keeps it. */
+export interface RecipePinnedBuild {
+  tag?: string;
+  image: string;
+  digest: string;
+}
+
+/** POST /api/recipes/plan: what a run would do; it refuses while problems is not empty. */
+export interface RecipePlan {
+  recipe: EnvironmentRecipe;
+  steps: RecipePlanStep[];
+  problems: RecipeProblem[] | null;
+  pinned?: RecipePinnedBuild;
+  typicalSeconds: number;
+  maxSeconds: number;
+}
+
+export type RecipeRunState = "running" | "succeeded" | "failed" | "stopped";
+export type RecipeStepStatus = "pending" | "running" | "success" | "failed" | "skipped";
+
+export interface RecipeRunStep {
+  id: string;
+  title: string;
+  status: RecipeStepStatus;
+  message?: string;
+  errorCode?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  /** How long the step usually takes, and at most (the plan's figures). */
+  typicalSeconds: number;
+  maxSeconds: number;
+  /** The run (any of its attempts) set the step's part up; absent when it was there already. */
+  created?: boolean;
+}
+
+/** The record of the last recipe run (pkg/types RecipeRun). */
+export interface RecipeRun {
+  id: string;
+  operationId: string;
+  bootId: string;
+  pod?: string;
+  user: string;
+  startedAt: string;
+  resumedAt?: string;
+  finishedAt?: string;
+  state: RecipeRunState;
+  /** Why a run that is not running ended. */
+  stopReason?: string;
+  /** sign_in_again, session_expired, forbidden, lock_lost, stopped, restart, timeout, internal, or the failed step's. */
+  errorCode?: string;
+  recipe: EnvironmentRecipe;
+  pinned?: RecipePinnedBuild;
+  /** The run's project; owned when the recipe created it. */
+  project?: { name: string; uid?: string; owned?: boolean };
+  steps: RecipeRunStep[];
+  /** The DataScienceCluster components the run turned on, which its Clean up turns back. */
+  components?: string[];
+}
+
+/** GET /api/recipes/run. */
+export interface RecipeRunStatus {
+  /** The last run; null when none was recorded. */
+  run: RecipeRun | null;
+  running: boolean;
+  /** Another updater pod (pod) runs it. */
+  remote?: boolean;
+  pod?: string;
+  /** The record says running, but the updater process that ran it is gone: Resume continues it. */
+  interrupted?: boolean;
+  stopRequested?: boolean;
+  /** The running step's latest progress. */
+  step?: { step: string; status: string; message: string; detail?: string; errorCode?: string };
+  /** The clean-up request for what the run created, once it is not running and created anything. */
+  cleanup?: CleanupRequest;
+  /** The projects recipes created (this run's and earlier ones') that the cluster has now, once no run runs. */
+  projects?: RecipeOwnedProject[];
+  /** Why those could not be read (none is offered then). */
+  projectsError?: string;
+}
+
+/** A project a recipe created, as the cluster still shows it (pkg/types RecipeOwnedProject). */
+export interface RecipeOwnedProject {
+  name: string;
+  uid: string;
+  /** The recipe that created it. */
+  recipe: string;
+  createdAt?: string;
+}
+
+/** The 202 answer of POST /api/recipes/run and /api/recipes/resume. */
+export interface RecipeRunAccepted {
+  runId: string;
 }

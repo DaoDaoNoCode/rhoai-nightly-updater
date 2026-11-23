@@ -1,0 +1,108 @@
+{
+  "maxSeconds": 3120,
+  "pinned": {
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "image": "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "tag": "rhoai-3.6"
+  },
+  "problems": [
+    {
+      "fix": {
+        "code": "project_foreign"
+      },
+      "message": "Project recipe-dev: Project recipe-dev exists and was not created by a recipe."
+    },
+    {
+      "field": "spec.rhoai.build",
+      "fix": {
+        "code": "build_unresolvable"
+      },
+      "message": "Cannot resolve the build on Quay."
+    },
+    {
+      "fix": {
+        "code": "one_time_setup_missing",
+        "page": "/"
+      },
+      "message": "The one-time cluster setup is not done: additional-pull-secret is missing in kube-system. Run the one-time setup on the Status page first."
+    }
+  ],
+  "recipe": {
+    "apiVersion": "rhoai-nightly-updater/v1alpha1",
+    "kind": "EnvironmentRecipe",
+    "metadata": {
+      "name": "dev"
+    },
+    "spec": {
+      "dashboardDev": {
+        "deploy": "none",
+        "flavor": "rhoai"
+      },
+      "dataScienceCluster": {
+        "create": true
+      },
+      "features": {
+        "maas": {
+          "enabled": false
+        },
+        "mlflow": {
+          "enabled": true
+        },
+        "models": {
+          "enabled": false
+        },
+        "pipelines": {
+          "enabled": true
+        },
+        "playground": {
+          "enabled": false
+        }
+      },
+      "project": {
+        "mode": "create",
+        "name": "recipe-dev"
+      },
+      "rhoai": {
+        "build": "latest",
+        "ifInstalled": "keep"
+      }
+    }
+  },
+  "steps": [
+    {
+      "action": "run",
+      "id": "rhoai",
+      "maxSeconds": 900,
+      "title": "RHOAI",
+      "typicalSeconds": 420
+    },
+    {
+      "action": "later",
+      "id": "dsc",
+      "maxSeconds": 420,
+      "reason": "Checked when the run gets here: it depends on a step before it.",
+      "title": "DataScienceCluster",
+      "typicalSeconds": 60
+    },
+    {
+      "action": "blocked",
+      "fix": {
+        "code": "project_foreign"
+      },
+      "id": "project",
+      "maxSeconds": 60,
+      "reason": "Project recipe-dev exists and was not created by a recipe.",
+      "title": "Project recipe-dev",
+      "typicalSeconds": 10
+    },
+    {
+      "action": "skip",
+      "id": "s3",
+      "maxSeconds": 300,
+      "reason": "The S3 storage is set up and ready.",
+      "title": "S3 storage",
+      "typicalSeconds": 60
+    }
+  ],
+  "typicalSeconds": 780
+}

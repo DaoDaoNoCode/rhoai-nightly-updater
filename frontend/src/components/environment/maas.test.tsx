@@ -57,6 +57,20 @@ describe("maasState", () => {
     expect(maasPublication(partly)).toBe(partly.message);
   });
 
+  it("publications that are gone are removed automatically: the tab polls until they settle, unless the removal failed", () => {
+    const ready = { platform: { deployed: true, ready: true, managedByTool: true } };
+    const removing = [{ namespace: "old", name: "qwen3-1-7b", reason: "project old no longer exists" }];
+    expect(maasSettling(base([{ id: "dsc", title: "DSC", state: "ready" }], { ...ready, removing }))).toBe(true);
+    expect(maasSettling(base([{ id: "dsc", title: "DSC", state: "ready" }], { ...ready, removing, removalProblem: "delete MaaSSubscription: forbidden" }))).toBe(false);
+  });
+
+  it("withholds the Unpublish dialog for a model with no row or one being removed", () => {
+    const removingRow = { namespace: "p", name: "qwen3-1-7b", deployed: false, ready: false, managedByTool: true, modelReady: false, published: false, removing: true, message: "Being removed automatically: project p is being deleted." };
+    const m = base([{ id: "dsc", title: "DSC", state: "ready" }], { platform: { deployed: true, ready: true, managedByTool: true }, items: [removingRow] });
+    expect(maasConfirm({ kind: "unpublish-maas", project: "p", model: "qwen3-1-7b" }, m)).toBeNull();
+    expect(maasConfirm({ kind: "unpublish-maas", project: "gone", model: "qwen3-1-7b" }, m)).toBeNull();
+  });
+
   it("someone else's MaaS is labelled not managed", () => {
     const s = maasState(base([{ id: "dsc", title: "DSC", state: "ready", notManaged: true }], { platform: { deployed: true, ready: true, managedByTool: false } }), IDLE);
     expect(s).toMatchObject({ label: "Ready, no model of this tool published", unmanaged: true });
@@ -313,5 +327,41 @@ describe("MaaS run dialog", () => {
     fireEvent.click(within(confirm).getByRole("button", { name: "Unpublish" }));
     await screen.findByRole("dialog", { name: "Unpublish SmolLM2 135M Instruct in dev" });
     expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "unpublish", project: "dev", model: "smollm2-135m-instruct" }]);
+  });
+});
+
+describe("Publications that are gone", () => {
+  const status = { minio: { deployed: false, ready: false, managedByTool: false }, mlflow: { deployed: false, ready: false, managedByTool: false }, pipelineServers: [] };
+  const removingRow = { namespace: "dev", name: "qwen3-1-7b", displayName: "Qwen3 1.7B (CPU, tool calling)", deployed: false, ready: false, managedByTool: true, modelReady: true, published: false, removing: true, message: "Being removed automatically: project dev is being deleted." };
+  const removing = [{ namespace: "old", name: "qwen25-05b-instruct", reason: "project old no longer exists" }];
+
+  it("have no Unpublish, and are named as being removed automatically", async () => {
+    stubApi({
+      "/api/resources/status": status,
+      "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/maas": base([{ id: "dsc", title: "MaaS in the DataScienceCluster", state: "ready" }], {
+        platform: { deployed: true, ready: true, managedByTool: true }, items: [removingRow], removing,
+      }),
+    });
+    render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
+    const row = (await screen.findByText("Qwen3 1.7B (CPU, tool calling)")).closest("tr")!;
+    expect(within(row).getByText("Being removed automatically: project dev is being deleted.")).toBeInTheDocument();
+    expect(within(row).queryByRole("button")).toBeNull();
+    expect(within(row).queryByText("Needs attention")).toBeNull();
+    expect(screen.getByText("Being removed automatically: qwen25-05b-instruct in old (project old no longer exists).")).toBeInTheDocument();
+    expect(screen.queryByText(/Could not remove/)).toBeNull();
+  });
+
+  it("show the error when the last removal failed", async () => {
+    stubApi({
+      "/api/resources/status": status,
+      "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/maas": base([{ id: "dsc", title: "MaaS in the DataScienceCluster", state: "ready" }], {
+        platform: { deployed: true, ready: true, managedByTool: true }, items: [], removing, removalProblem: "delete MaaSSubscription: forbidden",
+      }),
+    });
+    render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
+    expect(await screen.findByText("Could not remove publications that are gone")).toBeInTheDocument();
+    expect(screen.getByText(/qwen25-05b-instruct in old \(project old no longer exists\)\. The last try failed: delete MaaSSubscription: forbidden\. The updater tries again every few minutes\./)).toBeInTheDocument();
   });
 });

@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 /** Operator operations that stream progress from the backend. */
 export type OperationKind =
   | "update"
@@ -15,7 +17,10 @@ export function reconcileKindFor(kind: OperationKind): ReconcileKind {
 export interface PipelineStepDef {
   id: string;
   label: string;
-  description: string;
+  /** Text, or text with a link (a recipe's blocked step links the page that fixes it). */
+  description: ReactNode;
+  /** How the preview draws it (default pending): a recipe's plan marks what is set up or blocked. */
+  variant?: "pending" | "success" | "danger" | "default";
 }
 
 // Pipeline step definitions. They mirror the order and the step ids that
@@ -149,4 +154,18 @@ export function operationKindForServerType(type: string, target?: string): Opera
     default:
       return null;
   }
+}
+
+/** The server type of a recipe run (pkg/api operationTypes "/api/recipes/run" and resume). */
+export const RECIPE_OPERATION_TYPE = "recipe";
+
+/**
+ * A recipe run's target, "<recipe>: step k of n (<title>)" (pkg/api
+ * recipeTarget), as its recipe name and "step 4 of 8, Pipeline server";
+ * null for another target.
+ */
+export function recipeTarget(target?: string): { recipe: string; step: string } | null {
+  const m = /^(.+): step (\d+) of (\d+)(?: \((.+)\))?$/.exec(target ?? "");
+  if (!m) return null;
+  return { recipe: m[1], step: `step ${m[2]} of ${m[3]}${m[4] ? `, ${m[4]}` : ""}` };
 }

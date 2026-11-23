@@ -103,19 +103,16 @@ func TestMaaSUnpublish_InAProjectTheGatewayDoesNotListSaysSo(t *testing.T) {
 }
 
 // The model deleted elsewhere takes its MaaSModelRef with it (garbage
-// collection): the recorded publication shows as partly published, and
-// Unpublish finishes it.
+// collection): nothing of the publication is on the cluster, so it has no
+// row and is named as being removed automatically; an Unpublish (of a
+// stale tab) still finishes it.
 func TestMaaSUnpublish_AfterGarbageCollectionTookTheModelRef(t *testing.T) {
 	mc := publishedMaaSCluster(t)
 	deleteFakeObject(mc, testModelPath)
 	deleteFakeObject(mc, tMaaSRef)
 	st, _ := GetMaaSStatus(mc.c)
-	found := false
-	for _, it := range st.Items {
-		found = found || (it.Name == "qwen25-05b-instruct" && it.Partly)
-	}
-	if !found {
-		t.Fatalf("no partly published row: %+v", st.Items)
+	if len(st.Items) != 0 || len(st.Removing) != 1 || st.Removing[0].Reason != "model qwen25-05b-instruct in proj no longer exists" {
+		t.Fatalf("items %+v, removing %+v", st.Items, st.Removing)
 	}
 	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"}); !res.Success {
 		t.Fatalf("unpublish: %+v", res)

@@ -613,10 +613,19 @@ func readPlaygroundServer(c *kube.Client, project, name string) (kube.ObjectMeta
 	return obj.Metadata, true, nil
 }
 
+// playgroundClaimWindow bounds the time rule of playgroundOwnership: an
+// install's own server is created within its retries and its wait for
+// Ready after the request. A server made later in the project (the install
+// failed, or the project was made again) is someone else's.
+func playgroundClaimWindow() time.Duration {
+	return playgroundInstallRetryTimeout + playgroundReadyTimeout
+}
+
 // playgroundOwnership says whether the live playground srv in project is
 // the one this tool requested (rec, when has): its OGXServer's UID is the
 // recorded one, or, with none recorded yet, it was created at or after the
-// request. uid is the live server's UID when owned. A record of something
+// request and within playgroundClaimWindow of it. uid is the live server's
+// UID when owned. A record of something
 // else (the playground was deleted and made again in Gen AI studio, the
 // project was recreated, or the install found someone else's server) is
 // stale: owned is false.
@@ -633,7 +642,7 @@ func playgroundOwnership(c *kube.Client, project string, rec PlaygroundRecord, h
 	}
 	requested, err1 := time.Parse(time.RFC3339, rec.RequestedAt)
 	created, err2 := time.Parse(time.RFC3339, meta.CreationTimestamp)
-	if err1 != nil || err2 != nil || created.Before(requested) {
+	if err1 != nil || err2 != nil || created.Before(requested) || created.After(requested.Add(playgroundClaimWindow())) {
 		return false, "", nil
 	}
 	return true, meta.UID, nil

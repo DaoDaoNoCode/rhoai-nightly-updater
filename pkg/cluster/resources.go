@@ -12,6 +12,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/recipe"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
@@ -40,9 +41,10 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		dscErr      error
 		models      []serving.LLMISvcObject
 		modelsErr   error
+		recipeErr   error
 		status      = &types.ResourcesStatus{}
 	)
-	wg.Add(8)
+	wg.Add(9)
 	go func() { defer wg.Done(); models, modelsErr = serving.ListLLMInferenceServices(c) }()
 	go func() { defer wg.Done(); projects, projectsErr = envkit.DSProjects(c) }()
 	go func() { defer wg.Done(); dspas, dspasErr = storage.ListDSPAs(c, "") }()
@@ -51,6 +53,7 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	go func() { defer wg.Done(); status.MLflow = mlflow.Status(c) }()
 	go func() { defer wg.Done(); dashURL = dashdev.DashboardURL(c) }()
 	go func() { defer wg.Done(); dsc, dscErr = rhoai.ReadFirstDSC(c) }()
+	go func() { defer wg.Done(); status.RecipeProjects, recipeErr = recipe.OwnedProjects(c) }()
 	wg.Wait()
 	if projectsErr != nil {
 		return nil, projectsErr
@@ -59,6 +62,12 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		return nil, dspasErr
 	}
 
+	// The projects recipes created that exist, for Clean up everything; a
+	// list that cannot be read offers none and says why.
+	if recipeErr != nil {
+		status.RecipeProjects = nil
+		status.RecipeProjectsError = "Cannot read the projects recipes created: " + recipeErr.Error()
+	}
 	status.DashboardURL = dashURL
 	status.ForeignLegacyNamespace = foreignNS
 	// What the features need from the DataScienceCluster. One that cannot
@@ -102,6 +111,16 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	unmanaged := map[string]bool{}
 	for _, d := range dspas {
 		if !visible[d.Meta.Namespace] {
+			// This tool's, in a project that is not (or no longer) a Data
+			// Science project: listed apart, so it can still be deleted.
+			if d.ManagedByTool() && !d.Meta.Terminating() {
+				ps := storage.PipelineServerState(d, dashURL)
+				ps.Unrecorded = !pipelineRec.Owns(d.Meta)
+				if ps.Unrecorded {
+					ps.UID = d.Meta.UID
+				}
+				status.OutsidePipelineServers = append(status.OutsidePipelineServers, ps)
+			}
 			continue
 		}
 		if !d.ManagedByTool() {
@@ -115,6 +134,9 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		}
 		ps := storage.PipelineServerState(d, dashURL)
 		ps.Unrecorded = !pipelineRec.Owns(d.Meta)
+		if ps.Unrecorded {
+			ps.UID = d.Meta.UID
+		}
 		status.PipelineServers = append(status.PipelineServers, ps)
 	}
 	for ns := range unmanaged {
@@ -130,6 +152,9 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	})
 	sort.Slice(status.PipelineServers, func(i, j int) bool {
 		return status.PipelineServers[i].Namespace < status.PipelineServers[j].Namespace
+	})
+	sort.Slice(status.OutsidePipelineServers, func(i, j int) bool {
+		return status.OutsidePipelineServers[i].Namespace < status.OutsidePipelineServers[j].Namespace
 	})
 
 	// Storage an earlier version left in namespace minio: Migrate storage

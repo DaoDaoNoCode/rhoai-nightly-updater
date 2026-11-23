@@ -195,18 +195,28 @@ func mlflowOwnedPVCs(c *kube.Client, ns, uid string) ([]string, error) {
 	return names, nil
 }
 
+// Status is MLflow's state; a CR that cannot be read is reported in its
+// message (see ReadStatus for the error).
 func Status(c *kube.Client) types.ResourceState {
+	state, _ := ReadStatus(c)
+	return state
+}
+
+// ReadStatus is Status with the error of a CR read that failed (other
+// than not found), for callers that must tell an expired sign-in or a
+// refusal (401, 403) from MLflow not being ready.
+func ReadStatus(c *kube.Client) (types.ResourceState, error) {
 	ns, nsErr := mlflowNamespace(c)
 	state := types.ResourceState{Namespace: ns}
 
 	cr, err := ReadCR(c)
 	if kube.IsK8sNotFound(err) {
 		state.Message = "Not deployed"
-		return state
+		return state, nil
 	}
 	if err != nil {
-		state.Message = "Cannot read MLflow status: " + err.Error()
-		return state
+		state.Message = statusReadFailed + err.Error()
+		return state, err
 	}
 	state.Deployed = true
 	state.ManagedByTool = cr.managedByTool()
@@ -244,7 +254,7 @@ func Status(c *kube.Client) types.ResourceState {
 		// namespace; without it they are not read.
 		state.Message += fmt.Sprintf(" (the namespace it runs in is unknown: %v)", nsErr)
 		state.UIRoute = UIURL(cr.Status.URL, "")
-		return state
+		return state, nil
 	}
 
 	var (
@@ -277,7 +287,7 @@ func Status(c *kube.Client) types.ResourceState {
 	state.UIRoute = UIURL(cr.Status.URL, host)
 	envkit.ApplyPodIssue(&state, issue)
 	state.DataPVCs = pvcs
-	return state
+	return state, nil
 }
 
 // Setup creates the (cluster-scoped) MLflow CR; the operator runs the

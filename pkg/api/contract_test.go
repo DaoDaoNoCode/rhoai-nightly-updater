@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +40,10 @@ type contractCase struct {
 	path  string
 	token string
 	h     http.HandlerFunc
+	// post is the body of a POST; "" is a GET.
+	post string
+	// before, when set, changes the stubs for this case only.
+	before func(t *testing.T)
 }
 
 func TestFrontendContract(t *testing.T) {
@@ -47,23 +52,35 @@ func TestFrontendContract(t *testing.T) {
 	stubContractData(t)
 	started := time.Date(2026, 11, 20, 14, 5, 0, 0, time.UTC)
 	stubRunningOperation(t, started)
+	stubRecipeContract(t, started)
 
 	cases := []contractCase{
-		{"summary.json", "/api/summary", "user:carol", HandleSummary},
-		{"operation-user.json", "/api/operation", "user:carol", HandleOperation},
-		{"user-permissions-user.json", "/api/user/permissions", "user:carol", HandleUserPermissions},
-		{"user-permissions-admin.json", "/api/user/permissions", "user:admin", HandleUserPermissions},
-		{"project-status-user.json", "/api/resources/status?project=team-a", "user:carol", HandleResourcesStatus},
-		{"project-status-problems-user.json", "/api/resources/status?project=team-denied", "user:carol", HandleResourcesStatus},
-		{"playground-user.json", "/api/resources/playground?project=team-a", "user:carol", HandlePlaygroundStatus},
-		{"playground-problem-user.json", "/api/resources/playground?project=team-denied", "user:carol", HandlePlaygroundStatus},
-		{"samples-mlflow-user.json", "/api/resources/samples/mlflow?project=team-a", "user:carol", HandleMLflowSamplesStatus},
+		{"summary.json", "/api/summary", "user:carol", HandleSummary, "", nil},
+		{"operation-user.json", "/api/operation", "user:carol", HandleOperation, "", nil},
+		{"user-permissions-user.json", "/api/user/permissions", "user:carol", HandleUserPermissions, "", nil},
+		{"user-permissions-admin.json", "/api/user/permissions", "user:admin", HandleUserPermissions, "", nil},
+		{"project-status-user.json", "/api/resources/status?project=team-a", "user:carol", HandleResourcesStatus, "", nil},
+		{"project-status-problems-user.json", "/api/resources/status?project=team-denied", "user:carol", HandleResourcesStatus, "", nil},
+		{"playground-user.json", "/api/resources/playground?project=team-a", "user:carol", HandlePlaygroundStatus, "", nil},
+		{"playground-problem-user.json", "/api/resources/playground?project=team-denied", "user:carol", HandlePlaygroundStatus, "", nil},
+		{"samples-mlflow-user.json", "/api/resources/samples/mlflow?project=team-a", "user:carol", HandleMLflowSamplesStatus, "", nil},
+		// Admin-only answers the Recipes page reads.
+		{"recipe-run-admin.json", "/api/recipes/run", "user:admin", HandleRecipeRunStatus, "", nil},
+		{"recipe-run-ended-admin.json", "/api/recipes/run", "user:admin", HandleRecipeRunStatus, "", stubEndedRecipeRun},
+		{"recipe-plan-admin.json", "/api/recipes/plan", "user:admin", HandleRecipePlan, `{"recipe":` + testRecipe + `}`, nil},
 	}
 	update := *updateContract || os.Getenv("UPDATE_CONTRACT") == "1"
 	written := map[string]bool{}
 	for _, tc := range cases {
+		if tc.before != nil {
+			tc.before(t)
+		}
 		w := httptest.NewRecorder()
-		tc.h(w, getAs(t, tc.path, tc.token))
+		req := getAs(t, tc.path, tc.token)
+		if tc.post != "" {
+			req = postJSON(t, tc.path, tc.token, tc.post)
+		}
+		tc.h(w, req)
 		if w.Code != http.StatusOK {
 			t.Fatalf("%s: %d %s", tc.file, w.Code, w.Body.String())
 		}
@@ -178,5 +195,90 @@ func stubRunningOperation(t *testing.T, started time.Time) {
 	readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) {
 		return &cluster.OperationRecord{Lease: &types.OperationLease{ID: "op1", BootID: "another-process", Pod: "pod-2", User: "alice",
 			Type: "update", Label: "Update to nightly", Target: "rhoai-3.6", StartedAt: started.Format(time.RFC3339), HeartbeatAt: clk.Now().UTC().Format(time.RFC3339)}}, nil
+	}
+}
+
+// stubRecipeContract gives the recipe answers representative data: a run
+// that another updater pod runs (the operation's lease, stubRunningOperation),
+// and a plan with a step of every action and a problem.
+func stubRecipeContract(t *testing.T, started time.Time) {
+	t.Helper()
+	origRead, origPlan, origRecipes, origOwnership, origOwned := readRecipeRun, planRecipe, recipes, recipeOwnership, recipeOwnedProjects
+	recipes = &recipeRunner{}
+	t.Cleanup(func() {
+		readRecipeRun, planRecipe, recipes, recipeOwnership, recipeOwnedProjects = origRead, origPlan, origRecipes, origOwnership, origOwned
+	})
+	// The projects recipes created that the cluster still has: this run's
+	// and an earlier run's.
+	recipeOwnedProjects = func(*cluster.Client) ([]types.RecipeOwnedProject, error) {
+		return []types.RecipeOwnedProject{
+			{Name: "recipe-dev", UID: "0f3c1d2e-uid", Recipe: "dev", CreatedAt: "2026-11-20T14:15:00Z"},
+			{Name: "recipe-old", UID: "7a8b9c0d-uid", Recipe: "old", CreatedAt: "2026-11-19T09:00:00Z"},
+		}, nil
+	}
+	// What the cluster shows of an ended run: its project, and the
+	// component it turned on.
+	recipeOwnership = func(_ *cluster.Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
+		return map[string]bool{"project": true, "pipelines-prereq": true}, &types.CleanupRequest{RecipeProjects: []string{run.Project.Name}, RecipeProjectUIDs: map[string]string{run.Project.Name: run.Project.UID}, Components: run.Components}
+	}
+	pinned := &types.RecipePinnedBuild{Tag: "rhoai-3.6", Image: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + strings.Repeat("a", 64), Digest: "sha256:" + strings.Repeat("a", 64)}
+	at := func(m int) string { return started.Add(time.Duration(m) * time.Minute).Format(time.RFC3339) }
+	readRecipeRun = func(*cluster.Client) (*types.RecipeRun, error) {
+		rcp, _ := cluster.ValidateRecipe([]byte(testRecipe))
+		return &types.RecipeRun{
+			ID: "run1", OperationID: "op1", BootID: "another-process", Pod: "pod-2", User: "alice",
+			StartedAt: at(0), ResumedAt: at(9), State: types.RecipeRunRunning, ErrorCode: "", Recipe: rcp, Pinned: pinned,
+			Project: &types.RecipeProjectRef{Name: "recipe-dev", UID: "0f3c1d2e-uid", Owned: true},
+			Steps: []types.RecipeRunStep{
+				{ID: "rhoai", Title: "RHOAI", Status: types.RecipeStepSkipped, Message: "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).", StartedAt: at(9), FinishedAt: at(9), TypicalSeconds: 420, MaxSeconds: 900},
+				{ID: "dsc", Title: "DataScienceCluster", Status: types.RecipeStepSuccess, Message: "DataScienceCluster created with default components", StartedAt: at(9), FinishedAt: at(10), TypicalSeconds: 60, MaxSeconds: 420},
+				{ID: "project", Title: "Project recipe-dev", Status: types.RecipeStepFailed, Message: "Creating project recipe-dev failed.", ErrorCode: "forbidden", StartedAt: at(10), FinishedAt: at(10), TypicalSeconds: 10, MaxSeconds: 60},
+				{ID: "pipelines-prereq", Title: "What Pipelines needs", Status: types.RecipeStepRunning, StartedAt: at(11), TypicalSeconds: 120, MaxSeconds: 600},
+				{ID: "s3", Title: "S3 storage", Status: types.RecipeStepPending, TypicalSeconds: 60, MaxSeconds: 300},
+			},
+			// An earlier attempt turned the component on.
+			Components: []string{"aipipelines"},
+		}, nil
+	}
+	planRecipe = func(_ *cluster.Client, r types.EnvironmentRecipe, _ *types.RecipePinnedBuild) (*types.RecipePlan, cluster.RecipeState) {
+		return &types.RecipePlan{
+			Recipe: r, Pinned: pinned, TypicalSeconds: 780, MaxSeconds: 3120,
+			Steps: []types.RecipePlanStep{
+				{ID: "rhoai", Title: "RHOAI", Action: types.RecipeStepRun, TypicalSeconds: 420, MaxSeconds: 900},
+				{ID: "dsc", Title: "DataScienceCluster", Action: types.RecipeStepLater, Reason: "Checked when the run gets here: it depends on a step before it.", TypicalSeconds: 60, MaxSeconds: 420},
+				{ID: "project", Title: "Project recipe-dev", Action: types.RecipeStepBlocked, Reason: "Project recipe-dev exists and was not created by a recipe.", Fix: &types.RecipeFix{Code: types.RecipeFixProjectForeign}, TypicalSeconds: 10, MaxSeconds: 60},
+				{ID: "s3", Title: "S3 storage", Action: types.RecipeStepSkip, Reason: "The S3 storage is set up and ready.", TypicalSeconds: 60, MaxSeconds: 300},
+			},
+			Problems: []types.RecipeProblem{
+				{Message: "Project recipe-dev: Project recipe-dev exists and was not created by a recipe.", Fix: &types.RecipeFix{Code: types.RecipeFixProjectForeign}},
+				{Field: "spec.rhoai.build", Message: "Cannot resolve the build on Quay.", Fix: &types.RecipeFix{Code: types.RecipeFixBuildUnresolvable}},
+				{Message: "The one-time cluster setup is not done: additional-pull-secret is missing in kube-system. Run the one-time setup on the Status page first.", Fix: &types.RecipeFix{Code: types.RecipeFixOneTimeSetupMissing, Page: "/"}},
+			},
+		}, cluster.RecipeState{Recipe: r}
+	}
+}
+
+// stubEndedRecipeRun is a run that failed after a resume: what its
+// attempts set up is the run's, and the answer carries its Clean up.
+func stubEndedRecipeRun(t *testing.T) {
+	t.Helper()
+	rcp, _ := cluster.ValidateRecipe([]byte(testRecipe))
+	at := func(m int) string { return time.Date(2026, 11, 20, 14, 5+m, 0, 0, time.UTC).Format(time.RFC3339) }
+	readRecipeRun = func(*cluster.Client) (*types.RecipeRun, error) {
+		return &types.RecipeRun{
+			ID: "run1", OperationID: "op2", BootID: "another-process", Pod: "pod-2", User: "alice",
+			StartedAt: at(0), ResumedAt: at(20), FinishedAt: at(31), State: types.RecipeRunFailed, ErrorCode: "timeout",
+			StopReason: "Step 5 of 5 (Pipeline server) failed: The pipeline server in recipe-dev was set up but is not ready. Resume waits again.",
+			Recipe:     rcp,
+			Project:    &types.RecipeProjectRef{Name: "recipe-dev", UID: "0f3c1d2e-uid", Owned: true},
+			Steps: []types.RecipeRunStep{
+				{ID: "rhoai", Title: "RHOAI", Status: types.RecipeStepSkipped, Message: "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).", StartedAt: at(20), FinishedAt: at(20), TypicalSeconds: 420, MaxSeconds: 900},
+				{ID: "project", Title: "Project recipe-dev", Status: types.RecipeStepSkipped, Message: "Already set up: Project recipe-dev was created by a recipe.", StartedAt: at(20), FinishedAt: at(20), TypicalSeconds: 10, MaxSeconds: 60},
+				{ID: "pipelines-prereq", Title: "What Pipelines needs", Status: types.RecipeStepSkipped, Message: "Already set up: Everything it needs is set up.", StartedAt: at(20), FinishedAt: at(20), TypicalSeconds: 120, MaxSeconds: 600},
+				{ID: "s3", Title: "S3 storage", Status: types.RecipeStepSuccess, Message: "S3 storage is ready.", StartedAt: at(20), FinishedAt: at(21), TypicalSeconds: 60, MaxSeconds: 300},
+				{ID: "pipeline-server", Title: "Pipeline server", Status: types.RecipeStepFailed, Message: "The pipeline server in recipe-dev was set up but is not ready. Resume waits again.", ErrorCode: "timeout", StartedAt: at(21), FinishedAt: at(31), TypicalSeconds: 120, MaxSeconds: 600},
+			},
+			Components: []string{"aipipelines"},
+		}, nil
 	}
 }
