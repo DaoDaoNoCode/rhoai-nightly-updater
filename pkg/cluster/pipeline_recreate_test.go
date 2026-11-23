@@ -55,7 +55,7 @@ func TestRecreatePipelineServer_ReplacesTheEarlierName(t *testing.T) {
 	putDSProject(f, "proj")
 	putOldToolServer(f, "proj", "")
 
-	resp, _ := RecreatePipelineServer(c, "proj")
+	resp, _ := RecreatePipelineServer(c, "proj", true)
 	if !resp.Success {
 		t.Fatalf("recreate failed: %+v", resp)
 	}
@@ -128,7 +128,7 @@ func TestRecreatePipelineServer_RefusalsDeleteNothing(t *testing.T) {
 			f, c := newResourceFake(t)
 			putManagedDSC(f)
 			tc.setup(f)
-			resp, _ := RecreatePipelineServer(c, "proj")
+			resp, _ := RecreatePipelineServer(c, "proj", true)
 			if resp.Success || (tc.wantCode != "" && resp.ErrorCode != tc.wantCode) {
 				t.Fatalf("got %+v", resp)
 			}
@@ -151,7 +151,7 @@ func TestRecreatePipelineServer_OldServerStillTerminating(t *testing.T) {
 	putDSProject(f, "proj")
 	putOldToolServer(f, "proj", `,"finalizers":["`+storage.DSPAFinalizer+`"]`)
 	putDSPO(f, 1)
-	resp, _ := RecreatePipelineServer(c, "proj")
+	resp, _ := RecreatePipelineServer(c, "proj", true)
 	if resp.Success || resp.ErrorCode != "in_progress" || !strings.Contains(resp.Message, "Set up") {
 		t.Fatalf("got %+v", resp)
 	}
@@ -165,7 +165,7 @@ func TestTeardownPipelineServer_EarlierName(t *testing.T) {
 	fastPipelineTimings(t)
 	f, c := newResourceFake(t)
 	putOldToolServer(f, "proj", "")
-	resp, _ := TeardownPipelineServer(c, "proj")
+	resp, _ := TeardownPipelineServer(c, "proj", true)
 	if !resp.Success || f.has(dspaPath("proj", storage.PreviousDSPAName)) || f.has(secretPath("proj", storage.DSPASecretName)) {
 		t.Fatalf("got %+v", resp)
 	}

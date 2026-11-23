@@ -95,13 +95,13 @@ func TestTeardownPipelineServer_DeletesTheConnection(t *testing.T) {
 	putDSPA(f, "proj", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, "", "")
 	f.putJSON(secretPath("proj", storage.DSPASecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 	f.putJSON(secretPath("proj", storage.ConnectionSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
-	resp, _ := TeardownPipelineServer(c, "proj")
+	resp, _ := TeardownPipelineServer(c, "proj", true)
 	if !resp.Success || f.has(secretPath("proj", storage.ConnectionSecretName)) {
 		t.Fatalf("got %+v", resp)
 	}
 	// One of the same name that someone else made stays.
 	f.putJSON(secretPath("proj", storage.ConnectionSecretName), `{"metadata":{}}`)
-	if resp, _ := TeardownPipelineServer(c, "proj"); !resp.Success || !f.has(secretPath("proj", storage.ConnectionSecretName)) {
+	if resp, _ := TeardownPipelineServer(c, "proj", true); !resp.Success || !f.has(secretPath("proj", storage.ConnectionSecretName)) {
 		t.Fatalf("got %+v", resp)
 	}
 }

@@ -178,7 +178,7 @@ func TestTeardownPipelineServer_ForbiddenWhileWaitingIsAnError(t *testing.T) {
 			f.mu.Unlock()
 		}
 	}
-	resp, _ := TeardownPipelineServer(c, "p1")
+	resp, _ := TeardownPipelineServer(c, "p1", true)
 	if resp.Success || resp.ErrorCode != "forbidden" || strings.Contains(resp.Message, "still terminating") {
 		t.Fatalf("teardown = %+v", resp)
 	}

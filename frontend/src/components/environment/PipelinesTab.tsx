@@ -319,7 +319,7 @@ const PipelineServerPart: React.FC<PipelinesTabProps> = ({ status, project, busy
   const storageReady = !!status.minio?.ready || (old && !!legacy?.ready);
   const managed = !!server && server.managedByTool !== false;
   const menu: PartMenuItem[] = managed && !readOnly && !isTerminating(server)
-    ? [{ key: "delete", label: "Delete pipeline server…", onClick: () => setPending({ kind: "teardown-pipeline-server", project, name: server!.name }), disabledReason: baseReason ?? server!.teardownBlockedReason ?? null, isDanger: true }]
+    ? [{ key: "delete", label: "Delete pipeline server…", onClick: () => setPending({ kind: "teardown-pipeline-server", project, name: server!.name, ...(server!.unrecorded ? { unrecorded: true } : {}) }), disabledReason: baseReason ?? server!.teardownBlockedReason ?? null, isDanger: true }]
     : [];
   return (
     <PartItem id="pipeline-server" title="Pipeline server" scope={`In project ${project}`} status={pipelineServerStatus(status, project, busy)} unmanaged={unmanaged}
@@ -332,7 +332,7 @@ const PipelineServerPart: React.FC<PipelinesTabProps> = ({ status, project, busy
           : <Content component="p">Not set up in {project} yet. Set up creates one that keeps its artifacts in the S3 storage.</Content>}
       {server && managed && server.nonStandardName && !isTerminating(server) && (
         <Alert variant="warning" isInline component="div" title="Workbench pipelines don't work with this pipeline server"
-          actionLinks={!readOnly ? <AlertActionLink onClick={() => setPending({ kind: "recreate-pipeline-server", project, name: server.name ?? PREVIOUS_DSPA_NAME })} isDisabled={!!baseReason}>Recreate with the standard name</AlertActionLink> : undefined}>
+          actionLinks={!readOnly ? <AlertActionLink onClick={() => setPending({ kind: "recreate-pipeline-server", project, name: server.name ?? PREVIOUS_DSPA_NAME, ...(server.unrecorded ? { unrecorded: true } : {}) })} isDisabled={!!baseReason}>Recreate with the standard name</AlertActionLink> : undefined}>
           <Content component="p">
             An earlier version of this tool named it <code>{server.name ?? PREVIOUS_DSPA_NAME}</code>. Workbenches find their pipeline server only under the name <code>{DSPA_NAME}</code>, so Elyra pipelines from a workbench in {project} can&apos;t use it. The dashboard&apos;s pipelines pages and the KFP SDK work as they are.
           </Content>
@@ -551,6 +551,11 @@ export function storageConfirm(pending: Pending, minio: ResourceState | undefine
   }
 }
 
+/** A pipeline server with this tool's label that this tool has no record of: deleting it is the user's confirmation that it is this tool's. */
+export function unrecordedPipelineServerNote(project: string): React.ReactNode {
+  return <>This pipeline server carries this tool&apos;s label, but this tool has no record that it set it up (set up before version 3.0.1, or labelled by someone in {project}). Confirm only if it is this tool&apos;s.</>;
+}
+
 /** The confirmation of a pipeline server change, or null for another feature's change. */
 export function pipelineServerConfirm(pending: Pending, pipelineServers: ResourceState[]): ConfirmSpec | null {
   switch (pending.kind) {
@@ -586,6 +591,7 @@ export function pipelineServerConfirm(pending: Pending, pipelineServers: Resourc
         changes: [
           <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name}</code> and Secret <code>{DSPA_SECRET_NAME}</code> are deleted; its database goes with it.</>,
           <>Then DataSciencePipelinesApplication <code>{DSPA_NAME}</code> is created, storing artifacts in the same S3 storage, with Secret <code>{DSPA_SECRET_NAME}</code> and the dashboard S3 Connection <code>{CONNECTION_NAME}</code>, both owned by it.</>,
+          ...(pending.unrecorded ? [unrecordedPipelineServerNote(pending.project)] : []),
         ],
         dataLoss: <>
           The run history of <code>{pending.name}</code>: its runs, experiments and imported pipelines{pvcList(ps).length > 0 ? <> (volume {pvcList(ps).map((n, i) => <React.Fragment key={n}>{i > 0 ? ", " : ""}<code>{n}</code></React.Fragment>)})</> : null}.
@@ -598,7 +604,10 @@ export function pipelineServerConfirm(pending: Pending, pipelineServers: Resourc
       return {
         title: `Delete the pipeline server in ${pending.project}?`, confirm: "Delete", danger: true, runTitle: `Delete the pipeline server in ${pending.project}`,
         summary: <Content component="p">Deletes the pipeline server in {pending.project}, with its runs and experiments. The project and the S3 storage stay.</Content>,
-        changes: [<>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name || DSPA_NAME}</code> and its S3 credentials Secret are deleted, with the dashboard S3 Connection <code>{CONNECTION_NAME}</code> this tool created (workbenches or model deployments that use it lose it). The project stays.</>],
+        changes: [
+          <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name || DSPA_NAME}</code> and its S3 credentials Secret are deleted, with the dashboard S3 Connection <code>{CONNECTION_NAME}</code> this tool created (workbenches or model deployments that use it lose it). The project stays.</>,
+          ...(pending.unrecorded ? [unrecordedPipelineServerNote(pending.project)] : []),
+        ],
         dataLoss: pvcsLost(ps, "the pipeline database: runs, experiments and their history") ?? <>The pipeline database: runs, experiments and their history.</>,
       };
     }

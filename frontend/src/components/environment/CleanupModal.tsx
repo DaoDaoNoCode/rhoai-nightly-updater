@@ -22,7 +22,7 @@ import type { PlaygroundStatus, ResourcesStatus, MaaSStatus, RestorableComponent
 import type { CleanupRequest } from "../../services/api";
 import { TooltipButton } from "../TooltipButton";
 import { isTerminating } from "./resourceRow";
-import { S3_NAMESPACE, storageTeardownOffered } from "./PipelinesTab";
+import { S3_NAMESPACE, storageTeardownOffered, unrecordedPipelineServerNote } from "./PipelinesTab";
 import { gatewayListRelease } from "./modelsConfirm";
 
 /** What a Clean up offers: one feature's parts, or everything. */
@@ -139,7 +139,9 @@ export const CleanupModal: React.FC<{
   const [playgrounds, setPlaygrounds] = useState<string[]>(offered.playgrounds);
   const chosenPlaygrounds = playgrounds.filter((p) => offered.playgrounds.includes(p));
   const togglePlayground = (p: string, v: boolean) => setPlaygrounds((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
-  const [servers, setServers] = useState<string[]>(offered.servers);
+  // A pipeline server this tool has no record of is unticked: ticking it is the user's confirmation that it is this tool's.
+  const unrecordedServers = (status.pipelineServers ?? []).filter((ps) => ps.unrecorded && ps.namespace && offered.servers.includes(ps.namespace)).map((ps) => ps.namespace!);
+  const [servers, setServers] = useState<string[]>(offered.servers.filter((p) => !unrecordedServers.includes(p)));
   const [storage, setStorage] = useState(offered.storage);
   const [namespace, setNamespace] = useState(false);
   const [mlflow, setMlflow] = useState(offered.mlflow);
@@ -147,9 +149,11 @@ export const CleanupModal: React.FC<{
   const [gateway, setGateway] = useState(offered.gateway);
   const chosenModels = models.filter((m) => offered.models.includes(m));
   const chosenServers = servers.filter((s) => offered.servers.includes(s));
+  const confirmedServers = chosenServers.filter((s) => unrecordedServers.includes(s));
   const req: CleanupRequest = {
     ...(chosenPublished.length ? { maasPublished: chosenPublished } : {}),
     ...(chosenServers.length ? { pipelineServers: chosenServers } : {}),
+    ...(confirmedServers.length ? { confirmUnrecorded: confirmedServers } : {}),
     ...(storage && offered.storage ? { storage: true, ...(namespace && offered.namespace ? { deleteNamespace: true } : {}) } : {}),
     ...(mlflow && offered.mlflow ? { mlflow: true } : {}),
     ...(chosenPlaygrounds.length ? { playgrounds: chosenPlaygrounds } : {}),
@@ -197,7 +201,8 @@ export const CleanupModal: React.FC<{
                 {offered.servers.length > 0 && (
                   <FormGroup role="group" isStack label="Pipeline servers" fieldId="cleanup-servers">
                     {offered.servers.map((p) => (
-                      <Checkbox key={p} id={`cleanup-server-${p}`} label={<>Pipeline server in {p}</>} isChecked={servers.includes(p)} onChange={(_e, v) => toggleServer(p, v)} />
+                      <Checkbox key={p} id={`cleanup-server-${p}`} label={<>Pipeline server in {p}</>} isChecked={servers.includes(p)} onChange={(_e, v) => toggleServer(p, v)}
+                        description={unrecordedServers.includes(p) ? unrecordedPipelineServerNote(p) : undefined} />
                     ))}
                   </FormGroup>
                 )}

@@ -551,7 +551,7 @@ func TestTeardownPipelineServer(t *testing.T) {
 			fastPipelineTimings(t)
 			f, c := newResourceFake(t)
 			tc.setup(f)
-			resp, err := TeardownPipelineServer(c, "proj")
+			resp, err := TeardownPipelineServer(c, "proj", true)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -590,7 +590,7 @@ func TestTeardownPipelineServer_RerunWhileTerminatingDoesNotDeleteAgain(t *testi
 	f, c := newResourceFake(t)
 	putDSPA(f, "proj", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName,
 		`,"deletionTimestamp":"`+created+`","finalizers":["`+storage.DSPAFinalizer+`"]`, "")
-	resp, _ := TeardownPipelineServer(c, "proj")
+	resp, _ := TeardownPipelineServer(c, "proj", true)
 	if resp.Success || resp.ErrorCode != "in_progress" {
 		t.Fatalf("got %+v", resp)
 	}
@@ -603,13 +603,13 @@ func TestPipelineTeardown_RerunRemovesOrphanSecret(t *testing.T) {
 	fastPipelineTimings(t)
 	f, c := newResourceFake(t)
 	f.putJSON(secretPath("proj", storage.DSPASecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
-	resp, _ := TeardownPipelineServer(c, "proj")
+	resp, _ := TeardownPipelineServer(c, "proj", true)
 	if !resp.Success || f.has(secretPath("proj", storage.DSPASecretName)) {
 		t.Fatalf("got %+v", resp)
 	}
 	// An unlabelled secret with the same name is left alone.
 	f.putJSON(secretPath("proj", storage.DSPASecretName), `{"metadata":{}}`)
-	if resp, _ := TeardownPipelineServer(c, "proj"); !resp.Success || !f.has(secretPath("proj", storage.DSPASecretName)) {
+	if resp, _ := TeardownPipelineServer(c, "proj", true); !resp.Success || !f.has(secretPath("proj", storage.DSPASecretName)) {
 		t.Fatalf("got %+v", resp)
 	}
 }

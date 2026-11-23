@@ -1737,8 +1737,11 @@ type ComponentBlock struct {
 // CleanupRequest is the body of POST /api/resources/cleanup/stream: what
 // to delete of what this tool created, in this order.
 type CleanupRequest struct {
-	// PipelineServers are the projects whose pipeline server goes.
-	PipelineServers []string `json:"pipelineServers,omitempty"`
+	// PipelineServers are the projects whose pipeline server goes;
+	// ConfirmUnrecorded those whose unrecorded pipeline server the user
+	// confirmed as this tool's (PipelineServerRequest.ConfirmUnrecorded).
+	PipelineServers   []string `json:"pipelineServers,omitempty"`
+	ConfirmUnrecorded []string `json:"confirmUnrecorded,omitempty"`
 	// Storage deletes the S3 storage (and storage an earlier version left).
 	Storage bool `json:"storage,omitempty"`
 	// DeleteNamespace also deletes namespace seaweedfs (needs Storage).
@@ -1950,6 +1953,11 @@ type PipelineServerRequest struct {
 	// Recreate (setup only) replaces the tool's pipeline server named
 	// nightly-dspa with one named dspa.
 	Recreate bool `json:"recreate,omitempty"`
+	// ConfirmUnrecorded (teardown and Recreate): the user confirmed the
+	// pipeline server as this tool's although this tool has no record of
+	// it (ResourceState.Unrecorded); without it such a server is not
+	// deleted.
+	ConfirmUnrecorded bool `json:"confirmUnrecorded,omitempty"`
 }
 
 // DiagnosticsFixRequest is the JSON body for POST /api/diagnostics/fix.

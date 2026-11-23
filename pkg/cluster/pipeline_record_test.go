@@ -129,7 +129,7 @@ func TestPipelineServer_SetupRecordsAndTeardownForgets(t *testing.T) {
 		t.Fatalf("record = %+v, uid %q", rec, uid)
 	}
 	f.finalizeOnGet = true
-	if res, err := TeardownPipelineServer(c, "proj"); err != nil || !res.Success {
+	if res, err := TeardownPipelineServer(c, "proj", false); err != nil || !res.Success {
 		t.Fatalf("teardown: %+v, %v", res, err)
 	}
 	if rec, _ := storage.ReadPipelineRecord(c); len(rec) != 0 {

@@ -201,6 +201,14 @@ Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#u
   reference alone and offers no Unpublish. Delete still refuses (the
   reference would point at nothing), and now says the reference is not
   this tool's and whoever made it removes it.
+- **A pipeline server this tool has no record of is deleted only when you
+  confirm it.** Delete and Clean up took a pipeline server with this tool's
+  label as the tool's, although a project editor can set that label (or
+  make the server again under its name). One whose UID this tool did not
+  record (set up before 3.0.1, or labelled by someone else) is now deleted
+  only when you confirm it: the Delete and Recreate dialogs say so, and
+  Clean up lists it unticked with the reason. The server refuses without
+  the confirmation, and also while it cannot read its record.
 - **A DataScienceCluster change applies only to the DSC it was checked
   on.** The Components page's changes (a component's state, Fix, soft
   reset) and Diagnostics' disable-component fix tested only the fields
