@@ -39,9 +39,6 @@ const (
 // State is what a run carries from step to step, and records: the recipe,
 // the build pinned when the run started, and the project once known.
 type State struct {
-	// RunID is the run's ID, the value of the annotation that marks what
-	// the run created (kube.RecipeRunAnnotation); the runner sets it.
-	RunID   string
 	Recipe  types.EnvironmentRecipe
 	Pinned  *types.RecipePinnedBuild
 	Project *types.RecipeProjectRef
@@ -64,19 +61,19 @@ func (s *State) AddComponents(keys ...string) {
 // whether its part exists as the run's (created), and the Clean up (POST
 // /api/resources/cleanup/stream) of those parts, nil when there is none.
 // Nothing of it comes from the run record but the names to look for:
-//
 //   - the project, while it is the one a recipe created (deletable: the
 //     tool's label, the recipe annotation, the UID the recipes' project
 //     record holds) and not being deleted;
-//
 //   - the DataScienceCluster components the run turned on that are still
 //     as it set them (liveComponents); a prerequisite step is created
 //     while one of its feature's is.
 //
-//   - the S3 storage, the pipeline server in the run's project and MLflow
-//     while they are the tool's and carry the run's annotation (only a
-//     step that created one sets it); the request then carries RecipeRun,
-//     so Clean up checks the annotation again right before each delete.
+// The S3 storage, MLflow and a pipeline server are never the run's: the
+// storage and MLflow are shared by the whole cluster, and the cluster keeps
+// no record of who created an object, so a mark saying a run did could be
+// forged. The pipeline server in the recipe's own project goes with the
+// project; any other is removed with Clean up everything on the
+// Environment page.
 func Ownership(c *kube.Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
 	created := map[string]bool{}
 	if run == nil {
@@ -89,27 +86,15 @@ func Ownership(c *kube.Client, run *types.RecipeRun) (map[string]bool, *types.Cl
 			req.RecipeProject = p.Name
 		}
 	}
-	if run.ID != "" {
-		if ofRun(c, storagePath(), run.ID) {
-			created[StepS3], req.Storage = true, true
-		}
-		if p := run.Project; p != nil && p.Name != "" && dspaOfRun(c, p.Name, run.ID) {
-			created[StepPipelineServer], req.PipelineServers = true, []string{p.Name}
-		}
-		if ofRun(c, mlflowPath(), run.ID) {
-			created[StepMLflow], req.MLflow = true, true
-		}
-	}
 	for key, feature := range liveComponents(c, run.Components) {
 		req.Components = append(req.Components, key)
 		created[prereqStepOf[feature]] = true
 	}
 	delete(created, "")
 	slices.Sort(req.Components)
-	if req.RecipeProject == "" && len(req.Components) == 0 && !req.Storage && !req.MLflow && len(req.PipelineServers) == 0 {
+	if req.RecipeProject == "" && len(req.Components) == 0 {
 		return created, nil
 	}
-	req.RecipeRun = run.ID
 	return created, req
 }
 
@@ -511,9 +496,9 @@ func checkS3(c *kube.Client, _ *State) (Check, error) {
 }
 
 // runS3 is the Pipelines tab's Set up of the S3 storage, which waits for it.
-func runS3(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+func runS3(c *kube.Client, _ *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	emit(types.UpdateStepEvent{Step: StepS3, Status: "running", Message: "Setting up the S3 storage..."})
-	return setUpAndMark(c, s, "the S3 storage", storagePath(), func() (*types.OperationResponse, error) { return storage.SetupS3(c) })
+	return storage.SetupS3(c)
 }
 
 func projectOf(s *State) string {
@@ -551,9 +536,7 @@ func checkPipelineServer(c *kube.Client, s *State) (Check, error) {
 func runPipelineServer(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	project := projectOf(s)
 	emit(types.UpdateStepEvent{Step: StepPipelineServer, Status: "running", Message: fmt.Sprintf("Setting up the pipeline server in %s...", project)})
-	res, err := setUpAndMark(c, s, "the pipeline server in "+project, dspaPath(project), func() (*types.OperationResponse, error) {
-		return storage.SetupPipelineServer(c, project)
-	})
+	res, err := storage.SetupPipelineServer(c, project)
 	if err != nil || !res.Success {
 		return res, err
 	}
@@ -592,7 +575,7 @@ func checkMLflow(c *kube.Client, _ *State) (Check, error) {
 // runMLflow is the MLflow tab's Set up (when MLflow is not deployed), then
 // the wait the page makes in the browser. Only the Set up makes MLflow the
 // run's: one found deployed is waited for, not taken over.
-func runMLflow(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+func runMLflow(c *kube.Client, _ *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	var logs []string
 	st, err := mlflow.ReadStatus(c)
 	if err != nil {
@@ -600,7 +583,7 @@ func runMLflow(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*typ
 	}
 	if !st.Deployed {
 		emit(types.UpdateStepEvent{Step: StepMLflow, Status: "running", Message: "Setting up MLflow..."})
-		res, err := setUpAndMark(c, s, "MLflow", mlflowPath(), func() (*types.OperationResponse, error) { return mlflow.Setup(c) })
+		res, err := mlflow.Setup(c)
 		if err != nil || !res.Success {
 			return res, err
 		}

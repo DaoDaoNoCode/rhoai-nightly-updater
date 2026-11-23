@@ -668,19 +668,6 @@ func dspoRunning(c *kube.Client) (bool, error) {
 // secret from the given project. It is safe to re-run: a DSPA that is already
 // terminating is not deleted again, and missing objects count as removed.
 func TeardownPipelineServer(c *kube.Client, project string) (*types.OperationResponse, error) {
-	return teardownPipelineServer(c, project, "")
-}
-
-// TeardownPipelineServerOfRun is TeardownPipelineServer for a recipe run's
-// Clean up: the pipeline server goes only while it carries run's
-// annotation (kube.RecipeRunAnnotation), checked on the object read right
-// before its delete, which has the UID of that read as its precondition.
-// Anything else refuses (not_of_run); nothing else is deleted.
-func TeardownPipelineServerOfRun(c *kube.Client, project, run string) (*types.OperationResponse, error) {
-	return teardownPipelineServer(c, project, run)
-}
-
-func teardownPipelineServer(c *kube.Client, project, run string) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
 		record.Action(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (%s)", project, activity), false)
@@ -704,12 +691,6 @@ func teardownPipelineServer(c *kube.Client, project, run string) (*types.Operati
 		} else {
 			unmanaged = append(unmanaged, all[i].Meta.Name)
 		}
-	}
-	if target != nil && run != "" && !target.Meta.OfRun(run) {
-		return fail(kube.NotOfRunMessage(fmt.Sprintf("The pipeline server in %s (%s)", project, target.Meta.Name)), "not_of_run", "not of the recipe run")
-	}
-	if target == nil && run != "" {
-		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("No pipeline server of the recipe run remains in %s.", project), Logs: logs}, nil
 	}
 	if target == nil {
 		if len(unmanaged) > 0 {

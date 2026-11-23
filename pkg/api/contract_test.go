@@ -208,12 +208,10 @@ func stubRecipeContract(t *testing.T, started time.Time) {
 	t.Cleanup(func() {
 		readRecipeRun, planRecipe, recipes, recipeOwnership = origRead, origPlan, origRecipes, origOwnership
 	})
-	// What the cluster shows of an ended run: its project, the component
-	// it turned on, and the storage and the pipeline server carrying its
-	// annotation.
+	// What the cluster shows of an ended run: its project, and the
+	// component it turned on.
 	recipeOwnership = func(_ *cluster.Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
-		return map[string]bool{"project": true, "pipelines-prereq": true, "s3": true, "pipeline-server": true},
-			&types.CleanupRequest{PipelineServers: []string{run.Project.Name}, Storage: true, RecipeProject: run.Project.Name, Components: run.Components, RecipeRun: run.ID}
+		return map[string]bool{"project": true, "pipelines-prereq": true}, &types.CleanupRequest{RecipeProject: run.Project.Name, Components: run.Components}
 	}
 	pinned := &types.RecipePinnedBuild{Tag: "rhoai-3.6", Image: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + strings.Repeat("a", 64), Digest: "sha256:" + strings.Repeat("a", 64)}
 	at := func(m int) string { return started.Add(time.Duration(m) * time.Minute).Format(time.RFC3339) }

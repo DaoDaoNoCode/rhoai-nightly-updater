@@ -1407,10 +1407,6 @@ type storageDeletion struct {
 	deleted, kept, failed, pvcNames []string
 	pvcUIDs                         map[string]string // UID -> namespace
 	forbidden                       error
-	// expectUID: "kind/name" -> the UID that object must still have
-	// (a recipe run's Deployment, as its Clean up checked it).
-	expectUID map[string]string
-	replaced  bool
 }
 
 // storageObjectRead reads a named object of either storage namespace.
@@ -1446,10 +1442,6 @@ func (d *storageDeletion) deleteOwnedObject(c *kube.Client, namespace, kind, nam
 		}
 		return
 	case !found:
-		return
-	case d.expectUID[kind+"/"+name] != "" && d.expectUID[kind+"/"+name] != meta.UID:
-		d.failed = append(d.failed, fmt.Sprintf("%s: replaced since the recipe run's check, so it was not deleted", desc))
-		d.replaced = true
 		return
 	case !storageObjectOwned(meta):
 		d.kept = append(d.kept, desc)
@@ -1576,19 +1568,6 @@ func Users(dspas []DSPA, addresses ...Address) (live, deleting []string) {
 // precondition); otherwise the namespaces are kept (s3KeptNamespaceHint).
 // Re-running it is safe.
 func TeardownS3(c *kube.Client, opts types.S3TeardownRequest) (*types.OperationResponse, error) {
-	return teardownS3(c, opts, "")
-}
-
-// TeardownS3OfRun is TeardownS3 for a recipe run's Clean up: the storage
-// goes only while its SeaweedFS Deployment carries run's annotation
-// (kube.RecipeRunAnnotation), checked right before the objects are
-// deleted, and the Deployment's delete then requires the UID that check
-// read. Storage an earlier version left is not touched.
-func TeardownS3OfRun(c *kube.Client, opts types.S3TeardownRequest, run string) (*types.OperationResponse, error) {
-	return teardownS3(c, opts, run)
-}
-
-func teardownS3(c *kube.Client, opts types.S3TeardownRequest, run string) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
 		record.Action(c, "teardown-s3", fmt.Sprintf("%s (%s)", S3Namespace, activity), false)
@@ -1602,9 +1581,6 @@ func teardownS3(c *kube.Client, opts types.S3TeardownRequest, run string) (*type
 	legacy, err := ReadLegacy(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Cannot check namespace %s for storage from an earlier version; nothing was deleted: %v.%s", LegacyNamespace, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "earlier storage check failed")
-	}
-	if run != "" {
-		legacy = nil // never a run's
 	}
 	current := ns.Exists && ns.Managed && !ns.terminating()
 	if !current && legacy == nil {
@@ -1651,25 +1627,9 @@ func teardownS3(c *kube.Client, opts types.S3TeardownRequest, run string) (*type
 	}
 
 	var d storageDeletion
-	if run != "" {
-		meta, found, err := readS3Object(c, "Deployment", S3Deployment)
-		switch {
-		case err != nil:
-			return fail(fmt.Sprintf("Cannot read Deployment %s/%s; nothing was deleted: %v", S3Namespace, S3Deployment, err), kube.ErrorCodeFromK8sErr(err), "run check failed")
-		case !found:
-			logs = append(logs, "No S3 storage of the recipe run remains")
-			return &types.OperationResponse{Success: true, Message: "No S3 storage of the recipe run remains; nothing was deleted.", Logs: logs}, nil
-		case !storageObjectOwned(meta) || !meta.OfRun(run):
-			return fail(kube.NotOfRunMessage("The S3 storage"), "not_of_run", "not of the recipe run")
-		}
-		d.expectUID = map[string]string{"Deployment/" + S3Deployment: meta.UID}
-	}
 	var keptNamespaces []string
 	if current {
 		for _, o := range s3TeardownObjects {
-			if d.replaced {
-				break // fail closed: nothing after a replaced Deployment
-			}
 			d.deleteOwnedObject(c, S3Namespace, o.kind, o.name, &logs)
 		}
 		keptNamespaces = append(keptNamespaces, S3Namespace)

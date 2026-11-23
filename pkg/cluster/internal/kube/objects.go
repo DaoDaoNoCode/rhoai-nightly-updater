@@ -17,21 +17,6 @@ const ManagedByLabelKey = "app.kubernetes.io/managed-by"
 // ManagedByLabelValue: see ManagedByLabelKey.
 const ManagedByLabelValue = "rhoai-nightly-updater"
 
-// RecipeRunAnnotation marks an object an environment recipe run created,
-// with the run's ID: set only when the run's step created the object, and
-// required by that run's Clean up right before it deletes the object.
-const RecipeRunAnnotation = "rhoai-nightly-updater/recipe-run"
-
-// OfRun reports whether the object carries run's RecipeRunAnnotation.
-func (m ObjectMeta) OfRun(run string) bool {
-	return run != "" && m.Annotations[RecipeRunAnnotation] == run
-}
-
-// NotOfRunMessage refuses to delete what is not run's any more.
-func NotOfRunMessage(what string) string {
-	return what + " is not the one the recipe run created (it lacks the run's annotation: replaced, or set up by someone else), so it was not deleted."
-}
-
 // ObjectMeta is the subset of metadata the ownership checks read.
 type ObjectMeta struct {
 	Name              string               `json:"name"`

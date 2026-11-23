@@ -8,11 +8,9 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
-	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/recipe"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
-	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -29,11 +27,7 @@ var (
 	cleanupUnpublish    = serving.UnpublishMaaSModel
 	cleanupMaaSPlatform = serving.TeardownMaaSPlatform
 	cleanupComponents   = features.RestoreComponents
-	// The same teardowns for a recipe run's Clean up (RecipeRun set).
-	cleanupPipelineServerOfRun = storage.TeardownPipelineServerOfRun
-	cleanupStorageOfRun        = storage.TeardownS3OfRun
-	cleanupMLflowOfRun         = mlflow.TeardownOfRun
-	cleanupProject             = recipe.DeleteProject
+	cleanupProject      = recipe.DeleteProject
 	// recipeProjectProblem is recipe.ProjectTeardownProblem; tests replace it.
 	recipeProjectProblem = recipe.ProjectTeardownProblem
 )
@@ -78,12 +72,7 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 		parts = append(parts, cleanupPart{
 			id:    CleanupStepID("pipeline-server", project),
 			title: fmt.Sprintf("the pipeline server in '%s'", project),
-			run: func() (*types.OperationResponse, error) {
-				if req.RecipeRun != "" {
-					return cleanupPipelineServerOfRun(c, project, req.RecipeRun)
-				}
-				return cleanupPipelineServer(c, project)
-			},
+			run:   func() (*types.OperationResponse, error) { return cleanupPipelineServer(c, project) },
 		})
 	}
 	if req.Storage {
@@ -91,20 +80,12 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 			id:    CleanupStepID("storage", ""),
 			title: "the S3 storage",
 			run: func() (*types.OperationResponse, error) {
-				if req.RecipeRun != "" {
-					return cleanupStorageOfRun(c, types.S3TeardownRequest{DeleteNamespace: req.DeleteNamespace}, req.RecipeRun)
-				}
 				return cleanupStorage(c, types.S3TeardownRequest{DeleteNamespace: req.DeleteNamespace})
 			},
 		})
 	}
 	if req.MLflow {
-		parts = append(parts, cleanupPart{id: CleanupStepID("mlflow", ""), title: "MLflow", run: func() (*types.OperationResponse, error) {
-			if req.RecipeRun != "" {
-				return cleanupMLflowOfRun(c, req.RecipeRun)
-			}
-			return cleanupMLflow(c)
-		}})
+		parts = append(parts, cleanupPart{id: CleanupStepID("mlflow", ""), title: "MLflow", run: func() (*types.OperationResponse, error) { return cleanupMLflow(c) }})
 	}
 	for _, project := range req.Playgrounds {
 		parts = append(parts, cleanupPart{

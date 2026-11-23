@@ -382,17 +382,6 @@ func Setup(c *kube.Client) (*types.OperationResponse, error) {
 // owns mlflow-pvc through the CR, so the garbage collector deletes the
 // tracking database and artifacts with it.
 func Teardown(c *kube.Client) (*types.OperationResponse, error) {
-	return teardown(c, "")
-}
-
-// TeardownOfRun is Teardown for a recipe run's Clean up: the MLflow CR goes
-// only while it carries run's annotation (kube.RecipeRunAnnotation),
-// checked on the CR read right before its delete (UID precondition).
-func TeardownOfRun(c *kube.Client, run string) (*types.OperationResponse, error) {
-	return teardown(c, run)
-}
-
-func teardown(c *kube.Client, run string) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
 		record.Action(c, "teardown-mlflow", activity, false)
@@ -409,9 +398,6 @@ func teardown(c *kube.Client, run string) (*types.OperationResponse, error) {
 	}
 	if !cr.managedByTool() {
 		return fail("This MLflow instance was not created by this tool, so it was not deleted.", "not_managed", "not managed")
-	}
-	if run != "" && !cr.Metadata.OfRun(run) {
-		return fail(kube.NotOfRunMessage("MLflow"), "not_of_run", "not of the recipe run")
 	}
 	if cr.Metadata.Terminating() {
 		logs = append(logs, "MLflow CR is already being deleted")
