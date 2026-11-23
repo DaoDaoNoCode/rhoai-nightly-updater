@@ -1,9 +1,8 @@
-// Fixtures of the docs mock backend. Every object follows the JSON of the
-// real backend: pkg/types/types.go, pkg/api (OperationStatus, VersionInfo,
-// UpdateInfo, UpdateStep) and pkg/cluster (DiagnosticsResponse). The
-// Diagnostics answers in ./diagnostics are written by the backend itself
-// (make docs-fixtures). All names are fictional: cluster example-cluster,
-// user dev-user.
+// Docs mock API fixtures. Structures mirror JSON from the live service:
+// pkg/types/types.go, pkg/api (OperationStatus, VersionInfo,
+// UpdateInfo, UpdateStep) and pkg/cluster (DiagnosticsResponse). Files
+// under ./diagnostics are emitted by the Go backend (make docs-fixtures).
+// Placeholder identities only: cluster example-cluster, user dev-user.
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -11,29 +10,29 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-/** The fixed "now" of every screenshot; the browser clock is set to it too. */
+/** Screenshot timeline anchor; Playwright aligns the browser clock to the same instant. */
 export const NOW = Date.parse("2026-10-06T14:30:00Z");
 
-/** RFC 3339 time `minutes` before NOW. */
+/** Returns an RFC 3339 timestamp `minutes` earlier than NOW. */
 export const ago = (minutes) => new Date(NOW - minutes * 60_000).toISOString().replace(/\.\d{3}Z$/, "Z");
 
-/** A stable, realistic-looking digest for a name. */
+/** Seed-based digest string that looks like a real image reference. */
 export const digest = (seed) => "sha256:" + createHash("sha256").update(seed).digest("hex");
 export const hex = (seed, n) => createHash("sha1").update(seed).digest("hex").slice(0, n);
 
 export const USER = "dev-user";
-// pkg/api writeAuthError and sessionProblem (scopeRefusal): an expired or
-// revoked sign-in, and one made before 4.0.0 that cannot carry a change.
+// pkg/api writeAuthError and sessionProblem (scopeRefusal): expired or revoked
+// sessions, plus sign-ins predating 4.0.0 that cannot authorize mutations.
 export const SESSION_EXPIRED_MESSAGE = "Your OpenShift session has expired. Log in again.";
 export const SIGN_IN_SCOPE_MESSAGE = "Your sign-in cannot make changes: it was made before this updater acted with your own OpenShift permissions. Log out and log in again.";
 const APPS = "apps.example-cluster.example.com";
 export const CONSOLE_URL = `https://console-openshift-console.${APPS}`;
-// The Dashboard CR's status.url on a release behind the data-science gateway.
+// Dashboard CR status.url for a release routed via the data-science gateway.
 export const DASHBOARD_URL = `https://rh-ai.${APPS}`;
 const FBC = "quay.io/rhoai/rhoai-fbc-fragment";
 const fbc = (tag, seed) => `${FBC}:${tag}@${digest(seed)}`;
 
-// The builds of the rhoai-3.6 stream: the installed one and the newest.
+// rhoai-3.6 catalog tags: presently installed versus newest nightly.
 const installedBuild = { tag: "rhoai-3.6", seed: "rhoai-3.6-2026-10-04", buildDate: ago(60 * 59 + 17) };
 const latestBuild = { tag: "rhoai-3.6", seed: "rhoai-3.6-2026-10-06", buildDate: ago(60 * 11 + 22) };
 export const INSTALLED_IMAGE = fbc(installedBuild.tag, installedBuild.seed);
@@ -48,7 +47,7 @@ const nightlyBuild = (b, dashboardCommit) => ({
   dashboardGitURL: "https://github.com/red-hat-data-services/odh-dashboard",
 });
 
-// --- Activity log (newest first, as the backend returns it) -----------------
+// --- Activity log (backend ordering: newest first) ----------------------------
 
 const updateEntry = (minutesAgo, b) => ({
   timestamp: ago(minutesAgo), user: USER, action: "update", detail: fbc(b.tag, b.seed), success: true,
@@ -62,12 +61,12 @@ const olderActivity = [
   { timestamp: ago(60 * 74), user: USER, action: "update", detail: fbc("rhoai-3.6", "rhoai-3.6-2026-10-03"), success: false, reason: "The catalog image could not be pulled: unauthorized. Nothing was changed.", label: "Updated to nightly", category: "operator", build: `rhoai-3.6 · ${digest("rhoai-3.6-2026-10-03").slice(7, 19)}` },
   { timestamp: ago(60 * 75), user: USER, action: "create-pull-secret", detail: "kube-system/additional-pull-secret", success: true, label: "Pull secret configured", category: "setup" },
 ];
-/** The activity log (newest first) after the update to build b, `minutesAgo` ago. */
+/** Activity entries after moving to build b; newest first; ended `minutesAgo` ago. */
 const activityAfter = (b, minutesAgo) => [updateEntry(minutesAgo, b), ...(b === installedBuild ? [] : [updateEntry(60 * 26, installedBuild)]), ...olderActivity];
 
-// --- GET /api/status ----------------------------------------------------------
+// --- GET /api/status (cluster health snapshot) --------------------------------
 
-/** Up to date: the newest build was installed `updatedMinutesAgo` ago. */
+/** Healthy: latest nightly landed `updatedMinutesAgo` minutes before NOW. */
 export function healthyStatus(updatedMinutesAgo = 60 * 10) {
   return {
     cluster: { server: "https://api.example-cluster.example.com:443", version: "4.20.6", user: USER, controlPlane: "hosted" },
@@ -94,7 +93,7 @@ export function healthyStatus(updatedMinutesAgo = 60 * 10) {
   };
 }
 
-/** The installed build is two days old; a newer rhoai-3.6 build exists. */
+/** Install lags by two days while a fresher rhoai-3.6 image is available. */
 export function updateAvailableStatus() {
   const s = healthyStatus();
   s.catalogSource.image = INSTALLED_IMAGE;
@@ -112,7 +111,7 @@ export function operatorFailedStatus() {
   return s;
 }
 
-/** rhods-operator still runs, but its Subscription was deleted. */
+/** CSV still running even though the Subscription resource is gone. */
 export function noSubscriptionStatus() {
   const s = updateAvailableStatus();
   s.subscription = { name: "", source: "", channel: "", state: "" };
@@ -121,7 +120,7 @@ export function noSubscriptionStatus() {
   return s;
 }
 
-/** A cluster before the one-time setup. */
+/** Pristine cluster that has not run one-time setup yet. */
 export function freshStatus() {
   const s = healthyStatus();
   s.subscription = { name: "", source: "", channel: "", state: "" };
@@ -137,7 +136,7 @@ export function freshStatus() {
   return s;
 }
 
-/** Setup done, nothing installed yet. */
+/** One-time setup complete; operator stack not installed. */
 export function readyToInstallStatus() {
   const s = freshStatus();
   s.pullSecret = { exists: true, valid: true };
@@ -147,19 +146,18 @@ export function readyToInstallStatus() {
 }
 
 /**
- * The command a self-managed cluster's setup shows: the backend's own file
- * (pkg/cluster/internal/rhoai/node_pull_secret.sh, embedded as NodePullSecretCommand).
+ * Node pull-secret command text for self-managed clusters—the embedded backend
+ * script (pkg/cluster/internal/rhoai/node_pull_secret.sh, NodePullSecretCommand).
  */
 export const NODE_PULL_SECRET_COMMAND = readFileSync(join(here, "../../../pkg/cluster/internal/rhoai/node_pull_secret.sh"), "utf8").trim();
 
-/** Its removal (pkg/cluster/internal/rhoai/node_pull_secret_remove.sh, NodePullSecretRemoveCommand). */
+/** Companion removal script (pkg/cluster/internal/rhoai/node_pull_secret_remove.sh, NodePullSecretRemoveCommand). */
 export const NODE_PULL_SECRET_REMOVE_COMMAND = readFileSync(join(here, "../../../pkg/cluster/internal/rhoai/node_pull_secret_remove.sh"), "utf8").trim();
 
 /**
- * A self-managed cluster (controlPlane "self-managed"), a Red Hat-managed
- * one (managed: "managed", ROSA Classic or OSD), or one whose platform could
- * not be read (controlPlane absent): the nodes pull with
- * openshift-config/pull-secret, so the status carries pullSecret.nodes.
+ * Clusters where nodes consume openshift-config/pull-secret and status exposes
+ * pullSecret.nodes: self-managed (controlPlane "self-managed"), Red Hat-hosted
+ * (managed: "managed", ROSA Classic or OSD), or unknown platform (field omitted).
  */
 export function selfManaged(s, { known = true, pulled = false, managed = false, addedByTool } = {}) {
   if (known) s.cluster.controlPlane = managed ? "managed" : "self-managed";
@@ -168,21 +166,20 @@ export function selfManaged(s, { known = true, pulled = false, managed = false, 
   return s;
 }
 
-/** The status's record of the entry this tool added (pullSecret.nodes.addedByTool). */
+/** Audit row for a tool-owned pull-secret key (pullSecret.nodes.addedByTool). */
 export const NODE_PULL_RECORD = { at: "2026-11-18T10:00:00Z", by: "kube:admin", sameToken: true };
 
 /**
- * Create the image mirror's refusal when a corporate mirror serves all of
- * registry.redhat.io (pkg/cluster/internal/node/node_setup_mirrors.go ParentScopeRefusal,
- * its words for ImageDigestMirrorSet corp-mirrors).
+ * Parent-scope refusal when corp-mirrors already redirects all of registry.redhat.io
+ * (pkg/cluster/internal/node/node_setup_mirrors.go ParentScopeRefusal, copy for
+ * ImageDigestMirrorSet corp-mirrors).
  */
 export const MIRROR_PARENT_SCOPE_REFUSAL = "ImageDigestMirrorSet corp-mirrors maps registry.redhat.io to mirror.corp.example/redhat, so pulls of registry.redhat.io/rhoai images by digest go to mirror.corp.example/redhat/rhoai now. The nodes use only the mirrors of the most specific source that matches an image, and the Machine Config Operator copies a mirror to a namespace inside its source only while that namespace has no mirror of its own. Creating ImageDigestMirrorSet rhoai-quay-mirror, a mirror for exactly registry.redhat.io/rhoai, would take those pulls away from that mirror: pulls by digest would go to quay.io/rhoai, then to registry.redhat.io itself. So it is not created. Nothing was changed. To keep that mirror in use, the cluster's administrator adds an entry for registry.redhat.io/rhoai to that object, in spec.imageDigestMirrors of ImageDigestMirrorSet corp-mirrors: source registry.redhat.io/rhoai, mirrors mirror.corp.example/redhat/rhoai, quay.io/rhoai (that also sets up the image mirror). Or whoever runs that mirror makes it carry the nightly images at that path.";
 
 /**
- * What POST /api/setup/nodes/plan answers (pkg/cluster/internal/node/node_setup.go, its
- * words): w.nodes holds what the mock cluster has (pullEntry: "none",
- * "same", the entry this tool added with the saved token, or "other",
- * someone else's with another token; the mirror is status.imageMirror).
+ * POST /api/setup/nodes/plan response shape (pkg/cluster/internal/node/node_setup.go):
+ * w.nodes models pull state (pullEntry "none", "same" with saved token, or
+ * "other" for foreign credentials); mirror metadata mirrors status.imageMirror.
  */
 export function nodeSetupPlan(w, action, replaceExisting = false) {
   const cp = w.status.cluster.controlPlane;
@@ -198,8 +195,8 @@ export function nodeSetupPlan(w, action, replaceExisting = false) {
   if (cp === "managed" && !mirror) {
     return refuse("managed", "Red Hat runs this cluster (ROSA Classic or OpenShift Dedicated). Red Hat creates its cluster pull secret, and the documentation of these services has no procedure for changing it, so the updater does not change it. The command under Do it yourself instead does it, if you choose to. Nothing was changed.");
   }
-  // The platform unknown (the webhooks unreadable): the pull secret actions
-  // are refused, the mirror is attempted.
+  // Platform type unknown (webhooks unreadable): block pull-secret work but still
+  // evaluate mirror plans.
   if (!cp && !mirror) {
     return refuse("unknown_platform", "The updater cannot list the validating webhook configurations (list validating webhook configurations: k8s API error 403 (Forbidden)), so it cannot tell whether Red Hat runs this cluster (ROSA Classic or OpenShift Dedicated), where it does not change the cluster pull secret. Nothing was changed. The command under Do it yourself instead does it, if you choose to.");
   }
@@ -260,7 +257,7 @@ export function nodeSetupPlan(w, action, replaceExisting = false) {
   }
 }
 
-/** The steps POST /api/setup/nodes/stream streams for a ready plan. */
+/** SSE steps from POST /api/setup/nodes/stream after the plan is ready. */
 export function nodeSetupSteps(plan) {
   const done = {
     "mirror-create": "Created ImageDigestMirrorSet rhoai-quay-mirror.",
@@ -282,12 +279,12 @@ export function nodeSetupSteps(plan) {
   ];
 }
 
-/** What POST /api/setup/node-pull-check answers. */
+/** Body returned by POST /api/setup/node-pull-check. */
 export const nodePullCheck = (image, ok) => ok
   ? { success: true, message: `A temporary catalog pod pulled ${image} with the nodes' pull secret, and was removed again. A node whose machine config pool is still updating may not have the credentials yet: oc get mcp shows UPDATED True for every pool when they all do.`, logs: [] }
   : { success: false, errorCode: "catalog_image_pull", message: `The catalog image ${image} cannot be pulled (ErrImagePull: unauthorized: access to the requested resource is not authorized). This cluster is self-managed: its nodes pull with the cluster pull secret, openshift-config/pull-secret, not with additional-pull-secret, which only the updater uses here. A cluster-admin adds the quay.io/rhoai entry with the command under Pull secret in the cluster setup (Status page); the nodes pick it up within a few minutes. Also check that the image exists.`, logs: [] };
 
-/** Just installed: the operator runs, no DataScienceCluster yet. */
+/** Fresh operator install without a DataScienceCluster resource. */
 export function noDSCStatus() {
   const s = healthyStatus(0);
   s.dscExists = false;
@@ -297,7 +294,7 @@ export function noDSCStatus() {
 
 export const latestNightly = () => ({ tag: "rhoai-3.6", image: LATEST_IMAGE, digest: digest(latestBuild.seed), buildDate: latestBuild.buildDate });
 
-// --- Build Explorer --------------------------------------------------------------
+// --- Build Explorer (catalog bundles) -----------------------------------------
 
 const tagBuilds = [
   { tag: "rhoai-3.7-ea.1", seed: "rhoai-3.7-ea.1-2026-10-06", buildDate: ago(60 * 9 + 41) },
@@ -330,12 +327,12 @@ const relatedImageDefs = [
   ["odh_kube_rbac_proxy_image", "infra", "kube-rbac-proxy"],
 ];
 
-/** GET /api/build-explorer/content for one FBC image. */
+/** Single-image payload for GET /api/build-explorer/content. */
 export function fbcContent(image) {
   const b = tagBuilds.find((t) => image === fbc(t.tag, t.seed)) ?? installedBuild;
   const isInstalled = image === INSTALLED_IMAGE;
   const relatedImages = relatedImageDefs.map(([name, category, repo], i) => {
-    // The newest build has new commits in the dashboard, kserve and trainer.
+    // Latest tag differs from installed on dashboard, KServe, and trainer images.
     const changed = !isInstalled && [0, 3, 9].includes(i);
     const seed = `${name}-${changed ? b.seed : installedBuild.seed}`;
     return {
@@ -355,13 +352,11 @@ export function fbcContent(image) {
 }
 
 /**
- * GET /api/build-explorer/contains?pr=N|commit=SHA[&repo=owner/name]. A PR
- * (of any repository: the mock answers every one like the dashboard) is
- * merged 40 hours ago and reaches only the build from main after it;
- * release branches get a cherry-pick (another SHA). A commit is a fixed one
- * of rhoai-3.6, committed 40 hours ago. Builds more than an hour older than
- * either are answered from their date alone (built_before_merge /
- * built_before_commit), as the backend does.
+ * GET /api/build-explorer/contains?pr=N|commit=SHA[&repo=owner/name]. Treat every
+ * repo like the dashboard mock: PRs merged 40h ago appear only in post-merge
+ * main builds; release lines get cherry-picks (different SHAs). Commits use a
+ * fixed rhoai-3.6 SHA from 40h ago. Images built >1h earlier yield
+ * built_before_merge / built_before_commit from timestamps alone, matching prod logic.
  */
 export function buildContains({ pr, commit, repo }, images) {
   repo = repo || "opendatahub-io/odh-dashboard";
@@ -397,7 +392,7 @@ export function buildContains({ pr, commit, repo }, images) {
   };
 }
 
-// --- Components ------------------------------------------------------------------
+// --- Components (DSC modules and deployments) -----------------------------------
 
 const pod = (name, ns, extra = {}) => ({
   name, namespace: ns, phase: "Running", node: "ip-10-0-41-17.ec2.internal", ready: true, restarts: 0,
@@ -459,9 +454,9 @@ export function healthyComponents() {
 }
 
 /**
- * The operator's conversion webhook cannot convert the DSC to v3 (the
- * preferred version), so it is read as v2, and the bundle ships v3 defaults
- * only. Messages as pkg/cluster writes them (dsc_versions_test.go).
+ * Conversion webhook cannot lift the DSC to v3, so API reads stay on v2 while
+ * bundle defaults ship as v3 only. Wording copied from pkg/cluster
+ * (dsc_versions_test.go).
  */
 export function conversionFallbackComponents() {
   const c = healthyComponents();
@@ -480,7 +475,7 @@ export function conversionFallbackComponents() {
   return c;
 }
 
-/** The trainer needs the JobSet operator; ray's module operator lags. */
+/** Trainer blocked on missing JobSet; Ray module operator behind on generation. */
 export function notReadyComponents() {
   const c = healthyComponents();
   c.dscPhase = "Not Ready";
@@ -504,7 +499,7 @@ export function notReadyComponents() {
   return c;
 }
 
-// --- Dashboard Dev ----------------------------------------------------------------
+// --- Dashboard Dev (PR overrides) -----------------------------------------------
 
 const dashImage = (container, env, repo) => {
   const release = `registry.redhat.io/rhoai/odh-${container}-rhel9@${digest(`release-${container}`)}`;
@@ -528,7 +523,7 @@ export function dashboardIdle() {
   };
 }
 
-/** PR #5123 (RHOAI Konflux build) deployed by dev-user 40 minutes ago. */
+/** Active session: dev-user deployed PR #5123 (RHOAI Konflux) 40 minutes ago. */
 export function dashboardSession() {
   const s = dashboardIdle();
   const pr = 5123;
@@ -556,9 +551,8 @@ export function dashboardSession() {
 }
 
 /**
- * GET /api/dashboard/builds for dashboardSession(): the host was built from
- * the PR's latest commit; gen-ai-ui from a commit two pushes ago, and the
- * odh-pr-5123 tag has moved on to a newer build.
+ * GET /api/dashboard/builds for dashboardSession(): rhods-dashboard tracks the PR
+ * head; gen-ai-ui lags two commits; tag odh-pr-5123 already points at a newer image.
  */
 export function dashboardBuilds(session = dashboardSession()) {
   const pr = session.prNumber;
@@ -586,7 +580,7 @@ export function dashboardBuilds(session = dashboardSession()) {
   };
 }
 
-// --- Environment (/test-resources) ---------------------------------------------
+// --- Environment (/test-resources fixtures) -------------------------------------
 
 const SEAWEEDFS = `ghcr.io/chrislusf/seaweedfs@${digest("seaweedfs-4.54")}`;
 const S3_UI = `https://seaweedfs-admin-seaweedfs.${APPS}`;
@@ -614,15 +608,15 @@ export const s3States = {
     dataPVCs: ["seaweedfs-data"], waitingReason: "ImagePullBackOff",
     message: 'ImagePullBackOff: Back-off pulling image "mirror.example.com/seaweedfs:4.54": unauthorized',
   },
-  // Namespace seaweedfs exists, made by someone else: setup refuses.
+  // Pre-existing seaweedfs namespace from another actor: setup aborts.
   foreign: {
     deployed: false, ready: false, namespace: "seaweedfs", managedByTool: false,
     message: "Namespace seaweedfs exists but was not created by this tool, so setup will not modify it.",
     setupBlockedReason: "Namespace seaweedfs exists but was not created by this tool, so setup will not modify it.",
     teardownBlockedReason: "Namespace seaweedfs was not created by this tool.",
   },
-  // Storage of an earlier version is still in namespace minio: nothing in
-  // namespace seaweedfs yet, or (stage "remove") the new storage is running.
+  // Legacy minio bucket remains while seaweedfs is empty, or—during stage
+  // "remove"—new storage is already live.
   migrationNeeded: {
     deployed: false, ready: false, message: "Not deployed", namespace: "seaweedfs", managedByTool: false, migrationPending: true,
     teardownBlockedReason: BLOCKED("dev-project/dspa"), usedBy: ["dev-project/dspa"],
@@ -633,13 +627,13 @@ export const s3States = {
   },
 };
 
-/** The pipeline server an earlier version created ("dspa"), on the old storage. */
+/** Legacy dspa pipeline server from an older release, still on minio storage. */
 export const legacyPipelineServer = {
   deployed: true, ready: true, message: "Running", namespace: "dev-project", name: "dspa", managedByTool: true,
   apiRoute: `https://ds-pipeline-dspa-dev-project.${APPS}`, uiRoute: `${DASHBOARD_URL}/develop-train/pipelines/definitions/dev-project`, dataPVCs: ["mariadb-dspa"],
 };
 
-/** What 2.1 to 2.3 left in namespace minio (pkg/types LegacyStorageState). */
+/** Residual minio objects after 2.1→2.3 (pkg/types LegacyStorageState). */
 export function legacyStorage(stage) {
   return {
     namespace: "minio", server: "SeaweedFS", ready: true, endpoint: "minio-service.minio.svc:9000",
@@ -653,7 +647,7 @@ export function legacyStorage(stage) {
   };
 }
 
-/** The steps Migrate storage streams (pkg/cluster MigrateS3Storage). */
+/** Progress events for storage migration (pkg/cluster MigrateS3Storage). */
 export function migrateSteps(kind) {
   const rows = kind === "migrate"
     ? [
@@ -685,28 +679,28 @@ export const pipelineServer = {
   connection: "rhoai-nightly-updater-s3", connectionState: "present",
 };
 
-/** A pipeline server an earlier version set up as nightly-dspa (pkg/types NonStandardName): Recreate is offered. */
+/** Renamed nightly-dspa server from an earlier tool (pkg/types NonStandardName); UI offers Recreate. */
 export const pipelineServerOldName = {
   ...pipelineServer, name: "nightly-dspa", nonStandardName: true, connection: undefined, connectionState: "missing",
   apiRoute: `https://ds-pipeline-nightly-dspa-dev-project.${APPS}`, dataPVCs: ["mariadb-nightly-dspa"],
 };
 
-/** A pipeline server made in the dashboard, not by this tool (pkg/types UnmanagedPipelineServers). */
+/** Dashboard-created pipeline server outside tool ownership (pkg/types UnmanagedPipelineServers). */
 export const foreignPipelineServer = {
   deployed: true, ready: true, message: "Running", namespace: "fraud-detection", name: "dspa", managedByTool: false,
   uiRoute: `${DASHBOARD_URL}/develop-train/pipelines/definitions/fraud-detection`,
   teardownBlockedReason: "This pipeline server was not created by this tool, so the tool will not delete it.",
 };
 
-/** A pipeline server that has just been set up (DSPO is starting it). */
+/** Pipeline server mid-bootstrap while DSPO warms workloads. */
 export const pipelineServerStarting = { ...pipelineServer, ready: false, message: "Starting (1/3 ready)", uiRoute: undefined };
 
-/** This tool's pipeline server in project ns. */
+/** Tool-managed dspa clone relocated to namespace ns. */
 export const pipelineServerIn = (ns, over = {}) => ({
   ...pipelineServer, namespace: ns, apiRoute: pipelineServer.apiRoute.replace("dev-project", ns), uiRoute: pipelineServer.uiRoute.replace("dev-project", ns), ...over,
 });
 
-/** Not ready long after it was created (pkg/cluster pipeline_server.go: dspaStuckAfter), with the Ready condition's message. */
+/** Stuck server past dspaStuckAfter (pkg/cluster pipeline_server.go) including Ready condition text. */
 export const pipelineServerStuck = (ns) => pipelineServerIn(ns, {
   ready: false, terminalError: true, uiRoute: undefined, apiRoute: undefined,
   message: "Deployment ds-pipeline-dspa: 0/1 replicas available (database connection refused)",
@@ -714,7 +708,7 @@ export const pipelineServerStuck = (ns) => pipelineServerIn(ns, {
 
 export const mlflowStates = {
   none: { deployed: false, ready: false, message: "Not deployed", managedByTool: false },
-  // Made in the dashboard, not by this tool.
+  // Dashboard-provisioned MLflow the tool must not tear down.
   foreign: {
     deployed: true, ready: true, message: "Running", namespace: "redhat-ods-applications", name: "mlflow", managedByTool: false,
     uiRoute: `https://data-science-gateway.${APPS}/mlflow`, currentImage: `registry.redhat.io/rhoai/odh-mlflow-rhel9@${digest("mlflow")}`,
@@ -725,7 +719,7 @@ export const mlflowStates = {
     managedByTool: false, currentImage: `registry.redhat.io/rhoai/odh-mlflow-rhel9@${digest("mlflow")}`,
     teardownBlockedReason: "This MLflow instance was not created by this tool, so the tool will not delete it.",
   },
-  // A PR image that cannot be pulled.
+  // MLflow pinned to an unpullable PR image.
   prBroken: {
     deployed: true, ready: false, terminalError: true, message: "ImagePullBackOff", waitingReason: "ImagePullBackOff", namespace: "redhat-ods-applications", name: "mlflow",
     managedByTool: true, prOverride: true, prNumber: 412, revertImage: "", currentImage: `quay.io/opendatahub/mlflow@${digest("mlflow-pr-412")}`, dataPVCs: ["mlflow-pvc"],
@@ -740,14 +734,13 @@ export const mlflowStates = {
 export const projects = ["dev-project", "fraud-detection", "llm-eval"];
 
 // --- Models (pkg/types InferenceGatewayState, ModelsStatus, ModelState) ---
-// The words are the backend's (pkg/cluster inference_gateway.go, models.go).
+// Copy follows pkg/cluster inference_gateway.go and models.go.
 const INFERENCE = `https://inference.${APPS}`;
 const PRESET = "v3-6-0-kserve-config-llm-template-cpu";
 const PRESET_IMAGE = `registry.redhat.io/rhaii/vllm-cpu-rhel9@${digest("vllm-cpu-nightly")}`;
 const RELEASED_IMAGE = `registry.redhat.io/rhaii/vllm-cpu-rhel9@${digest("vllm-cpu-3.5.3")}`;
-// The projects the tool's gateway lists by name (allowedRoutes
-// kubernetes.io/metadata.name In [...], RHOAI's documented values array): its
-// own namespace, then each project a model was set up in.
+// Gateway allowedProjects mirrors allowedRoutes (kubernetes.io/metadata.name In
+// [...], RHOAI docs): openshift-ingress plus every project hosting a model.
 const ALLOWED = ["openshift-ingress", "a-test-project", "dev-project", "fraud-detection", "llm-eval"];
 const GW = { namespace: "openshift-ingress", name: "openshift-ai-inference", allowedProjects: ALLOWED };
 const usedBy = (models) => models.length
@@ -758,18 +751,18 @@ export const gatewayStates = {
   none: { deployed: false, ready: false, message: "Not set up", managedByTool: false },
   starting: { ...GW, deployed: true, ready: false, managedByTool: true, message: "Programmed, waiting for an address", externalUrl: INFERENCE },
   ready: (models = []) => ({ ...GW, deployed: true, ready: true, managedByTool: true, message: "Running", externalUrl: INFERENCE, address: "a1b2c3d4e5f6-1234567890.us-east-1.elb.amazonaws.com", dns: "published", addedProjects: models.length ? ["dev-project"] : undefined, authPolicy: models.length ? "enforced" : "missing", ...usedBy(models) }),
-  // RHOAI's chart (or an admin) made it: used as it is, never changed. The
-  // chart's documented allowedRoutes: a list of project names.
+  // Pre-existing gateway from chart/admin: fixture leaves it untouched.
+  // allowedRoutes in chart docs is simply project names.
   foreign: (models = []) => ({ ...GW, allowedProjects: ["openshift-ingress", "llm-eval"], deployed: true, ready: true, managedByTool: false, message: "Running", externalUrl: INFERENCE, address: "a9f8e7d6-0987654321.us-east-1.elb.amazonaws.com", authPolicy: "enforced", ...usedBy(models), teardownBlockedReason: "This gateway was not created by this tool, so the tool does not change or delete it." }),
-  // models ("namespace/name") route through the gateway from projects it
-  // does not list (deployed from the dashboard): their routes are rejected.
+  // Dashboard-deployed models in unlisted namespaces hit notAllowedModels when
+  // routes would cross the gateway.
   notAllowed: (gw, models) => ({ ...gw, allowedProjects: gw.allowedProjects.filter((p) => !models.some((m) => m.startsWith(`${p}/`))),
     notAllowedModels: models, notAllowedModelProjects: [...new Set(models.map((m) => m.split("/")[0]))] }),
-  // Someone else's that reports no Programmed condition: unknown, not failed.
+  // Foreign gateway lacking Programmed: treat health as unknown, not failed.
   unknown: { ...GW, deployed: true, ready: false, managedByTool: false, healthUnknown: true, message: "Reports no Programmed condition", externalUrl: INFERENCE, teardownBlockedReason: "This gateway was not created by this tool, so the tool does not change or delete it." },
 };
 
-/** The Models catalog, as pkg/cluster modelCatalog reports it. */
+/** Catalog entries aligned with pkg/cluster modelCatalog. */
 export const MODEL_CATALOG = [
   { name: "smollm2-135m-instruct", displayName: "SmolLM2 135M Instruct (CPU)", uri: "hf://HuggingFaceTB/SmolLM2-135M-Instruct:12fd25f77366fa6b3b4b768ec3050bf629380bac", cpu: "2", memoryRequest: "4Gi", memory: "5Gi",
     type: "chat", useCase: "Chat (smoke test)", downloadSize: "270 MB", args: "--max-model-len 4096",
@@ -790,9 +783,9 @@ const displayOf = (name) => MODEL_CATALOG.find((c) => c.name === name)?.displayN
 const MODEL = { name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", deployed: true };
 export const modelStates = {
   ready: (ns = "dev-project", over = {}) => ({ ...MODEL, namespace: ns, ready: true, managedByTool: true, message: "Running", url: `${INFERENCE}/${ns}/${over.name ?? MODEL.name}`, imageKind: "preset", hardwareProfile: "redhat-ods-applications/default-profile",
-    // The dashboard's token authentication the tool makes for each model (pkg/cluster models_token.go).
+    // Per-model SA/token secrets the tool provisions (pkg/cluster models_token.go).
     tokenSecret: `default-name-${over.name ?? MODEL.name}-sa`, tokenServiceAccount: `${over.name ?? MODEL.name}-sa`, ...over }),
-  /** Another catalog model, ready (on the released image, as the mock cluster is a nightly one). */
+  /** Alternate catalog entry on the released CPU image (nightly cluster uses shipping bits). */
   readyAs: (name, ns = "dev-project") => modelStates.ready(ns, { name, displayName: displayOf(name), imageKind: "released", imageVersion: "3.5.3", currentImage: RELEASED_IMAGE,
     hardwareProfile: name === "qwen3-1-7b" ? undefined : "redhat-ods-applications/default-profile" }),
   startingAs: (name, ns = "dev-project") => ({ ...MODEL, name, displayName: displayOf(name), namespace: ns, ready: false, managedByTool: true, message: `MainWorkloadReady: Deployment ${name}-kserve is not ready`, imageKind: "released" }),
@@ -814,19 +807,19 @@ export const modelsStatus = (over = {}) => {
     items: [],
     ...over,
   };
-  // The backend reports how every deployed model is reached (addModelRouting); a
-  // fixture that names none is on KServe's default gateway, as models were before 4.0.0.
+  // addModelRouting fills reachability; items without exposure inherit KServe's
+  // default gateway—the pre-4.0.0 behavior.
   out.items = out.items.map((i) => (i && i.deployed && !i.exposure ? routed(i) : i));
   return out;
 };
 
-/** The status's room check of one catalog model (pkg/cluster roomWarning). */
+/** Capacity warning text for a catalog row (pkg/cluster roomWarning). */
 export const CAPACITY_WARNING = "No worker seems to have room for the model: it needs 4 CPUs and 12 GiB of memory free (up to 14 GiB); the worker with the most free CPU, ip-10-0-1-23.ec2.internal, has 5.5 CPUs and 8.2 GiB free.";
-/** The catalog with that warning on Qwen3. */
+/** MODEL_CATALOG clone attaching the warning to Qwen3. */
 export const catalogWithoutRoom = (name = "qwen3-1-7b") => MODEL_CATALOG.map((c) => (c.name === name ? { ...c, capacityWarning: CAPACITY_WARNING } : c));
 
 // --- Samples (pkg/types SampleStatus, MLflowSamplesStatus, PipelineSampleSpec) ---
-// The names, messages and actions are the backend's (pkg/cluster samples_*.go).
+// Labels, UX strings, and actions come from pkg/cluster samples_*.go.
 
 const SAMPLE_MARKER = "rhoai-nightly-updater.sample";
 export const SAMPLE_NAMES = {
@@ -839,7 +832,7 @@ export const SAMPLE_IDS = Object.keys(SAMPLE_NAMES);
 const DEMO_REMOVE_HINT = "To remove the demo, delete it in the MLflow UI. This tool does not remove it, and Clean up leaves it in place.";
 const mlflowLink = (project, id) => `https://data-science-gateway.${APPS}/mlflow/#/experiments/${id}?workspace=${encodeURIComponent(project)}`;
 
-/** One MLflow sample of a project in the given state, as GetMLflowSamplesStatus reports it. */
+/** Single sample row for a project/state combo per GetMLflowSamplesStatus. */
 export function sampleStatus(project, id, state, extra = {}) {
   const s = { id, name: SAMPLE_NAMES[id], state, actions: [] };
   const foreign = { "genai-demo": "", training: "Experiment 'nightly-sample-training'", "mcp-server": "MCP server 'com.deepwiki/rhoai-nightly-sample'", skill: "Skill 'nightly-sample-mcp-builder'" }[id];
@@ -879,21 +872,21 @@ export function sampleStatus(project, id, state, extra = {}) {
   return { ...s, ...extra };
 }
 
-/** The demo on an MLflow CR with the 2Gi limit earlier versions set (pkg/cluster demoStatus). */
+/** Demo blocked by legacy 2Gi MLflow limits from older tool builds (pkg/cluster demoStatus). */
 export const DEMO_LOW_MEMORY = {
   message: "MLflow still has the 2Gi memory limit an earlier version of this tool set, and generating the demo runs MLflow out of memory. Add or Regenerate first removes that limit (spec.resources of MLflow CR mlflow, so the operator's defaults of 4 CPU / 3Gi apply) and MLflow restarts; then add the demo again once MLflow is ready.",
   repair: "MLflow CR mlflow: spec.resources (requests 500m/1Gi, limits 2/2Gi, set by an earlier version of this tool) is removed, so the operator's defaults (limits 4 CPU / 3Gi) apply. MLflow restarts, and the demo is not generated in this run: add it again once MLflow is ready.",
 };
 export const DEMO_LOW_MEMORY_FOREIGN = "MLflow's memory limit is 2Gi (spec.resources of MLflow CR mlflow), and generating the demo runs MLflow out of memory. This tool did not create that MLflow, so it does not change the limit: raise it, or remove spec.resources so the operator's defaults (3Gi) apply.";
 
-/** The MLflow samples of a project: states maps a sample id to its state (absent when not named). */
+/** Project-level MLflow sample map; omitted ids default to absent. */
 export const mlflowSamples = (project, states = {}) => ({
   project, available: true, mlflowURL: `https://data-science-gateway.${APPS}/mlflow`,
   samples: SAMPLE_IDS.map((id) => sampleStatus(project, id, states[id] || "absent")),
 });
 
 export const SAMPLE_PIPELINE_IMAGE = `registry.access.redhat.com/ubi9/ubi-minimal@${digest("ubi9-minimal")}`;
-/** GET /api/resources/samples/pipeline/spec (pkg/cluster PipelineSampleSpec: the same YAML). */
+/** Pipeline sample YAML for GET /api/resources/samples/pipeline/spec (pkg/cluster PipelineSampleSpec). */
 export const pipelineSampleSpec = {
   name: "rhoai-nightly-sample", fileName: "rhoai-nightly-sample.yaml",
   description: "Sample created by rhoai-nightly-updater: a two-step pipeline that writes an artifact and reads it back.",
@@ -966,15 +959,13 @@ sdkVersion: kfp-2.13.0
 `,
 };
 
-// --- Versions and the update check ---------------------------------------------
+// --- Versions and self-update probe --------------------------------------------
 
-// The updater the docs show is the release they describe, read from the
-// repository so no image keeps an old version: the version of CHANGELOG.md's
-// top section ("## [5.0.0] - unreleased" -> v5.0.0, skipping
-// "## [Unreleased]" as scripts/release.sh changelog_top does) and the
-// TEMPLATE_REVISION of deploy/template.yaml. Not Chart.yaml's appVersion:
-// during pre-releases it names one (v5.0.0-alpha.2), which the images
-// would keep after the release.
+// Docs UI version tracks the repo, not stale image tags: parse CHANGELOG.md's
+// first X.Y.Z heading (skip Unreleased like scripts/release.sh changelog_top)
+// and deploy/template.yaml TEMPLATE_REVISION. Chart.yaml appVersion is ignored
+// because pre-release values (e.g. v5.0.0-alpha.2) would stick in containers
+// past GA.
 const repoRoot = join(here, "..", "..", "..");
 
 function docsVersion() {
@@ -996,7 +987,7 @@ function templateRevision() {
 export const DOCS_VERSION = docsVersion();
 export const TEMPLATE_REVISION = templateRevision();
 
-// Built a day before the screenshots' NOW, like every other time here.
+// buildDate sits one day before screenshot NOW, consistent with other fixtures.
 export const versionInfo = (overrides = {}) => ({
   version: DOCS_VERSION, commit: hex(DOCS_VERSION, 40), buildDate: ago(60 * 24), goVersion: "go1.25.1",
   templateRevision: TEMPLATE_REVISION, expectedTemplateRevision: TEMPLATE_REVISION, templateOutdated: false, ...overrides,
@@ -1004,16 +995,16 @@ export const versionInfo = (overrides = {}) => ({
 
 export const noUpdate = { current: DOCS_VERSION, latest: DOCS_VERSION, updateAvailable: false, majorUpgrade: false };
 
-// --- Diagnostics -----------------------------------------------------------------
+// --- Diagnostics (JSON snapshots) ----------------------------------------------
 
-/** A Diagnostics answer written by the backend (make docs-fixtures). */
+/** Load a diagnostics JSON fixture generated via make docs-fixtures. */
 export function diagnostics(name) {
   return JSON.parse(readFileSync(join(here, "diagnostics", `${name}.json`), "utf8"));
 }
 
-// --- Update progress (UpdateStep events, as the backend streams them) ------
+// --- Update progress (streamed UpdateStep events) -----------------------------
 
-/** The GitOps install (Argo CD manages the operator), step by step. */
+/** GitOps-driven install where Argo CD owns the operator—full step list. */
 export function gitOpsUpdateSteps(image) {
   return [
     ["validate_prerequisites", "running", "Checking prerequisites..."],
@@ -1037,7 +1028,7 @@ export function gitOpsUpdateSteps(image) {
   ].map(([step, status, message, detail]) => ({ step, status, message, ...(detail ? { detail } : {}) }));
 }
 
-/** The update pipeline of a successful update, step by step. */
+/** Happy-path OLM nightly update with each UpdateStep enumerated. */
 export function updateSteps(image) {
   return [
     ["validate_prerequisites", "running", "Checking prerequisites..."],
@@ -1065,8 +1056,8 @@ export function updateSteps(image) {
 }
 
 // --- Playground (pkg/types PlaygroundStatus, PlaygroundState, PlaygroundModel) ---
-// The words are the backend's (pkg/cluster playground.go); the models are
-// what the dashboard's gen-ai API lists (aaa/models, maas/models).
+// Strings mirror pkg/cluster playground.go; model lists mimic dashboard gen-ai APIs
+// (aaa/models, maas/models).
 
 export const playgroundModels = {
   qwen: { name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", source: "namespace", status: "Running", ready: true, chat: true },
@@ -1088,7 +1079,7 @@ export const playgroundStates = {
   terminating: (ns = "dev-project") => ({ ...PLAYGROUND, namespace: ns, ready: false, phase: "Terminating", terminating: true, message: "Terminating" }),
 };
 
-/** The playground world: cluster parts, items, and the models of each project. */
+/** Aggregate playground status: infrastructure bits, items, per-project models. */
 export const playgroundWorld = (over = {}) => ({
   operatorReady: "True", genAiUi: "available", items: [],
   modelsByProject: { "dev-project": [playgroundModels.qwen, playgroundModels.maas, playgroundModels.opt], "fraud-detection": [playgroundModels.maas], "llm-eval": [playgroundModels.maas] },
@@ -1098,7 +1089,7 @@ export const playgroundWorld = (over = {}) => ({
 export const PLAYGROUND_API_DIFFERS = "This RHOAI release's dashboard gen-ai API differs from the one this tool knows: GET /gen-ai/api/v1/aaa/models answered 404 (the requested resource could not be found). Use the playground from the dashboard's Gen AI studio instead.";
 export const PLAYGROUND_BLOCKED = { component: "ogx", dsc: "default-dsc", state: "Removed", reason: "The Gen AI playground is turned off on this cluster: component ogx is Removed in DataScienceCluster default-dsc, so nothing would run it. A cluster-admin turns it on by setting it to Managed." };
 
-// --- Models as a Service (GET /api/resources/maas, pkg/cluster GetMaaSStatus) ---
+// --- Models as a Service (GET /api/resources/maas, GetMaaSStatus) -------------
 
 const MAAS_DOCS = "https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/content/";
 export const MAAS_INFRA = "redhat-ai-gateway-infra";
@@ -1174,11 +1165,9 @@ const TIER_POLICIES = {
 };
 
 /**
- * The platform's parts by state, in setup order (pkg/cluster
- * GetMaaSStatus): "none" (not set up), "starting", "ready", "foreign"
- * (someone else's). rhcl: "1.4.3" (installed by someone, below the docs'
- * minimum), "1.5.0" (installed), or "missing" (a cluster that never had
- * MaaS: nothing of Connectivity Link, Kuadrant or CloudNativePG).
+ * MaaS platform slice list ordered like pkg/cluster GetMaaSStatus: none, starting,
+ * ready, foreign. RHCL variant "1.4.3" (third-party, below docs), "1.5.0", or
+ * "missing" when the cluster never installed Connectivity Link, Kuadrant, or CNPG.
  */
 export function maasParts(state, { tls = true, rhcl = "1.4.3", tierPolicies = false, cnpg = true } = {}) {
   const tool = state !== "foreign";
@@ -1222,12 +1211,12 @@ export function maasParts(state, { tls = true, rhcl = "1.4.3", tierPolicies = fa
     { id: "tenant", title: "Default tenant and gateway authentication", docUrl: `${MAAS_DOCS}install/maas-setup.md#maastenantconfig-cr`,
       ...(!on ? { state: "missing", message: "The operator creates it once MaaS is turned on" } : ready ? { state: "ready", message: "Tenant models-as-a-service is Ready; the gateway's authentication is enforced" } : { state: "waiting", message: "Waiting for the operator (tenant missing, configuration missing, authentication missing)" }) },
   ];
-  // CloudNativePG is a part only once it is the database (pkg/cluster
-  // maasDatabaseStatus); before Set up it is one of the database choices.
+  // CNPG appears as a platform part only after it backs the DB (pkg/cluster
+  // maasDatabaseStatus); beforehand it is just a database option.
   return on ? parts : parts.filter((p) => p.id !== "cnpg");
 }
 
-/** The database choice (pkg/cluster maasDatabaseStatus): none yet, or this tool's CloudNativePG one, or someone else's. */
+/** Database selector state (pkg/cluster maasDatabaseStatus): unset, tool CNPG, or adopted external. */
 export function maasDatabase(state, { fresh = false, current: kind } = {}) {
   const choices = [
     { id: "external", plan: [`Write Secret ${MAAS_INFRA}/maas-db-config (label app=maas-api) with the connection URL you enter; nothing else is created, and your database is never changed`] },
@@ -1241,9 +1230,8 @@ export function maasDatabase(state, { fresh = false, current: kind } = {}) {
 }
 
 /**
- * The parts for a database of kind dbCurrent ("development" or "external";
- * otherwise the parts as they are): the Database part's message as the
- * backend words it, and no CloudNativePG part (shown only for its database).
+ * When dbCurrent is development or external, rewrite the Database part message to
+ * backend copy and drop the CNPG row (CNPG section only applies to that backend).
  */
 function maasDBParts(parts, dbCurrent) {
   if (dbCurrent !== "development" && dbCurrent !== "external") return parts;
@@ -1253,10 +1241,10 @@ function maasDBParts(parts, dbCurrent) {
   return parts.filter((p) => p.id !== "cnpg").map((p) => (p.id === "database" && p.state === "ready" ? { ...p, message } : p));
 }
 
-/** The groups that exist on the mock cluster (GET /api/resources/maas/groups). */
+/** Known OpenShift groups on the mock cluster (GET /api/resources/maas/groups). */
 export const MAAS_GROUPS = ["ml-team"];
 
-/** pkg/cluster maasGroupProblems: a missing group, with the commands when its name can be an OpenShift Group's. */
+/** Missing MaaS group diagnostics (pkg/cluster maasGroupProblems) plus oc adm hints when valid. */
 export function maasGroupProblems(names) {
   const openShiftName = (n) => n !== "." && n !== ".." && n !== "~" && !/[/%:]/.test(n);
   return names.filter((g) => !MAAS_GROUPS.includes(g)).map((g) => ({
@@ -1265,7 +1253,7 @@ export function maasGroupProblems(names) {
   }));
 }
 
-/** A published model's limit (pkg/types MaaSLimit), by preset. */
+/** Token-rate presets for published models (pkg/types MaaSLimit). */
 export const maasLimit = (preset = "free") => ({
   free: { preset: "free", rates: [{ limit: 100, window: "1m" }] },
   premium: { preset: "premium", rates: [{ limit: 100000, window: "24h" }] },
@@ -1273,13 +1261,13 @@ export const maasLimit = (preset = "free") => ({
   custom: { preset: "custom", rates: [{ limit: 500, window: "1m" }, { limit: 20000, window: "1h" }] },
 })[preset];
 
-/** What Set up would change, for the parts that are missing (pkg/cluster GetMaaSStatus setupPlan). */
+/** Planned creates for absent platform parts (pkg/cluster GetMaaSStatus setupPlan). */
 function maasSetupPlan(parts, { fresh }) {
   const plan = [];
   const missing = (id) => parts.find((p) => p.id === id)?.state === "missing";
   if (missing("rhcl")) plan.push("Install Red Hat Connectivity Link 1.5.0: Namespace kuadrant-system, OperatorGroup kuadrant-system/kuadrant-operator-group, Subscription kuadrant-system/kuadrant-operator (package rhcl-operator, channel stable-1.5, from redhat-operators, with spec.config.env RATELIMIT_CHECK_SERVICE_FAILURE_MODE=deny and RATELIMIT_REPORT_SERVICE_FAILURE_MODE=deny, as the MaaS docs recommend, so requests are refused rather than let through unlimited while Limitador is unavailable)");
   if (missing("kuadrant")) plan.push("Create the Kuadrant CR kuadrant-system/kuadrant");
-  // The database's own plan is its chosen option's (maasDatabase); only the namespace is Set up's.
+  // Database provisioning steps live in maasDatabase; Set up only ensures the namespace.
   if (missing("database") && fresh) plan.push(`Create namespace ${MAAS_INFRA} (the AI gateway's infrastructure namespace, where the docs' setup-database.sh puts the database; recorded, and deleted by Remove when nothing else is in it)`);
   if (missing("gateway")) plan.push(`Create Gateway openshift-ingress/maas-default-gateway with an external load balancer at maas.${APPS} (a cloud cost while it exists), and GatewayClass openshift-default if the cluster has none`);
   if (missing("authorino-tls")) plan.push("Configure Authorino TLS as the docs' setup-authorino-tls.sh does: the serving-certificate annotation on Service authorino-authorino-authorization, TLS on the Authorino CR's listener, SSL_CERT_FILE on Deployment authorino, then restart it");
@@ -1288,9 +1276,9 @@ function maasSetupPlan(parts, { fresh }) {
 }
 
 /**
- * This tool's model in dev-project (qwen25 unless named): published or not.
- * maasOnlySetup: set up on the Models tab through MaaS only, so Unpublish
- * leaves it with no route (pkg/cluster MaaSModel.MaaSOnlySetup).
+ * Tool-owned dev-project model (defaults to qwen25): published flag plus optional
+ * maasOnlySetup meaning Models-tab-only routing—unpublish drops every route
+ * (pkg/cluster MaaSModel.MaaSOnlySetup).
  */
 export function maasModel(published, { ready = true, name = "qwen25-05b-instruct", maasOnlySetup = false } = {}) {
   return {
@@ -1301,34 +1289,31 @@ export function maasModel(published, { ready = true, name = "qwen25-05b-instruct
   };
 }
 
-/** A publication by an earlier build: the model on the MaaS and the inference gateway (GetMaaSStatus). */
+/** Dual-gateway publication left by an older build (GetMaaSStatus). */
 export function maasEarlierBuildPublication({ name = "qwen25-05b-instruct" } = {}) {
   return { ...maasModel(true, { name }), ready: false, partly: true,
     message: "Partly published: the model routes through openshift-ingress/maas-default-gateway and openshift-ingress/openshift-ai-inference, as an earlier build of this tool published it, so calls to its direct address fail with 500. Unpublish, then Publish again." };
 }
 
 /**
- * A model this build published (its refs recorded) that someone added the
- * inference gateway to since (GetMaaSStatus refsAddedStatus).
+ * Publication whose recorded refs omit a gateway someone attached later
+ * (GetMaaSStatus refsAddedStatus).
  */
 export function maasSomeoneAddedPublication({ name = "qwen25-05b-instruct" } = {}) {
   return { ...maasModel(true, { name }), ready: false, partly: true,
     message: `Partly published: someone added openshift-ingress/openshift-ai-inference since the model was published, so direct calls to the model through that gateway fail with 500 once the rate limit applies to it. Unpublish and Publish refuse, since writing back the gateways the model had before would drop it. Set the gateways the model should use yourself, without maas-default-gateway (for KServe's default gateway: oc patch llminferenceservice ${name} -n dev-project --type=merge -p '{"spec":{"router":{"gateway":{"refs":null}}}}'), then Unpublish.` };
 }
 
-/** This tool's three models in dev-project (env-models-several) in MaaS's list: Qwen2.5 as given, Qwen3 as given, the embedding model never offered. */
+/** env-models-several trio: configurable Qwen2.5/Qwen3 rows plus embedding entry MaaS never sells. */
 export function maasSeveral(qwen25 = maasModel(true), qwen3 = maasModel(false, { name: "qwen3-1-7b" })) {
   return [maasEmbeddingModel(), qwen25, qwen3];
 }
 
 /**
- * Routes the Models tab's model in project through the MaaS gateway alone
- * (ModelState.maasPublished), or back: the inference gateway then no longer
- * lists it under Used by (pkg/cluster gatewayUsers). Other models of the
- * project keep their routes. maasOnlySetup: the Models tab set it up
- * through MaaS only (ModelState.maasOnlySetup); unpublished, such a model
- * has no route at all (reached only inside the cluster) and never goes on
- * the inference gateway.
+ * Toggle MaaS-only routing for one model: when published, inference gateway Used-by
+ * drops the ref (pkg/cluster gatewayUsers). Sibling models unchanged. maasOnlySetup
+ * means internal-only reachability until published—never on the shared inference gateway
+ * (ModelState.maasOnlySetup).
  */
 export function setMaaSPublished(resources, project, model, published, { maasOnlySetup = false } = {}) {
   const ref = `${project}/${model}`;
@@ -1337,7 +1322,7 @@ export function setMaaSPublished(resources, project, model, published, { maasOnl
   for (const [i, m] of items.entries()) {
     if (m.namespace !== project || m.name !== model) continue;
     if (published) {
-      // As pkg/cluster reports a published model: routed through the MaaS gateway alone, its address the MaaS route's, its check MaaS's own.
+      // Published shape from pkg/cluster: sole MaaS gateway, public MaaS URL, MaaS health probe.
       const url = `https://maas.${APPS}/${project}/${model}`;
       items[i] = { ...routed({ ...m, url }, { exposure: "maas", check: undefined }), maasPublished: true, ...(maasOnlySetup ? { maasOnlySetup: true } : {}),
         callCheck: { result: "maas", ok: true, url, message: "MaaS lists the model (its reference is Ready). Calls go through MaaS with an API key, which this tool does not create: the MaaS tab's commands get one and call the model.", at: "2026-11-18T18:04:12Z" } };
@@ -1354,22 +1339,22 @@ export function setMaaSPublished(resources, project, model, published, { maasOnl
   resources.inferenceGateway = { ...rest, ...usedBy(published || noRoute ? others : [...others, ref].sort()) };
 }
 
-/** This tool's embedding model in MaaS's list: never offered (pkg/cluster maasEmbeddingReason). */
+/** Embedding catalog row listed but blocked from MaaS publish (pkg/cluster maasEmbeddingReason). */
 export const maasEmbeddingModel = () => ({
   namespace: "dev-project", name: "granite-embedding-125m-english", displayName: displayOf("granite-embedding-125m-english"), managedByTool: true, modelReady: true,
   deployed: false, ready: false, published: false, message: "Not offered for MaaS",
   setupBlockedReason: "This tool publishes chat models only. Use the embedding model at its own address (the Models tab shows it), or add it to the Gen AI playground.",
 });
 
-/** A publication whose project is gone: no row, named in GetMaaSStatus's removing list (removed automatically). */
+/** Orphan publication: missing project, listed only under GetMaaSStatus.removing. */
 export function maasGonePublication(namespace) {
   return { namespace, name: "qwen25-05b-instruct", reason: `project ${namespace} no longer exists` };
 }
 
-/** Removal refused because others use MaaS (pkg/cluster teardown, foreignMaaSObjects). */
+/** Teardown guard when foreign MaaS consumers exist (pkg/cluster teardown, foreignMaaSObjects). */
 export const MAAS_IN_USE = "Others use this MaaS platform: MaaSModelRef team-a/granite-3-8b, MaaSSubscription models-as-a-service/team-a-subscription. Removing it would break them. They unpublish and remove theirs first. Nothing was deleted.";
 
-/** The MaaS status by state. */
+/** Compose full MaaS status for a platform state enum. */
 export function maasWorld(state = "none", { tls = true, items = [], blocked = null, noCNPG = false, rhcl = state === "none" ? "1.4.3" : "1.5.0", tierPolicies = false, access = { everyone: true }, dbCurrent, noUnlimited = false } = {}) {
   const parts = maasDBParts(maasParts(state, { tls, rhcl, tierPolicies, cnpg: !noCNPG }), dbCurrent);
   const shared = ["rhcl", "kuadrant", "cnpg", "authorino-tls", "tier-policies"];
@@ -1399,11 +1384,11 @@ export function maasWorld(state = "none", { tls = true, items = [], blocked = nu
 export const MAAS_BLOCKED = { component: "aigateway",
   reason: "MaaS needs RHOAI's DataScienceCluster, and this cluster has none. A cluster-admin creates one on the Components page." };
 
-// --- Models routing (GET /api/resources/models/exposures, ModelState routing fields) ---
+// --- Model exposure planner (GET /api/resources/models/exposures) -------------------
 
 const GW_KEY = "openshift-ingress/openshift-ai-inference";
 
-/** The ways a model can be reached from a project (pkg/cluster planExposures), for the gateway state given. */
+/** Exposure options for a model/project pair (pkg/cluster planExposures) given gateway preconditions. */
 export function modelExposures(project, model, gw, { maasReady = false, otherGateway = false, authReady = true } = {}) {
   const chat = MODEL_CATALOG.find((c) => c.name === model)?.type !== "embedding";
   const gwUsable = !!gw?.deployed && !!gw.ready;
@@ -1426,7 +1411,7 @@ export function modelExposures(project, model, gw, { maasReady = false, otherGat
     fix: chat && !maasReady ? "maas-tab" : undefined,
     changes: chat && maasReady ? [`Gateway openshift-ingress/maas-default-gateway: admits routes from ${project}.`, `Published to MaaS: MaaSModelRef ${model} in ${project}, and this tool's subscription and authorization policy list the model.`] : undefined,
   };
-  // Outside openshift-ingress: offered, never recommended (its token checks cannot be read).
+  // Non-ingress gateway: selectable but never the default recommendation (opaque token policy).
   const other = otherGateway ? [{
     key: "gateway:team-gateways/shared-llm", exposure: "gateway", gatewayRef: "team-gateways/shared-llm", title: "Through another gateway: team-gateways/shared-llm",
     description: "Uses a gateway someone else runs; this tool doesn't change it. RHOAI adds token checks.",
@@ -1449,12 +1434,12 @@ export function modelExposures(project, model, gw, { maasReady = false, otherGat
   };
 }
 
-/** A model's routing fields (pkg/cluster addModelRouting), with a "Can it be called?" result. */
+/** ModelState routing overlay from pkg/cluster addModelRouting plus synthetic call check. */
 export const routed = (m, { exposure = "default-gateway", check = "ok" } = {}) => ({
   ...m, exposure, servedName: m.name,
   gateway: exposure === "internal" ? undefined : exposure === "maas" ? "openshift-ingress/maas-default-gateway" : GW_KEY,
   gatewayAuth: exposure === "internal" ? undefined : exposure === "maas" ? "maas" : "enforced",
-  // As RHOAI 3.6 reports it (live): the model's path on its gateway's in-cluster Service; with no route, its own Service on port 8000.
+  // Matches live RHOAI 3.6: in-cluster path via gateway Service, else workload Service :8000.
   internalUrl: exposure === "internal" ? `https://${m.name}-kserve-workload-svc.${m.namespace}.svc.cluster.local:8000`
     : exposure === "maas" ? `https://maas-default-gateway-openshift-default.openshift-ingress.svc.cluster.local/${m.namespace}/${m.name}`
       : `https://openshift-ai-inference-openshift-ai-inference.openshift-ingress.svc.cluster.local/${m.namespace}/${m.name}`,
@@ -1466,7 +1451,7 @@ export const routed = (m, { exposure = "default-gateway", check = "ok" } = {}) =
         : undefined,
 });
 
-/** GET /api/resources/prerequisites: every feature ready, or Models missing what it needs. */
+/** Feature prerequisite matrix for GET /api/resources/prerequisites. */
 export function prerequisites({ models = "ready", pipelines = "ready", exposure = "" } = {}) {
   const readyPart = (id, title, message) => ({ id, title, state: "ready", message, notManaged: true });
   const ready = (parts) => ({ ready: true, parts });
@@ -1506,12 +1491,12 @@ export function prerequisites({ models = "ready", pipelines = "ready", exposure 
   };
 }
 
-// --- The Components page's DataScienceCluster manager (GET /api/components/dsc) ---
-// The tree of a RHOAI 3.6 cluster's CRD (v3), with the live DSC's values and
-// the release default of its CSV's alm-examples (pkg/cluster/testdata/dsc).
+// --- DataScienceCluster manager UI (GET /api/components/dsc) --------------------
+// CRD v3 tree for RHOAI 3.6 with live DSC values plus CSV alm-examples defaults
+// (pkg/cluster/testdata/dsc).
 const MR = ["Managed", "Removed"];
 const dscTree = [
-  // [path, spec (null: not set; undefined: a group), release default, CRD default, allowed, actual, condition]
+  // Tuple: path, spec (null unset; undefined grouping), CSV default, CRD default, allowed, actual, condition
   ["aigateway", "Managed", "Removed", "", MR, "Managed", ["AIGatewayReady", "True"]],
   ["aigateway.aiGrid", null, null, "", MR, "Removed", ["AIGridReady", "False", "Removed"]],
   ["aigateway.batchGateway", "Removed", "Removed", "", MR, "Removed", ["BatchGatewayReady", "False", "Removed"]],
@@ -1543,19 +1528,17 @@ const dscTree = [
 ];
 
 /**
- * The DSC manager. overrides maps a path to its value in the DSC (null: not
- * set). Mismatches are worked out as the backend does: a toggle the default
- * sets and the DSC leaves unset, and Managed under a parent that is not.
- * unknown maps the paths of fields the CRD does not define to their value
- * in the DSC (a row each, under the nearest node above it); noDefault
- * leaves the release default out (no DataScienceCluster example in the CSV).
+ * Build DSC manager graph. overrides pins spec values (null means omitted).
+ * Mismatch detection mirrors production: unset toggles vs CSV defaults and
+ * Managed children under non-Managed parents. unknown injects CRD-extraneous
+ * fields beneath nearest ancestors; noDefault skips CSV exemplar defaults.
  */
 export function dscManager(overrides = {}, { unknown = {}, noDefault = false, hardResetBlocked = false } = {}) {
   const nodes = dscTree.map(([path, s, def, schemaDefault, allowed, actual, cond]) => {
     const parts = path.split(".");
     const toggle = s !== undefined;
     const value = toggle ? (path in overrides ? overrides[path] : s) : null;
-    // A component set to Removed is reported as Removed once reconciled.
+    // After reconciliation, a Removed spec surfaces actual Removed even if CSV still Managed.
     if (toggle && value !== "Managed" && actual === "Managed") {
       actual = "Removed";
       cond = cond && [cond[0], "False", "Removed"];
@@ -1586,8 +1569,8 @@ export function dscManager(overrides = {}, { unknown = {}, noDefault = false, ha
         message: `Managed, but ${parent.path} is ${parent.spec || "not set"}, so the operator deploys nothing for it. Set ${parent.path} to Managed, or set this to Removed.` });
     }
   }
-  // Fields the CRD does not define: mismatches last, sorted, and a row each
-  // after the rows of the nearest node above it (pkg/cluster withUnknownNodes).
+  // Unknown schema fields become sorted mismatch rows inserted after their parent
+  // node (pkg/cluster withUnknownNodes).
   for (const path of Object.keys(unknown).sort()) {
     mismatches.push({ kind: "unknown-field", path, fixable: true, message: "The installed CRD does not define this field, so the operator never sees it. Fix removes it." });
     const parts = path.split(".");
@@ -1602,12 +1585,11 @@ export function dscManager(overrides = {}, { unknown = {}, noDefault = false, ha
     nodes.splice(at, 0, row);
   }
   const components = nodes.filter((n) => n.depth === 0 && !n.unknown).map((n) => n.path);
-  // A component is in the DSC when it or anything below it is set.
+  // Top-level component counts as present when it or any descendant has spec.
   const inDSC = components.filter((c) => nodes.some((n) => (n.path === c || n.path.startsWith(`${c}.`)) && n.specSet));
   const byName = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
-  // The unknown fields' values, for dscPlan's Fix, and whether the hard
-  // reset is blocked as on the live cluster; not part of the answer (not
-  // enumerable, so not sent).
+  // unknownValues + hardResetBlocked ride on dscPlan Fix and match live guardrails;
+  // non-enumerable extras omitted from JSON payloads.
   return Object.defineProperties({
     exists: true, state: "present", name: "default-dsc", uid: "ba54ddbf-ad4a-4257-9ab4-977eb541dc1c", apiVersion: "datasciencecluster.opendatahub.io/v3", storageVersion: "v3",
     dscCount: 1, phase: "Ready", releaseName: "OpenShift AI Self-Managed", releaseVersion: "3.6.0", operatorVersion: "3.6.0",
@@ -1628,15 +1610,14 @@ export function dscManager(overrides = {}, { unknown = {}, noDefault = false, ha
   });
 }
 
-// The plan's binding (a hash in the real backend); the mock never checks it.
+// Plan token placeholder (hashed server-side in prod); mock accepts any value.
 const DSC_PLAN_BINDING = "0".repeat(24);
 
-// The mock cluster's MaaS is in use (a published model, the tool's
-// subscription and access policy), as on the live cluster the guard was
-// written for (dsc_maas_guard.go).
+// Mock DSC encodes active MaaS usage—published model plus tool subscription/policy—
+// matching dsc_maas_guard.go expectations on real clusters.
 const DSC_MAAS_IN_USE = "MaaS is in use (published model dev-project/qwen25-05b-instruct; subscription models-as-a-service/rhoai-nightly-updater-subscription; access policy models-as-a-service/rhoai-nightly-updater-access; set up by this tool on the MaaS tab).";
 
-/** What a change would do (GET /api/components/dsc/plan), for the mock's manager m. */
+/** Planned DSC mutation preview (GET /api/components/dsc/plan) against manager m. */
 export function dscPlan(m, action, path, to, withParent, keepEnabled = false) {
   const base = { action, name: m.name, uid: m.uid, apiVersion: m.apiVersion, token: DSC_PLAN_BINDING, changes: [] };
   const node = m.nodes.find((n) => n.path === path);
@@ -1659,12 +1640,12 @@ export function dscPlan(m, action, path, to, withParent, keepEnabled = false) {
   if (action === "fix") {
     return { ...base, changes: [
       ...m.mismatches.filter((x) => x.kind === "unset").map((x) => ({ path: x.path, fromSet: false, to: x.default, toSet: true, toggle: true, effect: x.default === "Managed" ? "deploys" : "" })),
-      // A removed field, as the backend's diffFields lists it (its value as JSON).
+      // Unknown-field removal entry formatted like backend diffFields JSON.
       ...m.mismatches.filter((x) => x.kind === "unknown-field").map((x) => ({ path: x.path, from: m.unknownValues?.[x.path] ?? "", fromSet: true, toSet: false, toggle: false })),
     ] };
   }
-  // Resets: what the user turned on (Managed or Unmanaged and deployed,
-  // off in the release default) is kept with keepEnabled.
+  // During resets, keepEnabled preserves user-enabled components that CSV defaults
+  // would turn off.
   const byPath = Object.fromEntries(m.nodes.map((n) => [n.path, n]));
   const deployed = (n) => (n.spec === "Managed" || n.spec === "Unmanaged") && (!byPath[n.parent]?.toggle || byPath[n.parent].spec === "Managed");
   const turnedOn = m.nodes.filter((n) => n.toggle && n.specSet && deployed(n) && (n.default || n.schemaDefault || "Removed") === "Removed").map((n) => n.path);
@@ -1677,8 +1658,8 @@ export function dscPlan(m, action, path, to, withParent, keepEnabled = false) {
   }
   const protectedFields = ["aiHub.instancesNamespace", "workbenches.workbenchNamespace"];
   if (action === "soft-reset") return { ...reset, changes: differing, protectedFields };
-  // The live case (RHOAI 3.6.0, 2026-11-19): modules the tool cannot check
-  // and MLflow in use block the hard reset (pkg/cluster removalBlocks).
+  // Captured prod scenario (RHOAI 3.6.0, 2026-11-19): unchecked operators and in-use
+  // MLflow trip hard reset (pkg/cluster removalBlocks).
   const blocked = m.hardResetBlocked ? [
     { component: "aigateway", reasons: [DSC_UNKNOWN_OPERATOR] },
     { component: "mcplifecycleoperator", reasons: [DSC_UNKNOWN_OPERATOR] },
@@ -1702,17 +1683,17 @@ export function dscPlan(m, action, path, to, withParent, keepEnabled = false) {
       { crd: "guardrailsorchestrators.trustyai.opendatahub.io", component: "trustyai" },
       { crd: "trustyaiservices.trustyai.opendatahub.io", component: "trustyai" },
     ],
-    // As the API server stores it: the CRD's defaults filled in.
+    // newObject shows API-server view with CRD defaulting applied.
     newObject: `apiVersion: datasciencecluster.opendatahub.io/v3\nkind: DataScienceCluster\nmetadata:\n  labels:\n    app.kubernetes.io/name: datasciencecluster\n  name: default-dsc\nspec:\n  components:\n    aiHub:\n      instancesNamespace: rhoai-model-registries\n      managementState: Managed\n    aigateway:\n      managementState: ${kept.includes("aigateway") ? "Managed" : "Removed"}\n    ...\n    kserve:\n      managementState: Managed\n      nim:\n        airGapped: false\n        managementState: Managed\n      rawDeploymentServiceConfig: Headless\n    kueue:\n      autoCreateQueues: false\n      defaultClusterQueueName: default\n      defaultLocalQueueName: default\n      managementState: Removed\n    ...\n`,
   };
 }
 
-// The blocker for a module CR whose operator the tool does not know (pkg/cluster unknownOperatorBlocker).
+// Message fragment when operator ownership is uncertain (pkg/cluster unknownOperatorBlocker).
 const DSC_UNKNOWN_OPERATOR = "can't confirm its operator is running to clean up, so the tool won't remove it. Check in the OpenShift console, then change it there";
 
-// --- Environment recipes (pkg/types recipe.go: RecipePlan, RecipeRunStatus) ---------
+// --- Environment recipes (pkg/types RecipePlan, RecipeRunStatus) ------------------
 
-/** The recipe the docs show: the MVP features in a project the recipe creates. */
+/** Canonical dev recipe exposing MVP features inside a spawned project. */
 export const recipe = () => ({
   apiVersion: "rhoai-nightly-updater/v1alpha1", kind: "EnvironmentRecipe", metadata: { name: "dev" },
   spec: {
@@ -1723,7 +1704,7 @@ export const recipe = () => ({
   },
 });
 
-/** The runner's steps of that recipe (pkg/cluster internal/recipe Steps), with their usual and longest times in seconds. */
+/** Recipe step metadata (pkg/cluster internal/recipe Steps): typical and max durations. */
 const RECIPE_STEPS = [
   ["rhoai", "RHOAI", 420, 900], ["dsc", "DataScienceCluster", 60, 420], ["project", "Project recipe-dev", 10, 60],
   ["pipelines-prereq", "What Pipelines needs", 120, 600], ["s3", "S3 storage", 60, 300], ["pipeline-server", "Pipeline server", 120, 600],
@@ -1732,14 +1713,13 @@ const RECIPE_STEPS = [
 
 export const recipePinned = () => ({ tag: "rhoai-3.6", image: LATEST_IMAGE, digest: digest(latestBuild.seed) });
 
-/** The one-time cluster setup is missing: the Status page fixes it (pkg/types RecipeFix). */
+/** RecipeFix pointing users to Status when one-time setup is incomplete (pkg/types RecipeFix). */
 const ONE_TIME_SETUP_FIX = { code: "one_time_setup_missing", page: "/" };
 
 /**
- * POST /api/recipes/plan on a cluster with RHOAI and nothing else: RHOAI is
- * kept, the DSC and later steps are checked when the run gets there. With
- * `blocked`, the one-time cluster setup is missing: a problem and a blocked
- * step, each with the page that fixes it, and one the recipe fixes.
+ * recipePlan for an RHOAI-only cluster: keep installed operator, defer DSC and
+ * downstream checks until runtime. blocked injects missing one-time-setup errors
+ * with navigation fixes plus a build-resolution problem.
  */
 export function recipePlan(rcp = recipe(), installed = true, blocked = false) {
   const steps = RECIPE_STEPS.map(([id, title, typicalSeconds, maxSeconds], i) => {
@@ -1760,12 +1740,10 @@ export function recipePlan(rcp = recipe(), installed = true, blocked = false) {
 }
 
 /**
- * A run record: the first `done` steps set up (RHOAI kept), step `done`
- * with `current` (and its message), the rest pending. Times count back
- * from NOW: each finished step took a few minutes. Only the project and
- * the prerequisite steps it ran are `created` (the project is the recipe's,
- * the prerequisites turned their components on); the S3 storage, MLflow and
- * a pipeline server are never a run's.
+ * Synthetic recipe run: first `done` steps succeed (RHOAI skipped if present),
+ * index `done` reflects `current`, remainder pending. Timestamps rewind from NOW.
+ * created marks recipe-owned resources (project plus DSC prereq toggles) but never
+ * shared S3, MLflow, or pipeline servers.
  */
 export function recipeRun({ done = 0, current = "running", message = "", state = "running", stopReason = "", errorCode = "", pod = "rhoai-nightly-updater-6f7b8c9d5-x2k4p" } = {}) {
   const start = 2 + done * 2.5;
@@ -1790,29 +1768,27 @@ export function recipeRun({ done = 0, current = "running", message = "", state =
   };
 }
 
-/** The steps whose part a run can own: the project and the prerequisites. */
+/** Step IDs the recipe may mark created (project + DSC prereq phases). */
 const RECIPE_OWNS = new Set(["project", "pipelines-prereq", "mlflow-prereq"]);
 
-/** The DataScienceCluster component each prerequisite step turns on. */
+/** Maps prereq step id to DSC component name. */
 const RECIPE_COMPONENTS = { "pipelines-prereq": "aipipelines", "mlflow-prereq": "mlflowoperator" };
 
 /**
- * GET /api/recipes/run's clean-up request for what an ended run created
- * (pkg/cluster/internal/recipe Ownership): the project the recipe created
- * and the components it turned on; null when none.
+ * Cleanup payload for GET /api/recipes/run derived from pkg/cluster/internal/recipe
+ * Ownership—recipe-owned project plus enabled components, or null.
  */
 export function recipeCleanup(run) {
   const req = {
-    ...(run.project?.owned ? { recipeProjects: [run.project.name] } : {}),
+    ...(run.project?.owned ? { recipeProjects: [run.project.name], recipeProjectUIDs: { [run.project.name]: run.project.uid || "uid-recipe-dev" } } : {}),
     ...(run.components?.length ? { components: run.components } : {}),
   };
   return Object.keys(req).length ? req : null;
 }
 
 /**
- * The projects recipes created that the cluster has (GET /api/recipes/run
- * projects, GET /api/resources/status recipeProjects): the scenario's, or
- * the last run's own project when the recipe created it.
+ * recipeProjects list either from world scenario or from the latest owned run
+ * (GET /api/recipes/run projects / GET /api/resources/status recipeProjects).
  */
 export function recipeProjects(w) {
   if (w.recipeProjects) return w.recipeProjects;
