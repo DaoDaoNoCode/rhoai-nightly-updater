@@ -145,7 +145,7 @@ func SecureS3(c *kube.Client) (*types.OperationResponse, error) {
 
 	msg := "The S3 storage is secured: it has a new admin key, which is in no project."
 	if len(done) > 0 {
-		msg += fmt.Sprintf(" %s got a key of its own: %s.", kube.CountNoun(len(done), "pipeline server", "pipeline servers"), strings.Join(done, ", "))
+		msg += fmt.Sprintf(" Now on a key of their own: %s.", strings.Join(done, ", "))
 	}
 	if len(skipped) > 0 {
 		msg += fmt.Sprintf(" Already on their own key: %s.", strings.Join(skipped, ", "))

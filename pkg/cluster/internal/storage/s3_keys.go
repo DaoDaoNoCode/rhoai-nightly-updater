@@ -330,6 +330,19 @@ func readProjectS3Secret(c *kube.Client, project, name string) (projectS3Secret,
 	}}, nil
 }
 
+// connectionKeyID reads the access key ID in project's dashboard
+// Connection; found is false when it does not exist.
+func connectionKeyID(c *kube.Client, project string) (id string, found bool, err error) {
+	var secret struct {
+		Data map[string]string `json:"data"`
+	}
+	found, err = c.GetIntoOptional(rhoai.NamespacedPath("v1", "secrets", project, ConnectionSecretName), &secret)
+	if err != nil || !found {
+		return "", found, err
+	}
+	return DecodeBase64Field(secret.Data[S3AccessKeyField]), true, nil
+}
+
 // keyServers partitions pipeline servers on storage endpoint ep into
 // candidates for scoped keys (owned, recorded, object storage this tool
 // manages) versus servers that retain existing credentials, with reasons
@@ -359,10 +372,14 @@ func keyServers(ep S3Endpoints, dspas []DSPA, rec PipelineRecord) (recorded []DS
 
 // KeysState summarizes S3 key posture for status output: secured flag plus
 // which pipeline servers run on dedicated credentials. A server counts as
-// own-key when nightly-dspa-s3's access key ID matches a live key on its IAM
-// user in SeaweedFS (DSPA annotations are ignored here). Unsecured storage
-// marks every recorded server on the legacy key without live lookups. Returns
-// nil when storage is foreign, absent, or pending migration.
+// own-key when the access key ID in its project's Connection
+// (rhoai-nightly-updater-s3, which every write of the keys writes after
+// nightly-dspa-s3) matches a live key on its IAM user in SeaweedFS (DSPA
+// annotations are ignored here). The status reads the Connection, not
+// nightly-dspa-s3: the ServiceAccount may get the Connection by name
+// already and gets no new grant for this. Unsecured storage marks every
+// recorded server on the legacy key without live lookups. Returns nil when
+// storage is foreign, absent, or pending migration.
 func KeysState(c *kube.Client, state types.ResourceState, ep S3Endpoints, dspas []DSPA, rec PipelineRecord) *types.S3KeysState {
 	if !state.Deployed || !state.ManagedByTool || state.Terminating {
 		return nil
@@ -389,9 +406,14 @@ func KeysState(c *kube.Client, state types.ResourceState, ep S3Endpoints, dspas 
 	}
 	for _, d := range recorded {
 		name := d.Meta.Namespace + "/" + d.Meta.Name
-		secret, err := readProjectS3Secret(c, d.Meta.Namespace, DSPASecretName)
+		keyID, found, err := connectionKeyID(c, d.Meta.Namespace)
 		if err != nil {
 			ks.CheckError = fmt.Sprintf("Cannot check which key %s uses: %v", name, err)
+			continue
+		}
+		if !found {
+			// Deleted in the dashboard: nothing to tell from; Secure S3
+			// storage writes it again.
 			continue
 		}
 		ids, _, err := sw.ListAccessKeys(ScopedUserName(d.Meta.Namespace))
@@ -399,7 +421,7 @@ func KeysState(c *kube.Client, state types.ResourceState, ep S3Endpoints, dspas 
 			ks.CheckError = fmt.Sprintf("Cannot check which key %s uses: %v", name, err)
 			continue
 		}
-		if secret.keys.AccessKey != "" && slices.Contains(ids, secret.keys.AccessKey) {
+		if keyID != "" && slices.Contains(ids, keyID) {
 			ks.OwnKey = append(ks.OwnKey, name)
 		} else {
 			ks.OldKey = append(ks.OldKey, name)

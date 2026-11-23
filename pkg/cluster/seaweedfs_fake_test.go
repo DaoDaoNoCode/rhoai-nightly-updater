@@ -1,0 +1,343 @@
+package cluster
+
+import (
+	"encoding/base64"
+	"encoding/xml"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"slices"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
+)
+
+// seaweedFake stands in for a minimal SeaweedFS during scoped-key tests, implementing
+// the embedded IAM API (POST / with Action in the form body) plus the S3 object
+// operations the tool issues. Kubernetes-fake objects feed it the way a live pod
+// feeds a real server: the admin key is whatever Secret seaweedfs-s3-credentials
+// holds at the moment, and IAM mutations succeed only when the storage Deployment
+// uses secured args. A user key can touch objects in bucket pipelines after that
+// user receives a policy; IAM and bucket writes stay forbidden for that key.
+type seaweedFake struct {
+	t   *testing.T
+	f   *resourceFake
+	mu  sync.Mutex
+	srv *httptest.Server
+	// name -> user record.
+	users map[string]*fakeIAMUser
+	// "bucket/key" -> payload.
+	objects map[string][]byte
+	nextKey int
+	// when set, failIAM forces the given IAM action to return that HTTP status.
+	failIAM map[string]int
+	// per-user override for object-call HTTP status (simulates an invalid key).
+	failUserObjects map[string]int
+	// audit trail: "ACTION user" on IAM, "METHOD path (who)" on S3.
+	calls []string
+}
+
+type fakeIAMUser struct {
+	keys   map[string]string // access key ID maps to secret
+	order  []string
+	policy string
+	tags   map[string]string
+}
+
+// newSeaweedFake spins up the stub and routes the tool's S3 and IAM traffic through it.
+func newSeaweedFake(t *testing.T, f *resourceFake) *seaweedFake {
+	t.Helper()
+	sw := &seaweedFake{t: t, f: f, users: map[string]*fakeIAMUser{}, objects: map[string][]byte{}, failIAM: map[string]int{}, failUserObjects: map[string]int{}}
+	sw.srv = httptest.NewServer(http.HandlerFunc(sw.serve))
+	t.Cleanup(sw.srv.Close)
+	t.Cleanup(storage.SetS3ToolEndpointForTest(sw.srv.URL))
+	return sw
+}
+
+// adminKeyID pulls the access key from the storage Secret—the same value the pod sees.
+func (sw *seaweedFake) adminKeyID() string {
+	obj := sw.f.get(s3SecretPath)
+	if obj == nil {
+		return ""
+	}
+	data, _ := obj["data"].(map[string]any)
+	raw, _ := data["AWS_ACCESS_KEY_ID"].(string)
+	b, _ := base64.StdEncoding.DecodeString(raw)
+	return string(b)
+}
+
+// secured reports whether the storage Deployment container args are in secured mode.
+func (sw *seaweedFake) secured() bool {
+	obj := sw.f.get(s3DeployPath)
+	if obj == nil {
+		return false
+	}
+	ctrs, _ := obj["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)
+	for _, c := range ctrs {
+		var args []string
+		for _, a := range c.(map[string]any)["args"].([]any) {
+			args = append(args, a.(string))
+		}
+		return storage.ArgsSecured(args)
+	}
+	return false
+}
+
+// userOf looks up which user owns a given access key ID.
+func (sw *seaweedFake) userOf(id string) string {
+	for name, u := range sw.users {
+		if _, ok := u.keys[id]; ok {
+			return name
+		}
+	}
+	return ""
+}
+
+// keysOf lists that user's access key IDs in the order they were created.
+func (sw *seaweedFake) keysOf(user string) []string {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	if u := sw.users[user]; u != nil {
+		return slices.Clone(u.order)
+	}
+	return nil
+}
+
+func (sw *seaweedFake) userNames() []string {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	var out []string
+	for n := range sw.users {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (sw *seaweedFake) iamCalls() []string {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	var out []string
+	for _, c := range sw.calls {
+		if !strings.Contains(c, "/") {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func (sw *seaweedFake) xmlError(w http.ResponseWriter, status int, code string) {
+	w.WriteHeader(status)
+	fmt.Fprintf(w, `<ErrorResponse><Error><Code>%s</Code><Message>%s</Message></Error></ErrorResponse>`, code, code)
+}
+
+func (sw *seaweedFake) serve(w http.ResponseWriter, r *http.Request) {
+	auth := r.Header.Get("Authorization")
+	id := ""
+	if i := strings.Index(auth, "Credential="); i >= 0 {
+		id = strings.SplitN(auth[i+len("Credential="):], "/", 2)[0]
+	}
+	admin := sw.adminKeyID()
+	secured := sw.secured()
+	body, _ := io.ReadAll(r.Body)
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	user := sw.userOf(id)
+	isAdmin := id != "" && id == admin
+	if !isAdmin && user == "" {
+		sw.calls = append(sw.calls, r.Method+" "+r.URL.Path+" (unknown key)")
+		sw.xmlError(w, http.StatusForbidden, "InvalidAccessKeyId")
+		return
+	}
+	if r.Method == http.MethodPost && r.URL.Path == "/" {
+		form, _ := url.ParseQuery(string(body))
+		sw.iam(w, form, isAdmin, secured)
+		return
+	}
+	who := "admin"
+	if !isAdmin {
+		who = user
+	}
+	sw.calls = append(sw.calls, r.Method+" "+r.URL.Path+" ("+who+")")
+	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/"), "/", 2)
+	bucket, key := parts[0], ""
+	if len(parts) == 2 {
+		key = parts[1]
+	}
+	if !isAdmin {
+		if code := sw.failUserObjects[user]; code != 0 {
+			sw.xmlError(w, code, "InternalError")
+			return
+		}
+		if sw.users[user].policy == "" || bucket != "pipelines" || (key == "" && r.Method != http.MethodGet) {
+			sw.xmlError(w, http.StatusForbidden, "AccessDenied")
+			return
+		}
+	}
+	switch {
+	case key == "" && r.Method == http.MethodPut:
+		w.WriteHeader(http.StatusOK)
+	case key == "" && r.Method == http.MethodGet:
+		fmt.Fprint(w, `<ListBucketResult><Name>pipelines</Name></ListBucketResult>`)
+	case r.Method == http.MethodHead || r.Method == http.MethodGet:
+		data, ok := sw.objects[bucket+"/"+key]
+		if !ok {
+			sw.xmlError(w, http.StatusNotFound, "NoSuchKey")
+			return
+		}
+		if r.Method == http.MethodGet {
+			_, _ = w.Write(data)
+		}
+	case r.Method == http.MethodPut:
+		sw.objects[bucket+"/"+key] = body
+	case r.Method == http.MethodDelete:
+		delete(sw.objects, bucket+"/"+key)
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		sw.xmlError(w, http.StatusMethodNotAllowed, "MethodNotAllowed")
+	}
+}
+
+func (sw *seaweedFake) iam(w http.ResponseWriter, form url.Values, isAdmin, secured bool) {
+	action, name := form.Get("Action"), form.Get("UserName")
+	sw.calls = append(sw.calls, action+" "+name)
+	write := action != "ListUsers" && action != "ListAccessKeys"
+	switch {
+	case !isAdmin:
+		sw.xmlError(w, http.StatusForbidden, "AccessDenied")
+		return
+	case write && !secured:
+		sw.xmlError(w, http.StatusForbidden, "AccessDenied")
+		return
+	case sw.failIAM[action] != 0:
+		sw.xmlError(w, sw.failIAM[action], "ServiceFailure")
+		return
+	}
+	u := sw.users[name]
+	if u == nil && action != "CreateUser" && action != "ListUsers" {
+		sw.xmlError(w, http.StatusNotFound, "NoSuchEntity")
+		return
+	}
+	type member struct {
+		UserName    string `xml:"UserName,omitempty"`
+		AccessKeyID string `xml:"AccessKeyId,omitempty"`
+	}
+	switch action {
+	case "CreateUser":
+		if u != nil {
+			sw.xmlError(w, http.StatusConflict, "EntityAlreadyExists")
+			return
+		}
+		sw.users[name] = &fakeIAMUser{keys: map[string]string{}, tags: map[string]string{}}
+		fmt.Fprint(w, `<CreateUserResponse/>`)
+	case "DeleteUser":
+		if len(u.keys) > 0 {
+			sw.xmlError(w, http.StatusConflict, "DeleteConflict")
+			return
+		}
+		delete(sw.users, name)
+		fmt.Fprint(w, `<DeleteUserResponse/>`)
+	case "PutUserPolicy":
+		u.policy = form.Get("PolicyDocument")
+		fmt.Fprint(w, `<PutUserPolicyResponse/>`)
+	case "TagUser":
+		u.tags[form.Get("Tags.member.1.Key")] = form.Get("Tags.member.1.Value")
+		fmt.Fprint(w, `<TagUserResponse/>`)
+	case "CreateAccessKey":
+		sw.nextKey++
+		id, secret := fmt.Sprintf("SCOPED%04d", sw.nextKey), fmt.Sprintf("scoped-secret-%d", sw.nextKey)
+		u.keys[id] = secret
+		u.order = append(u.order, id)
+		fmt.Fprintf(w, `<CreateAccessKeyResponse><CreateAccessKeyResult><AccessKey><UserName>%s</UserName><AccessKeyId>%s</AccessKeyId><SecretAccessKey>%s</SecretAccessKey></AccessKey></CreateAccessKeyResult></CreateAccessKeyResponse>`, name, id, secret)
+	case "DeleteAccessKey":
+		id := form.Get("AccessKeyId")
+		delete(u.keys, id)
+		u.order = slices.DeleteFunc(u.order, func(k string) bool { return k == id })
+		fmt.Fprint(w, `<DeleteAccessKeyResponse/>`)
+	case "ListAccessKeys":
+		var ms []member
+		for _, id := range u.order {
+			ms = append(ms, member{UserName: name, AccessKeyID: id})
+		}
+		out, _ := xml.Marshal(struct {
+			XMLName xml.Name `xml:"ListAccessKeysResponse"`
+			Members []member `xml:"ListAccessKeysResult>AccessKeyMetadata>member"`
+		}{Members: ms})
+		_, _ = w.Write(out)
+	case "ListUsers":
+		ms := []member{{UserName: "admin-" + sw.adminKeyIDLocked()}}
+		for n := range sw.users {
+			ms = append(ms, member{UserName: n})
+		}
+		out, _ := xml.Marshal(struct {
+			XMLName xml.Name `xml:"ListUsersResponse"`
+			Members []member `xml:"ListUsersResult>Users>member"`
+		}{Members: ms})
+		_, _ = w.Write(out)
+	default:
+		sw.xmlError(w, http.StatusBadRequest, "InvalidAction")
+	}
+}
+
+// adminKeyIDLocked supplies the suffix used in the static admin's ListUsers name (SeaweedFS
+// surfaces it as admin-<first 8 chars of the key>).
+func (sw *seaweedFake) adminKeyIDLocked() string { return "static" }
+
+// giveScopedKey provisions the project's IAM user and key, matching post-setup state on secured storage.
+func (sw *seaweedFake) giveScopedKey(project string) (id, secret string) {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	name := storage.ScopedUserName(project)
+	u := sw.users[name]
+	if u == nil {
+		u = &fakeIAMUser{keys: map[string]string{}, tags: map[string]string{"rnu-namespace": project}, policy: storage.ScopedPolicy}
+		sw.users[name] = u
+	}
+	sw.nextKey++
+	id, secret = fmt.Sprintf("SCOPED%04d", sw.nextKey), fmt.Sprintf("scoped-secret-%d", sw.nextKey)
+	u.keys[id] = secret
+	u.order = append(u.order, id)
+	return id, secret
+}
+
+// secretOf returns the secret of an access key ID.
+func (sw *seaweedFake) secretOf(id string) string {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	for _, u := range sw.users {
+		if s, ok := u.keys[id]; ok {
+			return s
+		}
+	}
+	return ""
+}
+
+// assertScopedKey checks that both of project's Secrets hold the one key
+// of the project's SeaweedFS user, never the storage's admin key, and
+// returns its ID.
+func assertScopedKey(t *testing.T, f *resourceFake, project string) string {
+	t.Helper()
+	user := storage.ScopedUserName(project)
+	ids := f.sw.keysOf(user)
+	if len(ids) != 1 {
+		t.Fatalf("user %s has keys %v, want one", user, ids)
+	}
+	if ids[0] == f.sw.adminKeyID() {
+		t.Fatalf("%s holds the admin key", project)
+	}
+	for _, name := range []string{storage.DSPASecretName, storage.ConnectionSecretName} {
+		path := secretPath(project, name)
+		if got := secretValue(t, f, path, storage.S3AccessKeyField); got != ids[0] {
+			t.Errorf("%s: access key %q, want the user's %q", path, got, ids[0])
+		}
+		if got := secretValue(t, f, path, storage.S3SecretKeyField); got != f.sw.secretOf(ids[0]) {
+			t.Errorf("%s: the secret key is not the user's", path)
+		}
+	}
+	return ids[0]
+}

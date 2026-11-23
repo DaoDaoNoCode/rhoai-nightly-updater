@@ -273,14 +273,16 @@ func TestMigrate_FullRunMovesDataAndToolPipelineServersOnly(t *testing.T) {
 		if es["host"] != storage.S3Host() || ensureMap(es, "s3CredentialsSecret")["secretName"] != storage.DSPASecretName || es["bucket"] != "pipelines" || es["scheme"] != "http" {
 			t.Errorf("%s/%s external storage = %v", ps[0], ps[1], es)
 		}
-		if secretValue(t, f, secretPath(ps[0], storage.DSPASecretName), storage.S3AccessKeyField) != newID || secretValue(t, f, secretPath(ps[0], storage.DSPASecretName), storage.S3SecretKeyField) != newKey {
-			t.Errorf("%s has no credentials secret with the new storage's keys", ps[0])
+		// A key of its own on the new storage, never its admin key.
+		scoped := assertScopedKey(t, f, ps[0])
+		if scoped == newID || secretValue(t, f, secretPath(ps[0], storage.DSPASecretName), storage.S3SecretKeyField) == newKey {
+			t.Errorf("%s holds the new storage's admin key", ps[0])
 		}
 		// Owned by its pipeline server, so whoever deletes the server (the
 		// dashboard too) deletes it.
 		assertOwnedByDSPA(t, f, secretPath(ps[0], storage.DSPASecretName), ps[0], ps[1])
 		// The dashboard Connection to the new storage, with its keys.
-		assertConnection(t, f, ps[0], newID, newKey)
+		assertConnection(t, f, ps[0], scoped, f.sw.secretOf(scoped))
 		assertOwnedByDSPA(t, f, secretPath(ps[0], storage.ConnectionSecretName), ps[0], ps[1])
 	}
 	labels, _ := ensureMap(f.get(dspaPath("juntao-test", storage.LegacyDSPAName)), "metadata")["labels"].(map[string]any)
@@ -857,8 +859,8 @@ func TestMigrate_Refusals(t *testing.T) {
 		if got := secretValue(t, f, s3SecretPath, storage.S3AccessKeyField); got != id {
 			t.Errorf("the new storage's keys changed: %q -> %q", id, got)
 		}
-		if got := secretValue(t, f, secretPath("team-a", storage.DSPASecretName), storage.S3AccessKeyField); got != id {
-			t.Errorf("pipeline server key = %q, want %q", got, id)
+		if got := assertScopedKey(t, f, "team-a"); got == id {
+			t.Errorf("pipeline server key = the storage's admin key %q", id)
 		}
 	})
 	t.Run("old server not running", func(t *testing.T) {
