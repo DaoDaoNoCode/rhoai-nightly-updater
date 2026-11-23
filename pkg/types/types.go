@@ -1473,6 +1473,18 @@ type MaaSStatus struct {
 	// NoUnlimited: the cluster's MaaSSubscription API has no unlimited
 	// model reference (read from its CRD; false when that cannot be told).
 	NoUnlimited bool `json:"noUnlimited,omitempty"`
+	// Removing are this tool's publications whose project or model is
+	// gone: the background check removes what is left of them on its own.
+	// RemovalProblem is the error of its last try, when that failed.
+	Removing       []MaaSRemoval `json:"removing,omitempty"`
+	RemovalProblem string        `json:"removalProblem,omitempty"`
+}
+
+// MaaSRemoval is a publication of this tool that is gone, and why.
+type MaaSRemoval struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Reason    string `json:"reason"`
 }
 
 // MaaSAction is a change a platform part offers on its own (POST
@@ -1531,6 +1543,9 @@ type MaaSModel struct {
 	// Partly: what is left of a publication undone half-way (Message says
 	// what); Unpublish finishes it. Nothing about it settles on its own.
 	Partly bool `json:"partly,omitempty"`
+	// Removing: its publication is gone (the project is being deleted);
+	// the background check removes what is left, so it offers nothing.
+	Removing bool `json:"removing,omitempty"`
 	// Phase is the MaaSModelRef's phase ("Ready", ...).
 	Phase string `json:"phase,omitempty"`
 	// Endpoint is the MaaSModelRef's status.endpoint.

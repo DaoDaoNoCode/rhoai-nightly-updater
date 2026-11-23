@@ -1590,6 +1590,8 @@ export interface MaaSModel extends ResourceState {
   maasOnlySetup?: boolean;
   /** What is left of a publication undone half-way (message says what); Unpublish finishes it. */
   partly?: boolean;
+  /** Its publication is gone (the project is being deleted): removed automatically, so the row offers nothing. */
+  removing?: boolean;
   phase?: string;
   endpoint?: string;
   access?: string;
@@ -1663,6 +1665,17 @@ export interface MaaSStatus {
   access?: MaaSAudience & { groupProblems?: MaaSGroupProblem[] };
   /** The cluster's MaaSSubscription API has no unlimited model reference (read from its CRD). */
   noUnlimited?: boolean;
+  /** This tool's publications whose project or model is gone: the background check removes what is left. */
+  removing?: MaaSRemoval[];
+  /** The error of the last automatic removal, when it failed. */
+  removalProblem?: string;
+}
+
+/** A publication of this tool that is gone, and why (pkg/types MaaSRemoval). */
+export interface MaaSRemoval {
+  namespace: string;
+  name: string;
+  reason: string;
 }
 
 /** A group with no OpenShift Group (missing), or one that could not be checked (pkg/types MaaSGroupProblem). */

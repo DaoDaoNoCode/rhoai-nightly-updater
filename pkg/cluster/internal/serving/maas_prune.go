@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
@@ -117,8 +118,10 @@ func PruneGoneMaaSPublications(c *kube.Client) (changed bool, logs []string, err
 	}
 	gone, _ := goneMaaSPublications(c, rec)
 	if len(gone) == 0 {
+		setLastPruneFailure(nil)
 		return false, nil, nil
 	}
+	defer func() { setLastPruneFailure(err) }()
 	for _, g := range gone {
 		rec.SetPublished(g.pub.Project, g.pub.Model, false)
 	}
@@ -310,6 +313,31 @@ func updateToolObject(c *kube.Client, desc, path string, obj map[string]any, cur
 		}
 	}
 	return fmt.Errorf("%s: %w", desc, envkit.ErrObjectChanged)
+}
+
+// lastPrune is the error of the last PruneGoneMaaSPublications that found
+// gone publications ("" when it succeeded), for the status: a removal that
+// is on its way needs no attention, one that failed does. It is this
+// process's (the updater runs one replica, deploy/template.yaml); after a
+// restart the background job runs at once.
+var lastPrune struct {
+	sync.Mutex
+	failure string
+}
+
+func setLastPruneFailure(err error) {
+	lastPrune.Lock()
+	defer lastPrune.Unlock()
+	lastPrune.failure = ""
+	if err != nil {
+		lastPrune.failure = err.Error()
+	}
+}
+
+func lastPruneFailure() string {
+	lastPrune.Lock()
+	defer lastPrune.Unlock()
+	return lastPrune.failure
 }
 
 // ReleaseGoneMaaSProjects runs PruneGoneMaaSPublications for an operation

@@ -135,6 +135,17 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **The MaaS tab shows what is on the cluster, not this tool's record.**
+  A project deleted while its model was published left a "Needs attention:
+  Partly published ... this tool's record of the publication still in
+  place. Unpublish to finish removing it" row, built from the record alone,
+  and the Unpublish dialog said the model keeps running. Such a publication
+  now has no row: the tab names it as being removed automatically (the
+  background check removes what is left) and shows a problem only when
+  that removal failed, with its error. A project being deleted shows its
+  model as being removed, with no buttons. A publication only the record
+  still lists is "Not published" (Publish is offered), and the Models
+  tab's teardown no longer refuses such a model.
 - **A DataScienceCluster change applies only to the DSC it was checked
   on.** The Components page's changes (a component's state, Fix, soft
   reset) and Diagnostics' disable-component fix tested only the fields

@@ -41,7 +41,9 @@ export const MAAS_POLL_MS = 5_000;
 
 /** Something about MaaS may still change on its own: a part or a publication on its way. */
 export function maasSettling(m: MaaSStatus | null): boolean {
-  return !!m && (m.parts.some((p) => p.state === "waiting") || (m.items ?? []).some((i) => i.published && !i.ready && !i.partly));
+  return !!m && (m.parts.some((p) => p.state === "waiting") || (m.items ?? []).some((i) => i.published && !i.ready && !i.partly)
+    // Gone publications settle on their own, unless their removal failed.
+    || ((m.removing ?? []).length > 0 && !m.removalProblem));
 }
 
 /**
@@ -165,6 +167,7 @@ export const GroupProblemAlert: React.FC<{ problem: MaaSGroupProblem; idPrefix: 
 
 /** The words for a model's publication. */
 export function maasPublication(i: MaaSModel): string {
+  if (i.removing) return i.message ?? "Being removed automatically.";
   if (!i.published) return "Not published";
   if (i.partly) return i.message ?? "Partly published. Unpublish to finish removing it.";
   if (i.ready) return "Published";
@@ -224,7 +227,12 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
                   <Td dataLabel="Limit per user" modifier="wrap">{i.published && !i.partly ? limitText(i.limit) : "—"}</Td>
                   <Td dataLabel="In MaaS" modifier="wrap">
                     <Stack>
-                      {publishedReady(i) && !running(project, model)
+                      {i.removing
+                        ? <>
+                          <StackItem><EnvStatusLabel status="deleting" text="Removing" /></StackItem>
+                          <StackItem><Content component="small">{maasPublication(i)}</Content></StackItem>
+                        </>
+                        : publishedReady(i) && !running(project, model)
                         // One green label: "Ready" above "Published" said the same twice.
                         ? <StackItem><EnvStatusLabel status="ready" text="Published" /></StackItem>
                         : (i.published || running(project, model))
@@ -240,7 +248,7 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
                     </Stack>
                   </Td>
                   <Td dataLabel="Actions" isActionCell>
-                    {!readOnly && (i.published
+                    {!readOnly && !i.removing && (i.published
                       ? (
                         <ActionList isIconList>
                           {!i.partly && i.limit && <ActionListItem><Button variant="secondary" size="sm" isAriaDisabled={!!baseReason} onClick={() => setPending({ kind: "maas-limit", project, model })}>Change limit</Button></ActionListItem>}
@@ -257,8 +265,23 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
           </Tbody>}
         </Table>
       )}
+      {maas && <GonePublications maas={maas} />}
     </TabSection>
   );
+};
+
+/** Publications whose project or model is gone: no rows (nothing of them is left to show), removed automatically. */
+const GonePublications: React.FC<{ maas: MaaSStatus }> = ({ maas }) => {
+  const gone = (maas.removing ?? []).map((r) => `${r.name} in ${r.namespace} (${r.reason})`).join(", ");
+  if (!gone) return null;
+  if (maas.removalProblem) {
+    return (
+      <Alert variant="warning" isInline isPlain component="p" title="Could not remove publications that are gone">
+        {gone}. The last try failed: {maas.removalProblem.replace(/\.$/, "")}. The updater tries again every few minutes.
+      </Alert>
+    );
+  }
+  return <Content component="small" className="pf-v6-u-text-color-subtle">Being removed automatically: {gone}.</Content>;
 };
 
 /** How to call a published model: the docs' requests, and the dashboard's MaaS pages. */
@@ -623,7 +646,11 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
       };
     }
     case "unpublish-maas": {
-      const maasOnly = !!m?.items?.find((i) => i.namespace === pending.project && i.name === pending.model)?.maasOnlySetup;
+      // Only a row the cluster still shows can be unpublished: a publication
+      // that is gone is removed automatically.
+      const item = m?.items?.find((i) => i.namespace === pending.project && i.name === pending.model);
+      if (!item || item.removing) return null;
+      const maasOnly = !!item.maasOnlySetup;
       return {
         title: `Unpublish ${maasModelName(m, pending.project, pending.model)} in ${pending.project}?`, confirm: "Unpublish", danger: true, runTitle: `Unpublish ${maasModelName(m, pending.project, pending.model)} in ${pending.project}`,
         summary: <Content component="p">MaaS stops offering the model; API keys can no longer call it. The model keeps running in {pending.project}.{maasOnly ? " It had no outside route before it was published, so afterwards it has no outside address: only programs inside the cluster can call it, without a token." : ""}</Content>,
