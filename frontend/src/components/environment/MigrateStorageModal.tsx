@@ -18,8 +18,9 @@ import {
 import type { LegacyStorageState } from "../../types";
 import { TooltipButton } from "../TooltipButton";
 import { S3_ENDPOINT, S3_NAMESPACE } from "./StorageTab";
-import { MIGRATE_STEPS, type MigrateKind, type MigrateRun } from "./useMigrateStorage";
+import { runSteps, type MigrateKind, type MigrateRun } from "./useMigrateStorage";
 import { StepProgress } from "./StepProgress";
+import { withIds } from "./s3KeysText";
 
 /** The project of a "project/name" pipeline server. */
 const projectOf = (n: string) => n.split("/")[0];
@@ -30,10 +31,10 @@ const codes = (items: string[]) => items.map((n, i) => <React.Fragment key={n}>{
  * The ordered steps of a run. The step that stopped the run shows no text
  * of its own when the outcome alert says the same.
  */
-const RunProgress: React.FC<{ run: MigrateRun }> = ({ run }) => (
-  <StepProgress idPrefix="migrate" aria-label={run.kind === "migrate" ? "Migrate storage progress" : "Delete old storage progress"}
-    steps={MIGRATE_STEPS[run.kind]} states={run.steps} running={run.running}
-    shownElsewhere={run.result && !run.result.success ? run.result.message : undefined} />
+export const RunProgress: React.FC<{ run: MigrateRun; formatMessage?: (message: string) => React.ReactNode }> = ({ run, formatMessage }) => (
+  <StepProgress idPrefix={run.kind} aria-label={run.kind === "migrate" ? "Migrate storage progress" : run.kind === "secure" ? "Secure S3 storage progress" : "Delete old storage progress"}
+    steps={runSteps(run)} states={run.steps} running={run.running}
+    shownElsewhere={run.result && !run.result.success ? run.result.message : undefined} formatMessage={formatMessage} />
 );
 
 /** What Migrate storage does, before it runs. */
@@ -190,7 +191,7 @@ export const MigrateStorageModal: React.FC<{
         <Stack hasGutter>
           {ownRun && (
             <StackItem>
-              <RunProgress run={ownRun} />
+              <RunProgress run={ownRun} formatMessage={withIds} />
             </StackItem>
           )}
           {ownRun?.result && (

@@ -285,6 +285,24 @@ export const scenarios = {
     w.gated = true;
   },
   "s3-incomplete": (w) => { w.resources.minio = F.s3States.incomplete; w.gated = true; },
+  // Storage an earlier version set up: its admin key is in every pipeline project until Secure S3 storage runs.
+  // Secured storage: each recorded pipeline server on its own key, one server this tool did not set up lost access.
+  "s3-secured": (w) => {
+    w.resources.minio = { ...F.s3States.running, usedBy: ["dev-project/dspa", "team-b/dspa", "old-team/dspa"] };
+    w.resources.s3Keys = { secured: true, needsSecuring: false, ownKey: ["dev-project/dspa", "team-b/dspa"], keepOldKey: ["old-team/dspa (not recorded by this tool)"] };
+    w.gated = true;
+  },
+  // Secured storage with the key of a pipeline server deleted outside this tool.
+  "s3-leftover": (w) => {
+    w.resources.minio = { ...F.s3States.running, usedBy: ["dev-project/dspa"] };
+    w.resources.s3Keys = { secured: true, needsSecuring: false, ownKey: ["dev-project/dspa"], leftoverUsers: ["rnu-dspa-gone-team"], leftovers: [{ user: "rnu-dspa-gone-team", project: "gone-team", connectionInUse: true }] };
+    w.gated = true;
+  },
+  "s3-not-secured": (w) => {
+    w.resources.minio = { ...F.s3States.running, usedBy: ["dev-project/dspa", "team-b/dspa", "old-team/dspa"] };
+    w.resources.s3Keys = { secured: false, needsSecuring: true, oldKey: ["dev-project/dspa", "team-b/dspa"], keepOldKey: ["old-team/dspa (not recorded by this tool)"] };
+    w.gated = true;
+  },
   mlflow: (w) => { w.resources.mlflow = F.mlflowStates.running; },
   // The Environment page's other states, one scenario each.
   "env-ready": (w) => { w.resources.mlflow = F.mlflowStates.running; },

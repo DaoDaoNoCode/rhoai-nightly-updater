@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -51,6 +52,8 @@ const (
 	// its own. Only Secret seaweedfs/seaweedfs-s3-credentials holds it: the
 	// copies in pipeline projects (nightly-dspa-s3) carry only the S3 keys.
 	s3AdminPasswordField = "WEED_ADMIN_PASSWORD"
+	// s3ChecksumKeyField keys the pod template's checksum (keyChecksum).
+	s3ChecksumKeyField = "RNU_CHECKSUM_KEY"
 	// s3Port is SeaweedFS's S3 port (weed/command/mini.go "s3.port") and
 	// s3AdminPort its admin UI ("admin.port"). SeaweedFS 4.49 moved the
 	// admin default from 23646 to 12535, because the admin's gRPC port
@@ -153,6 +156,9 @@ type S3Keys struct {
 	AccessKey     string
 	SecretKey     string
 	AdminPassword string
+	// ChecksumKey keys the pod template's checksum of these keys
+	// (keyChecksum): a random value of its own, in the storage's Secret.
+	ChecksumKey string
 }
 
 // ReadS3Keys reads the keys stored in the storage's Secret. found is false
@@ -174,6 +180,7 @@ func ReadS3Keys(c *kube.Client) (keys S3Keys, found bool, err error) {
 	return S3Keys{
 		AccessKey: DecodeBase64Field(secret.Data[S3AccessKeyField]), SecretKey: DecodeBase64Field(secret.Data[S3SecretKeyField]),
 		AdminPassword: DecodeBase64Field(secret.Data[s3AdminPasswordField]),
+		ChecksumKey:   DecodeBase64Field(secret.Data[s3ChecksumKeyField]),
 	}, true, nil
 }
 
@@ -276,12 +283,22 @@ func S3Credentials(c *kube.Client) (S3Keys, error) {
 // up used the S3 secret key there, which every pipeline project's copy of
 // the keys holds; its next setup or Repair writes a password of its own.
 func withAdminPassword(c *kube.Client, keys S3Keys) (S3Keys, error) {
-	if keys.AdminPassword != "" {
+	if keys.AdminPassword != "" && keys.ChecksumKey != "" {
 		return keys, nil
 	}
 	stored, found, err := ReadS3Keys(c)
 	if err != nil {
 		return S3Keys{}, err
+	}
+	if keys.ChecksumKey == "" {
+		if found && stored.ChecksumKey != "" {
+			keys.ChecksumKey = stored.ChecksumKey
+		} else if keys.ChecksumKey, err = randomHex(16); err != nil {
+			return S3Keys{}, fmt.Errorf("generate the checksum key: %w", err)
+		}
+	}
+	if keys.AdminPassword != "" {
+		return keys, nil
 	}
 	if found && stored.AdminPassword != "" && stored.AdminPassword != keys.SecretKey {
 		keys.AdminPassword = stored.AdminPassword
@@ -414,8 +431,9 @@ type S3DeploymentSpec struct {
 		Template struct {
 			Spec struct {
 				Containers []struct {
-					Name  string `json:"name"`
-					Image string `json:"image"`
+					Name  string   `json:"name"`
+					Image string   `json:"image"`
+					Args  []string `json:"args"`
 					Env   []struct {
 						Name      string `json:"name"`
 						ValueFrom *struct {
@@ -450,6 +468,18 @@ func (d S3DeploymentSpec) AdminPasswordIsS3Key() bool {
 			if e.Name == "WEED_ADMIN_PASSWORD" && e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil && e.ValueFrom.SecretKeyRef.Key == S3SecretKeyField {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// Secured reports whether the server runs with IAM writes on and
+// self-service off (ArgsSecured): storage a first setup or Secure S3
+// storage made.
+func (d S3DeploymentSpec) Secured() bool {
+	for _, c := range d.Spec.Template.Spec.Containers {
+		if c.Name == s3Container {
+			return ArgsSecured(c.Args)
 		}
 	}
 	return false
@@ -557,6 +587,9 @@ func readService(c *kube.Client, namespace, name string) (serviceSpec, error) {
 // traffic, and the addresses pipeline servers may use to reach it.
 type S3Endpoints struct {
 	Address Address
+	// Secured is set by S3StatusAndEndpoints from the Deployment: the
+	// server runs with the secured args (S3DeploymentSpec.Secured).
+	Secured bool
 	svc     serviceSpec
 	ui      routeSpec
 }
@@ -706,6 +739,7 @@ func S3StatusAndEndpoints(c *kube.Client) (types.ResourceState, S3Endpoints, err
 	}
 	state.CurrentImage = deploy.image(s3Container)
 	state.UIUser = S3AdminUser
+	endpoints.Secured = deploy.Secured()
 	scaledDown := deploy.Spec.Replicas != nil && *deploy.Spec.Replicas == 0
 	serving := ""
 	if ns.Managed {
@@ -729,6 +763,9 @@ func S3StatusAndEndpoints(c *kube.Client) (types.ResourceState, S3Endpoints, err
 		}
 		if deploy.AdminPasswordIsS3Key() && state.RepairNeeded == "" {
 			state.RepairNeeded = "The admin UI's password is the S3 secret key, which every pipeline project's copy of the keys holds. Repair gives the admin UI a password of its own; the S3 keys and the data stay."
+		}
+		if state.RepairNeeded == "" {
+			state.RepairNeeded = networkPolicyProblem(c)
 		}
 	}
 	switch {
@@ -865,8 +902,9 @@ type s3Resource struct {
 
 // S3Resources returns the objects setup creates or updates, in order. Only
 // the admin UI gets a Route: the S3 API stays inside the cluster, where
-// pipeline servers reach it through the Service.
-func S3Resources(keys S3Keys) []s3Resource {
+// pipeline servers reach it through the Service. secured adds the IAM
+// flags of the secured storage (ArgsSecured, see s3SetupSecured).
+func S3Resources(keys S3Keys, secured bool) []s3Resource {
 	meta := func(name string) map[string]any {
 		return map[string]any{"name": name, "namespace": S3Namespace, "labels": envkit.ToolLabels()}
 	}
@@ -874,6 +912,11 @@ func S3Resources(keys S3Keys) []s3Resource {
 		return map[string]any{"name": name, "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": S3Secret, "key": key}}}
 	}
 	podLabels := map[string]any{"app": s3AppLabel}
+	args := []string{"mini", "-dir=/data", "-webdav=false", "-bucket=" + s3Bucket,
+		"-admin.port=" + strconv.Itoa(s3AdminPort), "-admin.port.legacy=0"}
+	if secured {
+		args = append(args, S3IAMWritesArg, S3SelfServiceArg)
+	}
 	return []s3Resource{
 		{"PVC", "PersistentVolumeClaim", map[string]any{
 			"apiVersion": "v1", "kind": "PersistentVolumeClaim",
@@ -891,6 +934,7 @@ func S3Resources(keys S3Keys) []s3Resource {
 				S3AccessKeyField:     keys.AccessKey,
 				S3SecretKeyField:     keys.SecretKey,
 				s3AdminPasswordField: keys.AdminPassword,
+				s3ChecksumKeyField:   keys.ChecksumKey,
 			},
 		}, false},
 		// "weed mini" listens on many ports besides S3 (master 9333/19333,
@@ -910,7 +954,11 @@ func S3Resources(keys S3Keys) []s3Resource {
 		//     .../host-network (a HostNetwork router), as in the OpenShift
 		//     docs "Allowing ingress from the Ingress Controller"
 		//     (checked live: openshift-ingress carries the ingress label).
-		//   - Nothing else.
+		//   - Nothing else. This is a security control, not hygiene: the
+		//     filer's gRPC port (18888) serves the IAM store without
+		//     authentication, so a pod reaching it could make itself an
+		//     admin (seen locally with SeaweedFS 4.54). A Go test pins the
+		//     two ports (TestS3NetworkPolicyAllowsOnlyS3AndAdminUI).
 		// The kubelet's probes always pass (traffic from the pod's node is
 		// allowed by NetworkPolicy semantics), and `oc port-forward` does
 		// not go through the pod network.
@@ -943,7 +991,10 @@ func S3Resources(keys S3Keys) []s3Resource {
 				"selector": map[string]any{"matchLabels": podLabels},
 				"strategy": map[string]any{"type": "Recreate"},
 				"template": map[string]any{
-					"metadata": map[string]any{"labels": podLabels},
+					// The checksum of the admin keys: a new key in the
+					// Secret changes the template, so the pod restarts with
+					// it (env from a Secret is read at start only).
+					"metadata": map[string]any{"labels": podLabels, "annotations": map[string]any{S3KeyChecksumAnnotation: keyChecksum(keys)}},
 					"spec": map[string]any{
 						"volumes": []map[string]any{
 							{"name": "data", "persistentVolumeClaim": map[string]any{"claimName": s3PVC}},
@@ -957,8 +1008,7 @@ func S3Resources(keys S3Keys) []s3Resource {
 							// -admin.port.legacy=0 turns off the second admin
 							// listener SeaweedFS keeps on the old port 23646
 							// for compatibility (weed/command/mini.go:598).
-							"args": []string{"mini", "-dir=/data", "-webdav=false", "-bucket=" + s3Bucket,
-								"-admin.port=" + strconv.Itoa(s3AdminPort), "-admin.port.legacy=0"},
+							"args": args,
 							"env": []map[string]any{
 								// The S3 server adds a static admin identity
 								// from these (weed/s3api/auth_credentials.go:555-611
@@ -1033,6 +1083,47 @@ func S3Resources(keys S3Keys) []s3Resource {
 	}
 }
 
+// networkPolicyProblem explains how NetworkPolicy seaweedfs-ingress differs
+// from what setup applies, or returns "" (also when it cannot be read: the
+// status then says nothing). It is a security control: only the S3 port
+// and the admin UI port may be reachable (see S3Resources).
+func networkPolicyProblem(c *kube.Client) string {
+	body, found, err := c.GetOptional(rhoai.NamespacedPath("networking.k8s.io/v1", "networkpolicies", S3Namespace, s3NetworkPolicy))
+	if err != nil {
+		return ""
+	}
+	repair := fmt.Sprintf(" Only the S3 port %d and the admin UI port %d may be reachable; Repair applies it again.", s3Port, s3AdminPort)
+	if !found {
+		return fmt.Sprintf("NetworkPolicy %s is missing, so every port of SeaweedFS is reachable from the pod network.", s3NetworkPolicy) + repair
+	}
+	// The whole spec, as setup applies it: the ports and who may reach them.
+	var live struct {
+		Spec any `json:"spec"`
+	}
+	var want any
+	for _, r := range S3Resources(S3Keys{}, true) {
+		if r.Kind == "NetworkPolicy" {
+			b, _ := json.Marshal(r.Obj["spec"])
+			_ = json.Unmarshal(b, &want)
+		}
+	}
+	if json.Unmarshal(body, &live) != nil || !reflect.DeepEqual(live.Spec, want) {
+		return fmt.Sprintf("NetworkPolicy %s was changed.", s3NetworkPolicy) + repair
+	}
+	return ""
+}
+
+// S3KeyChecksumAnnotation on the storage's pod template is keyChecksum of
+// the admin keys it was started with.
+const S3KeyChecksumAnnotation = "rhoai-nightly-updater/admin-key-checksum"
+
+// keyChecksum is a short SHA-256 of the admin key pair (not reversible).
+func keyChecksum(keys S3Keys) string {
+	// HMAC with a random key of its own, so the annotation (readable by
+	// whoever can read the Deployment) gives nothing to test guesses with.
+	return hex.EncodeToString(HMACSHA256([]byte(keys.ChecksumKey), []byte(keys.AccessKey+"\n"+keys.SecretKey+"\n"+keys.AdminPassword))[:16])
+}
+
 // restrictedSecurityContext is a container securityContext that passes
 // Pod Security "restricted" and OpenShift's restricted-v2 SCC, without a
 // fixed UID so the SCC assigns one.
@@ -1058,6 +1149,7 @@ type s3Retry struct {
 var (
 	s3RetrySetup   = s3Retry{"re-run setup", "Re-run setup"}
 	s3RetryMigrate = s3Retry{"run Migrate storage again", "Run Migrate storage again"}
+	s3RetrySecure  = s3Retry{"run Secure S3 storage again", "Run Secure S3 storage again"}
 )
 
 // foreignHint tells the user how to resolve a refusal over an object that
@@ -1090,12 +1182,44 @@ func SetupS3(c *kube.Client) (*types.OperationResponse, error) {
 		record.Action(c, "setup-s3", fmt.Sprintf("namespace=%s (earlier storage present)", S3Namespace), false)
 		return &types.OperationResponse{Success: false, Message: reason + " Nothing was changed.", ErrorCode: "prerequisites"}, nil
 	}
-	keys, err := S3Credentials(c)
+	keys, secured, rotated, err := s3SetupKeys(c)
 	if err != nil {
 		record.Action(c, "setup-s3", fmt.Sprintf("namespace=%s (credentials)", S3Namespace), false)
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot determine the S3 credentials; nothing was changed: %v.%s", err, kube.TemplateHint(err)), ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
-	return setupS3Storage(c, keys, &opLog{}, s3RetrySetup)
+	// Who held the stored key, when this setup replaces it: pipeline
+	// servers on the storage whose Connection holds that key, read before.
+	var holders []string
+	if rotated {
+		if old, found, err := ReadS3Keys(c); err == nil && found && old.AccessKey != "" {
+			if dspas, err := ListDSPAs(c, ""); err == nil {
+				if ep, err := readS3Endpoints(c); err == nil {
+					for _, d := range dspas {
+						if d.Meta.Terminating() || !ep.Address.UsedBy(d.Meta.Namespace, d.Host) {
+							continue
+						}
+						if id, found, err := connectionKeyID(c, d.Meta.Namespace); err == nil && found && id == old.AccessKey {
+							holders = append(holders, d.Meta.Namespace+"/"+d.Meta.Name)
+						}
+					}
+				}
+			}
+		}
+		sort.Strings(holders)
+	}
+	// Repair changes no SeaweedFS user: leftover keys are removed only by
+	// actions whose confirmation lists them.
+	finish := func(res *types.OperationResponse) (*types.OperationResponse, error) {
+		if !res.Success || !secured || !rotated {
+			return res, nil
+		}
+		res.Message += " The storage's Deployment was missing, so it was set up again with a new admin key and per-server keys turned on: the old admin key no longer works."
+		if len(holders) > 0 {
+			res.Message += fmt.Sprintf(" %s used it and lost S3 access: %s. Run Secure S3 storage to give each pipeline server this tool set up a key of its own.", kube.Verb(len(holders), "This pipeline server", "These pipeline servers"), strings.Join(holders, ", "))
+		}
+		return res, nil
+	}
+	return finish(setupS3Storage(c, keys, &opLog{}, s3RetrySetup, secured))
 }
 
 // opLog collects an operation's log lines for its response, and passes each
@@ -1121,8 +1245,9 @@ func (l *opLog) add(line string) {
 // envkit.EnsureToolObject). Every create and apply is sent as a server-side dry
 // run before any is made, so an object the API server rejects changes
 // nothing (the namespace, which the dry runs need, is created before them).
-// retry names the action that continues a setup that stopped.
-func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry) (*types.OperationResponse, error) {
+// retry names the action that continues a setup that stopped. secured
+// applies the IAM flags of the secured storage (see s3SetupSecured).
+func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry, secured bool) *types.OperationResponse {
 	fail := func(msg, code, activity string) *types.OperationResponse {
 		slog.Warn("s3 storage setup failed", "reason", activity, "user", kube.GetUser(c))
 		record.Action(c, "setup-s3", fmt.Sprintf("namespace=%s (%s)", S3Namespace, activity), false)
@@ -1132,14 +1257,14 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry) (*ty
 	// UI password: keep the stored one, or make one.
 	keys, err := withAdminPassword(c, keys)
 	if err != nil {
-		return fail(fmt.Sprintf("Cannot determine the admin UI password; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "credentials"), nil
+		return fail(fmt.Sprintf("Cannot determine the admin UI password; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "credentials")
 	}
 
 	// Step 1: Namespace. Never adopt a namespace this tool did not create.
 	log.add(fmt.Sprintf("Creating namespace %s...", S3Namespace))
 	ns, err := lookupS3Namespace(c)
 	if err != nil {
-		return fail(fmt.Sprintf("Cannot check namespace %s: %v.%s", S3Namespace, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "namespace check failed"), nil
+		return fail(fmt.Sprintf("Cannot check namespace %s: %v.%s", S3Namespace, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "namespace check failed")
 	}
 	if !ns.Exists {
 		nsData, _ := json.Marshal(map[string]any{
@@ -1155,19 +1280,19 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry) (*ty
 		case kube.IsK8sConflict(err):
 			// Created concurrently: decide ownership again.
 			if ns, err = lookupS3Namespace(c); err != nil {
-				return fail(fmt.Sprintf("Cannot check namespace %s: %v.%s", S3Namespace, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "namespace check failed"), nil
+				return fail(fmt.Sprintf("Cannot check namespace %s: %v.%s", S3Namespace, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "namespace check failed")
 			}
 		default:
-			return fail(fmt.Sprintf("Failed to create namespace %s: %v.%s", S3Namespace, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "namespace creation failed"), nil
+			return fail(fmt.Sprintf("Failed to create namespace %s: %v.%s", S3Namespace, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "namespace creation failed")
 		}
 	} else if ns.Managed && !ns.terminating() {
 		log.add("Namespace already exists (created by this tool) — reusing")
 	}
 	if ns.terminating() {
-		return fail(fmt.Sprintf("Namespace %s is still being deleted. Wait until it is gone, then %s.", S3Namespace, retry.again), "terminating", "namespace terminating"), nil
+		return fail(fmt.Sprintf("Namespace %s is still being deleted. Wait until it is gone, then %s.", S3Namespace, retry.again), "terminating", "namespace terminating")
 	}
 	if !ns.Managed {
-		return fail(fmt.Sprintf("Namespace %s already exists and was not created by this tool. Nothing was changed. Remove it yourself, or use a cluster without it.", S3Namespace), "not_managed", "namespace not managed"), nil
+		return fail(fmt.Sprintf("Namespace %s already exists and was not created by this tool. Nothing was changed. Remove it yourself, or use a cluster without it.", S3Namespace), "not_managed", "namespace not managed")
 	}
 
 	// Step 2: Check every object the tool writes before writing any, so a
@@ -1176,14 +1301,14 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry) (*ty
 		meta  kube.ObjectMeta
 		found bool
 	}
-	resources := S3Resources(keys)
+	resources := S3Resources(keys, secured)
 	existing := map[string]current{}
 	var foreign, deleting []string
 	for _, r := range resources {
 		name, _ := r.Obj["metadata"].(map[string]any)["name"].(string)
 		meta, found, err := readS3Object(c, r.Kind, name)
 		if err != nil {
-			return fail(fmt.Sprintf("Cannot read %s %s/%s; nothing was changed: %v.%s", r.Kind, S3Namespace, name, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "read failed"), nil
+			return fail(fmt.Sprintf("Cannot read %s %s/%s; nothing was changed: %v.%s", r.Kind, S3Namespace, name, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "read failed")
 		}
 		existing[r.Kind+"/"+name] = current{meta, found}
 		switch {
@@ -1195,10 +1320,10 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry) (*ty
 		}
 	}
 	if len(foreign) > 0 {
-		return fail(fmt.Sprintf("Namespace %s already contains %s, not created by this tool. Nothing was changed. %s", S3Namespace, strings.Join(foreign, ", "), retry.foreignHint()), "not_managed", "foreign objects: "+strings.Join(foreign, ", ")), nil
+		return fail(fmt.Sprintf("Namespace %s already contains %s, not created by this tool. Nothing was changed. %s", S3Namespace, strings.Join(foreign, ", "), retry.foreignHint()), "not_managed", "foreign objects: "+strings.Join(foreign, ", "))
 	}
 	if len(deleting) > 0 {
-		return fail(fmt.Sprintf("%s in namespace %s is still being deleted. Wait until it is gone, then %s.", strings.Join(deleting, ", "), S3Namespace, retry.again), "terminating", "objects terminating"), nil
+		return fail(fmt.Sprintf("%s in namespace %s is still being deleted. Wait until it is gone, then %s.", strings.Join(deleting, ", "), S3Namespace, retry.again), "terminating", "objects terminating")
 	}
 
 	// Step 3: Create or update the server objects. The Service and the
@@ -1251,7 +1376,7 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry) (*ty
 	log.add("Checking every change with the API server (dry run)...")
 	for _, r := range resources {
 		if resp := write(r, true); resp != nil {
-			return resp, nil
+			return resp
 		}
 	}
 	log.add("OK: The API server accepts every change")
@@ -1260,7 +1385,7 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry) (*ty
 			continue
 		}
 		if resp := write(r, false); resp != nil {
-			return resp, nil
+			return resp
 		}
 	}
 
@@ -1277,7 +1402,7 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry) (*ty
 				}
 			}
 			log.add("SeaweedFS is not ready: " + reason)
-			return fail(fmt.Sprintf("SeaweedFS was deployed but is not ready after %s (%s). The status shows the current state; %s once it is ready.", S3ReadyTimeout, reason, retry.again), "timeout", "not ready"), nil
+			return fail(fmt.Sprintf("SeaweedFS was deployed but is not ready after %s (%s). The status shows the current state; %s once it is ready.", S3ReadyTimeout, reason, retry.again), "timeout", "not ready")
 		}
 		if errors.Is(err, errS3CannotStart) {
 			msg := issue.Reason
@@ -1285,9 +1410,9 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry) (*ty
 				msg += ": " + kube.TruncateText(issue.Message, 300)
 			}
 			log.add("SeaweedFS cannot start: " + msg)
-			return fail(fmt.Sprintf("SeaweedFS was deployed but its pod cannot start (%s). Fix the cause (for example set SEAWEEDFS_IMAGE to a pullable image) and %s, or delete the storage.", msg, retry.again), "not_ready", issue.Reason), nil
+			return fail(fmt.Sprintf("SeaweedFS was deployed but its pod cannot start (%s). Fix the cause (for example set SEAWEEDFS_IMAGE to a pullable image) and %s, or delete the storage.", msg, retry.again), "not_ready", issue.Reason)
 		}
-		return fail(fmt.Sprintf("Stopped waiting for SeaweedFS: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "wait failed"), nil
+		return fail(fmt.Sprintf("Stopped waiting for SeaweedFS: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "wait failed")
 	}
 	log.add("OK: SeaweedFS is running")
 
@@ -1298,7 +1423,7 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry) (*ty
 			continue
 		}
 		if resp := write(r, false); resp != nil {
-			return resp, nil
+			return resp
 		}
 	}
 
@@ -1314,7 +1439,7 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry) (*ty
 	}
 	if bucketErr != nil {
 		log.add(fmt.Sprintf("Bucket creation failed: %v — you can create it from the SeaweedFS admin UI.", bucketErr))
-		return fail(fmt.Sprintf("SeaweedFS deployed but bucket creation failed: %v. %s to retry, or create bucket %s from the admin UI.", bucketErr, retry.Again, s3Bucket), kube.ErrorCodeFromK8sErr(bucketErr), "bucket failed"), nil
+		return fail(fmt.Sprintf("SeaweedFS deployed but bucket creation failed: %v. %s to retry, or create bucket %s from the admin UI.", bucketErr, retry.Again, s3Bucket), kube.ErrorCodeFromK8sErr(bucketErr), "bucket failed")
 	}
 	log.add(fmt.Sprintf("OK: Bucket %s created", s3Bucket))
 
@@ -1322,9 +1447,9 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry) (*ty
 	record.Action(c, "setup-s3", fmt.Sprintf("namespace=%s bucket=%s", S3Namespace, s3Bucket), true)
 	return &types.OperationResponse{
 		Success: true,
-		Message: fmt.Sprintf("S3 storage (SeaweedFS) deployed with bucket %s; pipeline servers reach it at %s. Sign in to the admin UI as %s; the password (the S3 secret key) and the S3 keys are in Secret %s in namespace %s.", s3Bucket, S3Endpoint(), S3AdminUser, S3Secret, S3Namespace),
+		Message: fmt.Sprintf("S3 storage (SeaweedFS) deployed with bucket %s; pipeline servers reach it at %s. Sign in to the admin UI as %s; its password (a value of its own) and the admin S3 keys are in Secret %s in namespace %s.", s3Bucket, S3Endpoint(), S3AdminUser, S3Secret, S3Namespace),
 		Logs:    log.lines,
-	}, nil
+	}
 }
 
 var (
@@ -1652,6 +1777,22 @@ func TeardownS3(c *kube.Client, opts types.S3TeardownRequest) (*types.OperationR
 	var d storageDeletion
 	var keptNamespaces []string
 	if current {
+		// The SeaweedFS users of deleted pipeline servers (one deleted in the
+		// RHOAI dashboard keeps its user): keys first, then the user. The
+		// data volume holds them and goes too, so a storage that cannot be
+		// reached only logs it.
+		if secured, err := storageSecured(c); err == nil && secured {
+			sw, err := adminSeaweed(c)
+			var users []string
+			if err == nil {
+				users, err = deleteScopedUsers(sw)
+			}
+			if err != nil {
+				logs = append(logs, fmt.Sprintf("Note: the SeaweedFS users of pipeline servers could not be deleted first (%v); they go with the data volume", err))
+			} else if len(users) > 0 {
+				logs = append(logs, fmt.Sprintf("OK: SeaweedFS users deleted with their keys: %s", strings.Join(users, ", ")))
+			}
+		}
 		for _, o := range s3TeardownObjects {
 			d.deleteOwnedObject(c, S3Namespace, o.kind, o.name, &logs)
 		}

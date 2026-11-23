@@ -1,7 +1,7 @@
 import React from "react";
 import { Alert, AlertActionLink, Button, Content, DescriptionList, DescriptionListDescription, DescriptionListGroup, DescriptionListTerm, ExpandableSection, Stack, StackItem } from "@patternfly/react-core";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
-import type { MaaSActionId, MLflowSampleAction, MLflowSampleId, ModelExposureKind, ModelExposureOption, PlaygroundModelRef, PrerequisiteFeature, ResourceState } from "../../types";
+import type { MaaSActionId, MLflowSampleAction, MLflowSampleId, ModelExposureKind, ModelExposureOption, PlaygroundModelRef, PrerequisiteFeature, ResourceState, S3LeftoverKey } from "../../types";
 import type { AudienceForm, DatabaseForm, LimitForm } from "./maasForms";
 import { withImageRefs } from "../ImageRef";
 import { TruncatedText } from "../LongText";
@@ -215,6 +215,8 @@ export type Pending =
   | { kind: "setup-minio" | "repair-minio" | "setup-mlflow" | "revert-mlflow" | "teardown-mlflow" }
   /** deleteNamespace: also delete namespace seaweedfs (the user's informed choice). */
   | { kind: "teardown-minio"; deleteNamespace?: boolean }
+  /** Delete the SeaweedFS users of projects with no pipeline server (S3KeysState.leftovers), as listed. */
+  | { kind: "remove-leftover-keys"; leftovers: S3LeftoverKey[] }
   | { kind: "deploy-mlflow-pr"; pr: number }
   /**
    * again: set up an existing pipeline server again (for example to recreate its Connection).

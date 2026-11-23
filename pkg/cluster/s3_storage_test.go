@@ -64,10 +64,22 @@ func putS3Namespace(f *resourceFake, labels string) {
 	f.putJSON(s3NSPath, `{"metadata":{"labels":`+labels+`,"creationTimestamp":"`+created+`"},"status":{"phase":"Active"}}`)
 }
 
-// putS3Deployment puts the tool's SeaweedFS Deployment.
+// securedArgsJSON are the args of secured storage, unsecuredArgsJSON those
+// of storage an earlier version set up (IAM read-only).
+const (
+	unsecuredArgsJSON = `["mini","-dir=/data","-webdav=false","-bucket=pipelines","-admin.port=12535","-admin.port.legacy=0"]`
+	securedArgsJSON   = `["mini","-dir=/data","-webdav=false","-bucket=pipelines","-admin.port=12535","-admin.port.legacy=0","` + storage.S3IAMWritesArg + `","` + storage.S3SelfServiceArg + `"]`
+)
+
+// putS3Deployment puts the tool's SeaweedFS Deployment, secured.
 func putS3Deployment(f *resourceFake, ready int) {
+	putS3DeploymentArgs(f, ready, securedArgsJSON)
+}
+
+// putS3DeploymentArgs puts the tool's SeaweedFS Deployment with args.
+func putS3DeploymentArgs(f *resourceFake, ready int, args string) {
 	f.putJSON(s3DeployPath, `{"metadata":{"labels":`+toolLabelJSON+`,"generation":1},
-		"spec":{"template":{"spec":{"containers":[{"name":"seaweedfs","image":"`+storage.SeaweedFSDefaultImage+`"}]}}},
+		"spec":{"template":{"spec":{"containers":[{"name":"seaweedfs","image":"`+storage.SeaweedFSDefaultImage+`","args":`+args+`}]}}},
 		"status":{"observedGeneration":1,"replicas":1,"readyReplicas":`+itoa(ready)+`,"updatedReplicas":1}}`)
 }
 
@@ -79,11 +91,21 @@ func putS3Serving(f *resourceFake) {
 	f.putJSON(s3RoutePath, `{"metadata":{"labels":`+toolLabelJSON+`},"spec":{"host":"seaweedfs-admin-seaweedfs.apps.example.com","to":{"kind":"Service","name":"seaweedfs-s3"},"port":{"targetPort":"ui"}}}`)
 }
 
+// putS3NetworkPolicy puts NetworkPolicy seaweedfs-ingress as setup applies it.
+func putS3NetworkPolicy(f *resourceFake) {
+	for _, r := range storage.S3Resources(storage.S3Keys{}, true) {
+		if r.Kind == "NetworkPolicy" {
+			f.putJSON(s3NPPath, mustJSON(r.Obj))
+		}
+	}
+}
+
 // putReadyManagedS3 puts a running storage the tool set up, with its keys.
 func putReadyManagedS3(f *resourceFake) {
 	putS3Namespace(f, toolLabelJSON)
 	putS3Deployment(f, 1)
 	putS3Serving(f)
+	putS3NetworkPolicy(f)
 	f.putJSON(s3SecretPath, `{"metadata":{"labels":`+toolLabelJSON+`},"data":{"AWS_ACCESS_KEY_ID":"`+exampleAuth("seaweedfs-key")+`","AWS_SECRET_ACCESS_KEY":"`+exampleAuth("pass")+`","WEED_ADMIN_PASSWORD":"`+exampleAuth("admin-pass")+`"}}`)
 }
 
@@ -189,7 +211,8 @@ func TestSetupS3Storage_FreshClusterUsesTheNewNamesLabelsEverythingAndWaitsForRe
 		t.Errorf("volumes = %+v", deploy.Spec.Template.Spec.Volumes)
 	}
 	// The admin password must not be on the command line.
-	if strings.Join(ctr.Args, " ") != "mini -dir=/data -webdav=false -bucket=pipelines -admin.port=12535 -admin.port.legacy=0" {
+	// A first setup is secured: IAM writes on, self-service off.
+	if strings.Join(ctr.Args, " ") != "mini -dir=/data -webdav=false -bucket=pipelines -admin.port=12535 -admin.port.legacy=0 -s3.iam.readOnly=false -s3.iam.selfServiceRequiresGrant=true" {
 		t.Errorf("args = %v", ctr.Args)
 	}
 	if _, fixed := ctr.SecurityContext["runAsUser"]; fixed || deploy.Spec.Template.Spec.SecurityContext != nil {
@@ -935,7 +958,7 @@ func TestWaitS3Ready_StalledAPIDoesNotOverrunDeadline(t *testing.T) {
 // S3 secret key; the pipeline projects' copies carry only the S3 keys.
 func TestS3AdminPasswordIsItsOwn(t *testing.T) {
 	keys := storage.S3Keys{AccessKey: "ak", SecretKey: "sk", AdminPassword: "ap"}
-	for _, r := range storage.S3Resources(keys) {
+	for _, r := range storage.S3Resources(keys, false) {
 		b, _ := json.Marshal(r.Obj)
 		switch r.Kind {
 		case "Secret":

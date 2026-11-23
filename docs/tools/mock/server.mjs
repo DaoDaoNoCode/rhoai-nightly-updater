@@ -208,6 +208,38 @@ async function migrateStream(req, res) {
   res.end();
 }
 
+/** Secure S3 storage: the checks, the rollout, one step per recorded pipeline server; each waits for /__docs/advance in gated mode. */
+async function secureStream(req, res) {
+  await body(req);
+  beginOperation("secure-s3", "Secure S3 storage", "");
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+  const servers = world.resources.s3Keys?.oldKey ?? [];
+  const kept = world.resources.s3Keys?.keepOldKey ?? [];
+  const keptNames = kept;
+  const steps = [
+    { step: "check", status: "success", message: `${servers.length === 1 ? "OK: Found 1 pipeline server to give a key of its own" : `OK: Found ${servers.length} pipeline servers to give each a key of its own`}; left on the old key: ${keptNames.join(", ")}` },
+    { step: "rollout", status: "running", message: "Waiting up to 1m30s for SeaweedFS to become ready..." },
+    { step: "rollout", status: "success", message: "OK: The S3 storage runs with the new admin key; the old key no longer works" },
+    ...servers.flatMap((n) => [
+      { step: `server:${n}`, status: "running", message: "Checking the new key against the storage..." },
+      { step: `server:${n}`, status: "success", message: `OK: Pipeline server ${n} uses SeaweedFS user rnu-dspa-${n.split("/")[0]}` },
+    ]),
+  ];
+  const done = `New admin key, kept out of every project. On a key of their own: ${servers.join(", ")}.${kept.length ? ` Left on the old admin key, which no longer works: ${keptNames.join(", ")}. ${kept.length > 1 ? "Their owners must give those pipeline servers new S3 keys, or delete them and set them up again with this tool." : "Its owner must give that pipeline server new S3 keys, or delete it and set it up again with this tool."}` : ""} Restart the workbenches and model deployments that use Connection rhoai-nightly-updater-s3, and Elyra pipelines in workbenches, so they pick up the new key.`;
+  let n = 0;
+  for (const step of [...steps, { step: "operation_complete", status: "success", message: done }]) {
+    n += 1;
+    await nextStep();
+    if (res.destroyed) return;
+    if (step.step === "operation_complete") {
+      world.resources.s3Keys = { secured: true, needsSecuring: false, ownKey: servers, keepOldKey: kept };
+      endOperation(true, done);
+    }
+    res.write(`data: ${JSON.stringify({ ...step, elapsedMs: n * 3000 })}\n\n`);
+  }
+  res.end();
+}
+
 /** Clean up: one step per part (pkg/cluster CleanUp); each waits for /__docs/advance in gated mode. */
 async function cleanupStream(req, res) {
   const { pipelineServers = [], storage = false, deleteNamespace = false, mlflow = false, models = [], inferenceGateway = false, playgrounds = [], recipeProjects = [], components = [] } = await body(req);
@@ -703,6 +735,12 @@ async function api(req, res, u) {
   if (key.startsWith("POST /api/recipes/")) return recipeRoute(req, res, key);
   if (key === "POST /api/update/stream") return updateStream(req, res);
   if (key === "POST /api/resources/s3/setup") return mutation(res, "setup-s3", "Set up S3 storage", minioSetup);
+  if (key === "POST /api/resources/s3/secure/stream") return secureStream(req, res);
+  if (key === "POST /api/resources/s3/leftover-keys/remove") return mutation(res, "remove-leftover-s3-keys", "Remove leftover S3 keys", () => {
+    const gone = world.resources.s3Keys?.leftoverUsers ?? [];
+    world.resources.s3Keys = { ...world.resources.s3Keys, leftoverUsers: [], leftovers: [] };
+    return { success: true, message: `Removed the keys of pipeline servers that no longer exist: ${gone.join(", ")}.`, logs: [] };
+  });
   if (key === "POST /api/resources/s3/migrate/stream") return migrateStream(req, res);
   if (key === "POST /api/resources/cleanup/stream") return cleanupStream(req, res);
   if (key === "POST /api/resources/models/stream") return modelsStream(req, res);

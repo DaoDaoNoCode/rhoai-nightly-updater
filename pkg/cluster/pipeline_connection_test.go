@@ -58,12 +58,20 @@ func TestSetupPipelineServer_CreatesTheDashboardConnection(t *testing.T) {
 	putManagedDSC(f)
 	putReadyManagedS3(f)
 	putDSProject(f, "proj")
-	keys, _, _ := storage.ReadS3Keys(c)
+	first := ""
 	for run := range 2 {
 		if resp, _ := SetupPipelineServer(c, "proj"); !resp.Success {
 			t.Fatalf("run %d: %+v", run, resp)
 		}
-		assertConnection(t, f, "proj", keys.AccessKey, keys.SecretKey)
+		// The project's own key, never the storage's admin key; a re-run
+		// keeps the key that works.
+		id := assertScopedKey(t, f, "proj")
+		if first == "" {
+			first = id
+		} else if id != first {
+			t.Errorf("a re-run replaced the working key %s with %s", first, id)
+		}
+		assertConnection(t, f, "proj", id, f.sw.secretOf(id))
 		assertOwnedByDSPA(t, f, secretPath("proj", storage.ConnectionSecretName), "proj", storage.DSPAName)
 	}
 	st, err := GetResourcesStatus(c)

@@ -85,6 +85,8 @@ type resourceFake struct {
 	// after it was recorded and its injected failures applied): it returns
 	// true when it did.
 	intercept func(w http.ResponseWriter, r *http.Request, body []byte) bool
+	// sw is the SeaweedFS the tool's own S3 and IAM requests reach.
+	sw *seaweedFake
 }
 
 // fakeCall is one request to resourceFake.
@@ -133,6 +135,7 @@ func newResourceFake(t *testing.T) (*resourceFake, *Client) {
 	// namespace these fixtures put RHOAI's objects in (delete it to test a
 	// cluster without one).
 	f.putJSON(dsciV2List+"/default-dsci", `{"metadata":{"name":"default-dsci"},"spec":{"applicationsNamespace":"redhat-ods-applications"}}`)
+	f.sw = newSeaweedFake(t, f)
 	return f, c
 }
 

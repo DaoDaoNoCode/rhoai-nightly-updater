@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"regexp"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -25,6 +26,92 @@ var HandleS3StorageSetup = withMutationAuth(func(c *cluster.Client, w http.Respo
 		return
 	}
 	writeOperationResult(w, result, "setup-s3")
+})
+
+// runSecureStorage runs Secure S3 storage; tests replace it.
+var runSecureStorage = cluster.SecureS3Storage
+
+// HandleS3StorageSecureStream runs Secure S3 storage: a new admin key with
+// IAM writes on, then a key of its own for every pipeline server this tool
+// recorded (storage an earlier version set up gave its admin key to every
+// pipeline project), streaming each step via SSE: "check", "rollout", then
+// "server:<namespace>/<name>" per pipeline server.
+var HandleS3StorageSecureStream = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
+	var req struct {
+		// RemoveLeftoverKeys are the leftover keys the confirmation listed.
+		RemoveLeftoverKeys []string `json:"removeLeftoverKeys,omitempty"`
+	}
+	if !decodeBody(w, r, 16384, &req, true) {
+		return
+	}
+	if !validLeftoverUsers(w, req.RemoveLeftoverKeys) {
+		return
+	}
+	beginOperation(w, "")
+	slog.Info("mutation", "op", "secure-s3", "removeLeftoverKeys", req.RemoveLeftoverKeys)
+	_, err := streamOperation(w, "secure-s3", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		return runSecureStorage(c, req.RemoveLeftoverKeys, emit)
+	})
+	if err != nil {
+		slog.Error("secure-s3 failed", "error", err)
+	}
+})
+
+// validLeftoverUsers checks the leftover keys a request names: at most 200
+// SeaweedFS user names of this tool (rnu-dspa-*, IAM name characters).
+func validLeftoverUsers(w http.ResponseWriter, users []string) bool {
+	if len(users) > 200 {
+		writeError(w, "at most 200 leftover keys", http.StatusBadRequest, "validation")
+		return false
+	}
+	for _, u := range users {
+		if !leftoverUserRegex.MatchString(u) {
+			writeError(w, "invalid leftover key name", http.StatusBadRequest, "validation")
+			return false
+		}
+	}
+	return true
+}
+
+var leftoverUserRegex = regexp.MustCompile(`^rnu-dspa-[a-z0-9.-]{1,55}$`)
+
+// runRemoveLeftoverKeys runs Remove leftover keys; tests replace it.
+var runRemoveLeftoverKeys = cluster.RemoveLeftoverS3Keys
+
+// HandleS3RemoveLeftoverKeys deletes the SeaweedFS users of pipeline
+// servers that no longer exist (Remove leftover keys): only the confirmed
+// ones that are still leftovers.
+var HandleS3RemoveLeftoverKeys = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
+	var req struct {
+		Users []string `json:"users"`
+	}
+	if !decodeBody(w, r, 16384, &req, false) {
+		return
+	}
+	if len(req.Users) == 0 {
+		writeError(w, "users is required", http.StatusBadRequest, "validation")
+		return
+	}
+	if !validLeftoverUsers(w, req.Users) {
+		return
+	}
+	beginOperation(w, "")
+	slog.Info("mutation", "op", "remove-leftover-s3-keys", "users", req.Users)
+	result, err := runRemoveLeftoverKeys(c, req.Users)
+	if err != nil {
+		slog.Error("remove-leftover-s3-keys failed", "error", err)
+		writeOperationError(w, "Remove leftover keys failed", err)
+		return
+	}
+	writeOperationResult(w, result, "remove-leftover-s3-keys")
 })
 
 // readS3AdminLogin reads the SeaweedFS admin UI login; tests replace it.

@@ -390,9 +390,14 @@ func setupPipelineServer(c *kube.Client, project string, recreate bool, confirme
 	if block := envkit.SetupComponentBlock(c, envkit.PipelinesComponent); block != nil {
 		return fail(block.Reason+" Nothing was changed.", "prerequisites", "component not managed")
 	}
-	storage := S3Status(c)
+	storage, storageEP, _ := S3StatusAndEndpoints(c)
 	if !storage.Deployed || !storage.ManagedByTool || !storage.Ready {
 		return fail("The S3 storage is not deployed or not ready. Set it up first (or, with storage from an earlier version, migrate it).", "prerequisites", "S3 storage not ready")
+	}
+	// Storage an earlier version set up hands its admin key to every
+	// pipeline project; a new project must not get it (fail closed).
+	if !storageEP.Secured {
+		return fail(SecureFirstReason+" Nothing was changed.", "prerequisites", "S3 storage not secured")
 	}
 	// Only a Data Science project gets a pipeline server, as with the
 	// MLflow samples: the project is the user's (made in the dashboard),
@@ -440,13 +445,14 @@ func setupPipelineServer(c *kube.Client, project string, recreate bool, confirme
 		return fail(fmt.Sprintf("Project %s has both %s and %s from this tool; delete one of them first. Nothing was changed.", project, PreviousDSPAName, DSPAName), "validation", "both names exist")
 	}
 
-	// Step 1: Read the S3 credentials
+	// Step 1: Read the storage's admin key, which makes the project's own
+	// key (it never goes into the project).
 	logs = append(logs, "Reading S3 storage credentials...")
-	keys, found, err := ReadS3Keys(c)
+	adminKeys, found, err := ReadS3Keys(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Failed to read the S3 storage credentials: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "S3 secret read failed")
 	}
-	if !found || keys.AccessKey == "" || keys.SecretKey == "" {
+	if !found || adminKeys.AccessKey == "" || adminKeys.SecretKey == "" {
 		return fail(fmt.Sprintf("The S3 credentials are empty. Check that Secret %s in namespace %s has the keys %s and %s, or repair the S3 storage.", S3Secret, S3Namespace, S3AccessKeyField, S3SecretKeyField), "prerequisites", "S3 credentials empty")
 	}
 	logs = append(logs, "OK: S3 storage credentials read")
@@ -454,9 +460,11 @@ func setupPipelineServer(c *kube.Client, project string, recreate bool, confirme
 	// Step 2: The DSPA credentials secret and the dashboard Connection,
 	// without taking over a secret of the same name someone else created.
 	logs = append(logs, "Creating pipeline server secret and dashboard connection...")
+	// Checked and dry-run without keys; the project's own key is made once
+	// every check passed (step 3).
 	secrets := []*projectSecret{
-		{c: c, project: project, name: DSPASecretName, what: "secret", obj: dspaS3Secret(project, keys)},
-		{c: c, project: project, name: ConnectionSecretName, what: "connection", obj: dashboardS3Connection(project, keys)},
+		{c: c, project: project, name: DSPASecretName, what: "secret", obj: dspaS3Secret(project, S3Keys{})},
+		{c: c, project: project, name: ConnectionSecretName, what: "connection", obj: dashboardS3Connection(project, S3Keys{})},
 	}
 	for _, s := range secrets {
 		if err := readProjectSecret(s, projectSecretPath(project, s.name)); err != nil {
@@ -511,7 +519,7 @@ func setupPipelineServer(c *kube.Client, project string, recreate bool, confirme
 			"labels":    envkit.ToolLabels(),
 			// Which Connection goes with it, for the status: the status
 			// reads only the DSPA list, so it costs no request per project.
-			"annotations": map[string]any{DSPAConnectionAnnotation: ConnectionSecretName},
+			"annotations": map[string]any{DSPAConnectionAnnotation: ConnectionSecretName, DSPAS3UserAnnotation: ScopedUserName(project)},
 		},
 		"spec": spec,
 	}
@@ -552,6 +560,37 @@ func setupPipelineServer(c *kube.Client, project string, recreate bool, confirme
 	if old != nil {
 		return replacePipelineServer(c, project, old, logs, confirmedUID)
 	}
+
+	// Step 3: the project's own key: its SeaweedFS user (rnu-dspa-<project>)
+	// and a key that works (checked against the storage), or on a re-run
+	// the key its Secret holds when that is still the user's.
+	logs = append(logs, fmt.Sprintf("Making the project's S3 key (SeaweedFS user %s)...", ScopedUserName(project)))
+	var current S3Keys
+	if secrets[0].found {
+		cur, err := readProjectS3Secret(c, project, DSPASecretName)
+		if err != nil {
+			return fail(fmt.Sprintf("Cannot read secret %s: %v", DSPASecretName, err), kube.ErrorCodeFromK8sErr(err), "secret read failed")
+		}
+		current = cur.keys
+	}
+	sw := newSeaweedClient(c.Context(), s3ToolEndpoint(), adminKeys)
+	keys, fresh, err := provisionScopedKey(sw, project, current)
+	if err == nil && fresh {
+		err = probeScopedKey(c.Context(), keys, ScopedUserName(project))
+	}
+	if err != nil {
+		return fail(fmt.Sprintf("Cannot make the project's S3 key: %v. Nothing in %s was changed; re-run setup.", err, project), "s3_keys", "scoped key failed")
+	}
+	logs = append(logs, "OK: The project's S3 key works")
+	secrets[0].obj = dspaS3Secret(project, keys)
+	secrets[1].obj = dashboardS3Connection(project, keys)
+	for _, s := range secrets {
+		if dspaFound {
+			setDSPAOwner(s.obj, DSPAName, dspaMeta.UID)
+		}
+	}
+	dspa["metadata"].(map[string]any)["annotations"].(map[string]any)[DSPAS3KeyAnnotation] = keys.AccessKey
+
 	for _, s := range secrets {
 		action, err := writeProjectSecret(s, projectSecretPath(project, s.name), envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "secrets", project, "")), false)
 		if err != nil {
@@ -680,7 +719,11 @@ func TeardownPipelineServer(c *kube.Client, project, confirmedUID string) (*type
 	}
 
 	all, err := ListDSPAs(c, project)
-	if errors.Is(err, ErrDSPACRDMissing) {
+	// No DSPA list (the CRD or its version is not served): nothing proves
+	// the project has no pipeline server, so its SeaweedFS user is kept (as
+	// the leftover paths decide); Remove leftover keys can remove it later.
+	listMissing := errors.Is(err, ErrDSPACRDMissing)
+	if listMissing {
 		all, err = nil, nil
 	}
 	if err != nil {
@@ -705,6 +748,9 @@ func TeardownPipelineServer(c *kube.Client, project, confirmedUID string) (*type
 		// A previous run may have removed the DSPA but not its secret.
 		orphan := &DSPA{Meta: kube.ObjectMeta{UID: "none"}, SecretName: DSPASecretName}
 		note := deleteDSPASecret(c, project, orphan, all, &logs) + deleteConnection(c, project, &logs)
+		if !listMissing {
+			note += deleteProjectKey(c, project, nil, all, &logs)
+		}
 		if note != "" {
 			return fail(fmt.Sprintf("No pipeline server created by this tool remains in %s.%s", project, note), "partial_failure", "orphan secret")
 		}
@@ -755,7 +801,7 @@ func TeardownPipelineServer(c *kube.Client, project, confirmedUID string) (*type
 	// The DSPA finalizer does not read the credentials secret, so it can go
 	// now; doing it before waiting keeps a timed-out teardown from leaving the
 	// secret behind with no pipeline server left to show a Tear down button.
-	secretNote := deleteDSPASecret(c, project, target, all, &logs) + deleteConnection(c, project, &logs)
+	secretNote := deleteDSPASecret(c, project, target, all, &logs) + deleteConnection(c, project, &logs) + deleteProjectKey(c, project, target, all, &logs)
 
 	gone, waitErr := kube.WaitForDeletion(c, dspaPath, pipelineServerDeleteTimeout, pipelineServerDeletePoll)
 	if waitErr != nil {
@@ -840,6 +886,10 @@ func deleteDSPASecret(c *kube.Client, project string, target *DSPA, all []DSPA, 
 	*logs = append(*logs, "OK: Secret deleted")
 	return ""
 }
+
+// SecureFirstReason is why Set up refuses a pipeline server on storage that
+// is not secured.
+const SecureFirstReason = "The S3 storage is not secured: an earlier version gave its admin key to every pipeline project, and a new pipeline server would get it too. Use Secure S3 storage on the S3 storage tab first; then every pipeline server gets a key of its own."
 
 // dspaS3Secret is the pipeline server's copy of the S3 keys. Besides the
 // tool's label it carries opendatahub.io/dashboard=true, as odh-dashboard's

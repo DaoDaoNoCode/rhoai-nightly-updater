@@ -93,7 +93,8 @@ export const S3SecretField: React.FC<{ id: string; field: S3CredentialField; lab
 
   return (
     // The description list's term names the field; the input has its own label.
-    <Form isWidthLimited onSubmit={(e) => e.preventDefault()}>
+    // A fixed width: the field does not grow or shrink with the other rows of the list.
+    <Form isWidthLimited style={{ width: "28rem", maxWidth: "calc(100vw - 4rem)" }} onSubmit={(e) => e.preventDefault()}>
       <FormGroup fieldId={id}>
         <TextInputGroup>
           <TextInputGroupMain inputId={id} type={value !== null ? "text" : "password"} value={value ?? HIDDEN}

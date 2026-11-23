@@ -284,6 +284,8 @@ var operationTypes = map[string][2]string{
 	"/api/dashboard/revert":                   {"revert-dashboard", "Revert dashboard"},
 	"/api/resources/s3/setup":                 {"setup-s3", "Set up S3 storage"},
 	"/api/resources/s3/teardown":              {"teardown-s3", "Delete S3 storage"},
+	"/api/resources/s3/secure/stream":         {"secure-s3", "Secure S3 storage"},
+	"/api/resources/s3/leftover-keys/remove":  {"remove-leftover-s3-keys", "Remove leftover S3 keys"},
 	"/api/resources/s3/migrate/stream":        {"migrate-storage", "Migrate S3 storage"},
 	"/api/resources/pipeline-server/setup":    {"setup-pipeline-server", "Set up pipeline server"},
 	"/api/resources/pipeline-server/teardown": {"teardown-pipeline-server", "Delete pipeline server"},
