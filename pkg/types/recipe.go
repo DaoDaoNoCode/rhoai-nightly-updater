@@ -418,6 +418,11 @@ type RecipeRunStatus struct {
 	// CleanupRequest); the user confirms it, and the project's contents
 	// when Clean up asks.
 	Cleanup *CleanupRequest `json:"cleanup,omitempty"`
+	// Projects are the projects recipes created (this run's and earlier
+	// runs') that the cluster has now, as Clean up may delete them, when no
+	// run is running; ProjectsError says why they could not be read.
+	Projects      []RecipeOwnedProject `json:"projects,omitempty"`
+	ProjectsError string               `json:"projectsError,omitempty"`
 }
 
 // RecipeOwnedProject is a project a recipe created: Clean up deletes it

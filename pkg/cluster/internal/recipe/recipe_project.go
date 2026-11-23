@@ -616,3 +616,63 @@ func DeleteProject(c *kube.Client, name string, confirmed []string) (*types.Oper
 	record.Action(c, "delete-recipe-project", "project="+name, true)
 	return &types.OperationResponse{Success: true, Message: msg, Logs: []string{"OK: " + msg}}, nil
 }
+
+// OwnedProjects are the projects recipes created that the cluster has now:
+// each recorded project whose namespace exists with the recorded UID, the
+// tool's label and the recipe annotation (deletable), and is not being
+// deleted, sorted by name. A recorded project that is gone, was made again
+// under the name or lost its label is not listed: nothing is shown from
+// the record alone. Read-only (the record is written only under the
+// cluster lock: ForgetGoneProjects). A read that fails is returned, and
+// nothing is listed (fail closed).
+func OwnedProjects(c *kube.Client) ([]types.RecipeOwnedProject, error) {
+	rec, err := readProjectRecord(c)
+	if err != nil {
+		return nil, err
+	}
+	var out []types.RecipeOwnedProject
+	for _, r := range rec.Projects {
+		meta, found, err := kube.ReadObjectMeta(c, namespacePath(r.Name))
+		if err != nil {
+			return nil, fmt.Errorf("read namespace %s: %w", r.Name, err)
+		}
+		p := projectFound{meta: meta, found: found, ours: found && meta.UID == r.UID}
+		if p.deletable() && !meta.Terminating() {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// ForgetGoneProjects drops from the record the projects that are gone: no
+// namespace of the name, or one with another UID (made again; the one the
+// recipe created is gone). A project being deleted, or whose namespace
+// cannot be read, is kept (fail closed). It writes the record only when it
+// forgets one, and returns the names it forgot. The record is one key
+// written whole, so it runs only under the cluster lock, as the project
+// step and Clean up write it: the background check (pkg/api
+// maas_prune_job.go) runs it.
+func ForgetGoneProjects(c *kube.Client) ([]string, error) {
+	rec, err := readProjectRecord(c)
+	if err != nil {
+		return nil, err
+	}
+	kept := rec
+	var forgot []string
+	for _, r := range rec.Projects {
+		meta, found, err := kube.ReadObjectMeta(c, namespacePath(r.Name))
+		if err != nil || (found && meta.UID == r.UID) {
+			continue
+		}
+		kept = kept.without(r.Name)
+		forgot = append(forgot, r.Name)
+	}
+	if len(forgot) == 0 {
+		return nil, nil
+	}
+	if err := writeProjectRecord(c, kept); err != nil {
+		return nil, err
+	}
+	return forgot, nil
+}

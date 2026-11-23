@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -162,14 +163,21 @@ func TestCleanUp_NothingLeftSucceeds(t *testing.T) {
 }
 
 // fakeRecipeProjectTeardown replaces the recipe project's check and part;
-// problem is the check's refusal ("" allows).
-func fakeRecipeProjectTeardown(t *testing.T, ran *[]string, problem string) {
+// holds maps a project to what it holds that the tool did not create: the
+// check refuses it until each is confirmed (nil allows every project).
+func fakeRecipeProjectTeardown(t *testing.T, ran *[]string, holds map[string][]string) {
 	t.Helper()
 	pr, cp, co := recipeProjectProblem, cleanupProject, cleanupComponents
 	t.Cleanup(func() { recipeProjectProblem, cleanupProject, cleanupComponents = pr, cp, co })
 	recipeProjectProblem = func(_ *Client, name string, confirmed []string) (string, string, []string, error) {
-		if problem != "" {
-			return problem, "confirm_project_contents", []string{"Notebook wb", "PersistentVolumeClaim wb-data"}, nil
+		var unconfirmed []string
+		for _, h := range holds[name] {
+			if !slices.Contains(confirmed, h) {
+				unconfirmed = append(unconfirmed, h)
+			}
+		}
+		if len(unconfirmed) > 0 {
+			return "Project " + name + " still holds what this tool did not create: " + strings.Join(unconfirmed, ", ") + ".", "confirm_project_contents", unconfirmed, nil
 		}
 		return "", "", nil, nil
 	}
@@ -188,11 +196,11 @@ func fakeRecipeProjectTeardown(t *testing.T, ran *[]string, problem string) {
 // with the confirmations of the request.
 func TestCleanUp_RecipeProjectAfterItsPartsBeforeTheComponents(t *testing.T) {
 	ran := fakeTeardowns(t, nil)
-	fakeRecipeProjectTeardown(t, ran, "")
+	fakeRecipeProjectTeardown(t, ran, nil)
 	_, c := newResourceFake(t)
 	res, err := CleanUp(c.SignedInUser(), types.CleanupRequest{
 		PipelineServers: []string{"recipe-dev"}, Storage: true, MLflow: true, Playgrounds: []string{"recipe-dev"}, Models: []string{"recipe-dev"},
-		RecipeProject: "recipe-dev", ConfirmProjectContents: []string{"Notebook wb"}, Components: []string{"aipipelines"},
+		RecipeProjects: []string{"recipe-dev"}, ConfirmProjectContents: map[string][]string{"recipe-dev": {"Notebook wb"}}, Components: []string{"aipipelines"},
 	}, nil)
 	if err != nil || !res.Success {
 		t.Fatalf("got %+v, %v", res, err)
@@ -207,10 +215,10 @@ func TestCleanUp_RecipeProjectAfterItsPartsBeforeTheComponents(t *testing.T) {
 // before any part runs: nothing is deleted.
 func TestCleanUp_RecipeProjectRefusalDeletesNothing(t *testing.T) {
 	ran := fakeTeardowns(t, nil)
-	fakeRecipeProjectTeardown(t, ran, "Project recipe-dev still holds what this tool did not create: Notebook wb.")
+	fakeRecipeProjectTeardown(t, ran, map[string][]string{"recipe-dev": {"Notebook wb", "PersistentVolumeClaim wb-data"}})
 	f, c := newResourceFake(t)
 	var events []UpdateStepEvent
-	res, err := CleanUp(c, types.CleanupRequest{PipelineServers: []string{"recipe-dev"}, RecipeProject: "recipe-dev"}, func(e UpdateStepEvent) { events = append(events, e) })
+	res, err := CleanUp(c, types.CleanupRequest{PipelineServers: []string{"recipe-dev"}, RecipeProjects: []string{"recipe-dev"}}, func(e UpdateStepEvent) { events = append(events, e) })
 	if err != nil || res.Success || res.ErrorCode != "confirm_project_contents" || !strings.Contains(res.Message, "Nothing was deleted") {
 		t.Fatalf("got %+v, %v", res, err)
 	}

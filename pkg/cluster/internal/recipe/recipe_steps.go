@@ -83,7 +83,7 @@ func Ownership(c *kube.Client, run *types.RecipeRun) (map[string]bool, *types.Cl
 	if p := run.Project; p != nil && p.Name != "" && p.Owned {
 		if found, _, err := findProject(c, p.Name); err == nil && found.deletable() && !found.meta.Terminating() {
 			created[StepProject] = true
-			req.RecipeProject = p.Name
+			req.RecipeProjects = []string{p.Name}
 		}
 	}
 	for key, feature := range liveComponents(c, run.Components) {
@@ -92,7 +92,7 @@ func Ownership(c *kube.Client, run *types.RecipeRun) (map[string]bool, *types.Cl
 	}
 	delete(created, "")
 	slices.Sort(req.Components)
-	if req.RecipeProject == "" && len(req.Components) == 0 {
+	if len(req.RecipeProjects) == 0 && len(req.Components) == 0 {
 		return created, nil
 	}
 	return created, req

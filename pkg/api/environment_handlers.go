@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
@@ -157,11 +158,11 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 	if !decodeBody(w, r, 16<<10, &req, false) {
 		return
 	}
-	if len(req.PipelineServers) > maxCleanupProjects || len(req.Models) > maxCleanupProjects || len(req.Playgrounds) > maxCleanupProjects || len(req.MaaSPublished) > maxCleanupProjects {
-		writeError(w, fmt.Sprintf("at most %d pipeline servers, models and playgrounds each per clean-up", maxCleanupProjects), http.StatusBadRequest, "validation")
+	if len(req.PipelineServers) > maxCleanupProjects || len(req.Models) > maxCleanupProjects || len(req.Playgrounds) > maxCleanupProjects || len(req.MaaSPublished) > maxCleanupProjects || len(req.RecipeProjects) > maxCleanupProjects {
+		writeError(w, fmt.Sprintf("at most %d pipeline servers, models, playgrounds and recipe projects each per clean-up", maxCleanupProjects), http.StatusBadRequest, "validation")
 		return
 	}
-	for _, list := range [][]string{req.PipelineServers, req.Models, req.Playgrounds, req.MaaSPublished} {
+	for _, list := range [][]string{req.PipelineServers, req.Models, req.Playgrounds, req.MaaSPublished, req.RecipeProjects} {
 		seen := map[string]bool{}
 		for _, p := range list {
 			if !namespaceRegex.MatchString(p) {
@@ -175,18 +176,18 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 			seen[p] = true
 		}
 	}
-	if req.RecipeProject != "" && !namespaceRegex.MatchString(req.RecipeProject) {
-		writeError(w, "invalid recipe project name", http.StatusBadRequest, "validation")
-		return
-	}
-	if len(req.ConfirmProjectContents) > maxConfirmedContents || (len(req.ConfirmProjectContents) > 0 && req.RecipeProject == "") {
-		writeError(w, fmt.Sprintf("confirmProjectContents lists at most %d entries, and only with recipeProject", maxConfirmedContents), http.StatusBadRequest, "validation")
-		return
-	}
-	for _, c := range req.ConfirmProjectContents {
-		if c == "" || len(c) > 300 {
-			writeError(w, "invalid confirmProjectContents entry", http.StatusBadRequest, "validation")
+	confirmed := 0
+	for project, contents := range req.ConfirmProjectContents {
+		confirmed += len(contents)
+		if !slices.Contains(req.RecipeProjects, project) || confirmed > maxConfirmedContents {
+			writeError(w, fmt.Sprintf("confirmProjectContents names only projects of recipeProjects, with at most %d entries in all", maxConfirmedContents), http.StatusBadRequest, "validation")
 			return
+		}
+		for _, c := range contents {
+			if c == "" || len(c) > 300 {
+				writeError(w, "invalid confirmProjectContents entry", http.StatusBadRequest, "validation")
+				return
+			}
 		}
 	}
 	if req.DeleteNamespace && !req.Storage {
@@ -201,7 +202,7 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 		}
 		seenComponents[k] = true
 	}
-	if len(req.PipelineServers) == 0 && !req.Storage && !req.MLflow && len(req.Models) == 0 && !req.InferenceGateway && len(req.Playgrounds) == 0 && len(req.MaaSPublished) == 0 && !req.MaaSPlatform && len(req.Components) == 0 && req.RecipeProject == "" {
+	if len(req.PipelineServers) == 0 && !req.Storage && !req.MLflow && len(req.Models) == 0 && !req.InferenceGateway && len(req.Playgrounds) == 0 && len(req.MaaSPublished) == 0 && !req.MaaSPlatform && len(req.Components) == 0 && len(req.RecipeProjects) == 0 {
 		writeError(w, "nothing to clean up was selected", http.StatusBadRequest, "validation")
 		return
 	}
@@ -233,14 +234,14 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 	if req.MaaSPlatform {
 		target = append(target, "MaaS platform")
 	}
-	if req.RecipeProject != "" {
-		target = append(target, "recipe project "+req.RecipeProject)
+	if n := len(req.RecipeProjects); n > 0 {
+		target = append(target, map[bool]string{true: "recipe project ", false: "recipe projects "}[n == 1]+strings.Join(req.RecipeProjects, ", "))
 	}
 	if len(req.Components) > 0 {
 		target = append(target, "DataScienceCluster "+strings.Join(req.Components, ", "))
 	}
 	beginOperation(w, strings.Join(target, ", "))
-	slog.Info("mutation", "op", "cleanup", "pipelineServers", req.PipelineServers, "storage", req.Storage, "deleteNamespace", req.DeleteNamespace, "mlflow", req.MLflow, "models", req.Models, "inferenceGateway", req.InferenceGateway, "playgrounds", req.Playgrounds, "maasPublished", req.MaaSPublished, "maasPlatform", req.MaaSPlatform, "components", req.Components, "recipeProject", req.RecipeProject)
+	slog.Info("mutation", "op", "cleanup", "pipelineServers", req.PipelineServers, "storage", req.Storage, "deleteNamespace", req.DeleteNamespace, "mlflow", req.MLflow, "models", req.Models, "inferenceGateway", req.InferenceGateway, "playgrounds", req.Playgrounds, "maasPublished", req.MaaSPublished, "maasPlatform", req.MaaSPlatform, "components", req.Components, "recipeProjects", req.RecipeProjects)
 
 	_, cleanupErr := streamOperation(w, "cleanup", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 		return runCleanUp(c, req, emit)

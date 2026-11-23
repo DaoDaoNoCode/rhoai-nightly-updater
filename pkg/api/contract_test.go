@@ -203,15 +203,23 @@ func stubRunningOperation(t *testing.T, started time.Time) {
 // and a plan with a step of every action and a problem.
 func stubRecipeContract(t *testing.T, started time.Time) {
 	t.Helper()
-	origRead, origPlan, origRecipes, origOwnership := readRecipeRun, planRecipe, recipes, recipeOwnership
+	origRead, origPlan, origRecipes, origOwnership, origOwned := readRecipeRun, planRecipe, recipes, recipeOwnership, recipeOwnedProjects
 	recipes = &recipeRunner{}
 	t.Cleanup(func() {
-		readRecipeRun, planRecipe, recipes, recipeOwnership = origRead, origPlan, origRecipes, origOwnership
+		readRecipeRun, planRecipe, recipes, recipeOwnership, recipeOwnedProjects = origRead, origPlan, origRecipes, origOwnership, origOwned
 	})
+	// The projects recipes created that the cluster still has: this run's
+	// and an earlier run's.
+	recipeOwnedProjects = func(*cluster.Client) ([]types.RecipeOwnedProject, error) {
+		return []types.RecipeOwnedProject{
+			{Name: "recipe-dev", UID: "0f3c1d2e-uid", Recipe: "dev", CreatedAt: "2026-11-20T14:15:00Z"},
+			{Name: "recipe-old", UID: "7a8b9c0d-uid", Recipe: "old", CreatedAt: "2026-11-19T09:00:00Z"},
+		}, nil
+	}
 	// What the cluster shows of an ended run: its project, and the
 	// component it turned on.
 	recipeOwnership = func(_ *cluster.Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
-		return map[string]bool{"project": true, "pipelines-prereq": true}, &types.CleanupRequest{RecipeProject: run.Project.Name, Components: run.Components}
+		return map[string]bool{"project": true, "pipelines-prereq": true}, &types.CleanupRequest{RecipeProjects: []string{run.Project.Name}, Components: run.Components}
 	}
 	pinned := &types.RecipePinnedBuild{Tag: "rhoai-3.6", Image: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + strings.Repeat("a", 64), Digest: "sha256:" + strings.Repeat("a", 64)}
 	at := func(m int) string { return started.Add(time.Duration(m) * time.Minute).Format(time.RFC3339) }

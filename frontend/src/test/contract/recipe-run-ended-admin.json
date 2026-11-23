@@ -3,8 +3,24 @@
     "components": [
       "aipipelines"
     ],
-    "recipeProject": "recipe-dev"
+    "recipeProjects": [
+      "recipe-dev"
+    ]
   },
+  "projects": [
+    {
+      "createdAt": "2026-11-20T14:15:00Z",
+      "name": "recipe-dev",
+      "recipe": "dev",
+      "uid": "0f3c1d2e-uid"
+    },
+    {
+      "createdAt": "2026-11-19T09:00:00Z",
+      "name": "recipe-old",
+      "recipe": "old",
+      "uid": "7a8b9c0d-uid"
+    }
+  ],
   "run": {
     "bootId": "another-process",
     "components": [

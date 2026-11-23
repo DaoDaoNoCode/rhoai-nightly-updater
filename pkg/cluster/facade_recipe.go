@@ -40,3 +40,13 @@ func RecordRecipeActivity(c *Client, action, detail string, success bool) {
 func RecipeOwnership(c *Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
 	return recipe.Ownership(c, run)
 }
+
+// RecipeOwnedProjects is recipe.OwnedProjects.
+func RecipeOwnedProjects(c *Client) ([]types.RecipeOwnedProject, error) {
+	return recipe.OwnedProjects(c)
+}
+
+// ForgetGoneRecipeProjects is recipe.ForgetGoneProjects.
+func ForgetGoneRecipeProjects(c *Client) ([]string, error) {
+	return recipe.ForgetGoneProjects(c)
+}

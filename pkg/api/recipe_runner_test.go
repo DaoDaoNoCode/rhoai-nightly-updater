@@ -121,11 +121,11 @@ func installRecipeFake(t *testing.T) (*recipeFake, *fakeRecord) {
 	fakeSession(t, fullToken(sessionNow.Add(-time.Hour)), nil)
 	rec := installFakeRecord(t)
 	f := &recipeFake{}
-	origSteps, origPlan, origSave, origRead, origActivity, origOwnership := recipeSteps, planRecipe, saveRecipeRun, readRecipeRun, recordRecipeActivity, recipeOwnership
+	origSteps, origPlan, origSave, origRead, origActivity, origOwnership, origOwned := recipeSteps, planRecipe, saveRecipeRun, readRecipeRun, recordRecipeActivity, recipeOwnership, recipeOwnedProjects
 	origMutations, origRecipes := mutations, recipes
 	mutations, recipes = &mutationTracker{}, &recipeRunner{}
 	t.Cleanup(func() {
-		recipeSteps, planRecipe, saveRecipeRun, readRecipeRun, recordRecipeActivity, recipeOwnership = origSteps, origPlan, origSave, origRead, origActivity, origOwnership
+		recipeSteps, planRecipe, saveRecipeRun, readRecipeRun, recordRecipeActivity, recipeOwnership, recipeOwnedProjects = origSteps, origPlan, origSave, origRead, origActivity, origOwnership, origOwned
 		mutations, recipes = origMutations, origRecipes
 	})
 	recipeSteps = func(types.EnvironmentRecipe) []cluster.RecipeStep { return f.clusterSteps() }
@@ -163,6 +163,7 @@ func installRecipeFake(t *testing.T) (*recipeFake, *fakeRecord) {
 		return copyRecipeRun(f.record), nil
 	}
 	recipeOwnership = func(*cluster.Client, *types.RecipeRun) (map[string]bool, *types.CleanupRequest) { return nil, nil }
+	recipeOwnedProjects = func(*cluster.Client) ([]types.RecipeOwnedProject, error) { return nil, nil }
 	recordRecipeActivity = func(c *cluster.Client, _, _ string, _ bool) {
 		if c.ActsAsUser() {
 			t.Error("the activity was written with the user's token")

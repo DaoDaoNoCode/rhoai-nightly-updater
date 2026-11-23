@@ -187,7 +187,7 @@ func TestRecipeOwnership_FromTheCluster(t *testing.T) {
 		}
 		run := &types.RecipeRun{Project: s.Project, Steps: []types.RecipeRunStep{{ID: recipe.StepProject}}}
 		created, req := recipe.Ownership(c, run)
-		if req == nil || req.RecipeProject != "recipe-dev" || !created[recipe.StepProject] {
+		if req == nil || len(req.RecipeProjects) != 1 || req.RecipeProjects[0] != "recipe-dev" || !created[recipe.StepProject] {
 			t.Fatalf("created %v, cleanup %+v", created, req)
 		}
 		// Replaced by someone else (another UID, no recipe annotation).

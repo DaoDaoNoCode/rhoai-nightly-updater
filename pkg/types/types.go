@@ -1102,6 +1102,11 @@ type ResourcesStatus struct {
 	// (ManagedByTool false): whether a server works does not depend on who
 	// created it. The tool never changes or deletes them.
 	UnmanagedPipelineServers []ResourceState `json:"unmanagedPipelineServers,omitempty"`
+	// RecipeProjects are the projects recipes created that the cluster has
+	// now (Clean up everything offers them); RecipeProjectsError says why
+	// they could not be read (none is offered then).
+	RecipeProjects      []RecipeOwnedProject `json:"recipeProjects,omitempty"`
+	RecipeProjectsError string               `json:"recipeProjectsError,omitempty"`
 	// LegacyStorage is the S3 storage an earlier version of this tool left
 	// in namespace minio, until Migrate storage (or teardown) removes it.
 	LegacyStorage *LegacyStorageState `json:"legacyStorage,omitempty"`
@@ -1747,15 +1752,15 @@ type CleanupRequest struct {
 	// tool turned on that go back to what they were, last, each only while
 	// this tool still owns the field and nothing on the cluster uses it.
 	Components []string `json:"components,omitempty"`
-	// RecipeProject is a project a recipe created, deleted after the parts
-	// that live in it and before the components: only while it carries
-	// the recipe's label and the UID the recipe recorded.
-	RecipeProject string `json:"recipeProject,omitempty"`
-	// ConfirmProjectContents are what the recipe project still holds that
-	// this tool did not create ("Pod x", "PersistentVolumeClaim y", ...), as
-	// a refusal listed them: the project is deleted with them only when
-	// every one is confirmed.
-	ConfirmProjectContents []string `json:"confirmProjectContents,omitempty"`
+	// RecipeProjects are projects recipes created, each deleted after the
+	// parts that live in it and before the components: only while it
+	// carries the recipe's label and the UID the recipe recorded.
+	RecipeProjects []string `json:"recipeProjects,omitempty"`
+	// ConfirmProjectContents maps a recipe project to what it still holds
+	// that this tool did not create ("Pod x", "PersistentVolumeClaim y",
+	// ...), as a refusal listed them: a project is deleted with them only
+	// when every one is confirmed for that project.
+	ConfirmProjectContents map[string][]string `json:"confirmProjectContents,omitempty"`
 }
 
 // S3TeardownRequest is the body of POST /api/resources/s3/teardown.

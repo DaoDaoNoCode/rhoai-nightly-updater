@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/clock"
@@ -25,6 +26,10 @@ var (
 	maasPruneClock    clock.Clock = clock.Real
 	// pruneGoneMaaS runs one check with the client; tests replace it.
 	pruneGoneMaaS = cluster.PruneGoneMaaSPublicationsInBackground
+	// forgetGoneRecipeProjects drops recipe projects that are gone from
+	// their record, in the same check (the record is written only under
+	// the lock); tests replace it.
+	forgetGoneRecipeProjects = cluster.ForgetGoneRecipeProjects
 )
 
 // maasPruneTimeout bounds one background check.
@@ -107,5 +112,10 @@ func runMaaSPruneOnce(ctx context.Context) bool {
 	}
 	defer releaseClusterMutationLock()
 	pruneGoneMaaS(c)
+	if forgot, err := forgetGoneRecipeProjects(c); err != nil {
+		slog.Warn("background check: the record of the projects recipes created cannot be checked", "error", err)
+	} else if len(forgot) > 0 {
+		slog.Info("background check: forgot the recipe projects that are gone", "projects", strings.Join(forgot, ", "))
+	}
 	return true
 }

@@ -47,6 +47,10 @@ func CleanupStepID(part, project string) string {
 type cleanupPart struct {
 	id, title string
 	run       func() (*types.OperationResponse, error)
+	// says: the part's own result message is what the clean-up's result
+	// says it did (it may have changed nothing: a component kept, a
+	// project already gone), instead of "Deleted <title>".
+	says bool
 }
 
 // cleanupParts lists the parts of a clean-up in the order they run: the
@@ -107,21 +111,22 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 	if req.MaaSPlatform {
 		parts = append(parts, cleanupPart{id: CleanupStepID("maas-platform", ""), title: "the MaaS platform", run: func() (*types.OperationResponse, error) { return cleanupMaaSPlatform(c) }})
 	}
-	if req.RecipeProject != "" {
+	for _, project := range req.RecipeProjects {
 		// After every part that lives in a project (MaaS publications,
 		// pipeline servers, playgrounds, models), so its own teardown
-		// runs first.
+		// runs first; each with its own confirmations.
 		parts = append(parts, cleanupPart{
-			id:    CleanupStepID("recipe-project", req.RecipeProject),
-			title: fmt.Sprintf("project '%s', which a recipe created", req.RecipeProject),
+			id:    CleanupStepID("recipe-project", project),
+			title: fmt.Sprintf("project '%s', which a recipe created", project),
 			run: func() (*types.OperationResponse, error) {
-				return cleanupProject(c, req.RecipeProject, req.ConfirmProjectContents)
+				return cleanupProject(c, project, req.ConfirmProjectContents[project])
 			},
+			says: true,
 		})
 	}
 	if len(req.Components) > 0 {
 		// Last: what used the components is gone by now.
-		parts = append(parts, cleanupPart{id: CleanupStepID("components", ""), title: "the DataScienceCluster components this tool turned on", run: func() (*types.OperationResponse, error) { return cleanupComponents(c, req.Components) }})
+		parts = append(parts, cleanupPart{id: CleanupStepID("components", ""), title: "the DataScienceCluster components this tool turned on", run: func() (*types.OperationResponse, error) { return cleanupComponents(c, req.Components) }, says: true})
 	}
 	return parts
 }
@@ -142,31 +147,44 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 		}
 	}
 	parts := cleanupParts(c, req)
-	var done []string
+	var done, said []string
 	// A recipe project that would be refused (not the recipe's any more,
 	// or holding what the user did not confirm) refuses the whole clean-up
 	// before anything is deleted; its part checks again before deleting.
-	if req.RecipeProject != "" {
-		problem, code, unconfirmed, err := recipeProjectProblem(c, req.RecipeProject, req.ConfirmProjectContents)
+	// Every project is checked, so each one to confirm is named at once.
+	var problems []string
+	refusalCode := ""
+	for _, project := range req.RecipeProjects {
+		problem, code, unconfirmed, err := recipeProjectProblem(c, project, req.ConfirmProjectContents[project])
 		if err != nil {
-			problem, code = fmt.Sprintf("Cannot check project %s: %v.", req.RecipeProject, err), kube.ErrorCodeOr(err, "prerequisites")
+			problem, code = fmt.Sprintf("Cannot check project %s: %v.", project, err), kube.ErrorCodeOr(err, "prerequisites")
 		}
-		if problem != "" {
-			step := CleanupStepID("recipe-project", req.RecipeProject)
-			// Detail lists what is to confirm, one per line, exactly as
-			// confirmProjectContents takes it (names cannot hold a line
-			// break): the browser shows the list and sends it back.
-			emit(UpdateStepEvent{Step: step, Status: "failed", Message: problem, ErrorCode: code, Detail: strings.Join(unconfirmed, "\n")})
-			recordCleanupActivity(c, "refused: "+problem, false)
-			return &types.OperationResponse{Success: false, Message: problem + " Nothing was deleted.", ErrorCode: code}, nil
+		if problem == "" {
+			continue
 		}
+		// Detail lists what is to confirm, one per line, exactly as
+		// confirmProjectContents takes it for the project (names cannot
+		// hold a line break): the browser shows the list and sends it
+		// back.
+		emit(UpdateStepEvent{Step: CleanupStepID("recipe-project", project), Status: "failed", Message: problem, ErrorCode: code, Detail: strings.Join(unconfirmed, "\n")})
+		problems = append(problems, problem)
+		// A refusal that is not only a confirmation to give names its
+		// own code.
+		if refusalCode == "" || refusalCode == recipe.ErrorCodeConfirmContents {
+			refusalCode = code
+		}
+	}
+	if len(problems) > 0 {
+		problem := strings.Join(problems, " ")
+		recordCleanupActivity(c, "refused: "+problem, false)
+		return &types.OperationResponse{Success: false, Message: problem + " Nothing was deleted.", ErrorCode: refusalCode}, nil
 	}
 	// Projects of MaaS publications that are gone leave the MaaS gateway
 	// first (maas_prune.go), whatever is selected.
 	logs := serving.ReleaseGoneMaaSProjects(c)
 	for i, p := range parts {
 		if err := c.Context().Err(); err != nil {
-			return cleanupStopped(c, parts[i:], done, logs, fmt.Sprintf("The clean-up was stopped before %s: %v.", p.title, err), "cancelled"), nil
+			return cleanupStopped(c, parts[i:], done, said, logs, fmt.Sprintf("The clean-up was stopped before %s: %v.", p.title, err), "cancelled"), nil
 		}
 		start := time.Now()
 		emit(UpdateStepEvent{Step: p.id, Status: "running", Message: fmt.Sprintf("Deleting %s...", p.title)})
@@ -177,26 +195,51 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 		logs = append(logs, res.Logs...)
 		if !res.Success {
 			emit(UpdateStepEvent{Step: p.id, Status: "failed", Message: res.Message, ErrorCode: res.ErrorCode})
-			return cleanupStopped(c, parts[i+1:], done, logs, res.Message, res.ErrorCode), nil
+			return cleanupStopped(c, parts[i+1:], done, said, logs, res.Message, res.ErrorCode), nil
 		}
 		emit(UpdateStepEvent{Step: p.id, Status: "success", Message: res.Message, Detail: time.Since(start).Round(time.Second).String()})
-		done = append(done, p.title)
+		if p.says {
+			said = append(said, strings.TrimSpace(res.Message))
+		} else {
+			done = append(done, p.title)
+		}
 	}
 	slog.Info("clean-up", "parts", len(parts), "user", kube.GetUser(c))
-	recordCleanupActivity(c, strings.Join(done, ", "), true)
-	msg := "Nothing was selected."
-	if len(done) > 0 {
-		msg = "Deleted " + kube.JoinTitles(done) + "."
-	}
+	msg := cleanupSummary(done, said)
+	recordCleanupActivity(c, msg, true)
 	return &types.OperationResponse{Success: true, Message: msg, Logs: logs}, nil
+}
+
+// cleanupSummary says what a clean-up did: the parts it deleted, then
+// what the parts that speak for themselves (the components, a recipe
+// project) said, so nothing kept or already gone reads as deleted.
+func cleanupSummary(done, said []string) string {
+	var out []string
+	if len(done) > 0 {
+		out = append(out, "Deleted "+kube.JoinTitles(done)+".")
+	}
+	for _, s := range said {
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	if len(out) == 0 {
+		return "Nothing was selected."
+	}
+	return strings.Join(out, " ")
 }
 
 // cleanupStopped is the result of a clean-up that stopped: why, what was
 // deleted before, and what was not done.
-func cleanupStopped(c *Client, notDone []cleanupPart, done, logs []string, reason, code string) *types.OperationResponse {
+func cleanupStopped(c *Client, notDone []cleanupPart, done, said, logs []string, reason, code string) *types.OperationResponse {
 	msg := strings.TrimSpace(reason)
 	if len(done) > 0 {
 		msg += " Deleted before it stopped: " + kube.JoinTitles(done) + "."
+	}
+	for _, s := range said {
+		if s = strings.TrimSpace(s); s != "" {
+			msg += " " + s
+		}
 	}
 	if len(notDone) > 0 {
 		titles := make([]string, len(notDone))

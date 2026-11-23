@@ -73,6 +73,7 @@ var (
 	readRecipeRun        = cluster.ReadRecipeRun
 	recordRecipeActivity = cluster.RecordRecipeActivity
 	recipeOwnership      = cluster.RecipeOwnership
+	recipeOwnedProjects  = cluster.RecipeOwnedProjects
 )
 
 // recipeRecordTimeout bounds one write of the run record. The last one
@@ -572,8 +573,19 @@ func (x *recipeExec) finish(end recipeEnd) {
 // What a run that is not running set up is worked out from the cluster
 // (cluster.RecipeOwnership): each step's created and the Clean up
 // request. The record's own created flags never count.
+//
+// Once no run is running it also lists the projects recipes created (this
+// run's and earlier runs') that the cluster has now
+// (cluster.RecipeOwnedProjects), each removable by Clean up.
 func recipeRunStatus(c *cluster.Client) types.RecipeRunStatus {
 	st := recordedRecipeRunStatus(c)
+	if !st.Running {
+		projects, err := recipeOwnedProjects(c)
+		if err != nil {
+			st.ProjectsError = "Cannot read the projects recipes created: " + err.Error()
+		}
+		st.Projects = projects
+	}
 	if st.Run == nil {
 		return st
 	}
