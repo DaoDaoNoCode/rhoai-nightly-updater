@@ -183,6 +183,14 @@ Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#u
   `openshift-config/pull-secret` (SECURITY.md). The card now says the entry
   is recorded as added by this tool and that Add and Remove check it with
   your permissions before they change anything.
+- **A MaaS publication of which nothing is left is dropped.** When the
+  project and model are still there but the MaaSModelRef is gone and the
+  model no longer routes through the MaaS gateway (the reference deleted
+  outside this tool, or a publish that stopped before it), the publication
+  stayed in this tool's record for good. It is now named as being removed
+  and the background check drops it (and its subscription entry); the
+  model's row is "Not published". A deleted MaaSModelRef whose model still
+  routes through the MaaS gateway stays "Partly published" with Unpublish.
 - **A DataScienceCluster change applies only to the DSC it was checked
   on.** The Components page's changes (a component's state, Fix, soft
   reset) and Diagnostics' disable-component fix tested only the fields

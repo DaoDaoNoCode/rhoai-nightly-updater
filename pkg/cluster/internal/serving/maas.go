@@ -1194,14 +1194,15 @@ type maasStatusRun struct {
 	modelsErr error
 }
 
-// goneWhy says why the publication of name in project is gone, if it is.
-func (r *maasStatusRun) goneWhy(project, name string) (string, bool) {
+// goneWhy says why the publication of name in project is gone, if it is,
+// and whether nothing of it is left (maasGonePub.unpublished).
+func (r *maasStatusRun) goneWhy(project, name string) (string, bool, bool) {
 	for _, g := range r.gone {
 		if g.pub.Project == project && g.pub.Model == name {
-			return g.why, true
+			return g.why, true, g.unpublished
 		}
 	}
-	return "", false
+	return "", false, false
 }
 
 func (r *maasStatusRun) part(p types.MaaSPart) { r.st.Parts = append(r.st.Parts, p) }
@@ -1691,8 +1692,9 @@ func (r *maasStatusRun) modelRow(m LLMISvcObject, entry CatalogModel, v maasMode
 		return item
 	}
 	// Its publication is gone (its project is being deleted): what is
-	// left goes on its own, so the row offers nothing.
-	if why, gone := r.goneWhy(m.Metadata.Namespace, m.Metadata.Name); gone {
+	// left goes on its own, so the row offers nothing. One of which
+	// nothing is left is not published: the live row below.
+	if why, gone, unpublished := r.goneWhy(m.Metadata.Namespace, m.Metadata.Name); gone && !unpublished {
 		item.Removing = true
 		item.Message = "Being removed automatically: " + why + "."
 		item.SetupBlockedReason = item.Message

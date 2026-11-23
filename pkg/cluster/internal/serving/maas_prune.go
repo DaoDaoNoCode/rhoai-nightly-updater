@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -37,17 +38,22 @@ import (
 // A publication is gone when its project no longer exists (or is being
 // deleted), or when the model it published is: absent, or another object
 // under its name than the one whose UID the tool recorded (deleted and
-// made again, as in a recreated project). Anything that cannot be read
-// keeps the publication (fail closed: it stays as it is, and the next
-// run looks again).
+// made again, as in a recreated project), or when nothing of it is left
+// while project and model are there: no MaaSModelRef of this tool's, and
+// the model neither on the MaaS gateway nor routed through it (its
+// reference deleted outside the tool, or a publish that stopped before
+// it). Anything that cannot be read keeps the publication (fail closed:
+// it stays as it is, and the next run looks again).
 
 // maasGonePub is a publication that is gone, and why. projectGone: its
 // project no longer exists or is being deleted (nothing of the tool's is
-// left to delete there).
+// left to delete there). unpublished: the model is there and nothing of
+// the publication is (its row is the model's live one, Not published).
 type maasGonePub struct {
 	pub         MaaSPub
 	why         string
 	projectGone bool
+	unpublished bool
 }
 
 // goneMaaSPublications reads, for each recorded publication, whether it is
@@ -67,10 +73,10 @@ func goneMaaSPublications(c *kube.Client, rec MaaSRecord) ([]maasGonePub, error)
 		case err != nil:
 			continue
 		case !found:
-			out = append(out, maasGonePub{p, fmt.Sprintf("project %s no longer exists", p.Project), true})
+			out = append(out, maasGonePub{p, fmt.Sprintf("project %s no longer exists", p.Project), true, false})
 			continue
 		case meta.Terminating():
-			out = append(out, maasGonePub{p, fmt.Sprintf("project %s is being deleted", p.Project), true})
+			out = append(out, maasGonePub{p, fmt.Sprintf("project %s is being deleted", p.Project), true, false})
 			continue
 		}
 		model, found, err := ReadToolModel(c, p.Project, p.Model)
@@ -78,15 +84,40 @@ func goneMaaSPublications(c *kube.Client, rec MaaSRecord) ([]maasGonePub, error)
 		case err != nil:
 			continue
 		case !found:
-			out = append(out, maasGonePub{p, fmt.Sprintf("model %s in %s no longer exists", p.Model, p.Project), false})
+			out = append(out, maasGonePub{p, fmt.Sprintf("model %s in %s no longer exists", p.Model, p.Project), false, false})
 		case modelsErr == nil && models.notTheToolsModel(p, model.Metadata.UID):
-			out = append(out, maasGonePub{p, fmt.Sprintf("model %s in %s is not the one this tool published (it was deleted and made again)", p.Model, p.Project), false})
+			out = append(out, maasGonePub{p, fmt.Sprintf("model %s in %s is not the one this tool published (it was deleted and made again)", p.Model, p.Project), false, false})
 		case rec.staleFor(p.Project, p.Model, model.Metadata.UID):
 			// This tool made it again: its own, but not the one published.
-			out = append(out, maasGonePub{p, fmt.Sprintf("model %s in %s was deleted and made again since it was published", p.Model, p.Project), false})
+			out = append(out, maasGonePub{p, fmt.Sprintf("model %s in %s was deleted and made again since it was published", p.Model, p.Project), false, false})
+		default:
+			if left, err := maasPublicationLeft(c, model); err == nil && !left {
+				out = append(out, maasGonePub{p, fmt.Sprintf("the MaaSModelRef of model %s in %s no longer exists", p.Model, p.Project), false, true})
+			}
 		}
 	}
 	return out, modelsErr
+}
+
+// maasPublicationLeft: something of the publication of model is on the
+// cluster: this tool's MaaSModelRef, the model's MaaS gateway ref, or its
+// route through the MaaS gateway (KServe has not moved it yet).
+func maasPublicationLeft(c *kube.Client, model LLMISvcObject) (bool, error) {
+	ref, found, err := readMaaSModelRef(c, model.Metadata.Namespace, model.Metadata.Name)
+	if err != nil {
+		return false, err
+	}
+	if found && ToolOwned(ref.Metadata) {
+		return true, nil
+	}
+	if ModelHasMaaSRef(model) {
+		return true, nil
+	}
+	parents, _, err := readModelRoute(c, model.Metadata.Namespace, model.Metadata.Name)
+	if err != nil {
+		return false, err
+	}
+	return slices.Contains(parents, inferenceGatewayNamespace+"/"+MaaSGatewayName), nil
 }
 
 // notTheToolsModel: the tool recorded another UID for p's model than uid.
