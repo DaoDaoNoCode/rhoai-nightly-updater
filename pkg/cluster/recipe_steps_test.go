@@ -142,38 +142,94 @@ func TestRecipePrereqSteps_RecordTheComponentsTheyTurnedOn(t *testing.T) {
 			t.Fatalf("%s: %+v %v", id, res, err)
 		}
 	}
-	if strings.Join(st.Components, ",") != "aipipelines" || !st.Created[recipe.StepPipelinesPrereq] || !st.Created[recipe.StepMLflowPrereq] {
-		t.Errorf("components %v, created %v", st.Components, st.Created)
+	if strings.Join(st.Components, ",") != "aipipelines" {
+		t.Errorf("components %v", st.Components)
 	}
 }
 
-// A run's Clean up asks for what its steps set up (any attempt), the
-// project a recipe created, and the components it turned on; nothing
-// found there. A run that set up nothing Clean up removes has none.
-func TestRecipeCleanupRequest(t *testing.T) {
-	run := &types.RecipeRun{
-		Project: &types.RecipeProjectRef{Name: "recipe-dev", UID: "u1", Owned: true},
-		Steps: []types.RecipeRunStep{
-			{ID: recipe.StepRHOAI, Created: true}, {ID: recipe.StepProject, Created: true}, {ID: recipe.StepS3},
-			{ID: recipe.StepPipelineServer, Created: true}, {ID: recipe.StepMLflow, Created: true},
-		},
-		Components: []string{"aipipelines", "mlflowoperator"},
-	}
-	got := recipe.CleanupRequest(run)
-	want := types.CleanupRequest{PipelineServers: []string{"recipe-dev"}, MLflow: true, RecipeProject: "recipe-dev", Components: []string{"aipipelines", "mlflowoperator"}}
-	if got == nil || !reflect.DeepEqual(*got, want) {
-		t.Errorf("cleanup %+v", got)
-	}
-	// A project the run uses but no recipe created stays.
-	run.Project.Owned = false
-	if got := recipe.CleanupRequest(run); got == nil || got.RecipeProject != "" {
-		t.Errorf("foreign project %+v", got)
-	}
-	none := &types.RecipeRun{Project: &types.RecipeProjectRef{Name: "mine"}, Steps: []types.RecipeRunStep{{ID: recipe.StepRHOAI, Created: true}, {ID: recipe.StepS3}}}
-	if got := recipe.CleanupRequest(none); got != nil {
-		t.Errorf("nothing to clean up: %+v", got)
-	}
-	if recipe.CleanupRequest(nil) != nil {
+// What a run owns is read from the cluster, not from its record: the
+// components it turned on while they are still Managed and recorded by
+// Set up, the project while it is the one a recipe created. The S3
+// storage, a pipeline server and MLflow are never claimed, whatever the
+// record says.
+func TestRecipeOwnership_FromTheCluster(t *testing.T) {
+	t.Run("components", func(t *testing.T) {
+		pc := newPrereqCluster(t)
+		if res, _ := runPrereqs(t, pc.c, "pipelines"); !res.Success {
+			t.Fatalf("setup %+v", res)
+		}
+		run := &types.RecipeRun{
+			Steps: []types.RecipeRunStep{
+				{ID: recipe.StepPipelinesPrereq}, {ID: recipe.StepS3, Created: true}, {ID: recipe.StepPipelineServer, Created: true}, {ID: recipe.StepMLflow, Created: true},
+			},
+			// mlflowoperator: Removed, and not in Set up's record.
+			Components: []string{"aipipelines", "mlflowoperator"},
+		}
+		created, req := recipe.Ownership(pc.c, run)
+		want := types.CleanupRequest{Components: []string{"aipipelines"}}
+		if req == nil || !reflect.DeepEqual(*req, want) || !reflect.DeepEqual(created, map[string]bool{recipe.StepPipelinesPrereq: true}) {
+			t.Fatalf("created %v, cleanup %+v", created, req)
+		}
+		// Someone else sets it back: no longer as the run set it.
+		k, _ := parseFakePath(tDSC)
+		pc.f.mu.Lock()
+		ensureMap(ensureMap(ensureMap(pc.f.objects[k], "spec"), "components"), "aipipelines")["managementState"] = "Removed"
+		pc.f.mu.Unlock()
+		if created, req := recipe.Ownership(pc.c, run); req != nil || len(created) != 0 {
+			t.Fatalf("after the change: created %v, cleanup %+v", created, req)
+		}
+	})
+	t.Run("project", func(t *testing.T) {
+		f, c := projectFake(t)
+		s := &recipe.State{Recipe: tRecipe(t, "create")}
+		if res := ensureProject(t, c, s); !res.Success {
+			t.Fatalf("ensure %+v", res)
+		}
+		run := &types.RecipeRun{Project: s.Project, Steps: []types.RecipeRunStep{{ID: recipe.StepProject}}}
+		created, req := recipe.Ownership(c, run)
+		if req == nil || req.RecipeProject != "recipe-dev" || !created[recipe.StepProject] {
+			t.Fatalf("created %v, cleanup %+v", created, req)
+		}
+		// Replaced by someone else (another UID, no recipe annotation).
+		f.putJSON(tRecipeNS, `{"metadata":{"uid":"someone-else"}}`)
+		if created, req := recipe.Ownership(c, run); req != nil || created[recipe.StepProject] {
+			t.Fatalf("replaced: created %v, cleanup %+v", created, req)
+		}
+	})
+	if created, req := recipe.Ownership(nil, nil); req != nil || len(created) != 0 {
 		t.Error("no run")
+	}
+}
+
+// When the prerequisites record cannot be read, the step says that its
+// components are not known to the run (and so not in its Clean up)
+// instead of losing them silently.
+func TestRecipePrereqSteps_UnreadableRecordIsSaid(t *testing.T) {
+	pc := newPrereqCluster(t)
+	r := tRecipe(t, "create")
+	r.Spec.Features.Pipelines.Enabled = true
+	reads := 0
+	serve := pc.f.beforeServe
+	pc.f.beforeServe = func(method, path string) {
+		serve(method, path)
+		if method == http.MethodGet && strings.HasSuffix(path, "/configmaps/rhoai-nightly-updater-snapshot") {
+			reads++
+			pc.f.mu.Lock()
+			if reads == 1 {
+				pc.f.fail["GET "+path] = 500
+			} else {
+				delete(pc.f.fail, "GET "+path)
+			}
+			pc.f.mu.Unlock()
+		}
+	}
+	st := &recipe.State{Recipe: r}
+	var events []string
+	res, err := recipeStep(t, r, recipe.StepPipelinesPrereq).Run(pc.c, st, func(e types.UpdateStepEvent) { events = append(events, e.Message) })
+	if err != nil || res == nil {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if len(st.Components) != 0 || !strings.Contains(res.Message, "Clean up everything") || !strings.Contains(strings.Join(events, "\n"), "cannot tell which") {
+		t.Fatalf("components %v, message %q, events %v", st.Components, res.Message, events)
 	}
 }

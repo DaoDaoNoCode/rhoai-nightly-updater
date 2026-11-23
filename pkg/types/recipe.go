@@ -371,8 +371,8 @@ type RecipeRun struct {
 	Project   *RecipeProjectRef  `json:"project,omitempty"`
 	Steps     []RecipeRunStep    `json:"steps"`
 	// Components are the DataScienceCluster components this run (any of
-	// its attempts) turned on (the prerequisites record's), which its
-	// Clean up turns back.
+	// its attempts) turned on (the keys its prerequisite steps added to
+	// the prerequisites record). Its Clean up offers those still Managed.
 	Components []string `json:"components,omitempty"`
 }
 
@@ -389,8 +389,9 @@ type RecipeRunStep struct {
 	// at most (the plan's figures).
 	TypicalSeconds int `json:"typicalSeconds"`
 	MaxSeconds     int `json:"maxSeconds"`
-	// Created: this run (any of its attempts) set the step's part up;
-	// false when it was there already. Kept across Resume.
+	// Created: what the step sets up exists on the cluster as this run's,
+	// worked out when GET /api/recipes/run answers a run that is not
+	// running (internal/recipe Ownership); never stored in the record.
 	Created bool `json:"created,omitempty"`
 }
 
@@ -412,8 +413,9 @@ type RecipeRunStatus struct {
 	// operation), when it runs.
 	Step *UpdateStepEvent `json:"step,omitempty"`
 	// Cleanup is the clean-up request for what the run created (POST
-	// /api/resources/cleanup/stream), when the run is not running and
-	// created anything; the user confirms it, and the project's contents
+	// /api/resources/cleanup/stream), as the cluster shows it now, when
+	// the run is not running and there is any (internal/recipe
+	// CleanupRequest); the user confirms it, and the project's contents
 	// when Clean up asks.
 	Cleanup *CleanupRequest `json:"cleanup,omitempty"`
 }

@@ -36,7 +36,7 @@ func RecordRecipeActivity(c *Client, action, detail string, success bool) {
 	recipe.RecordActivity(c, action, detail, success)
 }
 
-// RecipeCleanupRequest is recipe.CleanupRequest.
-func RecipeCleanupRequest(run *types.RecipeRun) *types.CleanupRequest {
-	return recipe.CleanupRequest(run)
+// RecipeOwnership is recipe.Ownership.
+func RecipeOwnership(c *Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
+	return recipe.Ownership(c, run)
 }

@@ -203,9 +203,16 @@ func stubRunningOperation(t *testing.T, started time.Time) {
 // and a plan with a step of every action and a problem.
 func stubRecipeContract(t *testing.T, started time.Time) {
 	t.Helper()
-	origRead, origPlan, origRecipes := readRecipeRun, planRecipe, recipes
+	origRead, origPlan, origRecipes, origOwnership := readRecipeRun, planRecipe, recipes, recipeOwnership
 	recipes = &recipeRunner{}
-	t.Cleanup(func() { readRecipeRun, planRecipe, recipes = origRead, origPlan, origRecipes })
+	t.Cleanup(func() {
+		readRecipeRun, planRecipe, recipes, recipeOwnership = origRead, origPlan, origRecipes, origOwnership
+	})
+	// What the cluster shows of an ended run: its project, and the
+	// component it turned on.
+	recipeOwnership = func(_ *cluster.Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
+		return map[string]bool{"project": true, "pipelines-prereq": true}, &types.CleanupRequest{RecipeProject: run.Project.Name, Components: run.Components}
+	}
 	pinned := &types.RecipePinnedBuild{Tag: "rhoai-3.6", Image: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + strings.Repeat("a", 64), Digest: "sha256:" + strings.Repeat("a", 64)}
 	at := func(m int) string { return started.Add(time.Duration(m) * time.Minute).Format(time.RFC3339) }
 	readRecipeRun = func(*cluster.Client) (*types.RecipeRun, error) {
@@ -216,9 +223,9 @@ func stubRecipeContract(t *testing.T, started time.Time) {
 			Project: &types.RecipeProjectRef{Name: "recipe-dev", UID: "0f3c1d2e-uid", Owned: true},
 			Steps: []types.RecipeRunStep{
 				{ID: "rhoai", Title: "RHOAI", Status: types.RecipeStepSkipped, Message: "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).", StartedAt: at(9), FinishedAt: at(9), TypicalSeconds: 420, MaxSeconds: 900},
-				{ID: "dsc", Title: "DataScienceCluster", Status: types.RecipeStepSuccess, Message: "DataScienceCluster created with default components", StartedAt: at(9), FinishedAt: at(10), TypicalSeconds: 60, MaxSeconds: 420, Created: true},
+				{ID: "dsc", Title: "DataScienceCluster", Status: types.RecipeStepSuccess, Message: "DataScienceCluster created with default components", StartedAt: at(9), FinishedAt: at(10), TypicalSeconds: 60, MaxSeconds: 420},
 				{ID: "project", Title: "Project recipe-dev", Status: types.RecipeStepFailed, Message: "Creating project recipe-dev failed.", ErrorCode: "forbidden", StartedAt: at(10), FinishedAt: at(10), TypicalSeconds: 10, MaxSeconds: 60},
-				{ID: "pipelines-prereq", Title: "What Pipelines needs", Status: types.RecipeStepRunning, StartedAt: at(11), TypicalSeconds: 120, MaxSeconds: 600, Created: true},
+				{ID: "pipelines-prereq", Title: "What Pipelines needs", Status: types.RecipeStepRunning, StartedAt: at(11), TypicalSeconds: 120, MaxSeconds: 600},
 				{ID: "s3", Title: "S3 storage", Status: types.RecipeStepPending, TypicalSeconds: 60, MaxSeconds: 300},
 			},
 			// An earlier attempt turned the component on.
@@ -258,10 +265,10 @@ func stubEndedRecipeRun(t *testing.T) {
 			Project:    &types.RecipeProjectRef{Name: "recipe-dev", UID: "0f3c1d2e-uid", Owned: true},
 			Steps: []types.RecipeRunStep{
 				{ID: "rhoai", Title: "RHOAI", Status: types.RecipeStepSkipped, Message: "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).", StartedAt: at(20), FinishedAt: at(20), TypicalSeconds: 420, MaxSeconds: 900},
-				{ID: "project", Title: "Project recipe-dev", Status: types.RecipeStepSkipped, Message: "Already set up: Project recipe-dev was created by a recipe.", StartedAt: at(20), FinishedAt: at(20), TypicalSeconds: 10, MaxSeconds: 60, Created: true},
-				{ID: "pipelines-prereq", Title: "What Pipelines needs", Status: types.RecipeStepSkipped, Message: "Already set up: Everything it needs is set up.", StartedAt: at(20), FinishedAt: at(20), TypicalSeconds: 120, MaxSeconds: 600, Created: true},
-				{ID: "s3", Title: "S3 storage", Status: types.RecipeStepSuccess, Message: "S3 storage is ready.", StartedAt: at(20), FinishedAt: at(21), TypicalSeconds: 60, MaxSeconds: 300, Created: true},
-				{ID: "pipeline-server", Title: "Pipeline server", Status: types.RecipeStepFailed, Message: "The pipeline server in recipe-dev was set up but is not ready. Resume waits again.", ErrorCode: "timeout", StartedAt: at(21), FinishedAt: at(31), TypicalSeconds: 120, MaxSeconds: 600, Created: true},
+				{ID: "project", Title: "Project recipe-dev", Status: types.RecipeStepSkipped, Message: "Already set up: Project recipe-dev was created by a recipe.", StartedAt: at(20), FinishedAt: at(20), TypicalSeconds: 10, MaxSeconds: 60},
+				{ID: "pipelines-prereq", Title: "What Pipelines needs", Status: types.RecipeStepSkipped, Message: "Already set up: Everything it needs is set up.", StartedAt: at(20), FinishedAt: at(20), TypicalSeconds: 120, MaxSeconds: 600},
+				{ID: "s3", Title: "S3 storage", Status: types.RecipeStepSuccess, Message: "S3 storage is ready.", StartedAt: at(20), FinishedAt: at(21), TypicalSeconds: 60, MaxSeconds: 300},
+				{ID: "pipeline-server", Title: "Pipeline server", Status: types.RecipeStepFailed, Message: "The pipeline server in recipe-dev was set up but is not ready. Resume waits again.", ErrorCode: "timeout", StartedAt: at(21), FinishedAt: at(31), TypicalSeconds: 120, MaxSeconds: 600},
 			},
 			Components: []string{"aipipelines"},
 		}, nil

@@ -306,7 +306,6 @@ func EnsureProject(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (
 			return fail(fmt.Sprintf("Project %s was created, but recording it as the recipe's failed (%v), so Clean up will not delete it. Delete it in the console, then run the recipe again.", name, err), kube.ErrorCodeOr(err, "prerequisites"))
 		}
 		s.Project = &types.RecipeProjectRef{Name: name, UID: uid, Owned: true}
-		s.MarkCreated(StepProject)
 	}
 	if err := labelProject(c, name, uid, s.Recipe.Metadata.Name, kueue); err != nil {
 		return fail(fmt.Sprintf("Project %s was created, but setting its labels failed: %v. Resume sets them again.", name, err), kube.ErrorCodeOr(err, "prerequisites"))

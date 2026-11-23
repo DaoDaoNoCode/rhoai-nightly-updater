@@ -49,9 +49,7 @@ type fakeRecipeStep struct {
 	clients  []*cluster.Client
 	onRun    func()
 	waitsCtx bool
-	// created: Run sets the part up (not found there); components: the
-	// DataScienceCluster components it turns on.
-	created    bool
+	// components: the DataScienceCluster components Run turns on.
 	components []string
 }
 
@@ -76,9 +74,6 @@ func (f *recipeFake) clusterSteps() []cluster.RecipeStep {
 				f.mu.Lock()
 				s.ran = true
 				f.mu.Unlock()
-				if s.created {
-					st.MarkCreated(s.id)
-				}
 				st.AddComponents(s.components...)
 				emit(cluster.UpdateStepEvent{Step: s.id + "-inner", Status: "running", Message: "working on " + s.id})
 				if s.onRun != nil {
@@ -123,11 +118,11 @@ func installRecipeFake(t *testing.T) (*recipeFake, *fakeRecord) {
 	fakeSession(t, fullToken(sessionNow.Add(-time.Hour)), nil)
 	rec := installFakeRecord(t)
 	f := &recipeFake{}
-	origSteps, origPlan, origSave, origRead, origActivity := recipeSteps, planRecipe, saveRecipeRun, readRecipeRun, recordRecipeActivity
+	origSteps, origPlan, origSave, origRead, origActivity, origOwnership := recipeSteps, planRecipe, saveRecipeRun, readRecipeRun, recordRecipeActivity, recipeOwnership
 	origMutations, origRecipes := mutations, recipes
 	mutations, recipes = &mutationTracker{}, &recipeRunner{}
 	t.Cleanup(func() {
-		recipeSteps, planRecipe, saveRecipeRun, readRecipeRun, recordRecipeActivity = origSteps, origPlan, origSave, origRead, origActivity
+		recipeSteps, planRecipe, saveRecipeRun, readRecipeRun, recordRecipeActivity, recipeOwnership = origSteps, origPlan, origSave, origRead, origActivity, origOwnership
 		mutations, recipes = origMutations, origRecipes
 	})
 	recipeSteps = func(types.EnvironmentRecipe) []cluster.RecipeStep { return f.clusterSteps() }
@@ -164,6 +159,7 @@ func installRecipeFake(t *testing.T) (*recipeFake, *fakeRecord) {
 		}
 		return copyRecipeRun(f.record), nil
 	}
+	recipeOwnership = func(*cluster.Client, *types.RecipeRun) (map[string]bool, *types.CleanupRequest) { return nil, nil }
 	recordRecipeActivity = func(c *cluster.Client, _, _ string, _ bool) {
 		if c.ActsAsUser() {
 			t.Error("the activity was written with the user's token")
@@ -909,14 +905,15 @@ func TestRecipeRun_SignInStopSaysResume(t *testing.T) {
 	}
 }
 
-// Resume keeps what an earlier attempt created: a step skipped now as
-// "already set up" stays the run's own, and the components it turned on
-// stay recorded. The status offers the clean-up of exactly those parts.
-func TestRecipeResume_KeepsWhatEarlierAttemptsCreated(t *testing.T) {
+// Resume keeps the components earlier attempts turned on (merged, never
+// reset), and the record stores no ownership: what a run set up, each
+// step's created and the Clean up request, is worked out when the status
+// is answered (cluster.RecipeOwnership), from the cluster, never from the
+// record's own flags.
+func TestRecipeResume_KeepsComponentsAndOwnershipIsLive(t *testing.T) {
 	f, _ := installRecipeFake(t)
-	f.addStep("s3").created = true
 	pre := f.addStep("pipelines-prereq")
-	pre.created, pre.components = true, []string{"aipipelines"}
+	pre.components = []string{"aipipelines"}
 	ps := f.addStep("pipeline-server")
 	ps.result = &types.OperationResponse{Success: false, Message: "not ready", ErrorCode: "timeout"}
 	for _, s := range f.steps {
@@ -928,11 +925,8 @@ func TestRecipeResume_KeepsWhatEarlierAttemptsCreated(t *testing.T) {
 	f.mu.Lock()
 	f.steps = nil
 	f.mu.Unlock()
-	f.addStep("s3").done = true
 	f.addStep("pipelines-prereq").done = true
-	ps2 := f.addStep("pipeline-server")
-	ps2.created = true
-	f.addStep("mlflow").done = true // found there: not the run's
+	f.addStep("pipeline-server").components = []string{"mlflowoperator"}
 	for _, s := range f.steps {
 		close(s.release)
 	}
@@ -947,20 +941,31 @@ func TestRecipeResume_KeepsWhatEarlierAttemptsCreated(t *testing.T) {
 	recipes.mu.Unlock()
 	waitDone(t, done)
 	run := f.saved()
-	created := map[string]bool{}
-	for _, s := range run.Steps {
-		created[s.ID] = s.Created
-	}
-	if !created["s3"] || !created["pipelines-prereq"] || !created["pipeline-server"] || created["mlflow"] {
-		t.Errorf("created %v", created)
-	}
-	if strings.Join(run.Components, ",") != "aipipelines" {
+	if strings.Join(run.Components, ",") != "aipipelines,mlflowoperator" {
 		t.Errorf("components %v", run.Components)
 	}
+	for _, s := range run.Steps {
+		if s.Created {
+			t.Errorf("the record stores created: %+v", s)
+		}
+	}
+
+	// A record that claims a step is not believed; the cluster decides.
+	f.mu.Lock()
+	f.record.Steps[1].Created = true
+	f.mu.Unlock()
+	recipes = &recipeRunner{}
+	var asked *types.RecipeRun
+	recipeOwnership = func(_ *cluster.Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
+		asked = run
+		return map[string]bool{"pipelines-prereq": true}, &types.CleanupRequest{Components: []string{"aipipelines"}}
+	}
 	st := recipeRunStatus(nil)
-	c := st.Cleanup
-	if c == nil || !c.Storage || strings.Join(c.PipelineServers, ",") != "recipe-dev" || c.MLflow || strings.Join(c.Components, ",") != "aipipelines" {
-		t.Errorf("cleanup %+v", c)
+	if asked == nil || strings.Join(asked.Components, ",") != "aipipelines,mlflowoperator" {
+		t.Fatalf("ownership asked for %+v", asked)
+	}
+	if !st.Run.Steps[0].Created || st.Run.Steps[1].Created || st.Cleanup == nil || strings.Join(st.Cleanup.Components, ",") != "aipipelines" {
+		t.Errorf("status %+v cleanup %+v", st.Run.Steps, st.Cleanup)
 	}
 }
 

@@ -72,6 +72,7 @@ var (
 	saveRecipeRun        = cluster.SaveRecipeRun
 	readRecipeRun        = cluster.ReadRecipeRun
 	recordRecipeActivity = cluster.RecordRecipeActivity
+	recipeOwnership      = cluster.RecipeOwnership
 )
 
 // recipeRecordTimeout bounds one write of the run record. The last one
@@ -261,7 +262,7 @@ func beginRecipeRun(c *cluster.Client, w http.ResponseWriter, st *recipeStart, r
 		run.Steps = append(run.Steps, types.RecipeRunStep{ID: s.ID, Title: s.Title, Status: types.RecipeStepPending, TypicalSeconds: typical, MaxSeconds: most})
 	}
 	if prior != nil {
-		keepOwnership(run, &state, prior)
+		keepComponents(run, &state, prior)
 	}
 	// The run's own mutation slot, before anything is recorded: a run
 	// that cannot begin leaves no record of a running run.
@@ -304,26 +305,11 @@ func beginRecipeRun(c *cluster.Client, w http.ResponseWriter, st *recipeStart, r
 	writeJSON(w, types.RecipeRunAccepted{RunID: run.ID}, "recipe-run")
 }
 
-// keepOwnership carries what earlier attempts of the run set up into the
-// resumed one (merged, never reset): a step's part one of them created
-// stays the run's when this attempt finds it there and skips the step, and
-// so do the DataScienceCluster components they turned on. Clean up then
-// offers them as the run's own.
-func keepOwnership(run *types.RecipeRun, state *cluster.RecipeState, prior *types.RecipeRun) {
-	for _, p := range prior.Steps {
-		if p.Created {
-			state.MarkCreated(p.ID)
-		}
-	}
+// keepComponents carries the DataScienceCluster components earlier
+// attempts of the run turned on into the resumed one (merged, never
+// reset). Clean up offers only those still as the run set them.
+func keepComponents(run *types.RecipeRun, state *cluster.RecipeState, prior *types.RecipeRun) {
 	state.AddComponents(prior.Components...)
-	takeOwnership(run, state)
-}
-
-// takeOwnership copies what the state says the run set up into its record.
-func takeOwnership(run *types.RecipeRun, state *cluster.RecipeState) {
-	for i := range run.Steps {
-		run.Steps[i].Created = run.Steps[i].Created || state.Created[run.Steps[i].ID]
-	}
 	run.Components = slices.Clone(state.Components)
 }
 
@@ -521,7 +507,7 @@ func (x *recipeExec) stepEnded(i int, status, msg, code string) {
 			p := *x.state.Pinned
 			run.Pinned = &p
 		}
-		takeOwnership(run, &x.state)
+		run.Components = slices.Clone(x.state.Components)
 	})
 	inflight.recordStep(x.opID, UpdateStep{Step: x.steps[i].ID, Status: status, Message: msg, ErrorCode: code})
 }
@@ -583,12 +569,20 @@ func (x *recipeExec) finish(end recipeEnd) {
 // run's own operation (its boot ID and operation ID), otherwise
 // interrupted.
 //
-// A run that is not running carries its Clean up request
-// (cluster.RecipeCleanupRequest).
+// What a run that is not running set up is worked out from the cluster
+// (cluster.RecipeOwnership): each step's created and the Clean up
+// request. The record's own created flags never count.
 func recipeRunStatus(c *cluster.Client) types.RecipeRunStatus {
 	st := recordedRecipeRunStatus(c)
-	if !st.Running && st.Run != nil {
-		st.Cleanup = cluster.RecipeCleanupRequest(st.Run)
+	if st.Run == nil {
+		return st
+	}
+	created := map[string]bool{}
+	if !st.Running {
+		created, st.Cleanup = recipeOwnership(c, st.Run)
+	}
+	for i := range st.Run.Steps {
+		st.Run.Steps[i].Created = created[st.Run.Steps[i].ID]
 	}
 	return st
 }

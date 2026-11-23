@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -41,20 +42,9 @@ type State struct {
 	Recipe  types.EnvironmentRecipe
 	Pinned  *types.RecipePinnedBuild
 	Project *types.RecipeProjectRef
-	// Created are the steps whose part the run set up (or began to: a
-	// failed attempt may have left part of it), as opposed to found there;
-	// Components are the DataScienceCluster components its prerequisite
-	// steps turned on. The runner keeps both across Resume.
-	Created    map[string]bool
+	// Components are the DataScienceCluster components the run's
+	// prerequisite steps turned on. The runner keeps them across Resume.
 	Components []string
-}
-
-// MarkCreated records that the run sets step's part up.
-func (s *State) MarkCreated(step string) {
-	if s.Created == nil {
-		s.Created = map[string]bool{}
-	}
-	s.Created[step] = true
 }
 
 // AddComponents records components the run turned on (once each, sorted).
@@ -67,34 +57,73 @@ func (s *State) AddComponents(keys ...string) {
 	slices.Sort(s.Components)
 }
 
-// CleanupRequest is the Clean up (POST /api/resources/cleanup/stream) of
-// what run set up, as Clean up everything would ask for it: the pipeline
-// server, the S3 storage and MLflow when a step of the run set them up
-// (RecipeRunStep.Created), the project when a recipe created it, and the
-// DataScienceCluster components the run turned on. nil when there is
-// none. Clean up's own guards still decide what goes (the tool's labels,
-// the recorded UID, who owns a component's field).
-func CleanupRequest(run *types.RecipeRun) *types.CleanupRequest {
-	if run == nil {
-		return nil
-	}
+// Ownership is what run set up, as the cluster shows it now: per step,
+// whether its part exists as the run's (created), and the Clean up (POST
+// /api/resources/cleanup/stream) of those parts, nil when there is none.
+// Nothing of it comes from the run record but the names to look for:
+//   - the project, while it is the one a recipe created (deletable: the
+//     tool's label, the recipe annotation, the UID the recipes' project
+//     record holds) and not being deleted;
+//   - the DataScienceCluster components the run turned on that are still
+//     as it set them (liveComponents); a prerequisite step is created
+//     while one of its feature's is.
+//
+// The S3 storage, a pipeline server and MLflow are never the run's here:
+// nothing on the cluster says yet which of them a run created.
+func Ownership(c *kube.Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
 	created := map[string]bool{}
-	for _, s := range run.Steps {
-		created[s.ID] = s.Created
+	if run == nil {
+		return created, nil
 	}
-	req := &types.CleanupRequest{Storage: created[StepS3], MLflow: created[StepMLflow], Components: slices.Clone(run.Components)}
-	if p := run.Project; p != nil && p.Name != "" {
-		if created[StepPipelineServer] {
-			req.PipelineServers = []string{p.Name}
-		}
-		if p.Owned {
+	req := &types.CleanupRequest{}
+	if p := run.Project; p != nil && p.Name != "" && p.Owned {
+		if found, _, err := findProject(c, p.Name); err == nil && found.deletable() && !found.meta.Terminating() {
+			created[StepProject] = true
 			req.RecipeProject = p.Name
 		}
 	}
-	if !req.Storage && !req.MLflow && len(req.Components) == 0 && len(req.PipelineServers) == 0 && req.RecipeProject == "" {
+	for key, feature := range liveComponents(c, run.Components) {
+		req.Components = append(req.Components, key)
+		created[prereqStepOf[feature]] = true
+	}
+	delete(created, "")
+	slices.Sort(req.Components)
+	if req.RecipeProject == "" && len(req.Components) == 0 {
+		return created, nil
+	}
+	return created, req
+}
+
+// prereqStepOf is the prerequisite step of a feature.
+var prereqStepOf = map[string]string{"pipelines": StepPipelinesPrereq, "mlflow": StepMLflowPrereq}
+
+// liveComponents are the keys still in the state the run set, with the
+// feature that turned each on: Managed in the DataScienceCluster, and in
+// the tool's record of the prerequisites it set up (what Clean up turns a
+// component back from). A read that fails offers none (Clean up
+// everything still can).
+func liveComponents(c *kube.Client, keys []string) map[string]string {
+	if len(keys) == 0 {
 		return nil
 	}
-	return req
+	rec, err := features.ReadPrereqRecord(c)
+	if err != nil {
+		return nil
+	}
+	read, err := rhoai.ReadFirstDSC(c)
+	if err != nil || read.State != rhoai.DSCStatePresent {
+		return nil
+	}
+	spec, _ := read.Object["spec"].(map[string]any)
+	comps, _ := spec["components"].(map[string]any)
+	out := map[string]string{}
+	for _, k := range keys {
+		comp, _ := comps[k].(map[string]any)
+		if r, recorded := rec.Components[k]; recorded && comp["managementState"] == "Managed" {
+			out[k] = r.Feature
+		}
+	}
+	return out
 }
 
 // Check is what a step's read-only check found.
@@ -233,7 +262,6 @@ func runRHOAI(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*type
 	if problem := PinnedBuildProblem(s.Recipe.Spec.RHOAI.Build, s.Pinned); problem != "" {
 		return fail(problem, "validation")
 	}
-	s.MarkCreated(StepRHOAI)
 	return operator.UpdateStreamWithOptions(c, s.Pinned.Image, operator.OperationOptions{}, emit)
 }
 
@@ -282,8 +310,7 @@ func dscName(obj map[string]any) string {
 // runDSC creates the installed release's default DataScienceCluster
 // (dsc.CreateDefault: the Components page's Create), trying a transient
 // failure again, then waits until the operator reports its conditions.
-func runDSC(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
-	s.MarkCreated(StepDSC)
+func runDSC(c *kube.Client, _ *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	emit(types.UpdateStepEvent{Step: StepDSC, Status: "running", Message: "Creating the release's default DataScienceCluster..."})
 	retryCtx, cancel := kube.Clock().WithTimeout(c.Context(), dscCreateRetry)
 	defer cancel()
@@ -403,24 +430,50 @@ const prereqRecordReadTimeout = 10 * time.Second
 // of feature that its record of the prerequisites it set up gained, also
 // when the setup then failed (it records a component before it turns it
 // on, and Clean up turns back only what it still owns). When either read
-// of that record fails nothing is claimed; Clean up everything still
-// offers them.
+// of that record fails nothing is claimed, and the step says so (its
+// message, its progress and the log): the run's Clean up then does not
+// offer them, Clean up everything still does.
 func runPrereq(c *kube.Client, s *State, step, feature string, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
-	s.MarkCreated(step)
-	before, beforeErr := features.ReadPrereqRecord(c)
+	before, readErr := features.ReadPrereqRecord(c)
 	res, err := features.RunPrerequisites(c, types.PrerequisitesRequest{Feature: feature}, emit)
-	if beforeErr == nil {
+	if readErr == nil {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Context()), prereqRecordReadTimeout)
 		defer cancel()
-		if after, readErr := features.ReadPrereqRecord(c.WithContext(ctx)); readErr == nil {
-			for key, comp := range after.Components {
-				if _, had := before.Components[key]; !had && comp.Feature == feature {
+		var after prereqRecordKeys
+		if after, readErr = readPrereqKeys(c.WithContext(ctx)); readErr == nil {
+			for key, f := range after {
+				if _, had := before.Components[key]; !had && f == feature {
 					s.AddComponents(key)
 				}
 			}
 		}
 	}
+	if readErr != nil {
+		note := fmt.Sprintf("The run cannot tell which DataScienceCluster components this step turned on (%v), so the recipe's Clean up does not offer them; Clean up everything on the Environment page does.", readErr)
+		slog.Warn("recipe step: components not recorded", "step", step, "error", readErr)
+		emit(types.UpdateStepEvent{Step: step, Status: "running", Message: note})
+		if res != nil {
+			res.Message = strings.TrimSpace(res.Message + " " + note)
+			res.Logs = append(res.Logs, "WARN: "+note)
+		}
+	}
 	return res, err
+}
+
+// prereqRecordKeys are the components of the prerequisites record, with
+// the feature that turned each on.
+type prereqRecordKeys map[string]string
+
+func readPrereqKeys(c *kube.Client) (prereqRecordKeys, error) {
+	rec, err := features.ReadPrereqRecord(c)
+	if err != nil {
+		return nil, err
+	}
+	out := prereqRecordKeys{}
+	for key, comp := range rec.Components {
+		out[key] = comp.Feature
+	}
+	return out, nil
 }
 
 // --- Pipelines ---------------------------------------------------------------
@@ -439,8 +492,7 @@ func checkS3(c *kube.Client, _ *State) (Check, error) {
 }
 
 // runS3 is the Pipelines tab's Set up of the S3 storage, which waits for it.
-func runS3(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
-	s.MarkCreated(StepS3)
+func runS3(c *kube.Client, _ *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	emit(types.UpdateStepEvent{Step: StepS3, Status: "running", Message: "Setting up the S3 storage..."})
 	return storage.SetupS3(c)
 }
@@ -480,7 +532,6 @@ func checkPipelineServer(c *kube.Client, s *State) (Check, error) {
 func runPipelineServer(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	project := projectOf(s)
 	emit(types.UpdateStepEvent{Step: StepPipelineServer, Status: "running", Message: fmt.Sprintf("Setting up the pipeline server in %s...", project)})
-	s.MarkCreated(StepPipelineServer)
 	res, err := storage.SetupPipelineServer(c, project)
 	if err != nil || !res.Success {
 		return res, err
@@ -520,7 +571,7 @@ func checkMLflow(c *kube.Client, _ *State) (Check, error) {
 // runMLflow is the MLflow tab's Set up (when MLflow is not deployed), then
 // the wait the page makes in the browser. Only the Set up makes MLflow the
 // run's: one found deployed is waited for, not taken over.
-func runMLflow(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+func runMLflow(c *kube.Client, _ *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	var logs []string
 	st, err := mlflow.ReadStatus(c)
 	if err != nil {
@@ -528,7 +579,6 @@ func runMLflow(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*typ
 	}
 	if !st.Deployed {
 		emit(types.UpdateStepEvent{Step: StepMLflow, Status: "running", Message: "Setting up MLflow..."})
-		s.MarkCreated(StepMLflow)
 		res, err := mlflow.Setup(c)
 		if err != nil || !res.Success {
 			return res, err
