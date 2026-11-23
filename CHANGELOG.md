@@ -33,14 +33,17 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   would do and why it would refuse (one-time setup missing, Argo CD
   managing the operator, a build that does not resolve, a project that is
   not the recipe's, a half installed operator, a part this version does
-  not run yet). `POST /api/recipes/run` runs it on the server as one
-  operation that holds the cluster lock until its last step, each step
+  not run yet), each refusal with a fix code and the page that fixes it,
+  and each step with its typical and longest duration.
+  `POST /api/recipes/run` runs it on the server as one operation that holds the cluster lock until its last step, each step
   with its own 15-minute budget and the sign-in checked again before it;
   closing the browser does not stop it, Stop after this step
   (`POST /api/recipes/stop`) does. `POST /api/recipes/resume` continues a
   failed, stopped or interrupted run, skipping what is set up and keeping
-  the pinned build. `GET /api/recipes/run` has the run record. All are
-  admin-only and refused in the gitops profile. A project the recipe
+  the pinned build and what earlier attempts set up. `GET /api/recipes/run`
+  has the run record and, once it ended, its Clean up request: what the
+  run set up, its project, and the DataScienceCluster components it turned
+  on. All are admin-only and refused in the gitops profile. A project the recipe
   created is removed by Clean up (`recipeProject`) only with its label,
   its recorded UID and every leftover confirmed. No new ServiceAccount
   permission ([SECURITY.md](SECURITY.md#environment-recipes-500),
