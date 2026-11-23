@@ -116,3 +116,17 @@ describe("opening Clean up", () => {
     await waitFor(() => expect(reads()).toBe(2));
   });
 });
+
+// N8: what a storage deletion left is named, from the cluster, with Delete.
+describe("a storage deletion that did not finish", () => {
+  it("names what it left and offers Delete", async () => {
+    stubApi({
+      "/api/resources/status": { minio: { deployed: false, ready: false, namespace: "seaweedfs", managedByTool: true, message: "Namespace exists but the S3 storage is not deployed", leftovers: ["Secret seaweedfs-s3-credentials"] }, mlflow: noMlflow, pipelineServers: [] } satisfies ResourcesStatus,
+      "/api/resources/projects": { projects: ["juntao-test"] },
+    });
+    renderAt("/test-resources?tab=pipelines&project=juntao-test");
+    const storage = await part("S3 storage");
+    expect(storage).toHaveTextContent("A deletion that did not finish left Secret seaweedfs-s3-credentials in namespace seaweedfs; Delete S3 storage removes it.");
+    expect(await menuItem("S3 storage", /Delete S3 storage/)).not.toBeNull();
+  });
+});

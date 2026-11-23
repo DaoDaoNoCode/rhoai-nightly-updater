@@ -200,6 +200,9 @@ const StoragePart: React.FC<PipelinesTabProps> = ({ status, busy, baseReason, re
   return (
     <PartItem id="storage" title="S3 storage" scope="Shared by the cluster" status={storageStatus(status, busy)} unmanaged={unmanaged} actions={actions.length ? actions : undefined} menu={menu}>
       <Content component="p">Keeps pipeline artifacts and test files. Every pipeline server this tool sets up stores its artifacts here, in bucket <code>pipelines</code>.</Content>
+      {!minio?.deployed && (minio?.leftovers ?? []).length > 0 && (
+        <Content component="p">A deletion that did not finish left {joinNodes((minio?.leftovers ?? []).map((l) => <code key={l}>{l}</code>))} in namespace <code>{S3_NAMESPACE}</code>{readOnly ? "." : "; Delete S3 storage removes it."}</Content>
+      )}
       {blocked && (
         <Alert variant="warning" isInline component="div" title={`The S3 storage can't be set up: namespace ${S3_NAMESPACE} belongs to someone else`}>
           <Content component="p">{minio!.setupBlockedReason}</Content>
@@ -598,11 +601,13 @@ export function pipelineServerConfirm(pending: Pending, pipelineServers: Resourc
       return {
         title: `Recreate the pipeline server in ${pending.project} with the standard name?`, confirm: "Recreate", danger: true,
         runTitle: `Recreate the pipeline server in ${pending.project}`,
-        summary: <Content component="p">Replaces pipeline server <code>{pending.name}</code> in {pending.project} with one named <code>{DSPA_NAME}</code>, which workbench pipelines use. Everything is checked first; nothing is deleted if the new one would be refused. Takes 1 to 3 minutes, plus the old one&apos;s cleanup.</Content>,
+        summary: <>
+          <Content component="p">Replaces pipeline server <code>{pending.name}</code> in {pending.project} with one named <code>{DSPA_NAME}</code>, which workbench pipelines use. Everything is checked first; nothing is deleted if the new one would be refused. Takes 1 to 3 minutes, plus the old one&apos;s cleanup.</Content>
+          {pending.unrecorded && <Content component="p">{unrecordedPipelineServerNote(pending.project)}</Content>}
+        </>,
         changes: [
           <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name}</code> and Secret <code>{DSPA_SECRET_NAME}</code> are deleted; its database goes with it.</>,
           <>Then DataSciencePipelinesApplication <code>{DSPA_NAME}</code> is created, storing artifacts in the same S3 storage, with Secret <code>{DSPA_SECRET_NAME}</code> and the dashboard S3 Connection <code>{CONNECTION_NAME}</code>, both owned by it.</>,
-          ...(pending.unrecorded ? [unrecordedPipelineServerNote(pending.project)] : []),
         ],
         dataLoss: <>
           The run history of <code>{pending.name}</code>: its runs, experiments and imported pipelines{pvcList(ps).length > 0 ? <> (volume {pvcList(ps).map((n, i) => <React.Fragment key={n}>{i > 0 ? ", " : ""}<code>{n}</code></React.Fragment>)})</> : null}.
@@ -614,11 +619,11 @@ export function pipelineServerConfirm(pending: Pending, pipelineServers: Resourc
       const ps = pipelineServers.find((p) => p.namespace === pending.project);
       return {
         title: `Delete the pipeline server in ${pending.project}?`, confirm: "Delete", danger: true, runTitle: `Delete the pipeline server in ${pending.project}`,
-        summary: <Content component="p">Deletes the pipeline server in {pending.project}, with its runs and experiments. The project and the S3 storage stay.</Content>,
-        changes: [
-          <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name || DSPA_NAME}</code> and its S3 credentials Secret are deleted, with the dashboard S3 Connection <code>{CONNECTION_NAME}</code> this tool created (workbenches or model deployments that use it lose it). The project stays.</>,
-          ...(pending.unrecorded ? [unrecordedPipelineServerNote(pending.project)] : []),
-        ],
+        summary: <>
+          <Content component="p">Deletes the pipeline server in {pending.project}, with its runs and experiments. The project and the S3 storage stay.</Content>
+          {pending.unrecorded && <Content component="p">{unrecordedPipelineServerNote(pending.project)}</Content>}
+        </>,
+        changes: [<>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name || DSPA_NAME}</code> and its S3 credentials Secret are deleted, with the dashboard S3 Connection <code>{CONNECTION_NAME}</code> this tool created (workbenches or model deployments that use it lose it). The project stays.</>],
         dataLoss: pvcsLost(ps, "the pipeline database: runs, experiments and their history") ?? <>The pipeline database: runs, experiments and their history.</>,
       };
     }
