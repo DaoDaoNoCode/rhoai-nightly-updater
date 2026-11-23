@@ -3,11 +3,7 @@
     "components": [
       "aipipelines"
     ],
-    "pipelineServers": [
-      "recipe-dev"
-    ],
-    "recipeProject": "recipe-dev",
-    "storage": true
+    "recipeProject": "recipe-dev"
   },
   "run": {
     "bootId": "another-process",
@@ -102,7 +98,6 @@
         "typicalSeconds": 120
       },
       {
-        "created": true,
         "finishedAt": "2026-11-20T14:26:00Z",
         "id": "s3",
         "maxSeconds": 300,
@@ -113,7 +108,6 @@
         "typicalSeconds": 60
       },
       {
-        "created": true,
         "errorCode": "timeout",
         "finishedAt": "2026-11-20T14:36:00Z",
         "id": "pipeline-server",

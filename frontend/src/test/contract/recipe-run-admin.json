@@ -75,7 +75,6 @@
         "typicalSeconds": 420
       },
       {
-        "created": true,
         "finishedAt": "2026-11-20T14:15:00Z",
         "id": "dsc",
         "maxSeconds": 420,
@@ -97,7 +96,6 @@
         "typicalSeconds": 10
       },
       {
-        "created": true,
         "id": "pipelines-prereq",
         "maxSeconds": 600,
         "startedAt": "2026-11-20T14:16:00Z",

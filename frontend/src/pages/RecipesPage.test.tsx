@@ -344,7 +344,8 @@ describe("Recipes page", () => {
   });
 
   it("clean up: sends the backend's clean-up request for what the run created; a project with a workbench is deleted only once it is confirmed", async () => {
-    // A failed run: its pipeline server was created but is not ready; it turned aipipelines on.
+    // A failed run: the cluster still shows its project and the aipipelines it turned on
+    // (the backend offers the storage and the pipeline server only once they carry the run's mark).
     const ended = contract.recipeRunEnded();
     const streams: ReturnType<typeof sseResponse>[] = [];
     const api = stubApi({
@@ -359,7 +360,7 @@ describe("Recipes page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up..." }));
     const dialog = screen.getByRole("dialog", { name: /Clean up what recipe dev set up\?/ });
     expect(within(dialog).getAllByRole("checkbox").map((c) => [c.getAttribute("id"), (c as HTMLInputElement).checked])).toEqual([
-      ["recipe-cleanup-pipeline-server:recipe-dev", true], ["recipe-cleanup-storage", true], ["recipe-cleanup-recipe-project:recipe-dev", true], ["recipe-cleanup-components", true],
+      ["recipe-cleanup-storage", false], ["recipe-cleanup-recipe-project:recipe-dev", true], ["recipe-cleanup-components", true],
     ]);
     expect(within(dialog).getByRole("checkbox", { name: "The DataScienceCluster components the run turned on: aipipelines" })).toBeChecked();
     expect(dialog).toHaveTextContent("Deleting project recipe-dev deletes everything in it.");
