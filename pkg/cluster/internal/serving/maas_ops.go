@@ -863,6 +863,31 @@ func maasLivePubs(c *kube.Client, rec MaaSRecord, with, without MaaSPub) ([]MaaS
 	return out, nil
 }
 
+// maasLiveProjects are the projects the MaaS gateway admits routes from
+// besides its own namespaces: those of maasLivePubs (this tool's
+// MaaSModelRefs on the cluster, plus with, minus without). A project only
+// the record still lists is not admitted: its editors could otherwise
+// attach routes to the MaaS gateway with nothing of the tool's published
+// there.
+func maasLiveProjects(c *kube.Client, rec MaaSRecord, with, without MaaSPub) ([]string, error) {
+	live, err := maasLivePubs(c, rec, with, without)
+	if err != nil {
+		return nil, err
+	}
+	return pubProjects(live), nil
+}
+
+// pubProjects are the projects of pubs, each once.
+func pubProjects(pubs []MaaSPub) []string {
+	var out []string
+	for _, p := range pubs {
+		if !slices.Contains(out, p.Project) {
+			out = append(out, p.Project)
+		}
+	}
+	return out
+}
+
 // maasPublish is what Publish's check step found, for the steps after it.
 type maasPublish struct {
 	project, name string
@@ -1055,7 +1080,11 @@ func (m *Run) publishCheckGateway(pl *maasPublish) (*types.OperationResponse, er
 	if err != nil {
 		return m.Fail("check", kube.SentenceStart(err.Error())+". Nothing was changed.", "prerequisites", "infra namespace unknown")
 	}
-	gwPlan, msg, code := planMaaSGateway(c, infra, rec.Projects())
+	projects, err := maasLiveProjects(c, rec, MaaSPub{project, pl.name}, MaaSPub{})
+	if err != nil {
+		return m.Fail("check", fmt.Sprintf("Cannot check the other publications: %v. Nothing was changed.", err), kube.ErrorCodeFromK8sErr(err), "ref read failed")
+	}
+	gwPlan, msg, code := planMaaSGateway(c, infra, projects)
 	if msg != "" {
 		return m.Fail("check", msg, code, "gateway check failed")
 	}
@@ -1477,7 +1506,7 @@ func (m *Run) unpublishGateway(u *maasUnpublish) (*types.OperationResponse, erro
 	if infraErr != nil {
 		msg = kube.SentenceStart(infraErr.Error())
 	} else {
-		gwPlan, msg, code = planMaaSGateway(c, infra, rec.Projects())
+		gwPlan, msg, code = planMaaSGateway(c, infra, pubProjects(u.live))
 	}
 	switch {
 	case msg != "":
@@ -1489,7 +1518,7 @@ func (m *Run) unpublishGateway(u *maasUnpublish) (*types.OperationResponse, erro
 		say("gateway", "success", "The gateway someone else made is not changed.")
 	case !gwPlan.found["Gateway"]:
 		say("gateway", "success", "There is no MaaS gateway to update.")
-	case slices.Contains(rec.Projects(), project):
+	case slices.Contains(pubProjects(u.live), project):
 		say("gateway", "success", fmt.Sprintf("The MaaS gateway still admits routes from %s: another model of this tool is published there.", project))
 	default:
 		gwPlan.classMissing = false // only the gateway changes

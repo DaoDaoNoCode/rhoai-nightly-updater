@@ -148,3 +148,19 @@ func TestMaaSStatus_AProjectBeingDeletedIsRemoving(t *testing.T) {
 		t.Fatalf("row = %+v", it)
 	}
 }
+
+// The MaaS gateway admits routes from the projects of this tool's
+// MaaSModelRefs on the cluster, not from every project its record lists: a
+// publication only the record still lists does not put its project back.
+func TestMaaSGateway_AdmitsOnlyProjectsWithALivePublication(t *testing.T) {
+	mc := staleRecordCluster(t)
+	if gatewayAdmits(t, mc) {
+		t.Fatal("unpublish left proj on the gateway")
+	}
+	if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}); !res.Success {
+		t.Fatalf("setup again: %+v", res)
+	}
+	if gatewayAdmits(t, mc) {
+		t.Fatal("the record alone put proj back on the gateway")
+	}
+}

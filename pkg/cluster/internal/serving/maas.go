@@ -1331,7 +1331,11 @@ func (r *maasStatusRun) statusGateway() {
 			gwPart.State = "problem"
 			gwPart.Message = "This gateway, which this tool did not create, admits routes from every namespace, so any project editor could put a route on MaaS's gateway. The MaaS docs' gateway (setup-gateway.sh) lists the namespaces instead. This tool publishes nothing through it until its owner applies the command below; it does not change a gateway it did not create."
 			if r.infraErr == nil {
-				gwPart.Commands = gatewayAllowedRoutesCommand(gw.gw, maasGatewayNamespaces(infra, rec.Projects()))
+				projects, err := maasLiveProjects(c, rec, MaaSPub{}, MaaSPub{})
+				if err != nil {
+					projects = rec.Projects()
+				}
+				gwPart.Commands = gatewayAllowedRoutesCommand(gw.gw, maasGatewayNamespaces(infra, projects))
 			}
 		case gw.acceptedErr != "":
 			gwPart.State, gwPart.Message = "problem", "Not accepted: "+kube.TruncateText(gw.acceptedErr, 300)

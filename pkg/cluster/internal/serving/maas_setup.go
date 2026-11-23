@@ -100,7 +100,11 @@ func (m *Run) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse, er
 
 	// The gateway: one someone else made is used as it is, unless it
 	// admits routes from every namespace.
-	gwPlan, msg, code := planMaaSGateway(c, infra, rec.Projects())
+	projects, err := maasLiveProjects(c, rec, MaaSPub{}, MaaSPub{})
+	if err != nil {
+		return m.Fail("check", fmt.Sprintf("Cannot check this tool's publications: %v. Nothing was changed.", err), kube.ErrorCodeFromK8sErr(err), "ref read failed")
+	}
+	gwPlan, msg, code := planMaaSGateway(c, infra, projects)
 	foreignGW := code == "foreign"
 	if msg != "" {
 		return m.Fail("check", msg, code, "gateway check failed")

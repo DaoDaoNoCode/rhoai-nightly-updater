@@ -151,7 +151,8 @@ func PruneGoneMaaSPublications(c *kube.Client) (changed bool, logs []string, err
 	}
 
 	// The access policy and the subscription.
-	live, err := maasLivePubs(c, rec, MaaSPub{}, MaaSPub{})
+	live, liveErr := maasLivePubs(c, rec, MaaSPub{}, MaaSPub{})
+	err = liveErr
 	var cur maasToolSub
 	if err == nil {
 		// The remaining publications keep their limits and who can use
@@ -209,7 +210,13 @@ func PruneGoneMaaSPublications(c *kube.Client) (changed bool, logs []string, err
 	if infra, err := MaaSInfraNamespace(c); err != nil {
 		msg = err.Error()
 	} else {
-		gwPlan, msg, code = planMaaSGateway(c, infra, rec.Projects())
+		// The projects of the publications left on the cluster; while
+		// they cannot be read, those the record still lists.
+		projects := rec.Projects()
+		if liveErr == nil {
+			projects = pubProjects(live)
+		}
+		gwPlan, msg, code = planMaaSGateway(c, infra, projects)
 	}
 	switch {
 	case msg != "":

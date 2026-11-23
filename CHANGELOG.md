@@ -155,6 +155,12 @@ Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#u
   record, so one whose project was gone still blocked removing
   `aigateway.modelsAsAService`. It now counts the MaaSModelRefs on the
   cluster (anyone's) and this tool's platform setup only.
+- **The MaaS gateway admits only projects with a publication on the
+  cluster.** Set up, Publish, Unpublish and the background check wrote
+  `maas-default-gateway`'s list of projects from this tool's record, so a
+  publication only the record still listed kept (or put back) its project
+  on the gateway, whose editors could then attach routes to it. The list
+  is now the projects of this tool's MaaSModelRefs on the cluster.
 - **A DataScienceCluster change applies only to the DSC it was checked
   on.** The Components page's changes (a component's state, Fix, soft
   reset) and Diagnostics' disable-component fix tested only the fields
