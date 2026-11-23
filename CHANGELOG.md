@@ -42,10 +42,11 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   failed, stopped or interrupted run, skipping what is set up and keeping
   the pinned build and what earlier attempts set up. `GET /api/recipes/run`
   has the run record and, once it ended, its Clean up request as the
-  cluster shows it: the storage, pipeline server and MLflow the run
-  created (marked with its `rhoai-nightly-updater/recipe-run` annotation,
-  checked again before each delete), the project a recipe created and the
-  DataScienceCluster components the run turned on that are still Managed. All are admin-only and refused in the gitops profile. A project the recipe
+  cluster shows it: only what is the run's alone, the project a recipe
+  created (its pipeline server goes with it) and the DataScienceCluster
+  components the run turned on that are still Managed. The S3 storage,
+  MLflow and a pipeline server in an existing project are never in it:
+  Clean up everything on the Environment page removes them. All are admin-only and refused in the gitops profile. A project the recipe
   created is removed by Clean up (`recipeProject`) only with its label,
   its recorded UID and every leftover confirmed. No new ServiceAccount
   permission ([SECURITY.md](SECURITY.md#environment-recipes-500),
@@ -55,9 +56,12 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 - **Recipes page (cluster-admins).** Build a recipe in a form, review what
   the run would do (each step with how long it usually takes and at most,
   each problem with a link to the page that fixes it), then follow the run
-  step by step, stop it after a step, resume it, and clean up what it
-  created: its parts, the project the recipe created (with what it holds,
-  once confirmed) and the DataScienceCluster components it turned on.
+  step by step, stop it after a step, resume it, and clean up what is only
+  its own: the project the recipe created (with everything in it,
+  including its pipeline server, once what it holds is confirmed) and the
+  DataScienceCluster components it turned on. The Clean up dialog lists
+  what it leaves in place (the S3 storage, MLflow, a pipeline server in an
+  existing project) and links to the Environment page.
 
 - **Pre-releases.** A version can now be tried out before it is released:
   `make release VERSION=v5.0.0-rc.1` tags a pre-release (`-alpha.N`,
