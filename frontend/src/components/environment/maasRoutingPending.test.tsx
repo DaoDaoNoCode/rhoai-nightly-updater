@@ -5,10 +5,10 @@ import { QuickResourceCreator } from "../QuickResourceCreator";
 import { stubApi } from "../../test/apiStub";
 import type { MaaSModel, MaaSStatus, ResourcesStatus } from "../../types";
 
-// F6 (live, 2026-11-23): the MaaS tab's rows come from the live
+// F6 and F2 (live, 2026-11-23): the MaaS tab's rows come from the live
 // state. A model whose MaaSModelRef was deleted outside the tool, still
 // routed through the MaaS gateway, offers "Restore direct routing" (not
-// Unpublish).
+// Unpublish); a model in a project being deleted offers nothing.
 
 const sse = (...events: object[]) => () => new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } });
 const none = { deployed: false, ready: false, managedByTool: false };
@@ -61,5 +61,15 @@ describe("A model whose MaaS reference was deleted outside the tool", () => {
     const confirm = await screen.findByRole("dialog", { name: /Restore direct routing/ });
     expect(within(confirm).getByText(/it then answers only at its in-cluster address/)).toBeInTheDocument();
     expect(within(confirm).queryByText(/its direct address answers again/)).toBeNull();
+  });
+});
+
+describe("A model in a project being deleted", () => {
+  it("is being removed with its project and offers nothing, whatever the record says", async () => {
+    renderTab([{ namespace: "dev", name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", deployed: false, ready: false, managedByTool: true, modelReady: true, published: false, removing: true, message: "Being removed with its project" }]);
+    const row = (await screen.findByText("Qwen2.5 0.5B Instruct (CPU)")).closest("tr")!;
+    expect(within(row).getByText("Being removed with its project")).toBeInTheDocument();
+    expect(within(row).getByText("Removing")).toBeInTheDocument();
+    expect(within(row).queryByRole("button")).toBeNull();
   });
 });

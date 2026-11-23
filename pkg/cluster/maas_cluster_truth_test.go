@@ -149,7 +149,7 @@ func TestMaaSStatus_AProjectBeingDeletedIsRemoving(t *testing.T) {
 	if !ok {
 		t.Fatal("no row for the listed model")
 	}
-	if !it.Removing || it.Published || it.Partly || !strings.Contains(it.Message, "project proj is being deleted") || !strings.Contains(it.Message, "automatically") {
+	if !it.Removing || it.Published || it.Partly || it.Message != "Being removed with its project" {
 		t.Fatalf("row = %+v", it)
 	}
 }

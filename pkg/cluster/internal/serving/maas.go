@@ -1242,6 +1242,9 @@ type maasStatusRun struct {
 	// read.
 	gone      []maasGonePub
 	modelsErr error
+	// terminating are the projects read for the rows, and whether each is
+	// being deleted.
+	terminating map[string]bool
 }
 
 // goneOf is the gone publication of name in project, if it is gone.
@@ -1252,6 +1255,21 @@ func (r *maasStatusRun) goneOf(project, name string) (maasGonePub, bool) {
 		}
 	}
 	return maasGonePub{}, false
+}
+
+// projectTerminating: project is being deleted (false when it cannot be
+// read: the row is then the model's live one).
+func (r *maasStatusRun) projectTerminating(project string) bool {
+	if t, ok := r.terminating[project]; ok {
+		return t
+	}
+	meta, found, err := kube.ReadObjectMeta(r.c, "/api/v1/namespaces/"+project)
+	t := err == nil && found && meta.Terminating()
+	if r.terminating == nil {
+		r.terminating = map[string]bool{}
+	}
+	r.terminating[project] = t
+	return t
 }
 
 func (r *maasStatusRun) part(p types.MaaSPart) { r.st.Parts = append(r.st.Parts, p) }
@@ -1735,14 +1753,25 @@ func (r *maasStatusRun) modelRow(m LLMISvcObject, entry CatalogModel, v maasMode
 	if cond, ok := kube.FindCondition(m.Status.Conditions, "Ready"); ok && cond.Status == "True" {
 		item.ModelReady = true
 	}
+	// Its project, or the model, is being deleted: whatever the record
+	// says (the background check empties it within a second of the first
+	// read), what is left goes with it, so the row offers nothing.
+	if r.projectTerminating(m.Metadata.Namespace) || m.Metadata.Terminating() {
+		item.Removing = true
+		item.Message = "Being removed with its project"
+		if !r.projectTerminating(m.Metadata.Namespace) {
+			item.Message = "Being removed"
+		}
+		item.SetupBlockedReason = item.Message + "."
+		return item
+	}
 	if entry.Type != ModelTypeChat {
 		item.Message = "Not offered for MaaS"
 		item.SetupBlockedReason = maasEmbeddingReason
 		return item
 	}
-	// Its publication is gone (its project is being deleted, or the model
-	// was made again): what is left goes on its own, so the row offers
-	// nothing. One of which nothing,
+	// Its publication is gone (the model was made again): what is left
+	// goes on its own, so the row offers nothing. One of which nothing,
 	// or only the model's routing, is left: the live rows below.
 	if g, gone := r.goneOf(m.Metadata.Namespace, m.Metadata.Name); gone && !g.unpublished && !g.routingPending {
 		item.Removing = true

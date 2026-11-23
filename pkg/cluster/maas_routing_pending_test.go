@@ -245,3 +245,31 @@ func TestMaaSTeardown_RestoresAModelWhoseRefWasDeletedOutside(t *testing.T) {
 		t.Fatalf("record after the teardown = %+v", rec)
 	}
 }
+
+// F2: during project deletion the status row reports removal regardless of
+// record contents—prune clears the record within about a second of the first
+// status read, and a live MaaSModelRef (Pending, deleted with the project) must
+// not flip the row back to "Published; waiting" with Unpublish and Change limit.
+func TestMaaSStatus_AModelInAProjectBeingDeletedIsBeingRemovedWithIt(t *testing.T) {
+	mc := publishedMaaSCluster(t)
+	mc.f.putJSON("/api/v1/namespaces/proj", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"},"deletionTimestamp":"2026-11-23T05:40:20Z"}}`)
+	for _, when := range []string{"before the prune", "after the prune"} {
+		st, err := GetMaaSStatus(mc.c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		it, ok := maasItem(st)
+		if !ok || !it.Removing || it.Published || it.Partly || it.RoutingPending || it.Limit != nil || it.Message != "Being removed with its project" {
+			t.Fatalf("%s: row = %+v (found %t)", when, it, ok)
+		}
+		if _, _, err := serving.PruneGoneMaaSPublications(mc.c); err != nil {
+			t.Fatal(err)
+		}
+		if rec, _ := serving.ReadMaaSRecord(mc.c); rec.IsPublished("proj", tModel) {
+			t.Fatal("the prune kept the publication of a project being deleted")
+		}
+		if !mc.f.has(tMaaSRef) {
+			t.Fatal("the fake lost the live MaaSModelRef")
+		}
+	}
+}
