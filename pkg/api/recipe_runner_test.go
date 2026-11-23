@@ -778,7 +778,7 @@ func TestRecipeRun_EndingRunDoesNotIdleTheNextOne(t *testing.T) {
 	s1 := f.addStep("one")
 	close(s1.release)
 	finalSave := make(chan struct{})
-	released := make(chan struct{})
+	released := make(chan struct{}, 1) // buffered: the signal is kept if the run gets there first
 	origSave := saveRecipeRun
 	saveRecipeRun = func(c *cluster.Client, run *types.RecipeRun, replace bool) error {
 		if run.State != types.RecipeRunRunning && run.OperationID != "" {
