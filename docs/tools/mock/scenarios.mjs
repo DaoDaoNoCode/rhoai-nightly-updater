@@ -510,6 +510,16 @@ export const scenarios = {
     w.resources.inferenceGateway = { ...w.resources.inferenceGateway, allowedProjects: ["openshift-ingress", "dev-project", "e2e-old", "team-x"], unusedProjects: ["e2e-old", "team-x"], goneProjects: ["e2e-old"], addedProjects: ["dev-project", "e2e-old"] };
     w.maas = { ...F.maasWorld("ready", { items: [F.maasModel(false)] }), removing: [{ namespace: "dev-project", name: "qwen25-05b-instruct", reason: "the MaaSModelRef of model qwen25-05b-instruct in dev-project no longer exists" }] };
   },
+  // F6 and F2 (live, 2026-11-23): a model whose MaaSModelRef was deleted
+  // outside this tool while it still routes through the MaaS gateway, and a
+  // published model in a project being deleted.
+  "env-maas-routing-pending": (w) => {
+    scenarios["env-models-ready"](w);
+    w.maas = F.maasWorld("ready", { items: [
+      { ...F.maasModel(false), routingPending: true, message: "No MaaS reference; the model still routes through the MaaS gateway, so its direct address does not answer." },
+      { ...F.maasModel(false, { name: "smollm2-135m-instruct" }), namespace: "old-team", removing: true, message: "Being removed with its project", setupBlockedReason: "Being removed with its project." },
+    ] });
+  },
   // A storage deletion that did not finish: the Deployment is gone, its Secret is left.
   "env-s3-leftovers": (w) => {
     w.resources.minio = { deployed: false, ready: false, namespace: "seaweedfs", managedByTool: true, message: "Namespace exists but the S3 storage is not deployed", leftovers: ["Secret seaweedfs-s3-credentials"], namespaceDeletable: true };

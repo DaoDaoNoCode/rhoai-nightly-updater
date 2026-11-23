@@ -133,6 +133,25 @@ Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#u
 
 ### Fixed
 
+- **A MaaSModelRef deleted outside this tool no longer leaves a "Partly
+  published" row and a Failed subscription.** Publish routes the model
+  through `maas-default-gateway` alone, so after `oc delete maasmodelref`
+  the background check never took the publication for gone: the tab asked
+  to Unpublish, and the subscription and access policy kept listing the
+  missing reference, which MaaS marks Failed for every published model.
+  The background check now takes the model out of the subscription, the
+  access policy and the gateway's projects, and the record keeps only what
+  restoring its routing writes back. The row, from the live model, reads
+  "No MaaS reference; the model still routes through the MaaS gateway, so
+  its direct address does not answer." with **Restore direct routing**,
+  which puts back its gateways and Gen AI studio label with your token.
+  Delete model and Clean up MaaS also work in this state.
+- **A published model in a project being deleted reads "Being removed
+  with its project".** For about 45 seconds the row showed "Published;
+  waiting" with Unpublish and Change limit, because the background check
+  empties the record within a second and the row then followed the
+  MaaSModelRef that is deleted with the project. The row now follows the
+  project (or the model) being deleted, whatever the record says.
 - **A deleted project this tool added to the inference gateway reads as
   this tool's.** When the project's namespace UID was recorded and the
   project had been deleted, the Models tab said "this tool did not add
@@ -218,8 +237,7 @@ Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#u
   outside this tool, or a publish that stopped before it), the publication
   stayed in this tool's record for good. It is now named as being removed
   and the background check drops it (and its subscription entry); the
-  model's row is "Not published". A deleted MaaSModelRef whose model still
-  routes through the MaaS gateway stays "Partly published" with Unpublish.
+  model's row is "Not published".
 - **"Through MaaS only" belongs to the model that was published.** The
   Models tab's "Through MaaS only" and the unpublish step of its Delete
   came from the MaaS record by name, so a model made again under the name
