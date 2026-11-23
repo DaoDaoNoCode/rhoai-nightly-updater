@@ -399,7 +399,7 @@ describe("Recipes page", () => {
     const leftovers = within(dialog).getByText("Project recipe-dev holds what this tool did not create").closest(".pf-v6-c-alert") as HTMLElement;
     expect(within(leftovers).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["Notebook wb", "PersistentVolumeClaim wb-data"]);
     // The list's limits are visible: it names only the kinds the tool checks.
-    expect(leftovers).toHaveTextContent("Only workbenches, models, volumes and pods are listed; anything else in the project is deleted with it.");
+    expect(leftovers).toHaveTextContent("Only Notebooks (workbenches), InferenceServices and LLMInferenceServices (models), PersistentVolumeClaims (volumes) and Pods are listed; anything else in the project is deleted with it.");
     expect(within(dialog).getByRole("button", { name: "Clean up" })).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(within(leftovers).getByRole("checkbox", { name: "Delete them with the project" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Clean up" }));

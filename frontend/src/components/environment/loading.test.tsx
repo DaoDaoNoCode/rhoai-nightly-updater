@@ -153,7 +153,7 @@ describe("Environment loading: the Overview", () => {
 
 describe("Environment loading: the feature tabs", () => {
   it.each([
-    ["storage", "S3 storage", /^S3 storage/],
+    ["storage", "S3 storage", /^SeaweedFS/],
     ["pipelines", "Pipelines", /^Pipeline server/],
     ["mlflow", "MLflow", /^MLflow server/],
     ["models", "Models", /^Inference gateway/],

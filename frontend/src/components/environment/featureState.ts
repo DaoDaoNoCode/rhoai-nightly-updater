@@ -117,6 +117,12 @@ export function storageStatus(status: ResourcesStatus | null, busy: Busy): EnvSt
 }
 
 /** True when setup may provision storage: absent and unblocked. */
+/** The one label of the storage while an earlier version's storage still holds the data: the same on every tab and row. */
+export const MIGRATION_NEEDED = "Migration needed";
+
+/** A storage problem's label: the cluster's, so it names no project. */
+const storageProblemLabel = (status: ResourcesStatus | null, s: EnvStatus) => (status?.legacyStorage?.stage === "migrate" ? MIGRATION_NEEDED : envStatusText(s));
+
 export function storageCanSetUp(status: ResourcesStatus | null, busy: Busy): boolean {
   return storageStatus(status, busy) === "not-set-up" && !status?.legacyStorage && !status?.minio?.setupBlockedReason;
 }
@@ -133,7 +139,7 @@ export function storageState(status: ResourcesStatus | null, busy: Busy = IDLE):
   const unmanaged = notManaged(status.minio);
   if (PROBLEM.includes(s)) {
     const migrate = status.legacyStorage?.stage === "migrate";
-    return { status: s, label: migrate ? "Migration needed" : envStatusText(s), ...owner(unmanaged), next: issueStep(status, "storage"), project: null };
+    return { status: s, label: migrate ? MIGRATION_NEEDED : envStatusText(s), ...owner(unmanaged), next: issueStep(status, "storage"), project: null };
   }
   if (s === "ready") {
     const href = status.minio?.uiRoute;
@@ -207,6 +213,8 @@ function pipelinesIn(status: ResourcesStatus | null, project: string, busy: Busy
   const [storage, server] = parts;
   const unmanaged = parts.some((p) => p.unmanaged);
   const problem = parts.find((p) => PROBLEM.includes(p.status));
+  if (problem?.id === "storage") return { status: problem.status, label: storageProblemLabel(status, problem.status), ...owner(problem.unmanaged), next: { kind: "show-issue", part: "storage" }, project };
+  if (problem?.id === "storage") return { status: problem.status, label: storageProblemLabel(status, problem.status), ...owner(problem.unmanaged), next: { kind: "show-issue", part: "storage" }, project };
   if (problem) return { status: problem.status, label: `${envStatusText(problem.status)} in ${project}`, ...owner(problem.unmanaged), next: issueStep(status, problem.id), project };
   const moving = parts.find((p) => MOVING.includes(p.status));
   // Ready once the pipeline server is, atop ready storage; foreign servers store
@@ -291,7 +299,7 @@ export function pipelinesState(status: ResourcesStatus | null, project: string |
   if (!status) return loadingState(project);
   if (project) return pipelinesIn(status, project, busy);
   const storage = storageStatus(status, busy);
-  if (PROBLEM.includes(storage)) return { status: storage, label: envStatusText(storage), ...owner(notManaged(status?.minio)), next: issueStep(status, "storage"), project: defaultProject(status, projects, null) };
+  if (PROBLEM.includes(storage)) return { status: storage, label: storageProblemLabel(status, storage), ...owner(notManaged(status?.minio)), next: { kind: "show-issue", part: "storage" }, project: defaultProject(status, projects, null) };
   const states = projectsWithServers(status, projects).map((p) => pipelinesIn(status, p, busy));
   const running = busy.actionProject ? pipelinesIn(status, busy.actionProject, busy) : null;
   const summary = acrossProjects(states, running);

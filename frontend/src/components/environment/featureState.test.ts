@@ -80,7 +80,7 @@ describe("pipelinesState and mlflowState", () => {
     ["storageError", "error", "Error"],
     ["serverError", "error", "Error in zeta"],
     ["foreign", "ready", "Ready in zeta"],
-    ["migrate", "needs-attention", "Needs attention"],
+    ["migrate", "needs-attention", "Migration needed"],
     ["migrateRemove", "ready", "Ready in juntao-test"],
     ["incomplete", "needs-attention", "Needs attention"],
   ])("%s: the Overview reads %s, %s", (name, status, label) => {
@@ -98,7 +98,8 @@ describe("pipelinesState and mlflowState", () => {
     if (tabProject) {
       const tab = pipelinesState(s, tabProject, projects);
       expect(tab.status).toBe(overview.status);
-      if (!overview.label.includes(" of ")) expect(tab.label).toBe(overview.label.startsWith("Needs attention") || overview.label.startsWith("Error") && !overview.label.includes(" in ") ? `${overview.label} in ${tabProject}` : overview.label);
+      // A storage problem is the cluster's: the tab names no project for it either.
+      if (!overview.label.includes(" of ")) expect(tab.label).toBe(overview.label);
       expect(tab.unmanaged).toBe(overview.unmanaged);
       // The label already names the project: the link does not repeat it, and the Overview's is the tab's.
       if (overview.next?.kind === "open") {

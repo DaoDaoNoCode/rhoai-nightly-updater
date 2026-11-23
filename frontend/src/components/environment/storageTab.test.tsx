@@ -36,9 +36,9 @@ describe("the S3 storage tab", () => {
     renderAt("/test-resources?tab=storage");
     expect(screen.getByRole("tab", { name: "S3 storage" })).toHaveAttribute("aria-selected", "true");
     expect((await header()).querySelector(".pf-v6-c-label")).toHaveTextContent(/^Ready$/);
-    expect(screen.getByRole("tabpanel")).toHaveTextContent("Every pipeline server this tool sets up keeps its artifacts here, in bucket pipelines");
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("The pipeline servers this tool sets up keep their artifacts here, in bucket pipelines");
     expect(screen.getByRole("tabpanel")).toHaveTextContent("Other features can use it too.");
-    const storage = await part("S3 storage");
+    const storage = await part("SeaweedFS");
     expect(storage).toHaveTextContent("Shared by the cluster");
     expect(storage.querySelector('dl[aria-label="S3 storage details"]')).toHaveTextContent(/Used by\s*dev\/dspa/);
     expect(within(storage).getByRole("link", { name: /Open admin UI/ })).toHaveAttribute("href", readyMinio.uiRoute);
@@ -68,8 +68,11 @@ describe("the S3 storage tab", () => {
     renderAt("/test-resources?tab=storage");
     expect((await header()).querySelector(".pf-v6-c-label")).toHaveTextContent(/^Migration needed$/);
     const why = screen.getByText("Your pipeline data is in storage from an earlier version").closest(".pf-v6-c-alert") as HTMLElement;
-    expect(within(why).getByRole("button", { name: "Migrate storage" })).toBeInTheDocument();
-    expect(within(await part("S3 storage")).getByRole("button", { name: "Migrate storage" })).toBeInTheDocument();
+    expect(within(why).queryByRole("button", { name: "Migrate storage" })).not.toBeInTheDocument();
+    const storage = await part("SeaweedFS");
+    expect(within(storage).getByText("Migration needed")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Migrate storage" })).toHaveLength(1);
+    expect(within(storage).getByRole("button", { name: "Migrate storage" })).toHaveClass("pf-m-primary");
     expect(screen.queryByRole("button", { name: /^Set up/ })).not.toBeInTheDocument();
   });
 
@@ -77,13 +80,33 @@ describe("the S3 storage tab", () => {
     stubApi({ "/api/resources/status": statusOf({ minio: foreign }), "/api/resources/projects": { projects: ["dev"] } });
     renderAt("/test-resources?tab=storage");
     expect(await header()).toHaveTextContent("Not managed by this tool");
-    const storage = await part("S3 storage");
+    const storage = await part("SeaweedFS");
     expect(within(storage).getByText("The S3 storage can't be set up: namespace seaweedfs belongs to someone else")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Set up/ })).not.toBeInTheDocument();
   });
 });
 
 describe("the S3 storage elsewhere", () => {
+  it("migration needed: Pipelines and the Overview name the storage, not a project, and send to the S3 storage tab", async () => {
+    stubApi({ "/api/resources/status": statusOf({ minio: { ...none, namespace: "seaweedfs", migrationPending: true }, legacyStorage: legacy, pipelineServers: [dspa] }), "/api/resources/projects": { projects: ["dev"] } });
+    const { unmount } = renderAt("/test-resources?tab=pipelines&project=dev");
+    const label = () => screen.getByRole("heading", { level: 2, name: "Pipelines" }).closest(".pf-v6-l-flex")!.querySelector(".pf-v6-c-label");
+    await waitFor(() => expect(label()).toHaveTextContent(/^Migration needed$/));
+    expect(screen.getByRole("tabpanel")).not.toHaveTextContent(/Needs attention in dev/);
+    expect(within(await part("Pipeline server")).getByText("Ready")).toBeInTheDocument();
+    expect(within(await part("S3 storage")).getByText("Migration needed")).toBeInTheDocument();
+    unmount();
+    renderAt("/test-resources");
+    const pipelines = (await screen.findByRole("link", { name: "Pipelines" })).closest("tr") as HTMLElement;
+    await waitFor(() => expect(pipelines).toHaveTextContent("Migration needed"));
+    // Migration is offered only on the S3 storage row and tab.
+    expect(within(pipelines).queryByRole("button", { name: /Migrate storage/ })).not.toBeInTheDocument();
+    expect(within(pipelines).getByRole("button", { name: "Show issue" })).toBeInTheDocument();
+    const s3 = (await screen.findByRole("link", { name: "S3 storage" })).closest("tr") as HTMLElement;
+    expect(s3).toHaveTextContent("Migration needed");
+    expect(within(s3).getByRole("button", { name: /^Migrate storage/ })).toBeInTheDocument();
+  });
+
   it("Pipelines shows the storage's health only, with a link to its tab", async () => {
     stubApi({ "/api/resources/status": statusOf({ minio: readyMinio, pipelineServers: [dspa] }), "/api/resources/projects": { projects: ["dev"] } });
     renderAt("/test-resources?tab=pipelines&project=dev");

@@ -215,7 +215,7 @@ describe("Environment page", () => {
     // Pipelines needs the storage, but the storage's issue is shown on its own tab.
     fireEvent.click(within(pipelines).getByRole("button", { name: "Show issue" }));
     await waitFor(() => expect(router.state.location.search).toBe("?tab=storage"));
-    const title = await screen.findByRole("heading", { level: 3, name: "S3 storage" });
+    const title = await screen.findByRole("heading", { level: 3, name: "SeaweedFS" });
     await waitFor(() => expect(title).toHaveFocus());
     expect(screen.queryByRole("combobox", { name: "Project" })).not.toBeInTheDocument();
   });

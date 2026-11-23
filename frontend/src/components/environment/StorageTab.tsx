@@ -32,7 +32,7 @@ import { CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, 
 import { CopyS3EnvButton, S3SecretField } from "./AdminLogin";
 import { notManaged } from "./resourceStatus";
 import { STORAGE_HREF, TAB_TITLES } from "./environmentTabs";
-import { type Busy, type FeatureState, storageStatus } from "./featureState";
+import { type Busy, type FeatureState, MIGRATION_NEEDED, storageStatus } from "./featureState";
 
 /** Namespace where storage runs and its in-cluster URL (pkg/cluster s3Namespace, s3Host). */
 export const S3_NAMESPACE = "seaweedfs";
@@ -115,11 +115,10 @@ const LegacyStorageDetails: React.FC<{ legacy: LegacyStorageState }> = ({ legacy
 };
 
 /** Tab-top banner for migration: why it is required, that workloads keep running, and what the action does. */
-const MigrationAlert: React.FC<{ legacy: LegacyStorageState; onMigrate: () => void; reason: string | null; readOnly: boolean }> = ({ legacy, onMigrate, reason, readOnly }) => {
+const MigrationAlert: React.FC<{ legacy: LegacyStorageState; reason: string | null; readOnly: boolean }> = ({ legacy, reason, readOnly }) => {
   if (legacy.stage === "migrate") {
     return (
-      <Alert variant="warning" isInline component="div" title="Your pipeline data is in storage from an earlier version"
-        actionLinks={!readOnly && !reason ? <AlertActionLink onClick={onMigrate}>Migrate storage</AlertActionLink> : undefined}>
+      <Alert variant="warning" isInline component="div" title="Your pipeline data is in storage from an earlier version">
         <Content component="p">
           This version keeps pipeline data in the S3 storage in namespace <code>{S3_NAMESPACE}</code>; an earlier version put it in namespace <code>{legacy.namespace}</code>.
           Your pipeline servers keep working on the old storage meanwhile. Migrate storage copies every object to the new storage, checks each copy, and then moves the pipeline servers this tool created; nothing is deleted.
@@ -161,7 +160,7 @@ const StoragePart: React.FC<StorageTabProps> = ({ status, busy, baseReason, read
   const blocked = !deployed && minio?.setupBlockedReason;
   const usedBy = minio?.usedBy ?? [];
   return (
-    <PartItem id="storage" title="S3 storage" scope="Shared by the cluster" status={storageStatus(status, busy)} unmanaged={unmanaged} actions={actions.length ? actions : undefined} menu={menu}>
+    <PartItem id="storage" title="SeaweedFS" scope="Shared by the cluster" status={storageStatus(status, busy)} statusText={legacy?.stage === "migrate" ? MIGRATION_NEEDED : undefined} unmanaged={unmanaged} actions={actions.length ? actions : undefined} menu={menu}>
       {!minio?.deployed && (minio?.leftovers ?? []).length > 0 && (
         <Content component="p">A deletion that did not finish left {joinNodes((minio?.leftovers ?? []).map((l) => <code key={l}>{l}</code>))} in namespace <code>{S3_NAMESPACE}</code>{readOnly ? "." : "; Delete S3 storage removes it."}</Content>
       )}
@@ -175,7 +174,7 @@ const StoragePart: React.FC<StorageTabProps> = ({ status, busy, baseReason, read
         <Content component="p">Not set up yet. Set up S3 storage creates it, with a 20 GiB volume.</Content>
       )}
       {legacy?.stage === "migrate" && (
-        <Content component="p">Not set up yet: Migrate storage creates it, with new keys, and gives them to the pipeline servers it moves.</Content>
+        <Content component="p">Migrate storage creates the new storage here, with new keys, copies the data from the storage of an earlier version in namespace <code>{legacy.namespace}</code>, and gives the new keys to the pipeline servers it moves.</Content>
       )}
       {status.foreignLegacyNamespace && !legacy && (
         <Alert variant="info" isInline component="div" title="Namespace minio is not this tool's">
@@ -258,7 +257,7 @@ const StoragePart: React.FC<StorageTabProps> = ({ status, busy, baseReason, read
  * and created resources. Cluster-wide—no project selector.
  */
 export const StorageTab: React.FC<StorageTabProps> = (props) => {
-  const { status, state, busy, baseReason, readOnly, onMigrate, onSetUp } = props;
+  const { status, state, busy, baseReason, readOnly, onSetUp } = props;
   const legacy = status.legacyStorage;
   const next = state.next;
   return (
@@ -266,10 +265,12 @@ export const StorageTab: React.FC<StorageTabProps> = (props) => {
       <StackItem><FeatureHeader title={TAB_TITLES.storage} purpose={FEATURE_PURPOSE.storage} state={state} /></StackItem>
       <StackItem>
         <Content component="p">
-          Every pipeline server this tool sets up keeps its artifacts here, in bucket <code>{PIPELINES_BUCKET}</code>; setting up Pipelines sets it up first when it is missing. Other features can use it too.
+          {legacy?.stage === "migrate"
+            ? <>Once Migrate storage has moved the data, the pipeline servers this tool sets up keep their artifacts here, in bucket <code>{PIPELINES_BUCKET}</code>. Other features can use it too.</>
+            : <>The pipeline servers this tool sets up keep their artifacts here, in bucket <code>{PIPELINES_BUCKET}</code>; setting up Pipelines sets it up first when it is missing. Other features can use it too.</>}
         </Content>
       </StackItem>
-      {legacy && <StackItem><MigrationAlert legacy={legacy} onMigrate={onMigrate} readOnly={readOnly} reason={busy.migrating ? "Migrate storage is running." : baseReason} /></StackItem>}
+      {legacy && <StackItem><MigrationAlert legacy={legacy} readOnly={readOnly} reason={busy.migrating ? "Migrate storage is running." : baseReason} /></StackItem>}
       <StackItem>
         <PartList aria-label={`What ${TAB_TITLES.storage} needs`}>
           <StoragePart {...props} />
@@ -299,6 +300,7 @@ export const StoragePrerequisitePart: React.FC<{ status: ResourcesStatus; busy: 
   const s = storageStatus(status, busy);
   const { minio, legacyStorage: legacy } = status;
   const unmanaged = notManaged(minio);
+  const migrating = legacy?.stage === "migrate";
   const why = unmanaged ? <>Namespace <code>{S3_NAMESPACE}</code> was not created by this tool, so pipeline servers set up here do not use it.</>
     // Migration needed: the alert at the top of the tab says it, with the way there.
     : legacy?.stage === "migrate" ? null
@@ -306,9 +308,13 @@ export const StoragePrerequisitePart: React.FC<{ status: ResourcesStatus; busy: 
     : s === "error" || s === "needs-attention" ? "The S3 storage tab says what needs attention."
     : null;
   return (
-    <PartItem id="pipelines-storage" title="S3 storage" scope="Shared by the cluster" status={s} unmanaged={unmanaged}
-      actions={<ActionListItem><Button variant="link" isInline component={StorageTabLink}>Open S3 storage</Button></ActionListItem>}>
-      <Content component="p">Pipeline servers this tool sets up keep their artifacts in it, in bucket <code>{PIPELINES_BUCKET}</code>.{why && <> {why}</>}</Content>
+    <PartItem id="pipelines-storage" title="S3 storage" scope="Shared by the cluster" status={s} statusText={migrating ? MIGRATION_NEEDED : undefined} unmanaged={unmanaged}
+      actions={migrating ? undefined : <ActionListItem><Button variant="link" component={StorageTabLink}>Open S3 storage</Button></ActionListItem>}>
+      <Content component="p">
+        {migrating
+          ? "Your pipeline servers still use the storage of an earlier version until Migrate storage moves them to the S3 storage."
+          : <>Pipeline servers this tool sets up keep their artifacts in it, in bucket <code>{PIPELINES_BUCKET}</code>.{why && <> {why}</>}</>}
+      </Content>
     </PartItem>
   );
 };

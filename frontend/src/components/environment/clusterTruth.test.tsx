@@ -155,8 +155,8 @@ describe("a storage deletion that did not finish", () => {
       "/api/resources/projects": { projects: ["juntao-test"] },
     });
     renderAt("/test-resources?tab=storage");
-    const storage = await part("S3 storage");
+    const storage = await part("SeaweedFS");
     expect(storage).toHaveTextContent("A deletion that did not finish left Secret seaweedfs-s3-credentials in namespace seaweedfs; Delete S3 storage removes it.");
-    expect(await menuItem("S3 storage", /Delete S3 storage/)).not.toBeNull();
+    expect(await menuItem("SeaweedFS", /Delete S3 storage/)).not.toBeNull();
   });
 });

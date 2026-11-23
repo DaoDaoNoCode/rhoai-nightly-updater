@@ -69,7 +69,7 @@ describe("terminal states", () => {
   it("S3 storage in ImagePullBackOff reads Error, says it in words with Repair in the alert, raw reasons in Technical details; Delete says why it is off", async () => {
     setup(live());
     renderAt(STORAGE_PATH);
-    const storage = await part("S3 storage");
+    const storage = await part("SeaweedFS");
     expect(within(storage).getByText("Error")).toBeInTheDocument();
     // Req. 6: human-readable headline; Repair on the alert; raw pod reason tucked under Technical details only.
     expect(within(storage).getByText("The S3 storage's image can't be downloaded")).toBeInTheDocument();
@@ -79,7 +79,7 @@ describe("terminal states", () => {
     fireEvent.click(within(storage).getByRole("button", { name: "Technical details" }));
     expect(within(storage).getByText("ImagePullBackOff")).toBeVisible();
     // Req. 4: Delete appears in the overflow menu together with the explanation for why it stays disabled.
-    const del = await menuItem("S3 storage", /Delete S3 storage/);
+    const del = await menuItem("SeaweedFS", /Delete S3 storage/);
     expect(del).toHaveAttribute("aria-disabled", "true");
     expect(del).toHaveTextContent(/1 pipeline server uses this S3 storage/);
   });
@@ -138,7 +138,7 @@ describe("health and ownership are separate", () => {
     // Storage tab mirrors the same inline block and likewise omits any Set up control.
     fireEvent.click(within(needed).getByRole("link", { name: "Open S3 storage" }));
     expect(await screen.findByRole("heading", { level: 2, name: "S3 storage" })).toBeInTheDocument();
-    const storage = await part("S3 storage");
+    const storage = await part("SeaweedFS");
     expect(within(storage).getByText("The S3 storage can't be set up: namespace seaweedfs belongs to someone else")).toBeInTheDocument();
     expect(storage).toHaveTextContent("oc delete project seaweedfs");
     expect(screen.queryByRole("button", { name: /^Set up/ })).not.toBeInTheDocument();
@@ -278,7 +278,7 @@ describe("teardown confirmations state the data loss", () => {
       "POST /api/resources/s3/teardown": () => jsonResponse({ success: false, errorCode: "prerequisites", logs: [], message: "Refusing to delete namespace seaweedfs: CRD mcpservers.mcp.x-k8s.io has a conversion webhook whose Service redhat-ods-applications/mcp-lifecycle-operator-webhook-service is missing." }, 422),
     });
     renderAt(STORAGE_PATH);
-    fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
+    fireEvent.click((await menuItem("SeaweedFS", /Delete S3 storage/))!);
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getAllByText("seaweedfs/seaweedfs-data").length).toBeGreaterThan(0);
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
@@ -298,7 +298,7 @@ describe("S3 storage (names, login, kept namespace)", () => {
     const warning = "SeaweedFS runs mirror.example.com/seaweedfs:4.54, not the image this version deploys. Re-run setup to update it; the data PVC is kept.";
     setup(live({ minio: { ...running, warning }, pipelineServers: [] }));
     renderAt(STORAGE_PATH);
-    const storage = await part("S3 storage");
+    const storage = await part("SeaweedFS");
     expect(within(storage).getByText("Needs attention")).toBeInTheDocument();
     expect(storage).toHaveTextContent("SeaweedFS runs mirror.example.com/seaweedfs:4.54, not the image this version deploys.");
     expect(storage).toHaveTextContent("Re-run setup to update it; the data PVC is kept.");
@@ -318,7 +318,7 @@ describe("S3 storage (names, login, kept namespace)", () => {
       "GET /api/resources/s3/admin-password": { user: "admin", password: "admin-value", secretKey: "s3cret-value" },
     });
     renderAt(STORAGE_PATH);
-    const storage = await part("S3 storage");
+    const storage = await part("SeaweedFS");
     const field = within(storage).getByLabelText("S3 secret key") as HTMLInputElement;
     const fetched = () => api.calls.filter((c) => c.includes("admin-password")).length;
     expect(fetched()).toBe(0);
@@ -348,7 +348,7 @@ describe("S3 storage (names, login, kept namespace)", () => {
       "GET /api/resources/s3/admin-password": { user: "admin", accessKey: "AKEY", password: "admin-value", secretKey: "s3cret-value" },
     });
     renderAt(STORAGE_PATH);
-    const storage = await part("S3 storage");
+    const storage = await part("SeaweedFS");
     expect(storage).toHaveTextContent("us-east-1, path-style addressing");
     expect(storage).toHaveTextContent("with a password of its own");
     const key = within(storage).getByLabelText("S3 access key") as HTMLInputElement;
@@ -365,11 +365,11 @@ describe("S3 storage (names, login, kept namespace)", () => {
   it("a reader sees who can help instead of keys and changes, and nothing is read", async () => {
     const api = setup(live({ minio: running, pipelineServers: [] }));
     renderAt(STORAGE_PATH, { readBlocker: "Read-only access: changing the cluster through this tool requires the cluster-admin role." });
-    const storage = await part("S3 storage");
+    const storage = await part("SeaweedFS");
     expect(within(storage).queryByRole("button", { name: "Show the S3 secret key" })).not.toBeInTheDocument();
     expect(storage).toHaveTextContent("Only cluster-admins can read the S3 keys here. Ask one for them.");
     // Req. 8: read-only users see no actions menu; Set up spells out whom to contact, inline.
-    expect(within(storage).queryByRole("button", { name: "S3 storage actions" })).not.toBeInTheDocument();
+    expect(within(storage).queryByRole("button", { name: "SeaweedFS actions" })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Clean up" })).not.toBeInTheDocument();
     // A running storage leaves nothing to set up here.
     expect(screen.queryByRole("button", { name: /^Set up/ })).not.toBeInTheDocument();
@@ -384,7 +384,7 @@ describe("S3 storage (names, login, kept namespace)", () => {
       "POST /api/resources/s3/teardown": () => { status = afterTeardown; return jsonResponse({ success: true, message: kept, logs: [] }); },
     });
     renderAt(STORAGE_PATH);
-    fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
+    fireEvent.click((await menuItem("SeaweedFS", /Delete S3 storage/))!);
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent(/Deletes the S3 storage with every file in it. Namespace seaweedfs is kept./);
     expect(dialog).not.toHaveTextContent(/minio/i);
@@ -393,7 +393,7 @@ describe("S3 storage (names, login, kept namespace)", () => {
     // Finished dialog echoes the API message, including the oc delete project hint for the retained namespace.
     await waitFor(() => expect(run.querySelector(".pf-v6-c-alert__title")).toHaveTextContent(/S3 storage removed\. .*oc delete project seaweedfs/));
     fireEvent.click(footerClose(run));
-    const storage = await part("S3 storage");
+    const storage = await part("SeaweedFS");
     expect(await within(storage).findByText("Not set up")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Set up S3 storage" })).toBeInTheDocument();
     expect(api.calls.filter((c) => c.startsWith("POST /api/resources/s3/teardown"))).toHaveLength(1);
@@ -413,13 +413,13 @@ describe("S3 storage (names, login, kept namespace)", () => {
       "POST /api/resources/s3/teardown": () => { status = afterTeardown; return jsonResponse({ success: false, errorCode: code, message, logs: [] }, 422); },
     });
     renderAt(STORAGE_PATH);
-    fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
+    fireEvent.click((await menuItem("SeaweedFS", /Delete S3 storage/))!);
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
     const run = await screen.findByRole("dialog", { name: "Delete the S3 storage" });
     expect(await within(run).findByText(title)).toBeInTheDocument();
     fireEvent.click(footerClose(run));
     await waitFor(() => expect(screen.getByRole("button", { name: "Set up S3 storage" })).toBeInTheDocument());
-    fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
+    fireEvent.click((await menuItem("SeaweedFS", /Delete S3 storage/))!);
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(api.calls.filter((c) => c.startsWith("POST /api/resources/s3/teardown"))).toHaveLength(2));
   });
@@ -432,12 +432,12 @@ describe("S3 storage (names, login, kept namespace)", () => {
       "POST /api/resources/s3/teardown": () => { status = afterTeardownBase; return jsonResponse({ success: false, errorCode: "network", message: "The connection dropped.", logs: [] }, 422); },
     });
     renderAt(STORAGE_PATH);
-    fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
+    fireEvent.click((await menuItem("SeaweedFS", /Delete S3 storage/))!);
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
     const run = await screen.findByRole("dialog", { name: "Delete the S3 storage" });
     fireEvent.click(footerClose(await waitFor(() => run)));
     await waitFor(() => expect(screen.getByRole("button", { name: "Set up S3 storage" })).toBeInTheDocument());
-    expect(await menuItem("S3 storage", /Delete S3 storage/)).toBeNull();
+    expect(await menuItem("SeaweedFS", /Delete S3 storage/)).toBeNull();
   });
 });
 
@@ -462,7 +462,7 @@ describe("storage from an earlier version", () => {
   it("a namespace minio this tool did not make is said plainly, offers no migration, and does not block setup", async () => {
     setup(live({ minio: notDeployed, legacyStorage: null, foreignLegacyNamespace: true, pipelineServers: [] }));
     renderAt(STORAGE_PATH);
-    const storage = await part("S3 storage");
+    const storage = await part("SeaweedFS");
     expect(within(storage).getByText("Namespace minio is not this tool's")).toBeInTheDocument();
     expect(within(storage).getByText(/not used as storage from an earlier version/)).toBeInTheDocument();
     expect(within(storage).queryByRole("button", { name: "Migrate storage" })).not.toBeInTheDocument();
@@ -471,14 +471,15 @@ describe("storage from an earlier version", () => {
   it("Migrate storage gives the new storage new keys, not the old ones", async () => {
     setup(live({ minio: notDeployed, legacyStorage: legacy, pipelineServers: [runningDspa] }));
     renderAt(STORAGE_PATH);
-    const storage = await part("S3 storage");
-    expect(within(storage).getByText(/Migrate storage creates it, with new keys/)).toBeInTheDocument();
+    const storage = await part("SeaweedFS");
+    expect(storage).toHaveTextContent("Migrate storage creates the new storage here, with new keys, copies the data from the storage of an earlier version in namespace minio");
+    expect(storage).not.toHaveTextContent(/Not set up yet/);
   });
 
   it("the Migrate storage and Delete old storage dialogs say the keys are new and where to find them", async () => {
     setup(live({ minio: notDeployed, legacyStorage: legacy, pipelineServers: [runningDspa] }));
     const { unmount } = renderAt(STORAGE_PATH);
-    fireEvent.click(within(await part("S3 storage")).getByRole("button", { name: "Migrate storage" }));
+    fireEvent.click(within(await part("SeaweedFS")).getByRole("button", { name: "Migrate storage" }));
     const migrate = await screen.findByRole("dialog", { name: "Migrate storage" });
     expect(migrate).toHaveTextContent("Sets up the storage in seaweedfs with new keys: a new access key and secret key. The old keys do not work on it.");
     expect(migrate).toHaveTextContent("to the new storage and its keys");
@@ -489,17 +490,19 @@ describe("storage from an earlier version", () => {
     const removable: LegacyStorageState = { ...legacy, stage: "remove", repoint: [], notMoved: [], usedBy: [], namespaceDeletable: true, namespaceKeptReason: undefined };
     setup(live({ minio: { ...readyMinio, migrationPending: true }, legacyStorage: removable, pipelineServers: [] }));
     renderAt(STORAGE_PATH);
-    fireEvent.click((await menuItem("S3 storage", /Delete old storage/))!);
+    fireEvent.click((await menuItem("SeaweedFS", /Delete old storage/))!);
     const remove = await screen.findByRole("dialog", { name: /Delete the old storage\?/ });
     expect(remove).toHaveTextContent("Access key and secret key: the new ones, shown on the S3 storage tab. The old keys do not work on the new storage.");
     expect(remove).not.toHaveTextContent(/same (access )?key|keys are the same/);
   });
 
-  it("reads Needs attention with Migrate storage, and names the old objects only in its collapsed section", async () => {
+  it("reads Migration needed with Migrate storage, and names the old objects only in its collapsed section", async () => {
     setup(live({ minio: notDeployed, legacyStorage: legacy, pipelineServers: [runningDspa] }));
     renderAt(STORAGE_PATH);
-    const storage = await part("S3 storage");
-    expect(within(storage).getByText("Needs attention")).toBeInTheDocument();
+    const storage = await part("SeaweedFS");
+    expect(within(storage).getByText("Migration needed")).toBeInTheDocument();
+    // One Migrate storage on the page: the storage's own button.
+    expect(screen.getAllByRole("button", { name: "Migrate storage" })).toHaveLength(1);
     expect(within(storage).getByRole("button", { name: "Migrate storage" })).toHaveClass("pf-m-primary");
     expect(screen.queryByRole("button", { name: /^Set up/ })).not.toBeInTheDocument();
     const toggle = within(storage).getByRole("button", { name: "Storage of an earlier version" });
@@ -517,17 +520,20 @@ describe("storage from an earlier version", () => {
   it("a new pipeline server waits until Migrate storage has moved the data, even with the new storage up (follow-up 3)", async () => {
     setup(live({ minio: { ...readyMinio, migrationPending: true }, legacyStorage: legacy, pipelineServers: [runningDspa] }));
     renderAt("/test-resources?tab=pipelines&project=fresh");
-    expect(await part("S3 storage")).toHaveTextContent("Needs attention");
+    expect(await part("S3 storage")).toHaveTextContent("Migration needed");
     expect(screen.queryByRole("button", { name: /^Set up/ })).not.toBeInTheDocument();
     // Item 7: why, at the top of the tab, with the way to Migrate storage on the S3 storage tab.
     const pointer = screen.getByText("Your pipeline data is in storage from an earlier version").closest(".pf-v6-c-alert") as HTMLElement;
     expect(pointer).toHaveTextContent("New pipeline servers can be set up once Migrate storage, on the S3 storage tab, has moved the data.");
     expect(within(pointer).getByRole("link", { name: "Open S3 storage" })).toHaveAttribute("href", "/test-resources?tab=storage");
     expect(within(pointer).queryByRole("button", { name: "Migrate storage" })).not.toBeInTheDocument();
-    // The S3 storage tab: the full reason, with the action.
+    // One link to the S3 storage tab: the storage part carries none here, and says what is true now.
+    expect(screen.getAllByRole("link", { name: "Open S3 storage" })).toHaveLength(1);
+    expect(await part("S3 storage")).toHaveTextContent("Your pipeline servers still use the storage of an earlier version until Migrate storage moves them to the S3 storage.");
+    // The S3 storage tab: the full reason, and the storage's one Migrate storage.
     fireEvent.click(within(pointer).getByRole("link", { name: "Open S3 storage" }));
-    const why = (await screen.findByText(/Your pipeline servers keep working on the old storage meanwhile/)).closest(".pf-v6-c-alert") as HTMLElement;
-    expect(within(why).getByRole("button", { name: "Migrate storage" })).toBeInTheDocument();
+    expect(await screen.findByText(/Your pipeline servers keep working on the old storage meanwhile/)).toBeInTheDocument();
+    expect(within(await part("SeaweedFS")).getByRole("button", { name: "Migrate storage" })).toBeInTheDocument();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   });
 
@@ -542,7 +548,7 @@ describe("storage from an earlier version", () => {
       ),
     });
     renderAt(STORAGE_PATH);
-    fireEvent.click(within(await part("S3 storage")).getByRole("button", { name: "Migrate storage" }));
+    fireEvent.click(within(await part("SeaweedFS")).getByRole("button", { name: "Migrate storage" }));
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("juntao-test/dspa");
     // Unmovable legacy data is surfaced as an explicit warning, not as body copy.
@@ -565,7 +571,7 @@ describe("storage from an earlier version", () => {
     const unrecorded: LegacyStorageState = { ...legacy, repoint: ["evil/dspa", "juntao-test/dspa"], unrecorded: ["evil/dspa"] };
     const api = setup(live({ minio: notDeployed, legacyStorage: unrecorded, pipelineServers: [runningDspa] }), { "POST /api/resources/s3/migrate/stream": run });
     renderAt(STORAGE_PATH);
-    fireEvent.click(within(await part("S3 storage")).getByRole("button", { name: "Migrate storage" }));
+    fireEvent.click(within(await part("SeaweedFS")).getByRole("button", { name: "Migrate storage" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Confirm the pipeline servers this tool set up")).toBeInTheDocument();
     const box = within(dialog).getByRole("checkbox", { name: /Move evil\/dspa: this tool set it up/ });
@@ -580,7 +586,7 @@ describe("storage from an earlier version", () => {
     const unrecorded: LegacyStorageState = { ...legacy, repoint: ["evil/dspa", "juntao-test/dspa"], unrecorded: ["evil/dspa"] };
     const api = setup(live({ minio: notDeployed, legacyStorage: unrecorded, pipelineServers: [runningDspa] }), { "POST /api/resources/s3/migrate/stream": run });
     renderAt(STORAGE_PATH);
-    fireEvent.click(within(await part("S3 storage")).getByRole("button", { name: "Migrate storage" }));
+    fireEvent.click(within(await part("SeaweedFS")).getByRole("button", { name: "Migrate storage" }));
     const dialog = await screen.findByRole("dialog");
     fireEvent.click(within(dialog).getByRole("checkbox", { name: /Move evil\/dspa: this tool set it up/ }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Migrate storage" }));
@@ -598,7 +604,7 @@ describe("storage from an earlier version", () => {
       ),
     });
     renderAt(STORAGE_PATH);
-    fireEvent.click(within(await part("S3 storage")).getByRole("button", { name: "Migrate storage" }));
+    fireEvent.click(within(await part("SeaweedFS")).getByRole("button", { name: "Migrate storage" }));
     const dialog = await screen.findByRole("dialog");
     fireEvent.click(within(dialog).getByRole("button", { name: "Migrate storage" }));
     expect(await within(dialog).findByText("Stopped")).toBeInTheDocument();
@@ -612,7 +618,7 @@ describe("storage from an earlier version", () => {
     });
     renderAt(STORAGE_PATH);
     expect(await screen.findByText(/The old storage can be deleted/)).toBeInTheDocument();
-    fireEvent.click((await menuItem("S3 storage", /Delete old storage/))!);
+    fireEvent.click((await menuItem("SeaweedFS", /Delete old storage/))!);
     const dialog = await screen.findByRole("dialog", { name: /Delete the old storage\?/ });
     const box = within(dialog).getByRole("checkbox", { name: "Also delete namespace minio" });
     const danger = within(dialog).getByText("Data is deleted and cannot be recovered");
@@ -626,7 +632,7 @@ describe("storage from an earlier version", () => {
   it("Delete covers the earlier storage too, and names its data", async () => {
     setup(live({ minio: { ...notDeployed, teardownBlockedReason: undefined }, legacyStorage: { ...legacy, usedBy: [] }, pipelineServers: [] }));
     renderAt(STORAGE_PATH);
-    fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
+    fireEvent.click((await menuItem("SeaweedFS", /Delete S3 storage/))!);
     const dialog = await screen.findByRole("dialog");
     fireEvent.click(within(dialog).getByRole("button", { name: "Details" }));
     expect(dialog).toHaveTextContent("The storage an earlier version left in namespace minio is deleted");
@@ -644,9 +650,9 @@ describe("every setup has its removal on the same tab", () => {
 
   it.each([
     ["the pipeline server", "/test-resources?tab=pipelines&project=juntao-test", { minio: readyMinio, pipelineServers: [runningDspa] }, [["Pipeline server", /Delete pipeline server/]], []],
-    ["the storage a pipeline server uses", STORAGE_PATH, { minio: readyMinio, pipelineServers: [runningDspa] }, [["S3 storage", /Delete S3 storage/]], []],
-    ["the storage alone", STORAGE_PATH, { minio: readyMinio, pipelineServers: [] }, [["S3 storage", /Delete S3 storage/]], []],
-    ["a broken storage", STORAGE_PATH, { minio: { ...brokenMinio, teardownBlockedReason: undefined }, pipelineServers: [] }, [["S3 storage", /Delete S3 storage/]], []],
+    ["the storage a pipeline server uses", STORAGE_PATH, { minio: readyMinio, pipelineServers: [runningDspa] }, [["SeaweedFS", /Delete S3 storage/]], []],
+    ["the storage alone", STORAGE_PATH, { minio: readyMinio, pipelineServers: [] }, [["SeaweedFS", /Delete S3 storage/]], []],
+    ["a broken storage", STORAGE_PATH, { minio: { ...brokenMinio, teardownBlockedReason: undefined }, pipelineServers: [] }, [["SeaweedFS", /Delete S3 storage/]], []],
     ["MLflow", "/test-resources?tab=mlflow", { mlflow: ownMlflow }, [["MLflow server", /Delete MLflow/]], []],
     ["someone else's MLflow", "/test-resources?tab=mlflow", { mlflow: browserMlflow }, [], [["MLflow server", "created outside this tool"]]],
     ["someone else's pipeline server", "/test-resources?tab=pipelines&project=team-x",
@@ -654,7 +660,7 @@ describe("every setup has its removal on the same tab", () => {
       [["Pipeline server", "Created outside this tool"], ["S3 storage", "was not created by this tool"]]],
     ["someone else's storage namespace", STORAGE_PATH,
       { minio: { deployed: false, ready: false, managedByTool: false, setupBlockedReason: "x" }, pipelineServers: [], unmanagedPipelineServers: [{ ...runningDspa, namespace: "team-x", name: "dspa", managedByTool: false }] }, [],
-      [["S3 storage", "belongs to someone else"]]],
+      [["SeaweedFS", "belongs to someone else"]]],
   ])("%s: the part's menu offers Delete, or the part says it is not this tool's", async (_name, path, over, items, texts) => {
     setup(live(over as Partial<ResourcesStatus>));
     renderAt(path);
@@ -680,7 +686,7 @@ describe("every setup has its removal on the same tab", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     // The storage's Delete is on its own tab.
     fireEvent.click(screen.getByRole("tab", { name: "S3 storage" }));
-    fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
+    fireEvent.click((await menuItem("SeaweedFS", /Delete S3 storage/))!);
     dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("Namespace seaweedfs is kept");
     fireEvent.click(within(dialog).getByRole("button", { name: "Details" }));
@@ -695,7 +701,7 @@ describe("every setup has its removal on the same tab", () => {
       "POST /api/resources/s3/teardown": () => jsonResponse({ success: true, message: "S3 storage removed. Namespace 'seaweedfs' is being deleted, with everything else in it.", logs: [] }),
     });
     renderAt(STORAGE_PATH);
-    fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
+    fireEvent.click((await menuItem("SeaweedFS", /Delete S3 storage/))!);
     const dialog = await screen.findByRole("dialog");
     const box = within(dialog).getByRole("checkbox", { name: "Also delete namespace seaweedfs (created by this tool)" });
     expect(box).not.toBeChecked();
@@ -717,7 +723,7 @@ describe("every setup has its removal on the same tab", () => {
       "POST /api/resources/s3/teardown": () => jsonResponse({ success: true, message: "S3 storage removed.", logs: [] }),
     });
     renderAt(STORAGE_PATH);
-    fireEvent.click((await menuItem("S3 storage", /Delete S3 storage/))!);
+    fireEvent.click((await menuItem("SeaweedFS", /Delete S3 storage/))!);
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
     expect(dialog).toHaveTextContent("its managedFields show no write by this tool");
@@ -729,7 +735,7 @@ describe("every setup has its removal on the same tab", () => {
     const legacy: LegacyStorageState = { namespace: "minio", server: "SeaweedFS", ready: true, endpoint: "minio-service.minio.svc:9000", objects: ["Deployment seaweedfs"], stage: "remove", namespaceDeletable: false, usedBy: [] };
     setup(live({ minio: { ...readyMinio, migrationPending: true }, legacyStorage: legacy, pipelineServers: [], mlflow: { ...ownMlflow, prOverride: true, prNumber: 7 } }));
     renderAt(STORAGE_PATH);
-    expect(await menuItem("S3 storage", /Delete old storage/)).not.toBeNull();
+    expect(await menuItem("SeaweedFS", /Delete old storage/)).not.toBeNull();
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     fireEvent.click(screen.getByRole("tab", { name: "MLflow" }));
     expect(within(await part("MLflow server")).getByRole("button", { name: "Revert the PR image" })).toBeInTheDocument();
@@ -750,7 +756,7 @@ describe("status from the serving configuration (Repair)", () => {
       "POST /api/resources/s3/setup": () => jsonResponse({ success: true, message: "S3 storage (SeaweedFS) deployed with bucket 'pipelines'.", logs: [] }),
     });
     renderAt(STORAGE_PATH);
-    const storage = await part("S3 storage");
+    const storage = await part("SeaweedFS");
     expect(within(storage).getByText(label)).toBeInTheDocument();
     expect(within(storage).getByText("The S3 storage needs a repair")).toBeInTheDocument();
     expect(storage).toHaveTextContent(text);
@@ -764,7 +770,7 @@ describe("status from the serving configuration (Repair)", () => {
   it("someone else's storage gets no Repair", async () => {
     setup(live({ minio: { ...base, managedByTool: false, terminalError: true, message: scaledDown, repairNeeded: scaledDown }, pipelineServers: [] }));
     renderAt(STORAGE_PATH);
-    const storage = await part("S3 storage");
+    const storage = await part("SeaweedFS");
     expect(within(storage).queryByRole("button", { name: "Repair" })).not.toBeInTheDocument();
     expect(within(storage).getByText("Not managed by this tool")).toBeInTheDocument();
   });

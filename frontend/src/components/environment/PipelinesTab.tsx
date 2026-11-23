@@ -292,7 +292,7 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
             <WhatNext id="pipelines-next" items={[
               <>Run the sample pipeline above to check that runs and their artifacts work in {project}.</>,
               <>Open pipelines in {project}, then choose Import pipeline to upload a compiled pipeline.</>,
-              <>Create a run; its steps write their artifacts to the S3 storage.</>,
+              <>Create a run; its steps write their artifacts to the pipeline server&apos;s storage.</>,
               <>Follow the run and open its artifacts from the run&apos;s page.</>,
             ]} />
           </StackItem>

@@ -246,7 +246,9 @@ export const CleanupModal: React.FC<{
             <Content component="p">
               {nothingOffered
                 ? "This tool created nothing here that is left to delete."
-                : "Deletes what this tool created, in this order. Something this tool did not create is never deleted. The parts run one after another as one operation; a part that fails stops the rest."}
+                : scope === "pipelines"
+                  ? "Deletes the pipeline servers you tick, as one operation. Something this tool did not create is never deleted."
+                  : "Deletes what this tool created, in this order. Something this tool did not create is never deleted. The parts run one after another as one operation; a part that fails stops the rest."}
             </Content>
           </StackItem>
           {!nothingOffered && (
@@ -338,7 +340,7 @@ export const CleanupModal: React.FC<{
                   <StackItem>
                     <List>{retry!.contents[p].map((c) => <ListItem key={c}>{c}</ListItem>)}</List>
                   </StackItem>
-                  <StackItem>Only workbenches, models, volumes and pods are listed; anything else in the project is deleted with it.</StackItem>
+                  <StackItem>Only Notebooks (workbenches), InferenceServices and LLMInferenceServices (models), PersistentVolumeClaims (volumes) and Pods are listed; anything else in the project is deleted with it.</StackItem>
                   <StackItem>
                     <Checkbox id={`cleanup-confirm-${p}`} label={`Delete ${retry!.contents[p].length === 1 ? "it" : "them"} with project ${p}`} isChecked={confirmedContents.includes(p)} onChange={(_e, v) => toggleConfirmedContents(p, v)} />
                   </StackItem>

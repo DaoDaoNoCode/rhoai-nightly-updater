@@ -69,6 +69,9 @@ describe("Clean up", () => {
     const dialog = await screen.findByRole("dialog", { name: /Clean up Pipelines\?/ });
     expect(within(dialog).queryByRole("checkbox", { name: "MLflow server" })).not.toBeInTheDocument();
     expect(within(dialog).queryByRole("checkbox", { name: /S3 storage/ })).not.toBeInTheDocument();
+    // One group: no wording about parts running in order.
+    expect(dialog).toHaveTextContent("Deletes the pipeline servers you tick, as one operation.");
+    expect(dialog).not.toHaveTextContent(/in this order|a part that fails/);
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Pipeline server in b" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([{ pipelineServers: ["a"] }]));
