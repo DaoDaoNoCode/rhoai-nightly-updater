@@ -54,7 +54,7 @@ import { PrerequisitesSection, RECOMMENDED_EXPOSURE, headerWithPrerequisites, pr
 import type { ModelExposureKind, PrerequisiteFeature } from "../types";
 import { BUSY_REASON, PROJECT_TABS, TAB_PARTS, TAB_TITLES, ENVIRONMENT_TABS, type EnvironmentTab } from "./environment/environmentTabs";
 import { useEnvironmentLocation } from "./environment/useEnvironmentLocation";
-import { useIdleRefresh, useResourceStatus, useSettlePolling } from "./environment/useResourceStatus";
+import { useResourcePolling, useResourceStatus } from "./environment/useResourceStatus";
 import { environmentActions, useRunState } from "./environment/environmentRuns";
 import { environmentProjectNames, modelsProjectOptions, pipelinesProjectOptions, playgroundProjectOptions } from "./environment/projectOptions";
 import { overviewRows as buildOverviewRows } from "./environment/overviewRows";
@@ -109,12 +109,10 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const runs = useRunState();
   const { resAction, actionProject, run, runOpen, setRunOpen, setupConfirm, setSetupConfirm, cleanupScope, setCleanupScope,
     sampleOp, samplesRefresh, modelsOp, playgroundOp, playgroundRefresh, maasOp, maasRefresh, prereqRefresh, checking, checkError } = runs;
-  // Poll quickly after a change, back off to 30 s, stop after 10 minutes or
-  // once nothing is settling; hidden tabs don't poll (A06-5).
+  // One poller: quickly after a change, backing off to 30 s, for 10 minutes;
+  // otherwise a slow re-read; hidden tabs don't poll (A06-5).
   const settlingNow = !!resAction || resourcesSettling || !!run.run?.running;
-  const polling = useSettlePolling(fetchResources, settlingNow);
-  // Otherwise a slow re-read, so something deleted or changed elsewhere goes away on its own.
-  useIdleRefresh(fetchResources, !settlingNow || polling.gaveUp);
+  const polling = useResourcePolling(fetchResources, settlingNow);
 
   const [migrateKind, setMigrateKind] = useState<MigrateKind | null>(null);
   const migration = useMigrateStorage(useCallback(() => { void fetchResources(); }, [fetchResources]));

@@ -133,6 +133,13 @@ Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#u
 
 ### Fixed
 
+- **The Environment page reads its status one request at a time.** After
+  quick polling had stopped at 10 minutes, a later change that started
+  settling again ran the quick polling beside the 45-second re-read, so two
+  status requests could run at once, and the page said at once that it had
+  stopped checking. One poller now does both: each settling period polls
+  quickly again for its own 10 minutes, and a read still running is waited
+  for.
 - **Clean up confirms only the pipeline servers you ticked.** A refresh
   while the Clean up dialog was open could turn a ticked pipeline server
   into one this tool has no record of, and the dialog then sent it as

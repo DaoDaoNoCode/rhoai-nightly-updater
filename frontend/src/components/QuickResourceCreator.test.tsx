@@ -109,6 +109,41 @@ describe("QuickResourceCreator polling", () => {
     expect(calls).toBe(3);
   });
 
+  // One poller: settling again after an earlier settling gave up starts the
+  // quick reads again (its own 10 minutes), and the idle re-read does not
+  // run beside them, so a read never starts while one is in flight.
+  it("a new settling period after giving up polls quickly again, one read at a time", async () => {
+    const provisioning: ResourceState = { deployed: true, ready: false, message: "Provisioning" };
+    let minio = provisioning;
+    let hang = false;
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url.includes("/api/resources/projects")) return jsonResponse({ projects: [] });
+      if (!url.includes("/api/resources/status")) return jsonResponse({});
+      calls += 1;
+      if (hang) await new Promise<void>(() => {});
+      return jsonResponse(statusWith(minio));
+    }));
+    renderAt("/test-resources?tab=pipelines");
+    await tick();
+    await tick(11 * 60_000);
+    expect(screen.getByText("Stopped checking automatically after 10 minutes")).toBeInTheDocument();
+    minio = { deployed: true, ready: true, message: "Running" };
+    await tick(45_000);
+    await tick();
+    expect(screen.queryByText("Stopped checking automatically after 10 minutes")).toBeNull();
+    minio = provisioning;
+    await tick(45_000);
+    const settlingAgain = calls;
+    await tick(5_000);
+    expect(calls).toBe(settlingAgain + 1);
+    expect(screen.queryByText("Stopped checking automatically after 10 minutes")).toBeNull();
+    hang = true;
+    const before = calls;
+    await tick(5 * 60_000);
+    expect(calls).toBe(before + 1);
+  });
+
   it("does not poll while the tab is hidden", async () => {
     const statusCalls = stubResources(() => statusWith({ deployed: true, ready: false, message: "Provisioning" }));
     renderAt("/test-resources?tab=pipelines");
