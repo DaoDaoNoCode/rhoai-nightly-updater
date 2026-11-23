@@ -298,9 +298,7 @@ const StoragePart: React.FC<StorageTabProps> = ({ status, busy, baseReason, read
       )}
       {deployed && !minio?.ready && !terminalReason(minio) && !isTerminating(minio) && <StartingNote state={minio!} typical="under a minute" />}
       {deployed && (
-        <DescriptionList isCompact isHorizontal termWidth="10rem" aria-label="S3 storage details"
-          // The text rows (Used by, Keys) wrap at 60rem, not at the width of the key fields.
-          style={{ "--pf-v6-c-description-list--m-horizontal__description--width": "60rem" } as React.CSSProperties}>
+        <DescriptionList isCompact isHorizontal termWidth="10rem" aria-label="S3 storage details">
           <DescriptionListGroup>
             <DescriptionListTerm>Endpoint</DescriptionListTerm>
             <DescriptionListDescription><ImageRef image={S3_ENDPOINT} what="S3 endpoint" truncate={false} /></DescriptionListDescription>
