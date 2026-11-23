@@ -112,7 +112,10 @@ func SecureS3(c *kube.Client, removeLeftover []string, onStep func(types.UpdateS
 	for _, d := range recorded {
 		names = append(names, d.Meta.Namespace+"/"+d.Meta.Name)
 	}
-	check := fmt.Sprintf("OK: Found %s to give a key of its own", kube.CountNoun(len(recorded), "pipeline server", "pipeline servers"))
+	check := "OK: Found 1 pipeline server to give a key of its own"
+	if len(recorded) != 1 {
+		check = fmt.Sprintf("OK: Found %d pipeline servers to give each a key of its own", len(recorded))
+	}
 	if len(kept) > 0 {
 		check += fmt.Sprintf("; left on the old key: %s", strings.Join(kept, ", "))
 	}
@@ -223,14 +226,17 @@ func SecureS3(c *kube.Client, removeLeftover []string, onStep func(types.UpdateS
 
 	// Keys of pipeline servers that no longer exist: only those the user
 	// confirmed, and only if they are still leftovers now.
-	left, leftErr := deleteConfirmedLeftovers(sw, dspas, removeLeftover)
+	left, leftErr := deleteConfirmedLeftovers(c, sw, removeLeftover)
 
 	msg := "New admin key, kept out of every project."
 	if s := summary(done, skipped, failed, true); s != "" {
 		msg += " " + s
 	}
 	if leftErr != nil {
-		msg += fmt.Sprintf(" The leftover keys could not be removed: %v.", leftErr)
+		msg += fmt.Sprintf(" The leftover keys could not all be removed: %v.", leftErr)
+		if len(left) > 0 {
+			msg += fmt.Sprintf(" Removed before that: %s.", strings.Join(left, ", "))
+		}
 	} else if len(left) > 0 {
 		msg += fmt.Sprintf(" Removed the keys of pipeline servers that no longer exist: %s.", strings.Join(left, ", "))
 	}

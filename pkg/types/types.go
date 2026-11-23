@@ -1851,19 +1851,37 @@ type S3KeysState struct {
 	OldKey []string `json:"oldKey,omitempty"`
 	// KeepOldKey are the other pipeline servers on the storage, each with
 	// why the tool leaves its key ("ns/name (not recorded as this
-	// tool's)"): after Secure S3 storage their old key no longer works.
+	// by this tool)" or "(not set up by this tool)"): after Secure S3
+	// storage their old key no longer works.
 	KeepOldKey []string `json:"keepOldKey,omitempty"`
 	// LeftoverUsers are SeaweedFS users this tool made (rnu-dspa-*) whose
-	// project has no live pipeline server of this tool any more (deleted
-	// while SeaweedFS failed, or outside this tool): their keys still work.
-	// Secure S3 storage and Repair delete them. Empty when the pipeline
-	// servers, the record or the users cannot be read (fail closed).
+	// project has no pipeline server at all (no DSPA that is not being
+	// deleted, whoever made it); their keys still work. Only Remove
+	// leftover keys and Secure S3 storage delete them, after a confirmation
+	// that lists them. Empty when anything cannot be read (fail closed).
 	LeftoverUsers []string `json:"leftoverUsers,omitempty"`
+	// Leftovers are LeftoverUsers with their project and whether its
+	// Connection still holds one of their keys.
+	Leftovers []S3LeftoverKey `json:"leftovers,omitempty"`
+	// Users names the SeaweedFS user of each recorded pipeline server
+	// (namespace/name to rnu-dspa-<project>, hashed for long names).
+	Users map[string]string `json:"users,omitempty"`
 	// CheckError says why which key a pipeline server uses could not be
 	// read (the state is then not changed by it).
 	CheckError string `json:"checkError,omitempty"`
 	// SecureBlockedReason explains why Secure S3 storage cannot run now.
 	SecureBlockedReason string `json:"secureBlockedReason,omitempty"`
+}
+
+// S3LeftoverKey is a SeaweedFS user of a project with no pipeline server.
+type S3LeftoverKey struct {
+	User    string `json:"user"`
+	Project string `json:"project"`
+	// ConnectionInUse is true when the project's Connection
+	// rhoai-nightly-updater-s3 still holds one of the user's keys (or that
+	// cannot be read): workbenches and model deployments using it lose S3
+	// access when the key is removed.
+	ConnectionInUse bool `json:"connectionInUse"`
 }
 
 // LegacyStorageState describes the S3 storage an earlier version of this

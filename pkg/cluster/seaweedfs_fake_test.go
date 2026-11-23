@@ -44,6 +44,8 @@ type seaweedFake struct {
 	// adminSecretOverride, when set, is the admin secret the server
 	// expects instead of the Secret's (a client signing with another one).
 	adminSecretOverride string
+	// failDeleteUser makes DeleteUser of that user fail.
+	failDeleteUser string
 	// audit trail: "ACTION user" on IAM, "METHOD path (who)" on S3.
 	calls []string
 }
@@ -258,6 +260,10 @@ func (sw *seaweedFake) iam(w http.ResponseWriter, form url.Values, isAdmin, secu
 		sw.users[name] = &fakeIAMUser{keys: map[string]string{}, tags: map[string]string{}}
 		fmt.Fprint(w, `<CreateUserResponse/>`)
 	case "DeleteUser":
+		if name == sw.failDeleteUser {
+			sw.xmlError(w, http.StatusInternalServerError, "ServiceFailure")
+			return
+		}
 		if len(u.keys) > 0 {
 			sw.xmlError(w, http.StatusConflict, "DeleteConflict")
 			return

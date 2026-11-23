@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -143,13 +142,17 @@ func storageSecured(c *kube.Client) (bool, error) {
 	return deploy.Secured(), nil
 }
 
-// deleteProjectKey deletes the SeaweedFS user of project's pipeline server
-// (its keys, then the user) once no other live pipeline server of this
-// tool in project is left. Only secured storage has such users. It returns
-// a note for the response when the user could not be deleted.
+// deleteProjectKey removes the project's pipeline-server SeaweedFS user
+// (keys first, then the account) when no other pipeline server remains in
+// the namespace (any surviving DSPA—not the one being removed—may still rely
+// on the Secret bearing this user's credentials; otherwise the account is a
+// leftover cleared via Remove leftover keys). Users tied to another project
+// (per userProject) are left alone. Such accounts exist only under secured storage.
+// On failure to delete, a message is returned for the API response.
 func deleteProjectKey(c *kube.Client, project string, target *DSPA, all []DSPA, logs *[]string) string {
 	for _, d := range all {
-		if (target == nil || d.Meta.UID != target.Meta.UID) && d.ManagedByTool() && !d.Meta.Terminating() {
+		if (target == nil || d.Meta.UID != target.Meta.UID) && !d.Meta.Terminating() {
+			*logs = append(*logs, fmt.Sprintf("Kept SeaweedFS user %s: pipeline server %s remains in %s", ScopedUserName(project), d.Meta.Name, project))
 			return ""
 		}
 	}
@@ -161,6 +164,14 @@ func deleteProjectKey(c *kube.Client, project string, target *DSPA, all []DSPA, 
 	var sw *seaweedClient
 	if err == nil {
 		sw, err = adminSeaweed(c)
+	}
+	if err == nil {
+		var owner string
+		var known bool
+		if owner, known, err = userProject(sw, user); err == nil && known && owner != project {
+			*logs = append(*logs, fmt.Sprintf("Kept SeaweedFS user %s: it belongs to project %s", user, owner))
+			return ""
+		}
 	}
 	if err == nil {
 		err = deleteScopedUser(sw, project)
@@ -214,7 +225,7 @@ func provisionScopedKey(sw *seaweedClient, project string, current S3Keys) (keys
 		return S3Keys{}, false, fmt.Errorf("read the tags of SeaweedFS user %s: %w", user, err)
 	}
 	if other := tags[scopedNamespaceTag]; other != "" && other != project {
-		return S3Keys{}, false, fmt.Errorf("SeaweedFS user %s belongs to project %s, not %s; nothing was changed", user, other, project)
+		return S3Keys{}, false, fmt.Errorf("SeaweedFS user %s belongs to project %s, not %s; nothing was changed. Delete that user in the SeaweedFS admin UI if project %s no longer needs it, or set up the pipeline server in a project with another name", user, other, project, other)
 	}
 	if err := sw.PutUserPolicy(user, scopedPolicyName, ScopedPolicy); err != nil {
 		return S3Keys{}, false, fmt.Errorf("set the policy of SeaweedFS user %s: %w", user, err)
@@ -423,7 +434,10 @@ func KeysState(c *kube.Client, state types.ResourceState, ep S3Endpoints, dspas 
 		return nil
 	}
 	recorded, kept := keyServers(ep, dspas, rec)
-	ks := &types.S3KeysState{Secured: ep.Secured, KeepOldKey: kept}
+	ks := &types.S3KeysState{Secured: ep.Secured, KeepOldKey: kept, Users: map[string]string{}}
+	for _, d := range recorded {
+		ks.Users[d.Meta.Namespace+"/"+d.Meta.Name] = ScopedUserName(d.Meta.Namespace)
+	}
 	if !ep.Secured {
 		for _, d := range recorded {
 			ks.OldKey = append(ks.OldKey, d.Meta.Namespace+"/"+d.Meta.Name)
@@ -474,101 +488,174 @@ func KeysState(c *kube.Client, state types.ResourceState, ep S3Endpoints, dspas 
 		}
 	}
 	if ks.CheckError == "" {
-		// Fail closed: only when every read succeeded.
+		// Conservative: populate leftovers only if all reads succeeded.
 		if left, err := leftoverUsers(sw, dspas); err == nil {
-			ks.LeftoverUsers = left
+			for _, l := range left {
+				ks.LeftoverUsers = append(ks.LeftoverUsers, l.user)
+				ks.Leftovers = append(ks.Leftovers, types.S3LeftoverKey{User: l.user, Project: l.project, ConnectionInUse: connectionHoldsKeyOf(c, sw, l)})
+			}
 		}
 	}
 	ks.NeedsSecuring = len(ks.OldKey) > 0
 	return ks
 }
 
+// connectionHoldsKeyOf is true when the leftover project still has a
+// dashboard Connection referencing one of that user's keys—dropping the user
+// would strand workbenches and deployments on that credential. Errors are
+// treated as true so the UI surfaces a warning before confirm.
+func connectionHoldsKeyOf(c *kube.Client, sw *seaweedClient, l leftover) bool {
+	keyID, found, err := connectionKeyID(c, l.project)
+	if err != nil {
+		return true
+	}
+	if !found || keyID == "" {
+		return false
+	}
+	ids, _, err := sw.ListAccessKeys(l.user)
+	return err != nil || slices.Contains(ids, keyID)
+}
+
+// leftover is a SeaweedFS user of this tool whose project has no
+// pipeline server at all.
+type leftover struct{ user, project string }
+
+// userProject returns the project a user of this tool belongs to. A name
+// that is not hashed (ScopedUserName) is its project's; a hashed name's
+// project is its scopedNamespaceTag, and only when that project hashes to
+// this name. known is false when that cannot be told (no tag, or a tag
+// that names another project than the name says): such a user is kept.
+func userProject(sw *seaweedClient, user string) (project string, known bool, err error) {
+	rest := strings.TrimPrefix(user, ScopedUserPrefix)
+	if !strings.Contains(rest, ".") {
+		tags, _, err := sw.ListUserTags(user)
+		if err != nil {
+			return "", false, err
+		}
+		if tag := tags[scopedNamespaceTag]; tag != "" && tag != rest {
+			return tag, true, nil
+		}
+		return rest, true, nil
+	}
+	tags, found, err := sw.ListUserTags(user)
+	if err != nil || !found {
+		return "", false, err
+	}
+	project = tags[scopedNamespaceTag]
+	if project == "" || ScopedUserName(project) != user {
+		return "", false, nil
+	}
+	return project, true, nil
+}
+
 // leftoverUsers lists the users this tool made (ScopedUserPrefix) whose
-// project has no pipeline server at all (dspas: every DSPA in the
-// cluster, whoever made it, recorded or not, on any storage; one being
-// deleted does not count). The project comes from the user's
-// scopedNamespaceTag; a user without one, whose tags cannot be found, or
-// whose name is not that project's, is kept. Never the static admin. Any
-// error: nothing is a leftover.
-func leftoverUsers(sw *seaweedClient, dspas []DSPA) ([]string, error) {
+// project (userProject) has no pipeline server at all (dspas: every DSPA
+// in the cluster, whoever made it, recorded or not, on any storage; one
+// being deleted does not count). A user whose project cannot be told is
+// kept. Never the static admin. Any error: nothing is a leftover.
+func leftoverUsers(sw *seaweedClient, dspas []DSPA) ([]leftover, error) {
 	users, err := sw.ListUsers()
 	if err != nil {
 		return nil, err
 	}
 	live := map[string]bool{}
+	liveNames := map[string]bool{}
 	for _, d := range dspas {
 		if !d.Meta.Terminating() {
 			live[d.Meta.Namespace] = true
+			liveNames[ScopedUserName(d.Meta.Namespace)] = true
 		}
 	}
-	var out []string
+	var out []leftover
 	for _, u := range users {
-		if !strings.HasPrefix(u, ScopedUserPrefix) {
+		// A user named for a project that has a pipeline server needs no
+		// tag lookup: it is not a leftover.
+		if !strings.HasPrefix(u, ScopedUserPrefix) || liveNames[u] {
 			continue
 		}
-		tags, found, err := sw.ListUserTags(u)
+		project, known, err := userProject(sw, u)
 		if err != nil {
 			return nil, err
 		}
-		project := tags[scopedNamespaceTag]
-		if !found || project == "" || live[project] || ScopedUserName(project) != u {
+		if !known || live[project] || ScopedUserName(project) != u {
 			continue
 		}
-		out = append(out, u)
+		out = append(out, leftover{user: u, project: project})
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].user < out[j].user })
 	return out, nil
 }
 
-// deleteUsers deletes users by name: their keys, then the user.
-func deleteUsers(sw *seaweedClient, users []string) error {
+// deleteUsers deletes users by name: their keys, then the user. On an
+// error it returns the names already deleted.
+func deleteUsers(sw *seaweedClient, users []string) ([]string, error) {
+	var deleted []string
 	for _, u := range users {
 		if !strings.HasPrefix(u, ScopedUserPrefix) {
 			continue
 		}
 		ids, _, err := sw.ListAccessKeys(u)
 		if err != nil {
-			return err
+			return deleted, err
 		}
 		for _, id := range ids {
 			if err := sw.DeleteAccessKey(u, id); err != nil {
-				return err
+				return deleted, err
 			}
 		}
 		if err := sw.DeleteUser(u); err != nil {
-			return err
+			return deleted, err
 		}
+		deleted = append(deleted, u)
 	}
-	return nil
+	return deleted, nil
 }
 
-// deleteConfirmedLeftovers deletes the users that are leftovers now
-// (leftoverUsers, read again here, under the caller's cluster lock) and
-// that the user confirmed: a user in only one of the two lists is kept.
-func deleteConfirmedLeftovers(sw *seaweedClient, dspas []DSPA, confirmed []string) ([]string, error) {
+// deleteConfirmedLeftovers deletes the users the user confirmed that are
+// leftovers now: the pipeline servers are listed again here (under the
+// caller's cluster lock), and right before each user is deleted its
+// project's pipeline servers are read once more, so one created meanwhile
+// keeps its user. Any read that fails, a DSPA API that answers 404
+// included, stops it: nothing more is deleted. It returns the users
+// deleted, also with an error.
+func deleteConfirmedLeftovers(c *kube.Client, sw *seaweedClient, confirmed []string) ([]string, error) {
 	if len(confirmed) == 0 {
 		return nil, nil
+	}
+	dspas, err := ListDSPAs(c, "")
+	if err != nil {
+		return nil, fmt.Errorf("list the pipeline servers: %w", err)
 	}
 	fresh, err := leftoverUsers(sw, dspas)
 	if err != nil {
 		return nil, err
 	}
-	var both []string
-	for _, u := range fresh {
-		if slices.Contains(confirmed, u) {
-			both = append(both, u)
+	var deleted []string
+	for _, l := range fresh {
+		if !slices.Contains(confirmed, l.user) {
+			continue
+		}
+		here, err := ListDSPAs(c, l.project)
+		if err != nil {
+			return deleted, fmt.Errorf("list the pipeline servers of %s: %w", l.project, err)
+		}
+		if slices.ContainsFunc(here, func(d DSPA) bool { return !d.Meta.Terminating() }) {
+			continue
+		}
+		done, err := deleteUsers(sw, []string{l.user})
+		deleted = append(deleted, done...)
+		if err != nil {
+			return deleted, err
 		}
 	}
-	if err := deleteUsers(sw, both); err != nil {
-		return nil, err
-	}
-	return both, nil
+	return deleted, nil
 }
 
 // RemoveLeftoverKeys deletes the users of pipeline servers that no longer
 // exist (Remove leftover keys, an explicit action whose confirmation lists
 // them): only those in confirmed that are still leftovers when read again
-// here. Any read that fails deletes nothing.
+// here (deleteConfirmedLeftovers). Any read that fails deletes nothing
+// more.
 func RemoveLeftoverKeys(c *kube.Client, confirmed []string) (*types.OperationResponse, error) {
 	fail := func(msg, code string) (*types.OperationResponse, error) {
 		record.Action(c, "remove-leftover-s3-keys", "failed: "+msg, false)
@@ -580,21 +667,23 @@ func RemoveLeftoverKeys(c *kube.Client, confirmed []string) (*types.OperationRes
 		}
 		return fail(fmt.Sprintf("Cannot read the S3 storage: %v. Nothing was changed.", err), kube.ErrorCodeFromK8sErr(err))
 	}
-	dspas, err := ListDSPAs(c, "")
-	if err != nil && !errors.Is(err, ErrDSPACRDMissing) {
-		return fail(fmt.Sprintf("Cannot list the pipeline servers: %v. Nothing was changed.", err), kube.ErrorCodeFromK8sErr(err))
-	}
 	sw, err := adminSeaweed(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Cannot read the admin key: %v. Nothing was changed.", err), kube.ErrorCodeFromK8sErr(err))
 	}
-	deleted, err := deleteConfirmedLeftovers(sw, dspas, confirmed)
+	deleted, err := deleteConfirmedLeftovers(c, sw, confirmed)
 	if err != nil {
-		return fail(fmt.Sprintf("Cannot remove the leftover keys: %v. Run it again.", err), "s3_keys")
+		msg := fmt.Sprintf("Cannot remove the leftover keys: %v.", err)
+		if len(deleted) > 0 {
+			msg += fmt.Sprintf(" Removed before that: %s.", strings.Join(deleted, ", "))
+		} else {
+			msg += " Nothing was changed."
+		}
+		return fail(msg+" Run it again.", "s3_keys")
 	}
 	record.Action(c, "remove-leftover-s3-keys", strings.Join(deleted, ","), true)
 	if len(deleted) == 0 {
-		return &types.OperationResponse{Success: true, Message: "No leftover key to remove: the pipeline servers they belonged to exist again, or the keys are gone."}, nil
+		return &types.OperationResponse{Success: true, Message: "No leftover key to remove: their projects have a pipeline server again, or the keys are gone."}, nil
 	}
 	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Removed the keys of pipeline servers that no longer exist: %s.", strings.Join(deleted, ", "))}, nil
 }

@@ -23,10 +23,15 @@ func TestS3Keys_LeftoversOnlyWithoutAnyPipelineServer(t *testing.T) {
 	putDSPA(f, "dash", "dspa", `{}`, "Mozilla", "Update", "s3.example.com", "dashboard-dspa-secret", "", "")
 	f.sw.giveScopedKey("dash")
 	f.sw.giveScopedKey("gone")
+	// A hashed name without its tag cannot be told apart: kept. An
+	// unhashed name is its project's (L4): a leftover, tag or not.
+	long := strings.Repeat("u", 60)
+	f.sw.giveScopedKey(long)
+	f.sw.untag(storage.ScopedUserName(long))
 	f.sw.giveScopedKey("untagged")
 	f.sw.untag(storage.ScopedUserName("untagged"))
 	st, _ := GetResourcesStatus(c)
-	if ks := st.S3Keys; ks == nil || strings.Join(ks.LeftoverUsers, ",") != storage.ScopedUserName("gone") {
+	if ks := st.S3Keys; ks == nil || strings.Join(ks.LeftoverUsers, ",") != storage.ScopedUserName("gone")+","+storage.ScopedUserName("untagged") {
 		t.Fatalf("leftovers = %+v", st.S3Keys)
 	}
 }
@@ -181,23 +186,30 @@ func TestS3Resources_ChecksumIsKeyed(t *testing.T) {
 	}
 }
 
-// The status carries no key, secret or password in any form.
+// The status carries no key, secret or password in any form: the admin
+// keys, the admin UI password, the checksum key and a pipeline server's
+// own secret key, raw, in every base64 alphabet and as hex; on secured
+// storage (also with IAM failing and with a leftover user) and on storage
+// that is not secured.
 func TestResourcesStatus_CarriesNoCredentialInAnyForm(t *testing.T) {
-	fixture := []string{"AKID-Zq9xW7", "s3-secret-Zq9x", "admin-pw-Kd7"}
+	fixture := []string{"AKID-Zq9xW7", "s3-secret-Zq9x", "admin-pw-Kd7", "checksum-key-Vb3", "scoped-secret-Qm5"}
 	run := func(name string, prep func(f *resourceFake)) {
 		t.Run(name, func(t *testing.T) {
 			f, c := newResourceFake(t)
 			putManagedDSC(f)
 			putReadyManagedS3(f)
-			f.putJSON(s3SecretPath, `{"metadata":{"labels":`+toolLabelJSON+`},"data":{"`+storage.S3AccessKeyField+`":"`+exampleAuth(fixture[0])+`","`+storage.S3SecretKeyField+`":"`+exampleAuth(fixture[1])+`","WEED_ADMIN_PASSWORD":"`+exampleAuth(fixture[2])+`"}}`)
+			f.putJSON(s3SecretPath, `{"metadata":{"labels":`+toolLabelJSON+`},"data":{"`+storage.S3AccessKeyField+`":"`+exampleAuth(fixture[0])+`","`+storage.S3SecretKeyField+`":"`+exampleAuth(fixture[1])+`","WEED_ADMIN_PASSWORD":"`+exampleAuth(fixture[2])+`","RNU_CHECKSUM_KEY":"`+exampleAuth(fixture[3])+`"}}`)
 			putToolDSPAOnStorage(f, "team-a")
 			recordDSPAs(f, "team-a/dspa")
-			putProjectS3Secrets(f, "team-a", fixture[0], fixture[1])
+			id, _ := f.sw.giveScopedKey("team-a")
+			putProjectS3Secrets(f, "team-a", id, fixture[4])
 			prep(f)
 			st, _ := GetResourcesStatus(c)
 			b, _ := json.Marshal(st)
 			for _, v := range fixture {
-				for _, form := range []string{v, base64.StdEncoding.EncodeToString([]byte(v)), hex.EncodeToString([]byte(v))} {
+				raw := []byte(v)
+				for _, form := range []string{v, base64.StdEncoding.EncodeToString(raw), base64.RawStdEncoding.EncodeToString(raw),
+					base64.URLEncoding.EncodeToString(raw), base64.RawURLEncoding.EncodeToString(raw), hex.EncodeToString(raw)} {
 					if strings.Contains(string(b), form) {
 						t.Errorf("status carries %q", form)
 					}
@@ -208,6 +220,7 @@ func TestResourcesStatus_CarriesNoCredentialInAnyForm(t *testing.T) {
 	run("secured", func(*resourceFake) {})
 	run("IAM failing", func(f *resourceFake) { f.sw.failIAM["ListAccessKeys"] = 503 })
 	run("leftover user", func(f *resourceFake) { f.sw.giveScopedKey("gone") })
+	run("not secured", func(f *resourceFake) { putS3DeploymentArgs(f, 1, unsecuredArgsJSON) })
 }
 
 // H1: setup paths never delete a SeaweedFS user: Repair (also what a
