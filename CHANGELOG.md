@@ -543,7 +543,10 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   model deployments that use the Connection afterwards. Any project's key
   still reaches every project's artifacts in the bucket (SECURITY.md).
   `make test-seaweedfs-podman` checks it against the pinned SeaweedFS image.
-  No RBAC change.
+  Keys of pipeline servers that no longer exist show as **Leftover keys**,
+  removed with **Remove leftover keys...** after a confirmation that lists
+  them. The first Set up or Repair with this version restarts SeaweedFS once
+  (its pod template gets a checksum of the admin keys). No RBAC change.
 
 ## [4.0.0] - 2026-11-20
 
