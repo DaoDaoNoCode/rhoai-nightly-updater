@@ -1850,8 +1850,11 @@ func maasOnlySetup(c *kube.Client, project, name string) (bool, error) {
 	return ok && refs.NoRoute, nil
 }
 
-// SetUpByTool: the record says this tool set MaaS up, or published a model,
-// and has not removed it (Clean up MaaS clears each of these as it goes).
+// SetUpByTool: the record says this tool set the MaaS platform up and has
+// not removed it (Clean up MaaS clears each of these as it goes). Its list
+// of publications does not count: a publication is its MaaSModelRef on the
+// cluster, and the record keeps one whose project is gone until the
+// background check drops it.
 func (r MaaSRecord) SetUpByTool() bool {
-	return r.DSCChanged || r.AIGatewayChanged || len(r.Published) > 0 || r.DBNamespace != "" || r.Database != "" || r.InfraNamespace != "" || r.POCCredsUID != ""
+	return r.DSCChanged || r.AIGatewayChanged || r.DBNamespace != "" || r.Database != "" || r.InfraNamespace != "" || r.POCCredsUID != ""
 }

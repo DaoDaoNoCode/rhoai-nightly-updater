@@ -36,7 +36,9 @@ func takesMaaSAway(path string) bool { return slices.Contains(dscMaaSPaths, path
 // maasUse is what uses MaaS on the cluster.
 type maasUse struct {
 	// models are the published models ("<project>/<model>"): every
-	// MaaSModelRef, and every publication this tool recorded.
+	// MaaSModelRef on the cluster, whoever made it. The tool's record of
+	// its publications does not count: one whose project is gone has no
+	// MaaSModelRef left and uses nothing.
 	models        []string
 	subscriptions []string // MaaSSubscriptions, "<namespace>/<name>"
 	policies      []string // MaaSAuthPolicies, "<namespace>/<name>"
@@ -67,7 +69,8 @@ func (u maasUse) text() string {
 }
 
 // readMaaSUse reads what uses MaaS with the MaaS tab's readers: this tool's
-// record (snapshot ConfigMap, key maas) and, when the MaaS API is served,
+// record of its platform setup (snapshot ConfigMap, key maas) and, when the
+// MaaS API is served,
 // the MaaSModelRefs, MaaSSubscriptions and MaaSAuthPolicies at the version
 // discovery reports (serving.ListMaaSObjects). Any read that fails is returned,
 // a 404 on a list of a served group included.
@@ -78,10 +81,6 @@ func readMaaSUse(c *kube.Client) (maasUse, error) {
 		return u, err
 	}
 	u.setUp = rec.SetUpByTool()
-	models := map[string]bool{}
-	for _, p := range rec.Pubs() {
-		models[p.Key()] = true
-	}
 	objs, err := serving.ListMaaSObjects(c)
 	if err != nil {
 		return u, err
@@ -93,16 +92,12 @@ func readMaaSUse(c *kube.Client) (maasUse, error) {
 		}
 		switch o.Kind {
 		case "MaaSModelRef":
-			delete(models, o.Meta.Namespace+"/"+o.Meta.Name)
 			u.models = append(u.models, name)
 		case "MaaSSubscription":
 			u.subscriptions = append(u.subscriptions, name)
 		case "MaaSAuthPolicy":
 			u.policies = append(u.policies, name)
 		}
-	}
-	for k := range models {
-		u.models = append(u.models, k)
 	}
 	sort.Strings(u.models)
 	sort.Strings(u.subscriptions)

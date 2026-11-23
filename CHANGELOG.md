@@ -150,6 +150,11 @@ Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#u
   five minutes: in the background (the read does not wait), under the same
   cluster lock and cross-pod lease, at most one per minute, and never in
   the gitops profile.
+- **A deleted MaaS project no longer keeps MaaS from being turned off.**
+  The Components page's MaaS guard counted the publications in this tool's
+  record, so one whose project was gone still blocked removing
+  `aigateway.modelsAsAService`. It now counts the MaaSModelRefs on the
+  cluster (anyone's) and this tool's platform setup only.
 - **A DataScienceCluster change applies only to the DSC it was checked
   on.** The Components page's changes (a component's state, Fix, soft
   reset) and Diagnostics' disable-component fix tested only the fields
