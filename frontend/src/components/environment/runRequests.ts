@@ -41,8 +41,8 @@ export function resourceRequest(p: ResourcePending): [string, () => Promise<Oper
     case "revert-mlflow": return ["revert-mlflow", revertMLflow, null];
     case "setup-pipeline-server": return ["setup-pipeline-server", () => setupPipelineServer(p.project), p.project];
     // The setup request with recreate: the page shows it as setting up.
-    case "recreate-pipeline-server": return ["setup-pipeline-server", () => setupPipelineServer(p.project, true, !!p.unrecorded), p.project];
-    case "teardown-pipeline-server": return ["teardown-pipeline-server", () => teardownPipelineServer(p.project, !!p.unrecorded), p.project];
+    case "recreate-pipeline-server": return ["setup-pipeline-server", () => setupPipelineServer(p.project, true, p.unrecorded ? p.uid ?? "" : ""), p.project];
+    case "teardown-pipeline-server": return ["teardown-pipeline-server", () => teardownPipelineServer(p.project, p.unrecorded ? p.uid ?? "" : ""), p.project];
   }
 }
 

@@ -361,7 +361,7 @@ func PipelineServerState(d DSPA, dashboardURL string) types.ResourceState {
 
 // SetupPipelineServer creates a pipeline server (DSPA) in the given project.
 func SetupPipelineServer(c *kube.Client, project string) (*types.OperationResponse, error) {
-	return setupPipelineServer(c, project, false, false)
+	return setupPipelineServer(c, project, false, "")
 }
 
 // RecreatePipelineServer replaces the pipeline server the tool set up in
@@ -370,11 +370,11 @@ func SetupPipelineServer(c *kube.Client, project string) (*types.OperationRespon
 // come first; only then is the old server deleted (its database, and so its
 // run history, goes with it; artifacts in the S3 storage stay) and the new
 // one set up. Without an old server it is a plain setup.
-func RecreatePipelineServer(c *kube.Client, project string, confirmUnrecorded bool) (*types.OperationResponse, error) {
-	return setupPipelineServer(c, project, true, confirmUnrecorded)
+func RecreatePipelineServer(c *kube.Client, project, confirmedUID string) (*types.OperationResponse, error) {
+	return setupPipelineServer(c, project, true, confirmedUID)
 }
 
-func setupPipelineServer(c *kube.Client, project string, recreate, confirmUnrecorded bool) (*types.OperationResponse, error) {
+func setupPipelineServer(c *kube.Client, project string, recreate bool, confirmedUID string) (*types.OperationResponse, error) {
 	logs := []string{}
 	op := "setup-pipeline-server"
 	if recreate {
@@ -550,7 +550,7 @@ func setupPipelineServer(c *kube.Client, project string, recreate, confirmUnreco
 		return fail(msg+" Nothing was changed.", code, "DSPA dry run failed")
 	}
 	if old != nil {
-		return replacePipelineServer(c, project, old, logs, confirmUnrecorded)
+		return replacePipelineServer(c, project, old, logs, confirmedUID)
 	}
 	for _, s := range secrets {
 		action, err := writeProjectSecret(s, projectSecretPath(project, s.name), envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "secrets", project, "")), false)
@@ -611,9 +611,9 @@ func setupPipelineServer(c *kube.Client, project string, recreate, confirmUnreco
 // checks the operator before deleting and waits for the finalizer), then
 // sets up the new one from scratch, so every check runs again on what is
 // there now.
-func replacePipelineServer(c *kube.Client, project string, old *DSPA, logs []string, confirmUnrecorded bool) (*types.OperationResponse, error) {
+func replacePipelineServer(c *kube.Client, project string, old *DSPA, logs []string, confirmedUID string) (*types.OperationResponse, error) {
 	logs = append(logs, "OK: The API server accepts the new pipeline server", fmt.Sprintf("Deleting pipeline server %s...", old.Meta.Name))
-	down, err := TeardownPipelineServer(c, project, confirmUnrecorded)
+	down, err := TeardownPipelineServer(c, project, confirmedUID)
 	if err != nil {
 		return nil, err
 	}
@@ -626,7 +626,7 @@ func replacePipelineServer(c *kube.Client, project string, old *DSPA, logs []str
 		}
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: down.ErrorCode}, nil
 	}
-	up, err := setupPipelineServer(c, project, false, false)
+	up, err := setupPipelineServer(c, project, false, "")
 	if err != nil {
 		return nil, err
 	}
@@ -669,9 +669,10 @@ func dspoRunning(c *kube.Client) (bool, error) {
 // terminating is not deleted again, and missing objects count as removed.
 // One that carries the tool's label but whose UID the tool did not record
 // (set up before 3.0.1, or labelled by someone in the project) is deleted
-// only with confirmUnrecorded: the label alone is something a project
+// only when confirmedUID is its UID (the user confirmed that very server;
+// one made again since is not it): the label alone is something a project
 // editor can set.
-func TeardownPipelineServer(c *kube.Client, project string, confirmUnrecorded bool) (*types.OperationResponse, error) {
+func TeardownPipelineServer(c *kube.Client, project, confirmedUID string) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
 		record.Action(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (%s)", project, activity), false)
@@ -714,10 +715,13 @@ func TeardownPipelineServer(c *kube.Client, project string, confirmUnrecorded bo
 	if !ok {
 		return fail(fmt.Sprintf("Pipeline server %s does not have a name this tool creates, so it was not deleted.", target.Meta.Name), "not_managed", "unexpected DSPA name")
 	}
-	if !confirmUnrecorded {
+	if confirmedUID == "" || confirmedUID != target.Meta.UID {
 		rec, err := ReadPipelineRecord(c)
 		if err != nil {
 			return fail(fmt.Sprintf("Cannot check that pipeline server %s in %s is the one this tool set up: %v. Nothing was deleted.", target.Meta.Name, project, err), kube.ErrorCodeFromK8sErr(err), "record read failed")
+		}
+		if !rec.Owns(target.Meta) && confirmedUID != "" {
+			return fail(fmt.Sprintf("Pipeline server %s in %s is not the one you confirmed as this tool's: it was deleted and made again since, and this tool has no record that it set it up. Check it again in the Delete dialog. Nothing was deleted.", target.Meta.Name, project), "not_managed", "not the confirmed server")
 		}
 		if !rec.Owns(target.Meta) {
 			return fail(fmt.Sprintf("Pipeline server %s in %s carries this tool's label, but this tool has no record that it set it up (set up before version 3.0.1, or labelled by someone in %s). Confirm it as this tool's in the Delete dialog. Nothing was deleted.", target.Meta.Name, project, project), "not_managed", "unrecorded")

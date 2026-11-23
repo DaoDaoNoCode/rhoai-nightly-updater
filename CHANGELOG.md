@@ -133,6 +133,13 @@ Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#u
 
 ### Fixed
 
+- **Clean up confirms only the pipeline servers you ticked.** A refresh
+  while the Clean up dialog was open could turn a ticked pipeline server
+  into one this tool has no record of, and the dialog then sent it as
+  confirmed by you. The dialog now unticks such a server, and a
+  confirmation names the server's UID: Delete, Recreate and Clean up skip
+  the record check only for that server, so one deleted and made again
+  since is refused.
 - **An Unpublish that failed on the model's Gen AI studio label is
   finished by Unpublish again.** When Unpublish routed the model back but
   could not put back its `opendatahub.io/genai-asset` label and

@@ -503,7 +503,7 @@ export const scenarios = {
   // and a MaaS publication of which nothing is left on the cluster.
   "env-cluster-truth": (w) => {
     scenarios["env-models-ready"](w);
-    w.resources.pipelineServers = [F.pipelineServerIn("dev-project", { unrecorded: true })];
+    w.resources.pipelineServers = [F.pipelineServerIn("dev-project", { unrecorded: true, uid: "3f6c2a9e-dev-project-dspa" })];
     w.resources.outsidePipelineServers = [F.pipelineServerIn("old-team")];
     w.resources.minio = { ...F.s3States.running, usedBy: ["dev-project/dspa", "old-team/dspa"], teardownBlockedReason: "2 pipeline servers use this S3 storage: dev-project/dspa, old-team/dspa. Delete them first." };
     w.resources.models = F.modelsStatus({ items: [F.modelStates.released("dev-project")], outside: [F.modelStates.released("old-team")] });

@@ -1747,10 +1747,11 @@ type ComponentBlock struct {
 // to delete of what this tool created, in this order.
 type CleanupRequest struct {
 	// PipelineServers are the projects whose pipeline server goes;
-	// ConfirmUnrecorded those whose unrecorded pipeline server the user
-	// confirmed as this tool's (PipelineServerRequest.ConfirmUnrecorded).
-	PipelineServers   []string `json:"pipelineServers,omitempty"`
-	ConfirmUnrecorded []string `json:"confirmUnrecorded,omitempty"`
+	// ConfirmUnrecorded maps each project whose unrecorded pipeline server
+	// the user confirmed as this tool's to that server's UID
+	// (PipelineServerRequest.ConfirmUnrecorded).
+	PipelineServers   []string          `json:"pipelineServers,omitempty"`
+	ConfirmUnrecorded map[string]string `json:"confirmUnrecorded,omitempty"`
 	// Storage deletes the S3 storage (and storage an earlier version left).
 	Storage bool `json:"storage,omitempty"`
 	// DeleteNamespace also deletes namespace seaweedfs (needs Storage).
@@ -1881,6 +1882,9 @@ type ResourceState struct {
 	// adopts it, and Migrate storage moves it only when its project is
 	// confirmed.
 	Unrecorded bool `json:"unrecorded,omitempty"`
+	// UID (an unrecorded pipeline server) is the object's UID: what the
+	// user's confirmation names (PipelineServerRequest.ConfirmUnrecorded).
+	UID string `json:"uid,omitempty"`
 	// Terminating is true while the resource is being deleted.
 	Terminating bool `json:"terminating,omitempty"`
 	// SetupBlockedReason explains why setup cannot run (for example a
@@ -1966,11 +1970,12 @@ type PipelineServerRequest struct {
 	// Recreate (setup only) replaces the tool's pipeline server named
 	// nightly-dspa with one named dspa.
 	Recreate bool `json:"recreate,omitempty"`
-	// ConfirmUnrecorded (teardown and Recreate): the user confirmed the
-	// pipeline server as this tool's although this tool has no record of
-	// it (ResourceState.Unrecorded); without it such a server is not
-	// deleted.
-	ConfirmUnrecorded bool `json:"confirmUnrecorded,omitempty"`
+	// ConfirmUnrecorded (teardown and Recreate) is the UID of the pipeline
+	// server the user confirmed as this tool's although this tool has no
+	// record of it (ResourceState.Unrecorded and UID). Only a server with
+	// that UID is deleted without the record; another one (made again
+	// since) is not.
+	ConfirmUnrecorded string `json:"confirmUnrecorded,omitempty"`
 }
 
 // DiagnosticsFixRequest is the JSON body for POST /api/diagnostics/fix.

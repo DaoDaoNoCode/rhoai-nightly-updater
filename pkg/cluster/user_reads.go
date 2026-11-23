@@ -75,6 +75,9 @@ func GetProjectStatus(sa, u *Client, project string) (*types.ProjectStatus, erro
 				ps.TeardownBlockedReason = "This pipeline server was not created by this tool, so the tool will not delete it."
 			} else {
 				ps.Unrecorded = !rec.Owns(d.Meta)
+				if ps.Unrecorded {
+					ps.UID = d.Meta.UID
+				}
 				ps.ConnectionState, ps.ConnectionMessage = connectionState(u, project, ps.Terminating)
 			}
 			st.PipelineServers = append(st.PipelineServers, ps)

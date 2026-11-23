@@ -107,6 +107,9 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 			if d.ManagedByTool() && !d.Meta.Terminating() {
 				ps := storage.PipelineServerState(d, dashURL)
 				ps.Unrecorded = !pipelineRec.Owns(d.Meta)
+				if ps.Unrecorded {
+					ps.UID = d.Meta.UID
+				}
 				status.OutsidePipelineServers = append(status.OutsidePipelineServers, ps)
 			}
 			continue
@@ -122,6 +125,9 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		}
 		ps := storage.PipelineServerState(d, dashURL)
 		ps.Unrecorded = !pipelineRec.Owns(d.Meta)
+		if ps.Unrecorded {
+			ps.UID = d.Meta.UID
+		}
 		status.PipelineServers = append(status.PipelineServers, ps)
 	}
 	for ns := range unmanaged {

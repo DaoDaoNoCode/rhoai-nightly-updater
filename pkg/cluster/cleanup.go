@@ -3,7 +3,6 @@ package cluster
 import (
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 	"time"
 
@@ -68,7 +67,7 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 			id:    CleanupStepID("pipeline-server", project),
 			title: fmt.Sprintf("the pipeline server in '%s'", project),
 			run: func() (*types.OperationResponse, error) {
-				return cleanupPipelineServer(c, project, slices.Contains(req.ConfirmUnrecorded, project))
+				return cleanupPipelineServer(c, project, req.ConfirmUnrecorded[project])
 			},
 		})
 	}

@@ -149,21 +149,26 @@ export const CleanupModal: React.FC<{
   const [playgrounds, setPlaygrounds] = useState<string[]>(offered.playgrounds);
   const chosenPlaygrounds = playgrounds.filter((p) => offered.playgrounds.includes(p));
   const togglePlayground = (p: string, v: boolean) => setPlaygrounds((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
-  // A pipeline server this tool has no record of is unticked: ticking it is the user's confirmation that it is this tool's.
-  const unrecordedServers = toolServers(status).filter((ps) => ps.unrecorded && ps.namespace && offered.servers.includes(ps.namespace)).map((ps) => ps.namespace!);
+  // A pipeline server this tool has no record of is unticked: ticking it is the user's confirmation that it is this tool's,
+  // of that server (its UID). A refresh can make a ticked server unrecorded or replace a confirmed one: it is then unticked,
+  // as only the user's own tick of the server now there confirms it.
+  const unrecordedUID = new Map(toolServers(status).filter((ps) => ps.unrecorded && ps.namespace && offered.servers.includes(ps.namespace)).map((ps) => [ps.namespace!, ps.uid ?? ""]));
+  const unrecordedServers = [...unrecordedUID.keys()];
+  const [confirmed, setConfirmed] = useState<Record<string, string>>({});
   const [servers, setServers] = useState<string[]>(offered.servers.filter((p) => !unrecordedServers.includes(p)));
+  const serverTicked = (p: string) => servers.includes(p) && offered.servers.includes(p) && (!unrecordedUID.has(p) || (!!unrecordedUID.get(p) && confirmed[p] === unrecordedUID.get(p)));
   const [storage, setStorage] = useState(offered.storage);
   const [namespace, setNamespace] = useState(false);
   const [mlflow, setMlflow] = useState(offered.mlflow);
   const [models, setModels] = useState<string[]>(offered.models);
   const [gateway, setGateway] = useState(offered.gateway);
   const chosenModels = models.filter((m) => offered.models.includes(m));
-  const chosenServers = servers.filter((s) => offered.servers.includes(s));
-  const confirmedServers = chosenServers.filter((s) => unrecordedServers.includes(s));
+  const chosenServers = servers.filter(serverTicked);
+  const confirmedServers = Object.fromEntries(chosenServers.filter((s) => unrecordedUID.has(s)).map((s) => [s, unrecordedUID.get(s)!]));
   const req: CleanupRequest = {
     ...(chosenPublished.length ? { maasPublished: chosenPublished } : {}),
     ...(chosenServers.length ? { pipelineServers: chosenServers } : {}),
-    ...(confirmedServers.length ? { confirmUnrecorded: confirmedServers } : {}),
+    ...(Object.keys(confirmedServers).length ? { confirmUnrecorded: confirmedServers } : {}),
     ...(storage && offered.storage ? { storage: true, ...(namespace && offered.namespace ? { deleteNamespace: true } : {}) } : {}),
     ...(mlflow && offered.mlflow ? { mlflow: true } : {}),
     ...(chosenPlaygrounds.length ? { playgrounds: chosenPlaygrounds } : {}),
@@ -182,7 +187,10 @@ export const CleanupModal: React.FC<{
     ...(req.playgrounds ?? []).map((p) => <>The chats and uploaded documents of the playground in {p}.</>),
     ...(req.maasPlatform ? [<>MaaS API keys, and the MaaS database with their records.</>] : []),
   ];
-  const toggleServer = (p: string, v: boolean) => setServers((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
+  const toggleServer = (p: string, v: boolean) => {
+    setServers((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
+    setConfirmed(({ [p]: _dropped, ...rest }) => (v && unrecordedUID.has(p) ? { ...rest, [p]: unrecordedUID.get(p)! } : rest));
+  };
   const toggleModel = (p: string, v: boolean) => setModels((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
   const nothingOffered = offered.servers.length === 0 && !offered.storage && !offered.mlflow && offered.models.length === 0 && !offered.gateway && offered.playgrounds.length === 0 && offered.maasPublished.length === 0 && !offered.maasPlatform && offeredComponents.length === 0;
   const title = scope === "all" ? "Clean up everything?" : scope === "pipelines" ? "Clean up Pipelines?" : scope === "models" ? "Clean up Models?" : scope === "playground" ? "Clean up Playground?" : "Clean up MLflow?";
@@ -211,7 +219,7 @@ export const CleanupModal: React.FC<{
                 {offered.servers.length > 0 && (
                   <FormGroup role="group" isStack label="Pipeline servers" fieldId="cleanup-servers">
                     {offered.servers.map((p) => (
-                      <Checkbox key={p} id={`cleanup-server-${p}`} label={<>Pipeline server in {p}</>} isChecked={servers.includes(p)} onChange={(_e, v) => toggleServer(p, v)}
+                      <Checkbox key={p} id={`cleanup-server-${p}`} label={<>Pipeline server in {p}</>} isChecked={serverTicked(p)} onChange={(_e, v) => toggleServer(p, v)}
                         description={unrecordedServers.includes(p) ? unrecordedPipelineServerNote(p) : undefined} />
                     ))}
                   </FormGroup>

@@ -323,7 +323,7 @@ const PipelineServerPart: React.FC<PipelinesTabProps> = ({ status, project, busy
   const storageReady = !!status.minio?.ready || (old && !!legacy?.ready);
   const managed = !!server && server.managedByTool !== false;
   const menu: PartMenuItem[] = managed && !readOnly && !isTerminating(server)
-    ? [{ key: "delete", label: "Delete pipeline server…", onClick: () => setPending({ kind: "teardown-pipeline-server", project, name: server!.name, ...(server!.unrecorded ? { unrecorded: true } : {}) }), disabledReason: baseReason ?? server!.teardownBlockedReason ?? null, isDanger: true }]
+    ? [{ key: "delete", label: "Delete pipeline server…", onClick: () => setPending({ kind: "teardown-pipeline-server", project, name: server!.name, ...(server!.unrecorded ? { unrecorded: true, uid: server!.uid } : {}) }), disabledReason: baseReason ?? server!.teardownBlockedReason ?? null, isDanger: true }]
     : [];
   return (
     <PartItem id="pipeline-server" title="Pipeline server" scope={`In project ${project}`} status={pipelineServerStatus(status, project, busy)} unmanaged={unmanaged}
@@ -336,7 +336,7 @@ const PipelineServerPart: React.FC<PipelinesTabProps> = ({ status, project, busy
           : <Content component="p">Not set up in {project} yet. Set up creates one that keeps its artifacts in the S3 storage.</Content>}
       {server && managed && server.nonStandardName && !isTerminating(server) && (
         <Alert variant="warning" isInline component="div" title="Workbench pipelines don't work with this pipeline server"
-          actionLinks={!readOnly ? <AlertActionLink onClick={() => setPending({ kind: "recreate-pipeline-server", project, name: server.name ?? PREVIOUS_DSPA_NAME, ...(server.unrecorded ? { unrecorded: true } : {}) })} isDisabled={!!baseReason}>Recreate with the standard name</AlertActionLink> : undefined}>
+          actionLinks={!readOnly ? <AlertActionLink onClick={() => setPending({ kind: "recreate-pipeline-server", project, name: server.name ?? PREVIOUS_DSPA_NAME, ...(server.unrecorded ? { unrecorded: true, uid: server.uid } : {}) })} isDisabled={!!baseReason}>Recreate with the standard name</AlertActionLink> : undefined}>
           <Content component="p">
             An earlier version of this tool named it <code>{server.name ?? PREVIOUS_DSPA_NAME}</code>. Workbenches find their pipeline server only under the name <code>{DSPA_NAME}</code>, so Elyra pipelines from a workbench in {project} can&apos;t use it. The dashboard&apos;s pipelines pages and the KFP SDK work as they are.
           </Content>
@@ -434,7 +434,7 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
           <OutsideProjectsAlert readOnly={readOnly} reason={baseReason} items={outside.map((ps) => ({
             key: `${ps.namespace}/${ps.name}`,
             text: <>Pipeline server <code>{ps.name ?? DSPA_NAME}</code> in project {ps.namespace} (no longer a data science project)</>,
-            onDelete: () => props.setPending({ kind: "teardown-pipeline-server", project: ps.namespace!, name: ps.name, ...(ps.unrecorded ? { unrecorded: true } : {}) }),
+            onDelete: () => props.setPending({ kind: "teardown-pipeline-server", project: ps.namespace!, name: ps.name, ...(ps.unrecorded ? { unrecorded: true, uid: ps.uid } : {}) }),
           }))} />
         </StackItem>
       )}

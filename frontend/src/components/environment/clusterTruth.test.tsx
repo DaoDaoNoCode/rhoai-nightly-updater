@@ -8,7 +8,7 @@ import { CleanupModal, cleanupBlocked, cleanupCandidates } from "./CleanupModal"
 
 const readyMinio: ResourceState = { deployed: true, ready: true, managedByTool: true, namespace: "seaweedfs", message: "Running", uiUser: "admin" };
 const noMlflow: ResourceState = { deployed: false, ready: false, managedByTool: false, message: "Not deployed" };
-const unrecordedDspa: ResourceState = { deployed: true, ready: true, namespace: "juntao-test", name: "dspa", managedByTool: true, unrecorded: true, message: "Running" };
+const unrecordedDspa: ResourceState = { deployed: true, ready: true, namespace: "juntao-test", name: "dspa", managedByTool: true, unrecorded: true, uid: "uid-1", message: "Running" };
 
 function renderAt(path: string) {
   return render(<MemoryRouter initialEntries={[path]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
@@ -42,11 +42,11 @@ describe("an unrecorded pipeline server", () => {
     expect(dialog).toHaveTextContent(/no record that it set it up/);
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     await screen.findByRole("dialog", { name: "Delete the pipeline server in juntao-test" });
-    expect(api.bodies["POST /api/resources/pipeline-server/teardown"]).toEqual([{ project: "juntao-test", confirmUnrecorded: true }]);
+    expect(api.bodies["POST /api/resources/pipeline-server/teardown"]).toEqual([{ project: "juntao-test", confirmUnrecorded: "uid-1" }]);
   });
 
   it("Clean up offers it unticked, says why, and confirms it only when ticked", () => {
-    const status: ResourcesStatus = { minio: readyMinio, mlflow: noMlflow, pipelineServers: [unrecordedDspa, { ...unrecordedDspa, namespace: "kept", unrecorded: false }] };
+    const status: ResourcesStatus = { minio: readyMinio, mlflow: noMlflow, pipelineServers: [unrecordedDspa, { ...unrecordedDspa, namespace: "kept", unrecorded: false, uid: undefined }] };
     expect(cleanupCandidates(status, "pipelines", false).servers).toEqual(["juntao-test", "kept"]);
     const onConfirm = vi.fn();
     render(<CleanupModal scope="pipelines" status={status} minioLeftovers={false} baseReason={null} onConfirm={onConfirm} onCancel={() => {}} />);
@@ -59,7 +59,35 @@ describe("an unrecorded pipeline server", () => {
     expect(onConfirm).toHaveBeenLastCalledWith({ pipelineServers: ["kept"] });
     fireEvent.click(box);
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-    expect(onConfirm).toHaveBeenLastCalledWith({ pipelineServers: ["kept", "juntao-test"], confirmUnrecorded: ["juntao-test"] });
+    expect(onConfirm).toHaveBeenLastCalledWith({ pipelineServers: ["kept", "juntao-test"], confirmUnrecorded: { "juntao-test": "uid-1" } });
+  });
+
+  // A refresh while the dialog is open can turn a ticked recorded server
+  // unrecorded, or replace a confirmed one: the confirmation is the user's
+  // explicit tick of that server (its UID), never derived from the ticks.
+  it("Clean up never confirms a server the user did not tick as unrecorded", () => {
+    const recorded: ResourceState = { ...unrecordedDspa, namespace: "kept", unrecorded: false, uid: undefined };
+    const at = (kept: ResourceState): ResourcesStatus => ({ minio: readyMinio, mlflow: noMlflow, pipelineServers: [kept] });
+    const onConfirm = vi.fn();
+    const modal = (status: ResourcesStatus) => <CleanupModal scope="pipelines" status={status} minioLeftovers={false} baseReason={null} onConfirm={onConfirm} onCancel={() => {}} />;
+    const { rerender } = render(modal(at(recorded)));
+    fireEvent.click(screen.getByRole("checkbox", { name: "S3 storage" }));
+    const box = () => screen.getByRole("checkbox", { name: /Pipeline server in kept/ });
+    expect(box()).toBeChecked();
+    // The record lost it: unticked, not sent, and not confirmed.
+    rerender(modal(at({ ...recorded, unrecorded: true, uid: "uid-k" })));
+    expect(box()).not.toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(onConfirm).not.toHaveBeenCalled();
+    // Ticked: the confirmation names that server.
+    fireEvent.click(box());
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(onConfirm).toHaveBeenLastCalledWith({ pipelineServers: ["kept"], confirmUnrecorded: { kept: "uid-k" } });
+    // Made again (another UID): the confirmation was of the other one.
+    rerender(modal(at({ ...recorded, unrecorded: true, uid: "uid-k2" })));
+    expect(box()).not.toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
   });
 });
 

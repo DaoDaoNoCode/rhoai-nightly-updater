@@ -1166,6 +1166,8 @@ export interface ResourceState {
   /** The S3 storage: this tool's objects still in its namespace once the Deployment is gone ("Kind name"), what a deletion left. */
   leftovers?: string[] | null;
   unrecorded?: boolean;
+  /** An unrecorded pipeline server's UID: what the user's confirmation names (one made again since is not it). */
+  uid?: string;
   terminating?: boolean;
   setupBlockedReason?: string;
   teardownBlockedReason?: string;
