@@ -46,17 +46,17 @@ func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.Operat
 			onStep(types.UpdateStepEvent{Step: id, Status: status, Message: msg})
 		}
 	}
-	stop := func(id, msg, code, activity string) (*types.OperationResponse, error) {
+	stop := func(id, msg, code, activity string) *types.OperationResponse {
 		if onStep != nil {
 			onStep(types.UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: code})
 		}
 		logs = append(logs, msg)
 		slog.Warn("secure s3 storage stopped", "step", id, "reason", activity, "user", kube.GetUser(c))
 		record.Action(c, "secure-s3", fmt.Sprintf("namespace=%s (%s)", S3Namespace, activity), false)
-		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}, nil
+		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: code}
 	}
 	unchanged := " Nothing was changed."
-	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
+	fail := func(msg, code, activity string) *types.OperationResponse {
 		return stop(SecureStepCheck, msg, code, activity)
 	}
 
@@ -64,27 +64,27 @@ func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.Operat
 	step(SecureStepCheck, "running", "Checking the S3 storage and its pipeline servers...")
 	legacy, err := ReadLegacy(c)
 	if err != nil {
-		return fail(fmt.Sprintf("Cannot check for storage from an earlier version in namespace %s: %v.%s%s", LegacyNamespace, err, kube.TemplateHint(err), unchanged), kube.ErrorCodeFromK8sErr(err), "earlier storage check failed")
+		return fail(fmt.Sprintf("Cannot check for storage from an earlier version in namespace %s: %v.%s%s", LegacyNamespace, err, kube.TemplateHint(err), unchanged), kube.ErrorCodeFromK8sErr(err), "earlier storage check failed"), nil
 	}
 	if legacy != nil {
-		return fail("Storage from an earlier version is still in namespace "+LegacyNamespace+": Migrate storage moves the data and leaves the storage secured."+unchanged, "prerequisites", "migration pending")
+		return fail("Storage from an earlier version is still in namespace "+LegacyNamespace+": Migrate storage moves the data and leaves the storage secured."+unchanged, "prerequisites", "migration pending"), nil
 	}
 	state, ep, epErr := S3StatusAndEndpoints(c)
 	switch {
 	case !state.Deployed || !state.ManagedByTool:
-		return fail("The S3 storage is not set up by this tool."+unchanged, "prerequisites", "not deployed")
+		return fail("The S3 storage is not set up by this tool."+unchanged, "prerequisites", "not deployed"), nil
 	case state.Terminating || !state.Ready:
-		return fail("The S3 storage is not ready ("+kube.FirstNonEmpty(state.Message, "not running")+"). Repair it first."+unchanged, "prerequisites", "not ready")
+		return fail("The S3 storage is not ready ("+kube.FirstNonEmpty(state.Message, "not running")+"). Repair it first."+unchanged, "prerequisites", "not ready"), nil
 	case epErr != nil:
-		return fail(fmt.Sprintf("Cannot read the S3 storage's Service, so which pipeline servers use it is unknown: %v.%s%s", epErr, kube.TemplateHint(epErr), unchanged), kube.ErrorCodeFromK8sErr(epErr), "endpoints unreadable")
+		return fail(fmt.Sprintf("Cannot read the S3 storage's Service, so which pipeline servers use it is unknown: %v.%s%s", epErr, kube.TemplateHint(epErr), unchanged), kube.ErrorCodeFromK8sErr(epErr), "endpoints unreadable"), nil
 	}
 	dspas, err := ListDSPAs(c, "")
 	if err != nil && !errors.Is(err, ErrDSPACRDMissing) {
-		return fail(fmt.Sprintf("Cannot list the pipeline servers: %v.%s%s", err, kube.TemplateHint(err), unchanged), kube.ErrorCodeFromK8sErr(err), "pipeline server list failed")
+		return fail(fmt.Sprintf("Cannot list the pipeline servers: %v.%s%s", err, kube.TemplateHint(err), unchanged), kube.ErrorCodeFromK8sErr(err), "pipeline server list failed"), nil
 	}
 	rec, err := ReadPipelineRecord(c)
 	if err != nil {
-		return fail(fmt.Sprintf("Cannot read this tool's record of its pipeline servers: %v.%s%s", err, kube.TemplateHint(err), unchanged), kube.ErrorCodeFromK8sErr(err), "pipeline record unreadable")
+		return fail(fmt.Sprintf("Cannot read this tool's record of its pipeline servers: %v.%s%s", err, kube.TemplateHint(err), unchanged), kube.ErrorCodeFromK8sErr(err), "pipeline record unreadable"), nil
 	}
 	recorded, kept := keyServers(ep, dspas, rec)
 	for _, d := range recorded {
@@ -92,10 +92,10 @@ func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.Operat
 		for _, name := range []string{DSPASecretName, ConnectionSecretName} {
 			cur, err := readProjectS3Secret(c, project, name)
 			if err != nil {
-				return fail(fmt.Sprintf("Cannot read Secret %s/%s: %v.%s%s", project, name, err, kube.TemplateHint(err), unchanged), kube.ErrorCodeFromK8sErr(err), "secret read failed")
+				return fail(fmt.Sprintf("Cannot read Secret %s/%s: %v.%s%s", project, name, err, kube.TemplateHint(err), unchanged), kube.ErrorCodeFromK8sErr(err), "secret read failed"), nil
 			}
 			if cur.found && !cur.meta.HasToolLabel() {
-				return fail(fmt.Sprintf("Secret %s/%s exists and was not created by this tool, so pipeline server %s/%s cannot get its own key.%s", project, name, project, d.Meta.Name, unchanged), "not_managed", "foreign secret")
+				return fail(fmt.Sprintf("Secret %s/%s exists and was not created by this tool, so pipeline server %s/%s cannot get its own key.%s", project, name, project, d.Meta.Name, unchanged), "not_managed", "foreign secret"), nil
 			}
 			obj := dspaS3Secret(project, S3Keys{})
 			if name == ConnectionSecretName {
@@ -105,7 +105,7 @@ func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.Operat
 			s := &projectSecret{c: c, project: project, name: name, obj: obj, meta: cur.meta, found: cur.found}
 			if _, err := writeProjectSecret(s, projectSecretPath(project, name), envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "secrets", project, "")), true); err != nil {
 				msg, code := pipelineWriteFailure(fmt.Sprintf("secret %s", name), project, err)
-				return fail(msg+unchanged, code, "secret dry run failed")
+				return fail(msg+unchanged, code, "secret dry run failed"), nil
 			}
 		}
 	}
@@ -149,14 +149,14 @@ func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.Operat
 		step(SecureStepRollout, "running", "Rolling out a new admin key with IAM writes on...")
 		keys, err := newAdminKeys(c)
 		if err != nil {
-			return stop(SecureStepRollout, fmt.Sprintf("Cannot make the new admin key: %v.%s", err, unchanged), "internal", "keys")
+			return stop(SecureStepRollout, fmt.Sprintf("Cannot make the new admin key: %v.%s", err, unchanged), "internal", "keys"), nil
 		}
 		res, err := setupS3Storage(c, keys, &opLog{observe: func(line string) { step(SecureStepRollout, "running", line) }}, s3RetrySecure, true)
 		if err != nil {
 			return nil, err
 		}
 		if !res.Success {
-			return stop(SecureStepRollout, "The new admin key was not rolled out: "+res.Message+" No pipeline server got its own key yet.", res.ErrorCode, "rollout failed")
+			return stop(SecureStepRollout, "The new admin key was not rolled out: "+res.Message+" No pipeline server got its own key yet.", res.ErrorCode, "rollout failed"), nil
 		}
 		step(SecureStepRollout, "success", "OK: The S3 storage runs with the new admin key; the old key no longer works")
 	}
@@ -164,7 +164,7 @@ func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.Operat
 	// Step 3: a key of its own for every recorded pipeline server.
 	sw, err := adminSeaweed(c)
 	if err != nil {
-		return stop(SecureStepRollout, fmt.Sprintf("Cannot read the new admin key: %v.%s No pipeline server got its own key yet; run Secure S3 storage again.", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "admin key unreadable")
+		return stop(SecureStepRollout, fmt.Sprintf("Cannot read the new admin key: %v.%s No pipeline server got its own key yet; run Secure S3 storage again.", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "admin key unreadable"), nil
 	}
 	var done, skipped []string
 	for _, d := range recorded {
@@ -173,7 +173,7 @@ func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.Operat
 		step(id, "running", fmt.Sprintf("Giving pipeline server %s a key of its own...", name))
 		changed, err := rekeyServer(c, sw, d, func(line string) { step(id, "running", line) })
 		if err != nil {
-			return stop(id, fmt.Sprintf("Pipeline server %s did not get its own key: %v. The storage is secured. %s", name, err, summary(done, skipped)), "s3_keys", "rekey failed")
+			return stop(id, fmt.Sprintf("Pipeline server %s did not get its own key: %v. The storage is secured. %s", name, err, summary(done, skipped)), "s3_keys", "rekey failed"), nil
 		}
 		if changed {
 			done = append(done, name)
