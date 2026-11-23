@@ -932,7 +932,7 @@ async (page) => {
 
       // The S3 storage, the cluster's: its own tab, no project picker.
       await open("/test-resources?tab=storage", "env-live");
-      const storage = part("S3 storage");
+      const storage = part("SeaweedFS");
       await crop("environment-storage", [panel().getByRole("heading", { name: "S3 storage", level: 2 }), storage], {
         notes: [
           { at: label(panel(), "Ready"), n: 1, pos: "r" },
@@ -1105,12 +1105,12 @@ async (page) => {
       });
 
       await open("/test-resources?tab=storage", "s3-migrate");
-      const old = part("S3 storage");
+      const old = part("SeaweedFS");
       await old.getByRole("button", { name: "Storage of an earlier version" }).click();
       await wait(400);
       await crop("s3-migration-needed", old, {
         notes: [
-          { at: label(old, "Needs attention"), n: 1, pos: "r" },
+          { at: label(old, "Migration needed"), n: 1, pos: "r" },
           { at: old.getByRole("button", { name: "Migrate storage" }), n: 2, pos: "l" },
           { at: old.getByRole("button", { name: "Storage of an earlier version" }), n: 3, pos: "l" },
         ],
@@ -1122,14 +1122,14 @@ async (page) => {
       await page.keyboard.press("Escape");
 
       await open("/test-resources?tab=storage", "s3-migrate-remove");
-      await part("S3 storage").getByRole("button", { name: "S3 storage actions" }).click();
+      await part("SeaweedFS").getByRole("button", { name: "SeaweedFS actions" }).click();
       await page.getByRole("menuitem", { name: /Delete old storage/ }).click();
       await wait(800);
       await crop("s3-remove-dialog", page.locator(".pf-v6-c-modal-box"), { noFit: true, pad: 6 });
       await page.keyboard.press("Escape");
 
       await open("/test-resources?tab=storage", "s3-incomplete");
-      const inc = part("S3 storage");
+      const inc = part("SeaweedFS");
       await crop("s3-incomplete", inc, {
         notes: [
           { at: label(inc, "Needs attention"), n: 1, pos: "r" },
@@ -1208,7 +1208,7 @@ async (page) => {
       await open("/test-resources?tab=storage", "s3-migrate");
       gif("s3-migrate", await mainClip());
       await frame(1200);
-      await clickShown(page.getByRole("listitem", { name: "S3 storage", exact: true }).getByRole("button", { name: "Migrate storage" }));
+      await clickShown(page.getByRole("listitem", { name: "SeaweedFS", exact: true }).getByRole("button", { name: "Migrate storage" }));
       await wait(700);
       await hidePointer();
       await frame(2600);
@@ -1233,7 +1233,7 @@ async (page) => {
       await open("/test-resources?tab=storage", "s3-incomplete");
       gif("s3-repair", await mainClip());
       await frame(1200);
-      await clickShown(page.getByRole("listitem", { name: "S3 storage", exact: true }).getByRole("button", { name: "Repair" }));
+      await clickShown(page.getByRole("listitem", { name: "SeaweedFS", exact: true }).getByRole("button", { name: "Repair" }));
       await wait(700);
       await hidePointer();
       await frame(2200);

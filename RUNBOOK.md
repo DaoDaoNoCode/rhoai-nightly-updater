@@ -29,7 +29,7 @@ What the tool itself changes: [docs/CLUSTER_CHANGES.md](docs/CLUSTER_CHANGES.md)
 | **Operator failed**, **No Subscription**, a failed Update or Install a different build step, "the API server's response is larger than 50 MiB" | [§6](#6-update--install-a-different-build-failed) |
 | A PR shows "Does not contain" in Build Explorer, tags or commit dates do not load | [§8](#8-build-explorer-quay-and-github) |
 | "Dashboard Dev session active", "Distance from main unknown" | [§9](#9-dashboard-dev) |
-| Storage **Needs attention** (Migrate storage or Repair), **Error**, Delete disabled, a pipeline server or sample problem | [§10](#10-environment-page), [§10.1](#101-migrate-storage-from-an-earlier-version) |
+| Storage **Migration needed** (Migrate storage), **Needs attention** (Repair), **Error**, Delete disabled, a pipeline server or sample problem | [§10](#10-environment-page), [§10.1](#101-migrate-storage-from-an-earlier-version) |
 | A model **Error** or **Needs attention**, "Can it be called?" fails, the gateway's list of projects | [§10.2](#102-models-the-inference-gateway-and-cpu-models) |
 | A playground that cannot be set up or deleted | [§10.3](#103-playground-the-dashboards-gen-ai-playground) |
 | MaaS setup, Publish or Unpublish refused, API keys that stop working, 429 | [§10.4](#104-maas-models-as-a-service) |
@@ -378,7 +378,7 @@ While the page reads the cluster, each Overview row and each tab shows loading p
 |---|---|
 | S3 storage setup: "not created by this tool" | Namespace `seaweedfs` holds foreign objects (or was not created by this tool). Nothing was changed. Remove them or use another cluster |
 | "The updater's ServiceAccount is not allowed to do this ... run `make upgrade`" | A read the updater makes with its ServiceAccount (a status, an ownership check) was refused: the image is newer than the template (the banner says the template is outdated). An admin runs `make upgrade`, then retry. A refusal of a setup or teardown step itself says "your OpenShift account is not allowed to do this" instead, since changes run with your own token ([§4](#4-sign-in-and-permissions)) |
-| Storage "Needs attention" with **Migrate storage** | Storage from an earlier version is in namespace `minio`. **Migrate storage** moves it (§10.1); Set up, and a new pipeline server, wait until it has copied the data |
+| Storage "Migration needed" with **Migrate storage** | Storage from an earlier version is in namespace `minio`. **Migrate storage** moves it (§10.1); Set up, and a new pipeline server, wait until it has copied the data |
 | Migrate storage stopped: "The copy is not complete" | Nothing else changed. The message says what differs and whether a retry can help. Objects or buckets missing, or unreadable: run it again (the copy never deletes). Before the first verified copy, while nothing uses the new storage, changed objects are copied again. Objects "different in the new storage" after that (a migration finished, pipeline servers write there, or Delete old storage's final copy): the copy never overwrites them, so a retry gives the same result; for each path named, copy the old version into `seaweedfs` yourself or delete it from `minio`, then run it again. Extra objects in `seaweedfs` are only reported |
 | Migrate storage: "The copy is still running" | A large storage: the Job keeps running (up to an hour). Run Migrate storage again to wait for it |
 | Delete old storage: "The final copy and check are still running" | Nothing was deleted and the copy keeps running (Job `seaweedfs-migrate`, marked as a final copy). Run Delete old storage again: it waits for that copy instead of starting over, and deletes the old storage only once it passed |
@@ -427,9 +427,9 @@ While the page reads the cluster, each Overview row and each tab shows loading p
 
 Versions before 3.0.0 kept the S3 storage in namespace `minio`, behind MinIO-era names. 3.0.0 moves it, with its data, to namespace `seaweedfs`:
 
-<img src="docs/images/s3-migration-needed.png" alt="S3 storage Needs attention, with Migrate storage, and the old storage's objects in its section" width="760">
+<img src="docs/images/s3-migration-needed.png" alt="SeaweedFS on the S3 storage tab: Migration needed, with Migrate storage, and the old storage's objects in its section" width="760">
 
-1. **Needs attention**: the old storage still holds the data and serves its pipeline servers.
+1. **Migration needed**: the old storage still holds the data and serves its pipeline servers.
 2. **Migrate storage** opens the plan; nothing changes until you confirm.
 3. **Storage of an earlier version** names the old storage's objects and volumes (the only place with MinIO-era names).
 
