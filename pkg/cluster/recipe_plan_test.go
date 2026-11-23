@@ -46,12 +46,11 @@ func problemText(p *types.RecipePlan) string {
 func problemFixes(p *types.RecipePlan) string {
 	var out []string
 	for _, pr := range p.Problems {
-		switch {
-		case pr.Fix == nil:
+		if pr.Fix == nil {
 			out = append(out, "-")
-		default:
-			out = append(out, pr.Fix.Code+"@"+pr.Fix.Page)
+			continue
 		}
+		out = append(out, pr.Fix.Code+"@"+pr.Fix.Page)
 	}
 	return strings.Join(out, " ")
 }
