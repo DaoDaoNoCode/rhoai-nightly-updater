@@ -252,6 +252,8 @@ export type Pending =
   /** access: only for the first published model (the audience is the subscription's). */
   | { kind: "publish-maas"; project: string; model: string; access?: AudienceForm; limit?: LimitForm }
   | { kind: "unpublish-maas"; project: string; model: string }
+  /** MaaS: the routing of a model whose MaaS reference was deleted outside the tool. */
+  | { kind: "restore-routing-maas"; project: string; model: string }
   /** MaaS: a published model's limit, who can use the published models, the database (every key is lost). */
   | { kind: "maas-limit"; project: string; model: string; limit?: LimitForm }
   | { kind: "maas-access"; access?: AudienceForm }
@@ -269,8 +271,8 @@ export const isPrerequisitesPending = (p: Pending): p is PrerequisitesPending =>
 /** A Playground change: one streamed request (pkg/api HandlePlaygroundStream). */
 export type PlaygroundPending = Extract<Pending, { kind: "setup-playground" | "teardown-playground" }>;
 /** A MaaS change: one streamed request (pkg/api HandleMaaSStream). */
-export type MaaSPending = Extract<Pending, { kind: "setup-maas" | "teardown-maas" | "publish-maas" | "unpublish-maas" | "maas-action" | "maas-limit" | "maas-access" | "maas-database" }>;
-const MAAS_KINDS: string[] = ["setup-maas", "teardown-maas", "publish-maas", "unpublish-maas", "maas-action", "maas-limit", "maas-access", "maas-database"];
+export type MaaSPending = Extract<Pending, { kind: "setup-maas" | "teardown-maas" | "publish-maas" | "unpublish-maas" | "restore-routing-maas" | "maas-action" | "maas-limit" | "maas-access" | "maas-database" }>;
+const MAAS_KINDS: string[] = ["setup-maas", "teardown-maas", "publish-maas", "unpublish-maas", "restore-routing-maas", "maas-action", "maas-limit", "maas-access", "maas-database"];
 export const isMaaSPending = (p: Pending): p is MaaSPending => MAAS_KINDS.includes(p.kind);
 export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending | PlaygroundPending | MaaSPending | PrerequisitesPending>;
 export const isPlaygroundPending = (p: Pending): p is PlaygroundPending => p.kind === "setup-playground" || p.kind === "teardown-playground";

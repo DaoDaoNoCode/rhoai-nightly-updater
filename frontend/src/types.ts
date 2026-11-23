@@ -1600,6 +1600,8 @@ export interface MaaSModel extends ResourceState {
   partly?: boolean;
   /** Its publication is gone (the project is being deleted): removed automatically, so the row offers nothing. */
   removing?: boolean;
+  /** No MaaSModelRef of this tool's (deleted outside it) while the model still routes through the MaaS gateway: "Restore direct routing" puts back what it had before publishing. */
+  routingPending?: boolean;
   phase?: string;
   endpoint?: string;
   access?: string;
@@ -1697,7 +1699,7 @@ export interface MaaSGroupProblem {
 
 /** The body of POST /api/resources/maas/stream. */
 export interface MaaSRequest {
-  action: "setup" | "teardown" | "publish" | "unpublish" | "change-limit" | "change-access" | MaaSActionId;
+  action: "setup" | "teardown" | "publish" | "unpublish" | "restore-routing" | "change-limit" | "change-access" | MaaSActionId;
   project?: string;
   /** The catalog name of the chat model to publish or unpublish; absent: the default. */
   model?: string;

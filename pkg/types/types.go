@@ -1555,6 +1555,11 @@ type MaaSModel struct {
 	// Removing: its publication is gone (the project is being deleted);
 	// the background check removes what is left, so it offers nothing.
 	Removing bool `json:"removing,omitempty"`
+	// RoutingPending: this tool has no MaaSModelRef for it (deleted outside
+	// the tool) while the model still routes through the MaaS gateway, so
+	// its direct address does not answer; "Restore direct routing" puts
+	// back the gateways and Gen AI metadata it had before publishing.
+	RoutingPending bool `json:"routingPending,omitempty"`
 	// Phase is the MaaSModelRef's phase ("Ready", ...).
 	Phase string `json:"phase,omitempty"`
 	// Endpoint is the MaaSModelRef's status.endpoint.

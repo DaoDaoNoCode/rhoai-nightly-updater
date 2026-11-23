@@ -38,31 +38,6 @@ func TestMaaS_ARecordOnlyPublicationIsGoneAndPruned(t *testing.T) {
 	}
 }
 
-// Removing a MaaSModelRef without going through the tool does not imply gone
-// when the model still has a route on the MaaS gateway: routing is active, the
-// row reports that, and Unpublish is how you remove it. Prune keeps the record
-// unchanged.
-func TestMaaS_ARefDeletedOutsideWithTheModelStillOnTheGatewayIsNotGone(t *testing.T) {
-	mc := publishedMaaSCluster(t)
-	deleteFakeObject(mc, tMaaSRef)
-	st, err := GetMaaSStatus(mc.c)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(st.Removing) != 0 {
-		t.Fatalf("removing = %+v", st.Removing)
-	}
-	if len(st.Items) != 1 || !st.Items[0].Partly || !strings.Contains(st.Items[0].Message, "route through") {
-		t.Fatalf("items = %+v", st.Items)
-	}
-	if _, _, err := serving.PruneGoneMaaSPublications(mc.c); err != nil {
-		t.Fatal(err)
-	}
-	if rec, _ := serving.ReadMaaSRecord(mc.c); !rec.IsPublished("proj", tModel) {
-		t.Fatal("the prune dropped a publication with a live route")
-	}
-}
-
 // Fail closed: unreadable model route means the publication must not be
 // classified as gone.
 func TestMaaS_ARecordOnlyPublicationIsKeptWhileItsRouteCannotBeRead(t *testing.T) {

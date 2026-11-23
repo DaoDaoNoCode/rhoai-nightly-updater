@@ -87,7 +87,7 @@ func TestMaaSUnpublish_ModelRefsWriteHasAResourceVersionPrecondition(t *testing.
 }
 
 // Finding 11: a model left only with the MaaS gateway ref (no reference, no
-// record) shows "Partly published", and Unpublish then takes the ref off.
+// record) shows its routing as pending, and Unpublish then takes the ref off.
 // With nothing recorded, the model on the MaaS gateway alone is taken to
 // have had no route (routeBefore: what a setup through MaaS only whose
 // publish stopped leaves), so it goes back to none, never onto a gateway
@@ -99,7 +99,7 @@ func TestMaaSUnpublish_RemovesALeftOverGatewayRef(t *testing.T) {
 		t.Fatal(err)
 	}
 	st, err := GetMaaSStatus(mc.c)
-	if err != nil || len(st.Items) != 1 || !strings.Contains(st.Items[0].Message, "Partly published") {
+	if err != nil || len(st.Items) != 1 || !st.Items[0].RoutingPending {
 		t.Fatalf("status = %+v, %v", st.Items, err)
 	}
 	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "unpublish", Project: "proj"})

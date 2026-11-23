@@ -172,6 +172,7 @@ export const GroupProblemAlert: React.FC<{ problem: MaaSGroupProblem; idPrefix: 
 /** The words for a model's publication. */
 export function maasPublication(i: MaaSModel): string {
   if (i.removing) return i.message ?? "Being removed automatically.";
+  if (i.routingPending) return i.message ?? "No MaaS reference; the model still routes through the MaaS gateway.";
   if (!i.published) return "Not published";
   if (i.partly) return i.message ?? "Partly published. Unpublish to finish removing it.";
   if (i.ready) return "Published";
@@ -239,9 +240,9 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
                         : publishedReady(i) && !running(project, model)
                         // One green label: "Ready" above "Published" said the same twice.
                         ? <StackItem><EnvStatusLabel status="ready" text="Published" /></StackItem>
-                        : (i.published || running(project, model))
+                        : (i.published || i.routingPending || running(project, model))
                           ? <>
-                            <StackItem><EnvStatusLabel status={running(project, model) ? (busy.maas?.action === "unpublish" ? "deleting" : "setting-up") : i.partly ? "needs-attention" : "setting-up"} /></StackItem>
+                            <StackItem><EnvStatusLabel status={running(project, model) ? (busy.maas?.action === "unpublish" ? "deleting" : "setting-up") : i.partly || i.routingPending ? "needs-attention" : "setting-up"} /></StackItem>
                             <StackItem><Content component="small">{maasPublication(i)}</Content></StackItem>
                           </>
                           : <>
@@ -252,7 +253,9 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
                     </Stack>
                   </Td>
                   <Td dataLabel="Actions" isActionCell>
-                    {!readOnly && !i.removing && (i.published
+                    {!readOnly && !i.removing && (i.routingPending
+                      ? <Button variant="secondary" size="sm" isAriaDisabled={!!baseReason} onClick={() => setPending({ kind: "restore-routing-maas", project, model })}>Restore direct routing</Button>
+                      : i.published
                       ? (
                         <ActionList isIconList>
                           {!i.partly && i.limit && <ActionListItem><Button variant="secondary" size="sm" isAriaDisabled={!!baseReason} onClick={() => setPending({ kind: "maas-limit", project, model })}>Change limit</Button></ActionListItem>}
@@ -408,6 +411,8 @@ export function maasRequestOf(p: MaaSPending, m: MaaSStatus | null): MaaSRequest
         ...(firstPublication(m) ? { access: audienceRequest(p.access ?? defaultAudienceForm(m?.access)) } : {}) };
     case "unpublish-maas":
       return { action: "unpublish", project: p.project, model: p.model };
+    case "restore-routing-maas":
+      return { action: "restore-routing", project: p.project, model: p.model };
     case "maas-limit":
       return { action: "change-limit", project: p.project, model: p.model, limit: limitRequest(p.limit ?? defaultLimitForm(limitOf(m, p.project, p.model))) };
     case "maas-access":
@@ -504,6 +509,11 @@ export function maasSteps(p: MaaSPending): { id: string; title: string }[] {
         { id: "model", title: "Route the model through the MaaS gateway only" },
         { id: "maas", title: "Model reference, subscription and authorization policy" },
         { id: "ready", title: "Wait until MaaS lists the model" },
+      ];
+    case "restore-routing-maas":
+      return [
+        { id: "check", title: "Check the model" },
+        { id: "model", title: "Route the model as before" },
       ];
     default:
       return [
@@ -663,6 +673,22 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
           maasOnly
             ? <>The model had no route of its own before it was published, so its route is removed: it then answers only at its in-cluster address, as a model set up &quot;Only inside the cluster&quot;. The MaaS gateway stops admitting {pending.project} unless another model of this tool is published there; the inference gateway is not changed.</>
             : <>The model routes through the gateways it used before publishing, so its direct address answers again; the MaaS gateway stops admitting {pending.project} unless another model of this tool is published there.</>,
+        ],
+      };
+    }
+    case "restore-routing-maas": {
+      // Offered only on a row the cluster shows with the model still on the MaaS gateway.
+      const item = m?.items?.find((i) => i.namespace === pending.project && i.name === pending.model);
+      if (!item?.routingPending) return null;
+      const name = maasModelName(m, pending.project, pending.model);
+      return {
+        title: `Restore direct routing of ${name} in ${pending.project}?`, confirm: "Restore direct routing", runTitle: `Restore direct routing of ${name} in ${pending.project}`,
+        summary: <Content component="p">Its MaaS reference was deleted outside this tool, so MaaS no longer offers the model, but the model still routes through the MaaS gateway. This puts back how it was reached before it was published, as Unpublish does. The model keeps running in {pending.project}.</Content>,
+        changes: [
+          item.maasOnlySetup
+            ? <>LLMInferenceService <code>{pending.model}</code> in {pending.project}: it had no route of its own before it was published, so its route is removed: it then answers only at its in-cluster address, as a model set up &quot;Only inside the cluster&quot;.</>
+            : <>LLMInferenceService <code>{pending.model}</code> in {pending.project}: routes through the gateways it used before publishing, so its direct address answers again.</>,
+          <>It is back in Gen AI studio&apos;s AI assets (the label and annotation publishing took off).</>,
         ],
       };
     }

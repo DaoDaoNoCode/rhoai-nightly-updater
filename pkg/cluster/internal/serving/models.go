@@ -1479,8 +1479,17 @@ func TeardownModels(c *kube.Client, project string, names ...string) (*types.Ope
 		} else if published {
 			// A MaaSModelRef someone else made has no Unpublish on the
 			// MaaS tab (it is left alone): it is theirs to remove.
-			if ref, found, err := readMaaSModelRef(c, project, entry.Name); err == nil && found && !ToolOwned(ref.Metadata) {
+			ref, found, err := readMaaSModelRef(c, project, entry.Name)
+			if err == nil && found && !ToolOwned(ref.Metadata) {
 				return fail(fmt.Sprintf("MaaSModelRef %s in %s, which this tool did not create, points at the model. Whoever made it removes it first (the MaaS tab leaves it alone); nothing was deleted.", entry.Name, project), "in_use", "foreign maas model ref")
+			}
+			// Its MaaSModelRef went outside the tool and the background
+			// check took it out of MaaS (the record no longer lists it):
+			// only the model's routing is left, which goes with it.
+			if err == nil && !found {
+				if maasRec, err := ReadMaaSRecord(c); err == nil && !maasRec.IsPublished(project, entry.Name) {
+					continue
+				}
 			}
 			return fail(fmt.Sprintf("%s in %s is published to Models as a Service. Unpublish it on the MaaS tab first; nothing was deleted.", entry.Name, project), "in_use", "published to maas")
 		}
