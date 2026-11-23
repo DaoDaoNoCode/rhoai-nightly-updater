@@ -150,6 +150,13 @@ type MaaSRecord struct {
 	// GenAI is, by publication, the genai label and annotation publish
 	// removed from the model (maas_genai.go); Unpublish puts them back.
 	GenAI map[string]maasGenAI `json:"genAI,omitempty"`
+	// ModelUIDs is, by publication, the UID of the model publish read: the
+	// publication and its values above are that model's only. A model
+	// deleted and made again under its name (also by this tool) has
+	// another UID, so its publication is gone (goneMaaSPublications) and
+	// the values are never written back to it. A publication by an earlier
+	// build has none.
+	ModelUIDs map[string]string `json:"modelUIDs,omitempty"`
 	// DBNamespace is where setup put the database and maas-db-config, so
 	// removal and the status look there even when the infrastructure
 	// namespace reads differently later.
@@ -292,6 +299,30 @@ func (r MaaSRecord) ModelRefsOf(project, model string) (MaaSModelRefs, bool) {
 	return refs, ok
 }
 
+// staleFor: the publication of model in project was of another model than
+// the one whose UID is uid (deleted and made again since).
+func (r MaaSRecord) staleFor(project, model, uid string) bool {
+	recorded := r.ModelUIDs[MaaSPub{project, model}.Key()]
+	return recorded != "" && uid != "" && recorded != uid
+}
+
+// forget drops the publication's values (SetPublished false keeps the
+// rest of the record).
+func (r *MaaSRecord) forget(project, model string) {
+	published := r.IsPublished(project, model)
+	r.SetPublished(project, model, false)
+	if published {
+		r.SetPublished(project, model, true)
+	}
+}
+
+func (r *MaaSRecord) setModelUID(project, model, uid string) {
+	if r.ModelUIDs == nil {
+		r.ModelUIDs = map[string]string{}
+	}
+	r.ModelUIDs[MaaSPub{project, model}.Key()] = uid
+}
+
 func (r *MaaSRecord) setModelRefs(project, model string, refs MaaSModelRefs) {
 	if r.ModelRefs == nil {
 		r.ModelRefs = map[string]MaaSModelRefs{}
@@ -312,6 +343,10 @@ func (r *MaaSRecord) SetPublished(project, model string, on bool) {
 	} else {
 		delete(r.ModelRefs, key)
 		delete(r.GenAI, key)
+		delete(r.ModelUIDs, key)
+		if len(r.ModelUIDs) == 0 {
+			r.ModelUIDs = nil
+		}
 		if len(r.GenAI) == 0 {
 			r.GenAI = nil
 		}

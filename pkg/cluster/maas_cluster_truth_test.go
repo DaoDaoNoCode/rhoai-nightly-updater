@@ -188,3 +188,41 @@ func TestMaaSStatus_DSCPartIsTheToolsOnlyWhileItOwnsTheField(t *testing.T) {
 		t.Fatalf("after someone else set it: %+v", p)
 	}
 }
+
+// A publication records the UID of the model it published: once this tool
+// made the model again (its models record follows the new UID), the
+// publication and its restoration values (the gateways and Gen AI
+// metadata to write back) are of the old model, are gone, and are dropped.
+func TestMaaS_APublicationIsBoundToTheModelsUID(t *testing.T) {
+	mc := publishedCluster(t)
+	rec, _ := serving.ReadMaaSRecord(mc.c)
+	k, _ := parseFakePath(testModelPath)
+	mc.f.mu.Lock()
+	uid, _ := ensureMap(mc.f.objects[k], "metadata")["uid"].(string)
+	mc.f.mu.Unlock()
+	if uid == "" || rec.ModelUIDs["proj/"+tModel] != uid {
+		t.Fatalf("publish recorded model UID %q, the model's is %q", rec.ModelUIDs["proj/"+tModel], uid)
+	}
+	// The tool made the model again: new UID, recorded as its own.
+	mc.f.mu.Lock()
+	ensureMap(mc.f.objects[k], "metadata")["uid"] = "made-again"
+	mc.f.mu.Unlock()
+	models, _ := serving.ReadModelsRecord(mc.c)
+	e := models[serving.ModelRecordKey("proj", tModel)]
+	e.UID = "made-again"
+	models[serving.ModelRecordKey("proj", tModel)] = e
+	if err := serving.WriteModelsRecord(mc.c, models); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := GetMaaSStatus(mc.c)
+	if len(st.Removing) != 1 || !strings.Contains(st.Removing[0].Reason, "made again") {
+		t.Fatalf("removing = %+v", st.Removing)
+	}
+	if _, _, err := serving.PruneGoneMaaSPublications(mc.c); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ = serving.ReadMaaSRecord(mc.c)
+	if len(rec.Published) != 0 || len(rec.ModelRefs) != 0 || len(rec.GenAI) != 0 || len(rec.ModelUIDs) != 0 {
+		t.Fatalf("record kept the old model's values: %+v", rec)
+	}
+}

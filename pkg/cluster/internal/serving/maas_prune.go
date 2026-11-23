@@ -79,13 +79,20 @@ func goneMaaSPublications(c *kube.Client, rec MaaSRecord) ([]maasGonePub, error)
 			continue
 		case !found:
 			out = append(out, maasGonePub{p, fmt.Sprintf("model %s in %s no longer exists", p.Model, p.Project), false})
-		case modelsErr == nil:
-			if e, ok := models[ModelRecordKey(p.Project, p.Model)]; ok && e.UID != "" && e.UID != model.Metadata.UID {
-				out = append(out, maasGonePub{p, fmt.Sprintf("model %s in %s is not the one this tool published (it was deleted and made again)", p.Model, p.Project), false})
-			}
+		case modelsErr == nil && models.notTheToolsModel(p, model.Metadata.UID):
+			out = append(out, maasGonePub{p, fmt.Sprintf("model %s in %s is not the one this tool published (it was deleted and made again)", p.Model, p.Project), false})
+		case rec.staleFor(p.Project, p.Model, model.Metadata.UID):
+			// This tool made it again: its own, but not the one published.
+			out = append(out, maasGonePub{p, fmt.Sprintf("model %s in %s was deleted and made again since it was published", p.Model, p.Project), false})
 		}
 	}
 	return out, modelsErr
+}
+
+// notTheToolsModel: the tool recorded another UID for p's model than uid.
+func (r ModelsRecord) notTheToolsModel(p MaaSPub, uid string) bool {
+	e, ok := r[ModelRecordKey(p.Project, p.Model)]
+	return ok && e.UID != "" && e.UID != uid
 }
 
 // goneMaaSText names the gone publications for people.

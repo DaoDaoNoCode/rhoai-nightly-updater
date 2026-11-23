@@ -1048,6 +1048,11 @@ func (m *Run) publishRecordRefs(pl *maasPublish) (*types.OperationResponse, erro
 	if err != nil {
 		return m.Fail("check", fmt.Sprintf("Cannot read %s in %s: %v. Nothing was changed.", name, project, err), kube.ErrorCodeFromK8sErr(err), "model read failed")
 	}
+	// Values recorded for a model of this name that was deleted and made
+	// again are not this model's.
+	if rec.staleFor(project, name, model.Metadata.UID) {
+		rec.forget(project, name)
+	}
 	original, recorded := rec.ModelRefsOf(project, name)
 	switch {
 	case !specHasRoute(spec) && !refs.hasMaaS():
@@ -1067,6 +1072,7 @@ func (m *Run) publishRecordRefs(pl *maasPublish) (*types.OperationResponse, erro
 	if _, recordedGenAI := rec.GenAI[MaaSPub{project, name}.Key()]; !recordedGenAI {
 		rec.setGenAI(project, name, genAIOf(model.Metadata))
 	}
+	rec.setModelUID(project, name, model.Metadata.UID)
 	rec.SetPublished(project, name, true)
 	pl.rec, pl.original = rec, original
 	return nil, nil
@@ -1351,6 +1357,11 @@ func (m *Run) unpublishCheck(u *maasUnpublish) (*types.OperationResponse, error)
 		if modelOwned, err = ownsModel(c, model.Metadata); err != nil {
 			return m.Fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
 		}
+	}
+	// Values recorded for another model of this name are never written
+	// back to this one.
+	if modelFound && rec.staleFor(project, name, model.Metadata.UID) {
+		rec.forget(project, name)
 	}
 	routed := modelOwned && ModelHasMaaSRef(model)
 	if !refFound && !rec.IsPublished(project, name) && !routed {

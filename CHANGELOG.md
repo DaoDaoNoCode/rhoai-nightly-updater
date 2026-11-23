@@ -167,6 +167,11 @@ Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#u
   prerequisites, the part (and the platform) now counts as this tool's
   only while the record says it changed the field and its field manager
   still owns it.
+- **A MaaS publication belongs to the model it published.** Publish now
+  records the model's UID with the gateways and Gen AI metadata Unpublish
+  writes back. A model deleted and made again under its name, also by this
+  tool, is not the published one: its old publication is removed
+  automatically, and the old values are never written to the new model.
 - **A DataScienceCluster change applies only to the DSC it was checked
   on.** The Components page's changes (a component's state, Fix, soft
   reset) and Diagnostics' disable-component fix tested only the fields
