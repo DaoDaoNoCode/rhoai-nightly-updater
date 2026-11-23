@@ -37,7 +37,7 @@ ROLLOUT_TIMEOUT ?= 20m
 RELEASES_URL ?=
 
 .PHONY: all build push deploy upgrade rollback resolve-image release undeploy dev lint lint-go lint-frontend frontend-deps \
-	test test-go test-frontend test-scripts test-chart chart check-chart vuln clean help env docs-fixtures docs-mock frontend-lock \
+	test test-go test-frontend test-scripts test-seaweedfs-podman test-chart chart check-chart vuln clean help env docs-fixtures docs-mock frontend-lock \
 	docs-screenshots docs-check shellcheck audit-frontend build-frontend release-check ci-go ci-checks ci-script-tests
 
 .DEFAULT_GOAL := help
@@ -159,6 +159,11 @@ frontend-lock:  ## Update frontend/package-lock.json with CI's pinned node image
 # without jq, unless REQUIRE_JQ=1).
 test-scripts:  ## Test the release, install, node pull secret and test-go scripts (offline, in parallel; the summary names anything skipped)
 	sh scripts/run-parallel.sh 'sh scripts/test-release.sh' 'bash scripts/test-install.sh' 'bash scripts/test-node-pull-secret.sh' 'sh scripts/test-test-go.sh'
+
+# Not part of make test or CI: it needs Podman and pulls the pinned
+# SeaweedFS image (SECURITY.md, "S3 storage keys").
+test-seaweedfs-podman:  ## Check the scoped S3 keys against the pinned SeaweedFS image in Podman (rotation, denials, restart)
+	go test -tags seaweedfs_podman -run TestSeaweedFSPodman -count=1 -v ./pkg/cluster/internal/storage/
 
 test-chart:  ## Lint and render the Helm chart (offline; says SKIP without helm, fails then with REQUIRE_HELM=1)
 	bash scripts/test-chart.sh

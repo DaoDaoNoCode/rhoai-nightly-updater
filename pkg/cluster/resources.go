@@ -171,6 +171,14 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		status.MinIO.MigrationPending = true
 	}
 
+	// Which keys the storage's clients use: on storage an earlier version
+	// set up, every pipeline project holds the admin key until Secure S3
+	// storage runs (never on its own). Read only when no migration is
+	// pending: Migrate storage leaves the storage secured.
+	if legacy == nil && legacyErr == nil && s3EPErr == nil {
+		status.S3Keys = storage.KeysState(c, status.MinIO, s3EP, dspas, pipelineRec)
+	}
+
 	// Also for a storage that is gone but left its data PVC: teardown
 	// deletes it under the same guard.
 	current := status.MinIO.ManagedByTool && (status.MinIO.Deployed || len(status.MinIO.DataPVCs) > 0)

@@ -27,6 +27,11 @@ func SetupS3Storage(c *Client) (*types.OperationResponse, error) {
 	return storage.SetupS3(c)
 }
 
+// SecureS3Storage is storage.SecureS3.
+func SecureS3Storage(c *Client) (*types.OperationResponse, error) {
+	return storage.SecureS3(c)
+}
+
 // TeardownS3Storage is storage.TeardownS3.
 func TeardownS3Storage(c *Client, opts types.S3TeardownRequest) (*types.OperationResponse, error) {
 	return storage.TeardownS3(c, opts)

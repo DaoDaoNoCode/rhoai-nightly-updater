@@ -429,7 +429,7 @@ func mustJSON(v any) string {
 // from every pod in every namespace, so its pods reach it without a rule
 // of their own.
 func TestNetworkPolicyAdmitsTheCopyJob(t *testing.T) {
-	for _, r := range storage.S3Resources(storage.S3Keys{AccessKey: "a", SecretKey: "b"}) {
+	for _, r := range storage.S3Resources(storage.S3Keys{AccessKey: "a", SecretKey: "b"}, false) {
 		if r.Kind != "NetworkPolicy" {
 			continue
 		}

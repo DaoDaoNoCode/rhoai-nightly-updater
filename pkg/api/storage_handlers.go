@@ -27,6 +27,26 @@ var HandleS3StorageSetup = withMutationAuth(func(c *cluster.Client, w http.Respo
 	writeOperationResult(w, result, "setup-s3")
 })
 
+// HandleS3StorageSecure runs Secure S3 storage: a new admin key with IAM
+// writes on, then a key of its own for every pipeline server this tool
+// recorded (storage an earlier version set up gave its admin key to every
+// pipeline project).
+var HandleS3StorageSecure = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
+	beginOperation(w, "")
+	slog.Info("mutation", "op", "secure-s3")
+	result, err := cluster.SecureS3Storage(c)
+	if err != nil {
+		slog.Error("secure-s3 failed", "error", err)
+		writeOperationError(w, "Secure S3 storage failed", err)
+		return
+	}
+	writeOperationResult(w, result, "secure-s3")
+})
+
 // readS3AdminLogin reads the SeaweedFS admin UI login; tests replace it.
 var readS3AdminLogin = cluster.S3AdminLogin
 

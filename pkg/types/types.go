@@ -1116,6 +1116,9 @@ type ResourcesStatus struct {
 	// LegacyStorage is the S3 storage an earlier version of this tool left
 	// in namespace minio, until Migrate storage (or teardown) removes it.
 	LegacyStorage *LegacyStorageState `json:"legacyStorage,omitempty"`
+	// S3Keys says which keys the S3 storage's clients use (nil when the
+	// storage is not this tool's, not deployed, or still to be migrated).
+	S3Keys *S3KeysState `json:"s3Keys,omitempty"`
 	// ForeignLegacyNamespace: namespace minio exists but this tool did not
 	// make it (no tool label; made by a project request, or by someone
 	// else), so whatever is in it is not treated as an earlier version's
@@ -1823,6 +1826,38 @@ type MigrateStorageRequest struct {
 	// user confirmed as this tool's (LegacyStorageState.Unrecorded); Migrate
 	// only.
 	ConfirmProjects []string `json:"confirmProjects,omitempty"`
+}
+
+// S3KeysState is the key state of the S3 storage. Secured storage runs
+// with IAM writes on, self-service off and an admin key that is in no
+// project; each pipeline server this tool records then has a SeaweedFS
+// user and key of its own. Storage an earlier version set up gave its
+// admin key to every pipeline project: Secure S3 storage moves it to the
+// secured state (POST /api/resources/s3/secure).
+type S3KeysState struct {
+	// Secured is true once the storage runs with the secured IAM settings
+	// and a new admin key.
+	Secured bool `json:"secured"`
+	// NeedsSecuring is true when the storage is not secured, or a recorded
+	// pipeline server still uses a key that is not its own (Secure S3
+	// storage stopped part-way): the storage's state is "Not secured".
+	NeedsSecuring bool `json:"needsSecuring"`
+	// OwnKey are the recorded pipeline servers (namespace/name) that use a
+	// key of their own, read live: the access key ID in their Secret is one
+	// of their SeaweedFS user's keys.
+	OwnKey []string `json:"ownKey,omitempty"`
+	// OldKey are the recorded pipeline servers that still use the old
+	// shared key: Secure S3 storage gives each its own.
+	OldKey []string `json:"oldKey,omitempty"`
+	// KeepOldKey are the other pipeline servers on the storage, each with
+	// why the tool leaves its key ("ns/name (not recorded as this
+	// tool's)"): after Secure S3 storage their old key no longer works.
+	KeepOldKey []string `json:"keepOldKey,omitempty"`
+	// CheckError says why which key a pipeline server uses could not be
+	// read (the state is then not changed by it).
+	CheckError string `json:"checkError,omitempty"`
+	// SecureBlockedReason explains why Secure S3 storage cannot run now.
+	SecureBlockedReason string `json:"secureBlockedReason,omitempty"`
 }
 
 // LegacyStorageState describes the S3 storage an earlier version of this

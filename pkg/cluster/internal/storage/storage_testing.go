@@ -90,6 +90,15 @@ func SetPipelineServerReadyTimingForTest(timeout, poll time.Duration) (restore f
 	return func() { PipelineServerReadyTimeout, pipelineServerReadyPoll = prevTimeout, prevPoll }
 }
 
+// SetS3ToolEndpointForTest sends the tool's own S3 and IAM requests to
+// endpoint (a fake SeaweedFS).
+func SetS3ToolEndpointForTest(endpoint string) (restore func()) {
+	mustBeTest("SetS3ToolEndpointForTest")
+	prev := s3ToolEndpoint
+	s3ToolEndpoint = func() string { return endpoint }
+	return func() { s3ToolEndpoint = prev }
+}
+
 // mustBeTest panics unless the program is a test binary.
 func mustBeTest(what string) {
 	if !testing.Testing() {

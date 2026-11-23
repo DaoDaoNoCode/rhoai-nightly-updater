@@ -412,6 +412,70 @@ func (m *migrateRun) step(id, status, msg string) {
 	}
 }
 
+// stepLog is an opLog whose lines are step id's progress and go into the
+// run's log.
+func (m *migrateRun) stepLog(id string) *opLog {
+	return &opLog{observe: func(line string) {
+		m.logs = append(m.logs, line)
+		if m.emit != nil {
+			m.emit(types.UpdateStepEvent{Step: id, Status: "running", Message: line})
+		}
+	}}
+}
+
+// secureNewStorage makes sure the new storage is secured (a new admin key
+// and the secured settings, when an earlier version's Migrate storage set
+// it up without them) and that the recorded pipeline servers already on it
+// use keys of their own. It returns the response of a stop, or nil.
+func (m *migrateRun) secureNewStorage(dspas []DSPA, rec PipelineRecord) *types.OperationResponse {
+	_, ep, err := S3StatusAndEndpoints(m.c)
+	if err != nil {
+		resp, _ := m.fail("storage", fmt.Sprintf("Cannot read the new storage's Service: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "endpoints unreadable")
+		return resp
+	}
+	if !ep.Secured {
+		m.step("storage", "running", "Securing the new storage: a new admin key, and keys of their own for its pipeline servers...")
+		keys, err := newAdminKeys(m.c)
+		if err != nil {
+			resp, _ := m.fail("storage", fmt.Sprintf("Cannot make the new storage's admin key; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "keys")
+			return resp
+		}
+		res, err := setupS3Storage(m.c, keys, m.stepLog("storage"), s3RetryMigrate, true)
+		if err != nil || !res.Success {
+			msg, code := "", "internal"
+			if res != nil {
+				msg, code = res.Message, res.ErrorCode
+			} else {
+				msg = err.Error()
+			}
+			resp, _ := m.fail("storage", "Securing the new storage did not finish: "+msg+" The old storage is unchanged.", code, "secure failed")
+			return resp
+		}
+		m.step("storage", "running", "OK: The new storage is secured")
+	}
+	recorded, _ := keyServers(ep, dspas, rec)
+	if len(recorded) == 0 {
+		return nil
+	}
+	sw, err := adminSeaweed(m.c)
+	if err != nil {
+		resp, _ := m.fail("storage", fmt.Sprintf("Cannot read the new storage's keys: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "new keys unreadable")
+		return resp
+	}
+	for _, d := range recorded {
+		name := d.Meta.Namespace + "/" + d.Meta.Name
+		changed, err := rekeyServer(m.c, sw, d)
+		if err != nil {
+			resp, _ := m.fail("storage", fmt.Sprintf("Pipeline server %s, already on the new storage, could not get a key of its own: %v. Run Migrate storage again.", name, err), "s3_keys", "rekey failed")
+			return resp
+		}
+		if changed {
+			m.step("storage", "running", fmt.Sprintf("OK: %s has a key of its own", name))
+		}
+	}
+	return nil
+}
+
 func (m *migrateRun) fail(id, msg, code, activity string) (*types.OperationResponse, error) {
 	if m.emit != nil {
 		m.emit(types.UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: code})
@@ -539,13 +603,11 @@ func (m *migrateRun) migrate(legacy *Legacy, dspas []DSPA, confirmed []string) (
 		if err != nil {
 			return m.fail("storage", fmt.Sprintf("Cannot make the new storage's keys; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "keys")
 		}
-		log := &opLog{observe: func(line string) {
-			if m.emit != nil {
-				m.emit(types.UpdateStepEvent{Step: "storage", Status: "running", Message: line})
-			}
-		}}
-		res, err := setupS3Storage(m.c, keys, log, s3RetryMigrate)
-		m.logs = append(m.logs, log.lines...)
+		secured, err := s3SetupSecured(m.c)
+		if err != nil {
+			return m.fail("storage", fmt.Sprintf("Cannot check how the new storage runs; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "secured check")
+		}
+		res, err := setupS3Storage(m.c, keys, m.stepLog("storage"), s3RetryMigrate, secured)
 		if err != nil {
 			return nil, err
 		}
@@ -554,6 +616,14 @@ func (m *migrateRun) migrate(legacy *Legacy, dspas []DSPA, confirmed []string) (
 			return m.fail("storage", "Setting up the new storage did not finish: "+res.Message+" The old storage is unchanged.", res.ErrorCode, "setup failed")
 		}
 		m.step("storage", "success", "OK: The new storage is ready")
+	}
+	// The new storage ends secured: its admin key goes into no project, and
+	// every pipeline server moved to it gets a key of its own. New storage
+	// that an earlier version's Migrate storage set up is not secured yet:
+	// it gets a new admin key and the secured settings here, and the
+	// recorded pipeline servers it already moved get their own keys.
+	if resp := m.secureNewStorage(dspas, rec); resp != nil {
+		return resp, nil
 	}
 
 	// Step 2: copy and verify. From now on the new storage may get data
@@ -566,15 +636,12 @@ func (m *migrateRun) migrate(legacy *Legacy, dspas []DSPA, confirmed []string) (
 		return m.fail("copy", fmt.Sprintf("The copy is verified, but it could not be recorded on Secret %s/%s: %v. No pipeline server was moved; run Migrate storage again.%s", S3Namespace, S3Secret, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "record failed")
 	}
 
-	// Step 3: the pipeline servers, with the new storage's keys.
-	newKeys, found, err := ReadS3Keys(m.c)
-	if err != nil || !found {
-		if err == nil {
-			err = fmt.Errorf("secret %s/%s is gone", S3Namespace, S3Secret)
-		}
+	// Step 3: the pipeline servers, each with a key of its own.
+	sw, err := adminSeaweed(m.c)
+	if err != nil {
 		return m.fail("repoint", fmt.Sprintf("Cannot read the new storage's keys; no pipeline server was moved: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "new keys unreadable")
 	}
-	repointed, listed, resp := m.repoint(legacy, dspas, newKeys, owned)
+	repointed, listed, resp := m.repoint(legacy, dspas, sw, owned)
 	if resp != nil {
 		return resp, nil
 	}
@@ -1030,7 +1097,7 @@ func (d DSPA) ObjectStoreReadyAt(generation int64) bool {
 // Every write is dry-run first. Each server is waited for before the next
 // is moved; one that does not reach the new storage stops the run, so the
 // old storage stays.
-func (m *migrateRun) repoint(legacy *Legacy, dspas []DSPA, keys S3Keys, owned func(DSPA) bool) (moved, listed []string, resp *types.OperationResponse) {
+func (m *migrateRun) repoint(legacy *Legacy, dspas []DSPA, sw *seaweedClient, owned func(DSPA) bool) (moved, listed []string, resp *types.OperationResponse) {
 	c := m.c
 	failed := func(msg, code, activity string) ([]string, []string, *types.OperationResponse) {
 		r, _ := m.fail("repoint", msg, code, activity)
@@ -1080,11 +1147,12 @@ func (m *migrateRun) repoint(legacy *Legacy, dspas []DSPA, keys S3Keys, owned fu
 	for _, d := range todo {
 		project := d.Meta.Namespace
 		// The same Secrets setup writes (the S3 secret, and the dashboard
-		// Connection with the new keys), owned by the DSPA they are for (it
-		// exists here), so they go with the DSPA whoever deletes it.
+		// Connection), owned by the DSPA they are for (it exists here), so
+		// they go with the DSPA whoever deletes it. The dry run sends them
+		// without keys; each server's own key is made just before its move.
 		secrets := []*projectSecret{
-			{c: c, project: project, name: DSPASecretName, what: "secret", obj: dspaS3Secret(project, keys)},
-			{c: c, project: project, name: ConnectionSecretName, what: "connection", obj: dashboardS3Connection(project, keys)},
+			{c: c, project: project, name: DSPASecretName, what: "secret", obj: dspaS3Secret(project, S3Keys{})},
+			{c: c, project: project, name: ConnectionSecretName, what: "connection", obj: dashboardS3Connection(project, S3Keys{})},
 		}
 		for _, s := range secrets {
 			setDSPAOwner(s.obj, d.Meta.Name, d.Meta.UID)
@@ -1097,7 +1165,7 @@ func (m *migrateRun) repoint(legacy *Legacy, dspas []DSPA, keys S3Keys, owned fu
 		}
 		patch, _ := json.Marshal(map[string]any{
 			"metadata": map[string]any{"resourceVersion": d.Meta.ResourceVersion, "labels": envkit.ToolLabels(),
-				"annotations": map[string]any{DSPAConnectionAnnotation: ConnectionSecretName}},
+				"annotations": map[string]any{DSPAConnectionAnnotation: ConnectionSecretName, DSPAS3UserAnnotation: ScopedUserName(project)}},
 			"spec": map[string]any{"objectStorage": map[string]any{"externalStorage": map[string]any{
 				"host": S3Host(),
 				"s3CredentialsSecret": map[string]any{
@@ -1164,6 +1232,19 @@ func (m *migrateRun) repoint(legacy *Legacy, dspas []DSPA, keys S3Keys, owned fu
 			return failed(fmt.Sprintf("Not enough time is left in this run to move pipeline server %s and wait until it reaches the new storage (up to %s). Already moved: %s. The old storage is kept; run Migrate storage again to continue.", name, migrateRepointTimeout, done), "in_progress", "out of time")
 		}
 		m.step("repoint", "running", fmt.Sprintf("Moving pipeline server %s...", name))
+		project := p.d.Meta.Namespace
+		keys, _, err := provisionScopedKey(sw, project, S3Keys{})
+		if err == nil {
+			err = probeScopedKey(c.Context(), keys, ScopedUserName(project))
+		}
+		if err != nil {
+			return failed(fmt.Sprintf("Cannot give pipeline server %s a key of its own: %v. It was not moved. Already moved: %s. The old storage is kept; run Migrate storage again.", name, err, done), "s3_keys", "scoped key failed")
+		}
+		p.secrets[0].obj = dspaS3Secret(project, keys)
+		p.secrets[1].obj = dashboardS3Connection(project, keys)
+		for _, s := range p.secrets {
+			setDSPAOwner(s.obj, p.d.Meta.Name, p.d.Meta.UID)
+		}
 		if msg, code, err := writeSecrets(p, false); err != nil {
 			return failed(fmt.Sprintf("%s Already moved: %s. The old storage is kept; run Migrate storage again.", msg, done), code, "secret write failed")
 		}

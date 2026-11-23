@@ -935,7 +935,7 @@ func TestWaitS3Ready_StalledAPIDoesNotOverrunDeadline(t *testing.T) {
 // S3 secret key; the pipeline projects' copies carry only the S3 keys.
 func TestS3AdminPasswordIsItsOwn(t *testing.T) {
 	keys := storage.S3Keys{AccessKey: "ak", SecretKey: "sk", AdminPassword: "ap"}
-	for _, r := range storage.S3Resources(keys) {
+	for _, r := range storage.S3Resources(keys, false) {
 		b, _ := json.Marshal(r.Obj)
 		switch r.Kind {
 		case "Secret":
