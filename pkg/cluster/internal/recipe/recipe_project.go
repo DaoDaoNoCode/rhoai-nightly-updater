@@ -18,12 +18,12 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// The recipe-owned project.
+// Project namespaces owned by recipes.
 //
-// The tool never creates a project, with one exception: a recipe with
-// spec.project.mode create. It creates the project the way the dashboard's
-// Create project does, with the signed-in user's token, so the cluster's
-// project template and the requester's admin binding apply:
+// Ordinarily the updater does not provision projects; the sole case where it
+// does is a recipe whose spec.project.mode is create. Provisioning follows the
+// dashboard Create project flow using the signed-in user's token so the
+// cluster project template and the caller's admin binding take effect:
 //
 //   - odh-dashboard frontend/src/api/k8s/projects.ts createProject (main at
 //     7a6f65a, 2026-11-21) creates a ProjectRequest (project.openshift.io/v1,
@@ -35,25 +35,24 @@ import (
 //     kueue.openshift.io/managed=true unless the OdhDashboardConfig sets
 //     disableKueue. It refuses names starting with openshift or kube.
 //
-// The recipe sets the dashboard's labels the same way: the Kueue label
-// exactly when the dashboard would, read from the dashboard's own
-// OdhDashboardConfig (kueueManaged); in addition the tool's label and the
-// annotation projectAnnotation naming the recipe.
+// Label application mirrors the dashboard: the Kueue tag appears only when
+// dashboard logic would add it (kueueManaged reads OdhDashboardConfig); the
+// updater also stamps its managed-by label and projectAnnotation with the
+// recipe name.
 //
-// The tool records the project's name and the UID the ProjectRequest
-// answered with (projectRecordKey of the snapshot ConfigMap, written
-// before the labels, so a run cut off between the two still knows the
-// project is its own), and the label patch is a JSON patch that tests that
-// UID first, so it never labels a namespace made again under the name.
-// Clean up deletes it only while it still has that UID, the tool's label
-// and the recipe annotation, is not being deleted, and holds nothing else
-// the tool can list, unless the user confirmed those (DeleteProject).
+// Name and UID from the ProjectRequest response land in the snapshot ConfigMap
+// under projectRecordKey before labeling, so an interrupted run still knows
+// ownership. Labeling uses a JSON patch whose first op tests that UID, avoiding
+// labels on a re-created namespace with the same name. Clean up removes the
+// project only when the UID, tool label, and recipe annotation still match,
+// deletion is not in progress, and listable leftovers are absent or user-
+// confirmed (DeleteProject).
 const (
 	projectAnnotation = "rhoai-nightly-updater/recipe"
-	// dashboardProjectLabel is odh-dashboard's label of its projects
-	// (KnownLabels.DASHBOARD_RESOURCE; the selector of envkit.DSProjects).
+	// dashboardProjectLabel marks odh-dashboard data-science projects
+	// (KnownLabels.DASHBOARD_RESOURCE; envkit.DSProjects selects on it).
 	dashboardProjectLabel = "opendatahub.io/dashboard"
-	// kueueProjectLabel is odh-dashboard's KnownLabels.KUEUE_MANAGED.
+	// kueueProjectLabel matches odh-dashboard KnownLabels.KUEUE_MANAGED.
 	kueueProjectLabel = "kueue.openshift.io/managed"
 
 	projectRecordKey     = "recipeProject"
@@ -513,9 +512,10 @@ func ProjectLeftovers(c *kube.Client, name string) ([]string, error) {
 // projectLeftovers names what is in project ns that this tool did not
 // create, as far as it can list: workbenches (Notebooks), InferenceServices
 // and LLMInferenceServices, PersistentVolumeClaims and pods. Objects with
-// the tool's label, objects being deleted, and the pods and claims of the
+// the tool's label, objects being deleted, the pods and claims of the
 // tool's pipeline server (DSPO labels its pods dspa=<name>, and sets the
-// DSPA as owner of what it creates) are left out. A kind whose API is not
+// DSPA as owner of what it creates) and the pods of the tool's models
+// (KServe's part-of and name labels) are left out. A kind whose API is not
 // served has none. A read that fails is returned (fail closed).
 func projectLeftovers(c *kube.Client, ns string) ([]string, error) {
 	toolDSPAs := map[string]bool{}
@@ -537,6 +537,14 @@ func projectLeftovers(c *kube.Client, ns string) ([]string, error) {
 			}
 		}
 		return false
+	}
+	// The tool's models (LLMInferenceServices with its label), filled in as
+	// they are listed, before the pods. KServe runs a model in pods of a
+	// Deployment it owns and labels them part-of llminferenceservice and
+	// name <model>, so a pod of the tool's model is the tool's.
+	toolModels := map[string]bool{}
+	toolModelPod := func(m kube.ObjectMeta) bool {
+		return m.Labels["app.kubernetes.io/part-of"] == "llminferenceservice" && toolModels[m.Labels["app.kubernetes.io/name"]]
 	}
 	var out []string
 	for _, l := range []struct{ kind, path string }{
@@ -563,7 +571,10 @@ func projectLeftovers(c *kube.Client, ns string) ([]string, error) {
 		}
 		for _, it := range list.Items {
 			m := it.Metadata
-			if m.HasToolLabel() || m.Terminating() || ownedByTool(m) || (l.kind == "Pod" && toolDSPAs[m.Labels["dspa"]]) {
+			if l.kind == "LLMInferenceService" && m.HasToolLabel() {
+				toolModels[m.Name] = true
+			}
+			if m.HasToolLabel() || m.Terminating() || ownedByTool(m) || (l.kind == "Pod" && (toolDSPAs[m.Labels["dspa"]] || toolModelPod(m))) {
 				continue
 			}
 			out = append(out, l.kind+" "+m.Name)

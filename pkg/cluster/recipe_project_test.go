@@ -17,7 +17,7 @@ const (
 	tProjectRequest = "/apis/project.openshift.io/v1/projectrequests"
 )
 
-// tRecipe is a valid MVP recipe with project mode (create or existing).
+// tRecipe builds a minimal valid recipe whose project spec uses the given mode (create or existing).
 func tRecipe(t *testing.T, mode string) types.EnvironmentRecipe {
 	t.Helper()
 	r, problems := recipe.Validate([]byte(`{"apiVersion":"rhoai-nightly-updater/v1alpha1","kind":"EnvironmentRecipe","metadata":{"name":"dev","description":"PR review"},
@@ -29,14 +29,14 @@ func tRecipe(t *testing.T, mode string) types.EnvironmentRecipe {
 	return r
 }
 
-// projectFake is a cluster where a ProjectRequest makes its namespace, as
-// OpenShift's project API does.
+// projectFake wires a fake cluster where submitting a ProjectRequest provisions
+// a namespace, matching how OpenShift's project API behaves.
 func projectFake(t *testing.T) (*resourceFake, *Client) {
 	t.Helper()
 	t.Setenv("NAMESPACE", "rhoai-nightly-updater")
 	f, c := newResourceFake(t)
-	// The ProjectRequest makes the namespace and answers with its Project
-	// (the same metadata), as openshift-apiserver does.
+	// On ProjectRequest POST, seed the namespace and return a Project whose
+	// metadata matches, the way openshift-apiserver responds.
 	f.intercept = func(w http.ResponseWriter, r *http.Request, _ []byte) bool {
 		if r.Method != http.MethodPost || r.URL.Path != tProjectRequest {
 			return false
@@ -61,11 +61,10 @@ func ensureProject(t *testing.T, c *Client, s *recipe.State) *types.OperationRes
 	return res
 }
 
-// The project is made as the dashboard's Create project makes it: a
-// ProjectRequest with the display name and description, then the
-// dashboard's label (plus the tool's label and the recipe annotation) by
-// merge patch. Its UID is recorded before the labels; running the step
-// again skips it.
+// Creation should mirror the dashboard's Create project flow: ProjectRequest
+// carries display name and description; a merge patch then applies the
+// dashboard label together with the tool label and recipe annotation. UID is
+// persisted before patching labels; a repeat invocation is a no-op.
 func TestRecipeProject_CreatedLikeTheDashboardAndRecorded(t *testing.T) {
 	f, c := projectFake(t)
 	s := &recipe.State{Recipe: tRecipe(t, "create")}
@@ -97,7 +96,7 @@ func TestRecipeProject_CreatedLikeTheDashboardAndRecorded(t *testing.T) {
 	if err != nil || !strings.Contains(raw, `"uid":"`+meta["uid"].(string)+`"`) || !strings.Contains(raw, `"recipe":"dev"`) {
 		t.Fatalf("record %q %v", raw, err)
 	}
-	// Again: skipped, nothing written.
+	// Re-run: step reports done and performs no further mutations.
 	before := len(f.mutations())
 	s2 := &recipe.State{Recipe: tRecipe(t, "create")}
 	chk, err := recipeStep(t, s2.Recipe, recipe.StepProject).Check(c, s2)
@@ -109,9 +108,9 @@ func TestRecipeProject_CreatedLikeTheDashboardAndRecorded(t *testing.T) {
 	}
 }
 
-// A namespace that exists and was not created by a recipe is refused,
-// whatever labels it carries; one being deleted waits; system, RHOAI and
-// updater namespaces are refused before anything is read.
+// Namespaces that predate the recipe are rejected regardless of labels;
+// terminating namespaces block until gone. Reserved system, RHOAI, and updater
+// names are rejected before any GET runs.
 func TestRecipeProject_Refusals(t *testing.T) {
 	for _, tc := range []struct {
 		name, ns, body, want string
@@ -149,8 +148,8 @@ func TestRecipeProject_Refusals(t *testing.T) {
 	}
 }
 
-// mode existing uses a data science project of the user's and owns
-// nothing; a namespace without the dashboard's label is refused.
+// existing mode attaches to the user's data science project without owning it;
+// lacking the dashboard label, the namespace is rejected.
 func TestRecipeProject_Existing(t *testing.T) {
 	f, c := projectFake(t)
 	s := &recipe.State{Recipe: tRecipe(t, "existing")}
@@ -166,10 +165,9 @@ func TestRecipeProject_Existing(t *testing.T) {
 	}
 }
 
-// Clean up deletes a recipe project only with the tool's label and the
-// recorded UID (as the delete's precondition), and only when what it
-// holds that the tool did not create was confirmed; then the record
-// forgets it.
+// Teardown removes a recipe-owned project only when the tool's label and the
+// stored UID satisfy the delete precondition, and only after the caller
+// confirmed user-owned leftovers; the snapshot entry is removed afterward.
 func TestRecipeProject_Teardown(t *testing.T) {
 	f, c := projectFake(t)
 	s := &recipe.State{Recipe: tRecipe(t, "create")}
@@ -177,7 +175,7 @@ func TestRecipeProject_Teardown(t *testing.T) {
 		t.Fatal(res.Message)
 	}
 	uid := s.Project.UID
-	// What the user added, and what the tool's pipeline server runs.
+	// User-created workload plus pipeline server objects the tool owns.
 	f.putJSON("/apis/kubeflow.org/v1/namespaces/recipe-dev/notebooks/my-wb", `{}`)
 	f.putJSON("/api/v1/namespaces/recipe-dev/persistentvolumeclaims/my-wb", `{}`)
 	f.putJSON("/apis/datasciencepipelinesapplications.opendatahub.io/v1/namespaces/recipe-dev/datasciencepipelinesapplications/dspa", `{"metadata":{"uid":"dspa-uid","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}}}`)
@@ -185,9 +183,17 @@ func TestRecipeProject_Teardown(t *testing.T) {
 	f.putJSON("/api/v1/namespaces/recipe-dev/pods/tools-own", `{"metadata":{"labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}}}`)
 	f.putJSON("/api/v1/namespaces/recipe-dev/pods/going", `{"metadata":{"deletionTimestamp":"2026-11-21T10:00:00Z"}}`)
 	f.putJSON("/api/v1/namespaces/recipe-dev/persistentvolumeclaims/mariadb-dspa", `{"metadata":{"ownerReferences":[{"kind":"DataSciencePipelinesApplication","name":"dspa","uid":"dspa-uid"}]}}`)
+	// Tool-owned model and the KServe pod (live RHOAI 3.7: ReplicaSet-owned,
+	// part-of llminferenceservice, name <model>); plus a user model and pod.
+	f.putJSON("/apis/serving.kserve.io/v1alpha2/namespaces/recipe-dev/llminferenceservices/smol", `{"metadata":{"labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}}}`)
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/smol-kserve-9bb6646f9-wzrps", `{"metadata":{"labels":{"app.kubernetes.io/part-of":"llminferenceservice","app.kubernetes.io/name":"smol"},"ownerReferences":[{"kind":"ReplicaSet","name":"smol-kserve-9bb6646f9","uid":"rs-uid"}]}}`)
+	f.putJSON("/apis/serving.kserve.io/v1alpha2/namespaces/recipe-dev/llminferenceservices/theirs", `{}`)
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/theirs-kserve-1", `{"metadata":{"labels":{"app.kubernetes.io/part-of":"llminferenceservice","app.kubernetes.io/name":"theirs"}}}`)
+	// A pod named like the model but without KServe's usual labels.
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/named-smol", `{"metadata":{"labels":{"app.kubernetes.io/name":"smol"}}}`)
 
 	left, err := recipe.ProjectLeftovers(c, "recipe-dev")
-	if err != nil || strings.Join(left, ",") != "Notebook my-wb,PersistentVolumeClaim my-wb" {
+	if err != nil || strings.Join(left, ",") != "LLMInferenceService theirs,Notebook my-wb,PersistentVolumeClaim my-wb,Pod named-smol,Pod theirs-kserve-1" {
 		t.Fatalf("leftovers %v %v", left, err)
 	}
 	res, err := recipe.DeleteProject(c, "recipe-dev", []string{"Notebook my-wb"})
@@ -208,15 +214,15 @@ func TestRecipeProject_Teardown(t *testing.T) {
 	if raw, _ := record.ReadSnapshotKey(c, "recipeProject"); strings.Contains(raw, "recipe-dev") {
 		t.Fatalf("still recorded: %s", raw)
 	}
-	// Not recorded (any more): refused.
+	// With no snapshot entry left, deletion is refused.
 	f.putJSON(tRecipeNS, `{"metadata":{"labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}}}`)
 	if res, _ := recipe.DeleteProject(c, "recipe-dev", nil); res.Success || !strings.Contains(res.Message, "not created by a recipe") {
 		t.Fatalf("unrecorded: %+v", res)
 	}
 }
 
-// The UID and label guards: a namespace made again under the name, or one
-// whose label was removed, is kept.
+// UID and managed-by checks prevent delete when the name was re-provisioned or
+// when labels were stripped.
 func TestRecipeProject_TeardownGuards(t *testing.T) {
 	for _, tc := range []struct{ name, body, want string }{
 		{"recreated", `{"metadata":{"uid":"new-uid","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}}}`, "made again"},
@@ -235,8 +241,8 @@ func TestRecipeProject_TeardownGuards(t *testing.T) {
 			}
 		})
 	}
-	// A UID that changes between the check and the delete: the
-	// precondition refuses (DeleteWithUID).
+	// If UID changes after the check but before delete, DeleteWithUID
+	// precondition blocks removal.
 	f, c := projectFake(t)
 	f.putJSON(tRecipeNS, `{"metadata":{"uid":"rec-uid","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"},"annotations":{"rhoai-nightly-updater/recipe":"dev"}}}`)
 	if err := record.WriteSnapshotKey(c, "recipeProject", "test", `{"projects":[{"name":"recipe-dev","uid":"rec-uid","recipe":"dev"}]}`); err != nil {
@@ -253,9 +259,9 @@ func TestRecipeProject_TeardownGuards(t *testing.T) {
 	}
 }
 
-// The label patch is bound to the UID the ProjectRequest answered with: a
-// namespace made again under the name between the check and the patch is
-// not labelled (the patch's test operation fails).
+// Label patching is tied to the UID returned from ProjectRequest: if another
+// namespace appears under the same name before patch, the test op fails and
+// labels are not applied.
 func TestRecipeProject_LabelPatchTestsTheCreatedUID(t *testing.T) {
 	f, c := projectFake(t)
 	f.beforeServe = func(method, path string) {
@@ -273,10 +279,9 @@ func TestRecipeProject_LabelPatchTestsTheCreatedUID(t *testing.T) {
 	}
 }
 
-// The Kueue label follows the dashboard: set when its OdhDashboardConfig
-// says disableKueue: false, not when true or unset (its default) or when
-// there is none; a config that cannot be read stops before anything is
-// created.
+// kueue.openshift.io/managed tracks the dashboard OdhDashboardConfig:
+// present when disableKueue is false, absent when true, unset (default), or
+// missing entirely; unreadable config aborts before project creation.
 func TestRecipeProject_KueueLabelFollowsTheDashboard(t *testing.T) {
 	const cfg = "/apis/opendatahub.io/v1alpha/namespaces/redhat-ods-applications/odhdashboardconfigs/odh-dashboard-config"
 	for _, tc := range []struct {
@@ -317,8 +322,8 @@ func TestRecipeProject_KueueLabelFollowsTheDashboard(t *testing.T) {
 	}
 }
 
-// A label or annotation removed between the last check and the delete
-// stops the delete: the resourceVersion read is its precondition.
+// Removing a label or annotation after the check but before delete aborts
+// deletion because resourceVersion is part of the precondition.
 func TestRecipeProject_DeleteRequiresTheCheckedVersion(t *testing.T) {
 	f, c := projectFake(t)
 	s := &recipe.State{Recipe: tRecipe(t, "create")}
@@ -341,9 +346,8 @@ func TestRecipeProject_DeleteRequiresTheCheckedVersion(t *testing.T) {
 	}
 }
 
-// Protected namespaces fail closed: when the DSCInitialization cannot be
-// read, the project step cannot tell RHOAI's namespaces and refuses, and
-// so does Clean up.
+// Fail closed on protected namespaces: unreadable DSCInitialization means
+// neither EnsureProject nor Clean up can distinguish RHOAI namespaces.
 func TestRecipeProject_UnreadableDSCIRefuses(t *testing.T) {
 	f, c := projectFake(t)
 	f.fail["GET "+dsciV2List] = 500
@@ -361,8 +365,8 @@ func TestRecipeProject_UnreadableDSCIRefuses(t *testing.T) {
 	}
 }
 
-// A project a run recorded but that is gone now is created again on
-// Resume, not taken for the old one.
+// Resume recreates a project that was recorded on a prior run but no longer
+// exists instead of reusing the stale UID.
 func TestRecipeProject_GoneProjectIsCreatedAgain(t *testing.T) {
 	f, c := projectFake(t)
 	s := &recipe.State{Recipe: tRecipe(t, "create"), Project: &types.RecipeProjectRef{Name: "recipe-dev", UID: "old-uid", Owned: true}}
@@ -372,8 +376,8 @@ func TestRecipeProject_GoneProjectIsCreatedAgain(t *testing.T) {
 	}
 }
 
-// The label patch of the recipe's project keeps what another writer added
-// after it was read: a map that was absent then is not replaced whole.
+// When labels or annotations were added concurrently after the read, the patch
+// must merge rather than replace an entire map that was missing at read time.
 func TestRecipeProject_LabelPatchKeepsAConcurrentWritersMap(t *testing.T) {
 	f, c := projectFake(t)
 	intercept := f.intercept
@@ -381,8 +385,8 @@ func TestRecipeProject_LabelPatchKeepsAConcurrentWritersMap(t *testing.T) {
 		if !intercept(w, r, body) {
 			return false
 		}
-		// The namespace comes without annotations (intercept runs under
-		// the fake's lock).
+		// Strip annotations from the freshly created namespace (intercept holds
+		// the fake lock).
 		delete(f.objects[fakeKey{gv: "v1", plural: "namespaces", name: "recipe-dev"}]["metadata"].(map[string]any), "annotations")
 		return true
 	}
