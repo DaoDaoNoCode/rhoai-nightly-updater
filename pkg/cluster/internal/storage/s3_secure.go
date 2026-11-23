@@ -137,16 +137,16 @@ func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.Operat
 			parts = append(parts, fmt.Sprintf("Still on the old key: %s; run Secure S3 storage again: it skips the servers already done.", strings.Join(old, ", ")))
 		}
 		if len(kept) > 0 {
-			parts = append(parts, fmt.Sprintf("Not changed by this tool, their old key no longer works: %s.", strings.Join(kept, "; ")))
+			parts = append(parts, fmt.Sprintf("Not changed by this tool: %s. The old admin key no longer works there: their owner must give those pipeline servers new S3 keys.", strings.Join(kept, "; ")))
 		}
 		return strings.Join(parts, " ")
 	}
 
 	// Step 2: the new admin key, with IAM writes on, in one rollout.
 	if ep.Secured {
-		step(SecureStepRollout, "skipped", "The S3 storage already runs with a new admin key and IAM writes on")
+		step(SecureStepRollout, "skipped", "The S3 storage already runs with a new admin key and per-server keys")
 	} else {
-		step(SecureStepRollout, "running", "Rolling out a new admin key with IAM writes on...")
+		step(SecureStepRollout, "running", "Rolling out a new admin key and turning on per-server keys...")
 		keys, err := newAdminKeys(c)
 		if err != nil {
 			return stop(SecureStepRollout, fmt.Sprintf("Cannot make the new admin key: %v.%s", err, unchanged), "internal", "keys"), nil
@@ -184,7 +184,7 @@ func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.Operat
 		}
 	}
 
-	msg := "The S3 storage is secured: it has a new admin key, which is in no project."
+	msg := "New admin key, kept out of every project."
 	if s := summary(done, skipped); s != "" {
 		msg += " " + s
 	}

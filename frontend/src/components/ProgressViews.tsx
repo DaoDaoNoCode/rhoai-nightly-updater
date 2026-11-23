@@ -112,11 +112,14 @@ function useNow(): number {
   return now;
 }
 
+/** A step title after a comma: its first word lower-cased, unless it is a name ("MLflow", "S3"). */
+const midSentence = (title: string) => (/^[A-Z][a-z]/.test(title) ? title.charAt(0).toLowerCase() + title.slice(1) : title);
+
 /** The operation alert while a run of this tab goes on with its dialog closed. */
 export const BackgroundRunAlert: React.FC<{ run: BackgroundRun }> = ({ run }) => {
   const now = useNow();
   // A one-step run's step is the run itself: its name says it.
-  const step = !run.step ? ": starting" : run.step.count > 1 ? `: step ${run.step.index} of ${run.step.count}, ${run.step.title}` : "";
+  const step = !run.step ? ": starting" : run.step.count > 1 ? `: step ${run.step.index} of ${run.step.count}, ${midSentence(run.step.title)}` : "";
   return (
     <Alert
       variant="info"

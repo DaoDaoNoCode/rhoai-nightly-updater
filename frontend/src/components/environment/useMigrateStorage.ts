@@ -22,7 +22,7 @@ export const MIGRATE_STEPS: Record<MigrateKind, { id: string; title: string }[]>
   // Then one step per recorded pipeline server (MigrateRun.extraSteps).
   secure: [
     { id: "check", title: "Check the S3 storage and its pipeline servers" },
-    { id: "rollout", title: "Roll out a new admin key with IAM writes on" },
+    { id: "rollout", title: "Roll out a new admin key and turn on per-server keys" },
   ],
 };
 

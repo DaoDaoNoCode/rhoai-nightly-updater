@@ -224,7 +224,7 @@ async function secureStream(req, res) {
       { step: `server:${n}`, status: "success", message: `OK: ${n} uses SeaweedFS user rnu-dspa-${n.split("/")[0]}` },
     ]),
   ];
-  const done = `The S3 storage is secured: it has a new admin key, which is in no project. On a key of their own: ${servers.join(", ")}.${kept.length ? ` Not changed by this tool, their old key no longer works: ${kept.join("; ")}.` : ""} Restart the workbenches and model deployments that use Connection rhoai-nightly-updater-s3, and workbenches that run pipelines, so they pick up the new key.`;
+  const done = `New admin key, kept out of every project. On a key of their own: ${servers.join(", ")}.${kept.length ? ` Not changed by this tool: ${kept.join("; ")}. The old admin key no longer works there: their owner must give those pipeline servers new S3 keys.` : ""} Restart the workbenches and model deployments that use Connection rhoai-nightly-updater-s3, and workbenches that run pipelines, so they pick up the new key.`;
   let n = 0;
   for (const step of [...steps, { step: "operation_complete", status: "success", message: done }]) {
     n += 1;

@@ -20,6 +20,13 @@ import { secureServerStep, type MigrateRun } from "./useMigrateStorage";
 
 const codes = (items: string[]) => items.map((n, i) => <React.Fragment key={n}>{i > 0 ? ", " : ""}<code>{n}</code></React.Fragment>);
 
+/** KeepOldKey entries ("ns/name (reason)"): the name as code, the reason as words that do not wrap. */
+const keptNodes = (items: string[]) => items.map((entry, i) => {
+  const at = entry.indexOf(" (");
+  const name = at < 0 ? entry : entry.slice(0, at);
+  return <React.Fragment key={entry}>{i > 0 ? ", " : ""}<code>{name}</code>{at >= 0 && <> <span style={{ whiteSpace: "nowrap" }}>{entry.slice(at + 1)}</span></>}</React.Fragment>;
+});
+
 /** Pipeline servers associated with a run, ordered the same way pkg/cluster keyServers returns them. */
 export const secureServers = (keys: S3KeysState | null | undefined) => [...(keys?.oldKey ?? []), ...(keys?.ownKey ?? [])].sort();
 
@@ -36,7 +43,7 @@ const SecurePlan: React.FC<{ keys: S3KeysState }> = ({ keys }) => {
         <Content component="p">
           {keys.secured
             ? "Finishes giving each pipeline server this tool set up a key of its own. Takes a few seconds per pipeline server."
-            : "Gives the S3 storage a new admin key, which goes into no project, and gives each pipeline server this tool set up a SeaweedFS key of its own. The old admin key, which every pipeline project holds, stops working. Takes up to 2 minutes; stored data is kept."}
+            : "Gives the S3 storage a new admin key, kept out of every project, and each pipeline server this tool set up a key of its own (SeaweedFS user rnu-dspa-<project>, one per project). The old admin key, which every pipeline project holds, stops working. Takes up to 2 minutes; stored data is kept."}
         </Content>
       </StackItem>
       <StackItem>
@@ -47,13 +54,13 @@ const SecurePlan: React.FC<{ keys: S3KeysState }> = ({ keys }) => {
       <StackItem>
         <Content component="p">This changes the shared cluster:</Content>
         <List>
-          {!keys.secured && <ListItem>SeaweedFS restarts with a new admin key in Secret <code>seaweedfs-s3-credentials</code>, and with IAM writes on, so the admin key can make a key for each pipeline server.</ListItem>}
+          {!keys.secured && <ListItem>SeaweedFS restarts with a new admin key in Secret <code>seaweedfs-s3-credentials</code> and with per-server keys turned on: the admin key can then make a key for each pipeline server, and a pipeline server&apos;s key cannot make keys.</ListItem>}
           <ListItem>
             {servers.length > 0
               ? <>These pipeline servers get a key of their own, checked against the storage before it is written into their Secrets <code>nightly-dspa-s3</code> and <code>rhoai-nightly-updater-s3</code> (the dashboard Connection): {codes(servers)}.</>
               : <>No pipeline server this tool recorded uses the old key.</>}
           </ListItem>
-          {kept.length > 0 && <ListItem>Not changed by this tool; they keep the old key, which then no longer works: {codes(kept)}.</ListItem>}
+          {kept.length > 0 && <ListItem>Not changed by this tool; they keep the old admin key, which then no longer works, and their owner must give them new S3 keys: {keptNodes(kept)}.</ListItem>}
           <ListItem>If it stops part-way, the storage is secured and the pipeline servers not done yet keep the old key: running it again finishes them and skips the ones done.</ListItem>
         </List>
       </StackItem>
@@ -82,6 +89,8 @@ export const SecureStorageModal: React.FC<{
   const succeeded = finished && !!ownRun?.result?.success;
   // Primary button visible idle and after a non-success stop; success hides it until the user chooses to run again.
   const showAction = !!keys && !ownRun?.running && !succeeded;
+  // Servers this tool did not give a key keep the old admin key, which no longer works: read from the live status.
+  const leftBehind = !!keys?.secured && (keys.keepOldKey ?? []).length > 0;
   const waiting = ownRun?.result && (ownRun.result.errorCode === "in_progress" || ownRun.result.errorCode === "detached");
   return (
     <Modal aria-labelledby={titleId} variant={ModalVariant.medium} isOpen={isOpen} onClose={onClose}>
@@ -91,8 +100,8 @@ export const SecureStorageModal: React.FC<{
           {ownRun && <StackItem><RunProgress run={ownRun} /></StackItem>}
           {ownRun?.result && (
             <StackItem>
-              <Alert component="p" isInline isLiveRegion variant={ownRun.result.success ? "success" : waiting ? "info" : "danger"}
-                title={ownRun.result.success ? "The S3 storage is secured" : waiting ? "Still running" : "Stopped"}>
+              <Alert component="p" isInline isLiveRegion variant={ownRun.result.success ? (leftBehind ? "warning" : "success") : waiting ? "info" : "danger"}
+                title={ownRun.result.success ? (leftBehind ? "The S3 storage is secured; some pipeline servers lost their S3 access" : "The S3 storage is secured") : waiting ? "Still running" : "Stopped"}>
                 {ownRun.result.message}
               </Alert>
             </StackItem>

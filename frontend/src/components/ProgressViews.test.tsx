@@ -73,7 +73,7 @@ describe("View progress: a run of this page whose dialog was closed", () => {
     await within(run).findByText("Creating...");
     fireEvent.click(footerClose(run));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(screen.getByText(/^Set up Pipelines in dev is running: step 2 of 3, Set up the S3 storage \(\d+s\)$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Set up Pipelines in dev is running: step 2 of 3, set up the S3 storage \(\d+s\)$/)).toBeInTheDocument();
     await act(async () => finish(jsonResponse({ success: false, message: "Refused.", errorCode: "validation", logs: [] })));
     await settleApps();
   });

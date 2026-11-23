@@ -102,7 +102,7 @@ export function streamMigrateStorage(
 
 /**
  * Runs Secure S3 storage over SSE: steps "check", "rollout" (a new admin key
- * with IAM writes on), then "server:<namespace>/<name>" for each pipeline
+ * and per-server keys turned on), then "server:<namespace>/<name>" for each pipeline
  * server this tool recorded. Yields an AbortController so the client can
  * detach; work keeps running on the server.
  */

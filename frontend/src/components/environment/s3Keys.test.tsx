@@ -7,7 +7,7 @@ import { sseEvent, sseResponse } from "../../test/utils";
 import type { ResourceState, ResourcesStatus, S3KeysState } from "../../types";
 import { NOT_SECURED, SECURE_FIRST, storageNotReadyReason } from "./featureState";
 
-const readyMinio: ResourceState = { deployed: true, ready: true, managedByTool: true, namespace: "seaweedfs", message: "Running", uiUser: "admin", uiRoute: "https://seaweedfs-admin.apps.example.com", usedBy: ["dev/dspa", "team-b/dspa"] };
+const readyMinio: ResourceState = { deployed: true, ready: true, managedByTool: true, namespace: "seaweedfs", message: "Running", uiUser: "admin", uiRoute: "https://seaweedfs-admin.apps.example.com", usedBy: ["dev/dspa", "hand/dspa", "team-b/dspa", "unrec/dspa"] };
 const none: ResourceState = { deployed: false, ready: false, managedByTool: false, message: "Not deployed" };
 const dspa: ResourceState = { deployed: true, ready: true, managedByTool: true, namespace: "dev", name: "dspa", message: "Running", uiRoute: "https://dash/dev" };
 const notSecured: S3KeysState = {
@@ -35,12 +35,17 @@ describe("S3 storage that is not secured", () => {
     const storage = await part("SeaweedFS");
     expect(within(storage).getByText(NOT_SECURED)).toBeInTheDocument();
     expect(screen.getByText("Every pipeline project holds the S3 storage's admin key")).toBeInTheDocument();
-    expect(storage.querySelector('dl[aria-label="S3 keys"]')).toHaveTextContent(/Old shared key\s*dev\/dspa, team-b\/dspa/);
+    // One list: each server that uses the storage with the key it uses; the reason is words, not code.
+    const usedBy = storage.querySelector('dl[aria-label="S3 storage details"]') as HTMLElement;
+    expect(usedBy).toHaveTextContent("dev/dspa: the shared admin key");
+    expect(usedBy).toHaveTextContent("unrec/dspa: the shared admin key, kept after Secure S3 storage (not recorded as this tool's)");
+    expect(within(usedBy).getByText("(not recorded as this tool's)").closest("code")).toBeNull();
+    expect(usedBy).toHaveTextContent("Admin access key");
     unmount();
 
     const p = renderAt("/test-resources?tab=pipelines&project=dev");
     expect(within(await part("S3 storage")).getByText(NOT_SECURED)).toBeInTheDocument();
-    expect(await part("S3 storage")).toHaveTextContent("Secure S3 storage, on the S3 storage tab, gives each pipeline server a key of its own");
+    expect(await part("S3 storage")).toHaveTextContent("holds the S3 storage's admin key. Secure S3 storage, on the S3 storage tab, gives each pipeline server this tool set up a key of its own");
     p.unmount();
 
     renderAt("/test-resources");
@@ -61,7 +66,8 @@ describe("S3 storage that is not secured", () => {
     const dialog = await screen.findByRole("dialog", { name: "Secure the S3 storage?" });
     expect(dialog).toHaveTextContent("The old admin key, which every pipeline project holds, stops working.");
     expect(dialog).toHaveTextContent(/These pipeline servers get a key of their own.*dev\/dspa, team-b\/dspa/);
-    expect(dialog).toHaveTextContent(/they keep the old key, which then no longer works: hand\/dspa \(not created by this tool\), unrec\/dspa \(not recorded as this tool's\)/);
+    expect(dialog).toHaveTextContent(/they keep the old admin key, which then no longer works, and their owner must give them new S3 keys: hand\/dspa \(not created by this tool\), unrec\/dspa \(not recorded as this tool's\)/);
+    expect(dialog).not.toHaveTextContent(/IAM/);
     expect(dialog).toHaveTextContent("Pipeline runs in progress may fail");
     expect(dialog).toHaveTextContent("restart them afterwards");
     expect(dialog).toHaveTextContent("running it again finishes them and skips the ones done");
@@ -69,7 +75,7 @@ describe("S3 storage that is not secured", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Secure S3 storage" }));
     const progress = await within(dialog).findByRole("list", { name: "Secure S3 storage progress" });
     // Every step is listed from the start, one per recorded pipeline server.
-    for (const title of ["Check the S3 storage and its pipeline servers", "Roll out a new admin key with IAM writes on", "Give dev/dspa a key of its own", "Give team-b/dspa a key of its own"]) {
+    for (const title of ["Check the S3 storage and its pipeline servers", "Roll out a new admin key and turn on per-server keys", "Give dev/dspa a key of its own", "Give team-b/dspa a key of its own"]) {
       expect(progress).toHaveTextContent(title);
     }
     run.push(sseEvent("check", "success", "OK: 2 pipeline servers to give a key of its own"));
@@ -105,7 +111,7 @@ describe("S3 storage that is not secured", () => {
           r.push(sseEvent("server:team-b/dspa", "failed", stopped, { errorCode: "s3_keys" }));
           r.push(sseEvent("operation_complete", "failed", stopped, { errorCode: "s3_keys" }));
         } else {
-          r.push(sseEvent("rollout", "skipped", "The S3 storage already runs with a new admin key and IAM writes on"));
+          r.push(sseEvent("rollout", "skipped", "The S3 storage already runs with a new admin key and per-server keys"));
           r.push(sseEvent("server:dev/dspa", "success", "OK: dev/dspa already uses its own key"));
           r.push(sseEvent("operation_complete", "success", "The S3 storage is secured: it has a new admin key, which is in no project. On a key of their own: dev/dspa, team-b/dspa."));
         }
@@ -139,11 +145,24 @@ describe("S3 storage that is not secured", () => {
     const dialog = await screen.findByRole("dialog", { name: "Secure the S3 storage?" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Secure S3 storage" }));
     run.push(sseEvent("check", "success", "OK"));
-    run.push(sseEvent("rollout", "running", "Rolling out a new admin key with IAM writes on..."));
-    expect(await within(dialog).findByText("Rolling out a new admin key with IAM writes on...")).toBeInTheDocument();
+    run.push(sseEvent("rollout", "running", "Rolling out a new admin key and turning on per-server keys..."));
+    expect(await within(dialog).findByText("Rolling out a new admin key and turning on per-server keys...")).toBeInTheDocument();
     run.fail();
     const outcome = (await within(dialog).findByText("Still running", {}, { timeout: 5000 })).closest(".pf-v6-c-alert") as HTMLElement;
     expect(outcome).toHaveTextContent("The operation continues on the server; the S3 storage tab shows the outcome when it ends.");
+  });
+
+  it("after Secure: servers this tool did not set up are named as having lost their S3 access; the storage says it is secured", async () => {
+    const after: S3KeysState = { secured: true, needsSecuring: false, ownKey: ["dev/dspa", "team-b/dspa"], keepOldKey: ["unrec/dspa (not recorded as this tool's)"] };
+    stubApi({ "/api/resources/status": statusOf({ minio: { ...readyMinio, usedBy: ["dev/dspa", "team-b/dspa", "unrec/dspa"] }, pipelineServers: [dspa], s3Keys: after }), "/api/resources/projects": { projects: ["dev"] } });
+    renderAt("/test-resources?tab=storage");
+    const alert = (await screen.findByText("This pipeline server lost its S3 access")).closest(".pf-v6-c-alert") as HTMLElement;
+    expect(alert).toHaveTextContent("unrec/dspa (not recorded as this tool's) uses the S3 storage");
+    expect(alert).toHaveTextContent("The old admin key no longer works: its owner must give that pipeline server new S3 keys.");
+    const details = (await part("SeaweedFS")).querySelector('dl[aria-label="S3 storage details"]') as HTMLElement;
+    expect(details).toHaveTextContent("unrec/dspa: the old admin key, which no longer works (not recorded as this tool's)");
+    expect(details).toHaveTextContent("dev/dspa: its own key");
+    expect(details).toHaveTextContent("Each pipeline server this tool set up has its own key");
   });
 
   it("a reader sees the state but no Secure action", async () => {
@@ -159,16 +178,25 @@ describe("S3 storage that is not secured", () => {
     renderAt("/test-resources?tab=pipelines&project=new");
     const setUp = await screen.findByRole("button", { name: "Set up Pipelines in new" });
     expect(setUp).toHaveAttribute("aria-disabled", "true");
-    expect(setUp).toHaveAccessibleDescription(/Secure S3 storage, on the S3 storage tab/);
+    expect(setUp).toHaveAccessibleDescription(/Secure the S3 storage first \(S3 storage tab\)/);
     expect(storageNotReadyReason(readyMinio, null, false, notSecured)).toBe(SECURE_FIRST);
     expect(storageNotReadyReason(readyMinio, null, false, secured)).toBeNull();
+  });
+
+  it("secured storage with one server left on the old key: a new project can still set up Pipelines (review 4)", async () => {
+    stubApi({ "/api/resources/status": statusOf({ minio: readyMinio, pipelineServers: [dspa], s3Keys: { secured: true, needsSecuring: true, ownKey: ["dev/dspa"], oldKey: ["team-b/dspa"] } }), "/api/resources/projects": { projects: ["dev", "new"] } });
+    renderAt("/test-resources?tab=pipelines&project=new");
+    const setUp = await screen.findByRole("button", { name: "Set up the pipeline server in new" });
+    expect(setUp).not.toHaveAttribute("aria-disabled", "true");
+    // The storage still says what is unfinished.
+    expect(within(await part("S3 storage")).getByText(NOT_SECURED)).toBeInTheDocument();
   });
 
   it("secured storage with one server left on the old key: still Not secured, and Set up works", async () => {
     stubApi({ "/api/resources/status": statusOf({ minio: readyMinio, pipelineServers: [dspa], s3Keys: { secured: true, needsSecuring: true, ownKey: ["dev/dspa"], oldKey: ["team-b/dspa"] } }), "/api/resources/projects": { projects: ["dev", "new"] } });
     renderAt("/test-resources?tab=storage");
     await waitFor(() => expect(headerLabel("S3 storage")).toHaveTextContent(/^Not secured$/));
-    expect(screen.getByText("Some pipeline servers still use the old key")).toBeInTheDocument();
-    expect(await part("SeaweedFS")).toHaveTextContent(/Own key\s*dev\/dspa/);
+    expect(screen.getByText("Some pipeline servers still use the old admin key")).toBeInTheDocument();
+    expect(await part("SeaweedFS")).toHaveTextContent("dev/dspa: its own key");
   });
 });

@@ -124,7 +124,7 @@ export const storageNeedsSecuring = (status: ResourcesStatus | null) =>
   !!status?.s3Keys?.needsSecuring && !!status.minio?.ready && status.legacyStorage?.stage !== "migrate";
 
 /** Why Set up does not give a new project a pipeline server while the storage is not secured (pkg/cluster SecureFirstReason). */
-export const SECURE_FIRST = "Available once Secure S3 storage, on the S3 storage tab, has secured the S3 storage: until then a new pipeline server would get the admin key every pipeline project of an earlier version holds.";
+export const SECURE_FIRST = "Secure the S3 storage first (S3 storage tab): until then a new pipeline server would get the shared admin key.";
 
 /** True when setup may provision storage: absent and unblocked. */
 /** The one label of the storage while an earlier version's storage still holds the data: the same on every tab and row. */
@@ -230,11 +230,15 @@ function pipelinesIn(status: ResourcesStatus | null, project: string, busy: Busy
   const unmanaged = parts.some((p) => p.unmanaged);
   const problem = parts.find((p) => PROBLEM.includes(p.status));
   // Not secured, with no pipeline server here yet: Set up stays, disabled with why (Secure S3 storage first).
-  if (problem?.id === "storage" && storageNeedsSecuring(status) && status?.s3Keys?.secured === false && server.status === "not-set-up" && !server.unmanaged) {
+  const newServer = server.status === "not-set-up" && !server.unmanaged;
+  if (problem?.id === "storage" && storageNeedsSecuring(status) && status?.s3Keys?.secured === false && newServer) {
     return { status: problem.status, label: NOT_SECURED, next: { kind: "set-up", label: `Set up Pipelines in ${project}`, setup: [], reason: SECURE_FIRST }, project };
   }
-  if (problem?.id === "storage") return { status: problem.status, label: storageProblemLabel(status, problem.status), ...owner(problem.unmanaged), next: { kind: "show-issue", part: "storage" }, project };
-  if (problem) return { status: problem.status, label: `${envStatusText(problem.status)} in ${project}`, ...owner(problem.unmanaged), next: issueStep(status, problem.id), project };
+  // Secured storage with servers still on the old key: a new pipeline server gets its own key, so Set up stays
+  // (the storage's own label and the Secure action say what is unfinished).
+  const secureUnfinished = problem?.id === "storage" && storageNeedsSecuring(status) && status?.s3Keys?.secured === true && newServer;
+  if (problem?.id === "storage" && !secureUnfinished) return { status: problem.status, label: storageProblemLabel(status, problem.status), ...owner(problem.unmanaged), next: { kind: "show-issue", part: "storage" }, project };
+  if (problem && !secureUnfinished) return { status: problem.status, label: `${envStatusText(problem.status)} in ${project}`, ...owner(problem.unmanaged), next: issueStep(status, problem.id), project };
   const moving = parts.find((p) => MOVING.includes(p.status));
   // Ready once the pipeline server is, atop ready storage; foreign servers store
   // artifacts elsewhere, so our storage is not a prerequisite for them.

@@ -10,6 +10,8 @@ import {
   DescriptionListDescription,
   DescriptionListGroup,
   DescriptionListTerm,
+  List,
+  ListItem,
   Stack,
   StackItem,
 } from "@patternfly/react-core";
@@ -143,51 +145,60 @@ const MigrationAlert: React.FC<{ legacy: LegacyStorageState; reason: string | nu
 
 /** Tab-top banner while the storage is not secured: why it matters and what Secure S3 storage does. */
 const NotSecuredAlert: React.FC<{ keys: S3KeysState; readOnly: boolean }> = ({ keys, readOnly }) => (
-  <Alert variant="warning" isInline component="div" title={keys.secured ? "Some pipeline servers still use the old key" : "Every pipeline project holds the S3 storage's admin key"}>
+  <Alert variant="warning" isInline component="div" title={keys.secured ? "Some pipeline servers still use the old admin key" : "Every pipeline project holds the S3 storage's admin key"}>
     <Content component="p">
       {keys.secured
-        ? "Secure S3 storage stopped before every pipeline server had a key of its own. Running it again finishes the rest."
-        : "An earlier version gave the storage's admin key to every pipeline project: anyone who can read a Secret in one of them can read, change or delete everything in the storage. Secure S3 storage gives the storage a new admin key and each pipeline server a key of its own; new pipeline servers can be set up once it has run."}
+        ? "Secure S3 storage stopped before every pipeline server this tool set up had a key of its own. Running it again finishes the rest."
+        : "An earlier version gave the storage's admin key to every pipeline project: anyone who can read a Secret in one of them can read, change or delete everything in the storage. Secure S3 storage gives the storage a new admin key and each pipeline server this tool set up a key of its own; new pipeline servers can be set up once it has run."}
     </Content>
     {readOnly && <Content component="p">A cluster-admin runs it.</Content>}
   </Alert>
 );
 
-/** Which key each pipeline server on the storage uses. */
-const KeysDetails: React.FC<{ keys: S3KeysState }> = ({ keys }) => {
-  const own = keys.ownKey ?? [];
-  const old = keys.oldKey ?? [];
-  const kept = keys.keepOldKey ?? [];
-  if (own.length + old.length + kept.length === 0 && !keys.checkError) return null;
+/** The name and the reason of a KeepOldKey entry ("ns/name (reason)"). */
+const keptEntry = (entry: string) => {
+  const i = entry.indexOf(" (");
+  return i < 0 ? { name: entry, reason: "" } : { name: entry.slice(0, i), reason: entry.slice(i + 2, -1) };
+};
+
+/** After Secure S3 storage: pipeline servers this tool did not give a key of their own, whose old admin key no longer works. */
+const OldKeyAlert: React.FC<{ keys: S3KeysState }> = ({ keys }) => {
+  const kept = (keys.keepOldKey ?? []).map(keptEntry);
   return (
-    <DescriptionList isCompact isHorizontal aria-label="S3 keys">
-      {own.length > 0 && (
-        <DescriptionListGroup>
-          <DescriptionListTerm>Own key</DescriptionListTerm>
-          <DescriptionListDescription>{joinNodes(own.map((n) => <code key={n}>{n}</code>))}</DescriptionListDescription>
-        </DescriptionListGroup>
-      )}
-      {old.length > 0 && (
-        <DescriptionListGroup>
-          <DescriptionListTerm>Old shared key</DescriptionListTerm>
-          <DescriptionListDescription>{joinNodes(old.map((n) => <code key={n}>{n}</code>))}</DescriptionListDescription>
-        </DescriptionListGroup>
-      )}
-      {kept.length > 0 && (
-        <DescriptionListGroup>
-          <DescriptionListTerm>Not changed by this tool</DescriptionListTerm>
-          <DescriptionListDescription>{joinNodes(kept.map((n) => <code key={n}>{n}</code>))}</DescriptionListDescription>
-        </DescriptionListGroup>
-      )}
-      {keys.checkError && (
-        <DescriptionListGroup>
-          <DescriptionListTerm>Keys</DescriptionListTerm>
-          <DescriptionListDescription>{keys.checkError}</DescriptionListDescription>
-        </DescriptionListGroup>
-      )}
-    </DescriptionList>
+    <Alert variant="warning" isInline component="div" title={kept.length > 1 ? "These pipeline servers lost their S3 access" : "This pipeline server lost its S3 access"}>
+      <Content component="p">
+        {joinNodes(kept.map((k) => <React.Fragment key={k.name}><code>{k.name}</code>{k.reason && <> <span style={{ whiteSpace: "nowrap" }}>({k.reason})</span></>}</React.Fragment>))}{" "}
+        {kept.length > 1 ? "use" : "uses"} the S3 storage, but this tool did not set {kept.length > 1 ? "them" : "it"} up, so Secure S3 storage did not give {kept.length > 1 ? "them keys" : "it a key"} of {kept.length > 1 ? "their" : "its"} own.
+        The old admin key no longer works: {kept.length > 1 ? "their owners must give them" : "its owner must give that pipeline server"} new S3 keys.
+      </Content>
+    </Alert>
   );
 };
+
+/** What key one pipeline server on the storage uses, in words, or null without the key state. */
+function keyStateOf(name: string, keys: S3KeysState | null | undefined): React.ReactNode {
+  if (!keys) return null;
+  if (keys.ownKey?.includes(name)) return "its own key";
+  if (keys.oldKey?.includes(name)) return keys.secured ? "still on the admin key, which no longer works: run Secure S3 storage again" : "the shared admin key";
+  const kept = (keys.keepOldKey ?? []).map(keptEntry).find((k) => k.name === name);
+  if (kept) {
+    const why = kept.reason ? <> <span style={{ whiteSpace: "nowrap" }}>({kept.reason})</span></> : null;
+    return keys.secured ? <>the old admin key, which no longer works{why}</> : <>the shared admin key, kept after Secure S3 storage{why}</>;
+  }
+  return null;
+}
+
+/** The pipeline servers that use the storage, each with the key it uses. */
+const UsedBy: React.FC<{ usedBy: string[]; keys: S3KeysState | null | undefined }> = ({ usedBy, keys }) => (
+  keys ? (
+    <List isPlain>
+      {usedBy.map((u) => {
+        const state = keyStateOf(u, keys);
+        return <ListItem key={u}><code>{u}</code>{state && <>: {state}</>}</ListItem>;
+      })}
+    </List>
+  ) : <>{joinNodes(usedBy.map((u) => <code key={u}>{u}</code>))}</>
+);
 
 /** Cluster-scoped S3 block: SeaweedFS in seaweedfs, or legacy storage awaiting migration. */
 const StoragePart: React.FC<StorageTabProps> = ({ status, busy, baseReason, readOnly, readReason, minioLeftovers, consoleURL, setPending, onMigrate, onRemoveOldStorage, onSecure }) => {
@@ -247,7 +258,6 @@ const StoragePart: React.FC<StorageTabProps> = ({ status, busy, baseReason, read
           logsHref={consolePodsHref(consoleURL, S3_NAMESPACE, "seaweedfs")} />
       )}
       {deployed && !minio?.ready && !terminalReason(minio) && !isTerminating(minio) && <StartingNote state={minio!} typical="under a minute" />}
-      {keys && deployed && !legacy && <KeysDetails keys={keys} />}
       {deployed && (
         <DescriptionList isCompact isHorizontal aria-label="S3 storage details">
           <DescriptionListGroup>
@@ -265,17 +275,23 @@ const StoragePart: React.FC<StorageTabProps> = ({ status, busy, baseReason, read
           {usedBy.length > 0 && (
             <DescriptionListGroup>
               <DescriptionListTerm>Used by</DescriptionListTerm>
-              <DescriptionListDescription>{joinNodes(usedBy.map((u) => <code key={u}>{u}</code>))}</DescriptionListDescription>
+              <DescriptionListDescription><UsedBy usedBy={usedBy} keys={legacy ? null : keys} /></DescriptionListDescription>
+            </DescriptionListGroup>
+          )}
+          {keys && !legacy && (keys.checkError || (keys.secured && !keys.needsSecuring)) && (
+            <DescriptionListGroup>
+              <DescriptionListTerm>Keys</DescriptionListTerm>
+              <DescriptionListDescription>{keys.checkError ?? "Each pipeline server this tool set up has its own key; the admin key is in no project."}</DescriptionListDescription>
             </DescriptionListGroup>
           )}
           {!unmanaged && !readOnly && (
             <>
               <DescriptionListGroup>
-                <DescriptionListTerm>Access key</DescriptionListTerm>
+                <DescriptionListTerm>Admin access key</DescriptionListTerm>
                 <DescriptionListDescription><S3SecretField id="storage-access-key" field="accessKey" label="S3 access key" disabledReason={readReason} /></DescriptionListDescription>
               </DescriptionListGroup>
               <DescriptionListGroup>
-                <DescriptionListTerm>Secret key</DescriptionListTerm>
+                <DescriptionListTerm>Admin secret key</DescriptionListTerm>
                 <DescriptionListDescription>
                   <S3SecretField id="storage-secret-key" field="secretKey" label="S3 secret key" disabledReason={readReason} />
                 </DescriptionListDescription>
@@ -337,6 +353,7 @@ export const StorageTab: React.FC<StorageTabProps> = (props) => {
       </StackItem>
       {legacy && <StackItem><MigrationAlert legacy={legacy} readOnly={readOnly} reason={busy.migrating ? "Migrate storage is running." : baseReason} /></StackItem>}
       {storageNeedsSecuring(status) && status.s3Keys && <StackItem><NotSecuredAlert keys={status.s3Keys} readOnly={readOnly} /></StackItem>}
+      {status.s3Keys?.secured && (status.s3Keys.keepOldKey ?? []).length > 0 && !legacy && <StackItem><OldKeyAlert keys={status.s3Keys} /></StackItem>}
       <StackItem>
         <PartList aria-label={`What ${TAB_TITLES.storage} needs`}>
           <StoragePart {...props} />
@@ -373,7 +390,7 @@ export const StoragePrerequisitePart: React.FC<{ status: ResourcesStatus; busy: 
     : legacy?.stage === "migrate" ? null
     : notSecured ? (status.s3Keys?.secured
       ? "Some pipeline servers still use the old shared key; Secure S3 storage, on the S3 storage tab, finishes giving each its own."
-      : "Every pipeline project still holds its admin key. Secure S3 storage, on the S3 storage tab, gives each pipeline server a key of its own; new pipeline servers can be set up after that.")
+      : "Every pipeline project still holds the S3 storage's admin key. Secure S3 storage, on the S3 storage tab, gives each pipeline server this tool set up a key of its own; new pipeline servers can be set up after that.")
     : s === "not-set-up" ? (minio?.setupBlockedReason ? "It can't be set up now; the S3 storage tab says why." : "Setting up a pipeline server sets it up first.")
     : s === "error" || s === "needs-attention" ? "The S3 storage tab says what needs attention."
     : null;

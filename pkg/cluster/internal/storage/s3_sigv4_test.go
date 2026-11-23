@@ -18,7 +18,7 @@ func TestSignV4KnownAnswers(t *testing.T) {
 	at := time.Date(2015, 8, 30, 12, 36, 0, 0, time.UTC)
 	cases := []struct {
 		name, method, url, service, want string
-		body                               []byte
+		body                             []byte
 	}{
 		{"s3 list", http.MethodGet, "http://seaweedfs-s3.seaweedfs.svc:8333/pipelines?" + canonicalQuery(url.Values{"list-type": {"2"}, "prefix": {"a b~c"}, "max-keys": {"1"}}), "s3",
 			"72338b26a0977685f67c79842e147b5eaa9f49e33ec6d61316360748fe19980a", nil},
