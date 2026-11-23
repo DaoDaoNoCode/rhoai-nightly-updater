@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QuickResourceCreator } from "../QuickResourceCreator";
 import { stubApi, jsonResponse } from "../../test/apiStub";
@@ -96,5 +96,23 @@ describe("this tool's objects outside Data Science projects", () => {
     expect(c.models).toEqual(["plain"]);
     expect(cleanupBlocked(status, { storage: true })).toMatch(/Select that pipeline server too/);
     expect(cleanupBlocked(status, { storage: true, pipelineServers: ["plain"] })).toBeNull();
+  });
+});
+
+// N1: Clean up lists what a fresh read finds, not the last snapshot.
+describe("opening Clean up", () => {
+  it("reads the status again", async () => {
+    const api = stubApi({
+      "/api/resources/status": { minio: readyMinio, mlflow: noMlflow, pipelineServers: [{ ...unrecordedDspa, unrecorded: false }] } satisfies ResourcesStatus,
+      "/api/resources/projects": { projects: ["juntao-test"] },
+    });
+    const reads = () => api.calls.filter((c) => c.startsWith("GET /api/resources/status")).length;
+    renderAt("/test-resources?tab=pipelines&project=juntao-test");
+    await screen.findByText("Pipeline server");
+    const open = screen.getAllByRole("button").find((b) => b.textContent?.includes("Clean up Pipelines"))!;
+    await waitFor(() => expect(reads()).toBe(1));
+    fireEvent.click(open);
+    await screen.findByRole("dialog");
+    await waitFor(() => expect(reads()).toBe(2));
   });
 });

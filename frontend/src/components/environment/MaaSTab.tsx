@@ -27,7 +27,7 @@ import {
 import { getMaaS, toApiError } from "../../services/api";
 import { usePolling } from "../../hooks/usePolling";
 import { useLatestRequest } from "../../hooks/useLatestRequest";
-import { RESOURCE_SETTLE_MAX_MS } from "../../constants";
+import { IDLE_REFRESH_MS, RESOURCE_SETTLE_MAX_MS } from "../../constants";
 import { ImageRef } from "../ImageRef";
 import { type ConfirmSpec, type MaaSPending, type Pending, ExternalLink, WarningAlert } from "./resourceRow";
 import { CleanupSection, CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, PartList, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
@@ -47,8 +47,10 @@ export function maasSettling(m: MaaSStatus | null): boolean {
 }
 
 /**
- * GET /api/resources/maas, read again when refreshKey changes and every few
- * seconds while something settles. Only the newest read's answer is shown.
+ * GET /api/resources/maas, read again when refreshKey changes, every few
+ * seconds while something settles, and otherwise every IDLE_REFRESH_MS while
+ * the browser tab is visible (one poller: the reads never overlap). Only the
+ * newest read's answer is shown.
  */
 export function useMaaSStatus(refreshKey: number, busy: boolean, enabled = true) {
   const [data, setData] = useState<MaaSStatus | null>(null);
@@ -72,10 +74,12 @@ export function useMaaSStatus(refreshKey: number, busy: boolean, enabled = true)
     setPollRound((n) => n + 1);
     void fetchNow();
   }, [fetchNow, refreshKey]);
+  const settling = busy || maasSettling(data);
   usePolling(fetchNow, {
-    enabled: enabled && (busy || maasSettling(data)),
-    restartKey: pollRound,
-    delay: ({ elapsedMs }) => (elapsedMs >= RESOURCE_SETTLE_MAX_MS ? null : MAAS_POLL_MS),
+    enabled,
+    // Settling starting or ending restarts the poller on the other pace.
+    restartKey: `${pollRound}|${settling}`,
+    delay: ({ elapsedMs }) => (settling && elapsedMs < RESOURCE_SETTLE_MAX_MS ? MAAS_POLL_MS : IDLE_REFRESH_MS),
   });
   return { data, error, reload: fetchNow };
 }

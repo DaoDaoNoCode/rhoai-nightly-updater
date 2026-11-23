@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ResourcesStatus } from "../../types";
 import { getDSProjects, getResourcesStatus, toApiError, type ApiError } from "../../services/api";
 import { exponentialBackoff, usePolling } from "../../hooks/usePolling";
-import { RESOURCE_POLL_BASE_MS, RESOURCE_POLL_MAX_MS, RESOURCE_SETTLE_MAX_MS } from "../../constants";
+import { IDLE_REFRESH_MS, RESOURCE_POLL_BASE_MS, RESOURCE_POLL_MAX_MS, RESOURCE_SETTLE_MAX_MS } from "../../constants";
 import { useLatestRequest } from "../../hooks/useLatestRequest";
 
 /**
@@ -96,4 +96,13 @@ export function useSettlePolling(fetch: () => Promise<void>, active: boolean) {
     setRound((n) => n + 1);
   };
   return { gaveUp, restart };
+}
+
+/**
+ * While enabled (nothing settles, so no other poller reads), reads again
+ * every IDLE_REFRESH_MS while the browser tab is visible and at once when it
+ * becomes visible again; the reads never overlap (createPoller is sequential).
+ */
+export function useIdleRefresh(fetch: () => unknown, enabled: boolean) {
+  usePolling(fetch, { enabled, delay: IDLE_REFRESH_MS, pauseWhenHidden: true, refreshOnVisible: true });
 }

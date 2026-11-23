@@ -217,6 +217,14 @@ Template revision 8—full redeploy required ([UPGRADING.md](docs/UPGRADING.md#u
   pipeline server one "this tool did not create". The Pipelines and Models
   tabs now name them ("no longer a data science project") with Delete, and
   Clean up offers them as this tool's.
+- **The Environment page follows the cluster on its own.** Once nothing
+  was starting or being deleted, the page never read the cluster again
+  until you clicked Refresh, so something deleted elsewhere kept its row and
+  its Delete and Clean up buttons. The status, MaaS and the prerequisites
+  are now read again every 45 seconds while the browser tab is visible
+  (never while it is hidden, at once when you come back, one read at a
+  time), and opening Clean up reads the status again before it lists what
+  goes.
 - **A DataScienceCluster change applies only to the DSC it was checked
   on.** The Components page's changes (a component's state, Fix, soft
   reset) and Diagnostics' disable-component fix tested only the fields

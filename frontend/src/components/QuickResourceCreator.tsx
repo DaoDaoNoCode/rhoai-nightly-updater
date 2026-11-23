@@ -54,7 +54,7 @@ import { PrerequisitesSection, RECOMMENDED_EXPOSURE, headerWithPrerequisites, pr
 import type { ModelExposureKind, PrerequisiteFeature } from "../types";
 import { BUSY_REASON, PROJECT_TABS, TAB_PARTS, TAB_TITLES, ENVIRONMENT_TABS, type EnvironmentTab } from "./environment/environmentTabs";
 import { useEnvironmentLocation } from "./environment/useEnvironmentLocation";
-import { useResourceStatus, useSettlePolling } from "./environment/useResourceStatus";
+import { useIdleRefresh, useResourceStatus, useSettlePolling } from "./environment/useResourceStatus";
 import { environmentActions, useRunState } from "./environment/environmentRuns";
 import { environmentProjectNames, modelsProjectOptions, pipelinesProjectOptions, playgroundProjectOptions } from "./environment/projectOptions";
 import { overviewRows as buildOverviewRows } from "./environment/overviewRows";
@@ -111,7 +111,10 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     sampleOp, samplesRefresh, modelsOp, playgroundOp, playgroundRefresh, maasOp, maasRefresh, prereqRefresh, checking, checkError } = runs;
   // Poll quickly after a change, back off to 30 s, stop after 10 minutes or
   // once nothing is settling; hidden tabs don't poll (A06-5).
-  const polling = useSettlePolling(fetchResources, !!resAction || resourcesSettling || !!run.run?.running);
+  const settlingNow = !!resAction || resourcesSettling || !!run.run?.running;
+  const polling = useSettlePolling(fetchResources, settlingNow);
+  // Otherwise a slow re-read, so something deleted or changed elsewhere goes away on its own.
+  useIdleRefresh(fetchResources, !settlingNow || polling.gaveUp);
 
   const [migrateKind, setMigrateKind] = useState<MigrateKind | null>(null);
   const migration = useMigrateStorage(useCallback(() => { void fetchResources(); }, [fetchResources]));
@@ -129,6 +132,23 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const [modelsExposure, setModelsExposure] = useState<ModelExposureKind | null>(null);
   const prereqRead = usePrerequisites(prereqRefresh, tab === "models" ? modelsExposure : RECOMMENDED_EXPOSURE, tab !== "maas");
   const prereq = prereqRead.data;
+  // Clean up lists what a fresh read finds, not the last snapshot: opening it
+  // reads the status, MaaS and the playgrounds again (a read that is enabled
+  // only for Clean up starts on its own).
+  const freshReads = useRef({ resources: fetchResources, maas: maasRead.reload, playground: playgroundRead.reload });
+  freshReads.current = { resources: fetchResources, maas: maasRead.reload, playground: playgroundRead.reload };
+  const cleanupOpen = !!cleanupScope;
+  useEffect(() => {
+    if (!cleanupOpen) return;
+    const r = freshReads.current;
+    void r.resources();
+    if (tab === "overview") {
+      void r.maas();
+      void r.playground();
+    }
+    // Only when Clean up opens; tab is the one it opened on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cleanupOpen]);
   useEffect(() => {
     if (!searchParams.has("project")) setPlaygroundDefault(defaultPlaygroundProject(pg, null));
   }, [pg, searchParams]);
