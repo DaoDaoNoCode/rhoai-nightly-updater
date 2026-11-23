@@ -55,7 +55,10 @@ type fakeRecipeStep struct {
 
 func (f *recipeFake) addStep(id string) *fakeRecipeStep {
 	s := &fakeRecipeStep{id: id, result: &types.OperationResponse{Success: true, Message: id + " set up"}, started: make(chan struct{}), release: make(chan struct{})}
+	// A run still ending may read the steps meanwhile (a test's save hook).
+	f.mu.Lock()
 	f.steps = append(f.steps, s)
+	f.mu.Unlock()
 	return s
 }
 
