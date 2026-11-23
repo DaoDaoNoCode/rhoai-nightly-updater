@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
-	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -58,7 +57,7 @@ var secureEvents []UpdateStepEvent
 func secureRun(t *testing.T, c *Client) (*types.OperationResponse, error) {
 	t.Helper()
 	secureEvents = nil
-	return SecureS3Storage(c, func(e UpdateStepEvent) { secureEvents = append(secureEvents, e) })
+	return SecureS3Storage(c, nil, func(e UpdateStepEvent) { secureEvents = append(secureEvents, e) })
 }
 
 // lastStatuses is each step's last status, in the order the steps began.
@@ -115,7 +114,7 @@ func TestSecureS3_GivesEachRecordedPipelineServerItsOwnKey(t *testing.T) {
 	if ks == nil || ks.Secured || !ks.NeedsSecuring || strings.Join(ks.OldKey, ",") != "team-a/dspa,team-b/dspa" || len(ks.OwnKey) != 0 {
 		t.Fatalf("before: %+v", ks)
 	}
-	if got := strings.Join(ks.KeepOldKey, "; "); got != "dashboard/dspa (not set up by this tool); unrecorded/dspa (not set up by this tool)" {
+	if got := strings.Join(ks.KeepOldKey, "; "); got != "dashboard/dspa (not set up by this tool); unrecorded/dspa (not recorded by this tool)" {
 		t.Errorf("kept = %q", got)
 	}
 	// Status reads alone must not mutate the cluster or auto-run securing.
@@ -161,7 +160,7 @@ func TestSecureS3_GivesEachRecordedPipelineServerItsOwnKey(t *testing.T) {
 	if !sawEvent("rollout", "Waiting up to") {
 		t.Error("the rollout's progress is not streamed")
 	}
-	for _, want := range []string{"On a key of their own: team-a/dspa, team-b/dspa.", "Not set up by this tool: dashboard/dspa, unrecorded/dspa.", "Restart the workbenches"} {
+	for _, want := range []string{"On a key of their own: team-a/dspa, team-b/dspa.", "Left on the old admin key, which no longer works: dashboard/dspa (not set up by this tool), unrecorded/dspa (not recorded by this tool).", "Restart the workbenches"} {
 		if !strings.Contains(resp.Message, want) {
 			t.Errorf("message lacks %q: %s", want, resp.Message)
 		}
@@ -245,7 +244,7 @@ func TestSecureS3_StopsOnAFailedProbeAndResumes(t *testing.T) {
 	resp, _ := secureRun(t, c)
 	// The storage is secured; one server is left: a warning outcome
 	// ("partial") that names it and says a re-run finishes it.
-	if !resp.Success || resp.ErrorCode != "partial" || !strings.Contains(resp.Message, "team-b/dspa still uses the old key") ||
+	if !resp.Success || resp.ErrorCode != "partial" || !strings.Contains(resp.Message, "team-b/dspa did not get its own key") ||
 		!strings.Contains(resp.Message, "On a key of their own: team-a/dspa.") || !strings.Contains(resp.Message, "Run Secure S3 storage again") {
 		t.Fatalf("first run: %+v", resp)
 	}
@@ -470,7 +469,7 @@ func TestSecureS3_RetriesAFailedAnnotation(t *testing.T) {
 	readyAfterApply(f)
 	f.fail["PATCH "+dspaPath("team-b", storage.DSPAName)] = 500
 	resp, _ := secureRun(t, c)
-	if resp.ErrorCode != "partial" || !strings.Contains(resp.Message, "team-b/dspa still uses the old key") {
+	if resp.ErrorCode != "partial" || !strings.Contains(resp.Message, "team-b/dspa did not get its own key") {
 		t.Fatalf("first run: %+v", resp)
 	}
 	id := assertScopedKey(t, f, "team-b")
@@ -588,8 +587,8 @@ func TestSecureS3_StopsBeforeAServerWhenTimeRunsOut(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	secureEvents = nil
-	resp, _ := SecureS3Storage(c.WithContext(ctx), func(e UpdateStepEvent) { secureEvents = append(secureEvents, e) })
-	if resp.Success || resp.ErrorCode != "in_progress" || !strings.Contains(resp.Message, "run Secure S3 storage again") {
+	resp, _ := SecureS3Storage(c.WithContext(ctx), nil, func(e UpdateStepEvent) { secureEvents = append(secureEvents, e) })
+	if resp.Success || resp.ErrorCode != "out_of_time" || strings.Count(resp.Message, "Secure S3 storage again") != 1 {
 		t.Fatalf("got %+v", resp)
 	}
 	if got := secretValue(t, f, secretPath("team-a", storage.DSPASecretName), storage.S3AccessKeyField); got != oldAdminID {
@@ -598,8 +597,9 @@ func TestSecureS3_StopsBeforeAServerWhenTimeRunsOut(t *testing.T) {
 }
 
 // M2: a pipeline server deleted while SeaweedFS failed leaves its user;
-// the status lists it and Repair deletes it (keys first).
-func TestS3Keys_LeftoverUserListedAndRemovedByRepair(t *testing.T) {
+// the status lists it, Repair keeps it (no side effect), and Remove
+// leftover keys deletes it (keys first).
+func TestS3Keys_LeftoverUserListedAndRemovedOnlyByTheAction(t *testing.T) {
 	fastS3Timings(t)
 	fastPipelineTimings(t)
 	f, c := newResourceFake(t)
@@ -618,32 +618,42 @@ func TestS3Keys_LeftoverUserListedAndRemovedByRepair(t *testing.T) {
 	delete(f.sw.failIAM, "ListAccessKeys")
 	user := storage.ScopedUserName("proj")
 	st, _ := GetResourcesStatus(c)
-	if ks := st.S3Keys; ks == nil || strings.Join(ks.LeftoverUsers, ",") != user || !ks.NeedsSecuring {
+	if ks := st.S3Keys; ks == nil || strings.Join(ks.LeftoverUsers, ",") != user || ks.NeedsSecuring {
 		t.Fatalf("status: %+v", ks)
 	}
 	readyAfterApply(f)
-	if resp, _ := SetupS3Storage(c); !resp.Success || !strings.Contains(resp.Message, user) {
+	if resp, _ := SetupS3Storage(c); !resp.Success {
 		t.Fatalf("repair: %+v", resp)
 	}
-	if slices.Contains(f.sw.userNames(), user) {
-		t.Error("Repair left the user")
+	if !slices.Contains(f.sw.userNames(), user) {
+		t.Fatal("Repair deleted a user: only the confirmed action may")
+	}
+	// A confirmed name that is not a leftover any more is not deleted.
+	putToolDSPAOnStorage(f, "live")
+	f.sw.giveScopedKey("live")
+	resp, _ := RemoveLeftoverS3Keys(c, []string{user, storage.ScopedUserName("live")})
+	if !resp.Success || !strings.Contains(resp.Message, user) {
+		t.Fatalf("remove: %+v", resp)
+	}
+	if slices.Contains(f.sw.userNames(), user) || !slices.Contains(f.sw.userNames(), storage.ScopedUserName("live")) {
+		t.Errorf("users after the removal: %v", f.sw.userNames())
 	}
 	st, _ = GetResourcesStatus(c)
 	if ks := st.S3Keys; len(ks.LeftoverUsers) != 0 {
-		t.Errorf("status after Repair: %+v", ks)
+		t.Errorf("status after the removal: %+v", ks)
 	}
 }
 
-// M2: a failure to list pipeline servers shows nothing as leftover (fail closed).
-func TestS3Keys_NoLeftoversWithoutTheRecord(t *testing.T) {
+// M2: a user whose tags cannot be read makes nothing a leftover (fail closed).
+func TestS3Keys_NoLeftoversWhenTagsCannotBeRead(t *testing.T) {
 	f, c := newResourceFake(t)
 	putManagedDSC(f)
 	putReadyManagedS3(f)
 	f.sw.giveScopedKey("gone")
-	f.fail["GET /api/v1/namespaces/"+record.GetActivityNamespace()+"/configmaps/"+record.SnapshotConfigMapName] = 500
+	f.sw.failIAM["ListUserTags"] = 503
 	st, _ := GetResourcesStatus(c)
 	if ks := st.S3Keys; ks != nil && len(ks.LeftoverUsers) != 0 {
-		t.Errorf("leftovers without a readable record: %+v", ks)
+		t.Errorf("leftovers without readable tags: %+v", ks)
 	}
 }
 

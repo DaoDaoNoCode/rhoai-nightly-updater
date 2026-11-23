@@ -176,7 +176,7 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 	// storage runs (never on its own). Read only when no migration is
 	// pending: Migrate storage leaves the storage secured.
 	if legacy == nil && legacyErr == nil && s3EPErr == nil {
-		status.S3Keys = storage.KeysState(c, status.MinIO, s3EP, dspas, pipelineRec, recErr == nil)
+		status.S3Keys = storage.KeysState(c, status.MinIO, s3EP, dspas, pipelineRec)
 	}
 
 	// Also for a storage that is gone but left its data PVC: teardown

@@ -39,7 +39,7 @@ import (
 // is now invalid; the success message names them. Workloads still using the
 // old credential in running pods (workbenches, model deployments, pipeline
 // API server) retain it until they recycle; this action does not restart them.
-func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+func SecureS3(c *kube.Client, removeLeftover []string, onStep func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	var logs []string
 	step := func(id, status, msg string) {
 		logs = append(logs, msg)
@@ -112,21 +112,16 @@ func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.Operat
 	for _, d := range recorded {
 		names = append(names, d.Meta.Namespace+"/"+d.Meta.Name)
 	}
-	// The kept servers by name, with a reason only when it is another one
-	// than "not set up by this tool" (which the sentence says already).
-	var keptNames []string
-	for _, k := range kept {
-		keptNames = append(keptNames, strings.TrimSuffix(k, " (not set up by this tool)"))
-	}
-	check := fmt.Sprintf("OK: %s to give a key of its own", kube.CountNoun(len(recorded), "pipeline server", "pipeline servers"))
+	check := fmt.Sprintf("OK: Found %s to give a key of its own", kube.CountNoun(len(recorded), "pipeline server", "pipeline servers"))
 	if len(kept) > 0 {
-		check += fmt.Sprintf("; not set up by this tool, left on the old key: %s", strings.Join(keptNames, ", "))
+		check += fmt.Sprintf("; left on the old key: %s", strings.Join(kept, ", "))
 	}
 	step(SecureStepCheck, "success", check)
 
-	// summary says which servers have their own key, which failed and which
-	// still use the old one, for the outcome of a run that ended or stopped.
-	summary := func(done, skipped []string, failed map[string]string) string {
+	// summary says which servers have their own key, which failed or were
+	// not checked, and which still use the old one, for the outcome of a
+	// run that ended or stopped. runAgain adds how to finish.
+	summary := func(done, skipped []string, failed map[string]string, runAgain bool) string {
 		var own, old, parts []string
 		for _, n := range names {
 			switch {
@@ -141,18 +136,19 @@ func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.Operat
 		}
 		for _, n := range names {
 			if why := failed[n]; why != "" {
-				parts = append(parts, fmt.Sprintf("%s still uses the old key: %s.", n, strings.TrimSuffix(why, ".")))
+				parts = append(parts, strings.TrimSuffix(why, ".")+".")
 			}
 		}
 		if len(old) > 0 {
-			parts = append(parts, fmt.Sprintf("Still on the old key: %s.", strings.Join(old, ", ")))
+			parts = append(parts, fmt.Sprintf("Still on the old key, which no longer works: %s.", strings.Join(old, ", ")))
 		}
-		if len(old) > 0 || len(failed) > 0 {
+		if runAgain && (len(old) > 0 || len(failed) > 0) {
 			parts = append(parts, "Run Secure S3 storage again: it skips the servers already done.")
 		}
 		if len(kept) > 0 {
-			parts = append(parts, fmt.Sprintf("Not set up by this tool: %s. The old admin key no longer works there: %s.", strings.Join(keptNames, ", "),
-				kube.Verb(len(kept), "its owner must give that pipeline server new S3 keys", "their owners must give those pipeline servers new S3 keys")))
+			parts = append(parts, fmt.Sprintf("Left on the old admin key, which no longer works: %s. %s", strings.Join(kept, ", "),
+				kube.Verb(len(kept), "Its owner must give that pipeline server new S3 keys, or delete it and set it up again with this tool.",
+					"Their owners must give those pipeline servers new S3 keys, or delete them and set them up again with this tool.")))
 		}
 		return strings.Join(parts, " ")
 	}
@@ -175,6 +171,9 @@ func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.Operat
 
 	// Step 3: a key of its own for every recorded pipeline server. A server
 	// that fails is reported and the others go on.
+	if c.Context().Err() != nil {
+		return stop(SecureStepRollout, fmt.Sprintf("The run was cancelled before any pipeline server got its own key. %s Run Secure S3 storage again to continue.", summary(nil, nil, nil, false)), "in_progress", "cancelled"), nil
+	}
 	sw, err := adminSeaweed(c)
 	if err != nil {
 		return stop(SecureStepRollout, fmt.Sprintf("Cannot read the new admin key: %v.%s No pipeline server got its own key yet; run Secure S3 storage again.", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "admin key unreadable"), nil
@@ -184,49 +183,59 @@ func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.Operat
 	for _, d := range recorded {
 		name := d.Meta.Namespace + "/" + d.Meta.Name
 		id := SecureServerStep(name)
+		// A cancelled request (the server shutting down) ends the run here:
+		// the next servers would only fail with the cancellation.
+		if c.Context().Err() != nil {
+			return stop(id, fmt.Sprintf("The run was cancelled before pipeline server %s. %s Run Secure S3 storage again to continue.", name, summary(done, skipped, failed, false)), "in_progress", "cancelled"), nil
+		}
 		if why := blocked[name]; why != "" {
-			failed[name] = why
-			step(id, "failed", why)
+			// Its Secrets were not checked; a server that already uses its
+			// own key is not reported as failing.
+			if own, err := usesOwnKey(c, sw, d); err == nil && own {
+				skipped = append(skipped, name)
+				step(id, "success", fmt.Sprintf("OK: Pipeline server %s already uses its own key; its Secrets were not checked: %s", name, why))
+				continue
+			}
+			failed[name] = fmt.Sprintf("%s was not checked: %s", name, why)
+			step(id, "failed", failed[name])
 			continue
 		}
-		// Like Migrate storage: a server is started only while the time for
-		// its key check (up to s3SlowHTTPClient's wait per call) is left.
+		// Like Migrate storage: a server is started only while its worst
+		// case is left (secureServerBudget), so the deadline cannot fall
+		// between the writes of its two Secrets.
 		if deadline, ok := c.Context().Deadline(); ok && kube.Clock().Until(deadline) < secureServerBudget {
-			return stop(id, fmt.Sprintf("Not enough time is left in this run to give pipeline server %s its own key. %s run Secure S3 storage again to continue.", name, summary(done, skipped, failed)), "in_progress", "out of time"), nil
+			return stop(id, fmt.Sprintf("Not enough time is left in this run to give pipeline server %s its own key. %s Run Secure S3 storage again to continue: it skips the servers already done.", name, summary(done, skipped, failed, false)), "out_of_time", "out of time"), nil
 		}
 		step(id, "running", fmt.Sprintf("Giving pipeline server %s a key of its own...", name))
 		changed, err := rekeyServer(c, sw, d, func(line string) { step(id, "running", line) })
 		switch {
 		case err != nil:
-			failed[name] = err.Error()
-			step(id, "failed", fmt.Sprintf("%s did not get its own key: %v", name, err))
+			failed[name] = fmt.Sprintf("%s did not get its own key: %v", name, err)
+			step(id, "failed", failed[name])
 		case changed:
 			done = append(done, name)
-			step(id, "success", fmt.Sprintf("OK: %s uses SeaweedFS user %s", name, ScopedUserName(d.Meta.Namespace)))
+			step(id, "success", fmt.Sprintf("OK: Pipeline server %s uses SeaweedFS user %s", name, ScopedUserName(d.Meta.Namespace)))
 		default:
 			skipped = append(skipped, name)
-			step(id, "success", fmt.Sprintf("OK: %s already uses its own key", name))
+			step(id, "success", fmt.Sprintf("OK: Pipeline server %s already uses its own key", name))
 		}
 	}
 
-	// Users of pipeline servers that are gone (deleted while SeaweedFS
-	// failed, or outside this tool): their keys still work until deleted.
-	left, leftErr := leftoverUsers(sw, recorded)
-	if leftErr == nil && len(left) > 0 {
-		leftErr = deleteUsers(sw, left)
-	}
+	// Keys of pipeline servers that no longer exist: only those the user
+	// confirmed, and only if they are still leftovers now.
+	left, leftErr := deleteConfirmedLeftovers(sw, dspas, removeLeftover)
 
 	msg := "New admin key, kept out of every project."
-	if s := summary(done, skipped, failed); s != "" {
+	if s := summary(done, skipped, failed, true); s != "" {
 		msg += " " + s
 	}
 	if leftErr != nil {
-		msg += fmt.Sprintf(" The keys of deleted pipeline servers could not be checked or deleted: %v.", leftErr)
+		msg += fmt.Sprintf(" The leftover keys could not be removed: %v.", leftErr)
 	} else if len(left) > 0 {
-		msg += fmt.Sprintf(" Deleted the keys of pipeline servers that are gone: %s.", strings.Join(left, ", "))
+		msg += fmt.Sprintf(" Removed the keys of pipeline servers that no longer exist: %s.", strings.Join(left, ", "))
 	}
 	if len(done) > 0 {
-		msg += fmt.Sprintf(" Restart the workbenches and model deployments that use Connection %s, and workbenches that run Elyra pipelines, so they pick up the new key.", ConnectionSecretName)
+		msg += fmt.Sprintf(" Restart the workbenches and model deployments that use Connection %s, and Elyra pipelines in workbenches, so they pick up the new key.", ConnectionSecretName)
 	}
 	slog.Info("s3 storage secured", "user", kube.GetUser(c), "rekeyed", len(done), "failed", len(failed))
 	record.Action(c, "secure-s3", fmt.Sprintf("namespace=%s (%d pipeline servers rekeyed, %d failed)", S3Namespace, len(done), len(failed)), len(failed) == 0)
@@ -238,9 +247,25 @@ func SecureS3(c *kube.Client, onStep func(types.UpdateStepEvent)) (*types.Operat
 	return &types.OperationResponse{Success: true, Message: msg, Logs: logs}, nil
 }
 
-// secureServerBudget is the time a server's key needs at most: its key
-// check makes up to five calls of up to s3SlowHTTPClient's wait.
-var secureServerBudget = 2 * time.Minute
+// usesOwnKey reports whether a recorded pipeline server uses a key of its
+// own, as the status decides it (KeysState): its Connection's key is one
+// of its user's, and the DSPA names it.
+func usesOwnKey(c *kube.Client, sw *seaweedClient, d DSPA) (bool, error) {
+	keyID, found, err := connectionKeyID(c, d.Meta.Namespace)
+	if err != nil || !found || keyID == "" {
+		return false, err
+	}
+	ids, _, err := sw.ListAccessKeys(ScopedUserName(d.Meta.Namespace))
+	if err != nil {
+		return false, err
+	}
+	return slices.Contains(ids, keyID) && d.Meta.Annotations[DSPAS3KeyAnnotation] == keyID, nil
+}
+
+// secureServerBudget is the time one server can take at worst: its key
+// check makes five calls of up to s3SlowHTTPClient's 45 seconds, and the
+// IAM calls, two Secret writes and the annotation come on top.
+var secureServerBudget = 5 * time.Minute
 
 // checkProjectSecret checks one of a recorded pipeline server's Secrets
 // for Secure S3 storage: readable, this tool's, and its write accepted (a

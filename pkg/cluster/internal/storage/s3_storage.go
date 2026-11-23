@@ -2,7 +2,6 @@ package storage
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,7 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"slices"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -53,6 +52,8 @@ const (
 	// its own. Only Secret seaweedfs/seaweedfs-s3-credentials holds it: the
 	// copies in pipeline projects (nightly-dspa-s3) carry only the S3 keys.
 	s3AdminPasswordField = "WEED_ADMIN_PASSWORD"
+	// s3ChecksumKeyField keys the pod template's checksum (keyChecksum).
+	s3ChecksumKeyField = "RNU_CHECKSUM_KEY"
 	// s3Port is SeaweedFS's S3 port (weed/command/mini.go "s3.port") and
 	// s3AdminPort its admin UI ("admin.port"). SeaweedFS 4.49 moved the
 	// admin default from 23646 to 12535, because the admin's gRPC port
@@ -155,6 +156,9 @@ type S3Keys struct {
 	AccessKey     string
 	SecretKey     string
 	AdminPassword string
+	// ChecksumKey keys the pod template's checksum of these keys
+	// (keyChecksum): a random value of its own, in the storage's Secret.
+	ChecksumKey string
 }
 
 // ReadS3Keys reads the keys stored in the storage's Secret. found is false
@@ -176,6 +180,7 @@ func ReadS3Keys(c *kube.Client) (keys S3Keys, found bool, err error) {
 	return S3Keys{
 		AccessKey: DecodeBase64Field(secret.Data[S3AccessKeyField]), SecretKey: DecodeBase64Field(secret.Data[S3SecretKeyField]),
 		AdminPassword: DecodeBase64Field(secret.Data[s3AdminPasswordField]),
+		ChecksumKey:   DecodeBase64Field(secret.Data[s3ChecksumKeyField]),
 	}, true, nil
 }
 
@@ -278,12 +283,22 @@ func S3Credentials(c *kube.Client) (S3Keys, error) {
 // up used the S3 secret key there, which every pipeline project's copy of
 // the keys holds; its next setup or Repair writes a password of its own.
 func withAdminPassword(c *kube.Client, keys S3Keys) (S3Keys, error) {
-	if keys.AdminPassword != "" {
+	if keys.AdminPassword != "" && keys.ChecksumKey != "" {
 		return keys, nil
 	}
 	stored, found, err := ReadS3Keys(c)
 	if err != nil {
 		return S3Keys{}, err
+	}
+	if keys.ChecksumKey == "" {
+		if found && stored.ChecksumKey != "" {
+			keys.ChecksumKey = stored.ChecksumKey
+		} else if keys.ChecksumKey, err = randomHex(16); err != nil {
+			return S3Keys{}, fmt.Errorf("generate the checksum key: %w", err)
+		}
+	}
+	if keys.AdminPassword != "" {
+		return keys, nil
 	}
 	if found && stored.AdminPassword != "" && stored.AdminPassword != keys.SecretKey {
 		keys.AdminPassword = stored.AdminPassword
@@ -919,6 +934,7 @@ func S3Resources(keys S3Keys, secured bool) []s3Resource {
 				S3AccessKeyField:     keys.AccessKey,
 				S3SecretKeyField:     keys.SecretKey,
 				s3AdminPasswordField: keys.AdminPassword,
+				s3ChecksumKeyField:   keys.ChecksumKey,
 			},
 		}, false},
 		// "weed mini" listens on many ports besides S3 (master 9333/19333,
@@ -1080,39 +1096,19 @@ func networkPolicyProblem(c *kube.Client) string {
 	if !found {
 		return fmt.Sprintf("NetworkPolicy %s is missing, so every port of SeaweedFS is reachable from the pod network.", s3NetworkPolicy) + repair
 	}
-	var np struct {
-		Spec struct {
-			PodSelector struct {
-				MatchLabels map[string]string `json:"matchLabels"`
-			} `json:"podSelector"`
-			PolicyTypes []string `json:"policyTypes"`
-			Ingress     []struct {
-				From  []json.RawMessage            `json:"from"`
-				Ports []map[string]json.RawMessage `json:"ports"`
-			} `json:"ingress"`
-		} `json:"spec"`
+	// The whole spec, as setup applies it: the ports and who may reach them.
+	var live struct {
+		Spec any `json:"spec"`
 	}
-	changed := fmt.Sprintf("NetworkPolicy %s was changed.", s3NetworkPolicy) + repair
-	if json.Unmarshal(body, &np) != nil || np.Spec.PodSelector.MatchLabels["app"] != s3AppLabel || len(np.Spec.PodSelector.MatchLabels) != 1 ||
-		!slices.Equal(np.Spec.PolicyTypes, []string{"Ingress"}) {
-		return changed
-	}
-	var ports []string
-	for _, rule := range np.Spec.Ingress {
-		if len(rule.From) == 0 || len(rule.Ports) == 0 {
-			return changed
-		}
-		for _, p := range rule.Ports {
-			if len(p) != 2 || string(p["protocol"]) != `"TCP"` || p["port"] == nil {
-				return changed
-			}
-			ports = append(ports, string(p["port"]))
+	var want any
+	for _, r := range S3Resources(S3Keys{}, true) {
+		if r.Kind == "NetworkPolicy" {
+			b, _ := json.Marshal(r.Obj["spec"])
+			_ = json.Unmarshal(b, &want)
 		}
 	}
-	sort.Strings(ports)
-	// Sorted as text: "12535" before "8333".
-	if !slices.Equal(ports, []string{strconv.Itoa(s3AdminPort), strconv.Itoa(s3Port)}) {
-		return changed
+	if json.Unmarshal(body, &live) != nil || !reflect.DeepEqual(live.Spec, want) {
+		return fmt.Sprintf("NetworkPolicy %s was changed.", s3NetworkPolicy) + repair
 	}
 	return ""
 }
@@ -1123,8 +1119,9 @@ const S3KeyChecksumAnnotation = "rhoai-nightly-updater/admin-key-checksum"
 
 // keyChecksum is a short SHA-256 of the admin key pair (not reversible).
 func keyChecksum(keys S3Keys) string {
-	sum := sha256.Sum256([]byte(keys.AccessKey + "\n" + keys.SecretKey))
-	return hex.EncodeToString(sum[:8])
+	// HMAC with a random key of its own, so the annotation (readable by
+	// whoever can read the Deployment) gives nothing to test guesses with.
+	return hex.EncodeToString(HMACSHA256([]byte(keys.ChecksumKey), []byte(keys.AccessKey+"\n"+keys.SecretKey+"\n"+keys.AdminPassword))[:16])
 }
 
 // restrictedSecurityContext is a container securityContext that passes
@@ -1190,32 +1187,35 @@ func SetupS3(c *kube.Client) (*types.OperationResponse, error) {
 		record.Action(c, "setup-s3", fmt.Sprintf("namespace=%s (credentials)", S3Namespace), false)
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot determine the S3 credentials; nothing was changed: %v.%s", err, kube.TemplateHint(err)), ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
 	}
-	// Who held the stored key, when this setup replaces it (read before).
+	// Who held the stored key, when this setup replaces it: pipeline
+	// servers on the storage whose Connection holds that key, read before.
 	var holders []string
 	if rotated {
-		if dspas, err := ListDSPAs(c, ""); err == nil {
-			if ep, err := readS3Endpoints(c); err == nil {
-				live, _ := Users(dspas, ep.Address)
-				holders = live
+		if old, found, err := ReadS3Keys(c); err == nil && found && old.AccessKey != "" {
+			if dspas, err := ListDSPAs(c, ""); err == nil {
+				if ep, err := readS3Endpoints(c); err == nil {
+					for _, d := range dspas {
+						if d.Meta.Terminating() || !ep.Address.UsedBy(d.Meta.Namespace, d.Host) {
+							continue
+						}
+						if id, found, err := connectionKeyID(c, d.Meta.Namespace); err == nil && found && id == old.AccessKey {
+							holders = append(holders, d.Meta.Namespace+"/"+d.Meta.Name)
+						}
+					}
+				}
 			}
 		}
+		sort.Strings(holders)
 	}
+	// Repair changes no SeaweedFS user: leftover keys are removed only by
+	// actions whose confirmation lists them.
 	finish := func(res *types.OperationResponse) (*types.OperationResponse, error) {
-		if !res.Success || !secured {
+		if !res.Success || !secured || !rotated {
 			return res, nil
 		}
-		if rotated {
-			res.Message += " The storage's Deployment was missing, so it was set up again with a new admin key and per-server keys turned on: the old admin key no longer works."
-			if len(holders) > 0 {
-				res.Message += fmt.Sprintf(" %s used it and lost S3 access: %s. Run Secure S3 storage to give each pipeline server this tool set up a key of its own.", kube.Verb(len(holders), "This pipeline server", "These pipeline servers"), strings.Join(holders, ", "))
-			}
-		}
-		// Users of pipeline servers that are gone: their keys still work.
-		if left, err := removeLeftoverUsers(c); err != nil {
-			res.Message += fmt.Sprintf(" The keys of deleted pipeline servers could not be checked: %v.", err)
-		} else if len(left) > 0 {
-			res.Message += fmt.Sprintf(" Deleted the keys of pipeline servers that are gone: %s.", strings.Join(left, ", "))
-			res.Logs = append(res.Logs, "OK: Deleted SeaweedFS users "+strings.Join(left, ", "))
+		res.Message += " The storage's Deployment was missing, so it was set up again with a new admin key and per-server keys turned on: the old admin key no longer works."
+		if len(holders) > 0 {
+			res.Message += fmt.Sprintf(" %s used it and lost S3 access: %s. Run Secure S3 storage to give each pipeline server this tool set up a key of its own.", kube.Verb(len(holders), "This pipeline server", "These pipeline servers"), strings.Join(holders, ", "))
 		}
 		return res, nil
 	}

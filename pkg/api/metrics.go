@@ -54,7 +54,7 @@ var (
 		"update": true, "dry_run": true, "refresh_operator": true, "create_dsc": true,
 		"reinstall_stable": true, "reinstall_nightly": true, "reinstall_custom": true,
 		"deploy_pr": true, "deploy_dashboard_main": true, "revert_dashboard": true, "assist_rollout": true,
-		"setup_minio": true, "teardown_minio": true, "secure_minio": true, "migrate_storage": true, "remove_old_storage": true, "setup_mlflow": true, "teardown_mlflow": true,
+		"setup_minio": true, "teardown_minio": true, "secure_minio": true, "remove_leftover_keys": true, "migrate_storage": true, "remove_old_storage": true, "setup_mlflow": true, "teardown_mlflow": true,
 		"deploy_mlflow_pr": true, "revert_mlflow": true,
 		"setup_pipeline_server": true, "teardown_pipeline_server": true,
 	}

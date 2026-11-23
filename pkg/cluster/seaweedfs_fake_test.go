@@ -228,7 +228,7 @@ func (sw *seaweedFake) serve(w http.ResponseWriter, r *http.Request) {
 func (sw *seaweedFake) iam(w http.ResponseWriter, form url.Values, isAdmin, secured bool) {
 	action, name := form.Get("Action"), form.Get("UserName")
 	sw.calls = append(sw.calls, action+" "+name)
-	write := action != "ListUsers" && action != "ListAccessKeys"
+	write := action != "ListUsers" && action != "ListAccessKeys" && action != "ListUserTags"
 	switch {
 	case !isAdmin:
 		sw.xmlError(w, http.StatusForbidden, "AccessDenied")
@@ -267,6 +267,20 @@ func (sw *seaweedFake) iam(w http.ResponseWriter, form url.Values, isAdmin, secu
 	case "PutUserPolicy":
 		u.policy = form.Get("PolicyDocument")
 		fmt.Fprint(w, `<PutUserPolicyResponse/>`)
+	case "ListUserTags":
+		type tag struct {
+			Key   string `xml:"Key"`
+			Value string `xml:"Value"`
+		}
+		var tags []tag
+		for k, v := range u.tags {
+			tags = append(tags, tag{k, v})
+		}
+		out, _ := xml.Marshal(struct {
+			XMLName xml.Name `xml:"ListUserTagsResponse"`
+			Tags    []tag    `xml:"ListUserTagsResult>Tags>member"`
+		}{Tags: tags})
+		_, _ = w.Write(out)
 	case "TagUser":
 		u.tags[form.Get("Tags.member.1.Key")] = form.Get("Tags.member.1.Value")
 		fmt.Fprint(w, `<TagUserResponse/>`)
@@ -403,25 +417,14 @@ func verifySigV4(r *http.Request, body []byte, id, secret string) error {
 	}
 	// The query, as SigV4 wants it: each key and value URI-encoded (spaces
 	// as %20), sorted.
-	q, _ := url.ParseQuery(r.URL.RawQuery)
-	type kv struct{ k, v string }
-	var kvs []kv
-	for k, vs := range q {
-		for _, v := range vs {
-			kvs = append(kvs, kv{sigEscape(k), sigEscape(v)})
-		}
+	// The query the way SeaweedFS 4.54 builds it (weed/s3api/auth_signature_v4.go
+	// getCanonicalRequest): r.URL.Query(), each key's values sorted,
+	// url.Values.Encode() (sorted by key), then "+" as "%20".
+	q := r.URL.Query()
+	for _, vs := range q {
+		sort.Strings(vs)
 	}
-	// By encoded key, then value, as SeaweedFS and AWS sort them.
-	sort.Slice(kvs, func(i, j int) bool {
-		if kvs[i].k != kvs[j].k {
-			return kvs[i].k < kvs[j].k
-		}
-		return kvs[i].v < kvs[j].v
-	})
-	var pairs []string
-	for _, p := range kvs {
-		pairs = append(pairs, p.k+"="+p.v)
-	}
+	pairs := []string{strings.ReplaceAll(q.Encode(), "+", "%20")}
 	canonical := strings.Join([]string{r.Method, r.URL.EscapedPath(), strings.Join(pairs, "&"), canonHeaders.String(), fields["SignedHeaders"], payload}, "\n")
 	creq := sha256.Sum256([]byte(canonical))
 	toSign := "AWS4-HMAC-SHA256\n" + amzDate + "\n" + strings.Join(scope[1:], "/") + "\n" + hex.EncodeToString(creq[:])
@@ -440,7 +443,28 @@ func verifySigV4(r *http.Request, body []byte, id, secret string) error {
 	return nil
 }
 
-// sigEscape is RFC 3986 encoding: unreserved characters stay.
-func sigEscape(s string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(url.QueryEscape(s), "+", "%20"), "%7E", "~")
+// untag removes a user's tags; retag points its project tag elsewhere.
+func (sw *seaweedFake) untag(user string) {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	sw.users[user].tags = map[string]string{}
+}
+
+func (sw *seaweedFake) retag(user, project string) {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	sw.users[user].tags["rnu-namespace"] = project
+}
+
+// allCalls returns every request recorded; resetCalls forgets them.
+func (sw *seaweedFake) allCalls() []string {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	return slices.Clone(sw.calls)
+}
+
+func (sw *seaweedFake) resetCalls() {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	sw.calls = nil
 }

@@ -16,7 +16,7 @@ func fakeSecure(t *testing.T, run func(onStep func(cluster.UpdateStepEvent)) *ty
 	orig := runSecureStorage
 	t.Cleanup(func() { runSecureStorage = orig })
 	calls := 0
-	runSecureStorage = func(_ *cluster.Client, onStep func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+	runSecureStorage = func(_ *cluster.Client, _ []string, onStep func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 		calls++
 		return run(onStep), nil
 	}

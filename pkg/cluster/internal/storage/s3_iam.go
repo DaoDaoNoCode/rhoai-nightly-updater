@@ -291,6 +291,31 @@ func (s *seaweedClient) PutUserPolicy(user, name, document string) error {
 	return err
 }
 
+// ListUserTags returns user's tags. found is false when the user does not exist.
+func (s *seaweedClient) ListUserTags(user string) (tags map[string]string, found bool, err error) {
+	body, err := s.iam("ListUserTags", url.Values{"UserName": {user}})
+	if iamErrorCode(err) == "NoSuchEntity" {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	var doc struct {
+		Tags []struct {
+			Key   string `xml:"Key"`
+			Value string `xml:"Value"`
+		} `xml:"ListUserTagsResult>Tags>member"`
+	}
+	if err := xml.Unmarshal(body, &doc); err != nil {
+		return nil, false, fmt.Errorf("IAM ListUserTags: parse the response: %w", err)
+	}
+	tags = map[string]string{}
+	for _, t := range doc.Tags {
+		tags[t.Key] = t.Value
+	}
+	return tags, true, nil
+}
+
 // TagUser applies a single key/value tag to user.
 func (s *seaweedClient) TagUser(user, key, value string) error {
 	_, err := s.iam("TagUser", url.Values{"UserName": {user}, "Tags.member.1.Key": {key}, "Tags.member.1.Value": {value}})
