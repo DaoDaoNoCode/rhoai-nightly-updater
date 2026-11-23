@@ -174,6 +174,15 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **A recipe project's Clean up deletes the project you reviewed, and a
+  second confirmation no longer loses the first.** A dialog left open while
+  its project was deleted and a recipe made it again deleted the new
+  project; the request now carries the UID shown (`recipeProjectUIDs`,
+  required), and Clean up refuses, before anything runs, a project made
+  again since. A refusal to confirm a project's contents now lists all of
+  them for every project that holds any, so a project whose contents were
+  all confirmed is no longer refused again on the retry.
+
 - **Recipe projects follow the cluster.** The Recipes page lists every
   project recipes created that the cluster still has (not only the last
   run's), and Clean up everything on the Environment page offers them, each
