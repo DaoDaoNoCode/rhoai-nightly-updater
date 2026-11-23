@@ -201,7 +201,7 @@ describe("Recipes page", () => {
     await settleApps();
     await settle();
     const list = screen.getByRole("list", { name: "Recipe dev: steps" });
-    expect(list).toHaveTextContent(/What Pipelines needsTurning on aipipelines in the DataScienceCluster \(1:0\d; usually 2 minutes, up to 10 minutes\)/);
+    expect(list).toHaveTextContent(/What Pipelines needsTurning on aipipelines in the DataScienceCluster \(1:0\d\)\. Usually 2 minutes, up to 10 minutes\./);
     // The steps still to come say how long they usually take; the ones done say what they did.
     expect(list).toHaveTextContent("S3 storageUsually 1 minute, up to 5 minutes.");
     expect(list).toHaveTextContent("Project recipe-devProject recipe-dev is set up.");

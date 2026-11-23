@@ -26,7 +26,7 @@ import { StatusLabel, type StatusKind } from "../StatusLabel";
 import { TooltipButton } from "../TooltipButton";
 import { StepProgress, type StepState } from "../environment/StepProgress";
 import { shortDigest } from "../../build";
-import { formatClock, resumeStep, usually, usuallySentence } from "./recipeForm";
+import { formatClock, resumeStep, usuallySentence } from "./recipeForm";
 import { RecipeProblems, refusalOf } from "./RecipeReviewModal";
 
 /** Ticks once a second while `active`, so elapsed times stay current. */
@@ -112,8 +112,9 @@ export const RecipeRunCard: React.FC<{
     if (s.status === "running" && live) {
       const started = s.startedAt ? Date.parse(s.startedAt) : NaN;
       const progress = status.step?.message || "Starting...";
-      const takes = usually(s.typicalSeconds, s.maxSeconds);
-      message = Number.isFinite(started) ? `${progress} (${formatClock(now - started)}; ${takes})` : `${progress} (${takes})`;
+      // "Waiting for SeaweedFS (1/1 pods starting) (1:12). Usually 1 minute, up to 5 minutes."
+      const shown = Number.isFinite(started) ? `${progress} (${formatClock(now - started)})` : progress;
+      message = `${/[.!?]$/.test(shown) ? shown : `${shown}.`} ${usuallySentence(s.typicalSeconds, s.maxSeconds)}`;
     } else if (s.status === "running") {
       // An interrupted run's record: the step that was running when its updater pod stopped.
       message = "Was running when the updater stopped.";
