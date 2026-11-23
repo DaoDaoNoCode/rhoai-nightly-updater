@@ -431,11 +431,11 @@ export const StoragePrerequisitePart: React.FC<{ status: ResourcesStatus; busy: 
     : notSecured ? (status.s3Keys?.secured
       ? ((status.s3Keys.oldKey ?? []).length > 0
         ? "Some pipeline servers still use the old shared key; Secure S3 storage, on the S3 storage tab, finishes giving each its own."
-        : "Keys of deleted pipeline servers still work; Secure S3 storage, on the S3 storage tab, deletes them.")
+        : (status.s3Keys?.leftovers ?? []).length > 1 ? "Keys of deleted pipeline servers still work; Secure S3 storage, on the S3 storage tab, deletes them." : "The key of a deleted pipeline server still works; Secure S3 storage, on the S3 storage tab, deletes it.")
       : "Every pipeline project still holds the S3 storage's admin key. Secure S3 storage, on the S3 storage tab, gives each pipeline server this tool set up a key of its own; new pipeline servers can be set up after that.")
     : s === "not-set-up" ? (minio?.setupBlockedReason ? "It can't be set up now; the S3 storage tab says why." : "Setting up a pipeline server sets it up first.")
-    : storageKeyWarning(status) === LEFTOVER_KEYS ? <>Projects with no pipeline server still have working S3 keys: {joinAnd((status.s3Keys?.leftovers ?? []).map((l) => <Id key={l.user}>{l.project}</Id>))}. Remove leftover keys, on the S3 storage tab, deletes them.</>
-    : storageKeyWarning(status) ? <>{(status.s3Keys?.keepOldKey ?? []).length > 1 ? "These pipeline servers" : "This pipeline server"} lost S3 access: {joinAnd((status.s3Keys?.keepOldKey ?? []).map((e) => <KeptServer key={e} entry={e} />))}. The S3 storage tab says what to do.</>
+    : storageKeyWarning(status) === LEFTOVER_KEYS ? <>{(status.s3Keys?.leftovers ?? []).length > 1 ? "Projects with no pipeline server still have working S3 keys" : "A project with no pipeline server still has a working S3 key"}: {joinAnd((status.s3Keys?.leftovers ?? []).map((l) => <Id key={l.user}>{l.project}</Id>))}. Remove leftover keys, on the S3 storage tab, deletes {(status.s3Keys?.leftovers ?? []).length > 1 ? "them" : "it"}.</>
+    : storageKeyWarning(status) ? <>{(status.s3Keys?.keepOldKey ?? []).length > 1 ? "Pipeline servers" : "Pipeline server"} {joinAnd((status.s3Keys?.keepOldKey ?? []).map((e) => <KeptServer key={e} entry={e} />))} lost S3 access. The S3 storage tab says what to do.</>
     : s === "error" || s === "needs-attention" ? "The S3 storage tab says what needs attention."
     : null;
   return (
@@ -455,17 +455,17 @@ export function storageConfirm(pending: Pending, minio: ResourceState | undefine
   switch (pending.kind) {
     case "remove-leftover-keys":
       return {
-        title: "Remove leftover keys?", confirm: "Remove", danger: true, runTitle: "Remove leftover keys", changesOpen: true,
+        title: pending.leftovers.length > 1 ? "Remove leftover keys?" : "Remove the leftover key?", confirm: "Remove", danger: true, runTitle: "Remove leftover keys", changesOpen: true,
         summary: (
           <Content component="p">
-            Deletes the S3 {pending.leftovers.length > 1 ? "keys of projects that have" : "key of a project that has"} no pipeline server any more (each a SeaweedFS user,
+            Deletes the S3 {pending.leftovers.length > 1 ? "keys of projects that have" : "key of a project that has"} no pipeline server any more ({pending.leftovers.length > 1 ? "each a SeaweedFS user" : "a SeaweedFS user"},
             the account a project&apos;s pipeline server signs in to the storage with). A pipeline server set up there again gets a new key.
             {pending.leftovers.length > 1 ? " Each is" : " It is"} deleted only if its project still has no pipeline server when this runs.
           </Content>
         ),
         changes: pending.leftovers.map((l) => (
           <>
-            The S3 key of project <Id>{l.project}</Id> (SeaweedFS user <Id>{l.user}</Id>): project <Id>{l.project}</Id> has no pipeline server any more.
+            The S3 key of project <Id>{l.project}</Id> (SeaweedFS user <Id>{l.user}</Id>).
             {l.connectionInUse && <> Its Connection <Id>rhoai-nightly-updater-s3</Id> still holds this key: workbenches and model deployments using it lose S3 access.</>}
           </>
         )),

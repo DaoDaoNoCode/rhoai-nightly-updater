@@ -192,9 +192,10 @@ describe("S3 storage that is not secured", () => {
     expect(screen.queryByRole("button", { name: "Secure S3 storage..." })).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole("button", { name: "Remove leftover keys..." }));
     const dialog = await screen.findByRole("dialog");
-    expect(dialog).toHaveTextContent("Remove leftover keys?");
+    expect(dialog).toHaveTextContent("Remove the leftover key?");
+    expect(dialog).toHaveTextContent("(a SeaweedFS user,");
     expect(dialog).toHaveTextContent("Deletes the S3 key of a project that has no pipeline server any more");
-    expect(dialog).toHaveTextContent("The S3 key of project gone (SeaweedFS user rnu-dspa-gone): project gone has no pipeline server any more. Its Connection rhoai-nightly-updater-s3 still holds this key");
+    expect(dialog).toHaveTextContent("The S3 key of project gone (SeaweedFS user rnu-dspa-gone). Its Connection rhoai-nightly-updater-s3 still holds this key");
     fireEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(api.bodies["POST /api/resources/s3/leftover-keys/remove"]).toEqual([{ users: ["rnu-dspa-gone"] }]));
     unmount();
@@ -257,6 +258,8 @@ describe("S3 storage that is not secured", () => {
       const tab = renderAt("/test-resources?tab=pipelines&project=dev");
       await waitFor(() => expect(headerLabel("Pipelines")).not.toBeNull());
       expect(headerLabel("Pipelines")!.textContent, name).toBe(rowLabel);
+      if (name === "leftover") expect(document.body).toHaveTextContent("A project with no pipeline server still has a working S3 key: gone. Remove leftover keys, on the S3 storage tab, deletes it.");
+      if (name === "lost access") expect(document.body.textContent).toMatch(/Pipeline server unrec\/dspa.*lost S3 access\./);
       tab.unmount();
     }
   });
