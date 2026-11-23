@@ -38,6 +38,11 @@ export function setupMinIO(): Promise<OperationResponse> {
   return request('/api/resources/s3/setup', { method: 'POST', acceptStatuses: [422] });
 }
 
+/** Secure S3 storage: a new admin key with IAM writes on, then a key of its own for every pipeline server this tool recorded. */
+export function secureMinIO(): Promise<OperationResponse> {
+  return request('/api/resources/s3/secure', { method: 'POST', acceptStatuses: [422] });
+}
+
 /** Removes S3 storage; deleteNamespace also drops namespace seaweedfs when this tool originally created it. */
 export function teardownMinIO(deleteNamespace = false): Promise<OperationResponse> {
   return request('/api/resources/s3/teardown', { method: 'POST', body: JSON.stringify(deleteNamespace ? { deleteNamespace: true } : {}), acceptStatuses: [422] });

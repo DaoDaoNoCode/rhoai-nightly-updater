@@ -1,6 +1,7 @@
 import type { ModelsRequest, OperationResponse, ResourceState, ResourcesStatus } from "../../types";
 import {
   setupMinIO,
+  secureMinIO,
   teardownMinIO,
   setupPipelineServer,
   teardownPipelineServer,
@@ -34,6 +35,7 @@ export function resourceRequest(p: ResourcePending): [string, () => Promise<Oper
   switch (p.kind) {
     case "setup-minio": return ["setup-minio", setupMinIO, null];
     case "repair-minio": return ["setup-minio", setupMinIO, null];
+    case "secure-minio": return ["secure-minio", secureMinIO, null];
     case "teardown-minio": return ["teardown-minio", () => teardownMinIO(!!p.deleteNamespace), null];
     case "setup-mlflow": return ["setup-mlflow", setupMLflow, null];
     case "teardown-mlflow": return ["teardown-mlflow", teardownMLflow, null];

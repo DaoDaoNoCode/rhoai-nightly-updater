@@ -149,7 +149,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     if (!searchParams.has("project")) setPlaygroundDefault(defaultPlaygroundProject(pg, null));
   }, [pg, searchParams]);
 
-  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, [...pipelineServers, ...(resStatus?.outsidePipelineServers ?? [])]) ?? modelsConfirm(p, resStatus) ?? playgroundConfirm(p, pg) ?? maasConfirm(p, maas, setPending) ?? prerequisitesConfirm(p, prereq) ?? samplesConfirm(p);
+  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending, resStatus?.s3Keys) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, [...pipelineServers, ...(resStatus?.outsidePipelineServers ?? [])]) ?? modelsConfirm(p, resStatus) ?? playgroundConfirm(p, pg) ?? maasConfirm(p, maas, setPending) ?? prerequisitesConfirm(p, prereq) ?? samplesConfirm(p);
 
   // Finished runs whose dialog was dismissed surface as toast with a path back—outcomes stay
   // visible without shifting page layout.

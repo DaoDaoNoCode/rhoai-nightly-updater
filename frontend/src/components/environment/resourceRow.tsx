@@ -212,7 +212,7 @@ export function consolePodsHref(consoleURL: string | undefined, namespace: strin
 
 /** A change the user is asked to confirm. */
 export type Pending =
-  | { kind: "setup-minio" | "repair-minio" | "setup-mlflow" | "revert-mlflow" | "teardown-mlflow" }
+  | { kind: "setup-minio" | "repair-minio" | "secure-minio" | "setup-mlflow" | "revert-mlflow" | "teardown-mlflow" }
   /** deleteNamespace: also delete namespace seaweedfs (the user's informed choice). */
   | { kind: "teardown-minio"; deleteNamespace?: boolean }
   | { kind: "deploy-mlflow-pr"; pr: number }

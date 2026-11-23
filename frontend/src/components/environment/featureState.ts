@@ -112,16 +112,31 @@ const MOVING: EnvStatus[] = ["setting-up", "deleting"];
 
 /** Storage health; legacy buckets retaining data warrant attention. */
 export function storageStatus(status: ResourcesStatus | null, busy: Busy): EnvStatus {
-  const b = busy.migrating || busy.resAction === "setup-minio" ? "setting-up" : busy.resAction === "teardown-minio" ? "deleting" : null;
-  return envStatus(status?.minio, { busy: b, attention: status?.legacyStorage?.stage === "migrate" });
+  const b = busy.migrating || busy.resAction === "setup-minio" || busy.resAction === "secure-minio" ? "setting-up" : busy.resAction === "teardown-minio" ? "deleting" : null;
+  return envStatus(status?.minio, { busy: b, attention: status?.legacyStorage?.stage === "migrate" || storageNeedsSecuring(status) });
 }
+
+/** The one label of running storage whose admin key may still be in pipeline projects (S3KeysState.needsSecuring): the same on every tab and row. */
+export const NOT_SECURED = "Not secured";
+
+/** True when the running storage is not secured, or a recorded pipeline server still uses the old key: Secure S3 storage, on the S3 storage tab, fixes it. */
+export const storageNeedsSecuring = (status: ResourcesStatus | null) =>
+  !!status?.s3Keys?.needsSecuring && !!status.minio?.ready && status.legacyStorage?.stage !== "migrate";
+
+/** Why Set up does not give a new project a pipeline server while the storage is not secured (pkg/cluster SecureFirstReason). */
+export const SECURE_FIRST = "Available once Secure S3 storage, on the S3 storage tab, has secured the S3 storage: until then a new pipeline server would get the admin key every pipeline project of an earlier version holds.";
 
 /** True when setup may provision storage: absent and unblocked. */
 /** The one label of the storage while an earlier version's storage still holds the data: the same on every tab and row. */
 export const MIGRATION_NEEDED = "Migration needed";
 
 /** A storage problem's label: the cluster's, so it names no project. */
-const storageProblemLabel = (status: ResourcesStatus | null, s: EnvStatus) => (status?.legacyStorage?.stage === "migrate" ? MIGRATION_NEEDED : envStatusText(s));
+const storageProblemLabel = (status: ResourcesStatus | null, s: EnvStatus) =>
+  status?.legacyStorage?.stage === "migrate" ? MIGRATION_NEEDED : storageNeedsSecuring(status) ? NOT_SECURED : envStatusText(s);
+
+/** The storage's status text where it differs from its status's (Migration needed, Not secured), else undefined. */
+export const storageStatusText = (status: ResourcesStatus | null): string | undefined =>
+  status?.legacyStorage?.stage === "migrate" ? MIGRATION_NEEDED : storageNeedsSecuring(status) ? NOT_SECURED : undefined;
 
 export function storageCanSetUp(status: ResourcesStatus | null, busy: Busy): boolean {
   return storageStatus(status, busy) === "not-set-up" && !status?.legacyStorage && !status?.minio?.setupBlockedReason;
@@ -138,8 +153,7 @@ export function storageState(status: ResourcesStatus | null, busy: Busy = IDLE):
   const s = storageStatus(status, busy);
   const unmanaged = notManaged(status.minio);
   if (PROBLEM.includes(s)) {
-    const migrate = status.legacyStorage?.stage === "migrate";
-    return { status: s, label: migrate ? MIGRATION_NEEDED : envStatusText(s), ...owner(unmanaged), next: issueStep(status, "storage"), project: null };
+    return { status: s, label: storageProblemLabel(status, s), ...owner(unmanaged), next: issueStep(status, "storage"), project: null };
   }
   if (s === "ready") {
     const href = status.minio?.uiRoute;
@@ -158,11 +172,13 @@ export function storageState(status: ResourcesStatus | null, busy: Busy = IDLE):
  * migration must finish copying legacy data—the integrity check compares both
  * sides, so premature writes to the new bucket would fail it.
  */
-export function storageNotReadyReason(minio: ResourceState | undefined, legacy: ResourcesStatus["legacyStorage"], migrating: boolean): string | null {
+export function storageNotReadyReason(minio: ResourceState | undefined, legacy: ResourcesStatus["legacyStorage"], migrating: boolean, keys?: ResourcesStatus["s3Keys"]): string | null {
   if (migrating) return "Migrate storage is running. Wait until it has finished.";
   if (legacy?.stage === "migrate") return "Available once Migrate storage has moved the data of an earlier version to the new storage.";
   if (notManaged(minio)) return "Pipeline servers set up here use the S3 storage this tool sets up. Namespace seaweedfs was not created by this tool, so it is not used.";
   if (!minio?.ready) return minio?.deployed ? "Available once the S3 storage is ready." : "Available once the S3 storage is set up.";
+  // Fail closed, as the backend: no new project gets the admin key.
+  if (keys && !keys.secured) return SECURE_FIRST;
   return null;
 }
 
@@ -213,7 +229,10 @@ function pipelinesIn(status: ResourcesStatus | null, project: string, busy: Busy
   const [storage, server] = parts;
   const unmanaged = parts.some((p) => p.unmanaged);
   const problem = parts.find((p) => PROBLEM.includes(p.status));
-  if (problem?.id === "storage") return { status: problem.status, label: storageProblemLabel(status, problem.status), ...owner(problem.unmanaged), next: { kind: "show-issue", part: "storage" }, project };
+  // Not secured, with no pipeline server here yet: Set up stays, disabled with why (Secure S3 storage first).
+  if (problem?.id === "storage" && storageNeedsSecuring(status) && status?.s3Keys?.secured === false && server.status === "not-set-up" && !server.unmanaged) {
+    return { status: problem.status, label: NOT_SECURED, next: { kind: "set-up", label: `Set up Pipelines in ${project}`, setup: [], reason: SECURE_FIRST }, project };
+  }
   if (problem?.id === "storage") return { status: problem.status, label: storageProblemLabel(status, problem.status), ...owner(problem.unmanaged), next: { kind: "show-issue", part: "storage" }, project };
   if (problem) return { status: problem.status, label: `${envStatusText(problem.status)} in ${project}`, ...owner(problem.unmanaged), next: issueStep(status, problem.id), project };
   const moving = parts.find((p) => MOVING.includes(p.status));
@@ -227,7 +246,7 @@ function pipelinesIn(status: ResourcesStatus | null, project: string, busy: Busy
   const setup: Pending[] = [];
   const storageSetUp = storageCanSetUp(status, busy);
   if (storageSetUp) setup.push({ kind: "setup-minio" });
-  const storageReason = storageNotReadyReason(status?.minio, status?.legacyStorage, busy.migrating);
+  const storageReason = storageNotReadyReason(status?.minio, status?.legacyStorage, busy.migrating, status?.s3Keys);
   if (server.status === "not-set-up" && !server.unmanaged && (storageReason === null || storageSetUp)) setup.push({ kind: "setup-pipeline-server", project });
   const status_: EnvStatus = moving ? "setting-up" : "not-set-up";
   const label = moving ? `Setting up in ${project}` : `Not set up in ${project}`;

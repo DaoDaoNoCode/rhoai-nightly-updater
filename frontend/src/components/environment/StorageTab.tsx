@@ -14,7 +14,7 @@ import {
   StackItem,
 } from "@patternfly/react-core";
 import { Link } from "react-router-dom";
-import type { KeptPVC, LegacyStorageState, ResourceState, ResourcesStatus } from "../../types";
+import type { KeptPVC, LegacyStorageState, ResourceState, ResourcesStatus, S3KeysState } from "../../types";
 import { TooltipButton } from "../TooltipButton";
 import { ImageRef } from "../ImageRef";
 import {
@@ -32,7 +32,7 @@ import { CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, 
 import { CopyS3EnvButton, S3SecretField } from "./AdminLogin";
 import { notManaged } from "./resourceStatus";
 import { STORAGE_HREF, TAB_TITLES } from "./environmentTabs";
-import { type Busy, type FeatureState, MIGRATION_NEEDED, storageStatus } from "./featureState";
+import { type Busy, type FeatureState, storageNeedsSecuring, storageStatus, storageStatusText } from "./featureState";
 
 /** Namespace where storage runs and its in-cluster URL (pkg/cluster s3Namespace, s3Host). */
 export const S3_NAMESPACE = "seaweedfs";
@@ -139,6 +139,54 @@ const MigrationAlert: React.FC<{ legacy: LegacyStorageState; reason: string | nu
   );
 };
 
+/** Tab-top banner while the storage is not secured: why it matters and what Secure S3 storage does. */
+const NotSecuredAlert: React.FC<{ keys: S3KeysState; readOnly: boolean }> = ({ keys, readOnly }) => (
+  <Alert variant="warning" isInline component="div" title={keys.secured ? "Some pipeline servers still use the old key" : "Every pipeline project holds the S3 storage's admin key"}>
+    <Content component="p">
+      {keys.secured
+        ? "Secure S3 storage stopped before every pipeline server had a key of its own. Running it again finishes the rest."
+        : "An earlier version gave the storage's admin key to every pipeline project: anyone who can read a Secret in one of them can read, change or delete everything in the storage. Secure S3 storage gives the storage a new admin key and each pipeline server a key of its own; new pipeline servers can be set up once it has run."}
+    </Content>
+    {readOnly && <Content component="p">A cluster-admin runs it.</Content>}
+  </Alert>
+);
+
+/** Which key each pipeline server on the storage uses. */
+const KeysDetails: React.FC<{ keys: S3KeysState }> = ({ keys }) => {
+  const own = keys.ownKey ?? [];
+  const old = keys.oldKey ?? [];
+  const kept = keys.keepOldKey ?? [];
+  if (own.length + old.length + kept.length === 0 && !keys.checkError) return null;
+  return (
+    <DescriptionList isCompact isHorizontal aria-label="S3 keys">
+      {own.length > 0 && (
+        <DescriptionListGroup>
+          <DescriptionListTerm>Own key</DescriptionListTerm>
+          <DescriptionListDescription>{joinNodes(own.map((n) => <code key={n}>{n}</code>))}</DescriptionListDescription>
+        </DescriptionListGroup>
+      )}
+      {old.length > 0 && (
+        <DescriptionListGroup>
+          <DescriptionListTerm>Old shared key</DescriptionListTerm>
+          <DescriptionListDescription>{joinNodes(old.map((n) => <code key={n}>{n}</code>))}</DescriptionListDescription>
+        </DescriptionListGroup>
+      )}
+      {kept.length > 0 && (
+        <DescriptionListGroup>
+          <DescriptionListTerm>Not changed by this tool</DescriptionListTerm>
+          <DescriptionListDescription>{joinNodes(kept.map((n) => <code key={n}>{n}</code>))}</DescriptionListDescription>
+        </DescriptionListGroup>
+      )}
+      {keys.checkError && (
+        <DescriptionListGroup>
+          <DescriptionListTerm>Keys</DescriptionListTerm>
+          <DescriptionListDescription>{keys.checkError}</DescriptionListDescription>
+        </DescriptionListGroup>
+      )}
+    </DescriptionList>
+  );
+};
+
 /** Cluster-scoped S3 block: SeaweedFS in seaweedfs, or legacy storage awaiting migration. */
 const StoragePart: React.FC<StorageTabProps> = ({ status, busy, baseReason, readOnly, readReason, minioLeftovers, consoleURL, setPending, onMigrate, onRemoveOldStorage }) => {
   const { minio, legacyStorage: legacy } = status;
@@ -149,6 +197,12 @@ const StoragePart: React.FC<StorageTabProps> = ({ status, busy, baseReason, read
   const legacyReason = busy.migrating ? "Migrate storage is running." : baseReason ?? (legacy?.terminating ? `Namespace ${legacy.namespace} is being deleted.` : null);
   if (legacy?.stage === "migrate" && !readOnly) {
     actions.push(<ActionListItem key="migrate"><TooltipButton variant="primary" onClick={onMigrate} isLoading={busy.migrating} disabledReason={busy.migrating ? null : legacyReason}>Migrate storage</TooltipButton></ActionListItem>);
+  }
+  const keys = status.s3Keys;
+  const needsSecuring = storageNeedsSecuring(status);
+  if (needsSecuring && !readOnly) {
+    actions.push(<ActionListItem key="secure"><TooltipButton variant="primary" onClick={() => setPending({ kind: "secure-minio" })} isLoading={busy.resAction === "secure-minio"}
+      disabledReason={busy.resAction === "secure-minio" ? null : baseReason ?? keys?.secureBlockedReason ?? null}>Secure S3 storage...</TooltipButton></ActionListItem>);
   }
   const canRepair = deployed && !unmanaged && !legacy && (!!terminalReason(minio) || !!minio?.repairNeeded) && !isTerminating(minio);
   const repairReason = baseReason ?? minio?.setupBlockedReason ?? null;
@@ -163,7 +217,7 @@ const StoragePart: React.FC<StorageTabProps> = ({ status, busy, baseReason, read
   const blocked = !deployed && minio?.setupBlockedReason;
   const usedBy = minio?.usedBy ?? [];
   return (
-    <PartItem id="storage" title="SeaweedFS" scope="Shared by the cluster" status={storageStatus(status, busy)} statusText={legacy?.stage === "migrate" ? MIGRATION_NEEDED : undefined} unmanaged={unmanaged} actions={actions.length ? actions : undefined} menu={menu}>
+    <PartItem id="storage" title="SeaweedFS" scope="Shared by the cluster" status={storageStatus(status, busy)} statusText={storageStatusText(status)} unmanaged={unmanaged} actions={actions.length ? actions : undefined} menu={menu}>
       {!minio?.deployed && (minio?.leftovers ?? []).length > 0 && (
         <Content component="p">A deletion that did not finish left {joinNodes((minio?.leftovers ?? []).map((l) => <code key={l}>{l}</code>))} in namespace <code>{S3_NAMESPACE}</code>{readOnly ? "." : "; Delete S3 storage removes it."}</Content>
       )}
@@ -191,6 +245,7 @@ const StoragePart: React.FC<StorageTabProps> = ({ status, busy, baseReason, read
           logsHref={consolePodsHref(consoleURL, S3_NAMESPACE, "seaweedfs")} />
       )}
       {deployed && !minio?.ready && !terminalReason(minio) && !isTerminating(minio) && <StartingNote state={minio!} typical="under a minute" />}
+      {keys && deployed && !legacy && <KeysDetails keys={keys} />}
       {deployed && (
         <DescriptionList isCompact isHorizontal aria-label="S3 storage details">
           <DescriptionListGroup>
@@ -279,6 +334,7 @@ export const StorageTab: React.FC<StorageTabProps> = (props) => {
         </Content>
       </StackItem>
       {legacy && <StackItem><MigrationAlert legacy={legacy} readOnly={readOnly} reason={busy.migrating ? "Migrate storage is running." : baseReason} /></StackItem>}
+      {storageNeedsSecuring(status) && status.s3Keys && <StackItem><NotSecuredAlert keys={status.s3Keys} readOnly={readOnly} /></StackItem>}
       <StackItem>
         <PartList aria-label={`What ${TAB_TITLES.storage} needs`}>
           <StoragePart {...props} />
@@ -309,14 +365,18 @@ export const StoragePrerequisitePart: React.FC<{ status: ResourcesStatus; busy: 
   const { minio, legacyStorage: legacy } = status;
   const unmanaged = notManaged(minio);
   const migrating = legacy?.stage === "migrate";
+  const notSecured = storageNeedsSecuring(status);
   const why = unmanaged ? <>Namespace <code>{S3_NAMESPACE}</code> was not created by this tool, so pipeline servers set up here do not use it.</>
     // Migration needed: the alert at the top of the tab says it, with the way there.
     : legacy?.stage === "migrate" ? null
+    : notSecured ? (status.s3Keys?.secured
+      ? "Some pipeline servers still use the old shared key; Secure S3 storage, on the S3 storage tab, finishes giving each its own."
+      : "Every pipeline project still holds its admin key. Secure S3 storage, on the S3 storage tab, gives each pipeline server a key of its own; new pipeline servers can be set up after that.")
     : s === "not-set-up" ? (minio?.setupBlockedReason ? "It can't be set up now; the S3 storage tab says why." : "Setting up a pipeline server sets it up first.")
     : s === "error" || s === "needs-attention" ? "The S3 storage tab says what needs attention."
     : null;
   return (
-    <PartItem id="pipelines-storage" title="S3 storage" scope="Shared by the cluster" status={s} statusText={migrating ? MIGRATION_NEEDED : undefined} unmanaged={unmanaged}
+    <PartItem id="pipelines-storage" title="S3 storage" scope="Shared by the cluster" status={s} statusText={storageStatusText(status)} unmanaged={unmanaged}
       actions={migrating ? undefined : <ActionListItem><Button variant="link" component={StorageTabLink}>Open S3 storage</Button></ActionListItem>}>
       <Content component="p">
         {migrating
@@ -328,8 +388,34 @@ export const StoragePrerequisitePart: React.FC<{ status: ResourcesStatus; busy: 
 };
 
 /** Build confirm dialog copy for a pending storage action; null if pending is unrelated. */
-export function storageConfirm(pending: Pending, minio: ResourceState | undefined, legacy?: LegacyStorageState | null, setPending?: (p: Pending) => void): ConfirmSpec | null {
+export function storageConfirm(pending: Pending, minio: ResourceState | undefined, legacy?: LegacyStorageState | null, setPending?: (p: Pending) => void, keys?: S3KeysState | null): ConfirmSpec | null {
   switch (pending.kind) {
+    case "secure-minio": {
+      const servers = keys?.oldKey ?? [];
+      const kept = keys?.keepOldKey ?? [];
+      return {
+        title: "Secure the S3 storage?", confirm: "Secure", runTitle: "Secure the S3 storage", changesOpen: true,
+        summary: (
+          <Content component="p">
+            {keys?.secured
+              ? "Finishes giving each pipeline server this tool set up a key of its own. Takes a few seconds."
+              : <>Gives the S3 storage a new admin key, which goes into no project, and gives each pipeline server this tool set up a SeaweedFS key of its own. The old admin key, which every pipeline project holds, stops working. Takes up to 2 minutes; stored data is kept.</>}
+          </Content>
+        ),
+        changes: [
+          ...(keys?.secured ? [] : [<>SeaweedFS restarts with a new admin key in Secret <code>seaweedfs-s3-credentials</code>, and with IAM writes on, so the admin key can make a key for each pipeline server.</>]),
+          servers.length > 0
+            ? <>These pipeline servers get a key of their own, checked against the storage before it is written into their Secrets <code>nightly-dspa-s3</code> and <code>rhoai-nightly-updater-s3</code> (the dashboard Connection): {joinNodes(servers.map((n) => <code key={n}>{n}</code>))}.</>
+            : <>No pipeline server this tool recorded uses the storage.</>,
+          ...(kept.length > 0 ? [<>Not changed by this tool; they keep the old key, which then no longer works: {joinNodes(kept.map((n) => <code key={n}>{n}</code>))}.</>] : []),
+        ],
+        extra: (
+          <Alert variant="warning" isInline component="div" title="Running pipelines and open workbenches">
+            <Content component="p">Pipeline runs in progress may fail while the storage restarts and the keys change. Workbenches and model deployments that use the Connection or run pipelines (Elyra) keep the old key until they restart: restart them afterwards. This tool restarts none of them.</Content>
+          </Alert>
+        ),
+      };
+    }
     case "setup-minio":
     case "repair-minio":
       return {
