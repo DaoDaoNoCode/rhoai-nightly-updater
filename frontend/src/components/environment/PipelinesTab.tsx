@@ -49,7 +49,7 @@ import {
 
 export { READ_ONLY_SETUP } from "./FeatureLayout";
 
-/** Canonical pipeline server identifier (pkg/cluster dspaName)—what the dashboard and workbenches expect—plus the legacy name (previousDSPAName) and the S3 Secret name (dspaSecretName). */
+/** Standard DataSciencePipelinesApplication name (pkg/cluster dspaName) that the dashboard and workbenches look for, the older default (previousDSPAName), and the S3 Secret object name (dspaSecretName). */
 export const DSPA_NAME = "dspa";
 export const PREVIOUS_DSPA_NAME = "nightly-dspa";
 export const DSPA_SECRET_NAME = "nightly-dspa-s3";
@@ -146,7 +146,7 @@ const PipelineServerPart: React.FC<PipelinesTabProps> = ({ status, project, busy
       {unmanaged
         ? <Content component="p">Created outside this tool (for example in the dashboard); this tool leaves it alone.</Content>
         : server
-          ? <Content component="p">Runs your pipelines in {project} and keeps their artifacts in {old ? <>the storage of an earlier version, until Migrate storage moves it to the S3 storage</> : "the S3 storage"}.</Content>
+          ? <Content component="p">Runs your pipelines in {project} and keeps their artifacts in {old ? <>the storage of an earlier version, until Migrate storage moves them to the S3 storage</> : "the S3 storage"}.</Content>
           : <Content component="p">Not set up in {project} yet. Set up creates one that keeps its artifacts in the S3 storage.</Content>}
       {server && managed && server.nonStandardName && !isTerminating(server) && (
         <Alert variant="warning" isInline component="div" title="Workbench pipelines don't work with this pipeline server"
