@@ -930,17 +930,29 @@ async (page) => {
         pad: 24,
       });
 
-      await open("/test-resources?tab=pipelines", "env-live");
+      // The S3 storage, the cluster's: its own tab, no project picker.
+      await open("/test-resources?tab=storage", "env-live");
       const storage = part("S3 storage");
+      await crop("environment-storage", [panel().getByRole("heading", { name: "S3 storage", level: 2 }), storage], {
+        notes: [
+          { at: label(panel(), "Ready"), n: 1, pos: "r" },
+          { at: row(storage, "Endpoint"), n: 2, pos: "l" },
+          { at: storage.getByRole("button", { name: "Show the S3 secret key" }), n: 3, pos: "r" },
+          { at: storage.getByRole("link", { name: /Open admin UI/ }), n: 4, pos: "l" },
+        ],
+        pad: 24,
+      });
+
+      await open("/test-resources?tab=pipelines", "env-live");
+      const needed = part("S3 storage");
       await crop("environment-pipelines", [panel().getByRole("heading", { name: "Pipelines", level: 2 }), part("Pipeline server")], {
         notes: [
           { at: label(panel(), "Ready in dev-project"), n: 1, pos: "r" },
           // The whole picker (text field and toggle), the badge on its top-right corner: on its right it covered the toggle.
           { at: panel().locator(".pf-v6-c-menu-toggle").filter({ has: page.getByRole("combobox") }), n: 2, pos: "tr" },
-          { at: row(storage, "Endpoint"), n: 3, pos: "l" },
-          { at: storage.getByRole("button", { name: "Show the S3 secret key" }), n: 4, pos: "r" },
-          { at: part("Pipeline server").getByRole("link", { name: /Open pipelines/ }), n: 6, pos: "l" },
-          { at: row(part("Pipeline server"), "Connection in the dashboard"), n: 5, pos: "l" },
+          { at: needed.getByRole("link", { name: "Open S3 storage" }), n: 3, pos: "l" },
+          { at: row(part("Pipeline server"), "Connection in the dashboard"), n: 4, pos: "l" },
+          { at: part("Pipeline server").getByRole("link", { name: /Open pipelines/ }), n: 5, pos: "l" },
         ],
         pad: 24,
       });
@@ -1092,7 +1104,7 @@ async (page) => {
         pad: 24,
       });
 
-      await open("/test-resources?tab=pipelines", "s3-migrate");
+      await open("/test-resources?tab=storage", "s3-migrate");
       const old = part("S3 storage");
       await old.getByRole("button", { name: "Storage of an earlier version" }).click();
       await wait(400);
@@ -1109,14 +1121,14 @@ async (page) => {
       await crop("s3-migrate-dialog", page.locator(".pf-v6-c-modal-box"), { noFit: true, pad: 6 });
       await page.keyboard.press("Escape");
 
-      await open("/test-resources?tab=pipelines", "s3-migrate-remove");
+      await open("/test-resources?tab=storage", "s3-migrate-remove");
       await part("S3 storage").getByRole("button", { name: "S3 storage actions" }).click();
       await page.getByRole("menuitem", { name: /Delete old storage/ }).click();
       await wait(800);
       await crop("s3-remove-dialog", page.locator(".pf-v6-c-modal-box"), { noFit: true, pad: 6 });
       await page.keyboard.press("Escape");
 
-      await open("/test-resources?tab=pipelines", "s3-incomplete");
+      await open("/test-resources?tab=storage", "s3-incomplete");
       const inc = part("S3 storage");
       await crop("s3-incomplete", inc, {
         notes: [
@@ -1193,7 +1205,7 @@ async (page) => {
     },
 
     async "gif-migrate"() {
-      await open("/test-resources?tab=pipelines", "s3-migrate");
+      await open("/test-resources?tab=storage", "s3-migrate");
       gif("s3-migrate", await mainClip());
       await frame(1200);
       await clickShown(page.getByRole("listitem", { name: "S3 storage", exact: true }).getByRole("button", { name: "Migrate storage" }));
@@ -1218,7 +1230,7 @@ async (page) => {
     },
 
     async "gif-repair"() {
-      await open("/test-resources?tab=pipelines", "s3-incomplete");
+      await open("/test-resources?tab=storage", "s3-incomplete");
       gif("s3-repair", await mainClip());
       await frame(1200);
       await clickShown(page.getByRole("listitem", { name: "S3 storage", exact: true }).getByRole("button", { name: "Repair" }));

@@ -242,18 +242,18 @@ Open **Components**, then **Diagnostics**.
 
 ## 7. Environment: pipelines and S3 storage
 
-Steps 7 to 11 are optional: each sets up one feature to develop against or reproduce an issue with. Open **Environment**. The **Overview** has one row per feature (Pipelines, MLflow, Models, Playground, MaaS) with its state and next step; each feature has its own tab.
+Steps 7 to 11 are optional: each sets up one feature to develop against or reproduce an issue with. Open **Environment**. The **Overview** has one row per feature (S3 storage, Pipelines, MLflow, Models, Playground, MaaS) with its state and next step; each feature has its own tab.
 
 <img src="images/environment-overview.png" alt="Overview: each feature with its state and next step" width="760">
 
 Before **Set up**, each tab says what it still needs, and Set up stays disabled with the reason under it: a DataScienceCluster component that is not Managed (with **Open Components**), or no data science project. The tool never creates a project here: create one in the RHOAI dashboard (Projects, then Create project) first. (The one exception is an environment recipe with `project.mode: create`, which creates its project as the dashboard does and removes it in Clean up: [CLUSTER_CHANGES §8](CLUSTER_CHANGES.md#environment-recipes-the-recipe-project-500).) Every Set up asks first, names what it creates, and shows its steps.
 
 1. On the **Overview**, **Pipelines** reads **Not set up in any project**: click **Choose a project**, or open the **Pipelines** tab.
-2. Pick a data science project, click **Set up** and confirm. The tool deploys SeaweedFS in namespace `seaweedfs` (bucket `pipelines`, Service `seaweedfs-s3`), then the pipeline server `dspa` in the project, as the dashboard sets one up, with a dashboard S3 Connection that workbenches can use. (If S3 storage reads **Needs attention** with **Migrate storage**, an earlier version's storage is still in namespace `minio`: see [UPGRADING §5](UPGRADING.md#5-upgrade-to-v300).)
+2. Pick a data science project, click **Set up** and confirm. The tool deploys SeaweedFS in namespace `seaweedfs` (bucket `pipelines`, Service `seaweedfs-s3`), then the pipeline server `dspa` in the project, as the dashboard sets one up, with a dashboard S3 Connection that workbenches can use. The **S3 storage** tab shows the storage on its own; you can also set it up there first. (If the Pipelines tab says your pipeline data is in storage from an earlier version, an earlier version's storage is still in namespace `minio`: run **Migrate storage** on the **S3 storage** tab, see [UPGRADING §5](UPGRADING.md#5-upgrade-to-v300).)
 
-<img src="images/environment-pipelines.png" alt="Pipelines tab: Ready in the project, with the storage's endpoint and admin login, and Open pipelines" width="760">
+<img src="images/environment-pipelines.png" alt="Pipelines tab: Ready in the project, the S3 storage's health with Open S3 storage, and Open pipelines" width="760">
 
-**What you should see:** the tab reads **Ready in** your project, with **Open pipelines** (after 1–3 minutes) and **Open admin UI** (user `admin`; the eye beside the password shows it, cluster-admins only). **Run a sample pipeline** on the same tab offers a two-step pipeline to import in the dashboard, or commands that make a token that may only use the pipeline API (it expires in 15 minutes), then upload and run it. To remove it all, use **Clean up Pipelines** at the bottom of the tab (or **Delete** in a part's menu: the storage's stays disabled while a pipeline server uses it).
+**What you should see:** the tab reads **Ready in** your project, with **Open pipelines** (after 1–3 minutes). The **S3 storage** tab has the storage's endpoint, keys and **Open admin UI** (user `admin`; the eye beside the password shows it, cluster-admins only). **Run a sample pipeline** on the same tab offers a two-step pipeline to import in the dashboard, or commands that make a token that may only use the pipeline API (it expires in 15 minutes), then upload and run it. To remove it all, use **Clean up Pipelines** at the bottom of the tab (or **Delete** in the pipeline server's menu). The storage's **Delete S3 storage** is on the S3 storage tab and stays disabled while a pipeline server uses it.
 
 ## 8. Environment: MLflow and sample data
 

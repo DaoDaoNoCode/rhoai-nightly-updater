@@ -348,8 +348,8 @@ was not re-applied: run the installer again.
 
 **S3 storage: Migrate storage.** 2.x kept the storage in namespace `minio`
 (MinIO, or SeaweedFS behind the MinIO-era names); 3.0.0 keeps it in
-namespace `seaweedfs`. After the upgrade, S3 storage on the Pipelines tab
-reads **Needs attention**, with **Migrate storage**
+namespace `seaweedfs`. After the upgrade, the **S3 storage** tab reads
+**Migration needed**, with **Migrate storage**
 ([RUNBOOK §10.1](../RUNBOOK.md#101-migrate-storage-from-an-earlier-version)):
 
 1. **Migrate storage** sets up the new storage with **new keys**, copies
@@ -360,7 +360,7 @@ reads **Needs attention**, with **Migrate storage**
 2. Before you remove the old storage, update what this tool did not create
    (data connections, workbenches, other pipeline servers): the endpoint
    becomes `http://seaweedfs-s3.seaweedfs.svc:8333` and the keys are the
-   new ones (the Pipelines tab shows them); buckets and object paths stay.
+   new ones (the S3 storage tab shows them); buckets and object paths stay.
    The old keys give no access to the new storage.
 3. **Delete old storage** (the storage's menu) is a separate, later step:
    it copies and checks once more, then deletes the old objects.
