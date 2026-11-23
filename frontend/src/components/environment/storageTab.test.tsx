@@ -38,6 +38,7 @@ describe("the S3 storage tab", () => {
     expect((await header()).querySelector(".pf-v6-c-label")).toHaveTextContent(/^Ready$/);
     expect(screen.getByRole("tabpanel")).toHaveTextContent("The pipeline servers this tool sets up keep their artifacts here, in bucket pipelines");
     expect(screen.getByRole("tabpanel")).toHaveTextContent("Other features can use it too.");
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("shared by the whole cluster, in namespace seaweedfs.");
     const storage = await part("SeaweedFS");
     expect(storage).toHaveTextContent("Shared by the cluster");
     expect(storage.querySelector('dl[aria-label="S3 storage details"]')).toHaveTextContent(/Used by\s*dev\/dspa/);
@@ -50,6 +51,7 @@ describe("the S3 storage tab", () => {
     stubApi({ "/api/resources/status": statusOf({}), "/api/resources/projects": { projects: ["dev"] } });
     renderAt("/test-resources?tab=storage");
     expect((await header()).querySelector(".pf-v6-c-label")).toHaveTextContent(/^Not set up$/);
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("It goes in namespace seaweedfs once it is set up.");
     fireEvent.click(await screen.findByRole("button", { name: "Set up S3 storage" }));
     const dialog = await screen.findByRole("dialog", { name: "Set up the S3 storage?" });
     expect(dialog).toHaveTextContent("On the cluster: S3 storage (20 GiB), shared by every pipeline server this tool sets up.");
@@ -67,6 +69,7 @@ describe("the S3 storage tab", () => {
     stubApi({ "/api/resources/status": statusOf({ minio: { ...none, namespace: "seaweedfs", migrationPending: true }, legacyStorage: legacy, pipelineServers: [dspa] }), "/api/resources/projects": { projects: ["dev"] } });
     renderAt("/test-resources?tab=storage");
     expect((await header()).querySelector(".pf-v6-c-label")).toHaveTextContent(/^Migration needed$/);
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("It goes in namespace seaweedfs once Migrate storage has set it up.");
     const why = screen.getByText("Your pipeline data is in storage from an earlier version").closest(".pf-v6-c-alert") as HTMLElement;
     expect(within(why).queryByRole("button", { name: "Migrate storage" })).not.toBeInTheDocument();
     const storage = await part("SeaweedFS");
@@ -93,6 +96,10 @@ describe("the S3 storage elsewhere", () => {
     const label = () => screen.getByRole("heading", { level: 2, name: "Pipelines" }).closest(".pf-v6-l-flex")!.querySelector(".pf-v6-c-label");
     await waitFor(() => expect(label()).toHaveTextContent(/^Migration needed$/));
     expect(screen.getByRole("tabpanel")).not.toHaveTextContent(/Needs attention in dev/);
+    // What is true while the earlier storage still holds the data: no claim that the new storage is in use.
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("their artifacts stay in the storage of an earlier version until Migrate storage moves them to the cluster's S3 storage.");
+    expect(screen.getByRole("tabpanel")).toHaveTextContent("The storage they use, from an earlier version, stays; delete it on the S3 storage tab.");
+    expect(screen.getByRole("tabpanel")).not.toHaveTextContent(/other features can use it/);
     expect(within(await part("Pipeline server")).getByText("Ready")).toBeInTheDocument();
     expect(within(await part("S3 storage")).getByText("Migration needed")).toBeInTheDocument();
     unmount();

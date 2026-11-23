@@ -40,6 +40,9 @@ export const S3_ENDPOINT = "http://seaweedfs-s3.seaweedfs.svc:8333";
 /** Bucket name used for artifacts from each pipeline server this tool provisions. */
 export const PIPELINES_BUCKET = "pipelines";
 
+/** What the storage is, before where it lives. */
+const STORAGE_WHAT = "S3-compatible object storage (SeaweedFS) shared by the whole cluster.";
+
 const pvcWithSize = (p: KeptPVC) => <><code>{p.name}</code>{p.size ? ` (${p.size})` : ""}</>;
 
 const joinNodes = (nodes: React.ReactNode[]) => nodes.map((n, i) => <React.Fragment key={i}>{i > 0 ? ", " : ""}{n}</React.Fragment>);
@@ -262,7 +265,12 @@ export const StorageTab: React.FC<StorageTabProps> = (props) => {
   const next = state.next;
   return (
     <Stack hasGutter>
-      <StackItem><FeatureHeader title={TAB_TITLES.storage} purpose={FEATURE_PURPOSE.storage} state={state} /></StackItem>
+      <StackItem>
+        <FeatureHeader title={TAB_TITLES.storage} state={state}
+          purpose={status.minio?.deployed ? FEATURE_PURPOSE.storage
+            : legacy?.stage === "migrate" ? `${STORAGE_WHAT} It goes in namespace ${S3_NAMESPACE} once Migrate storage has set it up.`
+            : `${STORAGE_WHAT} It goes in namespace ${S3_NAMESPACE} once it is set up.`} />
+      </StackItem>
       <StackItem>
         <Content component="p">
           {legacy?.stage === "migrate"

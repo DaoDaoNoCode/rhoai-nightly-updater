@@ -231,6 +231,7 @@ const UsePipelines: React.FC<{ server: ResourceState; project: string }> = ({ se
 export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
   const { status, project, projects, projectsLoaded, onProject, onClearProject, missingProject, state, busy, baseReason, readOnly, onSetUp, onCleanup } = props;
   const legacy = status.legacyStorage;
+  const migrating = legacy?.stage === "migrate";
   const server = project ? pipelineServerIn(status, project) : undefined;
   const next = state.next;
   const toolServers = (status.pipelineServers ?? []).filter((ps) => ps.managedByTool !== false);
@@ -240,10 +241,13 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
   const noProjects = projectsLoaded && projects.length === 0;
   return (
     <Stack hasGutter>
-      <StackItem><FeatureHeader title="Pipelines" purpose={FEATURE_PURPOSE.pipelines} state={state} /></StackItem>
+      <StackItem>
+        <FeatureHeader title="Pipelines" state={state}
+          purpose={migrating ? "Run data science pipelines in a project; their artifacts stay in the storage of an earlier version until Migrate storage moves them to the cluster's S3 storage." : FEATURE_PURPOSE.pipelines} />
+      </StackItem>
       {props.prerequisites && <StackItem>{props.prerequisites}</StackItem>}
       {status.pipelinesBlocked && <StackItem><ComponentAlert feature="Data Science Pipelines" block={status.pipelinesBlocked} /></StackItem>}
-      {legacy?.stage === "migrate" && <StackItem><MigrationPointer /></StackItem>}
+      {migrating && <StackItem><MigrationPointer /></StackItem>}
       {noProjects && <StackItem><NoProjectsAlert dashboardUrl={status.dashboardUrl} things="Pipeline servers" /></StackItem>}
       {outside.length > 0 && (
         <StackItem>
@@ -309,7 +313,9 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
       {!readOnly && anythingToClean && (
         <StackItem>
           <CleanupSection id="pipelines-cleanup" label="Clean up Pipelines…" onClick={onCleanup} reason={baseReason}
-            text="Deletes the pipeline servers this tool set up, in every project. You choose which, then it runs as one operation. The S3 storage stays: other features can use it. Delete it on the S3 storage tab, or with Clean up everything." />
+            text={migrating
+              ? "Deletes the pipeline servers this tool set up, in every project. You choose which, then it runs as one operation. The storage they use, from an earlier version, stays; delete it on the S3 storage tab."
+              : "Deletes the pipeline servers this tool set up, in every project. You choose which, then it runs as one operation. The S3 storage stays: other features can use it. Delete it on the S3 storage tab, or with Clean up everything."} />
         </StackItem>
       )}
     </Stack>
