@@ -56,7 +56,7 @@ export const RecipeCleanupModal: React.FC<{
   onClusterBusy: (res: { errorCode?: string }) => void;
 }> = ({ run, ready, isOpen, blocker, onClose, onDone, onClusterBusy }) => {
   const titleId = React.useId();
-  const parts = cleanupParts(run, ready);
+  const parts = cleanupParts(ready);
   const [chosen, setChosen] = useState<ReadonlySet<string>>(() => new Set(parts.filter((p) => p.setUpByRun).map((p) => p.id)));
   const [running, setRunning] = useState(false);
   const [states, setStates] = useState<Record<string, StepState>>({});

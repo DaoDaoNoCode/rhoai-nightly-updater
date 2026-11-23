@@ -344,8 +344,8 @@ describe("Recipes page", () => {
   });
 
   it("clean up: sends the backend's clean-up request for what the run created; a project with a workbench is deleted only once it is confirmed", async () => {
-    // A failed run: the cluster still shows its project and the aipipelines it turned on
-    // (the backend offers the storage and the pipeline server only once they carry the run's mark).
+    // A failed run: the cluster still shows as its own the pipeline server and the storage (they carry
+    // the run's annotation), the project it created and the aipipelines it turned on.
     const ended = contract.recipeRunEnded();
     const streams: ReturnType<typeof sseResponse>[] = [];
     const api = stubApi({
@@ -360,7 +360,7 @@ describe("Recipes page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up..." }));
     const dialog = screen.getByRole("dialog", { name: /Clean up what recipe dev set up\?/ });
     expect(within(dialog).getAllByRole("checkbox").map((c) => [c.getAttribute("id"), (c as HTMLInputElement).checked])).toEqual([
-      ["recipe-cleanup-storage", false], ["recipe-cleanup-recipe-project:recipe-dev", true], ["recipe-cleanup-components", true],
+      ["recipe-cleanup-pipeline-server:recipe-dev", true], ["recipe-cleanup-storage", true], ["recipe-cleanup-recipe-project:recipe-dev", true], ["recipe-cleanup-components", true],
     ]);
     expect(within(dialog).getByRole("checkbox", { name: "The DataScienceCluster components the run turned on: aipipelines" })).toBeChecked();
     expect(dialog).toHaveTextContent("Deleting project recipe-dev deletes everything in it.");
@@ -394,12 +394,12 @@ describe("Recipes page", () => {
     ]);
   });
 
-  it("clean up offers what the run found set up, unchosen, even when its step succeeded; a part chosen there joins the backend's request", async () => {
+  it("clean up offers only the backend's request: nothing the run found set up, whatever its step's status", async () => {
     // S3 and MLflow were there before: their steps succeeded without creating them.
     const before = steps(8).map((s) => (s.id === "s3" || s.id === "mlflow" ? { ...s, created: undefined } : s));
     const api = stubApi({
       ...editorReads,
-      "GET /api/recipes/run": runStatus({ state: "succeeded", steps: before, project: { name: "team-a" } }, { cleanup: { pipelineServers: ["team-a"], components: ["aipipelines"] } }),
+      "GET /api/recipes/run": runStatus({ state: "succeeded", steps: before, project: { name: "team-a" } }, { cleanup: { pipelineServers: ["team-a"], components: ["aipipelines"], recipeRun: "run1" } }),
       "POST /api/resources/cleanup/stream": () => sseResponse().response,
     });
     renderPage(<RecipesPage />, "/recipes");
@@ -407,17 +407,17 @@ describe("Recipes page", () => {
     await settle();
     fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up..." }));
     const dialog = screen.getByRole("dialog");
-    expect(within(dialog).getByRole("checkbox", { name: "The S3 storage" })).not.toBeChecked();
-    expect(within(dialog).getByRole("checkbox", { name: "MLflow" })).not.toBeChecked();
+    expect(within(dialog).queryByRole("checkbox", { name: "The S3 storage" })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("checkbox", { name: "MLflow" })).not.toBeInTheDocument();
     expect(within(dialog).getByRole("checkbox", { name: "The pipeline server in team-a" })).toBeChecked();
     expect(within(dialog).getByRole("checkbox", { name: "The DataScienceCluster components the run turned on: aipipelines" })).toBeChecked();
     // A project the recipe did not create is never offered.
     expect(within(dialog).queryByText(/Project team-a/)).not.toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("checkbox", { name: "MLflow" }));
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "The DataScienceCluster components the run turned on: aipipelines" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Clean up" }));
     await settle();
-    expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([{ pipelineServers: ["team-a"], mlflow: true }]);
+    // The run's ID goes with the request: Clean up re-checks the run's annotation before each delete.
+    expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([{ pipelineServers: ["team-a"], recipeRun: "run1" }]);
   });
 });
 

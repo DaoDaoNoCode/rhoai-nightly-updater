@@ -179,24 +179,17 @@ export interface RecipeCleanupPart {
 }
 
 /**
- * What Clean up can delete for a run, in the clean-up's own order: what the
- * run created (its steps' created, the backend's clean-up request `ready`:
- * the parts, the project the recipe created and the DataScienceCluster
- * components it turned on), and the parts its steps found already set up,
- * which were there before the run and are offered but not chosen.
+ * What Clean up can delete for a run, in the clean-up's own order: only what
+ * the backend's clean-up request `ready` names, which is what the cluster
+ * still shows as the run's (the parts carrying the run's annotation, the
+ * project the recipe created, the DataScienceCluster components it turned
+ * on). Nothing the run found already set up is offered.
  */
-export function cleanupParts(run: RecipeRun, ready: CleanupRequest | undefined): RecipeCleanupPart[] {
-  const step = (id: string) => run.steps.find((s) => s.id === id);
-  // A part the run created, or one its step found set up.
-  const offered = (id: string) => {
-    const s = step(id);
-    return !!s && (!!s.created || s.status === "success" || s.status === "skipped");
-  };
-  const project = run.project?.name;
+export function cleanupParts(ready: CleanupRequest | undefined): RecipeCleanupPart[] {
   const parts: RecipeCleanupPart[] = [];
-  if (project && offered("pipeline-server")) parts.push({ id: `pipeline-server:${project}`, title: `The pipeline server in ${project}`, setUpByRun: !!step("pipeline-server")?.created });
-  if (offered("s3")) parts.push({ id: "storage", title: "The S3 storage", setUpByRun: !!step("s3")?.created });
-  if (offered("mlflow")) parts.push({ id: "mlflow", title: "MLflow", setUpByRun: !!step("mlflow")?.created });
+  for (const project of ready?.pipelineServers ?? []) parts.push({ id: `pipeline-server:${project}`, title: `The pipeline server in ${project}`, setUpByRun: true });
+  if (ready?.storage) parts.push({ id: "storage", title: "The S3 storage", setUpByRun: true });
+  if (ready?.mlflow) parts.push({ id: "mlflow", title: "MLflow", setUpByRun: true });
   if (ready?.recipeProject) parts.push({ id: `recipe-project:${ready.recipeProject}`, title: `Project ${ready.recipeProject}, which the recipe created`, setUpByRun: true });
   if (ready?.components?.length) parts.push({ id: "components", title: `The DataScienceCluster components the run turned on: ${ready.components.join(", ")}`, setUpByRun: true });
   return parts;

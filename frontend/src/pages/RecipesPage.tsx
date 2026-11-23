@@ -87,7 +87,7 @@ export const RecipesPage: React.FC = () => {
   };
 
   const running = !!status?.running;
-  const hasCleanup = !!run && !running && cleanupParts(run, status?.cleanup).length > 0;
+  const hasCleanup = !!run && !running && cleanupParts(status?.cleanup).length > 0;
 
   return (
     <>
