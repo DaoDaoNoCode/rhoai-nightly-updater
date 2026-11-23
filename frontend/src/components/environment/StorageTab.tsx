@@ -175,7 +175,7 @@ const OldKeyAlert: React.FC<{ keys: S3KeysState }> = ({ keys }) => {
   const kept = (keys.keepOldKey ?? []).map(keptEntry);
   const many = kept.length > 1;
   return (
-    <Alert variant="warning" isInline component="div" title={many ? `${kept.length} pipeline servers lost their S3 access` : `Pipeline server ${kept[0]?.name} lost its S3 access`}>
+    <Alert variant="warning" isInline component="div" title={many ? `${kept.length} pipeline servers lost their S3 access` : <>Pipeline server <Id>{kept[0]?.name}</Id> lost its S3 access</>}>
       <List>
         {kept.map((k) => <ListItem key={k.name}><Id>{k.name}</Id>: {whyNoKey(k.reason)}.</ListItem>)}
       </List>
@@ -439,7 +439,7 @@ export function storageConfirm(pending: Pending, minio: ResourceState | undefine
   switch (pending.kind) {
     case "remove-leftover-keys":
       return {
-        title: "Remove leftover keys?", confirm: "Remove", danger: true, runTitle: "Remove leftover keys",
+        title: "Remove leftover keys?", confirm: "Remove", danger: true, runTitle: "Remove leftover keys", changesOpen: true,
         summary: <Content component="p">Deletes the S3 keys of pipeline servers that no longer exist. Each project named has no pipeline server now; if one is set up there again, it gets a new key.</Content>,
         changes: pending.users.map((u) => <><Id>{u}</Id>: its keys, then the SeaweedFS user, are deleted (only if its project still has no pipeline server when this runs).</>),
       };

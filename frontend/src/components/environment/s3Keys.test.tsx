@@ -162,7 +162,7 @@ describe("S3 storage that is not secured", () => {
     const after: S3KeysState = { secured: true, needsSecuring: false, ownKey: ["dev/dspa", "team-b/dspa"], keepOldKey: ["unrec/dspa (not recorded by this tool)"] };
     stubApi({ "/api/resources/status": statusOf({ minio: { ...readyMinio, usedBy: ["dev/dspa", "team-b/dspa", "unrec/dspa"] }, pipelineServers: [dspa], s3Keys: after }), "/api/resources/projects": { projects: ["dev"] } });
     const { unmount } = renderAt("/test-resources?tab=storage");
-    const alert = (await screen.findByText("Pipeline server unrec/dspa lost its S3 access")).closest(".pf-v6-c-alert") as HTMLElement;
+    const alert = (await screen.findByText((_, el) => el?.classList.contains("pf-v6-c-alert__title") === true && /Pipeline server unrec\/dspa lost its S3 access/.test(el.textContent ?? ""))).closest(".pf-v6-c-alert") as HTMLElement;
     expect(alert).toHaveTextContent("unrec/dspa: this tool has no record of it, so Secure S3 storage did not give it a key.");
     expect(alert).toHaveTextContent("The old admin key no longer works: its owner must give it new S3 keys, or delete it and set it up again with this tool.");
     const details = (await part("SeaweedFS")).querySelector('dl[aria-label="S3 storage details"]') as HTMLElement;
