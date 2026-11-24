@@ -1255,6 +1255,10 @@ export interface ResourceState {
   /** What the Connection Secret itself says, read only for the selected project (GET /api/resources/status?project=): present, missing, foreign or unreadable; absent when not read. */
   connectionState?: "present" | "missing" | "foreign" | "unreadable";
   connectionMessage?: string;
+  /** The project's workbenches whose opendatahub.io/connections annotation names that Connection (read with the user's token, only when present); deleting the pipeline server removes it from them first. */
+  connectionWorkbenches?: string[];
+  /** Why connectionWorkbenches could not be read. */
+  connectionWorkbenchesMessage?: string;
 }
 
 // --- Models (pkg/types InferenceGatewayState, ModelsStatus, ModelState) ---

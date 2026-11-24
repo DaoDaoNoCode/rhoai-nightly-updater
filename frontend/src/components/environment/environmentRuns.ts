@@ -44,6 +44,7 @@ export interface SetupConfirm {
  */
 /** The clean-up's refusal of a recipe project that holds what this tool did not create (pkg/cluster recipe.ErrorCodeConfirmContents). */
 const CONFIRM_PROJECT_CONTENTS = "confirm_project_contents";
+const CONFIRM_WORKBENCHES = "confirm_connection_workbenches";
 
 export function useRunState() {
   // The action running from this page ("setup-minio", ...) and its project.
@@ -402,9 +403,14 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     // Recipe projects the server refused because they hold what this tool
     // did not create, with what to confirm (the step's detail, one per line).
     const refusals: Record<string, string[]> = {};
+    // Pipeline servers refused because workbenches use their Connection, with those workbenches.
+    const workbenches: Record<string, string[]> = {};
     run.follow("Clean up", cleanupSteps(req), (onStep, onDone, onDetach) => streamCleanup(req, (step) => {
       if (step.step.startsWith("recipe-project:") && step.errorCode === CONFIRM_PROJECT_CONTENTS) {
         refusals[step.step.slice("recipe-project:".length)] = (step.detail ?? "").split("\n").filter(Boolean);
+      }
+      if (step.step.startsWith("pipeline-server:") && step.errorCode === CONFIRM_WORKBENCHES) {
+        workbenches[step.step.slice("pipeline-server:".length)] = (step.detail ?? "").split("\n").filter(Boolean);
       }
       onStep(step);
     }, (success, error, apiError) => {
@@ -412,9 +418,10 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setPlaygroundRefresh((n) => n + 1);
       setMaaSRefresh((n) => n + 1);
       onDone(success, error, apiError);
-      if (apiError?.errorCode === CONFIRM_PROJECT_CONTENTS && Object.keys(refusals).length > 0) {
+      const code = apiError?.errorCode;
+      if ((code === CONFIRM_PROJECT_CONTENTS || code === CONFIRM_WORKBENCHES) && Object.keys(refusals).length + Object.keys(workbenches).length > 0) {
         // Nothing was deleted: back to Clean up, with the same choices, to confirm.
-        setCleanupRetry({ req, contents: refusals });
+        setCleanupRetry({ req, contents: refusals, workbenches: { ...req.confirmWorkbenches, ...workbenches } });
         setRunOpen(false);
         setCleanupScope("all");
       }

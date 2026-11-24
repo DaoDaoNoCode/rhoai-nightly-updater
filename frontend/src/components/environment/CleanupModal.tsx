@@ -22,7 +22,7 @@ import type { PlaygroundStatus, ResourcesStatus, MaaSStatus, RestorableComponent
 import type { CleanupRequest } from "../../services/api";
 import { TooltipButton } from "../TooltipButton";
 import { isTerminating } from "./resourceRow";
-import { unrecordedPipelineServerNote } from "./PipelinesTab";
+import { connectionWorkbenchesChange, unrecordedPipelineServerNote } from "./PipelinesTab";
 import { S3_NAMESPACE, storageTeardownOffered } from "./StorageTab";
 import { gatewayListRelease } from "./modelsConfirm";
 
@@ -78,6 +78,8 @@ export function cleanupCandidates(status: ResourcesStatus, scope: CleanupScope, 
 export interface CleanupRetry {
   req: CleanupRequest;
   contents: Record<string, string[]>;
+  /** Per pipeline server's project, the workbenches that use its dashboard Connection (errorCode confirm_connection_workbenches). */
+  workbenches?: Record<string, string[]>;
 }
 
 /** The steps a clean-up streams, in its order (pkg/cluster CleanUp). */
@@ -203,10 +205,15 @@ export const CleanupModal: React.FC<{
   const chosenModels = models.filter((m) => offered.models.includes(m));
   const chosenServers = servers.filter(serverTicked);
   const confirmedServers = Object.fromEntries(chosenServers.filter((s) => unrecordedUID.has(s)).map((s) => [s, unrecordedUID.get(s)!]));
+  // The workbenches that lose each chosen server's dashboard Connection first: as a refused clean-up listed them, else as
+  // the status does (the selected project's only); the request confirms exactly these.
+  const connectionUsers = (p: string) => retry?.workbenches?.[p] ?? toolServers(status).find((ps) => ps.namespace === p)?.connectionWorkbenches ?? [];
+  const confirmWorkbenches = Object.fromEntries(chosenServers.map((p) => [p, connectionUsers(p)] as const).filter(([, w]) => w.length > 0));
   const req: CleanupRequest = {
     ...(chosenPublished.length ? { maasPublished: chosenPublished } : {}),
     ...(chosenServers.length ? { pipelineServers: chosenServers } : {}),
     ...(Object.keys(confirmedServers).length ? { confirmUnrecorded: confirmedServers } : {}),
+    ...(Object.keys(confirmWorkbenches).length ? { confirmWorkbenches } : {}),
     ...(storage && offered.storage ? { storage: true, ...(namespace && offered.namespace ? { deleteNamespace: true } : {}) } : {}),
     ...(mlflow && offered.mlflow ? { mlflow: true } : {}),
     ...(chosenPlaygrounds.length ? { playgrounds: chosenPlaygrounds } : {}),
@@ -345,6 +352,13 @@ export const CleanupModal: React.FC<{
                     <Checkbox id={`cleanup-confirm-${p}`} label={`Delete ${retry!.contents[p].length === 1 ? "it" : "them"} with project ${p}`} isChecked={confirmedContents.includes(p)} onChange={(_e, v) => toggleConfirmedContents(p, v)} />
                   </StackItem>
                 </Stack>
+              </Alert>
+            </StackItem>
+          ))}
+          {Object.entries(confirmWorkbenches).map(([p, wbs]) => (
+            <StackItem key={`workbenches-${p}`}>
+              <Alert variant="warning" isInline component="div" title={`Workbenches in ${p} use the dashboard Connection`}>
+                {connectionWorkbenchesChange(p, wbs)}
               </Alert>
             </StackItem>
           ))}

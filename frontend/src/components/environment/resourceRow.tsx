@@ -223,9 +223,9 @@ export type Pending =
    * unrecorded: the pipeline server carries this tool's label but this tool has no record of it; the dialog
    * says so, and confirming it is what lets Delete (and Recreate) remove it: the server with uid (one made again since is not).
    */
-  | { kind: "setup-pipeline-server" | "teardown-pipeline-server"; project: string; name?: string; again?: boolean; unrecorded?: boolean; uid?: string }
+  | { kind: "setup-pipeline-server" | "teardown-pipeline-server"; project: string; name?: string; again?: boolean; unrecorded?: boolean; uid?: string; workbenches?: string[] }
   /** Replace the tool's pipeline server named nightly-dspa with one named dspa (workbench pipelines need it). */
-  | { kind: "recreate-pipeline-server"; project: string; name: string; unrecorded?: boolean; uid?: string }
+  | { kind: "recreate-pipeline-server"; project: string; name: string; unrecorded?: boolean; uid?: string; workbenches?: string[] }
   /** MLflow samples in a project's workspace (one request for all of them). */
   | { kind: "mlflow-samples"; project: string; action: MLflowSampleAction; samples: MLflowSampleId[]; repairs?: string[] }
   /** Models: the inference gateway and/or the model in a project, as one streamed operation. */

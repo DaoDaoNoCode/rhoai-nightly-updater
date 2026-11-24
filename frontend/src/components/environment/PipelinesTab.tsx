@@ -102,8 +102,18 @@ export interface PipelinesTabProps {
 const ConnectionState: React.FC<{ server: ResourceState; project: string; readOnly: boolean; baseReason: string | null; onSetUpAgain: () => void }> = ({ server, project, readOnly, baseReason, onSetUpAgain }) => {
   const name = <code>{CONNECTION_NAME}</code>;
   switch (server.connectionState) {
-    case "present":
-      return <>{name}, listed as &quot;{CONNECTION_DISPLAY_NAME}&quot;: an S3 connection with the storage&apos;s keys, endpoint and bucket <code>pipelines</code>. Usable from workbenches and model deployments in {project}; in-cluster address only, so it does not work from outside the cluster.</>;
+    case "present": {
+      const users = server.connectionWorkbenches ?? [];
+      return (
+        <Stack hasGutter>
+          <StackItem>{name}, listed as &quot;{CONNECTION_DISPLAY_NAME}&quot;: an S3 connection with the storage&apos;s keys, endpoint and bucket <code>pipelines</code>. Usable from workbenches and model deployments in {project}; in-cluster address only, so it does not work from outside the cluster.</StackItem>
+          {users.length > 0 && (
+            <StackItem>Used by {users.length === 1 ? "workbench" : "workbenches"} {users.map((w, i) => <React.Fragment key={w}>{i > 0 ? ", " : ""}<code>{w}</code></React.Fragment>)}. Deleting the pipeline server removes the Connection from {users.length === 1 ? "it" : "them"} first.</StackItem>
+          )}
+          {server.connectionWorkbenchesMessage && <StackItem>Cannot check which workbenches use it: {server.connectionWorkbenchesMessage}</StackItem>}
+        </Stack>
+      );
+    }
     case "foreign":
       return <>A Secret {name} is in {project}, but it was not created by this tool, so it is not this storage&apos;s connection and the tool leaves it alone.</>;
     case "unreadable":
@@ -121,6 +131,16 @@ const ConnectionState: React.FC<{ server: ResourceState; project: string; readOn
   }
 };
 
+/** The workbenches a delete of server confirms removing the Connection from (as the status lists them). */
+function connectionWorkbenchesOf(server: ResourceState): { workbenches?: string[] } {
+  return server.connectionWorkbenches?.length ? { workbenches: server.connectionWorkbenches } : {};
+}
+
+/** The confirmation's line for the workbenches that lose the dashboard Connection before it is deleted. */
+export function connectionWorkbenchesChange(project: string, workbenches: string[]): React.ReactNode {
+  return <>These workbenches use the Connection <code>{CONNECTION_NAME}</code>; it is removed from them first: {workbenches.map((w, i) => <React.Fragment key={w}>{i > 0 ? ", " : ""}<code>{project}/{w}</code></React.Fragment>)}. Their other connections stay; attach it again in the dashboard once a new pipeline server made it again.</>;
+}
+
 /** Renders the selected project's pipeline server, or guidance until a project is picked. */
 const PipelineServerPart: React.FC<PipelinesTabProps> = ({ status, project, busy, baseReason, readOnly, consoleURL, setPending, connectionLoading }) => {
   if (!project) {
@@ -137,7 +157,7 @@ const PipelineServerPart: React.FC<PipelinesTabProps> = ({ status, project, busy
   const storageReady = !!status.minio?.ready || (old && !!legacy?.ready);
   const managed = !!server && server.managedByTool !== false;
   const menu: PartMenuItem[] = managed && !readOnly && !isTerminating(server)
-    ? [{ key: "delete", label: "Delete pipeline server…", onClick: () => setPending({ kind: "teardown-pipeline-server", project, name: server!.name, ...(server!.unrecorded ? { unrecorded: true, uid: server!.uid } : {}) }), disabledReason: baseReason ?? server!.teardownBlockedReason ?? null, isDanger: true }]
+    ? [{ key: "delete", label: "Delete pipeline server…", onClick: () => setPending({ kind: "teardown-pipeline-server", project, name: server!.name, ...(server!.unrecorded ? { unrecorded: true, uid: server!.uid } : {}), ...connectionWorkbenchesOf(server!) }), disabledReason: baseReason ?? server!.teardownBlockedReason ?? null, isDanger: true }]
     : [];
   return (
     <PartItem id="pipeline-server" title="Pipeline server" scope={`In project ${project}`} status={pipelineServerStatus(status, project, busy)} unmanaged={unmanaged}
@@ -150,7 +170,7 @@ const PipelineServerPart: React.FC<PipelinesTabProps> = ({ status, project, busy
           : <Content component="p">Not set up in {project} yet. Set up creates one that keeps its artifacts in the S3 storage.</Content>}
       {server && managed && server.nonStandardName && !isTerminating(server) && (
         <Alert variant="warning" isInline component="div" title="Workbench pipelines don't work with this pipeline server"
-          actionLinks={!readOnly ? <AlertActionLink onClick={() => setPending({ kind: "recreate-pipeline-server", project, name: server.name ?? PREVIOUS_DSPA_NAME, ...(server.unrecorded ? { unrecorded: true, uid: server.uid } : {}) })} isDisabled={!!baseReason}>Recreate with the standard name</AlertActionLink> : undefined}>
+          actionLinks={!readOnly ? <AlertActionLink onClick={() => setPending({ kind: "recreate-pipeline-server", project, name: server.name ?? PREVIOUS_DSPA_NAME, ...(server.unrecorded ? { unrecorded: true, uid: server.uid } : {}), ...connectionWorkbenchesOf(server) })} isDisabled={!!baseReason}>Recreate with the standard name</AlertActionLink> : undefined}>
           <Content component="p">
             An earlier version of this tool named it <code>{server.name ?? PREVIOUS_DSPA_NAME}</code>. Workbenches find their pipeline server only under the name <code>{DSPA_NAME}</code>, so Elyra pipelines from a workbench in {project} can&apos;t use it. The dashboard&apos;s pipelines pages and the KFP SDK work as they are.
           </Content>
@@ -363,6 +383,7 @@ export function pipelineServerConfirm(pending: Pending, pipelineServers: Resourc
           {pending.unrecorded && <Content component="p">{unrecordedPipelineServerNote(pending.project)}</Content>}
         </>,
         changes: [
+          ...(pending.workbenches?.length ? [connectionWorkbenchesChange(pending.project, pending.workbenches)] : []),
           <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name}</code> and Secret <code>{DSPA_SECRET_NAME}</code> are deleted; its database goes with it.</>,
           <>Then DataSciencePipelinesApplication <code>{DSPA_NAME}</code> is created, storing artifacts in the same S3 storage, with Secret <code>{DSPA_SECRET_NAME}</code> and the dashboard S3 Connection <code>{CONNECTION_NAME}</code>, both owned by it.</>,
         ],
@@ -380,7 +401,7 @@ export function pipelineServerConfirm(pending: Pending, pipelineServers: Resourc
           <Content component="p">Deletes the pipeline server in {pending.project}, with its runs and experiments. The project and the S3 storage stay.</Content>
           {pending.unrecorded && <Content component="p">{unrecordedPipelineServerNote(pending.project)}</Content>}
         </>,
-        changes: [<>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name || DSPA_NAME}</code> and its S3 credentials Secret are deleted, with the dashboard S3 Connection <code>{CONNECTION_NAME}</code> this tool created (workbenches or model deployments that use it lose it). The project stays.</>],
+        changes: [...(pending.workbenches?.length ? [connectionWorkbenchesChange(pending.project, pending.workbenches)] : []), <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name || DSPA_NAME}</code> and its S3 credentials Secret are deleted, with the dashboard S3 Connection <code>{CONNECTION_NAME}</code> this tool created (workbenches or model deployments that use it lose it). The project stays.</>],
         dataLoss: pvcsLost(ps, "the pipeline database: runs, experiments and their history") ?? <>The pipeline database: runs, experiments and their history.</>,
       };
     }
