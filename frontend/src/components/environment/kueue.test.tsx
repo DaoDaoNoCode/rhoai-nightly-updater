@@ -183,3 +183,15 @@ describe("review round: Overview and prerequisites", () => {
     expect(await screen.findByText(/the distributed workloads setup and the MaaS platform/)).toBeInTheDocument();
   });
 });
+
+describe("review round: the component rule once", () => {
+  it("U3: the kueue component's condition is stated once in Clean up", async () => {
+    stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] }, "/api/resources/kueue": ready(),
+      "/api/resources/prerequisites": { features: { kueue: { ready: true, parts: [], restorable: [{ component: "kueue", previous: "Removed", feature: "kueue" }] } } } });
+    renderAt("/test-resources?tab=kueue&project=dev");
+    fireEvent.click(await screen.findByRole("button", { name: "Clean up distributed workloads..." }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getAllByText(/no ClusterQueue or LocalQueue is left/)).toHaveLength(1);
+    expect(within(dialog).queryByText(/still uses it/)).toBeNull();
+  });
+});

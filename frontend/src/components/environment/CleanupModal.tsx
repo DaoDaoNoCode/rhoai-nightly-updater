@@ -43,7 +43,7 @@ export function modelRegistryComponentLine(component: string): string | null {
 /** A restorable component's checkbox label. */
 function componentLabel(r: RestorableComponent): React.ReactNode {
   if (r.component === "kueue") {
-    return <>Turn the DataScienceCluster&apos;s <code>kueue</code> back from Unmanaged to {r.previous || "Removed"}: the dashboard&apos;s Distributed workloads pages go away. Only once no ClusterQueue or LocalQueue is left on the cluster; the Red Hat build of Kueue and cert-manager stay.</>;
+    return <>Turn the DataScienceCluster&apos;s <code>kueue</code> back from Unmanaged to {r.previous || "Removed"}, only once no ClusterQueue or LocalQueue is left on the cluster: the dashboard&apos;s Distributed workloads pages go away. The Red Hat build of Kueue and cert-manager stay.</>;
   }
   const line = modelRegistryComponentLine(r.component);
   if (line === null) return <>Turn <code>{r.component}</code> back to {r.previous || "Removed"}</>;
@@ -438,7 +438,7 @@ export const CleanupModal: React.FC<{
                   <FormGroup role="group" isStack label="Cluster components this tool turned on" fieldId="cleanup-components">
                     {offeredComponents.map((r) => (
                       <Checkbox key={r.component} id={`cleanup-component-${r.component}`} label={componentLabel(r)}
-                        description="Runs last. It stays on while anything on the cluster still uses it, or if someone changed it since this tool turned it on. The operators it needed stay installed." isChecked={chosenComponents.includes(r.component)} onChange={(_e, v) => toggleComponent(r.component, v)} />
+                        description={r.component === "kueue" ? "Runs last. It also stays on if someone changed it since this tool turned it on." : "Runs last. It stays on while anything on the cluster still uses it, or if someone changed it since this tool turned it on. The operators it needed stay installed."} isChecked={chosenComponents.includes(r.component)} onChange={(_e, v) => toggleComponent(r.component, v)} />
                     ))}
                   </FormGroup>
                 )}
