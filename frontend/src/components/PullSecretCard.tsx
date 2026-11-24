@@ -33,6 +33,7 @@ import { CopyableCode } from "./environment/UseIt";
 import { describeError } from "../errors";
 import { formatBuildDate, sentence } from "../build";
 import { TooltipButton } from "./TooltipButton";
+import { ConfirmActionModal } from "./ConfirmActionModal";
 import { StatusLabel } from "./StatusLabel";
 import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
 import { errorResult } from "../outcomes";
@@ -318,19 +319,18 @@ export const RegistryPullCopy: React.FC<{ copy: RegistryPullCopyInfo; onStatusRe
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [result, setResult] = useState<OperationResponse | null>(null);
   const where = `Secret ${copy.name}${copy.namespace ? ` in ${copy.namespace}` : ""}`;
-  const fill = `Copy for the internal registry makes ${where} from the token saved here.`;
   const [variant, title, body]: ["success" | "warning" | "info", string, string] = copy.problem
     ? ["warning", "Workbench images: could not check whether the internal registry can pull nightly images", sentence(copy.problem)]
     : copy.noApplicationsNamespace
     ? ["info", "Workbench images: RHOAI is not installed yet", "Once it is, the updater copies the token for the internal registry, which pulls the workbench images."]
     : !copy.exists
-    ? ["warning", "Workbench images: the internal registry cannot pull nightly images", fill]
+    ? ["warning", "Workbench images: the internal registry cannot pull nightly images", `It has no copy of the token yet. Copy for the internal registry creates ${where} from the token saved here.`]
     : !copy.ours
     ? ["warning", `Workbench images: ${where} was not created by this updater`, "The updater leaves it as it is, so whether the internal registry can pull nightly images depends on the token in it."]
     : copy.unusable
     ? ["warning", `Workbench images: the internal registry does not use ${where}`, sentence(copy.unusable)]
     : !copy.current
-    ? ["warning", "Workbench images: the internal registry has an older token", fill]
+    ? ["warning", "Workbench images: the internal registry has an older token", `${where} holds an older token. Copy for the internal registry replaces it with the token saved here.`]
     : ["success", "Workbench images: the internal registry can pull nightly images", `It uses ${where}, a copy of this token.`];
   const canCopy = !copy.problem && !copy.noApplicationsNamespace && (!copy.exists || (copy.ours && !copy.unusable && !copy.current));
   const canRemove = copy.exists && copy.ours;
@@ -357,7 +357,7 @@ export const RegistryPullCopy: React.FC<{ copy: RegistryPullCopyInfo; onStatusRe
           {body}
         </Alert>
       </StackItem>
-      {(canCopy || canRemove) && !confirmRemove && (
+      {(canCopy || canRemove) && (
         <StackItem>
           <ActionList>
             <ActionListGroup>
@@ -370,7 +370,7 @@ export const RegistryPullCopy: React.FC<{ copy: RegistryPullCopyInfo; onStatusRe
               )}
               {canRemove && (
                 <ActionListItem>
-                  <TooltipButton variant="link" isDanger onClick={() => setConfirmRemove(true)} isDisabled={busy !== null} disabledReason={disabledReason}>
+                  <TooltipButton variant="secondary" isDanger onClick={() => setConfirmRemove(true)} isDisabled={busy !== null} disabledReason={disabledReason}>
                     Remove the internal registry&apos;s copy
                   </TooltipButton>
                 </ActionListItem>
@@ -379,26 +379,19 @@ export const RegistryPullCopy: React.FC<{ copy: RegistryPullCopyInfo; onStatusRe
           </ActionList>
         </StackItem>
       )}
-      {confirmRemove && (
-        <StackItem>
-          <Content component="p">
-            Remove {where}? Workbenches then cannot pull nightly images through the internal registry until the token is copied
-            again. Only this updater&apos;s Secret is removed; the pull secret stays.
-          </Content>
-          <ActionList>
-            <ActionListGroup>
-              <ActionListItem>
-                <TooltipButton variant="danger" onClick={() => void run("remove")} isLoading={busy === "remove" || undefined} isDisabled={busy !== null} disabledReason={disabledReason}>
-                  Remove
-                </TooltipButton>
-              </ActionListItem>
-              <ActionListItem>
-                <Button variant="link" onClick={() => setConfirmRemove(false)} isDisabled={busy !== null}>Cancel</Button>
-              </ActionListItem>
-            </ActionListGroup>
-          </ActionList>
-        </StackItem>
-      )}
+      <ConfirmActionModal
+        isOpen={confirmRemove}
+        title="Remove the internal registry's copy?"
+        confirmLabel="Remove"
+        confirmVariant="danger"
+        isLoading={busy === "remove"}
+        confirmDisabled={!!disabledReason}
+        changes={[`Deletes ${where}. Only this updater's Secret is removed; the pull secret stays.`]}
+        summary="Workbenches cannot pull nightly images through the internal registry until the token is copied again."
+        changesOpen
+        onConfirm={() => void run("remove")}
+        onCancel={() => setConfirmRemove(false)}
+      />
       {result && (
         <StackItem>
           <Alert component="p" variant={result.success ? "success" : "danger"} title={result.message} isInline isPlain isLiveRegion />
@@ -614,12 +607,6 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
         </Content>
       </StackItem>
 
-      {!notUsed && pullSecret.exists && pullSecret.registry && (
-        <StackItem>
-          <RegistryPullCopy copy={pullSecret.registry} onStatusRefresh={onStatusRefresh} />
-        </StackItem>
-      )}
-
       {invalid && !notUsed && (
         <StackItem>
           <Alert variant="warning" isInline isPlain component="p" title="The cluster can't pull nightly images with this secret">
@@ -682,6 +669,12 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
             isPlain
             isLiveRegion
           />
+        </StackItem>
+      )}
+
+      {!notUsed && pullSecret.exists && pullSecret.registry && (
+        <StackItem>
+          <RegistryPullCopy copy={pullSecret.registry} onStatusRefresh={onStatusRefresh} />
         </StackItem>
       )}
 

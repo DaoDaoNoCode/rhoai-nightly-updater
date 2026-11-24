@@ -1,6 +1,6 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { PullSecretSetup } from "./PullSecretCard";
 import { ClusterSetupCard } from "./StatusCards";
 import { SetupModal } from "./PrerequisitesPanel";
@@ -161,8 +161,8 @@ describe("The internal registry's copy of the token (ROSA HCP)", () => {
 
   it.each([
     [copy, "Workbench images: the internal registry can pull nightly images", "It uses Secret rhoai-nightly-updater-pull in redhat-ods-applications, a copy of this token.", false, true],
-    [{ ...copy, current: false }, "Workbench images: the internal registry has an older token", "Copy for the internal registry makes Secret rhoai-nightly-updater-pull in redhat-ods-applications from the token saved here.", true, true],
-    [{ ...copy, exists: false, ours: false, current: false }, "Workbench images: the internal registry cannot pull nightly images", "Copy for the internal registry makes Secret rhoai-nightly-updater-pull in redhat-ods-applications", true, false],
+    [{ ...copy, current: false }, "Workbench images: the internal registry has an older token", "Secret rhoai-nightly-updater-pull in redhat-ods-applications holds an older token. Copy for the internal registry replaces it with the token saved here.", true, true],
+    [{ ...copy, exists: false, ours: false, current: false }, "Workbench images: the internal registry cannot pull nightly images", "It has no copy of the token yet. Copy for the internal registry creates Secret rhoai-nightly-updater-pull in redhat-ods-applications", true, false],
     [{ ...copy, ours: false, current: false }, "Workbench images: Secret rhoai-nightly-updater-pull in redhat-ods-applications was not created by this updater", "The updater leaves it as it is", false, false],
     [{ ...copy, current: false, unusable: "It has the annotation openshift.io/image.excludeImageSecret=true, so the internal registry does not use it." }, "Workbench images: the internal registry does not use Secret rhoai-nightly-updater-pull in redhat-ods-applications", "openshift.io/image.excludeImageSecret=true", false, true],
     [{ name: "rhoai-nightly-updater-pull", noApplicationsNamespace: true, exists: false, ours: false, current: false }, "Workbench images: RHOAI is not installed yet", "Once it is, the updater copies the token", false, false],
@@ -220,11 +220,14 @@ describe("The internal registry's copy of the token (ROSA HCP)", () => {
     const open = screen.getByRole("button", { name: REMOVE });
     await waitFor(() => expect(open).not.toHaveAttribute("aria-disabled", "true"));
     fireEvent.click(open);
-    expect(screen.getByText(/Remove Secret rhoai-nightly-updater-pull in redhat-ods-applications\? Workbenches then cannot pull nightly images/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    const dialog = await screen.findByRole("dialog", { name: /Remove the internal registry's copy\?/ });
+    expect(dialog).toHaveTextContent("Workbenches cannot pull nightly images through the internal registry until the token is copied again.");
+    expect(dialog).toHaveTextContent("Deletes Secret rhoai-nightly-updater-pull in redhat-ods-applications. Only this updater's Secret is removed; the pull secret stays.");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(posts(fetchMock)).toEqual([]);
     fireEvent.click(screen.getByRole("button", { name: REMOVE }));
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Remove" }));
     expect(await screen.findByText(/removed Secret/)).toBeInTheDocument();
     expect(posts(fetchMock)).toEqual(["/api/setup/pull-secret/registry-copy/remove"]);
     await settleApps();
