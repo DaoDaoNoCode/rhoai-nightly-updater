@@ -287,6 +287,9 @@ func (m *Run) setupKuadrant(rec *MaaSRecord, kq *kuadrantState, kVersion, kuadra
 		if err := WriteMaaSRecord(c, *rec); err != nil {
 			return m.Fail("kuadrant", err.Error(), kube.ErrorCodeFromK8sErr(err), "record write failed")
 		}
+		if r, err := m.WaitKuadrantKindAdmissible("kuadrant"); r != nil || err != nil {
+			return r, err
+		}
 		m.Step("kuadrant", "running", fmt.Sprintf("Creating the Kuadrant CR %s/kuadrant...", kuadrantNS))
 		if err := CreateKuadrant(c, version, kuadrantNS, false); err != nil {
 			return m.Fail("kuadrant", fmt.Sprintf("Failed to create the Kuadrant CR %s/kuadrant: %v. Set up again to retry.", kuadrantNS, err), MaaSWriteCode(err), "kuadrant create failed")

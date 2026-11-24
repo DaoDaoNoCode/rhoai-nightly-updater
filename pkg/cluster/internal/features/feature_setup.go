@@ -913,6 +913,9 @@ func ensureKuadrant(m *serving.Run, rec *prereqRecord) (*types.OperationResponse
 	if err := serving.CreateKuadrant(c, version, ns, true); err != nil {
 		return m.Fail("kuadrant", fmt.Sprintf("The API server rejects the Kuadrant CR %s/kuadrant: %v. Nothing was created.", ns, err), serving.MaaSWriteCode(err), "kuadrant dry run failed")
 	}
+	if r, err := m.WaitKuadrantKindAdmissible("kuadrant"); r != nil || err != nil {
+		return r, err
+	}
 	m.Step("kuadrant", "running", fmt.Sprintf("Creating the Kuadrant CR %s/kuadrant...", ns))
 	if err := serving.CreateKuadrant(c, version, ns, false); err != nil {
 		return m.Fail("kuadrant", fmt.Sprintf("Failed to create the Kuadrant CR %s/kuadrant: %v. Set up again to retry.", ns, err), serving.MaaSWriteCode(err), "kuadrant create failed")

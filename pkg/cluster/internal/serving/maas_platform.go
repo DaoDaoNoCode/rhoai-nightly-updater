@@ -14,6 +14,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 // The platform pieces MaaS needs besides its own: the Kuadrant CR,
@@ -66,6 +67,96 @@ func CreateKuadrant(c *kube.Client, version, ns string, dryRun bool) error {
 		return nil
 	}
 	return err
+}
+
+// KuadrantCRD is the CRD of the Kuadrant CR.
+const KuadrantCRD = "kuadrants." + KuadrantGroup
+
+// kuadrantAdmissionWait is how long after the Kuadrant CRD turned
+// Established the Kuadrant CR waits to be created: the API server's
+// admission RESTMapper is reset every 30 seconds, and 15 seconds more cover
+// the reset itself and the gap between this tool's clock and the cluster's.
+const kuadrantAdmissionWait = 30*time.Second + 15*time.Second
+
+// WaitKuadrantKindAdmissible waits, on step, until the API servers know the
+// kind Kuadrant well enough to admit the objects a Kuadrant CR owns. It
+// returns a failed response when it cannot tell, and nil, nil when the CR
+// can be created now.
+//
+// Kuadrant's operator creates Authorino and Limitador with an owner
+// reference to the Kuadrant CR that sets blockOwnerDeletion. The garbage
+// collector's admission plugin refuses such a reference to a kind its
+// RESTMapper does not know (plugin/pkg/admission/gc/gc_admission.go:141:
+// "cannot set blockOwnerDeletion in this case because cannot find
+// RESTMapping"), and kube-apiserver resets that mapper only every 30
+// seconds (staging/src/k8s.io/apiserver/pkg/server/options/admission.go:167:
+// `go utilwait.Until(discoveryRESTMapper.Reset, 30*time.Second, ...)`).
+// So for up to 30 seconds after the CRD is Established the operator's first
+// try fails, and it does not try again (seen live with Connectivity Link
+// 1.5: Kuadrant stayed not Ready, "limitador resource not in topology",
+// until its operator restarted). The wait uses time, not a probe: each API
+// server replica (a hosted control plane runs several) has its own timer,
+// so one request that is admitted proves nothing about the next. A CRD
+// Established long ago needs no wait.
+//
+// The CRD is read from the cluster-wide CRD list, by name, which the
+// template already grants (Set up itself reads it with the signed-in
+// user's token, as every change does). Its time is the cluster's, so it is
+// compared with the wall clock, as object ages are; the wait itself runs on
+// kube.Clock() and never lasts longer than kuadrantAdmissionWait, whatever
+// the gap between the clocks.
+func (m *Run) WaitKuadrantKindAdmissible(step string) (*types.OperationResponse, error) {
+	c := m.Client
+	var crds []struct {
+		Metadata kube.ObjectMeta `json:"metadata"`
+		Status   struct {
+			Conditions []struct {
+				Type               string `json:"type"`
+				Status             string `json:"status"`
+				Reason             string `json:"reason"`
+				Message            string `json:"message"`
+				LastTransitionTime string `json:"lastTransitionTime"`
+			} `json:"conditions"`
+		} `json:"status"`
+	}
+	if err := c.ListInto("/apis/apiextensions.k8s.io/v1/customresourcedefinitions?fieldSelector="+url.QueryEscape("metadata.name="+KuadrantCRD), &crds); err != nil {
+		return m.Fail(step, fmt.Sprintf("Cannot read CRD %s, so this tool cannot tell whether the API server accepts the new Kuadrant type yet: %v. The Kuadrant CR was not created; Set up again to retry.%s", KuadrantCRD, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "kuadrant crd read failed")
+	}
+	found := false
+	established, status, why := "", "", "it reports no Established condition"
+	for _, crd := range crds {
+		if crd.Metadata.Name != KuadrantCRD {
+			continue
+		}
+		found = true
+		for _, cond := range crd.Status.Conditions {
+			if cond.Type == "Established" {
+				established, status = cond.LastTransitionTime, cond.Status
+				why = "Established is " + kube.FirstNonEmpty(cond.Status, "not set")
+				if text := kube.FirstNonEmpty(cond.Message, cond.Reason); text != "" {
+					why += ": " + kube.TruncateText(text, 300)
+				}
+			}
+		}
+	}
+	switch {
+	case !found:
+		return m.Fail(step, fmt.Sprintf("CRD %s is not there although Kuadrant's API is served. The Kuadrant CR was not created; Set up again to retry.", KuadrantCRD), "not_ready", "kuadrant crd missing")
+	case status != "True":
+		return m.Fail(step, fmt.Sprintf("CRD %s is not Established (%s). The Kuadrant CR was not created; Set up again to retry.", KuadrantCRD, why), "not_ready", "kuadrant crd not established")
+	}
+	wait := kuadrantAdmissionWait
+	if at, err := time.Parse(time.RFC3339, established); err == nil {
+		wait = min(max(kuadrantAdmissionWait-time.Since(at), 0), kuadrantAdmissionWait)
+	}
+	if wait <= 0 {
+		return nil, nil
+	}
+	m.Step(step, "running", fmt.Sprintf("Waiting for the API server to accept the new Kuadrant type (up to %d seconds)...", int((wait+time.Second-1)/time.Second)))
+	if err := kube.Clock().Sleep(c.Context(), wait); err != nil {
+		return m.Fail(step, fmt.Sprintf("Stopped waiting for the API server to accept the new Kuadrant type: %v. The Kuadrant CR was not created.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "kuadrant crd wait failed")
+	}
+	return nil, nil
 }
 
 // --- the infrastructure namespace -----------------------------------------------------
