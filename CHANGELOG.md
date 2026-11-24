@@ -117,7 +117,10 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   distributed workloads setup, but only those the run created: each
   carries the run's annotation from its creation, and is removed only
   while it still has it, the recorded UID and is this tool's. The form has a switch and the
-  few options of each feature. No new permission
+  few options of each feature. A Dashboard Dev pull request whose images
+  are not published blocks the plan, and a step counts as done only once
+  what it set up works (the model serves, MaaS accepts it, the dashboard
+  rolls out). No new permission
   ([RUNBOOK §5.1](RUNBOOK.md#51-environment-recipe-runs-resume-interrupted-sign-in-again)).
 
 - **Pre-releases.** A version can now be tried out before it is released:
