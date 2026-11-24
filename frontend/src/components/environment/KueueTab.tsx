@@ -40,7 +40,10 @@ const SAMPLE_WHERE: Record<KueueSample["kind"], string> = {
 };
 
 /** User-facing explanation beside the Ray image field for why the default reference is chosen. */
-export const IMAGE_HELP = "The Ray image the RHOAI docs use with the CodeFlare SDK on x86 (amd64). It is large (it carries CUDA), so the first start can take several minutes. The docs' CPU images (2.52.1-py311-cpu, -py312-cpu) are for IBM Power (ppc64le) only and do not run here.";
+export const IMAGE_HELP = "Ray 2.47.1 is the default because it is the newest x86 image the RHOAI docs list (with the CodeFlare SDK). It is large (it carries CUDA), so the first start can take several minutes. The docs' newer CPU-only images (2.52.1-py311-cpu, -py312-cpu) are for IBM Power (ppc64le) and do not run on x86 clusters like this one.";
+
+/** The opt-in's one name, everywhere. */
+export const OPT_IN_NAME = "Dashboard Kueue setting";
 
 export interface KueueTabProps {
   prerequisites?: React.ReactNode;
@@ -139,7 +142,7 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
           <FormGroup label="Project" fieldId="kueue-project">
             <ProjectSelect id="kueue-project" projects={projects} selected={shownProject} onSelect={onProject} onClear={onClearProject} />
             <FormHelperText>
-              <HelperText><HelperTextItem>Use a project of its own, for example {KUEUE_DEFAULT_PROJECT} (create it in the dashboard): Set up labels it <code>{KUEUE_LABEL}=true</code>, so Kueue admits the workloads sent to its queue.</HelperTextItem></HelperText>
+              <HelperText><HelperTextItem>Best a project of its own, for example {KUEUE_DEFAULT_PROJECT}; create it in the dashboard first. Set up adds the label <code>{KUEUE_LABEL}=true</code> to it, so that Kueue admits the workloads sent to its queue.</HelperTextItem></HelperText>
             </FormHelperText>
           </FormGroup>
         </Form>
@@ -154,11 +157,11 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
           <PartItem id="kueue-queues" title="Queues" scope={shownProject ? `Cluster-wide, for project ${shownProject}` : "Cluster-wide, for one project"} status={qStatus}
             unmanaged={!!k?.objects.some((o) => o.foreign)} loading={!k && !kueueError}>
             <Content component="p">
-              ResourceFlavor {KUEUE_FLAVOR}, ClusterQueue {KUEUE_CLUSTER_QUEUE} with a CPU and memory quota for the project only, and LocalQueue {KUEUE_LOCAL_QUEUE} in it (never named <code>default</code>, which would make Kueue queue every workload of the project).
+              A queue for the project with a CPU and memory quota, as the RHOAI docs set it up (the objects are listed below and under What this creates). Its LocalQueue is never named <code>default</code>, which would make Kueue queue every workload of the project.
             </Content>
             {k?.refusal && !setUp && <Content component="p">Set up cannot run yet: {k.refusal}</Content>}
             {k && k.instance.found && (
-              <Content component="p">Kueue: {k.instance.ready ? "ready (KueueReady, and the Kueue CR cluster is Available)" : `not ready${k.instance.message ? `: ${k.instance.message}` : ""}`}.</Content>
+              <Content component="p">{k.instance.ready ? "Kueue is running." : `Kueue is not running yet${k.instance.message ? `: ${k.instance.message}` : ""}.`}</Content>
             )}
             {k && (setUp || k.objects.some((o) => o.present)) && <Objects k={k} />}
           </PartItem>
@@ -186,14 +189,14 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
               </PartItem>
             );
           })}
-          <PartItem id="kueue-optin" title="Dashboard Kueue switch (opt-in)" scope="Shared by the cluster" status={optInOn ? "ready" : "not-set-up"} statusText={optInOn ? "On" : "Off"}
+          <PartItem id="kueue-optin" title={OPT_IN_NAME} scope="Shared by the cluster" status={optInOn ? "ready" : "not-set-up"} statusText={optInOn ? "On" : "Off"}
             unmanaged={!!optIn?.profile.foreign} loading={!k && !kueueError}
             actions={setUp && !readOnly ? <ActionListItem><PrimaryAction variant="secondary" label={optInOn ? "Turn off..." : "Turn on..."} reason={baseReason}
               onClick={() => setPending({ kind: optInOn ? "kueue-optout" : "kueue-optin" })} /></ActionListItem> : undefined}>
             <Content component="p">
-              Off by default. On sets the dashboard&apos;s <code>disableKueue</code> to false, which makes every new dashboard project a Kueue project, and adds hardware profile {KUEUE_PROFILE} for LocalQueue {KUEUE_LOCAL_QUEUE}, so workbenches and models can start in {shownProject ?? "the project"}.
+              Off by default. Turning it on makes every new dashboard project a Kueue project (<code>disableKueue: false</code>) and adds hardware profile {KUEUE_PROFILE} for LocalQueue {KUEUE_LOCAL_QUEUE}, so that workbenches and models can start in {shownProject ?? "the project"}.
             </Content>
-            {optIn && <Content component="p">The dashboard&apos;s disableKueue is {optIn.disableKueue === undefined ? "unset (the dashboard takes it as true)" : String(optIn.disableKueue)}{optIn.on && !optIn.setByTool ? "; someone changed it since this tool's opt-in, so Clean up leaves it" : ""}.</Content>}
+            {optIn && <Content component="p">{optIn.disableKueue === false ? "Kueue is on in the dashboard." : optIn.disableKueue === undefined ? "Kueue is off in the dashboard (the default)." : "Kueue is off in the dashboard."}{optIn.on && !optIn.setByTool ? " Someone changed it after this tool turned it on, so Clean up leaves it as it is." : ""}</Content>}
           </PartItem>
         </PartList>
       </StackItem>
@@ -212,11 +215,13 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
       <StackItem>
         <FeatureSection title="What this creates">
           <CreatesList items={[
-            <>Prerequisites (above): the cert-manager Operator and the Red Hat build of Kueue from OperatorHub, then the DataScienceCluster&apos;s kueue set to Unmanaged; RHOAI then creates the Kueue CR cluster. The operators stay after Clean up.</>,
-            <>ResourceFlavor <code>{KUEUE_FLAVOR}</code>, ClusterQueue <code>{KUEUE_CLUSTER_QUEUE}</code> ({k?.quota ?? "a CPU and memory quota"}, for the project only, not preemptive) and LocalQueue <code>{KUEUE_LOCAL_QUEUE}</code> in the project, as the RHOAI docs create them.</>,
+            <>Prerequisites (above): the cert-manager Operator and the Red Hat build of Kueue from OperatorHub, then the DataScienceCluster&apos;s kueue set to Unmanaged, which means RHOAI uses the Kueue operator you install instead of its own. RHOAI then starts Kueue (its Kueue CR <code>cluster</code>); the tab says &quot;Kueue is running&quot; once RHOAI reports it ready. The operators stay after Clean up.</>,
+            <>ResourceFlavor <code>{KUEUE_FLAVOR}</code>: a name for the kind of nodes the quota is for (here any node).</>,
+            <>ClusterQueue <code>{KUEUE_CLUSTER_QUEUE}</code>: the quota, {k?.quota ?? "CPU and memory"}, for the project only. It is not preemptive: a waiting workload never stops a running one.</>,
+            <>LocalQueue <code>{KUEUE_LOCAL_QUEUE}</code> in the project: where its workloads are sent (label <code>kueue.x-k8s.io/queue-name</code>), drawing on the ClusterQueue&apos;s quota.</>,
             <>The label <code>{KUEUE_LABEL}=true</code> on the project, if it does not have it.</>,
             <>With the samples: RayCluster <code>nightly-raycluster</code> and RayJob <code>nightly-rayjob</code> (head and one worker, 1 CPU and 2 GiB each).</>,
-            <>With the opt-in: <code>disableKueue: false</code> in the dashboard&apos;s settings and hardware profile <code>{KUEUE_PROFILE}</code>.</>,
+            <>With the {OPT_IN_NAME}: <code>disableKueue: false</code> in the dashboard&apos;s settings and hardware profile <code>{KUEUE_PROFILE}</code>.</>,
           ]} />
           <Content component="p"><ExternalLink href={KUEUE_DOCS} isInline>RHOAI docs: Manage workloads with Kueue</ExternalLink></Content>
         </FeatureSection>
@@ -224,7 +229,7 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
       {!readOnly && ours && (
         <StackItem>
           <CleanupSection id="kueue-cleanup" label="Clean up distributed workloads..." onClick={onCleanup} reason={baseReason}
-            text="Deletes the samples, the queues and the project label this tool created, and turns its dashboard opt-in back. The operators stay." />
+            text={`Deletes the samples, the queues and the project label this tool created, and turns the ${OPT_IN_NAME} back. The operators stay.`} />
         </StackItem>
       )}
     </Stack>
@@ -244,21 +249,24 @@ export function kueueSteps(p: KueuePending): { id: string; title: string }[] {
     case "delete-kueue-sample":
       return [{ id: "samples", title: `Delete the ${SAMPLE_TITLES[p.sample]}` }];
     case "kueue-optin":
-      return [{ id: "check", title: "Check the dashboard's settings" }, { id: "dashboard", title: "Set disableKueue to false" }, { id: "profile", title: `Create hardware profile ${KUEUE_PROFILE}` }];
+      return [{ id: "check", title: "Check the setup and the dashboard's settings" }, { id: "dashboard", title: "Turn Kueue on in the dashboard" }, { id: "profile", title: `Create hardware profile ${KUEUE_PROFILE}` }];
     case "kueue-optout":
-      return [{ id: "opt-in", title: "Turn the dashboard opt-in back" }];
+      return [{ id: "opt-in", title: `Turn the ${OPT_IN_NAME} back` }];
     default:
       return [
         { id: "samples", title: "Delete the samples" },
         { id: "queues", title: "Delete the queues" },
         { id: "project", title: "Remove the project label this tool added" },
-        { id: "opt-in", title: "Turn the dashboard opt-in back" },
+        { id: "opt-in", title: `Turn the ${OPT_IN_NAME} back` },
       ];
   }
 }
 
 /** One-line description of dashboard opt-in behavior for projects created afterward. */
-export const OPT_IN_EFFECT = "Every project created in the dashboard from now on gets the label kueue.openshift.io/managed=true, and its workbenches and model deployments then need a hardware profile with a local queue that the project has: without one, the dashboard offers none and they cannot be created.";
+export const OPT_IN_EFFECT = "In every new project on this cluster, workbenches and model deployments can only use the queue hardware profile; a project without its own LocalQueue cannot create workbenches or deploy models until an admin adds one.";
+
+/** "a pipeline server and a workbench". */
+const listText = (items: string[]) => (items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`);
 
 /**
  * Returns confirm-dialog content for a pending Kueue action, or null if pending
@@ -283,7 +291,7 @@ export function kueueConfirm(pending: Pending, k: KueueStatus | null, setPending
             {others.length > 0 && (
               <StackItem>
                 <Alert variant="warning" isInline component="p" title={`Project ${p.project} already has other setups`}>
-                  {others.join(", ")}. Kueue manages only what is sent to a queue, so they keep running; but a project of its own is safer, because once the dashboard&apos;s Kueue switch is on, new workbenches and models there need a Kueue hardware profile.
+                  This project already has {listText(others)}. Kueue manages only what is sent to a queue, so they keep running. A project of its own is still safer: once the {OPT_IN_NAME} is on, new workbenches and models there need the queue hardware profile.
                 </Alert>
               </StackItem>
             )}
@@ -312,7 +320,7 @@ export function kueueConfirm(pending: Pending, k: KueueStatus | null, setPending
           ]),
           ...(p.rayCluster ? [<>RayCluster <code>nightly-raycluster</code> in {p.project}: head and one worker, 1 CPU and 2 GiB each, image <code>{p.rayImage}</code>.</>] : []),
           ...(p.rayJob ? [<>RayJob <code>nightly-rayjob</code> in {p.project} on the same cluster, plus its submitter (0.5 CPU, 1 GiB).</>] : []),
-          <>The dashboard&apos;s settings are not changed (the opt-in is a separate step).</>,
+          <>The dashboard&apos;s settings are not changed (the {OPT_IN_NAME} is a separate step).</>,
         ],
       };
     }
@@ -322,27 +330,30 @@ export function kueueConfirm(pending: Pending, k: KueueStatus | null, setPending
         summary: <Content component="p">Deletes {pending.sample === "rayjob" ? "RayJob nightly-rayjob" : "RayCluster nightly-raycluster"} in {k?.project}, only if it is the one this tool created.</Content>,
         changes: [<>Its Kueue Workload and its pods go with it.</>],
       };
-    case "kueue-optin":
+    case "kueue-optin": {
+      const apps = k?.optIn.profile.namespace ?? "the applications namespace";
+      const now = k?.optIn.disableKueue === false ? "on already" : k?.optIn.disableKueue === undefined ? "off, the default" : "off";
       return {
-        title: "Turn on the dashboard's Kueue switch?", confirm: "Turn on", runTitle: "Turn on the dashboard's Kueue switch", titleIcon: "warning", changesOpen: true,
+        title: `Turn on the ${OPT_IN_NAME}?`, confirm: "Turn on", runTitle: `Turn on the ${OPT_IN_NAME}`, changesOpen: true,
         summary: (
           <Stack hasGutter>
-            <StackItem><Alert variant="warning" isInline component="p" title="This changes every new dashboard project">{OPT_IN_EFFECT}</Alert></StackItem>
+            <StackItem><Alert variant="warning" isInline component="p" title="This changes every new project">{OPT_IN_EFFECT}</Alert></StackItem>
             <StackItem><Content component="p">Existing projects keep their labels. Workbenches and models in project {k?.project} can then use hardware profile {KUEUE_PROFILE}.</Content></StackItem>
           </Stack>
         ),
         changes: [
-          <>OdhDashboardConfig <code>odh-dashboard-config</code>: <code>spec.dashboardConfig.disableKueue: false</code> (it is {k?.optIn.disableKueue === undefined ? "unset" : String(k.optIn.disableKueue)}; the value before is recorded).</>,
-          <>HardwareProfile <code>{KUEUE_PROFILE}</code> in the applications namespace: type Queue, local queue {KUEUE_LOCAL_QUEUE}, 1 CPU and 2 GiB by default (up to 2 CPUs and 4 GiB).</>,
-          <>Turning it off (or Clean up) restores the value and deletes the profile, only if nobody changed them since.</>,
+          <>OdhDashboardConfig <code>odh-dashboard-config</code> in {apps}: <code>spec.dashboardConfig.disableKueue: false</code>, which turns Kueue on in the dashboard (it is {now} now; this tool records that).</>,
+          <>HardwareProfile <code>{KUEUE_PROFILE}</code> in the applications namespace {apps}: type Queue, local queue {KUEUE_LOCAL_QUEUE}, 1 CPU and 2 GiB by default (up to 2 CPUs and 4 GiB).</>,
+          <>Turning it off, or Clean up, puts the setting back and deletes the profile. If someone changes it after this, Clean up leaves it as it is.</>,
         ],
       };
+    }
     case "kueue-optout":
       return {
-        title: "Turn off the dashboard's Kueue switch?", confirm: "Turn off", runTitle: "Turn off the dashboard's Kueue switch",
-        summary: <Content component="p">Restores <code>disableKueue</code> to its value before this tool&apos;s opt-in ({k?.optIn.previous ?? "unset"}) and deletes hardware profile {KUEUE_PROFILE}.</Content>,
+        title: `Turn off the ${OPT_IN_NAME}?`, confirm: "Turn off", runTitle: `Turn off the ${OPT_IN_NAME}`,
+        summary: <Content component="p">Turns Kueue in the dashboard back to how it was before ({k?.optIn.previous === "true" ? "off" : "off, the default"}) and deletes hardware profile {KUEUE_PROFILE}.</Content>,
         changes: [
-          <>Each only while nobody changed it since this tool&apos;s opt-in; otherwise it stays, and the result says so.</>,
+          <>Each only if nobody changed it after this tool turned the setting on; otherwise it stays, and the result says so.</>,
           <>Projects the dashboard labelled while it was on keep their label.</>,
         ],
       };
@@ -361,9 +372,10 @@ export function kueueConfirm(pending: Pending, k: KueueStatus | null, setPending
 /** Ordered teardown bullets for Kueue resources this application provisioned. */
 export function kueueCleanupLines(k: KueueStatus | null): React.ReactNode[] {
   return [
-    <>The samples, then LocalQueue <code>{KUEUE_LOCAL_QUEUE}</code>, ClusterQueue <code>{KUEUE_CLUSTER_QUEUE}</code> and ResourceFlavor <code>{KUEUE_FLAVOR}</code>, each only while it is this tool&apos;s (its UID) and nothing else uses it.</>,
+    <>The samples, then LocalQueue <code>{KUEUE_LOCAL_QUEUE}</code>, ClusterQueue <code>{KUEUE_CLUSTER_QUEUE}</code> and ResourceFlavor <code>{KUEUE_FLAVOR}</code>, each only while it is this tool&apos;s and nothing else uses it.</>,
+    <>Jobs people sent to LocalQueue {KUEUE_LOCAL_QUEUE} themselves are never admitted once the queues are gone; they are deleted only if their project is deleted.</>,
     k?.label?.addedByTool ? <>The label <code>{KUEUE_LABEL}</code> on {k.project}, once no Kueue workload is left there.</> : <>The project&apos;s labels stay (this tool added none).</>,
-    k?.optIn.on ? <>The dashboard opt-in: disableKueue back to {k.optIn.previous ?? "unset"} and hardware profile {KUEUE_PROFILE} deleted, only if nobody changed them.</> : <>The dashboard&apos;s settings stay (this tool did not change them).</>,
-    <>The Red Hat build of Kueue, cert-manager and the Kueue CR cluster stay: other users may rely on them.</>,
+    k?.optIn.on ? <>The {OPT_IN_NAME} goes back to how it was, and hardware profile {KUEUE_PROFILE} is deleted, each only if nobody changed it.</> : <>The dashboard&apos;s settings stay (this tool did not change them).</>,
+    <>The Red Hat build of Kueue and cert-manager stay: others may rely on them.</>,
   ];
 }

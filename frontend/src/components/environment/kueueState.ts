@@ -62,6 +62,8 @@ export function queuesStatus(k: KueueStatus | null, busy: Busy): EnvStatus {
   if (k.objects.some((o) => o.terminating)) return "deleting";
   if (!kueueSetUp(k)) return k.objects.some((o) => o.present) ? "needs-attention" : "not-set-up";
   if (k.objects.some((o) => o.kind !== "ResourceFlavor" && !o.active)) return "setting-up";
+  // Ready only while Kueue runs (KueueReady, the Kueue CR Available, v1beta2), nothing refuses, and the project has the label.
+  if (!k.instance.ready || !k.instance.v1beta2 || k.refusal || !k.label?.present) return "needs-attention";
   return "ready";
 }
 
@@ -102,7 +104,7 @@ export function kueueState(k: KueueStatus | null, project: string | null, busy: 
       if (!where) return { status: s, label: "Not set up", next: { kind: "choose-project" }, project: null };
       return { status: s, label: "Not set up", next: { kind: "set-up", label: "Set up distributed workloads", setup: [kueueSetupPending(where, k)], reason: k?.refusal ?? null }, project: where };
     case "needs-attention":
-      return { status: s, label: `Incomplete${target}`, next: { kind: "show-issue", part: "kueue-queues", ...(where ? { project: where } : {}) }, project: where };
+      return { status: s, label: kueueSetUp(k) ? (!k?.label?.present ? `Project label missing${target}` : `Kueue not ready${target}`) : `Incomplete${target}`, next: { kind: "show-issue", part: "kueue-queues", ...(where ? { project: where } : {}) }, project: where };
     default:
       return { status: s, label: "Unknown", next: { kind: "show-issue", part: "kueue-queues" }, project: where };
   }

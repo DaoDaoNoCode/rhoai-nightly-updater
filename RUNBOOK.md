@@ -762,16 +762,20 @@ oc get cm rhoai-nightly-updater-snapshot -n <tool namespace> -o jsonpath='{.data
 
 | Symptom | Cause and fix |
 |---|---|
-| Prerequisites refused: Kueue "runs on this cluster ... without being installed from OperatorHub" | `kueue.x-k8s.io` is served by a `kueue-controller-manager` without the `kueue-operator` CSV (upstream manifests, or RHOAI 2.x's embedded Kueue). RHOAI does not count it, and two controllers clash. A cluster-admin migrates to the Red Hat build of Kueue (RHOAI docs, "Migrating to the Red Hat build of Kueue") |
+| Prerequisites refused: Kueue "installed outside OperatorHub" | `kueue.x-k8s.io` is served, no `kueue-operator` CSV or Subscription exists, and CRD `clusterqueues.kueue.x-k8s.io` carries no OLM label of package `kueue-operator` (upstream manifests, or RHOAI 2.x's embedded Kueue), whatever its controller is named. RHOAI does not count it, and two controllers clash. CRDs OLM left after an uninstall keep their labels and do not refuse. A read that fails refuses too. A cluster-admin migrates to the Red Hat build of Kueue (RHOAI docs, "Migrating to the Red Hat build of Kueue") |
 | Set up refused: "does not serve kueue.x-k8s.io/v1beta2" | The dashboard reads v1beta2 only; the Red Hat build of Kueue 1.2 serves v1beta1 only. Upgrade it |
 | Set up refused: `labelPolicy None` | The Kueue CR makes Kueue take over every job-like object in a labelled project. A cluster-admin decides; the tool does not label a project under it |
 | Set up refused: "has a LocalQueue named default" | Kueue would queue every new Deployment, StatefulSet and Pod of the labelled project there. Use another project |
-| Set up refused: "RHOAI has not created the Kueue CR cluster yet" or "is not Available" | Wait; check the `kueue-operator` CSV and cert-manager (`CertManagerAvailable`), then the DSC's `KueueReady` |
+| Set up refused: "RHOAI has not created the Kueue CR cluster yet", "is not Available", or KueueReady not True | Wait; check the `kueue-operator` CSV and cert-manager (`CertManagerAvailable`), then the DSC's `KueueReady` (only `True` counts; absent and `Unknown` refuse too) |
+| Set up refused: "Cannot read Kueue's API versions" | API discovery of `kueue.x-k8s.io` failed (403, 500, or a document that does not parse); only a 404 means Kueue is absent. Check your access and the API server |
+| Set up refused: "has the label kueue.openshift.io/managed=false" (or another value) | Someone chose that value; this tool never overwrites it. Set it to `true` in the dashboard, or use another project |
+| Turning on the Dashboard Kueue setting refused | The recorded setup is not there as recorded (queue made again, label gone, project made again, Kueue not ready). Clean up, then set up again |
 | A sample stays **Inadmissible** or **Queued** | Kueue's message says why (quota, or a resource the ClusterQueue does not cover). The quota is 6 CPUs and 11 GiB; the nodes must also have room. The Ray image is large: the first pull can take minutes |
 | A sample is **Admitted** but its pods do not start | The image cannot be pulled on this architecture, or KubeRay (DataScienceCluster `ray`) is off. Check `oc get pods -n <project>` |
 | Clean up: "is used by ..." | Another LocalQueue, ClusterQueue or Workload uses the tool's queue; remove it first. Clean up deletes nothing of anyone else |
 | Clean up: "Kept the label" | Kueue still has Workloads in the project; delete them, then clean up again |
-| Clean up kept `disableKueue` or the profile | Someone changed it after the opt-in; the tool leaves it. Change it in the dashboard |
+| Clean up kept `disableKueue` or the profile | Someone changed it after the Dashboard Kueue setting was turned on; the tool leaves it. Change it in the dashboard |
+| Clean up waits on a queue or Workload "being deleted" | Objects being deleted count until they are gone (their finalizers); clean up again once they are |
 | The DataScienceCluster's `kueue` stays Unmanaged after Clean up | It goes back only when ticked and while no ClusterQueue or LocalQueue is left on the cluster (any owner) |
 
 ## 11. Manual recovery for operator deadlocks

@@ -569,6 +569,15 @@ func TestKueuePrerequisites(t *testing.T) {
 			t.Errorf("plan lacks %q:\n%s", want, plan)
 		}
 	}
+	var dscPart *types.MaaSPart
+	for i, pt := range st.Parts {
+		if pt.ID == "dsc-kueue" {
+			dscPart = &st.Parts[i]
+		}
+	}
+	if dscPart == nil || dscPart.Title != "Kueue component" || !strings.Contains(dscPart.Message, "uses the Kueue operator you install instead of its own") {
+		t.Fatalf("kueue part %+v", dscPart)
+	}
 	u := userClientOf(pc.c, fakeUserToken)
 	res, _ := runPrereqs(t, u, "kueue")
 	if !res.Success {

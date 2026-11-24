@@ -20,6 +20,9 @@ import { useLatestRequest } from "../../hooks/useLatestRequest";
  * terminal for an admin who prefers them.
  */
 
+/** The prerequisites' Set up button, where a feature has a shorter one. */
+export const prerequisitesSetupLabel = (feature: PrerequisiteFeature) => (feature === "kueue" ? "Set up Kueue's prerequisites" : `Set up what ${FEATURE_TITLES[feature]} needs`);
+
 export const FEATURE_TITLES: Record<PrerequisiteFeature, string> = { pipelines: "Pipelines", mlflow: "MLflow", "model-registry": "the model registry", models: "Models", playground: "the playground", kueue: "the distributed workloads setup" };
 
 /**
@@ -88,10 +91,10 @@ export function withPrerequisites(state: FeatureState, p: FeaturePrerequisites |
   const setup: Pending[] = [{ kind: "setup-prerequisites", feature, ...(feature === "models" ? { exposure: RECOMMENDED_EXPOSURE, recommended: true } : {}) }];
   const reason = p.setupBlockedReason ?? (plan.length === 0 ? "A cluster-admin finishes it: the tab shows each part." : null);
   if (state.status === "ready") {
-    return { ...state, status: "needs-attention", label: `Needs attention${state.project ? ` in ${state.project}` : ""}`, next: { kind: "set-up", label: `Set up what ${FEATURE_TITLES[feature]} needs`, setup, reason } };
+    return { ...state, status: "needs-attention", label: `Needs attention${state.project ? ` in ${state.project}` : ""}`, next: { kind: "set-up", label: prerequisitesSetupLabel(feature), setup, reason } };
   }
   if (state.status !== "not-set-up") return state;
-  return { ...state, label: "Needs cluster setup", next: { kind: "set-up", label: `Set up what ${FEATURE_TITLES[feature]} needs`, setup, reason } };
+  return { ...state, label: "Needs cluster setup", next: { kind: "set-up", label: prerequisitesSetupLabel(feature), setup, reason } };
 }
 
 /** A tab header's state: a feature that reads ready while its cluster prerequisites are not needs attention. */
@@ -172,7 +175,7 @@ export const PrerequisitesSection: React.FC<{
         </PartList>
       </StackItem>
       <StackItem>
-        <PrimaryAction label={`Set up what ${FEATURE_TITLES[feature]} needs`} onClick={() => setPending({ kind: "setup-prerequisites", feature, ...(exposure ? { exposure } : {}) })} reason={reason} />
+        <PrimaryAction label={prerequisitesSetupLabel(feature)} onClick={() => setPending({ kind: "setup-prerequisites", feature, ...(exposure ? { exposure } : {}) })} reason={reason} />
       </StackItem>
       {script && (
         <StackItem>

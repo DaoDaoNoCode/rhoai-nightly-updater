@@ -264,8 +264,8 @@ func dscComponentCommand(dsc, key, state string) string {
 // componentTitle names a component for people.
 func componentTitle(fc envkit.FeatureComponent, key string) string {
 	name := strings.TrimPrefix(fc.Feature, "The ")
-	if strings.Contains(name, "(") {
-		return name // "Model serving (KServe)"
+	if strings.Contains(name, "(") || strings.HasSuffix(name, " component") {
+		return name // "Model serving (KServe)", "Kueue component"
 	}
 	return fmt.Sprintf("%s (%s)", name, key)
 }
@@ -379,7 +379,7 @@ func planFeature(c *kube.Client, fs featureSetup, r clusterReads) *featurePlan {
 				pt.State, pt.Message = "manual", fmt.Sprintf("%s in DataScienceCluster %s, which Argo CD application %q manages: set it to %s in Git.", kube.FirstNonEmpty(state, "Not set"), p.dscName, p.argoApp, on)
 				pt.Commands = dscComponentCommand(p.dscName, key, on)
 			case cp.turnOn:
-				pt.State, pt.Message = "missing", fmt.Sprintf("%s in DataScienceCluster %s. Set up sets it to %s; Clean up can turn it back.", kube.FirstNonEmpty(state, "Not set"), p.dscName, on)
+				pt.State, pt.Message = "missing", fmt.Sprintf("%s in DataScienceCluster %s. Set up sets it to %s%s; Clean up can turn it back.", kube.FirstNonEmpty(state, "Not set"), p.dscName, on, onMeaning(on))
 				pt.Commands = dscComponentCommand(p.dscName, key, on)
 				p.plan = append(p.plan, fmt.Sprintf("DataScienceCluster %s: set %s to %s (it is %s; Clean up can turn it back while nothing else uses it)", p.dscName, key, on, kube.FirstNonEmpty(state, "not set")))
 			case cp.ready == "False":
@@ -811,6 +811,14 @@ func RunPrerequisites(c *kube.Client, req types.PrerequisitesRequest, onStep fun
 
 	// 3. Ready.
 	return waitPrerequisitesReady(m, p)
+}
+
+// onMeaning says what a non-Managed on state means, in plain words.
+func onMeaning(on string) string {
+	if on == "Unmanaged" {
+		return ", which means RHOAI uses the Kueue operator you install instead of its own"
+	}
+	return ""
 }
 
 // onStateOf is the state the plan's components are turned on with

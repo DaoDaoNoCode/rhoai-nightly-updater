@@ -1497,7 +1497,7 @@ export function kueueWorld(state = "none", { optIn = false, samples = false, pro
     project: state === "none" || missing ? undefined : project,
     instance: missing ? { found: false, available: false, v1beta2: false, ready: false } : { found: true, available: true, kueueReady: "True", v1beta2: true, ready: true },
     ...(missing ? { refusal: "First set up what distributed workloads need on the cluster (above): Kueue is turned off on this cluster: component kueue is Removed in DataScienceCluster default-dsc, so nothing would run it. A cluster-admin turns it on by setting it to Unmanaged.", refusalCode: "prerequisites",
-      blocked: { component: "kueue", dsc: "default-dsc", state: "Removed", reason: "Kueue is turned off on this cluster: component kueue is Removed in DataScienceCluster default-dsc, so nothing would run it. A cluster-admin turns it on by setting it to Unmanaged." } } : {}),
+      blocked: { component: "kueue", dsc: "default-dsc", state: "Removed", reason: "Kueue component is turned off on this cluster: component kueue is Removed in DataScienceCluster default-dsc, so nothing would run it. A cluster-admin turns it on by setting it to Unmanaged." } } : {}),
     objects: missing ? [] : [obj("ResourceFlavor", "nightly-kueue-cpu"), obj("ClusterQueue", "nightly-kueue"), obj("LocalQueue", "nightly-kueue", project)],
     quota: "6 CPUs and 11Gi of memory",
     ...(set ? { label: { present: true, addedByTool: true } } : {}),
@@ -1555,14 +1555,14 @@ export function prerequisites({ models = "ready", pipelines = "ready", registryR
           parts: [
             readyPart("cert-manager", "cert-manager Operator for Red Hat OpenShift", "Version 1.20.1 runs in cert-manager-operator"),
             { id: "kueue-operator", title: "Red Hat build of Kueue", state: "missing", message: "Not installed. Set up installs version 1.5.1 from redhat-operators (channel stable-v1.5)." },
-            { id: "dsc-kueue", title: "Kueue (kueue)", state: "missing", message: "Removed in DataScienceCluster default-dsc. Set up sets it to Unmanaged; Clean up can turn it back.", commands: `oc patch datasciencecluster default-dsc --type=merge -p '{"spec":{"components":{"kueue":{"managementState":"Unmanaged"}}}}'` },
+            { id: "dsc-kueue", title: "Kueue component", state: "missing", message: "Removed in DataScienceCluster default-dsc. Set up sets it to Unmanaged, which means RHOAI uses the Kueue operator you install instead of its own; Clean up can turn it back.", commands: `oc patch datasciencecluster default-dsc --type=merge -p '{"spec":{"components":{"kueue":{"managementState":"Unmanaged"}}}}'` },
           ],
           setupPlan: [
             "Install Red Hat build of Kueue 1.5.1: Namespace openshift-kueue-operator, OperatorGroup openshift-kueue-operator, Subscription openshift-kueue-operator/kueue-operator (package kueue-operator, channel stable-v1.5, from redhat-operators, automatic updates); it stays after Clean up, as other features share it",
             "DataScienceCluster default-dsc: set kueue to Unmanaged (it is Removed; Clean up can turn it back while nothing else uses it)",
           ],
         }
-        : { ready: true, parts: [readyPart("cert-manager", "cert-manager Operator for Red Hat OpenShift", "Version 1.20.1 runs in cert-manager-operator"), readyPart("kueue-operator", "Red Hat build of Kueue", "Version 1.5.1 runs in openshift-kueue-operator"), { id: "dsc-kueue", title: "Kueue (kueue)", state: "ready", message: "Unmanaged in DataScienceCluster default-dsc (turned on by this tool)", managedByTool: true }], restorable: [{ component: "kueue", previous: "Removed", feature: "kueue" }] },
+        : { ready: true, parts: [readyPart("cert-manager", "cert-manager Operator for Red Hat OpenShift", "Version 1.20.1 runs in cert-manager-operator"), readyPart("kueue-operator", "Red Hat build of Kueue", "Version 1.5.1 runs in openshift-kueue-operator"), { id: "dsc-kueue", title: "Kueue component", state: "ready", message: "Unmanaged in DataScienceCluster default-dsc (turned on by this tool)", managedByTool: true }], restorable: [{ component: "kueue", previous: "Removed", feature: "kueue" }] },
       "model-registry": registryRestorable
         ? { ready: true, parts: [{ id: "dsc-aiHub", title: "Model registry (aiHub)", state: "ready", message: "Managed in DataScienceCluster default-dsc (turned on by this tool)", managedByTool: true }], restorable: [{ component: "aiHub", previous: "Removed", feature: "model-registry" }] }
         : ready([readyPart("dsc-aiHub", "Model registry (aiHub)", "Managed in DataScienceCluster default-dsc")]),

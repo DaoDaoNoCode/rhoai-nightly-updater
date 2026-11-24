@@ -68,7 +68,7 @@ var (
 	// Unmanaged, the only on state RHOAI 3.x accepts (RHOAI docs, Managing
 	// OpenShift AI, "Manage workloads with Kueue": Managed is deprecated,
 	// Unmanaged is supported, Removed disables).
-	KueueComponent = FeatureComponent{Feature: "Kueue", Keys: []string{"kueue"}, On: "Unmanaged"}
+	KueueComponent = FeatureComponent{Feature: "Kueue component", Keys: []string{"kueue"}, On: "Unmanaged"}
 )
 
 // ComponentManagement is a component's managementState in a

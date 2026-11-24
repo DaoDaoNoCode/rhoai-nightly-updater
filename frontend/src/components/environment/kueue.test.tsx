@@ -7,7 +7,7 @@ import { contract } from "../../test/contract";
 import type { KueueStatus, ResourceState, ResourcesStatus } from "../../types";
 import { IDLE } from "./featureState";
 import { cleanupCandidates, cleanupSteps } from "./CleanupModal";
-import { IMAGE_HELP, OPT_IN_EFFECT, kueueConfirm, kueueSteps } from "./KueueTab";
+import { IMAGE_HELP, OPT_IN_EFFECT, kueueCleanupLines, kueueConfirm, kueueSteps } from "./KueueTab";
 import { KUEUE_DEFAULT_IMAGE, kueueState, sampleStatus } from "./kueueState";
 
 const none: ResourceState = { deployed: false, ready: false, message: "Not deployed", managedByTool: false };
@@ -66,7 +66,7 @@ describe("Distributed workloads confirmations", () => {
     expect(screen.getByRole("textbox", { name: "Ray image" })).toHaveValue("quay.io/modh/ray:2.47.1-py311-cu121");
     expect(screen.getByText(IMAGE_HELP)).toHaveTextContent("ppc64le");
     expect(screen.getByText(/already has other setups/)).toBeInTheDocument();
-    expect(screen.getByText(/a pipeline server, a workbench/)).toBeInTheDocument();
+    expect(screen.getByText(/a pipeline server and a workbench/)).toBeInTheDocument();
     expect(screen.getByText(/namespaceSelector: project dev only, no preemption/)).toBeInTheDocument();
     expect(screen.getByText(/gets the label/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("checkbox", { name: "RayJob sample" }));
@@ -81,12 +81,11 @@ describe("Distributed workloads confirmations", () => {
     const on = kueueConfirm({ kind: "kueue-optin" }, notSetUp({ objects: ready().objects }), () => {})!;
     render(<>{on.summary}<ul>{on.changes.map((c, i) => <li key={i}>{c}</li>)}</ul></>);
     expect(screen.getByText(OPT_IN_EFFECT)).toBeInTheDocument();
-    expect(screen.getByText(/This changes every new dashboard project/)).toBeInTheDocument();
+    expect(screen.getByText(/This changes every new project/)).toBeInTheDocument();
     expect(screen.getByText(/disableKueue: false/)).toBeInTheDocument();
-    expect(on.titleIcon).toBe("warning");
     const off = kueueConfirm({ kind: "kueue-optout" }, ready(), () => {})!;
     render(<>{off.summary}<ul>{off.changes.map((c, i) => <li key={i}>{c}</li>)}</ul></>);
-    expect(screen.getByText(/only while nobody changed it/)).toBeInTheDocument();
+    expect(screen.getByText(/only if nobody changed it after this tool/)).toBeInTheDocument();
   });
 
   it("Clean up offers the setup, after the models and before the components, and the kueue line is explicit", () => {
@@ -136,5 +135,51 @@ describe("Distributed workloads tab", () => {
     stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev", "other"] }, "/api/resources/kueue": { ...ready(), setUpIn: "dev" }, "/api/resources/prerequisites": prereq(true) });
     renderAt("/test-resources?tab=kueue&project=other");
     expect(await screen.findByText("Set up in project dev")).toBeInTheDocument();
+  });
+});
+
+describe("review round: readiness and words", () => {
+  it("M6: Ready only with Kueue running, no refusal, the label and active queues", () => {
+    expect(kueueState({ ...ready(), instance: { ...ready().instance, ready: false } }, "dev", IDLE).status).not.toBe("ready");
+    expect(kueueState({ ...ready(), instance: { ...ready().instance, v1beta2: false } }, "dev", IDLE).status).not.toBe("ready");
+    expect(kueueState({ ...ready(), refusal: "RHOAI reports Kueue not ready" }, "dev", IDLE).status).not.toBe("ready");
+    expect(kueueState({ ...ready(), label: { present: false } }, "dev", IDLE).status).not.toBe("ready");
+    expect(kueueState({ ...ready(), objects: ready().objects.map((o) => ({ ...o, active: o.kind === "ResourceFlavor" })) }, "dev", IDLE).status).not.toBe("ready");
+    expect(kueueState(ready(), "dev", IDLE).status).toBe("ready");
+  });
+
+  it("U2: the opt-in leads with its consequence, names the namespace and what Clean up leaves; one warning icon", () => {
+    const spec = kueueConfirm({ kind: "kueue-optin" }, notSetUp({ objects: ready().objects }), () => {})!;
+    expect(spec.title).toBe("Turn on the Dashboard Kueue setting?");
+    expect(spec.titleIcon).toBeUndefined();
+    render(<>{spec.summary}<ul>{spec.changes.map((c, i) => <li key={i}>{c}</li>)}</ul></>);
+    expect(screen.getByText(/In every new project on this cluster, workbenches and model deployments can only use the queue hardware profile; a project without its own LocalQueue cannot create workbenches or deploy models until an admin adds one\./)).toBeInTheDocument();
+    expect(screen.getByText(/in the applications namespace redhat-ods-applications/)).toBeInTheDocument();
+    expect(screen.getByText(/If someone changes it after this, Clean up leaves it as it is/)).toBeInTheDocument();
+    expect(screen.queryByText(/it is unset; the value before is recorded/)).toBeNull();
+  });
+
+  it("U3: Clean up names the profile, what happens to jobs people queued, and the component rule once", () => {
+    render(<ul>{kueueCleanupLines(ready()).map((c, i) => <li key={i}>{c}</li>)}</ul>);
+    expect(screen.getByText(/hardware profile nightly-kueue-cpu is deleted/)).toBeInTheDocument();
+    expect(screen.getByText(/Jobs people sent to LocalQueue nightly-kueue themselves are never admitted once the queues are gone/)).toBeInTheDocument();
+    expect(screen.queryByText(/DataScienceCluster/)).toBeNull();
+  });
+
+  it("U4/U6: the other-setups warning is a full sentence; the image help says why 2.47.1", () => {
+    const p = { kind: "setup-kueue" as const, project: "dev", rayCluster: true, rayJob: false, rayImage: KUEUE_DEFAULT_IMAGE };
+    const spec = kueueConfirm(p, notSetUp(), () => {}, ["a pipeline server", "a workbench"])!;
+    render(<>{spec.choice}</>);
+    expect(screen.getByText(/^This project already has a pipeline server and a workbench\. Kueue manages only/)).toBeInTheDocument();
+    expect(IMAGE_HELP).toMatch(/newest x86 image the RHOAI docs list/);
+    expect(IMAGE_HELP).toMatch(/do not run on x86 clusters like this one/);
+  });
+});
+
+describe("review round: Overview and prerequisites", () => {
+  it("U1/U6: Clean up everything names the setup; the prerequisites button is short", async () => {
+    stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] }, "/api/resources/kueue": ready(), "/api/resources/playground": { items: [] }, "/api/resources/workbench": { items: [] } });
+    renderAt("/test-resources");
+    expect(await screen.findByText(/the distributed workloads setup and the MaaS platform/)).toBeInTheDocument();
   });
 });
