@@ -91,6 +91,19 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   its release (`:v5.0.0-rc.1@sha256:...` in a 5.0.0 chart, and the other
   way round), since their templates may differ; before, a tag with a suffix
   passed the check. How to: [CONTRIBUTING.md](CONTRIBUTING.md#pre-releases).
+- **Model registry on the Environment page.** A Model registry tab (and an
+  Overview row) sets up one registry, `nightly-registry`, as the
+  dashboard's Create model registry dialog does with the default database,
+  so it shows in the dashboard; it first turns on the DataScienceCluster
+  component that runs registries (`aiHub` on RHOAI 3.6, `modelregistry`
+  before) when needed. Set up can register a sample model (the Models
+  tab's model) as the dashboard's Register model form does. Delete and
+  Clean up remove only the registry this tool created, with its database
+  and registered models. Clean up can also turn the component back off
+  (it says that `aiHub` also removes the Model Catalog), only when this
+  tool turned it on and no registry is left. New user-token requests only
+  (create, get, delete and, for that check, list ModelRegistries; get the
+  registry's Service); the ServiceAccount's RBAC is unchanged.
 
 ### Changed
 

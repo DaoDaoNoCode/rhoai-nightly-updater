@@ -43,6 +43,14 @@ func (fc FeatureComponent) KeyIn(r rhoai.DSCRead) string {
 var (
 	PipelinesComponent = FeatureComponent{Feature: "Data Science Pipelines", Keys: []string{"aipipelines", "datasciencepipelines"}, V1Key: "datasciencepipelines"}
 	MLflowComponent    = FeatureComponent{Feature: "MLflow", Keys: []string{"mlflowoperator"}}
+	// ModelRegistryComponent runs the model registry operator. RHOAI 3.6's
+	// DataScienceCluster v3 calls it aiHub (instancesNamespace), which also
+	// runs the Model Catalog; v2, and every release before 3.6, call it
+	// modelregistry (registriesNamespace). The conversion maps one to the
+	// other (rhods-operator rhoai-3.6 api/datasciencecluster/v2/
+	// datasciencecluster_conversion.go). The key the DataScienceCluster as
+	// read has is used, so no release is named.
+	ModelRegistryComponent = FeatureComponent{Feature: "Model registry", Keys: []string{"aiHub", "modelregistry"}, V1Key: "modelregistry"}
 )
 
 // ComponentManagement is a component's managementState in a

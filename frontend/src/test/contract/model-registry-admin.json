@@ -1,0 +1,18 @@
+{
+  "address": "https://rh-ai.apps.example.com/model-registry/nightly-registry",
+  "component": "aiHub",
+  "dashboardUrl": "https://rh-ai.apps.example.com",
+  "managedByTool": true,
+  "name": "nightly-registry",
+  "namespace": "rhoai-model-registries",
+  "sample": {
+    "complete": true,
+    "id": "1",
+    "model": "qwen25-05b-instruct",
+    "registered": true,
+    "state": "LIVE",
+    "uri": "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775",
+    "version": "v1"
+  },
+  "state": "ready"
+}

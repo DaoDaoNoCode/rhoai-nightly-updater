@@ -76,6 +76,7 @@ var getRouteTiers = map[string]readTier{
 	"GET /api/user/permissions":         tierUserToken,
 	"GET /api/resources/projects":       tierUserToken,
 	"GET /api/resources/playground":     tierUserToken,
+	"GET /api/resources/model-registry": tierUserToken,
 	"GET /api/resources/samples/mlflow": tierUserToken,
 
 	"GET /api/update-check":                    tierNoClusterRead,

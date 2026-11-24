@@ -1,4 +1,4 @@
-import type { ClusterSummary, MLflowSamplesStatus, PlaygroundStatus, ProjectStatus, RecipePlan, RecipeRunStatus, UserOperationStatus, UserPermissions } from "../types";
+import type { ClusterSummary, MLflowSamplesStatus, ModelRegistryStatus, PlaygroundStatus, ProjectStatus, RecipePlan, RecipeRunStatus, UserOperationStatus, UserPermissions } from "../types";
 import summaryJson from "./contract/summary.json";
 import operationUserJson from "./contract/operation-user.json";
 import permissionsUserJson from "./contract/user-permissions-user.json";
@@ -11,6 +11,7 @@ import samplesJson from "./contract/samples-mlflow-user.json";
 import recipeRunJson from "./contract/recipe-run-admin.json";
 import recipePlanJson from "./contract/recipe-plan-admin.json";
 import recipeRunEndedJson from "./contract/recipe-run-ended-admin.json";
+import modelRegistryJson from "./contract/model-registry-admin.json";
 
 /*
  * The backend's answers to a user who is not a cluster-admin, as the Go
@@ -53,6 +54,8 @@ export const contract = {
   recipeRun: (): RecipeRunStatus => clone<RecipeRunStatus>(recipeRunJson),
   recipeRunEnded: (): RecipeRunStatus => clone<RecipeRunStatus>(recipeRunEndedJson),
   recipePlan: (): RecipePlan => clone<RecipePlan>(recipePlanJson),
+  // The Model registry tab's answer: this tool's registry, ready, with the sample model.
+  modelRegistry: (): ModelRegistryStatus => clone<ModelRegistryStatus>(modelRegistryJson),
 };
 
 // Compile-time checks: the generated JSON fits the frontend's types. A
@@ -73,6 +76,7 @@ const typed: {
   recipeRun: Widen<RecipeRunStatus>;
   recipeRunEnded: Widen<RecipeRunStatus>;
   recipePlan: Widen<RecipePlan>;
+  modelRegistry: Widen<ModelRegistryStatus>;
 } = {
   summary: summaryJson,
   operation: operationUserJson,
@@ -85,5 +89,6 @@ const typed: {
   recipeRun: recipeRunJson,
   recipeRunEnded: recipeRunEndedJson,
   recipePlan: recipePlanJson,
+  modelRegistry: modelRegistryJson,
 };
 void typed;

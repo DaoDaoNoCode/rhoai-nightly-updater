@@ -240,7 +240,7 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 		}
 		seenComponents[k] = true
 	}
-	if len(req.PipelineServers) == 0 && !req.Storage && !req.MLflow && len(req.Models) == 0 && !req.InferenceGateway && len(req.Playgrounds) == 0 && len(req.MaaSPublished) == 0 && !req.MaaSPlatform && len(req.Components) == 0 && len(req.RecipeProjects) == 0 {
+	if len(req.PipelineServers) == 0 && !req.Storage && !req.MLflow && !req.ModelRegistry && len(req.Models) == 0 && !req.InferenceGateway && len(req.Playgrounds) == 0 && len(req.MaaSPublished) == 0 && !req.MaaSPlatform && len(req.Components) == 0 && len(req.RecipeProjects) == 0 {
 		writeError(w, "nothing to clean up was selected", http.StatusBadRequest, "validation")
 		return
 	}
@@ -259,6 +259,9 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 	}
 	if req.MLflow {
 		target = append(target, "MLflow")
+	}
+	if req.ModelRegistry {
+		target = append(target, "model registry")
 	}
 	if n := len(req.Playgrounds); n > 0 {
 		target = append(target, fmt.Sprintf("%d %s", n, map[bool]string{true: "playground", false: "playgrounds"}[n == 1]))
@@ -279,7 +282,7 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 		target = append(target, "DataScienceCluster "+strings.Join(req.Components, ", "))
 	}
 	beginOperation(w, strings.Join(target, ", "))
-	slog.Info("mutation", "op", "cleanup", "pipelineServers", req.PipelineServers, "storage", req.Storage, "deleteNamespace", req.DeleteNamespace, "mlflow", req.MLflow, "models", req.Models, "inferenceGateway", req.InferenceGateway, "playgrounds", req.Playgrounds, "maasPublished", req.MaaSPublished, "maasPlatform", req.MaaSPlatform, "components", req.Components, "recipeProjects", req.RecipeProjects, "recipeProjectUIDs", req.RecipeProjectUIDs)
+	slog.Info("mutation", "op", "cleanup", "pipelineServers", req.PipelineServers, "storage", req.Storage, "deleteNamespace", req.DeleteNamespace, "mlflow", req.MLflow, "modelRegistry", req.ModelRegistry, "models", req.Models, "inferenceGateway", req.InferenceGateway, "playgrounds", req.Playgrounds, "maasPublished", req.MaaSPublished, "maasPlatform", req.MaaSPlatform, "components", req.Components, "recipeProjects", req.RecipeProjects, "recipeProjectUIDs", req.RecipeProjectUIDs)
 
 	_, cleanupErr := streamOperation(w, "cleanup", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 		return runCleanUp(c, req, emit)

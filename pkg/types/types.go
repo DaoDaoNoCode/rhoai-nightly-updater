@@ -1776,6 +1776,9 @@ type CleanupRequest struct {
 	DeleteNamespace bool `json:"deleteNamespace,omitempty"`
 	// MLflow deletes the MLflow server.
 	MLflow bool `json:"mlflow,omitempty"`
+	// ModelRegistry deletes the model registry this tool created (with
+	// its registered models and its default database).
+	ModelRegistry bool `json:"modelRegistry,omitempty"`
 	// Models are the projects whose models of the tool's catalog go (all
 	// of them);
 	// InferenceGateway deletes the inference gateway after them.

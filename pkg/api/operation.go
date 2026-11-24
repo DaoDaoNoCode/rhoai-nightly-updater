@@ -295,6 +295,7 @@ var operationTypes = map[string][2]string{
 	"/api/resources/mlflow/revert":            {"revert-mlflow", "Revert MLflow"},
 	"/api/resources/models/stream":            {"models", "Models"},
 	"/api/resources/playground/stream":        {"playground", "Playground"},
+	"/api/resources/model-registry/stream":    {"model-registry", "Model registry"},
 	"/api/resources/maas/stream":              {"maas", "Models as a Service"},
 	"/api/resources/prerequisites/stream":     {"prerequisites", "Set up a feature's prerequisites"},
 	"/api/resources/cleanup/stream":           {"cleanup", "Clean up the environment"},

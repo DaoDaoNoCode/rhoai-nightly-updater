@@ -16,6 +16,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/modelregistry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
@@ -35,6 +36,10 @@ import (
 // datasciencepipelines):
 //   - Pipelines: aipipelines Managed. No operator.
 //   - MLflow: mlflowoperator Managed. No operator.
+//   - Model registry: aiHub Managed (DataScienceCluster v3, RHOAI 3.6;
+//     it also runs the Model Catalog), modelregistry before. No operator.
+//     Its namespace is left to the component's default (it cannot change
+//     while Managed).
 //   - Models: kserve Managed, and the cert-manager Operator for Red Hat
 //     OpenShift, which KServe checks for (red-hat-data-services/kserve
 //     rhoai-3.6 kserve-module/pkg/kservemodule/dependencies.go, the
@@ -117,6 +122,7 @@ func featureSetupFor(id, exposure string) featureSetup {
 var featureSetups = []featureSetup{
 	{id: "pipelines", title: "Pipelines", components: []envkit.FeatureComponent{envkit.PipelinesComponent}},
 	{id: "mlflow", title: "MLflow", components: []envkit.FeatureComponent{envkit.MLflowComponent}},
+	{id: "model-registry", title: "Model registry", components: []envkit.FeatureComponent{envkit.ModelRegistryComponent}},
 	{id: "models", title: "Models", components: []envkit.FeatureComponent{serving.KServeComponent}, operators: []envkit.OperatorSpec{certManagerOperator}, dependency: serving.LLMDependenciesCondition},
 	{id: "playground", title: "Playground", components: []envkit.FeatureComponent{playgroundComponent, dashboardComponent}},
 }
@@ -664,7 +670,7 @@ func GetPrerequisitesStatusFor(c *kube.Client, modelsExposure string) (*types.Pr
 // ValidatePrerequisitesRequest returns why req cannot run, or "".
 func ValidatePrerequisitesRequest(req types.PrerequisitesRequest) string {
 	if _, ok := featureSetupOf(req.Feature); !ok {
-		return "feature must be pipelines, mlflow, models or playground"
+		return "feature must be pipelines, mlflow, model-registry, models or playground"
 	}
 	if req.Exposure != "" && (req.Feature != "models" || !serving.ValidExposure(req.Exposure)) {
 		return "exposure is how a model is reached (models only): default-gateway, maas, gateway or internal"
@@ -969,7 +975,22 @@ func restoreCheck(c *kube.Client, rec prereqRecord, dscRead rhoai.DSCRead, key s
 	if argoCD := argo.TrackingOf(c, dscRead.Object, rhoai.DSCGroup, "DataScienceCluster"); argoCD.ManagedBy() != "" {
 		return restoreVerdict{refusal: argo.GitOpsRefusal("The DataScienceCluster", argoCD.ManagedBy(), "turning "+key+" back to "+prev) + argoCD.UnconfirmedNote(), code: kube.ErrorCodeGitOpsManaged}
 	}
-	users, err := dsc.ComponentUsers(c, key)
+	var users []string
+	var err error
+	if slices.Contains(envkit.ModelRegistryComponent.Keys, key) {
+		// The model registries in the namespace RHOAI keeps them in. Only
+		// this check lists them (Clean up, with the user's token), not
+		// dsc.ComponentUsers, which the ServiceAccount's reads reach. On
+		// RHOAI 3.6 aiHub also runs the Model Catalog, which has no
+		// objects to count: the Clean up dialog says it goes too.
+		ns := modelregistry.Namespace(dscRead.Object)
+		if ns == "" {
+			return restoreVerdict{kept: key + " (the DataScienceCluster names no namespace for model registries, so this tool cannot tell whether one is left)"}
+		}
+		users, err = modelregistry.Users(c, ns)
+	} else {
+		users, err = dsc.ComponentUsers(c, key)
+	}
 	if err != nil {
 		return restoreVerdict{refusal: fmt.Sprintf("Cannot tell whether anything still uses %s, so it stays Managed: %v.%s", key, err, kube.TemplateHint(err)), code: kube.ErrorCodeFromK8sErr(err)}
 	}

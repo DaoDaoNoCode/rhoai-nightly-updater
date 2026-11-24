@@ -20,7 +20,7 @@ import { useLatestRequest } from "../../hooks/useLatestRequest";
  * terminal for an admin who prefers them.
  */
 
-export const FEATURE_TITLES: Record<PrerequisiteFeature, string> = { pipelines: "Pipelines", mlflow: "MLflow", models: "Models", playground: "the playground" };
+export const FEATURE_TITLES: Record<PrerequisiteFeature, string> = { pipelines: "Pipelines", mlflow: "MLflow", "model-registry": "the model registry", models: "Models", playground: "the playground" };
 
 /**
  * The way to reach a model the Overview plans Models for: the recommended

@@ -261,7 +261,10 @@ export type Pending =
   | { kind: "maas-access"; access?: AudienceForm }
   | { kind: "maas-database"; database?: DatabaseForm; confirmKeysLost?: boolean }
   /** A MaaS platform part's own fix (its action lists the changes). */
-  | { kind: "maas-action"; action: MaaSActionId };
+  | { kind: "maas-action"; action: MaaSActionId }
+  /** Model registry: set up (with the sample model when samples) or delete this tool's registry. */
+  | { kind: "setup-model-registry"; samples?: boolean }
+  | { kind: "teardown-model-registry" };
 
 /** A sample change: a streamed request of its own, not a resource's setup or deletion. */
 export type SamplePending = Extract<Pending, { kind: "mlflow-samples" }>;
@@ -274,9 +277,12 @@ export const isPrerequisitesPending = (p: Pending): p is PrerequisitesPending =>
 export type PlaygroundPending = Extract<Pending, { kind: "setup-playground" | "teardown-playground" }>;
 /** A MaaS change: one streamed request (pkg/api HandleMaaSStream). */
 export type MaaSPending = Extract<Pending, { kind: "setup-maas" | "teardown-maas" | "publish-maas" | "unpublish-maas" | "restore-routing-maas" | "maas-action" | "maas-limit" | "maas-access" | "maas-database" }>;
+/** A Model registry change: one streamed operation. */
+export type ModelRegistryPending = Extract<Pending, { kind: "setup-model-registry" | "teardown-model-registry" }>;
+export const isModelRegistryPending = (p: Pending): p is ModelRegistryPending => p.kind === "setup-model-registry" || p.kind === "teardown-model-registry";
 const MAAS_KINDS: string[] = ["setup-maas", "teardown-maas", "publish-maas", "unpublish-maas", "restore-routing-maas", "maas-action", "maas-limit", "maas-access", "maas-database"];
 export const isMaaSPending = (p: Pending): p is MaaSPending => MAAS_KINDS.includes(p.kind);
-export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending | PlaygroundPending | MaaSPending | PrerequisitesPending>;
+export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending | PlaygroundPending | MaaSPending | PrerequisitesPending | ModelRegistryPending>;
 export const isPlaygroundPending = (p: Pending): p is PlaygroundPending => p.kind === "setup-playground" || p.kind === "teardown-playground";
 export const isSamplePending = (p: Pending): p is SamplePending => p.kind === "mlflow-samples";
 export const isModelsPending = (p: Pending): p is ModelsPending => p.kind === "setup-models" || p.kind === "teardown-model" || p.kind === "teardown-gateway" || p.kind === "allow-gateway-project" || p.kind === "disallow-gateway-project" || p.kind === "check-model";

@@ -1,4 +1,4 @@
-import type { CatalogModel, MaaSPart, MaaSRequest, MaaSStatus, ModelState, PlaygroundModel, PlaygroundState, PlaygroundStatus, ResourceState, ResourcesStatus } from "../../types";
+import type { CatalogModel, MaaSPart, MaaSRequest, MaaSStatus, ModelRegistryStatus, ModelState, PlaygroundModel, PlaygroundState, PlaygroundStatus, ResourceState, ResourcesStatus } from "../../types";
 import { envStatus, envStatusText, notManaged, type EnvStatus } from "./resourceStatus";
 import type { Pending } from "./resourceRow";
 import { mlflowOpenHref } from "./UseIt";
@@ -24,6 +24,13 @@ export interface Busy {
   playground?: PlaygroundOp | null;
   /** MaaS work in progress from this page: action, project (e.g. publish). */
   maas?: MaaSOp | null;
+  /** Model registry work in progress from this page. */
+  modelRegistry?: ModelRegistryOp | null;
+}
+
+/** A Model registry operation in progress. */
+export interface ModelRegistryOp {
+  action: "setup" | "teardown";
 }
 
 /** Fields a MaaS in-flight operation is allowed to change. */
@@ -803,4 +810,67 @@ export function maasState(m: MaaSStatus | null, busy: Busy = IDLE): FeatureState
     next: { kind: "set-up", label: "Set up MaaS", setup: [{ kind: "setup-maas" }], reason: m.platform.setupBlockedReason ?? null },
     project: null,
   };
+}
+
+// --- Model registry: one registry for the cluster -------------------------------
+
+/** The registry's state in the page's words. */
+export function modelRegistryStatus(mr: ModelRegistryStatus | null, busy: Busy): EnvStatus {
+  if (busy.modelRegistry?.action === "teardown") return "deleting";
+  if (busy.modelRegistry?.action === "setup") return "setting-up";
+  if (!mr) return "unknown";
+  // Someone else's registry keeps its own lifecycle state; ownership shows apart (foreign).
+  switch (mr.state) {
+    case "ready":
+      return "ready";
+    case "starting":
+      return "setting-up";
+    case "terminating":
+      return "deleting";
+    case "absent":
+      return "not-set-up";
+    default:
+      return "unknown";
+  }
+}
+
+/** The sample model's state: ready when registered and live. */
+export function modelRegistrySampleStatus(mr: ModelRegistryStatus | null): EnvStatus {
+  const s = mr?.sample;
+  if (!s) return "not-set-up";
+  if (s.problem) return "unknown";
+  if (!s.registered) return "not-set-up";
+  // Ready only with its version and artifact, all live; archived or incomplete needs attention.
+  return s.state === "LIVE" && s.complete ? "ready" : "needs-attention";
+}
+
+/** The dashboard's page of a model registry (odh-dashboard rhoai-3.6: /ai-hub/models/registry/<name>). */
+export function modelRegistryDashboardHref(mr: ModelRegistryStatus | null): string | undefined {
+  const base = mr?.dashboardUrl;
+  return base?.startsWith("https://") && mr ? `${base.replace(/\/$/, "")}/ai-hub/models/registry/${encodeURIComponent(mr.name)}` : undefined;
+}
+
+/** The Model registry feature: the tab and the Overview both show this. */
+export function modelRegistryState(mr: ModelRegistryStatus | null, busy: Busy = IDLE): FeatureState {
+  if (!mr && !busy.modelRegistry) return loadingState();
+  const s = modelRegistryStatus(mr, busy);
+  const unmanaged = !!mr?.foreign;
+  switch (s) {
+    case "ready": {
+      const href = modelRegistryDashboardHref(mr);
+      const sample = mr?.sample?.registered && mr.sample.complete && mr.sample.state === "LIVE" ? ", with the sample model" : "";
+      return { status: s, label: `Ready${sample}`, ...owner(unmanaged), next: href ? { kind: "open", label: "Open model registry", href } : null, project: null };
+    }
+    case "setting-up":
+    case "deleting":
+      return { status: s, label: s === "deleting" ? "Deleting" : "Setting up", ...owner(unmanaged), next: null, project: null };
+    case "not-set-up":
+      return {
+        status: s, label: "Not set up",
+        next: { kind: "set-up", label: "Set up the model registry", setup: [{ kind: "setup-model-registry", samples: true }], reason: mr?.blocked?.reason ?? (mr?.state === "absent" && mr.message ? mr.message : null) },
+        project: null,
+      };
+    default:
+      return { status: s, label: "Unknown", next: { kind: "show-issue", part: "model-registry" }, project: null };
+  }
 }

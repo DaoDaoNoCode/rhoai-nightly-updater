@@ -4,7 +4,7 @@
 
 <h1 align="center">RHOAI Nightly Updater</h1>
 
-The RHOAI Nightly Updater is a web app that installs and updates Red Hat OpenShift AI (RHOAI) nightly builds on your own ROSA HCP or OpenShift cluster. It also deploys odh-dashboard pull requests, sets up test environments on its Environment page (S3 storage, pipeline servers, MLflow, a CPU model) and explains what is wrong when RHOAI is not healthy. You need no `oc` commands day to day: everything is a button, and every change asks for confirmation first.
+The RHOAI Nightly Updater is a web app that installs and updates Red Hat OpenShift AI (RHOAI) nightly builds on your own ROSA HCP or OpenShift cluster. It also deploys odh-dashboard pull requests, sets up test environments on its Environment page (S3 storage, pipeline servers, MLflow, a model registry, a CPU model) and explains what is wrong when RHOAI is not healthy. You need no `oc` commands day to day: everything is a button, and every change asks for confirmation first.
 
 Cluster-admins make the changes. Since 5.0.0 everyone RHOAI lets in can sign in too and see what runs: a short Status page, Build Explorer and their own data science projects ([Not a cluster-admin?](#not-a-cluster-admin-what-you-see)).
 
@@ -109,7 +109,7 @@ One tab per feature after an **Overview**, kept in the address so a link opens t
 3. Its state, from the same function as the tab: **Ready**, **Not set up**, **Needs attention**, **Error**, ... Something this tool did not create reads **Ready**, with **Not managed by this tool** under the label: ownership never counts as not ready. A project-scoped feature summarises the projects that have it ("Ready in juntao-test", "Ready in 3 projects", "Error in 1 of 3 projects", "Not set up in any project"); with several, **Show projects** lists each one with its state and a link to the tab there.
 4. The next step, a link in the row: **Open pipelines** in its one ready project (with several ready projects, **Choose a project**: the tab's picker decides; with a problem in one of several, **Open** that project), **Open MLflow experiments** (MLflow's experiments in the dashboard), **Open admin UI** (the S3 storage's), **Set up** (confirm, then a check that every part can be set up, then the missing parts in order, each counted only once it works), **Migrate storage**, **Show issue** (opens the tab at that part; a problem with the S3 storage opens the S3 storage tab, from its row or from Pipelines) or **Choose a project**. A step that cannot run says why under it.
 
-Under the table, **Clean up everything** deletes what this tool created (first the MaaS publications, then the pipeline servers, the S3 storage, MLflow, the playgrounds, the models, the inference gateway, and the MaaS platform last) in one confirmed operation, with a checkbox per part.
+Under the table, **Clean up everything** deletes what this tool created (first the MaaS publications, then the pipeline servers, the S3 storage, MLflow, the model registry, the playgrounds, the models, the inference gateway, and the MaaS platform last) in one confirmed operation, with a checkbox per part.
 
 <img src="docs/images/environment-storage.png" alt="S3 storage tab: Ready; the endpoint, bucket, region and the pipeline server that uses it; masked access key, secret key and admin UI password; Copy as environment variables; Open admin UI" width="760">
 
@@ -149,6 +149,16 @@ Storage an earlier version set up in namespace `minio` reads **Migration needed*
 2. Ownership, apart: this one was made in the dashboard. It works (Open MLflow experiments, a PR build, Revert), but the tool does not delete it.
 
 MLflow on RHOAI keeps each data science project apart as a workspace. Once it is ready, **Use it** has a project picker, **Open <project> in MLflow** (the dashboard's MLflow experiments for the project, `/develop-train/mlflow/experiments?workspace=<project>`; MLflow's own `<address>/#/experiments?workspace=<project>` only when the dashboard's address is not known), and the client settings to copy (`MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_TOKEN=$(oc whoami -t)`, `MLFLOW_WORKSPACE=<project>`). Deploying an opendatahub-io/mlflow PR image is under **Test an MLflow PR build**.
+
+#### Model registry
+
+The Model registry tab sets up one model registry for the cluster, `nightly-registry`, the way the dashboard's **Settings > Model registry settings > Create model registry** does with **Default database (non-production)**: a ModelRegistry with `spec.postgres.generateDeployment: true`, in the namespace the DataScienceCluster names for registries (`rhoai-model-registries` by default), so it shows in the dashboard like one made there. The default database is RHOAI's for development and testing, not production; RHOAI provides it from 3.4 on, and on a cluster without it Set up refuses before changing anything.
+
+1. **Needed on the cluster first**: the DataScienceCluster component that runs registries, `aiHub` on RHOAI 3.6 (it also runs the Model Catalog) or `modelregistry` before, set to Managed with **Set up what the model registry needs**, as for the other tabs.
+2. **Model registry**: its state (starting while its database and server come up, then Ready), its REST address through the cluster's gateway, and **Open in the dashboard**. A registry of that name someone else made reads **Not managed by this tool**: shown, never changed or deleted.
+3. **Sample model**: Set up registers the model the Models tab serves (`qwen25-05b-instruct`, version `v1`, its Hugging Face address) as the dashboard's Register model form does, unless you untick **Add a sample model** in the confirmation. Registered models cannot be deleted, only archived; setting up again puts an archived sample back to live.
+
+No access is granted to anyone: cluster-admins can use the registry, and others are added on the dashboard's **Manage permissions** page. **Delete** (the registry's menu) and **Clean up the model registry** delete the registry, with every model registered in it and its database. **Clean up** also offers to turn the DataScienceCluster component back off when this tool turned it on, unticked, with the line that `aiHub` also removes the Model Catalog; it is turned off only while nobody changed it since and no model registry is left in its namespace. Troubleshooting: [RUNBOOK §10.5](RUNBOOK.md#105-model-registry).
 
 #### Models: small models on CPU
 

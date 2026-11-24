@@ -23,6 +23,8 @@ export function baseWorld() {
     playground: F.playgroundWorld(),
     // Models as a Service (GET /api/resources/maas).
     maas: F.maasWorld("none"),
+    // This tool's model registry (GET /api/resources/model-registry).
+    modelRegistry: F.modelRegistryStates.absent,
     // Sample states by project; a project not named has none of the samples.
     samples: { mlflow: {} },
     // The last environment recipe run (GET /api/recipes/run).
@@ -304,6 +306,12 @@ export const scenarios = {
     w.gated = true;
   },
   mlflow: (w) => { w.resources.mlflow = F.mlflowStates.running; },
+  // The Model registry tab: not set up, starting, and ready with the sample model.
+  "env-registry-none": (w) => { w.modelRegistry = F.modelRegistryStates.absent; },
+  "env-registry-starting": (w) => { w.modelRegistry = F.modelRegistryStates.starting; },
+  "env-registry-ready": (w) => { w.modelRegistry = F.modelRegistryStates.ready; },
+  // Its DataScienceCluster component was turned on by this tool: Clean up offers it back.
+  "env-registry-turned-on": (w) => { w.modelRegistry = F.modelRegistryStates.ready; w.prereq = { ...(w.prereq ?? {}), registryRestorable: true }; },
   // The Environment page's other states, one scenario each.
   "env-ready": (w) => { w.resources.mlflow = F.mlflowStates.running; },
   // Workbenches use the pipeline server's Connection: the Pipelines tab names them, Delete lists them.
@@ -706,6 +714,7 @@ export const reads = {
   "GET /api/resources/status": (w) => ({ dashboardUrl: F.DASHBOARD_URL, inferenceGateway: F.gatewayStates.none, models: F.modelsStatus(), ...w.resources, recipeProjects: F.recipeProjects(w) }),
   "GET /api/resources/projects": (w) => ({ projects: w.projects ?? F.projects }),
   "GET /api/resources/maas": (w) => w.maas,
+  "GET /api/resources/model-registry": (w) => w.modelRegistry,
   "GET /api/activity": (w) => w.status.activity ?? [],
   // The clean-up request for what the run created, once it is not running.
   "GET /api/recipes/run": (w) => {

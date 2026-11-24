@@ -50,7 +50,7 @@ func TestRouteTiersMatchTheDesign(t *testing.T) {
 			"GET /api/setup/dsc/preview", "GET /api/status", "GET /api/test-pull-secret", "GET /api/verify-nodes",
 		},
 		tierSummary:       {"GET /api/build-explorer/contains", "GET /api/build-explorer/content", "GET /api/build-explorer/tags", "GET /api/summary"},
-		tierUserToken:     {"GET /api/resources/playground", "GET /api/resources/projects", "GET /api/resources/samples/mlflow", "GET /api/user/permissions"},
+		tierUserToken:     {"GET /api/resources/model-registry", "GET /api/resources/playground", "GET /api/resources/projects", "GET /api/resources/samples/mlflow", "GET /api/user/permissions"},
 		tierNoClusterRead: {"GET /api/resources/samples/pipeline/spec", "GET /api/update-check"},
 		tierPerRole:       {"GET /api/operation", "GET /api/resources/status"},
 	}

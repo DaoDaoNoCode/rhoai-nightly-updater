@@ -64,6 +64,8 @@ func TestFrontendContract(t *testing.T) {
 		{"playground-user.json", "/api/resources/playground?project=team-a", "user:carol", HandlePlaygroundStatus, "", nil},
 		{"playground-problem-user.json", "/api/resources/playground?project=team-denied", "user:carol", HandlePlaygroundStatus, "", nil},
 		{"samples-mlflow-user.json", "/api/resources/samples/mlflow?project=team-a", "user:carol", HandleMLflowSamplesStatus, "", nil},
+		// The Model registry tab (read with the user's token; the page is a cluster-admin's).
+		{"model-registry-admin.json", "/api/resources/model-registry", "user:admin", HandleModelRegistryStatus, "", nil},
 		// Admin-only answers the Recipes page reads.
 		{"recipe-run-admin.json", "/api/recipes/run", "user:admin", HandleRecipeRunStatus, "", nil},
 		{"recipe-run-ended-admin.json", "/api/recipes/run", "user:admin", HandleRecipeRunStatus, "", stubEndedRecipeRun},
@@ -131,10 +133,18 @@ func TestFrontendContract(t *testing.T) {
 // field set, so a renamed or retyped field shows in the fixtures.
 func stubContractData(t *testing.T) {
 	t.Helper()
-	origSummary, origProject, origPlayground, origSamples := getSummary, getProjectStatus, getPlaygroundStatus, getMLflowSamplesStatus
+	origSummary, origProject, origPlayground, origSamples, origRegistry := getSummary, getProjectStatus, getPlaygroundStatus, getMLflowSamplesStatus, getModelRegistryStatus
 	t.Cleanup(func() {
-		getSummary, getProjectStatus, getPlaygroundStatus, getMLflowSamplesStatus = origSummary, origProject, origPlayground, origSamples
+		getSummary, getProjectStatus, getPlaygroundStatus, getMLflowSamplesStatus, getModelRegistryStatus = origSummary, origProject, origPlayground, origSamples, origRegistry
 	})
+	getModelRegistryStatus = func(_, _ *cluster.Client) (*types.ModelRegistryStatus, error) {
+		return &types.ModelRegistryStatus{
+			Name: "nightly-registry", Namespace: "rhoai-model-registries", Component: "aiHub", State: "ready", ManagedByTool: true,
+			Address: "https://rh-ai.apps.example.com/model-registry/nightly-registry", DashboardURL: "https://rh-ai.apps.example.com",
+			Sample: &types.ModelRegistrySample{Model: "qwen25-05b-instruct", Version: "v1", Registered: true, Complete: true, State: "LIVE", ID: "1",
+				URI: "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775"},
+		}, nil
+	}
 	getSummary = func(*cluster.Client) (*types.Summary, error) {
 		return &types.Summary{
 			RHOAI: types.SummaryRHOAI{Installed: true, Version: "3.6.0", Channel: "beta", Phase: "Succeeded"},

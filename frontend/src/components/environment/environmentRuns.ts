@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { ConnectionWorkbench, MaaSStatus, OperationResponse, PlaygroundStatus, PrerequisitesStatus, ResourcesStatus } from "../../types";
+import type { ConnectionWorkbench, MaaSStatus, ModelRegistryStatus, OperationResponse, PlaygroundStatus, PrerequisitesStatus, ResourcesStatus } from "../../types";
 import {
   trackFeature,
   streamCleanup,
@@ -7,20 +7,22 @@ import {
   streamModels,
   streamPlayground,
   streamMaaS,
+  streamModelRegistry,
   streamPrerequisites,
   type StreamDoneHandler,
   type StreamDetachHandler,
   type CleanupRequest,
 } from "../../services/api";
 import { errorResult } from "../../outcomes";
-import { type ConfirmSpec, type ModelsPending, type Pending, type PlaygroundPending, type MaaSPending, isMaaSPending, type PrerequisitesPending, isPrerequisitesPending, type SamplePending, isModelsPending, isPlaygroundPending, isSamplePending } from "./resourceRow";
+import { type ConfirmSpec, type ModelsPending, type Pending, type PlaygroundPending, type MaaSPending, isMaaSPending, type PrerequisitesPending, isPrerequisitesPending, type ModelRegistryPending, isModelRegistryPending, type SamplePending, isModelsPending, isPlaygroundPending, isSamplePending } from "./resourceRow";
 import { modelsConfirm, modelsSteps } from "./modelsConfirm";
 import { playgroundConfirm, playgroundSteps } from "./PlaygroundTab";
 import { maasConfirm, maasRequestOf, maasSteps } from "./MaaSTab";
+import { modelRegistryConfirm, modelRegistrySteps } from "./ModelRegistryTab";
 import { type SampleOp, mlflowSampleSteps, samplesConfirm } from "./samples";
 import { useGoalRun, type GoalRunStep } from "./useGoalRun";
 import { type CleanupRetry, type CleanupScope, cleanupSteps } from "./CleanupModal";
-import { type FeatureState, type MaaSOp, type ModelsOp, type PlaygroundOp, mlflowState, pipelinesState, setUpBlocked, storageState } from "./featureState";
+import { type FeatureState, type MaaSOp, type ModelRegistryOp, type ModelsOp, type PlaygroundOp, mlflowState, pipelinesState, setUpBlocked, storageState } from "./featureState";
 import { prerequisitesConfirm, prerequisitesSteps } from "./Prerequisites";
 import { modelsOpOf, modelsRequest, resourceRequest, setUpWait } from "./runRequests";
 import { TAB_TITLES, type RunFeature } from "./environmentTabs";
@@ -87,6 +89,9 @@ export function useRunState() {
   // the run's title or the last runs of other features).
   const [runFeature, setRunFeature] = useState<RunFeature>("other");
   const [maasRefresh, setMaaSRefresh] = useState(0);
+  // The Model registry operation running now, and a key that reads its state again.
+  const [modelRegistryOp, setModelRegistryOp] = useState<ModelRegistryOp | null>(null);
+  const [modelRegistryRefresh, setModelRegistryRefresh] = useState(0);
   const [prereqRefresh, setPrereqRefresh] = useState(0);
   // A model's Check again, which runs in place (no dialog), and why it could not run.
   const [checking, setChecking] = useState<{ project: string; model: string } | null>(null);
@@ -98,6 +103,7 @@ export function useRunState() {
     modelsOp, setModelsOp, modelsRun, setModelsRun,
     playgroundOp, setPlaygroundOp, playgroundRun, setPlaygroundRun, playgroundRefresh, setPlaygroundRefresh,
     maasOp, setMaaSOp, maasRun, setMaaSRun, runFeature, setRunFeature, maasRefresh, setMaaSRefresh,
+    modelRegistryOp, setModelRegistryOp, modelRegistryRefresh, setModelRegistryRefresh,
     prereqRefresh, setPrereqRefresh, checking, setChecking, checkError, setCheckError,
   };
 }
@@ -116,6 +122,7 @@ export interface EnvironmentActionsContext {
   restartPolling: () => void;
   pg: PlaygroundStatus | null;
   maas: MaaSStatus | null;
+  modelRegistry: ModelRegistryStatus | null;
   prereq: PrerequisitesStatus | null;
   confirmOf: (p: Pending) => ConfirmSpec | null;
   setPending: (p: Pending | null) => void;
@@ -129,11 +136,12 @@ export interface EnvironmentActionsContext {
  * then checks every part's prerequisites, then runs the missing parts.
  */
 export function environmentActions(ctx: EnvironmentActionsContext) {
-  const { runs, status: resStatus, statusRef, fetchResources, readFresh, restartPolling, pg, maas, prereq, confirmOf, setPending, projectNames, onResult } = ctx;
+  const { runs, status: resStatus, statusRef, fetchResources, readFresh, restartPolling, pg, maas, modelRegistry, prereq, confirmOf, setPending, projectNames, onResult } = ctx;
   const {
     setResAction, setActionProject, run, setRunOpen, setupConfirm, setSetupConfirm, setCleanupScope, setCleanupRetry,
     setSampleOp, setSampleRun, setSamplesRefresh, setModelsOp, setModelsRun, setPlaygroundOp, setPlaygroundRun, setPlaygroundRefresh,
     setMaaSOp, setMaaSRun, setRunFeature, setMaaSRefresh, setPrereqRefresh, checking, setChecking, setCheckError,
+    setModelRegistryOp, setModelRegistryRefresh,
   } = runs;
 
   /** Runs one request of a run; the run's dialog shows its outcome. */
@@ -161,6 +169,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     restartPolling();
     setPlaygroundRefresh((n) => n + 1);
     setMaaSRefresh((n) => n + 1);
+    setModelRegistryRefresh((n) => n + 1);
     setSamplesRefresh((n) => n + 1);
     setPrereqRefresh((n) => n + 1);
     void fetchResources();
@@ -260,6 +269,29 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     action === "teardown" || action === "unpublish" || action === "remove-tier-policies" ? "delete" : "setup");
   };
 
+  /** A confirmed Model registry change: one streamed request whose steps the run dialog shows. */
+  const startModelRegistry = (p: ModelRegistryPending) => {
+    if (run.run?.running) return;
+    const spec = modelRegistryConfirm(p, modelRegistry, () => {});
+    const op: ModelRegistryOp = { action: p.kind === "setup-model-registry" ? "setup" : "teardown" };
+    setPending(null);
+    setSampleRun(null);
+    setModelsRun(null);
+    setPlaygroundRun(null);
+    setRunOpen(true);
+    trackFeature(p.kind);
+    setRunFeature("model-registry");
+    setModelRegistryOp(op);
+    const end = () => {
+      setModelRegistryOp(null);
+      setModelRegistryRefresh((n) => n + 1);
+      setPrereqRefresh((n) => n + 1);
+    };
+    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, modelRegistrySteps(p), (onStep, onDone, onDetach) => streamModelRegistry(
+      { action: op.action, ...(p.kind === "setup-model-registry" && p.samples ? { samples: true } : {}) },
+      onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }), op.action === "setup" ? "setup" : "delete");
+  };
+
   /** A confirmed prerequisites setup: one streamed request whose steps the run dialog shows. */
   const startPrerequisites = (p: PrerequisitesPending) => {
     if (run.run?.running) return;
@@ -329,6 +361,10 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       startPrerequisites(p);
       return;
     }
+    if (isModelRegistryPending(p)) {
+      startModelRegistry(p);
+      return;
+    }
     setSampleRun(null);
     setModelsRun(null);
     setPlaygroundRun(null);
@@ -360,6 +396,11 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setPending(maasSetup);
       return;
     }
+    const registrySetup = setup.find(isModelRegistryPending);
+    if (registrySetup) {
+      setPending(registrySetup);
+      return;
+    }
     const prereqSetup = setup.find(isPrerequisitesPending);
     if (prereqSetup) {
       setPending(prereqSetup);
@@ -368,7 +409,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     const specs: ConfirmSpec[] = [];
     const steps: GoalRunStep[] = [];
     for (const p of setup) {
-      if (isSamplePending(p) || isModelsPending(p) || isPlaygroundPending(p) || isMaaSPending(p) || isPrerequisitesPending(p)) continue;
+      if (isSamplePending(p) || isModelsPending(p) || isPlaygroundPending(p) || isMaaSPending(p) || isPrerequisitesPending(p) || isModelRegistryPending(p)) continue;
       const spec = confirmOf(p);
       if (spec) specs.push(spec);
       const [action, fn, target] = resourceRequest(p);
@@ -428,6 +469,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       void fetchResources();
       setPlaygroundRefresh((n) => n + 1);
       setMaaSRefresh((n) => n + 1);
+      setModelRegistryRefresh((n) => n + 1);
       onDone(success, error, apiError);
       const code = apiError?.errorCode;
       if ((code === CONFIRM_PROJECT_CONTENTS || code === CONFIRM_WORKBENCHES) && Object.keys(refusals).length + Object.keys(workbenches).length > 0) {

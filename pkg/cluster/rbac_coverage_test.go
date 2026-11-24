@@ -90,6 +90,8 @@ var rbacUserTokenReads = map[string]string{
 	"user_reads.go:listProjectLLMInferenceServices": "the LLMInferenceServices of one of the user's projects",
 	"user_reads.go:listProjectInferenceServices":    "the InferenceServices of one of the user's projects",
 	"user_reads.go:listConnectionWorkbenches":       "the workbenches of one of the user's projects that use the tool's dashboard Connection",
+	"model_registry.go:userReadCR":                  "the Model registry tab's status: this tool's ModelRegistry",
+	"model_registry.go:userReadService":             "the Model registry tab's status: the registry's Service (its gateway address)",
 }
 
 // Best-effort reads of paths found by API discovery at run time, whose API

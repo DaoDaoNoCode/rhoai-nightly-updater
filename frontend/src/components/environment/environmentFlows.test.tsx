@@ -77,6 +77,18 @@ describe("Clean up", () => {
     await waitFor(() => expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([{ pipelineServers: ["a"] }]));
   });
 
+  it("Clean up the model registry is one part: no wording about parts running in order", async () => {
+    stubApi({
+      "/api/resources/status": everything, "/api/resources/projects": { projects: ["a", "b"] },
+      "/api/resources/model-registry": { name: "nightly-registry", namespace: "rhoai-model-registries", component: "aiHub", state: "ready", managedByTool: true },
+    });
+    renderAt("/test-resources?tab=model-registry");
+    fireEvent.click(await screen.findByRole("button", { name: /^Clean up the model registry/ }));
+    const dialog = await screen.findByRole("dialog", { name: /Clean up the model registry\?/ });
+    expect(dialog).toHaveTextContent("Deletes the model registry this tool created, as one operation.");
+    expect(dialog).not.toHaveTextContent(/in this order|a part that fails/);
+  });
+
   it("Clean up everything: the storage cannot go while an unselected pipeline server uses it: Delete says why, inline", async () => {
     stubApi({ "/api/resources/status": everything, "/api/resources/projects": { projects: ["a", "b"] } });
     renderAt("/test-resources");
