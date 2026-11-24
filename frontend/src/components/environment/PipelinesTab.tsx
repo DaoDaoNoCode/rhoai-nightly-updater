@@ -381,9 +381,9 @@ export function pipelineServerConfirm(pending: Pending, pipelineServers: Resourc
         summary: <>
           <Content component="p">Replaces pipeline server <code>{pending.name}</code> in {pending.project} with one named <code>{DSPA_NAME}</code>, which workbench pipelines use. Everything is checked first; nothing is deleted if the new one would be refused. Takes 1 to 3 minutes, plus the old one&apos;s cleanup.</Content>
           {pending.unrecorded && <Content component="p">{unrecordedPipelineServerNote(pending.project)}</Content>}
+          {!!pending.workbenches?.length && <Content component="p">{connectionWorkbenchesChange(pending.project, pending.workbenches)}</Content>}
         </>,
         changes: [
-          ...(pending.workbenches?.length ? [connectionWorkbenchesChange(pending.project, pending.workbenches)] : []),
           <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name}</code> and Secret <code>{DSPA_SECRET_NAME}</code> are deleted; its database goes with it.</>,
           <>Then DataSciencePipelinesApplication <code>{DSPA_NAME}</code> is created, storing artifacts in the same S3 storage, with Secret <code>{DSPA_SECRET_NAME}</code> and the dashboard S3 Connection <code>{CONNECTION_NAME}</code>, both owned by it.</>,
         ],
@@ -400,8 +400,9 @@ export function pipelineServerConfirm(pending: Pending, pipelineServers: Resourc
         summary: <>
           <Content component="p">Deletes the pipeline server in {pending.project}, with its runs and experiments. The project and the S3 storage stay.</Content>
           {pending.unrecorded && <Content component="p">{unrecordedPipelineServerNote(pending.project)}</Content>}
+          {!!pending.workbenches?.length && <Content component="p">{connectionWorkbenchesChange(pending.project, pending.workbenches)}</Content>}
         </>,
-        changes: [...(pending.workbenches?.length ? [connectionWorkbenchesChange(pending.project, pending.workbenches)] : []), <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name || DSPA_NAME}</code> and its S3 credentials Secret are deleted, with the dashboard S3 Connection <code>{CONNECTION_NAME}</code> this tool created (workbenches or model deployments that use it lose it). The project stays.</>],
+        changes: [<>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name || DSPA_NAME}</code> and its S3 credentials Secret are deleted, with the dashboard S3 Connection <code>{CONNECTION_NAME}</code> this tool created (workbenches or model deployments that use it lose it). The project stays.</>],
         dataLoss: pvcsLost(ps, "the pipeline database: runs, experiments and their history") ?? <>The pipeline database: runs, experiments and their history.</>,
       };
     }
