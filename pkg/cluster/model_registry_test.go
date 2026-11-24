@@ -381,7 +381,7 @@ func TestModelRegistrySetup_CreatesItAsTheDashboardAndRegistersTheSample(t *test
 		t.Fatalf("sample URI %s", modelregistry.SampleURI())
 	}
 
-	// The status, read with the user's token, shows it ready with the sample.
+	// Status fetched as the end user must report ready and include a registered sample.
 	st, err := GetModelRegistryStatus(e.sa, e.u)
 	if err != nil {
 		t.Fatal(err)
@@ -496,7 +496,7 @@ func TestModelRegistrySetup_AgainRestoresTheArchivedSample(t *testing.T) {
 	}
 }
 
-// Without a gateway address the registry is set up, the sample skipped.
+// Missing gateway address still allows registry setup; sample registration is omitted.
 func TestModelRegistrySetup_SkipsSamplesWithoutAGatewayAddress(t *testing.T) {
 	e := newMREnv(t)
 	e.putService(false)
@@ -539,7 +539,7 @@ func TestModelRegistryStatus_States(t *testing.T) {
 	if st.State != "terminating" {
 		t.Fatalf("terminating: %+v", st)
 	}
-	// The component turned off: blocked, and absent.
+	// With the component Removed, status is absent and includes a blocked prerequisite.
 	putDSC(e.f, `{"modelregistry":{"managementState":"Removed"}}`)
 	st, _ = GetModelRegistryStatus(e.sa, e.u)
 	if st.State != "absent" || st.Blocked == nil || st.Blocked.Component != "modelregistry" {
@@ -547,8 +547,8 @@ func TestModelRegistryStatus_States(t *testing.T) {
 	}
 }
 
-// On a v3 DataScienceCluster (RHOAI 3.6) the component is aiHub, its
-// namespace instancesNamespace; the prerequisites plan turns aiHub on.
+// Under DataScienceCluster v3 (RHOAI 3.6) the feature maps to aiHub and instancesNamespace; the
+// prerequisites plan should enable aiHub when it is missing.
 func TestModelRegistry_V3AIHub(t *testing.T) {
 	e := newMREnv(t)
 	e.f.groups["/apis/datasciencecluster.opendatahub.io"] = dscGroupV3
@@ -568,9 +568,9 @@ func TestModelRegistry_V3AIHub(t *testing.T) {
 	}
 }
 
-// Clean up never turns the model registry component off: telling whether
-// any registry still uses it needs a list of every ModelRegistry, which
-// this tool does not make; it stays Managed (fail closed), with no write.
+// Restore never flips the model registry component to Removed—determining whether registries still
+// depend on it would require enumerating all ModelRegistry objects, which this tool does not do—so it
+// remains Managed (fail closed) without patching the cluster.
 func TestRestoreComponents_KeepsTheModelRegistryComponent(t *testing.T) {
 	e := newMREnv(t)
 	e.f.putJSON(testSnapshotCM, `{"data":{"prerequisites":"{\"components\":{\"modelregistry\":{\"previous\":\"Removed\",\"feature\":\"model-registry\"}}}"}}`)

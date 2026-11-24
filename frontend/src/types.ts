@@ -1828,6 +1828,43 @@ export interface ModelCallCheck {
   at: string;
 }
 
+// --- Model registry (pkg/types ModelRegistryStatus) ---------------------------
+
+/** The sample model this tool registers (pkg/types ModelRegistrySample). */
+export interface ModelRegistrySample {
+  model: string;
+  version: string;
+  registered: boolean;
+  /** "LIVE" or "ARCHIVED". */
+  state?: string;
+  id?: string;
+  uri: string;
+  problem?: string;
+}
+
+/** GET /api/resources/model-registry: this tool's registry, read with the user's own token. */
+export interface ModelRegistryStatus {
+  name: string;
+  /** Where RHOAI keeps model registries; absent while the component reports none. */
+  namespace?: string;
+  /** The DataScienceCluster key that runs them ("aiHub" or "modelregistry"). */
+  component?: string;
+  blocked?: ComponentBlock;
+  state: "absent" | "foreign" | "terminating" | "starting" | "ready" | "unknown";
+  message?: string;
+  managedByTool?: boolean;
+  /** The registry's REST address through the cluster's gateway. */
+  address?: string;
+  dashboardUrl?: string;
+  sample?: ModelRegistrySample;
+}
+
+/** The body of POST /api/resources/model-registry/stream. */
+export interface ModelRegistryRequest {
+  action: "setup" | "teardown";
+  samples?: boolean;
+}
+
 // --- One-click prerequisites (pkg/types PrerequisitesStatus) -----------------
 
 /** A DataScienceCluster component this tool turned on, and what it was. */
@@ -1851,7 +1888,7 @@ export interface FeaturePrerequisites {
 }
 
 /** The features the prerequisites cover. */
-export type PrerequisiteFeature = "pipelines" | "mlflow" | "models" | "playground";
+export type PrerequisiteFeature = "pipelines" | "mlflow" | "model-registry" | "models" | "playground";
 
 /** GET /api/resources/prerequisites. */
 export interface PrerequisitesStatus {

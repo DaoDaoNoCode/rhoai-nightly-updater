@@ -1,6 +1,6 @@
 /** Environment page coverage: S3 storage, pipeline servers, MLflow, models, playground, MaaS, samples, prerequisites, and clean-up. */
 
-import { OperationResponse, ProjectStatus, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, ModelsRequest, PlaygroundRequest, PlaygroundStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest } from '../../types';
+import { OperationResponse, ProjectStatus, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, ModelsRequest, PlaygroundRequest, PlaygroundStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelRegistryRequest, ModelRegistryStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest } from '../../types';
 import { request } from './client';
 import { StreamDoneHandler, StreamDetachHandler, streamSSE } from './stream';
 
@@ -135,6 +135,8 @@ export interface CleanupRequest {
   /** When storage is selected, additionally remove namespace seaweedfs. */
   deleteNamespace?: boolean;
   mlflow?: boolean;
+  /** This tool's model registry (with its registered models and its database). */
+  modelRegistry?: boolean;
   /** Projects whose models are removed (after MLflow). */
   models?: string[];
   /** Inference gateway teardown, following the models. */
@@ -296,4 +298,23 @@ export function streamMLflowSamples(
 /** Sample pipeline specification for the user to execute with their own token (no cluster round-trip). */
 export function getPipelineSampleSpec(): Promise<PipelineSampleSpec> {
   return request('/api/resources/samples/pipeline/spec');
+}
+// --- Model registry ---
+
+/** This tool's model registry (GET /api/resources/model-registry), read with the user's own token. */
+export function getModelRegistry(signal?: AbortSignal): Promise<ModelRegistryStatus> {
+  return request('/api/resources/model-registry', { signal });
+}
+
+/**
+ * Sets up the model registry ("check", "create", "ready", "samples") or
+ * deletes it ("check", "delete", "gone") as one streamed operation.
+ */
+export function streamModelRegistry(
+  req: ModelRegistryRequest,
+  onStep: (step: UpdateStep) => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+): AbortController {
+  return streamSSE('/api/resources/model-registry/stream', req, onStep, onDone, onConnectionDrop);
 }

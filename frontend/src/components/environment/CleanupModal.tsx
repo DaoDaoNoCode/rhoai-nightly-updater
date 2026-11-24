@@ -18,13 +18,16 @@ import {
   Stack,
   StackItem,
 } from "@patternfly/react-core";
-import { confirmationOf, type ConnectionWorkbench, type PlaygroundStatus, type ResourcesStatus, type MaaSStatus, type RestorableComponent } from "../../types";
+import { confirmationOf, type ConnectionWorkbench, type ModelRegistryStatus, type PlaygroundStatus, type ResourcesStatus, type MaaSStatus, type RestorableComponent } from "../../types";
 import type { CleanupRequest } from "../../services/api";
 import { TooltipButton } from "../TooltipButton";
 import { isTerminating } from "./resourceRow";
 import { connectionEnvOnlyChange, connectionWorkbenchesChange, unrecordedPipelineServerNote } from "./PipelinesTab";
 import { S3_NAMESPACE, storageTeardownOffered } from "./StorageTab";
 import { gatewayListRelease } from "./modelsConfirm";
+
+/** The DataScienceCluster keys of the model registry component (pkg/cluster/internal/envkit ModelRegistryComponent). */
+const MODEL_REGISTRY_COMPONENTS = ["aiHub", "modelregistry"];
 
 /** This tool's pipeline servers: in the data science projects, and in projects that are no longer ones. */
 function toolServers(status: ResourcesStatus) {
@@ -37,10 +40,10 @@ function toolModels(status: ResourcesStatus) {
 }
 
 /** What a Clean up offers: one feature's parts, or everything. */
-export type CleanupScope = "pipelines" | "mlflow" | "models" | "playground" | "all";
+export type CleanupScope = "pipelines" | "mlflow" | "model-registry" | "models" | "playground" | "all";
 
 /** What this tool created that a clean-up of the scope can delete, from the status. */
-export function cleanupCandidates(status: ResourcesStatus, scope: CleanupScope, minioLeftovers: boolean, playground: PlaygroundStatus | null = null, maas: MaaSStatus | null = null) {
+export function cleanupCandidates(status: ResourcesStatus, scope: CleanupScope, minioLeftovers: boolean, playground: PlaygroundStatus | null = null, maas: MaaSStatus | null = null, registry: ModelRegistryStatus | null = null) {
   // MaaS: this tool's publications first (with the models, since a published
   // model cannot go without its publication), the platform last (Clean up
   // everything only).
@@ -65,9 +68,11 @@ export function cleanupCandidates(status: ResourcesStatus, scope: CleanupScope, 
   const minio = status.minio;
   const namespace = storage && minio?.managedByTool !== false && !!minio?.deployed && !!minio?.namespaceDeletable;
   const mlflow = (scope === "mlflow" || scope === "all") && !!status.mlflow?.deployed && status.mlflow.managedByTool !== false && !isTerminating(status.mlflow);
+  // This tool's model registry (its UID is the recorded one).
+  const modelRegistry = (scope === "model-registry" || scope === "all") && !!registry?.managedByTool && registry.state !== "absent" && registry.state !== "terminating";
   // The projects recipes created that the cluster has (Clean up everything only).
   const recipeProjects = scope === "all" ? (status.recipeProjects ?? []).map((p) => p.name) : [];
-  return { servers, storage, namespace, mlflow, models, gateway, playgrounds, maasPublished, maasPlatform, recipeProjects };
+  return { servers, storage, namespace, mlflow, modelRegistry, models, gateway, playgrounds, maasPublished, maasPlatform, recipeProjects };
 }
 
 /**
@@ -89,6 +94,7 @@ export function cleanupSteps(req: CleanupRequest): { id: string; title: string }
     ...(req.pipelineServers ?? []).map((p) => ({ id: `pipeline-server:${p}`, title: `Delete the pipeline server in ${p}` })),
     ...(req.storage ? [{ id: "storage", title: req.deleteNamespace ? `Delete the S3 storage and namespace ${S3_NAMESPACE}` : "Delete the S3 storage" }] : []),
     ...(req.mlflow ? [{ id: "mlflow", title: "Delete MLflow" }] : []),
+    ...(req.modelRegistry ? [{ id: "model-registry", title: "Delete the model registry" }] : []),
     ...(req.playgrounds ?? []).map((p) => ({ id: `playground:${p}`, title: `Delete the playground in ${p}` })),
     ...(req.models ?? []).map((p) => ({ id: `model:${p}`, title: `Delete the models in ${p}` })),
     ...(req.inferenceGateway ? [{ id: "inference-gateway", title: "Delete the inference gateway" }] : []),
@@ -143,6 +149,8 @@ export const CleanupModal: React.FC<{
   playground?: PlaygroundStatus | null;
   /** The MaaS status, for this tool's publications and platform (null: none known). */
   maas?: MaaSStatus | null;
+  /** The model registry status, for this tool's registry (null: none known). */
+  modelRegistry?: ModelRegistryStatus | null;
   minioLeftovers: boolean;
   /** Why changes are disabled now, or null. */
   baseReason: string | null;
@@ -152,10 +160,10 @@ export const CleanupModal: React.FC<{
   retry?: CleanupRetry | null;
   onConfirm: (req: CleanupRequest) => void;
   onCancel: () => void;
-}> = ({ scope, status, playground = null, maas = null, minioLeftovers, baseReason, restorable = [], retry = null, onConfirm, onCancel }) => {
+}> = ({ scope, status, playground = null, maas = null, modelRegistry = null, minioLeftovers, baseReason, restorable = [], retry = null, onConfirm, onCancel }) => {
   const titleId = React.useId();
   const reasonId = React.useId();
-  const offered = cleanupCandidates(status, scope, minioLeftovers, playground, maas);
+  const offered = cleanupCandidates(status, scope, minioLeftovers, playground, maas, modelRegistry);
   // A refused clean-up comes back with the choices it was sent with.
   const was = retry?.req;
   const [published, setPublished] = useState<string[]>(was ? was.maasPublished ?? [] : offered.maasPublished);
@@ -163,7 +171,9 @@ export const CleanupModal: React.FC<{
   const togglePublished = (p: string, v: boolean) => setPublished((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
   const [maasPlatform, setMaaSPlatform] = useState(was ? !!was.maasPlatform : offered.maasPlatform);
   // Components are offered for the scope's feature (every feature's with "all"), unchecked: turning one back is a cluster change of its own.
-  const offeredComponents = restorable.filter((r) => scope === "all" || r.feature === scope);
+  // The model registry's component is never turned back by Clean up (the backend keeps it on: telling whether any
+  // registry still uses it would need a list of every registry), so it is not offered.
+  const offeredComponents = restorable.filter((r) => (scope === "all" || r.feature === scope) && !MODEL_REGISTRY_COMPONENTS.includes(r.component));
   const [components, setComponents] = useState<string[]>(was?.components ?? []);
   const chosenComponents = components.filter((k) => offeredComponents.some((r) => r.component === k));
   const toggleComponent = (k: string, v: boolean) => setComponents((s) => (v ? [...s.filter((x) => x !== k), k] : s.filter((x) => x !== k)));
@@ -182,6 +192,7 @@ export const CleanupModal: React.FC<{
   const [storage, setStorage] = useState(was ? !!was.storage : offered.storage);
   const [namespace, setNamespace] = useState(!!was?.deleteNamespace);
   const [mlflow, setMlflow] = useState(was ? !!was.mlflow : offered.mlflow);
+  const [registry, setRegistry] = useState(was ? !!was.modelRegistry : offered.modelRegistry);
   const [models, setModels] = useState<string[]>(was ? was.models ?? [] : offered.models);
   const [gateway, setGateway] = useState(was ? !!was.inferenceGateway : offered.gateway);
   const [recipeProjects, setRecipeProjects] = useState<string[]>(was ? was.recipeProjects ?? [] : offered.recipeProjects);
@@ -224,6 +235,7 @@ export const CleanupModal: React.FC<{
     ...(Object.keys(confirmWorkbenches).length ? { confirmWorkbenches } : {}),
     ...(storage && offered.storage ? { storage: true, ...(namespace && offered.namespace ? { deleteNamespace: true } : {}) } : {}),
     ...(mlflow && offered.mlflow ? { mlflow: true } : {}),
+    ...(registry && offered.modelRegistry ? { modelRegistry: true } : {}),
     ...(chosenPlaygrounds.length ? { playgrounds: chosenPlaygrounds } : {}),
     ...(chosenModels.length ? { models: chosenModels } : {}),
     ...(gateway && offered.gateway ? { inferenceGateway: true } : {}),
@@ -232,7 +244,7 @@ export const CleanupModal: React.FC<{
     ...(Object.keys(confirmProjectContents).length ? { confirmProjectContents } : {}),
     ...(chosenComponents.length ? { components: chosenComponents } : {}),
   };
-  const nothing = !req.pipelineServers && !req.storage && !req.mlflow && !req.models && !req.inferenceGateway && !req.playgrounds && !req.maasPublished && !req.maasPlatform && !req.components && !req.recipeProjects;
+  const nothing = !req.pipelineServers && !req.storage && !req.mlflow && !req.modelRegistry && !req.models && !req.inferenceGateway && !req.playgrounds && !req.maasPublished && !req.maasPlatform && !req.components && !req.recipeProjects;
   const unconfirmed = asking.filter((p) => !confirmedContents.includes(p));
   const reason = baseReason ?? (nothing ? "Select something to delete."
     : unconfirmed.length > 0 ? "Confirm that what the project holds is deleted with it." : cleanupBlocked(status, req, offered.maasPublished));
@@ -241,6 +253,7 @@ export const CleanupModal: React.FC<{
     ...(req.storage ? [<>Every file in the S3 storage: pipeline artifacts and uploaded files{status.legacyStorage ? ", and the storage of an earlier version" : ""}.</>] : []),
     ...(req.deleteNamespace ? [<>Everything else in namespace <code>{S3_NAMESPACE}</code>.</>] : []),
     ...(req.mlflow ? [<>Every MLflow experiment, run and model, in every workspace.</>] : []),
+    ...(req.modelRegistry ? [<>Every model, version and artifact record in the model registry, and its database.</>] : []),
     ...(req.playgrounds ?? []).map((p) => <>The chats and uploaded documents of the playground in {p}.</>),
     ...(req.maasPlatform ? [<>MaaS API keys, and the MaaS database with their records.</>] : []),
     ...(req.recipeProjects ?? []).map((p) => <>Everything in project {p}.</>),
@@ -250,8 +263,8 @@ export const CleanupModal: React.FC<{
     setConfirmed(({ [p]: _dropped, ...rest }) => (v && unrecordedUID.has(p) ? { ...rest, [p]: unrecordedUID.get(p)! } : rest));
   };
   const toggleModel = (p: string, v: boolean) => setModels((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
-  const nothingOffered = offered.servers.length === 0 && !offered.storage && !offered.mlflow && offered.models.length === 0 && !offered.gateway && offered.playgrounds.length === 0 && offered.maasPublished.length === 0 && !offered.maasPlatform && offeredComponents.length === 0 && offered.recipeProjects.length === 0;
-  const title = scope === "all" ? "Clean up everything?" : scope === "pipelines" ? "Clean up Pipelines?" : scope === "models" ? "Clean up Models?" : scope === "playground" ? "Clean up Playground?" : "Clean up MLflow?";
+  const nothingOffered = offered.servers.length === 0 && !offered.storage && !offered.mlflow && !offered.modelRegistry && offered.models.length === 0 && !offered.gateway && offered.playgrounds.length === 0 && offered.maasPublished.length === 0 && !offered.maasPlatform && offeredComponents.length === 0 && offered.recipeProjects.length === 0;
+  const title = scope === "all" ? "Clean up everything?" : scope === "pipelines" ? "Clean up Pipelines?" : scope === "models" ? "Clean up Models?" : scope === "playground" ? "Clean up Playground?" : scope === "model-registry" ? "Clean up the model registry?" : "Clean up MLflow?";
   return (
     <Modal aria-labelledby={titleId} variant={ModalVariant.medium} isOpen onClose={onCancel}>
       <ModalHeader title={title} labelId={titleId} titleIconVariant="warning" />
@@ -298,6 +311,12 @@ export const CleanupModal: React.FC<{
                 {offered.mlflow && (
                   <FormGroup role="group" isStack label="MLflow" fieldId="cleanup-mlflow">
                     <Checkbox id="cleanup-mlflow" label="MLflow server" isChecked={mlflow} onChange={(_e, v) => setMlflow(v)} />
+                  </FormGroup>
+                )}
+                {offered.modelRegistry && (
+                  <FormGroup role="group" isStack label="Model registry" fieldId="cleanup-model-registry">
+                    <Checkbox id="cleanup-model-registry" label={<>Model registry <code>{modelRegistry?.name}</code></>} isChecked={registry} onChange={(_e, v) => setRegistry(v)}
+                      description="With its registered models and its database, which are deleted with it. The DataScienceCluster component that runs it stays on." />
                   </FormGroup>
                 )}
                 {offered.playgrounds.length > 0 && (
