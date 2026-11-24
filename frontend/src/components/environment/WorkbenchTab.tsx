@@ -25,7 +25,7 @@ import { ComponentAlert, NoProjectsAlert } from "./UseIt";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
 import { LoadFailed, PartsSkeleton } from "./Loading";
 import type { Busy, FeatureState } from "./featureState";
-import { WORKBENCH_FILES, WORKBENCH_NAME, WORKBENCH_STORAGE, keptStorage, profileText, storageText, workbenchIn, workbenchSetUpReason, workbenchStatusOf, workbenchUnreadable } from "./workbenchState";
+import { WORKBENCH_FILES, WORKBENCH_NAME, WORKBENCH_STORAGE, keptStorage, storageInUseText, profileText, storageText, workbenchIn, workbenchSetUpReason, workbenchStatusOf, workbenchUnreadable } from "./workbenchState";
 
 export interface WorkbenchTabProps {
   status: ResourcesStatus;
@@ -134,6 +134,9 @@ const WorkbenchPart: React.FC<WorkbenchTabProps & { project: string }> = ({ work
         <Alert variant="warning" isInline component="div" title="The workbench cannot be read" actionLinks={<AlertActionLink onClick={onRetry}>Retry</AlertActionLink>}>
           <Content component="p">{workbench?.itemsProblem ?? "The read failed."} This tool does not set up or delete anything here until it can read it.</Content>
         </Alert>
+      )}
+      {item?.storage?.managedByTool && storageInUseText(item.storage.usedBy) && (
+        <Alert variant="warning" isInline component="p" title="Its storage is used by another workbench">{storageInUseText(item.storage.usedBy)} Until then this tool does not delete the storage.</Alert>
       )}
       {item?.state === "failed" && (
         <Alert variant="danger" isInline component="div" title="The workbench can't start">
@@ -309,7 +312,9 @@ export function workbenchConfirm(pending: Pending, wb: WorkbenchStatus | null, s
       };
     case "delete-workbench-storage": {
       const kept = keptStorage(wb, pending.project);
+      const inUse = storageInUseText(kept?.usedBy);
       return {
+        ...(inUse ? { confirmDisabled: true, extra: <Alert variant="warning" isInline component="p" title="The storage is in use">{inUse}</Alert> } : {}),
         title: `Delete the kept storage in ${pending.project}?`, confirm: "Delete", danger: true, titleIcon: "danger", runTitle: `Delete the kept storage in ${pending.project}`,
         summary: <Content component="p">Deletes {storageText(kept?.size, kept?.storageClass)}, which this tool kept when its workbench was deleted. The next Set up creates new, empty storage.</Content>,
         changes: [<>Deleted: PersistentVolumeClaim <code>{WORKBENCH_STORAGE}</code> (only the one this tool created).</>],
@@ -322,6 +327,7 @@ export function workbenchConfirm(pending: Pending, wb: WorkbenchStatus | null, s
       const item = workbenchIn(wb, project);
       const storage = item?.storage;
       const ownStorage = !!storage?.managedByTool;
+      const inUse = storageInUseText(storage?.usedBy);
       const running = item?.state === "running" || item?.state === "starting";
       return {
         title: `Delete the workbench in ${project}?`, confirm: "Delete", danger: true, runTitle: `Delete the workbench in ${project}`,
@@ -338,8 +344,8 @@ export function workbenchConfirm(pending: Pending, wb: WorkbenchStatus | null, s
         ],
         ...(deleteStorage ? { dataLoss: <>The workbench&apos;s files in <code>{WORKBENCH_STORAGE}</code> are lost.</> } : {}),
         choice: ownStorage ? (
-          <Checkbox id="teardown-workbench-storage" label="Also delete its storage (files are lost)" isChecked={deleteStorage}
-            description={storageText(storage?.size, storage?.storageClass)}
+          <Checkbox id="teardown-workbench-storage" label="Also delete its storage (files are lost)" isChecked={deleteStorage && !inUse} isDisabled={!!inUse}
+            description={inUse ?? storageText(storage?.size, storage?.storageClass)}
             onChange={(_e, v) => setPending?.({ kind: "teardown-workbench", project, deleteStorage: v })} />
         ) : undefined,
       };

@@ -39,6 +39,10 @@ func TestWorkbenchUsernameTranslate(t *testing.T) {
 		"t~1":        "t-7f1",
 		"Ann Lee!":   "ann-20lee-21",
 		"me@x.com":   "me-40x-2ecom",
+		"a b":        "a-20b",
+		"a+b":        "a-2bb",
+		"é":          "-c3-a9",
+		"jöé":        "j-c3-b6-c3-a9",
 	} {
 		if got := workbench.UsernameTranslate(in); got != want {
 			t.Errorf("UsernameTranslate(%q) = %q, want %q", in, got, want)
@@ -78,7 +82,8 @@ func TestWorkbenchNotebookEqualsTheDashboards(t *testing.T) {
 			"opendatahub.io/hardware-profile-name":"default-profile",
 			"opendatahub.io/hardware-profile-namespace":"redhat-ods-applications",
 			"opendatahub.io/hardware-profile-resource-version":"42",
-			"opendatahub.io/image-display-name":"Jupyter | Minimal | CPU | Python 3.12"}},
+			"opendatahub.io/image-display-name":"Jupyter | Minimal | CPU | Python 3.12",
+			"opendatahub.io/workbench-image-namespace":""}},
 	"spec":{"template":{"spec":{
 		"enableServiceLinks":false,
 		"containers":[{
@@ -108,7 +113,7 @@ func TestWorkbenchNotebookEqualsTheDashboards(t *testing.T) {
 		t.Fatal("mlflow-instance without MLflow")
 	}
 	raw, _ = json.Marshal(nb)
-	if strings.Contains(string(raw), "elyra-dsp-details") || strings.Contains(string(raw), "workbench-image-namespace") {
+	if strings.Contains(string(raw), "elyra-dsp-details") {
 		t.Fatalf("unexpected fields: %s", raw)
 	}
 }
@@ -191,7 +196,7 @@ func profile(t *testing.T, js string) workbench.HardwareProfile {
 	return p
 }
 
-const cpuMem = `"identifiers":[{"identifier":"cpu","defaultCount":2,"resourceType":"CPU"},{"identifier":"memory","defaultCount":"4Gi","resourceType":"Memory"}]`
+const cpuMem = `"identifiers":[{"identifier":"cpu","displayName":"CPU","defaultCount":2,"minCount":1,"maxCount":4,"resourceType":"CPU"},{"identifier":"memory","displayName":"Memory","defaultCount":"4Gi","minCount":"2Gi","maxCount":"8Gi","resourceType":"Memory"}]`
 
 // ChooseProfile follows dashboard defaults for a fresh workbench, including
 // how Kueue-backed profiles are filtered.
@@ -687,5 +692,181 @@ func TestWorkbenchStatusUnreadableAndProfileName(t *testing.T) {
 	st, err = GetWorkbenchStatus(c, u, "proj")
 	if err != nil || len(st.Items) != 0 || len(st.ItemsUnreadable) != 1 || st.ItemsUnreadable[0] != "proj" || st.Plan != nil {
 		t.Fatalf("unreadable: %+v %v", st, err)
+	}
+}
+
+// L4: an image of the project names the project; one of the applications
+// namespace writes "" (the dashboard's null).
+func TestWorkbenchImageNamespaceAnnotation(t *testing.T) {
+	p := wbPlan()
+	ann := workbench.NotebookManifest(p)["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if v, ok := ann["opendatahub.io/workbench-image-namespace"]; !ok || v != "" {
+		t.Fatalf("applications-namespace image: %v %v", v, ok)
+	}
+	p.Image.Namespace = "proj"
+	ann = workbench.NotebookManifest(p)["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if ann["opendatahub.io/workbench-image-namespace"] != "proj" {
+		t.Fatalf("project image: %v", ann["opendatahub.io/workbench-image-namespace"])
+	}
+}
+
+// L2: the dashboard's isHardwareProfileValid: a default above the maximum,
+// a missing display name or minimum, a negative or decimal count makes a
+// profile invalid; CPU and memory count by resourceType too.
+func TestWorkbenchProfileValidity(t *testing.T) {
+	good := profile(t, `{"metadata":{"name":"default-profile","namespace":"apps"},"spec":{"identifiers":[
+		{"identifier":"cpu","displayName":"CPU","resourceType":"CPU","defaultCount":2,"minCount":1,"maxCount":4},
+		{"identifier":"memory","displayName":"Memory","resourceType":"Memory","defaultCount":"4Gi","minCount":"2Gi","maxCount":"8Gi"}]}}`)
+	for name, ids := range map[string]string{
+		"a-broken":       `{"identifier":"cpu","displayName":"CPU","resourceType":"CPU","defaultCount":8,"minCount":1,"maxCount":4}`,
+		"a-no-display":   `{"identifier":"cpu","resourceType":"CPU","defaultCount":2,"minCount":1}`,
+		"a-no-min":       `{"identifier":"cpu","displayName":"CPU","resourceType":"CPU","defaultCount":2}`,
+		"a-negative":     `{"identifier":"cpu","displayName":"CPU","resourceType":"CPU","defaultCount":"-1","minCount":"-2"}`,
+		"a-decimal":      `{"identifier":"cpu","displayName":"CPU","resourceType":"CPU","defaultCount":1.5,"minCount":1}`,
+		"a-below-min":    `{"identifier":"cpu","displayName":"CPU","resourceType":"CPU","defaultCount":1,"minCount":2}`,
+		"a-memory-above": `{"identifier":"cpu","displayName":"CPU","resourceType":"CPU","defaultCount":2,"minCount":1},{"identifier":"memory","displayName":"Memory","resourceType":"Memory","defaultCount":"16Gi","minCount":"2Gi","maxCount":"8Gi"}`,
+	} {
+		mem := `,{"identifier":"memory","displayName":"Memory","resourceType":"Memory","defaultCount":"4Gi","minCount":"2Gi"}`
+		if name == "a-memory-above" {
+			mem = ""
+		}
+		bad := profile(t, `{"metadata":{"name":"`+name+`","namespace":"apps"},"spec":{"identifiers":[`+ids+mem+`]}}`)
+		if got, _ := workbench.ChooseProfile([]workbench.HardwareProfile{bad, good}, nil, workbench.OnlyNonKueue, nil); got.Name != "default-profile" {
+			t.Errorf("%s: chose %q, the dashboard skips it", name, got.Name)
+		}
+	}
+	rt := profile(t, `{"metadata":{"name":"rt","namespace":"apps"},"spec":{"identifiers":[
+		{"identifier":"requests.cpu","displayName":"CPU","resourceType":"CPU","defaultCount":"500m","minCount":"250m"},
+		{"identifier":"requests.memory","displayName":"Memory","resourceType":"Memory","defaultCount":"4Gi","minCount":"2Gi"}]}}`)
+	if got, why := workbench.ChooseProfile([]workbench.HardwareProfile{rt}, nil, workbench.OnlyNonKueue, nil); got.Name != "rt" {
+		t.Fatalf("resourceType CPU/Memory: %q %q", got.Name, why)
+	}
+}
+
+// L7: a stopped workbench whose pod is still terminating (and ready) reads
+// Stopping, as the dashboard counts every pod.
+func TestWorkbenchStateTerminatingPod(t *testing.T) {
+	var nb workbench.Notebook
+	nb.Metadata.Annotations = map[string]string{workbench.StoppedAnnotation: "2026-11-24T10:00:00Z"}
+	p := pod(t, `{"metadata":{"name":"p","deletionTimestamp":"2026-11-24T10:00:01Z"},"status":{"containerStatuses":[{"name":"nightly-workbench","ready":true,"state":{"running":{}}}]}}`)
+	if got, _, _ := workbench.State(nb, []workbench.Pod{p}); got != workbench.StateStopping {
+		t.Fatalf("got %s", got)
+	}
+}
+
+// L6: Start removes the name and namespace annotations of a hardware
+// profile that no longer exists (getDeletedHardwareProfilePatches).
+func TestWorkbenchStartDropsDeletedProfile(t *testing.T) {
+	f, c := newResourceFake(t)
+	putWorkbenchCluster(t, f, true)
+	putToolWorkbench(t, f, c)
+	f.putJSON(wbNotebook, `{"metadata":{"uid":"nb-1","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"},"annotations":{"kubeflow-resource-stopped":"2026-11-24T09:00:00Z",
+		"opendatahub.io/hardware-profile-name":"gone-profile","opendatahub.io/hardware-profile-namespace":"`+wbApps+`"}},"spec":{"template":{"spec":{"containers":[{"name":"nightly-workbench","volumeMounts":[]}],"volumes":[]}}}}`)
+	if res := wbSteps(t, userClientOf(c, fakeUserToken), types.WorkbenchRequest{Action: "start", Project: "proj"}); !res.Success {
+		t.Fatalf("start: %+v", res)
+	}
+	calls := f.callsTo("PATCH", wbNotebook)
+	body := calls[len(calls)-1].Body
+	for _, want := range []string{`"path":"/metadata/annotations/opendatahub.io~1hardware-profile-name"`, `"path":"/metadata/annotations/opendatahub.io~1hardware-profile-namespace"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("start patch lacks %s: %s", want, body)
+		}
+	}
+	// A profile that exists stays.
+	f.putJSON(wbNotebook, `{"metadata":{"uid":"nb-1","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"},"annotations":{"kubeflow-resource-stopped":"2026-11-24T09:00:00Z",
+		"opendatahub.io/hardware-profile-name":"default-profile","opendatahub.io/hardware-profile-namespace":"`+wbApps+`"}},"spec":{"template":{"spec":{"containers":[{"name":"nightly-workbench","volumeMounts":[]}],"volumes":[]}}}}`)
+	if res := wbSteps(t, userClientOf(c, fakeUserToken), types.WorkbenchRequest{Action: "start", Project: "proj"}); !res.Success {
+		t.Fatalf("start: %+v", res)
+	}
+	calls = f.callsTo("PATCH", wbNotebook)
+	if strings.Contains(calls[len(calls)-1].Body, "hardware-profile-name") {
+		t.Fatalf("removed an existing profile: %s", calls[len(calls)-1].Body)
+	}
+}
+
+// putStorageUser stores another workbench and its pod that mount
+// nightly-workbench-storage.
+func putStorageUser(f *resourceFake) {
+	f.putJSON(wbNotebooks+"/my-wb", `{"metadata":{"uid":"other"},"spec":{"template":{"spec":{"containers":[{"name":"my-wb"}],"volumes":[{"name":"data","persistentVolumeClaim":{"claimName":"nightly-workbench-storage"}}]}}}}`)
+	f.putJSON("/api/v1/namespaces/proj/pods/my-wb-0", `{"metadata":{"labels":{"notebook-name":"my-wb"}},"spec":{"volumes":[{"name":"data","persistentVolumeClaim":{"claimName":"nightly-workbench-storage"}}]}}`)
+}
+
+// M1: storage another workbench or pod uses is never deleted, on every
+// entry point: Delete with storage, delete-storage, and both Clean up parts.
+func TestWorkbenchStorageInUse(t *testing.T) {
+	entries := map[string]func(c *Client) *types.OperationResponse{
+		"delete with storage": func(c *Client) *types.OperationResponse {
+			return wbSteps(t, userClientOf(c, fakeUserToken), types.WorkbenchRequest{Action: "teardown", Project: "proj", DeleteStorage: true})
+		},
+		"clean up workbench and storage": func(c *Client) *types.OperationResponse {
+			res, _ := cleanupWorkbench(userClientOf(c, fakeUserToken), "proj", true)
+			return res
+		},
+	}
+	for name, run := range entries {
+		t.Run(name, func(t *testing.T) {
+			f, c := newResourceFake(t)
+			putWorkbenchCluster(t, f, true)
+			putToolWorkbench(t, f, c)
+			putStorageUser(f)
+			res := run(c)
+			if res.Success || res.ErrorCode != "storage_in_use" || !strings.Contains(res.Message, "used by workbench my-wb") || !strings.Contains(res.Message, "remove it from that workbench in the dashboard first") {
+				t.Fatalf("got %+v", res)
+			}
+			if len(f.callsTo("DELETE", wbNotebook)) != 0 || len(f.callsTo("DELETE", wbPVC)) != 0 {
+				t.Fatal("deleted something")
+			}
+		})
+	}
+	kept := map[string]func(c *Client) *types.OperationResponse{
+		"delete-storage": func(c *Client) *types.OperationResponse {
+			return wbSteps(t, userClientOf(c, fakeUserToken), types.WorkbenchRequest{Action: "delete-storage", Project: "proj"})
+		},
+		"clean up kept storage": func(c *Client) *types.OperationResponse {
+			res, _ := cleanupWbStorage(userClientOf(c, fakeUserToken), "proj")
+			return res
+		},
+	}
+	for name, run := range kept {
+		t.Run(name, func(t *testing.T) {
+			f, c := newResourceFake(t)
+			putWorkbenchCluster(t, f, true)
+			putToolWorkbench(t, f, c)
+			f.deleteObject(wbNotebook)
+			if err := writeWorkbenchRecord(c, "", "pvc-1"); err != nil {
+				t.Fatal(err)
+			}
+			f.putJSON("/api/v1/namespaces/proj/pods/job-1", `{"spec":{"volumes":[{"name":"d","persistentVolumeClaim":{"claimName":"nightly-workbench-storage"}}]}}`)
+			res := run(c)
+			if res.Success || res.ErrorCode != "storage_in_use" || !strings.Contains(res.Message, "pod job-1") || len(f.callsTo("DELETE", wbPVC)) != 0 {
+				t.Fatalf("got %+v", res)
+			}
+		})
+	}
+	// The status says who uses it, so the page warns first; this tool's own
+	// workbench and its pods do not count.
+	f, c := newResourceFake(t)
+	putWorkbenchCluster(t, f, true)
+	putToolWorkbench(t, f, c)
+	f.putJSON("/api/v1/namespaces/proj/pods/nightly-workbench-0", `{"metadata":{"labels":{"notebook-name":"nightly-workbench"}},"spec":{"volumes":[{"name":"d","persistentVolumeClaim":{"claimName":"nightly-workbench-storage"}}]}}`)
+	st, err := GetWorkbenchStatus(c, userClientOf(c, fakeUserToken), "proj")
+	if err != nil || st.Items[0].Storage == nil || len(st.Items[0].Storage.UsedBy) != 0 {
+		t.Fatalf("own workbench counted: %+v %v", st, err)
+	}
+	putStorageUser(f)
+	st, _ = GetWorkbenchStatus(c, userClientOf(c, fakeUserToken), "proj")
+	if got := st.Items[0].Storage.UsedBy; len(got) != 1 || got[0] != "workbench my-wb" {
+		t.Fatalf("used by %v", got)
+	}
+}
+
+// L3: after the Notebook's dry run the refusal does not claim nothing
+// changed (the webhook may have made its ConfigMaps).
+func TestWorkbenchDryRunRefusalWording(t *testing.T) {
+	f, c := newResourceFake(t)
+	putWorkbenchCluster(t, f, false)
+	res := wbSteps(t, userClientOf(c, fakeUserToken), types.WorkbenchRequest{Action: "setup", Project: "proj"})
+	if res.Success || !strings.Contains(res.Message, "No workbench or storage was created") || strings.Contains(res.Message, "Nothing was changed") {
+		t.Fatalf("got %q", res.Message)
 	}
 }

@@ -1624,6 +1624,9 @@ export interface WorkbenchStorage {
   size?: string;
   storageClass?: string;
   managedByTool: boolean;
+  /** Other workbenches and pods that mount it: deleting it is refused while there are any. */
+  usedBy?: string[];
+  usedByProblem?: string;
 }
 
 /** POST /api/resources/workbench/stream. */

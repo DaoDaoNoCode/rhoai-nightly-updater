@@ -499,7 +499,7 @@
 6 patch /configmaps ns=${NS} name=rhoai-nightly-updater-snapshot
 1 update /configmaps ns=${NS} name=rhoai-nightly-updater-activity
 
-## excluded call sites (27)
+## excluded call sites (29)
 authz.go:CheckUserPermissionWithToken
 authz.go:LookupUserWithToken
 authz.go:ReadSessionToken
@@ -518,8 +518,10 @@ user_reads.go:listProjectInferenceServices
 user_reads.go:listProjectLLMInferenceServices
 workbench_reads.go:listImageStreams
 workbench_reads.go:listLocalQueues
+workbench_reads.go:listNotebooks
 workbench_reads.go:listPods
 workbench_reads.go:listProfiles
+workbench_reads.go:listProjectPods
 workbench_reads.go:listStorageClasses
 workbench_reads.go:pipelineConfigExists
 workbench_reads.go:projectLabels

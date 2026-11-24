@@ -172,15 +172,20 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 			return r.fail("check", fmt.Sprintf("The API server rejects PersistentVolumeClaim %s: %v. Nothing was changed.", StorageName, err), kube.ErrorCodeFromK8sErr(err), "storage dry run failed")
 		}
 	}
+	// The Notebook's dry run goes through odh-notebook-controller's
+	// webhook, which (as for the dashboard's own dry run and for a real
+	// create) makes ConfigMaps workbench-trusted-ca-bundle and
+	// pipeline-runtime-images and Secret ds-pipeline-config in the
+	// project when they are missing: SECURITY.md, "Workbench".
 	dry, err := create(c, rhoai.NamespacedPath(notebookAPI, "notebooks", project, ""), nbObj, true)
 	if err != nil {
-		return r.fail("check", fmt.Sprintf("The API server rejects workbench %s: %v. Nothing was changed.%s", Name, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "workbench dry run failed")
+		return r.fail("check", fmt.Sprintf("The API server rejects workbench %s: %v. No workbench or storage was created.%s", Name, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "workbench dry run failed")
 	}
 	// A passing dry run hits every Notebook webhook; under RHOAI 3 the
 	// controller adds kube-rbac-proxy for inject-auth—without that container
 	// serving falls back to the 2.x path and the tool fails closed.
 	if !hasContainer(dry, kubeRBACProxy) {
-		return r.fail("check", "This cluster's workbench controller does not add kube-rbac-proxy to a workbench (it is not RHOAI 3's), so this tool does not set one up. Create a workbench in the dashboard instead. Nothing was changed.", "unsupported", "no kube-rbac-proxy")
+		return r.fail("check", "This cluster's workbench controller does not add kube-rbac-proxy to a workbench (it is not RHOAI 3's), so this tool does not set one up. Create a workbench in the dashboard instead. No workbench or storage was created.", "unsupported", "no kube-rbac-proxy")
 	}
 	r.step("check", "success", describe(plan))
 
@@ -286,14 +291,18 @@ func StopOps(now time.Time) []kube.JSONPatchOp {
 // but the workbench lacks their settings mount, adds Elyra volume plus
 // container 0's mount; with MLflow enabled and no MLflow link on the
 // workbench, adds one (getMlflowInstancePatch).
-func StartOps(nb Notebook, pipelines, mlflow bool) []kube.JSONPatchOp {
+func StartOps(nb Notebook, pipelines, mlflow, profileGone bool) []kube.JSONPatchOp {
 	ops := []kube.JSONPatchOp{{Op: "remove", Path: stoppedPointer}}
-	has := slices.ContainsFunc(nb.Spec.Template.Spec.Volumes, func(v struct {
-		Name   string `json:"name"`
-		Secret *struct {
-			SecretName string `json:"secretName"`
-		} `json:"secret"`
-	}) bool {
+	// getDeletedHardwareProfilePatches (concepts/hardwareProfiles/utils.ts
+	// L81-88): a workbench whose hardware profile no longer exists loses
+	// its name and namespace annotations on Start.
+	if _, named := nb.Metadata.Annotations[profileNameAnnotation]; named && profileGone {
+		ops = append(ops, kube.JSONPatchOp{Op: "remove", Path: "/metadata/annotations/opendatahub.io~1hardware-profile-name"})
+		if _, ok := nb.Metadata.Annotations[profileNamespaceAnnotation]; ok {
+			ops = append(ops, kube.JSONPatchOp{Op: "remove", Path: "/metadata/annotations/opendatahub.io~1hardware-profile-namespace"})
+		}
+	}
+	has := slices.ContainsFunc(nb.Spec.Template.Spec.Volumes, func(v Volume) bool {
 		return v.Secret != nil && v.Secret.SecretName == PipelineSecret
 	})
 	if pipelines && !has {
@@ -345,7 +354,11 @@ func (r *run) start(project string) (*types.OperationResponse, error) {
 	if dsc, err := rhoai.ReadFirstDSC(r.c); err == nil {
 		mlflow = componentOn(dsc, "mlflowoperator")
 	}
-	if err := patch(r.c, project, nb.Metadata.UID, StartOps(nb, pipelines, mlflow)); err != nil {
+	gone, err := profileGone(r.c, nb)
+	if err != nil {
+		return r.fail("workbench", fmt.Sprintf("Cannot read the workbench's hardware profile: %v. Nothing was changed.", err), kube.ErrorCodeFromK8sErr(err), "read failed")
+	}
+	if err := patch(r.c, project, nb.Metadata.UID, StartOps(nb, pipelines, mlflow, gone)); err != nil {
 		return r.fail("workbench", fmt.Sprintf("Cannot start workbench %s in %s: %v.", Name, project, err), kube.ErrorCodeFromK8sErr(err), "start failed")
 	}
 	r.step("workbench", "success", "Starting (usually 1 to 3 minutes).")
@@ -374,6 +387,13 @@ func (r *run) teardown(project string, deleteStorage bool) (*types.OperationResp
 		}
 		if pvcFound && !rec.OwnsStorage(pvc.Metadata) {
 			return r.fail("workbench", fmt.Sprintf("PersistentVolumeClaim %s in %s was not created by this tool, so this tool does not delete it. Nothing was deleted.", StorageName, project), "not_managed", "foreign storage")
+		}
+		// Up front too, so a storage another workbench uses refuses the
+		// whole deletion before anything goes.
+		if pvcFound {
+			if msg, code := r.storageInUseCheck(project, rec); msg != "" {
+				return r.fail("workbench", msg+" Nothing was deleted.", code, "storage in use")
+			}
 		}
 	}
 	switch {
@@ -419,6 +439,9 @@ func (r *run) teardown(project string, deleteStorage bool) (*types.OperationResp
 	if !pvcFound {
 		r.step("storage", "success", fmt.Sprintf("Project %s has no storage %s.", project, StorageName))
 	} else {
+		if msg, code := r.storageInUseCheck(project, rec); msg != "" {
+			return r.fail("storage", fmt.Sprintf("The workbench was deleted, but its storage was kept: %s", msg), code, "storage in use")
+		}
 		if _, err := kube.DeleteWithUID(c, storagePath(project), pvc.Metadata.UID); err != nil && !kube.IsK8sNotFound(err) {
 			code := kube.ErrorCodeFromK8sErr(err)
 			if kube.IsK8sConflict(err) {
@@ -461,6 +484,9 @@ func (r *run) deleteKeptStorage(project string) (*types.OperationResponse, error
 	case !rec.OwnsStorage(pvc.Metadata):
 		return r.fail("storage", fmt.Sprintf("PersistentVolumeClaim %s in %s was not created by this tool, so this tool does not delete it. Nothing was deleted.", StorageName, project), "not_managed", "foreign storage")
 	default:
+		if msg, code := r.storageInUseCheck(project, rec); msg != "" {
+			return r.fail("storage", msg+" Nothing was deleted.", code, "storage in use")
+		}
 		if _, err := kube.DeleteWithUID(c, storagePath(project), pvc.Metadata.UID); err != nil && !kube.IsK8sNotFound(err) {
 			return r.fail("storage", fmt.Sprintf("Cannot delete storage %s in %s: %v.", StorageName, project, err), kube.ErrorCodeFromK8sErr(err), "storage delete failed")
 		}
@@ -500,4 +526,93 @@ func withoutEntry(value, project string) (string, bool) {
 		}
 	}
 	return strings.Join(kept, ","), found
+}
+
+// profileGone: the hardware profile the workbench's annotations name no
+// longer exists (the dashboard's binding state Deleted).
+func profileGone(c *kube.Client, nb Notebook) (bool, error) {
+	name, ns := nb.Metadata.Annotations[profileNameAnnotation], nb.Metadata.Annotations[profileNamespaceAnnotation]
+	if name == "" {
+		return false, nil
+	}
+	if ns == "" {
+		ns = nb.Metadata.Namespace
+	}
+	profiles, err := listProfiles(c, ns)
+	if err != nil {
+		return false, err
+	}
+	for _, p := range profiles {
+		if p.Metadata.Name == name {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// storageUsers are the workbenches and pods of project that mount
+// nightly-workbench-storage, other than this tool's workbench (the
+// Notebook with the recorded UID and its pods, labelled
+// notebook-name=nightly-workbench): deleting the storage would take it
+// from them, so it is refused while there are any.
+func storageUsers(c *kube.Client, project, recordedUID string) ([]string, error) {
+	notebooks, err := listNotebooks(c, project)
+	if err != nil {
+		return nil, err
+	}
+	var users []string
+	for _, nb := range notebooks {
+		if nb.Metadata.UID == recordedUID && recordedUID != "" {
+			continue
+		}
+		if mountsStorage(nb.Spec.Template.Spec.Volumes) {
+			users = append(users, "workbench "+nb.Metadata.Name)
+		}
+	}
+	pods, err := listProjectPods(c, project)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range pods {
+		if p.Metadata.Labels["notebook-name"] == Name || p.Metadata.Labels["notebook-name"] != "" && slices.Contains(users, "workbench "+p.Metadata.Labels["notebook-name"]) {
+			continue
+		}
+		if mountsStorage(p.Spec.Volumes) {
+			users = append(users, "pod "+p.Metadata.Name)
+		}
+	}
+	return users, nil
+}
+
+func mountsStorage(volumes []Volume) bool {
+	return slices.ContainsFunc(volumes, func(v Volume) bool {
+		return v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == StorageName
+	})
+}
+
+// storageInUse is the refusal when the storage has other users, or "".
+func storageInUse(users []string) string {
+	if len(users) == 0 {
+		return ""
+	}
+	from := "them"
+	if len(users) == 1 {
+		from = "that " + strings.SplitN(users[0], " ", 2)[0]
+	}
+	return fmt.Sprintf("Storage %s is used by %s; remove it from %s in the dashboard first.", StorageName, strings.Join(users, ", "), from)
+}
+
+// storageInUseCheck runs storageUsers right before a delete of the
+// storage: the refusal and its code, or "" when nothing else uses it.
+// Users that cannot be read refuse too (fail closed).
+func (r *run) storageInUseCheck(project string, rec Record) (string, string) {
+	e, _ := rec.Get(project)
+	users, err := storageUsers(r.c, project, e.UID)
+	if err != nil {
+		return fmt.Sprintf("Cannot check what uses storage %s in %s: %v.", StorageName, project, err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
+	}
+	if msg := storageInUse(users); msg != "" {
+		return msg, "storage_in_use"
+	}
+	return "", ""
 }

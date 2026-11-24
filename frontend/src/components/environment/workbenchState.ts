@@ -162,3 +162,10 @@ export function useWorkbenchStatus(project: string | null, refreshKey: number, b
   });
   return { data, error: error?.project === project ? error.message : null, reload: fetchNow };
 }
+
+/** Why the storage cannot be deleted now (another workbench or pod mounts it), or null. */
+export function storageInUseText(usedBy: string[] | undefined): string | null {
+  if (!usedBy?.length) return null;
+  const from = usedBy.length === 1 ? `that ${usedBy[0].split(" ")[0]}` : "them";
+  return `Storage ${WORKBENCH_STORAGE} is used by ${usedBy.join(", ")}; remove it from ${from} in the dashboard first.`;
+}

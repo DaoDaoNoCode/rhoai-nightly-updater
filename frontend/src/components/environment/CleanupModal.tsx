@@ -18,6 +18,7 @@ import {
   Stack,
   StackItem,
 } from "@patternfly/react-core";
+import { storageInUseText } from "./workbenchState";
 import { confirmationOf, type ConnectionWorkbench, type ModelRegistryStatus, type PlaygroundStatus, type ResourcesStatus, type MaaSStatus, type RestorableComponent, type WorkbenchStatus } from "../../types";
 import type { CleanupRequest } from "../../services/api";
 import { TooltipButton } from "../TooltipButton";
@@ -203,7 +204,7 @@ export const CleanupModal: React.FC<{
   const toggleWorkbench = (p: string, v: boolean) => setWorkbenches((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
   // A workbench's storage holds its files: never ticked unless the user ticks it.
   const [workbenchStorage, setWorkbenchStorage] = useState<string[]>(was?.workbenchStorage ?? []);
-  const chosenWorkbenchStorage = workbenchStorage.filter((p) => (chosenWorkbenches.includes(p) && offered.workbenchStorage.includes(p)) || offered.keptStorage.includes(p));
+  const chosenWorkbenchStorage = workbenchStorage.filter((p) => ((chosenWorkbenches.includes(p) && offered.workbenchStorage.includes(p)) || offered.keptStorage.includes(p)) && !offered.storageOf(p)?.usedBy?.length);
   const toggleWorkbenchStorage = (p: string, v: boolean) => setWorkbenchStorage((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
   const [published, setPublished] = useState<string[]>(was ? was.maasPublished ?? [] : offered.maasPublished);
   const chosenPublished = published.filter((p) => offered.maasPublished.includes(p));
@@ -341,16 +342,16 @@ export const CleanupModal: React.FC<{
                         <Checkbox key={p} id={`cleanup-workbench-${p}`} label={<>Workbench in {p}</>} isChecked={workbenches.includes(p)} onChange={(_e, v) => toggleWorkbench(p, v)}
                           description={offered.runningWorkbenches.includes(p) ? "Running: unsaved work in its session is lost." : undefined}
                           body={workbenches.includes(p) && offered.workbenchStorage.includes(p) ? (
-                            <Checkbox id={`cleanup-workbench-storage-${p}`} label="Also delete its storage (files are lost)" isChecked={workbenchStorage.includes(p)} onChange={(_e, v) => toggleWorkbenchStorage(p, v)}
-                              description={<>PersistentVolumeClaim <code>nightly-workbench-storage</code>{st?.size ? `, ${st.size}` : ""}{st?.storageClass ? `, storage class ${st.storageClass}` : ""}</>} />
+                            <Checkbox id={`cleanup-workbench-storage-${p}`} label="Also delete its storage (files are lost)" isChecked={workbenchStorage.includes(p) && !st?.usedBy?.length} isDisabled={!!st?.usedBy?.length} onChange={(_e, v) => toggleWorkbenchStorage(p, v)}
+                              description={st?.usedBy?.length ? storageInUseText(st.usedBy) : <>PersistentVolumeClaim <code>nightly-workbench-storage</code>{st?.size ? `, ${st.size}` : ""}{st?.storageClass ? `, storage class ${st.storageClass}` : ""}</>} />
                           ) : undefined} />
                       );
                     })}
                     {offered.keptStorage.map((p) => {
                       const st = offered.storageOf(p);
                       return (
-                        <Checkbox key={`kept-${p}`} id={`cleanup-workbench-kept-${p}`} label={<>Storage kept from the deleted workbench in {p} (files are lost)</>} isChecked={workbenchStorage.includes(p)} onChange={(_e, v) => toggleWorkbenchStorage(p, v)}
-                          description={<>PersistentVolumeClaim <code>nightly-workbench-storage</code>{st?.size ? `, ${st.size}` : ""}{st?.storageClass ? `, storage class ${st.storageClass}` : ""}</>} />
+                        <Checkbox key={`kept-${p}`} id={`cleanup-workbench-kept-${p}`} label={<>Storage kept from the deleted workbench in {p} (files are lost)</>} isChecked={workbenchStorage.includes(p) && !st?.usedBy?.length} isDisabled={!!st?.usedBy?.length} onChange={(_e, v) => toggleWorkbenchStorage(p, v)}
+                          description={st?.usedBy?.length ? storageInUseText(st.usedBy) : <>PersistentVolumeClaim <code>nightly-workbench-storage</code>{st?.size ? `, ${st.size}` : ""}{st?.storageClass ? `, storage class ${st.storageClass}` : ""}</>} />
                       );
                     })}
                   </FormGroup>

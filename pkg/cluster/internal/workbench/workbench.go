@@ -16,7 +16,7 @@
 package workbench
 
 import (
-	"net/url"
+	"fmt"
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
@@ -82,11 +82,11 @@ func encodeURIComponent(s string) string {
 			b.WriteByte(ch)
 			continue
 		}
-		b.WriteString(url.QueryEscape(string(ch)))
+		// Each byte of the UTF-8 encoding, as encodeURIComponent does
+		// ("é" is %C3%A9).
+		fmt.Fprintf(&b, "%%%02X", ch)
 	}
-	out := b.String()
-	// QueryEscape encodes space as "+"; encodeURIComponent expects %20.
-	return strings.ReplaceAll(out, "+", "%20")
+	return b.String()
 }
 
 // Plan captures what setup will persist, decided before the first API call.
@@ -135,9 +135,10 @@ func (p Plan) imageURL() string { return p.Image.Repository + ":" + p.Image.Tag 
 //   - no envFrom: the dashboard puts only form-supplied environment
 //     variables there; Connection envFrom is added by the connection
 //     webhook (from opendatahub.io/connections);
-//   - opendatahub.io/workbench-image-namespace is omitted for images in
-//     the applications namespace, where the dashboard sends null (the
-//     webhook reads missing as null; string maps cannot store null).
+//   - opendatahub.io/workbench-image-namespace is "" for images in the
+//     applications namespace, where the dashboard sends null: a string
+//     map cannot hold null, and the webhook reads "" as it reads null
+//     (the applications namespace).
 func NotebookManifest(p Plan) map[string]any {
 	image := p.imageURL()
 	base := "/notebook/" + p.Project + "/" + Name
@@ -159,9 +160,11 @@ func NotebookManifest(p Plan) map[string]any {
 	if p.MLflow {
 		annotations["opendatahub.io/mlflow-instance"] = "mlflow"
 	}
+	imageNamespace := ""
 	if p.Image.Namespace == p.Project {
-		annotations["opendatahub.io/workbench-image-namespace"] = p.Project
+		imageNamespace = p.Project
 	}
+	annotations["opendatahub.io/workbench-image-namespace"] = imageNamespace
 	if p.Profile.Name != "" {
 		annotations[profileNameAnnotation] = p.Profile.Name
 		annotations[profileNamespaceAnnotation] = p.Profile.Namespace

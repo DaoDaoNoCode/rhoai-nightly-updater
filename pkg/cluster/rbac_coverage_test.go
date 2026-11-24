@@ -104,6 +104,8 @@ var rbacUserTokenReads = map[string]string{
 	"workbench_reads.go:listStorageClasses":   "the cluster's StorageClasses",
 	"workbench_reads.go:readDashboardConfig":  "the dashboard's OdhDashboardConfig",
 	"workbench_reads.go:pipelineConfigExists": "whether a project has Secret ds-pipeline-config",
+	"workbench_reads.go:listNotebooks":        "a project's Notebooks, for which use the workbench storage",
+	"workbench_reads.go:listProjectPods":      "a project's pods, for which mount the workbench storage",
 	"workbench_reads.go:toolConnection":       "a project's dashboard Connection rhoai-nightly-updater-s3",
 }
 

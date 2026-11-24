@@ -230,12 +230,8 @@ func ChooseImage(streams []ImageStream) (ImageChoice, bool) {
 type HardwareProfile struct {
 	Metadata kube.ObjectMeta `json:"metadata"`
 	Spec     struct {
-		Identifiers []struct {
-			Identifier   string `json:"identifier"`
-			DefaultCount any    `json:"defaultCount"`
-			ResourceType string `json:"resourceType"`
-		} `json:"identifiers"`
-		Scheduling *struct {
+		Identifiers []Identifier `json:"identifiers"`
+		Scheduling  *struct {
 			Type  string `json:"type"`
 			Kueue *struct {
 				LocalQueueName string `json:"localQueueName"`
@@ -254,10 +250,87 @@ func (p HardwareProfile) dra() bool {
 func (p HardwareProfile) valid() bool {
 	var cpu, mem bool
 	for _, id := range p.Spec.Identifiers {
-		cpu = cpu || id.Identifier == "cpu"
-		mem = mem || id.Identifier == "memory"
+		if !id.valid() {
+			return false
+		}
+		cpu = cpu || id.ResourceType == "CPU" || id.Identifier == "cpu"
+		mem = mem || id.ResourceType == "Memory" || id.Identifier == "memory"
 	}
 	return cpu && mem
+}
+
+// Identifier is one resource of a hardware profile.
+type Identifier struct {
+	Identifier   string `json:"identifier"`
+	DisplayName  string `json:"displayName"`
+	ResourceType string `json:"resourceType"`
+	DefaultCount any    `json:"defaultCount"`
+	MinCount     any    `json:"minCount"`
+	MaxCount     any    `json:"maxCount"`
+}
+
+// valid ports the dashboard's identifierSchema (packages/hardware-profiles
+// src/pages/manage/validationUtils.ts L13-133): a display name and an
+// identifier, a default and a minimum count, none negative, each a whole
+// number in its unit, and minimum <= default <= maximum.
+func (id Identifier) valid() bool {
+	if strings.TrimSpace(id.DisplayName) == "" || strings.TrimSpace(id.Identifier) == "" || id.DefaultCount == nil || id.MinCount == nil {
+		return false
+	}
+	memory := id.ResourceType == "Memory" || id.Identifier == "memory"
+	cpu := id.ResourceType == "CPU" || id.Identifier == "cpu"
+	parse := func(v any) (float64, bool) {
+		s := ResourceText(v)
+		if strings.HasPrefix(strings.TrimSpace(s), "-") {
+			return 0, false
+		}
+		n, num, ok := parseCount(s, cpu, memory)
+		return n, ok && num == float64(int64(num))
+	}
+	lo, okLo := parse(id.MinCount)
+	def, okDef := parse(id.DefaultCount)
+	if !okLo || !okDef || def < lo {
+		return false
+	}
+	if id.MaxCount != nil {
+		hi, okHi := parse(id.MaxCount)
+		if !okHi || def > hi || lo > hi {
+			return false
+		}
+	}
+	return true
+}
+
+var memoryUnits = map[string]float64{"": 1, "Ki": 1 << 10, "Mi": 1 << 20, "Gi": 1 << 30, "Ti": 1 << 40, "Pi": 1 << 50, "K": 1e3, "k": 1e3, "M": 1e6, "G": 1e9, "T": 1e12, "P": 1e15}
+
+// parseCount splits a count into its number and unit as the dashboard's
+// splitValueUnit does: the value in base units (bytes, cores) and the
+// number as written (which must be whole).
+func parseCount(s string, cpu, memory bool) (value, number float64, ok bool) {
+	s = strings.TrimSpace(s)
+	end := len(s)
+	for end > 0 && (s[end-1] < '0' || s[end-1] > '9') && s[end-1] != '.' {
+		end--
+	}
+	num, err := strconv.ParseFloat(s[:end], 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	unit := s[end:]
+	switch {
+	case memory:
+		m, known := memoryUnits[unit]
+		return num * m, num, known
+	case cpu:
+		switch unit {
+		case "":
+			return num, num, true
+		case "m":
+			return num / 1000, num, true
+		}
+		return 0, 0, false
+	}
+	return num, num, unit == ""
 }
 
 // visibleForWorkbenches matches isHardwareProfileVisibleIn(profile, ["workbench"]):

@@ -1449,6 +1449,11 @@ type WorkbenchStorage struct {
 	Size          string `json:"size,omitempty"`
 	StorageClass  string `json:"storageClass,omitempty"`
 	ManagedByTool bool   `json:"managedByTool"`
+	// UsedBy are the other workbenches and pods that mount it ("workbench
+	// my-wb", "pod x"): deleting it is refused while there are any.
+	// UsedByProblem says why they could not be read.
+	UsedBy        []string `json:"usedBy,omitempty"`
+	UsedByProblem string   `json:"usedByProblem,omitempty"`
 }
 
 // WorkbenchRequest is the body of POST /api/resources/workbench/stream.

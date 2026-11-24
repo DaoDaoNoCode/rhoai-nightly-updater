@@ -35,12 +35,7 @@ type Notebook struct {
 						Requests map[string]any `json:"requests"`
 					} `json:"resources"`
 				} `json:"containers"`
-				Volumes []struct {
-					Name   string `json:"name"`
-					Secret *struct {
-						SecretName string `json:"secretName"`
-					} `json:"secret"`
-				} `json:"volumes"`
+				Volumes []Volume `json:"volumes"`
 			} `json:"spec"`
 		} `json:"template"`
 	} `json:"spec"`
@@ -88,7 +83,10 @@ func readStorage(c *kube.Client, project string) (PVC, bool, error) {
 // Pod models the pod subset status inspection needs for a workbench.
 type Pod struct {
 	Metadata kube.ObjectMeta `json:"metadata"`
-	Status   struct {
+	Spec     struct {
+		Volumes []Volume `json:"volumes"`
+	} `json:"spec"`
+	Status struct {
 		Conditions []struct {
 			Type    string `json:"type"`
 			Status  string `json:"status"`
@@ -269,4 +267,42 @@ func toolConnection(c *kube.Client, project string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// Volume is the part of a pod volume this package reads.
+type Volume struct {
+	Name   string `json:"name"`
+	Secret *struct {
+		SecretName string `json:"secretName"`
+	} `json:"secret"`
+	PersistentVolumeClaim *struct {
+		ClaimName string `json:"claimName"`
+	} `json:"persistentVolumeClaim"`
+}
+
+// listNotebooks lists the project's Notebooks (to find those that use its
+// workbench storage).
+func listNotebooks(c *kube.Client, project string) ([]Notebook, error) {
+	if err := userOnly(c); err != nil {
+		return nil, err
+	}
+	var items []Notebook
+	if err := c.ListInto(rhoai.NamespacedPath(notebookAPI, "notebooks", project, ""), &items); err != nil {
+		if kube.IsK8sNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return items, nil
+}
+
+// listProjectPods lists the project's pods (to find those that mount its
+// workbench storage).
+func listProjectPods(c *kube.Client, project string) ([]Pod, error) {
+	if err := userOnly(c); err != nil {
+		return nil, err
+	}
+	var pods []Pod
+	err := c.ListInto(rhoai.NamespacedPath("v1", "pods", project, ""), &pods)
+	return pods, err
 }

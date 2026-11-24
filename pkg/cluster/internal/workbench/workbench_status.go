@@ -74,8 +74,11 @@ var terminal = []string{"ImagePullBackOff", "ErrImagePull", "InvalidImageName", 
 // loop, absent Secret, and similar) yields Failed plus that reason.
 func State(nb Notebook, pods []Pod) (state, reason, message string) {
 	ready := false
+	// Every pod counts, a terminating one too, as the dashboard counts
+	// them (pages/projects/notebook/service.ts): a stopped workbench whose
+	// pod is still going away reads Stopping until it is gone.
 	for _, p := range pods {
-		if p.Metadata.Terminating() || len(p.Status.ContainerStatuses) == 0 {
+		if len(p.Status.ContainerStatuses) == 0 {
 			continue
 		}
 		all := true
@@ -125,6 +128,13 @@ func itemState(c *kube.Client, project, dashboardURL string, rec Record) (types.
 	}
 	if pvcFound {
 		st.Storage = &types.WorkbenchStorage{Name: StorageName, Size: pvc.Spec.Resources.Requests["storage"], StorageClass: pvc.Spec.StorageClassName, ManagedByTool: rec.OwnsStorage(pvc.Metadata)}
+		// What else uses it, so the page warns before a delete refuses.
+		e, _ := rec.Get(project)
+		if users, err := storageUsers(c, project, e.UID); err == nil {
+			st.Storage.UsedBy = users
+		} else {
+			st.Storage.UsedByProblem = err.Error()
+		}
 	}
 	if !found {
 		st.ManagedByTool = true
@@ -281,6 +291,9 @@ func BuildPlan(c *kube.Client, project string, dsc rhoai.DSCRead) (Plan, string,
 	mode := ModeFor(labels[KueueProjectLabel] == "true", kueueOn)
 	var queues []string
 	if mode == OnlyKueue {
+		// The dashboard keeps every Queue profile when the LocalQueues
+		// cannot be read (fail-open); this tool refuses instead (fail
+		// closed), so a workbench never waits on a queue that is not there.
 		if queues, err = listLocalQueues(c, project); err != nil {
 			return fail("the project's LocalQueues", err)
 		}

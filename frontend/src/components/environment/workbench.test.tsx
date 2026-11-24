@@ -197,6 +197,31 @@ describe("Delete warnings", () => {
   });
 });
 
+describe("Storage used by another workbench", () => {
+  const usedBy = (): WorkbenchStatus => {
+    const st = running();
+    st.items![0].storage!.usedBy = ["workbench my-wb"];
+    return st;
+  };
+  it("the tab warns, Delete cannot tick the storage, Delete storage cannot be confirmed", async () => {
+    stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] }, "/api/resources/workbench": usedBy() });
+    renderAt("/test-resources?tab=workbench&project=dev");
+    const part = await screen.findByRole("listitem", { name: "Workbench" });
+    expect(within(part).getByText(/Storage nightly-workbench-storage is used by workbench my-wb; remove it from that workbench in the dashboard first/)).toBeInTheDocument();
+    const del = workbenchConfirm({ kind: "teardown-workbench", project: "dev", deleteStorage: true }, usedBy())!;
+    render(<>{del.choice}</>);
+    expect(screen.getByRole("checkbox", { name: "Also delete its storage (files are lost)" })).toBeDisabled();
+    const kept = usedBy();
+    kept.items = [{ ...kept.items![0], deployed: false, ready: false, state: undefined }];
+    const spec = workbenchConfirm({ kind: "delete-workbench-storage", project: "dev" }, kept)!;
+    expect(spec.confirmDisabled).toBe(true);
+  });
+  it("Clean up offers its storage disabled, never in the request", () => {
+    const offered = cleanupCandidates(status, "workbench", false, null, null, null, usedBy());
+    expect(offered.storageOf("dev")?.usedBy).toEqual(["workbench my-wb"]);
+  });
+});
+
 describe("Clean up", () => {
   it("offers kept storage on its own, unticked, and runs it as its own step", () => {
     const st = notSetUp();
