@@ -201,8 +201,9 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   included. Delete, Recreate and Clean up now take the Connection off those
   workbenches first (only that entry of `opendatahub.io/connections`; the
   others stay), after you confirm each one: the confirmation lists them, a
-  workbench that started using it since refuses the request before anything
-  changes, and a failed change stops before anything is deleted. The
+  workbench that started using it since (checked again right before the
+  delete), or was made again under the same name, refuses the request before
+  anything is deleted, and a failed change stops before anything is deleted. The
   Pipelines tab names the workbenches that use the Connection. New
   permission used with your own token: `patch` on Notebooks.
 

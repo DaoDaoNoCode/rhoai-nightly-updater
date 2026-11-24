@@ -18,7 +18,7 @@ import {
   Stack,
   StackItem,
 } from "@patternfly/react-core";
-import type { PlaygroundStatus, ResourcesStatus, MaaSStatus, RestorableComponent } from "../../types";
+import { confirmationOf, type ConnectionWorkbench, type PlaygroundStatus, type ResourcesStatus, type MaaSStatus, type RestorableComponent } from "../../types";
 import type { CleanupRequest } from "../../services/api";
 import { TooltipButton } from "../TooltipButton";
 import { isTerminating } from "./resourceRow";
@@ -79,7 +79,7 @@ export interface CleanupRetry {
   req: CleanupRequest;
   contents: Record<string, string[]>;
   /** Per pipeline server's project, the workbenches that use its dashboard Connection (errorCode confirm_connection_workbenches). */
-  workbenches?: Record<string, string[]>;
+  workbenches?: Record<string, ConnectionWorkbench[]>;
 }
 
 /** The steps a clean-up streams, in its order (pkg/cluster CleanUp). */
@@ -207,8 +207,13 @@ export const CleanupModal: React.FC<{
   const confirmedServers = Object.fromEntries(chosenServers.filter((s) => unrecordedUID.has(s)).map((s) => [s, unrecordedUID.get(s)!]));
   // The workbenches that lose each chosen server's dashboard Connection first: as a refused clean-up listed them, else as
   // the status does (the selected project's only); the request confirms exactly these.
-  const connectionUsers = (p: string) => retry?.workbenches?.[p] ?? toolServers(status).find((ps) => ps.namespace === p)?.connectionWorkbenches ?? [];
-  const confirmWorkbenches = Object.fromEntries(chosenServers.map((p) => [p, connectionUsers(p)] as const).filter(([, w]) => w.length > 0));
+  // An empty list from the refusal does not hide what the status shows now.
+  const connectionUsers = (p: string): ConnectionWorkbench[] => {
+    const refused = retry?.workbenches?.[p] ?? [];
+    return refused.length > 0 ? refused : toolServers(status).find((ps) => ps.namespace === p)?.connectionWorkbenches ?? [];
+  };
+  const usersByServer = Object.fromEntries(chosenServers.map((p) => [p, connectionUsers(p)] as const).filter(([, w]) => w.length > 0));
+  const confirmWorkbenches = Object.fromEntries(Object.entries(usersByServer).map(([p, w]) => [p, confirmationOf(w)]));
   const req: CleanupRequest = {
     ...(chosenPublished.length ? { maasPublished: chosenPublished } : {}),
     ...(chosenServers.length ? { pipelineServers: chosenServers } : {}),
@@ -355,7 +360,7 @@ export const CleanupModal: React.FC<{
               </Alert>
             </StackItem>
           ))}
-          {Object.entries(confirmWorkbenches).map(([p, wbs]) => (
+          {Object.entries(usersByServer).map(([p, wbs]) => (
             <StackItem key={`workbenches-${p}`}>
               <Alert variant="warning" isInline component="div" title={`Workbenches in ${p} use the dashboard Connection`}>
                 {connectionWorkbenchesChange(p, wbs)}

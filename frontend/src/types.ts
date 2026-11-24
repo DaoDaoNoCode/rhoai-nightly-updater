@@ -1256,9 +1256,20 @@ export interface ResourceState {
   connectionState?: "present" | "missing" | "foreign" | "unreadable";
   connectionMessage?: string;
   /** The project's workbenches whose opendatahub.io/connections annotation names that Connection (read with the user's token, only when present); deleting the pipeline server removes it from them first. */
-  connectionWorkbenches?: string[];
+  connectionWorkbenches?: ConnectionWorkbench[];
   /** Why connectionWorkbenches could not be read. */
   connectionWorkbenchesMessage?: string;
+}
+
+/** A workbench (Notebook) that uses the tool's dashboard Connection (pkg/types ConnectionWorkbench): a confirmation names it with the UID reviewed. */
+export interface ConnectionWorkbench {
+  name: string;
+  uid: string;
+}
+
+/** A confirmation of workbenches as requests carry it: each name mapped to the UID the user reviewed. */
+export function confirmationOf(workbenches: ConnectionWorkbench[]): Record<string, string> {
+  return Object.fromEntries(workbenches.map((w) => [w.name, w.uid]));
 }
 
 // --- Models (pkg/types InferenceGatewayState, ModelsStatus, ModelState) ---

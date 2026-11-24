@@ -18,7 +18,7 @@ import {
   Stack,
   StackItem,
 } from "@patternfly/react-core";
-import type { ResourceState, ResourcesStatus } from "../../types";
+import type { ConnectionWorkbench, ResourceState, ResourcesStatus } from "../../types";
 import { TooltipButton } from "../TooltipButton";
 import {
   type ConfirmSpec,
@@ -108,7 +108,7 @@ const ConnectionState: React.FC<{ server: ResourceState; project: string; readOn
         <Stack hasGutter>
           <StackItem>{name}, listed as &quot;{CONNECTION_DISPLAY_NAME}&quot;: an S3 connection with the storage&apos;s keys, endpoint and bucket <code>pipelines</code>. Usable from workbenches and model deployments in {project}; in-cluster address only, so it does not work from outside the cluster.</StackItem>
           {users.length > 0 && (
-            <StackItem>Used by {users.length === 1 ? "workbench" : "workbenches"} {users.map((w, i) => <React.Fragment key={w}>{i > 0 ? ", " : ""}<code>{w}</code></React.Fragment>)}. Deleting the pipeline server removes the Connection from {users.length === 1 ? "it" : "them"} first.</StackItem>
+            <StackItem>Used by {users.length === 1 ? "workbench" : "workbenches"} {users.map((w, i) => <React.Fragment key={w.name}>{i > 0 ? ", " : ""}<code>{w.name}</code></React.Fragment>)}. Deleting the pipeline server removes the Connection from {users.length === 1 ? "it" : "them"} first.</StackItem>
           )}
           {server.connectionWorkbenchesMessage && <StackItem>Cannot check which workbenches use it: {server.connectionWorkbenchesMessage}</StackItem>}
         </Stack>
@@ -132,13 +132,13 @@ const ConnectionState: React.FC<{ server: ResourceState; project: string; readOn
 };
 
 /** The workbenches a delete of server confirms removing the Connection from (as the status lists them). */
-function connectionWorkbenchesOf(server: ResourceState): { workbenches?: string[] } {
+function connectionWorkbenchesOf(server: ResourceState): { workbenches?: ConnectionWorkbench[] } {
   return server.connectionWorkbenches?.length ? { workbenches: server.connectionWorkbenches } : {};
 }
 
 /** The confirmation's line for the workbenches that lose the dashboard Connection before it is deleted. */
-export function connectionWorkbenchesChange(project: string, workbenches: string[]): React.ReactNode {
-  return <>These workbenches use the Connection <code>{CONNECTION_NAME}</code>; it is removed from them first: {workbenches.map((w, i) => <React.Fragment key={w}>{i > 0 ? ", " : ""}<code>{project}/{w}</code></React.Fragment>)}. Their other connections stay; attach it again in the dashboard once a new pipeline server made it again.</>;
+export function connectionWorkbenchesChange(project: string, workbenches: ConnectionWorkbench[]): React.ReactNode {
+  return <>These workbenches use the Connection <code>{CONNECTION_NAME}</code>; it is removed from them first: {workbenches.map((w, i) => <React.Fragment key={w.name}>{i > 0 ? ", " : ""}<code>{project}/{w.name}</code></React.Fragment>)}. Their other connections stay; attach it again in the dashboard once a new pipeline server made it again.</>;
 }
 
 /** Renders the selected project's pipeline server, or guidance until a project is picked. */
