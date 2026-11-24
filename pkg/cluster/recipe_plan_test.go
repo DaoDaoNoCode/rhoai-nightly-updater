@@ -3,6 +3,7 @@ package cluster
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/recipe"
@@ -137,27 +138,95 @@ func TestRecipePlan_HalfInstalledOperatorBlocks(t *testing.T) {
 	}
 }
 
-// Argo CD managing the operator refuses, and so does every part of the
-// schema this version does not run yet.
-func TestRecipePlan_ArgoCDAndLaterFeaturesRefuse(t *testing.T) {
+// tRecipeAllFeatures is a recipe with every feature on.
+const tRecipeAllFeatures = `{"rhoai":{"build":{"image":"` + tRecipeFBC + `"}},"dataScienceCluster":{"create":true},"project":{"mode":"create","name":"recipe-dev"},
+"features":{"pipelines":{"enabled":true},"mlflow":{"enabled":true,"samples":true},"models":{"enabled":true,"model":"qwen3-1-7b","exposure":"default-gateway"},
+"playground":{"enabled":true},"maas":{"enabled":true,"database":"cnpg","publish":true},"modelRegistry":{"enabled":true,"sample":true},"workbench":{"enabled":true}},
+"dashboardDev":{"deploy":"pr","pr":1234}}`
+
+// Argo CD managing the operator refuses. The features of recipes phase 2
+// (models, the playground, MaaS, the MLflow samples, the model registry,
+// the workbench, Dashboard Dev) no longer do.
+func TestRecipePlan_ArgoCDRefusesTheFeaturesDoNot(t *testing.T) {
 	f, c := projectFake(t)
 	installedRHOAI(f)
 	f.argo = argoManagingAll(argo.SubscriptionObject)
 	plan, _ := planRecipeFor(t, c, `{"rhoai":{"build":"latest"},"dataScienceCluster":{"create":true},"project":{"mode":"create","name":"recipe-dev"},
 "features":{"models":{"enabled":true},"playground":{"enabled":true},"mlflow":{"enabled":true,"samples":true}},"dashboardDev":{"deploy":"main"}}`)
 	text := problemText(plan)
-	for _, want := range []string{"Models in a recipe is not in this version", "The playground in a recipe", "The MLflow samples in a recipe", "Dashboard Dev in a recipe"} {
-		if !strings.Contains(text, want) {
-			t.Errorf("no %q in %s", want, text)
-		}
+	if strings.Contains(text, "not in this version") {
+		t.Errorf("a feature is still refused: %s", text)
 	}
 	if !strings.Contains(text, "Argo CD application") || !strings.Contains(text, "manages the RHOAI operator") {
 		t.Errorf("Argo CD's management did not refuse: %s", text)
 	}
-	// The parts of a later version are fixed in the recipe (Field), Argo
-	// CD in Git.
-	if got := problemFixes(plan); got != "- - - - argo_managed@" {
+	if got := problemFixes(plan); got != "argo_managed@" {
 		t.Errorf("fixes %s", got)
+	}
+}
+
+// Every feature runs, in the runner's dependency order: the steps after
+// the RHOAI install are checked when the run gets there, nothing of the
+// schema is refused, and the plan adds up every step's figures (model
+// serving usually 5 minutes on a CPU worker).
+func TestRecipePlan_EveryFeatureInDependencyOrder(t *testing.T) {
+	f, c := projectFake(t)
+	plan, _ := planRecipeFor(t, c, tRecipeAllFeatures)
+	want := "rhoai=run dsc=later project=run pipelines-prereq=later s3=run pipeline-server=later mlflow-prereq=later mlflow=later mlflow-samples=later " +
+		"maas=later models-prereq=later model=later maas-publish=later playground-prereq=later playground=later " +
+		"model-registry-prereq=later model-registry=later workbench=later dashboard-dev=later"
+	if got := planActions(plan); got != want {
+		t.Fatalf("actions\n got %s\nwant %s", got, want)
+	}
+	for _, p := range plan.Problems {
+		if p.Fix == nil || p.Fix.Code != types.RecipeFixOneTimeSetupMissing {
+			t.Errorf("problem %+v", p)
+		}
+	}
+	titles := map[string]string{}
+	typical, most := 0, 0
+	for _, s := range plan.Steps {
+		titles[s.ID] = s.Title
+		typical, most = typical+s.TypicalSeconds, most+s.MaxSeconds
+	}
+	if titles["model"] != "Model qwen3-1-7b" || titles["dashboard-dev"] != "Dashboard Dev (PR #1234)" || titles["maas"] != "Models as a Service" {
+		t.Errorf("titles %v", titles)
+	}
+	if plan.TypicalSeconds != typical || plan.MaxSeconds != most {
+		t.Errorf("plan %d/%d, steps %d/%d", plan.TypicalSeconds, plan.MaxSeconds, typical, most)
+	}
+	if s := recipeStep(t, plan.Recipe, recipe.StepModel); s.Typical != 5*time.Minute || s.Max != 15*time.Minute {
+		t.Errorf("model step %v/%v", s.Typical, s.Max)
+	}
+	if m := f.mutations(); len(m) != 0 {
+		t.Fatalf("the plan changed %v", m)
+	}
+}
+
+// The MaaS publish step exists only when the model is not reached through
+// MaaS anyway (exposure maas publishes as part of the model's setup), and
+// Dashboard Dev is always last.
+func TestRecipeSteps_PublishOnlyWhenNeededDashboardDevLast(t *testing.T) {
+	ids := func(spec string) string {
+		r, problems := recipe.Validate([]byte(tRecipeBase + spec + `}`))
+		if len(problems) > 0 {
+			t.Fatal(problems)
+		}
+		var out []string
+		for _, s := range recipe.Steps(r) {
+			out = append(out, s.ID)
+		}
+		return strings.Join(out, " ")
+	}
+	base := `{"rhoai":{"build":"latest"},"dataScienceCluster":{"create":true},"project":{"mode":"existing","name":"p"},"dashboardDev":{"deploy":"main"},"features":`
+	if got := ids(base + `{"models":{"enabled":true,"exposure":"maas"},"maas":{"enabled":true,"publish":true}}}`); got != "rhoai dsc project maas models-prereq model dashboard-dev" {
+		t.Errorf("maas exposure: %s", got)
+	}
+	if got := ids(base + `{"models":{"enabled":true},"maas":{"enabled":true,"publish":true}}}`); got != "rhoai dsc project maas models-prereq model maas-publish dashboard-dev" {
+		t.Errorf("recommended exposure: %s", got)
+	}
+	if got := ids(base + `{"modelRegistry":{"enabled":true}}}`); got != "rhoai dsc project model-registry-prereq model-registry dashboard-dev" {
+		t.Errorf("registry: %s", got)
 	}
 }
 

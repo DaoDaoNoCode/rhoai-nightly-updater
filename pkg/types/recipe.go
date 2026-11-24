@@ -151,6 +151,20 @@ type RecipeFeatures struct {
 	Models     RecipeModels  `json:"models" yaml:"models"`
 	Playground RecipeFeature `json:"playground" yaml:"playground"`
 	MaaS       RecipeMaaS    `json:"maas" yaml:"maas"`
+	// ModelRegistry and Workbench are optional: a recipe written before
+	// they existed leaves them out, and they stay off.
+	ModelRegistry RecipeModelRegistry `json:"modelRegistry,omitzero" yaml:"modelRegistry"`
+	// Workbench: the tool's workbench in the project, with the tool's S3
+	// Connection when the project has the tool's pipeline server.
+	Workbench RecipeFeature `json:"workbench,omitzero" yaml:"workbench"`
+}
+
+// RecipeModelRegistry is the tool's model registry (cluster-wide, in the
+// namespace RHOAI keeps registries in).
+type RecipeModelRegistry struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
+	// Sample: also register the sample model.
+	Sample bool `json:"sample,omitempty" yaml:"sample"`
 }
 
 // RecipeFeature is a feature without options.
@@ -370,10 +384,36 @@ type RecipeRun struct {
 	Pinned    *RecipePinnedBuild `json:"pinned,omitempty"`
 	Project   *RecipeProjectRef  `json:"project,omitempty"`
 	Steps     []RecipeRunStep    `json:"steps"`
+	// Exposure is how the run's model is reached, as the Models
+	// prerequisites step resolved it ("default-gateway", "maas", "internal",
+	// or "gateway" with GatewayRef), kept so a resume sets the model up the
+	// same way; "" until then.
+	Exposure   string `json:"exposure,omitempty"`
+	GatewayRef string `json:"gatewayRef,omitempty"`
+	// CreatedParts are the cluster-wide parts this run (any of its
+	// attempts) created: they were not this tool's before its step. Its
+	// Clean up offers those still this tool's, never anything else.
+	CreatedParts []RecipeCreatedPart `json:"createdParts,omitempty"`
 	// Components are the DataScienceCluster components this run (any of
 	// its attempts) turned on (the keys its prerequisite steps added to
 	// the prerequisites record). Its Clean up offers those still Managed.
 	Components []string `json:"components,omitempty"`
+}
+
+// The cluster-wide parts a run can create (RecipeCreatedPart.Part).
+const (
+	RecipePartMaaSPlatform  = "maas-platform"
+	RecipePartModelRegistry = "model-registry"
+)
+
+// RecipeCreatedPart is a cluster-wide part a run created: the MaaS
+// platform or the model registry. UID names the object the step created
+// when there is one (the registry; the MaaS development database's
+// credentials Secret), so one made again since, by anyone, is not the
+// run's.
+type RecipeCreatedPart struct {
+	Part string `json:"part"`
+	UID  string `json:"uid,omitempty"`
 }
 
 // RecipeRunStep is one step of a run.

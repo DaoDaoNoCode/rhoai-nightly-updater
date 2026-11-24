@@ -252,6 +252,15 @@ func check(r types.EnvironmentRecipe) []types.RecipeProblem {
 	if f.MaaS.Publish && f.MaaS.Enabled && !f.Models.Enabled {
 		p.add("spec.features.maas.publish", "Publishing through MaaS needs a model: set spec.features.models.enabled.")
 	}
+	if f.MaaS.Publish && !f.MaaS.Enabled {
+		p.add("spec.features.maas.publish", "Publishing through MaaS needs Models as a Service: set spec.features.maas.enabled.")
+	}
+	if f.ModelRegistry.Sample && !f.ModelRegistry.Enabled {
+		p.add("spec.features.modelRegistry.sample", "The sample model needs the model registry: set spec.features.modelRegistry.enabled.")
+	}
+	if f.Workbench.Enabled {
+		needsProject("spec.features.workbench.enabled", "The workbench")
+	}
 
 	d := spec.DashboardDev
 	switch d.Deploy {

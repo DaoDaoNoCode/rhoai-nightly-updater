@@ -31,6 +31,11 @@ func PlanRecipe(c *Client, r types.EnvironmentRecipe, pinned *types.RecipePinned
 // RecipeSteps is recipe.Steps.
 func RecipeSteps(r types.EnvironmentRecipe) []RecipeStep { return recipe.Steps(r) }
 
+// RecipeExposureKept is recipe.ExposureKept.
+func RecipeExposureKept(exposure, gatewayRef string) bool {
+	return recipe.ExposureKept(exposure, gatewayRef)
+}
+
 // RecordRecipeActivity is recipe.RecordActivity.
 func RecordRecipeActivity(c *Client, action, detail string, success bool) {
 	recipe.RecordActivity(c, action, detail, success)

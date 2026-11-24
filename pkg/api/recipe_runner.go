@@ -149,6 +149,7 @@ func copyRecipeRun(run *types.RecipeRun) *types.RecipeRun {
 	cp := *run
 	cp.Steps = append([]types.RecipeRunStep(nil), run.Steps...)
 	cp.Components = slices.Clone(run.Components)
+	cp.CreatedParts = slices.Clone(run.CreatedParts)
 	if run.Pinned != nil {
 		p := *run.Pinned
 		cp.Pinned = &p
@@ -308,10 +309,23 @@ func beginRecipeRun(c *cluster.Client, w http.ResponseWriter, st *recipeStart, r
 
 // keepComponents carries the DataScienceCluster components earlier
 // attempts of the run turned on into the resumed one (merged, never
-// reset). Clean up offers only those still as the run set them.
+// reset), and the cluster-wide parts they created. Clean up offers only
+// those still as the run set them. How the model is reached is kept too,
+// so a resume sets it up as the first attempt resolved it; the record is
+// the updater's own ConfigMap, so only an exposure a recipe may name (or
+// the Models tab's own "gateway" with a namespace/name) is kept, any other
+// is resolved again.
 func keepComponents(run *types.RecipeRun, state *cluster.RecipeState, prior *types.RecipeRun) {
 	state.AddComponents(prior.Components...)
 	run.Components = slices.Clone(state.Components)
+	for _, p := range prior.CreatedParts {
+		state.AddCreated(p)
+	}
+	run.CreatedParts = slices.Clone(state.Created)
+	if cluster.RecipeExposureKept(prior.Exposure, prior.GatewayRef) {
+		state.Exposure, state.GatewayRef = prior.Exposure, prior.GatewayRef
+		run.Exposure, run.GatewayRef = prior.Exposure, prior.GatewayRef
+	}
 }
 
 // recipeTarget is the operation's target: "<recipe>: step k of n
@@ -509,6 +523,8 @@ func (x *recipeExec) stepEnded(i int, status, msg, code string) {
 			run.Pinned = &p
 		}
 		run.Components = slices.Clone(x.state.Components)
+		run.CreatedParts = slices.Clone(x.state.Created)
+		run.Exposure, run.GatewayRef = x.state.Exposure, x.state.GatewayRef
 	})
 	inflight.recordStep(x.opID, UpdateStep{Step: x.steps[i].ID, Status: status, Message: msg, ErrorCode: code})
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/modelregistry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
@@ -45,6 +46,22 @@ type State struct {
 	// Components names DataScienceCluster pieces enabled by prerequisite
 	// steps; the runner retains the slice when Resume runs.
 	Components []string
+	// Exposure and GatewayRef are how the run's model is reached, once the
+	// Models prerequisites step resolved it; the runner keeps them when
+	// Resume runs.
+	Exposure, GatewayRef string
+	// Created are the cluster-wide parts the run created (the MaaS
+	// platform, the model registry); the runner keeps them when Resume
+	// runs.
+	Created []types.RecipeCreatedPart
+}
+
+// AddCreated records a cluster-wide part the run created; a part recorded
+// again replaces the earlier entry (the newest UID counts).
+func (s *State) AddCreated(p types.RecipeCreatedPart) {
+	s.Created = slices.DeleteFunc(s.Created, func(e types.RecipeCreatedPart) bool { return e.Part == p.Part })
+	s.Created = append(s.Created, p)
+	slices.SortFunc(s.Created, func(a, b types.RecipeCreatedPart) int { return strings.Compare(a.Part, b.Part) })
 }
 
 // AddComponents logs newly enabled components (deduplicated, sorted).
@@ -68,7 +85,13 @@ func (s *State) AddComponents(keys ...string) {
 //     terminating; clean-up includes that UID (RecipeProjectUIDs);
 //   - DataScienceCluster components the run enabled and that still match
 //     that configuration (liveComponents); a prerequisite step reads as
-//     created while any of its feature components do.
+//     created while any of its feature components do;
+//   - the cluster-wide parts the run recorded creating (liveCreated): the
+//     MaaS platform while it is still this tool's (and, when the run
+//     recorded its development database's Secret, has that one), the
+//     model registry while the tool's record still holds the UID the run
+//     recorded. Clean up removes them with the Environment page's own
+//     teardowns, which check again that they are this tool's.
 //
 // S3 storage, MLflow, and pipeline servers are never attributed to the
 // run: storage and MLflow are cluster-wide, and the cluster does not track
@@ -94,16 +117,27 @@ func Ownership(c *kube.Client, run *types.RecipeRun) (map[string]bool, *types.Cl
 		req.Components = append(req.Components, key)
 		created[prereqStepOf[feature]] = true
 	}
+	for _, part := range liveCreated(c, run.CreatedParts) {
+		switch part {
+		case types.RecipePartMaaSPlatform:
+			req.MaaSPlatform, created[StepMaaS] = true, true
+		case types.RecipePartModelRegistry:
+			req.ModelRegistry, created[StepModelRegistry] = true, true
+		}
+	}
 	delete(created, "")
 	slices.Sort(req.Components)
-	if len(req.RecipeProjects) == 0 && len(req.Components) == 0 {
+	if len(req.RecipeProjects) == 0 && len(req.Components) == 0 && !req.MaaSPlatform && !req.ModelRegistry {
 		return created, nil
 	}
 	return created, req
 }
 
 // prereqStepOf maps a feature name to its prerequisite step id.
-var prereqStepOf = map[string]string{"pipelines": StepPipelinesPrereq, "mlflow": StepMLflowPrereq}
+var prereqStepOf = map[string]string{
+	"pipelines": StepPipelinesPrereq, "mlflow": StepMLflowPrereq, "models": StepModelsPrereq,
+	"playground": StepPlaygroundPrereq, "model-registry": StepModelRegistryPrereq,
+}
 
 // liveComponents returns component keys the run still owns, each paired
 // with the enabling feature: Managed on the DataScienceCluster and
@@ -128,6 +162,43 @@ func liveComponents(c *kube.Client, keys []string) map[string]string {
 		comp, _ := comps[k].(map[string]any)
 		if r, recorded := rec.Components[k]; recorded && comp["managementState"] == "Managed" {
 			out[k] = r.Feature
+		}
+	}
+	return out
+}
+
+// liveCreated returns the parts of created that are still as the run
+// created them (see Ownership). A failed read offers nothing (Clean up
+// everything remains available).
+func liveCreated(c *kube.Client, created []types.RecipeCreatedPart) []string {
+	var out []string
+	for _, p := range created {
+		switch p.Part {
+		case types.RecipePartMaaSPlatform:
+			st, err := maasStatus(c)
+			if err != nil || !st.Platform.ManagedByTool {
+				continue
+			}
+			if p.UID != "" {
+				if rec, err := maasRecord(c); err != nil || rec.POCCredsUID != p.UID {
+					continue
+				}
+			}
+			out = append(out, p.Part)
+		case types.RecipePartModelRegistry:
+			if p.UID == "" {
+				continue
+			}
+			rec, err := registryRecord(c)
+			if err != nil {
+				continue
+			}
+			for key, e := range rec {
+				if strings.HasSuffix(key, "/"+modelregistry.Name) && e.UID == p.UID {
+					out = append(out, p.Part)
+					break
+				}
+			}
 		}
 	}
 	return out
@@ -202,7 +273,7 @@ func Steps(r types.EnvironmentRecipe) []Step {
 			Step{ID: StepMLflow, Title: "MLflow", Typical: 2 * time.Minute, Max: 10 * time.Minute, Check: checkMLflow, Run: runMLflow},
 		)
 	}
-	return steps
+	return append(steps, featureSteps(r)...)
 }
 
 // fail is a step's refusal or failure.
@@ -399,7 +470,13 @@ func waitDSCConditions(c *kube.Client) error {
 // checkPrereq: the feature's prerequisites are ready → done; a reason the
 // setup cannot make them ready blocks.
 func checkPrereq(c *kube.Client, feature string) (Check, error) {
-	st, err := features.GetPrerequisitesStatusFor(c, "")
+	return checkPrereqFor(c, feature, "")
+}
+
+// checkPrereqFor is checkPrereq for a model reached by exposure (Models:
+// gateways need Connectivity Link too).
+func checkPrereqFor(c *kube.Client, feature, exposure string) (Check, error) {
+	st, err := prereqStatus(c, exposure)
 	if err != nil {
 		return Check{}, fmt.Errorf("read what %s needs: %w", feature, err)
 	}
@@ -441,8 +518,13 @@ const prereqRecordReadTimeout = 10 * time.Second
 // message, its progress and the log): the run's Clean up then does not
 // offer them, Clean up everything still does.
 func runPrereq(c *kube.Client, s *State, step, feature string, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+	return runPrereqFor(c, s, step, feature, "", emit)
+}
+
+// runPrereqFor is runPrereq for a model reached by exposure.
+func runPrereqFor(c *kube.Client, s *State, step, feature, exposure string, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	before, readErr := features.ReadPrereqRecord(c)
-	res, err := features.RunPrerequisites(c, types.PrerequisitesRequest{Feature: feature}, emit)
+	res, err := features.RunPrerequisites(c, types.PrerequisitesRequest{Feature: feature, Exposure: exposure}, emit)
 	if readErr == nil {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Context()), prereqRecordReadTimeout)
 		defer cancel()
