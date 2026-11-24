@@ -656,8 +656,8 @@ scenarios["diag-leftovers-refused"] = (w) => { scenarios["diag-leftovers"](w); w
 // RHOAI and no DataScienceCluster (new, and its review), a run at step 5
 // (POST /__docs/advance moves it on), one that failed at the pipeline
 // server, and one whose updater pod went away.
-const RECIPE_OPERATION = (w, step, title) => {
-  w.operation = { inProgress: true, operation: { id: "op-recipe", type: "recipe", label: "Environment recipe", user: F.USER, target: `dev: step ${step} of 8 (${title})`, startedAt: F.ago(12), updatedAt: F.ago(0.1) } };
+const RECIPE_OPERATION = (w, step, title, name = "dev", of = 8) => {
+  w.operation = { inProgress: true, operation: { id: "op-recipe", type: "recipe", label: "Environment recipe", user: F.USER, target: `${name}: step ${step} of ${of} (${title})`, startedAt: F.ago(12), updatedAt: F.ago(0.1) } };
 };
 scenarios["recipe-new"] = (w) => { scenarios["no-dsc"](w); w.resources = { minio: F.s3States.none, mlflow: F.mlflowStates.none, pipelineServers: [] }; };
 scenarios["recipe-review"] = (w) => { scenarios["recipe-new"](w); };
@@ -679,6 +679,25 @@ scenarios["recipe-succeeded"] = (w) => {
     { name: "recipe-dev", uid: "uid-recipe-dev", recipe: "dev", createdAt: F.ago(40) },
     { name: "recipe-review", uid: "uid-recipe-review", recipe: "review", createdAt: F.ago(60 * 26) },
   ];
+};
+// A recipe with every feature (recipes phase 2): the form (the editor's
+// switches are turned on in the browser), running at the model step, and
+// succeeded with its Clean up offering the MaaS platform and the model
+// registry it created.
+scenarios["recipe-full-new"] = (w) => { scenarios["recipe-new"](w); };
+scenarios["recipe-full-running"] = (w) => {
+  const rcp = F.fullRecipe();
+  const steps = F.recipeSteps(rcp);
+  const at = steps.findIndex(([id]) => id === "model");
+  w.recipeRun = { run: F.recipeRun({ rcp, done: at }), running: true, pod: "rhoai-nightly-updater-6f7b8c9d5-x2k4p",
+    step: { step: "model-ready", status: "running", message: "Waiting for qwen3-1-7b to serve: pulling the image on worker-2 (3:10 so far, usually 3 to 6 minutes)" } };
+  RECIPE_OPERATION(w, at + 1, steps[at][1], "full", steps.length);
+};
+scenarios["recipe-full-succeeded"] = (w) => {
+  const rcp = F.fullRecipe();
+  const steps = F.recipeSteps(rcp);
+  w.recipeRun = { run: F.recipeRun({ rcp, done: steps.length, current: "", state: "succeeded", stopReason: "Every step of full is set up." }), running: false };
+  w.resources = { ...w.resources, mlflow: F.mlflowStates.running, pipelineServers: [...w.resources.pipelineServers, { ...F.pipelineServer, namespace: "recipe-full", apiRoute: undefined, uiRoute: undefined }] };
 };
 scenarios["recipe-interrupted"] = (w) => {
   w.recipeRun = { run: F.recipeRun({ done: 3, pod: "rhoai-nightly-updater-6f7b8c9d5-q9m3z" }), running: false, interrupted: true };

@@ -1783,12 +1783,45 @@ export const recipe = () => ({
   },
 });
 
-/** Recipe step metadata (pkg/cluster internal/recipe Steps): typical and max durations. */
-const RECIPE_STEPS = [
-  ["rhoai", "RHOAI", 420, 900], ["dsc", "DataScienceCluster", 60, 420], ["project", "Project recipe-dev", 10, 60],
-  ["pipelines-prereq", "What Pipelines needs", 120, 600], ["s3", "S3 storage", 60, 300], ["pipeline-server", "Pipeline server", 120, 600],
-  ["mlflow-prereq", "What MLflow needs", 120, 600], ["mlflow", "MLflow", 120, 600],
-];
+/** A recipe with every feature (recipes phase 2), in project recipe-full. */
+export const fullRecipe = () => ({
+  apiVersion: "rhoai-nightly-updater/v1alpha1", kind: "EnvironmentRecipe", metadata: { name: "full" },
+  spec: {
+    rhoai: { build: "latest", ifInstalled: "keep" }, dataScienceCluster: { create: true },
+    project: { mode: "create", name: "recipe-full", displayName: "Recipe full" },
+    features: {
+      pipelines: { enabled: true }, mlflow: { enabled: true, samples: true },
+      models: { enabled: true, model: "qwen3-1-7b", exposure: "default-gateway" }, playground: { enabled: true },
+      maas: { enabled: true, database: "development", publish: true }, modelRegistry: { enabled: true, sample: true }, workbench: { enabled: true },
+    },
+    dashboardDev: { deploy: "pr", pr: 4321, flavor: "rhoai" },
+  },
+});
+
+/**
+ * A recipe's steps as the runner lists them (pkg/cluster internal/recipe
+ * Steps): id, title, typical and max seconds, in the runner's order.
+ */
+export function recipeSteps(rcp = recipe()) {
+  const sp = rcp.spec;
+  const f = sp.features;
+  const out = [["rhoai", "RHOAI", 420, 900], ["dsc", "DataScienceCluster", 60, 420]];
+  if (sp.project) out.push(["project", `Project ${sp.project.name}`, 10, 60]);
+  if (f.pipelines?.enabled) out.push(["pipelines-prereq", "What Pipelines needs", 120, 600], ["s3", "S3 storage", 60, 300], ["pipeline-server", "Pipeline server", 120, 600]);
+  if (f.mlflow?.enabled) out.push(["mlflow-prereq", "What MLflow needs", 120, 600], ["mlflow", "MLflow", 120, 600]);
+  if (f.mlflow?.enabled && f.mlflow.samples) out.push(["mlflow-samples", "MLflow samples", 60, 900]);
+  if (f.maas?.enabled) out.push(["maas", "Models as a Service", 600, 900]);
+  if (f.models?.enabled) {
+    out.push(["models-prereq", "What Models needs", 240, 900], ["model", `Model ${f.models.model || "qwen25-05b-instruct"}`, 300, 900]);
+    if (f.maas?.enabled && f.maas.publish && f.models.exposure !== "maas") out.push(["maas-publish", "Publish the model through MaaS", 120, 300]);
+  }
+  if (f.playground?.enabled) out.push(["playground-prereq", "What the playground needs", 120, 600], ["playground", "Playground", 120, 540]);
+  if (f.modelRegistry?.enabled) out.push(["model-registry-prereq", "What the model registry needs", 120, 600], ["model-registry", "Model registry", 120, 720]);
+  if (f.workbench?.enabled) out.push(["workbench", "Workbench", 30, 120]);
+  const d = sp.dashboardDev ?? {};
+  if (d.deploy === "main" || d.deploy === "pr") out.push(["dashboard-dev", d.deploy === "pr" ? `Dashboard Dev (PR #${d.pr})` : "Dashboard Dev (main)", 180, 480]);
+  return out;
+}
 
 export const recipePinned = () => ({ tag: "rhoai-3.6", image: LATEST_IMAGE, digest: digest(latestBuild.seed) });
 
@@ -1801,7 +1834,7 @@ const ONE_TIME_SETUP_FIX = { code: "one_time_setup_missing", page: "/" };
  * with navigation fixes plus a build-resolution problem.
  */
 export function recipePlan(rcp = recipe(), installed = true, blocked = false) {
-  const steps = RECIPE_STEPS.map(([id, title, typicalSeconds, maxSeconds], i) => {
+  const steps = recipeSteps(rcp).map(([id, title, typicalSeconds, maxSeconds], i) => {
     if (id === "rhoai" && blocked) return { id, title, action: "blocked", reason: "The one-time cluster setup is not done: additional-pull-secret is missing in kube-system.", fix: ONE_TIME_SETUP_FIX, typicalSeconds, maxSeconds };
     if (id === "rhoai" && installed) return { id, title, action: "skip", reason: "RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).", typicalSeconds, maxSeconds };
     if (i <= 2) return { id, title, action: "run", typicalSeconds, maxSeconds };
@@ -1824,14 +1857,15 @@ export function recipePlan(rcp = recipe(), installed = true, blocked = false) {
  * created marks recipe-owned resources (project plus DSC prereq toggles) but never
  * shared S3, MLflow, or pipeline servers.
  */
-export function recipeRun({ done = 0, current = "running", message = "", state = "running", stopReason = "", errorCode = "", pod = "rhoai-nightly-updater-6f7b8c9d5-x2k4p" } = {}) {
+export function recipeRun({ done = 0, current = "running", message = "", state = "running", stopReason = "", errorCode = "", pod = "rhoai-nightly-updater-6f7b8c9d5-x2k4p", rcp = recipe() } = {}) {
   const start = 2 + done * 2.5;
-  const steps = RECIPE_STEPS.map(([id, title, typicalSeconds, maxSeconds], i) => {
+  const project = rcp.spec.project?.name ?? "recipe-dev";
+  const steps = recipeSteps(rcp).map(([id, title, typicalSeconds, maxSeconds], i) => {
     const times = { typicalSeconds, maxSeconds };
     if (i < done) {
       return id === "rhoai"
         ? { id, title, ...times, status: "skipped", message: "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).", startedAt: ago(start), finishedAt: ago(start) }
-        : { id, title, ...times, status: "success", ...(RECIPE_OWNS.has(id) ? { created: true } : {}), message: RECIPE_DONE[id], startedAt: ago(start - i * 2.5), finishedAt: ago(start - (i + 1) * 2.5) };
+        : { id, title, ...times, status: "success", ...(RECIPE_OWNS.has(id) ? { created: true } : {}), message: (RECIPE_DONE[id] ?? `${title} is set up.`).replaceAll("recipe-dev", project), startedAt: ago(start - i * 2.5), finishedAt: ago(start - (i + 1) * 2.5) };
     }
     if (i === done && current) {
       return { id, title, ...times, status: current, ...(message ? { message } : {}), ...(current === "failed" ? { errorCode: "timeout", ...(RECIPE_OWNS.has(id) ? { created: true } : {}), finishedAt: ago(0.5) } : {}), startedAt: ago(1.2) };
@@ -1839,19 +1873,24 @@ export function recipeRun({ done = 0, current = "running", message = "", state =
     return { id, title, ...times, status: "pending" };
   });
   const components = Object.entries(RECIPE_COMPONENTS).filter(([id]) => steps.some((s) => s.id === id && s.created)).map(([, key]) => key);
+  // The cluster-wide parts the run created (they were not this tool's before their step).
+  const createdParts = [["maas", "maas-platform", "uid-maas-db-creds"], ["model-registry", "model-registry", "uid-nightly-registry"]]
+    .filter(([id]) => steps.some((s) => s.id === id && s.status === "success")).map(([, part, uid]) => ({ part, uid }));
   return {
     id: "run-7c1e", operationId: "op-recipe", bootId: "b-4e2a", pod, user: USER, startedAt: ago(start),
     ...(state !== "running" ? { finishedAt: ago(0.5) } : {}), state, ...(stopReason ? { stopReason } : {}), ...(errorCode ? { errorCode } : {}),
-    recipe: recipe(), pinned: recipePinned(), project: { name: "recipe-dev", uid: "5d1c0a3e-9b7f-4c2e-8a61-2f0d9e4b7c13", owned: true }, steps,
+    recipe: rcp, pinned: recipePinned(), project: { name: project, uid: "5d1c0a3e-9b7f-4c2e-8a61-2f0d9e4b7c13", owned: true }, steps,
     ...(components.length ? { components } : {}),
+    ...(rcp.spec.features.models?.enabled && steps.some((s) => s.id === "models-prereq" && s.status === "success") ? { exposure: rcp.spec.features.models.exposure || "default-gateway" } : {}),
+    ...(createdParts.length ? { createdParts } : {}),
   };
 }
 
 /** Step IDs the recipe may mark created (project + DSC prereq phases). */
-const RECIPE_OWNS = new Set(["project", "pipelines-prereq", "mlflow-prereq"]);
+const RECIPE_OWNS = new Set(["project", "pipelines-prereq", "mlflow-prereq", "models-prereq", "model-registry-prereq", "maas", "model-registry"]);
 
 /** Maps prereq step id to DSC component name. */
-const RECIPE_COMPONENTS = { "pipelines-prereq": "aipipelines", "mlflow-prereq": "mlflowoperator" };
+const RECIPE_COMPONENTS = { "pipelines-prereq": "aipipelines", "mlflow-prereq": "mlflowoperator", "models-prereq": "kserve", "model-registry-prereq": "modelregistry" };
 
 /**
  * Cleanup payload for GET /api/recipes/run derived from pkg/cluster/internal/recipe
@@ -1860,6 +1899,8 @@ const RECIPE_COMPONENTS = { "pipelines-prereq": "aipipelines", "mlflow-prereq": 
 export function recipeCleanup(run) {
   const req = {
     ...(run.project?.owned ? { recipeProjects: [run.project.name], recipeProjectUIDs: { [run.project.name]: run.project.uid || "uid-recipe-dev" } } : {}),
+    ...(run.createdParts?.some((p) => p.part === "model-registry") ? { modelRegistry: true } : {}),
+    ...(run.createdParts?.some((p) => p.part === "maas-platform") ? { maasPlatform: true } : {}),
     ...(run.components?.length ? { components: run.components } : {}),
   };
   return Object.keys(req).length ? req : null;
@@ -1883,4 +1924,15 @@ const RECIPE_DONE = {
   "pipeline-server": "The pipeline server in recipe-dev is ready.",
   "mlflow-prereq": "Turned on mlflowoperator in the DataScienceCluster; it is ready.",
   mlflow: "MLflow is ready.",
+  "mlflow-samples": "Samples added in project 'recipe-dev'.",
+  maas: "The MaaS platform is set up and ready.",
+  "models-prereq": "Turned on kserve and installed cert-manager and Connectivity Link; they are ready.",
+  model: "qwen3-1-7b in recipe-dev serves, through the cluster's default gateway.",
+  "maas-publish": "Published qwen3-1-7b in recipe-dev through MaaS.",
+  "playground-prereq": "Everything it needs is set up.",
+  playground: "The playground in recipe-dev is ready, with qwen3-1-7b.",
+  "model-registry-prereq": "Turned on modelregistry in the DataScienceCluster; it is ready.",
+  "model-registry": "Model registry nightly-registry is ready in rhoai-model-registries.",
+  workbench: "Workbench nightly-workbench is starting in recipe-dev with Jupyter | Data Science | CPU | Python 3.12 on hardware profile Default.",
+  "dashboard-dev": "Deployed PR #4321 (RHOAI build); the dashboard is ready.",
 };
