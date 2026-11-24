@@ -88,9 +88,11 @@ var Operator = envkit.OperatorSpec{ID: "kueue-operator", Title: "Red Hat build o
 	Source: "redhat-operators", Group: "openshift-kueue-operator", API: APIGroup, Controller: "kueue-controller-manager"}
 
 // Sample sizing: the CodeFlare SDK's defaults for a Ray cluster
-// (project-codeflare/codeflare-sdk src/codeflare_sdk/ray/cluster/config.py
-// lines 325-337): head 1 CPU request / 2 limit and 5Gi / 8Gi memory, each
-// worker 1 / 1 CPU and 3Gi / 6Gi. Live, a head with 1 CPU and 2Gi (requests =
+// (project-codeflare/codeflare-sdk v0.40.1, commit 9e2bb55e407a,
+// src/codeflare_sdk/ray/cluster/config.py lines 325-337): head 1 CPU
+// request / 2 limit and memory 5 / 8, each worker 1 / 1 CPU and memory
+// 3 / 6. The SDK writes memory in decimal gigabytes (5G, config.py
+// L475-478); here it is rounded to GiB (5Gi, a little more). Live, a head with 1 CPU and 2Gi (requests =
 // limits) was OOMKilled about 11 s after start (2026-11-24). Requests stay
 // below limits as CodeFlare sets them. The samples set neither num-cpus nor
 // memory in rayStartParams, so KubeRay derives `ray start --num-cpus/--memory`
