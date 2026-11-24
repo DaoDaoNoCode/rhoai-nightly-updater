@@ -266,6 +266,25 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **A fresh Connectivity Link install no longer leaves Kuadrant stuck
+  without Authorino and Limitador.** Set up (the MaaS tab, and models'
+  prerequisites through a gateway) created the Kuadrant CR as soon as its API
+  was served. For up to 30 seconds after a CRD is Established, the API server
+  refuses objects owned by its CRs with `blockOwnerDeletion` (its admission
+  RESTMapper is reset every 30 seconds), so Kuadrant's operator failed to
+  create Authorino and Limitador, never tried again, and Kuadrant stayed not
+  Ready ("limitador resource not in topology") until its operator restarted.
+  Set up now waits until 45 seconds after CRD `kuadrants.kuadrant.io` turned
+  Established before it creates the CR (no wait for an older CRD), and stops
+  without creating it when the CRD cannot be read or is not Established. When
+  Authorino does not appear, the message now gives the last thing the wait
+  found (not the wait's own deadline), quotes Kuadrant's Ready condition, and,
+  when Kuadrant is not Ready and made no Authorino, says that a cluster-admin
+  restarts Kuadrant's operator (`oc rollout restart
+  deployment/kuadrant-operator-controller-manager -n <namespace>`); the tool
+  restarts nothing itself. No new permission: the CRD is read from the
+  cluster-wide CRD list, by name, which the tool already reads.
+
 - **Deleting a pipeline server no longer breaks the workbenches that use its
   dashboard Connection.** A workbench a user attached
   `rhoai-nightly-updater-s3` to in the dashboard kept naming it after the
