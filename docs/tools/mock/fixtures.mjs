@@ -1793,6 +1793,7 @@ export const fullRecipe = () => ({
       pipelines: { enabled: true }, mlflow: { enabled: true, samples: true },
       models: { enabled: true, model: "qwen3-1-7b", exposure: "default-gateway" }, playground: { enabled: true },
       maas: { enabled: true, database: "development", publish: true }, modelRegistry: { enabled: true, sample: true }, workbench: { enabled: true },
+      kueue: { enabled: true, rayCluster: true },
     },
     dashboardDev: { deploy: "pr", pr: 4321, flavor: "rhoai" },
   },
@@ -1821,6 +1822,7 @@ export function recipeSteps(rcp = recipe()) {
   if (f.playground?.enabled) out.push(["playground-prereq", "What the playground needs", 120, 600], ["playground", "Playground", 120, 540]);
   if (f.modelRegistry?.enabled) out.push(["model-registry-prereq", "What the model registry needs", 120, 600], ["model-registry", "Model registry", 120, 720]);
   if (f.workbench?.enabled) out.push(["workbench", "Workbench", 30, 120]);
+  if (f.kueue?.enabled) out.push(["kueue-prereq", "What distributed workloads need", 240, 900], ["kueue", "Distributed workloads", 60, 600]);
   const d = sp.dashboardDev ?? {};
   if (d.deploy === "main" || d.deploy === "pr") out.push(["dashboard-dev", d.deploy === "pr" ? `Dashboard Dev (PR #${d.pr})` : "Dashboard Dev (main)", 180, 480]);
   return out;
@@ -1863,7 +1865,22 @@ export function recipePlan(rcp = recipe(), installed = true, blocked = false, mi
       { field: "spec.rhoai.build", message: "Cannot resolve the build on Quay.", fix: { code: "build_unresolvable" } },
     ] : [],
     typicalSeconds: counted.reduce((n, s) => n + s.typicalSeconds, 0), maxSeconds: counted.reduce((n, s) => n + s.maxSeconds, 0),
+    ...(kueueWarnings(rcp).length ? { warnings: kueueWarnings(rcp) } : {}),
   };
+}
+
+/** The plan's warnings for distributed workloads (pkg/cluster internal/recipe kueueWarnings). */
+function kueueWarnings(rcp) {
+  const f = rcp.spec.features;
+  if (!f.kueue?.enabled) return [];
+  const others = [f.pipelines?.enabled && "a pipeline server", f.models?.enabled && "a model", f.workbench?.enabled && "a workbench"].filter(Boolean);
+  const out = [];
+  if (others.length) {
+    const list = others.length === 1 ? others[0] : `${others.slice(0, -1).join(", ")} and ${others[others.length - 1]}`;
+    out.push(`Project ${rcp.spec.project?.name ?? "recipe-dev"} also gets ${list}. Kueue manages only what is sent to a queue, so they keep running. A project of its own is still safer: with the dashboard's Kueue setting on, new workbenches and models there need the queue hardware profile.`);
+  }
+  if (f.kueue.dashboardOptIn) out.push("The dashboard's Kueue setting changes every new project on this cluster: workbenches and model deployments there can only use the queue hardware profile, and a project without its own LocalQueue cannot create workbenches or deploy models until an admin adds one.");
+  return out;
 }
 
 /**
@@ -1889,7 +1906,7 @@ export function recipeRun({ done = 0, current = "running", message = "", state =
   });
   const components = Object.entries(RECIPE_COMPONENTS).filter(([id]) => steps.some((s) => s.id === id && s.created)).map(([, key]) => key);
   // The cluster-wide parts the run created (they were not this tool's before their step).
-  const createdParts = [["maas", "maas-platform", "uid-maas-db-creds"], ["model-registry", "model-registry", "uid-nightly-registry"]]
+  const createdParts = [["maas", "maas-platform", "uid-maas-db-creds"], ["model-registry", "model-registry", "uid-nightly-registry"], ["kueue", "kueue", "uid-nightly-kueue"]]
     .filter(([id]) => steps.some((s) => s.id === id && s.status === "success")).map(([, part, uid]) => ({ part, uid }));
   return {
     id: "run-7c1e", operationId: "op-recipe", bootId: "b-4e2a", pod, user: USER, startedAt: ago(start),
@@ -1902,10 +1919,10 @@ export function recipeRun({ done = 0, current = "running", message = "", state =
 }
 
 /** Step IDs the recipe may mark created (project + DSC prereq phases). */
-const RECIPE_OWNS = new Set(["project", "pipelines-prereq", "mlflow-prereq", "models-prereq", "model-registry-prereq", "maas", "model-registry"]);
+const RECIPE_OWNS = new Set(["project", "pipelines-prereq", "mlflow-prereq", "models-prereq", "model-registry-prereq", "kueue-prereq", "maas", "model-registry", "kueue"]);
 
 /** Maps prereq step id to DSC component name. */
-const RECIPE_COMPONENTS = { "pipelines-prereq": "aipipelines", "mlflow-prereq": "mlflowoperator", "models-prereq": "kserve", "model-registry-prereq": "modelregistry" };
+const RECIPE_COMPONENTS = { "pipelines-prereq": "aipipelines", "mlflow-prereq": "mlflowoperator", "models-prereq": "kserve", "model-registry-prereq": "modelregistry", "kueue-prereq": "kueue" };
 
 /**
  * Cleanup payload for GET /api/recipes/run derived from pkg/cluster/internal/recipe
@@ -1916,6 +1933,7 @@ export function recipeCleanup(run) {
     ...(run.project?.owned ? { recipeProjects: [run.project.name], recipeProjectUIDs: { [run.project.name]: run.project.uid || "uid-recipe-dev" } } : {}),
     ...(run.createdParts?.some((p) => p.part === "model-registry") ? { modelRegistry: true, modelRegistryUid: run.createdParts.find((p) => p.part === "model-registry").uid } : {}),
     ...(run.createdParts?.some((p) => p.part === "maas-platform") ? { maasPlatform: true, maasPlatformUid: run.createdParts.find((p) => p.part === "maas-platform").uid } : {}),
+    ...(run.createdParts?.some((p) => p.part === "kueue") ? { kueue: true, kueueUid: run.createdParts.find((p) => p.part === "kueue").uid } : {}),
     ...(run.createdParts?.length ? { recipeRunId: run.id } : {}),
     ...(run.components?.length ? { components: run.components } : {}),
   };
@@ -1950,5 +1968,7 @@ const RECIPE_DONE = {
   "model-registry-prereq": "Turned on modelregistry in the DataScienceCluster; it is ready.",
   "model-registry": "Model registry nightly-registry is ready in rhoai-model-registries.",
   workbench: "Workbench nightly-workbench is starting in recipe-dev with Jupyter | Data Science | CPU | Python 3.12 on hardware profile Default.",
+  "kueue-prereq": "Turned on kueue (Unmanaged) and installed cert-manager and the Red Hat build of Kueue; they are ready.",
+  kueue: "Distributed workloads are set up in recipe-dev with the RayCluster sample.",
   "dashboard-dev": "Deployed PR #4321 (RHOAI build); the dashboard is ready.",
 };
