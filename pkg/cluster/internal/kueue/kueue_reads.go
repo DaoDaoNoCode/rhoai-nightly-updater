@@ -1,7 +1,11 @@
 package kueue
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/url"
 	"slices"
+	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/authz"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
@@ -74,17 +78,31 @@ func readInstance(c *kube.Client) (Instance, bool, error) {
 	return k, found, err
 }
 
-// v1beta2Served reports whether Kueue exposes v1beta2—the version this
-// dashboard uses. served is also false while the API group is unavailable.
+// v1beta2Served reads Kueue's API discovery document with the user's
+// token. group is false only when the API server answers that the group is
+// not served (404); any other failure, or a document that does not parse,
+// is an error, never "absent" (fail closed). served: v1beta2, the version
+// the dashboard reads, is among its versions.
 func v1beta2Served(c *kube.Client) (served, group bool, err error) {
 	if err := userOnly(c); err != nil {
 		return false, false, err
 	}
-	v := rhoai.ServedVersions(c, APIGroup, nil)
-	if !v.Discovered {
+	body, found, err := c.GetOptional("/apis/" + APIGroup)
+	if err != nil {
+		return false, false, fmt.Errorf("read the API group %s: %w", APIGroup, err)
+	}
+	if !found {
 		return false, false, nil
 	}
-	return slices.Contains(v.Versions, APIVersion), true, nil
+	var doc rhoai.APIGroupDoc
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return false, false, fmt.Errorf("parse the API group %s: %w", APIGroup, err)
+	}
+	versions := doc.OrderedVersions()
+	if len(versions) == 0 {
+		return false, false, fmt.Errorf("the API group %s lists no version", APIGroup)
+	}
+	return slices.Contains(versions, APIVersion), true, nil
 }
 
 // Queue represents a ResourceFlavor, ClusterQueue, or LocalQueue from the API.
@@ -316,4 +334,60 @@ func readProfile(c *kube.Client, apps string) (kube.ObjectMeta, bool, error) {
 	}
 	found, err := c.GetIntoOptional(profilePath(apps), &p)
 	return p.Metadata, found, err
+}
+
+// crdName is the Kueue CRD whose OLM ownership tells who installed Kueue.
+const crdName = "clusterqueues." + APIGroup
+
+// OutsideOLM says whether Kueue's API is served by a Kueue that OLM did not
+// install for package kueue-operator, whatever its controller is named:
+// RHOAI counts Kueue only through OLM (rhods-operator rhoai-3.6
+// kueue_controller_actions.go checkPreConditions), and two Kueue
+// controllers clash. Called when no kueue-operator CSV or Subscription
+// exists. OLM labels the CRDs it installs for an operator
+// (operators.coreos.com/<package>.<namespace>, olm.managed=true) and
+// annotates them operatorframework.io/installed-alongside-<hash>:
+// <namespace>/<csv>; CRDs left by an uninstall keep them, and installing the
+// operator again adopts them. A CRD without them, or no CRD although the
+// API is served, is outside OLM (fail closed). Reads: API discovery and the
+// CRD list (by name), which the ServiceAccount already has.
+func OutsideOLM(c *kube.Client) (bool, string, error) {
+	_, found, err := c.GetOptional("/apis/" + APIGroup)
+	if err != nil {
+		return false, "", fmt.Errorf("read the API group %s: %w", APIGroup, err)
+	}
+	if !found {
+		return false, "", nil
+	}
+	var crds []struct {
+		Metadata kube.ObjectMeta `json:"metadata"`
+	}
+	if err := c.ListInto("/apis/apiextensions.k8s.io/v1/customresourcedefinitions?fieldSelector="+url.QueryEscape("metadata.name="+crdName), &crds); err != nil {
+		return false, "", fmt.Errorf("read CRD %s: %w", crdName, err)
+	}
+	for _, crd := range crds {
+		if crd.Metadata.Name != crdName {
+			continue
+		}
+		if olmInstalled(crd.Metadata) {
+			return false, "", nil
+		}
+		return true, fmt.Sprintf("its CRD %s carries no OLM label of package %s", crdName, Operator.Pkg), nil
+	}
+	return true, fmt.Sprintf("the API is served without a CRD %s", crdName), nil
+}
+
+// olmInstalled: OLM installed the CRD for package kueue-operator.
+func olmInstalled(m kube.ObjectMeta) bool {
+	for k := range m.Labels {
+		if strings.HasPrefix(k, "operators.coreos.com/"+Operator.Pkg+".") {
+			return true
+		}
+	}
+	for k, v := range m.Annotations {
+		if strings.HasPrefix(k, "operatorframework.io/installed-alongside-") && strings.Contains(v, "/"+Operator.Pkg+".") {
+			return true
+		}
+	}
+	return false
 }

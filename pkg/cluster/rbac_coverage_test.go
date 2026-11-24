@@ -112,6 +112,7 @@ var rbacUserTokenReads = map[string]string{
 	"models_hardware.go:listModelLocalQueues": "a project's Kueue LocalQueues, for a model's hardware profile",
 	// The Distributed workloads status (GET /api/resources/kueue) and its
 	// operations read with the admin's own token.
+	"kueue_reads.go:v1beta2Served":       "API discovery of kueue.x-k8s.io (a read that fails is not \"absent\")",
 	"kueue_reads.go:readInstance":        "the Kueue CR cluster (kueue.openshift.io)",
 	"kueue_reads.go:readFlavor":          "ResourceFlavor nightly-kueue-cpu",
 	"kueue_reads.go:readClusterQueue":    "ClusterQueue nightly-kueue",

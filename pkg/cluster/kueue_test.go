@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/authz"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
@@ -603,16 +602,40 @@ func TestKueuePrerequisites(t *testing.T) {
 // If Kueue APIs are already served by a non-OLM controller, prerequisite setup
 // is blocked to avoid duplicate controllers and unmatched RHOAI state.
 func TestKueuePrerequisitesRefuseKueueOutsideOLM(t *testing.T) {
-	pc := newPrereqCluster(t)
-	pc.f.putJSON(tDSC, `{"metadata":{"name":"default-dsc"},"spec":{"components":{"kueue":{"managementState":"Removed"}}}}`)
-	if pc.f.groups == nil {
-		pc.f.groups = map[string]string{}
-	}
-	pc.f.groups[kqGroup] = kqV1beta2
-	pc.f.putJSON("/apis/apps/v1/namespaces/kueue-system/deployments/kueue-controller-manager", `{"metadata":{"name":"kueue-controller-manager","namespace":"kueue-system"}}`)
-	st := prereqStatus(t, pc.c, "kueue")
-	if !strings.Contains(st.SetupBlockedReason, "without being installed from OperatorHub") {
-		t.Fatalf("status %+v", st)
+	const crdList = "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/clusterqueues.kueue.x-k8s.io"
+	for _, tc := range []struct {
+		name, crd, deployment string
+		refused               bool
+	}{
+		// Upstream manifests: no OLM labels on the CRD; the controller renamed.
+		{"renamed controller", `{"metadata":{"name":"clusterqueues.kueue.x-k8s.io"}}`, "my-kueue", true},
+		{"usual controller", `{"metadata":{"name":"clusterqueues.kueue.x-k8s.io"}}`, "kueue-controller-manager", true},
+		// No CRD named as Kueue's, but the API is served: cannot confirm, so refused.
+		{"no CRD", "", "", true},
+		// CRDs OLM installed for kueue-operator and left after an uninstall: installing adopts them.
+		{"OLM leftovers", `{"metadata":{"name":"clusterqueues.kueue.x-k8s.io","labels":{"olm.managed":"true","operators.coreos.com/kueue-operator.openshift-kueue-operator":""}}}`, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pc := newPrereqCluster(t)
+			pc.f.putJSON(tDSC, `{"metadata":{"name":"default-dsc"},"spec":{"components":{"kueue":{"managementState":"Removed"}}}}`)
+			pc.sim.packages["kueue-operator"] = fakePackage{source: "redhat-operators", defaultChannel: "stable-v1.5", order: []string{"stable-v1.5"},
+				installModes: []string{"AllNamespaces"}, channels: map[string]fakeChannel{"stable-v1.5": {head: "1.5.1", entries: []string{"1.5.1"}}}}
+			pc.putPackage("kueue-operator")
+			if pc.f.groups == nil {
+				pc.f.groups = map[string]string{}
+			}
+			pc.f.groups[kqGroup] = kqV1beta2
+			if tc.crd != "" {
+				pc.f.putJSON(crdList, tc.crd)
+			}
+			if tc.deployment != "" {
+				pc.f.putJSON("/apis/apps/v1/namespaces/kueue-system/deployments/"+tc.deployment, `{"metadata":{"name":"`+tc.deployment+`","namespace":"kueue-system"}}`)
+			}
+			st := prereqStatus(t, pc.c, "kueue")
+			if got := strings.Contains(st.SetupBlockedReason, "outside OperatorHub"); got != tc.refused {
+				t.Fatalf("refused %v, want %v: %+v", got, tc.refused, st)
+			}
+		})
 	}
 }
 
@@ -687,8 +710,6 @@ func writeTestPrereqRecord(c *Client, raw string) error {
 	return record.WriteSnapshotKey(c, "prerequisites", "rhoai-nightly-updater-prerequisites-record", raw)
 }
 
-var _ = time.Second
-
 // Clean up deletes the Kueue setup after the workbenches and models that
 // may use its queue, and before the components (kueue goes back last).
 func TestKueueCleanupOrder(t *testing.T) {
@@ -701,4 +722,182 @@ func TestKueueCleanupOrder(t *testing.T) {
 	if got := strings.Join(ids, " "); got != "workbench:proj model:proj kueue recipe-project:proj components" {
 		t.Fatalf("order %s", got)
 	}
+}
+
+// H1: a discovery read that fails is not "Kueue is absent": setup and the
+// component restore refuse (403, 500, a document that does not parse).
+func TestKueueDiscoveryErrorsFailClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(f *resourceFake)
+	}{
+		{"403", func(f *resourceFake) { f.fail["GET "+kqGroup] = 403 }},
+		{"500", func(f *resourceFake) { f.fail["GET "+kqGroup] = 500 }},
+		{"malformed", func(f *resourceFake) { f.groups[kqGroup] = "not json" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, u := putKueueCluster(t)
+			tc.change(f)
+			res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"})
+			if res.Success || !strings.Contains(res.Message, "Cannot read Kueue's API versions") || len(f.mutations()) != 0 {
+				t.Fatalf("setup: %+v", res)
+			}
+			if users, err := kueue.Users(u); err == nil {
+				t.Fatalf("Users: %v, no error", users)
+			}
+		})
+	}
+}
+
+// M1: KueueReady must read True: absent, Unknown and False refuse setup and
+// are not ready.
+func TestKueueReadyMustBeTrue(t *testing.T) {
+	for _, cond := range []string{``, `,"conditions":[{"type":"KueueReady","status":"Unknown"}]`, `,"conditions":[{"type":"KueueReady","status":"False","message":"broken"}]`} {
+		f, u := putKueueCluster(t)
+		f.putJSON(wbDSCv2+"/default-dsc", `{"metadata":{"name":"default-dsc"},"spec":{"components":{"kueue":{"managementState":"Unmanaged"},"ray":{"managementState":"Managed"}}},
+			"status":{"components":{"kueue":{"managementState":"Unmanaged"}}`+cond+`}}`)
+		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"})
+		if res.Success || !strings.Contains(res.Message, "KueueReady") || len(f.mutations()) != 0 {
+			t.Fatalf("%q: %+v", cond, res)
+		}
+		st, _ := GetKueueStatus(u, u, "proj")
+		if st.Instance.Ready || st.Refusal == "" {
+			t.Fatalf("%q: status %+v", cond, st.Instance)
+		}
+	}
+	// v1beta2 not served: not ready either.
+	f, u := putKueueCluster(t)
+	f.groups[kqGroup] = `{"versions":[{"version":"v1beta1"}]}`
+	if st, _ := GetKueueStatus(u, u, "proj"); st.Instance.Ready {
+		t.Fatalf("ready without v1beta2: %+v", st.Instance)
+	}
+}
+
+// M2: a LocalQueue named default refuses every setup, the project labelled
+// already and a sample added later too.
+func TestKueueDefaultQueueRefusedOnEverySetup(t *testing.T) {
+	f, u := putKueueCluster(t)
+	f.putJSON(wbProjectNS, `{"metadata":{"name":"proj","uid":"ns-uid","labels":{"opendatahub.io/dashboard":"true","kueue.openshift.io/managed":"true"}}}`)
+	f.putJSON(kqLQs+"/default", `{"metadata":{"name":"default","namespace":"proj"},"spec":{"clusterQueue":"x"}}`)
+	if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"}); res.Success || !strings.Contains(res.Message, "LocalQueue named default") {
+		t.Fatalf("labelled project: %+v", res)
+	}
+	f2, u2 := putKueueCluster(t)
+	if res, _ := runKueueOp(t, u2, types.KueueRequest{Action: "setup", Project: "proj"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	f2.putJSON(kqLQs+"/default", `{"metadata":{"name":"default","namespace":"proj"},"spec":{"clusterQueue":"x"}}`)
+	before := len(f2.mutations())
+	if res, _ := runKueueOp(t, u2, types.KueueRequest{Action: "setup", Project: "proj", RayJob: true}); res.Success || !strings.Contains(res.Message, "LocalQueue named default") || len(f2.mutations()) != before {
+		t.Fatalf("sample added: %+v", res)
+	}
+}
+
+// M3: the opt-in checks the setup live before it changes the dashboard: a
+// queue made again, the label gone, the project made again or Kueue not
+// ready refuse with no change to the dashboard's settings.
+func TestKueueOptInRevalidates(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(f *resourceFake)
+	}{
+		{"LocalQueue replaced", func(f *resourceFake) {
+			f.putJSON(kqLQ, `{"metadata":{"name":"nightly-kueue","namespace":"proj","uid":"other","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}},"spec":{"clusterQueue":"nightly-kueue"}}`)
+		}},
+		{"ClusterQueue gone", func(f *resourceFake) { f.deleteObject(kqCQ) }},
+		{"label gone", func(f *resourceFake) {
+			f.putJSON(wbProjectNS, `{"metadata":{"name":"proj","uid":"ns-uid","labels":{"opendatahub.io/dashboard":"true"}}}`)
+		}},
+		{"project made again", func(f *resourceFake) {
+			f.putJSON(wbProjectNS, `{"metadata":{"name":"proj","uid":"new-uid","labels":{"opendatahub.io/dashboard":"true","kueue.openshift.io/managed":"true"}}}`)
+		}},
+		{"Kueue not ready", func(f *resourceFake) {
+			f.putJSON(kqInstance, `{"status":{"conditions":[{"type":"Available","status":"False"}]}}`)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, u := putKueueCluster(t)
+			if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"}); !res.Success {
+				t.Fatalf("setup: %+v", res)
+			}
+			tc.change(f)
+			res, _ := runKueueOp(t, u, types.KueueRequest{Action: "optin"})
+			if res.Success || len(f.callsTo("PATCH", kqConfig)) != 0 || len(f.callsTo("POST", "/apis/infrastructure.opendatahub.io/v1/namespaces/redhat-ods-applications/hardwareprofiles")) != 0 {
+				t.Fatalf("got %+v", res)
+			}
+		})
+	}
+}
+
+// M4: the label: a value other than true is never overwritten (refused); a
+// label another actor adds between the read and the write is not claimed;
+// Clean up removes only the label the tool added while it still reads true.
+func TestKueueLabelCompareAndSet(t *testing.T) {
+	t.Run("other value", func(t *testing.T) {
+		f, u := putKueueCluster(t)
+		f.putJSON(wbProjectNS, `{"metadata":{"name":"proj","uid":"ns-uid","labels":{"opendatahub.io/dashboard":"true","kueue.openshift.io/managed":"false"}}}`)
+		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"})
+		if res.Success || !strings.Contains(res.Message, "kueue.openshift.io/managed=false") || len(f.mutations()) != 0 {
+			t.Fatalf("got %+v", res)
+		}
+	})
+	t.Run("added meanwhile by another actor", func(t *testing.T) {
+		f, u := putKueueCluster(t)
+		done := false
+		f.beforeRequest = func(r *http.Request) {
+			if r.Method == http.MethodPatch && r.URL.Path == wbProjectNS && r.URL.Query().Get("dryRun") == "" && !done {
+				done = true
+				f.putJSON(wbProjectNS, `{"metadata":{"name":"proj","uid":"ns-uid","resourceVersion":"99","labels":{"opendatahub.io/dashboard":"true","kueue.openshift.io/managed":"true"}}}`)
+			}
+		}
+		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"})
+		if !res.Success || kueueRecord(t, u).LabelAdded {
+			t.Fatalf("claimed another actor's label: %+v %+v", res, kueueRecord(t, u))
+		}
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"}); !res.Success || nsLabels(f)[kueue.ProjectLabel] != "true" {
+			t.Fatalf("teardown removed it: %+v", res)
+		}
+	})
+	t.Run("changed after setup", func(t *testing.T) {
+		f, u := putKueueCluster(t)
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"}); !res.Success {
+			t.Fatalf("setup: %+v", res)
+		}
+		ns := f.get(wbProjectNS)
+		ensureMap(ensureMap(ns, "metadata"), "labels")[kueue.ProjectLabel] = "custom"
+		f.put(wbProjectNS, ns)
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"}); !res.Success || nsLabels(f)[kueue.ProjectLabel] != "custom" {
+			t.Fatalf("got %+v", res)
+		}
+	})
+}
+
+// M5: objects being deleted still count until they are gone: a terminating
+// LocalQueue keeps the ClusterQueue and the DataScienceCluster's kueue, a
+// terminating Workload keeps the label.
+func TestKueueTerminatingDependencies(t *testing.T) {
+	t.Run("ClusterQueue", func(t *testing.T) {
+		f, u := putKueueCluster(t)
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"}); !res.Success {
+			t.Fatalf("setup: %+v", res)
+		}
+		f.putJSON(kqAPI+"/namespaces/team/localqueues/q", `{"metadata":{"name":"q","namespace":"team","deletionTimestamp":"2026-11-24T10:00:00Z","finalizers":["x"]},"spec":{"clusterQueue":"nightly-kueue"}}`)
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"}); res.Success || res.ErrorCode != "in_use" || !f.has(kqCQ) {
+			t.Fatalf("got %+v", res)
+		}
+		users, err := kueue.Users(u)
+		if err != nil || !strings.Contains(strings.Join(users, ","), "LocalQueue team/q") {
+			t.Fatalf("users %v %v", users, err)
+		}
+	})
+	t.Run("label", func(t *testing.T) {
+		f, u := putKueueCluster(t)
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"}); !res.Success {
+			t.Fatalf("setup: %+v", res)
+		}
+		f.putJSON(kqWorkloads+"/w1", `{"metadata":{"name":"w1","namespace":"proj","deletionTimestamp":"2026-11-24T10:00:00Z","finalizers":["kueue.x-k8s.io/resource-in-use"]},"spec":{"queueName":"team-queue"}}`)
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"}); !res.Success || nsLabels(f)[kueue.ProjectLabel] != "true" {
+			t.Fatalf("got %+v", res)
+		}
+	})
 }

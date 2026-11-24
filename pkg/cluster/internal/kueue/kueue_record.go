@@ -24,7 +24,10 @@ type Record struct {
 	ProjectUID string `json:"projectUID,omitempty"`
 	// LabelAdded means the tool placed kueue.openshift.io/managed=true on
 	// the project; cleanup strips solely that label.
-	LabelAdded      bool   `json:"labelAdded,omitempty"`
+	LabelAdded bool `json:"labelAdded,omitempty"`
+	// LabelPrior is the label as it was before this tool's setup: "absent"
+	// (the only case the tool sets it), or its value.
+	LabelPrior      string `json:"labelPrior,omitempty"`
 	FlavorUID       string `json:"flavorUID,omitempty"`
 	ClusterQueueUID string `json:"clusterQueueUID,omitempty"`
 	LocalQueueUID   string `json:"localQueueUID,omitempty"`

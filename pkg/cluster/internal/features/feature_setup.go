@@ -486,10 +486,27 @@ func planFeatureOperator(c *kube.Client, p *featurePlan, op envkit.OperatorSpec,
 	case st.Pending() != nil:
 		pt.State, pt.Message = "waiting", fmt.Sprintf("Subscription %s/%s exists; OLM is installing it (%s). Set up waits for it.", sub.Metadata.Namespace, sub.Metadata.Name, kube.FirstNonEmpty(sub.Status.State, "no state yet"))
 	default:
+		// Kueue: who installed it is told by its CRD's OLM labels, whatever
+		// its controller is named (kueue.OutsideOLM).
+		if op.API == kueue.APIGroup {
+			outside, detail, err := kueue.OutsideOLM(c)
+			if err != nil {
+				msg := fmt.Sprintf("Cannot tell whether Kueue runs outside OperatorHub; nothing was changed: %v.%s", err, kube.TemplateHint(err))
+				p.refuse(msg, kube.ErrorCodeFromK8sErr(err))
+				pt.State, pt.Message = "unknown", msg
+				return opp
+			}
+			if outside {
+				msg := fmt.Sprintf("Kueue's API (%s) is served on this cluster by a Kueue installed outside OperatorHub (%s): upstream manifests, or the Kueue RHOAI 2.x embedded. RHOAI does not count it, and installing %s next to it would run two. A cluster-admin migrates to %s from OperatorHub. Nothing was changed.", op.API, detail, op.Title, op.Title)
+				p.refuse(msg, "prerequisites")
+				pt.State, pt.Message, pt.NotManaged = "manual", msg, true
+				return opp
+			}
+		}
 		// Its API served by a running controller without a CSV: someone
 		// else's install, which KServe does not count and a second one
 		// would fight (a served API alone is CRDs left by an uninstall).
-		if op.API != "" {
+		if op.API != "" && op.API != kueue.APIGroup {
 			served, err := operatorAPIServed(c, op)
 			if err == nil && served && op.Controller != "" {
 				served, err = envkit.ControllerDeployed(c, op.Controller)
@@ -536,8 +553,6 @@ func operatorAPIServed(c *kube.Client, op envkit.OperatorSpec) (bool, error) {
 		return serving.GroupServed(c, serving.KuadrantGroup)
 	case serving.CNPGGroup:
 		return serving.GroupServed(c, serving.CNPGGroup)
-	case kueue.APIGroup:
-		return serving.GroupServed(c, kueue.APIGroup)
 	}
 	return false, fmt.Errorf("this tool does not know the API of %s", op.Title)
 }

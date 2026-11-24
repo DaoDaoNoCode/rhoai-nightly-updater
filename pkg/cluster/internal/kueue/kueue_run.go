@@ -211,18 +211,22 @@ func (r *run) setup(req types.KueueRequest) (*types.OperationResponse, error) {
 	case rec.ProjectUID != "" && ns.Metadata.UID != rec.ProjectUID:
 		return r.fail("check", fmt.Sprintf("Project %s was deleted and made again since this tool set up distributed workloads in it. Clean up first. Nothing was changed.", project), "validation", "project recreated")
 	}
-	labelled := ns.Metadata.Labels[ProjectLabel] == "true"
-	if !labelled {
-		// With a LocalQueue called default present, labelling the project would
-		// make Kueue default every new pod-backed workload into that queue.
-		qs, err := listLocalQueues(c, project)
-		if err != nil {
-			return r.fail("check", fmt.Sprintf("Cannot read the LocalQueues of %s: %v. Nothing was changed.", project, err), codeOf(err), "lq read failed")
-		}
-		for _, q := range qs {
-			if q.Metadata.Name == "default" {
-				return r.fail("check", fmt.Sprintf("Project %s has a LocalQueue named default: once labelled %s=true, Kueue would queue every new Deployment, StatefulSet and Pod in it there. Choose another project. Nothing was changed.", project, ProjectLabel), "validation", "default queue")
-			}
+	// The label: absent is set; "true" is used as it is; any other value is
+	// someone's choice and never overwritten.
+	labelValue, labelled := ns.Metadata.Labels[ProjectLabel]
+	if labelled && labelValue != "true" {
+		return r.fail("check", fmt.Sprintf("Project %s has the label %s=%s; this tool does not change it. Choose another project, or set it to true in the dashboard. Nothing was changed.", project, ProjectLabel, labelValue), "validation", "label value")
+	}
+	// A LocalQueue named default makes Kueue default every new pod-backed
+	// workload of a labelled project into it: refused on every setup, a
+	// project labelled already and samples added later included.
+	qs, err := listLocalQueues(c, project)
+	if err != nil {
+		return r.fail("check", fmt.Sprintf("Cannot read the LocalQueues of %s: %v. Nothing was changed.", project, err), codeOf(err), "lq read failed")
+	}
+	for _, q := range qs {
+		if q.Metadata.Name == "default" {
+			return r.fail("check", fmt.Sprintf("Project %s has a LocalQueue named default: with the label %s=true, Kueue queues every new Deployment, StatefulSet and Pod in it there. Choose another project. Nothing was changed.", project, ProjectLabel), "validation", "default queue")
 		}
 	}
 	// Reuse objects the tool already owns (label plus stored UID); reject
@@ -267,7 +271,7 @@ func (r *run) setup(req types.KueueRequest) (*types.OperationResponse, error) {
 		}
 	}
 	if !labelled {
-		if err := patchLabel(c, project, ns.Metadata.UID, true, true); err != nil {
+		if err := patchLabel(c, project, ns.Metadata.UID, ns.Metadata.ResourceVersion, true, true); err != nil {
 			return r.fail("check", fmt.Sprintf("The API server rejects labelling project %s: %v. Nothing was changed.", project, err), codeOf(err), "dry run failed")
 		}
 	}
@@ -309,14 +313,17 @@ func (r *run) setup(req types.KueueRequest) (*types.OperationResponse, error) {
 		r.step("project", "success", fmt.Sprintf("Project %s already has the label %s=true.", project, ProjectLabel))
 	} else {
 		r.step("project", "running", fmt.Sprintf("Labelling project %s %s=true...", project, ProjectLabel))
-		if _, err := updateRecord(c, func(e *Record) { e.LabelAdded = true }); err != nil {
+		if _, err := updateRecord(c, func(e *Record) { e.LabelAdded, e.LabelPrior = true, "absent" }); err != nil {
 			return r.fail("project", err.Error()+" The project was not labelled.", codeOf(err), "record write failed")
 		}
-		if err := patchLabel(c, project, ns.Metadata.UID, true, false); err != nil {
-			_, _ = updateRecord(c, func(e *Record) { e.LabelAdded = false })
+		added, msg, err := addLabel(c, project, ns.Metadata.UID, ns.Metadata.ResourceVersion)
+		if err != nil || !added {
+			_, _ = updateRecord(c, func(e *Record) { e.LabelAdded, e.LabelPrior = false, "" })
+		}
+		if err != nil {
 			return r.fail("project", fmt.Sprintf("Cannot label project %s: %v. Set up again to retry.", project, err), codeOf(err), "label failed")
 		}
-		r.step("project", "success", fmt.Sprintf("Labelled %s: Kueue admits its workloads sent to a queue.", project))
+		r.step("project", "success", msg)
 	}
 
 	// Step 3 — optional Ray samples.
@@ -358,10 +365,21 @@ func sampleManifest(kind, project, image string) map[string]any {
 // patchLabel applies or strips ProjectLabel via JSON patch. The patch always
 // tests metadata.uid first so a recreated namespace with the same name is
 // untouched. When removing, it also tests the label value is still "true".
-func patchLabel(c *kube.Client, project, uid string, add, dryRun bool) error {
+func labelPointer() string {
+	return "/metadata/labels/" + strings.ReplaceAll(strings.ReplaceAll(ProjectLabel, "~", "~0"), "/", "~1")
+}
+
+// patchLabel adds (add) or removes the project label with a JSON patch
+// that tests the namespace's UID and sets its resourceVersion to the one
+// read (the API server answers 409 when the namespace changed since: a
+// compare-and-set), so a namespace made again, or changed by someone in
+// between, is never changed. A removal also tests that the label still
+// reads "true". An absent labels map is added whole.
+func patchLabel(c *kube.Client, project, uid, resourceVersion string, add, dryRun bool) error {
 	rawUID, _ := json.Marshal(uid)
-	ptr := "/metadata/labels/" + strings.ReplaceAll(strings.ReplaceAll(ProjectLabel, "~", "~0"), "/", "~1")
-	ops := []kube.JSONPatchOp{{Op: "test", Path: "/metadata/uid", Value: rawUID}}
+	rawRV, _ := json.Marshal(resourceVersion)
+	ptr := labelPointer()
+	ops := []kube.JSONPatchOp{{Op: "test", Path: "/metadata/uid", Value: rawUID}, {Op: "replace", Path: "/metadata/resourceVersion", Value: rawRV}}
 	if add {
 		ops = append(ops, kube.JSONPatchOp{Op: "add", Path: ptr, Value: json.RawMessage(`"true"`)})
 	} else {
@@ -377,6 +395,40 @@ func patchLabel(c *kube.Client, project, uid string, add, dryRun bool) error {
 	}
 	_, _, err = c.Do(http.MethodPatch, "/api/v1/namespaces/"+project, "application/json-patch+json", body, q)
 	return err
+}
+
+// labelAttempts bounds the compare-and-set retries when the namespace
+// changes between the read and the patch.
+const labelAttempts = 3
+
+// addLabel sets the label as a compare-and-set. On a conflict the namespace
+// is read again: a label someone else set meanwhile is theirs (added false,
+// never claimed), and a value other than true is an error; else it retries.
+func addLabel(c *kube.Client, project, uid, resourceVersion string) (added bool, msg string, err error) {
+	rv := resourceVersion
+	for attempt := 1; ; attempt++ {
+		err = patchLabel(c, project, uid, rv, true, false)
+		if err == nil {
+			return true, fmt.Sprintf("Labelled %s: Kueue admits its workloads sent to a queue.", project), nil
+		}
+		if !kube.IsK8sConflict(err) || attempt == labelAttempts {
+			return false, "", err
+		}
+		ns, found, rerr := readNamespace(c, project)
+		switch {
+		case rerr != nil:
+			return false, "", rerr
+		case !found || ns.Metadata.UID != uid:
+			return false, "", fmt.Errorf("project %s was deleted or made again meanwhile", project)
+		}
+		if v, ok := ns.Metadata.Labels[ProjectLabel]; ok {
+			if v != "true" {
+				return false, "", fmt.Errorf("someone set the label %s=%s meanwhile; this tool does not change it", ProjectLabel, v)
+			}
+			return false, fmt.Sprintf("Someone else labelled %s %s=true meanwhile; the label is theirs and stays after Clean up.", project, ProjectLabel), nil
+		}
+		rv = ns.Metadata.ResourceVersion
+	}
 }
 
 // --- teardown flow ---------------------------------------------------------------
@@ -442,7 +494,7 @@ func queueUsers(c *kube.Client, o toolObject, rec Record) ([]string, error) {
 		}
 		for _, w := range ws {
 			sample := (rec.RayClusterUID != "" && w.Metadata.OwnedBy(rec.RayClusterUID)) || (rec.RayJobUID != "" && w.Metadata.OwnedBy(rec.RayJobUID))
-			if w.Spec.QueueName == LocalQueueName && !w.Metadata.Terminating() && !sample {
+			if w.Spec.QueueName == LocalQueueName && !sample {
 				users = append(users, "Workload "+w.Metadata.Name)
 			}
 		}
@@ -453,7 +505,7 @@ func queueUsers(c *kube.Client, o toolObject, rec Record) ([]string, error) {
 		}
 		for _, q := range qs {
 			ours := q.Metadata.Namespace == rec.Project && q.Metadata.Name == LocalQueueName
-			if q.Spec.ClusterQueue == ClusterQueueName && !ours && !q.Metadata.Terminating() {
+			if q.Spec.ClusterQueue == ClusterQueueName && !ours {
 				users = append(users, "LocalQueue "+q.Metadata.Namespace+"/"+q.Metadata.Name)
 			}
 		}
@@ -463,7 +515,7 @@ func queueUsers(c *kube.Client, o toolObject, rec Record) ([]string, error) {
 			return nil, err
 		}
 		for _, q := range qs {
-			if q.Metadata.Name != ClusterQueueName && q.usesFlavor(FlavorName) && !q.Metadata.Terminating() {
+			if q.Metadata.Name != ClusterQueueName && q.usesFlavor(FlavorName) {
 				users = append(users, "ClusterQueue "+q.Metadata.Name)
 			}
 		}
@@ -610,16 +662,32 @@ func (r *run) removeLabel(rec Record) (string, error) {
 		return fmt.Sprintf("Cannot tell whether Kueue still manages workloads in %s, so its label stays: %v.", rec.Project, err), err
 	}
 	var live []string
+	// A Workload being deleted still counts until it is gone.
 	for _, w := range ws {
-		if !w.Metadata.Terminating() {
-			live = append(live, w.Metadata.Name)
-		}
+		live = append(live, w.Metadata.Name)
 	}
 	if len(live) > 0 {
 		return fmt.Sprintf("Kept the label %s=true on %s: Kueue still manages %s there (Workload %s).", ProjectLabel, rec.Project, kube.Verb(len(live), "a workload", "workloads"), strings.Join(live, ", ")), nil
 	}
-	if err := patchLabel(c, rec.Project, rec.ProjectUID, false, false); err != nil {
-		return fmt.Sprintf("Cannot remove the label %s from %s: %v.", ProjectLabel, rec.Project, err), err
+	rv := ns.Metadata.ResourceVersion
+	for attempt := 1; ; attempt++ {
+		err := patchLabel(c, rec.Project, rec.ProjectUID, rv, false, false)
+		if err == nil {
+			break
+		}
+		if !kube.IsK8sConflict(err) || attempt == labelAttempts {
+			return fmt.Sprintf("Cannot remove the label %s from %s: %v.", ProjectLabel, rec.Project, err), err
+		}
+		// Changed meanwhile: read again; a label no longer the tool's
+		// value stays.
+		now, found, rerr := readNamespace(c, rec.Project)
+		if rerr != nil {
+			return fmt.Sprintf("Cannot read project %s: %v.", rec.Project, rerr), rerr
+		}
+		if !found || now.Metadata.UID != rec.ProjectUID || now.Metadata.Labels[ProjectLabel] != "true" {
+			return fmt.Sprintf("Project %s no longer has the label this tool added.", rec.Project), nil
+		}
+		rv = now.Metadata.ResourceVersion
 	}
 	return fmt.Sprintf("Removed the label %s from %s.", ProjectLabel, rec.Project), nil
 }
@@ -671,6 +739,9 @@ func (r *run) optIn() (*types.OperationResponse, error) {
 		return r.fail("check", "Set up the queues first: the hardware profile sends workloads to the tool's LocalQueue. Nothing was changed.", "validation", "not set up")
 	}
 	r.target = "distributed workloads in " + rec.Project
+	if msg, code := r.liveSetupProblem(rec); msg != "" {
+		return r.fail("check", msg+" The dashboard's settings were not changed.", code, "setup check")
+	}
 	apps, err := rhoai.AppsNamespace(c)
 	if err != nil {
 		return r.fail("check", fmt.Sprintf("Cannot find RHOAI's applications namespace: %v. Nothing was changed.", err), "prerequisites", "no apps ns")
@@ -748,6 +819,41 @@ func (r *run) optIn() (*types.OperationResponse, error) {
 		r.step("profile", "success", fmt.Sprintf("Created hardware profile %s for LocalQueue %s.", ProfileName, LocalQueueName))
 	}
 	return r.done("The dashboard's Kueue opt-in is on.")
+}
+
+// liveSetupProblem checks, right before the opt-in changes the dashboard,
+// that the recorded setup is still there as recorded: Kueue ready, the
+// project the recorded one (its UID) with the label, the ClusterQueue and
+// the LocalQueue the tool's (label and recorded UID) and not being deleted.
+// It returns why not, and an error code, or "".
+func (r *run) liveSetupProblem(rec Record) (string, string) {
+	c := r.c
+	dsc, err := rhoai.ReadFirstDSC(c)
+	if err != nil {
+		return fmt.Sprintf("Cannot read the DataScienceCluster: %v.", err), codeOf(err)
+	}
+	if ck := checkCluster(c, dsc, envkit.ComponentBlock(dsc, envkit.KueueComponent)); ck.refusal != "" {
+		return ck.refusal, ck.code
+	}
+	ns, found, err := readNamespace(c, rec.Project)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("Cannot read project %s: %v.", rec.Project, err), codeOf(err)
+	case !found || ns.Metadata.UID != rec.ProjectUID || ns.Metadata.Terminating():
+		return fmt.Sprintf("Project %s is gone, being deleted or was made again since this tool's setup. Clean up, then set up again.", rec.Project), "validation"
+	case ns.Metadata.Labels[ProjectLabel] != "true":
+		return fmt.Sprintf("Project %s no longer has the label %s=true. Set up again first.", rec.Project, ProjectLabel), "validation"
+	}
+	for _, o := range queueObjects(c, rec.Project)[1:] {
+		q, found, err := o.read()
+		switch {
+		case err != nil:
+			return fmt.Sprintf("Cannot read %s %s: %v.", o.kind, o.name, err), codeOf(err)
+		case !found || !owns(q.Metadata, *o.uid(&rec)) || q.Metadata.Terminating():
+			return fmt.Sprintf("%s %s is not the one this tool set up (gone, made again or being deleted). Set up again first.", o.kind, o.name), "not_managed"
+		}
+	}
+	return "", ""
 }
 
 func (r *run) optOut() (*types.OperationResponse, error) {
@@ -854,19 +960,16 @@ func Users(c *kube.Client) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list ClusterQueues: %w", err)
 	}
+	// Queues being deleted count until they are gone.
 	for _, q := range cqs {
-		if !q.Metadata.Terminating() {
-			out = append(out, "ClusterQueue "+q.Metadata.Name)
-		}
+		out = append(out, "ClusterQueue "+q.Metadata.Name)
 	}
 	lqs, err := listLocalQueues(c, "")
 	if err != nil {
 		return nil, fmt.Errorf("list LocalQueues: %w", err)
 	}
 	for _, q := range lqs {
-		if !q.Metadata.Terminating() {
-			out = append(out, "LocalQueue "+q.Metadata.Namespace+"/"+q.Metadata.Name)
-		}
+		out = append(out, "LocalQueue "+q.Metadata.Namespace+"/"+q.Metadata.Name)
 	}
 	return out, nil
 }

@@ -155,10 +155,16 @@ func checkCluster(u *kube.Client, dsc rhoai.DSCRead, block *types.ComponentBlock
 			refuse("The Kueue CR cluster is not Available: "+ck.instance.Message+".", "not_ready")
 		}
 	}
-	if ck.instance.KueueReady == "False" {
-		refuse("RHOAI reports Kueue not ready (DataScienceCluster condition KueueReady): "+ck.instance.Message+".", "not_ready")
+	// Only KueueReady True counts: absent (not reported yet), Unknown and
+	// False all mean RHOAI does not confirm Kueue.
+	switch ck.instance.KueueReady {
+	case "True":
+	case "":
+		refuse("RHOAI does not report Kueue ready yet (no DataScienceCluster condition KueueReady).", "not_ready")
+	default:
+		refuse(fmt.Sprintf("RHOAI reports Kueue not ready (DataScienceCluster condition KueueReady is %s)%s.", ck.instance.KueueReady, kube.FirstNonEmpty(map[bool]string{true: ": " + ck.instance.Message}[ck.instance.Message != ""], "")), "not_ready")
 	}
-	ck.instance.Ready = ck.instance.KueueReady == "True" && ck.instance.Available
+	ck.instance.Ready = ck.instance.KueueReady == "True" && ck.instance.Available && ck.instance.V1beta2
 	return ck
 }
 
