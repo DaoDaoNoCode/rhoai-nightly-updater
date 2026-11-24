@@ -73,3 +73,37 @@ func TestCleanUp_RecipeCreatedPartsAreCheckedAgainBeforeTheirTeardown(t *testing
 		}
 	}
 }
+
+// The distributed workloads setup a recipe run created is checked again
+// before its teardown, as the other cluster-wide parts are: replaced since
+// the review, it is refused and not torn down.
+func TestCleanUp_RecipeKueueIsCheckedAgainBeforeItsTeardown(t *testing.T) {
+	origKueue, origProblem := cleanupKueue, recipeCreatedPartProblem
+	t.Cleanup(func() { cleanupKueue, recipeCreatedPartProblem = origKueue, origProblem })
+	torn := 0
+	cleanupKueue = func(*Client) (*types.OperationResponse, error) {
+		torn++
+		return &types.OperationResponse{Success: true}, nil
+	}
+	recipeCreatedPartProblem = func(_, _ *Client, runID, part, uid string) string {
+		if part != types.RecipePartKueue || runID != "run-1" || uid != "cq-1" {
+			return "replaced or changed"
+		}
+		return ""
+	}
+	for _, tc := range []struct {
+		uid  string
+		torn int
+	}{{"cq-1", 1}, {"cq-0", 0}} {
+		torn = 0
+		for _, p := range cleanupParts(nil, types.CleanupRequest{Kueue: true, RecipeRunID: "run-1", KueueUID: tc.uid}) {
+			res, err := p.run()
+			if err != nil || (tc.torn == 0) == res.Success {
+				t.Errorf("%s: %+v %v", tc.uid, res, err)
+			}
+		}
+		if torn != tc.torn {
+			t.Errorf("%s: torn down %d times", tc.uid, torn)
+		}
+	}
+}
