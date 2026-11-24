@@ -139,8 +139,12 @@ describe("Distributed workloads tab", () => {
     old.samples = old.samples.map((x) => (x.kind === "raycluster" ? { ...x, outdated: "its head and worker have other CPU and memory than this version sets" } : x));
     stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] }, "/api/resources/kueue": old, "/api/resources/prerequisites": prereq(true) });
     renderAt("/test-resources?tab=kueue&project=dev");
-    expect(await screen.findByText(/: Made by an earlier version of this tool: its quota is 6 CPUs and 11Gi of memory; this version sets 6 CPUs and 19Gi of memory\. Clean up, then Set up again\.$/)).toBeInTheDocument();
+    expect(await screen.findByText("Its quota is 6 CPUs and 11Gi of memory; this version sets 6 CPUs and 19Gi of memory. Set up keeps it as it is: Clean up, then Set up again.")).toBeInTheDocument();
+    expect(screen.getByText(/: Made by an earlier version of this tool$/)).toBeInTheDocument();
     expect(screen.getByText("Its head and worker have other CPU and memory than this version sets. Delete it and add it again, or Clean up, then Set up again.")).toBeInTheDocument();
+    const queues = screen.getByRole("listitem", { name: "Queues" });
+    expect(within(queues).getByText("Needs attention")).toBeInTheDocument();
+    expect(within(screen.getByRole("listitem", { name: "RayCluster sample" })).getByText("Outdated")).toBeInTheDocument();
   });
 
   it("a setup in another project says so", async () => {

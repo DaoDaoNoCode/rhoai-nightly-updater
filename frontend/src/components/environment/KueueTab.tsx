@@ -71,7 +71,7 @@ const objectText = (o: KueueObject | undefined) => {
   if (!o?.present) return "Not created yet";
   if (o.foreign) return "Exists, not created by this tool";
   if (o.terminating) return "Being deleted";
-  if (o.outdated) return `Made by an earlier version of this tool: ${o.outdated}. Clean up, then Set up again.`;
+  if (o.outdated) return "Made by an earlier version of this tool";
   if (o.kind !== "ResourceFlavor" && !o.active) return `Not active yet${o.message ? `: ${o.message}` : ""}`;
   return "Created by this tool";
 };
@@ -164,6 +164,11 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
             {k && k.instance.found && (
               <Content component="p">{k.instance.ready ? "Kueue is running." : `Kueue is not running yet${k.instance.message ? `: ${k.instance.message}` : ""}.`}</Content>
             )}
+            {k?.objects.map((o) => o.outdated && (
+              <Alert key={o.kind} variant="warning" isInline component="p" title={`${o.kind} ${o.name} was made by an earlier version of this tool`}>
+                {`${o.outdated[0].toUpperCase()}${o.outdated.slice(1)}. Set up keeps it as it is: Clean up, then Set up again.`}
+              </Alert>
+            ))}
             {k && (setUp || k.objects.some((o) => o.present)) && <Objects k={k} />}
           </PartItem>
           {(["raycluster", "rayjob"] as const).map((kind) => {
@@ -174,14 +179,14 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
             const canAdd = setUp && !s?.present && !readOnly && !k?.rayBlocked && shownProject;
             return (
               <PartItem key={kind} id={`kueue-${kind}`} title={SAMPLE_TITLES[kind]} scope={shownProject ? `In project ${shownProject}` : "In the project"} status={sampleStatus(s)}
-                statusText={s?.present ? s.state ?? "Waiting for Kueue" : "Not added"} unmanaged={!!s?.foreign} loading={!k && !kueueError} menu={menu}
+                statusText={s?.present ? (s.outdated && !s.terminating ? "Outdated" : s.state ?? "Waiting for Kueue") : "Not added"} unmanaged={!!s?.foreign} loading={!k && !kueueError} menu={menu}
                 actions={canAdd ? <ActionListItem><PrimaryAction variant="secondary" label="Add" reason={baseReason}
                   onClick={() => setPending({ ...kueueSetupPending(shownProject, k), rayCluster: kind === "raycluster", rayJob: kind === "rayjob" } as Pending)} /></ActionListItem> : undefined}>
                 <Content component="p">
                   {kind === "raycluster" ? "A small CPU-only RayCluster" : "A RayJob on the same cluster spec that prints the cluster's resources, runs five minutes and completes"}, sent to LocalQueue {KUEUE_LOCAL_QUEUE}. {SAMPLE_WHERE[kind]}
                 </Content>
                 {s?.outdated && s.present && (
-                  <Alert variant="warning" isInline component="p" title="Made by an earlier version of this tool">
+                  <Alert variant="warning" isInline component="p" title={`${SAMPLE_TITLES[kind]} made by an earlier version of this tool`}>
                     {`${s.outdated[0].toUpperCase()}${s.outdated.slice(1)}. Delete it and add it again, or Clean up, then Set up again.`}
                   </Alert>
                 )}
