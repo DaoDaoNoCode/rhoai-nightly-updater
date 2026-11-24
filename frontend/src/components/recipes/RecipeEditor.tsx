@@ -61,6 +61,9 @@ function useCatalog(wanted: boolean) {
   return { catalog, error };
 }
 
+/** "a, b and c". */
+const listOf = (items: string[]): string => (items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`);
+
 /** What else the recipe sets up in the project Kueue labels (the tab's own warning). */
 function kueueOthers(f: RecipeForm): string[] {
   return [f.pipelines && "a pipeline server", f.models && "a model", f.workbench && "a workbench"].filter((x): x is string => !!x);
@@ -303,7 +306,7 @@ export const RecipeEditor: React.FC<{
                     help="Kueue queues for the project, as the Distributed workloads tab sets them up: a ClusterQueue and ResourceFlavor (cluster-wide, for this project only) and its LocalQueue. Adds what they need first: the kueue component, cert-manager and the Kueue operator. Set up after the project's other parts.">
                     {kueueOthers(form).length > 0 && (
                       <FieldHelperText variant="warning">
-                        {`The project also gets ${kueueOthers(form).join(" and ")}. Kueue manages only what is sent to a queue, so ${kueueOthers(form).length === 1 ? "it keeps" : "they keep"} running; a project of its own is still safer.`}
+                        {`The project also gets ${listOf(kueueOthers(form))}. Kueue manages only what is sent to a queue, so ${kueueOthers(form).length === 1 ? "it keeps" : "they keep"} running; a project of its own is still safer.`}
                       </FieldHelperText>
                     )}
                     <Checkbox id="recipe-kueue-raycluster" label="RayCluster sample" isChecked={form.kueueRayCluster} onChange={(_e, v) => set("kueueRayCluster", v)}

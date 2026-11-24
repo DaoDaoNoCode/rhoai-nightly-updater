@@ -79,7 +79,7 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     fireEvent.click(switchNamed("Workbench"));
     // Distributed workloads: the tab's options; the dashboard setting is off by default, with its cluster-wide effect.
     fireEvent.click(switchNamed("Distributed workloads"));
-    expect(screen.getByText("The project also gets a pipeline server and a model and a workbench. Kueue manages only what is sent to a queue, so they keep running; a project of its own is still safer.")).toBeInTheDocument();
+    expect(screen.getByText("The project also gets a pipeline server, a model and a workbench. Kueue manages only what is sent to a queue, so they keep running; a project of its own is still safer.")).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Turn on the dashboard's Kueue setting" })).not.toBeChecked();
     expect(screen.getByText(/It changes every new project on this cluster/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("checkbox", { name: "RayCluster sample" }));
