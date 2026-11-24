@@ -183,7 +183,12 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 		// After the workbenches and models that may use its queue, before
 		// recipe projects (its project may be one) and the components
 		// (DataScienceCluster kueue goes back only once no queue is left).
-		parts = append(parts, cleanupPart{id: CleanupStepID("kueue", ""), title: "the distributed workloads setup", run: func() (*types.OperationResponse, error) { return cleanupKueue(c) }, says: true})
+		parts = append(parts, cleanupPart{id: CleanupStepID("kueue", ""), title: "the distributed workloads setup", run: func() (*types.OperationResponse, error) {
+			if res := recipeCreatedCheck(c, req, types.RecipePartKueue, req.KueueUID); res != nil {
+				return res, nil
+			}
+			return cleanupKueue(c)
+		}, says: true})
 	}
 	if req.MaaSPlatform {
 		parts = append(parts, cleanupPart{id: CleanupStepID("maas-platform", ""), title: "the MaaS platform", run: func() (*types.OperationResponse, error) {

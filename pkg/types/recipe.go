@@ -157,6 +157,25 @@ type RecipeFeatures struct {
 	// Workbench: the tool's workbench in the project, with the tool's S3
 	// Connection when the project has the tool's pipeline server.
 	Workbench RecipeFeature `json:"workbench,omitzero" yaml:"workbench"`
+	// Kueue: distributed workloads in the project, as the Distributed
+	// workloads tab sets them up. Optional, off when left out.
+	Kueue RecipeKueue `json:"kueue,omitzero" yaml:"kueue"`
+}
+
+// RecipeKueue is distributed workloads (Kueue): the tool's ResourceFlavor,
+// ClusterQueue (for the project only) and LocalQueue, the project label,
+// and the Ray samples and the dashboard's Kueue setting when asked for.
+type RecipeKueue struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
+	// RayCluster and RayJob: the samples, run by KubeRay (the ray
+	// component); RayImage is their image ("" the tab's default).
+	RayCluster bool   `json:"rayCluster,omitempty" yaml:"rayCluster"`
+	RayJob     bool   `json:"rayJob,omitempty" yaml:"rayJob"`
+	RayImage   string `json:"rayImage,omitempty" yaml:"rayImage"`
+	// DashboardOptIn turns the dashboard's Kueue setting on (cluster-wide:
+	// every new project becomes a Kueue project) and adds the Queue
+	// hardware profile. Off by default.
+	DashboardOptIn bool `json:"dashboardOptIn,omitempty" yaml:"dashboardOptIn"`
 }
 
 // RecipeModelRegistry is the tool's model registry (cluster-wide, in the
@@ -308,6 +327,10 @@ type RecipePlan struct {
 	// checked later).
 	TypicalSeconds int `json:"typicalSeconds"`
 	MaxSeconds     int `json:"maxSeconds"`
+	// Warnings say what the run changes beyond the recipe's own parts and
+	// do not refuse it (the dashboard's cluster-wide Kueue setting; other
+	// setups in the project Kueue labels).
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // RecipePlanStep is one step of a plan.
@@ -404,6 +427,9 @@ type RecipeRun struct {
 const (
 	RecipePartMaaSPlatform  = "maas-platform"
 	RecipePartModelRegistry = "model-registry"
+	// RecipePartKueue is the distributed workloads setup; its UID is its
+	// ClusterQueue's.
+	RecipePartKueue = "kueue"
 )
 
 // RecipeCreatedPart is a cluster-wide part a run created: the MaaS

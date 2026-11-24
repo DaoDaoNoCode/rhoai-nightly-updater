@@ -1928,6 +1928,9 @@ type CleanupRequest struct {
 	RecipeRunID      string `json:"recipeRunId,omitempty"`
 	MaaSPlatformUID  string `json:"maasPlatformUid,omitempty"`
 	ModelRegistryUID string `json:"modelRegistryUid,omitempty"`
+	// KueueUID is the UID of the ClusterQueue of the distributed workloads
+	// setup a recipe's run created (with RecipeRunID), checked the same way.
+	KueueUID string `json:"kueueUid,omitempty"`
 	// ConfirmProjectContents maps a recipe project to what it still holds
 	// that this tool did not create ("Pod x", "PersistentVolumeClaim y",
 	// ...), as a refusal listed them: a project is deleted with them only

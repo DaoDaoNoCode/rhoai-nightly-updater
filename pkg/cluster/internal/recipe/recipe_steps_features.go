@@ -102,6 +102,7 @@ func featureSteps(r types.EnvironmentRecipe) []Step {
 	if f.Workbench.Enabled {
 		add(StepWorkbench, "Workbench", 30*time.Second, 2*time.Minute, checkWorkbench, runWorkbenchStep)
 	}
+	steps = append(steps, kueueSteps(r)...)
 	if d := r.Spec.DashboardDev; d.Deploy == DashboardDevMain || d.Deploy == DashboardDevPR {
 		// Placed last: a paused dashboard module operator stalls RHOAI upgrades
 		// until the pause ends.

@@ -127,14 +127,16 @@ func Ownership(c, u *kube.Client, run *types.RecipeRun) (map[string]bool, *types
 			req.MaaSPlatform, req.MaaSPlatformUID, created[StepMaaS] = true, uid, true
 		case types.RecipePartModelRegistry:
 			req.ModelRegistry, req.ModelRegistryUID, created[StepModelRegistry] = true, uid, true
+		case types.RecipePartKueue:
+			req.Kueue, req.KueueUID, created[StepKueue] = true, uid, true
 		}
 	}
-	if req.MaaSPlatform || req.ModelRegistry {
+	if req.MaaSPlatform || req.ModelRegistry || req.Kueue {
 		req.RecipeRunID = run.ID
 	}
 	delete(created, "")
 	slices.Sort(req.Components)
-	if len(req.RecipeProjects) == 0 && len(req.Components) == 0 && !req.MaaSPlatform && !req.ModelRegistry {
+	if len(req.RecipeProjects) == 0 && len(req.Components) == 0 && !req.MaaSPlatform && !req.ModelRegistry && !req.Kueue {
 		return created, nil
 	}
 	return created, req
@@ -143,7 +145,7 @@ func Ownership(c, u *kube.Client, run *types.RecipeRun) (map[string]bool, *types
 // prereqStepOf maps a feature name to its prerequisite step id.
 var prereqStepOf = map[string]string{
 	"pipelines": StepPipelinesPrereq, "mlflow": StepMLflowPrereq, "models": StepModelsPrereq,
-	"playground": StepPlaygroundPrereq, "model-registry": StepModelRegistryPrereq,
+	"playground": StepPlaygroundPrereq, "model-registry": StepModelRegistryPrereq, "kueue": StepKueuePrereq,
 }
 
 // liveComponents returns component keys the run still owns, each paired
@@ -249,6 +251,8 @@ func CreatedPartProblem(sa, u *kube.Client, runID, part, uid string) string {
 			return notIt("The model registry")
 		}
 		return ""
+	case types.RecipePartKueue:
+		return kueuePartProblem(sa, u, runID, uid, notIt)
 	}
 	return fmt.Sprintf("%q is not a part a recipe creates.", part)
 }

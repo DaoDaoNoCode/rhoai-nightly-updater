@@ -38,6 +38,8 @@ var stepDependsOn = map[string][]string{
 	// The workbench attaches the tool's S3 Connection when the project has
 	// the tool's pipeline server.
 	StepWorkbench:    {StepRHOAI, StepDSC, StepProject, StepPipelinesPrereq, StepS3, StepPipelineServer},
+	StepKueuePrereq:  {StepRHOAI, StepDSC},
+	StepKueue:        {StepRHOAI, StepDSC, StepProject, StepKueuePrereq},
 	StepDashboardDev: {StepRHOAI, StepDSC},
 }
 
@@ -133,6 +135,7 @@ func Plan(c *kube.Client, r types.EnvironmentRecipe, pinned *types.RecipePinnedB
 		plan.Steps = append(plan.Steps, ps)
 	}
 	plan.Pinned = s.Pinned
+	plan.Warnings = kueueWarnings(r)
 	plan.Problems = append(plan.Problems, p...)
 	return plan, s
 }
