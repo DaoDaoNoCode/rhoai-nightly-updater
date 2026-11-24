@@ -22,7 +22,7 @@ import type { RecipeRun, ResourcesStatus } from "../../types";
 import { StepProgress, type StepState } from "../environment/StepProgress";
 import { cleanupSteps } from "../environment/CleanupModal";
 import { TooltipButton } from "../TooltipButton";
-import { cleanupParts, cleanupRequest, componentsSplit, dashboardDevLeft, leftInPlace } from "./recipeForm";
+import { cleanupParts, cleanupRequest, componentsSplit, dashboardDevLeft, leftInPlace, listText } from "./recipeForm";
 
 /** The clean-up's refusal of a recipe project that still holds what the tool did not create (pkg/cluster recipe.ErrorCodeConfirmContents). */
 const CONFIRM_CONTENTS = "confirm_project_contents";
@@ -55,6 +55,8 @@ export const RecipeCleanupModal: React.FC<{
   title: string;
   /** The backend's clean-up request for what is the recipe's (GET /api/recipes/run cleanup, or one project). */
   ready: CleanupRequest | undefined;
+  /** Removing distributed workloads also turns the dashboard's Kueue setting back (the run turned it on). */
+  kueueSetting?: boolean;
   isOpen: boolean;
   /** Why a change cannot start now, or null. */
   blocker: string | null;
@@ -62,12 +64,12 @@ export const RecipeCleanupModal: React.FC<{
   /** The clean-up ended (the run and the operation state may have changed). */
   onDone: () => void;
   onClusterBusy: (res: { errorCode?: string }) => void;
-}> = ({ run, title, ready, isOpen, blocker, onClose, onDone, onClusterBusy }) => {
+}> = ({ run, title, ready, kueueSetting, isOpen, blocker, onClose, onDone, onClusterBusy }) => {
   const titleId = React.useId();
   // What is offered stays as it was when the dialog opened: polling (and the
   // clean-up itself) changes `ready`, never the user's choices.
   const [offered] = useState(ready);
-  const parts = cleanupParts(offered);
+  const parts = cleanupParts(offered, kueueSetting);
   const [chosen, setChosen] = useState<ReadonlySet<string>>(() => new Set(parts.filter((p) => p.chosen).map((p) => p.id)));
   // What stays, from the live status (null until it is read; false when it cannot be).
   const [resources, setResources] = useState<ResourcesStatus | false | null>(null);
@@ -96,7 +98,7 @@ export const RecipeCleanupModal: React.FC<{
   const split = run ? componentsSplit(resources || null, run, req, offered) : { back: offered?.components ?? [], stay: [] };
   const partLabel = (p: { id: string; title: string; description?: string }): [string, string] => {
     if (p.id !== "components") return [p.title, p.description ?? "Removes everything in the project: its models, playground, workbench and pipeline server."];
-    const title = split.back.length > 0 ? `Turn back the DataScienceCluster components the run turned on: ${split.back.join(", ")}` : "Turn back the DataScienceCluster components the run turned on";
+    const title = split.back.length > 0 ? `Turn back the DataScienceCluster components the run turned on: ${listText(split.back)}` : "Turn back the DataScienceCluster components the run turned on";
     const stay = split.stay.length > 0 ? `Stays on while what uses it stays: ${split.stay.join("; ")}.` : "";
     const desc = split.back.length > 0 ? `Each goes back to what it was.${stay ? ` ${stay}` : ""}` : `None goes back now. ${stay}`;
     return [title, desc];
@@ -191,7 +193,7 @@ export const RecipeCleanupModal: React.FC<{
                     <Stack hasGutter>
                       {stays.length > 0 && (
                         <>
-                          <StackItem>This clean-up does not delete these:</StackItem>
+                          <StackItem>This Clean up does not delete these:</StackItem>
                           <StackItem>
                             <List>{stays.map((s) => <ListItem key={s}>{s}</ListItem>)}</List>
                           </StackItem>

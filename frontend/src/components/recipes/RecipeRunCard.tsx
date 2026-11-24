@@ -179,6 +179,7 @@ export const RecipeRunCard: React.FC<{
               ? `Project ${run.project.name} is set up. Its workbench may still be starting: the Workbench tab shows when it runs.`
               : `Project ${run.project.name} is set up.`
             : "What it set up is on the Environment page."}
+          {run.steps.some((s) => s.id === "dashboard-dev") && " The dashboard runs a Dashboard Dev build: its operator stays paused, and RHOAI updates wait, until you revert it on the Dashboard Dev page."}
         </Alert>
       );
       break;

@@ -333,7 +333,24 @@ export interface RecipeCleanupPart {
  * and DataScienceCluster components the run enabled. Shared S3 storage, MLflow, and
  * pipeline servers outside recipe-created projects are omitted (see leftInPlace).
  */
-export function cleanupParts(ready: CleanupRequest | undefined): RecipeCleanupPart[] {
+/** The DataScienceCluster components a recipe turns on, by the names the dashboard and RHOAI's docs use. */
+const COMPONENT_NAMES: Record<string, string> = {
+  aipipelines: "Data Science Pipelines", datasciencepipelines: "Data Science Pipelines", mlflowoperator: "MLflow", modelregistry: "Model registry",
+  kserve: "KServe", kueue: "Kueue", ray: "Ray", dashboard: "Dashboard", llamastackoperator: "Llama Stack",
+};
+
+/** A component's plain name ("aipipelines" as Data Science Pipelines). */
+export function componentName(key: string): string {
+  return COMPONENT_NAMES[key] ?? key;
+}
+
+/** "a, b and c". */
+export function listText(items: string[]): string {
+  return items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+/** kueueSetting: removing the distributed workloads setup also turns the dashboard's Kueue setting back, which the run turned on (RecipeRunStatus cleanupKueueSetting). */
+export function cleanupParts(ready: CleanupRequest | undefined, kueueSetting = false): RecipeCleanupPart[] {
   const parts: RecipeCleanupPart[] = [];
   for (const p of ready?.recipeProjects ?? []) parts.push({ id: `recipe-project:${p}`, title: `Project ${p}, which the recipe created`, chosen: true });
   // Cluster-wide parts the run created: teammates may use them since, so they are offered, not chosen.
@@ -344,9 +361,15 @@ export function cleanupParts(ready: CleanupRequest | undefined): RecipeCleanupPa
     parts.push({ id: "maas-platform", title: "The MaaS platform the run set up", description: "MaaS API keys and the MaaS database go with it. Others may use it: it stays unless you tick it.", chosen: false });
   }
   if (ready?.kueue) {
-    parts.push({ id: "kueue", title: "The distributed workloads setup the run created", description: "Its ClusterQueue and ResourceFlavor (cluster-wide), the LocalQueue, the samples, the project's Kueue label and the dashboard's Kueue setting the run turned on. Others may use it: it stays unless you tick it.", chosen: false });
+    parts.push({
+      id: "kueue", title: "The distributed workloads setup the run created",
+      description: `Its queues (the ClusterQueue and ResourceFlavor are cluster-wide objects; only this project uses them), the samples and the project's Kueue label${kueueSetting
+        ? ", and it turns the dashboard's Kueue setting back off, which the run turned on"
+        : "; the dashboard's Kueue setting stays as it is"}. The Kueue operator and cert-manager stay: other setups may use them. It stays unless you tick it.`,
+      chosen: false,
+    });
   }
-  if (ready?.components?.length) parts.push({ id: "components", title: `The DataScienceCluster components the run turned on: ${ready.components.join(", ")}`, chosen: true });
+  if (ready?.components?.length) parts.push({ id: "components", title: `The DataScienceCluster components the run turned on: ${listText(ready.components.map(componentName))}`, chosen: true });
   return parts;
 }
 
@@ -419,10 +442,12 @@ export function componentsSplit(status: ResourcesStatus | null, run: RecipeRun, 
       }
       case "kserve":
         return project && run.recipe.spec.features.models.enabled && !deleted.has(project) ? `the model in ${project} stays` : null;
+      // Turned back only with the setup this Clean up removes (as the backend
+      // keeps a component while what uses it stays).
       case "modelregistry":
-        return offered?.modelRegistry && !req.modelRegistry ? "the model registry stays" : null;
+        return offered?.modelRegistry && req.modelRegistry ? null : offered?.modelRegistry ? "the model registry stays" : "the model registry is not removed here";
       case "kueue":
-        return offered?.kueue && !req.kueue ? "the distributed workloads setup stays" : null;
+        return offered?.kueue && req.kueue ? null : offered?.kueue ? "the distributed workloads setup stays" : "the distributed workloads setup is not removed here";
     }
     return null;
   };
@@ -430,7 +455,7 @@ export function componentsSplit(status: ResourcesStatus | null, run: RecipeRun, 
   const stay: string[] = [];
   for (const key of offered?.components ?? []) {
     const w = why(key);
-    if (w) stay.push(`${key} (${w})`); else back.push(key);
+    if (w) stay.push(`${componentName(key)} (${w})`); else back.push(componentName(key));
   }
   return { back, stay };
 }

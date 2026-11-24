@@ -671,7 +671,7 @@ scenarios["recipe-failed"] = (w) => {
   w.recipeRun = { run: F.recipeRun({ done: 5, current: "failed", message: why, state: "failed", errorCode: "timeout", stopReason: `Step 6 of 8 (Pipeline server) failed: ${why}` }), running: false };
 };
 scenarios["recipe-succeeded"] = (w) => {
-  w.recipeRun = { run: F.recipeRun({ done: 8, current: "", state: "succeeded", stopReason: "Every step of dev is set up." }), running: false };
+  w.recipeRun = { run: F.recipeRun({ done: 8, current: "", state: "succeeded", stopReason: "Every step of recipe dev is set up." }), running: false };
   // What the run set up is there: MLflow, and the pipeline server in its project.
   w.resources = { ...w.resources, mlflow: F.mlflowStates.running, pipelineServers: [...w.resources.pipelineServers, { ...F.pipelineServer, namespace: "recipe-dev", apiRoute: undefined, uiRoute: undefined }] };
   // An earlier run's project is still there too.
@@ -699,7 +699,7 @@ scenarios["recipe-full-running"] = (w) => {
 scenarios["recipe-full-succeeded"] = (w) => {
   const rcp = F.fullRecipe();
   const steps = F.recipeSteps(rcp);
-  w.recipeRun = { run: F.recipeRun({ rcp, done: steps.length, current: "", state: "succeeded", stopReason: "Every step of full is set up." }), running: false };
+  w.recipeRun = { run: F.recipeRun({ rcp, done: steps.length, current: "", state: "succeeded", stopReason: "Every step of recipe full is set up." }), running: false };
   w.resources = { ...w.resources, mlflow: F.mlflowStates.running, pipelineServers: [...w.resources.pipelineServers, { ...F.pipelineServer, namespace: "recipe-full", apiRoute: undefined, uiRoute: undefined }] };
 };
 scenarios["recipe-interrupted"] = (w) => {

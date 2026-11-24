@@ -1832,8 +1832,8 @@ export const recipePinned = () => ({ tag: "rhoai-3.6", image: LATEST_IMAGE, dige
 
 /** The steps a mixed plan finds set up, with why. */
 const MIXED_SKIP = {
-  "pipelines-prereq": "Everything it needs is set up.", s3: "The S3 storage is set up and ready.", "pipeline-server": "The pipeline server in PROJECT is ready.",
-  "mlflow-prereq": "Everything it needs is set up.", mlflow: "MLflow is ready.", maas: "The MaaS platform is ready.",
+  "pipelines-prereq": "Everything it needs is there.", s3: "The S3 storage is set up and ready.", "pipeline-server": "The pipeline server in PROJECT is ready.",
+  "mlflow-prereq": "Everything it needs is there.", mlflow: "MLflow is ready.", maas: "The MaaS platform is ready.",
 };
 const MIXED_BLOCKED = "Project PROJECT has a workbench nightly-workbench that this tool did not create; the recipe does not change it. Nothing was changed.";
 
@@ -1873,13 +1873,14 @@ export function recipePlan(rcp = recipe(), installed = true, blocked = false, mi
 function kueueWarnings(rcp) {
   const f = rcp.spec.features;
   if (!f.kueue?.enabled) return [];
-  const others = [f.pipelines?.enabled && "a pipeline server", f.models?.enabled && "a model", f.workbench?.enabled && "a workbench"].filter(Boolean);
+  const others = [f.pipelines?.enabled && "a pipeline server", f.models?.enabled && "a model", f.models?.enabled && f.playground?.enabled && "a playground",
+    f.mlflow?.enabled && f.mlflow.samples && "the MLflow samples", f.workbench?.enabled && "a workbench"].filter(Boolean);
   const out = [];
   if (others.length) {
     const list = others.length === 1 ? others[0] : `${others.slice(0, -1).join(", ")} and ${others[others.length - 1]}`;
-    out.push(`Project ${rcp.spec.project?.name ?? "recipe-dev"} also gets ${list}. Kueue manages only what is sent to a queue, so they keep running. A project of its own is still safer: with the dashboard's Kueue setting on, new workbenches and models there need the queue hardware profile.`);
+    out.push({ kind: "advice", message: `Project ${rcp.spec.project?.name ?? "recipe-dev"} also gets ${list}. Kueue manages only what is sent to a queue, so they keep running. A project of its own is still safer.` });
   }
-  if (f.kueue.dashboardOptIn) out.push("The dashboard's Kueue setting changes every new project on this cluster: workbenches and model deployments there can only use the queue hardware profile, and a project without its own LocalQueue cannot create workbenches or deploy models until an admin adds one.");
+  if (f.kueue.dashboardOptIn) out.push({ kind: "cluster", message: "The dashboard's Kueue setting is turned on: in every new project on this cluster, workbenches and model deployments can only use the queue hardware profile, and a project without its own LocalQueue cannot create workbenches or deploy models until an admin adds one." });
   return out;
 }
 
@@ -1953,22 +1954,22 @@ export function recipeProjects(w) {
 const RECIPE_DONE = {
   dsc: "DataScienceCluster default-dsc created with the release's default components.",
   project: "Created project recipe-dev.",
-  "pipelines-prereq": "Turned on aipipelines in the DataScienceCluster; it is ready.",
+  "pipelines-prereq": "Turned on Data Science Pipelines in the DataScienceCluster; it is ready.",
   s3: "S3 storage (SeaweedFS) deployed with bucket 'pipelines'.",
   "pipeline-server": "The pipeline server in recipe-dev is ready.",
-  "mlflow-prereq": "Turned on mlflowoperator in the DataScienceCluster; it is ready.",
+  "mlflow-prereq": "Turned on MLflow in the DataScienceCluster; it is ready.",
   mlflow: "MLflow is ready.",
   "mlflow-samples": "Samples added in project 'recipe-dev'.",
   maas: "The MaaS platform is set up and ready.",
-  "models-prereq": "Turned on KServe (kserve) in the DataScienceCluster, and installed cert-manager and Connectivity Link; they are ready.",
+  "models-prereq": "Turned on KServe in the DataScienceCluster, and installed cert-manager and Connectivity Link; they are ready.",
   model: "qwen3-1-7b in recipe-dev serves, through the cluster's default gateway.",
   "maas-publish": "Published qwen3-1-7b in recipe-dev through MaaS.",
-  "playground-prereq": "Everything it needs is set up.",
+  "playground-prereq": "Everything it needs is there.",
   playground: "The playground in recipe-dev is ready, with qwen3-1-7b.",
-  "model-registry-prereq": "Turned on modelregistry in the DataScienceCluster; it is ready.",
-  "model-registry": "Model registry nightly-registry is ready in rhoai-model-registries.",
+  "model-registry-prereq": "Turned on Model registry in the DataScienceCluster; it is ready.",
+  "model-registry": "Model registry nightly-registry is ready in rhoai-model-registries. Sample model mnist (version v1) is registered.",
   workbench: "Workbench nightly-workbench is starting in recipe-dev with Jupyter | Data Science | CPU | Python 3.12 on hardware profile Default.",
-  "kueue-prereq": "Turned on kueue (Unmanaged) and installed cert-manager and the Red Hat build of Kueue; they are ready.",
-  kueue: "Distributed workloads are set up in recipe-dev with the RayCluster sample.",
-  "dashboard-dev": "Deployed PR #4321 (RHOAI build); the dashboard is ready.",
+  "kueue-prereq": "Turned on Kueue (set to Unmanaged, so RHOAI uses the Kueue operator) and installed cert-manager and the Red Hat build of Kueue; they are ready.",
+  kueue: "Distributed workloads are set up in recipe-dev with the RayCluster sample; Kueue admits it when the quota allows.",
+  "dashboard-dev": "Deployed PR #4321, its build for RHOAI (the dashboard images made for RHOAI, not ODH); the dashboard is ready.",
 };

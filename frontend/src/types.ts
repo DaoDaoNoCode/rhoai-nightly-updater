@@ -2204,6 +2204,8 @@ export interface RecipeRunStatus {
   step?: { step: string; status: string; message: string; detail?: string; errorCode?: string };
   /** The clean-up request for what the run created, once it is not running and created anything. */
   cleanup?: CleanupRequest;
+  /** Removing the offered distributed workloads setup also turns the dashboard's Kueue setting back, which the run turned on. */
+  cleanupKueueSetting?: boolean;
   /** The projects recipes created (this run's and earlier ones') that the cluster has now, once no run runs. */
   projects?: RecipeOwnedProject[];
   /** Why those could not be read (none is offered then). */

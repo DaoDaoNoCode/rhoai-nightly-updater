@@ -66,7 +66,7 @@ const listOf = (items: string[]): string => (items.length < 2 ? items.join("") :
 
 /** What else the recipe sets up in the project Kueue labels (the tab's own warning). */
 function kueueOthers(f: RecipeForm): string[] {
-  return [f.pipelines && "a pipeline server", f.models && "a model", f.workbench && "a workbench"].filter((x): x is string => !!x);
+  return [f.pipelines && "a pipeline server", f.models && "a model", f.models && f.playground && "a playground", f.mlflow && f.mlflowSamples && "the MLflow samples", f.workbench && "a workbench"].filter((x): x is string => !!x);
 }
 
 /** The ways the model can be reached, as the Models tab names them. */
@@ -299,20 +299,25 @@ export const RecipeEditor: React.FC<{
                   <FeatureSwitch id="recipe-model-registry" label="Model registry" checked={form.modelRegistry} onChange={(v) => set("modelRegistry", v)}
                     help="A model registry for the cluster, with its default database. Turns on its DataScienceCluster component if it is off.">
                     <Checkbox id="recipe-registry-sample" label="Register the sample model" isChecked={form.registrySample} onChange={(_e, v) => set("registrySample", v)}
-                      description="Needs the model registry: adds a sample model to it, as the Model registry tab does." />
+                      description="Registered by the Model registry step, as the Model registry tab does." />
                   </FeatureSwitch>
                   <FeatureSwitch id="recipe-kueue" label="Distributed workloads" checked={form.kueue} reason={needsProjectReason(form, "Distributed workloads need")}
                     onChange={(v) => set("kueue", v)}
-                    help="Kueue queues for the project, as the Distributed workloads tab sets them up: a ClusterQueue and ResourceFlavor (cluster-wide, for this project only) and its LocalQueue. Adds what they need first: the kueue component, cert-manager and the Kueue operator. Set up after the project's other parts.">
+                    help="Kueue queues for the project, as the Distributed workloads tab sets them up: a ClusterQueue and ResourceFlavor (cluster-wide objects; only this project uses them) and its LocalQueue. First adds what they need: Kueue in the DataScienceCluster, cert-manager and the Kueue operator (not Ray: see the samples). Set up after the project's other parts.">
                     {kueueOthers(form).length > 0 && (
-                      <FieldHelperText variant="warning">
+                      <FieldHelperText>
                         {`The project also gets ${listOf(kueueOthers(form))}. Kueue manages only what is sent to a queue, so ${kueueOthers(form).length === 1 ? "it keeps" : "they keep"} running; a project of its own is still safer.`}
                       </FieldHelperText>
                     )}
                     <Checkbox id="recipe-kueue-raycluster" label="RayCluster sample" isChecked={form.kueueRayCluster} onChange={(_e, v) => set("kueueRayCluster", v)}
-                      description="Needs the ray component. Shows on the dashboard's Distributed workloads page." />
+                      description="Added by the Distributed workloads step. Shows on the dashboard's Distributed workloads page." />
                     <Checkbox id="recipe-kueue-rayjob" label="RayJob sample" isChecked={form.kueueRayJob} onChange={(_e, v) => set("kueueRayJob", v)}
-                      description="Needs the ray component. Runs once, then finishes." />
+                      description="Added by the Distributed workloads step. Runs once, then finishes." />
+                    {(form.kueueRayCluster || form.kueueRayJob) && (
+                      <FieldHelperText>
+                        The samples need the DataScienceCluster's ray component on. The recipe does not turn it on: if it is off, the step stops and says so (turn it on on the Components page).
+                      </FieldHelperText>
+                    )}
                     {(form.kueueRayCluster || form.kueueRayJob) && (
                       <FormGroup label="Sample image" fieldId="recipe-kueue-image">
                         <TextInput id="recipe-kueue-image" value={form.kueueRayImage} placeholder="The tab's default Ray image" onChange={(_e, v) => set("kueueRayImage", v)}
@@ -346,7 +351,7 @@ export const RecipeEditor: React.FC<{
                   <FeatureSwitch id="recipe-playground" label="Playground" checked={form.playground} reason={playgroundReason(form)} onChange={(v) => set("playground", v)}
                     help="Needs Models. The Gen AI playground in the project, with its ready chat models. Turns on what it needs." />
                   <FeatureSwitch id="recipe-maas" label="Models as a Service" checked={form.maas} onChange={(v) => set("maas", v)}
-                    help="The MaaS platform for the cluster (usually 10 minutes): Connectivity Link, its database and the MaaS gateway.">
+                    help="The MaaS platform for the cluster: Connectivity Link, its database and the MaaS gateway. Usually 10 minutes, up to 15.">
                     <FormGroup role="radiogroup" isStack fieldId="recipe-maas-database" label="Database">
                       <Radio id="recipe-maas-development" name="recipe-maas-database" label="Development" isChecked={form.maasDatabase === "development"}
                         onChange={() => set("maasDatabase", "development")} description="One pod without a volume: API keys are lost when it restarts." />

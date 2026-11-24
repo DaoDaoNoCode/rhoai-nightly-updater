@@ -144,7 +144,7 @@ export const RecipesPage: React.FC = () => {
         onCancel={() => setReviewOpen(false)}
       />
       {run && cleanupOpen && (
-        <RecipeCleanupModal run={run} title={`Clean up what recipe ${run.recipe.metadata.name} set up?`} ready={status?.cleanup} isOpen blocker={blocker}
+        <RecipeCleanupModal run={run} title={`Clean up what recipe ${run.recipe.metadata.name} set up?`} ready={status?.cleanup} kueueSetting={!!status?.cleanupKueueSetting} isOpen blocker={blocker}
           onClose={() => setCleanupOpen(false)} onDone={changed} onClusterBusy={onClusterBusy} />
       )}
       {projectCleanup && (

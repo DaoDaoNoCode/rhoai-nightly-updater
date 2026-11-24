@@ -44,7 +44,10 @@ const editorReads = {
 function featuresPlan(): RecipePlan {
   const run = contract.recipeRunFeatures().run!;
   const steps = run.steps.map((s, i) => ({ id: s.id, title: s.title, action: i === 0 ? "run" as const : "later" as const, typicalSeconds: s.typicalSeconds, maxSeconds: s.maxSeconds }));
-  const warnings = ["Project recipe-full also gets a pipeline server, a model and a workbench. Kueue manages only what is sent to a queue, so they keep running.", "The dashboard's Kueue setting changes every new project on this cluster."];
+  const warnings = [
+    { kind: "advice" as const, message: "Project recipe-full also gets a pipeline server, a model, a playground, the MLflow samples and a workbench. Kueue manages only what is sent to a queue, so they keep running. A project of its own is still safer." },
+    { kind: "cluster" as const, message: "The dashboard's Kueue setting is turned on: in every new project on this cluster, workbenches and model deployments can only use the queue hardware profile." },
+  ];
   return { recipe: run.recipe, steps, problems: [], warnings, typicalSeconds: steps.reduce((n, s) => n + s.typicalSeconds, 0), maxSeconds: steps.reduce((n, s) => n + s.maxSeconds, 0) };
 }
 
@@ -79,7 +82,7 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     fireEvent.click(switchNamed("Workbench"));
     // Distributed workloads: the tab's options; the dashboard setting is off by default, with its cluster-wide effect.
     fireEvent.click(switchNamed("Distributed workloads"));
-    expect(screen.getByText("The project also gets a pipeline server, a model and a workbench. Kueue manages only what is sent to a queue, so they keep running; a project of its own is still safer.")).toBeInTheDocument();
+    expect(screen.getByText("The project also gets a pipeline server, a model, a playground, the MLflow samples and a workbench. Kueue manages only what is sent to a queue, so they keep running; a project of its own is still safer.")).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Turn on the dashboard's Kueue setting" })).not.toBeChecked();
     expect(screen.getByText(/It changes every new project on this cluster/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("checkbox", { name: "RayCluster sample" }));
@@ -126,8 +129,10 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
       expect(titles[8 + i]).toContain(title);
     }
     // The plan's warnings: what else the run changes.
-    const warning = within(screen.getByRole("dialog", { name: "Run recipe dev?" })).getByText("The run also changes this").closest(".pf-v6-c-alert") as HTMLElement;
-    expect(within(warning).getAllByRole("listitem").map((li) => li.textContent)).toHaveLength(2);
+    // The plan's notes, each titled by what it is: advice, and a change to the shared cluster.
+    const review = screen.getByRole("dialog", { name: "Run recipe dev?" });
+    expect(within(review).getByText("Before you run").closest(".pf-v6-c-alert")).toHaveTextContent("Kueue manages only what is sent to a queue");
+    expect(within(review).getByText("This run changes the shared cluster").closest(".pf-v6-c-alert")).toHaveTextContent("in every new project on this cluster");
     expect(plan).toHaveTextContent("Model Qwen3 1.7B (CPU, tool calling)Later: usually 5 minutes, up to 15 minutes.");
   });
 
@@ -178,7 +183,7 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     await settleApps();
     await settle();
     expect(screen.getByText("Every step of full is set up.")).toBeInTheDocument();
-    expect(screen.getByText("Project recipe-full is set up. Its workbench may still be starting: the Workbench tab shows when it runs.")).toBeInTheDocument();
+    expect(screen.getByText(/Project recipe-full is set up\. Its workbench may still be starting: the Workbench tab shows when it runs\. The dashboard runs a Dashboard Dev build: its operator stays paused, and RHOAI updates wait, until you revert it on the Dashboard Dev page\./)).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 2, name: "Last run of recipe full" })).toBeInTheDocument();
     for (const title of ["Models as a Service", "Model Qwen3 1.7B (CPU, tool calling)", "Publish the model through MaaS", "Playground", "Model registry", "Workbench", "Dashboard Dev (PR #4321)"]) {
       expect(screen.getAllByText(title).length).toBeGreaterThan(0);
@@ -198,10 +203,10 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     expect(left).toEqual(["The S3 storage", "MLflow"]);
     expect(dialog).toHaveTextContent("The Dashboard Dev build stays: revert it on the Dashboard Dev page.");
     expect(within(dialog).getByRole("link", { name: "Dashboard Dev page" })).toHaveAttribute("href", "/dashboard-dev");
-    expect(within(dialog).getByRole("checkbox", { name: "Turn back the DataScienceCluster components the run turned on: kserve" })).toBeChecked();
+    expect(within(dialog).getByRole("checkbox", { name: "Turn back the DataScienceCluster components the run turned on: KServe" })).toBeChecked();
     // Keeping the project keeps its model, so kserve stays on, and the label says so.
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Project recipe-full, which the recipe created" }));
-    expect(dialog).toHaveTextContent("None goes back now. Stays on while what uses it stays: kserve (the model in recipe-full stays).");
+    expect(dialog).toHaveTextContent("None goes back now. Stays on while what uses it stays: KServe (the model in recipe-full stays).");
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Project recipe-full, which the recipe created" }));
     // The run's success says the workbench may still be starting, not that all is ready.
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "The MaaS platform the run set up" }));

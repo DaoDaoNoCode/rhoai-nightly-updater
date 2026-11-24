@@ -42,13 +42,23 @@ export const RecipeFixLink: React.FC<{ fix?: RecipeFix }> = ({ fix }) => {
   return name && fix?.page ? <> <Link to={fix.page}>Open {name}</Link></> : null;
 };
 
+/**
+ * A plan's message without the backend's "Nothing was changed." (a plan
+ * changes nothing: the problems' title says once that nothing has run).
+ */
+export function planText(message: string): string {
+  return message
+    .replace(/\s*Nothing (?:was|has been) changed(?:;\s*(\w)|[.:])?/g, (_m, next?: string) => (next ? ` ${next.toUpperCase()}` : ""))
+    .replace(/\s+/g, " ").trim();
+}
+
 function stepDef(step: RecipePlanStep): PipelineStepDef {
   const time = usually(step.typicalSeconds, step.maxSeconds);
   switch (step.action) {
     case "skip":
       return { id: step.id, label: step.title, variant: "success", description: `Already set up${step.reason ? `: ${step.reason}` : "."}` };
     case "blocked":
-      return { id: step.id, label: step.title, variant: "danger", description: <>Blocked: {step.reason ?? "the run would stop here."}<RecipeFixLink fix={step.fix} /></> };
+      return { id: step.id, label: step.title, variant: "danger", description: <>Blocked: {step.reason ? planText(step.reason) : "the run would stop here."}<RecipeFixLink fix={step.fix} /></> };
     case "later":
       return { id: step.id, label: step.title, description: `Later: ${time}.` };
     default:
@@ -57,11 +67,11 @@ function stepDef(step: RecipePlanStep): PipelineStepDef {
 }
 
 /** The refusal's problems, each with the field it is about. */
-export const RecipeProblems: React.FC<{ problems: RecipeProblem[]; title?: string }> = ({ problems, title = "The recipe cannot run on this cluster now. Nothing was changed." }) => (
+export const RecipeProblems: React.FC<{ problems: RecipeProblem[]; title?: string }> = ({ problems, title = "The recipe cannot run on this cluster yet. Nothing has run: fix this, then run it." }) => (
   <Alert variant="danger" isInline component="p" title={title}>
     <List>
       {problems.map((p, i) => (
-        <ListItem key={i}>{p.field && FIELD_NAMES[p.field] ? `${FIELD_NAMES[p.field]}: ` : ""}{p.message}<RecipeFixLink fix={p.fix} /></ListItem>
+        <ListItem key={i}>{p.field && FIELD_NAMES[p.field] ? `${FIELD_NAMES[p.field]}: ` : ""}{planText(p.message)}<RecipeFixLink fix={p.fix} /></ListItem>
       ))}
     </List>
   </Alert>

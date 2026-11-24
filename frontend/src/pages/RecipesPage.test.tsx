@@ -159,11 +159,13 @@ describe("Recipes page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Review and run" }));
     await settle();
     const dialog = screen.getByRole("dialog", { name: "Run recipe dev?" });
-    expect(within(dialog).getByText("The recipe cannot run on this cluster now. Nothing was changed.")).toBeInTheDocument();
+    expect(within(dialog).getByText("The recipe cannot run on this cluster yet. Nothing has run: fix this, then run it.")).toBeInTheDocument();
     expect(dialog).toHaveTextContent("Project recipe-dev: Project recipe-dev exists and was not created by a recipe.");
     expect(dialog).toHaveTextContent("Build: Cannot resolve the build on Quay.");
     // Only the problem a page fixes links there; the others are fixed in the recipe or by trying again.
-    const problems = within(dialog).getByText("The recipe cannot run on this cluster now. Nothing was changed.").closest(".pf-v6-c-alert") as HTMLElement;
+    const problems = within(dialog).getByText("The recipe cannot run on this cluster yet. Nothing has run: fix this, then run it.").closest(".pf-v6-c-alert") as HTMLElement;
+    // "Nothing was changed" is not repeated in each problem: the title says once that nothing has run.
+    expect(problems.textContent?.match(/Nothing was changed/g) ?? []).toHaveLength(0);
     expect(within(problems).getAllByRole("link").map((a) => [a.textContent, a.getAttribute("href")])).toEqual([["Open Status", "/"]]);
     const stepList = within(dialog).getByRole("list", { name: "Steps of this operation" });
     expect(stepList).toHaveTextContent("Project recipe-devBlocked: Project recipe-dev exists and was not created by a recipe.");
@@ -379,7 +381,7 @@ describe("Recipes page", () => {
     ]);
     // aipipelines stays on while the pipeline server in team-b stays: the label does not promise it goes back.
     expect(within(dialog).getByRole("checkbox", { name: "Turn back the DataScienceCluster components the run turned on" })).toBeChecked();
-    expect(dialog).toHaveTextContent("None goes back now. Stays on while what uses it stays: aipipelines (the pipeline server in team-b stays).");
+    expect(dialog).toHaveTextContent("None goes back now. Stays on while what uses it stays: Data Science Pipelines (the pipeline server in team-b stays).");
     expect(dialog).toHaveTextContent("Removes everything in the project: its models, playground, workbench and pipeline server.");
     expect(dialog).toHaveTextContent("Deleting project recipe-dev deletes everything in it.");
     // Left in place, from the live status: the shared parts; the project's pipeline server goes with it,
