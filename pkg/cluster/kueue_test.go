@@ -578,7 +578,7 @@ func TestKueuePrerequisites(t *testing.T) {
 	if componentState(f, "kueue") != "Unmanaged" {
 		t.Fatalf("kueue %s", componentState(f, "kueue"))
 	}
-	var subPost, dscPatch int = -1, -1
+	subPost, dscPatch := -1, -1
 	for i, m := range f.mutations() {
 		if strings.HasPrefix(m, "POST ") && strings.Contains(m, "openshift-kueue-operator/subscriptions") && subPost < 0 {
 			subPost = i

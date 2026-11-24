@@ -441,8 +441,8 @@ func queueUsers(c *kube.Client, o toolObject, rec Record) ([]string, error) {
 			return nil, err
 		}
 		for _, w := range ws {
-			if w.Spec.QueueName == LocalQueueName && !w.Metadata.Terminating() &&
-				!(rec.RayClusterUID != "" && w.Metadata.OwnedBy(rec.RayClusterUID)) && !(rec.RayJobUID != "" && w.Metadata.OwnedBy(rec.RayJobUID)) {
+			sample := (rec.RayClusterUID != "" && w.Metadata.OwnedBy(rec.RayClusterUID)) || (rec.RayJobUID != "" && w.Metadata.OwnedBy(rec.RayJobUID))
+			if w.Spec.QueueName == LocalQueueName && !w.Metadata.Terminating() && !sample {
 				users = append(users, "Workload "+w.Metadata.Name)
 			}
 		}
@@ -452,7 +452,8 @@ func queueUsers(c *kube.Client, o toolObject, rec Record) ([]string, error) {
 			return nil, err
 		}
 		for _, q := range qs {
-			if q.Spec.ClusterQueue == ClusterQueueName && !(q.Metadata.Namespace == rec.Project && q.Metadata.Name == LocalQueueName) && !q.Metadata.Terminating() {
+			ours := q.Metadata.Namespace == rec.Project && q.Metadata.Name == LocalQueueName
+			if q.Spec.ClusterQueue == ClusterQueueName && !ours && !q.Metadata.Terminating() {
 				users = append(users, "LocalQueue "+q.Metadata.Namespace+"/"+q.Metadata.Name)
 			}
 		}
