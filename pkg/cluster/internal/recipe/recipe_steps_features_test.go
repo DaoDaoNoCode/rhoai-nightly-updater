@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
@@ -73,6 +74,14 @@ type fakeCluster struct {
 	dbMeta                             *kube.ObjectMeta
 	// readErr forces model registry record reads to error.
 	readErr error
+	// legacy is the legacy flow's dashboard (no module operator); nil
+	// otherwise. prMissing: the PR's images are not published.
+	legacy      *types.DashboardState
+	legacyReads int
+	prMissing   bool
+	// publishAcceptedAfter: a publish is accepted by MaaS only from this
+	// read of its publication on (0: at once; -1: never).
+	publishAcceptedAfter, publishReads int
 
 	prereqExposures []string
 	ran             []string
@@ -90,12 +99,12 @@ func (fc *fakeCluster) install(t *testing.T) {
 	p0, p1, p2, p3, p4, p5, p6 := prereqStatus, samplesStatus, runSamples, maasStatus, maasRecord, runMaaS, modelExposures
 	p7, p8, p9, p10, p11, p12, p13 := readModel, runModels, maasPublished, playgroundStatus, runPlayground, registryStatus, registryRecord
 	p14, p15, p16, p17, p18, p19, p20 := runRegistry, workbenchStatus, runWorkbench, dashboardSession, deployMain, deployPR, waitDashboard
-	p21, p22, p23, p24, p25 := registryMeta, dbConfigMeta, annotateDBConfig, dashboardReady, stepPoll
+	p21, p22, p24, p25, p26, p27 := registryMeta, dbConfigMeta, dashboardReady, stepPoll, dashboardState, prPublished
 	t.Cleanup(func() {
 		prereqStatus, samplesStatus, runSamples, maasStatus, maasRecord, runMaaS, modelExposures = p0, p1, p2, p3, p4, p5, p6
 		readModel, runModels, maasPublished, playgroundStatus, runPlayground, registryStatus, registryRecord = p7, p8, p9, p10, p11, p12, p13
 		runRegistry, workbenchStatus, runWorkbench, dashboardSession, deployMain, deployPR, waitDashboard = p14, p15, p16, p17, p18, p19, p20
-		registryMeta, dbConfigMeta, annotateDBConfig, dashboardReady, stepPoll = p21, p22, p23, p24, p25
+		registryMeta, dbConfigMeta, dashboardReady, stepPoll, dashboardState, prPublished = p21, p22, p24, p25, p26, p27
 	})
 	stepPoll = 0
 	if fc.prereqReady == nil {
@@ -131,9 +140,13 @@ func (fc *fakeCluster) install(t *testing.T) {
 	maasStatus = func(*kube.Client) (*types.MaaSStatus, error) {
 		st := &types.MaaSStatus{Platform: types.ResourceState{Ready: fc.maasReady, Deployed: fc.maasReady, ManagedByTool: fc.maasOurs},
 			Database: &types.MaaSDatabase{Needed: !fc.maasReady}}
+		if fc.published && fc.publishAcceptedAfter != 0 {
+			fc.publishReads++
+		}
 		if fc.published || fc.routedOnly {
-			it := types.MaaSModel{Published: fc.published}
-			it.Namespace, it.Name, it.Ready = "proj", "qwen3-1-7b", fc.published
+			accepted := fc.published && (fc.publishAcceptedAfter == 0 || (fc.publishAcceptedAfter > 0 && fc.publishReads >= fc.publishAcceptedAfter))
+			it := types.MaaSModel{Published: accepted}
+			it.Namespace, it.Name, it.Ready = "proj", "qwen3-1-7b", accepted
 			st.Items = []types.MaaSModel{it}
 		}
 		return st, nil
@@ -145,19 +158,7 @@ func (fc *fakeCluster) install(t *testing.T) {
 		}
 		return *fc.dbMeta, true, nil
 	}
-	annotateDBConfig = func(_ *kube.Client, ns, uid, key, value string) error {
-		if fc.dbMeta == nil || fc.dbMeta.UID != uid || fc.dbMeta.Namespace != ns {
-			return errors.New("409 precondition failed: UID")
-		}
-		ann := map[string]string{key: value}
-		for k, v := range fc.dbMeta.Annotations {
-			ann[k] = v
-		}
-		ann[key] = value
-		fc.dbMeta.Annotations = ann
-		return nil
-	}
-	runMaaS = func(_ *kube.Client, req types.MaaSRequest, _ func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+	runMaaS = func(_ *kube.Client, req types.MaaSRequest, annotations map[string]string, _ func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 		fc.maasReqs = append(fc.maasReqs, req)
 		fc.ran = append(fc.ran, "maas:"+req.Action)
 		if req.Action == "publish" {
@@ -168,7 +169,7 @@ func (fc *fakeCluster) install(t *testing.T) {
 		if fc.dbMeta == nil && req.Database != nil {
 			// Setup path creates the database connection Secret.
 			fc.maasRec = serving.MaaSRecord{Database: req.Database.Kind, DBNamespace: "models-as-a-service-infra"}
-			m := toolMeta("models-as-a-service-infra", "maas-db-config", "secret-1", nil)
+			m := toolMeta("models-as-a-service-infra", "maas-db-config", "secret-1", annotations)
 			fc.dbMeta = &m
 		}
 		return ok(req.Action)
@@ -266,12 +267,35 @@ func (fc *fakeCluster) install(t *testing.T) {
 	}
 	dashboardSession = func(*kube.Client) (*types.DashboardOverride, error) { return fc.session, nil }
 	dashboardReady = func(*kube.Client) (bool, string, error) { return fc.dashReady, "rhods-dashboard", nil }
+	dashboardState = func(*kube.Client) (*types.DashboardState, error) {
+		if fc.legacy == nil {
+			return &types.DashboardState{}, nil
+		}
+		// A deployed PR's pods are ready from the second read on.
+		if fc.legacy.IsCustomPR && !fc.legacy.PodReady {
+			if fc.legacyReads++; fc.legacyReads >= 2 {
+				fc.legacy.PodReady = true
+			}
+		}
+		st := *fc.legacy
+		return &st, nil
+	}
+	prPublished = func(*kube.Client, int, string) (bool, string, error) {
+		if fc.prMissing {
+			return false, "no pr-77 in quay.io/opendatahub/odh-dashboard", nil
+		}
+		return true, "", nil
+	}
 	deployMain = func(*kube.Client, string) (*types.OperationResponse, error) {
 		fc.ran = append(fc.ran, "dashboard:main")
 		return ok("Deployed main.")
 	}
 	deployPR = func(_ *kube.Client, pr int, flavor string) (*types.OperationResponse, error) {
 		fc.ran = append(fc.ran, "dashboard:pr")
+		if fc.legacy != nil {
+			fc.legacy = &types.DashboardState{IsCustomPR: true, PRNumber: pr}
+			return ok("Deployed PR.")
+		}
 		fc.session = &types.DashboardOverride{Active: true, SessionRecorded: true, Mode: "pr", PRNumber: pr, Flavor: flavor}
 		return ok("Deployed PR.")
 	}
@@ -282,7 +306,13 @@ func (fc *fakeCluster) install(t *testing.T) {
 	}
 }
 
-func testClient() *kube.Client { return kube.NewClientWithContext(context.Background(), "t") }
+// testClient is a client whose context ends after a while, so a step that
+// waited forever would fail its test instead of hanging it.
+func testClient() *kube.Client {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	_ = cancel // ends with the timeout
+	return kube.NewClientWithContext(ctx, "t")
+}
 
 // readyCluster returns a fakeCluster with every recipe-driven piece already present.
 func readyCluster() *fakeCluster {
@@ -619,10 +649,10 @@ func TestDashboardDevStep_DeploysAndWaits(t *testing.T) {
 	if err != nil || !res.Success || strings.Join(fc.ran, " ") != "dashboard:main dashboard:wait" || !strings.Contains(res.Message, "the dashboard is ready") {
 		t.Fatalf("%+v %v %v", res, err, fc.ran)
 	}
-	legacy := &fakeCluster{}
+	legacy := &fakeCluster{legacy: &types.DashboardState{}}
 	legacy.install(t)
 	pr := validRecipe(t, "  dashboardDev: {deploy: pr, pr: 5, flavor: odh}\n")
-	if res, err := runDashboardDev(testClient(), &State{Recipe: pr}, func(types.UpdateStepEvent) {}); err != nil || !res.Success || strings.Join(legacy.ran, " ") != "dashboard:pr" {
+	if res, err := runDashboardDev(testClient(), &State{Recipe: pr}, func(types.UpdateStepEvent) {}); err != nil || !res.Success || strings.Join(legacy.ran, " ") != "dashboard:pr" || !legacy.legacy.PodReady {
 		t.Fatalf("legacy %+v %v %v", res, err, legacy.ran)
 	}
 }
@@ -648,8 +678,10 @@ func TestMaaSStep_MarksWhatItCreated(t *testing.T) {
 			}
 		})
 	}
-	t.Run("this tool's already", func(t *testing.T) {
-		fc := &fakeCluster{maasOurs: true}
+	t.Run("its database Secret there before the run", func(t *testing.T) {
+		// The Secret is created only when missing, so it carries no run's annotation.
+		m := toolMeta("models-as-a-service-infra", "maas-db-config", "secret-0", nil)
+		fc := &fakeCluster{maasOurs: true, dbMeta: &m, maasRec: serving.MaaSRecord{Database: "development", DBNamespace: "models-as-a-service-infra"}}
 		fc.install(t)
 		s := &State{Recipe: validRecipe(t, "  features: {maas: {enabled: true}}\n"), RunID: "run-1"}
 		if _, err := runMaaSStep(testClient(), s, func(types.UpdateStepEvent) {}); err != nil || len(s.Created) != 0 {
@@ -671,7 +703,8 @@ func TestModelRegistryStep_RecordsWhatItCreated(t *testing.T) {
 		t.Fatalf("%+v %v created %+v", res, err, s.Created)
 	}
 	again := &State{Recipe: r, RunID: "run-2"}
-	if _, err := runModelRegistry(testClient(), again, func(types.UpdateStepEvent) {}); err != nil || len(again.Created) != 0 || fc.registryAnn != nil {
+	// The registry is created only when missing: it keeps the first run's annotation.
+	if _, err := runModelRegistry(testClient(), again, func(types.UpdateStepEvent) {}); err != nil || len(again.Created) != 0 || fc.regMeta.Annotations[RecipeRunAnnotation] != "run-1" {
 		t.Errorf("a registry that was there: %+v %v", again.Created, fc.registryAnn)
 	}
 	fc2 := &fakeCluster{readErr: errors.New("boom")}

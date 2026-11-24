@@ -106,6 +106,13 @@
   ],
   "typicalSeconds": 780,
   "warnings": [
-    "The dashboard's Kueue setting changes every new project on this cluster."
+    {
+      "kind": "advice",
+      "message": "Project recipe-dev also gets a pipeline server. Kueue manages only what is sent to a queue, so they keep running. A project of its own is still safer."
+    },
+    {
+      "kind": "cluster",
+      "message": "The dashboard's Kueue setting is turned on: in every new project on this cluster, workbenches and model deployments can only use the queue hardware profile."
+    }
   ]
 }

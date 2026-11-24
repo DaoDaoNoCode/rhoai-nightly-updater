@@ -45,7 +45,7 @@ var (
 	runSamples       = mlflow.RunSamples
 	maasStatus       = serving.GetMaaSStatus
 	maasRecord       = serving.ReadMaaSRecord
-	runMaaS          = serving.RunMaaS
+	runMaaS          = serving.RunMaaSAnnotated
 	modelExposures   = serving.GetModelExposures
 	readModel        = readToolModel
 	runModels        = serving.RunModels
@@ -57,7 +57,8 @@ var (
 	runRegistry      = modelregistry.RunAnnotated
 	registryMeta     = modelregistry.ReadRegistryMeta
 	dbConfigMeta     = serving.MaaSDBConfigMeta
-	annotateDBConfig = serving.AnnotateMaaSDBConfig
+	dashboardState   = dashdev.State
+	prPublished      = prPublishedLive
 	dashboardReady   = dashdev.DeploymentsReadyNow
 	workbenchStatus  = workbench.GetStatus
 	runWorkbench     = workbench.Run
@@ -88,7 +89,7 @@ func featureSteps(r types.EnvironmentRecipe) []Step {
 		add(StepModelsPrereq, "What Models needs", 4*time.Minute, 15*time.Minute, checkModelsPrereq, runModelsPrereq)
 		add(StepModel, modelTitle(r), 5*time.Minute, 15*time.Minute, checkModel, runModel)
 		if f.MaaS.Enabled && f.MaaS.Publish && f.Models.Exposure != serving.ExposureMaaS {
-			add(StepMaaSPublish, "Publish the model through MaaS", 2*time.Minute, 5*time.Minute, checkMaaSPublish, runMaaSPublish)
+			add(StepMaaSPublish, "Publish the model through MaaS", 2*time.Minute, 15*time.Minute, checkMaaSPublish, runMaaSPublish)
 		}
 	}
 	if f.Playground.Enabled {
@@ -100,7 +101,7 @@ func featureSteps(r types.EnvironmentRecipe) []Step {
 		add(StepModelRegistry, "Model registry", 2*time.Minute, 12*time.Minute, checkModelRegistry, runModelRegistry)
 	}
 	if f.Workbench.Enabled {
-		add(StepWorkbench, "Workbench", 30*time.Second, 2*time.Minute, checkWorkbench, runWorkbenchStep)
+		add(StepWorkbench, "Workbench", 30*time.Second, 15*time.Minute, checkWorkbench, runWorkbenchStep)
 	}
 	steps = append(steps, kueueSteps(r)...)
 	if d := r.Spec.DashboardDev; d.Deploy == DashboardDevMain || d.Deploy == DashboardDevPR {
@@ -232,8 +233,10 @@ func runMLflowSamples(c *kube.Client, s *State, emit func(types.UpdateStepEvent)
 
 // --- Models as a Service -----------------------------------------------------
 
-// checkMaaS: complete when the cluster's single MaaS platform is ready (any
-// provisioner); blocked when Set up reports a denial reason.
+// checkMaaS: the MaaS platform ready → done, whoever set it up (it is the
+// cluster's one); a reason Set up refuses blocks. Done, a platform whose
+// database Secret proves this run created it is recorded as the run's (a
+// resume after a crash between the create and the record).
 func checkMaaS(c *kube.Client, s *State) (Check, error) {
 	st, err := maasStatus(c)
 	if err != nil {
@@ -241,6 +244,8 @@ func checkMaaS(c *kube.Client, s *State) (Check, error) {
 	}
 	switch {
 	case st.Platform.Ready:
+		// A read that fails marks nothing; the run's Set up reports it.
+		_ = markMaaSCreated(c, s, st)
 		return Check{Done: true, Reason: "The MaaS platform is ready."}, nil
 	case st.Platform.SetupBlockedReason != "":
 		return blockedAt(st.Platform.SetupBlockedReason), nil
@@ -266,9 +271,10 @@ func maasDatabaseBlocked(st *types.MaaSStatus, kind string) string {
 }
 
 // runMaaSStep is the MaaS tab's Set up, with the recipe's database when
-// Set up has to make one (as its dialog asks only then). When the platform
-// was not this tool's before and is now (also after a failure part way),
-// the run marks it as its own on the platform itself (markMaaSCreated).
+// Set up has to make one (as its dialog asks only then). The database
+// connection Secret it creates carries the run's annotation from its
+// creation; after the setup (also a failed one) the run records the
+// platform as its own when that Secret proves it (markMaaSCreated).
 func runMaaSStep(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	before, err := maasStatus(c)
 	if err != nil {
@@ -278,62 +284,59 @@ func runMaaSStep(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*t
 	if before.Database != nil && before.Database.Needed {
 		req.Database = &types.MaaSDatabaseRequest{Kind: s.Recipe.Spec.Features.MaaS.Database}
 	}
-	res, runErr := runMaaS(c, req, emit)
-	if !before.Platform.ManagedByTool {
-		rc, cancel := readWithin(c)
-		defer cancel()
-		part, err := markMaaSCreated(rc, s)
-		switch {
-		case err != nil:
-			noteUnrecorded(StepMaaS, "the MaaS platform", err, res, emit)
-		case part != nil:
-			s.AddCreated(*part)
-		}
+	res, runErr := runMaaS(c, req, runAnnotations(s), emit)
+	rc, cancel := readWithin(c)
+	defer cancel()
+	after, err := maasStatus(rc)
+	if err == nil {
+		err = markMaaSCreated(rc, s, after)
+	}
+	if err != nil {
+		noteUnrecorded(StepMaaS, "the MaaS platform", err, res, emit)
 	}
 	return res, runErr
 }
 
+// runAnnotations are the annotations a run's setups put on the
+// cluster-wide objects they create: the run's ID (RecipeRunAnnotation).
+func runAnnotations(s *State) map[string]string {
+	if s.RunID == "" {
+		return nil
+	}
+	return map[string]string{RecipeRunAnnotation: s.RunID}
+}
+
 // RecipeRunAnnotation marks a cluster-wide object a recipe run created:
-// its value is the run's ID. It is written with the user's token when the
-// run creates the object, and Clean up offers the object only while it
-// carries it (the run record alone is never proof: the ServiceAccount can
-// write it).
+// its value is the run's ID. It is part of the object from its creation
+// (the run's setups create it so, with the user's token), and Clean up
+// offers the object only while it carries it (the run record alone is
+// never proof: the ServiceAccount can write it).
 const RecipeRunAnnotation = "rhoai-nightly-updater/recipe-run"
 
-// markMaaSCreated marks the MaaS platform the run set up as the run's: the
-// database connection Secret maas-db-config that Set up wrote for the
-// recipe's database (development or CloudNativePG) gets the run's
-// annotation, and its UID is the created part's. nil when the platform is
-// not this tool's after all.
-func markMaaSCreated(c *kube.Client, s *State) (*types.RecipeCreatedPart, error) {
-	after, err := maasStatus(c)
-	if err != nil {
-		return nil, err
-	}
-	if !after.Platform.ManagedByTool {
-		return nil, nil
-	}
-	if s.RunID == "" {
-		return nil, errors.New("the run has no ID")
+// markMaaSCreated records the MaaS platform as the run's when the cluster
+// proves the run created it: the platform is this tool's, and the database
+// connection Secret of the database the tool made (development or
+// CloudNativePG) carries the run's annotation from its creation. It reads
+// only; a read that fails is returned and marks nothing.
+func markMaaSCreated(c *kube.Client, s *State, st *types.MaaSStatus) error {
+	if s.RunID == "" || !st.Platform.ManagedByTool {
+		return nil
 	}
 	rec, err := maasRecord(c)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if rec.DBNamespace == "" || (rec.Database != MaaSDatabaseDevelopment && rec.Database != MaaSDatabaseCNPG) {
-		return nil, errors.New("this tool's MaaS record names no database it made")
+		return nil
 	}
 	meta, found, err := dbConfigMeta(c, rec.DBNamespace)
-	switch {
-	case err != nil:
-		return nil, err
-	case !found || !serving.ToolOwned(meta) || meta.UID == "":
-		return nil, fmt.Errorf("the database Secret maas-db-config in %s is not this tool's", rec.DBNamespace)
+	if err != nil {
+		return err
 	}
-	if err := annotateDBConfig(c, rec.DBNamespace, meta.UID, RecipeRunAnnotation, s.RunID); err != nil {
-		return nil, err
+	if found && meta.UID != "" && meta.Annotations[RecipeRunAnnotation] == s.RunID && serving.ToolOwned(meta) {
+		s.AddCreated(types.RecipeCreatedPart{Part: types.RecipePartMaaSPlatform, UID: meta.UID})
 	}
-	return &types.RecipeCreatedPart{Part: types.RecipePartMaaSPlatform, UID: meta.UID}, nil
+	return nil
 }
 
 // noteUnrecorded adds to the step message, live progress, and logs that creation
@@ -426,8 +429,9 @@ func runModelsPrereq(c *kube.Client, s *State, emit func(types.UpdateStepEvent))
 	return runPrereqFor(c, s, StepModelsPrereq, "models", s.Exposure, emit)
 }
 
-// readToolModel loads the catalog model in project, reporting whether it exists
-// and state merged with the tool's stored record.
+// readToolModel reads the tool's catalog model in project: whether it
+// exists, its state with the tool's record, and how it is reached now
+// (Exposure and Gateway, as the Models tab reads them).
 func readToolModel(c *kube.Client, project, name string) (types.ModelState, bool, error) {
 	m, found, err := serving.ReadToolModel(c, project, name)
 	if err != nil || !found {
@@ -437,12 +441,16 @@ func readToolModel(c *kube.Client, project, name string) (types.ModelState, bool
 	if err != nil {
 		return types.ModelState{}, true, err
 	}
-	return serving.ModelState(c, m, false, rec), true, nil
+	st := serving.ModelState(c, m, false, rec)
+	st.Exposure, st.Gateway = serving.ModelExposureNow(c, m)
+	return st, true, nil
 }
 
 // checkModel: the tool's model in the project serves (and, reached through
-// MaaS, its publication is in place: publishedThroughMaaS) → done; a model
-// of that name the tool did not create blocks.
+// MaaS, its publication is in place: publishedThroughMaaS) → done. A model
+// of that name the tool did not create blocks, and so does one reached
+// another way than the recipe's (the recipe does not change it: the Models
+// tab deletes it and sets it up again).
 func checkModel(c *kube.Client, s *State) (Check, error) {
 	project, name := projectOf(s), modelName(s.Recipe)
 	st, found, err := readModel(c, project, name)
@@ -453,13 +461,18 @@ func checkModel(c *kube.Client, s *State) (Check, error) {
 	case !found:
 		return Check{}, nil
 	case !st.ManagedByTool:
-		return blockedAt(fmt.Sprintf("Project %s has a model %s that this tool did not create, so the recipe does not change it. Nothing was changed.", project, name)), nil
+		return blockedAt(fmt.Sprintf("Project %s has a model %s that this tool did not create, so the recipe does not change it. Nothing has run.", project, name)), nil
 	case st.Terminating:
 		return blockedAt(fmt.Sprintf("Model %s in %s is being deleted. Resume once it is gone.", name, project)), nil
-	case !st.Ready:
+	}
+	want := kube.FirstNonEmpty(s.Recipe.Spec.Features.Models.Exposure, s.Exposure)
+	if why := exposureMismatch(s, st, want); why != "" {
+		return blockedAt(why), nil
+	}
+	if !st.Ready {
 		return Check{}, nil
 	}
-	if kube.FirstNonEmpty(s.Recipe.Spec.Features.Models.Exposure, s.Exposure) == serving.ExposureMaaS {
+	if want == serving.ExposureMaaS {
 		published, err := publishedThroughMaaS(c, project, name)
 		if err != nil {
 			return Check{}, fmt.Errorf("read the MaaS publication of %s in %s: %w", name, project, err)
@@ -472,11 +485,31 @@ func checkModel(c *kube.Client, s *State) (Check, error) {
 	return Check{Done: true, Reason: fmt.Sprintf("Model %s in %s serves.", name, project)}, nil
 }
 
+// exposureMismatch says why the existing model st is not reached the way
+// the recipe wants (want; "" not known yet), or "". A model the recipe also
+// publishes through MaaS reads as reached through MaaS once published.
+func exposureMismatch(s *State, st types.ModelState, want string) string {
+	if want == "" || st.Exposure == "" {
+		return ""
+	}
+	if st.Exposure == want && (want != serving.ExposureGateway || s.GatewayRef == "" || st.Gateway == s.GatewayRef) {
+		return ""
+	}
+	if m := s.Recipe.Spec.Features; st.Exposure == serving.ExposureMaaS && m.MaaS.Enabled && m.MaaS.Publish {
+		return ""
+	}
+	words := map[string]string{serving.ExposureDefault: "through the cluster's default gateway", serving.ExposureMaaS: "through Models as a Service",
+		serving.ExposureInternal: "only inside the cluster", serving.ExposureGateway: "through gateway " + st.Gateway}
+	return fmt.Sprintf("Model %s in %s is already reached %s, not %s as the recipe asks; the recipe does not change it. Delete it on the Models tab and run the recipe again, or change how the recipe reaches it.",
+		modelName(s.Recipe), projectOf(s), kube.FirstNonEmpty(words[st.Exposure], st.Exposure), kube.FirstNonEmpty(words[want], want))
+}
+
 // publishedThroughMaaS reports whether this tool's model name in project
 // is published as the MaaS tab shows it: its MaaSModelRef is this tool's
 // and Ready, the tool's access policy and subscription are Active, and
 // nothing of it is half done. The model's routing alone is no publication.
 func publishedThroughMaaS(c *kube.Client, project, name string) (bool, error) {
+	// The whole MaaS status, as the MaaS tab's poll reads it: a waiting step reads it once per stepPoll.
 	st, err := maasStatus(c)
 	if err != nil {
 		return false, err
@@ -540,9 +573,23 @@ func checkMaaSPublish(c *kube.Client, s *State) (Check, error) {
 	return Check{}, nil
 }
 
-// runMaaSPublish executes MaaS tab Publish on the model.
+// runMaaSPublish is the MaaS tab's Publish of the model, then the wait
+// until MaaS has accepted it (checkMaaSPublish), within the step's
+// deadline; it never succeeds before.
 func runMaaSPublish(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
-	return runMaaS(c, types.MaaSRequest{Action: "publish", Project: projectOf(s), Model: modelName(s.Recipe)}, emit)
+	res, err := runMaaS(c, types.MaaSRequest{Action: "publish", Project: projectOf(s), Model: modelName(s.Recipe)}, nil, emit)
+	if err != nil || res == nil || !res.Success {
+		return res, err
+	}
+	for {
+		chk, err := checkMaaSPublish(c, s)
+		if err == nil && chk.Done {
+			return res, nil
+		}
+		if kube.Clock().Sleep(c.Context(), stepPoll) != nil {
+			return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Model %s in %s was published, but MaaS has not accepted it within the step's time. Resume waits again.", modelName(s.Recipe), projectOf(s)), Logs: res.Logs, ErrorCode: "timeout"}, nil
+		}
+	}
 }
 
 // --- Playground --------------------------------------------------------------
@@ -595,16 +642,17 @@ func runModelRegistryPrereq(c *kube.Client, s *State, emit func(types.UpdateStep
 	return runPrereqFor(c, s, StepModelRegistryPrereq, "model-registry", "", emit)
 }
 
-// checkModelRegistry: complete when a tool-owned registry is ready (sample model
-// too when requested and supported); blocked for a same-name registry the tool
-// did not create.
+// checkModelRegistry: this tool's registry is ready (with the sample model,
+// when the recipe asks for it and the registry can take it) → done; a
+// registry of its name the tool did not create blocks. Done, a registry
+// that proves this run created it is recorded as the run's.
 func checkModelRegistry(c *kube.Client, s *State) (Check, error) {
 	st, err := registryStatus(c, c)
 	if err != nil {
 		return Check{}, fmt.Errorf("read the model registry: %w", err)
 	}
 	if st.Foreign {
-		return blockedAt(fmt.Sprintf("A model registry named %s exists in %s that this tool did not create; the recipe does not change it. Nothing was changed.", st.Name, st.Namespace)), nil
+		return blockedAt(fmt.Sprintf("A model registry named %s exists in %s that this tool did not create; the recipe does not change it. Nothing has run.", st.Name, st.Namespace)), nil
 	}
 	if st.State != "ready" || !st.ManagedByTool {
 		return Check{}, nil
@@ -614,25 +662,43 @@ func checkModelRegistry(c *kube.Client, s *State) (Check, error) {
 	if s.Recipe.Spec.Features.ModelRegistry.Sample && !sampleDone && !noAddress {
 		return Check{}, nil
 	}
-	return Check{Done: true, Reason: fmt.Sprintf("Model registry %s is ready in %s.", st.Name, st.Namespace)}, nil
+	_ = markRegistryCreated(c, s) // a read that fails marks nothing
+	reason := fmt.Sprintf("Model registry %s is ready in %s.", st.Name, st.Namespace)
+	if sampleDone {
+		reason = fmt.Sprintf("Model registry %s is ready in %s, with the sample model %s registered.", st.Name, st.Namespace, st.Sample.Model)
+	}
+	return Check{Done: true, Reason: reason}, nil
+}
+
+// markRegistryCreated records the model registry as the run's when the
+// cluster proves the run created it: it carries the run's annotation from
+// its creation, and the tool's record owns it by its UID. It reads only.
+func markRegistryCreated(c *kube.Client, s *State) error {
+	if s.RunID == "" {
+		return nil
+	}
+	meta, found, err := registryMeta(c, c)
+	if err != nil || !found || meta.Annotations[RecipeRunAnnotation] != s.RunID {
+		return err
+	}
+	rec, err := registryRecord(c)
+	if err != nil {
+		return err
+	}
+	if rec.Owns(meta) {
+		s.AddCreated(types.RecipeCreatedPart{Part: types.RecipePartModelRegistry, UID: meta.UID})
+	}
+	return nil
 }
 
 // runModelRegistry is the Model registry tab's Set up (with the sample
 // model when the recipe asks for it). A registry it creates carries the
-// run's annotation from its creation, and the run records the UID the
-// tool recorded for it; the result says when the sample is registered.
+// run's annotation from its creation, and the run records it as its own
+// when that proves it (markRegistryCreated); the result says when the
+// sample is registered.
 func runModelRegistry(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
-	before, err := registryStatus(c, c)
-	if err != nil {
-		return fail(fmt.Sprintf("Cannot read the model registry: %v. Nothing was changed.", err), kube.ErrorCodeOr(err, "prerequisites"))
-	}
-	creates := before.State == "absent" && before.Namespace != "" && s.RunID != ""
-	var annotations map[string]string
-	if creates {
-		annotations = map[string]string{RecipeRunAnnotation: s.RunID}
-	}
 	sample := ""
-	res, runErr := runRegistry(c, types.ModelRegistryRequest{Action: "setup", Samples: s.Recipe.Spec.Features.ModelRegistry.Sample}, annotations, func(e types.UpdateStepEvent) {
+	res, runErr := runRegistry(c, types.ModelRegistryRequest{Action: "setup", Samples: s.Recipe.Spec.Features.ModelRegistry.Sample}, runAnnotations(s), func(e types.UpdateStepEvent) {
 		if e.Step == "samples" && e.Status == "success" {
 			sample = e.Message
 		}
@@ -641,16 +707,10 @@ func runModelRegistry(c *kube.Client, s *State, emit func(types.UpdateStepEvent)
 	if res != nil && res.Success && sample != "" {
 		res.Message = strings.TrimSpace(res.Message + " " + sample)
 	}
-	if creates {
-		rc, cancel := readWithin(c)
-		defer cancel()
-		rec, err := registryRecord(rc)
-		switch {
-		case err != nil:
-			noteUnrecorded(StepModelRegistry, "the model registry", err, res, emit)
-		case rec[before.Namespace+"/"+modelregistry.Name].UID != "":
-			s.AddCreated(types.RecipeCreatedPart{Part: types.RecipePartModelRegistry, UID: rec[before.Namespace+"/"+modelregistry.Name].UID})
-		}
+	rc, cancel := readWithin(c)
+	defer cancel()
+	if err := markRegistryCreated(rc, s); err != nil {
+		noteUnrecorded(StepModelRegistry, "the model registry", err, res, emit)
 	}
 	return res, runErr
 }
@@ -723,24 +783,91 @@ func runWorkbenchStep(c *kube.Client, s *State, emit func(types.UpdateStepEvent)
 
 // --- Dashboard Dev -----------------------------------------------------------
 
-// checkDashboardDev: a Dashboard Dev session runs the recipe's build and
-// the dashboard has rolled out → done. A session of the build that is
-// still rolling out is not: the step waits for it (without deploying
-// again).
+// checkDashboardDev: the recipe's build runs and the dashboard has rolled
+// out → done (a Dashboard Dev session of the module's operator, or the
+// legacy flow's PR image on a ready dashboard). A build that is still
+// rolling out is not: the step waits for it, without deploying again. A
+// pull request whose images are not published blocks (the plan says so
+// before the run starts).
 func checkDashboardDev(c *kube.Client, s *State) (Check, error) {
 	o, err := dashboardSession(c)
 	if err != nil {
 		return Check{}, fmt.Errorf("read the Dashboard Dev session: %w", err)
 	}
 	d := s.Recipe.Spec.DashboardDev
-	if !sessionRuns(o, d) {
+	build := strings.Trim(strings.TrimPrefix(dashboardDevTitle(d), "Dashboard Dev "), "()")
+	if o == nil {
+		if done, err := legacyRuns(c, d); err != nil || done {
+			if err != nil {
+				return Check{}, fmt.Errorf("read the dashboard: %w", err)
+			}
+			return Check{Done: true, Reason: fmt.Sprintf("The dashboard runs the recipe's build (%s) and is ready.", build)}, nil
+		}
+	} else if sessionRuns(o, d) {
+		if ready, _, err := dashboardReady(c); err == nil && ready {
+			return Check{Done: true, Reason: fmt.Sprintf("Dashboard Dev runs the recipe's build (%s), and the dashboard is ready.", build)}, nil
+		}
 		return Check{}, nil
 	}
-	ready, _, err := dashboardReady(c)
-	if err != nil || !ready {
-		return Check{}, nil
+	if d.Deploy == DashboardDevPR {
+		published, why, err := prPublished(c, d.PR, d.Flavor)
+		switch {
+		case err != nil:
+			return Check{}, fmt.Errorf("check the images of PR #%d: %w", d.PR, err)
+		case !published:
+			return Check{Blocked: fmt.Sprintf("Pull request #%d has no published dashboard images yet (%s). Choose a pull request whose build has finished, or run the recipe once it has.", d.PR, why), Fix: fixAt(types.RecipeFixFeatureBlocked, pageDashboardDev)}, nil
+		}
 	}
-	return Check{Done: true, Reason: fmt.Sprintf("Dashboard Dev runs the recipe's build (%s), and the dashboard is ready.", strings.Trim(strings.TrimPrefix(dashboardDevTitle(d), "Dashboard Dev "), "()"))}, nil
+	return Check{}, nil
+}
+
+// legacyRuns reports whether a cluster without the dashboard module (the
+// legacy flow, PR builds only) runs the recipe's PR image on a ready
+// dashboard.
+func legacyRuns(c *kube.Client, d types.RecipeDashboardDev) (bool, error) {
+	if d.Deploy != DashboardDevPR {
+		return false, nil
+	}
+	st, err := dashboardState(c)
+	if err != nil {
+		return false, err
+	}
+	return st.IsCustomPR && st.PRNumber == d.PR && st.PodReady, nil
+}
+
+// prPublished reports whether the images of pull request pr (flavor) are
+// published for every dashboard container of the module's operator
+// (dashdev.ResolveBuildTags, as Deploy resolves them), and which are not.
+// Without the module (the legacy flow, or RHOAI not installed yet) it does
+// not tell: Deploy checks them itself.
+func prPublishedLive(c *kube.Client, pr int, flavor string) (bool, string, error) {
+	_, op, err := dashdev.LoadOperator(c, false)
+	if err != nil || op == nil {
+		return true, "", err
+	}
+	images, err := dashdev.DiscoverImages(c, op)
+	if err != nil {
+		return false, "", err
+	}
+	tags := dashdev.BuildTags(DashboardDevPR, pr, flavor)
+	var missing []string
+	seen := map[string]bool{}
+	for _, img := range images {
+		if seen[img.Repository] {
+			continue
+		}
+		seen[img.Repository] = true
+		ctx, cancel := context.WithTimeout(c.Context(), buildResolveTimeout)
+		_, _, found, err := dashdev.ResolveBuildTags(ctx, img.Repository, tags)
+		cancel()
+		if err != nil {
+			return false, "", err
+		}
+		if !found {
+			missing = append(missing, img.Repository)
+		}
+	}
+	return len(missing) == 0, "no " + strings.Join(tags, " or ") + " in " + strings.Join(missing, ", "), nil
 }
 
 // sessionRuns reports whether the Dashboard Dev session o runs the build d
@@ -754,8 +881,9 @@ func sessionRuns(o *types.DashboardOverride, d types.RecipeDashboardDev) bool {
 
 // runDashboardDev is the Dashboard Dev page's Deploy (main or the pull
 // request), then the wait for the dashboard to roll out, made here as the
-// page shows it. A session that runs the build already (a resume) is not
-// deployed again: only the wait runs.
+// page shows it (for the legacy flow, until the dashboard's pods are
+// ready). A build that runs already (a resume) is not deployed again: only
+// the wait runs.
 func runDashboardDev(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	d := s.Recipe.Spec.DashboardDev
 	build := strings.Trim(strings.TrimPrefix(dashboardDevTitle(d), "Dashboard Dev "), "()")
@@ -764,20 +892,28 @@ func runDashboardDev(c *kube.Client, s *State, emit func(types.UpdateStepEvent))
 		return fail(fmt.Sprintf("Cannot read the Dashboard Dev session: %v. Nothing was changed.", err), kube.ErrorCodeOr(err, "prerequisites"))
 	}
 	res := &types.OperationResponse{Success: true, Message: fmt.Sprintf("The dashboard runs the %s build.", build)}
-	if !sessionRuns(module, d) {
+	deployed := sessionRuns(module, d)
+	if module == nil {
+		deployed, err = legacyDeployed(c, d)
+		if err != nil {
+			return fail(fmt.Sprintf("Cannot read the dashboard: %v. Nothing was changed.", err), kube.ErrorCodeOr(err, "prerequisites"))
+		}
+	}
+	if !deployed {
 		emit(types.UpdateStepEvent{Step: StepDashboardDev, Status: "running", Message: fmt.Sprintf("Deploying the dashboard's %s build...", build)})
 		if d.Deploy == DashboardDevPR {
 			res, err = deployPR(c, d.PR, d.Flavor)
 		} else {
 			res, err = deployMain(c, d.Flavor)
 		}
-		if err != nil || res == nil || !res.Success || module == nil {
-			// Without the dashboard module (the legacy flow) there is no
-			// operator session to wait on.
+		if err != nil || res == nil || !res.Success {
 			return res, err
 		}
 	}
 	emit(types.UpdateStepEvent{Step: StepDashboardDev, Status: "running", Message: "Waiting for the dashboard to roll out (usually 1 to 2 minutes)..."})
+	if module == nil {
+		return waitLegacyDashboard(c, d, res)
+	}
 	if _, err := waitDashboard(c); err != nil {
 		if ctxErr := c.Context().Err(); ctxErr != nil && !errors.Is(ctxErr, context.DeadlineExceeded) {
 			return &types.OperationResponse{Success: false, Message: "Stopped while waiting for the dashboard.", Logs: res.Logs}, ctxErr
@@ -789,4 +925,30 @@ func runDashboardDev(c *kube.Client, s *State, emit func(types.UpdateStepEvent))
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("%s, but the dashboard is not ready: %v. Resume waits again without deploying it again.", strings.TrimSuffix(res.Message, "."), err), Logs: res.Logs, ErrorCode: kube.ErrorCodeOr(err, code)}, nil
 	}
 	return &types.OperationResponse{Success: true, Message: strings.TrimSuffix(res.Message, ".") + "; the dashboard is ready.", Logs: res.Logs}, nil
+}
+
+// legacyDeployed reports whether the legacy flow's dashboard runs the
+// recipe's PR image already (ready or not).
+func legacyDeployed(c *kube.Client, d types.RecipeDashboardDev) (bool, error) {
+	if d.Deploy != DashboardDevPR {
+		return false, nil
+	}
+	st, err := dashboardState(c)
+	if err != nil {
+		return false, err
+	}
+	return st.IsCustomPR && st.PRNumber == d.PR, nil
+}
+
+// waitLegacyDashboard waits, within the step's deadline, until the legacy
+// flow's dashboard runs the recipe's PR image with its pods ready.
+func waitLegacyDashboard(c *kube.Client, d types.RecipeDashboardDev, res *types.OperationResponse) (*types.OperationResponse, error) {
+	for {
+		if done, err := legacyRuns(c, d); err == nil && done {
+			return &types.OperationResponse{Success: true, Message: strings.TrimSuffix(res.Message, ".") + "; the dashboard is ready.", Logs: res.Logs}, nil
+		}
+		if kube.Clock().Sleep(c.Context(), stepPoll) != nil {
+			return &types.OperationResponse{Success: false, Message: fmt.Sprintf("%s, but the dashboard is not ready within the step's time. Resume waits again without deploying it again.", strings.TrimSuffix(res.Message, ".")), Logs: res.Logs, ErrorCode: "timeout"}, nil
+		}
+	}
 }

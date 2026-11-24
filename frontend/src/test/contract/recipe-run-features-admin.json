@@ -248,7 +248,7 @@
       {
         "finishedAt": "2026-11-20T15:38:00Z",
         "id": "maas-publish",
-        "maxSeconds": 300,
+        "maxSeconds": 900,
         "message": "Publish the model through MaaS is set up.",
         "startedAt": "2026-11-20T15:36:00Z",
         "status": "success",
@@ -299,7 +299,7 @@
       {
         "finishedAt": "2026-11-20T15:53:00Z",
         "id": "workbench",
-        "maxSeconds": 120,
+        "maxSeconds": 900,
         "message": "Workbench is set up.",
         "startedAt": "2026-11-20T15:51:00Z",
         "status": "success",

@@ -15,6 +15,9 @@ type (
 	RecipeCheck = recipe.Check
 )
 
+// RecipeCreatedKueueSetting is recipe.CreatedKueueSetting.
+const RecipeCreatedKueueSetting = recipe.CreatedKueueSetting
+
 // ErrorCodeConfirmProjectContents is recipe.ErrorCodeConfirmContents.
 const ErrorCodeConfirmProjectContents = recipe.ErrorCodeConfirmContents
 

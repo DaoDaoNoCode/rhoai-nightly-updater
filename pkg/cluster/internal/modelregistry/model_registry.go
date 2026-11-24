@@ -288,10 +288,6 @@ func readService(c *kube.Client, ns string) (service, bool, error) {
 	return s, found, err
 }
 
-// userReadCR and userReadService are the status's reads, made with the
-// signed-in user's own token only: they refuse another client
-// (authz.ErrNotUserClient), so the ServiceAccount is granted nothing for
-// them (pkg/cluster rbac_coverage_test.go rbacUserTokenReads).
 // ReadRegistryMeta reads the metadata of the registry of this tool's name
 // where RHOAI keeps registries: sa finds where (the DataScienceCluster), u
 // (the signed-in user's own client) reads the registry. found is false
@@ -312,6 +308,10 @@ func ReadRegistryMeta(sa, u *kube.Client) (kube.ObjectMeta, bool, error) {
 	return o.Metadata, found, err
 }
 
+// userReadCR and userReadService are the status's reads, made with the
+// signed-in user's own token only: they refuse another client
+// (authz.ErrNotUserClient), so the ServiceAccount is granted nothing for
+// them (pkg/cluster rbac_coverage_test.go rbacUserTokenReads).
 func userReadCR(u *kube.Client, ns string) (object, bool, error) {
 	if !u.ActsAsUser() {
 		return object{}, false, authz.ErrNotUserClient

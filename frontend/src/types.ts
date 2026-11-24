@@ -2138,8 +2138,8 @@ export interface RecipePlan {
   pinned?: RecipePinnedBuild;
   typicalSeconds: number;
   maxSeconds: number;
-  /** What the run changes beyond the recipe's own parts; they do not refuse it. */
-  warnings?: string[];
+  /** Notes that do not refuse the run: advice before it, or a change it makes to what the whole cluster shares. */
+  warnings?: { kind: "advice" | "cluster"; message: string }[];
 }
 
 export type RecipeRunState = "running" | "succeeded" | "failed" | "stopped";

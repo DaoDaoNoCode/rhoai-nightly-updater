@@ -58,13 +58,17 @@ func kueueRequest(s *State) types.KueueRequest {
 	return types.KueueRequest{Action: "setup", Project: projectOf(s), RayCluster: k.RayCluster, RayJob: k.RayJob, RayImage: k.RayImage}
 }
 
-// checkKueue: project queues from this tool, the project label, requested
-// samples, and when requested the dashboard setting must all be present →
-// done. Fail closed on tab refusals: setup bound to another project, a
-// LocalQueue named default, the Kueue API, OLM, labelPolicy or KueueReady
-// diverging from RHOAI docs, or objects this tool did not create.
+// checkKueue: this tool's queues for the project, the project label, the
+// samples asked for and (asked for) the dashboard's setting in effect are
+// there → done, and a setup that proves this run created it is recorded as
+// the run's. What the tab refuses blocks (fail closed): a setup in another
+// project, a LocalQueue named default, the Kueue API, OLM, labelPolicy or
+// KueueReady not as RHOAI documents them, objects the tool did not create,
+// and samples asked for while the ray component is off (the recipe does
+// not turn it on).
 func checkKueue(c *kube.Client, s *State) (Check, error) {
 	project := projectOf(s)
+	k := s.Recipe.Spec.Features.Kueue
 	st, err := kueueStatus(c, c, project)
 	if err != nil {
 		return Check{}, fmt.Errorf("read distributed workloads in %s: %w", project, err)
@@ -73,12 +77,16 @@ func checkKueue(c *kube.Client, s *State) (Check, error) {
 		return blockedAt(why), nil
 	}
 	if st.Blocked != nil {
-		return Check{}, nil // prerequisite step must clear blocked first
+		return Check{}, nil // its prerequisites' step turns it on
 	}
-	if !kueueSetUp(st, s.Recipe.Spec.Features.Kueue) {
+	if (k.RayCluster || k.RayJob) && st.RayBlocked != nil {
+		return Check{Blocked: fmt.Sprintf("The samples need the DataScienceCluster's ray component, which is off (%s). The recipe does not turn it on: turn ray on on the Components page, or leave the samples out.", strings.TrimSuffix(st.RayBlocked.Reason, ".")), Fix: fixAt(types.RecipeFixFeatureBlocked, pageComponents)}, nil
+	}
+	if !kueueSetUp(st, k) {
 		return Check{}, nil
 	}
-	return Check{Done: true, Reason: fmt.Sprintf("Distributed workloads are set up in %s.", project)}, nil
+	_ = markKueueCreated(c, s) // a read that fails marks nothing
+	return Check{Done: true, Reason: fmt.Sprintf("Distributed workloads are in %s.", project)}, nil
 }
 
 // kueueBlocked returns why Set up on the tab rejects the project, or "".
@@ -104,7 +112,9 @@ func kueueBlocked(st *types.KueueStatus, project string) string {
 	return ""
 }
 
-// kueueSetUp returns true when status reflects everything k requests.
+// kueueSetUp reports whether the status shows everything k asks for. The
+// dashboard's setting counts only when it is in effect (optInLive), never
+// from the tool's record alone.
 func kueueSetUp(st *types.KueueStatus, k types.RecipeKueue) bool {
 	if len(st.Objects) == 0 || st.Label == nil || !st.Label.Present {
 		return false
@@ -126,79 +136,89 @@ func kueueSetUp(st *types.KueueStatus, k types.RecipeKueue) bool {
 			return false
 		}
 	}
-	return !k.DashboardOptIn || st.OptIn.On
+	return !k.DashboardOptIn || optInLive(st)
 }
 
-// runKueueStep runs the Distributed workloads tab Set up in the project
-// (including requested samples), then Turn on for the dashboard setting
-// when the recipe requests it. Cluster-scoped objects it creates (ResourceFlavor,
-// ClusterQueue, Queue hardware profile) get the run annotation at creation; a
-// ClusterQueue it created is tied to the run by UID.
+// optInLive reports whether the dashboard's Kueue setting is in effect as
+// the tab's Turn on makes it: disableKueue false on the live dashboard
+// settings, and the Queue hardware profile there and this tool's.
+func optInLive(st *types.KueueStatus) bool {
+	o := st.OptIn
+	return o.DisableKueue != nil && !*o.DisableKueue && o.Profile.Present && o.Profile.ManagedByTool && !o.Profile.Terminating
+}
+
+// runKueueStep is the Distributed workloads tab's Set up in the project
+// (with the samples asked for), then its Turn on for the dashboard's
+// setting when the recipe asks for it and it is not in effect (Turn on
+// handles a switch that is off and a profile that is missing). The
+// cluster-wide objects it creates (the ResourceFlavor, the ClusterQueue,
+// the Queue hardware profile) carry the run's annotation from their
+// creation; the run records the setup as its own when its ClusterQueue
+// proves it (also on a resume after a crash between create and record).
 func runKueueStep(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	project := projectOf(s)
 	before, err := kueueStatus(c, c, project)
 	if err != nil {
 		return fail(fmt.Sprintf("Cannot read distributed workloads in %s: %v. Nothing was changed.", project, err), kube.ErrorCodeOr(err, "prerequisites"))
 	}
-	var annotations map[string]string
-	if s.RunID != "" {
-		annotations = map[string]string{RecipeRunAnnotation: s.RunID}
-	}
-	cqBefore := kueueObjectPresent(before, "ClusterQueue")
-	res, err := runKueue(c, kueueRequest(s), annotations, emit)
-	if !cqBefore {
-		markKueueCreated(c, s, res, emit)
-	}
-	if err != nil || res == nil || !res.Success {
-		return res, err
-	}
-	if s.Recipe.Spec.Features.Kueue.DashboardOptIn && !before.OptIn.On {
-		opt, err := runKueue(c, types.KueueRequest{Action: "optin"}, annotations, emit)
-		if err != nil || opt == nil || !opt.Success {
-			return opt, err
-		}
-		res.Message = strings.TrimSpace(res.Message + " " + opt.Message)
-		res.Logs = append(res.Logs, opt.Logs...)
-	}
-	return res, nil
-}
-
-func kueueObjectPresent(st *types.KueueStatus, kind string) bool {
-	for _, o := range st.Objects {
-		if o.Kind == kind && o.Present {
-			return true
+	ann := runAnnotations(s)
+	res, err := runKueue(c, kueueRequest(s), ann, emit)
+	if err == nil && res != nil && res.Success && s.Recipe.Spec.Features.Kueue.DashboardOptIn && !optInLive(before) {
+		opt, optErr := runKueue(c, types.KueueRequest{Action: "optin"}, ann, emit)
+		if optErr != nil || opt == nil || !opt.Success {
+			res, err = opt, optErr
+		} else {
+			res.Message = strings.TrimSpace(res.Message + " " + opt.Message)
+			res.Logs = append(res.Logs, opt.Logs...)
 		}
 	}
-	return false
-}
-
-// markKueueCreated registers the ClusterQueue created by this run's setup
-// (run annotation and tool ownership per its record), or reports in the step
-// result when registration fails (so Clean up will not offer it).
-func markKueueCreated(c *kube.Client, s *State, res *types.OperationResponse, emit func(types.UpdateStepEvent)) {
 	rc, cancel := readWithin(c)
 	defer cancel()
-	meta, found, err := kueueCQMeta(rc)
-	if err != nil {
-		noteUnrecorded(StepKueue, "the distributed workloads setup", err, res, emit)
-		return
+	if markErr := markKueueCreated(rc, s); markErr != nil {
+		noteUnrecorded(StepKueue, "the distributed workloads setup", markErr, res, emit)
 	}
-	rec, err := kueueRecord(rc)
-	if err != nil {
-		noteUnrecorded(StepKueue, "the distributed workloads setup", err, res, emit)
-		return
-	}
-	if found && s.RunID != "" && meta.Annotations[RecipeRunAnnotation] == s.RunID && kueue.Owns(meta, rec.ClusterQueueUID) {
-		s.AddCreated(types.RecipeCreatedPart{Part: types.RecipePartKueue, UID: meta.UID})
-	}
+	return res, err
 }
 
-// kueuePartProblem implements CreatedPartProblem for distributed workloads
-// setup: ClusterQueue must carry the run annotation, match uid, and belong
-// to the tool (per record); when dashboard opt-in from this tool is active,
-// the same run must have applied it (Queue hardware profile carries the run
-// annotation and recorded UID)—teardown reverts it with the rest, so opt-in
-// outside the run prevents offering the part.
+// markKueueCreated records the distributed workloads setup as the run's
+// when its ClusterQueue proves the run created it: the run's annotation
+// from its creation, and the tool's record owns it by its UID. It reads
+// only; a read that fails is returned and marks nothing.
+func markKueueCreated(c *kube.Client, s *State) error {
+	if s.RunID == "" {
+		return nil
+	}
+	meta, found, err := kueueCQMeta(c)
+	if err != nil || !found || meta.Annotations[RecipeRunAnnotation] != s.RunID {
+		return err
+	}
+	rec, err := kueueRecord(c)
+	if err != nil {
+		return err
+	}
+	if kueue.Owns(meta, rec.ClusterQueueUID) {
+		s.AddCreated(types.RecipeCreatedPart{Part: types.RecipePartKueue, UID: meta.UID})
+	}
+	return nil
+}
+
+// kueueSettingTurnedOn reports whether the tool's record says its opt-in
+// set the dashboard's Kueue setting (which the teardown turns back), for
+// the words of a Clean up whose setup proves it is this run's (with the
+// run's Queue hardware profile: kueuePartProblem).
+func kueueSettingTurnedOn(sa *kube.Client) bool {
+	rec, err := kueueRecord(sa)
+	return err == nil && rec.OptIn != nil && rec.OptIn.DisableKueueSet
+}
+
+// kueuePartProblem is CreatedPartProblem for the distributed workloads
+// setup: its ClusterQueue carries the run's annotation, has uid and is the
+// tool's (by its record), and, when this tool's dashboard opt-in is
+// recorded, that was this run's too: its Queue hardware profile (in the
+// namespace the opt-in recorded) carries the run's annotation and the
+// recorded UID. The teardown turns the opt-in back with the rest, so an
+// opt-in made outside the run, or one whose profile is missing, keeps the
+// setup from being offered.
 func kueuePartProblem(sa, u *kube.Client, runID, uid string, notIt func(string) string) string {
 	if u == nil {
 		return "Distributed workloads are read with your own sign-in, which this request does not have."
@@ -214,28 +234,39 @@ func kueuePartProblem(sa, u *kube.Client, runID, uid string, notIt func(string) 
 	case !found || meta.UID != uid || meta.Annotations[RecipeRunAnnotation] != runID || meta.Terminating() || !kueue.Owns(meta, rec.ClusterQueueUID):
 		return notIt("The distributed workloads setup")
 	}
-	if o := rec.OptIn; o != nil && (o.DisableKueueSet || o.ProfileUID != "") {
-		pm, found, err := kueueProfileMeta(u, o.ProfileNamespace)
-		switch {
-		case err != nil:
-			return "Cannot read the Queue hardware profile: " + err.Error()
-		case !found || pm.UID != o.ProfileUID || pm.Annotations[RecipeRunAnnotation] != runID || !kueue.Owns(pm, o.ProfileUID):
-			return "The dashboard's Kueue setting was turned on outside this run, and removing distributed workloads turns it back too, so the recipe's Clean up does not remove them. Use the Distributed workloads tab."
-		}
+	o := rec.OptIn
+	if o == nil || (!o.DisableKueueSet && o.ProfileUID == "") {
+		return ""
+	}
+	const tabNote = " The recipe's Clean up does not remove distributed workloads, since that would turn the setting back too; use the Distributed workloads tab."
+	if o.ProfileUID == "" {
+		return "This tool turned the dashboard's Kueue setting on, but its Queue hardware profile was never created, so nothing shows that this run did it." + tabNote
+	}
+	ns := kube.FirstNonEmpty(o.ProfileNamespace, o.ConfigNamespace)
+	pm, found, err := kueueProfileMeta(u, ns)
+	switch {
+	case err != nil:
+		return "Cannot read the Queue hardware profile: " + err.Error()
+	case !found:
+		return fmt.Sprintf("This tool's Queue hardware profile is gone from %s, so nothing shows that this run turned the dashboard's Kueue setting on.", ns) + tabNote
+	case pm.UID != o.ProfileUID || pm.Annotations[RecipeRunAnnotation] != runID || !kueue.Owns(pm, o.ProfileUID):
+		return "The dashboard's Kueue setting was turned on outside this run." + tabNote
 	}
 	return ""
 }
 
-// kueueWarnings collects plan warnings for distributed workloads: other
-// recipe features in the same project (Kueue only queues submitted work,
-// so those keep running, as the tab notes), and cluster-wide impact of the
-// dashboard setting.
-func kueueWarnings(r types.EnvironmentRecipe) []string {
+// kueueWarnings are the plan's notes for distributed workloads, from what
+// the recipe turns on: advice when the same project also gets other
+// setups (Kueue manages only what is sent to a queue, so they keep
+// running, as the tab says), and the dashboard setting's cluster-wide
+// change, only when the recipe turns it on and it is not on already
+// (optInOn).
+func kueueWarnings(r types.EnvironmentRecipe, optInOn bool) []types.RecipeWarning {
 	f := r.Spec.Features
 	if !f.Kueue.Enabled {
 		return nil
 	}
-	var out []string
+	var out []types.RecipeWarning
 	var others []string
 	if f.Pipelines.Enabled {
 		others = append(others, "a pipeline server")
@@ -243,14 +274,33 @@ func kueueWarnings(r types.EnvironmentRecipe) []string {
 	if f.Models.Enabled {
 		others = append(others, "a model")
 	}
+	if f.Models.Enabled && f.Playground.Enabled {
+		others = append(others, "a playground")
+	}
+	if f.MLflow.Enabled && f.MLflow.Samples {
+		others = append(others, "the MLflow samples")
+	}
 	if f.Workbench.Enabled {
 		others = append(others, "a workbench")
 	}
 	if len(others) > 0 {
-		out = append(out, fmt.Sprintf("Project %s also gets %s. Kueue manages only what is sent to a queue, so they keep running. A project of its own is still safer: with the dashboard's Kueue setting on, new workbenches and models there need the queue hardware profile.", projectName(r.Spec.Project), kube.JoinTitles(others)))
+		out = append(out, types.RecipeWarning{Kind: types.RecipeWarningAdvice, Message: fmt.Sprintf("Project %s also gets %s. Kueue manages only what is sent to a queue, so they keep running. A project of its own is still safer.", projectName(r.Spec.Project), kube.JoinTitles(others))})
 	}
-	if f.Kueue.DashboardOptIn {
-		out = append(out, "The dashboard's Kueue setting changes every new project on this cluster: workbenches and model deployments there can only use the queue hardware profile, and a project without its own LocalQueue cannot create workbenches or deploy models until an admin adds one.")
+	if f.Kueue.DashboardOptIn && !optInOn {
+		out = append(out, types.RecipeWarning{Kind: types.RecipeWarningCluster, Message: "The dashboard's Kueue setting is turned on: in every new project on this cluster, workbenches and model deployments can only use the queue hardware profile, and a project without its own LocalQueue cannot create workbenches or deploy models until an admin adds one."})
 	}
 	return out
+}
+
+// planKueueWarnings are kueueWarnings with whether the tool's opt-in is in
+// effect now, read in the recipe's project (a read that fails counts as
+// not in effect: the warning shows).
+func planKueueWarnings(c *kube.Client, r types.EnvironmentRecipe) []types.RecipeWarning {
+	on := false
+	if k := r.Spec.Features.Kueue; k.Enabled && k.DashboardOptIn && r.Spec.Project != nil {
+		if st, err := kueueStatus(c, c, r.Spec.Project.Name); err == nil {
+			on = optInLive(st)
+		}
+	}
+	return kueueWarnings(r, on)
 }

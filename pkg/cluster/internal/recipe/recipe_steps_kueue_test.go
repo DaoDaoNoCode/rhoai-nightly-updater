@@ -63,20 +63,30 @@ func (fk *fakeKueue) install(t *testing.T) {
 				m := toolMeta("", kueue.ClusterQueueName, "cq-1", annotations)
 				fk.cq, fk.rec.ClusterQueueUID = &m, "cq-1"
 			}
-			fk.st = setUpKueue(req.Project, req.RayCluster, req.RayJob, fk.st.OptIn.On)
+			fk.st = setUpKueue(req.Project, req.RayCluster, req.RayJob, optInLive(&fk.st))
 		case "optin":
 			m := toolMeta("redhat-ods-applications", kueue.ProfileName, "prof-1", annotations)
 			fk.profile = &m
 			fk.rec.OptIn = &kueue.OptIn{DisableKueueSet: true, ProfileUID: "prof-1", ProfileNamespace: "redhat-ods-applications"}
-			fk.st.OptIn.On = true
+			fk.st.OptIn = liveOptIn(true)
 		}
 		return &types.OperationResponse{Success: true, Message: req.Action + " done."}, nil
 	}
 }
 
+// liveOptIn is the tab's opt-in status: in effect (the switch on, the
+// tool's profile there), or off.
+func liveOptIn(on bool) types.KueueOptIn {
+	if !on {
+		return types.KueueOptIn{}
+	}
+	f := false
+	return types.KueueOptIn{On: true, DisableKueue: &f, Profile: types.KueueObject{Kind: "HardwareProfile", Name: kueue.ProfileName, Present: true, ManagedByTool: true}}
+}
+
 // setUpKueue builds the tab-facing status for Kueue configured in a project.
 func setUpKueue(project string, rayCluster, rayJob, optIn bool) types.KueueStatus {
-	st := types.KueueStatus{Project: project, Label: &types.KueueLabel{Present: true, AddedByTool: true}, OptIn: types.KueueOptIn{On: optIn}}
+	st := types.KueueStatus{Project: project, Label: &types.KueueLabel{Present: true, AddedByTool: true}, OptIn: liveOptIn(optIn)}
 	for _, k := range []string{"ResourceFlavor", "ClusterQueue", "LocalQueue"} {
 		st.Objects = append(st.Objects, types.KueueObject{Kind: k, Name: strings.ToLower(k), Present: true, ManagedByTool: true})
 	}
@@ -227,8 +237,9 @@ func TestKueueOwnership_OffersOnlyWhatTheRunCreated(t *testing.T) {
 // project setups but ahead of Dashboard Dev.
 func TestKueuePlan_WarningsAndOrder(t *testing.T) {
 	r := validRecipe(t, "  project: {mode: existing, name: proj}\n  features:\n    pipelines: {enabled: true}\n    workbench: {enabled: true}\n    kueue: {enabled: true, dashboardOptIn: true}\n  dashboardDev: {deploy: main}\n")
-	w := kueueWarnings(r)
-	if len(w) != 2 || !strings.Contains(w[0], "Project proj also gets a pipeline server and a workbench") || !strings.Contains(w[1], "every new project on this cluster") {
+	w := kueueWarnings(r, false)
+	if len(w) != 2 || w[0].Kind != types.RecipeWarningAdvice || !strings.Contains(w[0].Message, "Project proj also gets a pipeline server and a workbench") ||
+		w[1].Kind != types.RecipeWarningCluster || !strings.Contains(w[1].Message, "every new project on this cluster") {
 		t.Fatalf("warnings %q", w)
 	}
 	var ids []string
@@ -238,7 +249,11 @@ func TestKueuePlan_WarningsAndOrder(t *testing.T) {
 	if got := strings.Join(ids, " "); !strings.HasSuffix(got, "workbench kueue-prereq kueue dashboard-dev") {
 		t.Errorf("order %s", got)
 	}
-	if w := kueueWarnings(validRecipe(t, "  project: {mode: existing, name: proj}\n  features: {kueue: {enabled: true}}\n")); len(w) != 0 {
+	// The setting already on: no cluster warning.
+	if w := kueueWarnings(r, true); len(w) != 1 || w[0].Kind != types.RecipeWarningAdvice {
+		t.Errorf("opt-in already on: %+v", w)
+	}
+	if w := kueueWarnings(validRecipe(t, "  project: {mode: existing, name: proj}\n  features: {kueue: {enabled: true}}\n"), false); len(w) != 0 {
 		t.Errorf("a project of its own, opt-in off: %q", w)
 	}
 }

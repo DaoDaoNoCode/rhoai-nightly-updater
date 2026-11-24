@@ -294,7 +294,10 @@ func stubRecipeContract(t *testing.T, started time.Time) {
 	planRecipe = func(_ *cluster.Client, r types.EnvironmentRecipe, _ *types.RecipePinnedBuild) (*types.RecipePlan, cluster.RecipeState) {
 		return &types.RecipePlan{
 			Recipe: r, Pinned: pinned, TypicalSeconds: 780, MaxSeconds: 3120,
-			Warnings: []string{"The dashboard's Kueue setting changes every new project on this cluster."},
+			Warnings: []types.RecipeWarning{
+				{Kind: types.RecipeWarningAdvice, Message: "Project recipe-dev also gets a pipeline server. Kueue manages only what is sent to a queue, so they keep running. A project of its own is still safer."},
+				{Kind: types.RecipeWarningCluster, Message: "The dashboard's Kueue setting is turned on: in every new project on this cluster, workbenches and model deployments can only use the queue hardware profile."},
+			},
 			Steps: []types.RecipePlanStep{
 				{ID: "rhoai", Title: "RHOAI", Action: types.RecipeStepRun, TypicalSeconds: 420, MaxSeconds: 900},
 				{ID: "dsc", Title: "DataScienceCluster", Action: types.RecipeStepLater, Reason: "Checked when the run gets here: it depends on a step before it.", TypicalSeconds: 60, MaxSeconds: 420},

@@ -131,13 +131,16 @@ export const RecipeReviewModal: React.FC<{
               </Alert>
             </StackItem>
           )}
-          {shownPlan?.warnings && shownPlan.warnings.length > 0 && (
-            <StackItem>
-              <Alert variant="warning" isInline component="p" title="The run also changes this">
-                <List>{shownPlan.warnings.map((w) => <ListItem key={w}>{w}</ListItem>)}</List>
-              </Alert>
-            </StackItem>
-          )}
+          {([["cluster", "warning", "This run changes the shared cluster"], ["advice", "info", "Before you run"]] as const).map(([kind, variant, title]) => {
+            const notes = (shownPlan?.warnings ?? []).filter((w) => w.kind === kind);
+            return notes.length > 0 && (
+              <StackItem key={kind}>
+                <Alert variant={variant} isInline component="p" title={title}>
+                  {notes.length === 1 ? notes[0].message : <List>{notes.map((w) => <ListItem key={w.message}>{w.message}</ListItem>)}</List>}
+                </Alert>
+              </StackItem>
+            );
+          })}
           {shownPlan && shownPlan.steps.some((s) => s.action === "later") && (
             <StackItem>
               <Content component="p">

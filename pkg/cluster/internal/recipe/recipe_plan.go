@@ -135,7 +135,7 @@ func Plan(c *kube.Client, r types.EnvironmentRecipe, pinned *types.RecipePinnedB
 		plan.Steps = append(plan.Steps, ps)
 	}
 	plan.Pinned = s.Pinned
-	plan.Warnings = kueueWarnings(r)
+	plan.Warnings = planKueueWarnings(c, r)
 	plan.Problems = append(plan.Problems, p...)
 	return plan, s
 }

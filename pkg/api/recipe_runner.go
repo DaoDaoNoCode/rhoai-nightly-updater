@@ -408,7 +408,7 @@ func (x *recipeExec) loop() (end recipeEnd) {
 		}
 		current = -1
 	}
-	return recipeEnd{state: types.RecipeRunSucceeded, reason: fmt.Sprintf("Every step of %s is set up.", x.state.Recipe.Metadata.Name)}
+	return recipeEnd{state: types.RecipeRunSucceeded, reason: fmt.Sprintf("Every step of recipe %s is set up.", x.state.Recipe.Metadata.Name)}
 }
 
 // beforeStep decides whether step i may start (the runner's notes, points
@@ -611,6 +611,7 @@ func recipeRunStatus(c, u *cluster.Client) types.RecipeRunStatus {
 	created := map[string]bool{}
 	if !st.Running {
 		created, st.Cleanup = recipeOwnership(c, u, st.Run)
+		st.CleanupKueueSetting = created[cluster.RecipeCreatedKueueSetting]
 	}
 	for i := range st.Run.Steps {
 		st.Run.Steps[i].Created = created[st.Run.Steps[i].ID]

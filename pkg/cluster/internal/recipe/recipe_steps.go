@@ -129,6 +129,8 @@ func Ownership(c, u *kube.Client, run *types.RecipeRun) (map[string]bool, *types
 			req.ModelRegistry, req.ModelRegistryUID, created[StepModelRegistry] = true, uid, true
 		case types.RecipePartKueue:
 			req.Kueue, req.KueueUID, created[StepKueue] = true, uid, true
+			// The words of its Clean up: the teardown turns the setting back.
+			created[CreatedKueueSetting] = kueueSettingTurnedOn(c)
 		}
 	}
 	if req.MaaSPlatform || req.ModelRegistry || req.Kueue {
@@ -175,6 +177,11 @@ func liveComponents(c *kube.Client, keys []string) map[string]string {
 	}
 	return out
 }
+
+// CreatedKueueSetting is Ownership's created entry (not a step) saying the
+// offered distributed workloads setup's teardown also turns the dashboard's
+// Kueue setting back, which this run turned on.
+const CreatedKueueSetting = "kueue-setting"
 
 // liveCreated returns the cluster-wide parts of run that are still as the
 // run created them, proven on the objects themselves (see Ownership), with
@@ -536,7 +543,7 @@ func checkPrereqFor(c *kube.Client, feature, exposure string) (Check, error) {
 	fp := st.Features[feature]
 	switch {
 	case fp.Ready:
-		return Check{Done: true, Reason: "Everything it needs is set up."}, nil
+		return Check{Done: true, Reason: "Everything it needs is there."}, nil
 	case fp.SetupBlockedReason != "":
 		return Check{Blocked: fp.SetupBlockedReason, Fix: fixAt(types.RecipeFixFeatureBlocked, pageEnvironment)}, nil
 	}

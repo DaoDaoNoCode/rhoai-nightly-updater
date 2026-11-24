@@ -1181,7 +1181,17 @@ func (m *Run) writeDBConfig(rec *MaaSRecord, p *MaaSDBPlan, st maasDBState, maas
 	if err != nil {
 		return m.Fail("database", err.Error()+" Run it again to retry.", kube.ErrorCodeFromK8sErr(err), "db secret read failed")
 	}
-	written, err := ensureMaaSDBObject(c, "Secret", ns, maasDBConfigObject(ns, connURL), st.secret, st.secretFound, false)
+	obj := maasDBConfigObject(ns, connURL)
+	if !st.secretFound && len(m.Annotations) > 0 {
+		// Created now: it carries the annotations from its creation.
+		meta := obj["metadata"].(map[string]any)
+		ann := map[string]any{}
+		for k, v := range m.Annotations {
+			ann[k] = v
+		}
+		meta["annotations"] = ann
+	}
+	written, err := ensureMaaSDBObject(c, "Secret", ns, obj, st.secret, st.secretFound, false)
 	if err != nil {
 		return m.Fail("database", p.Redact(fmt.Sprintf("Failed to write Secret %s/%s: %v.", ns, maasDBConfigSecret, err), connURL), MaaSWriteCode(err), "secret apply failed")
 	}

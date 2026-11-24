@@ -330,7 +330,22 @@ type RecipePlan struct {
 	// Warnings say what the run changes beyond the recipe's own parts and
 	// do not refuse it (the dashboard's cluster-wide Kueue setting; other
 	// setups in the project Kueue labels).
-	Warnings []string `json:"warnings,omitempty"`
+	Warnings []RecipeWarning `json:"warnings,omitempty"`
+}
+
+// The kinds of a plan's warning (RecipeWarning.Kind).
+const (
+	// RecipeWarningAdvice is advice before the run (a safer choice).
+	RecipeWarningAdvice = "advice"
+	// RecipeWarningCluster is a change the run makes to what the whole
+	// cluster shares.
+	RecipeWarningCluster = "cluster"
+)
+
+// RecipeWarning is one of a plan's warnings.
+type RecipeWarning struct {
+	Kind    string `json:"kind"`
+	Message string `json:"message"`
 }
 
 // RecipePlanStep is one step of a plan.
@@ -484,6 +499,10 @@ type RecipeRunStatus struct {
 	// CleanupRequest); the user confirms it, and the project's contents
 	// when Clean up asks.
 	Cleanup *CleanupRequest `json:"cleanup,omitempty"`
+	// CleanupKueueSetting: removing the offered distributed workloads
+	// setup also turns the dashboard's Kueue setting back, which the run
+	// turned on (the Clean up dialog says so).
+	CleanupKueueSetting bool `json:"cleanupKueueSetting,omitempty"`
 	// Projects are the projects recipes created (this run's and earlier
 	// runs') that the cluster has now, as Clean up may delete them, when no
 	// run is running; ProjectsError says why they could not be read.
