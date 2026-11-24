@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 )
@@ -36,7 +37,7 @@ const (
 	defaultClassAnnotation = "storageclass.kubernetes.io/is-default-class"
 	// KueueProjectLabel is present when Kueue should admit that project's workloads
 	// (packages/k8s-core k8sTypes.ts KnownLabels.KUEUE_MANAGED).
-	KueueProjectLabel = "kueue.openshift.io/managed"
+	KueueProjectLabel = envkit.KueueProjectLabel
 	// DefaultStorageSize is what the dashboard uses when notebookController.pvcSize
 	// is absent (storage/useDefaultPvcSize.ts).
 	DefaultStorageSize = "20Gi"
@@ -373,26 +374,19 @@ func (p HardwareProfile) isQueue() bool {
 	return p.Spec.Scheduling != nil && p.Spec.Scheduling.Type == "Queue"
 }
 
-// KueueMode corresponds to dashboard kueueFilteringState (kueueUtils.ts L56-97).
-type KueueMode int
+// KueueMode is the dashboard's Kueue rule (envkit.KueueMode), shared with
+// the Models tab's profile pick.
+type KueueMode = envkit.KueueMode
 
 const (
-	OnlyNonKueue KueueMode = iota
-	OnlyKueue
-	NoProfiles
+	OnlyNonKueue = envkit.OnlyNonKueue
+	OnlyKueue    = envkit.OnlyKueue
+	NoProfiles   = envkit.NoProfiles
 )
 
-// ModeFor encodes kueueFilteringState: with kueue.openshift.io/managed=true, Queue-only
-// profiles apply while Kueue is up, otherwise none; projects without that label see
-// only non-Queue profiles.
+// ModeFor is envkit.KueueModeFor.
 func ModeFor(projectKueue, kueueAvailable bool) KueueMode {
-	switch {
-	case projectKueue && kueueAvailable:
-		return OnlyKueue
-	case projectKueue:
-		return NoProfiles
-	}
-	return OnlyNonKueue
+	return envkit.KueueModeFor(projectKueue, kueueAvailable)
 }
 
 // ChooseProfile repeats the dashboard new-workbench default (useHardwareProfileConfig.ts

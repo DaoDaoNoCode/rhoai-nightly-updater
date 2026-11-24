@@ -107,6 +107,23 @@ var rbacUserTokenReads = map[string]string{
 	"workbench_reads.go:listNotebooks":        "a project's Notebooks, for which use the workbench storage",
 	"workbench_reads.go:listProjectPods":      "a project's pods, for which mount the workbench storage",
 	"workbench_reads.go:toolConnection":       "a project's dashboard Connection rhoai-nightly-updater-s3",
+	// A model's setup in a Kueue project (the dashboard's Kueue rule for
+	// its hardware profile).
+	"models_hardware.go:listModelLocalQueues": "a project's Kueue LocalQueues, for a model's hardware profile",
+	// The Distributed workloads status (GET /api/resources/kueue) and its
+	// operations read with the admin's own token.
+	"kueue_reads.go:v1beta2Served":       "API discovery of kueue.x-k8s.io (a read that fails is not \"absent\")",
+	"kueue_reads.go:readInstance":        "the Kueue CR cluster (kueue.openshift.io)",
+	"kueue_reads.go:readFlavor":          "ResourceFlavor nightly-kueue-cpu",
+	"kueue_reads.go:readClusterQueue":    "ClusterQueue nightly-kueue",
+	"kueue_reads.go:readLocalQueue":      "a project's LocalQueue nightly-kueue",
+	"kueue_reads.go:listClusterQueues":   "the ClusterQueues, for what uses the tool's ResourceFlavor and whether kueue is in use",
+	"kueue_reads.go:listLocalQueues":     "the LocalQueues of a project or of all, for a default queue and what uses the tool's ClusterQueue",
+	"kueue_reads.go:listWorkloads":       "a project's Kueue Workloads, the samples' state and what uses the LocalQueue",
+	"kueue_reads.go:readSample":          "a project's RayCluster nightly-raycluster or RayJob nightly-rayjob",
+	"kueue_reads.go:readNamespace":       "a project's namespace, for its labels",
+	"kueue_reads.go:readDashboardConfig": "the dashboard's OdhDashboardConfig, for disableKueue",
+	"kueue_reads.go:readProfile":         "hardware profile nightly-kueue-cpu",
 }
 
 // Best-effort reads of paths found by API discovery at run time, whose API

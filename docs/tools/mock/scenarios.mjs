@@ -23,6 +23,8 @@ export function baseWorld() {
     playground: F.playgroundWorld(),
     // The Workbench tab (GET /api/resources/workbench): items, and the plan of a project.
     workbench: { items: [] },
+    // The Distributed workloads tab (GET /api/resources/kueue).
+    kueue: F.kueueWorld("none"),
     // Models as a Service (GET /api/resources/maas).
     maas: F.maasWorld("none"),
     // This tool's model registry (GET /api/resources/model-registry).
@@ -563,6 +565,11 @@ export const scenarios = {
   // Others publish through the platform: Remove refuses before changing anything.
   "env-maas-in-use": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(false)] }); w.maasRefusal = F.MAAS_IN_USE; },
   // The Workbench tab: not set up (the plan shown), running, stopped, and no hardware profile fits.
+  // The Distributed workloads tab: not set up, operator missing, ready with samples, opt-in on.
+  "env-kueue-none": () => {},
+  "env-kueue-operator-missing": (w) => { w.kueue = F.kueueWorld("operator-missing"); w.prereq = { ...(w.prereq ?? {}), kueue: "missing" }; },
+  "env-kueue-ready": (w) => { w.kueue = F.kueueWorld("ready", { samples: true }); },
+  "env-kueue-optin": (w) => { w.kueue = F.kueueWorld("ready", { samples: true, optIn: true }); },
   "env-workbench-none": () => {},
   "env-workbench-running": (w) => { w.workbench.items = [F.workbenchItem("dev-project", "running")]; },
   "env-workbench-stopped": (w) => { w.workbench.items = [{ ...F.workbenchItem("dev-project", "stopped"), ready: false }]; },

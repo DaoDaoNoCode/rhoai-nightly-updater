@@ -1,6 +1,6 @@
 /** Environment page coverage: S3 storage, pipeline servers, MLflow, models, playground, MaaS, samples, prerequisites, and clean-up. */
 
-import { OperationResponse, ProjectStatus, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, ModelsRequest, PlaygroundRequest, PlaygroundStatus, WorkbenchRequest, WorkbenchStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelRegistryRequest, ModelRegistryStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest } from '../../types';
+import { OperationResponse, ProjectStatus, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, ModelsRequest, PlaygroundRequest, PlaygroundStatus, WorkbenchRequest, WorkbenchStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelRegistryRequest, ModelRegistryStatus, KueueRequest, KueueStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest } from '../../types';
 import { request } from './client';
 import { StreamDoneHandler, StreamDetachHandler, streamSSE } from './stream';
 
@@ -137,6 +137,8 @@ export interface CleanupRequest {
   mlflow?: boolean;
   /** This tool's model registry (with its registered models and its database). */
   modelRegistry?: boolean;
+  /** This tool's distributed workloads setup (samples, queues, project label, dashboard opt-in). */
+  kueue?: boolean;
   /** Projects whose models are removed (after MLflow). */
   models?: string[];
   /** Inference gateway teardown, following the models. */
@@ -335,4 +337,25 @@ export function streamModelRegistry(
   onConnectionDrop?: StreamDetachHandler,
 ): AbortController {
   return streamSSE('/api/resources/model-registry/stream', req, onStep, onDone, onConnectionDrop);
+}
+
+// --- Distributed workloads ---
+
+/** The Distributed workloads tab (GET /api/resources/kueue), read with the admin's own token. */
+export function getKueue(project: string | null, signal?: AbortSignal): Promise<KueueStatus> {
+  return request(`/api/resources/kueue${project ? `?project=${encodeURIComponent(project)}` : ''}`, { signal });
+}
+
+/**
+ * Sets up ("check", "queues", "project", "samples"), deletes ("samples",
+ * "queues", "project", "opt-in"), deletes a sample ("samples") or turns the
+ * dashboard opt-in on ("check", "dashboard", "profile") or off ("opt-in").
+ */
+export function streamKueue(
+  req: KueueRequest,
+  onStep: (step: UpdateStep) => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+): AbortController {
+  return streamSSE('/api/resources/kueue/stream', req, onStep, onDone, onConnectionDrop);
 }

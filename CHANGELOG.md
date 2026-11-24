@@ -24,6 +24,25 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Added
 
+- **Distributed workloads (Kueue) on the Environment page.** A new
+  **Distributed workloads** tab (and Overview row) sets Kueue up exactly as
+  the RHOAI docs do with self-managed queues: its prerequisites install the
+  cert-manager Operator and the Red Hat build of Kueue from OperatorHub
+  (default channel, all namespaces), then set the DataScienceCluster's
+  `kueue` to `Unmanaged` and wait for RHOAI's Kueue CR `cluster`. Set up
+  creates ResourceFlavor `nightly-kueue-cpu`, a non-preemptive ClusterQueue
+  `nightly-kueue` (6 CPUs, 11 GiB) for the chosen project only, LocalQueue
+  `nightly-kueue` (never `default`) and the project label
+  `kueue.openshift.io/managed=true`, plus optional RayCluster and RayJob
+  samples (image editable, default `quay.io/modh/ray:2.47.1-py311-cu121`)
+  for the dashboard's Distributed workloads and Infrastructure pages. An
+  opt-in, with its own confirmation, sets the dashboard's `disableKueue` to
+  false and adds a Queue hardware profile. Refused when Kueue does not
+  serve `v1beta2`, runs outside OLM, or has `labelPolicy: None`. Clean up
+  deletes only what the tool recorded and restores what nobody changed;
+  the operators stay. The Models tab's hardware profile follows the
+  dashboard's Kueue rule in Kueue projects. New user-token rights only; no
+  ServiceAccount change.
 - **Workbench on the Environment page.** A new **Workbench** tab (and
   Overview row) sets up a Jupyter workbench `nightly-workbench` in a data
   science project exactly as the dashboard's Create workbench does: the

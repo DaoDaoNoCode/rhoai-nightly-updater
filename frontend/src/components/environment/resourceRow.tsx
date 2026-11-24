@@ -267,7 +267,13 @@ export type Pending =
   | { kind: "maas-action"; action: MaaSActionId }
   /** Model registry: set up (with the sample model when samples) or delete this tool's registry. */
   | { kind: "setup-model-registry"; samples?: boolean }
-  | { kind: "teardown-model-registry" };
+  | { kind: "teardown-model-registry" }
+  /** Distributed workloads: set up in a project (with the samples ticked), delete, delete one sample, the dashboard opt-in. */
+  | { kind: "setup-kueue"; project: string; rayCluster: boolean; rayJob: boolean; rayImage: string }
+  | { kind: "teardown-kueue" }
+  | { kind: "delete-kueue-sample"; sample: "raycluster" | "rayjob" }
+  | { kind: "kueue-optin" }
+  | { kind: "kueue-optout" };
 
 /** A sample change: a streamed request of its own, not a resource's setup or deletion. */
 export type SamplePending = Extract<Pending, { kind: "mlflow-samples" }>;
@@ -287,7 +293,11 @@ const MAAS_KINDS: string[] = ["setup-maas", "teardown-maas", "publish-maas", "un
 export const isMaaSPending = (p: Pending): p is MaaSPending => MAAS_KINDS.includes(p.kind);
 export type WorkbenchPending = Extract<Pending, { kind: "setup-workbench" | "start-workbench" | "stop-workbench" | "teardown-workbench" | "delete-workbench-storage" }>;
 export const isWorkbenchPending = (p: Pending): p is WorkbenchPending => p.kind === "setup-workbench" || p.kind === "start-workbench" || p.kind === "stop-workbench" || p.kind === "teardown-workbench" || p.kind === "delete-workbench-storage";
-export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending | PlaygroundPending | MaaSPending | PrerequisitesPending | ModelRegistryPending | WorkbenchPending>;
+/** A Distributed workloads change: one streamed operation (pkg/api HandleKueueStream). */
+export type KueuePending = Extract<Pending, { kind: "setup-kueue" | "teardown-kueue" | "delete-kueue-sample" | "kueue-optin" | "kueue-optout" }>;
+const KUEUE_KINDS: string[] = ["setup-kueue", "teardown-kueue", "delete-kueue-sample", "kueue-optin", "kueue-optout"];
+export const isKueuePending = (p: Pending): p is KueuePending => KUEUE_KINDS.includes(p.kind);
+export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending | PlaygroundPending | MaaSPending | PrerequisitesPending | ModelRegistryPending | WorkbenchPending | KueuePending>;
 export const isPlaygroundPending = (p: Pending): p is PlaygroundPending => p.kind === "setup-playground" || p.kind === "teardown-playground";
 export const isSamplePending = (p: Pending): p is SamplePending => p.kind === "mlflow-samples";
 export const isModelsPending = (p: Pending): p is ModelsPending => p.kind === "setup-models" || p.kind === "teardown-model" || p.kind === "teardown-gateway" || p.kind === "allow-gateway-project" || p.kind === "disallow-gateway-project" || p.kind === "check-model";

@@ -1935,6 +1935,89 @@ export interface ModelRegistryRequest {
   samples?: boolean;
 }
 
+// --- Distributed workloads (pkg/types KueueStatus) ----------------------------
+
+/** The Kueue CR cluster and the DataScienceCluster's KueueReady (pkg/types KueueInstance). */
+export interface KueueInstance {
+  found: boolean;
+  available: boolean;
+  message?: string;
+  labelPolicy?: string;
+  /** "True", "False", or absent when not reported. */
+  kueueReady?: string;
+  v1beta2: boolean;
+  ready: boolean;
+}
+
+/** One of the tool's queue objects, or its hardware profile (pkg/types KueueObject). */
+export interface KueueObject {
+  kind: string;
+  name: string;
+  namespace?: string;
+  present: boolean;
+  managedByTool?: boolean;
+  foreign?: boolean;
+  active?: boolean;
+  message?: string;
+  terminating?: boolean;
+}
+
+/** The RayCluster or RayJob sample (pkg/types KueueSample). */
+export interface KueueSample {
+  kind: "raycluster" | "rayjob";
+  name: string;
+  present: boolean;
+  managedByTool?: boolean;
+  foreign?: boolean;
+  terminating?: boolean;
+  image?: string;
+  /** Its Workload's state as the dashboard names it (Queued, Inadmissible, Admitted, Running, Complete, Failed, ...). */
+  state?: string;
+  message?: string;
+  rayState?: string;
+}
+
+/** The dashboard's Kueue switch and the tool's Queue hardware profile. */
+export interface KueueOptIn {
+  /** odh-dashboard-config's disableKueue; absent: unset (the dashboard takes it as true). */
+  disableKueue?: boolean;
+  setByTool?: boolean;
+  previous?: string;
+  profile: KueueObject;
+  on?: boolean;
+}
+
+/** GET /api/resources/kueue?project=: the Distributed workloads tab, read with the admin's own token. */
+export interface KueueStatus {
+  project?: string;
+  /** The project of the tool's setup, when another than the one asked about. */
+  setUpIn?: string;
+  blocked?: ComponentBlock;
+  rayBlocked?: ComponentBlock;
+  instance: KueueInstance;
+  refusal?: string;
+  refusalCode?: string;
+  objects: KueueObject[];
+  quota: string;
+  label?: { present: boolean; addedByTool?: boolean };
+  defaultQueue?: boolean;
+  samples: KueueSample[];
+  optIn: KueueOptIn;
+  defaultRayImage: string;
+  itemsProblem?: string;
+  dashboardUrl?: string;
+}
+
+/** The body of POST /api/resources/kueue/stream. */
+export interface KueueRequest {
+  action: "setup" | "teardown" | "delete-sample" | "optin" | "optout";
+  project?: string;
+  rayCluster?: boolean;
+  rayJob?: boolean;
+  rayImage?: string;
+  sample?: "raycluster" | "rayjob";
+}
+
 // --- One-click prerequisites (pkg/types PrerequisitesStatus) -----------------
 
 /** A DataScienceCluster component this tool turned on, and what it was. */
@@ -1958,7 +2041,7 @@ export interface FeaturePrerequisites {
 }
 
 /** The features the prerequisites cover. */
-export type PrerequisiteFeature = "pipelines" | "mlflow" | "model-registry" | "models" | "playground";
+export type PrerequisiteFeature = "pipelines" | "mlflow" | "model-registry" | "models" | "playground" | "kueue";
 
 /** GET /api/resources/prerequisites. */
 export interface PrerequisitesStatus {

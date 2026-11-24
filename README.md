@@ -223,6 +223,17 @@ The Workbench tab sets up a Jupyter workbench `nightly-workbench` in a project y
 
 Troubleshooting: [RUNBOOK §10.6](RUNBOOK.md#106-workbench).
 
+#### Distributed workloads: Kueue as the RHOAI docs set it up
+
+The Distributed workloads tab sets up Kueue in one project so the dashboard's **Distributed workloads** page (Observe & monitor, Workload metrics) and **Observe & monitor, Infrastructure** show real workloads.
+
+1. **Prerequisites** (above the tab): the cert-manager Operator and the Red Hat build of Kueue from OperatorHub, then the DataScienceCluster's `kueue` set to `Unmanaged` (RHOAI 3.x rejects `Managed`); RHOAI then creates the Kueue CR `cluster`. The operators stay after Clean up.
+2. **Set up** in a project (a project of its own is best, for example `nightly-kueue`, created in the dashboard): ResourceFlavor `nightly-kueue-cpu`, ClusterQueue `nightly-kueue` with 6 CPUs and 11 GiB for that project only (not preemptive), LocalQueue `nightly-kueue`, and the project label `kueue.openshift.io/managed=true`. The confirmation warns when the project already has other setups.
+3. **Samples**: a RayCluster (on by default; the Distributed workloads page with its metrics) and a RayJob (off by default; the Infrastructure page's Workloads tab), both on one small CPU cluster and sent to the LocalQueue. The Ray image is editable; the default `quay.io/modh/ray:2.47.1-py311-cu121` is the x86 image the docs use (large); the docs' `-cpu` tags are ppc64le only.
+4. **Dashboard Kueue setting** (off by default, its own confirmation): sets `disableKueue: false`. In every new project on the cluster, workbenches and model deployments can then only use a queue hardware profile, so a project without its own LocalQueue cannot create them until an admin adds one. It also adds hardware profile `nightly-kueue-cpu` for the tool's LocalQueue. Turning it off restores what nobody changed.
+
+Set up refuses a Kueue that does not serve `kueue.x-k8s.io/v1beta2`, one installed outside OLM (told by its CRDs' OLM labels), a Kueue CR with `labelPolicy: None`, KueueReady not `True`, a project with a LocalQueue named `default` or with `kueue.openshift.io/managed` set to another value, and any read that fails. Troubleshooting: [RUNBOOK §10.7](RUNBOOK.md#107-distributed-workloads-kueue).
+
 #### Playground: the dashboard's Gen AI playground
 
 The Playground tab sets up the RHOAI dashboard's Gen AI playground, a chat page where you try a project's models and ask about your documents, in a project you choose.
