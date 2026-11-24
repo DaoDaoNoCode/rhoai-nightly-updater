@@ -73,6 +73,11 @@ var rbacCallsNotUsingTheSAToken = map[string]string{
 	// own client, and refuses without one (conversionBlocker). The
 	// ServiceAccount is granted none of those kinds on purpose.
 	"diagnostics_disable.go:listConversionObjects": "component removal: lists the objects of a CRD whose conversion webhook the component serves, with the signed-in user's token",
+	// The status reads the internal registry's copy of the pull secret
+	// (ROSA HCP) with the signed-in cluster-admin's own client
+	// (SignedInUser), and refuses any other. The ServiceAccount may not
+	// read Secrets in RHOAI's applications namespace and is not granted it.
+	"registry_pull_copy.go:ReadRegistryPullCopy": "status: reads Secret rhoai-nightly-updater-pull in the applications namespace with the signed-in user's token",
 }
 
 // Reads made with the signed-in user's own token by the read routes of

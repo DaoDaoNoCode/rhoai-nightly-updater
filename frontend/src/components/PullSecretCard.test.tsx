@@ -151,3 +151,33 @@ describe("A missing pull secret in the gitops profile", () => {
     expect(screen.queryByText(/additional-pull-secret is missing/)).not.toBeInTheDocument();
   });
 });
+
+describe("The internal registry's copy of the token (ROSA HCP)", () => {
+  afterEach(cleanup);
+  const valid = { exists: true, valid: true };
+  const copy = { name: "rhoai-nightly-updater-pull", namespace: "redhat-ods-applications", exists: true, ours: true, current: true };
+
+  it.each([
+    [copy, "Workbench images: the internal registry can pull nightly images", "It uses Secret rhoai-nightly-updater-pull in redhat-ods-applications, a copy of this token."],
+    [{ ...copy, current: false }, "Workbench images: the internal registry has an older token", "Save the token again with Replace token, or run Update or Refresh"],
+    [{ ...copy, exists: false, ours: false, current: false }, "Workbench images: the internal registry cannot pull nightly images", "copies it to Secret rhoai-nightly-updater-pull in redhat-ods-applications."],
+    [{ ...copy, ours: false, current: false }, "Workbench images: Secret rhoai-nightly-updater-pull in redhat-ods-applications was not created by this updater", "The updater leaves it as it is"],
+    [{ name: "rhoai-nightly-updater-pull", noApplicationsNamespace: true, exists: false, ours: false, current: false }, "Workbench images: RHOAI is not installed yet", "Once it is, the updater copies the token"],
+    [{ name: "rhoai-nightly-updater-pull", exists: false, ours: false, current: false, problem: "Could not read Secret x: forbidden" }, "Workbench images: could not check whether the internal registry can pull nightly images", "Could not read Secret x: forbidden."],
+  ])("says plainly whether workbench images can be pulled (%#)", async (registry, title, body) => {
+    renderWithApp(<PullSecretSetup pullSecret={{ ...valid, registry }} controlPlane="hosted" />);
+    await settleApps();
+    expect(screen.getByText(title)).toBeInTheDocument();
+    expect(screen.getByText(title).closest(".pf-v6-c-alert")).toHaveTextContent(body);
+  });
+
+  it("is not shown without the copy's state (self-managed, gitops profile)", async () => {
+    renderWithApp(<PullSecretSetup pullSecret={valid} />);
+    await settleApps();
+    expect(screen.queryByText(/Workbench images/)).not.toBeInTheDocument();
+    cleanup();
+    renderWithApp(<PullSecretSetup pullSecret={{ ...valid, registry: copy }} readOnly />);
+    await settleApps();
+    expect(screen.queryByText(/Workbench images/)).not.toBeInTheDocument();
+  });
+});

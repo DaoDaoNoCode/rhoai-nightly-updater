@@ -26,7 +26,7 @@ import {
 } from "@patternfly/react-core";
 import EyeIcon from "@patternfly/react-icons/dist/esm/icons/eye-icon";
 import EyeSlashIcon from "@patternfly/react-icons/dist/esm/icons/eye-slash-icon";
-import type { ClusterInfo, NodeSetupAction, OperationResponse, PullSecretInfo } from "../types";
+import type { ClusterInfo, NodeSetupAction, OperationResponse, PullSecretInfo, RegistryPullCopyInfo } from "../types";
 import { NodeSetupDialog } from "./NodeSetupDialog";
 import { checkNodePull, createPullSecret, testPullSecret, toApiError } from "../services/api";
 import { CopyableCode } from "./environment/UseIt";
@@ -304,6 +304,34 @@ const CREDENTIALS_HELP = (
   </>
 );
 
+/**
+ * ROSA HCP: whether the internal registry, which pulls RHOAI's workbench
+ * images, has its copy of the token (Secret rhoai-nightly-updater-pull in
+ * the applications namespace). The updater writes it when the pull secret
+ * is saved, and after Update, Reinstall, Refresh, creating the
+ * DataScienceCluster or setting up a workbench.
+ */
+export const RegistryPullCopy: React.FC<{ copy: RegistryPullCopyInfo }> = ({ copy }) => {
+  const where = `Secret ${copy.name}${copy.namespace ? ` in ${copy.namespace}` : ""}`;
+  const fill = `Save the token again with Replace token, or run Update or Refresh: the updater then copies it to ${where}.`;
+  const [variant, title, body]: ["success" | "warning" | "info", string, string] = copy.problem
+    ? ["warning", "Workbench images: could not check whether the internal registry can pull nightly images", sentence(copy.problem)]
+    : copy.noApplicationsNamespace
+    ? ["info", "Workbench images: RHOAI is not installed yet", "Once it is, the updater copies the token for the internal registry, which pulls the workbench images."]
+    : !copy.exists
+    ? ["warning", "Workbench images: the internal registry cannot pull nightly images", fill]
+    : !copy.ours
+    ? ["warning", `Workbench images: ${where} was not created by this updater`, "The updater leaves it as it is, so whether the internal registry can pull nightly images depends on the token in it."]
+    : !copy.current
+    ? ["warning", "Workbench images: the internal registry has an older token", fill]
+    : ["success", "Workbench images: the internal registry can pull nightly images", `It uses ${where}, a copy of this token.`];
+  return (
+    <Alert variant={variant} isInline isPlain component="p" title={title}>
+      {body}
+    </Alert>
+  );
+};
+
 /** The pull secret row of the cluster setup: its state, Test with Quay, and the create or replace form. */
 export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
   pullSecret,
@@ -509,6 +537,12 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
                 : "Credentials the cluster uses to pull nightly images from quay.io/rhoai."}
         </Content>
       </StackItem>
+
+      {!notUsed && pullSecret.exists && pullSecret.registry && (
+        <StackItem>
+          <RegistryPullCopy copy={pullSecret.registry} />
+        </StackItem>
+      )}
 
       {invalid && !notUsed && (
         <StackItem>

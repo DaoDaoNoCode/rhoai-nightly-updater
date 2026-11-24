@@ -344,7 +344,21 @@ func UpdateStreamWithOptions(c *kube.Client, image string, opts OperationOptions
 	if r, err := applyUpdateSubscription(c, newSub, nightlyChannel, recovery, &logs, emit, fail); r != nil || err != nil {
 		return r, err
 	}
-	return verifyUpdateInstall(c, target, recovery, &logs, emit)
+	return withRegistryPullCopy(c)(verifyUpdateInstall(c, target, recovery, &logs, emit))
+}
+
+// withRegistryPullCopy appends the internal registry's copy of the
+// quay.io/rhoai token (registry.EnsureRegistryPullCopyFromPullSecret, ROSA
+// HCP only) to a successful install's logs: once RHOAI runs, its
+// applications namespace exists and its workbench images can be pulled. A
+// problem with the copy is a warning, never the install's failure.
+func withRegistryPullCopy(c *kube.Client) func(*types.OperationResponse, error) (*types.OperationResponse, error) {
+	return func(res *types.OperationResponse, err error) (*types.OperationResponse, error) {
+		if err == nil && res != nil && res.Success {
+			res.Logs = append(res.Logs, registry.EnsureRegistryPullCopyFromPullSecret(c)...)
+		}
+		return res, err
+	}
 }
 
 // updateChecks is what Update's prerequisite checks found, for the steps
@@ -1393,7 +1407,7 @@ func reinstallNightlySteps(c *kube.Client, image, channel, approveCSV string, re
 
 	// --- Step 12: create_subscription ---
 	emit(types.UpdateStepEvent{Step: "create_subscription", Status: "running", Message: "Creating Subscription to nightly catalog..."})
-	return createSubscriptionAndWait(c, rhoai.CatalogName, channel, "nightly", approveCSV, recovery, logs, emit)
+	return withRegistryPullCopy(c)(createSubscriptionAndWait(c, rhoai.CatalogName, channel, "nightly", approveCSV, recovery, logs, emit))
 }
 
 // reinstallStableSteps handles the stable-specific portion of ReinstallStream:
@@ -1401,7 +1415,7 @@ func reinstallNightlySteps(c *kube.Client, image, channel, approveCSV string, re
 func reinstallStableSteps(c *kube.Client, stableSource, stableChannel, approveCSV string, recovery *Recovery, logs []string, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	// --- Step 9: create_subscription ---
 	emit(types.UpdateStepEvent{Step: "create_subscription", Status: "running", Message: "Creating fresh Subscription to stable catalog..."})
-	return createSubscriptionAndWait(c, stableSource, stableChannel, "stable", approveCSV, recovery, logs, emit)
+	return withRegistryPullCopy(c)(createSubscriptionAndWait(c, stableSource, stableChannel, "stable", approveCSV, recovery, logs, emit))
 }
 
 // createSubscriptionAndWait creates the Reinstall Subscription (keeping the
@@ -1824,14 +1838,14 @@ func RefreshStreamWithOptions(c *kube.Client, opts OperationOptions, emit func(t
 		// the install.
 		msg := fmt.Sprintf("Operator re-deployed, but OLM installed %s instead of the previous %s (the catalog changed during the refresh).", outcome.csv, target)
 		logs = append(logs, "Warning: "+msg)
-		return &types.OperationResponse{Success: true, Message: strings.TrimSpace(msg + " " + outcome.note), Logs: logs}, nil
+		return withRegistryPullCopy(c)(&types.OperationResponse{Success: true, Message: strings.TrimSpace(msg + " " + outcome.note), Logs: logs}, nil)
 	}
 	logs = append(logs, "The same operator version was re-deployed from the current catalog. To get a newer nightly build, use Update.")
-	return &types.OperationResponse{
+	return withRegistryPullCopy(c)(&types.OperationResponse{
 		Success: true,
 		Message: strings.TrimSpace(fmt.Sprintf("Operator re-deployed: %s is installed again (same version; use Update for a newer build). %s", outcome.csv, outcome.note)),
 		Logs:    logs,
-	}, nil
+	}, nil)
 }
 
 // channelHeadCSV returns the head (currentCSV) of a channel of the
@@ -2057,6 +2071,18 @@ func CreatePullSecret(c *kube.Client, auth string) (*types.OperationResponse, er
 		logs = append(logs, "OK: Pull secret verified — contains quay.io/rhoai credentials")
 	}
 
+	// ROSA HCP: the internal registry, which serves RHOAI's workbench
+	// images, does not see additional-pull-secret; it gets its own copy
+	// (registry.EnsureRegistryPullCopy). A problem there does not undo
+	// the saved pull secret: the message says what is missing.
+	copyLogs, copyWarning := registry.EnsureRegistryPullCopy(c, auth)
+	logs = append(logs, copyLogs...)
+	message := "Pull secret configured successfully."
+	if copyWarning != "" {
+		logs = append(logs, "Warning: "+copyWarning)
+		message += " " + copyWarning
+	}
+
 	record.Activity(c, types.ActivityEntry{
 		Timestamp: kube.NowRFC3339(),
 		User:      kube.GetUser(c),
@@ -2067,7 +2093,7 @@ func CreatePullSecret(c *kube.Client, auth string) (*types.OperationResponse, er
 
 	return &types.OperationResponse{
 		Success: true,
-		Message: "Pull secret configured successfully.",
+		Message: message,
 		Logs:    logs,
 	}, nil
 }

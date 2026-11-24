@@ -39,7 +39,15 @@ func validateReinstallRequest(req *types.ReinstallRequest) error {
 }
 
 // HandleStatus returns the current cluster and operator status.
-var HandleStatus = withAuth(statusHandler(cluster.GetStatus))
+// The route is admin-only (getRouteTiers: adminOnly runs before it), so the
+// client carries the signed-in cluster-admin's own client
+// (attachSignedInUser): on ROSA HCP the status reads the internal
+// registry's copy of the pull secret with it, which the ServiceAccount
+// may not read.
+var HandleStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	attachSignedInUser(c, r)
+	statusHandler(cluster.GetStatus)(c, w, r)
+})
 
 // HandleStatusGitOps is HandleStatus in the gitops profile: it reads no
 // Secret and contacts no registry (cluster.GetStatusGitOps).

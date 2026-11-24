@@ -89,7 +89,8 @@ export function healthyStatus(updatedMinutesAgo = 60 * 10) {
     subscription: { name: "rhods-operator", source: "rhoai-catalog-dev", channel: "stable-3.x", state: "AtLatestKnown" },
     csv: { name: "rhods-operator.3.6.0", version: "3.6.0", phase: "Succeeded" },
     catalogSource: { exists: true, name: "rhoai-catalog-dev", image: LATEST_IMAGE, state: "READY" },
-    pullSecret: { exists: true, valid: true },
+    // ROSA HCP: the internal registry's copy of the token (workbench images).
+    pullSecret: { exists: true, valid: true, registry: { name: "rhoai-nightly-updater-pull", namespace: "redhat-ods-applications", exists: true, ours: true, current: true } },
     imageMirror: { exists: true, name: "rhoai-quay-mirror", source: "registry.redhat.io/rhoai" },
     installPlan: { name: "install-7xk2p", phase: "Complete", approved: true },
     catalogPod: { name: "rhoai-catalog-dev-q8z4n", phase: "Running", ready: true, restartCount: 0 },
@@ -178,7 +179,9 @@ export const NODE_PULL_SECRET_REMOVE_COMMAND = readFileSync(join(here, "../../..
 export function selfManaged(s, { known = true, pulled = false, managed = false, addedByTool } = {}) {
   if (known) s.cluster.controlPlane = managed ? "managed" : "self-managed";
   else delete s.cluster.controlPlane;
-  s.pullSecret = { ...s.pullSecret, nodes: { command: NODE_PULL_SECRET_COMMAND, removeCommand: NODE_PULL_SECRET_REMOVE_COMMAND, pulled, ...(addedByTool ? { addedByTool } : {}) } };
+  // Only a hosted control plane reports the internal registry's copy.
+  const { registry: _registry, ...pullSecret } = s.pullSecret;
+  s.pullSecret = { ...pullSecret, nodes: { command: NODE_PULL_SECRET_COMMAND, removeCommand: NODE_PULL_SECRET_REMOVE_COMMAND, pulled, ...(addedByTool ? { addedByTool } : {}) } };
   return s;
 }
 

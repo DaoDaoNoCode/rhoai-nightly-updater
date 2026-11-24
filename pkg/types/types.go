@@ -211,6 +211,34 @@ type PullSecretInfo struct {
 	// (cluster.controlPlane absent). Absent on a hosted control plane and in
 	// the gitops profile.
 	Nodes *NodePullSecretInfo `json:"nodes,omitempty"`
+	// Registry is the internal registry's copy of the quay.io/rhoai
+	// credential, which RHOAI's workbench images are pulled with on a
+	// hosted control plane. Set only there, when the pull secret exists
+	// and the request carries the signed-in cluster-admin's token (the
+	// ServiceAccount may not read it).
+	Registry *RegistryPullCopyInfo `json:"registry,omitempty"`
+}
+
+// RegistryPullCopyInfo is the state of Secret Name in RHOAI's applications
+// namespace, the internal registry's copy of the quay.io/rhoai credential.
+// It never holds the credential.
+type RegistryPullCopyInfo struct {
+	Name string `json:"name"`
+	// Namespace is RHOAI's applications namespace; empty when it is not
+	// known.
+	Namespace string `json:"namespace,omitempty"`
+	// NoApplicationsNamespace: RHOAI has no DSCInitialization yet, so
+	// there is nowhere to copy to.
+	NoApplicationsNamespace bool `json:"noApplicationsNamespace,omitempty"`
+	Exists                  bool `json:"exists"`
+	// Ours: the Secret carries this tool's label (only then does the tool
+	// change it).
+	Ours bool `json:"ours"`
+	// Current: it holds only the pull secret's current quay.io/rhoai
+	// credential.
+	Current bool `json:"current"`
+	// Problem says why the state could not be read.
+	Problem string `json:"problem,omitempty"`
 }
 
 // NodePullSecretInfo is the nodes' side of the quay.io/rhoai credentials on

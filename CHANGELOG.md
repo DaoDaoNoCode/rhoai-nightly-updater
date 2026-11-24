@@ -291,6 +291,23 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   restarts nothing itself. No new permission: the CRD is read from the
   cluster-wide CRD list, by name, which the tool already reads.
 
+- **Workbenches start on ROSA HCP.** A workbench pulls its image through the
+  internal registry (`image-registry.openshift-image-registry.svc:5000/<applications namespace>/<image>:<tag>`,
+  as the dashboard writes it), whose pull-through follows the image mirror to
+  `quay.io/rhoai` but never sees `kube-system/additional-pull-secret`: on a
+  hosted control plane that Secret reaches the nodes only. So every
+  workbench, made by this tool or in the RHOAI dashboard, stayed in
+  `ImagePullBackOff`. On ROSA HCP the tool now also writes Secret
+  `rhoai-nightly-updater-pull` (only the `quay.io/rhoai` entry, labelled as
+  the tool's) into RHOAI's applications namespace, which it reads from the
+  DSCInitialization: when the pull secret is saved, and after Update,
+  Reinstall, Refresh, creating the DataScienceCluster and before a workbench
+  is created (a fresh cluster has no applications namespace when the pull
+  secret is saved). A Secret of that name the tool did not create is never
+  changed. The **Pull secret** item says whether the internal registry can
+  pull nightly images. Self-managed clusters are unchanged (their registry
+  uses `openshift-config/pull-secret`).
+
 - **Deleting a pipeline server no longer breaks the workbenches that use its
   dashboard Connection.** A workbench a user attached
   `rhoai-nightly-updater-s3` to in the dashboard kept naming it after the
@@ -639,6 +656,11 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Security
 
+- On ROSA HCP the `quay.io/rhoai` token is also copied into RHOAI's
+  applications namespace (Secret `rhoai-nightly-updater-pull`), with the
+  signed-in cluster-admin's token; only cluster-admins and OpenShift's own
+  accounts may read Secrets there. The ServiceAccount gains nothing
+  ([SECURITY.md](SECURITY.md#the-internal-registrys-copy-of-the-pull-secret-rosa-hcp-500)).
 - The app now receives the `user:full` token of every RHOAI user who signs
   in, not only cluster-admins'; it uses a non-admin's token only for their
   own reads.
