@@ -432,8 +432,10 @@ func (a GenAIAPI) listProjectModels(ns string, withMaaS bool) ([]types.Playgroun
 		var maas struct {
 			Data []maasModel `json:"data"`
 		}
+		// A Set up that chose a MaaS model needs this list: its error is
+		// the Set up's, not "no MaaS models".
 		if err := a.Call(http.MethodGet, "/maas/models", ns, nil, &maas); err != nil {
-			slog.Debug("no Models as a Service for the playground", "project", ns, "error", err)
+			return nil, fmt.Errorf("list your Models as a Service models: %w", err)
 		}
 		for _, m := range maas.Data {
 			if m.ID == "" {
@@ -539,6 +541,11 @@ func readMaaSPlaygroundModels(c *kube.Client) ([]maasPlaygroundRef, error) {
 	}
 	var out []maasPlaygroundRef
 	for _, r := range items {
+		// maas-api's ID (models-as-a-service main, maas-api/internal/models
+		// maasmodelref.go maasModelRefToModel, checked 2026-11-24): for an
+		// LLMInferenceService, status.resolvedModelAlias, else
+		// metadata.name; for an ExternalModel, the alias, else the
+		// referenced ExternalModel's name.
 		name := r.Metadata.Name
 		if r.Spec.ModelRef.Kind == "ExternalModel" && r.Spec.ModelRef.Name != "" {
 			name = r.Spec.ModelRef.Name
@@ -567,7 +574,9 @@ func readMaaSPlaygroundModels(c *kube.Client) ([]maasPlaygroundRef, error) {
 
 // MaaSPlaygroundModelsOf is every Models as a Service entry the
 // playground lists for model (an LLMInferenceService) in project: those of
-// the MaaSModelRefs in project that name it (spec.modelRef), under the
+// the MaaSModelRefs in project that name it (spec.modelRef; the list is
+// cluster-wide because the namespaced list would be a new permission row,
+// and only project's references are kept), under the
 // name maas-api lists each by, so a caller never builds that name itself;
 // sorted by that name. None when no MaaSModelRef references the model; an
 // entry no MaaSSubscription offers has no Subscriptions. Read with c (the
@@ -1345,6 +1354,10 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 				}
 			}
 			switch {
+			case found == nil && w.Source == "maas" && p.api.AsUser:
+				// maas-api lists, for the user's token, only the models of
+				// the subscriptions the user's groups and name may use.
+				return stop(fmt.Sprintf("Your Models as a Service subscriptions do not include model %s, so the dashboard does not offer it to you in %s. Ask whoever manages Models as a Service to add you to a subscription that offers it (this tool's subscription %s offers the models this tool publishes; the Models as a Service tab shows who it is for), then set up again.", w.Name, p.project, serving.MaaSSubscriptionName), "validation", "maas model not offered")
 			case found == nil:
 				return stop(fmt.Sprintf("The dashboard does not offer model %s in %s. Reload the page and choose again.", w.Name, p.project), "validation", "unknown model")
 			case !found.Ready:

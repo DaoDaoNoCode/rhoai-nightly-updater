@@ -648,10 +648,21 @@ func playgroundMaaSModel(c *kube.Client, s *State) (maasChoice, string, string) 
 			usable = append(usable, m)
 		}
 	}
-	sort.SliceStable(usable, func(i, j int) bool { return usable[i].Name < usable[j].Name })
+	// The entry this tool's subscription offers first: maas-api lists, for
+	// the user's token, only subscriptions the user's groups and name may
+	// use, and this tool's is the one its Publish adds the model to.
+	tool := func(m types.PlaygroundModel) bool {
+		return slices.Contains(m.Subscriptions, serving.MaaSSubscriptionName)
+	}
+	sort.SliceStable(usable, func(i, j int) bool {
+		if tool(usable[i]) != tool(usable[j]) {
+			return tool(usable[i])
+		}
+		return usable[i].Name < usable[j].Name
+	})
 	switch {
 	case len(all) == 0:
-		return maasChoice{}, fmt.Sprintf("Model %s in %s is not published through Models as a Service (no MaaSModelRef names it), and the dashboard offers it to the playground only that way. Publish it on the Models as a Service tab, then Resume. Nothing was changed.", name, project), "model_not_ready"
+		return maasChoice{}, fmt.Sprintf("Model %s in %s is not published through Models as a Service (no MaaSModelRef names it), and the dashboard offers it to the playground only that way. Publish it on the Models as a Service tab, then Resume. Nothing was changed.", name, project), "prerequisites"
 	case len(usable) == 0 && len(all) > 1:
 		var each []string
 		for _, m := range all {
@@ -673,7 +684,14 @@ func playgroundMaaSModel(c *kube.Client, s *State) (maasChoice, string, string) 
 		for _, m := range usable {
 			names = append(names, m.Name)
 		}
-		choice.Note = fmt.Sprintf("Models as a Service offers model %s in %s under %d ready entries (%s); the playground uses %s, the first by name.", name, project, len(usable), strings.Join(names, ", "), usable[0].Name)
+		why := "the first by name"
+		if tool(usable[0]) {
+			why = "the one this tool's subscription " + serving.MaaSSubscriptionName + " offers"
+			if len(usable) > 1 && tool(usable[1]) {
+				why += ", the first by name"
+			}
+		}
+		choice.Note = fmt.Sprintf("Models as a Service offers model %s in %s under %d ready entries (%s); the playground uses %s, %s.", name, project, len(usable), strings.Join(names, ", "), usable[0].Name, why)
 	}
 	return choice, "", ""
 }

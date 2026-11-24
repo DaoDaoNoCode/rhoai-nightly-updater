@@ -948,6 +948,28 @@ func TestPlayground_StatusListsMaaSModelsFromTheirModelRefs(t *testing.T) {
 	}
 }
 
+// With the user's token, a MaaS model the user's subscriptions do not
+// include is explained (maas-api lists only those), and a maas/models
+// answer that fails is the Set up's error, not "no MaaS models".
+func TestPlayground_SetupWithAMaaSModelTheUserCannotUse(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	uc := e.userPlaygroundClient("sha256~user-own-token")
+	req := setup()
+	req.Models = []types.PlaygroundModelRef{{Name: "publishers/team/models/elsewhere", Source: "maas"}}
+	res, err := RunPlayground(uc, req, func(UpdateStepEvent) {})
+	if err != nil || res.Success || !strings.Contains(res.Message, "Your Models as a Service subscriptions do not include model publishers/team/models/elsewhere") || strings.Contains(res.Message, "Reload the page") {
+		t.Fatalf("not offered: %+v %v", res, err)
+	}
+	e.g.maasModels = "not json"
+	res, err = RunPlayground(uc, req, func(UpdateStepEvent) {})
+	if err != nil || res.Success || strings.Contains(res.Message, "do not include") {
+		t.Fatalf("maas/models fails: %+v %v", res, err)
+	}
+	if len(e.g.installs) != 0 {
+		t.Fatalf("installed: %v", e.g.installs)
+	}
+}
+
 // The status shows, for this tool's playground, the models its Set up
 // asked for (from the record); a playground that is not this tool's shows
 // none.

@@ -361,6 +361,20 @@ func readyMaaSEntry() *types.PlaygroundModel {
 	return &types.PlaygroundModel{Name: maasEntryName, DisplayName: "Qwen3 1.7B", Source: "maas", Status: "Ready", Ready: true, Chat: true, Subscriptions: []string{"rhoai-nightly-updater-subscription"}}
 }
 
+// toolEntry is aEntry, ready and offered by this tool's subscription.
+func toolEntry() types.PlaygroundModel {
+	m := aEntry(true, true)
+	m.Subscriptions = []string{"rhoai-nightly-updater-subscription"}
+	return m
+}
+
+// otherEntry is the published entry offered only by another subscription.
+func otherEntry() types.PlaygroundModel {
+	m := *readyMaaSEntry()
+	m.Subscriptions = []string{"team-sub"}
+	return m
+}
+
 // aEntry is a second MaaS entry of the model, sorted before the first.
 func aEntry(ready, offered bool) types.PlaygroundModel {
 	m := types.PlaygroundModel{Name: "a/qwen", DisplayName: "Qwen3 1.7B again", Source: "maas", Status: "Pending", Ready: ready, Chat: true}
@@ -911,8 +925,12 @@ func TestRunPlaygroundStep_MaaSEntry(t *testing.T) {
 		// Several MaaSModelRefs name the model: a usable one wins over one
 		// that sorts first; of several usable, the first by name, said.
 		{"a pending entry first by name", playgroundPublish, readyMaaSEntry(), nil, []types.PlaygroundModelRef{{Name: maasEntryName, Source: "maas"}}, "", []types.PlaygroundModel{aEntry(false, true)}, ""},
-		{"two usable entries", playgroundPublish, readyMaaSEntry(), nil, []types.PlaygroundModelRef{{Name: "a/qwen", Source: "maas"}}, "", []types.PlaygroundModel{aEntry(true, true)},
-			"Models as a Service offers model qwen3-1-7b in proj under 2 ready entries (a/qwen, publishers/proj/models/qwen3-1-7b); the playground uses a/qwen, the first by name."},
+		{"two usable entries: this tool's subscription first", playgroundPublish, readyMaaSEntry(), nil, []types.PlaygroundModelRef{{Name: maasEntryName, Source: "maas"}}, "", []types.PlaygroundModel{aEntry(true, true)},
+			"Models as a Service offers model qwen3-1-7b in proj under 2 ready entries (publishers/proj/models/qwen3-1-7b, a/qwen); the playground uses publishers/proj/models/qwen3-1-7b, the one this tool's subscription rhoai-nightly-updater-subscription offers."},
+		{"two usable entries of this tool's subscription: the first by name", playgroundPublish, readyMaaSEntry(), nil, []types.PlaygroundModelRef{{Name: "a/qwen", Source: "maas"}}, "", []types.PlaygroundModel{toolEntry()},
+			"the playground uses a/qwen, the one this tool's subscription rhoai-nightly-updater-subscription offers, the first by name."},
+		{"two usable entries of other subscriptions: the first by name", playgroundPublish, func() *types.PlaygroundModel { m := aEntry(true, true); return &m }(), nil, []types.PlaygroundModelRef{{Name: "a/qwen", Source: "maas"}}, "", []types.PlaygroundModel{otherEntry()},
+			"the playground uses a/qwen, the first by name."},
 		{"several, none usable", playgroundPublish, notReady, nil, nil, "has 2 Models as a Service entries, and none is both ready and offered by a subscription: publishers/proj/models/qwen3-1-7b (phase Pending), a/qwen (phase Ready, offered by no subscription)", []types.PlaygroundModel{aEntry(true, false)}, ""},
 	}
 	for _, tc := range cases {
