@@ -35,6 +35,17 @@ var (
 	pipelineWorkbenchesProblem = storage.ConnectionWorkbenchesProblem
 )
 
+// workbenchesDetail is the detail of a step refused for workbenches that use
+// the tool's Connection: one "<name>=<uid>" per line (a Notebook's name
+// cannot hold "=" or a line break), for the UI to confirm each as it is.
+func workbenchesDetail(wbs []storage.ConnectionWorkbench) string {
+	lines := make([]string, 0, len(wbs))
+	for _, w := range wbs {
+		lines = append(lines, w.Name+"="+w.UID)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // cleanupConfirmCode reports whether code refuses a clean-up only until the
 // user confirms what it lists.
 func cleanupConfirmCode(code string) bool {
@@ -56,6 +67,8 @@ func CleanupStepID(part, project string) string {
 type cleanupPart struct {
 	id, title string
 	run       func() (*types.OperationResponse, error)
+	// project is the part's project, when it has one.
+	project string
 	// When true, the overall clean-up message quotes this part's own result
 	// (which may report no change—component retained, project already
 	// absent) rather than wording like "Deleted <title>".
@@ -83,8 +96,9 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 	}
 	for _, project := range req.PipelineServers {
 		parts = append(parts, cleanupPart{
-			id:    CleanupStepID("pipeline-server", project),
-			title: fmt.Sprintf("the pipeline server in '%s'", project),
+			id:      CleanupStepID("pipeline-server", project),
+			project: project,
+			title:   fmt.Sprintf("the pipeline server in '%s'", project),
 			run: func() (*types.OperationResponse, error) {
 				return cleanupPipelineServer(c, project, req.ConfirmUnrecorded[project], req.ConfirmWorkbenches[project])
 			},
@@ -202,7 +216,7 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 		}
 		detail := ""
 		if code == storage.ErrorCodeConfirmWorkbenches {
-			detail = strings.Join(current, "\n")
+			detail = workbenchesDetail(current)
 		}
 		emit(UpdateStepEvent{Step: CleanupStepID("pipeline-server", project), Status: "failed", Message: problem, ErrorCode: code, Detail: detail})
 	}
@@ -246,7 +260,15 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 		}
 		logs = append(logs, res.Logs...)
 		if !res.Success {
-			emit(UpdateStepEvent{Step: p.id, Status: "failed", Message: res.Message, ErrorCode: res.ErrorCode})
+			detail := ""
+			if res.ErrorCode == storage.ErrorCodeConfirmWorkbenches && strings.HasPrefix(p.id, "pipeline-server:") {
+				// Refused by the teardown itself (a workbench attached the
+				// Connection after the check up front): the step lists the
+				// workbenches that use it now, as that check's refusal does.
+				_, _, current := pipelineWorkbenchesProblem(c, p.project, nil)
+				detail = workbenchesDetail(current)
+			}
+			emit(UpdateStepEvent{Step: p.id, Status: "failed", Message: res.Message, ErrorCode: res.ErrorCode, Detail: detail})
 			return cleanupStopped(c, parts[i+1:], done, said, logs, res.Message, res.ErrorCode), nil
 		}
 		emit(UpdateStepEvent{Step: p.id, Status: "success", Message: res.Message, Detail: time.Since(start).Round(time.Second).String()})

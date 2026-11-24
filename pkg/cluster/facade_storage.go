@@ -53,11 +53,11 @@ func SetupPipelineServer(c *Client, project string) (*types.OperationResponse, e
 }
 
 // RecreatePipelineServer is storage.RecreatePipelineServer.
-func RecreatePipelineServer(c *Client, project, confirmedUID string, confirmedWorkbenches []string) (*types.OperationResponse, error) {
+func RecreatePipelineServer(c *Client, project, confirmedUID string, confirmedWorkbenches map[string]string) (*types.OperationResponse, error) {
 	return storage.RecreatePipelineServer(c, project, confirmedUID, confirmedWorkbenches)
 }
 
 // TeardownPipelineServer is storage.TeardownPipelineServer.
-func TeardownPipelineServer(c *Client, project, confirmedUID string, confirmedWorkbenches []string) (*types.OperationResponse, error) {
+func TeardownPipelineServer(c *Client, project, confirmedUID string, confirmedWorkbenches map[string]string) (*types.OperationResponse, error) {
 	return storage.TeardownPipelineServer(c, project, confirmedUID, confirmedWorkbenches)
 }

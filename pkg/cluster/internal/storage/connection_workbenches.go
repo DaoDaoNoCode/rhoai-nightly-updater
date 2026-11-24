@@ -115,52 +115,70 @@ func listConnectionWorkbenches(c *kube.Client, project string) ([]ConnectionWork
 	return ConnectionWorkbenches(list, project), nil
 }
 
-// connectionWorkbenchesToDetach is the pre-mutation guard for teardown:
-// workbenches in project that depend on the tool's Connection (empty when
-// no such Connection exists, or when the existing one is not the tool's
-// and therefore stays), each requiring explicit user confirmation. The
-// logic fails closed—unreadable Connection or workbench data, or any
-// workbench left unconfirmed, yields a refusal message and code rather
-// than proceeding.
-func connectionWorkbenchesToDetach(c *kube.Client, project string, confirmed []string) ([]ConnectionWorkbench, string, string) {
+// connectionUsers are the workbenches a teardown takes the tool's
+// Connection off; nil when there is no such Connection (absent, or one that
+// is not the tool's and stays).
+type connectionUsers struct {
+	wbs []ConnectionWorkbench
+}
+
+// unconfirmedRefusal is the refusal for workbenches that use the Connection
+// and were not confirmed as they are now (by name and UID).
+func unconfirmedRefusal(project string, names []string, since string) string {
+	n := len(names)
+	return fmt.Sprintf("%s in %s %s the dashboard connection %s%s, and removing it from %s was not confirmed: %s. Nothing was deleted. Review %s in the Delete dialog.",
+		kube.CountNoun(n, "workbench", "workbenches"), project, kube.Verb(n, "uses", "use"), ConnectionSecretName, since,
+		kube.Verb(n, "it", "them"), strings.Join(names, ", "), kube.Verb(n, "it", "them"))
+}
+
+// connectionWorkbenchesToDetach is the check a teardown makes before it
+// changes anything: the workbenches of project that use the tool's
+// Connection, each of which the user must have confirmed as the Notebook
+// they reviewed (confirmed maps its name to its UID; one deleted and made
+// again since under the same name is not confirmed). It fails closed: a
+// Connection or workbench list that cannot be read, or a workbench that is
+// not confirmed, gives a refusal message and code instead.
+func connectionWorkbenchesToDetach(c *kube.Client, project string, confirmed map[string]string) (*connectionUsers, string, string) {
 	meta, found, err := kube.ReadObjectMeta(c, rhoai.NamespacedPath("v1", "secrets", project, ConnectionSecretName))
 	switch {
 	case err != nil:
-		return nil, fmt.Sprintf("Cannot check the dashboard connection %s in %s: %v.", ConnectionSecretName, project, err), kube.ErrorCodeFromK8sErr(err)
+		return nil, fmt.Sprintf("Cannot check the dashboard connection %s in %s: %v. Nothing was deleted.", ConnectionSecretName, project, err), kube.ErrorCodeFromK8sErr(err)
 	case !found || !meta.HasToolLabel():
 		return nil, "", ""
 	}
 	wbs, err := listConnectionWorkbenches(c, project)
 	if err != nil {
-		return nil, fmt.Sprintf("Cannot check which workbenches in %s use the dashboard connection %s: %v.", project, ConnectionSecretName, err), kube.ErrorCodeFromK8sErr(err)
+		return nil, fmt.Sprintf("Cannot check which workbenches in %s use the dashboard connection %s: %v. Nothing was deleted.", project, ConnectionSecretName, err), kube.ErrorCodeFromK8sErr(err)
 	}
 	var unconfirmed []string
 	for _, w := range wbs {
-		if !slices.Contains(confirmed, w.Name) {
+		if uid, ok := confirmed[w.Name]; !ok || uid == "" || uid != w.UID {
 			unconfirmed = append(unconfirmed, w.Name)
 		}
 	}
 	if len(unconfirmed) > 0 {
-		n := len(unconfirmed)
-		return nil, fmt.Sprintf("%s in %s %s the dashboard connection %s, and removing it from %s was not confirmed: %s. Review %s in the Delete dialog.",
-			kube.CountNoun(n, "workbench", "workbenches"), project, kube.Verb(n, "uses", "use"), ConnectionSecretName,
-			kube.Verb(n, "it", "them"), strings.Join(unconfirmed, ", "), kube.Verb(n, "it", "them")), ErrorCodeConfirmWorkbenches
+		return nil, unconfirmedRefusal(project, unconfirmed, ""), ErrorCodeConfirmWorkbenches
 	}
-	return wbs, "", ""
+	return &connectionUsers{wbs: wbs}, "", ""
 }
 
-// ConnectionWorkbenchesProblem runs connectionWorkbenchesToDetach in
-// isolation (Clean up invokes it for each pipeline server ahead of any
-// delete): it returns refusal message and code, plus the names of
-// workbenches currently tied to the Connection.
-func ConnectionWorkbenchesProblem(c *kube.Client, project string, confirmed []string) (string, string, []string) {
-	wbs, problem, code := connectionWorkbenchesToDetach(c, project, confirmed)
+// ConnectionWorkbenchesProblem is the check of connectionWorkbenchesToDetach
+// on its own (Clean up runs it for every pipeline server before it deletes
+// anything, and again to list them when a teardown refused): a refusal
+// message and code, and the workbenches that use the Connection now.
+func ConnectionWorkbenchesProblem(c *kube.Client, project string, confirmed map[string]string) (string, string, []ConnectionWorkbench) {
+	users, problem, code := connectionWorkbenchesToDetach(c, project, confirmed)
 	if code == ErrorCodeConfirmWorkbenches {
-		if all, err := listConnectionWorkbenches(c, project); err == nil {
-			wbs = all
+		all, err := listConnectionWorkbenches(c, project)
+		if err != nil {
+			return problem, code, nil
 		}
+		return problem, code, all
 	}
-	return problem, code, ConnectionWorkbenchNames(wbs)
+	if users == nil {
+		return problem, code, nil
+	}
+	return problem, code, users.wbs
 }
 
 // detachConnection clears the tool's Connection from every workbench in
@@ -170,9 +188,12 @@ func ConnectionWorkbenchesProblem(c *kube.Client, project string, confirmed []st
 // subsequently clears the Connection's envFrom on its own. Processing
 // halts on the first error with a message; patches already applied stay
 // applied, and a later teardown pass only sees what is left.
-func detachConnection(c *kube.Client, project string, wbs []ConnectionWorkbench, logs *[]string) (string, string) {
+func detachConnection(c *kube.Client, project string, users *connectionUsers, logs *[]string) (string, string) {
+	if users == nil {
+		return "", ""
+	}
 	pointer := "/metadata/annotations/" + strings.ReplaceAll(NotebookConnectionsAnnotation, "/", "~1")
-	for _, w := range wbs {
+	for _, w := range users.wbs {
 		rest, _ := withoutConnection(w.Annotation, project)
 		uid, _ := json.Marshal(w.UID)
 		rv, _ := json.Marshal(w.ResourceVersion)
@@ -203,6 +224,17 @@ func detachConnection(c *kube.Client, project string, wbs []ConnectionWorkbench,
 			return fmt.Sprintf("Cannot remove the dashboard connection %s from workbench %s in %s (%s). Nothing was deleted; run the deletion again to retry.", ConnectionSecretName, w.Name, project, why), code
 		}
 		*logs = append(*logs, fmt.Sprintf("OK: Workbench %s no longer uses connection %s", w.Name, ConnectionSecretName))
+	}
+	// A workbench may have attached the Connection (again) since the list
+	// was read: read it once more right before the delete, and refuse while
+	// any workbench names it, so none is left naming a deleted Secret.
+	left, err := listConnectionWorkbenches(c, project)
+	if err != nil {
+		return fmt.Sprintf("Cannot check again which workbenches in %s use the dashboard connection %s: %v. Nothing was deleted.", project, ConnectionSecretName, err), kube.ErrorCodeFromK8sErr(err)
+	}
+	if len(left) > 0 {
+		*logs = append(*logs, fmt.Sprintf("Workbenches use connection %s again: %s", ConnectionSecretName, strings.Join(ConnectionWorkbenchNames(left), ", ")))
+		return unconfirmedRefusal(project, ConnectionWorkbenchNames(left), " (since the deletion started)"), ErrorCodeConfirmWorkbenches
 	}
 	return "", ""
 }

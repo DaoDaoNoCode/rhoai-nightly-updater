@@ -370,11 +370,11 @@ func SetupPipelineServer(c *kube.Client, project string) (*types.OperationRespon
 // come first; only then is the old server deleted (its database, and so its
 // run history, goes with it; artifacts in the S3 storage stay) and the new
 // one set up. Without an old server it is a plain setup.
-func RecreatePipelineServer(c *kube.Client, project, confirmedUID string, confirmedWorkbenches []string) (*types.OperationResponse, error) {
+func RecreatePipelineServer(c *kube.Client, project, confirmedUID string, confirmedWorkbenches map[string]string) (*types.OperationResponse, error) {
 	return setupPipelineServer(c, project, true, confirmedUID, confirmedWorkbenches)
 }
 
-func setupPipelineServer(c *kube.Client, project string, recreate bool, confirmedUID string, confirmedWorkbenches []string) (*types.OperationResponse, error) {
+func setupPipelineServer(c *kube.Client, project string, recreate bool, confirmedUID string, confirmedWorkbenches map[string]string) (*types.OperationResponse, error) {
 	logs := []string{}
 	op := "setup-pipeline-server"
 	if recreate {
@@ -650,7 +650,7 @@ func setupPipelineServer(c *kube.Client, project string, recreate bool, confirme
 // checks the operator before deleting and waits for the finalizer), then
 // sets up the new one from scratch, so every check runs again on what is
 // there now.
-func replacePipelineServer(c *kube.Client, project string, old *DSPA, logs []string, confirmedUID string, confirmedWorkbenches []string) (*types.OperationResponse, error) {
+func replacePipelineServer(c *kube.Client, project string, old *DSPA, logs []string, confirmedUID string, confirmedWorkbenches map[string]string) (*types.OperationResponse, error) {
 	logs = append(logs, "OK: The API server accepts the new pipeline server", fmt.Sprintf("Deleting pipeline server %s...", old.Meta.Name))
 	down, err := TeardownPipelineServer(c, project, confirmedUID, confirmedWorkbenches)
 	if err != nil {
@@ -713,7 +713,7 @@ func dspoRunning(c *kube.Client) (bool, error) {
 // editor can set. Workbenches that use the tool's dashboard Connection lose
 // it first (detachConnection), each only when confirmedWorkbenches names
 // it; until then nothing is deleted.
-func TeardownPipelineServer(c *kube.Client, project, confirmedUID string, confirmedWorkbenches []string) (*types.OperationResponse, error) {
+func TeardownPipelineServer(c *kube.Client, project, confirmedUID string, confirmedWorkbenches map[string]string) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
 		record.Action(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (%s)", project, activity), false)
@@ -750,7 +750,7 @@ func TeardownPipelineServer(c *kube.Client, project, confirmedUID string, confir
 		// A previous run may have removed the DSPA but not its secret.
 		wbs, problem, code := connectionWorkbenchesToDetach(c, project, confirmedWorkbenches)
 		if problem != "" {
-			return fail(problem+" Nothing was deleted.", code, "workbenches not confirmed")
+			return fail(problem, code, "workbenches not confirmed")
 		}
 		if msg, code := detachConnection(c, project, wbs, &logs); msg != "" {
 			return fail(msg, code, "workbench change failed")
@@ -786,7 +786,7 @@ func TeardownPipelineServer(c *kube.Client, project, confirmedUID string, confir
 	// the DSPA: its workbenches lose it before the DSPA goes.
 	wbs, problem, code := connectionWorkbenchesToDetach(c, project, confirmedWorkbenches)
 	if problem != "" {
-		return fail(problem+" Nothing was deleted.", code, "workbenches not confirmed")
+		return fail(problem, code, "workbenches not confirmed")
 	}
 	if target.Meta.Terminating() {
 		logs = append(logs, fmt.Sprintf("Pipeline server %s is already being deleted", target.Meta.Name))

@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -22,8 +23,13 @@ func putNotebook(f *resourceFake, ns, name, conns string) {
 	if conns != "" {
 		ann = `{"` + storage.NotebookConnectionsAnnotation + `":"` + conns + `"}`
 	}
-	f.putJSON(notebookPath(ns, name), `{"metadata":{"name":"`+name+`","namespace":"`+ns+`","annotations":`+ann+`},
+	f.putJSON(notebookPath(ns, name), `{"metadata":{"name":"`+name+`","namespace":"`+ns+`","uid":"uid-`+name+`","annotations":`+ann+`},
 		"spec":{"template":{"spec":{"containers":[{"name":"`+name+`","envFrom":[{"secretRef":{"name":"`+storage.ConnectionSecretName+`"}}]}]}}}}`)
+}
+
+// confirmBoth confirms wb-a and wb-b as putConnectionUsers made them.
+func confirmBoth() map[string]string {
+	return map[string]string{"wb-a": "uid-wb-a", "wb-b": "uid-wb-b"}
 }
 
 func notebookAnnotation(f *resourceFake, name string) (string, bool) {
@@ -56,7 +62,7 @@ func TestTeardownPipelineServer_RemovesTheConnectionFromItsWorkbenchesFirst(t *t
 	f, c := newResourceFake(t)
 	putConnectionUsers(f)
 	u := userClientOf(c, fakeUserToken)
-	resp, err := TeardownPipelineServer(u, "proj", toolDSPAUID(c, "proj"), []string{"wb-a", "wb-b"})
+	resp, err := TeardownPipelineServer(u, "proj", toolDSPAUID(c, "proj"), confirmBoth())
 	if err != nil || !resp.Success {
 		t.Fatalf("got %+v, %v", resp, err)
 	}
@@ -99,7 +105,7 @@ func TestTeardownPipelineServer_RemovesTheConnectionFromItsWorkbenchesFirst(t *t
 // user confirmation, teardown fails immediately with no cluster mutations.
 func TestTeardownPipelineServer_UnconfirmedWorkbenchRefusesBeforeAnyChange(t *testing.T) {
 	fastPipelineTimings(t)
-	for name, confirmed := range map[string][]string{"none": nil, "one of two": {"wb-a"}} {
+	for name, confirmed := range map[string]map[string]string{"none": nil, "one of two": {"wb-a": "uid-wb-a"}, "made again since": {"wb-a": "uid-wb-a", "wb-b": "uid-before"}} {
 		t.Run(name, func(t *testing.T) {
 			f, c := newResourceFake(t)
 			putConnectionUsers(f)
@@ -121,7 +127,7 @@ func TestTeardownPipelineServer_ResumesWithTheSameConfirmation(t *testing.T) {
 	f, c := newResourceFake(t)
 	putConnectionUsers(f)
 	putNotebook(f, "proj", "wb-a", "proj/other")
-	if resp, _ := TeardownPipelineServer(c, "proj", toolDSPAUID(c, "proj"), []string{"wb-a", "wb-b"}); !resp.Success {
+	if resp, _ := TeardownPipelineServer(c, "proj", toolDSPAUID(c, "proj"), confirmBoth()); !resp.Success {
 		t.Fatalf("got %+v", resp)
 	}
 	if _, ok := notebookAnnotation(f, "wb-b"); ok || hasMutation(f, "PATCH "+notebookPath("proj", "wb-a")) {
@@ -143,7 +149,7 @@ func TestTeardownPipelineServer_WorkbenchChangedAbortsBeforeDelete(t *testing.T)
 			f.mu.Unlock()
 		}
 	}
-	resp, _ := TeardownPipelineServer(c, "proj", toolDSPAUID(c, "proj"), []string{"wb-a", "wb-b"})
+	resp, _ := TeardownPipelineServer(c, "proj", toolDSPAUID(c, "proj"), confirmBoth())
 	if resp.Success || resp.ErrorCode != "conflict" || !strings.Contains(resp.Message, "wb-b") || !strings.Contains(resp.Message, "changed since it was read") {
 		t.Fatalf("got %+v", resp)
 	}
@@ -164,7 +170,7 @@ func TestTeardownPipelineServer_WorkbenchPatchRefusedAbortsBeforeDelete(t *testi
 	f, c := newResourceFake(t)
 	putConnectionUsers(f)
 	f.fail["PATCH "+notebookPath("proj", "wb-a")] = 403
-	resp, _ := TeardownPipelineServer(c, "proj", toolDSPAUID(c, "proj"), []string{"wb-a", "wb-b"})
+	resp, _ := TeardownPipelineServer(c, "proj", toolDSPAUID(c, "proj"), confirmBoth())
 	if resp.Success || !strings.Contains(resp.Message, "wb-a") {
 		t.Fatalf("got %+v", resp)
 	}
@@ -180,7 +186,7 @@ func TestTeardownPipelineServer_WorkbenchListFailureRefuses(t *testing.T) {
 	f, c := newResourceFake(t)
 	putConnectionUsers(f)
 	f.fail["GET /apis/kubeflow.org/v1/namespaces/proj/notebooks"] = 403
-	resp, _ := TeardownPipelineServer(c, "proj", toolDSPAUID(c, "proj"), []string{"wb-a", "wb-b"})
+	resp, _ := TeardownPipelineServer(c, "proj", toolDSPAUID(c, "proj"), confirmBoth())
 	if resp.Success || !strings.Contains(resp.Message, "Nothing was deleted") {
 		t.Fatalf("got %+v", resp)
 	}
@@ -201,7 +207,7 @@ func TestTeardownPipelineServer_LeftoverConnectionLeavesWorkbenchesFirst(t *test
 	if resp, _ := TeardownPipelineServer(c, "proj", "", nil); resp.Success || resp.ErrorCode != storage.ErrorCodeConfirmWorkbenches || hasMutation(f, "DELETE ") {
 		t.Fatalf("unconfirmed: %+v", resp)
 	}
-	if resp, _ := TeardownPipelineServer(c, "proj", "", []string{"wb-a", "wb-b"}); !resp.Success || f.has(secretPath("proj", storage.ConnectionSecretName)) {
+	if resp, _ := TeardownPipelineServer(c, "proj", "", confirmBoth()); !resp.Success || f.has(secretPath("proj", storage.ConnectionSecretName)) {
 		t.Fatalf("confirmed: %+v", resp)
 	}
 	if _, ok := notebookAnnotation(f, "wb-b"); ok {
@@ -223,20 +229,20 @@ func TestCleanUp_UnconfirmedConnectionWorkbenchesRefuseUpFront(t *testing.T) {
 	if m := f.mutations(); len(m) != 0 {
 		t.Errorf("nothing may change: %v", m)
 	}
-	if len(events) != 1 || events[0].Step != "pipeline-server:proj" || events[0].ErrorCode != storage.ErrorCodeConfirmWorkbenches || events[0].Detail != "wb-a\nwb-b" {
+	if len(events) != 1 || events[0].Step != "pipeline-server:proj" || events[0].ErrorCode != storage.ErrorCodeConfirmWorkbenches || events[0].Detail != "wb-a=uid-wb-a\nwb-b=uid-wb-b" {
 		t.Fatalf("events %+v", events)
 	}
 	// Confirmed, the clean-up hands the confirmation to the teardown.
-	var got []string
-	defer func(prev func(*Client, string, string, []string) (*types.OperationResponse, error)) {
+	var got map[string]string
+	defer func(prev func(*Client, string, string, map[string]string) (*types.OperationResponse, error)) {
 		cleanupPipelineServer = prev
 	}(cleanupPipelineServer)
-	cleanupPipelineServer = func(_ *Client, _, _ string, wbs []string) (*types.OperationResponse, error) {
+	cleanupPipelineServer = func(_ *Client, _, _ string, wbs map[string]string) (*types.OperationResponse, error) {
 		got = wbs
 		return &types.OperationResponse{Success: true}, nil
 	}
-	res, _ = CleanUp(c, types.CleanupRequest{PipelineServers: []string{"proj"}, ConfirmWorkbenches: map[string][]string{"proj": {"wb-a", "wb-b"}}}, nil)
-	if !res.Success || !slices.Equal(got, []string{"wb-a", "wb-b"}) {
+	res, _ = CleanUp(c, types.CleanupRequest{PipelineServers: []string{"proj"}, ConfirmWorkbenches: map[string]map[string]string{"proj": confirmBoth()}}, nil)
+	if !res.Success || !maps.Equal(got, confirmBoth()) {
 		t.Fatalf("got %+v, confirmed %v", res, got)
 	}
 }
@@ -268,6 +274,7 @@ func TestCleanUp_RecipeProjectDeleteLeavesWorkbenchesAlone(t *testing.T) {
 // Connection, read with the user's token (the ServiceAccount may not list
 // Notebooks); one that cannot be read says so.
 func TestStatus_ListsTheConnectionsWorkbenches(t *testing.T) {
+	bothRefs := []types.ConnectionWorkbench{{Name: "wb-a", UID: "uid-wb-a"}, {Name: "wb-b", UID: "uid-wb-b"}}
 	f, c := newResourceFake(t)
 	putConnectionUsers(f)
 	putDSProject(f, "proj")
@@ -277,7 +284,7 @@ func TestStatus_ListsTheConnectionsWorkbenches(t *testing.T) {
 	if err != nil || len(st.PipelineServers) != 1 {
 		t.Fatalf("got %+v, %v", st, err)
 	}
-	if ps := st.PipelineServers[0]; !slices.Equal(ps.ConnectionWorkbenches, []string{"wb-a", "wb-b"}) {
+	if ps := st.PipelineServers[0]; !slices.Equal(ps.ConnectionWorkbenches, bothRefs) {
 		t.Errorf("admin status: %+v", ps)
 	}
 	for _, call := range f.callsTo(http.MethodGet, "/apis/kubeflow.org/v1/namespaces/proj/notebooks") {
@@ -286,12 +293,64 @@ func TestStatus_ListsTheConnectionsWorkbenches(t *testing.T) {
 		}
 	}
 	pst, err := GetProjectStatus(c, u, "proj")
-	if err != nil || len(pst.PipelineServers) != 1 || !slices.Equal(pst.PipelineServers[0].ConnectionWorkbenches, []string{"wb-a", "wb-b"}) {
+	if err != nil || len(pst.PipelineServers) != 1 || !slices.Equal(pst.PipelineServers[0].ConnectionWorkbenches, bothRefs) {
 		t.Fatalf("project status: %+v, %v", pst, err)
 	}
 	f.failAs[fakeUserToken+" GET /apis/kubeflow.org/v1/namespaces/proj/notebooks"] = 403
 	st, _ = GetResourcesStatusFor(c, u, "proj")
 	if ps := st.PipelineServers[0]; ps.ConnectionWorkbenches != nil || !strings.Contains(ps.ConnectionWorkbenchesMessage, "may not read the workbenches") {
 		t.Errorf("unreadable: %+v", ps)
+	}
+}
+
+// attachDuringPatches makes wb-new attach the Connection while the
+// teardown patches wb-b (after its list was read, before the delete).
+func attachDuringPatches(f *resourceFake) {
+	f.beforeServe = func(method, path string) {
+		if method == http.MethodPatch && path == notebookPath("proj", "wb-b") {
+			putNotebook(f, "proj", "wb-new", "proj/"+storage.ConnectionSecretName)
+		}
+	}
+}
+
+// A workbench that attaches the Connection after the list was read is
+// found by a second read right before the delete: the teardown refuses,
+// deleting nothing, and names it.
+func TestTeardownPipelineServer_WorkbenchAttachingDuringTheDeletionRefuses(t *testing.T) {
+	fastPipelineTimings(t)
+	f, c := newResourceFake(t)
+	putConnectionUsers(f)
+	attachDuringPatches(f)
+	resp, _ := TeardownPipelineServer(c, "proj", toolDSPAUID(c, "proj"), confirmBoth())
+	if resp.Success || resp.ErrorCode != storage.ErrorCodeConfirmWorkbenches || !strings.Contains(resp.Message, "wb-new") || !strings.Contains(resp.Message, "Nothing was deleted") {
+		t.Fatalf("got %+v", resp)
+	}
+	if hasMutation(f, "DELETE ") || !f.has(secretPath("proj", storage.ConnectionSecretName)) {
+		t.Errorf("nothing may be deleted: %v", f.mutations())
+	}
+	// Run again with wb-new confirmed as it is: it goes through.
+	f.beforeServe = nil
+	confirm := map[string]string{"wb-new": "uid-wb-new"}
+	if resp, _ := TeardownPipelineServer(c, "proj", toolDSPAUID(c, "proj"), confirm); !resp.Success {
+		t.Fatalf("rerun: %+v", resp)
+	}
+}
+
+// The same late refusal inside Clean up names the workbenches on the
+// refused step, by name and UID, for the dialog to ask about them.
+func TestCleanUp_LateWorkbenchRefusalListsThem(t *testing.T) {
+	fastPipelineTimings(t)
+	f, c := newResourceFake(t)
+	putConnectionUsers(f)
+	attachDuringPatches(f)
+	var events []UpdateStepEvent
+	res, _ := CleanUp(c, types.CleanupRequest{PipelineServers: []string{"proj"}, ConfirmUnrecorded: map[string]string{"proj": toolDSPAUID(c, "proj")}, ConfirmWorkbenches: map[string]map[string]string{"proj": confirmBoth()}},
+		func(e UpdateStepEvent) { events = append(events, e) })
+	if res.Success || res.ErrorCode != storage.ErrorCodeConfirmWorkbenches {
+		t.Fatalf("got %+v", res)
+	}
+	last := events[len(events)-1]
+	if last.Step != "pipeline-server:proj" || last.Status != "failed" || last.Detail != "wb-new=uid-wb-new" {
+		t.Fatalf("events %+v", events)
 	}
 }

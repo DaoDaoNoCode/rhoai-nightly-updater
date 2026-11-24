@@ -96,11 +96,11 @@ func TestTeardownPipelineServer_AnUnreadableRecordRefuses(t *testing.T) {
 // Clean up propagates the confirmation flag only for projects the user
 // affirmed; all other projects receive no confirmation.
 func TestCleanUp_PassesTheConfirmationOfUnrecordedPipelineServers(t *testing.T) {
-	defer func(f func(*Client, string, string, []string) (*types.OperationResponse, error)) {
+	defer func(f func(*Client, string, string, map[string]string) (*types.OperationResponse, error)) {
 		cleanupPipelineServer = f
 	}(cleanupPipelineServer)
 	got := map[string]string{}
-	cleanupPipelineServer = func(_ *Client, project, confirmedUID string, _ []string) (*types.OperationResponse, error) {
+	cleanupPipelineServer = func(_ *Client, project, confirmedUID string, _ map[string]string) (*types.OperationResponse, error) {
 		got[project] = confirmedUID
 		return &types.OperationResponse{Success: true}, nil
 	}

@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -218,6 +219,65 @@ var HandleS3StorageTeardown = withMutationAuth(func(c *cluster.Client, w http.Re
 	writeOperationResult(w, result, "teardown-s3")
 })
 
+// Pipeline server teardowns and Recreate; tests may stub them.
+var (
+	runTeardownPipelineServer = cluster.TeardownPipelineServer
+	runRecreatePipelineServer = cluster.RecreatePipelineServer
+)
+
+// maxConfirmWorkbenches bounds the workbenches one request confirms
+// removing the dashboard Connection from (per pipeline server, and in all
+// of a clean-up).
+const maxConfirmWorkbenches = 500
+
+// maxNotebookNameLength is a Notebook name's longest (a DNS-1123
+// subdomain).
+const maxNotebookNameLength = 253
+
+// pipelineServerBodyLimit fits the largest valid request: a project and
+// maxConfirmWorkbenches entries of the longest name and UID
+// (500 * (253 + 128 + 6) bytes, about 190 KiB).
+const pipelineServerBodyLimit = 192 << 10
+
+// notebookNameRegex is a DNS-1123 subdomain, the form of a Notebook's name.
+var notebookNameRegex = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`)
+
+// validConfirmWorkbenches reports whether confirm (workbench name to UID)
+// is within the bounds a request may carry.
+func validConfirmWorkbenches(confirm map[string]string) bool {
+	if len(confirm) > maxConfirmWorkbenches {
+		return false
+	}
+	for name, uid := range confirm {
+		if len(name) > maxNotebookNameLength || !notebookNameRegex.MatchString(name) || uid == "" || len(uid) > maxUIDLength {
+			return false
+		}
+	}
+	return true
+}
+
+// readPipelineServerRequest decodes and checks a setup or teardown body,
+// answering 400 when it is not valid.
+func readPipelineServerRequest(w http.ResponseWriter, r *http.Request, req *types.PipelineServerRequest) bool {
+	if err := readBody(w, r, pipelineServerBodyLimit, req, false); err != nil {
+		writeError(w, "invalid request body", http.StatusBadRequest, "validation")
+		return false
+	}
+	if req.Project == "" {
+		writeError(w, "project is required", http.StatusBadRequest, "validation")
+		return false
+	}
+	if !namespaceRegex.MatchString(req.Project) {
+		writeError(w, "invalid project name", http.StatusBadRequest, "validation")
+		return false
+	}
+	if !validConfirmWorkbenches(req.ConfirmWorkbenches) {
+		writeError(w, fmt.Sprintf("confirmWorkbenches maps at most %d workbench names to their UIDs", maxConfirmWorkbenches), http.StatusBadRequest, "validation")
+		return false
+	}
+	return true
+}
+
 // HandlePipelineServerSetup creates a pipeline server (DSPA) in the specified project.
 var HandlePipelineServerSetup = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	if !lockCluster(w) {
@@ -225,12 +285,7 @@ var HandlePipelineServerSetup = withMutationAuth(func(c *cluster.Client, w http.
 	}
 	defer releaseClusterMutationLock()
 	var req types.PipelineServerRequest
-	if err := readBody(w, r, 4096, &req, false); err != nil || req.Project == "" {
-		writeError(w, "project is required", http.StatusBadRequest, "validation")
-		return
-	}
-	if !namespaceRegex.MatchString(req.Project) {
-		writeError(w, "invalid project name", http.StatusBadRequest, "validation")
+	if !readPipelineServerRequest(w, r, &req) {
 		return
 	}
 	beginOperation(w, req.Project)
@@ -238,7 +293,7 @@ var HandlePipelineServerSetup = withMutationAuth(func(c *cluster.Client, w http.
 	var result *types.OperationResponse
 	var err error
 	if req.Recreate {
-		result, err = cluster.RecreatePipelineServer(c, req.Project, req.ConfirmUnrecorded, req.ConfirmWorkbenches)
+		result, err = runRecreatePipelineServer(c, req.Project, req.ConfirmUnrecorded, req.ConfirmWorkbenches)
 	} else {
 		result, err = cluster.SetupPipelineServer(c, req.Project)
 	}
@@ -257,17 +312,12 @@ var HandlePipelineServerTeardown = withMutationAuth(func(c *cluster.Client, w ht
 	}
 	defer releaseClusterMutationLock()
 	var req types.PipelineServerRequest
-	if err := readBody(w, r, 4096, &req, false); err != nil || req.Project == "" {
-		writeError(w, "project is required", http.StatusBadRequest, "validation")
-		return
-	}
-	if !namespaceRegex.MatchString(req.Project) {
-		writeError(w, "invalid project name", http.StatusBadRequest, "validation")
+	if !readPipelineServerRequest(w, r, &req) {
 		return
 	}
 	beginOperation(w, req.Project)
 	slog.Info("mutation", "op", "teardown-pipeline-server", "project", req.Project, "confirmUnrecorded", req.ConfirmUnrecorded)
-	result, err := cluster.TeardownPipelineServer(c, req.Project, req.ConfirmUnrecorded, req.ConfirmWorkbenches)
+	result, err := runTeardownPipelineServer(c, req.Project, req.ConfirmUnrecorded, req.ConfirmWorkbenches)
 	if err != nil {
 		slog.Error("teardown-pipeline-server failed", "error", err)
 		writeOperationError(w, "pipeline server teardown failed", err)

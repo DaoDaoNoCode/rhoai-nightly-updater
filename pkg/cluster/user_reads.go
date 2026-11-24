@@ -133,7 +133,7 @@ func connectionState(u *Client, project string, terminating bool) (string, strin
 // of project whose opendatahub.io/connections annotation names the tool's
 // dashboard Connection (storage.ConnectionWorkbenches). A cluster without
 // the Notebook API has none.
-func listConnectionWorkbenches(u *Client, project string) ([]string, error) {
+func listConnectionWorkbenches(u *Client, project string) ([]types.ConnectionWorkbench, error) {
 	if !u.ActsAsUser() {
 		return nil, authz.ErrNotUserClient
 	}
@@ -142,7 +142,16 @@ func listConnectionWorkbenches(u *Client, project string) ([]string, error) {
 	if err != nil || !found {
 		return nil, err
 	}
-	return storage.ConnectionWorkbenchNames(storage.ConnectionWorkbenches(list, project)), nil
+	return connectionWorkbenchRefs(storage.ConnectionWorkbenches(list, project)), nil
+}
+
+// connectionWorkbenchRefs are wbs by name and UID, as the API returns them.
+func connectionWorkbenchRefs(wbs []storage.ConnectionWorkbench) []types.ConnectionWorkbench {
+	out := make([]types.ConnectionWorkbench, 0, len(wbs))
+	for _, w := range wbs {
+		out = append(out, types.ConnectionWorkbench{Name: w.Name, UID: w.UID})
+	}
+	return out
 }
 
 // addConnectionWorkbenches sets ps.ConnectionWorkbenches (or why they could
