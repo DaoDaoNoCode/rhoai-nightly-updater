@@ -64,6 +64,7 @@ type fakeCluster struct {
 	// playground (nil: no MaaSModelRef names it); maasEntryErr fails its
 	// read. playgroundReq is the last playground setup request.
 	maasEntry     *types.PlaygroundModel
+	maasExtra     []types.PlaygroundModel
 	maasEntryErr  error
 	playgroundReq types.PlaygroundRequest
 	registry      types.ModelRegistryStatus
@@ -223,14 +224,18 @@ func (fc *fakeCluster) install(t *testing.T) {
 		fc.playground = &types.PlaygroundState{ResourceState: types.ResourceState{Namespace: req.Project, Deployed: true, Ready: true, ManagedByTool: true}, Models: req.Models}
 		return ok("playground")
 	}
-	maasPlayground = func(_ *kube.Client, project, model string) (types.PlaygroundModel, bool, error) {
+	maasPlayground = func(_ *kube.Client, project, model string) ([]types.PlaygroundModel, error) {
 		if fc.maasEntryErr != nil {
-			return types.PlaygroundModel{}, false, fc.maasEntryErr
+			return nil, fc.maasEntryErr
 		}
-		if fc.maasEntry == nil || project != "proj" || model != "qwen3-1-7b" {
-			return types.PlaygroundModel{}, false, nil
+		if project != "proj" || model != "qwen3-1-7b" {
+			return nil, nil
 		}
-		return *fc.maasEntry, true, nil
+		var out []types.PlaygroundModel
+		if fc.maasEntry != nil {
+			out = append(out, *fc.maasEntry)
+		}
+		return append(out, fc.maasExtra...), nil
 	}
 	registryStatus = func(_, _ *kube.Client) (*types.ModelRegistryStatus, error) {
 		st := fc.registry
@@ -354,6 +359,18 @@ const maasEntryName = "publishers/proj/models/qwen3-1-7b"
 
 func readyMaaSEntry() *types.PlaygroundModel {
 	return &types.PlaygroundModel{Name: maasEntryName, DisplayName: "Qwen3 1.7B", Source: "maas", Status: "Ready", Ready: true, Chat: true, Subscriptions: []string{"rhoai-nightly-updater-subscription"}}
+}
+
+// aEntry is a second MaaS entry of the model, sorted before the first.
+func aEntry(ready, offered bool) types.PlaygroundModel {
+	m := types.PlaygroundModel{Name: "a/qwen", DisplayName: "Qwen3 1.7B again", Source: "maas", Status: "Pending", Ready: ready, Chat: true}
+	if ready {
+		m.Status = "Ready"
+	}
+	if offered {
+		m.Subscriptions = []string{"team-sub"}
+	}
+	return m
 }
 
 func stepOf(t *testing.T, r types.EnvironmentRecipe, id string) Step {
@@ -881,18 +898,26 @@ func TestRunPlaygroundStep_MaaSEntry(t *testing.T) {
 		err        error
 		want       []types.PlaygroundModelRef
 		failure    string
+		extra      []types.PlaygroundModel
+		note       string
 	}{
-		{"published: MaaS entry", playgroundPublish, readyMaaSEntry(), nil, []types.PlaygroundModelRef{{Name: maasEntryName, Source: "maas"}}, ""},
-		{"exposure maas: MaaS entry", playgroundExposure, readyMaaSEntry(), nil, []types.PlaygroundModelRef{{Name: maasEntryName, Source: "maas"}}, ""},
-		{"neither: the project's models", playgroundNeither, readyMaaSEntry(), nil, nil, ""},
-		{"not found", playgroundPublish, nil, nil, nil, "is not published through Models as a Service (no MaaSModelRef names it)"},
-		{"not ready", playgroundPublish, notReady, nil, nil, "is not ready in Models as a Service yet (Pending)"},
-		{"no subscription", playgroundPublish, unoffered, nil, nil, "No Models as a Service subscription offers model qwen3-1-7b"},
-		{"read fails", playgroundPublish, nil, errors.New("boom"), nil, "Cannot read how Models as a Service offers model qwen3-1-7b in proj: boom"},
+		{"published: MaaS entry", playgroundPublish, readyMaaSEntry(), nil, []types.PlaygroundModelRef{{Name: maasEntryName, Source: "maas"}}, "", nil, ""},
+		{"exposure maas: MaaS entry", playgroundExposure, readyMaaSEntry(), nil, []types.PlaygroundModelRef{{Name: maasEntryName, Source: "maas"}}, "", nil, ""},
+		{"neither: the project's models", playgroundNeither, readyMaaSEntry(), nil, nil, "", nil, ""},
+		{"not found", playgroundPublish, nil, nil, nil, "is not published through Models as a Service (no MaaSModelRef names it)", nil, ""},
+		{"not ready", playgroundPublish, notReady, nil, nil, "is not ready in Models as a Service yet (Pending)", nil, ""},
+		{"no subscription", playgroundPublish, unoffered, nil, nil, "No Models as a Service subscription offers model qwen3-1-7b", nil, ""},
+		{"read fails", playgroundPublish, nil, errors.New("boom"), nil, "Cannot read how Models as a Service offers model qwen3-1-7b in proj: boom", nil, ""},
+		// Several MaaSModelRefs name the model: a usable one wins over one
+		// that sorts first; of several usable, the first by name, said.
+		{"a pending entry first by name", playgroundPublish, readyMaaSEntry(), nil, []types.PlaygroundModelRef{{Name: maasEntryName, Source: "maas"}}, "", []types.PlaygroundModel{aEntry(false, true)}, ""},
+		{"two usable entries", playgroundPublish, readyMaaSEntry(), nil, []types.PlaygroundModelRef{{Name: "a/qwen", Source: "maas"}}, "", []types.PlaygroundModel{aEntry(true, true)},
+			"Models as a Service offers model qwen3-1-7b in proj under 2 ready entries (a/qwen, publishers/proj/models/qwen3-1-7b); the playground uses a/qwen, the first by name."},
+		{"several, none usable", playgroundPublish, notReady, nil, nil, "has 2 Models as a Service entries, and none is both ready and offered by a subscription: publishers/proj/models/qwen3-1-7b (phase Pending), a/qwen (phase Ready, offered by no subscription)", []types.PlaygroundModel{aEntry(true, false)}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fc := &fakeCluster{maasEntry: tc.entry, maasEntryErr: tc.err}
+			fc := &fakeCluster{maasEntry: tc.entry, maasExtra: tc.extra, maasEntryErr: tc.err}
 			fc.install(t)
 			res, err := runPlaygroundStep(testClient(), &State{Recipe: validRecipe(t, tc.spec)}, func(types.UpdateStepEvent) {})
 			if err != nil {
@@ -904,7 +929,7 @@ func TestRunPlaygroundStep_MaaSEntry(t *testing.T) {
 				}
 				return
 			}
-			if !res.Success || fc.playgroundReq.Project != "proj" || fmt.Sprint(fc.playgroundReq.Models) != fmt.Sprint(tc.want) {
+			if !res.Success || fc.playgroundReq.Project != "proj" || fmt.Sprint(fc.playgroundReq.Models) != fmt.Sprint(tc.want) || (tc.note != "" && !strings.Contains(res.Message, tc.note)) || (tc.note == "" && strings.Contains(res.Message, "the first by name")) {
 				t.Fatalf("got %+v, request %+v", res, fc.playgroundReq)
 			}
 		})
@@ -933,7 +958,8 @@ func TestCheckPlayground_MaaSModel(t *testing.T) {
 	}{
 		{"set up with the MaaS entry", playgroundPublish, ready(maasRef), readyMaaSEntry(), "ready, with Qwen3 1.7B (through Models as a Service)", ""},
 		{"still starting with it", playgroundPublish, starting, readyMaaSEntry(), "", ""},
-		{"set up with other models", playgroundPublish, ready(own), readyMaaSEntry(), "", "with other models, not Qwen3 1.7B (through Models as a Service)"},
+		{"set up with other models", playgroundPublish, ready(own), readyMaaSEntry(), "", "with other models, not Qwen3 1.7B again (through Models as a Service)"},
+		{"set up with another usable entry of the model", playgroundPublish, ready(types.PlaygroundModelRef{Name: "a/qwen", Source: "maas"}), readyMaaSEntry(), "ready, with Qwen3 1.7B again (through Models as a Service)", ""},
 		{"models not recorded", playgroundExposure, ready(), readyMaaSEntry(), "", "does not say which models the playground in proj was set up with"},
 		{"entry not found: the run says why", playgroundPublish, ready(maasRef), nil, "", ""},
 		{"no playground", playgroundPublish, nil, readyMaaSEntry(), "", ""},
@@ -941,7 +967,10 @@ func TestCheckPlayground_MaaSModel(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fc := &fakeCluster{playground: tc.playground, maasEntry: tc.entry}
+			fc := &fakeCluster{playground: tc.playground, maasEntry: tc.entry, maasExtra: []types.PlaygroundModel{aEntry(true, true)}}
+			if tc.entry == nil {
+				fc.maasExtra = nil
+			}
 			fc.install(t)
 			chk, err := checkPlayground(testClient(), &State{Recipe: validRecipe(t, tc.spec)})
 			switch {

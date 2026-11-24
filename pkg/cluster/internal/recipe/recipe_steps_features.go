@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -52,7 +53,7 @@ var (
 	maasPublished    = serving.MaaSPublishedIn
 	playgroundStatus = features.GetPlaygroundStatus
 	runPlayground    = features.RunPlayground
-	maasPlayground   = features.MaaSPlaygroundModelOf
+	maasPlayground   = features.MaaSPlaygroundModelsOf
 	registryStatus   = modelregistry.ReadStatus
 	registryRecord   = modelregistry.ReadRecord
 	runRegistry      = modelregistry.RunAnnotated
@@ -617,24 +618,64 @@ func playgroundThroughMaaS(s *State) bool {
 	return f.Models.Enabled && ((f.MaaS.Enabled && f.MaaS.Publish) || kube.FirstNonEmpty(f.Models.Exposure, s.Exposure) == serving.ExposureMaaS)
 }
 
+// maasChoice is the Models as a Service entry the playground uses for the
+// recipe's model, every usable entry of it (ready, and offered by a
+// subscription), and a note that says which was chosen when several are
+// usable.
+type maasChoice struct {
+	Model  types.PlaygroundModel
+	Usable []types.PlaygroundModel
+	Note   string
+}
+
+// usableMaaS: the entry is ready and a MaaSSubscription offers it.
+func usableMaaS(m types.PlaygroundModel) bool { return m.Ready && len(m.Subscriptions) > 0 }
+
 // playgroundMaaSModel is the recipe's model as the playground lists it
-// among the Models as a Service: the entry of the MaaSModelRef that names
-// the model (never a name built here). It returns why it cannot be used
-// otherwise, with an error code.
-func playgroundMaaSModel(c *kube.Client, s *State) (types.PlaygroundModel, string, string) {
+// among the Models as a Service: an entry of a MaaSModelRef that names the
+// model (never a name built here). Several MaaSModelRefs may name it: a
+// usable entry is preferred, the first by name when several are. It
+// returns why none can be used otherwise, with an error code.
+func playgroundMaaSModel(c *kube.Client, s *State) (maasChoice, string, string) {
 	project, name := projectOf(s), modelName(s.Recipe)
-	m, found, err := maasPlayground(c, project, name)
-	switch {
-	case err != nil:
-		return m, fmt.Sprintf("Cannot read how Models as a Service offers model %s in %s: %v. Nothing was changed.", name, project, err), kube.ErrorCodeOr(err, "prerequisites")
-	case !found:
-		return m, fmt.Sprintf("Model %s in %s is not published through Models as a Service (no MaaSModelRef names it), and the dashboard offers it to the playground only that way. Publish it on the Models as a Service tab, then Resume. Nothing was changed.", name, project), "model_not_ready"
-	case len(m.Subscriptions) == 0:
-		return m, fmt.Sprintf("No Models as a Service subscription offers model %s in %s, so the playground cannot use it. Publish it again on the Models as a Service tab, then Resume. Nothing was changed.", name, project), "model_not_ready"
-	case !m.Ready:
-		return m, fmt.Sprintf("Model %s in %s is not ready in Models as a Service yet (%s). Resume once the Models as a Service tab shows it ready. Nothing was changed.", name, project, kube.FirstNonEmpty(m.Status, "not ready")), "model_not_ready"
+	all, err := maasPlayground(c, project, name)
+	if err != nil {
+		return maasChoice{}, fmt.Sprintf("Cannot read how Models as a Service offers model %s in %s: %v. Nothing was changed.", name, project, err), kube.ErrorCodeOr(err, "prerequisites")
 	}
-	return m, "", ""
+	var usable []types.PlaygroundModel
+	for _, m := range all {
+		if usableMaaS(m) {
+			usable = append(usable, m)
+		}
+	}
+	sort.SliceStable(usable, func(i, j int) bool { return usable[i].Name < usable[j].Name })
+	switch {
+	case len(all) == 0:
+		return maasChoice{}, fmt.Sprintf("Model %s in %s is not published through Models as a Service (no MaaSModelRef names it), and the dashboard offers it to the playground only that way. Publish it on the Models as a Service tab, then Resume. Nothing was changed.", name, project), "model_not_ready"
+	case len(usable) == 0 && len(all) > 1:
+		var each []string
+		for _, m := range all {
+			why := "phase " + kube.FirstNonEmpty(m.Status, "not reported")
+			if len(m.Subscriptions) == 0 {
+				why += ", offered by no subscription"
+			}
+			each = append(each, fmt.Sprintf("%s (%s)", m.Name, why))
+		}
+		return maasChoice{}, fmt.Sprintf("Model %s in %s has %d Models as a Service entries, and none is both ready and offered by a subscription: %s. Resume once the Models as a Service tab shows the model published and ready. Nothing was changed.", name, project, len(all), strings.Join(each, ", ")), "model_not_ready"
+	case len(usable) == 0 && len(all[0].Subscriptions) == 0:
+		return maasChoice{}, fmt.Sprintf("No Models as a Service subscription offers model %s in %s, so the playground cannot use it. Publish it again on the Models as a Service tab, then Resume. Nothing was changed.", name, project), "model_not_ready"
+	case len(usable) == 0:
+		return maasChoice{}, fmt.Sprintf("Model %s in %s is not ready in Models as a Service yet (%s). Resume once the Models as a Service tab shows it ready. Nothing was changed.", name, project, kube.FirstNonEmpty(all[0].Status, "not ready")), "model_not_ready"
+	}
+	choice := maasChoice{Model: usable[0], Usable: usable}
+	if len(usable) > 1 {
+		var names []string
+		for _, m := range usable {
+			names = append(names, m.Name)
+		}
+		choice.Note = fmt.Sprintf("Models as a Service offers model %s in %s under %d ready entries (%s); the playground uses %s, the first by name.", name, project, len(usable), strings.Join(names, ", "), usable[0].Name)
+	}
+	return choice, "", ""
 }
 
 // maasModelWords names a Models as a Service model for people: its display
@@ -663,12 +704,21 @@ func checkPlayground(c *kube.Client, s *State) (Check, error) {
 		}
 		ready := fmt.Sprintf("The playground in %s is ready.", project)
 		if playgroundThroughMaaS(s) && !item.Terminating {
-			m, problem, _ := playgroundMaaSModel(c, s)
+			choice, problem, _ := playgroundMaaSModel(c, s)
 			if problem != "" {
 				// Not confirmed: the step's run says why.
 				return Check{}, nil
 			}
-			if !slices.Contains(item.Models, types.PlaygroundModelRef{Name: m.Name, Source: "maas"}) {
+			// Any usable entry of the model counts, not only the one a
+			// setup now would choose.
+			m := choice.Model
+			used := slices.IndexFunc(choice.Usable, func(u types.PlaygroundModel) bool {
+				return slices.Contains(item.Models, types.PlaygroundModelRef{Name: u.Name, Source: "maas"})
+			})
+			if used >= 0 {
+				m = choice.Usable[used]
+			}
+			if used < 0 {
 				why := fmt.Sprintf("This tool set up the playground in %s with other models, not %s, which the recipe's playground uses", project, maasModelWords(m))
 				if len(item.Models) == 0 {
 					why = fmt.Sprintf("This tool's record does not say which models the playground in %s was set up with (it was set up before the record kept them), so the recipe cannot tell whether it uses %s", project, maasModelWords(m))
@@ -708,11 +758,20 @@ func playgroundWarnings(r types.EnvironmentRecipe) []types.RecipeWarning {
 func runPlaygroundStep(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	req := types.PlaygroundRequest{Action: "setup", Project: projectOf(s)}
 	if playgroundThroughMaaS(s) {
-		m, problem, code := playgroundMaaSModel(c, s)
+		choice, problem, code := playgroundMaaSModel(c, s)
 		if problem != "" {
 			return fail(problem, code)
 		}
-		req.Models = []types.PlaygroundModelRef{{Name: m.Name, Source: "maas"}}
+		req.Models = []types.PlaygroundModelRef{{Name: choice.Model.Name, Source: "maas"}}
+		if choice.Note != "" {
+			emit(types.UpdateStepEvent{Step: StepPlayground, Status: "running", Message: choice.Note})
+			res, err := runPlayground(c, req, emit)
+			if res != nil {
+				res.Message = strings.TrimSpace(res.Message + " " + choice.Note)
+				res.Logs = append(res.Logs, "NOTE: "+choice.Note)
+			}
+			return res, err
+		}
 	}
 	return runPlayground(c, req, emit)
 }

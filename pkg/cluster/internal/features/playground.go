@@ -565,25 +565,26 @@ func readMaaSPlaygroundModels(c *kube.Client) ([]maasPlaygroundRef, error) {
 	return out, nil
 }
 
-// MaaSPlaygroundModelOf is the Models as a Service entry the playground
-// lists for model (an LLMInferenceService) in project: the one a
-// MaaSModelRef in project names (spec.modelRef), under the name maas-api
-// lists it by, so a caller never builds that name itself. found is false
-// when no MaaSModelRef references the model; Subscriptions is empty when no
-// MaaSSubscription offers it. Read with c (the Kubernetes API, no gen-ai
-// call); an error is a list that failed, an API that is not served
-// included.
-func MaaSPlaygroundModelOf(c *kube.Client, project, model string) (m types.PlaygroundModel, found bool, err error) {
+// MaaSPlaygroundModelsOf is every Models as a Service entry the
+// playground lists for model (an LLMInferenceService) in project: those of
+// the MaaSModelRefs in project that name it (spec.modelRef), under the
+// name maas-api lists each by, so a caller never builds that name itself;
+// sorted by that name. None when no MaaSModelRef references the model; an
+// entry no MaaSSubscription offers has no Subscriptions. Read with c (the
+// Kubernetes API, no gen-ai call); an error is a list that failed (of the
+// references or the subscriptions), an API that is not served included.
+func MaaSPlaygroundModelsOf(c *kube.Client, project, model string) ([]types.PlaygroundModel, error) {
 	refs, err := readMaaSPlaygroundModels(c)
 	if err != nil {
-		return types.PlaygroundModel{}, false, err
+		return nil, err
 	}
+	var out []types.PlaygroundModel
 	for _, r := range refs {
 		if r.Namespace == project && r.ModelKind == "LLMInferenceService" && r.ModelName == model {
-			return r.Model, true, nil
+			out = append(out, r.Model)
 		}
 	}
-	return types.PlaygroundModel{}, false, nil
+	return out, nil
 }
 
 // maasSubscriptionsByModel names, by MaaSModelRef ("<namespace>/<name>"),

@@ -945,32 +945,35 @@ func TestPlayground_StatusShowsTheRecordedModels(t *testing.T) {
 	}
 }
 
-// MaaSPlaygroundModelOf finds the MaaS entry of a model by the MaaSModelRef
-// that names it (in the model's project), under the name the playground
-// lists: not by a name built from the model's.
-func TestPlayground_MaaSPlaygroundModelOf(t *testing.T) {
+// MaaSPlaygroundModelsOf finds the MaaS entries of a model by the
+// MaaSModelRefs that name it (in the model's project), under the names the
+// playground lists, sorted by name: not by a name built from the model's.
+func TestPlayground_MaaSPlaygroundModelsOf(t *testing.T) {
 	e := newPlaygroundEnv(t)
 	e.putMaaSModels()
-	cases := []struct {
-		project, model, want string
-		found                bool
-	}{
-		{"team", "gpt-oss-20b", "gpt-oss-20b ready=true [rhoai-nightly-updater-subscription team-sub]", true},
-		{"team", "unoffered", "unoffered ready=true []", true},
-		{"proj", "gpt-oss-20b", "", false},
+	// A second reference to gpt-oss-20b, pending and offered by none.
+	e.k8s.putJSON("/apis/maas.opendatahub.io/v1alpha1/namespaces/team/maasmodelrefs/a-gpt", `{"spec":{"modelRef":{"kind":"LLMInferenceService","name":"gpt-oss-20b"}},"status":{"phase":"Pending"}}`)
+	cases := []struct{ project, model, want string }{
+		{"team", "gpt-oss-20b", "a-gpt ready=false [] maas; gpt-oss-20b ready=true [rhoai-nightly-updater-subscription team-sub] maas"},
+		{"team", "unoffered", "unoffered ready=true [] maas"},
+		{"proj", "gpt-oss-20b", ""},
 		// An ExternalModel's reference is not an LLMInferenceService's.
-		{"llm", "opt-125m", "", false},
+		{"llm", "opt-125m", ""},
 	}
 	for _, tc := range cases {
-		m, found, err := features.MaaSPlaygroundModelOf(e.c, tc.project, tc.model)
-		if err != nil || found != tc.found || (found && fmt.Sprintf("%s ready=%t %v", m.Name, m.Ready, m.Subscriptions) != tc.want) || (found && m.Source != "maas") {
-			t.Errorf("%s/%s: %+v %v %v", tc.project, tc.model, m, found, err)
+		ms, err := features.MaaSPlaygroundModelsOf(e.c, tc.project, tc.model)
+		var got []string
+		for _, m := range ms {
+			got = append(got, fmt.Sprintf("%s ready=%t %v %s", m.Name, m.Ready, m.Subscriptions, m.Source))
+		}
+		if err != nil || strings.Join(got, "; ") != tc.want {
+			t.Errorf("%s/%s: %v %v", tc.project, tc.model, got, err)
 		}
 	}
 	// Subscriptions that cannot be read are an error, never "offered by none".
 	e.k8s.fail["GET /apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maassubscriptions"] = http.StatusForbidden
-	if _, found, err := features.MaaSPlaygroundModelOf(e.c, "team", "gpt-oss-20b"); err == nil || found || !strings.Contains(err.Error(), "list the MaaS subscriptions") {
-		t.Errorf("subscriptions that cannot be read: %v %v", found, err)
+	if ms, err := features.MaaSPlaygroundModelsOf(e.c, "team", "gpt-oss-20b"); err == nil || len(ms) != 0 || !strings.Contains(err.Error(), "list the MaaS subscriptions") {
+		t.Errorf("subscriptions that cannot be read: %v %v", ms, err)
 	}
 	// The status still lists the project's own models (MaaS is optional there).
 	features.PurgePlaygroundStatus()
@@ -978,8 +981,8 @@ func TestPlayground_MaaSPlaygroundModelOf(t *testing.T) {
 		t.Errorf("status with unreadable subscriptions: %+v %v", st, err)
 	}
 	e.k8s.fail["GET /apis/maas.opendatahub.io/v1alpha1/maasmodelrefs"] = http.StatusForbidden
-	if _, found, err := features.MaaSPlaygroundModelOf(e.c, "team", "gpt-oss-20b"); err == nil || found {
-		t.Errorf("a list that fails: %v %v", found, err)
+	if ms, err := features.MaaSPlaygroundModelsOf(e.c, "team", "gpt-oss-20b"); err == nil || len(ms) != 0 {
+		t.Errorf("a list that fails: %v %v", ms, err)
 	}
 }
 
