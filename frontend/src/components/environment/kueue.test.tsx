@@ -230,6 +230,6 @@ describe("final round: words", () => {
       "/api/resources/prerequisites": { features: { kueue: { ready: false, parts: [{ id: "dsc-kueue", title: "Kueue component", state: "missing", message: "Removed" }] } } } });
     renderAt("/test-resources?tab=kueue&project=dev");
     expect(await screen.findAllByText("Set up its prerequisites first (above): Kueue is turned off on this cluster.")).toHaveLength(1);
-    expect(screen.getByText("Queues for project dev (the ClusterQueue and ResourceFlavor are cluster-wide)")).toBeInTheDocument();
+    expect(screen.getByText("Queues for project dev (the ClusterQueue and ResourceFlavor are cluster-wide objects; only this project uses them)")).toBeInTheDocument();
   });
 });

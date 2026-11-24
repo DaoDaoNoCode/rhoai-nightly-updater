@@ -142,7 +142,7 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
           <FormGroup label="Project" fieldId="kueue-project">
             <ProjectSelect id="kueue-project" projects={projects} selected={shownProject} onSelect={onProject} onClear={onClearProject} />
             <FormHelperText>
-              <HelperText><HelperTextItem>Best a project of its own, for example {KUEUE_DEFAULT_PROJECT}; create it in the dashboard first. Set up adds the label <code>{KUEUE_LABEL}=true</code> to it, so that Kueue admits the workloads sent to its queue.</HelperTextItem></HelperText>
+              <HelperText><HelperTextItem>Best to use a project of its own, for example {KUEUE_DEFAULT_PROJECT}; create it in the dashboard first. Set up adds the label <code>{KUEUE_LABEL}=true</code> to it, so that Kueue admits the workloads sent to its queue.</HelperTextItem></HelperText>
             </FormHelperText>
           </FormGroup>
         </Form>
@@ -154,10 +154,10 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
       )}
       <StackItem>
         <PartList aria-label="What distributed workloads need">
-          <PartItem id="kueue-queues" title="Queues" scope={shownProject ? `Queues for project ${shownProject} (the ClusterQueue and ResourceFlavor are cluster-wide)` : "Queues for one project (the ClusterQueue and ResourceFlavor are cluster-wide)"} status={qStatus}
+          <PartItem id="kueue-queues" title="Queues" scope={shownProject ? `Queues for project ${shownProject} (the ClusterQueue and ResourceFlavor are cluster-wide objects; only this project uses them)` : "Queues for one project (the ClusterQueue and ResourceFlavor are cluster-wide)"} status={qStatus}
             unmanaged={!!k?.objects.some((o) => o.foreign)} loading={!k && !kueueError}>
             <Content component="p">
-              A queue for the project with a CPU and memory quota, as the RHOAI docs set it up (the objects are listed below and under What this creates). Its LocalQueue is never named <code>default</code>, which would make Kueue queue every workload of the project.
+              A queue for the project with a CPU and memory quota, as the RHOAI docs set it up (the objects are listed below and under What this creates). Its LocalQueue is never named <code>default</code>, because Kueue would put every workload of the project that has no queue label into a LocalQueue named <code>default</code>.
             </Content>
             {k?.refusal && !setUp && !(next?.kind === "set-up" && reason === k.refusal) && <Content component="p">{k.refusal}</Content>}
             {k && k.instance.found && (
@@ -215,7 +215,7 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
       <StackItem>
         <FeatureSection title="What this creates">
           <CreatesList items={[
-            <>Prerequisites (above): the cert-manager Operator and the Red Hat build of Kueue from OperatorHub, then the DataScienceCluster&apos;s kueue set to Unmanaged, which means RHOAI uses the Kueue operator you install instead of its own. RHOAI then starts Kueue (its Kueue CR <code>cluster</code>); the tab says &quot;Kueue is running&quot; once RHOAI reports it ready. The operators stay after Clean up.</>,
+            <>Prerequisites (above): the cert-manager Operator and the Red Hat build of Kueue from OperatorHub, then the DataScienceCluster&apos;s kueue set to Unmanaged, which means RHOAI uses the Kueue operator you install instead of its own. RHOAI then starts Kueue (the Kueue object named <code>cluster</code>); the tab says &quot;Kueue is running&quot; once RHOAI reports it ready. The operators stay after Clean up.</>,
             <>ResourceFlavor <code>{KUEUE_FLAVOR}</code>: a name for the kind of nodes the quota is for (here any node).</>,
             <>ClusterQueue <code>{KUEUE_CLUSTER_QUEUE}</code>: the quota, {k?.quota ?? "CPU and memory"}, for the project only. It is not preemptive: a waiting workload never stops a running one.</>,
             <>LocalQueue <code>{KUEUE_LOCAL_QUEUE}</code> in the project: where its workloads are sent (label <code>kueue.x-k8s.io/queue-name</code>), drawing on the ClusterQueue&apos;s quota.</>,
@@ -223,7 +223,7 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
             <>With the samples: RayCluster <code>nightly-raycluster</code> and RayJob <code>nightly-rayjob</code> (head and one worker, 1 CPU and 2 GiB each).</>,
             <>With the {OPT_IN_NAME}: <code>disableKueue: false</code> in the dashboard&apos;s settings and hardware profile <code>{KUEUE_PROFILE}</code>.</>,
           ]} />
-          <Content component="p"><ExternalLink href={KUEUE_DOCS} isInline>RHOAI docs: Manage workloads with Kueue</ExternalLink></Content>
+          <Content component="p" style={{ marginTop: "var(--pf-t--global--spacer--md)" }}><ExternalLink href={KUEUE_DOCS} isInline>RHOAI docs: Manage workloads with Kueue</ExternalLink></Content>
         </FeatureSection>
       </StackItem>
       {!readOnly && ours && (
