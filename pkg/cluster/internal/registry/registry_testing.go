@@ -22,7 +22,7 @@ func SetHTTPClientForTest(c *http.Client) (restore func()) {
 
 // SetCopyFromPullSecretForTest makes f the copy the flows make for the
 // internal registry (EnsureRegistryPullCopyFromPullSecret).
-func SetCopyFromPullSecretForTest(f func(c *kube.Client) ([]string, string)) (restore func()) {
+func SetCopyFromPullSecretForTest(f func(c *kube.Client) ([]string, string, string)) (restore func()) {
 	mustBeTest("SetCopyFromPullSecretForTest")
 	prev := copyFromPullSecret
 	copyFromPullSecret = f

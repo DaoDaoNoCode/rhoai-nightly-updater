@@ -2075,7 +2075,7 @@ func CreatePullSecret(c *kube.Client, auth string) (*types.OperationResponse, er
 	// images, does not see additional-pull-secret; it gets its own copy
 	// (registry.EnsureRegistryPullCopy). A problem there does not undo
 	// the saved pull secret: the message says what is missing.
-	copyLogs, copyWarning := registry.EnsureRegistryPullCopy(c, auth)
+	copyLogs, copyWarning, _ := registry.EnsureRegistryPullCopy(c, auth)
 	logs = append(logs, copyLogs...)
 	message := "Pull secret configured successfully."
 	if copyWarning != "" {
@@ -2109,7 +2109,7 @@ func CopyPullSecretForRegistry(c *kube.Client) (*types.OperationResponse, error)
 		}
 		return &types.OperationResponse{Success: false, Message: msg, ErrorCode: "prerequisites"}, nil
 	}
-	logs, warning := registry.CopyFromPullSecret(c)
+	logs, warning, code := registry.CopyFromPullSecret(c)
 	ok := false
 	for _, l := range logs {
 		ok = ok || strings.HasPrefix(l, "OK: ")
@@ -2117,7 +2117,7 @@ func CopyPullSecretForRegistry(c *kube.Client) (*types.OperationResponse, error)
 	record.Action(c, "copy-registry-pull-secret", registry.RegistryPullCopyName, ok && warning == "")
 	switch {
 	case warning != "":
-		return &types.OperationResponse{Success: false, Message: warning, Logs: logs, ErrorCode: "validation"}, nil
+		return &types.OperationResponse{Success: false, Message: warning, Logs: logs, ErrorCode: kube.NonEmpty(code, "internal")}, nil
 	case !ok && len(logs) > 0:
 		return &types.OperationResponse{Success: false, Message: logs[len(logs)-1], Logs: logs, ErrorCode: "prerequisites"}, nil
 	case !ok:

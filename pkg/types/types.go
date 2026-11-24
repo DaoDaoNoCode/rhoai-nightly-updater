@@ -227,6 +227,10 @@ type RegistryPullCopyInfo struct {
 	// Namespace is RHOAI's applications namespace; empty when it is not
 	// known.
 	Namespace string `json:"namespace,omitempty"`
+	// NoQuayRHOAIEntry: the pull secret has no entry exactly for
+	// quay.io/rhoai (only a generic or repository login, or none), so
+	// nothing is copied and no copy counts as current.
+	NoQuayRHOAIEntry bool `json:"noQuayRHOAIEntry,omitempty"`
 	// NoApplicationsNamespace: RHOAI has no DSCInitialization yet, so
 	// there is nowhere to copy to.
 	NoApplicationsNamespace bool `json:"noApplicationsNamespace,omitempty"`

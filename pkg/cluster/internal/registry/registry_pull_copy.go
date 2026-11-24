@@ -75,28 +75,38 @@ func ExactQuayRHOAIAuth(auths map[string]any) string {
 // "" when absent). Self-managed or Red Hat managed (non-hosted): no action, no
 // messages. Without a user token or when control-plane type cannot be determined:
 // nothing is written and the warning explains why.
-func EnsureRegistryPullCopy(c *kube.Client, auth string) (logs []string, warning string) {
+func EnsureRegistryPullCopy(c *kube.Client, auth string) (logs []string, warning, code string) {
 	if !c.ActsAsUser() {
-		return nil, registryCopyPrefix + "the token is copied for the internal registry only with the signed-in user's own token, so it was not copied."
+		return nil, registryCopyPrefix + "the token is copied for the internal registry only with the signed-in user's own token, so it was not copied.", "forbidden"
 	}
 	switch rhoai.CachedControlPlane(c) {
 	case rhoai.ControlPlaneHosted:
 	case "":
-		return nil, registryCopyPrefix + "the updater could not read whether this cluster has a hosted control plane, so it did not copy the token for the internal registry."
+		return nil, registryCopyPrefix + "the updater could not read whether this cluster has a hosted control plane, so it did not copy the token for the internal registry.", "prerequisites"
 	default:
-		return nil, ""
+		return nil, "", ""
 	}
 	if auth == "" {
-		return []string{registryCopyPrefix + "the pull secret has no quay.io/rhoai entry, so nothing was copied for the internal registry; add the quay.io/rhoai token under Pull secret."}, ""
+		return []string{registryCopyPrefix + "the pull secret has no quay.io/rhoai entry, so nothing was copied for the internal registry; add the quay.io/rhoai token under Pull secret."}, "", ""
 	}
 	ns, err := rhoai.AppsNamespace(c)
 	if errors.Is(err, rhoai.ErrNoDSCInitialization) {
-		return []string{registryCopyPrefix + "RHOAI has no applications namespace yet, so the token was not copied for the internal registry yet; " + copyLater + "."}, ""
+		return []string{registryCopyPrefix + "RHOAI has no applications namespace yet, so the token was not copied for the internal registry yet; " + copyLater + "."}, "", ""
 	}
 	if err != nil {
-		return nil, registryCopyPrefix + "could not find RHOAI's applications namespace, so the token was not copied for the internal registry: " + kube.RedactSecrets(err.Error(), credentialForms(auth)...)
+		return nil, registryCopyPrefix + "could not find RHOAI's applications namespace, so the token was not copied for the internal registry: " + kube.RedactSecrets(err.Error(), credentialForms(auth)...), kube.ErrorCodeOr(err, "internal")
 	}
 	return writeRegistryPullCopy(c, ns, auth)
+}
+
+// CopyChanged: logs (of the copy) say it created or updated the Secret.
+func CopyChanged(logs []string) bool {
+	for _, l := range logs {
+		if strings.HasPrefix(l, "OK: "+registryCopyPrefix+"copied ") || strings.HasPrefix(l, "OK: "+registryCopyPrefix+"updated ") {
+			return true
+		}
+	}
+	return false
 }
 
 // copyFromPullSecret aliases CopyFromPullSecret so tests can swap the implementation
@@ -107,7 +117,7 @@ var copyFromPullSecret = CopyFromPullSecret
 // DataScienceCluster creation, and workbench setup invoke: CopyFromPullSecret,
 // promoting any warning to a "Warning: " log line.
 func EnsureRegistryPullCopyFromPullSecret(c *kube.Client) []string {
-	logs, warning := copyFromPullSecret(c)
+	logs, warning, _ := copyFromPullSecret(c)
 	if warning != "" {
 		logs = append(logs, "Warning: "+warning)
 	}
@@ -118,38 +128,38 @@ func EnsureRegistryPullCopyFromPullSecret(c *kube.Client) []string {
 // quay.io/rhoai slot from kube-system/additional-pull-secret via c. Non-hosted
 // clusters, or when the pull secret is missing or not a readable config, stay
 // silent (callers validate the secret on their own).
-func CopyFromPullSecret(c *kube.Client) (logs []string, warning string) {
+func CopyFromPullSecret(c *kube.Client) (logs []string, warning, code string) {
 	if !c.ActsAsUser() {
-		return nil, registryCopyPrefix + "the token is copied for the internal registry only with the signed-in user's own token, so it was not copied."
+		return nil, registryCopyPrefix + "the token is copied for the internal registry only with the signed-in user's own token, so it was not copied.", "forbidden"
 	}
 	switch rhoai.CachedControlPlane(c) {
 	case rhoai.ControlPlaneHosted:
 	case "":
-		return nil, registryCopyPrefix + "the updater could not read whether this cluster has a hosted control plane, so it did not copy the token for the internal registry."
+		return nil, registryCopyPrefix + "the updater could not read whether this cluster has a hosted control plane, so it did not copy the token for the internal registry.", "prerequisites"
 	default:
-		return nil, ""
+		return nil, "", ""
 	}
 	body, exists, err := c.GetOptional(rhoai.NamespacedPath("v1", "secrets", "kube-system", "additional-pull-secret"))
 	if err != nil {
-		return nil, registryCopyPrefix + "could not read kube-system/additional-pull-secret to copy its token for the internal registry: " + kube.RedactSecrets(err.Error(), existingCredentialForms(body)...)
+		return nil, registryCopyPrefix + "could not read kube-system/additional-pull-secret to copy its token for the internal registry: " + kube.RedactSecrets(err.Error(), existingCredentialForms(body)...), kube.ErrorCodeOr(err, "internal")
 	}
 	if !exists {
-		return nil, ""
+		return []string{registryCopyPrefix + "kube-system/additional-pull-secret does not exist, so nothing was copied for the internal registry; save the quay.io/rhoai token under Pull secret."}, "", ""
 	}
 	cfg, problem := DecodeDockerConfigSecret(body)
 	if problem != "" {
-		return nil, ""
+		return nil, fmt.Sprintf("%skube-system/additional-pull-secret is not a readable pull secret (%s), so nothing was copied for the internal registry; replace the token under Pull secret.", registryCopyPrefix, problem), "validation"
 	}
 	auths, _ := cfg["auths"].(map[string]any)
 	return EnsureRegistryPullCopy(c, ExactQuayRHOAIAuth(auths))
 }
 
-func writeRegistryPullCopy(c *kube.Client, ns, auth string) (logs []string, warning string) {
+func writeRegistryPullCopy(c *kube.Client, ns, auth string) (logs []string, warning, code string) {
 	where := ns + "/" + RegistryPullCopyName
 	path := rhoai.NamespacedPath("v1", "secrets", ns, RegistryPullCopyName)
 	cfg, err := json.Marshal(map[string]any{"auths": map[string]any{QuayRHOAI: map[string]any{"auth": auth}}})
 	if err != nil {
-		return nil, registryCopyPrefix + "could not build the internal registry's copy: " + err.Error()
+		return nil, registryCopyPrefix + "could not build the internal registry's copy: " + err.Error(), "internal"
 	}
 	cfgB64 := base64.StdEncoding.EncodeToString(cfg)
 	// Track each representation of the incoming credential and, after read,
@@ -162,7 +172,7 @@ func writeRegistryPullCopy(c *kube.Client, ns, auth string) (logs []string, warn
 	body, found, err := c.GetOptional(path)
 	secrets = append(secrets, existingCredentialForms(body)...)
 	if err != nil {
-		return nil, fmt.Sprintf("%scould not read Secret %s: %s. The token was not copied for the internal registry.", registryCopyPrefix, where, redact(err))
+		return nil, fmt.Sprintf("%scould not read Secret %s: %s. The token was not copied for the internal registry.", registryCopyPrefix, where, redact(err)), kube.ErrorCodeOr(err, "internal")
 	}
 	if !found {
 		data, err := json.Marshal(map[string]any{
@@ -177,25 +187,25 @@ func writeRegistryPullCopy(c *kube.Client, ns, auth string) (logs []string, warn
 			"data": map[string]any{".dockerconfigjson": cfgB64},
 		})
 		if err != nil {
-			return nil, registryCopyPrefix + "could not build the internal registry's copy: " + err.Error()
+			return nil, registryCopyPrefix + "could not build the internal registry's copy: " + err.Error(), "internal"
 		}
 		_, _, err = c.Post(rhoai.NamespacedPath("v1", "secrets", ns, ""), data)
 		switch {
 		case err == nil:
-			return []string{fmt.Sprintf("OK: %scopied the quay.io/rhoai token to Secret %s, so the internal registry can pull nightly workbench images", registryCopyPrefix, where)}, ""
+			return []string{fmt.Sprintf("OK: %scopied the quay.io/rhoai token to Secret %s, so the internal registry can pull nightly workbench images", registryCopyPrefix, where)}, "", ""
 		case kube.IsK8sNotFound(err):
-			return []string{fmt.Sprintf("%sRHOAI's applications namespace %s does not exist yet, so the token was not copied for the internal registry yet; %s.", registryCopyPrefix, ns, copyLater)}, ""
+			return []string{fmt.Sprintf("%sRHOAI's applications namespace %s does not exist yet, so the token was not copied for the internal registry yet; %s.", registryCopyPrefix, ns, copyLater)}, "", ""
 		case kube.IsK8sConflict(err) && rereadHolds(c, path, auth, &secrets):
-			return done, "" // another writer created it with this token in the meantime
+			return done, "", "" // another writer created it with this token in the meantime
 		}
-		return nil, fmt.Sprintf("%scould not create Secret %s: %s. The internal registry cannot pull nightly workbench images until it exists.", registryCopyPrefix, where, redact(err))
+		return nil, fmt.Sprintf("%scould not create Secret %s: %s. The internal registry cannot pull nightly workbench images until it exists.", registryCopyPrefix, where, redact(err)), kube.ErrorCodeOr(err, "internal")
 	}
 
-	if problem := copyProblem(body, where, ns); problem != "" {
-		return nil, registryCopyPrefix + problem
+	if problem, code := copyProblem(body, where, ns); problem != "" {
+		return nil, registryCopyPrefix + problem, code
 	}
 	if holdsOnly(body, auth) {
-		return []string{fmt.Sprintf("OK: %sSecret %s already holds the token, so the internal registry can pull nightly workbench images", registryCopyPrefix, where)}, ""
+		return []string{fmt.Sprintf("OK: %sSecret %s already holds the token, so the internal registry can pull nightly workbench images", registryCopyPrefix, where)}, "", ""
 	}
 	// Patch data only on the tool-owned copy: reuse the fetched object
 	// (labels, annotations, finalizers, owner references) and its
@@ -203,21 +213,21 @@ func writeRegistryPullCopy(c *kube.Client, ns, auth string) (logs []string, warn
 	// silent overwrites.
 	var obj map[string]any
 	if err := json.Unmarshal(body, &obj); err != nil {
-		return nil, fmt.Sprintf("%scould not parse Secret %s, so it was not changed.", registryCopyPrefix, where)
+		return nil, fmt.Sprintf("%scould not parse Secret %s, so it was not changed.", registryCopyPrefix, where), "internal"
 	}
 	obj["data"] = map[string]any{".dockerconfigjson": cfgB64}
 	delete(obj, "stringData")
 	data, err := json.Marshal(obj)
 	if err != nil {
-		return nil, registryCopyPrefix + "could not build the internal registry's copy: " + err.Error()
+		return nil, registryCopyPrefix + "could not build the internal registry's copy: " + err.Error(), "internal"
 	}
 	if _, _, err := c.Put(path, data); err != nil {
 		if kube.IsK8sConflict(err) && rereadHolds(c, path, auth, &secrets) {
-			return done, ""
+			return done, "", ""
 		}
-		return nil, fmt.Sprintf("%scould not update Secret %s: %s. The internal registry may still use the previous token.", registryCopyPrefix, where, redact(err))
+		return nil, fmt.Sprintf("%scould not update Secret %s: %s. The internal registry may still use the previous token.", registryCopyPrefix, where, redact(err)), kube.ErrorCodeOr(err, "internal")
 	}
-	return []string{fmt.Sprintf("OK: %supdated Secret %s with the new token for the internal registry", registryCopyPrefix, where)}, ""
+	return []string{fmt.Sprintf("OK: %supdated Secret %s with the new token for the internal registry", registryCopyPrefix, where)}, "", ""
 }
 
 // After a conflict, rereadHolds fetches the copy again and reports true when it
@@ -226,32 +236,36 @@ func writeRegistryPullCopy(c *kube.Client, ns, auth string) (logs []string, warn
 func rereadHolds(c *kube.Client, path, auth string, secrets *[]string) bool {
 	body, found, err := c.GetOptional(path)
 	*secrets = append(*secrets, existingCredentialForms(body)...)
-	return err == nil && found && copyProblem(body, "", "") == "" && holdsOnly(body, auth)
+	if err != nil || !found {
+		return false
+	}
+	problem, _ := copyProblem(body, "", "")
+	return problem == "" && holdsOnly(body, auth)
 }
 
 // copyProblem states why body must not be altered (where is ns/name for
 // messaging): wrong owner, terminating, wrong type, or excluded from registry
 // pull secrets. "" means modification is allowed.
-func copyProblem(body []byte, where, ns string) string {
+func copyProblem(body []byte, where, ns string) (problem, code string) {
 	var s struct {
 		Metadata kube.ObjectMeta `json:"metadata"`
 		Type     string          `json:"type"`
 	}
 	if err := json.Unmarshal(body, &s); err != nil {
-		return fmt.Sprintf("could not parse Secret %s, so it was not changed.", where)
+		return fmt.Sprintf("could not parse Secret %s, so it was not changed.", where), "internal"
 	}
 	switch {
 	case !s.Metadata.HasToolLabel():
 		return fmt.Sprintf("Secret %s exists and was not created by this updater (it lacks the label %s=%s), so it was not changed. If it should hold the updater's token, delete it (oc delete secret %s -n %s) and copy the token again.",
-			where, kube.ManagedByLabelKey, kube.ManagedByLabelValue, RegistryPullCopyName, ns)
+			where, kube.ManagedByLabelKey, kube.ManagedByLabelValue, RegistryPullCopyName, ns), "not_managed"
 	case s.Metadata.Terminating():
-		return fmt.Sprintf("Secret %s is being deleted, so it was not updated; copy the token again once it is gone.", where)
+		return fmt.Sprintf("Secret %s is being deleted, so it was not updated; copy the token again once it is gone.", where), "terminating"
 	case s.Type != "kubernetes.io/dockerconfigjson":
-		return fmt.Sprintf("Secret %s has type %s, not kubernetes.io/dockerconfigjson, so it was not changed. Delete it (oc delete secret %s -n %s) and copy the token again.", where, s.Type, RegistryPullCopyName, ns)
+		return fmt.Sprintf("Secret %s has type %s, not the type this tool writes (kubernetes.io/dockerconfigjson), so it was not changed. Delete it (oc delete secret %s -n %s) and copy the token again.", where, s.Type, RegistryPullCopyName, ns), "validation"
 	case s.Metadata.Annotations[ExcludeImageSecretAnnotation] == "true":
-		return fmt.Sprintf("Secret %s has the annotation %s=true, so the internal registry does not use it; it was not changed. Remove the annotation (oc annotate secret %s -n %s %s-) if the registry should use it.", where, ExcludeImageSecretAnnotation, RegistryPullCopyName, ns, ExcludeImageSecretAnnotation)
+		return fmt.Sprintf("Secret %s has the annotation %s=true, so the internal registry does not use it; it was not changed. Remove the annotation (oc annotate secret %s -n %s %s-) if the registry should use it.", where, ExcludeImageSecretAnnotation, RegistryPullCopyName, ns, ExcludeImageSecretAnnotation), "validation"
 	}
-	return ""
+	return "", ""
 }
 
 // holdsOnly reports whether the Secret config has a single auths entry for
@@ -353,32 +367,66 @@ func RemoveRegistryPullCopy(c *kube.Client) (logs []string, problem, code string
 	if err != nil || !meta.HasToolLabel() {
 		return nil, fmt.Sprintf("Secret %s was not created by this updater (it lacks the label %s=%s), so it is not removed.", where, kube.ManagedByLabelKey, kube.ManagedByLabelValue), "not_managed"
 	}
-	if _, err := kube.DeleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
-		return nil, fmt.Sprintf("Could not remove Secret %s: %s.", where, kube.RedactSecrets(err.Error(), secrets...)), kube.ErrorCodeOr(err, "internal")
+	// The UID and resourceVersion as checked: a Secret relabelled or made
+	// again since the check is not deleted. After a conflict it is read
+	// once more and removed only if it is still the tool's.
+	for attempt := 0; ; attempt++ {
+		_, err := kube.DeleteWithPreconditions(c, path, meta.UID, meta.ResourceVersion)
+		if err == nil || kube.IsK8sNotFound(err) {
+			break
+		}
+		if !kube.IsK8sConflict(err) {
+			return nil, fmt.Sprintf("Could not remove Secret %s: %s.", where, kube.RedactSecrets(err.Error(), secrets...)), kube.ErrorCodeOr(err, "internal")
+		}
+		if attempt > 0 {
+			return nil, fmt.Sprintf("Secret %s changed while it was being removed, so it was not removed. Try again.", where), "conflict"
+		}
+		body, found, err = c.GetOptional(path)
+		secrets = append(secrets, existingCredentialForms(body)...)
+		if err != nil {
+			return nil, fmt.Sprintf("Could not read Secret %s again: %s. Nothing was removed.", where, kube.RedactSecrets(err.Error(), secrets...)), kube.ErrorCodeOr(err, "internal")
+		}
+		if !found {
+			break
+		}
+		if meta, err = kube.ParseObjectMeta(body); err != nil || !meta.HasToolLabel() {
+			return nil, fmt.Sprintf("Secret %s changed and is no longer this updater's (it lacks the label %s=%s), so it is not removed.", where, kube.ManagedByLabelKey, kube.ManagedByLabelValue), "not_managed"
+		}
 	}
 	return []string{fmt.Sprintf("OK: removed Secret %s. Workbenches cannot pull nightly images through the internal registry until the token is copied again.", where)}, "", ""
 }
 
-// ReadRegistryPullCopy reports registry-copy status via u (the signed-in
-// cluster-admin's client—the ServiceAccount may lack Secret read in the
-// applications namespace). quayAuth is the pull secret's present quay.io/rhoai
-// credential for comparing against the copy. Output is booleans, namespace, and
-// reason only—never the credential itself.
-func ReadRegistryPullCopy(u *kube.Client, quayAuth string) *types.RegistryPullCopyInfo {
+// ReadRegistryPullCopy is the status of the registry copy, read with u (the
+// signed-in cluster-admin's own client: the ServiceAccount may not read
+// Secrets in the applications namespace). It compares the copy with the
+// exact quay.io/rhoai entry of kube-system/additional-pull-secret, the one
+// Copy writes, read with u too. Only booleans, the namespace and a reason
+// are returned, never the credential.
+func ReadRegistryPullCopy(u *kube.Client) *types.RegistryPullCopyInfo {
 	if u == nil || !u.ActsAsUser() {
-		return nil // not available under the ServiceAccount token
+		return nil // never with the ServiceAccount's token
 	}
+	var quayAuth string
+	var pullForms []string
+	if body, exists, err := u.GetOptional(rhoai.NamespacedPath("v1", "secrets", "kube-system", "additional-pull-secret")); err == nil && exists {
+		pullForms = existingCredentialForms(body)
+		if cfg, problem := DecodeDockerConfigSecret(body); problem == "" {
+			auths, _ := cfg["auths"].(map[string]any)
+			quayAuth = ExactQuayRHOAIAuth(auths)
+		}
+	}
+	redact := func(msg string) string { return kube.RedactSecrets(msg, pullForms...) }
 	ns, err := rhoai.AppsNamespace(u)
 	if errors.Is(err, rhoai.ErrNoDSCInitialization) {
 		return &types.RegistryPullCopyInfo{Name: RegistryPullCopyName, NoApplicationsNamespace: true}
 	}
 	if err != nil {
-		return &types.RegistryPullCopyInfo{Name: RegistryPullCopyName, Problem: "Could not find RHOAI's applications namespace: " + kube.RedactSecrets(err.Error(), credentialForms(quayAuth)...)}
+		return &types.RegistryPullCopyInfo{Name: RegistryPullCopyName, Problem: "Could not find RHOAI's applications namespace: " + redact(err.Error())}
 	}
-	info := &types.RegistryPullCopyInfo{Name: RegistryPullCopyName, Namespace: ns}
+	info := &types.RegistryPullCopyInfo{Name: RegistryPullCopyName, Namespace: ns, NoQuayRHOAIEntry: quayAuth == ""}
 	body, found, err := u.GetOptional(rhoai.NamespacedPath("v1", "secrets", ns, RegistryPullCopyName))
 	if err != nil {
-		info.Problem = fmt.Sprintf("Could not read Secret %s/%s: %s", ns, RegistryPullCopyName, kube.RedactSecrets(err.Error(), append(credentialForms(quayAuth), existingCredentialForms(body)...)...))
+		info.Problem = fmt.Sprintf("Could not read Secret %s/%s: %s", ns, RegistryPullCopyName, kube.RedactSecrets(redact(err.Error()), existingCredentialForms(body)...))
 		return info
 	}
 	if !found {
@@ -395,7 +443,7 @@ func ReadRegistryPullCopy(u *kube.Client, quayAuth string) *types.RegistryPullCo
 		case s.Metadata.Terminating():
 			info.Unusable = "It is being deleted."
 		case s.Type != "kubernetes.io/dockerconfigjson":
-			info.Unusable = fmt.Sprintf("It has type %s, not kubernetes.io/dockerconfigjson, so the internal registry does not use it.", s.Type)
+			info.Unusable = fmt.Sprintf("It has type %s, not the type this tool writes (kubernetes.io/dockerconfigjson).", s.Type)
 		case s.Metadata.Annotations[ExcludeImageSecretAnnotation] == "true":
 			info.Unusable = "It has the annotation " + ExcludeImageSecretAnnotation + "=true, so the internal registry does not use it."
 		}

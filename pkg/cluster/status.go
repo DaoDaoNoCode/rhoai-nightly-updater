@@ -33,7 +33,7 @@ type statusRegistryReads struct {
 	controlPlane func(c *Client) string
 	// registryCopy reads the internal registry's copy of the credential
 	// with the signed-in user's client (ROSA HCP only).
-	registryCopy func(u *Client, quayAuth string) *types.RegistryPullCopyInfo
+	registryCopy func(u *Client) *types.RegistryPullCopyInfo
 }
 
 // GetStatus aggregates cluster, operator, and RHOAI status into a single response.
@@ -277,7 +277,7 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 	// signed-in cluster-admin's own client, and left out without one.
 	if reads.registryCopy != nil && controlPlane == rhoai.ControlPlaneHosted && status.PullSecret.Exists {
 		if u := c.SignedInUser(); u != nil {
-			status.PullSecret.Registry = reads.registryCopy(u, quayAuth)
+			status.PullSecret.Registry = reads.registryCopy(u)
 		}
 	}
 

@@ -153,7 +153,11 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 		r.step("check", "success", "The workbench is already set up.")
 		// The internal registry's copy of the token, which an existing
 		// workbench needs to pull its image again (ROSA HCP).
-		r.logs = append(r.logs, registry.EnsureRegistryPullCopyFromPullSecret(c)...)
+		copyLogs := registry.EnsureRegistryPullCopyFromPullSecret(c)
+		r.logs = append(r.logs, copyLogs...)
+		if registry.CopyChanged(copyLogs) {
+			return r.done(fmt.Sprintf("Workbench %s in %s is already set up; the token was copied for the internal registry, which pulls its image.", Name, project))
+		}
 		return r.done(fmt.Sprintf("Workbench %s in %s is already set up; nothing was changed.", Name, project))
 	}
 	pvc, pvcFound, err := readStorage(c, project)
