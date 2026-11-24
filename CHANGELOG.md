@@ -36,7 +36,8 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   `kueue.openshift.io/managed=true`, plus optional RayCluster and RayJob
   samples (image editable, default `quay.io/modh/ray:2.47.1-py311-cu121`;
   sized as the CodeFlare SDK's defaults: head 1 CPU / 5 GiB requested, up to
-  2 CPUs / 8 GiB, one worker 1 CPU / 3 GiB, up to 6 GiB) for the dashboard's Distributed workloads and Infrastructure pages. An
+  2 CPUs / 8 GiB, one worker 1 CPU / 3 GiB, up to 6 GiB) for the dashboard's
+  Distributed workloads and Infrastructure pages. An
   opt-in, with its own confirmation, sets the dashboard's `disableKueue` to
   false and adds a Queue hardware profile. Refused when Kueue does not
   serve `v1beta2`, runs outside OLM, or has `labelPolicy: None`. Clean up
