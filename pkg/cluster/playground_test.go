@@ -563,6 +563,27 @@ func TestPlayground_SetupRecordsTheServerUID(t *testing.T) {
 	}
 }
 
+// Set up of this tool's playground that is there waits for it and chooses
+// no models again (the dashboard checks them only at install): a model the
+// client could not add now does not stop it, and nothing is installed.
+func TestPlayground_SetupWaitsForItsOwnPlaygroundWithoutChoosingModels(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	if res, _ := e.run(t, setup()); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	again := setup()
+	again.Models = []types.PlaygroundModelRef{{Name: "not-offered", Source: "maas"}}
+	res, steps := e.run(t, again)
+	if !res.Success || len(e.g.installs) != 1 {
+		t.Fatalf("got %+v, installs %d", res, len(e.g.installs))
+	}
+	if !slices.ContainsFunc(steps, func(s UpdateStepEvent) bool {
+		return s.Step == "check" && s.Message == "The playground in proj exists; Set up waits for it."
+	}) {
+		t.Errorf("steps %+v", steps)
+	}
+}
+
 // The playground this tool made was deleted in Gen AI studio and someone
 // made a new one there: the record is stale. The new one is not this
 // tool's: shown as not managed, never deleted, and the record is dropped.

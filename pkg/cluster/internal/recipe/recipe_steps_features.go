@@ -678,17 +678,16 @@ func playgroundMaaSModel(c *kube.Client, s *State) (maasChoice, string, string) 
 	return choice, "", ""
 }
 
-// maasModelWords names a Models as a Service model for people: its display
-// name, else the name it is listed by.
-func maasModelWords(m types.PlaygroundModel) string {
-	return kube.FirstNonEmpty(m.DisplayName, m.Name) + " (through Models as a Service)"
-}
-
-// checkPlayground: complete when a tool-provisioned project playground is
-// ready, and, when the recipe's model is offered only through Models as a
-// Service, this tool set it up with that model; blocked when a playground
-// exists that the tool did not set up, or that it set up without that
-// model (the recipe does not change it).
+// checkPlayground: complete when a playground this tool set up in the
+// project is ready; blocked when a playground exists that the tool did not
+// set up. Which models a ready playground offers does not depend on what
+// its Set up chose: the dashboard checks the chat models only at install,
+// and the playground lists, per request, the project's Gen AI models and
+// the Models as a Service models the caller may use (odh-dashboard
+// rhoai-3.6 packages/gen-ai/bff token_k8s_client.go generateLlamaStackConfig,
+// a remote::passthrough provider; api/genai_proxy_handler.go
+// GenAIProxyNSModelsHandler). So a ready playground offers the recipe's
+// MaaS model too, to users whose subscriptions include it.
 func checkPlayground(c *kube.Client, s *State) (Check, error) {
 	project := projectOf(s)
 	st, err := playgroundStatus(c, c, project)
@@ -699,36 +698,11 @@ func checkPlayground(c *kube.Client, s *State) (Check, error) {
 		if item.Namespace != project || !item.Deployed {
 			continue
 		}
-		if !item.ManagedByTool {
+		switch {
+		case !item.ManagedByTool:
 			return blockedAt(fmt.Sprintf("Project %s already has a playground that this tool did not set up; the recipe does not change it. Nothing was changed.", project)), nil
-		}
-		ready := fmt.Sprintf("The playground in %s is ready.", project)
-		if playgroundThroughMaaS(s) && !item.Terminating {
-			choice, problem, _ := playgroundMaaSModel(c, s)
-			if problem != "" {
-				// Not confirmed: the step's run says why.
-				return Check{}, nil
-			}
-			// Any usable entry of the model counts, not only the one a
-			// setup now would choose.
-			m := choice.Model
-			used := slices.IndexFunc(choice.Usable, func(u types.PlaygroundModel) bool {
-				return slices.Contains(item.Models, types.PlaygroundModelRef{Name: u.Name, Source: "maas"})
-			})
-			if used >= 0 {
-				m = choice.Usable[used]
-			}
-			if used < 0 {
-				why := fmt.Sprintf("This tool set up the playground in %s with other models, not %s, which the recipe's playground uses", project, maasModelWords(m))
-				if len(item.Models) == 0 {
-					why = fmt.Sprintf("This tool's record does not say which models the playground in %s was set up with (it was set up before the record kept them), so the recipe cannot tell whether it uses %s", project, maasModelWords(m))
-				}
-				return blockedAt(why + ". The recipe does not change a playground: delete it on the Playground tab, then Resume. Nothing was changed."), nil
-			}
-			ready = fmt.Sprintf("The playground in %s is ready, with %s.", project, maasModelWords(m))
-		}
-		if item.Ready {
-			return Check{Done: true, Reason: ready}, nil
+		case item.Ready:
+			return Check{Done: true, Reason: fmt.Sprintf("The playground in %s is ready.", project)}, nil
 		}
 	}
 	return Check{}, nil
@@ -749,6 +723,22 @@ func playgroundWarnings(r types.EnvironmentRecipe) []types.RecipeWarning {
 	return []types.RecipeWarning{{Kind: types.RecipeWarningAdvice, Message: fmt.Sprintf("%s is offered to the playground only through Models as a Service (%s), so the playground uses it from there: the dashboard sets the playground up with your sign-in, as when you choose a Models as a Service model in its Gen AI studio. Chatting with it needs a Models as a Service subscription to it.", modelTitle(r), how)}}
 }
 
+// playgroundStarted reports whether this tool's playground already exists
+// in the project (not being deleted); a failed read is "no", and Set up
+// then checks again.
+func playgroundStarted(c *kube.Client, s *State) bool {
+	st, err := playgroundStatus(c, c, projectOf(s))
+	if err != nil {
+		return false
+	}
+	for _, item := range st.Items {
+		if item.Namespace == projectOf(s) && item.Deployed && item.ManagedByTool && !item.Terminating {
+			return true
+		}
+	}
+	return false
+}
+
 // runPlaygroundStep runs Playground tab Set up in the project: with every
 // ready chat model of the project (the tab's default), or, when the
 // recipe's model is offered only through Models as a Service, with that
@@ -757,7 +747,9 @@ func playgroundWarnings(r types.EnvironmentRecipe) []types.RecipeWarning {
 // sign-in).
 func runPlaygroundStep(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	req := types.PlaygroundRequest{Action: "setup", Project: projectOf(s)}
-	if playgroundThroughMaaS(s) {
+	// The model is chosen only for a new playground: Set up waits for one
+	// this tool set up already, whatever it was set up with.
+	if playgroundThroughMaaS(s) && !playgroundStarted(c, s) {
 		choice, problem, code := playgroundMaaSModel(c, s)
 		if problem != "" {
 			return fail(problem, code)

@@ -1305,6 +1305,10 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 		if srv.Phase == "Terminating" {
 			return stop(fmt.Sprintf("The playground in %s is being deleted. Wait until it is gone, then set it up again.", p.project), "terminating", "terminating")
 		}
+		// This tool's playground is there: Set up waits for it. Its models
+		// are not chosen again (the dashboard checks them only at install).
+		p.step("check", "success", fmt.Sprintf("The playground in %s exists; Set up waits for it.", p.project))
+		return nil, srv, nil
 	}
 	withMaaS := false
 	for _, w := range wanted {

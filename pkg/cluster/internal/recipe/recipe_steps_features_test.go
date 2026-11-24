@@ -936,59 +936,57 @@ func TestRunPlaygroundStep_MaaSEntry(t *testing.T) {
 	}
 }
 
-// With the model offered only through MaaS, the playground counts as done
-// only when this tool set it up with the model's MaaS entry; one set up
-// without it (or before the record kept its models) blocks, and the step
-// runs when the entry cannot be confirmed.
-func TestCheckPlayground_MaaSModel(t *testing.T) {
+// A ready playground this tool set up counts as done whatever its Set up
+// chose: the playground offers the project's models and the caller's MaaS
+// models per request. One still starting runs (Set up waits for it), and
+// someone else's blocks.
+func TestCheckPlayground_ReadyIsDone(t *testing.T) {
 	ready := func(models ...types.PlaygroundModelRef) *types.PlaygroundState {
 		return &types.PlaygroundState{ResourceState: types.ResourceState{Namespace: "proj", Deployed: true, Ready: true, ManagedByTool: true}, Models: models}
 	}
-	maasRef := types.PlaygroundModelRef{Name: maasEntryName, Source: "maas"}
-	own := types.PlaygroundModelRef{Name: "qwen3-1-7b", Source: "namespace"}
-	starting := ready(maasRef)
+	starting := ready()
 	starting.Ready = false
+	foreign := ready()
+	foreign.ManagedByTool = false
 	cases := []struct {
-		name       string
-		spec       string
+		name, spec string
 		playground *types.PlaygroundState
 		entry      *types.PlaygroundModel
-		done       string
-		blocked    string
+		want       string // "done", "run" or "blocked"
 	}{
-		{"set up with the MaaS entry", playgroundPublish, ready(maasRef), readyMaaSEntry(), "ready, with Qwen3 1.7B (through Models as a Service)", ""},
-		{"still starting with it", playgroundPublish, starting, readyMaaSEntry(), "", ""},
-		{"set up with other models", playgroundPublish, ready(own), readyMaaSEntry(), "", "with other models, not Qwen3 1.7B again (through Models as a Service)"},
-		{"set up with another usable entry of the model", playgroundPublish, ready(types.PlaygroundModelRef{Name: "a/qwen", Source: "maas"}), readyMaaSEntry(), "ready, with Qwen3 1.7B again (through Models as a Service)", ""},
-		{"models not recorded", playgroundExposure, ready(), readyMaaSEntry(), "", "does not say which models the playground in proj was set up with"},
-		{"entry not found: the run says why", playgroundPublish, ready(maasRef), nil, "", ""},
-		{"no playground", playgroundPublish, nil, readyMaaSEntry(), "", ""},
-		{"neither: any ready playground of this tool", playgroundNeither, ready(own), nil, "The playground in proj is ready.", ""},
+		{"MaaS model: set up with the project's models", playgroundPublish, ready(types.PlaygroundModelRef{Name: "qwen3-1-7b", Source: "namespace"}), readyMaaSEntry(), "done"},
+		{"MaaS model: models not recorded", playgroundExposure, ready(), readyMaaSEntry(), "done"},
+		{"MaaS model: its entry gone", playgroundPublish, ready(types.PlaygroundModelRef{Name: maasEntryName, Source: "maas"}), nil, "done"},
+		{"still starting", playgroundPublish, starting, readyMaaSEntry(), "run"},
+		{"no playground", playgroundPublish, nil, readyMaaSEntry(), "run"},
+		{"someone else's", playgroundNeither, foreign, nil, "blocked"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fc := &fakeCluster{playground: tc.playground, maasEntry: tc.entry, maasExtra: []types.PlaygroundModel{aEntry(true, true)}}
-			if tc.entry == nil {
-				fc.maasExtra = nil
-			}
+			fc := &fakeCluster{playground: tc.playground, maasEntry: tc.entry}
 			fc.install(t)
 			chk, err := checkPlayground(testClient(), &State{Recipe: validRecipe(t, tc.spec)})
-			switch {
-			case err != nil:
-				t.Fatal(err)
-			case tc.blocked != "":
-				if chk.Done || !strings.Contains(chk.Blocked, tc.blocked) || !strings.Contains(chk.Blocked, "delete it on the Playground tab, then Resume") {
-					t.Fatalf("got %+v", chk)
-				}
-			case tc.done != "":
-				if !chk.Done || chk.Blocked != "" || !strings.Contains(chk.Reason, tc.done) {
-					t.Fatalf("got %+v", chk)
-				}
-			default:
-				if chk.Done || chk.Blocked != "" {
-					t.Fatalf("got %+v, want the step to run", chk)
-				}
+			got := "run"
+			if chk.Done {
+				got = "done"
+			} else if chk.Blocked != "" {
+				got = "blocked"
+			}
+			if err != nil || got != tc.want || (got == "done" && chk.Reason != "The playground in proj is ready.") {
+				t.Fatalf("got %+v %v, want %s", chk, err, tc.want)
 			}
 		})
+	}
+}
+
+// The MaaS entry is chosen only for a new playground: with this tool's
+// playground still starting, the step waits for it without one (even when
+// the entry is gone), as Set up does.
+func TestRunPlaygroundStep_ExistingPlaygroundChoosesNoModel(t *testing.T) {
+	fc := &fakeCluster{playground: &types.PlaygroundState{ResourceState: types.ResourceState{Namespace: "proj", Deployed: true, ManagedByTool: true}}}
+	fc.install(t)
+	res, err := runPlaygroundStep(testClient(), &State{Recipe: validRecipe(t, playgroundPublish)}, func(types.UpdateStepEvent) {})
+	if err != nil || !res.Success || len(fc.playgroundReq.Models) != 0 || fc.playgroundReq.Project != "proj" {
+		t.Fatalf("got %+v %v, request %+v", res, err, fc.playgroundReq)
 	}
 }
