@@ -542,7 +542,7 @@ func runWorkbenchStep(c *kube.Client, s *State, emit func(types.UpdateStepEvent)
 
 // --- Dashboard Dev -----------------------------------------------------------
 
-// checkDashboardDev: an active Dashboard Dev session runs the recipe build ⇒ complete.
+// checkDashboardDev: complete when an active Dashboard Dev session serves the recipe build.
 func checkDashboardDev(c *kube.Client, s *State) (Check, error) {
 	o, err := dashboardSession(c)
 	if err != nil {
@@ -558,8 +558,8 @@ func checkDashboardDev(c *kube.Client, s *State) (Check, error) {
 	return Check{Done: true, Reason: fmt.Sprintf("Dashboard Dev runs the recipe's build (%s).", strings.TrimPrefix(dashboardDevTitle(d), "Dashboard Dev "))}, nil
 }
 
-// runDashboardDev follows Dashboard Dev page Deploy (main or pull request), then
-// waits for dashboard rollout—the same sequence the UI presents.
+// runDashboardDev mirrors Dashboard Dev page Deploy (main or pull request), then
+// waits for dashboard rollout in the order the UI shows.
 func runDashboardDev(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	d := s.Recipe.Spec.DashboardDev
 	module, err := dashboardSession(c)
@@ -574,7 +574,7 @@ func runDashboardDev(c *kube.Client, s *State, emit func(types.UpdateStepEvent))
 		res, err = deployMain(c, d.Flavor)
 	}
 	if err != nil || res == nil || !res.Success || module == nil {
-		// Legacy flow without a dashboard module has no operator session to await.
+		// Legacy path without a dashboard module has no operator session to wait on.
 		return res, err
 	}
 	emit(types.UpdateStepEvent{Step: StepDashboardDev, Status: "running", Message: "Waiting for the dashboard to roll out (usually 1 to 2 minutes)..."})

@@ -68,7 +68,7 @@ export const RecipeCleanupModal: React.FC<{
   // clean-up itself) changes `ready`, never the user's choices.
   const [offered] = useState(ready);
   const parts = cleanupParts(offered);
-  const [chosen, setChosen] = useState<ReadonlySet<string>>(() => new Set(parts.map((p) => p.id)));
+  const [chosen, setChosen] = useState<ReadonlySet<string>>(() => new Set(parts.filter((p) => p.chosen).map((p) => p.id)));
   // What stays, from the live status (null until it is read; false when it cannot be).
   const [resources, setResources] = useState<ResourcesStatus | false | null>(null);
   const [running, setRunning] = useState(false);
@@ -90,7 +90,7 @@ export const RecipeCleanupModal: React.FC<{
 
   const confirmedContents = Object.fromEntries(Object.entries(contents).filter(([p]) => confirmed.has(p)));
   const req = cleanupRequest(offered, chosen, confirmedContents);
-  const stays = run && resources ? leftInPlace(resources, run, req) : [];
+  const stays = run && resources ? leftInPlace(resources, run, req, offered) : [];
   const steps = cleanupSteps(sent ?? req);
   const started = running || outcome !== null;
   const asking = Object.keys(contents).filter((p) => chosen.has(`${PROJECT_STEP}${p}`));
@@ -163,8 +163,8 @@ export const RecipeCleanupModal: React.FC<{
                   <FormGroup role="group" isStack fieldId="recipe-cleanup-parts" label="Delete">
                     {parts.map((p) => (
                       <Checkbox key={p.id} id={`recipe-cleanup-${p.id}`} label={p.title} isChecked={chosen.has(p.id)} onChange={(_e, v) => toggle(p.id, v)}
-                        description={p.id === "components" ? "Each goes back to what it was, unless something on the cluster uses it."
-                          : "Removes everything in the project, including its pipeline server."} />
+                        description={p.description ?? (p.id === "components" ? "Each goes back to what it was, unless something on the cluster uses it."
+                          : "Removes everything in the project: its models, playground, workbench and pipeline server.")} />
                     ))}
                   </FormGroup>
                 </Form>

@@ -2081,6 +2081,9 @@ export interface EnvironmentRecipe {
       models: { enabled: boolean; model?: string; exposure?: string; releasedImage?: boolean };
       playground: { enabled: boolean };
       maas: { enabled: boolean; database?: string; publish?: boolean };
+      /** Optional: absent is off. */
+      modelRegistry?: { enabled: boolean; sample?: boolean };
+      workbench?: { enabled: boolean };
     };
     dashboardDev: { deploy?: string; pr?: number; flavor?: string };
   };
@@ -2175,6 +2178,11 @@ export interface RecipeRun {
   steps: RecipeRunStep[];
   /** The DataScienceCluster components the run turned on, which its Clean up turns back. */
   components?: string[];
+  /** How the run's model is reached, once the Models prerequisites step resolved it. */
+  exposure?: string;
+  gatewayRef?: string;
+  /** The cluster-wide parts the run created (they were not this tool's before): its Clean up offers those still as it created them. */
+  createdParts?: { part: "maas-platform" | "model-registry"; uid?: string }[];
 }
 
 /** GET /api/recipes/run. */

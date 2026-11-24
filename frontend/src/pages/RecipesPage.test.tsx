@@ -376,7 +376,7 @@ describe("Recipes page", () => {
       ["recipe-cleanup-recipe-project:recipe-dev", true], ["recipe-cleanup-components", true],
     ]);
     expect(within(dialog).getByRole("checkbox", { name: "The DataScienceCluster components the run turned on: aipipelines" })).toBeChecked();
-    expect(dialog).toHaveTextContent("Removes everything in the project, including its pipeline server.");
+    expect(dialog).toHaveTextContent("Removes everything in the project: its models, playground, workbench and pipeline server.");
     expect(dialog).toHaveTextContent("Deleting project recipe-dev deletes everything in it.");
     // Left in place, from the live status: the shared parts; the project's pipeline server goes with it,
     // and one in a project the run never used is not the run's to name.

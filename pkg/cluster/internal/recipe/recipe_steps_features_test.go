@@ -308,8 +308,8 @@ func TestFeatureSteps_ResumeAfterMaaSContinuesWithModels(t *testing.T) {
 			continue
 		}
 		if step.ID == StepModelsPrereq || step.ID == StepPlaygroundPrereq || step.ID == StepModelRegistryPrereq {
-			// RunPrerequisites is the Environment page's own (tested
-			// there); the cluster now has them.
+			// RunPrerequisites belongs to the Environment page (covered there);
+			// afterward the fake cluster reports those prerequisites as ready.
 			fc.prereqReady[strings.TrimSuffix(step.ID, "-prereq")] = true
 			if step.ID == StepModelsPrereq {
 				if problem, _ := pinExposure(c, s); problem != "" {
@@ -335,17 +335,16 @@ func TestFeatureSteps_ResumeAfterMaaSContinuesWithModels(t *testing.T) {
 	if fc.modelsReq.Project != "proj" || fc.modelsReq.Model != "qwen3-1-7b" || fc.modelsReq.Exposure != "default-gateway" || s.Exposure != "default-gateway" {
 		t.Errorf("model request %+v, state exposure %q", fc.modelsReq, s.Exposure)
 	}
-	// The MaaS platform was there before: the run did not create it. The
-	// registry it created is the run's, by its recorded UID.
+	// MaaS was pre-existing so Created omits it; the registry added in this run
+	// is attributed via the UID stored on the tool record.
 	if len(s.Created) != 1 || s.Created[0] != (types.RecipeCreatedPart{Part: types.RecipePartModelRegistry, UID: "reg-1"}) {
 		t.Errorf("created %+v", s.Created)
 	}
 }
 
-// The recommended exposure is resolved in the project when the recipe
-// names none, used for the Models prerequisites, and pinned for the model;
-// none recommended blocks with the reason; the recipe's own exposure is
-// used as it is.
+// With no exposure in the recipe, the project default is resolved for Models
+// prerequisites and locked in for the model step; missing recommendations yield
+// a blocking reason; an explicit recipe exposure is honored unchanged.
 func TestModelsExposure_ResolvedPinnedOrBlocked(t *testing.T) {
 	r := validRecipe(t, "  project: {mode: existing, name: proj}\n  features: {models: {enabled: true}}\n")
 	fc := &fakeCluster{exposures: &types.ModelExposures{Default: "gateway:ns1/gw", Options: []types.ModelExposureOption{
@@ -380,8 +379,8 @@ func TestModelsExposure_ResolvedPinnedOrBlocked(t *testing.T) {
 	}
 }
 
-// Reached through MaaS, the model is set up only once it is published too
-// (the Models tab publishes it as part of the setup).
+// Under MaaS exposure the model step stays incomplete until publication lands
+// (the Models tab performs publish as part of setup).
 func TestModelStep_MaaSExposureNeedsThePublication(t *testing.T) {
 	r := validRecipe(t, "  project: {mode: existing, name: proj}\n  features: {models: {enabled: true, exposure: maas}, maas: {enabled: true}}\n")
 	fc := readyCluster()
@@ -396,9 +395,8 @@ func TestModelStep_MaaSExposureNeedsThePublication(t *testing.T) {
 	}
 }
 
-// The MaaS step records the platform as the run's only when it was not
-// this tool's before and is after; the database the recipe names goes in
-// only when Set up has to make one.
+// MaaS records the platform in Created only when this tool newly owns it; the
+// recipe's database kind is passed through solely when Set up must provision one.
 func TestMaaSStep_RecordsWhatItCreated(t *testing.T) {
 	r := validRecipe(t, "  features: {maas: {enabled: true, database: cnpg}}\n")
 	t.Run("created", func(t *testing.T) {
@@ -425,9 +423,9 @@ func TestMaaSStep_RecordsWhatItCreated(t *testing.T) {
 	})
 }
 
-// A registry the run's setup created is recorded by the tool record's
-// UID; one that was there is not; a record that cannot be read records
-// nothing, and the step says so.
+// A registry born in this run's setup lands in Created via the tool record UID;
+// an already-present registry does not; unreadable records add nothing and the
+// step surfaces that in its message.
 func TestModelRegistryStep_RecordsWhatItCreated(t *testing.T) {
 	r := validRecipe(t, "  features: {modelRegistry: {enabled: true}}\n")
 	fc := &fakeCluster{}
@@ -450,9 +448,9 @@ func TestModelRegistryStep_RecordsWhatItCreated(t *testing.T) {
 	}
 }
 
-// Clean up offers a cluster-wide part only when the run recorded creating
-// it and it is still as the run created it; never what the run did not
-// create, even when it is this tool's.
+// Clean up surfaces a cluster-wide part only when the run logged creating it
+// and it still matches that snapshot; resources the run never created stay off
+// the list even if this tool currently manages them.
 func TestOwnership_OffersOnlyWhatTheRunCreated(t *testing.T) {
 	run := func(parts ...types.RecipeCreatedPart) *types.RecipeRun {
 		return &types.RecipeRun{ID: "r", CreatedParts: parts}
@@ -494,9 +492,8 @@ func TestOwnership_OffersOnlyWhatTheRunCreated(t *testing.T) {
 	}
 }
 
-// Dashboard Dev deploys the recipe's build and waits for the rollout;
-// without the dashboard module (the legacy flow) there is nothing to wait
-// on.
+// Dashboard Dev applies the recipe's chosen build then waits on rollout; the
+// legacy path without the dashboard module has nothing to wait for.
 func TestDashboardDevStep_DeploysAndWaits(t *testing.T) {
 	r := validRecipe(t, "  dashboardDev: {deploy: main}\n")
 	fc := &fakeCluster{session: &types.DashboardOverride{}}
