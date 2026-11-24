@@ -16,6 +16,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/modelregistry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
@@ -974,14 +975,22 @@ func restoreCheck(c *kube.Client, rec prereqRecord, dscRead rhoai.DSCRead, key s
 	if argoCD := argo.TrackingOf(c, dscRead.Object, rhoai.DSCGroup, "DataScienceCluster"); argoCD.ManagedBy() != "" {
 		return restoreVerdict{refusal: argo.GitOpsRefusal("The DataScienceCluster", argoCD.ManagedBy(), "turning "+key+" back to "+prev) + argoCD.UnconfirmedNote(), code: kube.ErrorCodeGitOpsManaged}
 	}
+	var users []string
+	var err error
 	if slices.Contains(envkit.ModelRegistryComponent.Keys, key) {
-		// Whether a model registry still uses it needs a list of every
-		// ModelRegistry, which this tool does not make (yet): it stays
-		// Managed (fail closed). On RHOAI 3.6 aiHub also runs the Model
-		// Catalog.
-		return restoreVerdict{kept: key + " (this tool does not check which model registries use it, so it stays on; turn it off in the DataScienceCluster)"}
+		// The model registries in the namespace RHOAI keeps them in. Only
+		// this check lists them (Clean up, with the user's token), not
+		// dsc.ComponentUsers, which the ServiceAccount's reads reach. On
+		// RHOAI 3.6 aiHub also runs the Model Catalog, which has no
+		// objects to count: the Clean up dialog says it goes too.
+		ns := modelregistry.Namespace(dscRead.Object)
+		if ns == "" {
+			return restoreVerdict{kept: key + " (the DataScienceCluster names no namespace for model registries, so this tool cannot tell whether one is left)"}
+		}
+		users, err = modelregistry.Users(c, ns)
+	} else {
+		users, err = dsc.ComponentUsers(c, key)
 	}
-	users, err := dsc.ComponentUsers(c, key)
 	if err != nil {
 		return restoreVerdict{refusal: fmt.Sprintf("Cannot tell whether anything still uses %s, so it stays Managed: %v.%s", key, err, kube.TemplateHint(err)), code: kube.ErrorCodeFromK8sErr(err)}
 	}

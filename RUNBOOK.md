@@ -715,16 +715,17 @@ The **Model registry** tab creates ModelRegistry `nightly-registry` (`modelregis
 
 | Symptom | Cause and fix |
 |---|---|
-| "The model registry is turned off on this cluster" | Component `aiHub` (3.6) or `modelregistry` is not Managed. **Set up what the model registry needs** on the tab sets it to Managed (recorded; it stays on after Clean up) |
+| "The model registry is turned off on this cluster" | Component `aiHub` (3.6) or `modelregistry` is not Managed. **Set up what the model registry needs** on the tab sets it to Managed (recorded, so Clean up can turn it back once no registry is left) |
 | "RHOAI does not report where model registries go yet" | The component is Managed, but its status names no namespace yet. Wait until it is ready on the Components page |
 | "This cluster's ModelRegistry API has no default database" | The CRD has no `spec.postgres.generateDeployment` (before RHOAI 3.4). A registry needs an external MySQL or PostgreSQL database; create it in the dashboard (Settings, Model registry settings) |
+| Clean up: "Kept Managed: aiHub (in use: model registry ...)" or "Cannot tell whether anything still uses aiHub" | The component goes back off only when no model registry is left in its namespace (`oc get modelregistries.modelregistry.opendatahub.io -n rhoai-model-registries`); a list that fails keeps it on. On RHOAI 3.6 turning `aiHub` off also removes the Model Catalog |
 | "A model registry named nightly-registry exists ... that this tool did not create" | Someone made one of that name (or this tool's record of its UID is gone). The tool uses it as it is and never deletes it; delete it in the dashboard if it is yours to remove |
 | Stuck **Setting up** with "Deployment ... is progressing" | The operator starts PostgreSQL (a 5 GiB PVC: needs a default StorageClass), then the server. `oc get pvc,pods -n rhoai-model-registries`; a Pending PVC means no default StorageClass |
 | "The operator reports no address through the cluster's gateway" | The Service has no `routing.opendatahub.io/external-address-rest`. The registry works, but the sample model is added only through the gateway, so it is skipped |
 | Sample model: "... answered 403" | The registry's kube-rbac-proxy checks `get services/nightly-registry` for your token. Cluster-admins have it; sign in again if your session expired |
 | Sample model **Archived** | Archived in the dashboard. **Restore the sample** (or Set up again) puts the model and version back to live; the registry has no delete |
 
-Rollback: **Delete** in the registry's menu, or **Clean up the model registry**: deletes the CR by UID (precondition), waits until the operator's finalizer has run, and drops the record. The default database's Deployment, Service, Secret and PVC carry owner references to the CR and are deleted with it, with every registered model. The DataScienceCluster component stays Managed: Clean up does not turn it off (it would have to list every ModelRegistry on the cluster to know none is left). By hand: `oc delete modelregistry.modelregistry.opendatahub.io nightly-registry -n rhoai-model-registries`, then remove key `modelRegistries` from the snapshot ConfigMap.
+Rollback: **Delete** in the registry's menu, or **Clean up the model registry**: deletes the CR by UID (precondition), waits until the operator's finalizer has run, and drops the record. The default database's Deployment, Service, Secret and PVC carry owner references to the CR and are deleted with it, with every registered model. The DataScienceCluster component stays Managed unless you also tick it in Clean up, which turns it back only when this tool turned it on, nobody changed it since, and listing the registries in its namespace shows none left. By hand: `oc delete modelregistry.modelregistry.opendatahub.io nightly-registry -n rhoai-model-registries`, then remove key `modelRegistries` from the snapshot ConfigMap.
 
 ## 11. Manual recovery for operator deadlocks
 

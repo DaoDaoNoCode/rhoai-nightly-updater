@@ -99,9 +99,11 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   before) when needed. Set up can register a sample model (the Models
   tab's model) as the dashboard's Register model form does. Delete and
   Clean up remove only the registry this tool created, with its database
-  and registered models; the component stays on. New user-token requests
-  only (create, get, delete ModelRegistries; get the registry's Service);
-  the ServiceAccount's RBAC is unchanged.
+  and registered models. Clean up can also turn the component back off
+  (it says that `aiHub` also removes the Model Catalog), only when this
+  tool turned it on and no registry is left. New user-token requests only
+  (create, get, delete and, for that check, list ModelRegistries; get the
+  registry's Service); the ServiceAccount's RBAC is unchanged.
 
 ### Changed
 

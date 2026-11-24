@@ -26,8 +26,16 @@ import { connectionEnvOnlyChange, connectionWorkbenchesChange, unrecordedPipelin
 import { S3_NAMESPACE, storageTeardownOffered } from "./StorageTab";
 import { gatewayListRelease } from "./modelsConfirm";
 
-/** The DataScienceCluster keys of the model registry component (pkg/cluster/internal/envkit ModelRegistryComponent). */
-const MODEL_REGISTRY_COMPONENTS = ["aiHub", "modelregistry"];
+/**
+ * The confirmation line of turning a model registry component back (pkg/cluster/internal/envkit
+ * ModelRegistryComponent): RHOAI 3.6's aiHub also runs the Model Catalog. Offered only when this tool turned it
+ * on and still owns the field (restorable); the server turns it back only when no model registry is left.
+ */
+export function modelRegistryComponentLine(component: string): string | null {
+  if (component === "aiHub") return "Also turns off the model registry component, which also removes the Model Catalog.";
+  if (component === "modelregistry") return "Also turns off the model registry component.";
+  return null;
+}
 
 /** This tool's pipeline servers: in the data science projects, and in projects that are no longer ones. */
 function toolServers(status: ResourcesStatus) {
@@ -171,9 +179,7 @@ export const CleanupModal: React.FC<{
   const togglePublished = (p: string, v: boolean) => setPublished((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
   const [maasPlatform, setMaaSPlatform] = useState(was ? !!was.maasPlatform : offered.maasPlatform);
   // Components are offered for the scope's feature (every feature's with "all"), unchecked: turning one back is a cluster change of its own.
-  // The model registry's component is never turned back by Clean up (the backend keeps it on: telling whether any
-  // registry still uses it would need a list of every registry), so it is not offered.
-  const offeredComponents = restorable.filter((r) => (scope === "all" || r.feature === scope) && !MODEL_REGISTRY_COMPONENTS.includes(r.component));
+  const offeredComponents = restorable.filter((r) => scope === "all" || r.feature === scope);
   const [components, setComponents] = useState<string[]>(was?.components ?? []);
   const chosenComponents = components.filter((k) => offeredComponents.some((r) => r.component === k));
   const toggleComponent = (k: string, v: boolean) => setComponents((s) => (v ? [...s.filter((x) => x !== k), k] : s.filter((x) => x !== k)));
@@ -316,7 +322,7 @@ export const CleanupModal: React.FC<{
                 {offered.modelRegistry && (
                   <FormGroup role="group" isStack label="Model registry" fieldId="cleanup-model-registry">
                     <Checkbox id="cleanup-model-registry" label={<>Model registry <code>{modelRegistry?.name}</code></>} isChecked={registry} onChange={(_e, v) => setRegistry(v)}
-                      description="With its registered models and its database, which are deleted with it. The DataScienceCluster component that runs it stays on." />
+                      description="With its registered models and its database, which are deleted with it. The DataScienceCluster component that runs it stays on unless you also tick it below." />
                   </FormGroup>
                 )}
                 {offered.playgrounds.length > 0 && (
@@ -353,7 +359,8 @@ export const CleanupModal: React.FC<{
                 {offeredComponents.length > 0 && (
                   <FormGroup role="group" isStack label="Cluster components this tool turned on" fieldId="cleanup-components">
                     {offeredComponents.map((r) => (
-                      <Checkbox key={r.component} id={`cleanup-component-${r.component}`} label={<>Turn <code>{r.component}</code> back to {r.previous || "Removed"}</>}
+                      <Checkbox key={r.component} id={`cleanup-component-${r.component}`}
+                        label={<>Turn <code>{r.component}</code> back to {r.previous || "Removed"}{modelRegistryComponentLine(r.component) ? <>. {modelRegistryComponentLine(r.component)}</> : null}</>}
                         description="Last, and only while nothing on the cluster uses it and nobody has changed it since. Someone who only set it to Managed again is not noticed, so then the check that nothing uses it is what keeps it on. The operators it needed stay." isChecked={chosenComponents.includes(r.component)} onChange={(_e, v) => toggleComponent(r.component, v)} />
                     ))}
                   </FormGroup>

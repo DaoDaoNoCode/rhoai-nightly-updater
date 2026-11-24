@@ -1472,7 +1472,7 @@ export const modelRegistryStates = {
 };
 
 /** Feature prerequisite matrix for GET /api/resources/prerequisites. */
-export function prerequisites({ models = "ready", pipelines = "ready", exposure = "" } = {}) {
+export function prerequisites({ models = "ready", pipelines = "ready", registryRestorable = false, exposure = "" } = {}) {
   const readyPart = (id, title, message) => ({ id, title, state: "ready", message, notManaged: true });
   const ready = (parts) => ({ ready: true, parts });
   const missingModels = {
@@ -1507,7 +1507,9 @@ export function prerequisites({ models = "ready", pipelines = "ready", exposure 
       mlflow: ready([readyPart("dsc-mlflowoperator", "MLflow (mlflowoperator)", "Managed in DataScienceCluster default-dsc")]),
       models: models === "ready" ? ready([readyPart("dsc-kserve", "Model serving (KServe)", "Managed in DataScienceCluster default-dsc"), readyPart("cert-manager", "cert-manager Operator for Red Hat OpenShift", "Version 1.20.1 runs in cert-manager-operator")]) : missingModels,
       playground: ready([readyPart("dsc-ogx", "Gen AI playground (ogx)", "Managed in DataScienceCluster default-dsc")]),
-      "model-registry": ready([readyPart("dsc-aiHub", "Model registry (aiHub)", "Managed in DataScienceCluster default-dsc")]),
+      "model-registry": registryRestorable
+        ? { ready: true, parts: [{ id: "dsc-aiHub", title: "Model registry (aiHub)", state: "ready", message: "Managed in DataScienceCluster default-dsc (turned on by this tool)", managedByTool: true }], restorable: [{ component: "aiHub", previous: "Removed", feature: "model-registry" }] }
+        : ready([readyPart("dsc-aiHub", "Model registry (aiHub)", "Managed in DataScienceCluster default-dsc")]),
     },
   };
 }

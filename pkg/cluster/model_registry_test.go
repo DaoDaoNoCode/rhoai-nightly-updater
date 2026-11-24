@@ -568,19 +568,62 @@ func TestModelRegistry_V3AIHub(t *testing.T) {
 	}
 }
 
-// Restore never flips the model registry component to Removed—determining whether registries still
-// depend on it would require enumerating all ModelRegistry objects, which this tool does not do—so it
-// remains Managed (fail closed) without patching the cluster.
-func TestRestoreComponents_KeepsTheModelRegistryComponent(t *testing.T) {
-	e := newMREnv(t)
-	e.f.putJSON(testSnapshotCM, `{"data":{"prerequisites":"{\"components\":{\"modelregistry\":{\"previous\":\"Removed\",\"feature\":\"model-registry\"}}}"}}`)
-	res, err := features.RestoreComponents(e.u, []string{"modelregistry"})
-	if err != nil || !res.Success || !strings.Contains(res.Message, "Kept Managed: modelregistry") {
-		t.Fatalf("%+v %v", res, err)
+// Clean up turns the model registry component back only when this tool
+// turned it on, still owns the field, and listing the registries in its
+// namespace shows none left; a list that fails keeps it on.
+func TestRestoreComponents_ModelRegistryComponent(t *testing.T) {
+	setUp := func(t *testing.T) *prereqCluster {
+		pc := newPrereqCluster(t)
+		dsc := pc.f.get(tDSC)
+		dsc["spec"].(map[string]any)["components"].(map[string]any)["modelregistry"] = map[string]any{"managementState": "Removed", "registriesNamespace": mrNS}
+		pc.f.put(tDSC, dsc)
+		if res, _ := runPrereqs(t, pc.c, "model-registry"); !res.Success {
+			t.Fatalf("setup: %+v", res)
+		}
+		if componentState(pc.f, "modelregistry") != "Managed" {
+			t.Fatal("not turned on")
+		}
+		if st := prereqStatus(t, pc.c, "model-registry"); len(st.Restorable) != 1 || st.Restorable[0].Component != "modelregistry" {
+			t.Fatalf("restorable %+v", st.Restorable)
+		}
+		return pc
 	}
-	if len(e.f.callsTo(http.MethodPatch, dscPath)) > 0 {
-		t.Fatal("the DataScienceCluster was changed")
-	}
+	t.Run("no registry left: turned back", func(t *testing.T) {
+		pc := setUp(t)
+		res, err := features.RestoreComponents(pc.c, []string{"modelregistry"})
+		if err != nil || !res.Success || !strings.Contains(res.Message, "modelregistry is Removed again") || componentState(pc.f, "modelregistry") != "Removed" {
+			t.Fatalf("%+v %v", res, err)
+		}
+		if lists := pc.f.callsTo(http.MethodGet, mrCollection); len(lists) != 1 {
+			t.Fatalf("lists %+v", lists)
+		}
+	})
+	t.Run("another registry left: kept on", func(t *testing.T) {
+		pc := setUp(t)
+		pc.f.putJSON(mrCollection+"/theirs", `{"metadata":{}}`)
+		pc.f.putJSON(mrCollection+"/going", `{"metadata":{"deletionTimestamp":"2026-11-24T10:00:00Z","finalizers":["x"]}}`)
+		res, _ := features.RestoreComponents(pc.c, []string{"modelregistry"})
+		if !res.Success || !strings.Contains(res.Message, "Kept Managed: modelregistry (in use: model registry "+mrNS+"/theirs)") || componentState(pc.f, "modelregistry") != "Managed" {
+			t.Fatalf("%+v", res)
+		}
+	})
+	t.Run("the list fails: kept on", func(t *testing.T) {
+		pc := setUp(t)
+		pc.f.fail["GET "+mrCollection] = 403
+		res, _ := features.RestoreComponents(pc.c, []string{"modelregistry"})
+		if res.Success || !strings.Contains(res.Message, "Cannot tell whether anything still uses modelregistry") || componentState(pc.f, "modelregistry") != "Managed" {
+			t.Fatalf("%+v", res)
+		}
+	})
+	t.Run("changed by someone since: kept on", func(t *testing.T) {
+		pc := setUp(t)
+		someoneSets(t, pc, "modelregistry", "Removed")
+		someoneSets(t, pc, "modelregistry", "Managed")
+		res, _ := features.RestoreComponents(pc.c, []string{"modelregistry"})
+		if !res.Success || !strings.Contains(res.Message, "changed by someone since") || componentState(pc.f, "modelregistry") != "Managed" {
+			t.Fatalf("%+v", res)
+		}
+	})
 	if !RestorableComponentKey("aiHub") || !RestorableComponentKey("modelregistry") {
 		t.Fatal("not restorable keys")
 	}

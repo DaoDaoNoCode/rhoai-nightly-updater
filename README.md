@@ -158,7 +158,7 @@ The Model registry tab sets up one model registry for the cluster, `nightly-regi
 2. **Model registry**: its state (starting while its database and server come up, then Ready), its REST address through the cluster's gateway, and **Open in the dashboard**. A registry of that name someone else made reads **Not managed by this tool**: shown, never changed or deleted.
 3. **Sample model**: Set up registers the model the Models tab serves (`qwen25-05b-instruct`, version `v1`, its Hugging Face address) as the dashboard's Register model form does, unless you untick **Add a sample model** in the confirmation. Registered models cannot be deleted, only archived; setting up again puts an archived sample back to live.
 
-No access is granted to anyone: cluster-admins can use the registry, and others are added on the dashboard's **Manage permissions** page. **Delete** (the registry's menu) and **Clean up the model registry** delete the registry, with every model registered in it and its database. The DataScienceCluster component stays on. Troubleshooting: [RUNBOOK §10.5](RUNBOOK.md#105-model-registry).
+No access is granted to anyone: cluster-admins can use the registry, and others are added on the dashboard's **Manage permissions** page. **Delete** (the registry's menu) and **Clean up the model registry** delete the registry, with every model registered in it and its database. **Clean up** also offers to turn the DataScienceCluster component back off when this tool turned it on, unticked, with the line that `aiHub` also removes the Model Catalog; it is turned off only while nobody changed it since and no model registry is left in its namespace. Troubleshooting: [RUNBOOK §10.5](RUNBOOK.md#105-model-registry).
 
 #### Models: small models on CPU
 

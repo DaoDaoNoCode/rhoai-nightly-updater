@@ -304,3 +304,33 @@ func splitKey(key string) (ns, name string, ok bool) {
 	}
 	return "", "", false
 }
+
+// Users lists the model registries in ns (where RHOAI keeps them) that are
+// not being deleted: whether the component is still in use, for turning it
+// back off (Clean up, with the user's token). A list that fails is
+// returned, so the caller keeps the component on (fail closed); an API that
+// is not served has no registries.
+func Users(c *kube.Client, ns string) ([]string, error) {
+	body, found, err := c.GetOptional(collectionPath(ns))
+	if err != nil {
+		return nil, fmt.Errorf("list the model registries in %s: %w", ns, err)
+	}
+	if !found {
+		return nil, nil
+	}
+	var list struct {
+		Items []struct {
+			Metadata kube.ObjectMeta `json:"metadata"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		return nil, fmt.Errorf("parse the model registries in %s: %w", ns, err)
+	}
+	var out []string
+	for _, it := range list.Items {
+		if !it.Metadata.Terminating() {
+			out = append(out, fmt.Sprintf("model registry %s/%s", ns, it.Metadata.Name))
+		}
+	}
+	return out, nil
+}

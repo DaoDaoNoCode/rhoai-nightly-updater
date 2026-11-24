@@ -6,7 +6,7 @@ import { stubApi } from "../../test/apiStub";
 import { contract } from "../../test/contract";
 import type { ModelRegistryStatus, PrerequisitesStatus, ResourceState, ResourcesStatus } from "../../types";
 import { IDLE, modelRegistryState } from "./featureState";
-import { cleanupCandidates, cleanupSteps } from "./CleanupModal";
+import { cleanupCandidates, cleanupSteps, modelRegistryComponentLine } from "./CleanupModal";
 import { modelRegistrySteps } from "./ModelRegistryTab";
 
 const none: ResourceState = { deployed: false, ready: false, message: "Not deployed", managedByTool: false };
@@ -118,7 +118,7 @@ describe("Model registry tab", () => {
     expect(api.bodies["POST /api/resources/model-registry/stream"]).toEqual([{ action: "setup" }]);
   });
 
-  it("Clean up lists the registry with what is lost, and never offers to turn the component off", async () => {
+  it("Clean up lists the registry with what is lost, and offers to turn the component back with the Model Catalog line", async () => {
     stub(ready(), {
       "/api/resources/prerequisites": { features: { "model-registry": { ...prereqReady.features["model-registry"], restorable: [{ component: "aiHub", previous: "Removed", feature: "model-registry" }] } } },
     });
@@ -126,8 +126,23 @@ describe("Model registry tab", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Clean up the model registry..." }));
     const dialog = await screen.findByRole("dialog", { name: /Clean up the model registry\?/ });
     expect(within(dialog).getByRole("checkbox", { name: /Model registry nightly-registry/ })).toBeChecked();
-    expect(dialog).toHaveTextContent("With its registered models and its database, which are deleted with it.");
+    expect(dialog).toHaveTextContent("With its registered models and its database, which are deleted with it. The DataScienceCluster component that runs it stays on unless you also tick it below.");
     expect(dialog).toHaveTextContent("Every model, version and artifact record in the model registry, and its database.");
+    // The component this tool turned on is offered, unticked, with what else it removes.
+    const component = within(dialog).getByRole("checkbox", { name: /Turn aiHub back to Removed/ });
+    expect(component).not.toBeChecked();
+    expect(component.closest(".pf-v6-c-check")).toHaveTextContent("Also turns off the model registry component, which also removes the Model Catalog.");
+  });
+
+  it("the component line is shown only for a component this tool turned on (restorable)", async () => {
+    stub(ready());
+    renderAt("/test-resources?tab=model-registry");
+    fireEvent.click(await screen.findByRole("button", { name: "Clean up the model registry..." }));
+    const dialog = await screen.findByRole("dialog", { name: /Clean up the model registry\?/ });
     expect(within(dialog).queryByRole("checkbox", { name: /aiHub/ })).toBeNull();
+    expect(dialog).not.toHaveTextContent("Model Catalog");
+    expect(modelRegistryComponentLine("aiHub")).toBe("Also turns off the model registry component, which also removes the Model Catalog.");
+    expect(modelRegistryComponentLine("modelregistry")).toBe("Also turns off the model registry component.");
+    expect(modelRegistryComponentLine("kserve")).toBeNull();
   });
 });

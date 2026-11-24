@@ -310,6 +310,8 @@ export const scenarios = {
   "env-registry-none": (w) => { w.modelRegistry = F.modelRegistryStates.absent; },
   "env-registry-starting": (w) => { w.modelRegistry = F.modelRegistryStates.starting; },
   "env-registry-ready": (w) => { w.modelRegistry = F.modelRegistryStates.ready; },
+  // Its DataScienceCluster component was turned on by this tool: Clean up offers it back.
+  "env-registry-turned-on": (w) => { w.modelRegistry = F.modelRegistryStates.ready; w.prereq = { ...(w.prereq ?? {}), registryRestorable: true }; },
   // The Environment page's other states, one scenario each.
   "env-ready": (w) => { w.resources.mlflow = F.mlflowStates.running; },
   // Workbenches use the pipeline server's Connection: the Pipelines tab names them, Delete lists them.
