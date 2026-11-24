@@ -157,14 +157,51 @@ func findModel(a *mlflow.SampleAPI) (entity, bool, error) {
 // SampleStatus fetches the sample model from the registry at address.
 func SampleStatus(u *kube.Client, address string) *types.ModelRegistrySample {
 	s := &types.ModelRegistrySample{Model: SampleName(), Version: sampleVersion, URI: SampleURI()}
-	m, found, err := findModel(api(u, address))
+	a := api(u, address)
+	m, found, err := findModel(a)
 	switch {
 	case err != nil:
 		s.Problem = fmt.Sprintf("Cannot read the sample model: %v.", err)
-	case found:
-		s.Registered, s.State, s.ID = true, m.State, m.ID
+		return s
+	case !found:
+		return s
 	}
+	s.Registered, s.State, s.ID = true, m.State, m.ID
+	v, art, err := sampleParts(a, m.ID)
+	if err != nil {
+		s.Problem = fmt.Sprintf("Cannot read the sample model's version: %v.", err)
+		return s
+	}
+	s.Complete = m.State == "LIVE" && v.State == "LIVE" && art.ID != "" && (art.State == "" || art.State == "LIVE")
 	return s
+}
+
+// sampleParts reads the sample's version and its artifact (empty when
+// missing).
+func sampleParts(a *mlflow.SampleAPI, modelID string) (entity, entity, error) {
+	var v, art entity
+	var versions entityList
+	if err := send(a, http.MethodGet, "/registered_models/"+url.PathEscape(modelID)+"/versions", url.Values{"name": {sampleVersion}}, nil, &versions); err != nil && !isNotFound(err) {
+		return v, art, err
+	}
+	for _, it := range versions.Items {
+		if it.Name == sampleVersion {
+			v = it
+		}
+	}
+	if v.ID == "" {
+		return v, art, nil
+	}
+	var artifacts entityList
+	if err := send(a, http.MethodGet, "/model_versions/"+url.PathEscape(v.ID)+"/artifacts", nil, nil, &artifacts); err != nil {
+		return v, art, err
+	}
+	for _, it := range artifacts.Items {
+		if it.Name == sampleVersion {
+			art = it
+		}
+	}
+	return v, art, nil
 }
 
 // registerSample ensures the sample model, version, and artifact exist (creating each only
@@ -228,9 +265,19 @@ func registerSample(c *kube.Client, address string, say func(string)) error {
 		return fmt.Errorf("read the artifacts of version %s: %w", sampleVersion, err)
 	}
 	for _, it := range artifacts.Items {
-		if it.Name == sampleVersion {
+		if it.Name != sampleVersion {
+			continue
+		}
+		if it.State == "" || it.State == "LIVE" {
 			return nil
 		}
+		// PATCH model_artifacts/{id} (ModelArtifactUpdate); the type names
+		// which kind of artifact the update is for.
+		if err := send(a, http.MethodPatch, "/model_artifacts/"+url.PathEscape(it.ID), nil, map[string]any{"artifactType": "model-artifact", "state": "LIVE"}, nil); err != nil {
+			return fmt.Errorf("restore the model artifact of version %s: %w", sampleVersion, err)
+		}
+		say("Its model artifact was not live; it is live again.")
+		return nil
 	}
 	if err := send(a, http.MethodPost, "/model_versions/"+url.PathEscape(v.ID)+"/artifacts", nil, artifactBody(), nil); err != nil {
 		return fmt.Errorf("register the model artifact of version %s: %w", sampleVersion, err)

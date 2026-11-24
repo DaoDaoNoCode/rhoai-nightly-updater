@@ -24,10 +24,18 @@ type ModelRegistryStatus struct {
 	// ManagedByTool: true when this tool created the registry (UID matches the
 	// stored record and the tool label is present).
 	ManagedByTool bool `json:"managedByTool,omitempty"`
+	// Foreign: a registry of that name exists that this tool did not
+	// create; State is still its own lifecycle state.
+	Foreign bool `json:"foreign,omitempty"`
 	// Address is the REST endpoint for the registry via the cluster gateway
 	// (https://<routing.opendatahub.io/external-address-rest>); empty if the
 	// operator exposes none.
 	Address string `json:"address,omitempty"`
+	// AddressProblem says why the Service's address is not used (the user's
+	// token is sent only to the cluster's own gateway, at the registry's
+	// path, through a Service the registry owns); "" when it is used or
+	// there is none.
+	AddressProblem string `json:"addressProblem,omitempty"`
 	// DashboardURL is the RHOAI dashboard base URL used when building links.
 	DashboardURL string `json:"dashboardUrl,omitempty"`
 	// Sample reflects the sample model in the registry; nil when the registry
@@ -42,6 +50,9 @@ type ModelRegistrySample struct {
 	Version string `json:"version"`
 	// Registered means the model is present in the registry; State is
 	// "LIVE" or "ARCHIVED".
+	// Complete: the model, its version and the version's artifact all
+	// exist and are LIVE.
+	Complete   bool   `json:"complete,omitempty"`
 	Registered bool   `json:"registered"`
 	State      string `json:"state,omitempty"`
 	// ID is the registered model identifier (for dashboard links).

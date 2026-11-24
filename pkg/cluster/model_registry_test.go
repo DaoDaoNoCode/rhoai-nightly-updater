@@ -42,6 +42,10 @@ type mrEnv struct {
 	// it never becomes available); increments on each read the test harness performs.
 	availableAfter int
 	gets           int
+	// serviceNotOwned: the Service carries no owner reference to the CR.
+	serviceNotOwned bool
+	// address overrides the Service's gateway address ("" the registry API's).
+	address string
 }
 
 func newMREnv(t *testing.T) *mrEnv {
@@ -67,6 +71,19 @@ func newMREnv(t *testing.T) *mrEnv {
 		obj["status"] = map[string]any{"conditions": []any{map[string]any{"type": "Available", "status": status, "message": msg}}}
 	}
 	e.putService(true)
+	// The dashboard's address is the cluster's gateway, where the operator
+	// routes the registry (/model-registry/<name>).
+	f.putJSON("/apis/route.openshift.io/v1/namespaces/redhat-ods-applications/routes/rhods-dashboard", `{"spec":{"host":"`+strings.TrimPrefix(e.reg.url, "https://")+`"}}`)
+	prev := f.onGet
+	f.onGet = func(k fakeKey, obj map[string]any) {
+		prev(k, obj)
+		if k.plural == "services" && k.name == "nightly-registry" && !e.serviceNotOwned {
+			if cr := f.objects[fakeKey{gv: "modelregistry.opendatahub.io/v1beta1", ns: mrNS, plural: "modelregistries", name: "nightly-registry"}]; cr != nil {
+				uid := cr["metadata"].(map[string]any)["uid"]
+				ensureMap(obj, "metadata")["ownerReferences"] = []any{map[string]any{"apiVersion": "modelregistry.opendatahub.io/v1beta1", "kind": "ModelRegistry", "name": "nightly-registry", "uid": uid, "controller": true}}
+			}
+		}
+	}
 	u := *sa
 	editTestClient(&u, func(o *testClientOptions) { o.Token, o.AsUser = fakeUserToken, true })
 	u.SetUsername("alice")
@@ -78,7 +95,7 @@ func newMREnv(t *testing.T) *mrEnv {
 func (e *mrEnv) putService(withAddress bool) {
 	ann := map[string]any{}
 	if withAddress {
-		ann[modelregistry.AddressAnnotation] = strings.TrimPrefix(e.reg.url, "https://") + "/model-registry/nightly-registry"
+		ann[modelregistry.AddressAnnotation] = kubeFirst(e.address, strings.TrimPrefix(e.reg.url, "https://")+"/model-registry/nightly-registry")
 	}
 	e.f.put(mrSvcPath, map[string]any{
 		"metadata": map[string]any{"labels": map[string]any{"component": "model-registry", "app": "nightly-registry"}, "annotations": ann},
@@ -428,7 +445,7 @@ func TestModelRegistry_ForeignRegistryIsKept(t *testing.T) {
 		t.Fatalf("setup: %+v", res)
 	}
 	st, err := GetModelRegistryStatus(e.sa, e.u)
-	if err != nil || st.State != "foreign" || st.ManagedByTool {
+	if err != nil || !st.Foreign || st.ManagedByTool || st.Sample != nil {
 		t.Fatalf("status %+v %v", st, err)
 	}
 	// Same behavior if the object carries the tool label but bookkeeping references a different UID.
@@ -601,9 +618,16 @@ func TestRestoreComponents_ModelRegistryComponent(t *testing.T) {
 	t.Run("another registry left: kept on", func(t *testing.T) {
 		pc := setUp(t)
 		pc.f.putJSON(mrCollection+"/theirs", `{"metadata":{}}`)
-		pc.f.putJSON(mrCollection+"/going", `{"metadata":{"deletionTimestamp":"2026-11-24T10:00:00Z","finalizers":["x"]}}`)
 		res, _ := features.RestoreComponents(pc.c, []string{"modelregistry"})
 		if !res.Success || !strings.Contains(res.Message, "Kept Managed: modelregistry (in use: model registry "+mrNS+"/theirs)") || componentState(pc.f, "modelregistry") != "Managed" {
+			t.Fatalf("%+v", res)
+		}
+	})
+	t.Run("a registry being deleted: kept on until it is gone", func(t *testing.T) {
+		pc := setUp(t)
+		pc.f.putJSON(mrCollection+"/going", `{"metadata":{"deletionTimestamp":"2026-11-24T10:00:00Z","finalizers":["modelregistry.opendatahub.io/finalizer"]}}`)
+		res, _ := features.RestoreComponents(pc.c, []string{"modelregistry"})
+		if !res.Success || !strings.Contains(res.Message, "in use: model registry "+mrNS+"/going") || componentState(pc.f, "modelregistry") != "Managed" {
 			t.Fatalf("%+v", res)
 		}
 	})
@@ -638,4 +662,157 @@ func TestValidateModelRegistryRequest(t *testing.T) {
 			t.Errorf("%+v: valid %v", req, got)
 		}
 	}
+}
+
+func kubeFirst(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+// C1: the user's token goes only to the cluster's own gateway, at the
+// registry's own path, through a Service the recorded registry owns.
+func TestModelRegistry_TokenGoesOnlyToTheClustersGateway(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(e *mrEnv, evil *fakeRegistryAPI)
+		want  string
+	}{
+		{"another https host", func(e *mrEnv, evil *fakeRegistryAPI) {
+			e.address = strings.TrimPrefix(evil.url, "https://") + "/model-registry/nightly-registry"
+		}, "not the cluster's gateway"},
+		{"another path on the gateway", func(e *mrEnv, evil *fakeRegistryAPI) {
+			e.address = strings.TrimPrefix(e.reg.url, "https://") + "/model-registry/someone-else"
+		}, "not the registry's own path"},
+		{"a Service the registry does not own", func(e *mrEnv, evil *fakeRegistryAPI) { e.serviceNotOwned = true }, "not owned by"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newMREnv(t)
+			evil := newFakeRegistryAPI(t)
+			tc.setup(e, evil)
+			e.putService(true)
+			res, steps := runMR(t, e.u, types.ModelRegistryRequest{Action: "setup", Samples: true})
+			if res.Success || !strings.Contains(res.Message, tc.want) || !strings.Contains(res.Message, "Nothing was sent") {
+				t.Fatalf("got %+v", res)
+			}
+			if last := steps[len(steps)-1]; last.Step != "samples" || last.Status != "failed" {
+				t.Fatalf("last step %+v", last)
+			}
+			if len(evil.calls) > 0 || len(e.reg.calls) > 0 {
+				t.Fatalf("a request was sent: %v %v", evil.calls, e.reg.calls)
+			}
+			st, err := GetModelRegistryStatus(e.sa, e.u)
+			if err != nil || st.Address != "" || st.Sample != nil || !strings.Contains(st.AddressProblem, tc.want) {
+				t.Fatalf("status %+v %v", st, err)
+			}
+			if len(evil.calls) > 0 || len(e.reg.calls) > 0 {
+				t.Fatal("the status sent a request")
+			}
+		})
+	}
+}
+
+// C3: the sample is complete only with its version and artifact, all live;
+// Set up again completes it.
+func TestModelRegistrySample_IncompleteUntilVersionAndArtifactAreThere(t *testing.T) {
+	e := newMREnv(t)
+	if res, _ := runMR(t, e.u, types.ModelRegistryRequest{Action: "setup"}); !res.Success {
+		t.Fatal(res.Message)
+	}
+	e.reg.mu.Lock()
+	e.reg.models["qwen25-05b-instruct"] = map[string]any{"id": "7", "name": "qwen25-05b-instruct", "state": "LIVE"}
+	e.reg.next = 7
+	e.reg.mu.Unlock()
+	st, _ := GetModelRegistryStatus(e.sa, e.u)
+	if st.Sample == nil || !st.Sample.Registered || st.Sample.Complete {
+		t.Fatalf("sample %+v", st.Sample)
+	}
+	if res, _ := runMR(t, e.u, types.ModelRegistryRequest{Action: "setup", Samples: true}); !res.Success {
+		t.Fatal(res.Message)
+	}
+	if got := e.reg.writes(); !reflect.DeepEqual(got, []string{"POST /registered_models/7/versions", "POST /model_versions/8/artifacts"}) {
+		t.Fatalf("writes %v", got)
+	}
+	st, _ = GetModelRegistryStatus(e.sa, e.u)
+	if !st.Sample.Complete || st.Sample.State != "LIVE" {
+		t.Fatalf("sample %+v", st.Sample)
+	}
+}
+
+// C4: a registry someone else made keeps its own lifecycle state.
+func TestModelRegistryStatus_ForeignKeepsItsLifecycle(t *testing.T) {
+	e := newMREnv(t)
+	e.availableAfter = 0
+	e.f.putJSON(mrPath, `{"metadata":{"labels":{}}}`)
+	st, err := GetModelRegistryStatus(e.sa, e.u)
+	if err != nil || st.State != "starting" || !st.Foreign || st.ManagedByTool {
+		t.Fatalf("starting: %+v %v", st, err)
+	}
+	e.availableAfter = 1
+	st, _ = GetModelRegistryStatus(e.sa, e.u)
+	if st.State != "ready" || !st.Foreign || st.Sample != nil {
+		t.Fatalf("ready: %+v", st)
+	}
+}
+
+// C6: Clean up deletes the registry with the user's token before the
+// component; a teardown that fails keeps the component on.
+func TestCleanUp_ModelRegistryThenItsComponent(t *testing.T) {
+	setUp := func(t *testing.T, ours bool) (*prereqCluster, *Client) {
+		pc := newPrereqCluster(t)
+		pc.f.groups = map[string]string{"/apis/modelregistry.opendatahub.io": mrGroupDoc}
+		dsc := pc.f.get(tDSC)
+		dsc["spec"].(map[string]any)["components"].(map[string]any)["modelregistry"] = map[string]any{"managementState": "Removed", "registriesNamespace": mrNS}
+		pc.f.put(tDSC, dsc)
+		if res, _ := runPrereqs(t, pc.c, "model-registry"); !res.Success {
+			t.Fatalf("setup: %+v", res)
+		}
+		pc.f.putJSON(mrPath, `{"metadata":{"labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}}}`)
+		uid := pc.f.get(mrPath)["metadata"].(map[string]any)["uid"].(string)
+		if !ours {
+			uid = "someone-elses"
+		}
+		cm := pc.f.get(testSnapshotCM)
+		ensureMap(cm, "data")["modelRegistries"] = `{"` + mrNS + `/nightly-registry":{"uid":"` + uid + `"}}`
+		pc.f.put(testSnapshotCM, cm)
+		u := *pc.c
+		editTestClient(&u, func(o *testClientOptions) { o.Token, o.AsUser = fakeUserToken, true })
+		u.SetBookkeeping(pc.c)
+		return pc, &u
+	}
+	req := types.CleanupRequest{ModelRegistry: true, Components: []string{"modelregistry"}}
+	t.Run("in order, with the user's token", func(t *testing.T) {
+		pc, u := setUp(t, true)
+		var steps []string
+		res, err := CleanUp(u, req, func(e UpdateStepEvent) {
+			if e.Status == "success" {
+				steps = append(steps, e.Step)
+			}
+		})
+		if err != nil || !res.Success || componentState(pc.f, "modelregistry") != "Removed" || pc.f.has(mrPath) {
+			t.Fatalf("%+v %v", res, err)
+		}
+		if strings.Join(steps, ",") != "model-registry,components" {
+			t.Fatalf("steps %v", steps)
+		}
+		for _, call := range append(pc.f.callsTo(http.MethodDelete, mrPath), pc.f.callsTo(http.MethodGet, mrCollection)...) {
+			if call.Token != fakeUserToken {
+				t.Fatalf("%s %s with %q", call.Method, call.Path, call.Token)
+			}
+		}
+	})
+	t.Run("a failed teardown keeps the component on", func(t *testing.T) {
+		pc, u := setUp(t, false)
+		var failed []string
+		res, _ := CleanUp(u, req, func(e UpdateStepEvent) {
+			if e.Status == "failed" {
+				failed = append(failed, e.Step)
+			}
+		})
+		if res.Success || componentState(pc.f, "modelregistry") != "Managed" || !pc.f.has(mrPath) || strings.Join(failed, ",") != "model-registry" {
+			t.Fatalf("%+v failed=%v", res, failed)
+		}
+	})
 }

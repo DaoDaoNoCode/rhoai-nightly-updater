@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
@@ -114,6 +115,7 @@ func setup(m *serving.Run, samples bool) (*types.OperationResponse, error) {
 	m.Step("check", "success", fmt.Sprintf("Component %s is Managed; registries go in %s.", p.component, ns))
 
 	// 1. The registry.
+	uid := o.Metadata.UID
 	if found {
 		m.Step("create", "success", fmt.Sprintf("Model registry %s/%s exists (created by this tool).", ns, Name))
 	} else {
@@ -129,7 +131,8 @@ func setup(m *serving.Run, samples bool) (*types.OperationResponse, error) {
 			err = fmt.Errorf("it has no UID")
 		}
 		if err == nil {
-			rec[ns+"/"+Name] = Recorded{UID: made.Metadata.UID, At: kube.NowRFC3339(), By: kube.GetUser(c)}
+			uid = made.Metadata.UID
+			rec[ns+"/"+Name] = Recorded{UID: uid, At: kube.NowRFC3339(), By: kube.GetUser(c)}
 			err = writeRecord(c, rec)
 		}
 		if err != nil {
@@ -140,16 +143,19 @@ func setup(m *serving.Run, samples bool) (*types.OperationResponse, error) {
 	}
 
 	// 2. Ready.
-	address, res, err := waitReady(m, ns)
+	address, problem, res, err := waitReady(m, ns, uid)
 	if res != nil || err != nil {
 		return res, err
 	}
 
 	// 3. The sample model.
 	if samples {
-		if address == "" {
+		switch {
+		case problem != "":
+			return m.Fail("samples", fmt.Sprintf("The registry is ready, but the sample model was not added: %s. Nothing was sent: your token goes only to the registry on the cluster's own gateway.", problem), "untrusted_address", "untrusted address")
+		case address == "":
 			m.Step("samples", "success", "Skipped: the registry has no address through the cluster's gateway, which sample data is added through.")
-		} else {
+		default:
 			m.Step("samples", "running", fmt.Sprintf("Registering sample model %s...", SampleName()))
 			if err := registerSample(c, address, func(s string) { m.Logs = append(m.Logs, s) }); err != nil {
 				code := mlflow.SampleErrorCode(err)
@@ -179,7 +185,7 @@ func create(c *kube.Client, ns string, dryRun bool) error {
 
 // waitReady waits for Available=True on the registry, streaming its
 // message as it changes, then reads the Service's gateway address.
-func waitReady(m *serving.Run, ns string) (string, *types.OperationResponse, error) {
+func waitReady(m *serving.Run, ns, uid string) (string, string, *types.OperationResponse, error) {
 	c := m.Client
 	m.Step("ready", "running", "Waiting for the registry to be available (usually 1 to 3 minutes)...")
 	last := ""
@@ -203,27 +209,30 @@ func waitReady(m *serving.Run, ns string) (string, *types.OperationResponse, err
 	})
 	if err != nil {
 		r, e := m.Fail("ready", fmt.Sprintf("Stopped waiting: %v. The registry stays; the tab shows its state.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "ready wait failed")
-		return "", r, e
+		return "", "", r, e
 	}
 	if !done {
 		r, e := m.Fail("ready", fmt.Sprintf("Not available after %s (%s). The registry stays; the tab shows its state.", serving.ClockText(readyTimeout), kube.FirstNonEmpty(last, "no message")), "not_ready", "not ready")
-		return "", r, e
+		return "", "", r, e
 	}
 	svc, found, err := readService(c, ns)
 	if err != nil {
 		r, e := m.Fail("ready", fmt.Sprintf("The registry is available, but its Service cannot be read: %v.", err), kube.ErrorCodeFromK8sErr(err), "service read failed")
-		return "", r, e
+		return "", "", r, e
 	}
-	address := ""
+	address, problem := "", ""
 	if found {
-		address = svc.address()
+		address, problem = trustedAddress(svc, uid, dashdev.DashboardURL(c))
 	}
 	where := "it has no address through the cluster's gateway"
-	if address != "" {
+	switch {
+	case address != "":
 		where = "its REST address is " + address
+	case problem != "":
+		where = "its address is not used: " + problem
 	}
 	m.Step("ready", "success", fmt.Sprintf("The registry is available; %s.", where))
-	return address, nil, nil
+	return address, problem, nil, nil
 }
 
 // teardown deletes the registry this tool created: only when its UID is
@@ -305,9 +314,9 @@ func splitKey(key string) (ns, name string, ok bool) {
 	return "", "", false
 }
 
-// Users lists the model registries in ns (where RHOAI keeps them) that are
-// not being deleted: whether the component is still in use, for turning it
-// back off (Clean up, with the user's token). A list that fails is
+// Users lists the model registries in ns (where RHOAI keeps them), those
+// being deleted included: whether the component is still in use, for
+// turning it back off (Clean up, with the user's token). A list that fails is
 // returned, so the caller keeps the component on (fail closed); an API that
 // is not served has no registries.
 func Users(c *kube.Client, ns string) ([]string, error) {
@@ -326,11 +335,15 @@ func Users(c *kube.Client, ns string) ([]string, error) {
 	if err := json.Unmarshal(body, &list); err != nil {
 		return nil, fmt.Errorf("parse the model registries in %s: %w", ns, err)
 	}
+	// One being deleted still counts until it is gone: its finalizer needs
+	// the component's operator to run.
 	var out []string
 	for _, it := range list.Items {
-		if !it.Metadata.Terminating() {
-			out = append(out, fmt.Sprintf("model registry %s/%s", ns, it.Metadata.Name))
+		name := fmt.Sprintf("model registry %s/%s", ns, it.Metadata.Name)
+		if it.Metadata.Terminating() {
+			name += " (being deleted)"
 		}
+		out = append(out, name)
 	}
 	return out, nil
 }

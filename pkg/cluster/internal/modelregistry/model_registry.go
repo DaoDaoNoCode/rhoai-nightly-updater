@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -302,6 +303,49 @@ func userReadService(u *kube.Client, ns string) (service, bool, error) {
 	return s, found, err
 }
 
+// trustedAddress is the registry's REST address the user's token may be
+// sent to, or why there is none to use ("" and "": the Service names no
+// address). The Service must be the one the operator made for the
+// registry (owned by its UID, with the operator's labels app=<name> and
+// component=model-registry), and the address must be on the cluster's own
+// gateway (the host of the dashboard's address, which the data-science
+// gateway serves, as it serves the registry: model-registry-operator
+// rhoai-3.6 service.yaml.tmpl writes <gateway domain>/model-registry/<name>)
+// at the registry's own path. Anything else gets no request: whoever may
+// edit a Service there could otherwise point the user's token anywhere.
+func trustedAddress(svc service, registryUID, dashboardURL string) (string, string) {
+	where := fmt.Sprintf("Service %s/%s", svc.Metadata.Namespace, svc.Metadata.Name)
+	if registryUID == "" || !svc.Metadata.OwnedBy(registryUID) {
+		return "", where + " is not owned by the model registry this tool created"
+	}
+	if svc.Metadata.Labels["app"] != Name || svc.Metadata.Labels["component"] != "model-registry" {
+		return "", where + " does not carry the operator's labels (app=" + Name + ", component=model-registry)"
+	}
+	raw := strings.TrimSpace(svc.Metadata.Annotations[AddressAnnotation])
+	if raw == "" {
+		return "", ""
+	}
+	address := svc.address()
+	if address == "" {
+		return "", fmt.Sprintf("the address %s names is not a plain https address", where)
+	}
+	u, err := url.Parse(address)
+	if err != nil {
+		return "", fmt.Sprintf("the address %s names cannot be read", where)
+	}
+	gw, err := url.Parse(dashboardURL)
+	if dashboardURL == "" || err != nil || gw.Host == "" {
+		return "", "the cluster's gateway address is not known (the dashboard reports no address), so the registry's address cannot be checked"
+	}
+	if !strings.EqualFold(u.Host, gw.Host) {
+		return "", fmt.Sprintf("the address %s names (%s) is not the cluster's gateway (%s)", where, u.Host, gw.Host)
+	}
+	if u.Path != "/model-registry/"+Name || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Sprintf("the address %s names (%s) is not the registry's own path (/model-registry/%s) on the cluster's gateway", where, u.Path, Name)
+	}
+	return address, ""
+}
+
 // --- status -----------------------------------------------------------------------------
 
 // placement captures which component and namespace host registries on this
@@ -360,19 +404,16 @@ func Status(u *kube.Client, dsc rhoai.DSCRead, dashboardURL string) (*types.Mode
 		return st, nil
 	}
 	st.ManagedByTool = rec.Owns(o.Metadata)
-	switch {
-	case !st.ManagedByTool:
-		st.State, st.Message = "foreign", fmt.Sprintf("A model registry named %s exists in %s that this tool did not create, so it uses it as it is and never deletes it.", Name, p.namespace)
-	case o.Metadata.Terminating():
+	// One of that name that this tool did not create keeps its own
+	// lifecycle state; Foreign says whose it is.
+	st.Foreign = !st.ManagedByTool
+	if o.Metadata.Terminating() {
 		st.State, st.Message = "terminating", "Being deleted."
 		return st, nil
 	}
 	avail, msg := o.available()
 	if avail != "True" {
-		if st.State == "" {
-			st.State = "starting"
-		}
-		st.Message = kube.FirstNonEmpty(st.Message, kube.TruncateText(msg, 300), "Starting: the operator has not reported the registry available yet.")
+		st.State, st.Message = "starting", kube.FirstNonEmpty(kube.TruncateText(msg, 300), "Starting: the operator has not reported the registry available yet.")
 		return st, nil
 	}
 	svc, svcFound, err := userReadService(u, p.namespace)
@@ -380,24 +421,16 @@ func Status(u *kube.Client, dsc rhoai.DSCRead, dashboardURL string) (*types.Mode
 	case kube.IsK8sError(err, 401):
 		return nil, err
 	case err != nil:
-		if st.State == "" {
-			st.State = "unknown"
-		}
-		st.Message = kube.FirstNonEmpty(st.Message, fmt.Sprintf("Cannot read Service %s/%s: %v", p.namespace, Name, err))
+		st.State, st.Message = "unknown", fmt.Sprintf("Cannot read Service %s/%s: %v", p.namespace, Name, err)
 		return st, nil
 	case !svcFound || !svc.shown():
-		if st.State == "" {
-			st.State = "starting"
-		}
-		st.Message = kube.FirstNonEmpty(st.Message, fmt.Sprintf("Available, but Service %s/%s does not have what the dashboard lists registries by yet (label component=model-registry and a port named https-api).", p.namespace, Name))
+		st.State, st.Message = "starting", fmt.Sprintf("Available, but Service %s/%s does not have what the dashboard lists registries by yet (label component=model-registry and a port named https-api).", p.namespace, Name)
 		return st, nil
 	}
-	st.Address = svc.address()
-	if st.State == "" {
-		st.State = "ready"
-		if st.Address == "" {
-			st.Message = "Ready. The operator reports no address through the cluster's gateway, so sample data cannot be added."
-		}
+	st.State = "ready"
+	st.Address, st.AddressProblem = trustedAddress(svc, o.Metadata.UID, dashboardURL)
+	if st.Address == "" && st.AddressProblem == "" {
+		st.Message = "Ready. The operator reports no address through the cluster's gateway, so sample data cannot be added."
 	}
 	return st, nil
 }

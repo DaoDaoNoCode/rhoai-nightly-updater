@@ -6,6 +6,7 @@
   "name": "nightly-registry",
   "namespace": "rhoai-model-registries",
   "sample": {
+    "complete": true,
     "id": "1",
     "model": "qwen25-05b-instruct",
     "registered": true,

@@ -141,7 +141,7 @@ func stubContractData(t *testing.T) {
 		return &types.ModelRegistryStatus{
 			Name: "nightly-registry", Namespace: "rhoai-model-registries", Component: "aiHub", State: "ready", ManagedByTool: true,
 			Address: "https://rh-ai.apps.example.com/model-registry/nightly-registry", DashboardURL: "https://rh-ai.apps.example.com",
-			Sample: &types.ModelRegistrySample{Model: "qwen25-05b-instruct", Version: "v1", Registered: true, State: "LIVE", ID: "1",
+			Sample: &types.ModelRegistrySample{Model: "qwen25-05b-instruct", Version: "v1", Registered: true, Complete: true, State: "LIVE", ID: "1",
 				URI: "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775"},
 		}, nil
 	}
