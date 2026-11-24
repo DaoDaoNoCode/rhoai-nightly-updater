@@ -24,6 +24,10 @@ const FIELD_NAMES: Record<string, string> = {
   "spec.rhoai.build.image": "Catalog image",
   "spec.project.name": "Project name",
   "spec.project.displayName": "Display name",
+  "spec.features.models.model": "Model",
+  "spec.features.models.exposure": "How it is reached",
+  "spec.features.maas.database": "Database",
+  "spec.dashboardDev.pr": "Pull request number",
 };
 
 /** The page names of the app's routes a fix can name ("/environment" is the Environment page's own route). */

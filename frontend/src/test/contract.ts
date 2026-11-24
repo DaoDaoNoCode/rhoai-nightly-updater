@@ -11,6 +11,7 @@ import samplesJson from "./contract/samples-mlflow-user.json";
 import recipeRunJson from "./contract/recipe-run-admin.json";
 import recipePlanJson from "./contract/recipe-plan-admin.json";
 import recipeRunEndedJson from "./contract/recipe-run-ended-admin.json";
+import recipeRunFeaturesJson from "./contract/recipe-run-features-admin.json";
 import modelRegistryJson from "./contract/model-registry-admin.json";
 import workbenchJson from "./contract/workbench-admin.json";
 import kueueJson from "./contract/kueue-admin.json";
@@ -55,6 +56,8 @@ export const contract = {
   // request, and POST /api/recipes/plan with problems.
   recipeRun: (): RecipeRunStatus => clone<RecipeRunStatus>(recipeRunJson),
   recipeRunEnded: (): RecipeRunStatus => clone<RecipeRunStatus>(recipeRunEndedJson),
+  /** A run of every feature that succeeded; its Clean up offers the project, the MaaS platform and the model registry it created. */
+  recipeRunFeatures: (): RecipeRunStatus => clone<RecipeRunStatus>(recipeRunFeaturesJson),
   recipePlan: (): RecipePlan => clone<RecipePlan>(recipePlanJson),
   // The Model registry tab's answer: this tool's registry, ready, with the sample model.
   modelRegistry: (): ModelRegistryStatus => clone<ModelRegistryStatus>(modelRegistryJson),
@@ -81,6 +84,7 @@ const typed: {
   samples: Widen<MLflowSamplesStatus>;
   recipeRun: Widen<RecipeRunStatus>;
   recipeRunEnded: Widen<RecipeRunStatus>;
+  recipeRunFeatures: Widen<RecipeRunStatus>;
   recipePlan: Widen<RecipePlan>;
   modelRegistry: Widen<ModelRegistryStatus>;
   workbench: Widen<WorkbenchStatus>;
@@ -96,6 +100,7 @@ const typed: {
   samples: samplesJson,
   recipeRun: recipeRunJson,
   recipeRunEnded: recipeRunEndedJson,
+  recipeRunFeatures: recipeRunFeaturesJson,
   recipePlan: recipePlanJson,
   modelRegistry: modelRegistryJson,
   workbench: workbenchJson,

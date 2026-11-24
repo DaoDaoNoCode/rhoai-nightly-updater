@@ -117,7 +117,6 @@ describe("Recipes page", () => {
     expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue("recipe-dev");
     expect(screen.getByRole("switch", { name: "Pipelines" })).toBeChecked();
     expect(screen.getByRole("switch", { name: "MLflow" })).toBeChecked();
-    expect(screen.getByText(/Models, the playground, Models as a Service and Dashboard Dev come to recipes in a later version/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Review and run" }));
     await settle();

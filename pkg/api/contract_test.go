@@ -69,6 +69,7 @@ func TestFrontendContract(t *testing.T) {
 		// Admin-only answers the Recipes page reads.
 		{"recipe-run-admin.json", "/api/recipes/run", "user:admin", HandleRecipeRunStatus, "", nil},
 		{"recipe-run-ended-admin.json", "/api/recipes/run", "user:admin", HandleRecipeRunStatus, "", stubEndedRecipeRun},
+		{"recipe-run-features-admin.json", "/api/recipes/run", "user:admin", HandleRecipeRunStatus, "", stubFeaturesRecipeRun},
 		// The Workbench tab's status (admin-only, read with the admin's token).
 		{"workbench-admin.json", "/api/resources/workbench?project=team-a", "user:admin", HandleWorkbenchStatus, "", nil},
 		// The Distributed workloads tab's status (admin-only, the admin's token).
@@ -330,5 +331,48 @@ func stubEndedRecipeRun(t *testing.T) {
 			},
 			Components: []string{"aipipelines"},
 		}, nil
+	}
+}
+
+// testRecipeFeatures is a recipe with every feature of recipes phase 2.
+const testRecipeFeatures = `{"apiVersion":"rhoai-nightly-updater/v1alpha1","kind":"EnvironmentRecipe","metadata":{"name":"full"},
+"spec":{"rhoai":{"build":"latest"},"dataScienceCluster":{"create":true},"project":{"mode":"create","name":"recipe-full"},
+"features":{"pipelines":{"enabled":true},"mlflow":{"enabled":true,"samples":true},"models":{"enabled":true,"model":"qwen3-1-7b"},
+"playground":{"enabled":true},"maas":{"enabled":true,"database":"development","publish":true},"modelRegistry":{"enabled":true,"sample":true},"workbench":{"enabled":true}},
+"dashboardDev":{"deploy":"pr","pr":4321}}}`
+
+// stubFeaturesRecipeRun is a run of every feature that succeeded: its
+// steps are the runner's own (titles and figures), and its Clean up
+// offers the project, the MaaS platform and the model registry it created.
+func stubFeaturesRecipeRun(t *testing.T) {
+	t.Helper()
+	rcp, problems := cluster.ValidateRecipe([]byte(testRecipeFeatures))
+	if len(problems) > 0 {
+		t.Fatal(problems)
+	}
+	at := func(m int) string { return time.Date(2026, 11, 20, 15, m, 0, 0, time.UTC).Format(time.RFC3339) }
+	var steps []types.RecipeRunStep
+	for i, s := range cluster.RecipeSteps(rcp) {
+		typical, most := s.Seconds()
+		st := types.RecipeRunStep{ID: s.ID, Title: s.Title, Status: types.RecipeStepSuccess, Message: s.Title + " is set up.", StartedAt: at(i * 3), FinishedAt: at(i*3 + 2), TypicalSeconds: typical, MaxSeconds: most}
+		if s.ID == "rhoai" {
+			st.Status, st.Message = types.RecipeStepSkipped, "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep)."
+		}
+		steps = append(steps, st)
+	}
+	readRecipeRun = func(*cluster.Client) (*types.RecipeRun, error) {
+		return &types.RecipeRun{
+			ID: "run2", OperationID: "op3", BootID: "another-process", Pod: "pod-2", User: "alice",
+			StartedAt: at(0), FinishedAt: at(len(steps) * 3), State: types.RecipeRunSucceeded, StopReason: "Every step of full is set up.",
+			Recipe: rcp, Project: &types.RecipeProjectRef{Name: "recipe-full", UID: "1a2b3c4d-uid", Owned: true}, Steps: steps,
+			Exposure:     "default-gateway",
+			CreatedParts: []types.RecipeCreatedPart{{Part: types.RecipePartMaaSPlatform, UID: "creds-uid"}, {Part: types.RecipePartModelRegistry, UID: "registry-uid"}},
+			Components:   []string{"aipipelines", "kserve"},
+		}, nil
+	}
+	recipeOwnership = func(_ *cluster.Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
+		return map[string]bool{"project": true, "maas": true, "model-registry": true, "models-prereq": true},
+			&types.CleanupRequest{RecipeProjects: []string{run.Project.Name}, RecipeProjectUIDs: map[string]string{run.Project.Name: run.Project.UID},
+				MaaSPlatform: true, ModelRegistry: true, Components: []string{"kserve"}}
 	}
 }
