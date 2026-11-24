@@ -43,6 +43,7 @@ export const FEATURE_PURPOSE = {
   "model-registry": "A model registry for the cluster: register models and their versions, and deploy them from the dashboard.",
   models: "Serve small models on CPU in a project: chat, tool calling and embeddings. Call them with each model's own token or from the dashboard's Gen AI playground.",
   playground: "The dashboard's Gen AI playground in a project: a chat page to try the project's models and ask about your documents.",
+  kueue: "Distributed workloads with Kueue in a project, as the RHOAI docs set them up: queues with a CPU and memory quota, and Ray samples the dashboard's Distributed workloads and Infrastructure pages show.",
   maas: "Models as a Service: offer models to everyone on the cluster through one gateway, with API keys and token limits.",
 } as const;
 

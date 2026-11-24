@@ -2,6 +2,7 @@ import type { CatalogModel, MaaSPart, MaaSRequest, MaaSStatus, ModelRegistryStat
 import { envStatus, envStatusText, notManaged, type EnvStatus } from "./resourceStatus";
 import type { Pending } from "./resourceRow";
 import { mlflowOpenHref } from "./UseIt";
+import type { KueueOp } from "./kueueState";
 
 /**
  * Each Environment feature's state is derived here once; both the dedicated
@@ -28,6 +29,8 @@ export interface Busy {
   workbench?: WorkbenchOp | null;
   /** Model registry work in progress from this page. */
   modelRegistry?: ModelRegistryOp | null;
+  /** Distributed workloads work in progress from this page. */
+  kueue?: KueueOp | null;
 }
 
 /** A Model registry operation in progress. */

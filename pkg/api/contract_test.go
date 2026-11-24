@@ -71,6 +71,8 @@ func TestFrontendContract(t *testing.T) {
 		{"recipe-run-ended-admin.json", "/api/recipes/run", "user:admin", HandleRecipeRunStatus, "", stubEndedRecipeRun},
 		// The Workbench tab's status (admin-only, read with the admin's token).
 		{"workbench-admin.json", "/api/resources/workbench?project=team-a", "user:admin", HandleWorkbenchStatus, "", nil},
+		// The Distributed workloads tab's status (admin-only, the admin's token).
+		{"kueue-admin.json", "/api/resources/kueue?project=team-a", "user:admin", HandleKueueStatus, "", nil},
 		{"recipe-plan-admin.json", "/api/recipes/plan", "user:admin", HandleRecipePlan, `{"recipe":` + testRecipe + `}`, nil},
 	}
 	update := *updateContract || os.Getenv("UPDATE_CONTRACT") == "1"
@@ -135,10 +137,31 @@ func TestFrontendContract(t *testing.T) {
 // field set, so a renamed or retyped field shows in the fixtures.
 func stubContractData(t *testing.T) {
 	t.Helper()
-	origSummary, origProject, origPlayground, origSamples, origRegistry, origWorkbench := getSummary, getProjectStatus, getPlaygroundStatus, getMLflowSamplesStatus, getModelRegistryStatus, getWorkbenchStatus
+	origSummary, origProject, origPlayground, origSamples, origRegistry, origWorkbench, origKueue := getSummary, getProjectStatus, getPlaygroundStatus, getMLflowSamplesStatus, getModelRegistryStatus, getWorkbenchStatus, getKueueStatus
 	t.Cleanup(func() {
-		getSummary, getProjectStatus, getPlaygroundStatus, getMLflowSamplesStatus, getModelRegistryStatus, getWorkbenchStatus = origSummary, origProject, origPlayground, origSamples, origRegistry, origWorkbench
+		getSummary, getProjectStatus, getPlaygroundStatus, getMLflowSamplesStatus, getModelRegistryStatus, getWorkbenchStatus, getKueueStatus = origSummary, origProject, origPlayground, origSamples, origRegistry, origWorkbench, origKueue
 	})
+	getKueueStatus = func(_, _ *cluster.Client, project string) (*types.KueueStatus, error) {
+		f := false
+		return &types.KueueStatus{
+			Project:  project,
+			Instance: types.KueueInstance{Found: true, Available: true, KueueReady: "True", V1beta2: true, Ready: true},
+			Objects: []types.KueueObject{
+				{Kind: "ResourceFlavor", Name: "nightly-kueue-cpu", Present: true, ManagedByTool: true, Active: true},
+				{Kind: "ClusterQueue", Name: "nightly-kueue", Present: true, ManagedByTool: true, Active: true},
+				{Kind: "LocalQueue", Name: "nightly-kueue", Namespace: project, Present: true, ManagedByTool: true, Active: true},
+			},
+			Quota: "6 CPUs and 11Gi of memory",
+			Label: &types.KueueLabel{Present: true, AddedByTool: true},
+			Samples: []types.KueueSample{
+				{Kind: "raycluster", Name: "nightly-raycluster", Present: true, ManagedByTool: true, Image: "quay.io/modh/ray:2.47.1-py311-cu121", State: "Admitted", RayState: "ready"},
+				{Kind: "rayjob", Name: "nightly-rayjob"},
+			},
+			OptIn:           types.KueueOptIn{DisableKueue: &f, SetByTool: true, Previous: "unset", On: true, Profile: types.KueueObject{Kind: "HardwareProfile", Name: "nightly-kueue-cpu", Namespace: "redhat-ods-applications", Present: true, ManagedByTool: true, Active: true}},
+			DefaultRayImage: "quay.io/modh/ray:2.47.1-py311-cu121",
+			DashboardURL:    "https://rh-ai.apps.example.com",
+		}, nil
+	}
 	getModelRegistryStatus = func(_, _ *cluster.Client) (*types.ModelRegistryStatus, error) {
 		return &types.ModelRegistryStatus{
 			Name: "nightly-registry", Namespace: "rhoai-model-registries", Component: "aiHub", State: "ready", ManagedByTool: true,
