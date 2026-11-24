@@ -15,6 +15,9 @@ type (
 	RecipeCheck = recipe.Check
 )
 
+// RecipeCreatedKueueSetting is recipe.CreatedKueueSetting.
+const RecipeCreatedKueueSetting = recipe.CreatedKueueSetting
+
 // ErrorCodeConfirmProjectContents is recipe.ErrorCodeConfirmContents.
 const ErrorCodeConfirmProjectContents = recipe.ErrorCodeConfirmContents
 
@@ -31,14 +34,19 @@ func PlanRecipe(c *Client, r types.EnvironmentRecipe, pinned *types.RecipePinned
 // RecipeSteps is recipe.Steps.
 func RecipeSteps(r types.EnvironmentRecipe) []RecipeStep { return recipe.Steps(r) }
 
+// RecipeExposureKept is recipe.ExposureKept.
+func RecipeExposureKept(exposure, gatewayRef string) bool {
+	return recipe.ExposureKept(exposure, gatewayRef)
+}
+
 // RecordRecipeActivity is recipe.RecordActivity.
 func RecordRecipeActivity(c *Client, action, detail string, success bool) {
 	recipe.RecordActivity(c, action, detail, success)
 }
 
 // RecipeOwnership is recipe.Ownership.
-func RecipeOwnership(c *Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
-	return recipe.Ownership(c, run)
+func RecipeOwnership(sa, u *Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
+	return recipe.Ownership(sa, u, run)
 }
 
 // RecipeOwnedProjects is recipe.OwnedProjects.

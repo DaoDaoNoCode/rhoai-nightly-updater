@@ -96,6 +96,33 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   what it leaves in place (the S3 storage, MLflow, a pipeline server in an
   existing project) and links to the Environment page.
 
+- **Recipes: every Environment feature, and Dashboard Dev.** A recipe now
+  also runs the MLflow samples, Models as a Service (development or
+  CloudNativePG database), the Models prerequisites and a catalog model
+  in the project (reached the recommended way, through the default
+  gateway, through MaaS or only inside the cluster), publishing it
+  through MaaS, the playground, the model registry (with its sample
+  model), a workbench (with the tool's S3 Connection when the project has
+  the pipeline server), distributed workloads (Kueue, as the Distributed
+  workloads tab sets them up, with its samples and, off by default, the
+  dashboard's cluster-wide Kueue setting) and a Dashboard Dev main or pull
+  request build, deployed last. Each step calls what the Environment or Dashboard Dev
+  page's own button calls, and checks the cluster first, so a resume
+  skips what is set up; how the model is reached is resolved once and
+  kept for a resume. New optional recipe fields: `features.modelRegistry`
+  (`enabled`, `sample`), `features.workbench` (`enabled`) and
+  `features.kueue` (`enabled`, `rayCluster`, `rayJob`, `rayImage`,
+  `dashboardOptIn`); recipes without them read as before. Clean up also
+  offers, unticked, the MaaS platform, the model registry and the
+  distributed workloads setup, but only those the run created: each
+  carries the run's annotation from its creation, and is removed only
+  while it still has it, the recorded UID and is this tool's. The form has a switch and the
+  few options of each feature. A Dashboard Dev pull request whose images
+  are not published blocks the plan, and a step counts as done only once
+  what it set up works (the model serves, MaaS accepts it, the dashboard
+  rolls out). No new permission
+  ([RUNBOOK §5.1](RUNBOOK.md#51-environment-recipe-runs-resume-interrupted-sign-in-again)).
+
 - **Pre-releases.** A version can now be tried out before it is released:
   `make release VERSION=v5.0.0-rc.1` tags a pre-release (`-alpha.N`,
   `-beta.N` or `-rc.N`, numbered from 1), on `main` or on an `integ/*`

@@ -166,7 +166,7 @@ func TestRecipeOwnership_FromTheCluster(t *testing.T) {
 			// mlflowoperator is Removed and absent from Set up's record.
 			Components: []string{"aipipelines", "mlflowoperator"},
 		}
-		created, req := recipe.Ownership(pc.c, run)
+		created, req := recipe.Ownership(pc.c, nil, run)
 		want := types.CleanupRequest{Components: []string{"aipipelines"}}
 		if req == nil || !reflect.DeepEqual(*req, want) || !reflect.DeepEqual(created, map[string]bool{recipe.StepPipelinesPrereq: true}) {
 			t.Fatalf("created %v, cleanup %+v", created, req)
@@ -176,7 +176,7 @@ func TestRecipeOwnership_FromTheCluster(t *testing.T) {
 		pc.f.mu.Lock()
 		ensureMap(ensureMap(ensureMap(pc.f.objects[k], "spec"), "components"), "aipipelines")["managementState"] = "Removed"
 		pc.f.mu.Unlock()
-		if created, req := recipe.Ownership(pc.c, run); req != nil || len(created) != 0 {
+		if created, req := recipe.Ownership(pc.c, nil, run); req != nil || len(created) != 0 {
 			t.Fatalf("after the change: created %v, cleanup %+v", created, req)
 		}
 	})
@@ -187,7 +187,7 @@ func TestRecipeOwnership_FromTheCluster(t *testing.T) {
 			t.Fatalf("ensure %+v", res)
 		}
 		run := &types.RecipeRun{Project: s.Project, Steps: []types.RecipeRunStep{{ID: recipe.StepProject}}}
-		created, req := recipe.Ownership(c, run)
+		created, req := recipe.Ownership(c, nil, run)
 		if req == nil || len(req.RecipeProjects) != 1 || req.RecipeProjects[0] != "recipe-dev" || !created[recipe.StepProject] {
 			t.Fatalf("created %v, cleanup %+v", created, req)
 		}
@@ -201,16 +201,16 @@ func TestRecipeOwnership_FromTheCluster(t *testing.T) {
 		if res := ensureProject(t, c, &recipe.State{Recipe: tRecipe(t, "create")}); !res.Success {
 			t.Fatalf("again %+v", res)
 		}
-		if created, req := recipe.Ownership(c, run); req != nil || created[recipe.StepProject] {
+		if created, req := recipe.Ownership(c, nil, run); req != nil || created[recipe.StepProject] {
 			t.Fatalf("another run's: created %v, cleanup %+v", created, req)
 		}
 		// Another party replaces the namespace (different UID, no recipe annotation).
 		f.putJSON(tRecipeNS, `{"metadata":{"uid":"someone-else"}}`)
-		if created, req := recipe.Ownership(c, run); req != nil || created[recipe.StepProject] {
+		if created, req := recipe.Ownership(c, nil, run); req != nil || created[recipe.StepProject] {
 			t.Fatalf("replaced: created %v, cleanup %+v", created, req)
 		}
 	})
-	if created, req := recipe.Ownership(nil, nil); req != nil || len(created) != 0 {
+	if created, req := recipe.Ownership(nil, nil, nil); req != nil || len(created) != 0 {
 		t.Error("no run")
 	}
 }

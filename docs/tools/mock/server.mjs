@@ -700,7 +700,7 @@ async function mlflowSamplesStream(req, res) {
 async function recipeRoute(req, res, key) {
   const { recipe } = await body(req);
   const installed = !!world.status?.csv?.phase && world.status.csv.phase !== "Not Found";
-  if (key === "POST /api/recipes/plan") return json(res, 200, F.recipePlan(recipe ?? F.recipe(), installed, !!world.recipePlanBlocked));
+  if (key === "POST /api/recipes/plan") return json(res, 200, F.recipePlan(recipe ?? F.recipe(), installed, !!world.recipePlanBlocked, !!world.recipePlanMixed));
   if (key === "POST /api/recipes/stop") {
     if (!world.recipeRun.running) return json(res, 409, { error: "No recipe runs in this updater process. Nothing was changed.", errorCode: "not_running" });
     world.recipeRun = { ...world.recipeRun, stopRequested: true };

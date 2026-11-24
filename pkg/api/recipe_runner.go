@@ -149,6 +149,7 @@ func copyRecipeRun(run *types.RecipeRun) *types.RecipeRun {
 	cp := *run
 	cp.Steps = append([]types.RecipeRunStep(nil), run.Steps...)
 	cp.Components = slices.Clone(run.Components)
+	cp.CreatedParts = slices.Clone(run.CreatedParts)
 	if run.Pinned != nil {
 		p := *run.Pinned
 		cp.Pinned = &p
@@ -265,6 +266,8 @@ func beginRecipeRun(c *cluster.Client, w http.ResponseWriter, st *recipeStart, r
 	if prior != nil {
 		keepComponents(run, &state, prior)
 	}
+	// The run's ID marks the cluster-wide objects its steps create.
+	state.RunID = run.ID
 	// The run's own mutation slot, before anything is recorded: a run
 	// that cannot begin leaves no record of a running run.
 	if !mutations.begin() {
@@ -308,10 +311,24 @@ func beginRecipeRun(c *cluster.Client, w http.ResponseWriter, st *recipeStart, r
 
 // keepComponents carries the DataScienceCluster components earlier
 // attempts of the run turned on into the resumed one (merged, never
-// reset). Clean up offers only those still as the run set them.
+// reset), and the cluster-wide parts they created. Clean up offers only
+// those still as the run set them. How the model is reached is kept too,
+// so a resume sets it up as the first attempt resolved it; the record is
+// the updater's own ConfigMap, so only an exposure a recipe may name (or
+// the Models tab's own "gateway" with a namespace/name) is kept, any other
+// is resolved again.
 func keepComponents(run *types.RecipeRun, state *cluster.RecipeState, prior *types.RecipeRun) {
 	state.AddComponents(prior.Components...)
 	run.Components = slices.Clone(state.Components)
+	for _, p := range prior.CreatedParts {
+		state.AddCreated(p)
+	}
+	run.CreatedParts = slices.Clone(state.Created)
+	// An exposure the recipe names wins: a kept one must be that one.
+	if e := run.Recipe.Spec.Features.Models.Exposure; (e == "" || e == prior.Exposure) && cluster.RecipeExposureKept(prior.Exposure, prior.GatewayRef) {
+		state.Exposure, state.GatewayRef = prior.Exposure, prior.GatewayRef
+		run.Exposure, run.GatewayRef = prior.Exposure, prior.GatewayRef
+	}
 }
 
 // recipeTarget is the operation's target: "<recipe>: step k of n
@@ -391,7 +408,7 @@ func (x *recipeExec) loop() (end recipeEnd) {
 		}
 		current = -1
 	}
-	return recipeEnd{state: types.RecipeRunSucceeded, reason: fmt.Sprintf("Every step of %s is set up.", x.state.Recipe.Metadata.Name)}
+	return recipeEnd{state: types.RecipeRunSucceeded, reason: fmt.Sprintf("Every step of recipe %s is set up.", x.state.Recipe.Metadata.Name)}
 }
 
 // beforeStep decides whether step i may start (the runner's notes, points
@@ -509,6 +526,8 @@ func (x *recipeExec) stepEnded(i int, status, msg, code string) {
 			run.Pinned = &p
 		}
 		run.Components = slices.Clone(x.state.Components)
+		run.CreatedParts = slices.Clone(x.state.Created)
+		run.Exposure, run.GatewayRef = x.state.Exposure, x.state.GatewayRef
 	})
 	inflight.recordStep(x.opID, UpdateStep{Step: x.steps[i].ID, Status: status, Message: msg, ErrorCode: code})
 }
@@ -577,7 +596,7 @@ func (x *recipeExec) finish(end recipeEnd) {
 // Once no run is running it also lists the projects recipes created (this
 // run's and earlier runs') that the cluster has now
 // (cluster.RecipeOwnedProjects), each removable by Clean up.
-func recipeRunStatus(c *cluster.Client) types.RecipeRunStatus {
+func recipeRunStatus(c, u *cluster.Client) types.RecipeRunStatus {
 	st := recordedRecipeRunStatus(c)
 	if !st.Running {
 		projects, err := recipeOwnedProjects(c)
@@ -591,7 +610,8 @@ func recipeRunStatus(c *cluster.Client) types.RecipeRunStatus {
 	}
 	created := map[string]bool{}
 	if !st.Running {
-		created, st.Cleanup = recipeOwnership(c, st.Run)
+		created, st.Cleanup = recipeOwnership(c, u, st.Run)
+		st.CleanupKueueSetting = created[cluster.RecipeCreatedKueueSetting]
 	}
 	for i := range st.Run.Steps {
 		st.Run.Steps[i].Created = created[st.Run.Steps[i].ID]

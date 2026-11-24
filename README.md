@@ -292,6 +292,10 @@ You run the sample yourself: the updater never calls a pipeline server's API, be
 
 Every setup has its removal on the same tab: **Delete** in the part's menu for the storage, the pipeline server and MLflow, each confirmed with the outcome first and the objects under Details; **Revert** for a deployed PR image; **Delete old storage** after Migrate storage; and **Clean up** at the bottom of each tab. What this tool did not create has no Delete.
 
+### Recipes: set up a cluster in one run
+
+**Recipes** (cluster-admins) sets up a dev cluster in one run on the updater: an RHOAI nightly, the release's default DataScienceCluster, a project the recipe creates (or one of yours), and the features you switch on: Pipelines, MLflow and its samples, Models as a Service, a model of the catalog (and how it is reached), the playground, the model registry (with its sample model), a workbench, distributed workloads (Kueue, with its samples and, only if you tick it, the dashboard's cluster-wide Kueue setting), and a Dashboard Dev main or pull request build, which goes last. Each step does what the Environment or Dashboard Dev page's own button does, and checks the cluster first: **Review and run** shows each step as Runs, Already set up or Blocked, with how long it usually takes. The run holds the cluster lock until it ends; you can close the browser, **Stop after this step**, and **Resume**, which skips what is set up. **Clean up** deletes only what the run created: the project with everything in it, the components it turned on, and, unticked until you choose them, the MaaS platform, the model registry and the distributed workloads setup it created. See [RUNBOOK §5.1](RUNBOOK.md#51-environment-recipe-runs-resume-interrupted-sign-in-again).
+
 ### Diagnostics: what is wrong, and how to fix it
 
 <img src="docs/images/diagnostics-copy-command.gif" alt="Opening a Diagnostics problem, showing its command and copying it" width="760">

@@ -33,6 +33,10 @@ type Run struct {
 	// Ready until published: its route needs the MaaS gateway to admit the
 	// project, which publish does. Publish waits for Ready on its route.
 	newModel bool
+	// Annotations go on the database connection Secret maas-db-config
+	// when this run creates it (never on one that exists): an environment
+	// recipe marks the platform its run created (RunMaaSAnnotated).
+	Annotations map[string]string
 }
 
 func (m *Run) Step(id, status, msg string) {
@@ -148,7 +152,13 @@ func ValidateMaaSRequest(req types.MaaSRequest) string {
 // "check", "gateway", "model", "maas", "ready"; unpublish "check", "maas",
 // "model", "gateway"; restore-routing "check", "model".
 func RunMaaS(c *kube.Client, req types.MaaSRequest, onStep func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
-	m := &Run{Client: c, Emit: onStep, Activity: req.Action + "-maas", Target: "MaaS platform"}
+	return RunMaaSAnnotated(c, req, nil, onStep)
+}
+
+// RunMaaSAnnotated is RunMaaS, with annotations on the database connection
+// Secret its setup creates (Run.Annotations).
+func RunMaaSAnnotated(c *kube.Client, req types.MaaSRequest, annotations map[string]string, onStep func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+	m := &Run{Client: c, Emit: onStep, Activity: req.Action + "-maas", Target: "MaaS platform", Annotations: annotations}
 	entry, _ := CatalogEntry(req.Model)
 	if req.Project != "" {
 		m.Target = fmt.Sprintf("model %s in %s", kube.FirstNonEmpty(entry.Name, req.Model), req.Project)

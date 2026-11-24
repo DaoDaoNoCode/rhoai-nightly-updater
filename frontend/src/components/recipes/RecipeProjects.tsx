@@ -26,11 +26,11 @@ export const RecipeProjects: React.FC<{
     <section aria-labelledby={titleId}>
       <Stack hasGutter>
         <StackItem>
-          <Title headingLevel="h2" size="xl" id={titleId}>Projects recipes created</Title>
+          <Title headingLevel="h2" size="xl" id={titleId}>Projects created by recipes</Title>
         </StackItem>
         <StackItem>
           <Content component="p">
-            Each is deleted with everything in it, only while it is still the one the recipe created. One that holds what this tool did not create is deleted only once you confirm it.
+            Delete removes a project and everything in it. It deletes only the project the recipe created, and asks first when the project holds something this tool did not create.
           </Content>
         </StackItem>
         {error && (
@@ -40,7 +40,7 @@ export const RecipeProjects: React.FC<{
         )}
         {projects.length > 0 && (
           <StackItem>
-            <Table aria-label="Projects recipes created" variant="compact">
+            <Table aria-label="Projects created by recipes" variant="compact">
               <Thead>
                 <Tr>
                   <Th>Project</Th>

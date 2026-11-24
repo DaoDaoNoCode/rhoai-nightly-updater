@@ -188,18 +188,25 @@ func readCR(c *kube.Client, ns string) (object, bool, error) {
 // (odh-dashboard rhoai-3.6 CreateModal.tsx:323-344, utils.ts:132-154), with
 // the tool label added. spec.postgres.image is omitted so the operator can
 // inject RHOAI's PostgreSQL image.
-func Body(ns string) map[string]any {
+func Body(ns string) map[string]any { return BodyWith(ns, nil) }
+
+// BodyWith is Body with more annotations (an environment recipe's run).
+func BodyWith(ns string, annotations map[string]string) map[string]any {
+	ann := map[string]any{
+		"openshift.io/display-name": displayName,
+		"openshift.io/description":  description,
+	}
+	for k, v := range annotations {
+		ann[k] = v
+	}
 	return map[string]any{
 		"apiVersion": APIVersion,
 		"kind":       "ModelRegistry",
 		"metadata": map[string]any{
-			"name":      Name,
-			"namespace": ns,
-			"labels":    envkit.ToolLabels(),
-			"annotations": map[string]any{
-				"openshift.io/display-name": displayName,
-				"openshift.io/description":  description,
-			},
+			"name":        Name,
+			"namespace":   ns,
+			"labels":      envkit.ToolLabels(),
+			"annotations": ann,
 		},
 		"spec": map[string]any{
 			"kubeRBACProxy": map[string]any{},
@@ -279,6 +286,26 @@ func readService(c *kube.Client, ns string) (service, bool, error) {
 	var s service
 	found, err := c.GetIntoOptional(rhoai.NamespacedPath("v1", "services", ns, Name), &s)
 	return s, found, err
+}
+
+// ReadRegistryMeta reads the metadata of the registry of this tool's name
+// where RHOAI keeps registries: sa finds where (the DataScienceCluster), u
+// (the signed-in user's own client) reads the registry. found is false
+// when RHOAI names no namespace yet.
+func ReadRegistryMeta(sa, u *kube.Client) (kube.ObjectMeta, bool, error) {
+	r, err := rhoai.ReadFirstDSC(sa)
+	if err != nil {
+		return kube.ObjectMeta{}, false, err
+	}
+	p := placementOf(r)
+	if p.namespace == "" {
+		return kube.ObjectMeta{}, false, nil
+	}
+	o, found, err := userReadCR(u, p.namespace)
+	if err != nil && kube.IsK8sNotFound(err) {
+		return kube.ObjectMeta{}, false, nil
+	}
+	return o.Metadata, found, err
 }
 
 // userReadCR and userReadService are the status's reads, made with the

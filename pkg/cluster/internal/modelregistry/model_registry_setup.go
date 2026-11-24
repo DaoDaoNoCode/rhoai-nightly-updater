@@ -48,6 +48,13 @@ func ValidateRequest(req types.ModelRegistryRequest) string {
 // streaming its steps. Every change is made with c, the signed-in user's
 // own client.
 func Run(c *kube.Client, req types.ModelRegistryRequest, onStep func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+	return RunAnnotated(c, req, nil, onStep)
+}
+
+// RunAnnotated is Run, with annotations (setup only) added to the registry
+// it creates: an environment recipe marks the registry its run created
+// (a registry that exists already is not changed).
+func RunAnnotated(c *kube.Client, req types.ModelRegistryRequest, annotations map[string]string, onStep func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	m := &serving.Run{Client: c, Emit: onStep, Activity: req.Action + "-model-registry", Target: "model registry " + Name}
 	if problem := ValidateRequest(req); problem != "" {
 		return m.Fail("check", problem, "validation", "invalid request")
@@ -55,7 +62,7 @@ func Run(c *kube.Client, req types.ModelRegistryRequest, onStep func(types.Updat
 	if req.Action == "teardown" {
 		return teardown(m)
 	}
-	return setup(m, req.Samples)
+	return setup(m, req.Samples, annotations)
 }
 
 // readPlacement reads where registries go, with c (the user's client).
@@ -67,7 +74,7 @@ func readPlacement(c *kube.Client) (placement, error) {
 	return placementOf(r), nil
 }
 
-func setup(m *serving.Run, samples bool) (*types.OperationResponse, error) {
+func setup(m *serving.Run, samples bool, annotations map[string]string) (*types.OperationResponse, error) {
 	c := m.Client
 	m.Step("check", "running", "Checking that the cluster can run a model registry...")
 	p, err := readPlacement(c)
@@ -105,7 +112,7 @@ func setup(m *serving.Run, samples bool) (*types.OperationResponse, error) {
 		// create. Strict field validation makes the API server refuse a
 		// field the CRD does not have instead of dropping it, so a cluster
 		// without the default database is refused before anything changes.
-		if err := create(c, ns, true); err != nil {
+		if err := create(c, ns, annotations, true); err != nil {
 			if why := unknownFieldsError(err); why != nil {
 				return m.Fail("check", why.Error()+". Nothing was changed.", "prerequisites", "no default database")
 			}
@@ -120,7 +127,7 @@ func setup(m *serving.Run, samples bool) (*types.OperationResponse, error) {
 		m.Step("create", "success", fmt.Sprintf("Model registry %s/%s exists (created by this tool).", ns, Name))
 	} else {
 		m.Step("create", "running", fmt.Sprintf("Creating model registry %s/%s with the default database...", ns, Name))
-		if err := create(c, ns, false); err != nil {
+		if err := create(c, ns, annotations, false); err != nil {
 			if kube.IsK8sConflict(err) {
 				return m.Fail("create", fmt.Sprintf("A model registry named %s was created in %s by someone else meanwhile. Nothing was changed.", Name, ns), "conflict", "create conflict")
 			}
@@ -173,8 +180,8 @@ func setup(m *serving.Run, samples bool) (*types.OperationResponse, error) {
 
 // create posts the registry (a server-side dry run with dryRun), with
 // strict field validation.
-func create(c *kube.Client, ns string, dryRun bool) error {
-	data, _ := json.Marshal(Body(ns))
+func create(c *kube.Client, ns string, annotations map[string]string, dryRun bool) error {
+	data, _ := json.Marshal(BodyWith(ns, annotations))
 	query := url.Values{"fieldValidation": {"Strict"}}
 	if dryRun {
 		query.Set("dryRun", "All")

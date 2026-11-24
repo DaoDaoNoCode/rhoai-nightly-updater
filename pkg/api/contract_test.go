@@ -69,6 +69,7 @@ func TestFrontendContract(t *testing.T) {
 		// Admin-only answers the Recipes page reads.
 		{"recipe-run-admin.json", "/api/recipes/run", "user:admin", HandleRecipeRunStatus, "", nil},
 		{"recipe-run-ended-admin.json", "/api/recipes/run", "user:admin", HandleRecipeRunStatus, "", stubEndedRecipeRun},
+		{"recipe-run-features-admin.json", "/api/recipes/run", "user:admin", HandleRecipeRunStatus, "", stubFeaturesRecipeRun},
 		// The Workbench tab's status (admin-only, read with the admin's token).
 		{"workbench-admin.json", "/api/resources/workbench?project=team-a", "user:admin", HandleWorkbenchStatus, "", nil},
 		// The Distributed workloads tab's status (admin-only, the admin's token).
@@ -268,7 +269,7 @@ func stubRecipeContract(t *testing.T, started time.Time) {
 	}
 	// What the cluster shows of an ended run: its project, and the
 	// component it turned on.
-	recipeOwnership = func(_ *cluster.Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
+	recipeOwnership = func(_, _ *cluster.Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
 		return map[string]bool{"project": true, "pipelines-prereq": true}, &types.CleanupRequest{RecipeProjects: []string{run.Project.Name}, RecipeProjectUIDs: map[string]string{run.Project.Name: run.Project.UID}, Components: run.Components}
 	}
 	pinned := &types.RecipePinnedBuild{Tag: "rhoai-3.6", Image: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + strings.Repeat("a", 64), Digest: "sha256:" + strings.Repeat("a", 64)}
@@ -280,7 +281,7 @@ func stubRecipeContract(t *testing.T, started time.Time) {
 			StartedAt: at(0), ResumedAt: at(9), State: types.RecipeRunRunning, ErrorCode: "", Recipe: rcp, Pinned: pinned,
 			Project: &types.RecipeProjectRef{Name: "recipe-dev", UID: "0f3c1d2e-uid", Owned: true},
 			Steps: []types.RecipeRunStep{
-				{ID: "rhoai", Title: "RHOAI", Status: types.RecipeStepSkipped, Message: "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).", StartedAt: at(9), FinishedAt: at(9), TypicalSeconds: 420, MaxSeconds: 900},
+				{ID: "rhoai", Title: "RHOAI", Status: types.RecipeStepSkipped, Message: "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it.", StartedAt: at(9), FinishedAt: at(9), TypicalSeconds: 420, MaxSeconds: 900},
 				{ID: "dsc", Title: "DataScienceCluster", Status: types.RecipeStepSuccess, Message: "DataScienceCluster created with default components", StartedAt: at(9), FinishedAt: at(10), TypicalSeconds: 60, MaxSeconds: 420},
 				{ID: "project", Title: "Project recipe-dev", Status: types.RecipeStepFailed, Message: "Creating project recipe-dev failed.", ErrorCode: "forbidden", StartedAt: at(10), FinishedAt: at(10), TypicalSeconds: 10, MaxSeconds: 60},
 				{ID: "pipelines-prereq", Title: "What Pipelines needs", Status: types.RecipeStepRunning, StartedAt: at(11), TypicalSeconds: 120, MaxSeconds: 600},
@@ -293,6 +294,10 @@ func stubRecipeContract(t *testing.T, started time.Time) {
 	planRecipe = func(_ *cluster.Client, r types.EnvironmentRecipe, _ *types.RecipePinnedBuild) (*types.RecipePlan, cluster.RecipeState) {
 		return &types.RecipePlan{
 			Recipe: r, Pinned: pinned, TypicalSeconds: 780, MaxSeconds: 3120,
+			Warnings: []types.RecipeWarning{
+				{Kind: types.RecipeWarningAdvice, Message: "Project recipe-dev also gets a pipeline server. Kueue manages only what is sent to a queue, so they keep running. A project of its own is still safer."},
+				{Kind: types.RecipeWarningCluster, Message: "The dashboard's Kueue setting is turned on: in every new project on this cluster, workbenches and model deployments can only use the queue hardware profile."},
+			},
 			Steps: []types.RecipePlanStep{
 				{ID: "rhoai", Title: "RHOAI", Action: types.RecipeStepRun, TypicalSeconds: 420, MaxSeconds: 900},
 				{ID: "dsc", Title: "DataScienceCluster", Action: types.RecipeStepLater, Reason: "Checked when the run gets here: it depends on a step before it.", TypicalSeconds: 60, MaxSeconds: 420},
@@ -322,7 +327,7 @@ func stubEndedRecipeRun(t *testing.T) {
 			Recipe:     rcp,
 			Project:    &types.RecipeProjectRef{Name: "recipe-dev", UID: "0f3c1d2e-uid", Owned: true},
 			Steps: []types.RecipeRunStep{
-				{ID: "rhoai", Title: "RHOAI", Status: types.RecipeStepSkipped, Message: "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).", StartedAt: at(20), FinishedAt: at(20), TypicalSeconds: 420, MaxSeconds: 900},
+				{ID: "rhoai", Title: "RHOAI", Status: types.RecipeStepSkipped, Message: "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it.", StartedAt: at(20), FinishedAt: at(20), TypicalSeconds: 420, MaxSeconds: 900},
 				{ID: "project", Title: "Project recipe-dev", Status: types.RecipeStepSkipped, Message: "Already set up: Project recipe-dev was created by a recipe.", StartedAt: at(20), FinishedAt: at(20), TypicalSeconds: 10, MaxSeconds: 60},
 				{ID: "pipelines-prereq", Title: "What Pipelines needs", Status: types.RecipeStepSkipped, Message: "Already set up: Everything it needs is set up.", StartedAt: at(20), FinishedAt: at(20), TypicalSeconds: 120, MaxSeconds: 600},
 				{ID: "s3", Title: "S3 storage", Status: types.RecipeStepSuccess, Message: "S3 storage is ready.", StartedAt: at(20), FinishedAt: at(21), TypicalSeconds: 60, MaxSeconds: 300},
@@ -330,5 +335,51 @@ func stubEndedRecipeRun(t *testing.T) {
 			},
 			Components: []string{"aipipelines"},
 		}, nil
+	}
+}
+
+// testRecipeFeatures is a recipe with every feature of recipes phase 2.
+const testRecipeFeatures = `{"apiVersion":"rhoai-nightly-updater/v1alpha1","kind":"EnvironmentRecipe","metadata":{"name":"full"},
+"spec":{"rhoai":{"build":"latest"},"dataScienceCluster":{"create":true},"project":{"mode":"create","name":"recipe-full"},
+"features":{"pipelines":{"enabled":true},"mlflow":{"enabled":true,"samples":true},"models":{"enabled":true,"model":"qwen3-1-7b"},
+"playground":{"enabled":true},"maas":{"enabled":true,"database":"development","publish":true},"modelRegistry":{"enabled":true,"sample":true},"workbench":{"enabled":true},
+"kueue":{"enabled":true,"rayCluster":true,"dashboardOptIn":true}},
+"dashboardDev":{"deploy":"pr","pr":4321}}}`
+
+// stubFeaturesRecipeRun is a run of every feature that succeeded: its
+// steps are the runner's own (titles and figures), and its Clean up
+// offers the project, the MaaS platform and the model registry it created.
+func stubFeaturesRecipeRun(t *testing.T) {
+	t.Helper()
+	rcp, problems := cluster.ValidateRecipe([]byte(testRecipeFeatures))
+	if len(problems) > 0 {
+		t.Fatal(problems)
+	}
+	at := func(m int) string { return time.Date(2026, 11, 20, 15, m, 0, 0, time.UTC).Format(time.RFC3339) }
+	var steps []types.RecipeRunStep
+	for i, s := range cluster.RecipeSteps(rcp) {
+		typical, most := s.Seconds()
+		st := types.RecipeRunStep{ID: s.ID, Title: s.Title, Status: types.RecipeStepSuccess, Message: s.Title + " is set up.", StartedAt: at(i * 3), FinishedAt: at(i*3 + 2), TypicalSeconds: typical, MaxSeconds: most}
+		if s.ID == "rhoai" {
+			st.Status, st.Message = types.RecipeStepSkipped, "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it."
+		}
+		steps = append(steps, st)
+	}
+	readRecipeRun = func(*cluster.Client) (*types.RecipeRun, error) {
+		return &types.RecipeRun{
+			ID: "run2", OperationID: "op3", BootID: "another-process", Pod: "pod-2", User: "alice",
+			StartedAt: at(0), FinishedAt: at(len(steps) * 3), State: types.RecipeRunSucceeded, StopReason: "Every step of full is set up.",
+			Recipe: rcp, Project: &types.RecipeProjectRef{Name: "recipe-full", UID: "1a2b3c4d-uid", Owned: true}, Steps: steps,
+			Exposure:     "default-gateway",
+			CreatedParts: []types.RecipeCreatedPart{{Part: types.RecipePartMaaSPlatform, UID: "creds-uid"}, {Part: types.RecipePartModelRegistry, UID: "registry-uid"}, {Part: types.RecipePartKueue, UID: "clusterqueue-uid"}},
+			Components:   []string{"aipipelines", "kserve"},
+		}, nil
+	}
+	recipeOwnership = func(_, _ *cluster.Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
+		return map[string]bool{"project": true, "maas": true, "model-registry": true, "models-prereq": true, "kueue": true},
+			&types.CleanupRequest{RecipeProjects: []string{run.Project.Name}, RecipeProjectUIDs: map[string]string{run.Project.Name: run.Project.UID},
+				MaaSPlatform: true, ModelRegistry: true, Components: []string{"kserve"},
+				Kueue: true, KueueUID: "clusterqueue-uid",
+				RecipeRunID: run.ID, MaaSPlatformUID: "creds-uid", ModelRegistryUID: "registry-uid"}
 	}
 }

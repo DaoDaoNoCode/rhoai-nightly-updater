@@ -26,7 +26,7 @@ import { StatusLabel, type StatusKind } from "../StatusLabel";
 import { TooltipButton } from "../TooltipButton";
 import { StepProgress, type StepState } from "../environment/StepProgress";
 import { shortDigest } from "../../build";
-import { formatClock, resumeStep, usuallySentence } from "./recipeForm";
+import { formatClock, resumeStep, usually, usuallySentence } from "./recipeForm";
 import { RecipeProblems, refusalOf } from "./RecipeReviewModal";
 
 /** Ticks once a second while `active`, so elapsed times stay current. */
@@ -111,10 +111,13 @@ export const RecipeRunCard: React.FC<{
     let message = s.message ?? "";
     if (s.status === "running" && live) {
       const started = s.startedAt ? Date.parse(s.startedAt) : NaN;
-      const progress = status.step?.message || "Starting...";
-      // "Waiting for SeaweedFS (1/1 pods starting) (1:12). Usually 1 minute, up to 5 minutes."
-      const shown = Number.isFinite(started) ? `${progress} (${formatClock(now - started)})` : progress;
-      message = `${/[.!?]$/.test(shown) ? shown : `${shown}.`} ${usuallySentence(s.typicalSeconds, s.maxSeconds)}`;
+      // One line: the current phase, the time so far, one estimate. A clock the
+      // phase's own message carries ("(3:10 so far, ...)") is dropped: the line has its own.
+      const progress = (status.step?.message || "Starting...").replace(/\s*\([^)]*\d+:\d\d[^)]*\)/g, "").trim();
+      const phaseText = /[.!?]$/.test(progress) ? progress : `${progress}.`;
+      message = Number.isFinite(started)
+        ? `${phaseText} ${formatClock(now - started)} so far; ${usually(s.typicalSeconds, s.maxSeconds)}.`
+        : `${phaseText} ${usuallySentence(s.typicalSeconds, s.maxSeconds)}`;
     } else if (s.status === "running") {
       // An interrupted run's record: the step that was running when its updater pod stopped.
       message = "Was running when the updater stopped.";
@@ -171,7 +174,12 @@ export const RecipeRunCard: React.FC<{
       outcome = (
         <Alert variant="success" isInline component="p" isLiveRegion title={run.stopReason || `Every step of ${name} is set up.`}
           actionLinks={<AlertActionLink onClick={() => navigate(run.project ? `/test-resources?project=${encodeURIComponent(run.project.name)}` : "/test-resources")}>Open Environment</AlertActionLink>}>
-          {run.project ? `Project ${run.project.name} is ready to use.` : "What it set up is on the Environment page."}
+          {run.project
+            ? run.steps.some((s) => s.id === "workbench")
+              ? `Project ${run.project.name} is set up. Its workbench may still be starting: the Workbench tab shows when it runs.`
+              : `Project ${run.project.name} is set up.`
+            : "What it set up is on the Environment page."}
+          {run.steps.some((s) => s.id === "dashboard-dev") && " The dashboard runs a Dashboard Dev build: its operator stays paused, and RHOAI updates wait, until you revert it on the Dashboard Dev page."}
         </Alert>
       );
       break;
@@ -219,7 +227,7 @@ export const RecipeRunCard: React.FC<{
     <Card>
       <CardHeader>
         <Flex gap={{ default: "gapMd" }} alignItems={{ default: "alignItemsCenter" }}>
-          <FlexItem><CardTitle><Title headingLevel="h2" size="xl">{live ? "Running" : "Last run"}: recipe {name}</Title></CardTitle></FlexItem>
+          <FlexItem><CardTitle><Title headingLevel="h2" size="xl">{live ? "Recipe" : "Last run of recipe"} {name}</Title></CardTitle></FlexItem>
           <FlexItem><StatusLabel status={labelKind}>{labelText}</StatusLabel></FlexItem>
         </Flex>
       </CardHeader>

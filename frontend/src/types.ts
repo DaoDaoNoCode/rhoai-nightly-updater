@@ -2081,6 +2081,11 @@ export interface EnvironmentRecipe {
       models: { enabled: boolean; model?: string; exposure?: string; releasedImage?: boolean };
       playground: { enabled: boolean };
       maas: { enabled: boolean; database?: string; publish?: boolean };
+      /** Optional: absent is off. */
+      modelRegistry?: { enabled: boolean; sample?: boolean };
+      workbench?: { enabled: boolean };
+      /** Distributed workloads (Kueue), as the Distributed workloads tab sets them up. */
+      kueue?: { enabled: boolean; rayCluster?: boolean; rayJob?: boolean; rayImage?: string; dashboardOptIn?: boolean };
     };
     dashboardDev: { deploy?: string; pr?: number; flavor?: string };
   };
@@ -2133,6 +2138,8 @@ export interface RecipePlan {
   pinned?: RecipePinnedBuild;
   typicalSeconds: number;
   maxSeconds: number;
+  /** Notes that do not refuse the run: advice before it, or a change it makes to what the whole cluster shares. */
+  warnings?: { kind: "advice" | "cluster"; message: string }[];
 }
 
 export type RecipeRunState = "running" | "succeeded" | "failed" | "stopped";
@@ -2175,6 +2182,11 @@ export interface RecipeRun {
   steps: RecipeRunStep[];
   /** The DataScienceCluster components the run turned on, which its Clean up turns back. */
   components?: string[];
+  /** How the run's model is reached, once the Models prerequisites step resolved it. */
+  exposure?: string;
+  gatewayRef?: string;
+  /** The cluster-wide parts the run created (they were not this tool's before): its Clean up offers those still as it created them. */
+  createdParts?: { part: "maas-platform" | "model-registry" | "kueue"; uid?: string }[];
 }
 
 /** GET /api/recipes/run. */
@@ -2192,6 +2204,8 @@ export interface RecipeRunStatus {
   step?: { step: string; status: string; message: string; detail?: string; errorCode?: string };
   /** The clean-up request for what the run created, once it is not running and created anything. */
   cleanup?: CleanupRequest;
+  /** Removing the offered distributed workloads setup also turns the dashboard's Kueue setting back, which the run turned on. */
+  cleanupKueueSetting?: boolean;
   /** The projects recipes created (this run's and earlier ones') that the cluster has now, once no run runs. */
   projects?: RecipeOwnedProject[];
   /** Why those could not be read (none is offered then). */

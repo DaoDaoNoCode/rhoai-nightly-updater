@@ -162,6 +162,16 @@ export interface CleanupRequest {
    */
   recipeProjectUIDs?: Record<string, string>;
   /**
+   * A recipe's Clean up of the MaaS platform and the model registry its run
+   * created: the run, and the UID of each object reviewed. Each is checked
+   * again before its teardown and refused when it was replaced since.
+   */
+  recipeRunId?: string;
+  maasPlatformUid?: string;
+  modelRegistryUid?: string;
+  /** The ClusterQueue of the distributed workloads setup the recipe's run created. */
+  kueueUid?: string;
+  /**
    * Per recipe project, non-tool artifacts the refusal path listed
    * (errorCode confirm_project_contents; failed step detail for the project,
    * one line each): the project is removed with them only when all are

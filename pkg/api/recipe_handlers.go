@@ -150,6 +150,9 @@ var HandleRecipeStop = withMutationAuth(func(_ *cluster.Client, w http.ResponseW
 // tier admin): from memory while this process runs it, otherwise from the
 // record, with whether another updater pod runs it or it was interrupted.
 // It reads only the updater's own records, with the ServiceAccount.
-var HandleRecipeRunStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, recipeRunStatus(c), "recipe-run")
+var HandleRecipeRunStatus = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	// The model registry a run created is read with the user's own token,
+	// as the Model registry tab reads it.
+	u := userReadClient(r.Context(), c, extractUserToken(r), resolveUsername(r))
+	writeJSON(w, recipeRunStatus(c, u), "recipe-run")
 })

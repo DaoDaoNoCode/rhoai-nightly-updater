@@ -1,0 +1,345 @@
+{
+  "cleanup": {
+    "components": [
+      "kserve"
+    ],
+    "kueue": true,
+    "kueueUid": "clusterqueue-uid",
+    "maasPlatform": true,
+    "maasPlatformUid": "creds-uid",
+    "modelRegistry": true,
+    "modelRegistryUid": "registry-uid",
+    "recipeProjectUIDs": {
+      "recipe-full": "1a2b3c4d-uid"
+    },
+    "recipeProjects": [
+      "recipe-full"
+    ],
+    "recipeRunId": "run2"
+  },
+  "projects": [
+    {
+      "createdAt": "2026-11-20T14:15:00Z",
+      "name": "recipe-dev",
+      "recipe": "dev",
+      "uid": "0f3c1d2e-uid"
+    },
+    {
+      "createdAt": "2026-11-19T09:00:00Z",
+      "name": "recipe-old",
+      "recipe": "old",
+      "uid": "7a8b9c0d-uid"
+    }
+  ],
+  "run": {
+    "bootId": "another-process",
+    "components": [
+      "aipipelines",
+      "kserve"
+    ],
+    "createdParts": [
+      {
+        "part": "maas-platform",
+        "uid": "creds-uid"
+      },
+      {
+        "part": "model-registry",
+        "uid": "registry-uid"
+      },
+      {
+        "part": "kueue",
+        "uid": "clusterqueue-uid"
+      }
+    ],
+    "exposure": "default-gateway",
+    "finishedAt": "2026-11-20T16:03:00Z",
+    "id": "run2",
+    "operationId": "op3",
+    "pod": "pod-2",
+    "project": {
+      "name": "recipe-full",
+      "owned": true,
+      "uid": "1a2b3c4d-uid"
+    },
+    "recipe": {
+      "apiVersion": "rhoai-nightly-updater/v1alpha1",
+      "kind": "EnvironmentRecipe",
+      "metadata": {
+        "name": "full"
+      },
+      "spec": {
+        "dashboardDev": {
+          "deploy": "pr",
+          "flavor": "rhoai",
+          "pr": 4321
+        },
+        "dataScienceCluster": {
+          "create": true
+        },
+        "features": {
+          "kueue": {
+            "dashboardOptIn": true,
+            "enabled": true,
+            "rayCluster": true
+          },
+          "maas": {
+            "database": "development",
+            "enabled": true,
+            "publish": true
+          },
+          "mlflow": {
+            "enabled": true,
+            "samples": true
+          },
+          "modelRegistry": {
+            "enabled": true,
+            "sample": true
+          },
+          "models": {
+            "enabled": true,
+            "model": "qwen3-1-7b"
+          },
+          "pipelines": {
+            "enabled": true
+          },
+          "playground": {
+            "enabled": true
+          },
+          "workbench": {
+            "enabled": true
+          }
+        },
+        "project": {
+          "mode": "create",
+          "name": "recipe-full"
+        },
+        "rhoai": {
+          "build": "latest",
+          "ifInstalled": "keep"
+        }
+      }
+    },
+    "startedAt": "2026-11-20T15:00:00Z",
+    "state": "succeeded",
+    "steps": [
+      {
+        "finishedAt": "2026-11-20T15:02:00Z",
+        "id": "rhoai",
+        "maxSeconds": 900,
+        "message": "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it.",
+        "startedAt": "2026-11-20T15:00:00Z",
+        "status": "skipped",
+        "title": "RHOAI",
+        "typicalSeconds": 420
+      },
+      {
+        "finishedAt": "2026-11-20T15:05:00Z",
+        "id": "dsc",
+        "maxSeconds": 420,
+        "message": "DataScienceCluster is set up.",
+        "startedAt": "2026-11-20T15:03:00Z",
+        "status": "success",
+        "title": "DataScienceCluster",
+        "typicalSeconds": 60
+      },
+      {
+        "created": true,
+        "finishedAt": "2026-11-20T15:08:00Z",
+        "id": "project",
+        "maxSeconds": 60,
+        "message": "Project recipe-full is set up.",
+        "startedAt": "2026-11-20T15:06:00Z",
+        "status": "success",
+        "title": "Project recipe-full",
+        "typicalSeconds": 10
+      },
+      {
+        "finishedAt": "2026-11-20T15:11:00Z",
+        "id": "pipelines-prereq",
+        "maxSeconds": 600,
+        "message": "What Pipelines needs is set up.",
+        "startedAt": "2026-11-20T15:09:00Z",
+        "status": "success",
+        "title": "What Pipelines needs",
+        "typicalSeconds": 120
+      },
+      {
+        "finishedAt": "2026-11-20T15:14:00Z",
+        "id": "s3",
+        "maxSeconds": 300,
+        "message": "S3 storage is set up.",
+        "startedAt": "2026-11-20T15:12:00Z",
+        "status": "success",
+        "title": "S3 storage",
+        "typicalSeconds": 60
+      },
+      {
+        "finishedAt": "2026-11-20T15:17:00Z",
+        "id": "pipeline-server",
+        "maxSeconds": 600,
+        "message": "Pipeline server is set up.",
+        "startedAt": "2026-11-20T15:15:00Z",
+        "status": "success",
+        "title": "Pipeline server",
+        "typicalSeconds": 120
+      },
+      {
+        "finishedAt": "2026-11-20T15:20:00Z",
+        "id": "mlflow-prereq",
+        "maxSeconds": 600,
+        "message": "What MLflow needs is set up.",
+        "startedAt": "2026-11-20T15:18:00Z",
+        "status": "success",
+        "title": "What MLflow needs",
+        "typicalSeconds": 120
+      },
+      {
+        "finishedAt": "2026-11-20T15:23:00Z",
+        "id": "mlflow",
+        "maxSeconds": 600,
+        "message": "MLflow is set up.",
+        "startedAt": "2026-11-20T15:21:00Z",
+        "status": "success",
+        "title": "MLflow",
+        "typicalSeconds": 120
+      },
+      {
+        "finishedAt": "2026-11-20T15:26:00Z",
+        "id": "mlflow-samples",
+        "maxSeconds": 900,
+        "message": "MLflow samples is set up.",
+        "startedAt": "2026-11-20T15:24:00Z",
+        "status": "success",
+        "title": "MLflow samples",
+        "typicalSeconds": 60
+      },
+      {
+        "created": true,
+        "finishedAt": "2026-11-20T15:29:00Z",
+        "id": "maas",
+        "maxSeconds": 900,
+        "message": "Models as a Service is set up.",
+        "startedAt": "2026-11-20T15:27:00Z",
+        "status": "success",
+        "title": "Models as a Service",
+        "typicalSeconds": 600
+      },
+      {
+        "created": true,
+        "finishedAt": "2026-11-20T15:32:00Z",
+        "id": "models-prereq",
+        "maxSeconds": 900,
+        "message": "What Models needs is set up.",
+        "startedAt": "2026-11-20T15:30:00Z",
+        "status": "success",
+        "title": "What Models needs",
+        "typicalSeconds": 240
+      },
+      {
+        "finishedAt": "2026-11-20T15:35:00Z",
+        "id": "model",
+        "maxSeconds": 900,
+        "message": "Model Qwen3 1.7B (CPU, tool calling) is set up.",
+        "startedAt": "2026-11-20T15:33:00Z",
+        "status": "success",
+        "title": "Model Qwen3 1.7B (CPU, tool calling)",
+        "typicalSeconds": 300
+      },
+      {
+        "finishedAt": "2026-11-20T15:38:00Z",
+        "id": "maas-publish",
+        "maxSeconds": 900,
+        "message": "Publish the model through MaaS is set up.",
+        "startedAt": "2026-11-20T15:36:00Z",
+        "status": "success",
+        "title": "Publish the model through MaaS",
+        "typicalSeconds": 120
+      },
+      {
+        "finishedAt": "2026-11-20T15:41:00Z",
+        "id": "playground-prereq",
+        "maxSeconds": 600,
+        "message": "What the playground needs is set up.",
+        "startedAt": "2026-11-20T15:39:00Z",
+        "status": "success",
+        "title": "What the playground needs",
+        "typicalSeconds": 120
+      },
+      {
+        "finishedAt": "2026-11-20T15:44:00Z",
+        "id": "playground",
+        "maxSeconds": 540,
+        "message": "Playground is set up.",
+        "startedAt": "2026-11-20T15:42:00Z",
+        "status": "success",
+        "title": "Playground",
+        "typicalSeconds": 120
+      },
+      {
+        "finishedAt": "2026-11-20T15:47:00Z",
+        "id": "model-registry-prereq",
+        "maxSeconds": 600,
+        "message": "What the model registry needs is set up.",
+        "startedAt": "2026-11-20T15:45:00Z",
+        "status": "success",
+        "title": "What the model registry needs",
+        "typicalSeconds": 120
+      },
+      {
+        "created": true,
+        "finishedAt": "2026-11-20T15:50:00Z",
+        "id": "model-registry",
+        "maxSeconds": 720,
+        "message": "Model registry is set up.",
+        "startedAt": "2026-11-20T15:48:00Z",
+        "status": "success",
+        "title": "Model registry",
+        "typicalSeconds": 120
+      },
+      {
+        "finishedAt": "2026-11-20T15:53:00Z",
+        "id": "workbench",
+        "maxSeconds": 900,
+        "message": "Workbench is set up.",
+        "startedAt": "2026-11-20T15:51:00Z",
+        "status": "success",
+        "title": "Workbench",
+        "typicalSeconds": 30
+      },
+      {
+        "finishedAt": "2026-11-20T15:56:00Z",
+        "id": "kueue-prereq",
+        "maxSeconds": 900,
+        "message": "What distributed workloads need is set up.",
+        "startedAt": "2026-11-20T15:54:00Z",
+        "status": "success",
+        "title": "What distributed workloads need",
+        "typicalSeconds": 240
+      },
+      {
+        "created": true,
+        "finishedAt": "2026-11-20T15:59:00Z",
+        "id": "kueue",
+        "maxSeconds": 600,
+        "message": "Distributed workloads is set up.",
+        "startedAt": "2026-11-20T15:57:00Z",
+        "status": "success",
+        "title": "Distributed workloads",
+        "typicalSeconds": 60
+      },
+      {
+        "finishedAt": "2026-11-20T16:02:00Z",
+        "id": "dashboard-dev",
+        "maxSeconds": 480,
+        "message": "Dashboard Dev (PR #4321) is set up.",
+        "startedAt": "2026-11-20T16:00:00Z",
+        "status": "success",
+        "title": "Dashboard Dev (PR #4321)",
+        "typicalSeconds": 180
+      }
+    ],
+    "stopReason": "Every step of full is set up.",
+    "user": "alice"
+  },
+  "running": false
+}

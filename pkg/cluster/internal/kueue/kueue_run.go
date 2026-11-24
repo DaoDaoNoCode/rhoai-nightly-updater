@@ -53,6 +53,9 @@ type run struct {
 	logs     []string
 	activity string
 	target   string
+	// annotations go on the cluster-wide objects this run creates
+	// (RunAnnotated).
+	annotations map[string]string
 }
 
 func (r *run) step(id, status, msg string) {
@@ -84,7 +87,15 @@ func codeOf(err error) string { return kube.FirstNonEmpty(kube.ErrorCodeFromK8sE
 // project, samples; teardown — samples, queues, project, opt-in;
 // delete-sample — samples; optin — check, dashboard, profile; optout — opt-in.
 func Run(c *kube.Client, req types.KueueRequest, onStep func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
-	r := &run{c: c, emit: onStep, activity: req.Action + "-kueue", target: "distributed workloads"}
+	return RunAnnotated(c, req, nil, onStep)
+}
+
+// RunAnnotated is Run, with annotations added to the cluster-wide objects
+// it creates (setup: the ResourceFlavor and the ClusterQueue; optin: the
+// Queue hardware profile): an environment recipe marks the objects its
+// run created. Objects that exist already are not changed.
+func RunAnnotated(c *kube.Client, req types.KueueRequest, annotations map[string]string, onStep func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+	r := &run{c: c, emit: onStep, activity: req.Action + "-kueue", target: "distributed workloads", annotations: annotations}
 	if req.Project != "" {
 		r.target += " in " + req.Project
 	}
@@ -232,6 +243,11 @@ func (r *run) setup(req types.KueueRequest) (*types.OperationResponse, error) {
 	// Reuse objects the tool already owns (label plus stored UID); reject
 	// same-named resources from another owner.
 	objs := queueObjects(c, project)
+	for i := range objs {
+		if objs[i].kind != "LocalQueue" {
+			objs[i].manifest = withAnnotations(objs[i].manifest, r.annotations)
+		}
+	}
 	present := map[string]bool{}
 	for _, o := range objs {
 		q, found, err := o.read()
@@ -771,7 +787,7 @@ func (r *run) optIn() (*types.OperationResponse, error) {
 			return r.fail("check", fmt.Sprintf("The API server rejects setting disableKueue to false: %v. Nothing was changed.", err), codeOf(err), "dry run failed")
 		}
 	}
-	profile := ProfileManifest(apps, kube.NowRFC3339())
+	profile := withAnnotations(ProfileManifest(apps, kube.NowRFC3339()), r.annotations)
 	if !pFound {
 		if _, err := create(c, rhoai.NamespacedPath(profileAPI, "hardwareprofiles", apps, ""), profile, true); err != nil {
 			return r.fail("check", fmt.Sprintf("The API server rejects hardware profile %s: %v. Nothing was changed.", ProfileName, err), codeOf(err), "dry run failed")
@@ -973,3 +989,45 @@ func Users(c *kube.Client) ([]string, error) {
 	}
 	return out, nil
 }
+
+// withAnnotations adds annotations to manifest's metadata (a copy of the
+// metadata map; the manifest is the caller's own).
+func withAnnotations(manifest map[string]any, annotations map[string]string) map[string]any {
+	if len(annotations) == 0 {
+		return manifest
+	}
+	meta, _ := manifest["metadata"].(map[string]any)
+	m := map[string]any{}
+	for k, v := range meta {
+		m[k] = v
+	}
+	ann := map[string]any{}
+	if old, ok := m["annotations"].(map[string]any); ok {
+		for k, v := range old {
+			ann[k] = v
+		}
+	}
+	for k, v := range annotations {
+		ann[k] = v
+	}
+	m["annotations"] = ann
+	manifest["metadata"] = m
+	return manifest
+}
+
+// ReadClusterQueueMeta reads the metadata of this tool's ClusterQueue
+// with u, the signed-in user's own client.
+func ReadClusterQueueMeta(u *kube.Client) (kube.ObjectMeta, bool, error) {
+	q, found, err := readClusterQueue(u)
+	return q.Metadata, found, err
+}
+
+// ReadProfileMeta reads the metadata of this tool's Queue hardware profile
+// in ns with u, the signed-in user's own client.
+func ReadProfileMeta(u *kube.Client, ns string) (kube.ObjectMeta, bool, error) {
+	return readProfile(u, ns)
+}
+
+// Owns reports whether meta is the object of uid this tool created (its
+// label and that UID).
+func Owns(meta kube.ObjectMeta, uid string) bool { return owns(meta, uid) }

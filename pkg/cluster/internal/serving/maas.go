@@ -1869,6 +1869,21 @@ func maasLeftovers(c *kube.Client, m LLMISvcObject, recorded bool) []string {
 	return left
 }
 
+// ModelExposureNow is how this tool's model m is reached now, as the
+// Models tab reads it: the exposure and, through a gateway, its
+// "namespace/name".
+func ModelExposureNow(c *kube.Client, m LLMISvcObject) (string, string) {
+	def, _ := readKServeGateway(c)
+	return modelExposureOf(m, def)
+}
+
+// MaaSDBConfigMeta reads the metadata of Secret maas-db-config in ns, the
+// database connection MaaS setup writes for its development and
+// CloudNativePG databases.
+func MaaSDBConfigMeta(c *kube.Client, ns string) (kube.ObjectMeta, bool, error) {
+	return kube.ReadObjectMeta(c, maasObjectPath("Secret", ns))
+}
+
 // ToolOwned: this tool created the object (its label, and a write by it).
 func ToolOwned(meta kube.ObjectMeta) bool {
 	return meta.HasToolLabel() && meta.HasManager(envkit.ToolManagers)

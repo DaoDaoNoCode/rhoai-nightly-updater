@@ -40,6 +40,8 @@ var (
 	cleanupMaaSPlatform = serving.TeardownMaaSPlatform
 	cleanupComponents   = features.RestoreComponents
 	cleanupProject      = recipe.DeleteProject
+	// Bound to recipe.CreatedPartProblem; swappable in tests.
+	recipeCreatedPartProblem = recipe.CreatedPartProblem
 	// Bound to recipe.ProjectTeardownProblem; swappable in tests.
 	recipeProjectProblem = recipe.ProjectTeardownProblem
 	// Bound to storage.ConnectionWorkbenchesProblem; swappable in tests.
@@ -153,7 +155,12 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 		parts = append(parts, cleanupPart{id: CleanupStepID("mlflow", ""), title: "MLflow", run: func() (*types.OperationResponse, error) { return cleanupMLflow(c) }})
 	}
 	if req.ModelRegistry {
-		parts = append(parts, cleanupPart{id: CleanupStepID("model-registry", ""), title: "the model registry", run: func() (*types.OperationResponse, error) { return cleanupModelRegistry(c) }})
+		parts = append(parts, cleanupPart{id: CleanupStepID("model-registry", ""), title: "the model registry", run: func() (*types.OperationResponse, error) {
+			if res := recipeCreatedCheck(c, req, types.RecipePartModelRegistry, req.ModelRegistryUID); res != nil {
+				return res, nil
+			}
+			return cleanupModelRegistry(c)
+		}})
 	}
 	for _, project := range req.Playgrounds {
 		parts = append(parts, cleanupPart{
@@ -176,10 +183,20 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 		// After the workbenches and models that may use its queue, before
 		// recipe projects (its project may be one) and the components
 		// (DataScienceCluster kueue goes back only once no queue is left).
-		parts = append(parts, cleanupPart{id: CleanupStepID("kueue", ""), title: "the distributed workloads setup", run: func() (*types.OperationResponse, error) { return cleanupKueue(c) }, says: true})
+		parts = append(parts, cleanupPart{id: CleanupStepID("kueue", ""), title: "the distributed workloads setup", run: func() (*types.OperationResponse, error) {
+			if res := recipeCreatedCheck(c, req, types.RecipePartKueue, req.KueueUID); res != nil {
+				return res, nil
+			}
+			return cleanupKueue(c)
+		}, says: true})
 	}
 	if req.MaaSPlatform {
-		parts = append(parts, cleanupPart{id: CleanupStepID("maas-platform", ""), title: "the MaaS platform", run: func() (*types.OperationResponse, error) { return cleanupMaaSPlatform(c) }})
+		parts = append(parts, cleanupPart{id: CleanupStepID("maas-platform", ""), title: "the MaaS platform", run: func() (*types.OperationResponse, error) {
+			if res := recipeCreatedCheck(c, req, types.RecipePartMaaSPlatform, req.MaaSPlatformUID); res != nil {
+				return res, nil
+			}
+			return cleanupMaaSPlatform(c)
+		}})
 	}
 	for _, project := range req.RecipeProjects {
 		// Scheduled after every in-project slice (MaaS publications,
@@ -199,6 +216,26 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 		parts = append(parts, cleanupPart{id: CleanupStepID("components", ""), title: "the DataScienceCluster components this tool turned on", run: func() (*types.OperationResponse, error) { return cleanupComponents(c, req.Components) }, says: true})
 	}
 	return parts
+}
+
+// recipeCreatedCheck refuses a recipe's Clean up of a cluster-wide part
+// its run created (req.RecipeRunID with the part's UID) when the part is
+// not the object the user reviewed any more (recipe.CreatedPartProblem),
+// checked under the cluster lock right before the teardown; nil lets it
+// go ahead, as for the Environment page's own Clean up (neither is set).
+// One of the two alone is refused: nothing is deleted on half a review.
+func recipeCreatedCheck(c *Client, req types.CleanupRequest, part, uid string) *types.OperationResponse {
+	if req.RecipeRunID == "" && uid == "" {
+		return nil
+	}
+	problem := "A recipe's Clean up names its run and the object it reviewed; this request names only one. Nothing was deleted."
+	if req.RecipeRunID != "" && uid != "" {
+		problem = recipeCreatedPartProblem(c, c, req.RecipeRunID, part, uid)
+	}
+	if problem == "" {
+		return nil
+	}
+	return &types.OperationResponse{Success: false, Message: problem, ErrorCode: "conflict"}
 }
 
 // confirmedWorkbenches are the workbenches (name to UID) of project whose

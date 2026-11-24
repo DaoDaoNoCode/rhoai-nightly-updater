@@ -16,6 +16,7 @@ import (
 	jsonv2 "encoding/json/v2"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kueue"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
@@ -251,6 +252,28 @@ func check(r types.EnvironmentRecipe) []types.RecipeProblem {
 	}
 	if f.MaaS.Publish && f.MaaS.Enabled && !f.Models.Enabled {
 		p.add("spec.features.maas.publish", "Publishing through MaaS needs a model: set spec.features.models.enabled.")
+	}
+	if f.MaaS.Publish && !f.MaaS.Enabled {
+		p.add("spec.features.maas.publish", "Publishing through MaaS needs Models as a Service: set spec.features.maas.enabled.")
+	}
+	if f.ModelRegistry.Sample && !f.ModelRegistry.Enabled {
+		p.add("spec.features.modelRegistry.sample", "The sample model needs the model registry: set spec.features.modelRegistry.enabled.")
+	}
+	if f.Workbench.Enabled {
+		needsProject("spec.features.workbench.enabled", "The workbench")
+	}
+	k := f.Kueue
+	if k.Enabled {
+		needsProject("spec.features.kueue.enabled", "Distributed workloads")
+	} else if k.RayCluster || k.RayJob || k.RayImage != "" || k.DashboardOptIn {
+		p.add("spec.features.kueue.enabled", "The samples, their image and the dashboard's Kueue setting need distributed workloads: set spec.features.kueue.enabled.")
+	}
+	if k.RayImage != "" {
+		if !k.RayCluster && !k.RayJob {
+			p.add("spec.features.kueue.rayImage", "rayImage is the samples' image: set rayCluster or rayJob.")
+		} else if problem := kueue.ValidImage(k.RayImage); problem != "" {
+			p.add("spec.features.kueue.rayImage", "%s", problem)
+		}
 	}
 
 	d := spec.DashboardDev
