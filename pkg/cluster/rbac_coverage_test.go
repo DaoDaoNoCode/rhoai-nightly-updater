@@ -73,6 +73,11 @@ var rbacCallsNotUsingTheSAToken = map[string]string{
 	// own client, and refuses without one (conversionBlocker). The
 	// ServiceAccount is granted none of those kinds on purpose.
 	"diagnostics_disable.go:listConversionObjects": "component removal: lists the objects of a CRD whose conversion webhook the component serves, with the signed-in user's token",
+	// The status reads the internal registry's copy of the pull secret
+	// (ROSA HCP) with the signed-in cluster-admin's own client
+	// (SignedInUser), and refuses any other. The ServiceAccount may not
+	// read Secrets in RHOAI's applications namespace and is not granted it.
+	"registry_pull_copy.go:ReadRegistryPullCopy": "status: reads Secret rhoai-nightly-updater-pull in the applications namespace with the signed-in user's token",
 }
 
 // Reads made with the signed-in user's own token by the read routes of
@@ -89,6 +94,41 @@ var rbacUserTokenReads = map[string]string{
 	"user_projects.go:ListUserDSProjects":           "the user's data science projects, through the projects API",
 	"user_reads.go:listProjectLLMInferenceServices": "the LLMInferenceServices of one of the user's projects",
 	"user_reads.go:listProjectInferenceServices":    "the InferenceServices of one of the user's projects",
+	"user_reads.go:listConnectionWorkbenches":       "the workbenches of one of the user's projects that use the tool's dashboard Connection",
+	"model_registry.go:userReadCR":                  "the Model registry tab's status: this tool's ModelRegistry",
+	"model_registry.go:userReadService":             "the Model registry tab's status: the registry's Service (its gateway address)",
+	// The Workbench status of an admin (GET /api/resources/workbench) and
+	// the Workbench operations read with the admin's own token.
+	"workbench_reads.go:readNotebook":         "a project's nightly-workbench Notebook",
+	"workbench_reads.go:readStorage":          "a project's nightly-workbench-storage PersistentVolumeClaim",
+	"workbench_reads.go:listPods":             "the pods of a project's nightly-workbench",
+	"workbench_reads.go:projectLabels":        "a project's namespace, for its labels",
+	"workbench_reads.go:listImageStreams":     "the workbench images (ImageStreams) the dashboard offers",
+	"workbench_reads.go:listProfiles":         "the hardware profiles of the applications namespace and of a project",
+	"workbench_reads.go:listLocalQueues":      "a project's Kueue LocalQueues",
+	"workbench_reads.go:listStorageClasses":   "the cluster's StorageClasses",
+	"workbench_reads.go:readDashboardConfig":  "the dashboard's OdhDashboardConfig",
+	"workbench_reads.go:pipelineConfigExists": "whether a project has Secret ds-pipeline-config",
+	"workbench_reads.go:listNotebooks":        "a project's Notebooks, for which use the workbench storage",
+	"workbench_reads.go:listProjectPods":      "a project's pods, for which mount the workbench storage",
+	"workbench_reads.go:toolConnection":       "a project's dashboard Connection rhoai-nightly-updater-s3",
+	// A model's setup in a Kueue project (the dashboard's Kueue rule for
+	// its hardware profile).
+	"models_hardware.go:listModelLocalQueues": "a project's Kueue LocalQueues, for a model's hardware profile",
+	// The Distributed workloads status (GET /api/resources/kueue) and its
+	// operations read with the admin's own token.
+	"kueue_reads.go:v1beta2Served":       "API discovery of kueue.x-k8s.io (a read that fails is not \"absent\")",
+	"kueue_reads.go:readInstance":        "the Kueue CR cluster (kueue.openshift.io)",
+	"kueue_reads.go:readFlavor":          "ResourceFlavor nightly-kueue-cpu",
+	"kueue_reads.go:readClusterQueue":    "ClusterQueue nightly-kueue",
+	"kueue_reads.go:readLocalQueue":      "a project's LocalQueue nightly-kueue",
+	"kueue_reads.go:listClusterQueues":   "the ClusterQueues, for what uses the tool's ResourceFlavor and whether kueue is in use",
+	"kueue_reads.go:listLocalQueues":     "the LocalQueues of a project or of all, for a default queue and what uses the tool's ClusterQueue",
+	"kueue_reads.go:listWorkloads":       "a project's Kueue Workloads, the samples' state and what uses the LocalQueue",
+	"kueue_reads.go:readSample":          "a project's RayCluster nightly-raycluster or RayJob nightly-rayjob",
+	"kueue_reads.go:readNamespace":       "a project's namespace, for its labels",
+	"kueue_reads.go:readDashboardConfig": "the dashboard's OdhDashboardConfig, for disableKueue",
+	"kueue_reads.go:readProfile":         "hardware profile nightly-kueue-cpu",
 }
 
 // Best-effort reads of paths found by API discovery at run time, whose API
@@ -168,6 +208,7 @@ var methodVerbs = map[string][]string{
 // is refused, as anywhere else.
 var transportMethods = map[string]string{
 	"applyWithOptions": "the body of Apply and DryRunApply",
+	"doWithHeader":     "the body of Do and ListIntoAt",
 }
 
 // isTransport reports whether fn is a Client method that implements the
@@ -207,6 +248,7 @@ var helperMethods = map[string]string{
 	"GetInto":         "Get",
 	"GetIntoOptional": "Get",
 	"ListInto":        "Get",
+	"ListIntoAt":      "Get",
 	"DeleteIfExists":  "Delete",
 	"PatchJSON":       "Patch",
 }

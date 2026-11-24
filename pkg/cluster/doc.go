@@ -26,8 +26,11 @@
 //	                        node setup and the node pull check
 //	mlflow, storage,        MLflow and its samples; S3 storage and pipeline
 //	operator                servers; Update, Reinstall and Refresh
-//	serving, gitops         models, the inference gateway and MaaS; the gitops
-//	                        profile's update and admission-policy check
+//	serving, gitops,        models, the inference gateway and MaaS; the gitops
+//	workbench, kueue        profile's update and admission-policy check; the
+//	                        Workbench feature; distributed workloads (Kueue)
+//	modelregistry           the model registry, its status and its sample
+//	                        model
 //	dsc                     the DataScienceCluster's writes and their guards
 //	features, diagnostics   feature setups and the playground; the
 //	                        diagnostics runner, its checks and fixes

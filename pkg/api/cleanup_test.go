@@ -116,3 +116,25 @@ func TestCleanupStream_NeedsMutationPermission(t *testing.T) {
 		t.Fatalf("got %d %s", w.Code, w.Body.String())
 	}
 }
+
+// C1: a clean-up of workbenches only (Clean up Workbench), or of kept
+// workbench storage only, is a selection, not "nothing selected".
+func TestCleanupStream_WorkbenchesOnly(t *testing.T) {
+	for _, body := range []string{`{"workbenches":["a"]}`, `{"workbenchStorage":["a"]}`, `{"workbenches":["a"],"workbenchStorage":["a"]}`} {
+		t.Run(body, func(t *testing.T) {
+			setupDevMode(t)
+			allowMutations(t)
+			calls := fakeCleanUp(t, func(req types.CleanupRequest, onStep func(cluster.UpdateStepEvent)) *types.OperationResponse {
+				return &types.OperationResponse{Success: true, Message: "Deleted the workbench."}
+			})
+			w := httptest.NewRecorder()
+			HandleCleanupStream(w, postJSON(t, "/api/resources/cleanup/stream", "user:wb-"+strings.Trim(strings.ReplaceAll(body, `"`, ""), "{}"), body))
+			if w.Code != http.StatusOK || len(*calls) != 1 {
+				t.Fatalf("got %d %s, calls %+v", w.Code, w.Body.String(), *calls)
+			}
+			if !strings.Contains(w.Body.String(), `"operation_complete","status":"success"`) {
+				t.Fatalf("stream: %s", w.Body.String())
+			}
+		})
+	}
+}

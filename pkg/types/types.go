@@ -211,6 +211,41 @@ type PullSecretInfo struct {
 	// (cluster.controlPlane absent). Absent on a hosted control plane and in
 	// the gitops profile.
 	Nodes *NodePullSecretInfo `json:"nodes,omitempty"`
+	// Registry is the internal registry's copy of the quay.io/rhoai
+	// credential, which RHOAI's workbench images are pulled with on a
+	// hosted control plane. Set only there, when the pull secret exists
+	// and the request carries the signed-in cluster-admin's token (the
+	// ServiceAccount may not read it).
+	Registry *RegistryPullCopyInfo `json:"registry,omitempty"`
+}
+
+// RegistryPullCopyInfo is the state of Secret Name in RHOAI's applications
+// namespace, the internal registry's copy of the quay.io/rhoai credential.
+// It never holds the credential.
+type RegistryPullCopyInfo struct {
+	Name string `json:"name"`
+	// Namespace is RHOAI's applications namespace; empty when it is not
+	// known.
+	Namespace string `json:"namespace,omitempty"`
+	// NoQuayRHOAIEntry: the pull secret has no entry exactly for
+	// quay.io/rhoai (only a generic or repository login, or none), so
+	// nothing is copied and no copy counts as current.
+	NoQuayRHOAIEntry bool `json:"noQuayRHOAIEntry,omitempty"`
+	// NoApplicationsNamespace: RHOAI has no DSCInitialization yet, so
+	// there is nowhere to copy to.
+	NoApplicationsNamespace bool `json:"noApplicationsNamespace,omitempty"`
+	Exists                  bool `json:"exists"`
+	// Ours: the Secret carries this tool's label (only then does the tool
+	// change it).
+	Ours bool `json:"ours"`
+	// Current: it holds only the pull secret's current quay.io/rhoai
+	// credential and the registry can use it (Unusable is empty).
+	Current bool `json:"current"`
+	// Unusable says why the registry does not use the Secret: being
+	// deleted, another type, or openshift.io/image.excludeImageSecret=true.
+	Unusable string `json:"unusable,omitempty"`
+	// Problem says why the state could not be read.
+	Problem string `json:"problem,omitempty"`
 }
 
 // NodePullSecretInfo is the nodes' side of the quay.io/rhoai credentials on
@@ -1362,6 +1397,110 @@ type ModelsRequest struct {
 	GatewayRef string `json:"gatewayRef,omitempty"`
 }
 
+// WorkbenchStatus is the Workbench feature (GET /api/resources/workbench):
+// what a workbench needs on the cluster, this tool's workbenches, and for
+// the chosen project the workbench there and what Set up would create.
+// Everything about a project is read with the signed-in admin's own token.
+type WorkbenchStatus struct {
+	// Project is the project the answer is about ("" for none).
+	Project string `json:"project,omitempty"`
+	// Blocked says why no workbench can be set up (the workbenches
+	// component is off), or is nil; Unsupported says why this platform
+	// cannot have one (RHOAI 2.x), or is "".
+	Blocked     *ComponentBlock `json:"blocked,omitempty"`
+	Unsupported string          `json:"unsupported,omitempty"`
+	// Items are this tool's workbenches (in the projects it recorded one)
+	// and the chosen project's nightly-workbench, whoever made it.
+	Items []WorkbenchState `json:"items,omitempty"`
+	// ItemsProblem says why this tool's workbenches could not be read;
+	// ItemsUnreadable are the projects whose workbench could not be read
+	// (their state is unknown: never shown as absent).
+	ItemsProblem    string   `json:"itemsProblem,omitempty"`
+	ItemsUnreadable []string `json:"itemsUnreadable,omitempty"`
+	// Plan is what Set up would create in Project (nil when it cannot:
+	// PlanProblem says why, PlanProblemCode is "no_profile", "no_image",
+	// "validation", "forbidden", ...).
+	Plan            *WorkbenchPlan `json:"plan,omitempty"`
+	PlanProblem     string         `json:"planProblem,omitempty"`
+	PlanProblemCode string         `json:"planProblemCode,omitempty"`
+}
+
+// WorkbenchPlan is what Set up would create, chosen as the dashboard's
+// Create workbench form would choose it.
+type WorkbenchPlan struct {
+	// Image is the image's display name, ImageStream and ImageTag the
+	// ImageStream tag it runs.
+	Image       string `json:"image"`
+	ImageStream string `json:"imageStream"`
+	ImageTag    string `json:"imageTag"`
+	// HardwareProfile is the profile's display name, HardwareProfileName
+	// its "<namespace>/<name>"; CPU and Memory are what the workbench
+	// requests (the profile's defaults).
+	HardwareProfile     string `json:"hardwareProfile"`
+	HardwareProfileName string `json:"hardwareProfileName"`
+	CPU                 string `json:"cpu,omitempty"`
+	Memory              string `json:"memory,omitempty"`
+	// Queue is the Kueue LocalQueue the profile sends the workbench to
+	// ("" for none).
+	Queue string `json:"queue,omitempty"`
+	// StorageSize and StorageClass are its storage's ("" class: the
+	// cluster's default).
+	StorageSize  string `json:"storageSize"`
+	StorageClass string `json:"storageClass,omitempty"`
+	// Connection: the tool's S3 Connection is attached; Pipelines: the
+	// pipeline server's settings are mounted (Elyra); MLflow: it is
+	// linked to MLflow.
+	Connection bool `json:"connection,omitempty"`
+	Pipelines  bool `json:"pipelines,omitempty"`
+	MLflow     bool `json:"mlflow,omitempty"`
+}
+
+// WorkbenchState is one workbench named nightly-workbench (Namespace).
+type WorkbenchState struct {
+	ResourceState
+	// State is how the dashboard shows it: "starting", "running",
+	// "stopping", "stopped" or "failed".
+	State string `json:"state,omitempty"`
+	// URL is where it opens (the dashboard's address and
+	// /notebook/<project>/<name>); "" when unknown.
+	URL string `json:"url,omitempty"`
+	// Image is the image's display name and tag, HardwareProfile the
+	// profile's name, as the workbench records them.
+	Image           string `json:"image,omitempty"`
+	HardwareProfile string `json:"hardwareProfile,omitempty"`
+	// CPU and Memory are what its container requests.
+	CPU    string `json:"cpu,omitempty"`
+	Memory string `json:"memory,omitempty"`
+	// ConnectionAttached: its connections annotation names the tool's S3
+	// Connection.
+	ConnectionAttached bool `json:"connectionAttached,omitempty"`
+	// Storage is its storage nightly-workbench-storage (nil when absent).
+	Storage *WorkbenchStorage `json:"storage,omitempty"`
+}
+
+// WorkbenchStorage is a workbench's storage, a PersistentVolumeClaim.
+type WorkbenchStorage struct {
+	Name          string `json:"name"`
+	Size          string `json:"size,omitempty"`
+	StorageClass  string `json:"storageClass,omitempty"`
+	ManagedByTool bool   `json:"managedByTool"`
+	// UsedBy are the other workbenches and pods that mount it ("workbench
+	// my-wb", "pod x"): deleting it is refused while there are any.
+	// UsedByProblem says why they could not be read.
+	UsedBy        []string `json:"usedBy,omitempty"`
+	UsedByProblem string   `json:"usedByProblem,omitempty"`
+}
+
+// WorkbenchRequest is the body of POST /api/resources/workbench/stream.
+type WorkbenchRequest struct {
+	// Action is "setup", "start", "stop", "teardown" or "delete-storage"
+	// (the storage kept from a deleted workbench).
+	Action  string `json:"action"`
+	Project string `json:"project"`
+	// DeleteStorage (teardown) also deletes its storage: its files are lost.
+	DeleteStorage bool `json:"deleteStorage,omitempty"`
+}
+
 // PlaygroundStatus is what the Gen AI playground feature needs and the
 // playgrounds in data science projects (GET /api/resources/playground).
 // The cluster parts are read with the app's ServiceAccount; everything about
@@ -1411,6 +1550,10 @@ type PlaygroundState struct {
 	// Requested is true when this tool's record says it requested a
 	// playground in the project (also when none exists any more).
 	Requested bool `json:"requested,omitempty"`
+	// Models (this tool's playground only) are the models its Set up asked
+	// the dashboard for, from this tool's record; none when the record
+	// does not say (a playground set up before the record kept them).
+	Models []PlaygroundModelRef `json:"models,omitempty"`
 }
 
 // PlaygroundModel is a model the dashboard offers the playground.
@@ -1765,12 +1908,23 @@ type CleanupRequest struct {
 	// (PipelineServerRequest.ConfirmUnrecorded).
 	PipelineServers   []string          `json:"pipelineServers,omitempty"`
 	ConfirmUnrecorded map[string]string `json:"confirmUnrecorded,omitempty"`
+	// ConfirmWorkbenches maps a project of PipelineServers to the
+	// workbenches the user confirmed removing the tool's dashboard
+	// Connection from, each by name to the UID reviewed
+	// (PipelineServerRequest.ConfirmWorkbenches).
+	ConfirmWorkbenches map[string]map[string]string `json:"confirmWorkbenches,omitempty"`
 	// Storage deletes the S3 storage (and storage an earlier version left).
 	Storage bool `json:"storage,omitempty"`
 	// DeleteNamespace also deletes namespace seaweedfs (needs Storage).
 	DeleteNamespace bool `json:"deleteNamespace,omitempty"`
 	// MLflow deletes the MLflow server.
 	MLflow bool `json:"mlflow,omitempty"`
+	// ModelRegistry deletes the model registry this tool created (with
+	// its registered models and its default database).
+	ModelRegistry bool `json:"modelRegistry,omitempty"`
+	// Kueue deletes this tool's distributed workloads setup: its samples,
+	// queues and project label, and turns back its dashboard opt-in.
+	Kueue bool `json:"kueue,omitempty"`
 	// Models are the projects whose models of the tool's catalog go (all
 	// of them);
 	// InferenceGateway deletes the inference gateway after them.
@@ -1779,6 +1933,12 @@ type CleanupRequest struct {
 	// Playgrounds are the projects whose playground (requested by this
 	// tool) goes, before the models it uses.
 	Playgrounds []string `json:"playgrounds,omitempty"`
+	// Workbenches are the projects whose workbench (nightly-workbench, made
+	// by this tool) goes; WorkbenchStorage are the projects whose storage
+	// (nightly-workbench-storage) goes, with the workbench or, for storage
+	// kept from a deleted workbench, on its own: its files are lost.
+	Workbenches      []string `json:"workbenches,omitempty"`
+	WorkbenchStorage []string `json:"workbenchStorage,omitempty"`
 	// MaaSPublished are the projects whose models this tool unpublishes from
 	// Models as a Service first, before anything else goes; MaaSPlatform
 	// removes the MaaS platform this tool set up, last.
@@ -1797,6 +1957,19 @@ type CleanupRequest struct {
 	// only while the record and the namespace still have that UID, so one
 	// deleted and made again since is kept. Every recipe project needs one.
 	RecipeProjectUIDs map[string]string `json:"recipeProjectUIDs,omitempty"`
+	// RecipeRunID, MaaSPlatformUID and ModelRegistryUID: a recipe's Clean
+	// up of the MaaS platform and the model registry its run created names
+	// the run and the UID of each object it reviewed (the database Secret
+	// maas-db-config; the ModelRegistry). The part is removed only while
+	// the object still has that UID and the run's annotation, checked
+	// again under the cluster lock; otherwise it is refused. Empty for the
+	// Environment page's own Clean up.
+	RecipeRunID      string `json:"recipeRunId,omitempty"`
+	MaaSPlatformUID  string `json:"maasPlatformUid,omitempty"`
+	ModelRegistryUID string `json:"modelRegistryUid,omitempty"`
+	// KueueUID is the UID of the ClusterQueue of the distributed workloads
+	// setup a recipe's run created (with RecipeRunID), checked the same way.
+	KueueUID string `json:"kueueUid,omitempty"`
 	// ConfirmProjectContents maps a recipe project to what it still holds
 	// that this tool did not create ("Pod x", "PersistentVolumeClaim y",
 	// ...), as a refusal listed them: a project is deleted with them only
@@ -2040,12 +2213,37 @@ type ResourceState struct {
 	// "unreadable" (ConnectionMessage says why). "" means not read.
 	ConnectionState   string `json:"connectionState,omitempty"`
 	ConnectionMessage string `json:"connectionMessage,omitempty"`
+	// ConnectionWorkbenches are the workbenches of the project whose
+	// opendatahub.io/connections annotation names that Connection, read
+	// with the user's token along with ConnectionState (present only);
+	// deleting the pipeline server removes it from them first.
+	// ConnectionWorkbenchesMessage says why they could not be read.
+	ConnectionWorkbenches        []ConnectionWorkbench `json:"connectionWorkbenches,omitempty"`
+	ConnectionWorkbenchesMessage string                `json:"connectionWorkbenchesMessage,omitempty"`
+	// ConnectionEnvOnlyWorkbenches load that Connection through envFrom
+	// without naming it in the annotation (attached the RHOAI 2.x way):
+	// nothing takes it off them, and they fail to start once it is
+	// deleted.
+	ConnectionEnvOnlyWorkbenches []string `json:"connectionEnvOnlyWorkbenches,omitempty"`
 }
 
 // KeptPVC is a PersistentVolumeClaim and its size.
 type KeptPVC struct {
 	Name string `json:"name"`
 	Size string `json:"size,omitempty"`
+}
+
+// ConnectionWorkbench is a workbench (Notebook) that uses the tool's
+// dashboard Connection: a confirmation names it with the UID the user
+// reviewed, so one deleted and made again since under the same name is not
+// confirmed.
+type ConnectionWorkbench struct {
+	Name string `json:"name"`
+	UID  string `json:"uid"`
+	// Running: the workbench is not stopped. Taking the Connection off it
+	// changes its pod template, which restarts its pod (work not saved to
+	// disk is lost).
+	Running bool `json:"running,omitempty"`
 }
 
 // PipelineServerRequest is the JSON body for pipeline server setup/teardown.
@@ -2060,6 +2258,13 @@ type PipelineServerRequest struct {
 	// that UID is deleted without the record; another one (made again
 	// since) is not.
 	ConfirmUnrecorded string `json:"confirmUnrecorded,omitempty"`
+	// ConfirmWorkbenches (teardown and Recreate) maps each workbench of
+	// the project the user confirmed removing the tool's dashboard
+	// Connection from to the UID they reviewed
+	// (ResourceState.ConnectionWorkbenches): a workbench that uses it and
+	// is not named with its current UID refuses the request before
+	// anything changes.
+	ConfirmWorkbenches map[string]string `json:"confirmWorkbenches,omitempty"`
 }
 
 // DiagnosticsFixRequest is the JSON body for POST /api/diagnostics/fix.

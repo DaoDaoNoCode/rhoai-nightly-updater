@@ -24,6 +24,23 @@ var stepDependsOn = map[string][]string{
 	StepPipelineServer:  {StepRHOAI, StepDSC, StepProject, StepPipelinesPrereq, StepS3},
 	StepMLflowPrereq:    {StepRHOAI, StepDSC},
 	StepMLflow:          {StepRHOAI, StepDSC, StepMLflowPrereq},
+	StepMLflowSamples:   {StepRHOAI, StepDSC, StepProject, StepMLflowPrereq, StepMLflow},
+	StepMaaS:            {StepRHOAI, StepDSC},
+	// How the model is reached is resolved in the project, and depends on
+	// the MaaS platform.
+	StepModelsPrereq:        {StepRHOAI, StepDSC, StepProject, StepMaaS},
+	StepModel:               {StepRHOAI, StepDSC, StepProject, StepMaaS, StepModelsPrereq},
+	StepMaaSPublish:         {StepRHOAI, StepDSC, StepProject, StepMaaS, StepModelsPrereq, StepModel},
+	StepPlaygroundPrereq:    {StepRHOAI, StepDSC},
+	StepPlayground:          {StepRHOAI, StepDSC, StepProject, StepMaaS, StepModelsPrereq, StepModel, StepMaaSPublish, StepPlaygroundPrereq},
+	StepModelRegistryPrereq: {StepRHOAI, StepDSC},
+	StepModelRegistry:       {StepRHOAI, StepDSC, StepModelRegistryPrereq},
+	// The workbench attaches the tool's S3 Connection when the project has
+	// the tool's pipeline server.
+	StepWorkbench:    {StepRHOAI, StepDSC, StepProject, StepPipelinesPrereq, StepS3, StepPipelineServer},
+	StepKueuePrereq:  {StepRHOAI, StepDSC},
+	StepKueue:        {StepRHOAI, StepDSC, StepProject, StepKueuePrereq},
+	StepDashboardDev: {StepRHOAI, StepDSC},
 }
 
 // buildResolveTimeout bounds resolving the recipe's build on Quay.
@@ -33,8 +50,6 @@ const buildResolveTimeout = 30 * time.Second
 // step would do (run, skip because it is set up, blocked, or checked
 // later), and every reason the run would refuse to start (Problems):
 //
-//   - a part of the schema this version does not run yet (models, the
-//     playground, MaaS, the MLflow samples, Dashboard Dev);
 //   - Argo CD or an ACM policy manages the RHOAI operator;
 //   - the RHOAI step would run without the one-time cluster setup (the
 //     pull secret and the image mirror), or its build cannot be resolved;
@@ -48,7 +63,6 @@ const buildResolveTimeout = 30 * time.Second
 func Plan(c *kube.Client, r types.EnvironmentRecipe, pinned *types.RecipePinnedBuild) (*types.RecipePlan, State) {
 	plan := &types.RecipePlan{Recipe: r, Steps: []types.RecipePlanStep{}, Problems: []types.RecipeProblem{}}
 	var p problems
-	notInThisVersion(&p, r)
 
 	if g, err := argo.ReadOperatorGitOps(c); err != nil {
 		p.addFix(checkFailed(), "", "Cannot check whether Argo CD manages the RHOAI operator: %v. Nothing was changed.", err)
@@ -121,29 +135,9 @@ func Plan(c *kube.Client, r types.EnvironmentRecipe, pinned *types.RecipePinnedB
 		plan.Steps = append(plan.Steps, ps)
 	}
 	plan.Pinned = s.Pinned
+	plan.Warnings = append(planKueueWarnings(c, r), playgroundWarnings(r)...)
 	plan.Problems = append(plan.Problems, p...)
 	return plan, s
-}
-
-// notInThisVersion refuses the parts of the schema this version of the
-// updater does not run yet.
-func notInThisVersion(p *problems, r types.EnvironmentRecipe) {
-	f := r.Spec.Features
-	for _, part := range []struct {
-		on    bool
-		field string
-		what  string
-	}{
-		{f.Models.Enabled, "spec.features.models.enabled", "Models"},
-		{f.Playground.Enabled, "spec.features.playground.enabled", "The playground"},
-		{f.MaaS.Enabled, "spec.features.maas.enabled", "Models as a Service"},
-		{f.MLflow.Samples, "spec.features.mlflow.samples", "The MLflow samples"},
-		{r.Spec.DashboardDev.Deploy != DashboardDevNone, "spec.dashboardDev.deploy", "Dashboard Dev"},
-	} {
-		if part.on {
-			p.add(part.field, "%s in a recipe is not in this version of the updater; turn it off, or set it up on its own page after the run.", part.what)
-		}
-	}
 }
 
 // gitOpsManager names what manages the operator.

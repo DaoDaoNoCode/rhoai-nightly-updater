@@ -36,16 +36,17 @@ afterEach(() => {
 
 describe("Environment page", () => {
   it("opens on the Overview: a summary line and one row per feature with its state and next step", async () => {
-    stubApi({ "/api/resources/status": { minio: notDeployed, mlflow: notDeployed, pipelineServers: [] }, "/api/resources/projects": { projects: [] }, "/api/resources/playground": { items: [] },
+    stubApi({ "/api/resources/status": { minio: notDeployed, mlflow: notDeployed, pipelineServers: [] }, "/api/resources/projects": { projects: [] }, "/api/resources/playground": { items: [] }, "/api/resources/workbench": { items: [] }, "/api/resources/kueue": { instance: { found: true, available: true, v1beta2: true, ready: true, kueueReady: "True" }, objects: [], quota: "6 CPUs and 19Gi of memory", samples: [], optIn: { profile: { kind: "HardwareProfile", name: "nightly-kueue-cpu", present: false } }, defaultRayImage: "quay.io/modh/ray:2.47.1-py311-cu121" },
+      "/api/resources/model-registry": { name: "nightly-registry", namespace: "rhoai-model-registries", component: "aiHub", state: "absent" },
       "/api/resources/maas": { platform: { deployed: false, ready: false, managedByTool: false }, parts: [{ id: "dsc", title: "MaaS in the DataScienceCluster", state: "missing" }], subscription: "rhoai-nightly-updater-subscription" } });
     renderPage("/test-resources");
     expect(screen.getByRole("heading", { level: 1, name: "Environment" })).toBeInTheDocument();
     expect(document.title).toBe("Environment — RHOAI Nightly Updater");
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Overview", "S3 storage", "Pipelines", "MLflow", "Models", "Playground", "MaaS"]);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Overview", "S3 storage", "Pipelines", "Workbench", "MLflow", "Model registry", "Models", "Playground", "Distributed workloads", "MaaS"]);
     expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
-    expect(await screen.findByText("0 of 6 ready")).toBeInTheDocument();
+    expect(await screen.findByText("0 of 9 ready")).toBeInTheDocument();
     const table = screen.getByRole("grid", { name: "Features" });
-    expect(within(table).getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["S3 storage", "Pipelines", "MLflow", "Models", "Playground", "MaaS"]);
+    expect(within(table).getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["S3 storage", "Pipelines", "Workbench", "MLflow", "Model registry", "Models", "Playground", "Distributed workloads", "MaaS"]);
     // The S3 storage is its own row: the cluster's, set up on its own.
     expect(await row("S3 storage")).toHaveTextContent(/Not set up\s*Set up S3 storage/);
     expect(within(await row("S3 storage")).getByRole("link", { name: "S3 storage" })).toHaveAttribute("href", "/test-resources?tab=storage");
@@ -61,10 +62,11 @@ describe("Environment page", () => {
     stubApi({
       "/api/resources/status": { minio: readyMinio, mlflow: foreignMlflow, pipelineServers: [readyDspa("juntao-test")] },
       "/api/resources/projects": { projects: ["a-test-project", "juntao-test", "zeta"] },
-      "/api/resources/playground": { items: [] },
+      "/api/resources/playground": { items: [] }, "/api/resources/workbench": { items: [] }, "/api/resources/kueue": { instance: { found: true, available: true, v1beta2: true, ready: true, kueueReady: "True" }, objects: [], quota: "6 CPUs and 19Gi of memory", samples: [], optIn: { profile: { kind: "HardwareProfile", name: "nightly-kueue-cpu", present: false } }, defaultRayImage: "quay.io/modh/ray:2.47.1-py311-cu121" },
+      "/api/resources/model-registry": { name: "nightly-registry", namespace: "rhoai-model-registries", component: "aiHub", state: "absent" },
     });
     const router = renderPage("/test-resources");
-    expect(await screen.findByText("3 of 6 ready")).toBeInTheDocument();
+    expect(await screen.findByText("3 of 9 ready")).toBeInTheDocument();
     expect(within(await row("S3 storage")).getByRole("link", { name: /Open admin UI/ })).toHaveAttribute("href", readyMinio.uiRoute);
     const mlflow = await row("MLflow");
     // Ownership under the status label, in its own words.

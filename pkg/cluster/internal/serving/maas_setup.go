@@ -1,12 +1,14 @@
 package serving
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
@@ -151,7 +153,7 @@ func (m *Run) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse, er
 
 	// 6. Authorino TLS (setup-authorino-tls.sh), once Kuadrant has made
 	// Authorino.
-	if r, err := m.applyAuthorinoTLS(&rec, kq.Namespace, "authorino-tls"); r != nil || err != nil {
+	if r, err := m.applyAuthorinoTLS(&rec, kq.Namespace, "authorino-tls", "Set up again to continue"); r != nil || err != nil {
 		return r, err
 	}
 
@@ -287,6 +289,9 @@ func (m *Run) setupKuadrant(rec *MaaSRecord, kq *kuadrantState, kVersion, kuadra
 		if err := WriteMaaSRecord(c, *rec); err != nil {
 			return m.Fail("kuadrant", err.Error(), kube.ErrorCodeFromK8sErr(err), "record write failed")
 		}
+		if r, err := m.WaitKuadrantKindAdmissible("kuadrant"); r != nil || err != nil {
+			return r, err
+		}
 		m.Step("kuadrant", "running", fmt.Sprintf("Creating the Kuadrant CR %s/kuadrant...", kuadrantNS))
 		if err := CreateKuadrant(c, version, kuadrantNS, false); err != nil {
 			return m.Fail("kuadrant", fmt.Sprintf("Failed to create the Kuadrant CR %s/kuadrant: %v. Set up again to retry.", kuadrantNS, err), MaaSWriteCode(err), "kuadrant create failed")
@@ -305,7 +310,19 @@ func (m *Run) setupKuadrant(rec *MaaSRecord, kq *kuadrantState, kVersion, kuadra
 	case err != nil:
 		return m.Fail("kuadrant", fmt.Sprintf("Stopped waiting for Kuadrant: %v.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "kuadrant wait failed")
 	case !ready:
-		m.Step("kuadrant", "success", fmt.Sprintf("Kuadrant is not Ready after %s (%s); continuing.", ClockText(maasKuadrantTimeout), kube.FirstNonEmpty(kq.Message, "no message")))
+		// Without even the Authorino CR, the Authorino TLS step would only
+		// wait as long again: say why now, before the steps after this.
+		if kq.Found {
+			dc, cancel := m.diagnosisClient()
+			made, aerr := authorinoCRExists(dc, kq.Namespace)
+			if aerr == nil && !made {
+				msg := fmt.Sprintf("Stopped after waiting %s for Kuadrant to be Ready.", ClockText(maasKuadrantTimeout)) + kuadrantRecovery(dc, *kq, true, "Set up again to continue")
+				cancel()
+				return m.Fail("kuadrant", msg, "not_ready", "kuadrant not ready")
+			}
+			cancel()
+		}
+		m.Step("kuadrant", "success", fmt.Sprintf("Kuadrant is not Ready after %s (%s); continuing.", ClockText(maasKuadrantTimeout), kube.FirstNonEmpty(kq.readyText(), "no message")))
 	default:
 		m.Step("kuadrant", "success", "Kuadrant "+kq.Namespace+"/kuadrant is Ready.")
 	}
@@ -437,13 +454,18 @@ func (m *Run) setupGateway(gwPlan *maasGatewayPlan, foreign bool) (*types.Operat
 	return nil, nil
 }
 
-// errAuthorinoNotYet: Kuadrant has not made Authorino's objects yet.
-var errAuthorinoNotYet = errors.New("kuadrant has not made Authorino yet")
+// errAuthorinoNotYet: Kuadrant has not made Authorino's objects yet;
+// errNoAuthorinoCR (with it): not even the Authorino CR.
+var (
+	errAuthorinoNotYet = errors.New("kuadrant has not made Authorino yet")
+	errNoAuthorinoCR   = errors.New("no Authorino authorino")
+)
 
 // applyAuthorinoTLS is the Authorino TLS step: it waits for Kuadrant's
 // Authorino in ns, then configures what is missing and records that this
-// tool did.
-func (m *Run) applyAuthorinoTLS(rec *MaaSRecord, ns, step string) (*types.OperationResponse, error) {
+// tool did. again is how the caller's user runs it again, after "Once
+// Kuadrant is Ready, " ("Set up again to continue").
+func (m *Run) applyAuthorinoTLS(rec *MaaSRecord, ns, step, again string) (*types.OperationResponse, error) {
 	c := m.Client
 	if ns == "" {
 		return m.Fail(step, "There is no Kuadrant CR, so there is no Authorino to configure. Set up creates it.", "prerequisites", "no kuadrant")
@@ -458,6 +480,11 @@ func (m *Run) applyAuthorinoTLS(rec *MaaSRecord, ns, step string) (*types.Operat
 	done, err := kube.WaitForGone(c, maasKuadrantTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 		ch, err := configureAuthorinoTLS(cc, ns, false)
 		changes = append(changes, ch...)
+		if err != nil && cc.Context().Err() != nil {
+			// The wait's end cut this poll off: what the polls before
+			// found is the reason.
+			return false, nil
+		}
 		lastErr = err
 		if errors.Is(err, errAuthorinoNotYet) {
 			return false, nil
@@ -474,10 +501,14 @@ func (m *Run) applyAuthorinoTLS(rec *MaaSRecord, ns, step string) (*types.Operat
 		m.Logs = append(m.Logs, "OK: "+ch)
 	}
 	switch {
+	case err != nil && c.Context().Err() != nil:
+		// The operation ended (its deadline, or the user) while Kuadrant
+		// had not made Authorino.
+		return m.Fail(step, m.authorinoMissing(fmt.Sprintf("Stopped waiting for Authorino in %s: %v; it is not there yet", ns, err), lastErr, again), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "authorino wait failed")
 	case err != nil:
 		return m.Fail(step, fmt.Sprintf("Failed to configure Authorino TLS in %s: %v. Run it again to retry; the MaaS tab shows the docs' commands too.%s", ns, err, kube.TemplateHint(err)), MaaSWriteCode(err), "authorino tls failed")
 	case !done:
-		return m.Fail(step, fmt.Sprintf("Authorino in %s is not there after %s (%v). Run it again once Kuadrant is Ready.", ns, ClockText(maasKuadrantTimeout), lastErr), "not_ready", "authorino missing")
+		return m.Fail(step, m.authorinoMissing(fmt.Sprintf("Authorino in %s is not there after %s", ns, ClockText(maasKuadrantTimeout)), lastErr, again), "not_ready", "authorino missing")
 	}
 	if len(changes) == 0 {
 		m.Step(step, "success", "Authorino in "+ns+" already serves TLS and trusts the service CA.")
@@ -494,6 +525,71 @@ func (m *Run) applyAuthorinoTLS(rec *MaaSRecord, ns, step string) (*types.Operat
 		}
 	}
 	return nil, nil
+}
+
+// kuadrantDiagnosisWait bounds the reads that word why Authorino is not
+// there, which run on their own context: the operation's may have ended.
+const kuadrantDiagnosisWait = 30 * time.Second
+
+// diagnosisClient is m's client on its own context, bounded by
+// kuadrantDiagnosisWait, with the operation's values.
+func (m *Run) diagnosisClient() (*kube.Client, context.CancelFunc) {
+	ctx, cancel := kube.Clock().WithTimeout(context.WithoutCancel(m.Client.Context()), kuadrantDiagnosisWait)
+	return m.Client.WithContext(ctx), cancel
+}
+
+// authorinoMissing words why Authorino is not there: lead says what
+// the wait saw, last is what its last poll found, and the Kuadrant CR's
+// Ready condition (kuadrantRecovery) says what to do.
+func (m *Run) authorinoMissing(lead string, last error, again string) string {
+	c, cancel := m.diagnosisClient()
+	defer cancel()
+	msg := fmt.Sprintf("%s (%s).", lead, kube.FirstNonEmpty(errText(last), "no answer"))
+	k, err := ReadKuadrant(c)
+	switch {
+	case err != nil:
+		return msg + fmt.Sprintf(" The Kuadrant CR cannot be read: %v. Once Kuadrant is Ready, %s.", err, again)
+	case !k.Found:
+		return msg + " There is no Kuadrant CR any more; Set up creates it."
+	}
+	return msg + kuadrantRecovery(c, k, errors.Is(last, errNoAuthorinoCR), again)
+}
+
+// kuadrantRecovery is what Kuadrant CR k says about an Authorino that is
+// not there (noAuthorinoCR: not even its CR), and what to do; it starts with
+// a space. It names an operator restart only for the reasons Kuadrant
+// reports when Authorino or Limitador is missing from its topology, as when
+// the API server refused them and the operator dropped its retry
+// (WaitKuadrantKindAdmissible); not for MissingDependency, which Kuadrant
+// reports first (no Gateway API provider yet, say), where a restart does
+// not help. This tool restarts nothing itself.
+func kuadrantRecovery(c *kube.Client, k kuadrantState, noAuthorinoCR bool, again string) string {
+	made := ""
+	if noAuthorinoCR {
+		made = " and has not made Authorino"
+	}
+	why := kube.FirstNonEmpty(k.readyText(), "no reason given")
+	switch {
+	case k.Ready:
+		return fmt.Sprintf(" Kuadrant %s/kuadrant is Ready; %s.", k.Namespace, again)
+	case k.ReadyStatus != "False":
+		return fmt.Sprintf(" Kuadrant %s/kuadrant is not Ready yet (%s)%s. Once Kuadrant is Ready, %s.", k.Namespace, kube.FirstNonEmpty(k.readyText(), "it reports no Ready condition"), made, again)
+	case !noAuthorinoCR || (k.Reason != "LimitadorNotReady" && k.Reason != "AuthorinoNotReady"):
+		return fmt.Sprintf(" Kuadrant %s/kuadrant is not Ready (%s)%s. Once Kuadrant is Ready, %s.", k.Namespace, why, made, again)
+	}
+	opNS, _, err := envkit.ControllerNamespace(c, KuadrantController)
+	if err != nil || opNS == "" {
+		opNS = RHCLOperator.Namespace
+	}
+	return fmt.Sprintf(" Kuadrant %s/kuadrant is not Ready (%s)%s; its operator can drop its own retry (Kuadrant/kuadrant-operator#2102), so a cluster-admin can restart it (oc rollout restart deployment/%s -n %s). Once Kuadrant is Ready, %s.", k.Namespace, why, made, KuadrantController, opNS, again)
+}
+
+// errText is err's text, "" for nil.
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // waitPlatformReady is setup's validation: maas-api, the tenant and the

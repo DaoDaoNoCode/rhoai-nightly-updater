@@ -1374,7 +1374,7 @@ func (m *modelsRun) planModel(req types.ModelsRequest, gw *gatewayPlan) (*modelP
 		}
 	}
 	ephemeral := modelVolumeIsEmptyDir(c)
-	hw, why := pickHardwareProfile(c, entry)
+	hw, why := pickHardwareProfile(c, req.Project, entry)
 	if hw.Name != "" {
 		m.step("check", "running", fmt.Sprintf("Hardware profile: %s/%s, as the dashboard records it.", hw.Namespace, hw.Name))
 	} else {

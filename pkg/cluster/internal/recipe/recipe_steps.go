@@ -16,6 +16,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -42,9 +43,28 @@ type State struct {
 	Recipe  types.EnvironmentRecipe
 	Pinned  *types.RecipePinnedBuild
 	Project *types.RecipeProjectRef
+	// RunID is the run's ID, which marks the cluster-wide objects it
+	// creates (RecipeRunAnnotation).
+	RunID string
 	// Components names DataScienceCluster pieces enabled by prerequisite
 	// steps; the runner retains the slice when Resume runs.
 	Components []string
+	// Exposure and GatewayRef are how the run's model is reached, once the
+	// Models prerequisites step resolved it; the runner keeps them when
+	// Resume runs.
+	Exposure, GatewayRef string
+	// Created are the cluster-wide parts the run created (the MaaS
+	// platform, the model registry); the runner keeps them when Resume
+	// runs.
+	Created []types.RecipeCreatedPart
+}
+
+// AddCreated records a cluster-wide part the run created; a part recorded
+// again replaces the earlier entry (the newest UID counts).
+func (s *State) AddCreated(p types.RecipeCreatedPart) {
+	s.Created = slices.DeleteFunc(s.Created, func(e types.RecipeCreatedPart) bool { return e.Part == p.Part })
+	s.Created = append(s.Created, p)
+	slices.SortFunc(s.Created, func(a, b types.RecipeCreatedPart) int { return strings.Compare(a.Part, b.Part) })
 }
 
 // AddComponents logs newly enabled components (deduplicated, sorted).
@@ -68,14 +88,21 @@ func (s *State) AddComponents(keys ...string) {
 //     terminating; clean-up includes that UID (RecipeProjectUIDs);
 //   - DataScienceCluster components the run enabled and that still match
 //     that configuration (liveComponents); a prerequisite step reads as
-//     created while any of its feature components do.
+//     created while any of its feature components do;
+//   - the cluster-wide parts the run created, proven on the objects
+//     themselves (liveCreated, CreatedPartProblem): the MaaS platform's
+//     database Secret and the ModelRegistry carry the run's annotation and
+//     the recorded UID and are still this tool's (the registry read with
+//     u, the signed-in user's client; nil offers no registry). The
+//     request names each by that UID, and Clean up checks it again under
+//     the cluster lock before the Environment page's own teardown.
 //
 // S3 storage, MLflow, and pipeline servers are never attributed to the
 // run: storage and MLflow are cluster-wide, and the cluster does not track
 // creator identity—claims of run ownership could be faked. A pipeline server
 // in the recipe project is cleaned with the project; others fall under
 // Clean up everything on the Environment page.
-func Ownership(c *kube.Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
+func Ownership(c, u *kube.Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
 	created := map[string]bool{}
 	if run == nil {
 		return created, nil
@@ -94,16 +121,34 @@ func Ownership(c *kube.Client, run *types.RecipeRun) (map[string]bool, *types.Cl
 		req.Components = append(req.Components, key)
 		created[prereqStepOf[feature]] = true
 	}
+	for part, uid := range liveCreated(c, u, run) {
+		switch part {
+		case types.RecipePartMaaSPlatform:
+			req.MaaSPlatform, req.MaaSPlatformUID, created[StepMaaS] = true, uid, true
+		case types.RecipePartModelRegistry:
+			req.ModelRegistry, req.ModelRegistryUID, created[StepModelRegistry] = true, uid, true
+		case types.RecipePartKueue:
+			req.Kueue, req.KueueUID, created[StepKueue] = true, uid, true
+			// The words of its Clean up: the teardown turns the setting back.
+			created[CreatedKueueSetting] = kueueSettingTurnedOn(c)
+		}
+	}
+	if req.MaaSPlatform || req.ModelRegistry || req.Kueue {
+		req.RecipeRunID = run.ID
+	}
 	delete(created, "")
 	slices.Sort(req.Components)
-	if len(req.RecipeProjects) == 0 && len(req.Components) == 0 {
+	if len(req.RecipeProjects) == 0 && len(req.Components) == 0 && !req.MaaSPlatform && !req.ModelRegistry && !req.Kueue {
 		return created, nil
 	}
 	return created, req
 }
 
 // prereqStepOf maps a feature name to its prerequisite step id.
-var prereqStepOf = map[string]string{"pipelines": StepPipelinesPrereq, "mlflow": StepMLflowPrereq}
+var prereqStepOf = map[string]string{
+	"pipelines": StepPipelinesPrereq, "mlflow": StepMLflowPrereq, "models": StepModelsPrereq,
+	"playground": StepPlaygroundPrereq, "model-registry": StepModelRegistryPrereq, "kueue": StepKueuePrereq,
+}
 
 // liveComponents returns component keys the run still owns, each paired
 // with the enabling feature: Managed on the DataScienceCluster and
@@ -131,6 +176,92 @@ func liveComponents(c *kube.Client, keys []string) map[string]string {
 		}
 	}
 	return out
+}
+
+// CreatedKueueSetting is Ownership's created entry (not a step) saying the
+// offered distributed workloads setup's teardown also turns the dashboard's
+// Kueue setting back, which this run turned on.
+const CreatedKueueSetting = "kueue-setting"
+
+// liveCreated returns the cluster-wide parts of run that are still as the
+// run created them, proven on the objects themselves (see Ownership), with
+// the UID each was proven by. sa reads what the ServiceAccount reads for
+// the Environment page; u, the signed-in user's own client, reads the
+// model registry (nil: the registry is not offered). The run record alone
+// proves nothing (the ServiceAccount can write it): a part is offered only
+// when its object carries the run's annotation, has the recorded UID and
+// is still this tool's. Any read that fails offers nothing (fail closed).
+func liveCreated(sa, u *kube.Client, run *types.RecipeRun) map[string]string {
+	out := map[string]string{}
+	for _, p := range run.CreatedParts {
+		if p.UID == "" || run.ID == "" {
+			continue
+		}
+		if CreatedPartProblem(sa, u, run.ID, p.Part, p.UID) == "" {
+			out[p.Part] = p.UID
+		}
+	}
+	return out
+}
+
+// CreatedPartProblem says why the cluster-wide part a recipe run (runID)
+// recorded creating, as the object of UID uid, is not that object any
+// more, or "" when it is: the object carries the run's annotation
+// (RecipeRunAnnotation), has that UID and is still this tool's. For the
+// MaaS platform the object is Secret maas-db-config of the database this
+// tool made (development or CloudNativePG), and the platform is still
+// this tool's; for the model registry it is the ModelRegistry, read with
+// u (the signed-in user's own client), and the tool's record still owns
+// it. Clean up checks it again, under the cluster lock, right before it
+// deletes the part.
+func CreatedPartProblem(sa, u *kube.Client, runID, part, uid string) string {
+	notIt := func(what string) string {
+		return fmt.Sprintf("%s is not the one recipe run %s created (it was replaced or changed since); it is not deleted. Reload the page.", what, runID)
+	}
+	switch part {
+	case types.RecipePartMaaSPlatform:
+		st, err := maasStatus(sa)
+		if err != nil {
+			return "Cannot read the MaaS platform: " + err.Error()
+		}
+		rec, err := maasRecord(sa)
+		if err != nil {
+			return "Cannot read this tool's MaaS record: " + err.Error()
+		}
+		if !st.Platform.ManagedByTool || rec.DBNamespace == "" {
+			return notIt("The MaaS platform")
+		}
+		meta, found, err := dbConfigMeta(sa, rec.DBNamespace)
+		switch {
+		case err != nil:
+			return "Cannot read the MaaS database Secret: " + err.Error()
+		case !found || meta.UID != uid || meta.Annotations[RecipeRunAnnotation] != runID || !serving.ToolOwned(meta):
+			return notIt("The MaaS platform")
+		}
+		return ""
+	case types.RecipePartModelRegistry:
+		if u == nil {
+			return "The model registry is read with your own sign-in, which this request does not have."
+		}
+		meta, found, err := registryMeta(sa, u)
+		if err != nil {
+			return "Cannot read the model registry: " + err.Error()
+		}
+		if !found || meta.UID != uid || meta.Annotations[RecipeRunAnnotation] != runID || meta.Terminating() {
+			return notIt("The model registry")
+		}
+		rec, err := registryRecord(sa)
+		if err != nil {
+			return "Cannot read this tool's record of its model registry: " + err.Error()
+		}
+		if !rec.Owns(meta) {
+			return notIt("The model registry")
+		}
+		return ""
+	case types.RecipePartKueue:
+		return kueuePartProblem(sa, u, runID, uid, notIt)
+	}
+	return fmt.Sprintf("%q is not a part a recipe creates.", part)
 }
 
 // Check holds the outcome of a step's read-only precondition probe.
@@ -202,7 +333,7 @@ func Steps(r types.EnvironmentRecipe) []Step {
 			Step{ID: StepMLflow, Title: "MLflow", Typical: 2 * time.Minute, Max: 10 * time.Minute, Check: checkMLflow, Run: runMLflow},
 		)
 	}
-	return steps
+	return append(steps, featureSteps(r)...)
 }
 
 // fail is a step's refusal or failure.
@@ -236,7 +367,7 @@ func checkRHOAI(c *kube.Client, s *State) (Check, error) {
 		// Not installed: install.
 	case csv.Phase == "Succeeded" && sub.Found:
 		if s.Recipe.Spec.RHOAI.IfInstalled != IfInstalledUpdate {
-			return Check{Done: true, Reason: fmt.Sprintf("RHOAI %s is installed; the recipe keeps it (ifInstalled: keep).", csv.Version)}, nil
+			return Check{Done: true, Reason: fmt.Sprintf("RHOAI %s is installed; the recipe keeps it.", csv.Version)}, nil
 		}
 		cs, err := rhoai.GetCatalogSource(c)
 		if err != nil {
@@ -300,7 +431,7 @@ func checkDSC(c *kube.Client, s *State) (Check, error) {
 		return Check{Done: true, Reason: fmt.Sprintf("DataScienceCluster %s exists.", dscName(read.Object))}, nil
 	}
 	if !s.Recipe.Spec.DataScienceCluster.Create {
-		return Check{Blocked: "There is no DataScienceCluster, and the recipe does not create one (dataScienceCluster.create: false). Create it on the Components page, or set dataScienceCluster.create: true.", Fix: fixAt(types.RecipeFixDSCMissing, pageComponents)}, nil
+		return Check{Blocked: "There is no DataScienceCluster, and the recipe does not create one. Create it on the Components page, or turn on Create the default DataScienceCluster in the recipe.", Fix: fixAt(types.RecipeFixDSCMissing, pageComponents)}, nil
 	}
 	return Check{}, nil
 }
@@ -399,14 +530,20 @@ func waitDSCConditions(c *kube.Client) error {
 // checkPrereq: the feature's prerequisites are ready → done; a reason the
 // setup cannot make them ready blocks.
 func checkPrereq(c *kube.Client, feature string) (Check, error) {
-	st, err := features.GetPrerequisitesStatusFor(c, "")
+	return checkPrereqFor(c, feature, "")
+}
+
+// checkPrereqFor is checkPrereq for a model reached by exposure (Models:
+// gateways need Connectivity Link too).
+func checkPrereqFor(c *kube.Client, feature, exposure string) (Check, error) {
+	st, err := prereqStatus(c, exposure)
 	if err != nil {
 		return Check{}, fmt.Errorf("read what %s needs: %w", feature, err)
 	}
 	fp := st.Features[feature]
 	switch {
 	case fp.Ready:
-		return Check{Done: true, Reason: "Everything it needs is set up."}, nil
+		return Check{Done: true, Reason: "Everything it needs is there."}, nil
 	case fp.SetupBlockedReason != "":
 		return Check{Blocked: fp.SetupBlockedReason, Fix: fixAt(types.RecipeFixFeatureBlocked, pageEnvironment)}, nil
 	}
@@ -441,8 +578,13 @@ const prereqRecordReadTimeout = 10 * time.Second
 // message, its progress and the log): the run's Clean up then does not
 // offer them, Clean up everything still does.
 func runPrereq(c *kube.Client, s *State, step, feature string, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+	return runPrereqFor(c, s, step, feature, "", emit)
+}
+
+// runPrereqFor is runPrereq for a model reached by exposure.
+func runPrereqFor(c *kube.Client, s *State, step, feature, exposure string, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	before, readErr := features.ReadPrereqRecord(c)
-	res, err := features.RunPrerequisites(c, types.PrerequisitesRequest{Feature: feature}, emit)
+	res, err := features.RunPrerequisites(c, types.PrerequisitesRequest{Feature: feature, Exposure: exposure}, emit)
 	if readErr == nil {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Context()), prereqRecordReadTimeout)
 		defer cancel()

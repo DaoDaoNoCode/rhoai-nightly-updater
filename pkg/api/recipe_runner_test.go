@@ -49,8 +49,14 @@ type fakeRecipeStep struct {
 	clients  []*cluster.Client
 	onRun    func()
 	waitsCtx bool
-	// components: the DataScienceCluster components Run turns on.
+	// components: the DataScienceCluster components Run turns on;
+	// created and exposure: the cluster-wide parts it creates and the
+	// model exposure it resolves.
 	components []string
+	created    []types.RecipeCreatedPart
+	exposure   string
+	// seen gets the run's state when Check runs.
+	seen func(*cluster.RecipeState)
 }
 
 func (f *recipeFake) addStep(id string) *fakeRecipeStep {
@@ -67,10 +73,13 @@ func (f *recipeFake) clusterSteps() []cluster.RecipeStep {
 	for _, s := range f.steps {
 		out = append(out, cluster.RecipeStep{
 			ID: s.id, Title: "Step " + s.id, Typical: time.Minute, Max: 15 * time.Minute,
-			Check: func(c *cluster.Client, _ *cluster.RecipeState) (cluster.RecipeCheck, error) {
+			Check: func(c *cluster.Client, st *cluster.RecipeState) (cluster.RecipeCheck, error) {
 				f.mu.Lock()
 				defer f.mu.Unlock()
 				s.clients = append(s.clients, c)
+				if s.seen != nil {
+					s.seen(st)
+				}
 				return cluster.RecipeCheck{Done: s.done, Reason: s.id + " is there"}, nil
 			},
 			Run: func(c *cluster.Client, st *cluster.RecipeState, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
@@ -78,6 +87,12 @@ func (f *recipeFake) clusterSteps() []cluster.RecipeStep {
 				s.ran = true
 				f.mu.Unlock()
 				st.AddComponents(s.components...)
+				for _, p := range s.created {
+					st.AddCreated(p)
+				}
+				if s.exposure != "" {
+					st.Exposure = s.exposure
+				}
 				emit(cluster.UpdateStepEvent{Step: s.id + "-inner", Status: "running", Message: "working on " + s.id})
 				if s.onRun != nil {
 					s.onRun()
@@ -162,7 +177,9 @@ func installRecipeFake(t *testing.T) (*recipeFake, *fakeRecord) {
 		}
 		return copyRecipeRun(f.record), nil
 	}
-	recipeOwnership = func(*cluster.Client, *types.RecipeRun) (map[string]bool, *types.CleanupRequest) { return nil, nil }
+	recipeOwnership = func(_, _ *cluster.Client, _ *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
+		return nil, nil
+	}
 	recipeOwnedProjects = func(*cluster.Client) ([]types.RecipeOwnedProject, error) { return nil, nil }
 	recordRecipeActivity = func(c *cluster.Client, _, _ string, _ bool) {
 		if c.ActsAsUser() {
@@ -266,7 +283,7 @@ func TestRecipeRun_StepsInOrderHoldingTheLock(t *testing.T) {
 	if op == nil || op.Type != "recipe" || op.Label != "Environment recipe" || op.Target != "dev: step 1 of 3 (Step one)" || op.Step != "one-inner" {
 		t.Errorf("operation %+v", op)
 	}
-	if st := recipeRunStatus(nil); !st.Running || st.Run.ID != runID || st.Step == nil || st.Step.Step != "one-inner" {
+	if st := recipeRunStatus(nil, nil); !st.Running || st.Run.ID != runID || st.Step == nil || st.Step.Step != "one-inner" {
 		t.Errorf("status during the run %+v", st)
 	}
 	close(s1.release)
@@ -349,7 +366,7 @@ func TestRecipeRun_StopAfterThisStep(t *testing.T) {
 			t.Fatalf("stop: %d %s", w.Code, w.Body.String())
 		}
 	}
-	if st := recipeRunStatus(nil); !st.StopRequested {
+	if st := recipeRunStatus(nil, nil); !st.StopRequested {
 		t.Error("the status does not show the stop")
 	}
 	close(s1.release)
@@ -435,7 +452,7 @@ func TestRecipeRun_DrainStopsBeforeTheNextStep(t *testing.T) {
 	if st := operationStatus(nil); st.Interrupted != nil {
 		t.Errorf("reported interrupted: %+v", st.Interrupted)
 	}
-	if st := recipeRunStatus(nil); st.Interrupted || st.Running {
+	if st := recipeRunStatus(nil, nil); st.Interrupted || st.Running {
 		t.Errorf("run status %+v", st)
 	}
 	mutations.mu.Lock()
@@ -660,27 +677,27 @@ func TestRecipePlan_ReadOnly(t *testing.T) {
 func TestRecipeRunStatus_InterruptedAndRemote(t *testing.T) {
 	f, rec := installRecipeFake(t)
 	f.record = &types.RecipeRun{ID: "r1", OperationID: "remote-op", BootID: "other-boot", State: types.RecipeRunRunning, Steps: []types.RecipeRunStep{{ID: "rhoai", Status: types.RecipeStepRunning}}}
-	if st := recipeRunStatus(nil); !st.Interrupted || st.Running || st.Run.ID != "r1" {
+	if st := recipeRunStatus(nil, nil); !st.Interrupted || st.Running || st.Run.ID != "r1" {
 		t.Errorf("no live lease: %+v", st)
 	}
 	rec.setLease(otherPodLease(clk.Now()))
-	if st := recipeRunStatus(nil); st.Interrupted || !st.Running || !st.Remote || st.Pod != "updater-old-pod" || st.Step == nil {
+	if st := recipeRunStatus(nil, nil); st.Interrupted || !st.Running || !st.Remote || st.Pod != "updater-old-pod" || st.Step == nil {
 		t.Errorf("live lease of its process: %+v", st)
 	}
 	// The same process running another operation is not this run.
 	other := otherPodLease(clk.Now())
 	other.ID = "another-op"
 	rec.setLease(other)
-	if st := recipeRunStatus(nil); !st.Interrupted || st.Running {
+	if st := recipeRunStatus(nil, nil); !st.Interrupted || st.Running {
 		t.Errorf("a live lease of another operation of its process: %+v", st)
 	}
 	f.record.State = types.RecipeRunFailed
 	rec.setLease(nil)
-	if st := recipeRunStatus(nil); st.Interrupted || st.Running {
+	if st := recipeRunStatus(nil, nil); st.Interrupted || st.Running {
 		t.Errorf("finished run: %+v", st)
 	}
 	f.record = nil
-	if st := recipeRunStatus(nil); st.Run != nil {
+	if st := recipeRunStatus(nil, nil); st.Run != nil {
 		t.Errorf("no run: %+v", st)
 	}
 }
@@ -960,11 +977,11 @@ func TestRecipeResume_KeepsComponentsAndOwnershipIsLive(t *testing.T) {
 	f.mu.Unlock()
 	recipes = &recipeRunner{}
 	var asked *types.RecipeRun
-	recipeOwnership = func(_ *cluster.Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
+	recipeOwnership = func(_, _ *cluster.Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
 		asked = run
 		return map[string]bool{"pipelines-prereq": true}, &types.CleanupRequest{Components: []string{"aipipelines"}}
 	}
-	st := recipeRunStatus(nil)
+	st := recipeRunStatus(nil, nil)
 	if asked == nil || strings.Join(asked.Components, ",") != "aipipelines,mlflowoperator" {
 		t.Fatalf("ownership asked for %+v", asked)
 	}
@@ -1018,5 +1035,107 @@ func TestRecipePlan_GitOpsProfileFix(t *testing.T) {
 	plan, _ := planForRun(nil, types.EnvironmentRecipe{}, nil)
 	if n := len(plan.Problems); n != 1 || plan.Problems[0].Fix == nil || *plan.Problems[0].Fix != (types.RecipeFix{Code: types.RecipeFixProfileGitOps}) {
 		t.Errorf("problems %+v", plan.Problems)
+	}
+}
+
+// resumeRun posts a resume of runID and waits for it to end.
+func resumeRun(t *testing.T, runID string) {
+	t.Helper()
+	mutationLimiter = newRateLimiter()
+	w := httptest.NewRecorder()
+	HandleRecipeResume(w, postJSON(t, "/api/recipes/resume", "user:admin", `{"runId":"`+runID+`"}`))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("resume: %d %s", w.Code, w.Body.String())
+	}
+	recipes.mu.Lock()
+	done := recipes.done
+	recipes.mu.Unlock()
+	waitDone(t, done)
+}
+
+// A run stopped after the MaaS step resumes with the Models prerequisites:
+// the steps the cluster has are skipped (their checks say so), and the MaaS
+// platform the first attempt created stays the run's.
+func TestRecipeResume_AfterMaaSContinuesWithModels(t *testing.T) {
+	f, rec := installRecipeFake(t)
+	f.addStep("mlflow")
+	maas := f.addStep("maas")
+	maas.created = []types.RecipeCreatedPart{{Part: types.RecipePartMaaSPlatform, UID: "creds-1"}}
+	f.addStep("models-prereq")
+	f.addStep("model")
+	close(f.steps[0].release)
+	runID, done := startRun(t)
+	waitStarted(t, maas)
+	w := httptest.NewRecorder()
+	HandleRecipeStop(w, postJSON(t, "/api/recipes/stop", "user:admin", "{}"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("stop: %d %s", w.Code, w.Body.String())
+	}
+	close(maas.release)
+	waitDone(t, done)
+	run := f.saved()
+	if run.State != types.RecipeRunStopped || stepStatuses(run) != "mlflow=success maas=success models-prereq=pending model=pending" || !strings.Contains(run.StopReason, "Resume continues with Step models-prereq") {
+		t.Fatalf("stopped run %s: %+v", stepStatuses(run), run)
+	}
+	if len(run.CreatedParts) != 1 || run.CreatedParts[0].Part != types.RecipePartMaaSPlatform {
+		t.Errorf("created %+v", run.CreatedParts)
+	}
+
+	// The cluster now has MLflow and MaaS.
+	f.mu.Lock()
+	f.steps = nil
+	f.mu.Unlock()
+	f.addStep("mlflow").done = true
+	f.addStep("maas").done = true
+	pre, model := f.addStep("models-prereq"), f.addStep("model")
+	for _, s := range f.steps {
+		close(s.release)
+	}
+	resumeRun(t, runID)
+	run = f.saved()
+	if run.State != types.RecipeRunSucceeded || stepStatuses(run) != "mlflow=skipped maas=skipped models-prereq=success model=success" || !pre.ran || !model.ran {
+		t.Errorf("resumed %s: %+v", stepStatuses(run), run)
+	}
+	if len(run.CreatedParts) != 1 || run.CreatedParts[0].UID != "creds-1" {
+		t.Errorf("the resume lost what the first attempt created: %+v", run.CreatedParts)
+	}
+	assertReleased(t, rec)
+}
+
+// How the model is reached, as the first attempt resolved it, is kept for
+// a resume; one the record holds that no model setup takes (a tampered
+// record) is not, and the resume resolves it again.
+func TestRecipeResume_KeepsTheResolvedExposure(t *testing.T) {
+	f, _ := installRecipeFake(t)
+	f.addStep("models-prereq").exposure = "maas"
+	m := f.addStep("model")
+	m.result = &types.OperationResponse{Success: false, Message: "not ready", ErrorCode: "timeout"}
+	for _, s := range f.steps {
+		close(s.release)
+	}
+	runID, done := startRun(t)
+	waitDone(t, done)
+	if run := f.saved(); run.Exposure != "maas" {
+		t.Fatalf("recorded exposure %q", run.Exposure)
+	}
+	for _, tc := range []struct{ name, recorded, want string }{{"kept", "maas", "maas"}, {"tampered", "public", ""}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f.mu.Lock()
+			f.steps = nil
+			f.record.Exposure, f.record.State = tc.recorded, types.RecipeRunFailed
+			f.mu.Unlock()
+			f.addStep("models-prereq").done = true
+			var seen string
+			model := f.addStep("model")
+			model.seen = func(st *cluster.RecipeState) { seen = st.Exposure }
+			for _, s := range f.steps {
+				close(s.release)
+			}
+			recipes = &recipeRunner{}
+			resumeRun(t, runID)
+			if seen != tc.want {
+				t.Errorf("the model step saw exposure %q, want %q", seen, tc.want)
+			}
+		})
 	}
 }

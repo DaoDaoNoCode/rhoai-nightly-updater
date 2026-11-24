@@ -21,8 +21,14 @@ export function baseWorld() {
     resources: { minio: F.s3States.running, mlflow: F.mlflowStates.none, pipelineServers: [F.pipelineServer] },
     // The Gen AI playground (GET /api/resources/playground).
     playground: F.playgroundWorld(),
+    // The Workbench tab (GET /api/resources/workbench): items, and the plan of a project.
+    workbench: { items: [] },
+    // The Distributed workloads tab (GET /api/resources/kueue).
+    kueue: F.kueueWorld("none"),
     // Models as a Service (GET /api/resources/maas).
     maas: F.maasWorld("none"),
+    // This tool's model registry (GET /api/resources/model-registry).
+    modelRegistry: F.modelRegistryStates.absent,
     // Sample states by project; a project not named has none of the samples.
     samples: { mlflow: {} },
     // The last environment recipe run (GET /api/recipes/run).
@@ -304,8 +310,19 @@ export const scenarios = {
     w.gated = true;
   },
   mlflow: (w) => { w.resources.mlflow = F.mlflowStates.running; },
+  // The Model registry tab: not set up, starting, and ready with the sample model.
+  "env-registry-none": (w) => { w.modelRegistry = F.modelRegistryStates.absent; },
+  "env-registry-starting": (w) => { w.modelRegistry = F.modelRegistryStates.starting; },
+  "env-registry-ready": (w) => { w.modelRegistry = F.modelRegistryStates.ready; },
+  // Its DataScienceCluster component was turned on by this tool: Clean up offers it back.
+  "env-registry-turned-on": (w) => { w.modelRegistry = F.modelRegistryStates.ready; w.prereq = { ...(w.prereq ?? {}), registryRestorable: true }; },
   // The Environment page's other states, one scenario each.
   "env-ready": (w) => { w.resources.mlflow = F.mlflowStates.running; },
+  // Workbenches use the pipeline server's Connection: the Pipelines tab names them, Delete lists them.
+  "env-connection-workbenches": (w) => {
+    w.resources.mlflow = F.mlflowStates.running;
+    w.resources.pipelineServers = [{ ...F.pipelineServer, connectionWorkbenches: [{ name: "my-notebook", uid: "0b5e2c1a-6f0d-4c4e-9a52-3f1d7e8a9b10", running: true }, { name: "training-wb", uid: "7c9d4e2f-1a3b-4d5e-8f60-2b4c6d8e0f12" }], connectionEnvOnlyWorkbenches: ["old-notebook"] }];
+  },
   // A pipeline server an earlier version set up as nightly-dspa: the workbench notice and Recreate.
   "env-old-name": (w) => {
     w.resources.pipelineServers = [F.pipelineServerOldName];
@@ -547,6 +564,26 @@ export const scenarios = {
   },
   // Others publish through the platform: Remove refuses before changing anything.
   "env-maas-in-use": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(false)] }); w.maasRefusal = F.MAAS_IN_USE; },
+  // The Workbench tab: not set up (the plan shown), running, stopped, and no hardware profile fits.
+  // The Distributed workloads tab: not set up, operator missing, ready with samples, opt-in on.
+  "env-kueue-none": () => {},
+  "env-kueue-operator-missing": (w) => { w.kueue = F.kueueWorld("operator-missing"); w.prereq = { ...(w.prereq ?? {}), kueue: "missing" }; },
+  "env-kueue-ready": (w) => { w.kueue = F.kueueWorld("ready", { samples: true }); },
+  // Made by an earlier version: the 11Gi queue and a 2Gi RayCluster sample (Set up keeps what is there).
+  "env-kueue-outdated": (w) => {
+    w.kueue = F.kueueWorld("ready", { samples: true });
+    w.kueue.quota = "6 CPUs and 11Gi of memory";
+    w.kueue.objects = w.kueue.objects.map((o) => (o.kind === "ClusterQueue" ? { ...o, outdated: "its quota is 6 CPUs and 11Gi of memory; this version sets 6 CPUs and 19Gi of memory" } : o));
+    w.kueue.samples = w.kueue.samples.map((s) => (s.kind === "raycluster" ? { ...s, state: "Admitted", rayState: "failed", outdated: "its head and worker have other CPU and memory than this version sets (head 1 CPU and 5Gi requested, up to 2 CPUs and 8Gi; worker 1 CPU and 3Gi requested, up to 1 CPU and 6Gi)" } : s));
+  },
+  "env-kueue-optin": (w) => { w.kueue = F.kueueWorld("ready", { samples: true, optIn: true }); },
+  "env-workbench-none": () => {},
+  "env-workbench-running": (w) => { w.workbench.items = [F.workbenchItem("dev-project", "running")]; },
+  "env-workbench-stopped": (w) => { w.workbench.items = [{ ...F.workbenchItem("dev-project", "stopped"), ready: false }]; },
+  "env-workbench-no-profile": (w) => { w.workbench.noProfile = true; },
+  "env-workbench-storage-used": (w) => { const it = F.workbenchItem("dev-project", "running"); w.workbench.items = [{ ...it, storage: { ...it.storage, usedBy: ["workbench my-wb"] } }]; },
+  "env-workbench-kept-storage-used": (w) => { scenarios["env-workbench-kept-storage"](w); w.workbench.items[0].storage = { ...w.workbench.items[0].storage, usedBy: ["workbench my-wb"] }; },
+  "env-workbench-kept-storage": (w) => { const { state: _s, url: _u, image: _i, hardwareProfile: _h, cpu: _c, memory: _m, connectionAttached: _a, ...kept } = F.workbenchItem("dev-project", "stopped"); w.workbench.items = [{ ...kept, deployed: false, ready: false }]; },
   "env-playground-no-model": (w) => { w.playground.modelsByProject["dev-project"] = []; },
   "env-playground-model-not-ready": (w) => {
     scenarios["env-models-ready"](w);
@@ -554,6 +591,12 @@ export const scenarios = {
   },
   "env-playground-starting": (w) => { scenarios["env-models-ready"](w); w.playground.items = [F.playgroundStates.starting()]; },
   "env-playground-ready": (w) => { scenarios["env-models-ready"](w); w.playground.items = [F.playgroundStates.ready()]; },
+  // Set up with the published Models as a Service model (recorded), and a MaaS row the user's subscriptions may allow.
+  "env-playground-ready-maas": (w) => {
+    scenarios["env-models-ready"](w);
+    w.playground.modelsByProject["dev-project"] = [F.playgroundModels.qwen, F.playgroundModels.opt];
+    w.playground.items = [F.playgroundStates.ready("dev-project", { models: [{ name: F.playgroundModels.opt.name, source: "maas" }] })];
+  },
   "env-playground-foreign": (w) => { scenarios["env-models-ready"](w); w.playground.items = [F.playgroundStates.foreign()]; },
   "env-playground-failed": (w) => { scenarios["env-models-ready"](w); w.playground.items = [F.playgroundStates.failed()]; },
   "env-playground-api-differs": (w) => { scenarios["env-models-ready"](w); w.playground.apiProblem = F.PLAYGROUND_API_DIFFERS; w.playground.apiCode = "api_missing"; },
@@ -626,8 +669,8 @@ scenarios["diag-leftovers-refused"] = (w) => { scenarios["diag-leftovers"](w); w
 // RHOAI and no DataScienceCluster (new, and its review), a run at step 5
 // (POST /__docs/advance moves it on), one that failed at the pipeline
 // server, and one whose updater pod went away.
-const RECIPE_OPERATION = (w, step, title) => {
-  w.operation = { inProgress: true, operation: { id: "op-recipe", type: "recipe", label: "Environment recipe", user: F.USER, target: `dev: step ${step} of 8 (${title})`, startedAt: F.ago(12), updatedAt: F.ago(0.1) } };
+const RECIPE_OPERATION = (w, step, title, name = "dev", of = 8) => {
+  w.operation = { inProgress: true, operation: { id: "op-recipe", type: "recipe", label: "Environment recipe", user: F.USER, target: `${name}: step ${step} of ${of} (${title})`, startedAt: F.ago(12), updatedAt: F.ago(0.1) } };
 };
 scenarios["recipe-new"] = (w) => { scenarios["no-dsc"](w); w.resources = { minio: F.s3States.none, mlflow: F.mlflowStates.none, pipelineServers: [] }; };
 scenarios["recipe-review"] = (w) => { scenarios["recipe-new"](w); };
@@ -641,7 +684,7 @@ scenarios["recipe-failed"] = (w) => {
   w.recipeRun = { run: F.recipeRun({ done: 5, current: "failed", message: why, state: "failed", errorCode: "timeout", stopReason: `Step 6 of 8 (Pipeline server) failed: ${why}` }), running: false };
 };
 scenarios["recipe-succeeded"] = (w) => {
-  w.recipeRun = { run: F.recipeRun({ done: 8, current: "", state: "succeeded", stopReason: "Every step of dev is set up." }), running: false };
+  w.recipeRun = { run: F.recipeRun({ done: 8, current: "", state: "succeeded", stopReason: "Every step of recipe dev is set up." }), running: false };
   // What the run set up is there: MLflow, and the pipeline server in its project.
   w.resources = { ...w.resources, mlflow: F.mlflowStates.running, pipelineServers: [...w.resources.pipelineServers, { ...F.pipelineServer, namespace: "recipe-dev", apiRoute: undefined, uiRoute: undefined }] };
   // An earlier run's project is still there too.
@@ -649,6 +692,28 @@ scenarios["recipe-succeeded"] = (w) => {
     { name: "recipe-dev", uid: "uid-recipe-dev", recipe: "dev", createdAt: F.ago(40) },
     { name: "recipe-review", uid: "uid-recipe-review", recipe: "review", createdAt: F.ago(60 * 26) },
   ];
+};
+// A recipe with every feature (recipes phase 2): the form (the editor's
+// switches are turned on in the browser), running at the model step, and
+// succeeded with its Clean up offering the MaaS platform and the model
+// registry it created.
+scenarios["recipe-full-new"] = (w) => { scenarios["recipe-new"](w); };
+// The review of a recipe on a cluster that has part of it: skipped steps,
+// steps that run, and a blocked one with its problem.
+scenarios["recipe-full-review-mixed"] = (w) => { scenarios["recipe-new"](w); w.recipePlanMixed = true; };
+scenarios["recipe-full-running"] = (w) => {
+  const rcp = F.fullRecipe();
+  const steps = F.recipeSteps(rcp);
+  const at = steps.findIndex(([id]) => id === "model");
+  w.recipeRun = { run: F.recipeRun({ rcp, done: at }), running: true, pod: "rhoai-nightly-updater-6f7b8c9d5-x2k4p",
+    step: { step: "model-ready", status: "running", message: "Waiting for Qwen3 1.7B to serve: pulling its image on worker-2" } };
+  RECIPE_OPERATION(w, at + 1, steps[at][1], "full", steps.length);
+};
+scenarios["recipe-full-succeeded"] = (w) => {
+  const rcp = F.fullRecipe();
+  const steps = F.recipeSteps(rcp);
+  w.recipeRun = { run: F.recipeRun({ rcp, done: steps.length, current: "", state: "succeeded", stopReason: "Every step of recipe full is set up." }), running: false };
+  w.resources = { ...w.resources, mlflow: F.mlflowStates.running, pipelineServers: [...w.resources.pipelineServers, { ...F.pipelineServer, namespace: "recipe-full", apiRoute: undefined, uiRoute: undefined }] };
 };
 scenarios["recipe-interrupted"] = (w) => {
   w.recipeRun = { run: F.recipeRun({ done: 3, pod: "rhoai-nightly-updater-6f7b8c9d5-q9m3z" }), running: false, interrupted: true };
@@ -701,6 +766,7 @@ export const reads = {
   "GET /api/resources/status": (w) => ({ dashboardUrl: F.DASHBOARD_URL, inferenceGateway: F.gatewayStates.none, models: F.modelsStatus(), ...w.resources, recipeProjects: F.recipeProjects(w) }),
   "GET /api/resources/projects": (w) => ({ projects: w.projects ?? F.projects }),
   "GET /api/resources/maas": (w) => w.maas,
+  "GET /api/resources/model-registry": (w) => w.modelRegistry,
   "GET /api/activity": (w) => w.status.activity ?? [],
   // The clean-up request for what the run created, once it is not running.
   "GET /api/recipes/run": (w) => {

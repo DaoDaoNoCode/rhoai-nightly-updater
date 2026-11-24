@@ -1,6 +1,6 @@
 /** Environment page coverage: S3 storage, pipeline servers, MLflow, models, playground, MaaS, samples, prerequisites, and clean-up. */
 
-import { OperationResponse, ProjectStatus, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, ModelsRequest, PlaygroundRequest, PlaygroundStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest } from '../../types';
+import { OperationResponse, ProjectStatus, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, ModelsRequest, PlaygroundRequest, PlaygroundStatus, WorkbenchRequest, WorkbenchStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelRegistryRequest, ModelRegistryStatus, KueueRequest, KueueStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest } from '../../types';
 import { request } from './client';
 import { StreamDoneHandler, StreamDetachHandler, streamSSE } from './stream';
 
@@ -58,19 +58,22 @@ export function getS3AdminLogin(): Promise<{ user: string; password: string; acc
  * Provisions the pipeline server in project; recreate swaps nightly-dspa for dspa.
  * confirmUnrecorded: UID of a pipeline server this tool never tracked that the user acknowledged as theirs (Recreate removes it).
  */
-export function setupPipelineServer(project: string, recreate = false, confirmUnrecorded = ""): Promise<OperationResponse> {
+export function setupPipelineServer(project: string, recreate = false, confirmUnrecorded = "", confirmWorkbenches: Record<string, string> = {}): Promise<OperationResponse> {
   return request('/api/resources/pipeline-server/setup', {
     method: 'POST',
-    body: JSON.stringify(recreate ? { project, recreate: true, ...(confirmUnrecorded ? { confirmUnrecorded } : {}) } : { project }),
+    body: JSON.stringify(recreate ? { project, recreate: true, ...(confirmUnrecorded ? { confirmUnrecorded } : {}), ...(Object.keys(confirmWorkbenches).length ? { confirmWorkbenches } : {}) } : { project }),
     acceptStatuses: [422],
   });
 }
 
-/** Removes the pipeline server in project; confirmUnrecorded: UID of an unrecorded server the user confirmed as theirs. */
-export function teardownPipelineServer(project: string, confirmUnrecorded = ""): Promise<OperationResponse> {
+/**
+ * Removes the pipeline server in project; confirmUnrecorded: UID of an unrecorded server the user confirmed as theirs;
+ * confirmWorkbenches: the workbenches the user confirmed removing the dashboard Connection from, by name to the UID reviewed (refused when another uses it).
+ */
+export function teardownPipelineServer(project: string, confirmUnrecorded = "", confirmWorkbenches: Record<string, string> = {}): Promise<OperationResponse> {
   return request('/api/resources/pipeline-server/teardown', {
     method: 'POST',
-    body: JSON.stringify(confirmUnrecorded ? { project, confirmUnrecorded } : { project }),
+    body: JSON.stringify({ project, ...(confirmUnrecorded ? { confirmUnrecorded } : {}), ...(Object.keys(confirmWorkbenches).length ? { confirmWorkbenches } : {}) }),
     acceptStatuses: [422],
   });
 }
@@ -126,16 +129,25 @@ export interface CleanupRequest {
   pipelineServers?: string[];
   /** Subset with unrecorded servers the user attributed to this tool: project mapped to that server’s UID. */
   confirmUnrecorded?: Record<string, string>;
+  /** Per project of pipelineServers, the workbenches the user confirmed removing the dashboard Connection from (errorCode confirm_connection_workbenches otherwise). */
+  confirmWorkbenches?: Record<string, Record<string, string>>;
   storage?: boolean;
   /** When storage is selected, additionally remove namespace seaweedfs. */
   deleteNamespace?: boolean;
   mlflow?: boolean;
+  /** This tool's model registry (with its registered models and its database). */
+  modelRegistry?: boolean;
+  /** This tool's distributed workloads setup (samples, queues, project label, dashboard opt-in). */
+  kueue?: boolean;
   /** Projects whose models are removed (after MLflow). */
   models?: string[];
   /** Inference gateway teardown, following the models. */
   inferenceGateway?: boolean;
   /** Projects losing this tool’s playground, before models. */
   playgrounds?: string[];
+  /** Projects losing this tool’s workbench (first); workbenchStorage: those whose storage goes too. */
+  workbenches?: string[];
+  workbenchStorage?: string[];
   /** Projects whose models this tool unpublishes from MaaS; runs first. */
   maasPublished?: string[];
   /** MaaS platform this tool installed; runs last. */
@@ -149,6 +161,16 @@ export interface CleanupRequest {
    * UID still matches, so a recreated project survives. Mandatory per recipe project.
    */
   recipeProjectUIDs?: Record<string, string>;
+  /**
+   * A recipe's Clean up of the MaaS platform and the model registry its run
+   * created: the run, and the UID of each object reviewed. Each is checked
+   * again before its teardown and refused when it was replaced since.
+   */
+  recipeRunId?: string;
+  maasPlatformUid?: string;
+  modelRegistryUid?: string;
+  /** The ClusterQueue of the distributed workloads setup the recipe's run created. */
+  kueueUid?: string;
   /**
    * Per recipe project, non-tool artifacts the refusal path listed
    * (errorCode confirm_project_contents; failed step detail for the project,
@@ -235,6 +257,21 @@ export function streamPlayground(
   return streamSSE('/api/resources/playground/stream', req, onStep, onDone, onConnectionDrop);
 }
 
+/** The Workbench feature: this tool's workbenches, and a project's with what Set up would create (admin only). */
+export function getWorkbench(project: string | null, signal?: AbortSignal): Promise<WorkbenchStatus> {
+  return request(`/api/resources/workbench${project ? `?project=${encodeURIComponent(project)}` : ''}`, { signal });
+}
+
+/** Set up, start, stop or delete a project's workbench: steps "check", "storage", "workbench" (teardown: "workbench", "storage"). */
+export function streamWorkbench(
+  req: WorkbenchRequest,
+  onStep: (step: UpdateStep) => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+): AbortController {
+  return streamSSE('/api/resources/workbench/stream', req, onStep, onDone, onConnectionDrop);
+}
+
 /** Models as a Service: platform pieces and this tool’s models with publication state. */
 export function getMaaS(signal?: AbortSignal): Promise<MaaSStatus> {
   return request('/api/resources/maas', { signal });
@@ -291,4 +328,44 @@ export function streamMLflowSamples(
 /** Sample pipeline specification for the user to execute with their own token (no cluster round-trip). */
 export function getPipelineSampleSpec(): Promise<PipelineSampleSpec> {
   return request('/api/resources/samples/pipeline/spec');
+}
+// --- Model registry ---
+
+/** This tool's model registry (GET /api/resources/model-registry), read with the user's own token. */
+export function getModelRegistry(signal?: AbortSignal): Promise<ModelRegistryStatus> {
+  return request('/api/resources/model-registry', { signal });
+}
+
+/**
+ * Sets up the model registry ("check", "create", "ready", "samples") or
+ * deletes it ("check", "delete", "gone") as one streamed operation.
+ */
+export function streamModelRegistry(
+  req: ModelRegistryRequest,
+  onStep: (step: UpdateStep) => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+): AbortController {
+  return streamSSE('/api/resources/model-registry/stream', req, onStep, onDone, onConnectionDrop);
+}
+
+// --- Distributed workloads ---
+
+/** The Distributed workloads tab (GET /api/resources/kueue), read with the admin's own token. */
+export function getKueue(project: string | null, signal?: AbortSignal): Promise<KueueStatus> {
+  return request(`/api/resources/kueue${project ? `?project=${encodeURIComponent(project)}` : ''}`, { signal });
+}
+
+/**
+ * Sets up ("check", "queues", "project", "samples"), deletes ("samples",
+ * "queues", "project", "opt-in"), deletes a sample ("samples") or turns the
+ * dashboard opt-in on ("check", "dashboard", "profile") or off ("opt-in").
+ */
+export function streamKueue(
+  req: KueueRequest,
+  onStep: (step: UpdateStep) => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+): AbortController {
+  return streamSSE('/api/resources/kueue/stream', req, onStep, onDone, onConnectionDrop);
 }

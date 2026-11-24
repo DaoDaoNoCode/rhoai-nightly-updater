@@ -222,8 +222,10 @@ const (
 // annotation only says the tool created one, which the dashboard may since
 // have deleted. One named GET, only when the project has the tool's
 // server (so only in a visible Data Science project); other projects, and
-// an empty project, read no Secret.
-func GetResourcesStatusFor(c *Client, project string) (*types.ResourcesStatus, error) {
+// an empty project, read no Secret. With a present Connection, u (the
+// signed-in user's client; nil reads nothing) lists the project's
+// workbenches that use it (ResourceState.ConnectionWorkbenches).
+func GetResourcesStatusFor(c, u *Client, project string) (*types.ResourcesStatus, error) {
 	status, err := GetResourcesStatus(c)
 	if err != nil || project == "" {
 		return status, err
@@ -243,6 +245,9 @@ func GetResourcesStatusFor(c *Client, project string) (*types.ResourcesStatus, e
 			ps.ConnectionState = ConnectionForeign
 		default:
 			ps.ConnectionState = ConnectionPresent
+			if u != nil {
+				addConnectionWorkbenches(u, project, ps)
+			}
 		}
 	}
 	return status, nil

@@ -151,6 +151,39 @@ type RecipeFeatures struct {
 	Models     RecipeModels  `json:"models" yaml:"models"`
 	Playground RecipeFeature `json:"playground" yaml:"playground"`
 	MaaS       RecipeMaaS    `json:"maas" yaml:"maas"`
+	// ModelRegistry and Workbench are optional: a recipe written before
+	// they existed leaves them out, and they stay off.
+	ModelRegistry RecipeModelRegistry `json:"modelRegistry,omitzero" yaml:"modelRegistry"`
+	// Workbench: the tool's workbench in the project, with the tool's S3
+	// Connection when the project has the tool's pipeline server.
+	Workbench RecipeFeature `json:"workbench,omitzero" yaml:"workbench"`
+	// Kueue: distributed workloads in the project, as the Distributed
+	// workloads tab sets them up. Optional, off when left out.
+	Kueue RecipeKueue `json:"kueue,omitzero" yaml:"kueue"`
+}
+
+// RecipeKueue is distributed workloads (Kueue): the tool's ResourceFlavor,
+// ClusterQueue (for the project only) and LocalQueue, the project label,
+// and the Ray samples and the dashboard's Kueue setting when asked for.
+type RecipeKueue struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
+	// RayCluster and RayJob: the samples, run by KubeRay (the ray
+	// component); RayImage is their image ("" the tab's default).
+	RayCluster bool   `json:"rayCluster,omitempty" yaml:"rayCluster"`
+	RayJob     bool   `json:"rayJob,omitempty" yaml:"rayJob"`
+	RayImage   string `json:"rayImage,omitempty" yaml:"rayImage"`
+	// DashboardOptIn turns the dashboard's Kueue setting on (cluster-wide:
+	// every new project becomes a Kueue project) and adds the Queue
+	// hardware profile. Off by default.
+	DashboardOptIn bool `json:"dashboardOptIn,omitempty" yaml:"dashboardOptIn"`
+}
+
+// RecipeModelRegistry is the tool's model registry (cluster-wide, in the
+// namespace RHOAI keeps registries in).
+type RecipeModelRegistry struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
+	// Sample: also register the sample model.
+	Sample bool `json:"sample,omitempty" yaml:"sample"`
 }
 
 // RecipeFeature is a feature without options.
@@ -294,6 +327,25 @@ type RecipePlan struct {
 	// checked later).
 	TypicalSeconds int `json:"typicalSeconds"`
 	MaxSeconds     int `json:"maxSeconds"`
+	// Warnings say what the run changes beyond the recipe's own parts and
+	// do not refuse it (the dashboard's cluster-wide Kueue setting; other
+	// setups in the project Kueue labels).
+	Warnings []RecipeWarning `json:"warnings,omitempty"`
+}
+
+// The kinds of a plan's warning (RecipeWarning.Kind).
+const (
+	// RecipeWarningAdvice is advice before the run (a safer choice).
+	RecipeWarningAdvice = "advice"
+	// RecipeWarningCluster is a change the run makes to what the whole
+	// cluster shares.
+	RecipeWarningCluster = "cluster"
+)
+
+// RecipeWarning is one of a plan's warnings.
+type RecipeWarning struct {
+	Kind    string `json:"kind"`
+	Message string `json:"message"`
 }
 
 // RecipePlanStep is one step of a plan.
@@ -370,10 +422,39 @@ type RecipeRun struct {
 	Pinned    *RecipePinnedBuild `json:"pinned,omitempty"`
 	Project   *RecipeProjectRef  `json:"project,omitempty"`
 	Steps     []RecipeRunStep    `json:"steps"`
+	// Exposure is how the run's model is reached, as the Models
+	// prerequisites step resolved it ("default-gateway", "maas", "internal",
+	// or "gateway" with GatewayRef), kept so a resume sets the model up the
+	// same way; "" until then.
+	Exposure   string `json:"exposure,omitempty"`
+	GatewayRef string `json:"gatewayRef,omitempty"`
+	// CreatedParts are the cluster-wide parts this run (any of its
+	// attempts) created: they were not this tool's before its step. Its
+	// Clean up offers those still this tool's, never anything else.
+	CreatedParts []RecipeCreatedPart `json:"createdParts,omitempty"`
 	// Components are the DataScienceCluster components this run (any of
 	// its attempts) turned on (the keys its prerequisite steps added to
 	// the prerequisites record). Its Clean up offers those still Managed.
 	Components []string `json:"components,omitempty"`
+}
+
+// The cluster-wide parts a run can create (RecipeCreatedPart.Part).
+const (
+	RecipePartMaaSPlatform  = "maas-platform"
+	RecipePartModelRegistry = "model-registry"
+	// RecipePartKueue is the distributed workloads setup; its UID is its
+	// ClusterQueue's.
+	RecipePartKueue = "kueue"
+)
+
+// RecipeCreatedPart is a cluster-wide part a run created: the MaaS
+// platform or the model registry. UID names the object the step created
+// when there is one (the registry; the MaaS development database's
+// credentials Secret), so one made again since, by anyone, is not the
+// run's.
+type RecipeCreatedPart struct {
+	Part string `json:"part"`
+	UID  string `json:"uid,omitempty"`
 }
 
 // RecipeRunStep is one step of a run.
@@ -418,6 +499,10 @@ type RecipeRunStatus struct {
 	// CleanupRequest); the user confirms it, and the project's contents
 	// when Clean up asks.
 	Cleanup *CleanupRequest `json:"cleanup,omitempty"`
+	// CleanupKueueSetting: removing the offered distributed workloads
+	// setup also turns the dashboard's Kueue setting back, which the run
+	// turned on (the Clean up dialog says so).
+	CleanupKueueSetting bool `json:"cleanupKueueSetting,omitempty"`
 	// Projects are the projects recipes created (this run's and earlier
 	// runs') that the cluster has now, as Clean up may delete them, when no
 	// run is running; ProjectsError says why they could not be read.

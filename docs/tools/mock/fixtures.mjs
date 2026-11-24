@@ -11,6 +11,22 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 
 /** Screenshot timeline anchor; Playwright aligns the browser clock to the same instant. */
+/** The Workbench tab (GET /api/resources/workbench): what Set up would create, and this tool's workbench in states. */
+export const workbenchPlan = {
+  image: "Jupyter | Minimal | CPU | Python 3.12", imageStream: "s2i-minimal-notebook", imageTag: "2025.2",
+  hardwareProfile: "Default", hardwareProfileName: "redhat-ods-applications/default-profile", cpu: "2", memory: "4Gi",
+  storageSize: "20Gi", storageClass: "gp3-csi", connection: true, pipelines: true, mlflow: false,
+};
+export const WORKBENCH_NO_PROFILE = "No enabled hardware profile is offered for workbenches. A cluster-admin enables one in the dashboard (Settings, Hardware profiles).";
+export function workbenchItem(ns, state) {
+  return {
+    deployed: true, ready: state === "running", namespace: ns, name: "nightly-workbench", managedByTool: true, uid: "3f1c2b9e-workbench",
+    state, url: `${DASHBOARD_URL}/notebook/${ns}/nightly-workbench`,
+    image: "Jupyter | Minimal | CPU | Python 3.12 (2025.2)", hardwareProfile: "Default", cpu: "2", memory: "4Gi", connectionAttached: true,
+    storage: { name: "nightly-workbench-storage", size: "20Gi", storageClass: "gp3-csi", managedByTool: true },
+  };
+}
+
 export const NOW = Date.parse("2026-10-06T14:30:00Z");
 
 /** Returns an RFC 3339 timestamp `minutes` earlier than NOW. */
@@ -73,7 +89,8 @@ export function healthyStatus(updatedMinutesAgo = 60 * 10) {
     subscription: { name: "rhods-operator", source: "rhoai-catalog-dev", channel: "stable-3.x", state: "AtLatestKnown" },
     csv: { name: "rhods-operator.3.6.0", version: "3.6.0", phase: "Succeeded" },
     catalogSource: { exists: true, name: "rhoai-catalog-dev", image: LATEST_IMAGE, state: "READY" },
-    pullSecret: { exists: true, valid: true },
+    // ROSA HCP: the internal registry's copy of the token (workbench images).
+    pullSecret: { exists: true, valid: true, registry: { name: "rhoai-nightly-updater-pull", namespace: "redhat-ods-applications", exists: true, ours: true, current: true } },
     imageMirror: { exists: true, name: "rhoai-quay-mirror", source: "registry.redhat.io/rhoai" },
     installPlan: { name: "install-7xk2p", phase: "Complete", approved: true },
     catalogPod: { name: "rhoai-catalog-dev-q8z4n", phase: "Running", ready: true, restartCount: 0 },
@@ -162,7 +179,9 @@ export const NODE_PULL_SECRET_REMOVE_COMMAND = readFileSync(join(here, "../../..
 export function selfManaged(s, { known = true, pulled = false, managed = false, addedByTool } = {}) {
   if (known) s.cluster.controlPlane = managed ? "managed" : "self-managed";
   else delete s.cluster.controlPlane;
-  s.pullSecret = { ...s.pullSecret, nodes: { command: NODE_PULL_SECRET_COMMAND, removeCommand: NODE_PULL_SECRET_REMOVE_COMMAND, pulled, ...(addedByTool ? { addedByTool } : {}) } };
+  // Only a hosted control plane reports the internal registry's copy.
+  const { registry: _registry, ...pullSecret } = s.pullSecret;
+  s.pullSecret = { ...pullSecret, nodes: { command: NODE_PULL_SECRET_COMMAND, removeCommand: NODE_PULL_SECRET_REMOVE_COMMAND, pulled, ...(addedByTool ? { addedByTool } : {}) } };
   return s;
 }
 
@@ -1451,8 +1470,54 @@ export const routed = (m, { exposure = "default-gateway", check = "ok" } = {}) =
         : undefined,
 });
 
+// --- Model registry (GET /api/resources/model-registry, modelregistry.ReadStatus) ---
+
+const REGISTRY_BASE = { name: "nightly-registry", namespace: "rhoai-model-registries", component: "aiHub", dashboardUrl: DASHBOARD_URL };
+const REGISTRY_SAMPLE = { model: "qwen25-05b-instruct", version: "v1", uri: "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775" };
+
+/** This tool's model registry, one state each. */
+export const modelRegistryStates = {
+  absent: { ...REGISTRY_BASE, state: "absent" },
+  starting: { ...REGISTRY_BASE, state: "starting", managedByTool: true, message: "Deployment nightly-registry-postgres is progressing: waiting for the database to be available" },
+  ready: {
+    ...REGISTRY_BASE, state: "ready", managedByTool: true, address: `${DASHBOARD_URL}/model-registry/nightly-registry`,
+    sample: { ...REGISTRY_SAMPLE, registered: true, complete: true, state: "LIVE", id: "1" },
+  },
+  readyNoSample: {
+    ...REGISTRY_BASE, state: "ready", managedByTool: true, address: `${DASHBOARD_URL}/model-registry/nightly-registry`,
+    sample: { ...REGISTRY_SAMPLE, registered: false },
+  },
+  terminating: { ...REGISTRY_BASE, state: "terminating", managedByTool: true, message: "Being deleted." },
+};
+
+/** The Distributed workloads tab (GET /api/resources/kueue): Kueue on the cluster, the tool's setup in states. */
+export const KUEUE_IMAGE = "quay.io/modh/ray:2.47.1-py311-cu121";
+export function kueueWorld(state = "none", { optIn = false, samples = false, project = "dev-project" } = {}) {
+  const set = state === "ready";
+  const obj = (kind, name, namespace) => ({ kind, name, ...(namespace ? { namespace } : {}), present: set, ...(set ? { managedByTool: true, active: true } : {}) });
+  const missing = state === "operator-missing";
+  return {
+    project: state === "none" || missing ? undefined : project,
+    instance: missing ? { found: false, available: false, v1beta2: false, ready: false } : { found: true, available: true, kueueReady: "True", v1beta2: true, ready: true },
+    ...(missing ? { refusal: "Set up its prerequisites first (above): Kueue is turned off on this cluster.", refusalCode: "prerequisites",
+      blocked: { component: "kueue", dsc: "default-dsc", state: "Removed", reason: "Kueue component is turned off on this cluster: component kueue is Removed in DataScienceCluster default-dsc, so nothing would run it. A cluster-admin turns it on by setting it to Unmanaged." } } : {}),
+    objects: missing ? [] : [obj("ResourceFlavor", "nightly-kueue-cpu"), obj("ClusterQueue", "nightly-kueue"), obj("LocalQueue", "nightly-kueue", project)],
+    quota: "6 CPUs and 19Gi of memory",
+    ...(set ? { label: { present: true, addedByTool: true } } : {}),
+    samples: [
+      samples ? { kind: "raycluster", name: "nightly-raycluster", present: true, managedByTool: true, image: KUEUE_IMAGE, state: "Running", rayState: "ready" } : { kind: "raycluster", name: "nightly-raycluster", present: false },
+      samples ? { kind: "rayjob", name: "nightly-rayjob", present: true, managedByTool: true, image: KUEUE_IMAGE, state: "Admitted", rayState: "Running" } : { kind: "rayjob", name: "nightly-rayjob", present: false },
+    ],
+    optIn: optIn
+      ? { disableKueue: false, setByTool: true, previous: "unset", on: true, profile: { kind: "HardwareProfile", name: "nightly-kueue-cpu", namespace: "redhat-ods-applications", present: true, managedByTool: true, active: true } }
+      : { profile: { kind: "HardwareProfile", name: "nightly-kueue-cpu", namespace: "redhat-ods-applications", present: false } },
+    defaultRayImage: KUEUE_IMAGE,
+    dashboardUrl: DASHBOARD_URL,
+  };
+}
+
 /** Feature prerequisite matrix for GET /api/resources/prerequisites. */
-export function prerequisites({ models = "ready", pipelines = "ready", exposure = "" } = {}) {
+export function prerequisites({ models = "ready", pipelines = "ready", registryRestorable = false, kueue = "ready", exposure = "" } = {}) {
   const readyPart = (id, title, message) => ({ id, title, state: "ready", message, notManaged: true });
   const ready = (parts) => ({ ready: true, parts });
   const missingModels = {
@@ -1487,6 +1552,23 @@ export function prerequisites({ models = "ready", pipelines = "ready", exposure 
       mlflow: ready([readyPart("dsc-mlflowoperator", "MLflow (mlflowoperator)", "Managed in DataScienceCluster default-dsc")]),
       models: models === "ready" ? ready([readyPart("dsc-kserve", "Model serving (KServe)", "Managed in DataScienceCluster default-dsc"), readyPart("cert-manager", "cert-manager Operator for Red Hat OpenShift", "Version 1.20.1 runs in cert-manager-operator")]) : missingModels,
       playground: ready([readyPart("dsc-ogx", "Gen AI playground (ogx)", "Managed in DataScienceCluster default-dsc")]),
+      kueue: kueue === "missing"
+        ? {
+          ready: false,
+          parts: [
+            readyPart("cert-manager", "cert-manager Operator for Red Hat OpenShift", "Version 1.20.1 runs in cert-manager-operator"),
+            { id: "kueue-operator", title: "Red Hat build of Kueue", state: "missing", message: "Not installed. Set up installs version 1.5.1 from redhat-operators (channel stable-v1.5)." },
+            { id: "dsc-kueue", title: "Kueue component", state: "missing", message: "Removed in DataScienceCluster default-dsc. Set up sets it to Unmanaged, which means RHOAI uses the Kueue operator you install instead of its own; Clean up can turn it back.", commands: `oc patch datasciencecluster default-dsc --type=merge -p '{"spec":{"components":{"kueue":{"managementState":"Unmanaged"}}}}'` },
+          ],
+          setupPlan: [
+            "Install Red Hat build of Kueue 1.5.1: Namespace openshift-kueue-operator, OperatorGroup openshift-kueue-operator, Subscription openshift-kueue-operator/kueue-operator (package kueue-operator, channel stable-v1.5, from redhat-operators, automatic updates); it stays after Clean up, as other features share it",
+            "DataScienceCluster default-dsc: set kueue to Unmanaged (it is Removed; Clean up can turn it back while nothing else uses it)",
+          ],
+        }
+        : { ready: true, parts: [readyPart("cert-manager", "cert-manager Operator for Red Hat OpenShift", "Version 1.20.1 runs in cert-manager-operator"), readyPart("kueue-operator", "Red Hat build of Kueue", "Version 1.5.1 runs in openshift-kueue-operator"), { id: "dsc-kueue", title: "Kueue component", state: "ready", message: "Unmanaged in DataScienceCluster default-dsc (turned on by this tool)", managedByTool: true }], restorable: [{ component: "kueue", previous: "Removed", feature: "kueue" }] },
+      "model-registry": registryRestorable
+        ? { ready: true, parts: [{ id: "dsc-aiHub", title: "Model registry (aiHub)", state: "ready", message: "Managed in DataScienceCluster default-dsc (turned on by this tool)", managedByTool: true }], restorable: [{ component: "aiHub", previous: "Removed", feature: "model-registry" }] }
+        : ready([readyPart("dsc-aiHub", "Model registry (aiHub)", "Managed in DataScienceCluster default-dsc")]),
     },
   };
 }
@@ -1704,14 +1786,59 @@ export const recipe = () => ({
   },
 });
 
-/** Recipe step metadata (pkg/cluster internal/recipe Steps): typical and max durations. */
-const RECIPE_STEPS = [
-  ["rhoai", "RHOAI", 420, 900], ["dsc", "DataScienceCluster", 60, 420], ["project", "Project recipe-dev", 10, 60],
-  ["pipelines-prereq", "What Pipelines needs", 120, 600], ["s3", "S3 storage", 60, 300], ["pipeline-server", "Pipeline server", 120, 600],
-  ["mlflow-prereq", "What MLflow needs", 120, 600], ["mlflow", "MLflow", 120, 600],
-];
+/** A recipe with every feature (recipes phase 2), in project recipe-full. */
+export const fullRecipe = () => ({
+  apiVersion: "rhoai-nightly-updater/v1alpha1", kind: "EnvironmentRecipe", metadata: { name: "full" },
+  spec: {
+    rhoai: { build: "latest", ifInstalled: "keep" }, dataScienceCluster: { create: true },
+    project: { mode: "create", name: "recipe-full", displayName: "Recipe full" },
+    features: {
+      pipelines: { enabled: true }, mlflow: { enabled: true, samples: true },
+      models: { enabled: true, model: "qwen3-1-7b", exposure: "default-gateway" }, playground: { enabled: true },
+      maas: { enabled: true, database: "development", publish: true }, modelRegistry: { enabled: true, sample: true }, workbench: { enabled: true },
+      kueue: { enabled: true, rayCluster: true },
+    },
+    dashboardDev: { deploy: "pr", pr: 4321, flavor: "rhoai" },
+  },
+});
+
+/**
+ * A recipe's steps as the runner lists them (pkg/cluster internal/recipe
+ * Steps): id, title, typical and max seconds, in the runner's order.
+ */
+/** The catalog's display names (pkg/cluster internal/serving ModelCatalog), which the model step's title uses. */
+const MODEL_NAMES = { "qwen25-05b-instruct": "Qwen2.5 0.5B Instruct (CPU)", "qwen3-1-7b": "Qwen3 1.7B (CPU, tool calling)", "smollm2-135m-instruct": "SmolLM2 135M Instruct (CPU)" };
+
+export function recipeSteps(rcp = recipe()) {
+  const sp = rcp.spec;
+  const f = sp.features;
+  const out = [["rhoai", "RHOAI", 420, 900], ["dsc", "DataScienceCluster", 60, 420]];
+  if (sp.project) out.push(["project", `Project ${sp.project.name}`, 10, 60]);
+  if (f.pipelines?.enabled) out.push(["pipelines-prereq", "What Pipelines needs", 120, 600], ["s3", "S3 storage", 60, 300], ["pipeline-server", "Pipeline server", 120, 600]);
+  if (f.mlflow?.enabled) out.push(["mlflow-prereq", "What MLflow needs", 120, 600], ["mlflow", "MLflow", 120, 600]);
+  if (f.mlflow?.enabled && f.mlflow.samples) out.push(["mlflow-samples", "MLflow samples", 60, 900]);
+  if (f.maas?.enabled) out.push(["maas", "Models as a Service", 600, 900]);
+  if (f.models?.enabled) {
+    out.push(["models-prereq", "What Models needs", 240, 900], ["model", `Model ${MODEL_NAMES[f.models.model || "qwen25-05b-instruct"] ?? f.models.model}`, 300, 900]);
+    if (f.maas?.enabled && f.maas.publish && f.models.exposure !== "maas") out.push(["maas-publish", "Publish the model through MaaS", 120, 900]);
+  }
+  if (f.playground?.enabled) out.push(["playground-prereq", "What the playground needs", 120, 600], ["playground", "Playground", 120, 540]);
+  if (f.modelRegistry?.enabled) out.push(["model-registry-prereq", "What the model registry needs", 120, 600], ["model-registry", "Model registry", 120, 720]);
+  if (f.workbench?.enabled) out.push(["workbench", "Workbench", 30, 900]);
+  if (f.kueue?.enabled) out.push(["kueue-prereq", "What distributed workloads need", 240, 900], ["kueue", "Distributed workloads", 60, 600]);
+  const d = sp.dashboardDev ?? {};
+  if (d.deploy === "main" || d.deploy === "pr") out.push(["dashboard-dev", d.deploy === "pr" ? `Dashboard Dev (PR #${d.pr})` : "Dashboard Dev (main)", 180, 480]);
+  return out;
+}
 
 export const recipePinned = () => ({ tag: "rhoai-3.6", image: LATEST_IMAGE, digest: digest(latestBuild.seed) });
+
+/** The steps a mixed plan finds set up, with why. */
+const MIXED_SKIP = {
+  "pipelines-prereq": "Everything it needs is there.", s3: "The S3 storage is set up and ready.", "pipeline-server": "The pipeline server in PROJECT is ready.",
+  "mlflow-prereq": "Everything it needs is there.", mlflow: "MLflow is ready.", maas: "The MaaS platform is ready.",
+};
+const MIXED_BLOCKED = "Project PROJECT has a workbench nightly-workbench that this tool did not create; the recipe does not change it. Nothing was changed.";
 
 /** RecipeFix pointing users to Status when one-time setup is incomplete (pkg/types RecipeFix). */
 const ONE_TIME_SETUP_FIX = { code: "one_time_setup_missing", page: "/" };
@@ -1721,22 +1848,53 @@ const ONE_TIME_SETUP_FIX = { code: "one_time_setup_missing", page: "/" };
  * downstream checks until runtime. blocked injects missing one-time-setup errors
  * with navigation fixes plus a build-resolution problem.
  */
-export function recipePlan(rcp = recipe(), installed = true, blocked = false) {
-  const steps = RECIPE_STEPS.map(([id, title, typicalSeconds, maxSeconds], i) => {
+export function recipePlan(rcp = recipe(), installed = true, blocked = false, mixed = false) {
+  const steps = recipeSteps(rcp).map(([id, title, typicalSeconds, maxSeconds], i) => {
+    // A cluster where some of it is set up and one step is blocked: what a review shows.
+    const proj = rcp.spec.project?.name ?? "recipe-dev";
+    if (mixed && MIXED_SKIP[id]) return { id, title, action: "skip", reason: MIXED_SKIP[id].replace("PROJECT", proj), typicalSeconds, maxSeconds };
+    if (mixed && id === "workbench") return { id, title, action: "blocked", reason: MIXED_BLOCKED.replace("PROJECT", proj), fix: { code: "feature_blocked", page: "/environment" }, typicalSeconds, maxSeconds };
+    if (mixed && i > 0 && !MIXED_SKIP[id]) return { id, title, action: id === "project" || id === "dsc" ? "skip" : "run", ...(id === "dsc" ? { reason: "DataScienceCluster default-dsc exists." } : id === "project" ? { reason: `Project ${proj} was created by a recipe.` } : {}), typicalSeconds, maxSeconds };
     if (id === "rhoai" && blocked) return { id, title, action: "blocked", reason: "The one-time cluster setup is not done: additional-pull-secret is missing in kube-system.", fix: ONE_TIME_SETUP_FIX, typicalSeconds, maxSeconds };
-    if (id === "rhoai" && installed) return { id, title, action: "skip", reason: "RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).", typicalSeconds, maxSeconds };
+    if (id === "rhoai" && installed) return { id, title, action: "skip", reason: "RHOAI 3.6.0 is installed; the recipe keeps it.", typicalSeconds, maxSeconds };
     if (i <= 2) return { id, title, action: "run", typicalSeconds, maxSeconds };
     return { id, title, action: "later", reason: "Checked when the run gets here: it depends on a step before it.", typicalSeconds, maxSeconds };
   });
   const counted = steps.filter((s) => s.action !== "skip");
   return {
     recipe: rcp, steps, pinned: recipePinned(),
-    problems: blocked ? [
+    problems: mixed ? [{ message: `Workbench: ${MIXED_BLOCKED.replace("PROJECT", rcp.spec.project?.name ?? "recipe-dev")}`, fix: { code: "feature_blocked", page: "/environment" } }] : blocked ? [
       { message: "The one-time cluster setup is not done: additional-pull-secret is missing in kube-system. Run the one-time setup on the Status page first.", fix: ONE_TIME_SETUP_FIX },
       { field: "spec.rhoai.build", message: "Cannot resolve the build on Quay.", fix: { code: "build_unresolvable" } },
     ] : [],
     typicalSeconds: counted.reduce((n, s) => n + s.typicalSeconds, 0), maxSeconds: counted.reduce((n, s) => n + s.maxSeconds, 0),
+    ...([...kueueWarnings(rcp), ...playgroundWarnings(rcp)].length ? { warnings: [...kueueWarnings(rcp), ...playgroundWarnings(rcp)] } : {}),
   };
+}
+
+/** The plan's warning that the playground reaches the model through Models as a Service (pkg/cluster internal/recipe playgroundWarnings). */
+function playgroundWarnings(rcp) {
+  const f = rcp.spec.features;
+  const maas = f.models?.enabled && ((f.maas?.enabled && f.maas.publish) || f.models.exposure === "maas");
+  if (!f.playground?.enabled || !maas) return [];
+  const how = f.models.exposure === "maas" ? "it is reached through Models as a Service" : "the run publishes it there";
+  const entry = MODEL_CATALOG.find((c) => c.name === (f.models.model || "qwen25-05b-instruct"));
+  return [{ kind: "advice", message: `Model ${entry?.displayName ?? f.models.model} is offered to the playground only through Models as a Service (${how}), so the playground uses it from there: the dashboard sets the playground up with your sign-in, as when you choose a Models as a Service model in its Gen AI studio. Chatting with it needs a Models as a Service subscription to it. SECURITY.md (Which token is used where) says where your sign-in goes.` }];
+}
+
+/** The plan's warnings for distributed workloads (pkg/cluster internal/recipe kueueWarnings). */
+function kueueWarnings(rcp) {
+  const f = rcp.spec.features;
+  if (!f.kueue?.enabled) return [];
+  const others = [f.pipelines?.enabled && "a pipeline server", f.models?.enabled && "a model", f.models?.enabled && f.playground?.enabled && "a playground",
+    f.mlflow?.enabled && f.mlflow.samples && "the MLflow samples", f.workbench?.enabled && "a workbench"].filter(Boolean);
+  const out = [];
+  if (others.length) {
+    const list = others.length === 1 ? others[0] : `${others.slice(0, -1).join(", ")} and ${others[others.length - 1]}`;
+    out.push({ kind: "advice", message: `Project ${rcp.spec.project?.name ?? "recipe-dev"} also gets ${list}. Kueue manages only what is sent to a queue, so they keep running. A project of its own is still safer.` });
+  }
+  if (f.kueue.dashboardOptIn) out.push({ kind: "cluster", message: "The dashboard's Kueue setting is turned on: in every new project on this cluster, workbenches and model deployments can only use the queue hardware profile, and a project without its own LocalQueue cannot create workbenches or deploy models until an admin adds one." });
+  return out;
 }
 
 /**
@@ -1745,14 +1903,15 @@ export function recipePlan(rcp = recipe(), installed = true, blocked = false) {
  * created marks recipe-owned resources (project plus DSC prereq toggles) but never
  * shared S3, MLflow, or pipeline servers.
  */
-export function recipeRun({ done = 0, current = "running", message = "", state = "running", stopReason = "", errorCode = "", pod = "rhoai-nightly-updater-6f7b8c9d5-x2k4p" } = {}) {
+export function recipeRun({ done = 0, current = "running", message = "", state = "running", stopReason = "", errorCode = "", pod = "rhoai-nightly-updater-6f7b8c9d5-x2k4p", rcp = recipe() } = {}) {
   const start = 2 + done * 2.5;
-  const steps = RECIPE_STEPS.map(([id, title, typicalSeconds, maxSeconds], i) => {
+  const project = rcp.spec.project?.name ?? "recipe-dev";
+  const steps = recipeSteps(rcp).map(([id, title, typicalSeconds, maxSeconds], i) => {
     const times = { typicalSeconds, maxSeconds };
     if (i < done) {
       return id === "rhoai"
-        ? { id, title, ...times, status: "skipped", message: "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).", startedAt: ago(start), finishedAt: ago(start) }
-        : { id, title, ...times, status: "success", ...(RECIPE_OWNS.has(id) ? { created: true } : {}), message: RECIPE_DONE[id], startedAt: ago(start - i * 2.5), finishedAt: ago(start - (i + 1) * 2.5) };
+        ? { id, title, ...times, status: "skipped", message: "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it.", startedAt: ago(start), finishedAt: ago(start) }
+        : { id, title, ...times, status: "success", ...(RECIPE_OWNS.has(id) ? { created: true } : {}), message: (RECIPE_DONE[id] ?? `${title} is set up.`).replaceAll("recipe-dev", project), startedAt: ago(start - i * 2.5), finishedAt: ago(start - (i + 1) * 2.5) };
     }
     if (i === done && current) {
       return { id, title, ...times, status: current, ...(message ? { message } : {}), ...(current === "failed" ? { errorCode: "timeout", ...(RECIPE_OWNS.has(id) ? { created: true } : {}), finishedAt: ago(0.5) } : {}), startedAt: ago(1.2) };
@@ -1760,19 +1919,24 @@ export function recipeRun({ done = 0, current = "running", message = "", state =
     return { id, title, ...times, status: "pending" };
   });
   const components = Object.entries(RECIPE_COMPONENTS).filter(([id]) => steps.some((s) => s.id === id && s.created)).map(([, key]) => key);
+  // The cluster-wide parts the run created (they were not this tool's before their step).
+  const createdParts = [["maas", "maas-platform", "uid-maas-db-creds"], ["model-registry", "model-registry", "uid-nightly-registry"], ["kueue", "kueue", "uid-nightly-kueue"]]
+    .filter(([id]) => steps.some((s) => s.id === id && s.status === "success")).map(([, part, uid]) => ({ part, uid }));
   return {
     id: "run-7c1e", operationId: "op-recipe", bootId: "b-4e2a", pod, user: USER, startedAt: ago(start),
     ...(state !== "running" ? { finishedAt: ago(0.5) } : {}), state, ...(stopReason ? { stopReason } : {}), ...(errorCode ? { errorCode } : {}),
-    recipe: recipe(), pinned: recipePinned(), project: { name: "recipe-dev", uid: "5d1c0a3e-9b7f-4c2e-8a61-2f0d9e4b7c13", owned: true }, steps,
+    recipe: rcp, pinned: recipePinned(), project: { name: project, uid: "5d1c0a3e-9b7f-4c2e-8a61-2f0d9e4b7c13", owned: true }, steps,
     ...(components.length ? { components } : {}),
+    ...(rcp.spec.features.models?.enabled && steps.some((s) => s.id === "models-prereq" && s.status === "success") ? { exposure: rcp.spec.features.models.exposure || "default-gateway" } : {}),
+    ...(createdParts.length ? { createdParts } : {}),
   };
 }
 
 /** Step IDs the recipe may mark created (project + DSC prereq phases). */
-const RECIPE_OWNS = new Set(["project", "pipelines-prereq", "mlflow-prereq"]);
+const RECIPE_OWNS = new Set(["project", "pipelines-prereq", "mlflow-prereq", "models-prereq", "model-registry-prereq", "kueue-prereq", "maas", "model-registry", "kueue"]);
 
 /** Maps prereq step id to DSC component name. */
-const RECIPE_COMPONENTS = { "pipelines-prereq": "aipipelines", "mlflow-prereq": "mlflowoperator" };
+const RECIPE_COMPONENTS = { "pipelines-prereq": "aipipelines", "mlflow-prereq": "mlflowoperator", "models-prereq": "kserve", "model-registry-prereq": "modelregistry", "kueue-prereq": "kueue" };
 
 /**
  * Cleanup payload for GET /api/recipes/run derived from pkg/cluster/internal/recipe
@@ -1781,6 +1945,10 @@ const RECIPE_COMPONENTS = { "pipelines-prereq": "aipipelines", "mlflow-prereq": 
 export function recipeCleanup(run) {
   const req = {
     ...(run.project?.owned ? { recipeProjects: [run.project.name], recipeProjectUIDs: { [run.project.name]: run.project.uid || "uid-recipe-dev" } } : {}),
+    ...(run.createdParts?.some((p) => p.part === "model-registry") ? { modelRegistry: true, modelRegistryUid: run.createdParts.find((p) => p.part === "model-registry").uid } : {}),
+    ...(run.createdParts?.some((p) => p.part === "maas-platform") ? { maasPlatform: true, maasPlatformUid: run.createdParts.find((p) => p.part === "maas-platform").uid } : {}),
+    ...(run.createdParts?.some((p) => p.part === "kueue") ? { kueue: true, kueueUid: run.createdParts.find((p) => p.part === "kueue").uid } : {}),
+    ...(run.createdParts?.length ? { recipeRunId: run.id } : {}),
     ...(run.components?.length ? { components: run.components } : {}),
   };
   return Object.keys(req).length ? req : null;
@@ -1799,9 +1967,22 @@ export function recipeProjects(w) {
 const RECIPE_DONE = {
   dsc: "DataScienceCluster default-dsc created with the release's default components.",
   project: "Created project recipe-dev.",
-  "pipelines-prereq": "Turned on aipipelines in the DataScienceCluster; it is ready.",
+  "pipelines-prereq": "Turned on Data Science Pipelines in the DataScienceCluster; it is ready.",
   s3: "S3 storage (SeaweedFS) deployed with bucket 'pipelines'.",
   "pipeline-server": "The pipeline server in recipe-dev is ready.",
-  "mlflow-prereq": "Turned on mlflowoperator in the DataScienceCluster; it is ready.",
+  "mlflow-prereq": "Turned on MLflow in the DataScienceCluster; it is ready.",
   mlflow: "MLflow is ready.",
+  "mlflow-samples": "Samples added in project 'recipe-dev'.",
+  maas: "The MaaS platform is set up and ready.",
+  "models-prereq": "Turned on KServe in the DataScienceCluster, and installed cert-manager and Connectivity Link; they are ready.",
+  model: "qwen3-1-7b in recipe-dev serves, through the cluster's default gateway.",
+  "maas-publish": "Published qwen3-1-7b in recipe-dev through MaaS.",
+  "playground-prereq": "Everything it needs is there.",
+  playground: "The playground in recipe-dev is ready, with qwen3-1-7b.",
+  "model-registry-prereq": "Turned on Model registry in the DataScienceCluster; it is ready.",
+  "model-registry": "Model registry nightly-registry is ready in rhoai-model-registries. Sample model mnist (version v1) is registered.",
+  workbench: "Workbench nightly-workbench is starting in recipe-dev with Jupyter | Data Science | CPU | Python 3.12 on hardware profile Default.",
+  "kueue-prereq": "Turned on Kueue (set to Unmanaged, so RHOAI uses the Kueue operator) and installed cert-manager and the Red Hat build of Kueue; they are ready.",
+  kueue: "Distributed workloads are set up in recipe-dev with the RayCluster sample; Kueue admits it when the quota allows.",
+  "dashboard-dev": "Deployed PR #4321, its build for RHOAI (the dashboard images made for RHOAI, not ODH); the dashboard is ready.",
 };

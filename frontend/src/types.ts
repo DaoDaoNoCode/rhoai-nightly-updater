@@ -185,6 +185,29 @@ export interface PullSecretInfo {
    * self-managed cluster, or one whose control plane could not be read.
    */
   nodes?: NodePullSecretInfo;
+  /**
+   * ROSA HCP only: the internal registry's copy of the quay.io/rhoai token,
+   * which RHOAI's workbench images are pulled with. Absent elsewhere.
+   */
+  registry?: RegistryPullCopyInfo;
+}
+
+/** Secret `name` in RHOAI's applications namespace; never the token. */
+export interface RegistryPullCopyInfo {
+  name: string;
+  namespace?: string;
+  /** The pull secret has no entry exactly for quay.io/rhoai (only a generic quay.io login, or none): nothing is copied. */
+  noQuayRHOAIEntry?: boolean;
+  /** RHOAI has no DSCInitialization yet, so there is nowhere to copy to. */
+  noApplicationsNamespace?: boolean;
+  exists: boolean;
+  /** It carries this updater's label (only then does the updater change it). */
+  ours: boolean;
+  /** It holds only the pull secret's current token, and the registry can use it. */
+  current: boolean;
+  /** Why the registry does not use it (being deleted, another type, excluded). */
+  unusable?: string;
+  problem?: string;
 }
 
 /** The nodes' side of the quay.io/rhoai credentials: openshift-config/pull-secret, which the updater cannot read. */
@@ -1255,6 +1278,25 @@ export interface ResourceState {
   /** What the Connection Secret itself says, read only for the selected project (GET /api/resources/status?project=): present, missing, foreign or unreadable; absent when not read. */
   connectionState?: "present" | "missing" | "foreign" | "unreadable";
   connectionMessage?: string;
+  /** The project's workbenches whose opendatahub.io/connections annotation names that Connection (read with the user's token, only when present); deleting the pipeline server removes it from them first. */
+  connectionWorkbenches?: ConnectionWorkbench[];
+  /** Why connectionWorkbenches could not be read. */
+  connectionWorkbenchesMessage?: string;
+  /** Workbenches that load that Connection through envFrom without naming it in the annotation (RHOAI 2.x): not changed; they fail to start once it is deleted. */
+  connectionEnvOnlyWorkbenches?: string[];
+}
+
+/** A workbench (Notebook) that uses the tool's dashboard Connection (pkg/types ConnectionWorkbench): a confirmation names it with the UID reviewed. */
+export interface ConnectionWorkbench {
+  name: string;
+  uid: string;
+  /** Not stopped: taking the Connection off restarts its pod (work not saved to disk is lost). */
+  running?: boolean;
+}
+
+/** A confirmation of workbenches as requests carry it: each name mapped to the UID the user reviewed. */
+export function confirmationOf(workbenches: ConnectionWorkbench[]): Record<string, string> {
+  return Object.fromEntries(workbenches.map((w) => [w.name, w.uid]));
 }
 
 // --- Models (pkg/types InferenceGatewayState, ModelsStatus, ModelState) ---
@@ -1553,6 +1595,70 @@ export interface PRContainsResponse {
   retryAfterSeconds?: number;
 }
 
+/** GET /api/resources/workbench (pkg/types WorkbenchStatus): the Workbench feature, read with the admin's own token. */
+export interface WorkbenchStatus {
+  project?: string;
+  /** Why no workbench can be set up (the workbenches component is off). */
+  blocked?: ComponentBlock;
+  /** Why this platform cannot have one (RHOAI 2.x). */
+  unsupported?: string;
+  /** This tool's workbenches, and the chosen project's nightly-workbench. */
+  items?: WorkbenchState[];
+  itemsProblem?: string;
+  /** Projects whose workbench could not be read: unknown, never absent. */
+  itemsUnreadable?: string[];
+  /** What Set up would create in project; planProblem says why it cannot. */
+  plan?: WorkbenchPlan;
+  planProblem?: string;
+  planProblemCode?: string;
+}
+
+export interface WorkbenchPlan {
+  image: string;
+  imageStream: string;
+  imageTag: string;
+  hardwareProfile: string;
+  hardwareProfileName: string;
+  cpu?: string;
+  memory?: string;
+  queue?: string;
+  storageSize: string;
+  storageClass?: string;
+  connection?: boolean;
+  pipelines?: boolean;
+  mlflow?: boolean;
+}
+
+export type WorkbenchRunState = "starting" | "running" | "stopping" | "stopped" | "failed";
+
+export interface WorkbenchState extends ResourceState {
+  state?: WorkbenchRunState;
+  url?: string;
+  image?: string;
+  hardwareProfile?: string;
+  cpu?: string;
+  memory?: string;
+  connectionAttached?: boolean;
+  storage?: WorkbenchStorage;
+}
+
+export interface WorkbenchStorage {
+  name: string;
+  size?: string;
+  storageClass?: string;
+  managedByTool: boolean;
+  /** Other workbenches and pods that mount it: deleting it is refused while there are any. */
+  usedBy?: string[];
+  usedByProblem?: string;
+}
+
+/** POST /api/resources/workbench/stream. */
+export interface WorkbenchRequest {
+  action: "setup" | "start" | "stop" | "teardown" | "delete-storage";
+  project: string;
+  deleteStorage?: boolean;
+}
+
 /** The Gen AI playground feature (GET /api/resources/playground; pkg/types PlaygroundStatus). */
 export interface PlaygroundStatus {
   /** Why no playground can be set up (its operator's component is off). */
@@ -1578,6 +1684,8 @@ export interface PlaygroundStatus {
 export interface PlaygroundState extends ResourceState {
   phase?: string;
   requested?: boolean;
+  /** This tool's playground only: the models its Set up asked the dashboard for (none when not recorded). */
+  models?: PlaygroundModelRef[];
 }
 
 /** A model the dashboard offers the playground. */
@@ -1809,6 +1917,136 @@ export interface ModelCallCheck {
   at: string;
 }
 
+// --- Model registry (pkg/types ModelRegistryStatus) ---------------------------
+
+/** The sample model this tool registers (pkg/types ModelRegistrySample). */
+export interface ModelRegistrySample {
+  model: string;
+  version: string;
+  registered: boolean;
+  /** The model, its version and the version's artifact all exist and are LIVE. */
+  complete?: boolean;
+  /** "LIVE" or "ARCHIVED". */
+  state?: string;
+  id?: string;
+  uri: string;
+  problem?: string;
+}
+
+/** GET /api/resources/model-registry: this tool's registry, read with the user's own token. */
+export interface ModelRegistryStatus {
+  name: string;
+  /** Where RHOAI keeps model registries; absent while the component reports none. */
+  namespace?: string;
+  /** The DataScienceCluster key that runs them ("aiHub" or "modelregistry"). */
+  component?: string;
+  blocked?: ComponentBlock;
+  state: "absent" | "terminating" | "starting" | "ready" | "unknown";
+  /** A registry of that name that this tool did not create; state is still its own. */
+  foreign?: boolean;
+  message?: string;
+  managedByTool?: boolean;
+  /** The registry's REST address through the cluster's gateway. */
+  address?: string;
+  /** Why the Service's address is not used (the user's token goes only to the cluster's gateway). */
+  addressProblem?: string;
+  dashboardUrl?: string;
+  sample?: ModelRegistrySample;
+}
+
+/** The body of POST /api/resources/model-registry/stream. */
+export interface ModelRegistryRequest {
+  action: "setup" | "teardown";
+  samples?: boolean;
+}
+
+// --- Distributed workloads (pkg/types KueueStatus) ----------------------------
+
+/** The Kueue CR cluster and the DataScienceCluster's KueueReady (pkg/types KueueInstance). */
+export interface KueueInstance {
+  found: boolean;
+  available: boolean;
+  message?: string;
+  labelPolicy?: string;
+  /** "True", "False", or absent when not reported. */
+  kueueReady?: string;
+  v1beta2: boolean;
+  ready: boolean;
+}
+
+/** One of the tool's queue objects, or its hardware profile (pkg/types KueueObject). */
+export interface KueueObject {
+  kind: string;
+  name: string;
+  namespace?: string;
+  present: boolean;
+  managedByTool?: boolean;
+  foreign?: boolean;
+  active?: boolean;
+  message?: string;
+  terminating?: boolean;
+  /** This tool's ClusterQueue made by an earlier version with another quota: how it differs. */
+  outdated?: string;
+}
+
+/** The RayCluster or RayJob sample (pkg/types KueueSample). */
+export interface KueueSample {
+  kind: "raycluster" | "rayjob";
+  name: string;
+  present: boolean;
+  managedByTool?: boolean;
+  foreign?: boolean;
+  terminating?: boolean;
+  image?: string;
+  /** Its Workload's state as the dashboard names it (Queued, Inadmissible, Admitted, Running, Complete, Failed, ...). */
+  state?: string;
+  message?: string;
+  rayState?: string;
+  /** This tool's sample made by an earlier version with other sizes: how it differs. */
+  outdated?: string;
+}
+
+/** The dashboard's Kueue switch and the tool's Queue hardware profile. */
+export interface KueueOptIn {
+  /** odh-dashboard-config's disableKueue; absent: unset (the dashboard takes it as true). */
+  disableKueue?: boolean;
+  setByTool?: boolean;
+  previous?: string;
+  profile: KueueObject;
+  on?: boolean;
+}
+
+/** GET /api/resources/kueue?project=: the Distributed workloads tab, read with the admin's own token. */
+export interface KueueStatus {
+  project?: string;
+  /** The project of the tool's setup, when another than the one asked about. */
+  setUpIn?: string;
+  blocked?: ComponentBlock;
+  rayBlocked?: ComponentBlock;
+  instance: KueueInstance;
+  refusal?: string;
+  refusalCode?: string;
+  objects: KueueObject[];
+  quota: string;
+  label?: { present: boolean; addedByTool?: boolean };
+  defaultQueue?: boolean;
+  samples: KueueSample[];
+  optIn: KueueOptIn;
+  defaultRayImage: string;
+  itemsProblem?: string;
+  dashboardUrl?: string;
+}
+
+/** The body of POST /api/resources/kueue/stream. */
+export interface KueueRequest {
+  action: "setup" | "teardown" | "delete-sample" | "optin" | "optout";
+  project?: string;
+  rayCluster?: boolean;
+  rayJob?: boolean;
+  rayImage?: string;
+  sample?: "raycluster" | "rayjob";
+}
+
 // --- One-click prerequisites (pkg/types PrerequisitesStatus) -----------------
 
 /** A DataScienceCluster component this tool turned on, and what it was. */
@@ -1832,7 +2070,7 @@ export interface FeaturePrerequisites {
 }
 
 /** The features the prerequisites cover. */
-export type PrerequisiteFeature = "pipelines" | "mlflow" | "models" | "playground";
+export type PrerequisiteFeature = "pipelines" | "mlflow" | "model-registry" | "models" | "playground" | "kueue";
 
 /** GET /api/resources/prerequisites. */
 export interface PrerequisitesStatus {
@@ -1872,6 +2110,11 @@ export interface EnvironmentRecipe {
       models: { enabled: boolean; model?: string; exposure?: string; releasedImage?: boolean };
       playground: { enabled: boolean };
       maas: { enabled: boolean; database?: string; publish?: boolean };
+      /** Optional: absent is off. */
+      modelRegistry?: { enabled: boolean; sample?: boolean };
+      workbench?: { enabled: boolean };
+      /** Distributed workloads (Kueue), as the Distributed workloads tab sets them up. */
+      kueue?: { enabled: boolean; rayCluster?: boolean; rayJob?: boolean; rayImage?: string; dashboardOptIn?: boolean };
     };
     dashboardDev: { deploy?: string; pr?: number; flavor?: string };
   };
@@ -1924,6 +2167,8 @@ export interface RecipePlan {
   pinned?: RecipePinnedBuild;
   typicalSeconds: number;
   maxSeconds: number;
+  /** Notes that do not refuse the run: advice before it, or a change it makes to what the whole cluster shares. */
+  warnings?: { kind: "advice" | "cluster"; message: string }[];
 }
 
 export type RecipeRunState = "running" | "succeeded" | "failed" | "stopped";
@@ -1966,6 +2211,11 @@ export interface RecipeRun {
   steps: RecipeRunStep[];
   /** The DataScienceCluster components the run turned on, which its Clean up turns back. */
   components?: string[];
+  /** How the run's model is reached, once the Models prerequisites step resolved it. */
+  exposure?: string;
+  gatewayRef?: string;
+  /** The cluster-wide parts the run created (they were not this tool's before): its Clean up offers those still as it created them. */
+  createdParts?: { part: "maas-platform" | "model-registry" | "kueue"; uid?: string }[];
 }
 
 /** GET /api/recipes/run. */
@@ -1983,6 +2233,8 @@ export interface RecipeRunStatus {
   step?: { step: string; status: string; message: string; detail?: string; errorCode?: string };
   /** The clean-up request for what the run created, once it is not running and created anything. */
   cleanup?: CleanupRequest;
+  /** Removing the offered distributed workloads setup also turns the dashboard's Kueue setting back, which the run turned on. */
+  cleanupKueueSetting?: boolean;
   /** The projects recipes created (this run's and earlier ones') that the cluster has now, once no run runs. */
   projects?: RecipeOwnedProject[];
   /** Why those could not be read (none is offered then). */

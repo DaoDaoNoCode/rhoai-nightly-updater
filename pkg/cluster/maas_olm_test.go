@@ -213,7 +213,7 @@ func newFreshMaaSCluster(t *testing.T) (*modelsCluster, *fakeOLMSim) {
 	f.mu.Lock()
 	for k := range f.objects {
 		if strings.HasPrefix(k.gv, "kuadrant.io") || k.gv == "operator.authorino.kuadrant.io/v1beta1" || k.ns == "kuadrant-system" || k.name == "redhat-ai-gateway-infra" ||
-			k.name == serving.KuadrantController || k.name == serving.CNPGController {
+			k.name == serving.KuadrantController || k.name == serving.CNPGController || k.name == serving.KuadrantCRD {
 			delete(f.objects, k)
 		}
 	}
@@ -228,7 +228,8 @@ func newFreshMaaSCluster(t *testing.T) (*modelsCluster, *fakeOLMSim) {
 	sim.onInstalled = func(pkg, ns, from, to string) {
 		switch pkg {
 		case "rhcl-operator":
-			f.objects[fakeKey{gv: "apps/v1", ns: ns, plural: "deployments", name: serving.KuadrantController}] = map[string]any{"metadata": map[string]any{"name": serving.KuadrantController}}
+			f.objects[fakeKey{gv: "apps/v1", ns: ns, plural: "deployments", name: serving.KuadrantController}] = map[string]any{"metadata": map[string]any{"name": serving.KuadrantController, "namespace": ns}}
+			installKuadrantCRDLocked(f)
 			f.groups["/apis/kuadrant.io"] = `{"kind":"APIGroup","name":"kuadrant.io","versions":[{"groupVersion":"kuadrant.io/v1","version":"v1"},{"groupVersion":"kuadrant.io/v1beta1","version":"v1beta1"}],"preferredVersion":{"groupVersion":"kuadrant.io/v1","version":"v1"}}`
 			delete(f.fail, "GET /apis/kuadrant.io/v1beta1/kuadrants")
 		case "cloudnative-pg":

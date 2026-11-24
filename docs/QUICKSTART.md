@@ -108,7 +108,7 @@ Nightly builds come from `quay.io/rhoai`. The cluster needs a pull secret for it
 <img src="images/status-cluster-setup.png" alt="One-time cluster setup: Pull secret and Image mirror (IDMS), both Missing" width="760">
 
 
-1. **Pull secret:** paste the `quay.io/rhoai` token (step 0) and click **Create secret**. The tool stores it in `kube-system/additional-pull-secret` and replaces only the `quay.io/rhoai` entry. On self-managed OpenShift, also add it to the cluster pull secret (below).
+1. **Pull secret:** paste the `quay.io/rhoai` token (step 0) and click **Create secret**. The tool stores it in `kube-system/additional-pull-secret` and replaces only the `quay.io/rhoai` entry. On self-managed OpenShift, also add it to the cluster pull secret (below). On ROSA HCP the tool also copies it for the internal registry, which pulls the workbench images, into Secret `rhoai-nightly-updater-pull` in RHOAI's applications namespace (once RHOAI is installed; the item says whether the internal registry can pull nightly images).
 2. **Image mirror (IDMS):** RHOAI images reference `registry.redhat.io/rhoai`; the mirror redirects them to `quay.io/rhoai`. On self-managed OpenShift click **Create the image mirror**; on ROSA HCP click **How to create the image mirror** for the `rosa` steps (below).
 
 What the app offers depends on the cluster. It reads Infrastructure `cluster` (`status.controlPlaneTopology`; `External` is a hosted control plane) and, if the control plane runs on the cluster, whether Red Hat SRE's admission webhooks (`*.managed.openshift.io`, installed on ROSA Classic and OpenShift Dedicated only) are there:

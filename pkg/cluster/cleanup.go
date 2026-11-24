@@ -3,14 +3,20 @@ package cluster
 import (
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kueue"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/modelregistry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/recipe"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/workbench"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -19,22 +25,50 @@ var (
 	cleanupPipelineServer = TeardownPipelineServer
 	cleanupStorage        = TeardownS3Storage
 	cleanupMLflow         = TeardownMLflow
-	cleanupModels         = func(c *Client, project string) (*types.OperationResponse, error) {
+	cleanupKueue          = kueue.Teardown
+	cleanupModelRegistry  = func(c *Client) (*types.OperationResponse, error) {
+		return modelregistry.Run(c, types.ModelRegistryRequest{Action: "teardown"}, nil)
+	}
+	cleanupModels = func(c *Client, project string) (*types.OperationResponse, error) {
 		return serving.TeardownModels(c, project)
 	}
 	cleanupGateway      = serving.TeardownInferenceGateway
 	cleanupPlayground   = features.TeardownPlayground
+	cleanupWorkbench    = workbench.Teardown
+	cleanupWbStorage    = workbench.DeleteStorage
 	cleanupUnpublish    = serving.UnpublishMaaSModel
 	cleanupMaaSPlatform = serving.TeardownMaaSPlatform
 	cleanupComponents   = features.RestoreComponents
 	cleanupProject      = recipe.DeleteProject
+	// Bound to recipe.CreatedPartProblem; swappable in tests.
+	recipeCreatedPartProblem = recipe.CreatedPartProblem
 	// Bound to recipe.ProjectTeardownProblem; swappable in tests.
 	recipeProjectProblem = recipe.ProjectTeardownProblem
+	// Bound to storage.ConnectionWorkbenchesProblem; swappable in tests.
+	pipelineWorkbenchesProblem = storage.ConnectionWorkbenchesProblem
 )
 
+// workbenchesDetail is the detail of a step refused for workbenches that use
+// the tool's Connection: one "<name>=<uid>" per line (a Notebook's name
+// cannot hold "=" or a line break), for the UI to confirm each as it is.
+func workbenchesDetail(wbs []storage.ConnectionWorkbench) string {
+	lines := make([]string, 0, len(wbs))
+	for _, w := range wbs {
+		lines = append(lines, w.Name+"="+w.UID)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// cleanupConfirmCode reports whether code refuses a clean-up only until the
+// user confirms what it lists.
+func cleanupConfirmCode(code string) bool {
+	return code == recipe.ErrorCodeConfirmContents || code == storage.ErrorCodeConfirmWorkbenches
+}
+
 // CleanupStepID identifies each clean-up slice in the stream, e.g.
-// "pipeline-server:<project>", "storage", "mlflow", "playground:<project>",
-// "model:<project>", "inference-gateway", "maas-unpublish:<project>"
+// "pipeline-server:<project>", "storage", "mlflow", "model-registry",
+// "playground:<project>",
+// "model:<project>", "inference-gateway", "kueue", "maas-unpublish:<project>"
 // (first), "maas-platform", "recipe-project:<project>", and "components"
 // (last).
 func CleanupStepID(part, project string) string {
@@ -47,6 +81,8 @@ func CleanupStepID(part, project string) string {
 type cleanupPart struct {
 	id, title string
 	run       func() (*types.OperationResponse, error)
+	// project is the part's project, when it has one.
+	project string
 	// When true, the overall clean-up message quotes this part's own result
 	// (which may report no change—component retained, project already
 	// absent) rather than wording like "Deleted <title>".
@@ -55,10 +91,10 @@ type cleanupPart struct {
 
 // cleanupParts returns clean-up slices in execution order: pipeline servers
 // first (storage teardown blocks while one still references storage), then
-// storage, then MLflow (independent of both), then playgrounds (which
-// depend on models), then models and—after those—the inference gateway they
-// traffic through (its teardown blocks while a model still routes via it).
-// A MaaS-published model is unpublished ahead of everything else (Models
+// storage, then MLflow and the model registry (independent of both), then
+// playgrounds (which depend on models), then models and—after those—the
+// inference gateway they traffic through (its teardown blocks while a
+// model still routes via it). A MaaS-published model is unpublished ahead of everything else (Models
 // teardown blocks while publication remains), and the MaaS platform runs
 // near the end except for recipe-provisioned projects, which run once
 // in-project resources are gone, and DataScienceCluster components this
@@ -72,12 +108,37 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 			run:   func() (*types.OperationResponse, error) { return cleanupUnpublish(c, project) },
 		})
 	}
+	// Workbenches go before the pipeline servers, whose teardown takes the
+	// tool's Connection off every workbench still using it.
+	for _, project := range req.Workbenches {
+		storage := slices.Contains(req.WorkbenchStorage, project)
+		title := fmt.Sprintf("the workbench in '%s'", project)
+		if storage {
+			title = fmt.Sprintf("the workbench and its storage in '%s'", project)
+		}
+		parts = append(parts, cleanupPart{
+			id:    CleanupStepID("workbench", project),
+			title: title,
+			run:   func() (*types.OperationResponse, error) { return cleanupWorkbench(c, project, storage) },
+		})
+	}
+	for _, project := range req.WorkbenchStorage {
+		if slices.Contains(req.Workbenches, project) {
+			continue
+		}
+		parts = append(parts, cleanupPart{
+			id:    CleanupStepID("workbench-storage", project),
+			title: fmt.Sprintf("the workbench storage kept in '%s'", project),
+			run:   func() (*types.OperationResponse, error) { return cleanupWbStorage(c, project) },
+		})
+	}
 	for _, project := range req.PipelineServers {
 		parts = append(parts, cleanupPart{
-			id:    CleanupStepID("pipeline-server", project),
-			title: fmt.Sprintf("the pipeline server in '%s'", project),
+			id:      CleanupStepID("pipeline-server", project),
+			project: project,
+			title:   fmt.Sprintf("the pipeline server in '%s'", project),
 			run: func() (*types.OperationResponse, error) {
-				return cleanupPipelineServer(c, project, req.ConfirmUnrecorded[project])
+				return cleanupPipelineServer(c, project, req.ConfirmUnrecorded[project], confirmedWorkbenches(c, req, project))
 			},
 		})
 	}
@@ -92,6 +153,14 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 	}
 	if req.MLflow {
 		parts = append(parts, cleanupPart{id: CleanupStepID("mlflow", ""), title: "MLflow", run: func() (*types.OperationResponse, error) { return cleanupMLflow(c) }})
+	}
+	if req.ModelRegistry {
+		parts = append(parts, cleanupPart{id: CleanupStepID("model-registry", ""), title: "the model registry", run: func() (*types.OperationResponse, error) {
+			if res := recipeCreatedCheck(c, req, types.RecipePartModelRegistry, req.ModelRegistryUID); res != nil {
+				return res, nil
+			}
+			return cleanupModelRegistry(c)
+		}})
 	}
 	for _, project := range req.Playgrounds {
 		parts = append(parts, cleanupPart{
@@ -110,8 +179,24 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 	if req.InferenceGateway {
 		parts = append(parts, cleanupPart{id: CleanupStepID("inference-gateway", ""), title: "the inference gateway", run: func() (*types.OperationResponse, error) { return cleanupGateway(c, len(req.Models) > 0) }})
 	}
+	if req.Kueue {
+		// After the workbenches and models that may use its queue, before
+		// recipe projects (its project may be one) and the components
+		// (DataScienceCluster kueue goes back only once no queue is left).
+		parts = append(parts, cleanupPart{id: CleanupStepID("kueue", ""), title: "the distributed workloads setup", run: func() (*types.OperationResponse, error) {
+			if res := recipeCreatedCheck(c, req, types.RecipePartKueue, req.KueueUID); res != nil {
+				return res, nil
+			}
+			return cleanupKueue(c)
+		}, says: true})
+	}
 	if req.MaaSPlatform {
-		parts = append(parts, cleanupPart{id: CleanupStepID("maas-platform", ""), title: "the MaaS platform", run: func() (*types.OperationResponse, error) { return cleanupMaaSPlatform(c) }})
+		parts = append(parts, cleanupPart{id: CleanupStepID("maas-platform", ""), title: "the MaaS platform", run: func() (*types.OperationResponse, error) {
+			if res := recipeCreatedCheck(c, req, types.RecipePartMaaSPlatform, req.MaaSPlatformUID); res != nil {
+				return res, nil
+			}
+			return cleanupMaaSPlatform(c)
+		}})
 	}
 	for _, project := range req.RecipeProjects {
 		// Scheduled after every in-project slice (MaaS publications,
@@ -131,6 +216,53 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 		parts = append(parts, cleanupPart{id: CleanupStepID("components", ""), title: "the DataScienceCluster components this tool turned on", run: func() (*types.OperationResponse, error) { return cleanupComponents(c, req.Components) }, says: true})
 	}
 	return parts
+}
+
+// recipeCreatedCheck refuses a recipe's Clean up of a cluster-wide part
+// its run created (req.RecipeRunID with the part's UID) when the part is
+// not the object the user reviewed any more (recipe.CreatedPartProblem),
+// checked under the cluster lock right before the teardown; nil lets it
+// go ahead, as for the Environment page's own Clean up (neither is set).
+// One of the two alone is refused: nothing is deleted on half a review.
+func recipeCreatedCheck(c *Client, req types.CleanupRequest, part, uid string) *types.OperationResponse {
+	if req.RecipeRunID == "" && uid == "" {
+		return nil
+	}
+	problem := "A recipe's Clean up names its run and the object it reviewed; this request names only one. Nothing was deleted."
+	if req.RecipeRunID != "" && uid != "" {
+		problem = recipeCreatedPartProblem(c, c, req.RecipeRunID, part, uid)
+	}
+	if problem == "" {
+		return nil
+	}
+	return &types.OperationResponse{Success: false, Message: problem, ErrorCode: "conflict"}
+}
+
+// confirmedWorkbenches are the workbenches (name to UID) of project whose
+// loss of the tool's Connection the clean-up may go ahead with: those the
+// user confirmed, and this tool's own nightly-workbench (by its recorded
+// UID) when the clean-up deletes it first. Its part runs before the
+// pipeline server's and stops the clean-up when it is not this tool's; a
+// Notebook of that name with another UID stays unconfirmed.
+func confirmedWorkbenches(c *Client, req types.CleanupRequest, project string) map[string]string {
+	confirmed := req.ConfirmWorkbenches[project]
+	if !slices.Contains(req.Workbenches, project) {
+		return confirmed
+	}
+	rec, err := workbench.ReadRecord(c)
+	if err != nil {
+		return confirmed
+	}
+	e, ok := rec.Get(project)
+	if !ok || e.UID == "" {
+		return confirmed
+	}
+	out := maps.Clone(confirmed)
+	if out == nil {
+		out = map[string]string{}
+	}
+	out[workbench.Name] = e.UID
+	return out
 }
 
 // CleanUp removes resources this tool created as a single operation: pipeline
@@ -173,9 +305,32 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 		}
 		problems = append(problems, problem)
 		// Refusals beyond “needs confirmation” keep a distinct error code.
-		if refusalCode == "" || refusalCode == recipe.ErrorCodeConfirmContents {
+		if refusalCode == "" || cleanupConfirmCode(refusalCode) && !cleanupConfirmCode(code) {
 			refusalCode = code
 		}
+	}
+	// A pipeline server whose dashboard Connection workbenches use goes
+	// only with the user's confirmation of each of them (its teardown
+	// removes the Connection from them first): checked up front too, so a
+	// refusal deletes nothing. The step's detail lists the workbenches that
+	// use it now, one per line, for the UI to ask about.
+	for _, project := range req.PipelineServers {
+		// This tool's workbench that the clean-up deletes first needs no
+		// confirmation: its part runs before (and stops the clean-up when
+		// it is not this tool's).
+		problem, code, current := pipelineWorkbenchesProblem(c, project, confirmedWorkbenches(c, req, project))
+		if problem == "" {
+			continue
+		}
+		problems = append(problems, problem)
+		if refusalCode == "" || cleanupConfirmCode(refusalCode) && !cleanupConfirmCode(code) {
+			refusalCode = code
+		}
+		detail := ""
+		if code == storage.ErrorCodeConfirmWorkbenches {
+			detail = workbenchesDetail(current)
+		}
+		emit(UpdateStepEvent{Step: CleanupStepID("pipeline-server", project), Status: "failed", Message: problem, ErrorCode: code, Detail: detail})
 	}
 	for _, chk := range checks {
 		// Detail enumerates non-tool resources still in the project, one
@@ -191,7 +346,7 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 				detail = strings.Join(chk.left, "\n")
 			}
 			emit(UpdateStepEvent{Step: CleanupStepID("recipe-project", chk.project), Status: "failed", Message: chk.problem, ErrorCode: chk.code, Detail: detail})
-		case refusalCode == recipe.ErrorCodeConfirmContents && len(chk.left) > 0:
+		case cleanupConfirmCode(refusalCode) && len(chk.left) > 0:
 			emit(UpdateStepEvent{Step: CleanupStepID("recipe-project", chk.project), Status: "failed", ErrorCode: recipe.ErrorCodeConfirmContents,
 				Message: fmt.Sprintf("Project %s holds what this tool did not create, all of it confirmed: %s. It was not deleted, as the clean-up asks to confirm what another project holds.", chk.project, strings.Join(chk.left, ", ")),
 				Detail:  strings.Join(chk.left, "\n")})
@@ -217,7 +372,15 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 		}
 		logs = append(logs, res.Logs...)
 		if !res.Success {
-			emit(UpdateStepEvent{Step: p.id, Status: "failed", Message: res.Message, ErrorCode: res.ErrorCode})
+			detail := ""
+			if res.ErrorCode == storage.ErrorCodeConfirmWorkbenches && strings.HasPrefix(p.id, "pipeline-server:") {
+				// Refused by the teardown itself (a workbench attached the
+				// Connection after the check up front): the step lists the
+				// workbenches that use it now, as that check's refusal does.
+				_, _, current := pipelineWorkbenchesProblem(c, p.project, nil)
+				detail = workbenchesDetail(current)
+			}
+			emit(UpdateStepEvent{Step: p.id, Status: "failed", Message: res.Message, ErrorCode: res.ErrorCode, Detail: detail})
 			return cleanupStopped(c, parts[i+1:], done, said, logs, res.Message, res.ErrorCode), nil
 		}
 		emit(UpdateStepEvent{Step: p.id, Status: "success", Message: res.Message, Detail: time.Since(start).Round(time.Second).String()})

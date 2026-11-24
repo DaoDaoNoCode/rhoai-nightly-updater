@@ -68,7 +68,7 @@
         "finishedAt": "2026-11-20T14:14:00Z",
         "id": "rhoai",
         "maxSeconds": 900,
-        "message": "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).",
+        "message": "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it.",
         "startedAt": "2026-11-20T14:14:00Z",
         "status": "skipped",
         "title": "RHOAI",

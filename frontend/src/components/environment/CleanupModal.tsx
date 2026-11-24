@@ -18,13 +18,37 @@ import {
   Stack,
   StackItem,
 } from "@patternfly/react-core";
-import type { PlaygroundStatus, ResourcesStatus, MaaSStatus, RestorableComponent } from "../../types";
+import { storageInUseText } from "./workbenchState";
+import { confirmationOf, type ConnectionWorkbench, type KueueStatus, type ModelRegistryStatus, type PlaygroundStatus, type ResourcesStatus, type MaaSStatus, type RestorableComponent, type WorkbenchStatus } from "../../types";
 import type { CleanupRequest } from "../../services/api";
 import { TooltipButton } from "../TooltipButton";
 import { isTerminating } from "./resourceRow";
-import { unrecordedPipelineServerNote } from "./PipelinesTab";
+import { connectionEnvOnlyChange, connectionWorkbenchesChange, unrecordedPipelineServerNote } from "./PipelinesTab";
 import { S3_NAMESPACE, storageTeardownOffered } from "./StorageTab";
 import { gatewayListRelease } from "./modelsConfirm";
+import { kueueAnything } from "./kueueState";
+
+/**
+ * The model registry component's own words in the Clean up dialog (pkg/cluster/internal/envkit
+ * ModelRegistryComponent): null for another component; for aiHub (RHOAI 3.6) what else it removes. Offered only
+ * when this tool turned it on and still owns the field (restorable); the server turns it back only when no model
+ * registry is left.
+ */
+export function modelRegistryComponentLine(component: string): string | null {
+  if (component === "aiHub") return "this also removes the Model Catalog.";
+  if (component === "modelregistry") return "";
+  return null;
+}
+
+/** A restorable component's checkbox label. */
+function componentLabel(r: RestorableComponent): React.ReactNode {
+  if (r.component === "kueue") {
+    return <>Turn the DataScienceCluster&apos;s <code>kueue</code> back from Unmanaged to {r.previous || "Removed"}, only once no ClusterQueue or LocalQueue is left on the cluster: the dashboard&apos;s Distributed workloads pages go away. The Red Hat build of Kueue and cert-manager stay.</>;
+  }
+  const line = modelRegistryComponentLine(r.component);
+  if (line === null) return <>Turn <code>{r.component}</code> back to {r.previous || "Removed"}</>;
+  return <>Turn the model registry component (<code>{r.component}</code>) back to {r.previous || "Removed"}{line ? `; ${line}` : "."}</>;
+}
 
 /** This tool's pipeline servers: in the data science projects, and in projects that are no longer ones. */
 function toolServers(status: ResourcesStatus) {
@@ -37,10 +61,10 @@ function toolModels(status: ResourcesStatus) {
 }
 
 /** What a Clean up offers: one feature's parts, or everything. */
-export type CleanupScope = "pipelines" | "mlflow" | "models" | "playground" | "all";
+export type CleanupScope = "pipelines" | "workbench" | "mlflow" | "model-registry" | "models" | "playground" | "kueue" | "all";
 
 /** What this tool created that a clean-up of the scope can delete, from the status. */
-export function cleanupCandidates(status: ResourcesStatus, scope: CleanupScope, minioLeftovers: boolean, playground: PlaygroundStatus | null = null, maas: MaaSStatus | null = null) {
+export function cleanupCandidates(status: ResourcesStatus, scope: CleanupScope, minioLeftovers: boolean, playground: PlaygroundStatus | null = null, maas: MaaSStatus | null = null, registry: ModelRegistryStatus | null = null, workbench: WorkbenchStatus | null = null, kueue: KueueStatus | null = null) {
   // MaaS: this tool's publications first (with the models, since a published
   // model cannot go without its publication), the platform last (Clean up
   // everything only).
@@ -50,6 +74,18 @@ export function cleanupCandidates(status: ResourcesStatus, scope: CleanupScope, 
   const playgrounds = scope === "playground" || scope === "all"
     ? (playground?.items ?? []).filter((i) => i.managedByTool && i.deployed && !isTerminating(i) && i.namespace).map((i) => i.namespace!)
     : [];
+  // This tool's workbenches (workbench status): their storage is offered unticked.
+  const workbenches = scope === "workbench" || scope === "all"
+    ? (workbench?.items ?? []).filter((i) => i.managedByTool && i.deployed && !isTerminating(i) && i.namespace).map((i) => i.namespace!)
+    : [];
+  const workbenchStorage = workbenches.filter((p) => !!(workbench?.items ?? []).find((i) => i.namespace === p)?.storage?.managedByTool);
+  // Storage this tool kept from a deleted workbench: offered on its own, unticked.
+  const keptStorage = scope === "workbench" || scope === "all"
+    ? (workbench?.items ?? []).filter((i) => !i.deployed && i.storage?.managedByTool && i.namespace).map((i) => i.namespace!)
+    : [];
+  // Workbenches whose running session a deletion ends.
+  const runningWorkbenches = workbenches.filter((p) => ["running", "starting"].includes((workbench?.items ?? []).find((i) => i.namespace === p)?.state ?? ""));
+  const storageOf = (p: string) => (workbench?.items ?? []).find((i) => i.namespace === p)?.storage;
   const pipelines = scope === "pipelines" || scope === "all";
   const modelsScope = scope === "models" || scope === "all";
   const models = modelsScope
@@ -65,9 +101,13 @@ export function cleanupCandidates(status: ResourcesStatus, scope: CleanupScope, 
   const minio = status.minio;
   const namespace = storage && minio?.managedByTool !== false && !!minio?.deployed && !!minio?.namespaceDeletable;
   const mlflow = (scope === "mlflow" || scope === "all") && !!status.mlflow?.deployed && status.mlflow.managedByTool !== false && !isTerminating(status.mlflow);
+  // This tool's model registry (its UID is the recorded one).
+  const modelRegistry = (scope === "model-registry" || scope === "all") && !!registry?.managedByTool && registry.state !== "absent" && registry.state !== "terminating";
+  // This tool's distributed workloads setup (its record: queues, samples, label, opt-in).
+  const kueueSetup = (scope === "kueue" || scope === "all") && kueueAnything(kueue);
   // The projects recipes created that the cluster has (Clean up everything only).
   const recipeProjects = scope === "all" ? (status.recipeProjects ?? []).map((p) => p.name) : [];
-  return { servers, storage, namespace, mlflow, models, gateway, playgrounds, maasPublished, maasPlatform, recipeProjects };
+  return { workbenches, workbenchStorage, keptStorage, runningWorkbenches, storageOf, servers, storage, namespace, mlflow, modelRegistry, kueue: kueueSetup, models, gateway, playgrounds, maasPublished, maasPlatform, recipeProjects };
 }
 
 /**
@@ -78,18 +118,24 @@ export function cleanupCandidates(status: ResourcesStatus, scope: CleanupScope, 
 export interface CleanupRetry {
   req: CleanupRequest;
   contents: Record<string, string[]>;
+  /** Per pipeline server's project, the workbenches that use its dashboard Connection (errorCode confirm_connection_workbenches). */
+  workbenches?: Record<string, ConnectionWorkbench[]>;
 }
 
 /** The steps a clean-up streams, in its order (pkg/cluster CleanUp). */
 export function cleanupSteps(req: CleanupRequest): { id: string; title: string }[] {
   return [
     ...(req.maasPublished ?? []).map((p) => ({ id: `maas-unpublish:${p}`, title: `Unpublish the models in ${p} from MaaS` })),
+    ...(req.workbenches ?? []).map((p) => ({ id: `workbench:${p}`, title: (req.workbenchStorage ?? []).includes(p) ? `Delete the workbench and its storage in ${p}` : `Delete the workbench in ${p}` })),
+    ...(req.workbenchStorage ?? []).filter((p) => !(req.workbenches ?? []).includes(p)).map((p) => ({ id: `workbench-storage:${p}`, title: `Delete the workbench storage kept in ${p}` })),
     ...(req.pipelineServers ?? []).map((p) => ({ id: `pipeline-server:${p}`, title: `Delete the pipeline server in ${p}` })),
     ...(req.storage ? [{ id: "storage", title: req.deleteNamespace ? `Delete the S3 storage and namespace ${S3_NAMESPACE}` : "Delete the S3 storage" }] : []),
     ...(req.mlflow ? [{ id: "mlflow", title: "Delete MLflow" }] : []),
+    ...(req.modelRegistry ? [{ id: "model-registry", title: "Delete the model registry" }] : []),
     ...(req.playgrounds ?? []).map((p) => ({ id: `playground:${p}`, title: `Delete the playground in ${p}` })),
     ...(req.models ?? []).map((p) => ({ id: `model:${p}`, title: `Delete the models in ${p}` })),
     ...(req.inferenceGateway ? [{ id: "inference-gateway", title: "Delete the inference gateway" }] : []),
+    ...(req.kueue ? [{ id: "kueue", title: "Delete the distributed workloads setup" }] : []),
     ...(req.maasPlatform ? [{ id: "maas-platform", title: "Remove the MaaS platform" }] : []),
     ...(req.recipeProjects ?? []).map((p) => ({ id: `recipe-project:${p}`, title: `Delete project ${p}, which a recipe created` })),
     ...(req.components?.length ? [{ id: "components", title: `Turn ${req.components.join(", ")} back` }] : []),
@@ -139,8 +185,14 @@ export const CleanupModal: React.FC<{
   status: ResourcesStatus;
   /** The playground status, for the playgrounds this tool set up (null: none known). */
   playground?: PlaygroundStatus | null;
+  /** The workbench status, for this tool's workbenches (null: none known). */
+  workbench?: WorkbenchStatus | null;
   /** The MaaS status, for this tool's publications and platform (null: none known). */
   maas?: MaaSStatus | null;
+  /** The model registry status, for this tool's registry (null: none known). */
+  modelRegistry?: ModelRegistryStatus | null;
+  /** The Distributed workloads status (null: none known). */
+  kueue?: KueueStatus | null;
   minioLeftovers: boolean;
   /** Why changes are disabled now, or null. */
   baseReason: string | null;
@@ -150,12 +202,19 @@ export const CleanupModal: React.FC<{
   retry?: CleanupRetry | null;
   onConfirm: (req: CleanupRequest) => void;
   onCancel: () => void;
-}> = ({ scope, status, playground = null, maas = null, minioLeftovers, baseReason, restorable = [], retry = null, onConfirm, onCancel }) => {
+}> = ({ scope, status, playground = null, workbench = null, maas = null, modelRegistry = null, kueue = null, minioLeftovers, baseReason, restorable = [], retry = null, onConfirm, onCancel }) => {
   const titleId = React.useId();
   const reasonId = React.useId();
-  const offered = cleanupCandidates(status, scope, minioLeftovers, playground, maas);
+  const offered = cleanupCandidates(status, scope, minioLeftovers, playground, maas, modelRegistry, workbench, kueue);
   // A refused clean-up comes back with the choices it was sent with.
   const was = retry?.req;
+  const [workbenches, setWorkbenches] = useState<string[]>(was ? was.workbenches ?? [] : offered.workbenches);
+  const chosenWorkbenches = workbenches.filter((p) => offered.workbenches.includes(p));
+  const toggleWorkbench = (p: string, v: boolean) => setWorkbenches((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
+  // A workbench's storage holds its files: never ticked unless the user ticks it.
+  const [workbenchStorage, setWorkbenchStorage] = useState<string[]>(was?.workbenchStorage ?? []);
+  const chosenWorkbenchStorage = workbenchStorage.filter((p) => ((chosenWorkbenches.includes(p) && offered.workbenchStorage.includes(p)) || offered.keptStorage.includes(p)) && !offered.storageOf(p)?.usedBy?.length);
+  const toggleWorkbenchStorage = (p: string, v: boolean) => setWorkbenchStorage((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
   const [published, setPublished] = useState<string[]>(was ? was.maasPublished ?? [] : offered.maasPublished);
   const chosenPublished = published.filter((p) => offered.maasPublished.includes(p));
   const togglePublished = (p: string, v: boolean) => setPublished((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
@@ -180,6 +239,8 @@ export const CleanupModal: React.FC<{
   const [storage, setStorage] = useState(was ? !!was.storage : offered.storage);
   const [namespace, setNamespace] = useState(!!was?.deleteNamespace);
   const [mlflow, setMlflow] = useState(was ? !!was.mlflow : offered.mlflow);
+  const [registry, setRegistry] = useState(was ? !!was.modelRegistry : offered.modelRegistry);
+  const [kueueTicked, setKueueTicked] = useState(was ? !!was.kueue : offered.kueue);
   const [models, setModels] = useState<string[]>(was ? was.models ?? [] : offered.models);
   const [gateway, setGateway] = useState(was ? !!was.inferenceGateway : offered.gateway);
   const [recipeProjects, setRecipeProjects] = useState<string[]>(was ? was.recipeProjects ?? [] : offered.recipeProjects);
@@ -203,12 +264,29 @@ export const CleanupModal: React.FC<{
   const chosenModels = models.filter((m) => offered.models.includes(m));
   const chosenServers = servers.filter(serverTicked);
   const confirmedServers = Object.fromEntries(chosenServers.filter((s) => unrecordedUID.has(s)).map((s) => [s, unrecordedUID.get(s)!]));
+  // The workbenches that lose each chosen server's dashboard Connection first: as a refused clean-up listed them, else as
+  // the status does (the selected project's only); the request confirms exactly these.
+  // An empty list from the refusal does not hide what the status shows now.
+  const connectionUsers = (p: string): ConnectionWorkbench[] => {
+    const refused = retry?.workbenches?.[p] ?? [];
+    return refused.length > 0 ? refused : toolServers(status).find((ps) => ps.namespace === p)?.connectionWorkbenches ?? [];
+  };
+  const usersByServer = Object.fromEntries(chosenServers.map((p) => [p, connectionUsers(p)] as const).filter(([, w]) => w.length > 0));
+  const confirmWorkbenches = Object.fromEntries(Object.entries(usersByServer).map(([p, w]) => [p, confirmationOf(w)]));
+  // Workbenches that load the Connection without the annotation (as the status shows them): nothing changes them.
+  const envOnlyByServer = Object.fromEntries(chosenServers.map((p) => [p, toolServers(status).find((ps) => ps.namespace === p)?.connectionEnvOnlyWorkbenches ?? []] as const).filter(([, w]) => w.length > 0));
+  const affected = chosenServers.filter((p) => usersByServer[p] || envOnlyByServer[p]);
   const req: CleanupRequest = {
     ...(chosenPublished.length ? { maasPublished: chosenPublished } : {}),
+    ...(chosenWorkbenches.length ? { workbenches: chosenWorkbenches } : {}),
+    ...(chosenWorkbenchStorage.length ? { workbenchStorage: chosenWorkbenchStorage } : {}),
     ...(chosenServers.length ? { pipelineServers: chosenServers } : {}),
     ...(Object.keys(confirmedServers).length ? { confirmUnrecorded: confirmedServers } : {}),
+    ...(Object.keys(confirmWorkbenches).length ? { confirmWorkbenches } : {}),
     ...(storage && offered.storage ? { storage: true, ...(namespace && offered.namespace ? { deleteNamespace: true } : {}) } : {}),
     ...(mlflow && offered.mlflow ? { mlflow: true } : {}),
+    ...(registry && offered.modelRegistry ? { modelRegistry: true } : {}),
+    ...(kueueTicked && offered.kueue ? { kueue: true } : {}),
     ...(chosenPlaygrounds.length ? { playgrounds: chosenPlaygrounds } : {}),
     ...(chosenModels.length ? { models: chosenModels } : {}),
     ...(gateway && offered.gateway ? { inferenceGateway: true } : {}),
@@ -217,15 +295,19 @@ export const CleanupModal: React.FC<{
     ...(Object.keys(confirmProjectContents).length ? { confirmProjectContents } : {}),
     ...(chosenComponents.length ? { components: chosenComponents } : {}),
   };
-  const nothing = !req.pipelineServers && !req.storage && !req.mlflow && !req.models && !req.inferenceGateway && !req.playgrounds && !req.maasPublished && !req.maasPlatform && !req.components && !req.recipeProjects;
+  const nothing = !req.workbenches && !req.workbenchStorage && !req.pipelineServers && !req.storage && !req.mlflow && !req.modelRegistry && !req.kueue && !req.models && !req.inferenceGateway && !req.playgrounds && !req.maasPublished && !req.maasPlatform && !req.components && !req.recipeProjects;
   const unconfirmed = asking.filter((p) => !confirmedContents.includes(p));
   const reason = baseReason ?? (nothing ? "Select something to delete."
     : unconfirmed.length > 0 ? "Confirm that what the project holds is deleted with it." : cleanupBlocked(status, req, offered.maasPublished));
   const lost = [
+    ...(req.workbenchStorage ?? []).map((p) => <>The files in storage <code>nightly-workbench-storage</code> in {p}.</>),
+    ...offered.runningWorkbenches.filter((p) => chosenWorkbenches.includes(p)).map((p) => <>Unsaved work in the running workbench in {p}: only files saved under <code>/opt/app-root/src</code> are in its storage.</>),
     ...(req.pipelineServers ?? []).map((p) => <>The runs and experiments of the pipeline server in {p}.</>),
     ...(req.storage ? [<>Every file in the S3 storage: pipeline artifacts and uploaded files{status.legacyStorage ? ", and the storage of an earlier version" : ""}.</>] : []),
     ...(req.deleteNamespace ? [<>Everything else in namespace <code>{S3_NAMESPACE}</code>.</>] : []),
     ...(req.mlflow ? [<>Every MLflow experiment, run and model, in every workspace.</>] : []),
+    ...(req.modelRegistry ? [<>Everything in the model registry, which the whole cluster shares: every registered model, version and artifact record, including the models other people registered, and its database.</>] : []),
+    ...(chosenComponents.includes("aiHub") ? [<>The Model Catalog, for every dashboard user.</>] : []),
     ...(req.playgrounds ?? []).map((p) => <>The chats and uploaded documents of the playground in {p}.</>),
     ...(req.maasPlatform ? [<>MaaS API keys, and the MaaS database with their records.</>] : []),
     ...(req.recipeProjects ?? []).map((p) => <>Everything in project {p}.</>),
@@ -235,8 +317,8 @@ export const CleanupModal: React.FC<{
     setConfirmed(({ [p]: _dropped, ...rest }) => (v && unrecordedUID.has(p) ? { ...rest, [p]: unrecordedUID.get(p)! } : rest));
   };
   const toggleModel = (p: string, v: boolean) => setModels((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
-  const nothingOffered = offered.servers.length === 0 && !offered.storage && !offered.mlflow && offered.models.length === 0 && !offered.gateway && offered.playgrounds.length === 0 && offered.maasPublished.length === 0 && !offered.maasPlatform && offeredComponents.length === 0 && offered.recipeProjects.length === 0;
-  const title = scope === "all" ? "Clean up everything?" : scope === "pipelines" ? "Clean up Pipelines?" : scope === "models" ? "Clean up Models?" : scope === "playground" ? "Clean up Playground?" : "Clean up MLflow?";
+  const nothingOffered = offered.workbenches.length === 0 && offered.keptStorage.length === 0 && offered.servers.length === 0 && !offered.storage && !offered.mlflow && !offered.modelRegistry && !offered.kueue && offered.models.length === 0 && !offered.gateway && offered.playgrounds.length === 0 && offered.maasPublished.length === 0 && !offered.maasPlatform && offeredComponents.length === 0 && offered.recipeProjects.length === 0;
+  const title = scope === "all" ? "Clean up everything?" : scope === "pipelines" ? "Clean up Pipelines?" : scope === "models" ? "Clean up Models?" : scope === "playground" ? "Clean up Playground?" : scope === "model-registry" ? "Clean up the model registry?" : scope === "workbench" ? "Clean up Workbench?" : scope === "kueue" ? "Clean up distributed workloads?" : "Clean up MLflow?";
   return (
     <Modal aria-labelledby={titleId} variant={ModalVariant.medium} isOpen onClose={onCancel}>
       <ModalHeader title={title} labelId={titleId} titleIconVariant="warning" />
@@ -248,7 +330,9 @@ export const CleanupModal: React.FC<{
                 ? "This tool created nothing here that is left to delete."
                 : scope === "pipelines"
                   ? "Deletes the pipeline servers you tick, as one operation. Something this tool did not create is never deleted."
-                  : "Deletes what this tool created, in this order. Something this tool did not create is never deleted. The parts run one after another as one operation; a part that fails stops the rest."}
+                  : scope === "model-registry"
+                    ? "Deletes the model registry this tool created, as one operation. Something this tool did not create is never deleted."
+                    : "Deletes what this tool created, in this order. Something this tool did not create is never deleted. The parts run one after another as one operation; a part that fails stops the rest."}
             </Content>
           </StackItem>
           {!nothingOffered && (
@@ -259,6 +343,28 @@ export const CleanupModal: React.FC<{
                     {offered.maasPublished.map((p) => (
                       <Checkbox key={p} id={`cleanup-maas-published-${p}`} label={<>Model in {p}, published to MaaS</>} description="Unpublished first, before anything else goes." isChecked={published.includes(p)} onChange={(_e, v) => togglePublished(p, v)} />
                     ))}
+                  </FormGroup>
+                )}
+                {(offered.workbenches.length > 0 || offered.keptStorage.length > 0) && (
+                  <FormGroup role="group" isStack label="Workbenches" fieldId="cleanup-workbenches">
+                    {offered.workbenches.map((p) => {
+                      const st = offered.storageOf(p);
+                      return (
+                        <Checkbox key={p} id={`cleanup-workbench-${p}`} label={<>Workbench in {p}</>} isChecked={workbenches.includes(p)} onChange={(_e, v) => toggleWorkbench(p, v)}
+                          description={offered.runningWorkbenches.includes(p) ? "Running: unsaved work in its session is lost." : undefined}
+                          body={workbenches.includes(p) && offered.workbenchStorage.includes(p) ? (
+                            <Checkbox id={`cleanup-workbench-storage-${p}`} label="Also delete its storage (files are lost)" isChecked={workbenchStorage.includes(p) && !st?.usedBy?.length} isDisabled={!!st?.usedBy?.length} onChange={(_e, v) => toggleWorkbenchStorage(p, v)}
+                              description={st?.usedBy?.length ? storageInUseText(st.usedBy) : <>PersistentVolumeClaim <code>nightly-workbench-storage</code>{st?.size ? `, ${st.size}` : ""}{st?.storageClass ? `, storage class ${st.storageClass}` : ""}</>} />
+                          ) : undefined} />
+                      );
+                    })}
+                    {offered.keptStorage.map((p) => {
+                      const st = offered.storageOf(p);
+                      return (
+                        <Checkbox key={`kept-${p}`} id={`cleanup-workbench-kept-${p}`} label={<>Storage kept from the deleted workbench in {p} (files are lost)</>} isChecked={workbenchStorage.includes(p) && !st?.usedBy?.length} isDisabled={!!st?.usedBy?.length} onChange={(_e, v) => toggleWorkbenchStorage(p, v)}
+                          description={st?.usedBy?.length ? storageInUseText(st.usedBy) : <>PersistentVolumeClaim <code>nightly-workbench-storage</code>{st?.size ? `, ${st.size}` : ""}{st?.storageClass ? `, storage class ${st.storageClass}` : ""}</>} />
+                      );
+                    })}
                   </FormGroup>
                 )}
                 {offered.servers.length > 0 && (
@@ -285,6 +391,12 @@ export const CleanupModal: React.FC<{
                     <Checkbox id="cleanup-mlflow" label="MLflow server" isChecked={mlflow} onChange={(_e, v) => setMlflow(v)} />
                   </FormGroup>
                 )}
+                {offered.modelRegistry && (
+                  <FormGroup role="group" isStack label="Model registry" fieldId="cleanup-model-registry">
+                    <Checkbox id="cleanup-model-registry" label={<code>{modelRegistry?.name}</code>} isChecked={registry} onChange={(_e, v) => setRegistry(v)}
+                      description={`Its registered models and its database are deleted with it. The DataScienceCluster component that runs it stays on${offeredComponents.some((r) => r.feature === "model-registry") ? " unless you also tick it below" : ""}.`} />
+                  </FormGroup>
+                )}
                 {offered.playgrounds.length > 0 && (
                   <FormGroup role="group" isStack label="Playground" fieldId="cleanup-playgrounds">
                     {offered.playgrounds.map((p) => (
@@ -303,6 +415,12 @@ export const CleanupModal: React.FC<{
                     )}
                   </FormGroup>
                 )}
+                {offered.kueue && (
+                  <FormGroup role="group" isStack label="Distributed workloads" fieldId="cleanup-kueue">
+                    <Checkbox id="cleanup-kueue" label="Distributed workloads setup" isChecked={kueueTicked} onChange={(_e, v) => setKueueTicked(v)}
+                      description={<>The samples, LocalQueue, ClusterQueue and ResourceFlavor{kueue?.label?.addedByTool ? `, and the project label on ${kueue.project}` : ""}, each only if this tool still owns it.{kueue?.optIn.on ? " The Dashboard Kueue setting goes back and hardware profile nightly-kueue-cpu is deleted, if nobody changed them." : ""} Jobs people sent to LocalQueue nightly-kueue themselves are never admitted once the queues are gone (those jobs are deleted only when their project is deleted). The operators stay.</>} />
+                  </FormGroup>
+                )}
                 {offered.maasPlatform && (
                   <FormGroup role="group" isStack label="MaaS" fieldId="cleanup-maas-platform">
                     <Checkbox id="cleanup-maas-platform" label="MaaS platform" description="Last: MaaS turned back off as it was, then the gateway and database this tool created." isChecked={maasPlatform} onChange={(_e, v) => setMaaSPlatform(v)} />
@@ -319,8 +437,8 @@ export const CleanupModal: React.FC<{
                 {offeredComponents.length > 0 && (
                   <FormGroup role="group" isStack label="Cluster components this tool turned on" fieldId="cleanup-components">
                     {offeredComponents.map((r) => (
-                      <Checkbox key={r.component} id={`cleanup-component-${r.component}`} label={<>Turn <code>{r.component}</code> back to {r.previous || "Removed"}</>}
-                        description="Last, and only while nothing on the cluster uses it and nobody has changed it since. Someone who only set it to Managed again is not noticed, so then the check that nothing uses it is what keeps it on. The operators it needed stay." isChecked={chosenComponents.includes(r.component)} onChange={(_e, v) => toggleComponent(r.component, v)} />
+                      <Checkbox key={r.component} id={`cleanup-component-${r.component}`} label={componentLabel(r)}
+                        description={r.component === "kueue" ? "Runs last. It also stays on if someone changed it since this tool turned it on." : "Runs last. It stays on while anything on the cluster still uses it, or if someone changed it since this tool turned it on. The operators it needed stay installed."} isChecked={chosenComponents.includes(r.component)} onChange={(_e, v) => toggleComponent(r.component, v)} />
                     ))}
                   </FormGroup>
                 )}
@@ -344,6 +462,16 @@ export const CleanupModal: React.FC<{
                   <StackItem>
                     <Checkbox id={`cleanup-confirm-${p}`} label={`Delete ${retry!.contents[p].length === 1 ? "it" : "them"} with project ${p}`} isChecked={confirmedContents.includes(p)} onChange={(_e, v) => toggleConfirmedContents(p, v)} />
                   </StackItem>
+                </Stack>
+              </Alert>
+            </StackItem>
+          ))}
+          {affected.map((p) => (
+            <StackItem key={`workbenches-${p}`}>
+              <Alert variant="warning" isInline component="div" title={`Workbenches in ${p} use the dashboard Connection`}>
+                <Stack hasGutter>
+                  {usersByServer[p] && <StackItem>{connectionWorkbenchesChange(p, usersByServer[p])}</StackItem>}
+                  {envOnlyByServer[p] && <StackItem>{connectionEnvOnlyChange(p, envOnlyByServer[p])}</StackItem>}
                 </Stack>
               </Alert>
             </StackItem>

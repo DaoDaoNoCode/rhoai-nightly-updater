@@ -20,7 +20,10 @@ import { useLatestRequest } from "../../hooks/useLatestRequest";
  * terminal for an admin who prefers them.
  */
 
-export const FEATURE_TITLES: Record<PrerequisiteFeature, string> = { pipelines: "Pipelines", mlflow: "MLflow", models: "Models", playground: "the playground" };
+/** The prerequisites' Set up button, where a feature has a shorter one. */
+export const prerequisitesSetupLabel = (feature: PrerequisiteFeature) => (feature === "kueue" ? "Set up Kueue's prerequisites" : `Set up what ${FEATURE_TITLES[feature]} needs`);
+
+export const FEATURE_TITLES: Record<PrerequisiteFeature, string> = { pipelines: "Pipelines", mlflow: "MLflow", "model-registry": "the model registry", models: "Models", playground: "the playground", kueue: "the distributed workloads setup" };
 
 /**
  * The way to reach a model the Overview plans Models for: the recommended
@@ -88,10 +91,10 @@ export function withPrerequisites(state: FeatureState, p: FeaturePrerequisites |
   const setup: Pending[] = [{ kind: "setup-prerequisites", feature, ...(feature === "models" ? { exposure: RECOMMENDED_EXPOSURE, recommended: true } : {}) }];
   const reason = p.setupBlockedReason ?? (plan.length === 0 ? "A cluster-admin finishes it: the tab shows each part." : null);
   if (state.status === "ready") {
-    return { ...state, status: "needs-attention", label: `Needs attention${state.project ? ` in ${state.project}` : ""}`, next: { kind: "set-up", label: `Set up what ${FEATURE_TITLES[feature]} needs`, setup, reason } };
+    return { ...state, status: "needs-attention", label: `Needs attention${state.project ? ` in ${state.project}` : ""}`, next: { kind: "set-up", label: prerequisitesSetupLabel(feature), setup, reason } };
   }
   if (state.status !== "not-set-up") return state;
-  return { ...state, label: "Needs cluster setup", next: { kind: "set-up", label: `Set up what ${FEATURE_TITLES[feature]} needs`, setup, reason } };
+  return { ...state, label: "Needs cluster setup", next: { kind: "set-up", label: prerequisitesSetupLabel(feature), setup, reason } };
 }
 
 /** A tab header's state: a feature that reads ready while its cluster prerequisites are not needs attention. */
@@ -172,7 +175,7 @@ export const PrerequisitesSection: React.FC<{
         </PartList>
       </StackItem>
       <StackItem>
-        <PrimaryAction label={`Set up what ${FEATURE_TITLES[feature]} needs`} onClick={() => setPending({ kind: "setup-prerequisites", feature, ...(exposure ? { exposure } : {}) })} reason={reason} />
+        <PrimaryAction label={prerequisitesSetupLabel(feature)} onClick={() => setPending({ kind: "setup-prerequisites", feature, ...(exposure ? { exposure } : {}) })} reason={reason} />
       </StackItem>
       {script && (
         <StackItem>
@@ -189,6 +192,11 @@ export const PrerequisitesSection: React.FC<{
 };
 
 /** The confirmation of a prerequisites setup: every change of the plan, open. */
+/** A plan line without what the summary says once (stays after Clean up, Clean up can turn it back). */
+export const planLine = (c: string) => c
+  .replace(/; it stays after Clean up, as other features share it$/, "")
+  .replace(/ \(it is ([^;)]*); Clean up can turn it back while nothing else uses it\)$/, " (it is $1)");
+
 export function prerequisitesConfirm(pending: Pending, st: PrerequisitesStatus | null): ConfirmSpec | null {
   if (pending.kind !== "setup-prerequisites") return null;
   const p = st?.features?.[pending.feature];
@@ -197,16 +205,17 @@ export function prerequisitesConfirm(pending: Pending, st: PrerequisitesStatus |
   const planned = pending.feature !== "models" || plannedFor(st, pending.exposure);
   const plan = planned ? p?.setupPlan ?? [] : [];
   const installs = plan.some((c) => c.startsWith("Install "));
-  const title = `Set up what ${FEATURE_TITLES[pending.feature]} needs on the cluster`;
+  const title = pending.feature === "kueue" ? prerequisitesSetupLabel("kueue") : `Set up what ${FEATURE_TITLES[pending.feature]} needs on the cluster`;
   const gatewayChoice = pending.exposure === "default-gateway" || pending.exposure === "gateway";
   return {
     title: `${title}?`, confirm: installs ? "Install and turn on" : "Turn on", runTitle: title, changesOpen: true, confirmDisabled: !planned,
     summary: (
       <Stack hasGutter>
-        {installs && <StackItem><Content component="p">Operators it installs stay installed after Clean up, because other features share them.</Content></StackItem>}
         <StackItem>
           <Content component="p">
-            Only what is missing, in this order; each change is checked on the server before the first one is made. Components this tool turns on can be turned back with Clean up while nothing uses them.
+            Set up makes only what is missing, in this order; the server checks each change before the first one is made.
+            {installs ? " The operators it installs stay after Clean up, because other features share them." : ""}
+            {" "}Clean up can turn the components back while nothing uses them.
             {pending.recommended ? " Includes Red Hat Connectivity Link, for the recommended inference gateway." : gatewayChoice ? " Red Hat Connectivity Link is included because the model's calls go through a gateway, which it authenticates." : ""}
           </Content>
         </StackItem>
@@ -214,7 +223,7 @@ export function prerequisitesConfirm(pending: Pending, st: PrerequisitesStatus |
       </Stack>
     ),
     changes: [
-      ...plan.map((c) => <>{c}.</>),
+      ...plan.map((c) => <>{planLine(c)}.</>),
       <>Not changed: anything that exists already, and everything this tool did not create.</>,
     ],
   };

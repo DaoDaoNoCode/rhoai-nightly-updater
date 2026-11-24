@@ -4,7 +4,7 @@
 
 <h1 align="center">RHOAI Nightly Updater</h1>
 
-The RHOAI Nightly Updater is a web app that installs and updates Red Hat OpenShift AI (RHOAI) nightly builds on your own ROSA HCP or OpenShift cluster. It also deploys odh-dashboard pull requests, sets up test environments on its Environment page (S3 storage, pipeline servers, MLflow, a CPU model) and explains what is wrong when RHOAI is not healthy. You need no `oc` commands day to day: everything is a button, and every change asks for confirmation first.
+The RHOAI Nightly Updater is a web app that installs and updates Red Hat OpenShift AI (RHOAI) nightly builds on your own ROSA HCP or OpenShift cluster. It also deploys odh-dashboard pull requests, sets up test environments on its Environment page (S3 storage, pipeline servers, MLflow, a model registry, a CPU model) and explains what is wrong when RHOAI is not healthy. You need no `oc` commands day to day: everything is a button, and every change asks for confirmation first.
 
 Cluster-admins make the changes. Since 5.0.0 everyone RHOAI lets in can sign in too and see what runs: a short Status page, Build Explorer and their own data science projects ([Not a cluster-admin?](#not-a-cluster-admin-what-you-see)).
 
@@ -109,7 +109,7 @@ One tab per feature after an **Overview**, kept in the address so a link opens t
 3. Its state, from the same function as the tab: **Ready**, **Not set up**, **Needs attention**, **Error**, ... Something this tool did not create reads **Ready**, with **Not managed by this tool** under the label: ownership never counts as not ready. A project-scoped feature summarises the projects that have it ("Ready in juntao-test", "Ready in 3 projects", "Error in 1 of 3 projects", "Not set up in any project"); with several, **Show projects** lists each one with its state and a link to the tab there.
 4. The next step, a link in the row: **Open pipelines** in its one ready project (with several ready projects, **Choose a project**: the tab's picker decides; with a problem in one of several, **Open** that project), **Open MLflow experiments** (MLflow's experiments in the dashboard), **Open admin UI** (the S3 storage's), **Set up** (confirm, then a check that every part can be set up, then the missing parts in order, each counted only once it works), **Migrate storage**, **Show issue** (opens the tab at that part; a problem with the S3 storage opens the S3 storage tab, from its row or from Pipelines) or **Choose a project**. A step that cannot run says why under it.
 
-Under the table, **Clean up everything** deletes what this tool created (first the MaaS publications, then the pipeline servers, the S3 storage, MLflow, the playgrounds, the models, the inference gateway, and the MaaS platform last) in one confirmed operation, with a checkbox per part.
+Under the table, **Clean up everything** deletes what this tool created (first the MaaS publications, then the pipeline servers, the S3 storage, MLflow, the model registry, the playgrounds, the models, the inference gateway, and the MaaS platform last) in one confirmed operation, with a checkbox per part.
 
 <img src="docs/images/environment-storage.png" alt="S3 storage tab: Ready; the endpoint, bucket, region and the pipeline server that uses it; masked access key, secret key and admin UI password; Copy as environment variables; Open admin UI" width="760">
 
@@ -149,6 +149,16 @@ Storage an earlier version set up in namespace `minio` reads **Migration needed*
 2. Ownership, apart: this one was made in the dashboard. It works (Open MLflow experiments, a PR build, Revert), but the tool does not delete it.
 
 MLflow on RHOAI keeps each data science project apart as a workspace. Once it is ready, **Use it** has a project picker, **Open <project> in MLflow** (the dashboard's MLflow experiments for the project, `/develop-train/mlflow/experiments?workspace=<project>`; MLflow's own `<address>/#/experiments?workspace=<project>` only when the dashboard's address is not known), and the client settings to copy (`MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_TOKEN=$(oc whoami -t)`, `MLFLOW_WORKSPACE=<project>`). Deploying an opendatahub-io/mlflow PR image is under **Test an MLflow PR build**.
+
+#### Model registry
+
+The Model registry tab sets up one model registry for the cluster, `nightly-registry`, the way the dashboard's **Settings > Model registry settings > Create model registry** does with **Default database (non-production)**: a ModelRegistry with `spec.postgres.generateDeployment: true`, in the namespace the DataScienceCluster names for registries (`rhoai-model-registries` by default), so it shows in the dashboard like one made there. The default database is RHOAI's for development and testing, not production; RHOAI provides it from 3.4 on, and on a cluster without it Set up refuses before changing anything.
+
+1. **Needed on the cluster first**: the DataScienceCluster component that runs registries, `aiHub` on RHOAI 3.6 (it also runs the Model Catalog) or `modelregistry` before, set to Managed with **Set up what the model registry needs**, as for the other tabs.
+2. **Model registry**: its state (starting while its database and server come up, then Ready), its REST address through the cluster's gateway, and **Open in the dashboard**. A registry of that name someone else made reads **Not managed by this tool**: shown, never changed or deleted.
+3. **Sample model**: Set up registers the model the Models tab serves (`qwen25-05b-instruct`, version `v1`, its Hugging Face address) as the dashboard's Register model form does, unless you untick **Add a sample model** in the confirmation. Registered models cannot be deleted, only archived; setting up again puts an archived sample back to live.
+
+No access is granted to anyone: cluster-admins can use the registry, and others are added on the dashboard's **Manage permissions** page. **Delete** (the registry's menu) and **Clean up the model registry** delete the registry, with every model registered in it and its database. **Clean up** also offers to turn the DataScienceCluster component back off when this tool turned it on, unticked, with the line that `aiHub` also removes the Model Catalog; it is turned off only while nobody changed it since and no model registry is left in its namespace. Troubleshooting: [RUNBOOK §10.5](RUNBOOK.md#105-model-registry).
 
 #### Models: small models on CPU
 
@@ -203,6 +213,26 @@ An unavailable choice says why under it, with a link to fix it where there is on
 3. The projects the gateway allows. Deleting a project's last model takes the project off the list (it stays while another model there uses the gateway); a project that was deleted leaves it at the next Models change, and **Remove from the list** does it by hand.
 
 Each part's menu has **Delete**, for the chosen model only; the gateway stays while a model uses it. **Clean up Models** deletes every model of this tool in the projects you choose, then the gateway. Troubleshooting: [RUNBOOK §10.2](RUNBOOK.md#102-models-the-inference-gateway-and-cpu-models).
+
+#### Workbench: a Jupyter workbench made as the dashboard makes it
+
+The Workbench tab sets up a Jupyter workbench `nightly-workbench` in a project you choose, exactly as the dashboard's **Create workbench** form does, so the dashboard lists and runs it like any other.
+
+1. **Set up** names what it creates before it runs: the image RHOAI marks as its default workbench image (Jupyter Minimal on 3.6), the dashboard's default hardware profile for the project (in a Kueue-managed project only a Queue profile whose LocalQueue the project has), storage `nightly-workbench-storage` of the dashboard's default size and storage class, and the pipeline server's S3 connection when the project has one. When no hardware profile fits, or the cluster runs RHOAI 2.x, it says why and Set up stays off.
+2. **Workbench**: its state as the dashboard shows it (Starting, Running, Stopping, Stopped, Failed), with **Open workbench**, **Start** and **Stop** (the dashboard's own patches), and **Delete workbench**, which keeps the storage unless you tick **Also delete its storage (files are lost)**. Setting up again uses kept storage; until then the card shows it, with **Delete storage** in its menu. A `nightly-workbench` this tool did not create reads **Not managed by this tool**; one whose state cannot be read reads **Unknown**, with **Retry**.
+
+Troubleshooting: [RUNBOOK §10.6](RUNBOOK.md#106-workbench).
+
+#### Distributed workloads: Kueue as the RHOAI docs set it up
+
+The Distributed workloads tab sets up Kueue in one project so the dashboard's **Distributed workloads** page (Observe & monitor, Workload metrics) and **Observe & monitor, Infrastructure** show real workloads.
+
+1. **Prerequisites** (above the tab): the cert-manager Operator and the Red Hat build of Kueue from OperatorHub, then the DataScienceCluster's `kueue` set to `Unmanaged` (RHOAI 3.x rejects `Managed`); RHOAI then creates the Kueue CR `cluster`. The operators stay after Clean up.
+2. **Set up** in a project (a project of its own is best, for example `nightly-kueue`, created in the dashboard): ResourceFlavor `nightly-kueue-cpu`, ClusterQueue `nightly-kueue` with 6 CPUs and 19 GiB for that project only (not preemptive), LocalQueue `nightly-kueue`, and the project label `kueue.openshift.io/managed=true`. The confirmation warns when the project already has other setups.
+3. **Samples**: a RayCluster (on by default; the Distributed workloads page with its metrics) and a RayJob (off by default; the Infrastructure page's Workloads tab), both on one small CPU cluster and sent to the LocalQueue. The Ray image is editable; the default `quay.io/modh/ray:2.47.1-py311-cu121` is the x86 image the docs use (large); the docs' `-cpu` tags are ppc64le only.
+4. **Dashboard Kueue setting** (off by default, its own confirmation): sets `disableKueue: false`. In every new project on the cluster, workbenches and model deployments can then only use a queue hardware profile, so a project without its own LocalQueue cannot create them until an admin adds one. It also adds hardware profile `nightly-kueue-cpu` for the tool's LocalQueue. Turning it off restores what nobody changed.
+
+Set up refuses a Kueue that does not serve `kueue.x-k8s.io/v1beta2`, one installed outside OLM (told by its CRDs' OLM labels), a Kueue CR with `labelPolicy: None`, KueueReady not `True`, a project with a LocalQueue named `default` or with `kueue.openshift.io/managed` set to another value, and any read that fails. Troubleshooting: [RUNBOOK §10.7](RUNBOOK.md#107-distributed-workloads-kueue).
 
 #### Playground: the dashboard's Gen AI playground
 
@@ -261,6 +291,10 @@ The other samples are a training experiment with three runs and a registered mod
 You run the sample yourself: the updater never calls a pipeline server's API, because that API is a Service in your project and the updater's token must not reach it ([SECURITY.md](SECURITY.md#the-sample-pipelines-token)). It works on any ready pipeline server, the dashboard's too.
 
 Every setup has its removal on the same tab: **Delete** in the part's menu for the storage, the pipeline server and MLflow, each confirmed with the outcome first and the objects under Details; **Revert** for a deployed PR image; **Delete old storage** after Migrate storage; and **Clean up** at the bottom of each tab. What this tool did not create has no Delete.
+
+### Recipes: set up a cluster in one run
+
+**Recipes** (cluster-admins) sets up a dev cluster in one run on the updater: an RHOAI nightly, the release's default DataScienceCluster, a project the recipe creates (or one of yours), and the features you switch on: Pipelines, MLflow and its samples, Models as a Service, a model of the catalog (and how it is reached), the playground, the model registry (with its sample model), a workbench, distributed workloads (Kueue, with its samples and, only if you tick it, the dashboard's cluster-wide Kueue setting), and a Dashboard Dev main or pull request build, which goes last. Each step does what the Environment or Dashboard Dev page's own button does, and checks the cluster first: **Review and run** shows each step as Runs, Already set up or Blocked, with how long it usually takes. The run holds the cluster lock until it ends; you can close the browser, **Stop after this step**, and **Resume**, which skips what is set up. **Clean up** deletes only what the run created: the project with everything in it, the components it turned on, and, unticked until you choose them, the MaaS platform, the model registry and the distributed workloads setup it created. See [RUNBOOK §5.1](RUNBOOK.md#51-environment-recipe-runs-resume-interrupted-sign-in-again).
 
 ### Diagnostics: what is wrong, and how to fix it
 

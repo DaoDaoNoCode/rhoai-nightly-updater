@@ -1,4 +1,4 @@
-import type { ClusterSummary, MLflowSamplesStatus, PlaygroundStatus, ProjectStatus, RecipePlan, RecipeRunStatus, UserOperationStatus, UserPermissions } from "../types";
+import type { KueueStatus, WorkbenchStatus, ClusterSummary, MLflowSamplesStatus, ModelRegistryStatus, PlaygroundStatus, ProjectStatus, RecipePlan, RecipeRunStatus, UserOperationStatus, UserPermissions } from "../types";
 import summaryJson from "./contract/summary.json";
 import operationUserJson from "./contract/operation-user.json";
 import permissionsUserJson from "./contract/user-permissions-user.json";
@@ -11,6 +11,10 @@ import samplesJson from "./contract/samples-mlflow-user.json";
 import recipeRunJson from "./contract/recipe-run-admin.json";
 import recipePlanJson from "./contract/recipe-plan-admin.json";
 import recipeRunEndedJson from "./contract/recipe-run-ended-admin.json";
+import recipeRunFeaturesJson from "./contract/recipe-run-features-admin.json";
+import modelRegistryJson from "./contract/model-registry-admin.json";
+import workbenchJson from "./contract/workbench-admin.json";
+import kueueJson from "./contract/kueue-admin.json";
 
 /*
  * The backend's answers to a user who is not a cluster-admin, as the Go
@@ -52,7 +56,15 @@ export const contract = {
   // request, and POST /api/recipes/plan with problems.
   recipeRun: (): RecipeRunStatus => clone<RecipeRunStatus>(recipeRunJson),
   recipeRunEnded: (): RecipeRunStatus => clone<RecipeRunStatus>(recipeRunEndedJson),
+  /** A run of every feature that succeeded; its Clean up offers the project, the MaaS platform and the model registry it created. */
+  recipeRunFeatures: (): RecipeRunStatus => clone<RecipeRunStatus>(recipeRunFeaturesJson),
   recipePlan: (): RecipePlan => clone<RecipePlan>(recipePlanJson),
+  // The Model registry tab's answer: this tool's registry, ready, with the sample model.
+  modelRegistry: (): ModelRegistryStatus => clone<ModelRegistryStatus>(modelRegistryJson),
+  // A cluster-admin's GET /api/resources/workbench: a running workbench and the plan.
+  workbench: (project = CONTRACT_PROJECT): WorkbenchStatus => forProject<WorkbenchStatus>(workbenchJson, CONTRACT_PROJECT, project),
+  // A cluster-admin's GET /api/resources/kueue: set up, the RayCluster sample admitted, the opt-in on.
+  kueue: (project = CONTRACT_PROJECT): KueueStatus => forProject<KueueStatus>(kueueJson, CONTRACT_PROJECT, project),
 };
 
 // Compile-time checks: the generated JSON fits the frontend's types. A
@@ -72,7 +84,11 @@ const typed: {
   samples: Widen<MLflowSamplesStatus>;
   recipeRun: Widen<RecipeRunStatus>;
   recipeRunEnded: Widen<RecipeRunStatus>;
+  recipeRunFeatures: Widen<RecipeRunStatus>;
   recipePlan: Widen<RecipePlan>;
+  modelRegistry: Widen<ModelRegistryStatus>;
+  workbench: Widen<WorkbenchStatus>;
+  kueue: Widen<KueueStatus>;
 } = {
   summary: summaryJson,
   operation: operationUserJson,
@@ -84,6 +100,10 @@ const typed: {
   samples: samplesJson,
   recipeRun: recipeRunJson,
   recipeRunEnded: recipeRunEndedJson,
+  recipeRunFeatures: recipeRunFeaturesJson,
   recipePlan: recipePlanJson,
+  modelRegistry: modelRegistryJson,
+  workbench: workbenchJson,
+  kueue: kueueJson,
 };
 void typed;

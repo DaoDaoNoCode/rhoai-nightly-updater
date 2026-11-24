@@ -16,6 +16,8 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kueue"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/modelregistry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
@@ -35,6 +37,10 @@ import (
 // datasciencepipelines):
 //   - Pipelines: aipipelines Managed. No operator.
 //   - MLflow: mlflowoperator Managed. No operator.
+//   - Model registry: aiHub Managed (DataScienceCluster v3, RHOAI 3.6;
+//     it also runs the Model Catalog), modelregistry before. No operator.
+//     Its namespace is left to the component's default (it cannot change
+//     while Managed).
 //   - Models: kserve Managed, and the cert-manager Operator for Red Hat
 //     OpenShift, which KServe checks for (red-hat-data-services/kserve
 //     rhoai-3.6 kserve-module/pkg/kservemodule/dependencies.go, the
@@ -92,6 +98,13 @@ type featureSetup struct {
 	// kuadrant: a Kuadrant CR is made after the operators (Models routed
 	// through a gateway: featureSetupFor).
 	kuadrant bool
+	// operatorsFirst: the operators are installed before the components
+	// are turned on (Kueue: RHOAI's kueue component needs its operator).
+	operatorsFirst bool
+	// ready is what else ready waits for once the components report
+	// ready, with the user's token: what is still awaited (""), or a
+	// refusal that stops the wait.
+	ready func(c *kube.Client) (waiting, refusal string, err error)
 }
 
 // featureSetupFor is the feature's setup for how its model is reached
@@ -117,8 +130,14 @@ func featureSetupFor(id, exposure string) featureSetup {
 var featureSetups = []featureSetup{
 	{id: "pipelines", title: "Pipelines", components: []envkit.FeatureComponent{envkit.PipelinesComponent}},
 	{id: "mlflow", title: "MLflow", components: []envkit.FeatureComponent{envkit.MLflowComponent}},
+	{id: "model-registry", title: "Model registry", components: []envkit.FeatureComponent{envkit.ModelRegistryComponent}},
 	{id: "models", title: "Models", components: []envkit.FeatureComponent{serving.KServeComponent}, operators: []envkit.OperatorSpec{certManagerOperator}, dependency: serving.LLMDependenciesCondition},
 	{id: "playground", title: "Playground", components: []envkit.FeatureComponent{playgroundComponent, dashboardComponent}},
+	// Distributed workloads, as the RHOAI docs set Kueue up ("Manage
+	// workloads with Kueue"): cert-manager and the Red Hat build of Kueue
+	// first, then the DataScienceCluster's kueue Unmanaged; RHOAI then
+	// creates the Kueue CR cluster, which ready waits for (kueueReady).
+	{id: "kueue", title: "Distributed workloads", components: []envkit.FeatureComponent{envkit.KueueComponent}, operators: []envkit.OperatorSpec{certManagerOperator, kueue.Operator}, operatorsFirst: true, ready: kueue.InstanceWaiting},
 }
 
 func featureSetupOf(id string) (featureSetup, bool) {
@@ -245,8 +264,8 @@ func dscComponentCommand(dsc, key, state string) string {
 // componentTitle names a component for people.
 func componentTitle(fc envkit.FeatureComponent, key string) string {
 	name := strings.TrimPrefix(fc.Feature, "The ")
-	if strings.Contains(name, "(") {
-		return name // "Model serving (KServe)"
+	if strings.Contains(name, "(") || strings.HasSuffix(name, " component") {
+		return name // "Model serving (KServe)", "Kueue component"
 	}
 	return fmt.Sprintf("%s (%s)", name, key)
 }
@@ -347,7 +366,8 @@ func planFeature(c *kube.Client, fs featureSetup, r clusterReads) *featurePlan {
 		for _, fc := range fs.components {
 			key := fc.KeyIn(r.dsc)
 			state, _ := envkit.ComponentManagement(r.dsc.Object, key)
-			cp := componentPlan{fc: fc, key: key, state: state, turnOn: state != "Managed", owned: DSCComponentOwned(r.dsc.Object, key)}
+			on := fc.OnState()
+			cp := componentPlan{fc: fc, key: key, state: state, turnOn: state != on, owned: DSCComponentOwned(r.dsc.Object, key)}
 			cp.ready, cp.msg = componentReadyCondition(r.dsc.Object, []string{key})
 			if rc, ok := r.rec.Components[key]; ok {
 				cp.recorded, cp.recordedPrior = true, rc.Previous
@@ -356,16 +376,16 @@ func planFeature(c *kube.Client, fs featureSetup, r clusterReads) *featurePlan {
 			pt := types.MaaSPart{ID: "dsc-" + key, Title: componentTitle(fc, key), ManagedByTool: cp.recorded && cp.owned && !cp.turnOn}
 			switch {
 			case cp.turnOn && p.argoApp != "":
-				pt.State, pt.Message = "manual", fmt.Sprintf("%s in DataScienceCluster %s, which Argo CD application %q manages: set it to Managed in Git.", kube.FirstNonEmpty(state, "Not set"), p.dscName, p.argoApp)
-				pt.Commands = dscComponentCommand(p.dscName, key, "Managed")
+				pt.State, pt.Message = "manual", fmt.Sprintf("%s in DataScienceCluster %s, which Argo CD application %q manages: set it to %s in Git.", kube.FirstNonEmpty(state, "Not set"), p.dscName, p.argoApp, on)
+				pt.Commands = dscComponentCommand(p.dscName, key, on)
 			case cp.turnOn:
-				pt.State, pt.Message = "missing", fmt.Sprintf("%s in DataScienceCluster %s. Set up sets it to Managed; Clean up can turn it back.", kube.FirstNonEmpty(state, "Not set"), p.dscName)
-				pt.Commands = dscComponentCommand(p.dscName, key, "Managed")
-				p.plan = append(p.plan, fmt.Sprintf("DataScienceCluster %s: set %s to Managed (it is %s; Clean up can turn it back while nothing else uses it)", p.dscName, key, kube.FirstNonEmpty(state, "not set")))
+				pt.State, pt.Message = "missing", fmt.Sprintf("%s in DataScienceCluster %s. Set up sets it to %s%s; Clean up can turn it back.", kube.FirstNonEmpty(state, "Not set"), p.dscName, on, onMeaning(on))
+				pt.Commands = dscComponentCommand(p.dscName, key, on)
+				p.plan = append(p.plan, fmt.Sprintf("DataScienceCluster %s: set %s to %s (it is %s; Clean up can turn it back while nothing else uses it)", p.dscName, key, on, kube.FirstNonEmpty(state, "not set")))
 			case cp.ready == "False":
-				pt.State, pt.Message = "waiting", "Managed; RHOAI's operator reports it not ready: "+kube.TruncateText(kube.FirstNonEmpty(cp.msg, "no message"), 300)
+				pt.State, pt.Message = "waiting", on+"; RHOAI's operator reports it not ready: "+kube.TruncateText(kube.FirstNonEmpty(cp.msg, "no message"), 300)
 			default:
-				pt.State, pt.Message = "ready", "Managed in DataScienceCluster "+p.dscName
+				pt.State, pt.Message = "ready", on+" in DataScienceCluster "+p.dscName
 				if pt.ManagedByTool {
 					pt.Message += " (turned on by this tool)"
 				}
@@ -466,10 +486,27 @@ func planFeatureOperator(c *kube.Client, p *featurePlan, op envkit.OperatorSpec,
 	case st.Pending() != nil:
 		pt.State, pt.Message = "waiting", fmt.Sprintf("Subscription %s/%s exists; OLM is installing it (%s). Set up waits for it.", sub.Metadata.Namespace, sub.Metadata.Name, kube.FirstNonEmpty(sub.Status.State, "no state yet"))
 	default:
+		// Kueue: who installed it is told by its CRD's OLM labels, whatever
+		// its controller is named (kueue.OutsideOLM).
+		if op.API == kueue.APIGroup {
+			outside, detail, err := kueue.OutsideOLM(c)
+			if err != nil {
+				msg := fmt.Sprintf("Cannot tell whether Kueue runs outside OperatorHub; nothing was changed: %v.%s", err, kube.TemplateHint(err))
+				p.refuse(msg, kube.ErrorCodeFromK8sErr(err))
+				pt.State, pt.Message = "unknown", msg
+				return opp
+			}
+			if outside {
+				msg := fmt.Sprintf("Kueue's API (%s) is served on this cluster by a Kueue installed outside OperatorHub (%s): upstream manifests, or the Kueue RHOAI 2.x embedded. RHOAI does not count it, and installing %s next to it would run two. A cluster-admin migrates to %s from OperatorHub. Nothing was changed.", op.API, detail, op.Title, op.Title)
+				p.refuse(msg, "prerequisites")
+				pt.State, pt.Message, pt.NotManaged = "manual", msg, true
+				return opp
+			}
+		}
 		// Its API served by a running controller without a CSV: someone
 		// else's install, which KServe does not count and a second one
 		// would fight (a served API alone is CRDs left by an uninstall).
-		if op.API != "" {
+		if op.API != "" && op.API != kueue.APIGroup {
 			served, err := operatorAPIServed(c, op)
 			if err == nil && served && op.Controller != "" {
 				served, err = envkit.ControllerDeployed(c, op.Controller)
@@ -639,7 +676,7 @@ func (p *featurePlan) status() types.FeaturePrerequisites {
 		out.SetupBlockedReason = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(p.refusal), "Nothing was changed."))
 	}
 	for _, cp := range p.components {
-		if cp.recorded && cp.owned && cp.state == "Managed" {
+		if cp.recorded && cp.owned && cp.state == cp.fc.OnState() {
 			out.Restorable = append(out.Restorable, types.RestorableComponent{Component: cp.key, Previous: cp.recordedPrior, Feature: p.fs.id})
 		}
 	}
@@ -664,7 +701,7 @@ func GetPrerequisitesStatusFor(c *kube.Client, modelsExposure string) (*types.Pr
 // ValidatePrerequisitesRequest returns why req cannot run, or "".
 func ValidatePrerequisitesRequest(req types.PrerequisitesRequest) string {
 	if _, ok := featureSetupOf(req.Feature); !ok {
-		return "feature must be pipelines, mlflow, models or playground"
+		return "feature must be pipelines, mlflow, model-registry, models, playground or kueue"
 	}
 	if req.Exposure != "" && (req.Feature != "models" || !serving.ValidExposure(req.Exposure)) {
 		return "exposure is how a model is reached (models only): default-gateway, maas, gateway or internal"
@@ -695,8 +732,8 @@ func RunPrerequisites(c *kube.Client, req types.PrerequisitesRequest, onStep fun
 		if !cp.turnOn {
 			continue
 		}
-		if _, err := patchDSCComponent(c, cp.key, "Managed", "", true); err != nil {
-			return m.Fail("prerequisites", fmt.Sprintf("The API server rejects setting %s to Managed in the DataScienceCluster: %v. Nothing was changed.%s", cp.key, err, kube.TemplateHint(err)), serving.MaaSWriteCode(err), "dry run failed")
+		if _, err := patchDSCComponent(c, cp.key, cp.fc.OnState(), "", true); err != nil {
+			return m.Fail("prerequisites", fmt.Sprintf("The API server rejects setting %s to %s in the DataScienceCluster: %v. Nothing was changed.%s", cp.key, cp.fc.OnState(), err, kube.TemplateHint(err)), serving.MaaSWriteCode(err), "dry run failed")
 		}
 	}
 	for _, o := range p.operators {
@@ -709,56 +746,90 @@ func RunPrerequisites(c *kube.Client, req types.PrerequisitesRequest, onStep fun
 	}
 	m.Step("prerequisites", "success", "Everything Set up changes is checked.")
 
-	// 1. The components.
-	var on []string
-	for _, cp := range p.components {
-		if cp.turnOn {
-			on = append(on, cp.key)
-		}
-	}
-	if len(on) == 0 {
-		m.Step("dsc", "success", fmt.Sprintf("%s %s Managed in DataScienceCluster %s.", kube.JoinTitles(componentKeys(p.components)), kube.Verb(len(p.components), "is", "are"), p.dscName))
-	} else {
-		rec := p.rec
-		if rec.Components == nil {
-			rec.Components = map[string]prereqComponent{}
-		}
+	// The components, and the operators: in that order, or the operators
+	// first (fs.operatorsFirst: RHOAI's kueue needs its operator to be
+	// there, as the docs install it first).
+	components := func() (*types.OperationResponse, error) {
+		var on []string
 		for _, cp := range p.components {
 			if cp.turnOn {
-				rec.Components[cp.key] = prereqComponent{Previous: cp.state, Feature: fs.id}
+				on = append(on, cp.key)
 			}
 		}
-		m.Step("dsc", "running", fmt.Sprintf("Setting %s to Managed in DataScienceCluster %s (Clean up can turn %s back)...", kube.JoinTitles(on), p.dscName, kube.Verb(len(on), "it", "them")))
-		if err := writePrereqRecord(c, rec); err != nil {
-			return m.Fail("dsc", err.Error()+" The DataScienceCluster was not changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
-		}
-		p.rec = rec
-		for _, cp := range p.components {
-			if !cp.turnOn {
-				continue
+		if len(on) == 0 {
+			m.Step("dsc", "success", fmt.Sprintf("%s %s %s in DataScienceCluster %s.", kube.JoinTitles(componentKeys(p.components)), kube.Verb(len(p.components), "is", "are"), onStateOf(p.components), p.dscName))
+		} else {
+			rec := p.rec
+			if rec.Components == nil {
+				rec.Components = map[string]prereqComponent{}
 			}
-			if _, err := patchDSCComponent(c, cp.key, "Managed", "", false); err != nil {
-				return m.Fail("dsc", fmt.Sprintf("Failed to set %s to Managed: %v.%s", cp.key, err, kube.TemplateHint(err)), serving.MaaSWriteCode(err), "dsc patch failed")
+			for _, cp := range p.components {
+				if cp.turnOn {
+					rec.Components[cp.key] = prereqComponent{Previous: cp.state, Feature: fs.id}
+				}
 			}
-			m.Logs = append(m.Logs, fmt.Sprintf("OK: %s Managed (was %s)", cp.key, kube.FirstNonEmpty(cp.state, "not set")))
+			m.Step("dsc", "running", fmt.Sprintf("Setting %s to %s in DataScienceCluster %s (Clean up can turn %s back)...", kube.JoinTitles(on), onStateOf(p.components), p.dscName, kube.Verb(len(on), "it", "them")))
+			if err := writePrereqRecord(c, rec); err != nil {
+				return m.Fail("dsc", err.Error()+" The DataScienceCluster was not changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
+			}
+			p.rec = rec
+			for _, cp := range p.components {
+				if !cp.turnOn {
+					continue
+				}
+				if _, err := patchDSCComponent(c, cp.key, cp.fc.OnState(), "", false); err != nil {
+					return m.Fail("dsc", fmt.Sprintf("Failed to set %s to %s: %v.%s", cp.key, cp.fc.OnState(), err, kube.TemplateHint(err)), serving.MaaSWriteCode(err), "dsc patch failed")
+				}
+				m.Logs = append(m.Logs, fmt.Sprintf("OK: %s %s (was %s)", cp.key, cp.fc.OnState(), kube.FirstNonEmpty(cp.state, "not set")))
+			}
+			m.Step("dsc", "success", fmt.Sprintf("%s %s %s; RHOAI's operator deploys %s.", kube.JoinTitles(on), kube.Verb(len(on), "is", "are"), onStateOf(p.components), kube.Verb(len(on), "it", "them")))
 		}
-		m.Step("dsc", "success", fmt.Sprintf("%s %s Managed; RHOAI's operator deploys %s.", kube.JoinTitles(on), kube.Verb(len(on), "is", "are"), kube.Verb(len(on), "it", "them")))
+		return nil, nil
 	}
-
-	// 2. The operators.
-	for _, o := range p.operators {
-		if r, err := ensureOperator(m, &p.rec, o); r != nil || err != nil {
-			return r, err
+	operators := func() (*types.OperationResponse, error) {
+		for _, o := range p.operators {
+			if r, err := ensureOperator(m, &p.rec, o); r != nil || err != nil {
+				return r, err
+			}
 		}
+		if fs.kuadrant {
+			if r, err := ensureKuadrant(m, &p.rec); r != nil || err != nil {
+				return r, err
+			}
+		}
+		return nil, nil
 	}
-	if fs.kuadrant {
-		if r, err := ensureKuadrant(m, &p.rec); r != nil || err != nil {
+	steps := []func() (*types.OperationResponse, error){components, operators}
+	if fs.operatorsFirst {
+		steps = []func() (*types.OperationResponse, error){operators, components}
+	}
+	for _, step := range steps {
+		if r, err := step(); r != nil || err != nil {
 			return r, err
 		}
 	}
 
 	// 3. Ready.
 	return waitPrerequisitesReady(m, p)
+}
+
+// onMeaning says what a non-Managed on state means, in plain words.
+func onMeaning(on string) string {
+	if on == "Unmanaged" {
+		return ", which means RHOAI uses the Kueue operator you install instead of its own"
+	}
+	return ""
+}
+
+// onStateOf is the state the plan's components are turned on with
+// (Unmanaged for kueue, the only component of its feature; else Managed).
+func onStateOf(cps []componentPlan) string {
+	for _, cp := range cps {
+		if cp.fc.OnState() != "Managed" {
+			return cp.fc.OnState()
+		}
+	}
+	return "Managed"
 }
 
 func componentKeys(cps []componentPlan) []string {
@@ -842,6 +913,9 @@ func ensureKuadrant(m *serving.Run, rec *prereqRecord) (*types.OperationResponse
 	if err := serving.CreateKuadrant(c, version, ns, true); err != nil {
 		return m.Fail("kuadrant", fmt.Sprintf("The API server rejects the Kuadrant CR %s/kuadrant: %v. Nothing was created.", ns, err), serving.MaaSWriteCode(err), "kuadrant dry run failed")
 	}
+	if r, err := m.WaitKuadrantKindAdmissible("kuadrant"); r != nil || err != nil {
+		return r, err
+	}
 	m.Step("kuadrant", "running", fmt.Sprintf("Creating the Kuadrant CR %s/kuadrant...", ns))
 	if err := serving.CreateKuadrant(c, version, ns, false); err != nil {
 		return m.Fail("kuadrant", fmt.Sprintf("Failed to create the Kuadrant CR %s/kuadrant: %v. Set up again to retry.", ns, err), serving.MaaSWriteCode(err), "kuadrant create failed")
@@ -859,6 +933,8 @@ func waitPrerequisitesReady(m *serving.Run, p *featurePlan) (*types.OperationRes
 	c := m.Client
 	m.Step("ready", "running", fmt.Sprintf("Waiting for RHOAI's operator to report %s ready (usually 1 to 3 minutes)...", kube.JoinTitles(componentKeys(p.components))))
 	last := ""
+	// refused stops the wait; extra is what fs.ready still waits for.
+	refused, extra := "", ""
 	var dsc rhoai.DSCRead
 	done, err := kube.WaitForGone(c, prerequisiteReadyTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 		r, err := rhoai.ReadFirstDSC(cc)
@@ -882,6 +958,20 @@ func waitPrerequisitesReady(m *serving.Run, p *featurePlan) (*types.OperationRes
 				}
 			}
 		}
+		if p.fs.ready != nil {
+			w, refusal, err := p.fs.ready(cc)
+			if err != nil {
+				return false, err
+			}
+			if refusal != "" {
+				refused = refusal
+				return true, nil
+			}
+			extra = w
+			if w != "" {
+				waiting = append(waiting, w)
+			}
+		}
 		msg := strings.Join(waiting, "; ")
 		if msg != last && msg != "" {
 			last = msg
@@ -892,9 +982,12 @@ func waitPrerequisitesReady(m *serving.Run, p *featurePlan) (*types.OperationRes
 	if err != nil {
 		return m.Fail("ready", fmt.Sprintf("Stopped waiting: %v. What was set up stays; Set up again to continue.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "ready wait failed")
 	}
+	if refused != "" {
+		return m.Fail("ready", refused+" What was set up stays.", "unsupported", "refused")
+	}
 	if !done {
 		// A component never reported at all is not a failure.
-		failed := false
+		failed := extra != ""
 		for _, cp := range p.components {
 			if s, _ := componentReadyCondition(dsc.Object, []string{cp.key}); s == "False" {
 				failed = true
@@ -922,6 +1015,18 @@ func waitPrerequisitesReady(m *serving.Run, p *featurePlan) (*types.OperationRes
 }
 
 // --- turning components back (Clean up) ----------------------------------------------
+
+// componentOnState is the state the component key is turned on with.
+func componentOnState(key string) string {
+	for _, fs := range featureSetups {
+		for _, fc := range fs.components {
+			if slices.Contains(fc.Keys, key) {
+				return fc.OnState()
+			}
+		}
+	}
+	return "Managed"
+}
 
 // RestorableComponentKey: key is a component this tool turns on for a
 // feature (Clean up may turn it back).
@@ -961,7 +1066,7 @@ func restoreCheck(c *kube.Client, rec prereqRecord, dscRead rhoai.DSCRead, key s
 	prev := kube.FirstNonEmpty(rc.Previous, "Removed")
 	state, _ := envkit.ComponentManagement(dscRead.Object, key)
 	switch {
-	case dscRead.Object == nil || state != "Managed":
+	case dscRead.Object == nil || state != componentOnState(key):
 		return restoreVerdict{drop: true, log: key + " is " + kube.FirstNonEmpty(state, "not set") + " already"}
 	case !DSCComponentOwned(dscRead.Object, key):
 		return restoreVerdict{drop: true, kept: key + " (changed by someone since this tool's setup)"}
@@ -969,7 +1074,27 @@ func restoreCheck(c *kube.Client, rec prereqRecord, dscRead rhoai.DSCRead, key s
 	if argoCD := argo.TrackingOf(c, dscRead.Object, rhoai.DSCGroup, "DataScienceCluster"); argoCD.ManagedBy() != "" {
 		return restoreVerdict{refusal: argo.GitOpsRefusal("The DataScienceCluster", argoCD.ManagedBy(), "turning "+key+" back to "+prev) + argoCD.UnconfirmedNote(), code: kube.ErrorCodeGitOpsManaged}
 	}
-	users, err := dsc.ComponentUsers(c, key)
+	var users []string
+	var err error
+	if slices.Contains(envkit.ModelRegistryComponent.Keys, key) {
+		// The model registries in the namespace RHOAI keeps them in. Only
+		// this check lists them (Clean up, with the user's token), not
+		// dsc.ComponentUsers, which the ServiceAccount's reads reach. On
+		// RHOAI 3.6 aiHub also runs the Model Catalog, which has no
+		// objects to count: the Clean up dialog says it goes too.
+		ns := modelregistry.Namespace(dscRead.Object)
+		if ns == "" {
+			return restoreVerdict{kept: key + " (the DataScienceCluster names no namespace for model registries, so this tool cannot tell whether one is left)"}
+		}
+		users, err = modelregistry.Users(c, ns)
+	} else if key == envkit.KueueComponent.Keys[0] {
+		// The queues left on the cluster, of any owner (the tool's own are
+		// deleted first, by Clean up's Kueue part), read with the user's
+		// token.
+		users, err = kueue.Users(c)
+	} else {
+		users, err = dsc.ComponentUsers(c, key)
+	}
 	if err != nil {
 		return restoreVerdict{refusal: fmt.Sprintf("Cannot tell whether anything still uses %s, so it stays Managed: %v.%s", key, err, kube.TemplateHint(err)), code: kube.ErrorCodeFromK8sErr(err)}
 	}

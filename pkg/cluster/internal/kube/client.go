@@ -304,13 +304,20 @@ func NewClientWithContext(ctx context.Context, token string) *Client {
 // added to the path's own query. Error responses are returned as *K8sError
 // together with their body; transport failures as *NetworkError.
 func (c *Client) Do(method, path, contentType string, body []byte, query url.Values) ([]byte, int, error) {
+	respBody, _, code, err := c.doWithHeader(method, path, contentType, body, query)
+	return respBody, code, err
+}
+
+// doWithHeader is Do that also returns the response's header (nil when no
+// response came).
+func (c *Client) doWithHeader(method, path, contentType string, body []byte, query url.Values) ([]byte, http.Header, int, error) {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
 	req, err := http.NewRequestWithContext(c.ctx, method, c.baseURL+path, reader)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/json")
@@ -329,7 +336,7 @@ func (c *Client) Do(method, path, contentType string, body []byte, query url.Val
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, 0, wrapNetworkError(err)
+		return nil, nil, 0, wrapNetworkError(err)
 	}
 	defer resp.Body.Close()
 
@@ -337,19 +344,19 @@ func (c *Client) Do(method, path, contentType string, body []byte, query url.Val
 	// fits, which would otherwise come back cut and fail later as JSON.
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBody+1))
 	if err != nil {
-		return nil, resp.StatusCode, err
+		return nil, resp.Header, resp.StatusCode, err
 	}
 	if len(respBody) > MaxResponseBody {
-		return nil, resp.StatusCode, fmt.Errorf("%s %s: the API server's response is larger than %d MiB", method, path, MaxResponseBody>>20)
+		return nil, resp.Header, resp.StatusCode, fmt.Errorf("%s %s: the API server's response is larger than %d MiB", method, path, MaxResponseBody>>20)
 	}
 	if resp.StatusCode >= 400 {
 		err := ParseK8sError(respBody, resp.StatusCode)
 		if k, ok := errors.AsType[*K8sError](err); ok {
 			k.User = c.asUser
 		}
-		return respBody, resp.StatusCode, err
+		return respBody, resp.Header, resp.StatusCode, err
 	}
-	return respBody, resp.StatusCode, nil
+	return respBody, resp.Header, resp.StatusCode, nil
 }
 
 func (c *Client) Get(path string) ([]byte, int, error) {

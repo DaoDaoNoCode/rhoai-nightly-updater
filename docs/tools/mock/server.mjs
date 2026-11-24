@@ -426,6 +426,95 @@ function removePlayground(project) {
   world.playground.items = world.playground.items.filter((i) => i.namespace !== project);
 }
 
+/** GET /api/resources/workbench (pkg/cluster GetWorkbenchStatus): the plan is the project's when nothing is there. */
+function workbenchOf(project) {
+  const { items, noProfile } = world.workbench;
+  if (!project) return { items };
+  if (items.some((i) => i.namespace === project && i.deployed)) return { project, items };
+  return noProfile
+    ? { project, items, planProblem: F.WORKBENCH_NO_PROFILE, planProblemCode: "no_profile" }
+    : { project, items, plan: F.workbenchPlan };
+}
+
+/** POST /api/resources/workbench/stream (pkg/cluster RunWorkbench). */
+async function workbenchStream(req, res) {
+  const { action, project, deleteStorage = false } = await body(req);
+  beginOperation("workbench", "Workbench", `${action} workbench in ${project}`);
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+  let n = 0;
+  const send = (ev) => res.write(`data: ${JSON.stringify({ ...ev, elapsedMs: ++n * 3000 })}\n\n`);
+  const others = world.workbench.items.filter((i) => i.namespace !== project);
+  let message;
+  if (action === "delete-storage") {
+    world.workbench.items = others;
+    send({ step: "storage", status: "success", message: "Deleted storage nightly-workbench-storage; its files are gone." });
+    message = `Deleted storage nightly-workbench-storage in ${project}.`;
+  } else if (action === "teardown") {
+    const was = world.workbench.items.find((i) => i.namespace === project);
+    world.workbench.items = deleteStorage || !was?.storage ? others : [...others, { namespace: project, name: "nightly-workbench", deployed: false, ready: false, managedByTool: true, storage: was.storage }];
+    send({ step: "workbench", status: "success", message: "Deleted workbench nightly-workbench." });
+    if (deleteStorage) send({ step: "storage", status: "success", message: "Deleted storage nightly-workbench-storage; its files are gone." });
+    message = `Deleted workbench nightly-workbench in ${project}.`;
+  } else {
+    const state = action === "stop" ? "stopped" : "running";
+    if (action === "setup") {
+      send({ step: "check", status: "success", message: "Image Jupyter | Minimal | CPU | Python 3.12 (2025.2), hardware profile Default, storage 20Gi." });
+      send({ step: "storage", status: "success", message: "Created storage nightly-workbench-storage." });
+    }
+    await nextStep();
+    world.workbench.items = [...others, { ...F.workbenchItem(project, state), ready: state === "running" }];
+    message = `Workbench nightly-workbench in ${project} is ${state === "stopped" ? "stopped" : "starting"}.`;
+    send({ step: "workbench", status: "success", message });
+  }
+  endOperation(true, message);
+  send({ step: "operation_complete", status: "success", message });
+  res.end();
+}
+
+/** GET /api/resources/kueue (pkg/cluster GetKueueStatus): one setup per cluster, in its project. */
+function kueueOf(project) {
+  const k = world.kueue;
+  if (!k.project && project) return { ...k, project, objects: k.objects.map((o) => (o.kind === "LocalQueue" ? { ...o, namespace: project } : o)) };
+  return { ...k, ...(k.project && project && project !== k.project ? { setUpIn: k.project } : {}) };
+}
+
+/** POST /api/resources/kueue/stream (pkg/cluster RunKueue). */
+async function kueueStream(req, res) {
+  const { action, project, rayCluster = false, rayJob = false, sample } = await body(req);
+  beginOperation("kueue", "Distributed workloads", `${action} distributed workloads`);
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+  let n = 0;
+  const send = (ev) => res.write(`data: ${JSON.stringify({ ...ev, elapsedMs: ++n * 3000 })}\n\n`);
+  let message;
+  const k = world.kueue;
+  if (action === "setup") {
+    const was = k.project ? k : F.kueueWorld("ready", { project });
+    send({ step: "check", status: "success", message: `Kueue is ready; queues for 6 CPUs and 19Gi of memory in ${project}.` });
+    send({ step: "queues", status: "success", message: "ClusterQueue nightly-kueue and LocalQueue nightly-kueue are there." });
+    send({ step: "project", status: "success", message: `Labelled ${project}: Kueue admits its workloads sent to a queue.` });
+    await nextStep();
+    const samples = was.samples.map((s) => ((s.kind === "raycluster" && rayCluster) || (s.kind === "rayjob" && rayJob) ? { ...s, present: true, managedByTool: true, image: F.KUEUE_IMAGE, state: "Queued" } : s));
+    world.kueue = { ...was, samples, optIn: k.optIn };
+    if (rayCluster || rayJob) send({ step: "samples", status: "success", message: "Created the samples." });
+    message = `Distributed workloads are set up in ${project}.`;
+  } else if (action === "optin" || action === "optout") {
+    world.kueue = { ...k, optIn: F.kueueWorld("ready", { optIn: action === "optin" }).optIn };
+    message = action === "optin" ? "The dashboard's Kueue opt-in is on." : "disableKueue is unset again; deleted hardware profile nightly-kueue-cpu.";
+    send({ step: action === "optin" ? "profile" : "opt-in", status: "success", message });
+  } else if (action === "delete-sample") {
+    world.kueue = { ...k, samples: k.samples.map((s) => (s.kind === sample ? { kind: s.kind, name: s.name, present: false } : s)) };
+    message = "Deleted the sample.";
+    send({ step: "samples", status: "success", message });
+  } else {
+    world.kueue = F.kueueWorld("none");
+    message = "Deleted this tool's distributed workloads setup.";
+    send({ step: "opt-in", status: "success", message });
+  }
+  endOperation(true, message);
+  send({ step: "operation_complete", status: "success", message });
+  res.end();
+}
+
 /** POST /api/resources/playground/stream (pkg/cluster RunPlayground). */
 async function playgroundStream(req, res) {
   const { action, project, models = [] } = await body(req);
@@ -445,7 +534,10 @@ async function playgroundStream(req, res) {
     send({ step: "gone", status: "success", message: `The playground in ${project} is gone.` });
     message = `Playground deleted from ${project}: the dashboard removed its server, configuration and database. The project and its models stay.`;
   } else {
-    const names = models.length ? models.map((m) => m.name) : (world.playground.modelsByProject[project] ?? []).filter((m) => m.source === "namespace" && m.ready && (m.chat || m.embeddingDimension)).map((m) => m.name);
+    const listed = world.playground.modelsByProject[project] ?? [];
+    const chosen = models.length ? models.map((r) => listed.find((m) => m.name === r.name && m.source === r.source) ?? r) : listed.filter((m) => m.source === "namespace" && m.ready && (m.chat || m.embeddingDimension));
+    // As pkg/cluster checkPlayground names them (a MaaS model by its display name, with its name).
+    const names = chosen.map((m) => (m.source !== "maas" ? m.name : m.displayName && m.displayName !== m.name ? `${m.displayName} (Models as a Service, ${m.name})` : `${m.name} (Models as a Service)`));
     send({ step: "check", status: "running", message: "Checking what the playground needs..." });
     await nextStep();
     send({ step: "check", status: "success", message: `Ready to set up: ${project} with ${names.join(", ")}.` });
@@ -454,9 +546,43 @@ async function playgroundStream(req, res) {
     send({ step: "install", status: "success", message: `The dashboard is setting up the playground in ${project}.` });
     send({ step: "ready", status: "running", message: "The playground is starting (phase Initializing)..." });
     await nextStep();
-    world.playground.items = [...world.playground.items.filter((i) => i.namespace !== project), F.playgroundStates.ready(project)];
+    // The record keeps the models Set up asked for (pkg/cluster PlaygroundRecord.Models).
+    world.playground.items = [...world.playground.items.filter((i) => i.namespace !== project), { ...F.playgroundStates.ready(project), models: chosen.map((m) => ({ name: m.name, source: m.source })) }];
     send({ step: "ready", status: "success", message: `The playground in ${project} is ready.` });
     message = `The playground in ${project} is ready. Open it in the dashboard's Gen AI studio.`;
+  }
+  endOperation(true, message);
+  send({ step: "operation_complete", status: "success", message });
+  res.end();
+}
+
+/** POST /api/resources/model-registry/stream (pkg/cluster RunModelRegistry), in the backend's steps. */
+async function modelRegistryStream(req, res) {
+  const { action, samples } = await body(req);
+  beginOperation("model-registry", "Model registry", `${action} model registry`);
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+  let n = 0;
+  const send = (ev) => res.write(`data: ${JSON.stringify({ ...ev, elapsedMs: ++n * 3000 })}\n\n`);
+  let message;
+  if (action === "teardown") {
+    send({ step: "check", status: "success", message: "Model registry rhoai-model-registries/nightly-registry is the one this tool created." });
+    send({ step: "delete", status: "running", message: "Deleting model registry rhoai-model-registries/nightly-registry with its database..." });
+    world.modelRegistry = F.modelRegistryStates.terminating;
+    await nextStep();
+    send({ step: "delete", status: "success", message: "Model registry rhoai-model-registries/nightly-registry is being deleted; its operator and the garbage collector remove its database." });
+    world.modelRegistry = F.modelRegistryStates.absent;
+    send({ step: "gone", status: "success", message: "The registry and its database are gone." });
+    message = "Model registry nightly-registry removed, with its registered models and its database.";
+  } else {
+    send({ step: "check", status: "success", message: "Component aiHub is Managed; registries go in rhoai-model-registries." });
+    send({ step: "create", status: "success", message: "Model registry rhoai-model-registries/nightly-registry created; its operator starts a PostgreSQL database and the registry server." });
+    world.modelRegistry = F.modelRegistryStates.starting;
+    send({ step: "ready", status: "running", message: "Waiting for the registry to be available (usually 1 to 3 minutes)..." });
+    await nextStep();
+    world.modelRegistry = samples ? F.modelRegistryStates.ready : F.modelRegistryStates.readyNoSample;
+    send({ step: "ready", status: "success", message: "The registry is available; its REST address is https://rh-ai.apps.example-cluster.example.com/model-registry/nightly-registry." });
+    if (samples) send({ step: "samples", status: "success", message: "Sample model qwen25-05b-instruct (version v1) is registered." });
+    message = "Model registry nightly-registry is ready in rhoai-model-registries.";
   }
   endOperation(true, message);
   send({ step: "operation_complete", status: "success", message });
@@ -578,7 +704,7 @@ async function mlflowSamplesStream(req, res) {
 async function recipeRoute(req, res, key) {
   const { recipe } = await body(req);
   const installed = !!world.status?.csv?.phase && world.status.csv.phase !== "Not Found";
-  if (key === "POST /api/recipes/plan") return json(res, 200, F.recipePlan(recipe ?? F.recipe(), installed, !!world.recipePlanBlocked));
+  if (key === "POST /api/recipes/plan") return json(res, 200, F.recipePlan(recipe ?? F.recipe(), installed, !!world.recipePlanBlocked, !!world.recipePlanMixed));
   if (key === "POST /api/recipes/stop") {
     if (!world.recipeRun.running) return json(res, 409, { error: "No recipe runs in this updater process. Nothing was changed.", errorCode: "not_running" });
     world.recipeRun = { ...world.recipeRun, stopRequested: true };
@@ -623,7 +749,10 @@ const routes = {
   "GET /api/resources/projects": () => reads["GET /api/resources/projects"](world),
   "GET /api/summary": () => reads["GET /api/summary"](world),
   "GET /api/resources/playground": (u) => playgroundOf(u.searchParams.get("project") || ""),
+  "GET /api/resources/workbench": (u) => workbenchOf(u.searchParams.get("project") || ""),
+  "GET /api/resources/kueue": (u) => kueueOf(u.searchParams.get("project") || ""),
   "GET /api/resources/maas": () => reads["GET /api/resources/maas"](world),
+  "GET /api/resources/model-registry": () => reads["GET /api/resources/model-registry"](world),
   "GET /api/resources/maas/groups": (u) => F.maasGroupProblems(u.searchParams.getAll("name")),
   // Models routing and one-click prerequisites.
   "GET /api/resources/models/exposures": (u) => F.modelExposures(u.searchParams.get("project") || "", u.searchParams.get("model") || "qwen25-05b-instruct", world.resources.inferenceGateway ?? F.gatewayStates.none, world.routing ?? {}),
@@ -637,6 +766,23 @@ const routes = {
   "GET /api/test-pull-secret": () => ({ success: true, message: "The pull secret can pull from quay.io/rhoai.", logs: [] }),
   "GET /api/verify-nodes": () => ({ success: true, message: "All 3 nodes have the pull secret and the image mirror.", logs: [] }),
   "POST /api/setup/node-pull-check": () => F.nodePullCheck(F.latestNightly().image, !world.nodePullFails),
+  // ROSA HCP: the internal registry's copy of the pull secret (made up, like every value here).
+  "POST /api/setup/pull-secret/registry-copy": () => {
+    const reg = world.status?.pullSecret?.registry;
+    if (!reg || !reg.namespace) return { success: false, errorCode: "prerequisites", message: "This cluster does not have a hosted control plane: its internal registry pulls with openshift-config/pull-secret, so no copy is made.", logs: [] };
+    if (reg.noQuayRHOAIEntry) return { success: false, errorCode: "prerequisites", message: "Workbench images: the pull secret has no quay.io/rhoai entry, so nothing was copied for the internal registry; add the quay.io/rhoai token under Pull secret.", logs: [] };
+    if (reg.exists && !reg.ours) return { success: false, errorCode: "not_managed", message: `Workbench images: Secret ${reg.namespace}/${reg.name} exists and was not created by this updater, so it was not changed.`, logs: [] };
+    const updated = reg.exists;
+    world.status.pullSecret.registry = { ...reg, exists: true, ours: true, current: true, unusable: undefined };
+    return { success: true, message: updated ? `Workbench images: updated Secret ${reg.namespace}/${reg.name} with the new token for the internal registry` : `Workbench images: copied the quay.io/rhoai token to Secret ${reg.namespace}/${reg.name}, so the internal registry can pull nightly workbench images`, logs: [] };
+  },
+  "POST /api/setup/pull-secret/registry-copy/remove": () => {
+    const reg = world.status?.pullSecret?.registry;
+    if (!reg?.exists) return { success: true, message: "Secret does not exist; nothing to remove.", logs: [] };
+    if (!reg.ours) return { success: false, errorCode: "not_managed", message: `Secret ${reg.namespace}/${reg.name} was not created by this updater, so it is not removed.`, logs: [] };
+    world.status.pullSecret.registry = { ...reg, exists: false, ours: false, current: false, unusable: undefined };
+    return { success: true, message: `removed Secret ${reg.namespace}/${reg.name}. Workbenches cannot pull nightly images through the internal registry until the token is copied again.`, logs: [] };
+  },
   "GET /api/setup/dsc/preview": () => ({
     yaml: `apiVersion: ${world.previewAPIVersion || "datasciencecluster.opendatahub.io/v2"}\n` + "kind: DataScienceCluster\nmetadata:\n  name: default-dsc\nspec:\n  components:\n    aipipelines:\n      managementState: Managed\n    dashboard:\n      managementState: Managed\n    kserve:\n      managementState: Managed\n    workbenches:\n      managementState: Managed\n",
     apiVersion: world.previewAPIVersion || "datasciencecluster.opendatahub.io/v2",
@@ -745,6 +891,9 @@ async function api(req, res, u) {
   if (key === "POST /api/resources/cleanup/stream") return cleanupStream(req, res);
   if (key === "POST /api/resources/models/stream") return modelsStream(req, res);
   if (key === "POST /api/resources/playground/stream") return playgroundStream(req, res);
+  if (key === "POST /api/resources/model-registry/stream") return modelRegistryStream(req, res);
+  if (key === "POST /api/resources/workbench/stream") return workbenchStream(req, res);
+  if (key === "POST /api/resources/kueue/stream") return kueueStream(req, res);
   if (key === "POST /api/resources/maas/stream") return maasStream(req, res);
   if (key.startsWith("POST /api/resources/samples/") && world.canMutate === false) {
     return json(res, 403, { error: "Only cluster-admins can change the cluster through the updater.", errorCode: "forbidden" });

@@ -60,7 +60,7 @@ func TestTeardownPipelineServer_KeepsTheUserWhileAnotherServerRemains(t *testing
 			putDSPA(f, "proj", "other", `{}`, "Mozilla", "Update", storage.S3Host(), secret, "", "")
 			id, key := f.sw.giveScopedKey("proj")
 			putProjectS3Secrets(f, "proj", id, key)
-			TeardownPipelineServer(c, "proj", "")
+			TeardownPipelineServer(c, "proj", "", nil)
 			if !slices.Contains(f.sw.userNames(), storage.ScopedUserName("proj")) {
 				t.Error("the user was deleted although proj/other remains")
 			}
@@ -80,7 +80,7 @@ func TestTeardownPipelineServer_KeepsAUserOfAnotherProject(t *testing.T) {
 	recordDSPAs(f, "proj/dspa")
 	f.sw.giveScopedKey("proj")
 	f.sw.retag(storage.ScopedUserName("proj"), "other")
-	TeardownPipelineServer(c, "proj", "")
+	TeardownPipelineServer(c, "proj", "", nil)
 	if !slices.Contains(f.sw.userNames(), storage.ScopedUserName("proj")) {
 		t.Error("teardown deleted a user tagged for another project")
 	}

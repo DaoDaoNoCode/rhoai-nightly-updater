@@ -15,6 +15,10 @@ const DIGEST_IMAGE = /^quay\.io\/rhoai\/rhoai-fbc-fragment(:[A-Za-z0-9._-]+)?@sh
 
 export type BuildChoice = "latest" | "tag" | "image";
 export type ProjectChoice = "create" | "existing" | "none";
+/** How the model is reached; "" is the one the Models tab recommends when the run gets there. */
+export type ExposureChoice = "" | "default-gateway" | "maas" | "internal";
+export type MaaSDatabaseChoice = "development" | "cnpg";
+export type DashboardDevChoice = "none" | "main" | "pr";
 
 /** In-editor representation of the recipe MVP (environment recipes phase 1). */
 export interface RecipeForm {
@@ -33,6 +37,36 @@ export interface RecipeForm {
   existingProject: string;
   pipelines: boolean;
   mlflow: boolean;
+  /** Add the MLflow samples to the project (needs MLflow and a project). */
+  mlflowSamples: boolean;
+  models: boolean;
+  /** A model of the tool's catalog; "" is the catalog's default. */
+  model: string;
+  exposure: ExposureChoice;
+  /** Kept from an imported or earlier recipe; the editor does not show it. */
+  releasedImage: boolean;
+  playground: boolean;
+  maas: boolean;
+  maasDatabase: MaaSDatabaseChoice;
+  /** Publish the model through MaaS (needs Models). */
+  maasPublish: boolean;
+  modelRegistry: boolean;
+  /** Register the sample model in the registry. */
+  registrySample: boolean;
+  workbench: boolean;
+  dashboardDev: DashboardDevChoice;
+  /** The odh-dashboard pull request, as typed. */
+  dashboardPR: string;
+  /** Kept from an imported or earlier recipe; the editor does not show it. */
+  dashboardFlavor: string;
+  /** Distributed workloads (Kueue) in the project, with the tab's options. */
+  kueue: boolean;
+  kueueRayCluster: boolean;
+  kueueRayJob: boolean;
+  /** The samples' image; "" is the tab's default. */
+  kueueRayImage: string;
+  /** The dashboard's Kueue setting: cluster-wide, off by default. */
+  kueueOptIn: boolean;
 }
 
 export const DEFAULT_RECIPE_FORM: RecipeForm = {
@@ -48,12 +82,34 @@ export const DEFAULT_RECIPE_FORM: RecipeForm = {
   existingProject: "",
   pipelines: true,
   mlflow: true,
+  mlflowSamples: false,
+  models: false,
+  model: "",
+  exposure: "",
+  releasedImage: false,
+  playground: false,
+  maas: false,
+  maasDatabase: "development",
+  maasPublish: true,
+  modelRegistry: false,
+  registrySample: false,
+  workbench: false,
+  dashboardDev: "none",
+  dashboardPR: "",
+  dashboardFlavor: "rhoai",
+  kueue: false,
+  kueueRayCluster: false,
+  kueueRayJob: false,
+  kueueRayImage: "",
+  kueueOptIn: false,
 };
 
 /** Map a stored recipe into editor fields; UI-hidden values remain at defaults. */
 export function formFromRecipe(r: EnvironmentRecipe): RecipeForm {
   const b = r.spec.rhoai.build;
   const project = r.spec.project;
+  const f = r.spec.features;
+  const d = r.spec.dashboardDev;
   return {
     name: r.metadata.name,
     build: b === "latest" ? "latest" : b.image ? "image" : "tag",
@@ -65,13 +121,34 @@ export function formFromRecipe(r: EnvironmentRecipe): RecipeForm {
     newProject: project?.mode === "create" ? project.name : DEFAULT_RECIPE_FORM.newProject,
     displayName: project?.mode === "create" ? project.displayName ?? "" : DEFAULT_RECIPE_FORM.displayName,
     existingProject: project?.mode === "existing" ? project.name : "",
-    pipelines: r.spec.features.pipelines.enabled,
-    mlflow: r.spec.features.mlflow.enabled,
+    pipelines: f.pipelines.enabled,
+    mlflow: f.mlflow.enabled,
+    mlflowSamples: !!f.mlflow.samples,
+    models: f.models.enabled,
+    model: f.models.model ?? "",
+    exposure: (["default-gateway", "maas", "internal"].includes(f.models.exposure ?? "") ? f.models.exposure : "") as ExposureChoice,
+    releasedImage: !!f.models.releasedImage,
+    playground: f.playground.enabled,
+    maas: f.maas.enabled,
+    maasDatabase: f.maas.database === "cnpg" ? "cnpg" : "development",
+    maasPublish: f.maas.enabled ? !!f.maas.publish : DEFAULT_RECIPE_FORM.maasPublish,
+    modelRegistry: !!f.modelRegistry?.enabled,
+    registrySample: !!f.modelRegistry?.sample,
+    workbench: !!f.workbench?.enabled,
+    dashboardDev: d.deploy === "main" || d.deploy === "pr" ? d.deploy : "none",
+    dashboardPR: d.deploy === "pr" && d.pr ? String(d.pr) : "",
+    dashboardFlavor: d.flavor || "rhoai",
+    kueue: !!f.kueue?.enabled,
+    kueueRayCluster: !!f.kueue?.rayCluster,
+    kueueRayJob: !!f.kueue?.rayJob,
+    kueueRayImage: f.kueue?.rayImage ?? "",
+    kueueOptIn: !!f.kueue?.dashboardOptIn,
   };
 }
 
 /** Serialize the form into the EnvironmentRecipe shape the backend expects. */
 export function recipeFromForm(f: RecipeForm): EnvironmentRecipe {
+  const e = effectiveForm(f);
   const build = f.build === "latest" ? "latest" as const : f.build === "tag" ? { tag: f.tag } : { image: f.image.trim() };
   const project = f.project === "create"
     ? { mode: "create", name: f.newProject.trim(), ...(f.displayName.trim() ? { displayName: f.displayName.trim() } : {}) }
@@ -85,19 +162,53 @@ export function recipeFromForm(f: RecipeForm): EnvironmentRecipe {
       dataScienceCluster: { create: f.createDSC },
       ...(project ? { project } : {}),
       features: {
-        pipelines: { enabled: f.pipelines },
-        mlflow: { enabled: f.mlflow },
-        models: { enabled: false },
-        playground: { enabled: false },
-        maas: { enabled: false },
+        pipelines: { enabled: e.pipelines },
+        mlflow: { enabled: e.mlflow, ...(e.mlflowSamples ? { samples: true } : {}) },
+        models: e.models
+          ? { enabled: true, ...(e.model ? { model: e.model } : {}), ...(e.exposure ? { exposure: e.exposure } : {}), ...(e.releasedImage ? { releasedImage: true } : {}) }
+          : { enabled: false },
+        playground: { enabled: e.playground },
+        maas: e.maas ? { enabled: true, database: e.maasDatabase, ...(e.maasPublish ? { publish: true } : {}) } : { enabled: false },
+        ...(e.modelRegistry ? { modelRegistry: { enabled: true, ...(e.registrySample ? { sample: true } : {}) } } : {}),
+        ...(e.workbench ? { workbench: { enabled: true } } : {}),
+        ...(e.kueue ? { kueue: {
+          enabled: true,
+          ...(e.kueueRayCluster ? { rayCluster: true } : {}),
+          ...(e.kueueRayJob ? { rayJob: true } : {}),
+          ...((e.kueueRayCluster || e.kueueRayJob) && e.kueueRayImage.trim() ? { rayImage: e.kueueRayImage.trim() } : {}),
+          ...(e.kueueOptIn ? { dashboardOptIn: true } : {}),
+        } } : {}),
       },
-      dashboardDev: { deploy: "none" },
+      dashboardDev: e.dashboardDev === "none" ? { deploy: "none" }
+        : { deploy: e.dashboardDev, ...(e.dashboardDev === "pr" ? { pr: Number(e.dashboardPR.trim()) } : {}), flavor: e.dashboardFlavor },
     },
   };
 }
 
+/**
+ * The form as it is sent: a choice another one rules out counts as off
+ * (the editor shows it off, with the reason), so the recipe never asks for
+ * what its own validation refuses.
+ */
+export function effectiveForm(f: RecipeForm): RecipeForm {
+  const project = f.project !== "none";
+  const models = f.models && project;
+  return {
+    ...f,
+    pipelines: f.pipelines && project,
+    mlflowSamples: f.mlflowSamples && f.mlflow && project,
+    models,
+    exposure: f.exposure === "maas" && !f.maas ? "" : f.exposure,
+    playground: f.playground && models,
+    maasPublish: f.maasPublish && f.maas && models && f.exposure !== "maas",
+    registrySample: f.registrySample && f.modelRegistry,
+    workbench: f.workbench && project,
+    kueue: f.kueue && project,
+  };
+}
+
 /** Invalid fields keyed to their client-side message; server validation matches. */
-export type FormProblems = Partial<Record<"name" | "tag" | "image" | "newProject" | "existingProject", string>>;
+export type FormProblems = Partial<Record<"name" | "tag" | "image" | "newProject" | "existingProject" | "dashboardPR" | "kueueRayImage", string>>;
 
 function nameProblem(name: string, what: string): string | undefined {
   const n = name.trim();
@@ -117,17 +228,62 @@ export function formProblems(f: RecipeForm): FormProblems {
     if (project) p.newProject = project;
   }
   if (f.project === "existing" && !f.existingProject) p.existingProject = "Choose a project.";
+  if (f.dashboardDev === "pr" && !/^[1-9][0-9]{0,8}$/.test(f.dashboardPR.trim())) p.dashboardPR = "Enter the number of an odh-dashboard pull request.";
+  // As the Distributed workloads tab checks it.
+  if (f.kueue && (f.kueueRayCluster || f.kueueRayJob) && f.kueueRayImage.trim() && !/^[a-zA-Z0-9][a-zA-Z0-9._/:@+-]*$/.test(f.kueueRayImage.trim())) p.kueueRayImage = "Enter an image reference, such as quay.io/project/ray:2.47.";
   return p;
 }
 
 /** Blocking reason for enabling Pipelines, or null when allowed. */
 export function pipelinesReason(f: RecipeForm): string | null {
-  return f.project === "none" ? "Pipelines needs a project: choose one under Project." : null;
+  return needsProjectReason(f, "Pipelines needs");
+}
+
+/** Why a feature that lives in the project cannot be on ("<what> a project: ..."), or null. */
+export function needsProjectReason(f: RecipeForm, what: string): string | null {
+  return f.project === "none" ? `${what} a project: choose one under Project.` : null;
+}
+
+/** Why the playground cannot be on, or null. */
+export function playgroundReason(f: RecipeForm): string | null {
+  return needsProjectReason(f, "The playground needs") ?? (!f.models ? "The playground needs a model: turn Models on." : null);
+}
+
+/**
+ * Whether the recipe's playground reaches its model through Models as a Service: the model is published there, or reached
+ * through it, so the dashboard offers it to the playground only as a Models as a Service model (pkg/cluster
+ * internal/recipe playgroundThroughMaaS; a recommended way the run resolves to Models as a Service is known only then).
+ */
+export function playgroundThroughMaaS(f: RecipeForm): boolean {
+  const e = effectiveForm(f);
+  return e.playground && (e.maasPublish || e.exposure === "maas");
+}
+
+/** Why the model cannot be published through MaaS here, or null. */
+export function maasPublishReason(f: RecipeForm): string | null {
+  if (!f.models || f.project === "none") return "Publishing needs a model: turn Models on.";
+  if (f.exposure === "maas") return "The model is reached through MaaS, which publishes it already.";
+  return null;
 }
 
 /** Reason the recipe must have a project, or null when omission is fine. */
 export function noProjectReason(f: RecipeForm): string | null {
-  return f.pipelines ? "Pipelines needs a project. Turn Pipelines off to run without one." : null;
+  const inProject = [
+    f.pipelines && "Pipelines",
+    f.mlflow && f.mlflowSamples && "the MLflow samples",
+    f.models && "Models",
+    f.models && f.playground && "the playground",
+    f.workbench && "the workbench",
+    f.kueue && "distributed workloads",
+  ].filter((x): x is string => !!x);
+  if (inProject.length === 0) return null;
+  const capital = (t: string) => `${t[0].toUpperCase()}${t.slice(1)}`;
+  if (inProject.length === 1) {
+    const [one] = inProject;
+    return `${capital(one)} ${one === "the MLflow samples" ? "need" : "needs"} a project. Turn ${one} off to run without one.`;
+  }
+  const list = `${inProject.slice(0, -1).join(", ")} and ${inProject[inProject.length - 1]}`;
+  return `${capital(list)} need a project. Turn them off to run without one.`;
 }
 
 /** Seconds rendered as phrases like "under a minute", "7 minutes", or "1 hour 5 minutes". */
@@ -175,6 +331,10 @@ export interface RecipeCleanupPart {
   /** pkg/cluster CleanupStepID from the cleanup stream, or "components". */
   id: string;
   title: string;
+  /** What it deletes besides, when that is worth saying. */
+  description?: string;
+  /** Ticked when the dialog opens: a cluster-wide part (the MaaS platform, the model registry) is not. */
+  chosen: boolean;
 }
 
 /**
@@ -183,10 +343,43 @@ export interface RecipeCleanupPart {
  * and DataScienceCluster components the run enabled. Shared S3 storage, MLflow, and
  * pipeline servers outside recipe-created projects are omitted (see leftInPlace).
  */
-export function cleanupParts(ready: CleanupRequest | undefined): RecipeCleanupPart[] {
+/** The DataScienceCluster components a recipe turns on, by the names the dashboard and RHOAI's docs use. */
+const COMPONENT_NAMES: Record<string, string> = {
+  aipipelines: "Data Science Pipelines", datasciencepipelines: "Data Science Pipelines", mlflowoperator: "MLflow", modelregistry: "Model registry",
+  kserve: "KServe", kueue: "Kueue", ray: "Ray", dashboard: "Dashboard", llamastackoperator: "Llama Stack",
+};
+
+/** A component's plain name ("aipipelines" as Data Science Pipelines). */
+export function componentName(key: string): string {
+  return COMPONENT_NAMES[key] ?? key;
+}
+
+/** "a, b and c". */
+export function listText(items: string[]): string {
+  return items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+/** kueueSetting: removing the distributed workloads setup also turns the dashboard's Kueue setting back, which the run turned on (RecipeRunStatus cleanupKueueSetting). */
+export function cleanupParts(ready: CleanupRequest | undefined, kueueSetting = false): RecipeCleanupPart[] {
   const parts: RecipeCleanupPart[] = [];
-  for (const p of ready?.recipeProjects ?? []) parts.push({ id: `recipe-project:${p}`, title: `Project ${p}, which the recipe created` });
-  if (ready?.components?.length) parts.push({ id: "components", title: `The DataScienceCluster components the run turned on: ${ready.components.join(", ")}` });
+  for (const p of ready?.recipeProjects ?? []) parts.push({ id: `recipe-project:${p}`, title: `Project ${p}, which the recipe created`, chosen: true });
+  // Cluster-wide parts the run created: teammates may use them since, so they are offered, not chosen.
+  if (ready?.modelRegistry) {
+    parts.push({ id: "model-registry", title: "The model registry the run created", description: "With its registered models and its database. Others may use it: it stays unless you tick it.", chosen: false });
+  }
+  if (ready?.maasPlatform) {
+    parts.push({ id: "maas-platform", title: "The MaaS platform the run set up", description: "MaaS API keys and the MaaS database go with it. Others may use it: it stays unless you tick it.", chosen: false });
+  }
+  if (ready?.kueue) {
+    parts.push({
+      id: "kueue", title: "The distributed workloads setup the run created",
+      description: `Its queues (the ClusterQueue and ResourceFlavor are cluster-wide objects; only this project uses them), the samples and the project's Kueue label${kueueSetting
+        ? ", and it turns the dashboard's Kueue setting back off, which the run turned on"
+        : "; the dashboard's Kueue setting stays as it is"}. The Kueue operator and cert-manager stay: other setups may use them. It stays unless you tick it.`,
+      chosen: false,
+    });
+  }
+  if (ready?.components?.length) parts.push({ id: "components", title: `The DataScienceCluster components the run turned on: ${listText(ready.components.map(componentName))}`, chosen: true });
   return parts;
 }
 
@@ -204,6 +397,11 @@ export function cleanupRequest(ready: CleanupRequest | undefined, chosen: Readon
     const confirm = Object.fromEntries(projects.filter((p) => (confirmed[p] ?? []).length > 0).map((p) => [p, confirmed[p]]));
     if (Object.keys(confirm).length > 0) req.confirmProjectContents = confirm;
   }
+  // The reviewed identities go with them: the backend checks each again before it deletes it.
+  if (ready?.modelRegistry && chosen.has("model-registry")) Object.assign(req, { modelRegistry: true, modelRegistryUid: ready.modelRegistryUid ?? "" });
+  if (ready?.maasPlatform && chosen.has("maas-platform")) Object.assign(req, { maasPlatform: true, maasPlatformUid: ready.maasPlatformUid ?? "" });
+  if (ready?.kueue && chosen.has("kueue")) Object.assign(req, { kueue: true, kueueUid: ready.kueueUid ?? "" });
+  if (req.modelRegistry || req.maasPlatform || req.kueue) req.recipeRunId = ready?.recipeRunId ?? "";
   if (ready?.components?.length && chosen.has("components")) req.components = ready.components;
   return req;
 }
@@ -211,7 +409,8 @@ export function cleanupRequest(ready: CleanupRequest | undefined, chosen: Readon
 /**
  * Resources the run provisioned but this cleanup keeps, per current cluster
  * status (GET /api/resources/status): cluster-wide S3 and MLflow, plus the
- * pipeline server in the run project when that project is not part of the delete request.
+ * pipeline server in the run project when that project is not part of the delete request,
+ * (the parts offered as checkboxes and a Dashboard Dev build are said elsewhere).
  */
 export function leftInPlace(status: ResourcesStatus, run: RecipeRun, req: CleanupRequest): string[] {
   const up = (r: ResourceState | null | undefined) => !!r?.deployed && !isTerminating(r);
@@ -223,4 +422,50 @@ export function leftInPlace(status: ResourcesStatus, run: RecipeRun, req: Cleanu
   if (up(status.minio)) out.push("The S3 storage");
   if (up(status.mlflow)) out.push("MLflow");
   return out;
+}
+
+/** Whether the run deployed a Dashboard Dev build, which Clean up leaves (Revert on the Dashboard Dev page ends it). */
+export function dashboardDevLeft(run: RecipeRun): boolean {
+  const dev = run.recipe.spec.dashboardDev;
+  return dev.deploy === "main" || dev.deploy === "pr";
+}
+
+/**
+ * The DataScienceCluster components a recipe's Clean up would turn back, and
+ * those that stay on because something that uses them stays (the backend
+ * keeps a component while anything on the cluster uses it): MLflow for
+ * mlflowoperator, a pipeline server that is not deleted for aipipelines, the
+ * model in a project that is not deleted for kserve, and a model registry
+ * that is not deleted for modelregistry.
+ */
+export function componentsSplit(status: ResourcesStatus | null, run: RecipeRun, req: CleanupRequest, offered: CleanupRequest | undefined): { back: string[]; stay: string[] } {
+  const up = (r: ResourceState | null | undefined) => !!r?.deployed && !isTerminating(r);
+  const deleted = new Set(req.recipeProjects ?? []);
+  const project = run.project?.name;
+  const why = (key: string): string | null => {
+    switch (key) {
+      case "mlflowoperator":
+        return status && up(status.mlflow) ? "MLflow stays" : null;
+      case "aipipelines": {
+        const kept = (status?.pipelineServers ?? []).filter((ps) => up(ps) && ps.namespace && !deleted.has(ps.namespace)).map((ps) => ps.namespace);
+        return kept.length ? `the pipeline server in ${kept.join(", ")} stays` : null;
+      }
+      case "kserve":
+        return project && run.recipe.spec.features.models.enabled && !deleted.has(project) ? `the model in ${project} stays` : null;
+      // Turned back only with the setup this Clean up removes (as the backend
+      // keeps a component while what uses it stays).
+      case "modelregistry":
+        return offered?.modelRegistry && req.modelRegistry ? null : offered?.modelRegistry ? "the model registry stays" : "the model registry is not removed here";
+      case "kueue":
+        return offered?.kueue && req.kueue ? null : offered?.kueue ? "the distributed workloads setup stays" : "the distributed workloads setup is not removed here";
+    }
+    return null;
+  };
+  const back: string[] = [];
+  const stay: string[] = [];
+  for (const key of offered?.components ?? []) {
+    const w = why(key);
+    if (w) stay.push(`${componentName(key)} (${w})`); else back.push(componentName(key));
+  }
+  return { back, stay };
 }

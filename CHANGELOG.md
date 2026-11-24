@@ -24,6 +24,41 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Added
 
+- **Distributed workloads (Kueue) on the Environment page.** A new
+  **Distributed workloads** tab (and Overview row) sets Kueue up exactly as
+  the RHOAI docs do with self-managed queues: its prerequisites install the
+  cert-manager Operator and the Red Hat build of Kueue from OperatorHub
+  (default channel, all namespaces), then set the DataScienceCluster's
+  `kueue` to `Unmanaged` and wait for RHOAI's Kueue CR `cluster`. Set up
+  creates ResourceFlavor `nightly-kueue-cpu`, a non-preemptive ClusterQueue
+  `nightly-kueue` (6 CPUs, 19 GiB) for the chosen project only, LocalQueue
+  `nightly-kueue` (never `default`) and the project label
+  `kueue.openshift.io/managed=true`, plus optional RayCluster and RayJob
+  samples (image editable, default `quay.io/modh/ray:2.47.1-py311-cu121`;
+  sized as the CodeFlare SDK's defaults: head 1 CPU / 5 GiB requested, up to
+  2 CPUs / 8 GiB, one worker 1 CPU / 3 GiB, up to 6 GiB) for the dashboard's
+  Distributed workloads and Infrastructure pages. An
+  opt-in, with its own confirmation, sets the dashboard's `disableKueue` to
+  false and adds a Queue hardware profile. Refused when Kueue does not
+  serve `v1beta2`, runs outside OLM, or has `labelPolicy: None`. Clean up
+  deletes only what the tool recorded and restores what nobody changed;
+  the operators stay. The Models tab's hardware profile follows the
+  dashboard's Kueue rule in Kueue projects. New user-token rights only; no
+  ServiceAccount change.
+- **Workbench on the Environment page.** A new **Workbench** tab (and
+  Overview row) sets up a Jupyter workbench `nightly-workbench` in a data
+  science project exactly as the dashboard's Create workbench does: the
+  image RHOAI marks as its default workbench image, the dashboard's default
+  hardware profile (with its Kueue rule), its storage size and class, the
+  pipeline server's S3 connection by annotation, and nothing the workbench
+  controllers add themselves. It shows the dashboard's state (Starting,
+  Running, Stopping, Stopped, Failed) with **Open**, **Start**, **Stop**
+  (the dashboard's own patches) and **Delete**, which keeps the storage
+  `nightly-workbench-storage` unless you tick it; kept storage shows on the
+  tab and in Clean up, where it can be deleted on its own. Refused on RHOAI 2.x and
+  when no hardware profile fits. Clean up offers the workbenches, storage
+  unticked. All reads and writes use your own token (new user-token
+  rights only; no ServiceAccount change).
 - **Environment recipes (backend, first version).** A recipe
   (`rhoai-nightly-updater/v1alpha1`, YAML or JSON, no secrets) describes a
   dev cluster: an RHOAI build (latest, a nightly line or an image; kept or
@@ -63,6 +98,33 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   what it leaves in place (the S3 storage, MLflow, a pipeline server in an
   existing project) and links to the Environment page.
 
+- **Recipes: every Environment feature, and Dashboard Dev.** A recipe now
+  also runs the MLflow samples, Models as a Service (development or
+  CloudNativePG database), the Models prerequisites and a catalog model
+  in the project (reached the recommended way, through the default
+  gateway, through MaaS or only inside the cluster), publishing it
+  through MaaS, the playground, the model registry (with its sample
+  model), a workbench (with the tool's S3 Connection when the project has
+  the pipeline server), distributed workloads (Kueue, as the Distributed
+  workloads tab sets them up, with its samples and, off by default, the
+  dashboard's cluster-wide Kueue setting) and a Dashboard Dev main or pull
+  request build, deployed last. Each step calls what the Environment or Dashboard Dev
+  page's own button calls, and checks the cluster first, so a resume
+  skips what is set up; how the model is reached is resolved once and
+  kept for a resume. New optional recipe fields: `features.modelRegistry`
+  (`enabled`, `sample`), `features.workbench` (`enabled`) and
+  `features.kueue` (`enabled`, `rayCluster`, `rayJob`, `rayImage`,
+  `dashboardOptIn`); recipes without them read as before. Clean up also
+  offers, unticked, the MaaS platform, the model registry and the
+  distributed workloads setup, but only those the run created: each
+  carries the run's annotation from its creation, and is removed only
+  while it still has it, the recorded UID and is this tool's. The form has a switch and the
+  few options of each feature. A Dashboard Dev pull request whose images
+  are not published blocks the plan, and a step counts as done only once
+  what it set up works (the model serves, MaaS accepts it, the dashboard
+  rolls out). No new permission
+  ([RUNBOOK §5.1](RUNBOOK.md#51-environment-recipe-runs-resume-interrupted-sign-in-again)).
+
 - **Pre-releases.** A version can now be tried out before it is released:
   `make release VERSION=v5.0.0-rc.1` tags a pre-release (`-alpha.N`,
   `-beta.N` or `-rc.N`, numbered from 1), on `main` or on an `integ/*`
@@ -91,6 +153,19 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   its release (`:v5.0.0-rc.1@sha256:...` in a 5.0.0 chart, and the other
   way round), since their templates may differ; before, a tag with a suffix
   passed the check. How to: [CONTRIBUTING.md](CONTRIBUTING.md#pre-releases).
+- **Model registry on the Environment page.** A Model registry tab (and an
+  Overview row) sets up one registry, `nightly-registry`, as the
+  dashboard's Create model registry dialog does with the default database,
+  so it shows in the dashboard; it first turns on the DataScienceCluster
+  component that runs registries (`aiHub` on RHOAI 3.6, `modelregistry`
+  before) when needed. Set up can register a sample model (the Models
+  tab's model) as the dashboard's Register model form does. Delete and
+  Clean up remove only the registry this tool created, with its database
+  and registered models. Clean up can also turn the component back off
+  (it says that `aiHub` also removes the Model Catalog), only when this
+  tool turned it on and no registry is left. New user-token requests only
+  (create, get, delete and, for that check, list ModelRegistries; get the
+  registry's Service); the ServiceAccount's RBAC is unchanged.
 
 ### Changed
 
@@ -192,6 +267,97 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   like every other page's ("Cannot load the environment" before).
 
 ### Fixed
+
+- **A fresh Connectivity Link install no longer leaves Kuadrant stuck
+  without Authorino and Limitador.** Set up (the MaaS tab, and models'
+  prerequisites through a gateway) created the Kuadrant CR as soon as its API
+  was served. For up to 30 seconds after a CRD is Established, the API server
+  refuses objects owned by its CRs with `blockOwnerDeletion` (its admission
+  RESTMapper is reset every 30 seconds), so Kuadrant's operator failed to
+  create Authorino and Limitador. It retries such errors, but can drop its
+  own retry (Kuadrant/kuadrant-operator#2102), and Kuadrant then stays not
+  Ready ("limitador resource not in topology") until its operator restarts.
+  Set up now waits until 45 seconds after CRD `kuadrants.kuadrant.io` turned
+  Established, by the API server's clock, before it creates the CR (no wait
+  for an older CRD; a CRD not Established yet is read again for up to 30
+  seconds), and stops without creating it when the CRD cannot be read or does
+  not turn Established. When Kuadrant is not Ready after 5 minutes and has
+  not made Authorino, Set up stops there instead of going on to the database
+  and the gateway and waiting for Authorino as long again. Its message, and
+  the Authorino TLS step's (also when the operation ends while it waits),
+  gives what the wait found (not the wait's own deadline) and quotes
+  Kuadrant's Ready condition; when Kuadrant reports Authorino or Limitador
+  missing from its topology, it says that a cluster-admin can restart
+  Kuadrant's operator (`oc rollout restart
+  deployment/kuadrant-operator-controller-manager -n <namespace>`); the tool
+  restarts nothing itself. No new permission: the CRD is read from the
+  cluster-wide CRD list, by name, which the tool already reads.
+
+- **Workbenches start on ROSA HCP.** A workbench pulls its image through the
+  internal registry (`image-registry.openshift-image-registry.svc:5000/<applications namespace>/<image>:<tag>`,
+  as the dashboard writes it), whose pull-through follows the image mirror to
+  `quay.io/rhoai` but never sees `kube-system/additional-pull-secret`: on a
+  hosted control plane that Secret reaches the nodes only. So every
+  workbench, made by this tool or in the RHOAI dashboard, stayed in
+  `ImagePullBackOff`. On ROSA HCP the tool now also writes Secret
+  `rhoai-nightly-updater-pull` (only an exact `quay.io/rhoai` entry, never a
+  generic `quay.io` login; labelled as the tool's) into RHOAI's applications
+  namespace, which it reads from the DSCInitialization: when the pull secret
+  is saved, and after Update (also under Argo CD), Reinstall, Refresh,
+  creating the DataScienceCluster and setting up a workbench (a fresh cluster
+  has no applications namespace when the pull secret is saved). The
+  **Pull secret** item says whether the internal registry can pull nightly
+  images and offers **Copy for the internal registry** and **Remove the
+  internal registry's copy**. A Secret of that name the tool did not create
+  is never changed or removed. Self-managed clusters are unchanged (their
+  registry uses `openshift-config/pull-secret`); the gitops profile reads no
+  Secret, so it documents an `oc` command instead
+  ([GITOPS](docs/GITOPS.md#workbench-images-on-rosa-hcp)).
+
+- **A recipe's playground works when its model is offered only through
+  Models as a Service.** Publishing the model through MaaS (or reaching it
+  through MaaS) takes it out of the dashboard's Gen AI assets, so the
+  playground offers it only as a Models as a Service model, and the
+  Playground step stopped with "has no ready chat model". The step now sets
+  the playground up with that model's Models as a Service entry (found from
+  its MaaSModelRef), and fails with the reason when it is missing or not
+  ready; a ready playground of this tool counts as done, since the
+  playground offers each user's Models as a Service models per request.
+  The recipe form and the review say so. The Playground tab's
+  set-up confirmation names models by their display names, and the tab says
+  which models Set up chose (the tool now records them) and that the
+  playground offers the project's own ready models and the Models as a
+  Service models each user's subscriptions allow.
+
+- **The Ray samples' head no longer runs out of memory.** In the 5.0.0
+  pre-releases the samples' head and worker had 1 CPU and 2 GiB (requests
+  equal to limits), and the head was OOMKilled seconds after it started. They
+  now use the CodeFlare SDK's defaults (above), and the ClusterQueue quota
+  grows from 6 CPUs / 11 GiB to 6 CPUs / 19 GiB to hold them. Set up keeps
+  what is there, so the Distributed workloads tab now shows the live
+  ClusterQueue's quota and flags a queue or sample an earlier version made
+  with other sizes, and a recipe no longer counts those as set up: Clean
+  up, then Set up.
+
+- **Deleting a pipeline server no longer breaks the workbenches that use its
+  dashboard Connection.** A workbench a user attached
+  `rhoai-nightly-updater-s3` to in the dashboard kept naming it after the
+  pipeline server (and with it the Connection) was deleted, and the
+  workbenches webhook then refused every update of it, Stop and Start
+  included. Delete, Recreate and Clean up now take the Connection off the
+  workbenches that name it in `opendatahub.io/connections` first (only that
+  entry; the others stay; running workbenches restart, so work not saved to
+  disk is lost), after you confirm each one: the confirmation lists them, a
+  workbench that started using it since (checked again right before the
+  delete), or was made again under the same name, refuses the request before
+  anything is deleted, and a failed change stops before anything is deleted. The
+  Pipelines tab names the workbenches that use the Connection. Every change
+  is tried as a dry run first, and a workbench the webhook refuses (another
+  of its Connections is gone) is named with the webhook's reason.
+  Workbenches that load the Connection without the annotation (attached by
+  RHOAI 2.x) are listed but not changed: they fail to start after the
+  deletion until you remove it from them in the dashboard. New
+  permission used with your own token: `patch` on Notebooks.
 
 - **A recipe project's Clean up deletes the project you reviewed, and a
   second confirmation no longer loses the first.** A dialog left open while
@@ -521,6 +687,11 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Security
 
+- On ROSA HCP the `quay.io/rhoai` token is also copied into RHOAI's
+  applications namespace (Secret `rhoai-nightly-updater-pull`), with the
+  signed-in cluster-admin's token; only cluster-admins and OpenShift's own
+  accounts may read Secrets there. The ServiceAccount gains nothing
+  ([SECURITY.md](SECURITY.md#the-internal-registrys-copy-of-the-pull-secret-rosa-hcp-500)).
 - The app now receives the `user:full` token of every RHOAI user who signs
   in, not only cluster-admins'; it uses a non-admin's token only for their
   own reads.

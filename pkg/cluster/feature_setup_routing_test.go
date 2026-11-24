@@ -56,6 +56,7 @@ func TestPrerequisites_ModelsThroughAGatewayInstallsConnectivityLink(t *testing.
 		prev(pkg, ns, from, to)
 		if pkg == "rhcl-operator" {
 			pc.f.groups = map[string]string{"/apis/kuadrant.io": kuadrantGroupDoc}
+			installKuadrantCRDLocked(pc.f)
 		}
 	}
 	pc.f.fail["GET /apis/kuadrant.io/v1/kuadrants"] = 404

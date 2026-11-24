@@ -103,13 +103,13 @@ func TestTeardownPipelineServer_DeletesTheConnection(t *testing.T) {
 	putDSPA(f, "proj", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, "", "")
 	f.putJSON(secretPath("proj", storage.DSPASecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
 	f.putJSON(secretPath("proj", storage.ConnectionSecretName), `{"metadata":{"labels":`+toolLabelJSON+`}}`)
-	resp, _ := TeardownPipelineServer(c, "proj", toolDSPAUID(c, "proj"))
+	resp, _ := TeardownPipelineServer(c, "proj", toolDSPAUID(c, "proj"), nil)
 	if !resp.Success || f.has(secretPath("proj", storage.ConnectionSecretName)) {
 		t.Fatalf("got %+v", resp)
 	}
 	// One of the same name that someone else made stays.
 	f.putJSON(secretPath("proj", storage.ConnectionSecretName), `{"metadata":{}}`)
-	if resp, _ := TeardownPipelineServer(c, "proj", toolDSPAUID(c, "proj")); !resp.Success || !f.has(secretPath("proj", storage.ConnectionSecretName)) {
+	if resp, _ := TeardownPipelineServer(c, "proj", toolDSPAUID(c, "proj"), nil); !resp.Success || !f.has(secretPath("proj", storage.ConnectionSecretName)) {
 		t.Fatalf("got %+v", resp)
 	}
 }
@@ -141,7 +141,7 @@ func TestGetResourcesStatusFor_ReadsTheConnection(t *testing.T) {
 			putDSPA(f, "proj", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, annotated, "")
 			putDSPA(f, "other", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, annotated, "")
 			tc.setup(f)
-			st, err := GetResourcesStatusFor(c, "proj")
+			st, err := GetResourcesStatusFor(c, nil, "proj")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -168,7 +168,7 @@ func TestGetResourcesStatusFor_NoSecretReadOutsideTheSelectedServer(t *testing.T
 	putDSProject(f, "proj")
 	putDSPA(f, "proj", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, "", "")
 	for _, project := range []string{"", "elsewhere"} {
-		if _, err := GetResourcesStatusFor(c, project); err != nil {
+		if _, err := GetResourcesStatusFor(c, nil, project); err != nil {
 			t.Fatal(err)
 		}
 	}

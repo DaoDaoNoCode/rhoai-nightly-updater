@@ -38,9 +38,12 @@ export const partTitleId = (part: string) => `environment-part-${part}`;
 export const FEATURE_PURPOSE = {
   storage: "S3-compatible object storage (SeaweedFS) shared by the whole cluster, in namespace seaweedfs.",
   pipelines: "Run data science pipelines in a project; their artifacts go to the cluster's S3 storage.",
+  workbench: "A Jupyter workbench in a project, made as the dashboard's Create workbench does: open it from here or from the project in the dashboard.",
   mlflow: "Track experiments: log runs, metrics and models to an MLflow server on the cluster, with a workspace per data science project.",
+  "model-registry": "A model registry for the cluster: register models and their versions, and deploy them from the dashboard.",
   models: "Serve small models on CPU in a project: chat, tool calling and embeddings. Call them with each model's own token or from the dashboard's Gen AI playground.",
   playground: "The dashboard's Gen AI playground in a project: a chat page to try the project's models and ask about your documents.",
+  kueue: "Distributed workloads with Kueue in a project, as the RHOAI docs set them up: queues with a CPU and memory quota, and Ray samples the dashboard's Distributed workloads and Infrastructure pages show.",
   maas: "Models as a Service: offer models to everyone on the cluster through one gateway, with API keys and token limits.",
 } as const;
 

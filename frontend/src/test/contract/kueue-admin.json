@@ -1,0 +1,71 @@
+{
+  "dashboardUrl": "https://rh-ai.apps.example.com",
+  "defaultRayImage": "quay.io/modh/ray:2.47.1-py311-cu121",
+  "instance": {
+    "available": true,
+    "found": true,
+    "kueueReady": "True",
+    "ready": true,
+    "v1beta2": true
+  },
+  "label": {
+    "addedByTool": true,
+    "present": true
+  },
+  "objects": [
+    {
+      "active": true,
+      "kind": "ResourceFlavor",
+      "managedByTool": true,
+      "name": "nightly-kueue-cpu",
+      "present": true
+    },
+    {
+      "active": true,
+      "kind": "ClusterQueue",
+      "managedByTool": true,
+      "name": "nightly-kueue",
+      "present": true
+    },
+    {
+      "active": true,
+      "kind": "LocalQueue",
+      "managedByTool": true,
+      "name": "nightly-kueue",
+      "namespace": "team-a",
+      "present": true
+    }
+  ],
+  "optIn": {
+    "disableKueue": false,
+    "on": true,
+    "previous": "unset",
+    "profile": {
+      "active": true,
+      "kind": "HardwareProfile",
+      "managedByTool": true,
+      "name": "nightly-kueue-cpu",
+      "namespace": "redhat-ods-applications",
+      "present": true
+    },
+    "setByTool": true
+  },
+  "project": "team-a",
+  "quota": "6 CPUs and 19Gi of memory",
+  "samples": [
+    {
+      "image": "quay.io/modh/ray:2.47.1-py311-cu121",
+      "kind": "raycluster",
+      "managedByTool": true,
+      "name": "nightly-raycluster",
+      "present": true,
+      "rayState": "ready",
+      "state": "Admitted"
+    },
+    {
+      "kind": "rayjob",
+      "name": "nightly-rayjob",
+      "present": false
+    }
+  ]
+}

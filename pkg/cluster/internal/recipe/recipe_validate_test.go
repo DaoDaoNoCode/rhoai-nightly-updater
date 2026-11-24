@@ -39,6 +39,8 @@ spec:
     models:    {enabled: true, model: "", exposure: maas, releasedImage: true}
     playground: {enabled: true}
     maas:      {enabled: true, database: cnpg, publish: true}
+    modelRegistry: {enabled: true, sample: true}
+    workbench: {enabled: true}
   dashboardDev:
     deploy: pr
     pr: 4321
@@ -59,7 +61,9 @@ const fullJSON = `{
       "mlflow": {"enabled": true, "samples": true},
       "models": {"enabled": true, "model": "", "exposure": "maas", "releasedImage": true},
       "playground": {"enabled": true},
-      "maas": {"enabled": true, "database": "cnpg", "publish": true}
+      "maas": {"enabled": true, "database": "cnpg", "publish": true},
+      "modelRegistry": {"enabled": true, "sample": true},
+      "workbench": {"enabled": true}
     },
     "dashboardDev": {"deploy": "pr", "pr": 4321, "flavor": "odh"}
   }
@@ -81,6 +85,9 @@ func TestValidate_AcceptsAndFillsDefaults(t *testing.T) {
 				Models:     types.RecipeModels{Enabled: true, Exposure: "maas", ReleasedImage: true},
 				Playground: types.RecipeFeature{Enabled: true},
 				MaaS:       types.RecipeMaaS{Enabled: true, Database: MaaSDatabaseCNPG, Publish: true},
+				// Recipes phase 2: optional, so recipes without them read as before.
+				ModelRegistry: types.RecipeModelRegistry{Enabled: true, Sample: true},
+				Workbench:     types.RecipeFeature{Enabled: true},
 			},
 			DashboardDev: types.RecipeDashboardDev{Deploy: DashboardDevPR, PR: 4321, Flavor: "odh"},
 		},
@@ -98,6 +105,8 @@ func TestValidate_AcceptsAndFillsDefaults(t *testing.T) {
 	withImage.Spec.RHOAI.Build = types.RecipeBuild{Image: pinnedImage}
 	withTaggedImage := minimal
 	withTaggedImage.Spec.RHOAI.Build = types.RecipeBuild{Image: "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + strings.Repeat("a", 64)}
+	withRegistry := minimal
+	withRegistry.Spec.Features.ModelRegistry = types.RecipeModelRegistry{Enabled: true}
 	existing := minimal
 	existing.Spec.Project = &types.RecipeProject{Mode: ProjectExisting, Name: "default"}
 
@@ -115,6 +124,7 @@ func TestValidate_AcceptsAndFillsDefaults(t *testing.T) {
 		{"a pinned image with its tag", source("  rhoai: {build: {image: \"quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:" + strings.Repeat("a", 64) + "\"}}\n"), withTaggedImage},
 		{"an existing project may have any valid name", source(latest + "  project: {mode: existing, name: default}\n"), existing},
 		{"a comment and a document start", "# my recipe\n---\n" + source(latest), minimal},
+		{"the model registry without its sample", source(latest + "  features: {modelRegistry: {enabled: true}}\n"), withRegistry},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -175,6 +185,8 @@ func TestValidate_RefusesWhatItCannotReadStrictly(t *testing.T) {
 		{"a JSON build object with another member", `{"apiVersion":"` + APIVersion + `","kind":"` + Kind + `","metadata":{"name":"x"},"spec":{"rhoai":{"build":{"Tag":"rhoai-3.6"}}}}`, `unknown object member name "Tag"`},
 		// No secrets: the schema has no field for one.
 		{"a pull secret", source(latest + "  pullSecret: {auths: {}}\n"), "field pullSecret not found"},
+		{"an unknown model registry field", source(latest + "  features: {modelRegistry: {enabled: true, namespace: x}}\n"), "field namespace not found"},
+		{"an unknown JSON workbench member", `{"apiVersion":"` + APIVersion + `","kind":"` + Kind + `","metadata":{"name":"x"},"spec":{"rhoai":{"build":"latest"},"features":{"workbench":{"enabled":true,"image":"x"}}}}`, `unknown object member name "image"`},
 		{"a MaaS connection URL", source(latest + "  features: {maas: {enabled: true, database: external, connectionURL: \"postgresql://u:p@db/maas\"}}\n"), "field connectionURL not found"},
 	}
 	for _, tc := range cases {
@@ -235,6 +247,9 @@ func TestValidate_ReportsEveryBrokenRule(t *testing.T) {
 		{"an external database while MaaS is off", source(latest + "  features: {maas: {database: external}}\n"), []string{"spec.features.maas.database"}, "a recipe holds no secrets"},
 		{"an unknown MaaS database", source(latest + "  features: {maas: {enabled: true, database: sqlite}}\n"), []string{"spec.features.maas.database"}, `Database "sqlite"`},
 		{"publishing without a model", source(latest + "  features: {maas: {enabled: true, publish: true}}\n"), []string{"spec.features.maas.publish"}, "Publishing through MaaS needs a model"},
+		{"publishing while MaaS is off", source(latest + "  project: {mode: create, name: p}\n  features: {models: {enabled: true}, maas: {publish: true}}\n"), []string{"spec.features.maas.publish"}, "Publishing through MaaS needs Models as a Service"},
+		{"the registry's sample without the registry", source(latest + "  features: {modelRegistry: {sample: true}}\n"), []string{"spec.features.modelRegistry.sample"}, "The sample model needs the model registry"},
+		{"a workbench without a project", source(latest + "  features: {workbench: {enabled: true}}\n"), []string{"spec.features.workbench.enabled"}, "The workbench needs a project"},
 		{"a PR with deploy main", source(latest + "  dashboardDev: {deploy: main, pr: 12}\n"), []string{"spec.dashboardDev.pr"}, "pr is only for deploy: pr"},
 		{"a PR without deploy", source(latest + "  dashboardDev: {pr: 12}\n"), []string{"spec.dashboardDev.pr"}, "pr is only for deploy: pr"},
 		{"deploy pr without a PR", source(latest + "  dashboardDev: {deploy: pr}\n"), []string{"spec.dashboardDev.pr"}, "needs the odh-dashboard pull request number"},
@@ -257,6 +272,31 @@ func TestValidate_ReportsEveryBrokenRule(t *testing.T) {
 			}
 			if !strings.Contains(strings.Join(messages, "\n"), tc.want) {
 				t.Fatalf("no message with %q: %q", tc.want, messages)
+			}
+		})
+	}
+}
+
+// Combinations of the recipes phase 2 fields that are valid: none of them
+// reports a problem.
+func TestValidate_AcceptsTheFeatureCombinations(t *testing.T) {
+	project := "  project: {mode: existing, name: p}\n"
+	for name, spec := range map[string]string{
+		"the registry and its sample need no project": "  features: {modelRegistry: {enabled: true, sample: true}}\n",
+		"a workbench in an existing project":          project + "  features: {workbench: {enabled: true}}\n",
+		"a workbench without Pipelines":               project + "  features: {workbench: {enabled: true}, pipelines: {enabled: false}}\n",
+		"published while reached inside the cluster":  project + "  features: {models: {enabled: true, exposure: internal}, maas: {enabled: true, publish: true}}\n",
+		"published and reached through MaaS":          project + "  features: {models: {enabled: true, exposure: maas}, maas: {enabled: true, publish: true}}\n",
+		"MaaS on its own":                             "  features: {maas: {enabled: true, database: cnpg}}\n",
+		"every feature with Dashboard Dev main":       allFeatures + "  dashboardDev: {deploy: main}\n",
+		"the samples with MLflow in a project":        project + "  features: {mlflow: {enabled: true, samples: true}}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if strings.Contains(spec, "dashboardDev: {deploy: main}") {
+				spec = strings.Replace(spec, "  dashboardDev: {deploy: pr, pr: 77}\n", "", 1)
+			}
+			if _, problems := Validate([]byte(source(latest + spec))); len(problems) > 0 {
+				t.Errorf("problems %+v", problems)
 			}
 		})
 	}

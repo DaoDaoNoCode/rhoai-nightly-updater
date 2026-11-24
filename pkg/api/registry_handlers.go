@@ -50,6 +50,42 @@ var HandleCreatePullSecret = withMutationAuth(func(c *cluster.Client, w http.Res
 	writeJSON(w, result, "create-pull-secret")
 })
 
+// HandleRegistryPullCopy (re)makes only the internal registry's copy of the
+// pull secret's quay.io/rhoai entry (ROSA HCP), with the user's token.
+var HandleRegistryPullCopy = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
+	beginOperation(w, "")
+	slog.Info("mutation", "op", "copy-registry-pull-secret")
+	result, err := cluster.CopyPullSecretForRegistry(c)
+	if err != nil {
+		slog.Error("copy-registry-pull-secret failed", "error", err)
+		writeOperationError(w, "copy the pull secret for the internal registry failed", err)
+		return
+	}
+	writeJSON(w, result, "copy-registry-pull-secret")
+})
+
+// HandleRemoveRegistryPullCopy deletes only the tool's copy, with the user's
+// token.
+var HandleRemoveRegistryPullCopy = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
+	if !lockCluster(w) {
+		return
+	}
+	defer releaseClusterMutationLock()
+	beginOperation(w, "")
+	slog.Info("mutation", "op", "remove-registry-pull-secret")
+	result, err := cluster.RemovePullSecretRegistryCopy(c)
+	if err != nil {
+		slog.Error("remove-registry-pull-secret failed", "error", err)
+		writeOperationError(w, "remove the internal registry's copy failed", err)
+		return
+	}
+	writeJSON(w, result, "remove-registry-pull-secret")
+})
+
 // planNodeSetup and runNodeSetup are cluster.PlanNodeSetup and
 // cluster.RunNodeSetup; tests replace them.
 var (

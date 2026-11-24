@@ -575,7 +575,20 @@ type kuadrantState struct {
 	Found, Ready bool
 	Namespace    string
 	Message      string
-	Meta         kube.ObjectMeta
+	// ReadyStatus and Reason are the Ready condition's status ("True",
+	// "False", "Unknown"; "" when it reports none) and reason.
+	ReadyStatus, Reason string
+	Meta                kube.ObjectMeta
+}
+
+// readyText is the Ready condition's reason and message ("" when it
+// reports neither), as Kuadrant words why it is not Ready.
+func (k kuadrantState) readyText() string {
+	// Message falls back to the reason when the condition has no message.
+	if k.Reason == "" || k.Message == k.Reason {
+		return kube.TruncateText(k.Message, 300)
+	}
+	return k.Reason + ": " + kube.TruncateText(k.Message, 300)
 }
 
 func ReadKuadrant(c *kube.Client) (kuadrantState, error) {
@@ -609,6 +622,7 @@ func ReadKuadrant(c *kube.Client) (kuadrantState, error) {
 	if cond, ok := kube.FindCondition(k.Status.Conditions, "Ready"); ok {
 		st.Ready = cond.Status == "True"
 		st.Message = kube.FirstNonEmpty(cond.Message, cond.Reason)
+		st.ReadyStatus, st.Reason = cond.Status, cond.Reason
 	}
 	return st, nil
 }
@@ -1867,6 +1881,21 @@ func maasLeftovers(c *kube.Client, m LLMISvcObject, recorded bool) []string {
 		}
 	}
 	return left
+}
+
+// ModelExposureNow is how this tool's model m is reached now, as the
+// Models tab reads it: the exposure and, through a gateway, its
+// "namespace/name".
+func ModelExposureNow(c *kube.Client, m LLMISvcObject) (string, string) {
+	def, _ := readKServeGateway(c)
+	return modelExposureOf(m, def)
+}
+
+// MaaSDBConfigMeta reads the metadata of Secret maas-db-config in ns, the
+// database connection MaaS setup writes for its development and
+// CloudNativePG databases.
+func MaaSDBConfigMeta(c *kube.Client, ns string) (kube.ObjectMeta, bool, error) {
+	return kube.ReadObjectMeta(c, maasObjectPath("Secret", ns))
 }
 
 // ToolOwned: this tool created the object (its label, and a write by it).

@@ -1,7 +1,7 @@
 import React from "react";
 import { Alert, AlertActionLink, Button, Content, DescriptionList, DescriptionListDescription, DescriptionListGroup, DescriptionListTerm, ExpandableSection, Stack, StackItem } from "@patternfly/react-core";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
-import type { MaaSActionId, MLflowSampleAction, MLflowSampleId, ModelExposureKind, ModelExposureOption, PlaygroundModelRef, PrerequisiteFeature, ResourceState, S3LeftoverKey } from "../../types";
+import type { ConnectionWorkbench, MaaSActionId, MLflowSampleAction, MLflowSampleId, ModelExposureKind, ModelExposureOption, PlaygroundModelRef, PrerequisiteFeature, ResourceState, S3LeftoverKey } from "../../types";
 import type { AudienceForm, DatabaseForm, LimitForm } from "./maasForms";
 import { withImageRefs } from "../ImageRef";
 import { TruncatedText } from "../LongText";
@@ -212,6 +212,9 @@ export function consolePodsHref(consoleURL: string | undefined, namespace: strin
 
 /** A change the user is asked to confirm. */
 export type Pending =
+  /** The Workbench tab: one streamed request (pkg/api HandleWorkbenchStream). */
+  | { kind: "setup-workbench" | "start-workbench" | "stop-workbench" | "delete-workbench-storage"; project: string }
+  | { kind: "teardown-workbench"; project: string; deleteStorage?: boolean }
   | { kind: "setup-minio" | "repair-minio" | "setup-mlflow" | "revert-mlflow" | "teardown-mlflow" }
   /** deleteNamespace: also delete namespace seaweedfs (the user's informed choice). */
   | { kind: "teardown-minio"; deleteNamespace?: boolean }
@@ -223,9 +226,9 @@ export type Pending =
    * unrecorded: the pipeline server carries this tool's label but this tool has no record of it; the dialog
    * says so, and confirming it is what lets Delete (and Recreate) remove it: the server with uid (one made again since is not).
    */
-  | { kind: "setup-pipeline-server" | "teardown-pipeline-server"; project: string; name?: string; again?: boolean; unrecorded?: boolean; uid?: string }
+  | { kind: "setup-pipeline-server" | "teardown-pipeline-server"; project: string; name?: string; again?: boolean; unrecorded?: boolean; uid?: string; workbenches?: ConnectionWorkbench[]; envOnly?: string[] }
   /** Replace the tool's pipeline server named nightly-dspa with one named dspa (workbench pipelines need it). */
-  | { kind: "recreate-pipeline-server"; project: string; name: string; unrecorded?: boolean; uid?: string }
+  | { kind: "recreate-pipeline-server"; project: string; name: string; unrecorded?: boolean; uid?: string; workbenches?: ConnectionWorkbench[]; envOnly?: string[] }
   /** MLflow samples in a project's workspace (one request for all of them). */
   | { kind: "mlflow-samples"; project: string; action: MLflowSampleAction; samples: MLflowSampleId[]; repairs?: string[] }
   /** Models: the inference gateway and/or the model in a project, as one streamed operation. */
@@ -261,7 +264,16 @@ export type Pending =
   | { kind: "maas-access"; access?: AudienceForm }
   | { kind: "maas-database"; database?: DatabaseForm; confirmKeysLost?: boolean }
   /** A MaaS platform part's own fix (its action lists the changes). */
-  | { kind: "maas-action"; action: MaaSActionId };
+  | { kind: "maas-action"; action: MaaSActionId }
+  /** Model registry: set up (with the sample model when samples) or delete this tool's registry. */
+  | { kind: "setup-model-registry"; samples?: boolean }
+  | { kind: "teardown-model-registry" }
+  /** Distributed workloads: set up in a project (with the samples ticked), delete, delete one sample, the dashboard opt-in. */
+  | { kind: "setup-kueue"; project: string; rayCluster: boolean; rayJob: boolean; rayImage: string }
+  | { kind: "teardown-kueue" }
+  | { kind: "delete-kueue-sample"; sample: "raycluster" | "rayjob" }
+  | { kind: "kueue-optin" }
+  | { kind: "kueue-optout" };
 
 /** A sample change: a streamed request of its own, not a resource's setup or deletion. */
 export type SamplePending = Extract<Pending, { kind: "mlflow-samples" }>;
@@ -274,9 +286,18 @@ export const isPrerequisitesPending = (p: Pending): p is PrerequisitesPending =>
 export type PlaygroundPending = Extract<Pending, { kind: "setup-playground" | "teardown-playground" }>;
 /** A MaaS change: one streamed request (pkg/api HandleMaaSStream). */
 export type MaaSPending = Extract<Pending, { kind: "setup-maas" | "teardown-maas" | "publish-maas" | "unpublish-maas" | "restore-routing-maas" | "maas-action" | "maas-limit" | "maas-access" | "maas-database" }>;
+/** A Model registry change: one streamed operation. */
+export type ModelRegistryPending = Extract<Pending, { kind: "setup-model-registry" | "teardown-model-registry" }>;
+export const isModelRegistryPending = (p: Pending): p is ModelRegistryPending => p.kind === "setup-model-registry" || p.kind === "teardown-model-registry";
 const MAAS_KINDS: string[] = ["setup-maas", "teardown-maas", "publish-maas", "unpublish-maas", "restore-routing-maas", "maas-action", "maas-limit", "maas-access", "maas-database"];
 export const isMaaSPending = (p: Pending): p is MaaSPending => MAAS_KINDS.includes(p.kind);
-export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending | PlaygroundPending | MaaSPending | PrerequisitesPending>;
+export type WorkbenchPending = Extract<Pending, { kind: "setup-workbench" | "start-workbench" | "stop-workbench" | "teardown-workbench" | "delete-workbench-storage" }>;
+export const isWorkbenchPending = (p: Pending): p is WorkbenchPending => p.kind === "setup-workbench" || p.kind === "start-workbench" || p.kind === "stop-workbench" || p.kind === "teardown-workbench" || p.kind === "delete-workbench-storage";
+/** A Distributed workloads change: one streamed operation (pkg/api HandleKueueStream). */
+export type KueuePending = Extract<Pending, { kind: "setup-kueue" | "teardown-kueue" | "delete-kueue-sample" | "kueue-optin" | "kueue-optout" }>;
+const KUEUE_KINDS: string[] = ["setup-kueue", "teardown-kueue", "delete-kueue-sample", "kueue-optin", "kueue-optout"];
+export const isKueuePending = (p: Pending): p is KueuePending => KUEUE_KINDS.includes(p.kind);
+export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending | PlaygroundPending | MaaSPending | PrerequisitesPending | ModelRegistryPending | WorkbenchPending | KueuePending>;
 export const isPlaygroundPending = (p: Pending): p is PlaygroundPending => p.kind === "setup-playground" || p.kind === "teardown-playground";
 export const isSamplePending = (p: Pending): p is SamplePending => p.kind === "mlflow-samples";
 export const isModelsPending = (p: Pending): p is ModelsPending => p.kind === "setup-models" || p.kind === "teardown-model" || p.kind === "teardown-gateway" || p.kind === "allow-gateway-project" || p.kind === "disallow-gateway-project" || p.kind === "check-model";
@@ -293,6 +314,8 @@ export interface ConfirmSpec {
   /** A choice that changes what is deleted, shown above the data-loss alert it changes. */
   choice?: React.ReactNode;
   danger?: boolean;
+  /** The title icon matches the data-loss alert ("danger") when set. */
+  titleIcon?: "warning" | "danger";
   /** Confirm stays disabled (a form in the dialog is not complete or valid yet). */
   confirmDisabled?: boolean;
   /** Show the changes open after the summary, not under "Details" (a plan the user should read). */
