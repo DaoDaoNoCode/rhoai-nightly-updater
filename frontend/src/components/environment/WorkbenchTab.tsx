@@ -25,7 +25,7 @@ import { ComponentAlert, NoProjectsAlert } from "./UseIt";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
 import { LoadFailed, PartsSkeleton } from "./Loading";
 import type { Busy, FeatureState } from "./featureState";
-import { WORKBENCH_FILES, WORKBENCH_NAME, WORKBENCH_STORAGE, keptStorage, keptStorageInUseText, storageInUseText, profileText, storageText, workbenchIn, workbenchSetUpReason, workbenchStatusOf, workbenchUnreadable } from "./workbenchState";
+import { WORKBENCH_FILES, WORKBENCH_NAME, WORKBENCH_STORAGE, keptStorage, storageInUseText, profileText, storageText, workbenchIn, workbenchSetUpReason, workbenchStatusOf, workbenchUnreadable } from "./workbenchState";
 
 export interface WorkbenchTabProps {
   status: ResourcesStatus;
@@ -216,7 +216,7 @@ export const WorkbenchTab: React.FC<WorkbenchTabProps> = (props) => {
       {project && current && item?.storage?.managedByTool && storageInUseText(item.storage.usedBy) && (
         <StackItem>
           <Alert variant="warning" isInline component="p" title="Its storage is used by another workbench">
-            {item.deployed ? `${storageInUseText(item.storage.usedBy)} Until then this tool does not delete the storage.` : `${keptStorageInUseText(item.storage.usedBy)} Until then this tool does not reuse or delete it.`}
+            {item.deployed ? `${storageInUseText(item.storage.usedBy)} Until then this tool does not delete the storage.` : "Until then this tool does not reuse or delete it."}
           </Alert>
         </StackItem>
       )}

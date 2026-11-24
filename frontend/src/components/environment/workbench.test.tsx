@@ -238,7 +238,9 @@ describe("Kept storage another workbench uses", () => {
     const part = await screen.findByRole("listitem", { name: "Workbench" });
     expect(within(part).queryByText(/reused by the next Set up/)).toBeNull();
     expect(screen.getByRole("button", { name: "Set up a workbench in dev" })).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getAllByText(REASON).length).toBeGreaterThan(0);
+    // The full reason once, on the disabled button; the alert only says what this tool does meanwhile.
+    expect(screen.getAllByText(REASON)).toHaveLength(1);
+    expect(screen.getByText("Until then this tool does not reuse or delete it.")).toBeInTheDocument();
     // The in-use alert spans the tab (outside the card), as for a running workbench.
     expect(within(part).queryByText("Its storage is used by another workbench")).toBeNull();
     expect(screen.getByText("Its storage is used by another workbench")).toBeInTheDocument();
