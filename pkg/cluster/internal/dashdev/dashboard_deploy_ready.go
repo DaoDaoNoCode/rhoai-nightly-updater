@@ -167,3 +167,14 @@ func rolloutFailure(d Deployment) string {
 	}
 	return ""
 }
+
+// DeploymentsReadyNow is one poll of WaitDeploymentsReady: whether every
+// dashboard Deployment of the Dashboard Dev session is rolled out and
+// ready now, what is not yet, or the error that waiting cannot fix
+// (wrapping ErrDeploymentsFailed) or a read's.
+func DeploymentsReadyNow(c *kube.Client) (ready bool, waiting string, err error) {
+	var images []types.DashboardDevImage
+	last := ""
+	ready, err = deploymentsReadyOnce(c, &images, &last)
+	return ready, last, err
+}

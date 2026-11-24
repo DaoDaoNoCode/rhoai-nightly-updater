@@ -189,7 +189,7 @@ func TestRecipePlan_EveryFeatureInDependencyOrder(t *testing.T) {
 		titles[s.ID] = s.Title
 		typical, most = typical+s.TypicalSeconds, most+s.MaxSeconds
 	}
-	if titles["model"] != "Model qwen3-1-7b" || titles["dashboard-dev"] != "Dashboard Dev (PR #1234)" || titles["maas"] != "Models as a Service" {
+	if titles["model"] != "Model Qwen3 1.7B (CPU, tool calling)" || titles["dashboard-dev"] != "Dashboard Dev (PR #1234)" || titles["maas"] != "Models as a Service" {
 		t.Errorf("titles %v", titles)
 	}
 	if plan.TypicalSeconds != typical || plan.MaxSeconds != most {

@@ -177,7 +177,9 @@ func installRecipeFake(t *testing.T) (*recipeFake, *fakeRecord) {
 		}
 		return copyRecipeRun(f.record), nil
 	}
-	recipeOwnership = func(*cluster.Client, *types.RecipeRun) (map[string]bool, *types.CleanupRequest) { return nil, nil }
+	recipeOwnership = func(_, _ *cluster.Client, _ *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
+		return nil, nil
+	}
 	recipeOwnedProjects = func(*cluster.Client) ([]types.RecipeOwnedProject, error) { return nil, nil }
 	recordRecipeActivity = func(c *cluster.Client, _, _ string, _ bool) {
 		if c.ActsAsUser() {
@@ -281,7 +283,7 @@ func TestRecipeRun_StepsInOrderHoldingTheLock(t *testing.T) {
 	if op == nil || op.Type != "recipe" || op.Label != "Environment recipe" || op.Target != "dev: step 1 of 3 (Step one)" || op.Step != "one-inner" {
 		t.Errorf("operation %+v", op)
 	}
-	if st := recipeRunStatus(nil); !st.Running || st.Run.ID != runID || st.Step == nil || st.Step.Step != "one-inner" {
+	if st := recipeRunStatus(nil, nil); !st.Running || st.Run.ID != runID || st.Step == nil || st.Step.Step != "one-inner" {
 		t.Errorf("status during the run %+v", st)
 	}
 	close(s1.release)
@@ -364,7 +366,7 @@ func TestRecipeRun_StopAfterThisStep(t *testing.T) {
 			t.Fatalf("stop: %d %s", w.Code, w.Body.String())
 		}
 	}
-	if st := recipeRunStatus(nil); !st.StopRequested {
+	if st := recipeRunStatus(nil, nil); !st.StopRequested {
 		t.Error("the status does not show the stop")
 	}
 	close(s1.release)
@@ -450,7 +452,7 @@ func TestRecipeRun_DrainStopsBeforeTheNextStep(t *testing.T) {
 	if st := operationStatus(nil); st.Interrupted != nil {
 		t.Errorf("reported interrupted: %+v", st.Interrupted)
 	}
-	if st := recipeRunStatus(nil); st.Interrupted || st.Running {
+	if st := recipeRunStatus(nil, nil); st.Interrupted || st.Running {
 		t.Errorf("run status %+v", st)
 	}
 	mutations.mu.Lock()
@@ -675,27 +677,27 @@ func TestRecipePlan_ReadOnly(t *testing.T) {
 func TestRecipeRunStatus_InterruptedAndRemote(t *testing.T) {
 	f, rec := installRecipeFake(t)
 	f.record = &types.RecipeRun{ID: "r1", OperationID: "remote-op", BootID: "other-boot", State: types.RecipeRunRunning, Steps: []types.RecipeRunStep{{ID: "rhoai", Status: types.RecipeStepRunning}}}
-	if st := recipeRunStatus(nil); !st.Interrupted || st.Running || st.Run.ID != "r1" {
+	if st := recipeRunStatus(nil, nil); !st.Interrupted || st.Running || st.Run.ID != "r1" {
 		t.Errorf("no live lease: %+v", st)
 	}
 	rec.setLease(otherPodLease(clk.Now()))
-	if st := recipeRunStatus(nil); st.Interrupted || !st.Running || !st.Remote || st.Pod != "updater-old-pod" || st.Step == nil {
+	if st := recipeRunStatus(nil, nil); st.Interrupted || !st.Running || !st.Remote || st.Pod != "updater-old-pod" || st.Step == nil {
 		t.Errorf("live lease of its process: %+v", st)
 	}
 	// The same process running another operation is not this run.
 	other := otherPodLease(clk.Now())
 	other.ID = "another-op"
 	rec.setLease(other)
-	if st := recipeRunStatus(nil); !st.Interrupted || st.Running {
+	if st := recipeRunStatus(nil, nil); !st.Interrupted || st.Running {
 		t.Errorf("a live lease of another operation of its process: %+v", st)
 	}
 	f.record.State = types.RecipeRunFailed
 	rec.setLease(nil)
-	if st := recipeRunStatus(nil); st.Interrupted || st.Running {
+	if st := recipeRunStatus(nil, nil); st.Interrupted || st.Running {
 		t.Errorf("finished run: %+v", st)
 	}
 	f.record = nil
-	if st := recipeRunStatus(nil); st.Run != nil {
+	if st := recipeRunStatus(nil, nil); st.Run != nil {
 		t.Errorf("no run: %+v", st)
 	}
 }
@@ -975,11 +977,11 @@ func TestRecipeResume_KeepsComponentsAndOwnershipIsLive(t *testing.T) {
 	f.mu.Unlock()
 	recipes = &recipeRunner{}
 	var asked *types.RecipeRun
-	recipeOwnership = func(_ *cluster.Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
+	recipeOwnership = func(_, _ *cluster.Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
 		asked = run
 		return map[string]bool{"pipelines-prereq": true}, &types.CleanupRequest{Components: []string{"aipipelines"}}
 	}
-	st := recipeRunStatus(nil)
+	st := recipeRunStatus(nil, nil)
 	if asked == nil || strings.Join(asked.Components, ",") != "aipipelines,mlflowoperator" {
 		t.Fatalf("ownership asked for %+v", asked)
 	}

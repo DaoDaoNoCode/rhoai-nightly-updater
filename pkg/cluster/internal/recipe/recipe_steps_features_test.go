@@ -3,16 +3,19 @@ package recipe
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/modelregistry"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// allFeatures describes an existing project whose recipe turns every feature on.
+// allFeatures holds recipe YAML where each feature is enabled against an existing project.
 const allFeatures = "  project: {mode: existing, name: proj}\n" +
 	"  features:\n    pipelines: {enabled: true}\n    mlflow: {enabled: true, samples: true}\n" +
 	"    models: {enabled: true, model: qwen3-1-7b}\n    playground: {enabled: true}\n" +
@@ -28,21 +31,47 @@ func validRecipe(t *testing.T, spec string) types.EnvironmentRecipe {
 	return r
 }
 
-// fakeCluster supplies state that post-MLflow steps observe: a cluster brought
-// to a particular point and which setup actions already executed.
+// toolMeta builds ObjectMeta for cluster objects the tool applied: managed-by
+// label, field manager, UID, and supplied annotations.
+func toolMeta(ns, name, uid string, annotations map[string]string) kube.ObjectMeta {
+	return kube.ObjectMeta{Namespace: ns, Name: name, UID: uid, Annotations: annotations,
+		Labels:        map[string]string{kube.ManagedByLabelKey: kube.ManagedByLabelValue},
+		ManagedFields: []kube.ManagedFieldsEntry{{Manager: envkit.ToolFieldManager, Operation: "Apply"}}}
+}
+
+const registryNS = "rhoai-model-registries"
+
+// fakeCluster simulates cluster state for post-MLflow steps: how far setup
+// progressed and which setup calls fired. With stepPoll at zero, waits hinge
+// on read counts—state flips after N polls, not on the clock.
 type fakeCluster struct {
 	samplesAdded, maasReady, maasOurs bool
-	prereqReady                       map[string]bool
-	exposures                         *types.ModelExposures
-	model                             *types.ModelState
-	published                         bool
-	playground                        *types.PlaygroundState
-	registry                          types.ModelRegistryStatus
-	registryRec                       modelregistry.Record
-	workbench                         *types.WorkbenchState
-	session                           *types.DashboardOverride
-	maasRec                           serving.MaaSRecord
-	// readErr forces registryRecord lookups to fail when set.
+	// sampleUnknown: at least one sample returned an unreadable state.
+	sampleUnknown bool
+	prereqReady   map[string]bool
+	exposures     *types.ModelExposures
+	model         *types.ModelState
+	// modelReadyAfter: RunModels's model turns Ready starting at this read
+	// index (0 means immediately; -1 means it never becomes Ready).
+	modelReadyAfter, modelReads int
+	// published: full MaaS publication exists (Published and Ready on the
+	// status item); routedOnly: traffic goes via MaaS gateway without a
+	// completed publish.
+	published, routedOnly bool
+	playground            *types.PlaygroundState
+	registry              types.ModelRegistryStatus
+	registryRec           modelregistry.Record
+	regMeta               *kube.ObjectMeta
+	registryAnn           map[string]string
+	workbench             *types.WorkbenchState
+	// workbenchGoneAfter: terminating workbench disappears after this many
+	// status reads (-1 keeps it around forever).
+	workbenchGoneAfter, workbenchReads int
+	session                            *types.DashboardOverride
+	dashReady                          bool
+	maasRec                            serving.MaaSRecord
+	dbMeta                             *kube.ObjectMeta
+	// readErr forces model registry record reads to error.
 	readErr error
 
 	prereqExposures []string
@@ -55,17 +84,20 @@ func ok(msg string) (*types.OperationResponse, error) {
 	return &types.OperationResponse{Success: true, Message: msg}, nil
 }
 
-// install swaps package step readers and runners for fc's fakes.
+// install swaps package-level step hooks for fakeCluster stubs and restores them on cleanup.
 func (fc *fakeCluster) install(t *testing.T) {
 	t.Helper()
 	p0, p1, p2, p3, p4, p5, p6 := prereqStatus, samplesStatus, runSamples, maasStatus, maasRecord, runMaaS, modelExposures
 	p7, p8, p9, p10, p11, p12, p13 := readModel, runModels, maasPublished, playgroundStatus, runPlayground, registryStatus, registryRecord
 	p14, p15, p16, p17, p18, p19, p20 := runRegistry, workbenchStatus, runWorkbench, dashboardSession, deployMain, deployPR, waitDashboard
+	p21, p22, p23, p24, p25 := registryMeta, dbConfigMeta, annotateDBConfig, dashboardReady, stepPoll
 	t.Cleanup(func() {
 		prereqStatus, samplesStatus, runSamples, maasStatus, maasRecord, runMaaS, modelExposures = p0, p1, p2, p3, p4, p5, p6
 		readModel, runModels, maasPublished, playgroundStatus, runPlayground, registryStatus, registryRecord = p7, p8, p9, p10, p11, p12, p13
 		runRegistry, workbenchStatus, runWorkbench, dashboardSession, deployMain, deployPR, waitDashboard = p14, p15, p16, p17, p18, p19, p20
+		registryMeta, dbConfigMeta, annotateDBConfig, dashboardReady, stepPoll = p21, p22, p23, p24, p25
 	})
+	stepPoll = 0
 	if fc.prereqReady == nil {
 		fc.prereqReady = map[string]bool{}
 	}
@@ -86,6 +118,9 @@ func (fc *fakeCluster) install(t *testing.T) {
 			}
 			st.Samples = append(st.Samples, s)
 		}
+		if fc.sampleUnknown {
+			st.Samples = append(st.Samples, types.SampleStatus{ID: "skill", Name: "Skill", State: "unknown", Message: "MLflow answered 503", Actions: []string{}})
+		}
 		return st, nil
 	}
 	runSamples = func(_ *kube.Client, req types.MLflowSamplesRequest, _ func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
@@ -94,17 +129,47 @@ func (fc *fakeCluster) install(t *testing.T) {
 		return ok("added")
 	}
 	maasStatus = func(*kube.Client) (*types.MaaSStatus, error) {
-		return &types.MaaSStatus{Platform: types.ResourceState{Ready: fc.maasReady, Deployed: fc.maasReady, ManagedByTool: fc.maasOurs},
-			Database: &types.MaaSDatabase{Needed: !fc.maasReady}}, nil
+		st := &types.MaaSStatus{Platform: types.ResourceState{Ready: fc.maasReady, Deployed: fc.maasReady, ManagedByTool: fc.maasOurs},
+			Database: &types.MaaSDatabase{Needed: !fc.maasReady}}
+		if fc.published || fc.routedOnly {
+			it := types.MaaSModel{Published: fc.published}
+			it.Namespace, it.Name, it.Ready = "proj", "qwen3-1-7b", fc.published
+			st.Items = []types.MaaSModel{it}
+		}
+		return st, nil
 	}
 	maasRecord = func(*kube.Client) (serving.MaaSRecord, error) { return fc.maasRec, nil }
+	dbConfigMeta = func(_ *kube.Client, ns string) (kube.ObjectMeta, bool, error) {
+		if fc.dbMeta == nil || ns != fc.dbMeta.Namespace {
+			return kube.ObjectMeta{}, false, nil
+		}
+		return *fc.dbMeta, true, nil
+	}
+	annotateDBConfig = func(_ *kube.Client, ns, uid, key, value string) error {
+		if fc.dbMeta == nil || fc.dbMeta.UID != uid || fc.dbMeta.Namespace != ns {
+			return errors.New("409 precondition failed: UID")
+		}
+		ann := map[string]string{key: value}
+		for k, v := range fc.dbMeta.Annotations {
+			ann[k] = v
+		}
+		ann[key] = value
+		fc.dbMeta.Annotations = ann
+		return nil
+	}
 	runMaaS = func(_ *kube.Client, req types.MaaSRequest, _ func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 		fc.maasReqs = append(fc.maasReqs, req)
 		fc.ran = append(fc.ran, "maas:"+req.Action)
 		if req.Action == "publish" {
 			fc.published = true
-		} else {
-			fc.maasReady, fc.maasOurs = true, true
+			return ok("publish")
+		}
+		fc.maasReady, fc.maasOurs = true, true
+		if fc.dbMeta == nil && req.Database != nil {
+			// Setup path creates the database connection Secret.
+			fc.maasRec = serving.MaaSRecord{Database: req.Database.Kind, DBNamespace: "models-as-a-service-infra"}
+			m := toolMeta("models-as-a-service-infra", "maas-db-config", "secret-1", nil)
+			fc.dbMeta = &m
 		}
 		return ok(req.Action)
 	}
@@ -118,16 +183,24 @@ func (fc *fakeCluster) install(t *testing.T) {
 		if fc.model == nil {
 			return types.ModelState{}, false, nil
 		}
-		return *fc.model, true, nil
+		fc.modelReads++
+		m := *fc.model
+		if fc.modelReadyAfter != 0 {
+			m.Ready = fc.modelReadyAfter > 0 && fc.modelReads >= fc.modelReadyAfter
+		}
+		return m, true, nil
 	}
 	runModels = func(_ *kube.Client, req types.ModelsRequest, _ func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+		if problem := serving.ValidateModelsRequest(req); problem != "" {
+			return &types.OperationResponse{Success: false, Message: problem, ErrorCode: "validation"}, nil
+		}
 		fc.modelsReq = req
 		fc.ran = append(fc.ran, "model")
 		fc.model = &types.ModelState{ResourceState: types.ResourceState{Deployed: true, Ready: true, ManagedByTool: true}, MaaSPublished: req.Exposure == serving.ExposureMaaS}
 		fc.published = fc.published || req.Exposure == serving.ExposureMaaS
 		return ok("model")
 	}
-	maasPublished = func(*kube.Client, string, string) (bool, error) { return fc.published, nil }
+	maasPublished = func(*kube.Client, string, string) (bool, error) { return fc.published || fc.routedOnly, nil }
 	playgroundStatus = func(_, _ *kube.Client, project string) (*types.PlaygroundStatus, error) {
 		st := &types.PlaygroundStatus{Project: project}
 		if fc.playground != nil {
@@ -145,7 +218,7 @@ func (fc *fakeCluster) install(t *testing.T) {
 		if st.State == "" {
 			st.State = "absent"
 		}
-		st.Name, st.Namespace = modelregistry.Name, "rhoai-model-registries"
+		st.Name, st.Namespace = modelregistry.Name, registryNS
 		return &st, nil
 	}
 	registryRecord = func(*kube.Client) (modelregistry.Record, error) {
@@ -154,17 +227,34 @@ func (fc *fakeCluster) install(t *testing.T) {
 		}
 		return fc.registryRec, nil
 	}
-	runRegistry = func(_ *kube.Client, req types.ModelRegistryRequest, _ func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+	registryMeta = func(_, _ *kube.Client) (kube.ObjectMeta, bool, error) {
+		if fc.regMeta == nil {
+			return kube.ObjectMeta{}, false, nil
+		}
+		return *fc.regMeta, true, nil
+	}
+	runRegistry = func(_ *kube.Client, req types.ModelRegistryRequest, annotations map[string]string, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 		fc.ran = append(fc.ran, "registry")
+		fc.registryAnn = annotations
 		if fc.registry.State == "absent" || fc.registry.State == "" {
-			fc.registryRec = modelregistry.Record{"rhoai-model-registries/" + modelregistry.Name: {UID: "reg-1"}}
+			fc.registryRec = modelregistry.Record{registryNS + "/" + modelregistry.Name: {UID: "reg-1"}}
+			m := toolMeta(registryNS, modelregistry.Name, "reg-1", annotations)
+			fc.regMeta = &m
 		}
 		fc.registry = types.ModelRegistryStatus{State: "ready", ManagedByTool: true, Sample: &types.ModelRegistrySample{Complete: req.Samples}, Address: "https://x"}
-		return ok("registry")
+		if req.Samples {
+			emit(types.UpdateStepEvent{Step: "samples", Status: "success", Message: "Sample model mnist (version v1) is registered."})
+		}
+		return ok("Model registry nightly-registry is ready in " + registryNS + ".")
 	}
 	workbenchStatus = func(_, _ *kube.Client, project string) (*types.WorkbenchStatus, error) {
 		st := &types.WorkbenchStatus{Project: project}
 		if fc.workbench != nil {
+			fc.workbenchReads++
+			if fc.workbench.Terminating && fc.workbenchGoneAfter >= 0 && fc.workbenchReads > fc.workbenchGoneAfter {
+				fc.workbench = nil
+				return st, nil
+			}
 			st.Items = []types.WorkbenchState{*fc.workbench}
 		}
 		return st, nil
@@ -175,6 +265,7 @@ func (fc *fakeCluster) install(t *testing.T) {
 		return ok("workbench")
 	}
 	dashboardSession = func(*kube.Client) (*types.DashboardOverride, error) { return fc.session, nil }
+	dashboardReady = func(*kube.Client) (bool, string, error) { return fc.dashReady, "rhods-dashboard", nil }
 	deployMain = func(*kube.Client, string) (*types.OperationResponse, error) {
 		fc.ran = append(fc.ran, "dashboard:main")
 		return ok("Deployed main.")
@@ -186,16 +277,14 @@ func (fc *fakeCluster) install(t *testing.T) {
 	}
 	waitDashboard = func(*kube.Client) ([]types.DashboardDevImage, error) {
 		fc.ran = append(fc.ran, "dashboard:wait")
+		fc.dashReady = true
 		return nil, nil
 	}
 }
 
 func testClient() *kube.Client { return kube.NewClientWithContext(context.Background(), "t") }
 
-// stepsAfterMLflow lists recipe steps that come after MLflow.
-func stepsAfterMLflow(r types.EnvironmentRecipe) []Step { return featureSteps(r) }
-
-// readyCluster pretends the cluster already has every resource the recipe would provision.
+// readyCluster returns a fakeCluster with every recipe-driven piece already present.
 func readyCluster() *fakeCluster {
 	return &fakeCluster{
 		samplesAdded: true, maasReady: true,
@@ -206,17 +295,30 @@ func readyCluster() *fakeCluster {
 		registry:    types.ModelRegistryStatus{State: "ready", ManagedByTool: true, Sample: &types.ModelRegistrySample{Complete: true}, Address: "https://x"},
 		workbench:   &types.WorkbenchState{ResourceState: types.ResourceState{Namespace: "proj", Deployed: true, ManagedByTool: true}, State: "stopped"},
 		session:     &types.DashboardOverride{Active: true, SessionRecorded: true, Mode: "pr", PRNumber: 77, Flavor: "rhoai"},
+		dashReady:   true,
 	}
 }
 
-// For each new step, Check inspects live cluster state: provisioned pieces are
-// skipped (Resume's already-done path), and ordering follows runner dependencies.
+func stepOf(t *testing.T, r types.EnvironmentRecipe, id string) Step {
+	t.Helper()
+	for _, s := range featureSteps(r) {
+		if s.ID == id {
+			return s
+		}
+	}
+	t.Fatalf("no step %s", id)
+	return Step{}
+}
+
+// Check on each feature step inspects live cluster state: fully provisioned
+// pieces are skipped (Resume treats them as already set up). Step IDs must
+// follow the runner's dependency ordering.
 func TestFeatureSteps_CheckSkipsWhatIsSetUp(t *testing.T) {
 	r := validRecipe(t, allFeatures)
 	fc := readyCluster()
 	fc.install(t)
 	var ids []string
-	for _, step := range stepsAfterMLflow(r) {
+	for _, step := range featureSteps(r) {
 		ids = append(ids, step.ID)
 		chk, err := step.Check(nil, &State{Recipe: r})
 		if err != nil || !chk.Done || chk.Reason == "" {
@@ -232,38 +334,33 @@ func TestFeatureSteps_CheckSkipsWhatIsSetUp(t *testing.T) {
 	}
 }
 
-// When a piece is absent the step may run; when it exists but was not created
-// by this tool the step blocks, and cluster state stays unchanged either way.
+// When a required piece is missing, Check leaves the step runnable; foreign
+// or third-party resources block with a reason and trigger no setup calls.
 func TestFeatureSteps_CheckRunsOrBlocks(t *testing.T) {
 	r := validRecipe(t, allFeatures)
-	step := func(id string) Step {
-		for _, s := range stepsAfterMLflow(r) {
-			if s.ID == id {
-				return s
-			}
-		}
-		t.Fatalf("no step %s", id)
-		return Step{}
-	}
 	cases := []struct {
 		name, step string
 		edit       func(fc *fakeCluster)
-		blocked    string // empty means the step runs
+		blocked    string // empty blocked means the step should run
 	}{
 		{"samples missing", StepMLflowSamples, func(fc *fakeCluster) { fc.samplesAdded = false }, ""},
+		{"a sample whose state cannot be read", StepMLflowSamples, func(fc *fakeCluster) { fc.sampleUnknown = true }, ""},
 		{"MaaS not ready", StepMaaS, func(fc *fakeCluster) { fc.maasReady = false }, ""},
 		{"Models prerequisites", StepModelsPrereq, func(fc *fakeCluster) { fc.prereqReady["models"] = false }, ""},
 		{"no model", StepModel, func(fc *fakeCluster) { fc.model = nil }, ""},
 		{"a model still starting", StepModel, func(fc *fakeCluster) { fc.model.Ready = false }, ""},
 		{"someone else's model", StepModel, func(fc *fakeCluster) { fc.model.ManagedByTool = false }, "this tool did not create"},
 		{"not published", StepMaaSPublish, func(fc *fakeCluster) { fc.published = false }, ""},
+		{"routed through MaaS, no publication", StepMaaSPublish, func(fc *fakeCluster) { fc.published, fc.routedOnly = false, true }, ""},
 		{"someone else's playground", StepPlayground, func(fc *fakeCluster) { fc.playground.ManagedByTool = false }, "did not set up"},
 		{"no playground", StepPlayground, func(fc *fakeCluster) { fc.playground = nil }, ""},
 		{"the sample missing", StepModelRegistry, func(fc *fakeCluster) { fc.registry.Sample.Complete = false }, ""},
 		{"a foreign registry", StepModelRegistry, func(fc *fakeCluster) { fc.registry = types.ModelRegistryStatus{State: "ready", Foreign: true} }, "did not create"},
 		{"no workbench", StepWorkbench, func(fc *fakeCluster) { fc.workbench = nil }, ""},
+		{"a workbench being deleted", StepWorkbench, func(fc *fakeCluster) { fc.workbench.Terminating, fc.workbenchGoneAfter = true, -1 }, ""},
 		{"someone else's workbench", StepWorkbench, func(fc *fakeCluster) { fc.workbench.ManagedByTool = false }, "did not create"},
 		{"another PR deployed", StepDashboardDev, func(fc *fakeCluster) { fc.session.PRNumber = 78 }, ""},
+		{"the build deployed, not rolled out", StepDashboardDev, func(fc *fakeCluster) { fc.dashReady = false }, ""},
 		{"no session", StepDashboardDev, func(fc *fakeCluster) { fc.session = nil }, ""},
 	}
 	for _, tc := range cases {
@@ -271,7 +368,7 @@ func TestFeatureSteps_CheckRunsOrBlocks(t *testing.T) {
 			fc := readyCluster()
 			tc.edit(fc)
 			fc.install(t)
-			chk, err := step(tc.step).Check(nil, &State{Recipe: r})
+			chk, err := stepOf(t, r, tc.step).Check(nil, &State{Recipe: r})
 			switch {
 			case err != nil || chk.Done:
 				t.Fatalf("%+v %v", chk, err)
@@ -287,18 +384,18 @@ func TestFeatureSteps_CheckRunsOrBlocks(t *testing.T) {
 	}
 }
 
-// Resuming after MaaS hits Models prerequisites first: samples and the MaaS
-// platform are already on the cluster and get skipped; downstream steps fill in
-// the rest in order, each issuing the same request its UI page would send.
+// Resume after MaaS begins at Models prerequisites: samples and MaaS already
+// on the cluster are skipped; following steps run in sequence with the same
+// requests their UI pages would issue.
 func TestFeatureSteps_ResumeAfterMaaSContinuesWithModels(t *testing.T) {
 	r := validRecipe(t, allFeatures)
-	// Exercise the dashboard path while Dashboard Dev still lacks a session.
+	// Dashboard Dev step executes even though no override session is recorded yet.
 	fc := &fakeCluster{samplesAdded: true, maasReady: true, session: &types.DashboardOverride{}}
 	fc.install(t)
 	c := testClient()
-	s := &State{Recipe: r}
+	s := &State{Recipe: r, RunID: "run-1"}
 	var outcome []string
-	for _, step := range stepsAfterMLflow(r) {
+	for _, step := range featureSteps(r) {
 		chk, err := step.Check(c, s)
 		if err != nil || chk.Blocked != "" {
 			t.Fatalf("%s: %+v %v", step.ID, chk, err)
@@ -308,8 +405,8 @@ func TestFeatureSteps_ResumeAfterMaaSContinuesWithModels(t *testing.T) {
 			continue
 		}
 		if step.ID == StepModelsPrereq || step.ID == StepPlaygroundPrereq || step.ID == StepModelRegistryPrereq {
-			// RunPrerequisites belongs to the Environment page (covered there);
-			// afterward the fake cluster reports those prerequisites as ready.
+			// Prerequisite runs belong to the Environment page tests; here we
+			// only flip fakeCluster so later checks see them ready.
 			fc.prereqReady[strings.TrimSuffix(step.ID, "-prereq")] = true
 			if step.ID == StepModelsPrereq {
 				if problem, _ := pinExposure(c, s); problem != "" {
@@ -335,20 +432,20 @@ func TestFeatureSteps_ResumeAfterMaaSContinuesWithModels(t *testing.T) {
 	if fc.modelsReq.Project != "proj" || fc.modelsReq.Model != "qwen3-1-7b" || fc.modelsReq.Exposure != "default-gateway" || s.Exposure != "default-gateway" {
 		t.Errorf("model request %+v, state exposure %q", fc.modelsReq, s.Exposure)
 	}
-	// MaaS was pre-existing so Created omits it; the registry added in this run
-	// is attributed via the UID stored on the tool record.
-	if len(s.Created) != 1 || s.Created[0] != (types.RecipeCreatedPart{Part: types.RecipePartModelRegistry, UID: "reg-1"}) {
-		t.Errorf("created %+v", s.Created)
+	// Pre-existing MaaS must not land in Created. The registry this run
+	// provisioned should be tracked with the run annotation and UID from setup.
+	if len(s.Created) != 1 || s.Created[0] != (types.RecipeCreatedPart{Part: types.RecipePartModelRegistry, UID: "reg-1"}) || fc.registryAnn[RecipeRunAnnotation] != "run-1" {
+		t.Errorf("created %+v, annotations %v", s.Created, fc.registryAnn)
 	}
 }
 
-// With no exposure in the recipe, the project default is resolved for Models
-// prerequisites and locked in for the model step; missing recommendations yield
-// a blocking reason; an explicit recipe exposure is honored unchanged.
+// With no recipe exposure, the project default is resolved for prerequisite
+// checks and pinned on the model run. Missing recommendations block and
+// surface the reason. Explicit recipe exposure values pass through unchanged.
 func TestModelsExposure_ResolvedPinnedOrBlocked(t *testing.T) {
 	r := validRecipe(t, "  project: {mode: existing, name: proj}\n  features: {models: {enabled: true}}\n")
 	fc := &fakeCluster{exposures: &types.ModelExposures{Default: "gateway:ns1/gw", Options: []types.ModelExposureOption{
-		{Key: "default-gateway", Exposure: "default-gateway"}, {Key: "gateway:ns1/gw", Exposure: "gateway", GatewayRef: "ns1/gw"}}}}
+		{Key: "default-gateway", Exposure: "default-gateway"}, {Key: "gateway:ns1/gw", Exposure: "gateway", GatewayRef: "ns1/gw", Available: true}}}}
 	fc.install(t)
 	s := &State{Recipe: r}
 	if chk, err := checkModelsPrereq(nil, s); err != nil || chk.Done || chk.Blocked != "" || strings.Join(fc.prereqExposures, ",") != "gateway" {
@@ -366,7 +463,7 @@ func TestModelsExposure_ResolvedPinnedOrBlocked(t *testing.T) {
 
 	fc.exposures = &types.ModelExposures{Options: []types.ModelExposureOption{{Key: "default-gateway", Reason: "KServe has no default gateway."}}}
 	chk, err := checkModelsPrereq(nil, &State{Recipe: r})
-	if err != nil || !strings.Contains(chk.Blocked, "KServe has no default gateway.") || !strings.Contains(chk.Blocked, "spec.features.models.exposure") {
+	if err != nil || !strings.Contains(chk.Blocked, "KServe has no default gateway.") || !strings.Contains(chk.Blocked, "Only inside the cluster always works") {
 		t.Errorf("no recommendation: %+v %v", chk, err)
 	}
 
@@ -379,121 +476,141 @@ func TestModelsExposure_ResolvedPinnedOrBlocked(t *testing.T) {
 	}
 }
 
-// Under MaaS exposure the model step stays incomplete until publication lands
-// (the Models tab performs publish as part of setup).
-func TestModelStep_MaaSExposureNeedsThePublication(t *testing.T) {
-	r := validRecipe(t, "  project: {mode: existing, name: proj}\n  features: {models: {enabled: true, exposure: maas}, maas: {enabled: true}}\n")
-	fc := readyCluster()
-	fc.model.MaaSPublished = false
-	fc.install(t)
-	if chk, err := checkModel(nil, &State{Recipe: r}); err != nil || chk.Done {
-		t.Fatalf("%+v %v", chk, err)
-	}
-	fc.model.MaaSPublished = true
-	if chk, err := checkModel(nil, &State{Recipe: r}); err != nil || !chk.Done {
-		t.Fatalf("%+v %v", chk, err)
-	}
-}
-
-// MaaS records the platform in Created only when this tool newly owns it; the
-// recipe's database kind is passed through solely when Set up must provision one.
-func TestMaaSStep_RecordsWhatItCreated(t *testing.T) {
-	r := validRecipe(t, "  features: {maas: {enabled: true, database: cnpg}}\n")
-	t.Run("created", func(t *testing.T) {
-		fc := &fakeCluster{maasRec: serving.MaaSRecord{POCCredsUID: "creds-1"}}
-		fc.install(t)
-		s := &State{Recipe: r}
-		if res, err := runMaaSStep(testClient(), s, func(types.UpdateStepEvent) {}); err != nil || !res.Success {
-			t.Fatalf("%+v %v", res, err)
-		}
-		if len(fc.maasReqs) != 1 || fc.maasReqs[0].Database == nil || fc.maasReqs[0].Database.Kind != "cnpg" {
-			t.Errorf("requests %+v", fc.maasReqs)
-		}
-		if len(s.Created) != 1 || s.Created[0] != (types.RecipeCreatedPart{Part: types.RecipePartMaaSPlatform, UID: "creds-1"}) {
-			t.Errorf("created %+v", s.Created)
-		}
-	})
-	t.Run("this tool's already", func(t *testing.T) {
-		fc := &fakeCluster{maasOurs: true}
-		fc.install(t)
-		s := &State{Recipe: r}
-		if _, err := runMaaSStep(testClient(), s, func(types.UpdateStepEvent) {}); err != nil || len(s.Created) != 0 {
-			t.Errorf("created %+v %v", s.Created, err)
-		}
-	})
-}
-
-// A registry born in this run's setup lands in Created via the tool record UID;
-// an already-present registry does not; unreadable records add nothing and the
-// step surfaces that in its message.
-func TestModelRegistryStep_RecordsWhatItCreated(t *testing.T) {
-	r := validRecipe(t, "  features: {modelRegistry: {enabled: true}}\n")
-	fc := &fakeCluster{}
+// M1: UI may attach a gateway ref on the MaaS option, but setup only keeps
+// GatewayRef when exposure is "gateway". Recommended MaaS must omit it so
+// ValidateModelsRequest accepts the payload.
+func TestModelsExposure_RecommendedMaaSSendsNoGatewayRef(t *testing.T) {
+	r := validRecipe(t, "  project: {mode: existing, name: proj}\n  features: {models: {enabled: true, model: qwen3-1-7b}, maas: {enabled: true}}\n")
+	fc := &fakeCluster{exposures: &types.ModelExposures{Default: "maas", Options: []types.ModelExposureOption{
+		{Key: "maas", Exposure: "maas", GatewayRef: "openshift-ingress/maas-default-gateway", Available: true}}}, published: true}
 	fc.install(t)
 	s := &State{Recipe: r}
-	if res, err := runModelRegistry(testClient(), s, func(types.UpdateStepEvent) {}); err != nil || !res.Success || len(s.Created) != 1 || s.Created[0].UID != "reg-1" {
-		t.Fatalf("%+v %v created %+v", res, err, s.Created)
+	res, err := runModel(testClient(), s, func(types.UpdateStepEvent) {})
+	if err != nil || !res.Success || fc.modelsReq.Exposure != "maas" || fc.modelsReq.GatewayRef != "" || s.GatewayRef != "" {
+		t.Fatalf("%+v %v request %+v", res, err, fc.modelsReq)
 	}
-	again := &State{Recipe: r}
-	if _, err := runModelRegistry(testClient(), again, func(types.UpdateStepEvent) {}); err != nil || len(again.Created) != 0 {
-		t.Errorf("a registry that was there: %+v", again.Created)
+	if problem := serving.ValidateModelsRequest(fc.modelsReq); problem != "" {
+		t.Errorf("the request is refused: %s", problem)
 	}
-	fc2 := &fakeCluster{readErr: errors.New("boom")}
-	fc2.install(t)
-	s3 := &State{Recipe: r}
+}
+
+// M5: During resume, recipe-specified exposure overrides state from a prior
+// run. Stored gateway refs survive only if the Models UI still lists that gateway.
+func TestModelsExposure_ResumeRevalidatesTheRecordedOne(t *testing.T) {
+	own := validRecipe(t, "  project: {mode: existing, name: proj}\n  features: {models: {enabled: true, exposure: internal}}\n")
+	fc := &fakeCluster{}
+	fc.install(t)
+	if e, ref, problem, _ := exposureOf(nil, &State{Recipe: own, Exposure: "maas"}); e != "internal" || ref != "" || problem != "" {
+		t.Errorf("own: %q %q %q", e, ref, problem)
+	}
+	auto := validRecipe(t, "  project: {mode: existing, name: proj}\n  features: {models: {enabled: true}}\n")
+	fc.exposures = &types.ModelExposures{Default: "default-gateway", Options: []types.ModelExposureOption{
+		{Key: "default-gateway", Exposure: "default-gateway", Available: true}, {Key: "gateway:ns1/gw", Exposure: "gateway", GatewayRef: "ns1/gw", Available: true}}}
+	if e, ref, _, _ := exposureOf(nil, &State{Recipe: auto, Exposure: "gateway", GatewayRef: "ns1/gw"}); e != "gateway" || ref != "ns1/gw" {
+		t.Errorf("offered gateway: %q %q", e, ref)
+	}
+	if e, ref, _, _ := exposureOf(nil, &State{Recipe: auto, Exposure: "gateway", GatewayRef: "ns9/gone"}); e != "default-gateway" || ref != "" {
+		t.Errorf("gateway gone: %q %q", e, ref)
+	}
+}
+
+// M3: MaaS exposure requires a finished publish—not merely gateway routing
+// such as when publish was interrupted after the model already existed.
+func TestModelStep_MaaSExposureNeedsThePublication(t *testing.T) {
+	r := validRecipe(t, "  project: {mode: existing, name: proj}\n  features: {models: {enabled: true, model: qwen3-1-7b, exposure: maas}, maas: {enabled: true}}\n")
+	fc := readyCluster()
+	fc.published, fc.routedOnly = false, true
+	fc.model.MaaSPublished = true
+	fc.install(t)
+	if chk, err := checkModel(nil, &State{Recipe: r}); err != nil || chk.Done {
+		t.Fatalf("routing only: %+v %v", chk, err)
+	}
+	fc.published = true
+	if chk, err := checkModel(nil, &State{Recipe: r}); err != nil || !chk.Done {
+		t.Fatalf("published: %+v %v", chk, err)
+	}
+}
+
+// M4: runModel succeeds only after Ready flips true, polling until the step
+// deadline. Timeout fails the step and tells Resume to retry the wait later.
+func TestModelStep_WaitsUntilTheModelServes(t *testing.T) {
+	r := validRecipe(t, "  project: {mode: existing, name: proj}\n  features: {models: {enabled: true, exposure: internal}}\n")
+	fc := &fakeCluster{modelReadyAfter: 3}
+	fc.install(t)
+	if res, err := runModel(testClient(), &State{Recipe: r}, func(types.UpdateStepEvent) {}); err != nil || !res.Success || fc.modelReads < 3 {
+		t.Fatalf("%+v %v after %d reads", res, err, fc.modelReads)
+	}
+	never := &fakeCluster{modelReadyAfter: -1}
+	never.install(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	c := kube.NewClientWithContext(ctx, "t")
+	reads := 0
+	readModel = func(*kube.Client, string, string) (types.ModelState, bool, error) {
+		if reads++; reads == 5 {
+			cancel() // simulate exhausting the step deadline
+		}
+		return types.ModelState{ResourceState: types.ResourceState{Deployed: true, ManagedByTool: true}}, true, nil
+	}
+	res, err := runModel(c, &State{Recipe: r}, func(types.UpdateStepEvent) {})
+	if err != nil || res.Success || res.ErrorCode != "timeout" || !strings.Contains(res.Message, "Resume waits again") {
+		t.Fatalf("%+v %v", res, err)
+	}
+}
+
+// M6: Unknown sample state must not count as present—the step adds readable
+// samples, fails overall, and forces Resume to re-check.
+func TestMLflowSamplesStep_UnknownStateIsNotPresent(t *testing.T) {
+	r := validRecipe(t, allFeatures)
+	fc := &fakeCluster{sampleUnknown: true}
+	fc.install(t)
+	res, err := runMLflowSamples(testClient(), &State{Recipe: r}, func(types.UpdateStepEvent) {})
+	if err != nil || res.Success || !strings.Contains(res.Message, "Skill: MLflow answered 503") || strings.Join(fc.ran, " ") != "samples:genai-demo,training" {
+		t.Fatalf("%+v %v %v", res, err, fc.ran)
+	}
+}
+
+// M7: Terminating workbenches are polled away before redeploy; if deletion
+// never completes within the deadline, the step errors out.
+func TestWorkbenchStep_WaitsForADeletedWorkbench(t *testing.T) {
+	r := validRecipe(t, allFeatures)
+	fc := &fakeCluster{workbench: &types.WorkbenchState{ResourceState: types.ResourceState{Namespace: "proj", Deployed: true, ManagedByTool: true, Terminating: true}}, workbenchGoneAfter: 2}
+	fc.install(t)
 	var events []string
-	res, err := runModelRegistry(testClient(), s3, func(e types.UpdateStepEvent) { events = append(events, e.Message) })
-	if err != nil || !res.Success || len(s3.Created) != 0 || !strings.Contains(res.Message, "does not offer it") || len(events) != 1 {
-		t.Errorf("unreadable record: %+v %v %v", res, s3.Created, events)
+	res, err := runWorkbenchStep(testClient(), &State{Recipe: r}, func(e types.UpdateStepEvent) { events = append(events, e.Message) })
+	if err != nil || !res.Success || strings.Join(fc.ran, " ") != "workbench" || !strings.Contains(strings.Join(events, "\n"), "being deleted") {
+		t.Fatalf("%+v %v %v %v", res, err, fc.ran, events)
+	}
+	stuck := &fakeCluster{workbench: &types.WorkbenchState{ResourceState: types.ResourceState{Namespace: "proj", Deployed: true, ManagedByTool: true, Terminating: true}}, workbenchGoneAfter: -1}
+	stuck.install(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	res, err = runWorkbenchStep(kube.NewClientWithContext(ctx, "t"), &State{Recipe: r}, func(types.UpdateStepEvent) {})
+	if err != nil || res.Success || res.ErrorCode != "timeout" || len(stuck.ran) != 0 {
+		t.Fatalf("stuck: %+v %v %v", res, err, stuck.ran)
 	}
 }
 
-// Clean up surfaces a cluster-wide part only when the run logged creating it
-// and it still matches that snapshot; resources the run never created stay off
-// the list even if this tool currently manages them.
-func TestOwnership_OffersOnlyWhatTheRunCreated(t *testing.T) {
-	run := func(parts ...types.RecipeCreatedPart) *types.RecipeRun {
-		return &types.RecipeRun{ID: "r", CreatedParts: parts}
+// M2: On resume, an image already deployed but not ready should call wait
+// only—no second deploy—and mark done once the dashboard reports ready.
+func TestDashboardDevStep_ResumeWaitsWithoutRedeploying(t *testing.T) {
+	r := validRecipe(t, "  dashboardDev: {deploy: pr, pr: 77}\n")
+	fc := readyCluster()
+	fc.dashReady = false
+	fc.install(t)
+	if chk, _ := checkDashboardDev(nil, &State{Recipe: r}); chk.Done {
+		t.Fatalf("not rolled out but done: %+v", chk)
 	}
-	maas := types.RecipeCreatedPart{Part: types.RecipePartMaaSPlatform, UID: "creds-1"}
-	reg := types.RecipeCreatedPart{Part: types.RecipePartModelRegistry, UID: "reg-1"}
-	cases := []struct {
-		name           string
-		run            *types.RecipeRun
-		edit           func(fc *fakeCluster)
-		maas, registry bool
-	}{
-		{"both, as created", run(maas, reg), nil, true, true},
-		{"nothing recorded, though both are this tool's", run(), nil, false, false},
-		{"MaaS set up again since (another database Secret)", run(maas, reg), func(fc *fakeCluster) { fc.maasRec.POCCredsUID = "creds-2" }, false, true},
-		{"MaaS no longer this tool's", run(maas), func(fc *fakeCluster) { fc.maasOurs = false }, false, false},
-		{"the registry made again since (another UID)", run(reg), func(fc *fakeCluster) {
-			fc.registryRec = modelregistry.Record{"ns/" + modelregistry.Name: {UID: "reg-2"}}
-		}, false, false},
-		{"the registry record unreadable", run(reg), func(fc *fakeCluster) { fc.readErr = errors.New("boom") }, false, false},
+	res, err := runDashboardDev(testClient(), &State{Recipe: r}, func(types.UpdateStepEvent) {})
+	if err != nil || !res.Success || strings.Join(fc.ran, " ") != "dashboard:wait" {
+		t.Fatalf("%+v %v %v", res, err, fc.ran)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			fc := &fakeCluster{maasOurs: true, maasRec: serving.MaaSRecord{POCCredsUID: "creds-1"},
-				registryRec: modelregistry.Record{"ns/" + modelregistry.Name: {UID: "reg-1"}}}
-			if tc.edit != nil {
-				tc.edit(fc)
-			}
-			fc.install(t)
-			created, req := Ownership(nil, tc.run)
-			gotMaaS, gotReg := req != nil && req.MaaSPlatform, req != nil && req.ModelRegistry
-			if gotMaaS != tc.maas || gotReg != tc.registry || created[StepMaaS] != tc.maas || created[StepModelRegistry] != tc.registry {
-				t.Errorf("req %+v created %v", req, created)
-			}
-			if !tc.maas && !tc.registry && req != nil {
-				t.Errorf("a clean-up with nothing in it: %+v", req)
-			}
-		})
+	if chk, _ := checkDashboardDev(nil, &State{Recipe: r}); !chk.Done {
+		t.Errorf("rolled out but not done: %+v", chk)
 	}
 }
 
-// Dashboard Dev applies the recipe's chosen build then waits on rollout; the
-// legacy path without the dashboard module has nothing to wait for.
+// Dashboard Dev issues deploy plus wait when the module is present; legacy
+// flows deploy PR builds without a follow-up readiness wait.
 func TestDashboardDevStep_DeploysAndWaits(t *testing.T) {
 	r := validRecipe(t, "  dashboardDev: {deploy: main}\n")
 	fc := &fakeCluster{session: &types.DashboardOverride{}}
@@ -508,7 +625,143 @@ func TestDashboardDevStep_DeploysAndWaits(t *testing.T) {
 	if res, err := runDashboardDev(testClient(), &State{Recipe: pr}, func(types.UpdateStepEvent) {}); err != nil || !res.Success || strings.Join(legacy.ran, " ") != "dashboard:pr" {
 		t.Fatalf("legacy %+v %v %v", res, err, legacy.ran)
 	}
-	if chk, _ := checkDashboardDev(nil, &State{Recipe: pr}); !chk.Done {
-		t.Errorf("the deployed PR is not done: %+v", chk)
+}
+
+// H1: New MaaS platform setup stamps the DB Secret with the run annotation
+// and Created UID (cnpg and development alike). Platforms the tool already
+// owned must not be attributed to this run.
+func TestMaaSStep_MarksWhatItCreated(t *testing.T) {
+	for _, db := range []string{"cnpg", "development"} {
+		t.Run(db, func(t *testing.T) {
+			r := validRecipe(t, "  features: {maas: {enabled: true, database: "+db+"}}\n")
+			fc := &fakeCluster{}
+			fc.install(t)
+			s := &State{Recipe: r, RunID: "run-1"}
+			if res, err := runMaaSStep(testClient(), s, func(types.UpdateStepEvent) {}); err != nil || !res.Success {
+				t.Fatalf("%+v %v", res, err)
+			}
+			if len(fc.maasReqs) != 1 || fc.maasReqs[0].Database == nil || fc.maasReqs[0].Database.Kind != db {
+				t.Errorf("requests %+v", fc.maasReqs)
+			}
+			if len(s.Created) != 1 || s.Created[0] != (types.RecipeCreatedPart{Part: types.RecipePartMaaSPlatform, UID: "secret-1"}) || fc.dbMeta.Annotations[RecipeRunAnnotation] != "run-1" {
+				t.Errorf("created %+v, Secret %+v", s.Created, fc.dbMeta)
+			}
+		})
 	}
+	t.Run("this tool's already", func(t *testing.T) {
+		fc := &fakeCluster{maasOurs: true}
+		fc.install(t)
+		s := &State{Recipe: validRecipe(t, "  features: {maas: {enabled: true}}\n"), RunID: "run-1"}
+		if _, err := runMaaSStep(testClient(), s, func(types.UpdateStepEvent) {}); err != nil || len(s.Created) != 0 {
+			t.Errorf("created %+v %v", s.Created, err)
+		}
+	})
+}
+
+// U6: Sample-enabled runs should claim registration in the result message.
+// Pre-existing registries skip Created and annotations; unreadable records
+// yield empty Created and an explanatory message.
+func TestModelRegistryStep_RecordsWhatItCreated(t *testing.T) {
+	r := validRecipe(t, "  features: {modelRegistry: {enabled: true, sample: true}}\n")
+	fc := &fakeCluster{}
+	fc.install(t)
+	s := &State{Recipe: r, RunID: "run-1"}
+	res, err := runModelRegistry(testClient(), s, func(types.UpdateStepEvent) {})
+	if err != nil || !res.Success || len(s.Created) != 1 || s.Created[0].UID != "reg-1" || !strings.Contains(res.Message, "Sample model mnist (version v1) is registered.") {
+		t.Fatalf("%+v %v created %+v", res, err, s.Created)
+	}
+	again := &State{Recipe: r, RunID: "run-2"}
+	if _, err := runModelRegistry(testClient(), again, func(types.UpdateStepEvent) {}); err != nil || len(again.Created) != 0 || fc.registryAnn != nil {
+		t.Errorf("a registry that was there: %+v %v", again.Created, fc.registryAnn)
+	}
+	fc2 := &fakeCluster{readErr: errors.New("boom")}
+	fc2.install(t)
+	s3 := &State{Recipe: r, RunID: "run-3"}
+	var events []string
+	res, err = runModelRegistry(testClient(), s3, func(e types.UpdateStepEvent) { events = append(events, e.Message) })
+	if err != nil || !res.Success || len(s3.Created) != 0 || !strings.Contains(res.Message, "does not offer it") {
+		t.Errorf("unreadable record: %+v %v %v", res, s3.Created, events)
+	}
+}
+
+// H1: Ownership cleanup lists MaaS platform and registry only when live
+// objects match run annotation, recorded UID, and tool ownership. Bad claims,
+// replaced resources, or read errors offer neither; successful requests cite
+// vetted UIDs and run id (H2).
+func TestOwnership_OffersOnlyWhatTheRunCreated(t *testing.T) {
+	run := func(parts ...types.RecipeCreatedPart) *types.RecipeRun {
+		return &types.RecipeRun{ID: "run-1", CreatedParts: parts}
+	}
+	maas := types.RecipeCreatedPart{Part: types.RecipePartMaaSPlatform, UID: "secret-1"}
+	reg := types.RecipeCreatedPart{Part: types.RecipePartModelRegistry, UID: "reg-1"}
+	cases := []struct {
+		name           string
+		run            *types.RecipeRun
+		edit           func(fc *fakeCluster)
+		maas, registry bool
+	}{
+		{"both, as created", run(maas, reg), nil, true, true},
+		{"nothing recorded, though both are this tool's and marked", run(), nil, false, false},
+		{"a forged claim: the platform carries no run annotation", run(maas), func(fc *fakeCluster) { fc.dbMeta.Annotations = nil }, false, false},
+		{"another run's annotation", run(maas, reg), func(fc *fakeCluster) {
+			fc.dbMeta.Annotations = map[string]string{RecipeRunAnnotation: "run-9"}
+			fc.regMeta.Annotations = map[string]string{RecipeRunAnnotation: "run-9"}
+		}, false, false},
+		{"MaaS set up again since (another database Secret)", run(maas, reg), func(fc *fakeCluster) { fc.dbMeta.UID = "secret-2" }, false, true},
+		{"a forged UID claim", run(types.RecipeCreatedPart{Part: types.RecipePartMaaSPlatform, UID: "x"}), nil, false, false},
+		{"a claim with no UID", run(types.RecipeCreatedPart{Part: types.RecipePartMaaSPlatform}), nil, false, false},
+		{"MaaS no longer this tool's", run(maas), func(fc *fakeCluster) { fc.maasOurs = false }, false, false},
+		{"the Secret not this tool's", run(maas), func(fc *fakeCluster) { fc.dbMeta.Labels = nil }, false, false},
+		{"the registry made again since (another UID)", run(reg), func(fc *fakeCluster) { fc.regMeta.UID = "reg-2" }, false, false},
+		{"the registry no longer in the tool's record", run(reg), func(fc *fakeCluster) { fc.registryRec = modelregistry.Record{} }, false, false},
+		{"the registry record unreadable", run(reg), func(fc *fakeCluster) { fc.readErr = errors.New("boom") }, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := toolMeta("infra", "maas-db-config", "secret-1", map[string]string{RecipeRunAnnotation: "run-1"})
+			rm := toolMeta(registryNS, modelregistry.Name, "reg-1", map[string]string{RecipeRunAnnotation: "run-1"})
+			fc := &fakeCluster{maasOurs: true, maasRec: serving.MaaSRecord{Database: "cnpg", DBNamespace: "infra"}, dbMeta: &db, regMeta: &rm,
+				registryRec: modelregistry.Record{registryNS + "/" + modelregistry.Name: {UID: "reg-1"}}}
+			if tc.edit != nil {
+				tc.edit(fc)
+			}
+			fc.install(t)
+			created, req := Ownership(nil, testClient(), tc.run)
+			gotMaaS, gotReg := req != nil && req.MaaSPlatform, req != nil && req.ModelRegistry
+			if gotMaaS != tc.maas || gotReg != tc.registry || created[StepMaaS] != tc.maas || created[StepModelRegistry] != tc.registry {
+				t.Errorf("req %+v created %v", req, created)
+			}
+			if gotMaaS && (req.MaaSPlatformUID != "secret-1" || req.RecipeRunID != "run-1") || gotReg && req.ModelRegistryUID != "reg-1" {
+				t.Errorf("the request does not name what was reviewed: %+v", req)
+			}
+			if !tc.maas && !tc.registry && req != nil {
+				t.Errorf("a clean-up with nothing in it: %+v", req)
+			}
+		})
+	}
+	// Nil client skips registry record reads, so registry cannot be offered.
+	db := toolMeta("infra", "maas-db-config", "secret-1", map[string]string{RecipeRunAnnotation: "run-1"})
+	fc := &fakeCluster{maasOurs: true, maasRec: serving.MaaSRecord{Database: "cnpg", DBNamespace: "infra"}, dbMeta: &db}
+	fc.install(t)
+	if _, req := Ownership(nil, nil, run(reg)); req != nil {
+		t.Errorf("registry offered without the user's client: %+v", req)
+	}
+	if p := CreatedPartProblem(nil, testClient(), "run-1", types.RecipePartMaaSPlatform, "secret-2"); !strings.Contains(p, "replaced or changed") {
+		t.Errorf("a replaced platform: %q", p)
+	}
+}
+
+// Each step's Max and Typical durations must stay within record.OperationDeadline
+// (15 minutes), with Typical positive and not above Max.
+func TestFeatureSteps_FitTheStepDeadline(t *testing.T) {
+	r := validRecipe(t, allFeatures)
+	for _, s := range Steps(r) {
+		if s.Max > record.OperationDeadline || s.Typical > s.Max || s.Typical <= 0 {
+			t.Errorf("%s: typical %v, max %v, deadline %v", s.ID, s.Typical, s.Max, record.OperationDeadline)
+		}
+	}
+	if title := stepOf(t, r, StepModel).Title; title != "Model Qwen3 1.7B (CPU, tool calling)" {
+		t.Errorf("model title %q", title)
+	}
+	_ = fmt.Sprint
 }

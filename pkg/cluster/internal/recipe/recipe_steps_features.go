@@ -54,7 +54,11 @@ var (
 	runPlayground    = features.RunPlayground
 	registryStatus   = modelregistry.ReadStatus
 	registryRecord   = modelregistry.ReadRecord
-	runRegistry      = modelregistry.Run
+	runRegistry      = modelregistry.RunAnnotated
+	registryMeta     = modelregistry.ReadRegistryMeta
+	dbConfigMeta     = serving.MaaSDBConfigMeta
+	annotateDBConfig = serving.AnnotateMaaSDBConfig
+	dashboardReady   = dashdev.DeploymentsReadyNow
 	workbenchStatus  = workbench.GetStatus
 	runWorkbench     = workbench.Run
 	dashboardSession = dashdev.OverrideSummary
@@ -82,7 +86,7 @@ func featureSteps(r types.EnvironmentRecipe) []Step {
 		// On CPU workers, serving often lands in 3–6 minutes (QUICKSTART); the
 		// step still obeys serving.modelReadyTimeout.
 		add(StepModelsPrereq, "What Models needs", 4*time.Minute, 15*time.Minute, checkModelsPrereq, runModelsPrereq)
-		add(StepModel, "Model "+modelName(r), 5*time.Minute, 15*time.Minute, checkModel, runModel)
+		add(StepModel, modelTitle(r), 5*time.Minute, 15*time.Minute, checkModel, runModel)
 		if f.MaaS.Enabled && f.MaaS.Publish && f.Models.Exposure != serving.ExposureMaaS {
 			add(StepMaaSPublish, "Publish the model through MaaS", 2*time.Minute, 5*time.Minute, checkMaaSPublish, runMaaSPublish)
 		}
@@ -106,13 +110,22 @@ func featureSteps(r types.EnvironmentRecipe) []Step {
 	return steps
 }
 
-// modelName returns the recipe model's catalog label; empty string means the
-// catalog default.
+// modelName is the catalog name of the recipe's model ("" is the catalog's
+// default).
 func modelName(r types.EnvironmentRecipe) string {
 	if entry, ok := serving.CatalogEntry(r.Spec.Features.Models.Model); ok {
 		return entry.Name
 	}
 	return r.Spec.Features.Models.Model
+}
+
+// modelTitle is the model step's title: the model's display name, as the
+// Models tab shows it.
+func modelTitle(r types.EnvironmentRecipe) string {
+	if entry, ok := serving.CatalogEntry(r.Spec.Features.Models.Model); ok && entry.DisplayName != "" {
+		return "Model " + entry.DisplayName
+	}
+	return "Model " + modelName(r)
 }
 
 func dashboardDevTitle(d types.RecipeDashboardDev) string {
@@ -136,25 +149,29 @@ func readWithin(c *kube.Client) (*kube.Client, context.CancelFunc) {
 
 // --- MLflow samples ----------------------------------------------------------
 
-// addableSamples lists samples MLflow tab Add all would select: those whose
-// state offers Add. Repair-needed rows are skipped (demo MLflow held at 2Gi by
-// an older release)—Add would restart MLflow after reconfiguring instead of
-// attaching the sample.
-func addableSamples(st *types.MLflowSamplesStatus) (ids, repairs []string) {
+// addableSamples sorts the project's samples as the MLflow tab's Add all
+// sees them: ids it adds (their state allows Add), repairs it leaves (the
+// demo on an MLflow an earlier version of this tool limited to 2Gi: its
+// Add changes MLflow and restarts it instead), and unknown ones whose
+// state could not be read ("name: why"), which are never counted as there.
+func addableSamples(st *types.MLflowSamplesStatus) (ids, repairs, unknown []string) {
 	for _, s := range st.Samples {
-		if !slices.Contains(s.Actions, "add") {
-			continue
-		}
-		if s.Repair != "" {
+		switch {
+		case s.State == "unknown":
+			unknown = append(unknown, kube.FirstNonEmpty(s.Name, s.ID)+": "+kube.FirstNonEmpty(s.Message, "its state could not be read"))
+		case !slices.Contains(s.Actions, "add"):
+		case s.Repair != "":
 			repairs = append(repairs, s.Name)
-			continue
+		default:
+			ids = append(ids, s.ID)
 		}
-		ids = append(ids, s.ID)
 	}
-	return ids, repairs
+	return ids, repairs, unknown
 }
 
-// checkMLflowSamples: complete when no addable samples remain in the project.
+// checkMLflowSamples: nothing left to add in the project, and every
+// sample's state read → done. A sample whose state could not be read is
+// not done: the step runs and says so.
 func checkMLflowSamples(c *kube.Client, s *State) (Check, error) {
 	project := projectOf(s)
 	st, err := samplesStatus(c, c, project)
@@ -165,15 +182,28 @@ func checkMLflowSamples(c *kube.Client, s *State) (Check, error) {
 		return Check{}, fmt.Errorf("read the MLflow samples in %s: %w", project, err)
 	}
 	if !st.Available {
-		return Check{}, nil // RunSamples will supply the explanation
+		return Check{}, nil // RunSamples reports why
 	}
-	if ids, _ := addableSamples(st); len(ids) == 0 {
-		return Check{Done: true, Reason: fmt.Sprintf("The MLflow samples are in %s.", project)}, nil
+	ids, repairs, unknown := addableSamples(st)
+	if len(ids) > 0 || len(unknown) > 0 {
+		return Check{}, nil
 	}
-	return Check{}, nil
+	return Check{Done: true, Reason: samplesInMessage(project, repairs)}, nil
 }
 
-// runMLflowSamples runs MLflow tab Add all for the project.
+// samplesInMessage says the samples are in project, and which one needs a
+// change to MLflow first.
+func samplesInMessage(project string, repairs []string) string {
+	msg := fmt.Sprintf("The MLflow samples are in %s.", project)
+	if len(repairs) > 0 {
+		msg = fmt.Sprintf("The MLflow samples are in %s, except %s, which needs a change to MLflow first: add it on the MLflow tab.", project, strings.Join(repairs, ", "))
+	}
+	return msg
+}
+
+// runMLflowSamples is the MLflow tab's Add all in the project. A sample
+// whose state could not be read fails the step (Resume checks again): it
+// is not counted as added.
 func runMLflowSamples(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	project := projectOf(s)
 	st, err := samplesStatus(c, c, project)
@@ -183,15 +213,20 @@ func runMLflowSamples(c *kube.Client, s *State, emit func(types.UpdateStepEvent)
 	if !st.Available {
 		return fail(kube.FirstNonEmpty(st.Reason, "MLflow is not ready.")+" Nothing was changed; Resume tries again.", "prerequisites")
 	}
-	ids, repairs := addableSamples(st)
-	if len(ids) == 0 {
-		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("The MLflow samples are in %s.", project)}, nil
+	ids, repairs, unknown := addableSamples(st)
+	res := &types.OperationResponse{Success: true, Message: samplesInMessage(project, repairs)}
+	if len(ids) > 0 {
+		if res, err = runSamples(c, types.MLflowSamplesRequest{Project: project, Action: "add", Samples: ids}, emit); err != nil || res == nil || !res.Success {
+			return res, err
+		}
+		if len(repairs) > 0 {
+			res.Message = strings.TrimSpace(res.Message + fmt.Sprintf(" Not added: %s, which needs a change to MLflow first; add it on the MLflow tab.", strings.Join(repairs, ", ")))
+		}
 	}
-	res, err := runSamples(c, types.MLflowSamplesRequest{Project: project, Action: "add", Samples: ids}, emit)
-	if res != nil && len(repairs) > 0 {
-		res.Message = strings.TrimSpace(res.Message + fmt.Sprintf(" Not added: %s, which needs a change to MLflow first; add it on the MLflow tab.", strings.Join(repairs, ", ")))
+	if len(unknown) > 0 {
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Cannot tell whether these MLflow samples are in %s: %s. Resume checks them again.", project, strings.Join(unknown, "; ")), Logs: res.Logs, ErrorCode: "unknown"}, nil
 	}
-	return res, err
+	return res, nil
 }
 
 // --- Models as a Service -----------------------------------------------------
@@ -229,9 +264,10 @@ func maasDatabaseBlocked(st *types.MaaSStatus, kind string) string {
 	return ""
 }
 
-// runMaaSStep follows MaaS tab Set up and sends the recipe database when Set up
-// must create one (the UI asks only then). If the platform shifts from external
-// to tool-managed—even after partial failure—the run records it as tool-created.
+// runMaaSStep is the MaaS tab's Set up, with the recipe's database when
+// Set up has to make one (as its dialog asks only then). When the platform
+// was not this tool's before and is now (also after a failure part way),
+// the run marks it as its own on the platform itself (markMaaSCreated).
 func runMaaSStep(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	before, err := maasStatus(c)
 	if err != nil {
@@ -245,19 +281,58 @@ func runMaaSStep(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*t
 	if !before.Platform.ManagedByTool {
 		rc, cancel := readWithin(c)
 		defer cancel()
-		after, err := maasStatus(rc)
-		var rec serving.MaaSRecord
-		if err == nil {
-			rec, err = maasRecord(rc)
-		}
+		part, err := markMaaSCreated(rc, s)
 		switch {
 		case err != nil:
 			noteUnrecorded(StepMaaS, "the MaaS platform", err, res, emit)
-		case after.Platform.ManagedByTool:
-			s.AddCreated(types.RecipeCreatedPart{Part: types.RecipePartMaaSPlatform, UID: rec.POCCredsUID})
+		case part != nil:
+			s.AddCreated(*part)
 		}
 	}
 	return res, runErr
+}
+
+// RecipeRunAnnotation marks a cluster-wide object a recipe run created:
+// its value is the run's ID. It is written with the user's token when the
+// run creates the object, and Clean up offers the object only while it
+// carries it (the run record alone is never proof: the ServiceAccount can
+// write it).
+const RecipeRunAnnotation = "rhoai-nightly-updater/recipe-run"
+
+// markMaaSCreated marks the MaaS platform the run set up as the run's: the
+// database connection Secret maas-db-config that Set up wrote for the
+// recipe's database (development or CloudNativePG) gets the run's
+// annotation, and its UID is the created part's. nil when the platform is
+// not this tool's after all.
+func markMaaSCreated(c *kube.Client, s *State) (*types.RecipeCreatedPart, error) {
+	after, err := maasStatus(c)
+	if err != nil {
+		return nil, err
+	}
+	if !after.Platform.ManagedByTool {
+		return nil, nil
+	}
+	if s.RunID == "" {
+		return nil, errors.New("the run has no ID")
+	}
+	rec, err := maasRecord(c)
+	if err != nil {
+		return nil, err
+	}
+	if rec.DBNamespace == "" || (rec.Database != MaaSDatabaseDevelopment && rec.Database != MaaSDatabaseCNPG) {
+		return nil, errors.New("this tool's MaaS record names no database it made")
+	}
+	meta, found, err := dbConfigMeta(c, rec.DBNamespace)
+	switch {
+	case err != nil:
+		return nil, err
+	case !found || !serving.ToolOwned(meta) || meta.UID == "":
+		return nil, fmt.Errorf("Secret maas-db-config in %s is not this tool's", rec.DBNamespace)
+	}
+	if err := annotateDBConfig(c, rec.DBNamespace, meta.UID, RecipeRunAnnotation, s.RunID); err != nil {
+		return nil, err
+	}
+	return &types.RecipeCreatedPart{Part: types.RecipePartMaaSPlatform, UID: meta.UID}, nil
 }
 
 // noteUnrecorded adds to the step message, live progress, and logs that creation
@@ -275,23 +350,35 @@ func noteUnrecorded(step, what string, err error, res *types.OperationResponse, 
 
 // --- Models ------------------------------------------------------------------
 
-// exposureOf determines how traffic would reach the run's model: state on the
-// run, spec on the recipe, or—if neither is set—the Models tab suggestion for
-// that catalog model in the project. Does not modify s.
+// exposureOf is how the run's model is reached: the recipe's own (always:
+// a resume never keeps another), the one the run resolved (a gateway only
+// while the Models tab still offers it), or else the one the Models tab
+// recommends now for the model in the project. GatewayRef goes only with
+// exposure "gateway" (ValidateModelsRequest). It does not change s.
 func exposureOf(c *kube.Client, s *State) (exposure, gatewayRef, problem, code string) {
-	if s.Exposure != "" {
-		return s.Exposure, s.GatewayRef, "", ""
-	}
 	if e := s.Recipe.Spec.Features.Models.Exposure; e != "" {
 		return e, "", "", ""
+	}
+	if s.Exposure != "" && s.Exposure != serving.ExposureGateway {
+		return s.Exposure, "", "", ""
 	}
 	project := projectOf(s)
 	ex, msg, code := modelExposures(c, project, modelName(s.Recipe))
 	if msg != "" {
 		return "", "", fmt.Sprintf("Cannot tell how the model in %s would be reached: %s", project, msg), kube.FirstNonEmpty(code, "prerequisites")
 	}
+	if s.Exposure == serving.ExposureGateway {
+		for _, opt := range ex.Options {
+			if opt.Exposure == serving.ExposureGateway && opt.GatewayRef == s.GatewayRef && opt.Available {
+				return opt.Exposure, opt.GatewayRef, "", ""
+			}
+		}
+	}
 	for _, opt := range ex.Options {
 		if opt.Key == ex.Default && ex.Default != "" {
+			if opt.Exposure != serving.ExposureGateway {
+				return opt.Exposure, "", "", ""
+			}
 			return opt.Exposure, opt.GatewayRef, "", ""
 		}
 	}
@@ -299,7 +386,7 @@ func exposureOf(c *kube.Client, s *State) (exposure, gatewayRef, problem, code s
 	if len(ex.Options) > 0 {
 		why = strings.TrimSpace(ex.Options[0].Reason + " " + why)
 	}
-	return "", "", fmt.Sprintf("No way to reach the model from %s is recommended now. %s Set spec.features.models.exposure (internal: only inside the cluster).", project, kube.FirstNonEmpty(why, "No gateway can carry it.")), "prerequisites"
+	return "", "", fmt.Sprintf("No way to reach the model from %s is recommended now. %s Choose how the model is reached in the recipe: Only inside the cluster always works.", project, kube.FirstNonEmpty(why, "No gateway can carry it.")), "prerequisites"
 }
 
 // ExposureKept tests whether a run record's exposure (and gateway) is valid for
@@ -352,8 +439,9 @@ func readToolModel(c *kube.Client, project, name string) (types.ModelState, bool
 	return serving.ModelState(c, m, false, rec), true, nil
 }
 
-// checkModel: complete when a tool-managed project model is serving (and MaaS-
-// published if exposure is MaaS); blocked when an unrelated same-name model exists.
+// checkModel: the tool's model in the project serves (and, reached through
+// MaaS, its publication is in place: publishedThroughMaaS) → done; a model
+// of that name the tool did not create blocks.
 func checkModel(c *kube.Client, s *State) (Check, error) {
 	project, name := projectOf(s), modelName(s.Recipe)
 	st, found, err := readModel(c, project, name)
@@ -370,29 +458,78 @@ func checkModel(c *kube.Client, s *State) (Check, error) {
 	case !st.Ready:
 		return Check{}, nil
 	}
-	exposure := kube.FirstNonEmpty(s.Exposure, s.Recipe.Spec.Features.Models.Exposure)
-	if exposure == serving.ExposureMaaS && !st.MaaSPublished {
-		return Check{}, nil
+	if kube.FirstNonEmpty(s.Recipe.Spec.Features.Models.Exposure, s.Exposure) == serving.ExposureMaaS {
+		published, err := publishedThroughMaaS(c, project, name)
+		if err != nil {
+			return Check{}, fmt.Errorf("read the MaaS publication of %s in %s: %w", name, project, err)
+		}
+		if !published {
+			return Check{}, nil
+		}
+		return Check{Done: true, Reason: fmt.Sprintf("Model %s in %s serves, published through MaaS.", name, project)}, nil
 	}
 	return Check{Done: true, Reason: fmt.Sprintf("Model %s in %s serves.", name, project)}, nil
 }
 
-// runModel calls Models tab Set up for the project model with resolved reachability
-// (MaaS exposure publishes via MaaS in one pass, matching the tab).
-func runModel(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
-	if s.Exposure == "" {
-		if problem, code := pinExposure(c, s); problem != "" {
-			return fail(problem+" Nothing was changed.", code)
+// publishedThroughMaaS reports whether this tool's model name in project
+// is published as the MaaS tab shows it: its MaaSModelRef is this tool's
+// and Ready, the tool's access policy and subscription are Active, and
+// nothing of it is half done. The model's routing alone is no publication.
+func publishedThroughMaaS(c *kube.Client, project, name string) (bool, error) {
+	st, err := maasStatus(c)
+	if err != nil {
+		return false, err
+	}
+	for _, it := range st.Items {
+		if it.Namespace == project && it.Name == name {
+			return it.Published && it.Ready && !it.Partly, nil
 		}
 	}
-	m := s.Recipe.Spec.Features.Models
-	return runModels(c, types.ModelsRequest{Action: "setup", Project: projectOf(s), Model: modelName(s.Recipe), ReleasedImage: m.ReleasedImage, Exposure: s.Exposure, GatewayRef: s.GatewayRef}, emit)
+	return false, nil
 }
 
-// checkMaaSPublish: complete when the model is already published through MaaS.
+// stepPoll is how often a step reads the cluster while it waits for what
+// a setup started (a model to serve, a workbench to go). Tests set it to
+// zero.
+var stepPoll = 10 * time.Second
+
+// runModel is the Models tab's Set up of the model in the project, reached
+// the way the run resolved (with exposure maas it is published through
+// MaaS as part of it, as the Models tab does). It succeeds only once the
+// model serves (and is published, through MaaS), within the step's own
+// deadline; otherwise it fails, and Resume waits again.
+func runModel(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+	if problem, code := pinExposure(c, s); problem != "" {
+		return fail(problem+" Nothing was changed.", code)
+	}
+	m := s.Recipe.Spec.Features.Models
+	res, err := runModels(c, types.ModelsRequest{Action: "setup", Project: projectOf(s), Model: modelName(s.Recipe), ReleasedImage: m.ReleasedImage, Exposure: s.Exposure, GatewayRef: s.GatewayRef}, emit)
+	if err != nil || res == nil || !res.Success {
+		return res, err
+	}
+	for {
+		chk, err := checkModel(c, s)
+		switch {
+		case err == nil && chk.Done:
+			return res, nil
+		case err == nil && chk.Blocked != "":
+			return &types.OperationResponse{Success: false, Message: chk.Blocked, Logs: res.Logs, ErrorCode: "prerequisites"}, nil
+		}
+		if kube.Clock().Sleep(c.Context(), stepPoll) != nil {
+			what := "serving"
+			if s.Exposure == serving.ExposureMaaS {
+				what = "serving and published through MaaS"
+			}
+			return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Model %s in %s was set up but is not %s within the step's time. Resume waits again.", modelName(s.Recipe), projectOf(s), what), Logs: res.Logs, ErrorCode: "timeout"}, nil
+		}
+	}
+}
+
+// checkMaaSPublish: the model's publication through MaaS is in place →
+// done.
 func checkMaaSPublish(c *kube.Client, s *State) (Check, error) {
 	project, name := projectOf(s), modelName(s.Recipe)
-	published, err := maasPublished(c, project, name)
+	published, err := publishedThroughMaaS(c, project, name)
 	if err != nil {
 		return Check{}, fmt.Errorf("read whether %s in %s is published: %w", name, project, err)
 	}
@@ -479,16 +616,31 @@ func checkModelRegistry(c *kube.Client, s *State) (Check, error) {
 	return Check{Done: true, Reason: fmt.Sprintf("Model registry %s is ready in %s.", st.Name, st.Namespace)}, nil
 }
 
-// runModelRegistry drives Model registry tab Set up (sample model optional per
-// recipe). Registries created here tie to the run through the UID the tool
-// persisted.
+// runModelRegistry is the Model registry tab's Set up (with the sample
+// model when the recipe asks for it). A registry it creates carries the
+// run's annotation from its creation, and the run records the UID the
+// tool recorded for it; the result says when the sample is registered.
 func runModelRegistry(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	before, err := registryStatus(c, c)
 	if err != nil {
 		return fail(fmt.Sprintf("Cannot read the model registry: %v. Nothing was changed.", err), kube.ErrorCodeOr(err, "prerequisites"))
 	}
-	res, runErr := runRegistry(c, types.ModelRegistryRequest{Action: "setup", Samples: s.Recipe.Spec.Features.ModelRegistry.Sample}, emit)
-	if before.State == "absent" && before.Namespace != "" {
+	creates := before.State == "absent" && before.Namespace != "" && s.RunID != ""
+	var annotations map[string]string
+	if creates {
+		annotations = map[string]string{RecipeRunAnnotation: s.RunID}
+	}
+	sample := ""
+	res, runErr := runRegistry(c, types.ModelRegistryRequest{Action: "setup", Samples: s.Recipe.Spec.Features.ModelRegistry.Sample}, annotations, func(e types.UpdateStepEvent) {
+		if e.Step == "samples" && e.Status == "success" {
+			sample = e.Message
+		}
+		emit(e)
+	})
+	if res != nil && res.Success && sample != "" {
+		res.Message = strings.TrimSpace(res.Message + " " + sample)
+	}
+	if creates {
 		rc, cancel := readWithin(c)
 		defer cancel()
 		rec, err := registryRecord(rc)
@@ -504,89 +656,136 @@ func runModelRegistry(c *kube.Client, s *State, emit func(types.UpdateStepEvent)
 
 // --- Workbench ---------------------------------------------------------------
 
-// checkWorkbench: complete when a tool-created project workbench exists (running
-// or idle—the tab can start it); blocked for foreign workbenches, disabled
-// components, or unsupported platforms.
+// checkWorkbench: this tool's workbench in the project exists and is not
+// being deleted → done (started or not: the Workbench tab starts it); one
+// being deleted is not (the step waits until it is gone and sets it up
+// again); one the tool did not create, a component that is off, or a
+// platform without workbenches blocks.
 func checkWorkbench(c *kube.Client, s *State) (Check, error) {
 	project := projectOf(s)
-	st, err := workbenchStatus(c, c, project)
-	if err != nil {
-		return Check{}, fmt.Errorf("read the workbench in %s: %w", project, err)
-	}
+	item, st, err := workbenchIn(c, project)
 	switch {
+	case err != nil:
+		return Check{}, err
 	case st.Unsupported != "":
 		return blockedAt(st.Unsupported), nil
 	case st.Blocked != nil:
 		return Check{Blocked: st.Blocked.Reason, Fix: fixAt(types.RecipeFixFeatureBlocked, pageComponents)}, nil
-	case slices.Contains(st.ItemsUnreadable, project):
-		return Check{}, fmt.Errorf("the workbench in %s cannot be read: %s", project, kube.FirstNonEmpty(st.ItemsProblem, "unknown"))
+	case item == nil || item.Terminating:
+		return Check{}, nil
+	case !item.ManagedByTool:
+		return blockedAt(fmt.Sprintf("Project %s has a workbench %s that this tool did not create; the recipe does not change it. Nothing was changed.", project, workbench.Name)), nil
 	}
-	for _, item := range st.Items {
-		if item.Namespace != project || !item.Deployed {
-			continue
-		}
-		if !item.ManagedByTool {
-			return blockedAt(fmt.Sprintf("Project %s has a workbench %s that this tool did not create; the recipe does not change it. Nothing was changed.", project, workbench.Name)), nil
-		}
-		return Check{Done: true, Reason: fmt.Sprintf("Workbench %s in %s is set up (%s).", workbench.Name, project, kube.FirstNonEmpty(item.State, "state unknown"))}, nil
-	}
-	return Check{}, nil
+	return Check{Done: true, Reason: fmt.Sprintf("Workbench %s in %s is set up (%s).", workbench.Name, project, kube.FirstNonEmpty(item.State, "state unknown"))}, nil
 }
 
-// runWorkbenchStep runs Workbench tab Set up in the project and attaches the tool
-// S3 Connection when the project already has the tool pipeline server, as the
-// tab does.
+// workbenchIn reads the Workbench tab's status of project and its
+// workbench nightly-workbench (nil when there is none).
+func workbenchIn(c *kube.Client, project string) (*types.WorkbenchState, *types.WorkbenchStatus, error) {
+	st, err := workbenchStatus(c, c, project)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read the workbench in %s: %w", project, err)
+	}
+	if slices.Contains(st.ItemsUnreadable, project) {
+		return nil, nil, fmt.Errorf("the workbench in %s cannot be read: %s", project, kube.FirstNonEmpty(st.ItemsProblem, "unknown"))
+	}
+	for i := range st.Items {
+		if st.Items[i].Namespace == project && st.Items[i].Deployed {
+			return &st.Items[i], st, nil
+		}
+	}
+	return nil, st, nil
+}
+
+// runWorkbenchStep is the Workbench tab's Set up in the project; it
+// attaches the tool's S3 Connection when the project has the tool's
+// pipeline server, as that tab does. A workbench being deleted is waited
+// for first (Set up would take it for one that is set up), within the
+// step's deadline.
 func runWorkbenchStep(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+	project := projectOf(s)
+	for {
+		item, _, err := workbenchIn(c, project)
+		if err != nil {
+			return fail(fmt.Sprintf("Cannot read the workbench in %s: %v. Nothing was changed.", project, err), kube.ErrorCodeOr(err, "prerequisites"))
+		}
+		if item == nil || !item.Terminating {
+			break
+		}
+		emit(types.UpdateStepEvent{Step: StepWorkbench, Status: "running", Message: fmt.Sprintf("Workbench %s in %s is being deleted; waiting until it is gone...", workbench.Name, project)})
+		if kube.Clock().Sleep(c.Context(), stepPoll) != nil {
+			return fail(fmt.Sprintf("Workbench %s in %s is still being deleted. Nothing was changed; Resume waits again.", workbench.Name, project), "timeout")
+		}
+	}
 	return runWorkbench(c, types.WorkbenchRequest{Action: "setup", Project: projectOf(s)}, emit)
 }
 
 // --- Dashboard Dev -----------------------------------------------------------
 
-// checkDashboardDev: complete when an active Dashboard Dev session serves the recipe build.
+// checkDashboardDev: a Dashboard Dev session runs the recipe's build and
+// the dashboard has rolled out → done. A session of the build that is
+// still rolling out is not: the step waits for it (without deploying
+// again).
 func checkDashboardDev(c *kube.Client, s *State) (Check, error) {
 	o, err := dashboardSession(c)
 	if err != nil {
 		return Check{}, fmt.Errorf("read the Dashboard Dev session: %w", err)
 	}
 	d := s.Recipe.Spec.DashboardDev
-	if o == nil || !o.Active || !o.SessionRecorded || o.Mode != d.Deploy || kube.FirstNonEmpty(o.Flavor, dashdev.FlavorRHOAI) != d.Flavor {
+	if !sessionRuns(o, d) {
 		return Check{}, nil
 	}
-	if d.Deploy == DashboardDevPR && o.PRNumber != d.PR {
+	ready, _, err := dashboardReady(c)
+	if err != nil || !ready {
 		return Check{}, nil
 	}
-	return Check{Done: true, Reason: fmt.Sprintf("Dashboard Dev runs the recipe's build (%s).", strings.TrimPrefix(dashboardDevTitle(d), "Dashboard Dev "))}, nil
+	return Check{Done: true, Reason: fmt.Sprintf("Dashboard Dev runs the recipe's build (%s), and the dashboard is ready.", strings.Trim(strings.TrimPrefix(dashboardDevTitle(d), "Dashboard Dev "), "()"))}, nil
 }
 
-// runDashboardDev mirrors Dashboard Dev page Deploy (main or pull request), then
-// waits for dashboard rollout in the order the UI shows.
+// sessionRuns reports whether the Dashboard Dev session o runs the build d
+// names.
+func sessionRuns(o *types.DashboardOverride, d types.RecipeDashboardDev) bool {
+	if o == nil || !o.Active || !o.SessionRecorded || o.Mode != d.Deploy || kube.FirstNonEmpty(o.Flavor, dashdev.FlavorRHOAI) != d.Flavor {
+		return false
+	}
+	return d.Deploy != DashboardDevPR || o.PRNumber == d.PR
+}
+
+// runDashboardDev is the Dashboard Dev page's Deploy (main or the pull
+// request), then the wait for the dashboard to roll out, made here as the
+// page shows it. A session that runs the build already (a resume) is not
+// deployed again: only the wait runs.
 func runDashboardDev(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	d := s.Recipe.Spec.DashboardDev
+	build := strings.Trim(strings.TrimPrefix(dashboardDevTitle(d), "Dashboard Dev "), "()")
 	module, err := dashboardSession(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Cannot read the Dashboard Dev session: %v. Nothing was changed.", err), kube.ErrorCodeOr(err, "prerequisites"))
 	}
-	emit(types.UpdateStepEvent{Step: StepDashboardDev, Status: "running", Message: fmt.Sprintf("Deploying the dashboard's %s build...", strings.Trim(strings.TrimPrefix(dashboardDevTitle(d), "Dashboard Dev "), "()"))})
-	var res *types.OperationResponse
-	if d.Deploy == DashboardDevPR {
-		res, err = deployPR(c, d.PR, d.Flavor)
-	} else {
-		res, err = deployMain(c, d.Flavor)
-	}
-	if err != nil || res == nil || !res.Success || module == nil {
-		// Legacy path without a dashboard module has no operator session to wait on.
-		return res, err
+	res := &types.OperationResponse{Success: true, Message: fmt.Sprintf("The dashboard runs the %s build.", build)}
+	if !sessionRuns(module, d) {
+		emit(types.UpdateStepEvent{Step: StepDashboardDev, Status: "running", Message: fmt.Sprintf("Deploying the dashboard's %s build...", build)})
+		if d.Deploy == DashboardDevPR {
+			res, err = deployPR(c, d.PR, d.Flavor)
+		} else {
+			res, err = deployMain(c, d.Flavor)
+		}
+		if err != nil || res == nil || !res.Success || module == nil {
+			// Without the dashboard module (the legacy flow) there is no
+			// operator session to wait on.
+			return res, err
+		}
 	}
 	emit(types.UpdateStepEvent{Step: StepDashboardDev, Status: "running", Message: "Waiting for the dashboard to roll out (usually 1 to 2 minutes)..."})
 	if _, err := waitDashboard(c); err != nil {
-		if ctxErr := c.Context().Err(); ctxErr != nil {
+		if ctxErr := c.Context().Err(); ctxErr != nil && !errors.Is(ctxErr, context.DeadlineExceeded) {
 			return &types.OperationResponse{Success: false, Message: "Stopped while waiting for the dashboard.", Logs: res.Logs}, ctxErr
 		}
 		code := "timeout"
 		if errors.Is(err, dashdev.ErrDeploymentsFailed) {
 			code = "prerequisites"
 		}
-		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("%s, but the dashboard is not ready: %v. The Dashboard Dev page shows when it is; a resume does not deploy it again.", strings.TrimSuffix(res.Message, "."), err), Logs: res.Logs, ErrorCode: kube.ErrorCodeOr(err, code)}, nil
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("%s, but the dashboard is not ready: %v. Resume waits again without deploying it again.", strings.TrimSuffix(res.Message, "."), err), Logs: res.Logs, ErrorCode: kube.ErrorCodeOr(err, code)}, nil
 	}
 	return &types.OperationResponse{Success: true, Message: strings.TrimSuffix(res.Message, ".") + "; the dashboard is ready.", Logs: res.Logs}, nil
 }

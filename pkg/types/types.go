@@ -1918,6 +1918,16 @@ type CleanupRequest struct {
 	// only while the record and the namespace still have that UID, so one
 	// deleted and made again since is kept. Every recipe project needs one.
 	RecipeProjectUIDs map[string]string `json:"recipeProjectUIDs,omitempty"`
+	// RecipeRunID, MaaSPlatformUID and ModelRegistryUID: a recipe's Clean
+	// up of the MaaS platform and the model registry its run created names
+	// the run and the UID of each object it reviewed (the database Secret
+	// maas-db-config; the ModelRegistry). The part is removed only while
+	// the object still has that UID and the run's annotation, checked
+	// again under the cluster lock; otherwise it is refused. Empty for the
+	// Environment page's own Clean up.
+	RecipeRunID      string `json:"recipeRunId,omitempty"`
+	MaaSPlatformUID  string `json:"maasPlatformUid,omitempty"`
+	ModelRegistryUID string `json:"modelRegistryUid,omitempty"`
 	// ConfirmProjectContents maps a recipe project to what it still holds
 	// that this tool did not create ("Pod x", "PersistentVolumeClaim y",
 	// ...), as a refusal listed them: a project is deleted with them only

@@ -1869,6 +1869,21 @@ func maasLeftovers(c *kube.Client, m LLMISvcObject, recorded bool) []string {
 	return left
 }
 
+// MaaSDBConfigMeta reads the metadata of Secret maas-db-config in ns, the
+// database connection MaaS setup writes for its development and
+// CloudNativePG databases.
+func MaaSDBConfigMeta(c *kube.Client, ns string) (kube.ObjectMeta, bool, error) {
+	return kube.ReadObjectMeta(c, maasObjectPath("Secret", ns))
+}
+
+// AnnotateMaaSDBConfig sets an annotation on Secret maas-db-config in ns,
+// only while it is the object of that UID (a merge patch whose
+// metadata.uid the API server refuses for any other): an environment
+// recipe marks the platform its run set up.
+func AnnotateMaaSDBConfig(c *kube.Client, ns, uid, key, value string) error {
+	return c.PatchJSON(maasObjectPath("Secret", ns), map[string]any{"metadata": map[string]any{"uid": uid, "annotations": map[string]string{key: value}}})
+}
+
 // ToolOwned: this tool created the object (its label, and a write by it).
 func ToolOwned(meta kube.ObjectMeta) bool {
 	return meta.HasToolLabel() && meta.HasManager(envkit.ToolManagers)

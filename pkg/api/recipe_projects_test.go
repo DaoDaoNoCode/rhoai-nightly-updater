@@ -95,18 +95,20 @@ func TestRecipeRunStatus_ListsTheProjectsRecipesCreated(t *testing.T) {
 	origOwnership, origOwned, origRecipes := recipeOwnership, recipeOwnedProjects, recipes
 	recipes = &recipeRunner{}
 	t.Cleanup(func() { recipeOwnership, recipeOwnedProjects, recipes = origOwnership, origOwned, origRecipes })
-	recipeOwnership = func(*cluster.Client, *types.RecipeRun) (map[string]bool, *types.CleanupRequest) { return nil, nil }
+	recipeOwnership = func(_, _ *cluster.Client, _ *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
+		return nil, nil
+	}
 	recipeOwnedProjects = func(*cluster.Client) ([]types.RecipeOwnedProject, error) {
 		return []types.RecipeOwnedProject{{Name: "recipe-dev", UID: "u1", Recipe: "dev"}, {Name: "recipe-old", UID: "u2", Recipe: "old"}}, nil
 	}
-	st := recipeRunStatus(nil)
+	st := recipeRunStatus(nil, nil)
 	if len(st.Projects) != 2 || st.Projects[1].Name != "recipe-old" || st.ProjectsError != "" {
 		t.Fatalf("status %+v", st)
 	}
 	recipeOwnedProjects = func(*cluster.Client) ([]types.RecipeOwnedProject, error) {
 		return nil, errors.New("namespaces unreadable")
 	}
-	st = recipeRunStatus(nil)
+	st = recipeRunStatus(nil, nil)
 	if len(st.Projects) != 0 || !strings.Contains(st.ProjectsError, "namespaces unreadable") {
 		t.Fatalf("status %+v", st)
 	}

@@ -103,11 +103,11 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     // Dialog step list mirrors runner order and shows each title without adornment.
     const plan = within(screen.getByRole("dialog", { name: "Run recipe dev?" })).getByRole("list", { name: "Steps of this operation" });
     const titles = within(plan).getAllByRole("listitem").map((li) => li.textContent ?? "");
-    for (const [i, title] of ["MLflow samples", "Models as a Service", "What Models needs", "Model qwen3-1-7b", "Publish the model through MaaS",
+    for (const [i, title] of ["MLflow samples", "Models as a Service", "What Models needs", "Model Qwen3 1.7B (CPU, tool calling)", "Publish the model through MaaS",
       "What the playground needs", "Playground", "What the model registry needs", "Model registry", "Workbench", "Dashboard Dev (PR #4321)"].entries()) {
       expect(titles[8 + i]).toContain(title);
     }
-    expect(plan).toHaveTextContent("Model qwen3-1-7bChecked when the run gets there; if it runs, usually 5 minutes, up to 15 minutes.");
+    expect(plan).toHaveTextContent("Model Qwen3 1.7B (CPU, tool calling)Checked when the run gets there; if it runs, usually 5 minutes, up to 15 minutes.");
   });
 
   it("dependencies: the playground needs a model, publishing is part of a MaaS exposure, and a project is kept while features live in it", async () => {
@@ -157,7 +157,7 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     await settleApps();
     await settle();
     expect(screen.getByText("Every step of full is set up.")).toBeInTheDocument();
-    for (const title of ["Models as a Service", "Model qwen3-1-7b", "Publish the model through MaaS", "Playground", "Model registry", "Workbench", "Dashboard Dev (PR #4321)"]) {
+    for (const title of ["Models as a Service", "Model Qwen3 1.7B (CPU, tool calling)", "Publish the model through MaaS", "Playground", "Model registry", "Workbench", "Dashboard Dev (PR #4321)"]) {
       expect(screen.getAllByText(title).length).toBeGreaterThan(0);
     }
     // Controls load state from the recipe attached to the completed run.
@@ -177,7 +177,8 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     await settle();
     expect(streams).toHaveLength(1);
     expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([
-      { recipeProjects: ["recipe-full"], recipeProjectUIDs: { "recipe-full": "1a2b3c4d-uid" }, maasPlatform: true, components: ["kserve"] },
+      // The reviewed identities: the backend checks them again before it deletes the platform.
+      { recipeProjects: ["recipe-full"], recipeProjectUIDs: { "recipe-full": "1a2b3c4d-uid" }, maasPlatform: true, maasPlatformUid: "creds-uid", recipeRunId: "run2", components: ["kserve"] },
     ]);
     await act(async () => { streams[0].close(); });
     await settle();

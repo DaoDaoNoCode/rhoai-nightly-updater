@@ -42,8 +42,8 @@ func RecordRecipeActivity(c *Client, action, detail string, success bool) {
 }
 
 // RecipeOwnership is recipe.Ownership.
-func RecipeOwnership(c *Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
-	return recipe.Ownership(c, run)
+func RecipeOwnership(sa, u *Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
+	return recipe.Ownership(sa, u, run)
 }
 
 // RecipeOwnedProjects is recipe.OwnedProjects.

@@ -4,13 +4,16 @@
       "kserve"
     ],
     "maasPlatform": true,
+    "maasPlatformUid": "creds-uid",
     "modelRegistry": true,
+    "modelRegistryUid": "registry-uid",
     "recipeProjectUIDs": {
       "recipe-full": "1a2b3c4d-uid"
     },
     "recipeProjects": [
       "recipe-full"
-    ]
+    ],
+    "recipeRunId": "run2"
   },
   "projects": [
     {
@@ -112,7 +115,7 @@
         "finishedAt": "2026-11-20T15:02:00Z",
         "id": "rhoai",
         "maxSeconds": 900,
-        "message": "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).",
+        "message": "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it.",
         "startedAt": "2026-11-20T15:00:00Z",
         "status": "skipped",
         "title": "RHOAI",
@@ -225,10 +228,10 @@
         "finishedAt": "2026-11-20T15:35:00Z",
         "id": "model",
         "maxSeconds": 900,
-        "message": "Model qwen3-1-7b is set up.",
+        "message": "Model Qwen3 1.7B (CPU, tool calling) is set up.",
         "startedAt": "2026-11-20T15:33:00Z",
         "status": "success",
-        "title": "Model qwen3-1-7b",
+        "title": "Model Qwen3 1.7B (CPU, tool calling)",
         "typicalSeconds": 300
       },
       {

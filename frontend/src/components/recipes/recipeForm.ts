@@ -332,8 +332,10 @@ export function cleanupRequest(ready: CleanupRequest | undefined, chosen: Readon
     const confirm = Object.fromEntries(projects.filter((p) => (confirmed[p] ?? []).length > 0).map((p) => [p, confirmed[p]]));
     if (Object.keys(confirm).length > 0) req.confirmProjectContents = confirm;
   }
-  if (ready?.modelRegistry && chosen.has("model-registry")) req.modelRegistry = true;
-  if (ready?.maasPlatform && chosen.has("maas-platform")) req.maasPlatform = true;
+  // The reviewed identities go with them: the backend checks each again before it deletes it.
+  if (ready?.modelRegistry && chosen.has("model-registry")) Object.assign(req, { modelRegistry: true, modelRegistryUid: ready.modelRegistryUid ?? "" });
+  if (ready?.maasPlatform && chosen.has("maas-platform")) Object.assign(req, { maasPlatform: true, maasPlatformUid: ready.maasPlatformUid ?? "" });
+  if (req.modelRegistry || req.maasPlatform) req.recipeRunId = ready?.recipeRunId ?? "";
   if (ready?.components?.length && chosen.has("components")) req.components = ready.components;
   return req;
 }
