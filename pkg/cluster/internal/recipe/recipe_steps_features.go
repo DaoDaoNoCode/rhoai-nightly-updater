@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -52,6 +53,8 @@ var (
 	maasPublished    = serving.MaaSPublishedIn
 	playgroundStatus = features.GetPlaygroundStatus
 	runPlayground    = features.RunPlayground
+	maasPlayground   = features.MaaSPlaygroundModelsOf
+	userMaaSModels   = features.UserMaaSModels
 	registryStatus   = modelregistry.ReadStatus
 	registryRecord   = modelregistry.ReadRecord
 	runRegistry      = modelregistry.RunAnnotated
@@ -603,8 +606,129 @@ func runPlaygroundPrereq(c *kube.Client, s *State, emit func(types.UpdateStepEve
 	return runPrereqFor(c, s, StepPlaygroundPrereq, "playground", "", emit)
 }
 
-// checkPlayground: complete when a tool-provisioned project playground is ready;
-// blocked when a playground exists that the tool did not set up.
+// playgroundThroughMaaS says whether the recipe's model is offered only
+// through Models as a Service: the run publishes it there (the publish
+// step, which takes the model out of the dashboard's Gen AI assets as the
+// dashboard's MaaS checkbox does, serving maas_genai.go), or sets it up to
+// be reached through MaaS (exposure maas, the recipe's or the one the run
+// resolved), which publishes it as part of the model step. The dashboard's
+// gen-ai API then offers it to the playground only as a MaaS model, so the
+// playground step chooses that entry.
+func playgroundThroughMaaS(s *State) bool {
+	f := s.Recipe.Spec.Features
+	return f.Models.Enabled && ((f.MaaS.Enabled && f.MaaS.Publish) || kube.FirstNonEmpty(f.Models.Exposure, s.Exposure) == serving.ExposureMaaS)
+}
+
+// maasChoice is the Models as a Service entry the playground uses for the
+// recipe's model, every usable entry of it (ready, and offered by a
+// subscription), and a note that says which was chosen when several are
+// usable.
+type maasChoice struct {
+	Model  types.PlaygroundModel
+	Usable []types.PlaygroundModel
+	Note   string
+}
+
+// usableMaaS: the entry is ready and a MaaSSubscription offers it.
+func usableMaaS(m types.PlaygroundModel) bool { return m.Ready && len(m.Subscriptions) > 0 }
+
+// playgroundMaaSModel is the recipe's model as the playground lists it
+// among the Models as a Service: an entry of a MaaSModelRef that names the
+// model (never a name built here). Several MaaSModelRefs may name it: a
+// usable entry is preferred, the first by name when several are. It
+// returns why none can be used otherwise, with an error code.
+func playgroundMaaSModel(c *kube.Client, s *State) (maasChoice, string, string) {
+	project, name := projectOf(s), modelName(s.Recipe)
+	all, err := maasPlayground(c, project, name)
+	if err != nil {
+		return maasChoice{}, fmt.Sprintf("Cannot read how Models as a Service offers model %s in %s: %v. Nothing was changed.", name, project, err), kube.ErrorCodeOr(err, "prerequisites")
+	}
+	var usable []types.PlaygroundModel
+	for _, m := range all {
+		if usableMaaS(m) {
+			usable = append(usable, m)
+		}
+	}
+	if len(usable) > 0 {
+		// Only what the dashboard offers this user: maas-api lists the
+		// subscriptions the user's groups and name may use, and Set up
+		// checks the choice against that list.
+		offered, err := userMaaSModels(c, project)
+		if err != nil {
+			return maasChoice{}, fmt.Sprintf("Cannot list the Models as a Service models the dashboard offers you in %s: %v. Nothing was changed.", project, err), kube.ErrorCodeOr(err, "prerequisites")
+		}
+		var mine []types.PlaygroundModel
+		for _, m := range usable {
+			if slices.ContainsFunc(offered, func(o types.PlaygroundModel) bool { return o.Name == m.Name }) {
+				mine = append(mine, m)
+			}
+		}
+		if len(mine) == 0 {
+			var names []string
+			for _, m := range usable {
+				names = append(names, m.Name)
+			}
+			return maasChoice{}, fmt.Sprintf("Your Models as a Service subscriptions do not include model %s in %s (%s), so the dashboard would not set the playground up with it for you. Ask whoever manages Models as a Service to add you to a subscription that offers it (this tool's subscription %s offers the models this tool publishes; the Models as a Service tab shows who it is for), then Resume. Nothing was changed.", name, project, strings.Join(names, ", "), serving.MaaSSubscriptionName), "prerequisites"
+		}
+		usable = mine
+	}
+	// Of the entries the user may use, the one this tool's subscription
+	// offers first: this tool's Publish adds the model to it.
+	tool := func(m types.PlaygroundModel) bool {
+		return slices.Contains(m.Subscriptions, serving.MaaSSubscriptionName)
+	}
+	sort.SliceStable(usable, func(i, j int) bool {
+		if tool(usable[i]) != tool(usable[j]) {
+			return tool(usable[i])
+		}
+		return usable[i].Name < usable[j].Name
+	})
+	switch {
+	case len(all) == 0:
+		return maasChoice{}, fmt.Sprintf("Model %s in %s is not published through Models as a Service (no MaaSModelRef names it), and the dashboard offers it to the playground only that way. Publish it on the Models as a Service tab, then Resume. Nothing was changed.", name, project), "prerequisites"
+	case len(usable) == 0 && len(all) > 1:
+		var each []string
+		for _, m := range all {
+			why := "phase " + kube.FirstNonEmpty(m.Status, "not reported")
+			if len(m.Subscriptions) == 0 {
+				why += ", offered by no subscription"
+			}
+			each = append(each, fmt.Sprintf("%s (%s)", m.Name, why))
+		}
+		return maasChoice{}, fmt.Sprintf("Model %s in %s has %d Models as a Service entries, and none is both ready and offered by a subscription: %s. Resume once the Models as a Service tab shows the model published and ready. Nothing was changed.", name, project, len(all), strings.Join(each, ", ")), "model_not_ready"
+	case len(usable) == 0 && len(all[0].Subscriptions) == 0:
+		return maasChoice{}, fmt.Sprintf("No Models as a Service subscription offers model %s in %s, so the playground cannot use it. Publish it again on the Models as a Service tab, then Resume. Nothing was changed.", name, project), "model_not_ready"
+	case len(usable) == 0:
+		return maasChoice{}, fmt.Sprintf("Model %s in %s is not ready in Models as a Service yet (%s). Resume once the Models as a Service tab shows it ready. Nothing was changed.", name, project, kube.FirstNonEmpty(all[0].Status, "not ready")), "model_not_ready"
+	}
+	choice := maasChoice{Model: usable[0], Usable: usable}
+	if len(usable) > 1 {
+		var names []string
+		for _, m := range usable {
+			names = append(names, m.Name)
+		}
+		why := "the first by name"
+		if tool(usable[0]) {
+			why = "the one this tool's subscription " + serving.MaaSSubscriptionName + " offers"
+			if len(usable) > 1 && tool(usable[1]) {
+				why += ", the first by name"
+			}
+		}
+		choice.Note = fmt.Sprintf("Models as a Service offers model %s in %s under %d ready entries (%s); the playground uses %s, %s.", name, project, len(usable), strings.Join(names, ", "), usable[0].Name, why)
+	}
+	return choice, "", ""
+}
+
+// checkPlayground: complete when a playground this tool set up in the
+// project is ready; blocked when a playground exists that the tool did not
+// set up. Which models a ready playground offers does not depend on what
+// its Set up chose: the dashboard checks the chat models only at install,
+// and the playground lists, per request, the project's Gen AI models and
+// the Models as a Service models the caller may use (odh-dashboard
+// rhoai-3.6 packages/gen-ai/bff token_k8s_client.go generateLlamaStackConfig,
+// a remote::passthrough provider; api/genai_proxy_handler.go
+// GenAIProxyNSModelsHandler). So a ready playground offers the recipe's
+// MaaS model too, to users whose subscriptions include it.
 func checkPlayground(c *kube.Client, s *State) (Check, error) {
 	project := projectOf(s)
 	st, err := playgroundStatus(c, c, project)
@@ -625,10 +749,64 @@ func checkPlayground(c *kube.Client, s *State) (Check, error) {
 	return Check{}, nil
 }
 
-// runPlaygroundStep runs Playground tab Set up in the project with every ready
-// chat model included—the tab's default.
+// playgroundWarnings tells, before the run, that the playground reaches the
+// recipe's model through Models as a Service (playgroundThroughMaaS, as far
+// as the recipe says: an exposure the run resolves to maas is known only
+// when it runs).
+func playgroundWarnings(r types.EnvironmentRecipe) []types.RecipeWarning {
+	if !r.Spec.Features.Playground.Enabled || !playgroundThroughMaaS(&State{Recipe: r}) {
+		return nil
+	}
+	how := "the run publishes it there"
+	if r.Spec.Features.Models.Exposure == serving.ExposureMaaS {
+		how = "it is reached through Models as a Service"
+	}
+	return []types.RecipeWarning{{Kind: types.RecipeWarningAdvice, Message: fmt.Sprintf("%s is offered to the playground only through Models as a Service (%s), so the playground uses it from there: the dashboard sets the playground up with your sign-in, as when you choose a Models as a Service model in its Gen AI studio. Chatting with it needs a Models as a Service subscription to it. SECURITY.md (Which token is used where) says where your sign-in goes.", modelTitle(r), how)}}
+}
+
+// playgroundStarted reports whether this tool's playground already exists
+// in the project (not being deleted); a failed read is "no", and Set up
+// then checks again.
+func playgroundStarted(c *kube.Client, s *State) bool {
+	st, err := playgroundStatus(c, c, projectOf(s))
+	if err != nil {
+		return false
+	}
+	for _, item := range st.Items {
+		if item.Namespace == projectOf(s) && item.Deployed && item.ManagedByTool && !item.Terminating {
+			return true
+		}
+	}
+	return false
+}
+
+// runPlaygroundStep runs Playground tab Set up in the project: with every
+// ready chat model of the project (the tab's default), or, when the
+// recipe's model is offered only through Models as a Service, with that
+// model's Models as a Service entry, as when the user chooses it on the
+// tab (the dashboard then calls Models as a Service with the user's own
+// sign-in).
 func runPlaygroundStep(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
-	return runPlayground(c, types.PlaygroundRequest{Action: "setup", Project: projectOf(s)}, emit)
+	req := types.PlaygroundRequest{Action: "setup", Project: projectOf(s)}
+	// The model is chosen only for a new playground: Set up waits for one
+	// this tool set up already, whatever it was set up with.
+	if playgroundThroughMaaS(s) && !playgroundStarted(c, s) {
+		choice, problem, code := playgroundMaaSModel(c, s)
+		if problem != "" {
+			return fail(problem, code)
+		}
+		req.Models = []types.PlaygroundModelRef{{Name: choice.Model.Name, Source: "maas"}}
+		if choice.Note != "" {
+			emit(types.UpdateStepEvent{Step: StepPlayground, Status: "running", Message: choice.Note})
+			res, err := runPlayground(c, req, emit)
+			if res != nil {
+				res.Message = strings.TrimSpace(res.Message + " " + choice.Note)
+				res.Logs = append(res.Logs, "NOTE: "+choice.Note)
+			}
+			return res, err
+		}
+	}
+	return runPlayground(c, req, emit)
 }
 
 // --- Model registry ----------------------------------------------------------

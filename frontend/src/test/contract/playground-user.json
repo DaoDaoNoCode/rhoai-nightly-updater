@@ -5,6 +5,12 @@
       "deployed": true,
       "managedByTool": true,
       "message": "Ready",
+      "models": [
+        {
+          "name": "qwen25-05b-instruct",
+          "source": "namespace"
+        }
+      ],
       "name": "lsd-genai-playground",
       "namespace": "team-a",
       "phase": "Ready",

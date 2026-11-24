@@ -432,8 +432,10 @@ func (a GenAIAPI) listProjectModels(ns string, withMaaS bool) ([]types.Playgroun
 		var maas struct {
 			Data []maasModel `json:"data"`
 		}
+		// A Set up that chose a MaaS model needs this list: its error is
+		// the Set up's, not "no MaaS models".
 		if err := a.Call(http.MethodGet, "/maas/models", ns, nil, &maas); err != nil {
-			slog.Debug("no Models as a Service for the playground", "project", ns, "error", err)
+			return nil, fmt.Errorf("list your Models as a Service models: %w", err)
 		}
 		for _, m := range maas.Data {
 			if m.ID == "" {
@@ -483,6 +485,40 @@ const (
 // error, an API that is not served included, is no models: MaaS is
 // optional.
 func listMaaSPlaygroundModels(c *kube.Client) []types.PlaygroundModel {
+	refs, err := readMaaSPlaygroundModels(c)
+	if err != nil {
+		if kube.IsDecodeError(err) {
+			slog.Debug("cannot parse the MaaS model references", "error", err)
+		} else if !kube.IsK8sNotFound(err) {
+			slog.Debug("cannot list the MaaS models for the playground", "error", err)
+		}
+		return nil
+	}
+	var out []types.PlaygroundModel
+	for _, r := range refs {
+		// A reference no MaaSSubscription lists is offered to nobody: not
+		// shown as published.
+		if len(r.Model.Subscriptions) > 0 {
+			out = append(out, r.Model)
+		}
+	}
+	return out
+}
+
+// maasPlaygroundRef is a MaaSModelRef (Namespace, Name) that references
+// ModelKind ModelName, and the entry the playground lists for it.
+type maasPlaygroundRef struct {
+	Namespace, Name, ModelKind, ModelName string
+	Model                                 types.PlaygroundModel
+}
+
+// readMaaSPlaygroundModels reads every MaaSModelRef that is not being
+// deleted and has a name, as listMaaSPlaygroundModels describes, sorted by
+// that name; a reference no MaaSSubscription offers has no Subscriptions.
+// A failed read of the references or of the subscriptions is an error, so
+// a caller that must decide (the recipe) never takes it for "offered by
+// none"; listMaaSPlaygroundModels shows none then.
+func readMaaSPlaygroundModels(c *kube.Client) ([]maasPlaygroundRef, error) {
 	var items []struct {
 		Metadata kube.ObjectMeta `json:"metadata"`
 		Spec     struct {
@@ -497,46 +533,99 @@ func listMaaSPlaygroundModels(c *kube.Client) []types.PlaygroundModel {
 		} `json:"status"`
 	}
 	if err := c.ListInto("/apis/"+serving.MaaSAPI(c)+"/maasmodelrefs", &items); err != nil {
-		if kube.IsDecodeError(err) {
-			slog.Debug("cannot parse the MaaS model references", "error", err)
-			return nil
-		}
-		if !kube.IsK8sNotFound(err) {
-			slog.Debug("cannot list the MaaS models for the playground", "error", err)
-		}
-		return nil
+		return nil, err
 	}
-	subs := maasSubscriptionsByModel(c)
-	var out []types.PlaygroundModel
+	subs, err := maasSubscriptionsByModel(c)
+	if err != nil {
+		return nil, fmt.Errorf("list the MaaS subscriptions: %w", err)
+	}
+	var out []maasPlaygroundRef
 	for _, r := range items {
+		// maas-api's ID (models-as-a-service main, maas-api/internal/models
+		// maasmodelref.go maasModelRefToModel, checked 2026-11-24): for an
+		// LLMInferenceService, status.resolvedModelAlias, else
+		// metadata.name; for an ExternalModel, the alias, else the
+		// referenced ExternalModel's name.
 		name := r.Metadata.Name
 		if r.Spec.ModelRef.Kind == "ExternalModel" && r.Spec.ModelRef.Name != "" {
 			name = r.Spec.ModelRef.Name
 		}
 		name = kube.FirstNonEmpty(r.Status.ResolvedModelAlias, name)
 		offered := subs[r.Metadata.Namespace+"/"+r.Metadata.Name]
-		// A reference no MaaSSubscription lists is offered to nobody: not
-		// shown as published.
-		if name == "" || r.Metadata.Terminating() || len(offered) == 0 {
+		if name == "" || r.Metadata.Terminating() {
 			continue
 		}
 		var caps []string
 		if raw := r.Metadata.Annotations[maasCapabilitiesAnnotation]; raw != "" {
 			_ = json.Unmarshal([]byte(raw), &caps)
 		}
-		out = append(out, types.PlaygroundModel{
-			Name: name, DisplayName: r.Metadata.Annotations[maasDisplayNameAnnotation], Source: "maas",
-			Status: kube.FirstNonEmpty(r.Status.Phase, "Not ready"), Ready: r.Status.Phase == "Ready",
-			Chat: chatModel(caps, r.Metadata.Annotations[serving.GenAIUseCaseAnnotation], ""), Subscriptions: offered,
+		out = append(out, maasPlaygroundRef{
+			Namespace: r.Metadata.Namespace, Name: r.Metadata.Name, ModelKind: r.Spec.ModelRef.Kind, ModelName: r.Spec.ModelRef.Name,
+			Model: types.PlaygroundModel{
+				Name: name, DisplayName: r.Metadata.Annotations[maasDisplayNameAnnotation], Source: "maas",
+				Status: kube.FirstNonEmpty(r.Status.Phase, "Not ready"), Ready: r.Status.Phase == "Ready",
+				Chat: chatModel(caps, r.Metadata.Annotations[serving.GenAIUseCaseAnnotation], ""), Subscriptions: offered,
+			},
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out
+	sort.Slice(out, func(i, j int) bool { return out[i].Model.Name < out[j].Model.Name })
+	return out, nil
+}
+
+// MaaSPlaygroundModelsOf is every Models as a Service entry the
+// playground lists for model (an LLMInferenceService) in project: those of
+// the MaaSModelRefs in project that name it (spec.modelRef; the list is
+// cluster-wide because the namespaced list would be a new permission row,
+// and only project's references are kept), under the
+// name maas-api lists each by, so a caller never builds that name itself;
+// sorted by that name. None when no MaaSModelRef references the model; an
+// entry no MaaSSubscription offers has no Subscriptions. Read with c (the
+// Kubernetes API, no gen-ai call); an error is a list that failed (of the
+// references or the subscriptions), an API that is not served included.
+func MaaSPlaygroundModelsOf(c *kube.Client, project, model string) ([]types.PlaygroundModel, error) {
+	refs, err := readMaaSPlaygroundModels(c)
+	if err != nil {
+		return nil, err
+	}
+	var out []types.PlaygroundModel
+	for _, r := range refs {
+		if r.Namespace == project && r.ModelKind == "LLMInferenceService" && r.ModelName == model {
+			out = append(out, r.Model)
+		}
+	}
+	return out, nil
+}
+
+// UserMaaSModels is the Models as a Service models the dashboard offers
+// the signed-in user (c, the user's own client) in project: maas/models
+// with the user's token, the list a Set up with a MaaS model checks its
+// choice against (maas-api lists only the subscriptions the user's groups
+// and name may use). An error when it cannot be listed.
+func UserMaaSModels(c *kube.Client, project string) ([]types.PlaygroundModel, error) {
+	if !c.ActsAsUser() {
+		return nil, authz.ErrNotUserClient
+	}
+	api, problem, _ := PlaygroundAPI(c)
+	if problem != "" {
+		return nil, errors.New(problem)
+	}
+	models, err := api.listProjectModels(project, true)
+	if err != nil {
+		return nil, err
+	}
+	var out []types.PlaygroundModel
+	for _, m := range models {
+		if m.Source == "maas" {
+			out = append(out, m)
+		}
+	}
+	return out, nil
 }
 
 // maasSubscriptionsByModel names, by MaaSModelRef ("<namespace>/<name>"),
-// the MaaSSubscriptions that offer it (none when they cannot be read).
-func maasSubscriptionsByModel(c *kube.Client) map[string][]string {
+// the MaaSSubscriptions that offer it, or the error that kept them from
+// being read.
+func maasSubscriptionsByModel(c *kube.Client) (map[string][]string, error) {
 	out := map[string][]string{}
 	var items []struct {
 		Metadata kube.ObjectMeta `json:"metadata"`
@@ -547,8 +636,8 @@ func maasSubscriptionsByModel(c *kube.Client) map[string][]string {
 			} `json:"modelRefs"`
 		} `json:"spec"`
 	}
-	if c.ListInto(rhoai.NamespacedPath(serving.MaaSAPI(c), "maassubscriptions", serving.MaaSTenantNamespace, ""), &items) != nil {
-		return out
+	if err := c.ListInto(rhoai.NamespacedPath(serving.MaaSAPI(c), "maassubscriptions", serving.MaaSTenantNamespace, ""), &items); err != nil {
+		return nil, err
 	}
 	for _, s := range items {
 		for _, ref := range s.Spec.ModelRefs {
@@ -561,7 +650,7 @@ func maasSubscriptionsByModel(c *kube.Client) map[string][]string {
 	for k := range out {
 		sort.Strings(out[k])
 	}
-	return out
+	return out, nil
 }
 
 // --- what this tool requested --------------------------------------------------------
@@ -584,6 +673,13 @@ type PlaygroundRecord struct {
 	RequestedAt string `json:"requestedAt"`
 	By          string `json:"by,omitempty"`
 	UID         string `json:"uid,omitempty"`
+	// Models are the models the request asked the dashboard to set the
+	// playground up with (none in a record from before they were kept).
+	Models []types.PlaygroundModelRef `json:"models,omitempty"`
+}
+
+func (r PlaygroundRecord) equal(o PlaygroundRecord) bool {
+	return r.RequestedAt == o.RequestedAt && r.By == o.By && r.UID == o.UID && slices.Equal(r.Models, o.Models)
 }
 
 // playgroundServerName is the OGXServer the dashboard's install makes
@@ -702,7 +798,7 @@ func setPlaygroundRecord(c *kube.Client, project string, rec *PlaygroundRecord) 
 	}
 	old, has := records[project]
 	switch {
-	case rec == nil && !has, rec != nil && has && old == *rec:
+	case rec == nil && !has, rec != nil && has && old.equal(*rec):
 		return nil
 	case rec == nil:
 		delete(records, project)
@@ -978,7 +1074,11 @@ func GetPlaygroundStatus(sa, u *kube.Client, project string) (*types.PlaygroundS
 	for p, srv := range fo.servers {
 		_, recorded := records[p]
 		if srv != nil {
-			st.Items = append(st.Items, playgroundItem(p, srv, fo.owned[p]))
+			item := playgroundItem(p, srv, fo.owned[p])
+			if fo.owned[p] {
+				item.Models = records[p].Models
+			}
+			st.Items = append(st.Items, item)
 			seen[p] = true
 		} else if recorded {
 			st.Items = append(st.Items, playgroundItem(p, nil, true))
@@ -1240,6 +1340,10 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 		if srv.Phase == "Terminating" {
 			return stop(fmt.Sprintf("The playground in %s is being deleted. Wait until it is gone, then set it up again.", p.project), "terminating", "terminating")
 		}
+		// This tool's playground is there: Set up waits for it. Its models
+		// are not chosen again (the dashboard checks them only at install).
+		p.step("check", "success", fmt.Sprintf("The playground in %s exists; Set up waits for it.", p.project))
+		return nil, srv, nil
 	}
 	withMaaS := false
 	for _, w := range wanted {
@@ -1276,6 +1380,10 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 				}
 			}
 			switch {
+			case found == nil && w.Source == "maas" && p.api.AsUser:
+				// maas-api lists, for the user's token, only the models of
+				// the subscriptions the user's groups and name may use.
+				return stop(fmt.Sprintf("Your Models as a Service subscriptions do not include model %s, so the dashboard does not offer it to you in %s. Ask whoever manages Models as a Service to add you to a subscription that offers it (this tool's subscription %s offers the models this tool publishes; the Models as a Service tab shows who it is for), then set up again.", w.Name, p.project, serving.MaaSSubscriptionName), "validation", "maas model not offered")
 			case found == nil:
 				return stop(fmt.Sprintf("The dashboard does not offer model %s in %s. Reload the page and choose again.", w.Name, p.project), "validation", "unknown model")
 			case !found.Ready:
@@ -1298,6 +1406,9 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 	names := make([]string, len(chosen))
 	for i, m := range chosen {
 		names[i] = m.Name
+		if m.Source == "maas" {
+			names[i] = maasModelText(m)
+		}
 		if !m.Chat {
 			names[i] += fmt.Sprintf(" (embedding, %d dimensions)", m.EmbeddingDimension)
 		}
@@ -1308,6 +1419,15 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 	}
 	p.step("check", "success", msg)
 	return chosen, srv, nil
+}
+
+// maasModelText names a Models as a Service model for people: its display
+// name, with the name it is listed by.
+func maasModelText(m types.PlaygroundModel) string {
+	if m.DisplayName == "" || m.DisplayName == m.Name {
+		return m.Name + " (Models as a Service)"
+	}
+	return fmt.Sprintf("%s (Models as a Service, %s)", m.DisplayName, m.Name)
 }
 
 // owned says whether the live playground srv is the one this tool
@@ -1364,7 +1484,11 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 	if existing == nil {
 		// Recorded before the install, so a playground whose install
 		// outlives this process is still known as this tool's.
-		if err := setPlaygroundRecord(p.c, p.project, newPlaygroundRecord(p.c)); err != nil {
+		rec := newPlaygroundRecord(p.c)
+		for _, m := range models {
+			rec.Models = append(rec.Models, types.PlaygroundModelRef{Name: m.Name, Source: m.Source})
+		}
+		if err := setPlaygroundRecord(p.c, p.project, rec); err != nil {
 			return p.fail("install", fmt.Sprintf("Cannot record the request in this tool's namespace; nothing was set up: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "record")
 		}
 		body := map[string]any{"enable_guardrails": false, "enable_tracing": false, "vector_stores": []any{}}

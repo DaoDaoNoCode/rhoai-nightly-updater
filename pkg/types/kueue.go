@@ -25,7 +25,9 @@ type KueueStatus struct {
 	// Objects lists ResourceFlavor, ClusterQueue, and LocalQueue in that
 	// sequence, each with status even when the object is missing.
 	Objects []KueueObject `json:"objects"`
-	// Quota summarizes the ClusterQueue limits (e.g. "6 CPUs and 12Gi of memory").
+	// Quota summarizes the ClusterQueue's nominal quota (e.g. "6 CPUs and
+	// 19Gi of memory"): the live ClusterQueue's, or what Set up creates
+	// when there is none.
 	Quota string `json:"quota"`
 	// Label reflects the project's kueue.openshift.io/managed label.
 	Label *KueueLabel `json:"label,omitempty"`
@@ -75,6 +77,11 @@ type KueueObject struct {
 	// Message carries the Active condition message when the object is inactive.
 	Message     string `json:"message,omitempty"`
 	Terminating bool   `json:"terminating,omitempty"`
+	// Outdated (this tool's ClusterQueue only) says how an earlier
+	// version made it differently from this version's manifest (its
+	// quota); Set up keeps an object that is there, so Clean up and Set up
+	// make it again.
+	Outdated string `json:"outdated,omitempty"`
 }
 
 // KueueLabel describes the project's kueue.openshift.io/managed label.
@@ -102,6 +109,11 @@ type KueueSample struct {
 	// RayState is the Ray resource's native status (RayCluster status.state or
 	// RayJob status.jobDeploymentStatus).
 	RayState string `json:"rayState,omitempty"`
+	// Outdated (this tool's sample only) says how an earlier version made
+	// it differently from this version's manifest (its head and worker
+	// sizes); deleting and adding it again, or Clean up and Set up, makes
+	// it again.
+	Outdated string `json:"outdated,omitempty"`
 }
 
 // KueueOptIn holds the dashboard Kueue switch and the tool's Queue profile.

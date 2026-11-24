@@ -87,28 +87,40 @@ var Operator = envkit.OperatorSpec{ID: "kueue-operator", Title: "Red Hat build o
 	SubName: "kueue-operator", SubNames: []string{"kueue-operator"}, Namespace: "openshift-kueue-operator",
 	Source: "redhat-operators", Group: "openshift-kueue-operator", API: APIGroup, Controller: "kueue-controller-manager"}
 
-// Sample sizing: one head and one worker with requests matching limits (to be
-// validated in-cluster as the minimum viable footprint) plus the RayJob
-// submitter pod. Kueue models a RayCluster as a single Workload spanning its
-// pods and includes the RayJob submitter, so quota must cover the aggregate.
+// Sample sizing: the CodeFlare SDK's defaults for a Ray cluster
+// (project-codeflare/codeflare-sdk v0.40.1, commit 9e2bb55e407a,
+// src/codeflare_sdk/ray/cluster/config.py lines 325-337): head 1 CPU
+// request / 2 limit and memory 5 / 8, each worker 1 / 1 CPU and memory
+// 3 / 6. The SDK writes memory in decimal gigabytes (5G, config.py
+// L475-478); here it is rounded to GiB (5Gi, a little more). Live, a head with 1 CPU and 2Gi (requests =
+// limits) was OOMKilled about 11 s after start (2026-11-24). Requests stay
+// below limits as CodeFlare sets them. The samples set neither num-cpus nor
+// memory in rayStartParams, so KubeRay derives `ray start --num-cpus/--memory`
+// from these container limits (ray-project/kuberay ray-operator
+// controllers/ray/common/pod.go generateRayStartCommand), keeping Ray's view in
+// step with the pod size. The RayJob adds its submitter pod.
+var (
+	headSize      = podSize{CPUMilli: 1000, CPULimitMilli: 2000, MemoryMi: 5 * 1024, MemoryLimitMi: 8 * 1024}
+	workerSize    = podSize{CPUMilli: 1000, CPULimitMilli: 1000, MemoryMi: 3 * 1024, MemoryLimitMi: 6 * 1024}
+	submitterSize = podSize{CPUMilli: 500, CPULimitMilli: 500, MemoryMi: 1024, MemoryLimitMi: 1024}
+)
+
 const (
-	nodeCPUMilli      = 1000
-	nodeMemoryMi      = 2048
-	submitterCPUMilli = 500
-	submitterMemoryMi = 1024
 	// Default capacity on the opt-in hardware profile: one workload should fit
 	// alongside both samples.
 	profileCPUMilli = 1000
 	profileMemoryMi = 2048
 )
 
-// Quota derives the ClusterQueue nominal limits so both samples and one
-// opt-in-profile workload can run concurrently, rounded to whole CPUs and GiB.
-// Kueue tracks requests; free capacity on nodes is not validated (admission
+// Quota derives the ClusterQueue nominal limits so both samples (head plus one
+// worker each, and the RayJob's submitter) and one opt-in-profile workload can
+// run concurrently, rounded up to whole CPUs and GiB: 6 CPUs and 19Gi. Kueue
+// models a RayCluster as a single Workload spanning its pods and counts their
+// requests, not limits; free capacity on nodes is not validated (admission
 // accounting only).
 func Quota() (cpu, memory string) {
-	milli := 2*nodeCPUMilli + 2*nodeCPUMilli + submitterCPUMilli + profileCPUMilli
-	mi := 2*nodeMemoryMi + 2*nodeMemoryMi + submitterMemoryMi + profileMemoryMi
+	milli := 2*(headSize.CPUMilli+workerSize.CPUMilli) + submitterSize.CPUMilli + profileCPUMilli
+	mi := 2*(headSize.MemoryMi+workerSize.MemoryMi) + submitterSize.MemoryMi + profileMemoryMi
 	return fmt.Sprint((milli + 999) / 1000), fmt.Sprintf("%dGi", (mi+1023)/1024)
 }
 
@@ -187,14 +199,80 @@ func rayVersion(image string) string {
 	return rayVersionTag.FindString(image[i+1:])
 }
 
-func resources(milli, mi int) map[string]any {
-	r := map[string]any{"cpu": milliText(milli), "memory": miText(mi)}
-	return map[string]any{"requests": r, "limits": map[string]any{"cpu": r["cpu"], "memory": r["memory"]}}
+// podSize is a sample container's CPU (milli) and memory (MiB) requests
+// and limits: the manifests are built from it and a live sample is
+// compared with it.
+type podSize struct {
+	CPUMilli, CPULimitMilli, MemoryMi, MemoryLimitMi int
+}
+
+// quantities are the size as the manifests write it, by "requests" and
+// "limits", then "cpu" and "memory".
+func (z podSize) quantities() map[string]map[string]string {
+	return map[string]map[string]string{
+		"requests": {"cpu": milliText(z.CPUMilli), "memory": miText(z.MemoryMi)},
+		"limits":   {"cpu": milliText(z.CPULimitMilli), "memory": miText(z.MemoryLimitMi)},
+	}
+}
+
+// resources is the container's resources field.
+func (z podSize) resources() map[string]any {
+	out := map[string]any{}
+	for kind, values := range z.quantities() {
+		m := map[string]any{}
+		for name, v := range values {
+			m[name] = v
+		}
+		out[kind] = m
+	}
+	return out
+}
+
+// matches compares a live container's requests and limits with the size,
+// as amounts ("1000m" is "1"). A value that is missing differs; known is
+// false when a value cannot be read (nothing can be said then).
+func (z podSize) matches(requests, limits map[string]kube.Quantity) (same, known bool) {
+	unknown := false
+	for kind, values := range z.quantities() {
+		live := requests
+		if kind == "limits" {
+			live = limits
+		}
+		for name, want := range values {
+			got, ok := live[name]
+			if !ok || got == "" {
+				return false, true
+			}
+			eq, readable := kube.SameQuantity(string(got), want)
+			switch {
+			case !readable:
+				unknown = true
+			case !eq:
+				return false, true
+			}
+		}
+	}
+	return !unknown, !unknown
+}
+
+// text is "1 CPU and 5Gi requested, up to 2 CPUs and 8Gi".
+func (z podSize) text() string {
+	return fmt.Sprintf("%s requested, up to %s", sizeText(z.CPUMilli, z.MemoryMi), sizeText(z.CPULimitMilli, z.MemoryLimitMi))
+}
+
+// sizeText is "1 CPU and 5Gi" for milli CPUs and mebibytes.
+func sizeText(milli, mi int) string {
+	unit := "CPUs"
+	if milli == 1000 {
+		unit = "CPU"
+	}
+	return fmt.Sprintf("%s %s and %s", milliText(milli), unit, miText(mi))
 }
 
 // RayClusterSpec is the shared cluster shape for both samples: head plus one
 // worker on CPU only (mirrors odh-dashboard rhoai-3.6
-// packages/cypress/cypress/fixtures/resources/yaml/ray-job.yaml).
+// packages/cypress/cypress/fixtures/resources/yaml/ray-job.yaml), sized as the
+// CodeFlare SDK's defaults.
 func RayClusterSpec(image string) map[string]any {
 	spec := map[string]any{
 		"headGroupSpec": map[string]any{
@@ -206,7 +284,7 @@ func RayClusterSpec(image string) map[string]any {
 					map[string]any{"containerPort": 8265, "name": "dashboard"},
 					map[string]any{"containerPort": 10001, "name": "client"},
 				},
-				"resources": resources(nodeCPUMilli, nodeMemoryMi),
+				"resources": headSize.resources(),
 			}}}},
 		},
 		"workerGroupSpecs": []any{map[string]any{
@@ -214,7 +292,7 @@ func RayClusterSpec(image string) map[string]any {
 			"rayStartParams": map[string]any{},
 			"template": map[string]any{"spec": map[string]any{"containers": []any{map[string]any{
 				"name": "ray-worker", "image": image,
-				"resources": resources(nodeCPUMilli, nodeMemoryMi),
+				"resources": workerSize.resources(),
 			}}}},
 		}},
 	}
@@ -254,7 +332,7 @@ func RayJobManifest(project, image string) map[string]any {
 			"restartPolicy": "Never",
 			"containers": []any{map[string]any{
 				"name": "ray-job-submitter", "image": image,
-				"resources": resources(submitterCPUMilli, submitterMemoryMi),
+				"resources": submitterSize.resources(),
 			}},
 		}},
 		"rayClusterSpec": RayClusterSpec(image),

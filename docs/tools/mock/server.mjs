@@ -489,7 +489,7 @@ async function kueueStream(req, res) {
   const k = world.kueue;
   if (action === "setup") {
     const was = k.project ? k : F.kueueWorld("ready", { project });
-    send({ step: "check", status: "success", message: `Kueue is ready; queues for 6 CPUs and 11Gi of memory in ${project}.` });
+    send({ step: "check", status: "success", message: `Kueue is ready; queues for 6 CPUs and 19Gi of memory in ${project}.` });
     send({ step: "queues", status: "success", message: "ClusterQueue nightly-kueue and LocalQueue nightly-kueue are there." });
     send({ step: "project", status: "success", message: `Labelled ${project}: Kueue admits its workloads sent to a queue.` });
     await nextStep();
@@ -534,7 +534,10 @@ async function playgroundStream(req, res) {
     send({ step: "gone", status: "success", message: `The playground in ${project} is gone.` });
     message = `Playground deleted from ${project}: the dashboard removed its server, configuration and database. The project and its models stay.`;
   } else {
-    const names = models.length ? models.map((m) => m.name) : (world.playground.modelsByProject[project] ?? []).filter((m) => m.source === "namespace" && m.ready && (m.chat || m.embeddingDimension)).map((m) => m.name);
+    const listed = world.playground.modelsByProject[project] ?? [];
+    const chosen = models.length ? models.map((r) => listed.find((m) => m.name === r.name && m.source === r.source) ?? r) : listed.filter((m) => m.source === "namespace" && m.ready && (m.chat || m.embeddingDimension));
+    // As pkg/cluster checkPlayground names them (a MaaS model by its display name, with its name).
+    const names = chosen.map((m) => (m.source !== "maas" ? m.name : m.displayName && m.displayName !== m.name ? `${m.displayName} (Models as a Service, ${m.name})` : `${m.name} (Models as a Service)`));
     send({ step: "check", status: "running", message: "Checking what the playground needs..." });
     await nextStep();
     send({ step: "check", status: "success", message: `Ready to set up: ${project} with ${names.join(", ")}.` });
@@ -543,7 +546,8 @@ async function playgroundStream(req, res) {
     send({ step: "install", status: "success", message: `The dashboard is setting up the playground in ${project}.` });
     send({ step: "ready", status: "running", message: "The playground is starting (phase Initializing)..." });
     await nextStep();
-    world.playground.items = [...world.playground.items.filter((i) => i.namespace !== project), F.playgroundStates.ready(project)];
+    // The record keeps the models Set up asked for (pkg/cluster PlaygroundRecord.Models).
+    world.playground.items = [...world.playground.items.filter((i) => i.namespace !== project), { ...F.playgroundStates.ready(project), models: chosen.map((m) => ({ name: m.name, source: m.source })) }];
     send({ step: "ready", status: "success", message: `The playground in ${project} is ready.` });
     message = `The playground in ${project} is ready. Open it in the dashboard's Gen AI studio.`;
   }

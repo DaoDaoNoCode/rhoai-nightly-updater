@@ -51,7 +51,7 @@
     "setByTool": true
   },
   "project": "team-a",
-  "quota": "6 CPUs and 11Gi of memory",
+  "quota": "6 CPUs and 19Gi of memory",
   "samples": [
     {
       "image": "quay.io/modh/ray:2.47.1-py311-cu121",

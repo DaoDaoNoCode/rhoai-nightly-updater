@@ -31,11 +31,13 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   (default channel, all namespaces), then set the DataScienceCluster's
   `kueue` to `Unmanaged` and wait for RHOAI's Kueue CR `cluster`. Set up
   creates ResourceFlavor `nightly-kueue-cpu`, a non-preemptive ClusterQueue
-  `nightly-kueue` (6 CPUs, 11 GiB) for the chosen project only, LocalQueue
+  `nightly-kueue` (6 CPUs, 19 GiB) for the chosen project only, LocalQueue
   `nightly-kueue` (never `default`) and the project label
   `kueue.openshift.io/managed=true`, plus optional RayCluster and RayJob
-  samples (image editable, default `quay.io/modh/ray:2.47.1-py311-cu121`)
-  for the dashboard's Distributed workloads and Infrastructure pages. An
+  samples (image editable, default `quay.io/modh/ray:2.47.1-py311-cu121`;
+  sized as the CodeFlare SDK's defaults: head 1 CPU / 5 GiB requested, up to
+  2 CPUs / 8 GiB, one worker 1 CPU / 3 GiB, up to 6 GiB) for the dashboard's
+  Distributed workloads and Infrastructure pages. An
   opt-in, with its own confirmation, sets the dashboard's `disableKueue` to
   false and adds a Queue hardware profile. Refused when Kueue does not
   serve `v1beta2`, runs outside OLM, or has `labelPolicy: None`. Clean up
@@ -311,6 +313,31 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   registry uses `openshift-config/pull-secret`); the gitops profile reads no
   Secret, so it documents an `oc` command instead
   ([GITOPS](docs/GITOPS.md#workbench-images-on-rosa-hcp)).
+
+- **A recipe's playground works when its model is offered only through
+  Models as a Service.** Publishing the model through MaaS (or reaching it
+  through MaaS) takes it out of the dashboard's Gen AI assets, so the
+  playground offers it only as a Models as a Service model, and the
+  Playground step stopped with "has no ready chat model". The step now sets
+  the playground up with that model's Models as a Service entry (found from
+  its MaaSModelRef), and fails with the reason when it is missing or not
+  ready; a ready playground of this tool counts as done, since the
+  playground offers each user's Models as a Service models per request.
+  The recipe form and the review say so. The Playground tab's
+  set-up confirmation names models by their display names, and the tab says
+  which models Set up chose (the tool now records them) and that the
+  playground offers the project's own ready models and the Models as a
+  Service models each user's subscriptions allow.
+
+- **The Ray samples' head no longer runs out of memory.** In the 5.0.0
+  pre-releases the samples' head and worker had 1 CPU and 2 GiB (requests
+  equal to limits), and the head was OOMKilled seconds after it started. They
+  now use the CodeFlare SDK's defaults (above), and the ClusterQueue quota
+  grows from 6 CPUs / 11 GiB to 6 CPUs / 19 GiB to hold them. Set up keeps
+  what is there, so the Distributed workloads tab now shows the live
+  ClusterQueue's quota and flags a queue or sample an earlier version made
+  with other sizes, and a recipe no longer counts those as set up: Clean
+  up, then Set up.
 
 - **Deleting a pipeline server no longer breaks the workbenches that use its
   dashboard Connection.** A workbench a user attached

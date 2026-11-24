@@ -38,6 +38,8 @@ export function kueueAnything(k: KueueStatus | null): boolean {
 export function sampleStatus(s: KueueSample | undefined): EnvStatus {
   if (!s?.present) return "not-set-up";
   if (s.terminating) return "deleting";
+  // Made by an earlier version with other sizes (the tab says what to do).
+  if (s.outdated) return "needs-attention";
   switch (s.state) {
     case "Running":
     case "Admitted":
@@ -62,6 +64,7 @@ export function queuesStatus(k: KueueStatus | null, busy: Busy): EnvStatus {
   if (k.objects.some((o) => o.terminating)) return "deleting";
   if (!kueueSetUp(k)) return k.objects.some((o) => o.present) ? "needs-attention" : "not-set-up";
   if (k.objects.some((o) => o.kind !== "ResourceFlavor" && !o.active)) return "setting-up";
+  if (k.objects.some((o) => o.outdated)) return "needs-attention";
   // Ready only while Kueue runs (KueueReady, the Kueue CR Available, v1beta2), nothing refuses, and the project has the label.
   if (!k.instance.ready || !k.instance.v1beta2 || k.refusal || !k.label?.present) return "needs-attention";
   return "ready";

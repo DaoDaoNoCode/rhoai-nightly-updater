@@ -569,6 +569,13 @@ export const scenarios = {
   "env-kueue-none": () => {},
   "env-kueue-operator-missing": (w) => { w.kueue = F.kueueWorld("operator-missing"); w.prereq = { ...(w.prereq ?? {}), kueue: "missing" }; },
   "env-kueue-ready": (w) => { w.kueue = F.kueueWorld("ready", { samples: true }); },
+  // Made by an earlier version: the 11Gi queue and a 2Gi RayCluster sample (Set up keeps what is there).
+  "env-kueue-outdated": (w) => {
+    w.kueue = F.kueueWorld("ready", { samples: true });
+    w.kueue.quota = "6 CPUs and 11Gi of memory";
+    w.kueue.objects = w.kueue.objects.map((o) => (o.kind === "ClusterQueue" ? { ...o, outdated: "its quota is 6 CPUs and 11Gi of memory; this version sets 6 CPUs and 19Gi of memory" } : o));
+    w.kueue.samples = w.kueue.samples.map((s) => (s.kind === "raycluster" ? { ...s, state: "Admitted", rayState: "failed", outdated: "its head and worker have other CPU and memory than this version sets (head 1 CPU and 5Gi requested, up to 2 CPUs and 8Gi; worker 1 CPU and 3Gi requested, up to 1 CPU and 6Gi)" } : s));
+  },
   "env-kueue-optin": (w) => { w.kueue = F.kueueWorld("ready", { samples: true, optIn: true }); },
   "env-workbench-none": () => {},
   "env-workbench-running": (w) => { w.workbench.items = [F.workbenchItem("dev-project", "running")]; },
@@ -584,6 +591,12 @@ export const scenarios = {
   },
   "env-playground-starting": (w) => { scenarios["env-models-ready"](w); w.playground.items = [F.playgroundStates.starting()]; },
   "env-playground-ready": (w) => { scenarios["env-models-ready"](w); w.playground.items = [F.playgroundStates.ready()]; },
+  // Set up with the published Models as a Service model (recorded), and a MaaS row the user's subscriptions may allow.
+  "env-playground-ready-maas": (w) => {
+    scenarios["env-models-ready"](w);
+    w.playground.modelsByProject["dev-project"] = [F.playgroundModels.qwen, F.playgroundModels.opt];
+    w.playground.items = [F.playgroundStates.ready("dev-project", { models: [{ name: F.playgroundModels.opt.name, source: "maas" }] })];
+  },
   "env-playground-foreign": (w) => { scenarios["env-models-ready"](w); w.playground.items = [F.playgroundStates.foreign()]; },
   "env-playground-failed": (w) => { scenarios["env-models-ready"](w); w.playground.items = [F.playgroundStates.failed()]; },
   "env-playground-api-differs": (w) => { scenarios["env-models-ready"](w); w.playground.apiProblem = F.PLAYGROUND_API_DIFFERS; w.playground.apiCode = "api_missing"; },

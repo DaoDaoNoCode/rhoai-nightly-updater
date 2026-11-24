@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -355,6 +356,16 @@ func TestPlayground_SetupWithTheUsersTokenAddsAMaaSModel(t *testing.T) {
 	if want := `{"enable_guardrails":false,"enable_tracing":false,"models":[{"model_name":"qwen25-05b-instruct","model_source_type":"namespace","model_type":"llm"},{"model_name":"gpt-oss-20b","model_source_type":"maas","model_type":"llm"}],"vector_stores":[]}`; string(body) != want {
 		t.Errorf("install body\n got %s\nwant %s", body, want)
 	}
+	// The record keeps the models the request asked for, and the check
+	// names the MaaS model as Models as a Service.
+	if got := e.records(t)["proj"].Models; fmt.Sprint(got) != fmt.Sprint(req.Models) {
+		t.Errorf("recorded models %+v", got)
+	}
+	if !slices.ContainsFunc(steps, func(s UpdateStepEvent) bool {
+		return s.Step == "check" && strings.Contains(s.Message, "with qwen25-05b-instruct, GPT OSS 20B (Models as a Service, gpt-oss-20b).")
+	}) {
+		t.Errorf("check step %+v", steps)
+	}
 	for _, a := range e.g.auth {
 		if a != "Bearer "+userToken {
 			t.Fatalf("authorization %q", a)
@@ -549,6 +560,27 @@ func TestPlayground_SetupRecordsTheServerUID(t *testing.T) {
 	}
 	if got := e.records(t)["proj"].UID; got != "uid-installed-1" {
 		t.Errorf("recorded UID %q", got)
+	}
+}
+
+// Set up of this tool's playground that is there waits for it and chooses
+// no models again (the dashboard checks them only at install): a model the
+// client could not add now does not stop it, and nothing is installed.
+func TestPlayground_SetupWaitsForItsOwnPlaygroundWithoutChoosingModels(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	if res, _ := e.run(t, setup()); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	again := setup()
+	again.Models = []types.PlaygroundModelRef{{Name: "not-offered", Source: "maas"}}
+	res, steps := e.run(t, again)
+	if !res.Success || len(e.g.installs) != 1 {
+		t.Fatalf("got %+v, installs %d", res, len(e.g.installs))
+	}
+	if !slices.ContainsFunc(steps, func(s UpdateStepEvent) bool {
+		return s.Step == "check" && s.Message == "The playground in proj exists; Set up waits for it."
+	}) {
+		t.Errorf("steps %+v", steps)
 	}
 }
 
@@ -913,6 +945,111 @@ func TestPlayground_StatusListsMaaSModelsFromTheirModelRefs(t *testing.T) {
 		if !strings.Contains(p, "/aaa/models") && !strings.Contains(p, "/lsd/status") {
 			t.Errorf("gen-ai call %s", p)
 		}
+	}
+}
+
+// With the user's token, a MaaS model the user's subscriptions do not
+// include is explained (maas-api lists only those), and a maas/models
+// answer that fails is the Set up's error, not "no MaaS models".
+func TestPlayground_SetupWithAMaaSModelTheUserCannotUse(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	uc := e.userPlaygroundClient("sha256~user-own-token")
+	req := setup()
+	req.Models = []types.PlaygroundModelRef{{Name: "publishers/team/models/elsewhere", Source: "maas"}}
+	res, err := RunPlayground(uc, req, func(UpdateStepEvent) {})
+	if err != nil || res.Success || !strings.Contains(res.Message, "Your Models as a Service subscriptions do not include model publishers/team/models/elsewhere") || strings.Contains(res.Message, "Reload the page") {
+		t.Fatalf("not offered: %+v %v", res, err)
+	}
+	e.g.maasModels = "not json"
+	res, err = RunPlayground(uc, req, func(UpdateStepEvent) {})
+	if err != nil || res.Success || strings.Contains(res.Message, "do not include") {
+		t.Fatalf("maas/models fails: %+v %v", res, err)
+	}
+	if len(e.g.installs) != 0 {
+		t.Fatalf("installed: %v", e.g.installs)
+	}
+}
+
+// UserMaaSModels lists, with the user's own token only, the MaaS models
+// the dashboard offers that user (maas/models); a failed answer is an
+// error.
+func TestPlayground_UserMaaSModels(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	uc := e.userPlaygroundClient("sha256~another-user-token")
+	ms, err := features.UserMaaSModels(uc, "proj")
+	if err != nil || len(ms) == 0 || !slices.ContainsFunc(ms, func(m types.PlaygroundModel) bool { return m.Name == "gpt-oss-20b" }) {
+		t.Fatalf("user's MaaS models: %+v %v", ms, err)
+	}
+	for _, m := range ms {
+		if m.Source != "maas" {
+			t.Errorf("not a MaaS model: %+v", m)
+		}
+	}
+	if _, err := features.UserMaaSModels(e.c, "proj"); err == nil {
+		t.Error("the ServiceAccount's client listed MaaS models")
+	}
+	e.g.maasModels = "not json"
+	if _, err := features.UserMaaSModels(uc, "proj"); err == nil {
+		t.Error("a failed maas/models answer is no error")
+	}
+}
+
+// The status shows, for this tool's playground, the models its Set up
+// asked for (from the record); a playground that is not this tool's shows
+// none.
+func TestPlayground_StatusShowsTheRecordedModels(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	if res, _ := e.run(t, setup()); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	features.PurgePlaygroundStatus()
+	st, err := GetPlaygroundStatus(e.c, e.reader, "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Items) != 1 || !st.Items[0].ManagedByTool || fmt.Sprint(st.Items[0].Models) != fmt.Sprint([]types.PlaygroundModelRef{{Name: "qwen25-05b-instruct", Source: "namespace"}}) {
+		t.Fatalf("items %+v", st.Items)
+	}
+}
+
+// MaaSPlaygroundModelsOf finds the MaaS entries of a model by the
+// MaaSModelRefs that name it (in the model's project), under the names the
+// playground lists, sorted by name: not by a name built from the model's.
+func TestPlayground_MaaSPlaygroundModelsOf(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	e.putMaaSModels()
+	// A second reference to gpt-oss-20b, pending and offered by none.
+	e.k8s.putJSON("/apis/maas.opendatahub.io/v1alpha1/namespaces/team/maasmodelrefs/a-gpt", `{"spec":{"modelRef":{"kind":"LLMInferenceService","name":"gpt-oss-20b"}},"status":{"phase":"Pending"}}`)
+	cases := []struct{ project, model, want string }{
+		{"team", "gpt-oss-20b", "a-gpt ready=false [] maas; gpt-oss-20b ready=true [rhoai-nightly-updater-subscription team-sub] maas"},
+		{"team", "unoffered", "unoffered ready=true [] maas"},
+		{"proj", "gpt-oss-20b", ""},
+		// An ExternalModel's reference is not an LLMInferenceService's.
+		{"llm", "opt-125m", ""},
+	}
+	for _, tc := range cases {
+		ms, err := features.MaaSPlaygroundModelsOf(e.c, tc.project, tc.model)
+		var got []string
+		for _, m := range ms {
+			got = append(got, fmt.Sprintf("%s ready=%t %v %s", m.Name, m.Ready, m.Subscriptions, m.Source))
+		}
+		if err != nil || strings.Join(got, "; ") != tc.want {
+			t.Errorf("%s/%s: %v %v", tc.project, tc.model, got, err)
+		}
+	}
+	// Subscriptions that cannot be read are an error, never "offered by none".
+	e.k8s.fail["GET /apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maassubscriptions"] = http.StatusForbidden
+	if ms, err := features.MaaSPlaygroundModelsOf(e.c, "team", "gpt-oss-20b"); err == nil || len(ms) != 0 || !strings.Contains(err.Error(), "list the MaaS subscriptions") {
+		t.Errorf("subscriptions that cannot be read: %v %v", ms, err)
+	}
+	// The status still lists the project's own models (MaaS is optional there).
+	features.PurgePlaygroundStatus()
+	if st, err := GetPlaygroundStatus(e.c, e.reader, "proj"); err != nil || len(st.Models) != 1 || st.Models[0].Source != "namespace" {
+		t.Errorf("status with unreadable subscriptions: %+v %v", st, err)
+	}
+	e.k8s.fail["GET /apis/maas.opendatahub.io/v1alpha1/maasmodelrefs"] = http.StatusForbidden
+	if ms, err := features.MaaSPlaygroundModelsOf(e.c, "team", "gpt-oss-20b"); err == nil || len(ms) != 0 {
+		t.Errorf("a list that fails: %v %v", ms, err)
 	}
 }
 

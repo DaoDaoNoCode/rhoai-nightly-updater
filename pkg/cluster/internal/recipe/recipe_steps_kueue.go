@@ -82,11 +82,36 @@ func checkKueue(c *kube.Client, s *State) (Check, error) {
 	if (k.RayCluster || k.RayJob) && st.RayBlocked != nil {
 		return Check{Blocked: fmt.Sprintf("The samples need the DataScienceCluster's ray component, which is off (%s). The recipe does not turn it on: turn ray on on the Components page, or leave the samples out.", strings.TrimSuffix(st.RayBlocked.Reason, ".")), Fix: fixAt(types.RecipeFixFeatureBlocked, pageComponents)}, nil
 	}
+	if why := kueueOutdated(st, k, project); why != "" {
+		return blockedAt(why), nil
+	}
 	if !kueueSetUp(st, k) {
 		return Check{}, nil
 	}
 	_ = markKueueCreated(c, s) // a read that fails marks nothing
 	return Check{Done: true, Reason: fmt.Sprintf("Distributed workloads are in %s.", project)}, nil
+}
+
+// kueueOutdated says why the recipe does not count this tool's queue or a
+// sample it asks for as set up: an earlier version made it with other
+// sizes, and Set up keeps what is there. "" when none is.
+func kueueOutdated(st *types.KueueStatus, k types.RecipeKueue, project string) string {
+	what := ""
+	for _, o := range st.Objects {
+		if o.Present && o.ManagedByTool && o.Outdated != "" {
+			what = fmt.Sprintf("%s %s (%s)", o.Kind, o.Name, o.Outdated)
+		}
+	}
+	want := map[string]bool{kueue.SampleRayCluster: k.RayCluster, kueue.SampleRayJob: k.RayJob}
+	for _, sm := range st.Samples {
+		if what == "" && want[sm.Kind] && sm.Present && sm.ManagedByTool && sm.Outdated != "" {
+			what = fmt.Sprintf("the sample %s (%s)", sm.Name, sm.Outdated)
+		}
+	}
+	if what == "" {
+		return ""
+	}
+	return fmt.Sprintf("An earlier version of this tool made %s in %s, and Set up keeps what is there, so the recipe does not count it as set up. Clean up on the Distributed workloads tab, then Resume. Nothing was changed.", what, project)
 }
 
 // kueueBlocked returns why Set up on the tab rejects the project, or "".

@@ -93,7 +93,7 @@ func TestKueueManifests(t *testing.T) {
 	assertJSONEqual(t, kueue.ClusterQueueManifest("proj"), `{"apiVersion":"kueue.x-k8s.io/v1beta2","kind":"ClusterQueue",
 		"metadata":{"name":"nightly-kueue","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}},
 		"spec":{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"proj"}},
-			"resourceGroups":[{"coveredResources":["cpu","memory"],"flavors":[{"name":"nightly-kueue-cpu","resources":[{"name":"cpu","nominalQuota":"6"},{"name":"memory","nominalQuota":"11Gi"}]}]}]}}`)
+			"resourceGroups":[{"coveredResources":["cpu","memory"],"flavors":[{"name":"nightly-kueue-cpu","resources":[{"name":"cpu","nominalQuota":"6"},{"name":"memory","nominalQuota":"19Gi"}]}]}]}}`)
 	assertJSONEqual(t, kueue.FlavorManifest(), `{"apiVersion":"kueue.x-k8s.io/v1beta2","kind":"ResourceFlavor","metadata":{"name":"nightly-kueue-cpu","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}},"spec":{}}`)
 	// Combined sample requests plus the profile default must fit under the quota.
 	sum := func(obj map[string]any) (cpu, memMi float64) {
@@ -124,8 +124,18 @@ func TestKueueManifests(t *testing.T) {
 	}
 	c1, m1 := sum(kueue.RayClusterManifest("proj", kueue.DefaultRayImage))
 	c2, m2 := sum(kueue.RayJobManifest("proj", kueue.DefaultRayImage))
-	if c1+c2+1 > 6 || m1+m2+2048 > 11*1024 || c1 != 2 || c2 != 2.5 {
-		t.Fatalf("quota 6 CPUs / 11Gi does not hold the samples: %v+%v CPU, %v+%v Mi", c1, c2, m1, m2)
+	if c1+c2+1 > 6 || m1+m2+2048 > 19*1024 || c1 != 2 || c2 != 2.5 || m1 != 8*1024 || m2 != 9*1024 {
+		t.Fatalf("quota 6 CPUs / 19Gi does not hold the samples: %v+%v CPU, %v+%v Mi", c1, c2, m1, m2)
+	}
+	// Head and worker sized as the CodeFlare SDK's defaults, requests below
+	// limits (a 2Gi head was OOMKilled live).
+	spec := kueue.RayClusterSpec(kueue.DefaultRayImage)
+	head := spec["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)["resources"]
+	worker := spec["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)["resources"]
+	assertJSONEqual(t, head, `{"requests":{"cpu":"1","memory":"5Gi"},"limits":{"cpu":"2","memory":"8Gi"}}`)
+	assertJSONEqual(t, worker, `{"requests":{"cpu":"1","memory":"3Gi"},"limits":{"cpu":"1","memory":"6Gi"}}`)
+	if cpu, memory := kueue.Quota(); cpu != "6" || memory != "19Gi" {
+		t.Fatalf("Quota() = %s, %s; want 6, 19Gi", cpu, memory)
 	}
 	rc, rj := kueue.RayClusterManifest("proj", "img:2.47.1-x"), kueue.RayJobManifest("proj", "img:2.47.1-x")
 	a, _ := json.Marshal(rc["spec"])
@@ -497,6 +507,42 @@ func TestKueueStatus(t *testing.T) {
 	}
 	if s := st.Samples[0]; !s.Present || !s.ManagedByTool || s.State != kueue.StateInadmissible || s.Message != "insufficient quota" || st.Samples[1].Present {
 		t.Fatalf("samples %+v", st.Samples)
+	}
+	// The quota is the live ClusterQueue's; what this version made is not outdated.
+	if st.Quota != "6 CPUs and 19Gi of memory" || st.Objects[1].Outdated != "" || st.Samples[0].Outdated != "" {
+		t.Fatalf("quota %q, queue %+v, sample %+v", st.Quota, st.Objects[1], st.Samples[0])
+	}
+	// The same amounts in other forms (custom resources keep what was
+	// written: numbers, 1000m, bytes) are not outdated; an earlier
+	// version's queue (11Gi) and sample (2Gi head, requests = limits) are.
+	cqPath, rcPath := kqAPI+"/clusterqueues/"+kueue.ClusterQueueName, kqRayCs+"/"+kueue.RayClusterName
+	setSizes := func(cpuQuota any, memoryQuota string, headRes map[string]any) {
+		t.Helper()
+		cq := f.get(cqPath)
+		res := cq["spec"].(map[string]any)["resourceGroups"].([]any)[0].(map[string]any)["flavors"].([]any)[0].(map[string]any)["resources"].([]any)
+		res[0].(map[string]any)["nominalQuota"], res[1].(map[string]any)["nominalQuota"] = cpuQuota, memoryQuota
+		rc := f.get(rcPath)
+		rc["spec"].(map[string]any)["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)["resources"] = headRes
+		for path, obj := range map[string]map[string]any{cqPath: cq, rcPath: rc} {
+			raw, _ := json.Marshal(obj)
+			f.putJSON(path, string(raw))
+		}
+	}
+	setSizes(6, "19456Mi", map[string]any{"requests": map[string]any{"cpu": 1, "memory": "5368709120"}, "limits": map[string]any{"cpu": "2000m", "memory": "8Gi"}})
+	st, err = GetKueueStatus(u, u, "proj")
+	if err != nil || st.Quota != "6 CPUs and 19456Mi of memory" || st.Objects[1].Outdated != "" || st.Samples[0].Outdated != "" || !st.Samples[0].Present {
+		t.Fatalf("equivalent forms: %v quota %q, queue %+v, sample %+v", err, st.Quota, st.Objects[1], st.Samples[0])
+	}
+	// A value that cannot be read is not called outdated.
+	setSizes("lots", "19Gi", map[string]any{"requests": map[string]any{"cpu": "one", "memory": "5Gi"}, "limits": map[string]any{"cpu": "2", "memory": "8Gi"}})
+	if st, _ = GetKueueStatus(u, u, "proj"); st.Objects[1].Outdated != "" || st.Samples[0].Outdated != "" {
+		t.Fatalf("unreadable: queue %+v, sample %+v", st.Objects[1], st.Samples[0])
+	}
+	setSizes("6", "11Gi", map[string]any{"requests": map[string]any{"cpu": "1", "memory": "2Gi"}, "limits": map[string]any{"cpu": "1", "memory": "2Gi"}})
+	st, _ = GetKueueStatus(u, u, "proj")
+	if st.Quota != "6 CPUs and 11Gi of memory" || st.Objects[1].Outdated != "its quota is 6 CPUs and 11Gi of memory; this version sets 6 CPUs and 19Gi of memory" ||
+		st.Samples[0].Outdated != "its head and worker have other CPU and memory than this version sets (head 1 CPU and 5Gi requested, up to 2 CPUs and 8Gi; worker 1 CPU and 3Gi requested, up to 1 CPU and 6Gi)" {
+		t.Fatalf("outdated: quota %q, queue %+v, sample %+v", st.Quota, st.Objects[1], st.Samples[0])
 	}
 	// One Ray state for the RayJob: its job's, in words.
 	f.putJSON(kqRayJobs+"/"+kueue.RayJobName, `{"metadata":{"name":"nightly-rayjob","namespace":"proj"},"status":{"jobDeploymentStatus":"Running","jobStatus":"RUNNING"}}`)

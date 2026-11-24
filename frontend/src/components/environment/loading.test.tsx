@@ -35,7 +35,7 @@ const maas: MaaSStatus = {
   parts: [{ id: "dsc", title: "MaaS in the DataScienceCluster", state: "missing" }],
   subscription: "rhoai-nightly-updater-subscription",
 };
-const kueueNone = { instance: { found: true, available: true, v1beta2: true, ready: true, kueueReady: "True" }, objects: [], quota: "6 CPUs and 11Gi of memory", samples: [], optIn: { profile: { kind: "HardwareProfile", name: "nightly-kueue-cpu", present: false } }, defaultRayImage: "quay.io/modh/ray:2.47.1-py311-cu121" };
+const kueueNone = { instance: { found: true, available: true, v1beta2: true, ready: true, kueueReady: "True" }, objects: [], quota: "6 CPUs and 19Gi of memory", samples: [], optIn: { profile: { kind: "HardwareProfile", name: "nightly-kueue-cpu", present: false } }, defaultRayImage: "quay.io/modh/ray:2.47.1-py311-cu121" };
 const registryAbsent: ModelRegistryStatus = { name: "nightly-registry", namespace: "rhoai-model-registries", component: "aiHub", state: "absent" };
 const qwen: PlaygroundModel = { name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", source: "namespace", status: "Running", ready: true, chat: true };
 

@@ -71,6 +71,7 @@ const objectText = (o: KueueObject | undefined) => {
   if (!o?.present) return "Not created yet";
   if (o.foreign) return "Exists, not created by this tool";
   if (o.terminating) return "Being deleted";
+  if (o.outdated) return "Made by an earlier version of this tool";
   if (o.kind !== "ResourceFlavor" && !o.active) return `Not active yet${o.message ? `: ${o.message}` : ""}`;
   return "Created by this tool";
 };
@@ -163,6 +164,11 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
             {k && k.instance.found && (
               <Content component="p">{k.instance.ready ? "Kueue is running." : `Kueue is not running yet${k.instance.message ? `: ${k.instance.message}` : ""}.`}</Content>
             )}
+            {k?.objects.map((o) => o.outdated && (
+              <Alert key={o.kind} variant="warning" isInline component="p" title={`${o.kind} ${o.name} was made by an earlier version of this tool`}>
+                {`${o.outdated[0].toUpperCase()}${o.outdated.slice(1)}. Set up keeps it as it is: Clean up, then Set up again.`}
+              </Alert>
+            ))}
             {k && (setUp || k.objects.some((o) => o.present)) && <Objects k={k} />}
           </PartItem>
           {(["raycluster", "rayjob"] as const).map((kind) => {
@@ -173,12 +179,17 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
             const canAdd = setUp && !s?.present && !readOnly && !k?.rayBlocked && shownProject;
             return (
               <PartItem key={kind} id={`kueue-${kind}`} title={SAMPLE_TITLES[kind]} scope={shownProject ? `In project ${shownProject}` : "In the project"} status={sampleStatus(s)}
-                statusText={s?.present ? s.state ?? "Waiting for Kueue" : "Not added"} unmanaged={!!s?.foreign} loading={!k && !kueueError} menu={menu}
+                statusText={s?.present ? (s.outdated && !s.terminating ? "Outdated" : s.state ?? "Waiting for Kueue") : "Not added"} unmanaged={!!s?.foreign} loading={!k && !kueueError} menu={menu}
                 actions={canAdd ? <ActionListItem><PrimaryAction variant="secondary" label="Add" reason={baseReason}
                   onClick={() => setPending({ ...kueueSetupPending(shownProject, k), rayCluster: kind === "raycluster", rayJob: kind === "rayjob" } as Pending)} /></ActionListItem> : undefined}>
                 <Content component="p">
                   {kind === "raycluster" ? "A small CPU-only RayCluster" : "A RayJob on the same cluster spec that prints the cluster's resources, runs five minutes and completes"}, sent to LocalQueue {KUEUE_LOCAL_QUEUE}. {SAMPLE_WHERE[kind]}
                 </Content>
+                {s?.outdated && s.present && (
+                  <Alert variant="warning" isInline component="p" title={`${SAMPLE_TITLES[kind]} made by an earlier version of this tool`}>
+                    {`${s.outdated[0].toUpperCase()}${s.outdated.slice(1)}. Delete it and add it again, or Clean up, then Set up again.`}
+                  </Alert>
+                )}
                 {s?.message && s.present && <Content component="p">Kueue: {s.message}</Content>}
                 {s?.present && (s.image || s.rayState) && (
                   <DescriptionList isCompact isHorizontal aria-label={`${SAMPLE_TITLES[kind]} details`}>
@@ -220,7 +231,7 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
             <>ClusterQueue <code>{KUEUE_CLUSTER_QUEUE}</code>: the quota, {k?.quota ?? "CPU and memory"}, for the project only. It is not preemptive: a waiting workload never stops a running one.</>,
             <>LocalQueue <code>{KUEUE_LOCAL_QUEUE}</code> in the project: where its workloads are sent (label <code>kueue.x-k8s.io/queue-name</code>), drawing on the ClusterQueue&apos;s quota.</>,
             <>The label <code>{KUEUE_LABEL}=true</code> on the project, if it does not have it.</>,
-            <>With the samples: RayCluster <code>nightly-raycluster</code> and RayJob <code>nightly-rayjob</code> (head and one worker, 1 CPU and 2 GiB each).</>,
+            <>With the samples: RayCluster <code>nightly-raycluster</code> and RayJob <code>nightly-rayjob</code> (sized as the CodeFlare SDK&apos;s defaults: a head of 1 CPU and 5 GiB, up to 2 CPUs and 8 GiB, and one worker of 1 CPU and 3 GiB, up to 6 GiB).</>,
             <>With the {OPT_IN_NAME}: <code>disableKueue: false</code> in the dashboard&apos;s settings and hardware profile <code>{KUEUE_PROFILE}</code>.</>,
           ]} />
           <Content component="p" style={{ marginTop: "var(--pf-t--global--spacer--md)" }}><ExternalLink href={KUEUE_DOCS} isInline>RHOAI docs: Manage workloads with Kueue</ExternalLink></Content>
@@ -321,7 +332,7 @@ export function kueueConfirm(pending: Pending, k: KueueStatus | null, setPending
             <>They are created with your OpenShift account, and this tool records them, so Clean up deletes only these.</>,
             labelled ? <>Project {p.project} has the label <code>{KUEUE_LABEL}=true</code> already; it stays as it is.</> : <>Project {p.project} gets the label <code>{KUEUE_LABEL}=true</code> (recorded; Clean up removes it).</>,
           ]),
-          ...(p.rayCluster ? [<>RayCluster <code>nightly-raycluster</code> in {p.project}: head and one worker, 1 CPU and 2 GiB each, image <code>{p.rayImage}</code>.</>] : []),
+          ...(p.rayCluster ? [<>RayCluster <code>nightly-raycluster</code> in {p.project}: a head of 1 CPU and 5 GiB (up to 2 CPUs and 8 GiB) and one worker of 1 CPU and 3 GiB (up to 6 GiB), image <code>{p.rayImage}</code>.</>] : []),
           ...(p.rayJob ? [<>RayJob <code>nightly-rayjob</code> in {p.project} on the same cluster, plus its submitter (0.5 CPU, 1 GiB).</>] : []),
           <>The dashboard&apos;s settings are not changed (the {OPT_IN_NAME} is a separate step).</>,
         ],
