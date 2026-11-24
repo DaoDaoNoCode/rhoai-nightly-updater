@@ -103,15 +103,20 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   gateway, through MaaS or only inside the cluster), publishing it
   through MaaS, the playground, the model registry (with its sample
   model), a workbench (with the tool's S3 Connection when the project has
-  the pipeline server) and a Dashboard Dev main or pull request build,
-  deployed last. Each step calls what the Environment or Dashboard Dev
+  the pipeline server), distributed workloads (Kueue, as the Distributed
+  workloads tab sets them up, with its samples and, off by default, the
+  dashboard's cluster-wide Kueue setting) and a Dashboard Dev main or pull
+  request build, deployed last. Each step calls what the Environment or Dashboard Dev
   page's own button calls, and checks the cluster first, so a resume
   skips what is set up; how the model is reached is resolved once and
   kept for a resume. New optional recipe fields: `features.modelRegistry`
-  (`enabled`, `sample`) and `features.workbench` (`enabled`); recipes
-  without them read as before. Clean up also offers, unticked, the MaaS
-  platform and the model registry, but only when the run created them
-  and they are still as it created them. The form has a switch and the
+  (`enabled`, `sample`), `features.workbench` (`enabled`) and
+  `features.kueue` (`enabled`, `rayCluster`, `rayJob`, `rayImage`,
+  `dashboardOptIn`); recipes without them read as before. Clean up also
+  offers, unticked, the MaaS platform, the model registry and the
+  distributed workloads setup, but only those the run created: each
+  carries the run's annotation from its creation, and is removed only
+  while it still has it, the recorded UID and is this tool's. The form has a switch and the
   few options of each feature. No new permission
   ([RUNBOOK §5.1](RUNBOOK.md#51-environment-recipe-runs-resume-interrupted-sign-in-again)).
 
