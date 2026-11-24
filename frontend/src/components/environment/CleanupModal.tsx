@@ -27,14 +27,22 @@ import { S3_NAMESPACE, storageTeardownOffered } from "./StorageTab";
 import { gatewayListRelease } from "./modelsConfirm";
 
 /**
- * The confirmation line of turning a model registry component back (pkg/cluster/internal/envkit
- * ModelRegistryComponent): RHOAI 3.6's aiHub also runs the Model Catalog. Offered only when this tool turned it
- * on and still owns the field (restorable); the server turns it back only when no model registry is left.
+ * The model registry component's own words in the Clean up dialog (pkg/cluster/internal/envkit
+ * ModelRegistryComponent): null for another component; for aiHub (RHOAI 3.6) what else it removes. Offered only
+ * when this tool turned it on and still owns the field (restorable); the server turns it back only when no model
+ * registry is left.
  */
 export function modelRegistryComponentLine(component: string): string | null {
-  if (component === "aiHub") return "Also turns off the model registry component, which also removes the Model Catalog.";
-  if (component === "modelregistry") return "Also turns off the model registry component.";
+  if (component === "aiHub") return "this also removes the Model Catalog.";
+  if (component === "modelregistry") return "";
   return null;
+}
+
+/** A restorable component's checkbox label. */
+function componentLabel(r: RestorableComponent): React.ReactNode {
+  const line = modelRegistryComponentLine(r.component);
+  if (line === null) return <>Turn <code>{r.component}</code> back to {r.previous || "Removed"}</>;
+  return <>Turn the model registry component (<code>{r.component}</code>) back to {r.previous || "Removed"}{line ? `; ${line}` : "."}</>;
 }
 
 /** This tool's pipeline servers: in the data science projects, and in projects that are no longer ones. */
@@ -259,7 +267,8 @@ export const CleanupModal: React.FC<{
     ...(req.storage ? [<>Every file in the S3 storage: pipeline artifacts and uploaded files{status.legacyStorage ? ", and the storage of an earlier version" : ""}.</>] : []),
     ...(req.deleteNamespace ? [<>Everything else in namespace <code>{S3_NAMESPACE}</code>.</>] : []),
     ...(req.mlflow ? [<>Every MLflow experiment, run and model, in every workspace.</>] : []),
-    ...(req.modelRegistry ? [<>Every model, version and artifact record in the model registry, and its database.</>] : []),
+    ...(req.modelRegistry ? [<>Everything in the model registry, which the whole cluster shares: every registered model, version and artifact record, including the models other people registered, and its database.</>] : []),
+    ...(chosenComponents.includes("aiHub") ? [<>The Model Catalog, for every dashboard user.</>] : []),
     ...(req.playgrounds ?? []).map((p) => <>The chats and uploaded documents of the playground in {p}.</>),
     ...(req.maasPlatform ? [<>MaaS API keys, and the MaaS database with their records.</>] : []),
     ...(req.recipeProjects ?? []).map((p) => <>Everything in project {p}.</>),
@@ -282,7 +291,9 @@ export const CleanupModal: React.FC<{
                 ? "This tool created nothing here that is left to delete."
                 : scope === "pipelines"
                   ? "Deletes the pipeline servers you tick, as one operation. Something this tool did not create is never deleted."
-                  : "Deletes what this tool created, in this order. Something this tool did not create is never deleted. The parts run one after another as one operation; a part that fails stops the rest."}
+                  : scope === "model-registry"
+                    ? "Deletes the model registry this tool created, as one operation. Something this tool did not create is never deleted."
+                    : "Deletes what this tool created, in this order. Something this tool did not create is never deleted. The parts run one after another as one operation; a part that fails stops the rest."}
             </Content>
           </StackItem>
           {!nothingOffered && (
@@ -321,8 +332,8 @@ export const CleanupModal: React.FC<{
                 )}
                 {offered.modelRegistry && (
                   <FormGroup role="group" isStack label="Model registry" fieldId="cleanup-model-registry">
-                    <Checkbox id="cleanup-model-registry" label={<>Model registry <code>{modelRegistry?.name}</code></>} isChecked={registry} onChange={(_e, v) => setRegistry(v)}
-                      description="With its registered models and its database, which are deleted with it. The DataScienceCluster component that runs it stays on unless you also tick it below." />
+                    <Checkbox id="cleanup-model-registry" label={<code>{modelRegistry?.name}</code>} isChecked={registry} onChange={(_e, v) => setRegistry(v)}
+                      description="Its registered models and its database are deleted with it. The DataScienceCluster component that runs it stays on unless you also tick it below." />
                   </FormGroup>
                 )}
                 {offered.playgrounds.length > 0 && (
@@ -359,9 +370,8 @@ export const CleanupModal: React.FC<{
                 {offeredComponents.length > 0 && (
                   <FormGroup role="group" isStack label="Cluster components this tool turned on" fieldId="cleanup-components">
                     {offeredComponents.map((r) => (
-                      <Checkbox key={r.component} id={`cleanup-component-${r.component}`}
-                        label={<>Turn <code>{r.component}</code> back to {r.previous || "Removed"}{modelRegistryComponentLine(r.component) ? <>. {modelRegistryComponentLine(r.component)}</> : null}</>}
-                        description="Last, and only while nothing on the cluster uses it and nobody has changed it since. Someone who only set it to Managed again is not noticed, so then the check that nothing uses it is what keeps it on. The operators it needed stay." isChecked={chosenComponents.includes(r.component)} onChange={(_e, v) => toggleComponent(r.component, v)} />
+                      <Checkbox key={r.component} id={`cleanup-component-${r.component}`} label={componentLabel(r)}
+                        description="Runs last. It stays on while anything on the cluster still uses it, or if someone changed it since this tool turned it on. The operators it needed stay installed." isChecked={chosenComponents.includes(r.component)} onChange={(_e, v) => toggleComponent(r.component, v)} />
                     ))}
                   </FormGroup>
                 )}

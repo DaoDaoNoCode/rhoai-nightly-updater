@@ -819,6 +819,7 @@ export function modelRegistryStatus(mr: ModelRegistryStatus | null, busy: Busy):
   if (busy.modelRegistry?.action === "teardown") return "deleting";
   if (busy.modelRegistry?.action === "setup") return "setting-up";
   if (!mr) return "unknown";
+  // Someone else's registry keeps its own lifecycle state; ownership shows apart (foreign).
   switch (mr.state) {
     case "ready":
       return "ready";
@@ -828,8 +829,6 @@ export function modelRegistryStatus(mr: ModelRegistryStatus | null, busy: Busy):
       return "deleting";
     case "absent":
       return "not-set-up";
-    case "foreign":
-      return "ready";
     default:
       return "unknown";
   }
@@ -841,7 +840,8 @@ export function modelRegistrySampleStatus(mr: ModelRegistryStatus | null): EnvSt
   if (!s) return "not-set-up";
   if (s.problem) return "unknown";
   if (!s.registered) return "not-set-up";
-  return s.state === "LIVE" ? "ready" : "needs-attention";
+  // Ready only with its version and artifact, all live; archived or incomplete needs attention.
+  return s.state === "LIVE" && s.complete ? "ready" : "needs-attention";
 }
 
 /** The dashboard's page of a model registry (odh-dashboard rhoai-3.6: /ai-hub/models/registry/<name>). */
@@ -854,16 +854,16 @@ export function modelRegistryDashboardHref(mr: ModelRegistryStatus | null): stri
 export function modelRegistryState(mr: ModelRegistryStatus | null, busy: Busy = IDLE): FeatureState {
   if (!mr && !busy.modelRegistry) return loadingState();
   const s = modelRegistryStatus(mr, busy);
-  const unmanaged = mr?.state === "foreign";
+  const unmanaged = !!mr?.foreign;
   switch (s) {
     case "ready": {
       const href = modelRegistryDashboardHref(mr);
-      const sample = mr?.sample?.registered ? ", with the sample model" : "";
-      return { status: s, label: `Ready${sample}`, ...owner(unmanaged), next: href ? { kind: "open", label: "Open in the dashboard", href } : null, project: null };
+      const sample = mr?.sample?.registered && mr.sample.complete && mr.sample.state === "LIVE" ? ", with the sample model" : "";
+      return { status: s, label: `Ready${sample}`, ...owner(unmanaged), next: href ? { kind: "open", label: "Open model registry", href } : null, project: null };
     }
     case "setting-up":
     case "deleting":
-      return { status: s, label: s === "deleting" ? "Deleting" : "Setting up", next: null, project: null };
+      return { status: s, label: s === "deleting" ? "Deleting" : "Setting up", ...owner(unmanaged), next: null, project: null };
     case "not-set-up":
       return {
         status: s, label: "Not set up",

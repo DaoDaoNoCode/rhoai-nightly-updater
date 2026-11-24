@@ -1835,6 +1835,8 @@ export interface ModelRegistrySample {
   model: string;
   version: string;
   registered: boolean;
+  /** The model, its version and the version's artifact all exist and are LIVE. */
+  complete?: boolean;
   /** "LIVE" or "ARCHIVED". */
   state?: string;
   id?: string;
@@ -1850,11 +1852,15 @@ export interface ModelRegistryStatus {
   /** The DataScienceCluster key that runs them ("aiHub" or "modelregistry"). */
   component?: string;
   blocked?: ComponentBlock;
-  state: "absent" | "foreign" | "terminating" | "starting" | "ready" | "unknown";
+  state: "absent" | "terminating" | "starting" | "ready" | "unknown";
+  /** A registry of that name that this tool did not create; state is still its own. */
+  foreign?: boolean;
   message?: string;
   managedByTool?: boolean;
   /** The registry's REST address through the cluster's gateway. */
   address?: string;
+  /** Why the Service's address is not used (the user's token goes only to the cluster's gateway). */
+  addressProblem?: string;
   dashboardUrl?: string;
   sample?: ModelRegistrySample;
 }

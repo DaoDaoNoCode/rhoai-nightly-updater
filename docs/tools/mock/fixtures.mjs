@@ -1462,7 +1462,7 @@ export const modelRegistryStates = {
   starting: { ...REGISTRY_BASE, state: "starting", managedByTool: true, message: "Deployment nightly-registry-postgres is progressing: waiting for the database to be available" },
   ready: {
     ...REGISTRY_BASE, state: "ready", managedByTool: true, address: `${DASHBOARD_URL}/model-registry/nightly-registry`,
-    sample: { ...REGISTRY_SAMPLE, registered: true, state: "LIVE", id: "1" },
+    sample: { ...REGISTRY_SAMPLE, registered: true, complete: true, state: "LIVE", id: "1" },
   },
   readyNoSample: {
     ...REGISTRY_BASE, state: "ready", managedByTool: true, address: `${DASHBOARD_URL}/model-registry/nightly-registry`,

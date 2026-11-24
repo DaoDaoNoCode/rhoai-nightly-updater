@@ -1,6 +1,8 @@
 import React from "react";
 import {
   ActionListItem,
+  Alert,
+  AlertActionLink,
   Checkbox,
   Content,
   DescriptionList,
@@ -12,10 +14,11 @@ import {
 } from "@patternfly/react-core";
 import type { ModelRegistryStatus } from "../../types";
 import { ImageRef } from "../ImageRef";
+import { TruncatedText } from "../LongText";
 import { TooltipButton } from "../TooltipButton";
 import { type ConfirmSpec, type ModelRegistryPending, type Pending, ExternalLink, WarningAlert } from "./resourceRow";
 import { CleanupSection, CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, READ_ONLY_SETUP, WhatNext } from "./FeatureLayout";
-import { type Busy, type FeatureState, modelRegistryDashboardHref, modelRegistrySampleStatus, modelRegistryStatus } from "./featureState";
+import { DEFAULT_MODEL, type Busy, type FeatureState, modelRegistryDashboardHref, modelRegistrySampleStatus, modelRegistryStatus } from "./featureState";
 import { LoadFailed } from "./Loading";
 
 /** Documentation for model registries in the current RHOAI release. */
@@ -23,6 +26,15 @@ export const MODEL_REGISTRY_DOCS = "https://docs.redhat.com/en/documentation/red
 
 /** Name of the registry provisioned by this tool (pkg/cluster/internal/modelregistry Name). */
 export const MODEL_REGISTRY_NAME = "nightly-registry";
+
+/** The link to the registry's page in the dashboard (the tab and the Overview). */
+export const OPEN_MODEL_REGISTRY = "Open model registry";
+
+/** The sample, named the same way everywhere (pkg/cluster/internal/modelregistry: the Models tab's default model). */
+export const SampleName: React.FC = () => <>Sample model <code>{DEFAULT_MODEL}</code> (the Models tab&apos;s default chat model), version v1</>;
+
+/** A message as a sentence: with its final period. */
+const sentence = (s: string) => (/[.!?]$/.test(s.trim()) ? s.trim() : `${s.trim()}.`);
 
 export interface ModelRegistryTabProps {
   /** Cluster prerequisites for one-click setup, rendered above the part list. */
@@ -52,24 +64,34 @@ const where = (mr: ModelRegistryStatus | null) => (mr?.namespace ? <code>{mr.nam
 export const ModelRegistryTab: React.FC<ModelRegistryTabProps> = (props) => {
   const { registry: mr, registryError, state, busy, baseReason, readOnly, setPending, onSetUp, onCleanup } = props;
   const status = modelRegistryStatus(mr, busy);
-  const foreign = mr?.state === "foreign";
+  const foreign = !!mr?.foreign;
   const ours = !!mr?.managedByTool;
   const present = !!mr && mr.state !== "absent";
   const href = modelRegistryDashboardHref(mr);
   const next = state.next;
   const actions: React.ReactNode[] = [];
-  if (mr?.state === "ready" && href) actions.push(<ActionListItem key="open"><ExternalLink href={href}>Open in the dashboard</ExternalLink></ActionListItem>);
+  if (mr?.state === "ready" && href) actions.push(<ActionListItem key="open"><ExternalLink href={href}>{OPEN_MODEL_REGISTRY}</ExternalLink></ActionListItem>);
   const menu: PartMenuItem[] = ours && !readOnly && mr?.state !== "terminating"
     ? [{ key: "delete", label: "Delete the model registry...", onClick: () => setPending({ kind: "teardown-model-registry" }), disabledReason: baseReason, isDanger: true }]
     : [];
   const sampleStatus = modelRegistrySampleStatus(mr);
   const sample = mr?.sample;
-  const canAddSample = ours && mr?.state === "ready" && !!mr.address && !readOnly && sampleStatus !== "ready";
+  const canAddSample = ours && mr?.state === "ready" && !!mr.address && !readOnly && sampleStatus !== "ready" && !sample?.problem;
+  const archived = !!sample?.registered && sample.state !== "LIVE";
+  const incomplete = !!sample?.registered && !archived && !sample.complete;
   return (
     <Stack hasGutter>
       <StackItem><FeatureHeader title="Model registry" purpose={FEATURE_PURPOSE["model-registry"]} state={state} /></StackItem>
       {props.prerequisites && <StackItem>{props.prerequisites}</StackItem>}
       {!mr && registryError && <StackItem><LoadFailed title="Cannot read the model registry" error={registryError} onRetry={props.onRetry} /></StackItem>}
+      {mr && registryError && (
+        <StackItem>
+          <Alert variant="warning" title="Model registry status may be out of date" isInline component="p"
+            actionLinks={<AlertActionLink onClick={props.onRetry}>Retry</AlertActionLink>}>
+            <TruncatedText>The data below is from the last successful refresh. {registryError}</TruncatedText>
+          </Alert>
+        </StackItem>
+      )}
       <StackItem>
         <PartList aria-label="What the model registry needs">
           <PartItem id="model-registry" title="Model registry" scope="Shared by the cluster" status={status} unmanaged={foreign} actions={actions.length ? actions : undefined} menu={menu} loading={!mr && !registryError}>
@@ -77,8 +99,9 @@ export const ModelRegistryTab: React.FC<ModelRegistryTabProps> = (props) => {
               One model registry, {MODEL_REGISTRY_NAME}, in {where(mr)}, with the dashboard&apos;s default database (PostgreSQL, for development and testing).
               {foreign ? " It was created outside this tool (for example in the dashboard): this tool shows it, but never changes or deletes it." : ""}
             </Content>
-            {mr?.message && mr.state !== "ready" && <Content component="p">{mr.message}</Content>}
-            {mr?.state === "ready" && mr.message && <WarningAlert text={mr.message} />}
+            {mr?.message && mr.state !== "ready" && <Content component="p">{sentence(mr.message)}</Content>}
+            {mr?.state === "ready" && mr.message && <WarningAlert text={sentence(mr.message)} />}
+            {mr?.addressProblem && <WarningAlert text={`The registry's address is not used, so no sample can be added: ${sentence(mr.addressProblem)}`} />}
             {present && (
               <DescriptionList isCompact isHorizontal aria-label="Model registry details">
                 <DescriptionListGroup>
@@ -88,7 +111,7 @@ export const ModelRegistryTab: React.FC<ModelRegistryTabProps> = (props) => {
                 {mr?.address && (
                   <DescriptionListGroup>
                     <DescriptionListTerm>REST address</DescriptionListTerm>
-                    <DescriptionListDescription><ImageRef image={mr.address} what="registry address" truncate={false} isCode={false} /></DescriptionListDescription>
+                    <DescriptionListDescription><ImageRef image={mr.address} what="registry address" truncate={false} /></DescriptionListDescription>
                   </DescriptionListGroup>
                 )}
                 {mr?.component && (
@@ -101,11 +124,12 @@ export const ModelRegistryTab: React.FC<ModelRegistryTabProps> = (props) => {
             )}
           </PartItem>
           <PartItem id="model-registry-sample" title="Sample model" scope={`In ${MODEL_REGISTRY_NAME}`} status={sampleStatus} unmanaged={false}
-            statusText={sampleStatus === "not-set-up" ? "Not added" : sampleStatus === "needs-attention" ? "Archived" : undefined} loading={!mr && !registryError}
+            statusText={sampleStatus === "not-set-up" ? "Not added" : archived ? "Archived" : incomplete ? "Incomplete" : undefined} loading={!mr && !registryError}
             actions={canAddSample ? <ActionListItem><TooltipButton variant="secondary" disabledReason={baseReason}
-              onClick={() => setPending({ kind: "setup-model-registry", samples: true })}>{sample?.registered ? "Restore the sample" : "Add the sample"}</TooltipButton></ActionListItem> : undefined}>
+              onClick={() => setPending({ kind: "setup-model-registry", samples: true })}>{archived ? "Restore the sample" : "Add the sample"}</TooltipButton></ActionListItem> : undefined}>
             <Content component="p">
-              {sample ? <><code>{sample.model}</code>, version {sample.version}</> : <>The Models tab&apos;s default chat model, version v1</>}: registered as the dashboard&apos;s Register model form does, with its weights {sample?.uri ? <>at <code>{sample.uri}</code></> : "on Hugging Face"}.
+              <SampleName />, with its weights {sample?.uri ? <>at <code>{sample.uri}</code></> : "on Hugging Face"}.
+              {incomplete ? " Its version or its model artifact is missing or not live: Add the sample completes it." : ""}
               {!ours || mr?.state !== "ready" ? " It can be added once this tool's registry is ready." : !mr.address ? " This registry has no address through the cluster's gateway, so it cannot be added." : ""}
             </Content>
             {sample?.problem && <WarningAlert text={sample.problem} />}
@@ -131,7 +155,7 @@ export const ModelRegistryTab: React.FC<ModelRegistryTabProps> = (props) => {
           <CreatesList items={[
             <>DataScienceCluster: the component that runs model registries is set to Managed, if it is not (its prerequisites, above).</>,
             <>ModelRegistry <code>{MODEL_REGISTRY_NAME}</code> in {where(mr)}, exactly as the dashboard&apos;s Create model registry dialog makes it with the default database. Its operator creates the registry server, a PostgreSQL database with a 5 GiB volume, a Service and a route through the cluster&apos;s gateway.</>,
-            <>With the sample: registered model <code>{sample?.model ?? "qwen25-05b-instruct"}</code>, version <code>v1</code> and its model artifact, in the registry&apos;s database.</>,
+            <>With the sample: <SampleName /> and its model artifact, in the registry&apos;s database.</>,
             <>No access is granted to anyone: cluster-admins can use the registry; others are added on the dashboard&apos;s Manage permissions page.</>,
           ]} />
           <Content component="p"><ExternalLink href={MODEL_REGISTRY_DOCS} isInline>RHOAI docs: Managing model registries</ExternalLink></Content>
@@ -173,18 +197,18 @@ export function modelRegistryConfirm(pending: Pending, mr: ModelRegistryStatus |
         title: exists ? "Add the sample model?" : "Set up the model registry?", confirm: exists ? "Add" : "Set up",
         runTitle: exists ? "Add the sample model" : "Set up the model registry",
         summary: <Content component="p">{exists
-          ? <>Registers the sample model in {MODEL_REGISTRY_NAME}, as the dashboard&apos;s Register model form does.</>
+          ? <>Adds the <SampleName /> to {MODEL_REGISTRY_NAME}, or completes it.</>
           : <>One model registry for the cluster, as the dashboard creates it with its default database (for development and testing, not production). Takes 1 to 3 minutes.</>}</Content>,
         choice: exists ? undefined : (
           <Checkbox id="model-registry-samples" label="Add a sample model" isChecked={samples} onChange={(_e, v) => setPending({ kind: "setup-model-registry", samples: v })}
-            description="The model the Models tab serves, with one version. Registered models cannot be deleted, only archived; they go with the registry." />
+            description={<><SampleName />. Registered models cannot be deleted, only archived; they are deleted when the registry is cleaned up.</>} />
         ),
         changes: [
           ...(exists ? [] : [
             <>ModelRegistry <code>{MODEL_REGISTRY_NAME}</code> is created in {where(mr)} with your OpenShift account, with the default database (<code>spec.postgres.generateDeployment: true</code>); its operator creates the server, a PostgreSQL database with a 5 GiB volume, and a Service.</>,
             <>This tool records the registry&apos;s UID in its own namespace, and labels it.</>,
           ]),
-          ...(samples || exists ? [<>The registry&apos;s REST API, with your token: registered model, version <code>v1</code> and its model artifact pointing at the Models tab&apos;s weights.</>] : []),
+          ...(samples || exists ? [<>The registry&apos;s REST API on the cluster&apos;s gateway, with your token: <SampleName />, and its model artifact pointing at the Models tab&apos;s weights.</>] : []),
           <>No access is granted to anyone else.</>,
         ],
       };
