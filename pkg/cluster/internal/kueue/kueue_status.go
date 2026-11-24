@@ -121,7 +121,12 @@ func checkCluster(u *kube.Client, dsc rhoai.DSCRead, block *types.ComponentBlock
 		}
 	}
 	if block != nil {
-		refuse("First set up what distributed workloads need on the cluster (above): "+block.Reason, "prerequisites")
+		// The prerequisites' button turns it on: one sentence, no fix to repeat.
+		msg := "Set up its prerequisites first (above): Kueue is turned off on this cluster."
+		if block.DSC == "" {
+			msg = "Set up its prerequisites first (above): " + block.Reason
+		}
+		refuse(msg, "prerequisites")
 	}
 	ck.instance.KueueReady, ck.instance.Message = kueueReady(dsc)
 	served, group, err := v1beta2Served(u)
@@ -226,10 +231,9 @@ func sampleState(u *kube.Client, kind, project string, rec Record, workloads []W
 	s.Foreign = !s.ManagedByTool
 	s.Terminating = r.Metadata.Terminating()
 	s.Image = r.image()
-	s.RayState = kube.FirstNonEmpty(r.Status.State, r.Status.JobDeploymentStatus)
-	if kind == SampleRayJob && r.Status.JobStatus != "" {
-		s.RayState = kube.FirstNonEmpty(r.Status.JobDeploymentStatus, "") + " (job " + r.Status.JobStatus + ")"
-	}
+	// One state: a RayJob's job status when it has one (RUNNING,
+	// SUCCEEDED...), else its deployment status; a RayCluster's state.
+	s.RayState = stateWords(kube.FirstNonEmpty(r.Status.JobStatus, r.Status.State, r.Status.JobDeploymentStatus))
 	for _, w := range workloads {
 		if w.Metadata.OwnedBy(r.Metadata.UID) {
 			s.State, s.Message = WorkloadState(w.Status.Conditions)
@@ -396,4 +400,13 @@ func InstanceWaiting(c *kube.Client) (waiting, refusal string, err error) {
 		return "the Kueue CR cluster is not Available yet: " + kube.TruncateText(kube.FirstNonEmpty(cond.Message, cond.Reason, "no condition yet"), 300), "", nil
 	}
 	return "", "", nil
+}
+
+// stateWords writes an upper-case state as a word ("RUNNING" -> "Running");
+// others stay as they are.
+func stateWords(s string) string {
+	if s == "" || strings.ToUpper(s) != s {
+		return s
+	}
+	return s[:1] + strings.ToLower(s[1:])
 }

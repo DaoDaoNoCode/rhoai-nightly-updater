@@ -268,7 +268,7 @@ func TestKueueSetupRefusals(t *testing.T) {
 		{"Kueue CR not Available", "is not Available", "not_ready", func(f *resourceFake) {
 			f.putJSON(kqInstance, `{"status":{"conditions":[{"type":"Available","status":"False","message":"cert-manager missing"}]}}`)
 		}},
-		{"kueue Removed", "First set up", "prerequisites", func(f *resourceFake) {
+		{"kueue Removed", "Set up its prerequisites first (above): Kueue is turned off on this cluster.", "prerequisites", func(f *resourceFake) {
 			f.putJSON(wbDSCv2+"/default-dsc", `{"metadata":{"name":"default-dsc"},"spec":{"components":{"kueue":{"managementState":"Removed"}}}}`)
 		}},
 		{"default LocalQueue", "LocalQueue named default", "validation", func(f *resourceFake) {
@@ -497,6 +497,11 @@ func TestKueueStatus(t *testing.T) {
 	}
 	if s := st.Samples[0]; !s.Present || !s.ManagedByTool || s.State != kueue.StateInadmissible || s.Message != "insufficient quota" || st.Samples[1].Present {
 		t.Fatalf("samples %+v", st.Samples)
+	}
+	// One Ray state for the RayJob: its job's, in words.
+	f.putJSON(kqRayJobs+"/"+kueue.RayJobName, `{"metadata":{"name":"nightly-rayjob","namespace":"proj"},"status":{"jobDeploymentStatus":"Running","jobStatus":"RUNNING"}}`)
+	if st, _ = GetKueueStatus(u, u, "proj"); st.Samples[1].RayState != "Running" {
+		t.Fatalf("RayJob state %q", st.Samples[1].RayState)
 	}
 	// Unsupported API versions surface as refusal codes on status as well.
 	f.groups[kqGroup] = `{"versions":[{"version":"v1beta1"}]}`

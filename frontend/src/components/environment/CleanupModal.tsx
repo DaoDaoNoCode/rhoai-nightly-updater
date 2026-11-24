@@ -418,7 +418,7 @@ export const CleanupModal: React.FC<{
                 {offered.kueue && (
                   <FormGroup role="group" isStack label="Distributed workloads" fieldId="cleanup-kueue">
                     <Checkbox id="cleanup-kueue" label="Distributed workloads setup" isChecked={kueueTicked} onChange={(_e, v) => setKueueTicked(v)}
-                      description={<>The samples, LocalQueue, ClusterQueue and ResourceFlavor{kueue?.label?.addedByTool ? `, and the project label on ${kueue.project}` : ""}, each only while it is this tool&apos;s.{kueue?.optIn.on ? " The Dashboard Kueue setting goes back and hardware profile nightly-kueue-cpu is deleted, if nobody changed them." : ""} Jobs people sent to LocalQueue nightly-kueue themselves are never admitted once the queues are gone (they are deleted only with their project). The operators stay.</>} />
+                      description={<>The samples, LocalQueue, ClusterQueue and ResourceFlavor{kueue?.label?.addedByTool ? `, and the project label on ${kueue.project}` : ""}, each only if this tool still owns it.{kueue?.optIn.on ? " The Dashboard Kueue setting goes back and hardware profile nightly-kueue-cpu is deleted, if nobody changed them." : ""} Jobs people sent to LocalQueue nightly-kueue themselves are never admitted once the queues are gone (those jobs are deleted only when their project is deleted). The operators stay.</>} />
                   </FormGroup>
                 )}
                 {offered.maasPlatform && (

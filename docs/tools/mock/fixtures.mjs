@@ -1496,14 +1496,14 @@ export function kueueWorld(state = "none", { optIn = false, samples = false, pro
   return {
     project: state === "none" || missing ? undefined : project,
     instance: missing ? { found: false, available: false, v1beta2: false, ready: false } : { found: true, available: true, kueueReady: "True", v1beta2: true, ready: true },
-    ...(missing ? { refusal: "First set up what distributed workloads need on the cluster (above): Kueue is turned off on this cluster: component kueue is Removed in DataScienceCluster default-dsc, so nothing would run it. A cluster-admin turns it on by setting it to Unmanaged.", refusalCode: "prerequisites",
+    ...(missing ? { refusal: "Set up its prerequisites first (above): Kueue is turned off on this cluster.", refusalCode: "prerequisites",
       blocked: { component: "kueue", dsc: "default-dsc", state: "Removed", reason: "Kueue component is turned off on this cluster: component kueue is Removed in DataScienceCluster default-dsc, so nothing would run it. A cluster-admin turns it on by setting it to Unmanaged." } } : {}),
     objects: missing ? [] : [obj("ResourceFlavor", "nightly-kueue-cpu"), obj("ClusterQueue", "nightly-kueue"), obj("LocalQueue", "nightly-kueue", project)],
     quota: "6 CPUs and 11Gi of memory",
     ...(set ? { label: { present: true, addedByTool: true } } : {}),
     samples: [
       samples ? { kind: "raycluster", name: "nightly-raycluster", present: true, managedByTool: true, image: KUEUE_IMAGE, state: "Running", rayState: "ready" } : { kind: "raycluster", name: "nightly-raycluster", present: false },
-      samples ? { kind: "rayjob", name: "nightly-rayjob", present: true, managedByTool: true, image: KUEUE_IMAGE, state: "Admitted", rayState: "Running (job RUNNING)" } : { kind: "rayjob", name: "nightly-rayjob", present: false },
+      samples ? { kind: "rayjob", name: "nightly-rayjob", present: true, managedByTool: true, image: KUEUE_IMAGE, state: "Admitted", rayState: "Running" } : { kind: "rayjob", name: "nightly-rayjob", present: false },
     ],
     optIn: optIn
       ? { disableKueue: false, setByTool: true, previous: "unset", on: true, profile: { kind: "HardwareProfile", name: "nightly-kueue-cpu", namespace: "redhat-ods-applications", present: true, managedByTool: true, active: true } }

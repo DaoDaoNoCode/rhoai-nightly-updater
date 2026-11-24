@@ -40,7 +40,7 @@ const SAMPLE_WHERE: Record<KueueSample["kind"], string> = {
 };
 
 /** User-facing explanation beside the Ray image field for why the default reference is chosen. */
-export const IMAGE_HELP = "Ray 2.47.1 is the default because it is the newest x86 image the RHOAI docs list (with the CodeFlare SDK). It is large (it carries CUDA), so the first start can take several minutes. The docs' newer CPU-only images (2.52.1-py311-cpu, -py312-cpu) are for IBM Power (ppc64le) and do not run on x86 clusters like this one.";
+export const IMAGE_HELP = "Ray 2.47.1 is the default because it is the newest x86 image the RHOAI docs list (with the CodeFlare SDK). It is large (it carries CUDA), so the first start can take several minutes. The docs' newer CPU-only images (2.52.1-py311-cpu, -py312-cpu) are for IBM Power (ppc64le) and do not run on x86 (amd64) clusters.";
 
 /** The opt-in's one name, everywhere. */
 export const OPT_IN_NAME = "Dashboard Kueue setting";
@@ -154,12 +154,12 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
       )}
       <StackItem>
         <PartList aria-label="What distributed workloads need">
-          <PartItem id="kueue-queues" title="Queues" scope={shownProject ? `Cluster-wide, for project ${shownProject}` : "Cluster-wide, for one project"} status={qStatus}
+          <PartItem id="kueue-queues" title="Queues" scope={shownProject ? `Queues for project ${shownProject} (the ClusterQueue and ResourceFlavor are cluster-wide)` : "Queues for one project (the ClusterQueue and ResourceFlavor are cluster-wide)"} status={qStatus}
             unmanaged={!!k?.objects.some((o) => o.foreign)} loading={!k && !kueueError}>
             <Content component="p">
               A queue for the project with a CPU and memory quota, as the RHOAI docs set it up (the objects are listed below and under What this creates). Its LocalQueue is never named <code>default</code>, which would make Kueue queue every workload of the project.
             </Content>
-            {k?.refusal && !setUp && <Content component="p">Set up cannot run yet: {k.refusal}</Content>}
+            {k?.refusal && !setUp && !(next?.kind === "set-up" && reason === k.refusal) && <Content component="p">{k.refusal}</Content>}
             {k && k.instance.found && (
               <Content component="p">{k.instance.ready ? "Kueue is running." : `Kueue is not running yet${k.instance.message ? `: ${k.instance.message}` : ""}.`}</Content>
             )}
@@ -229,7 +229,7 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
       {!readOnly && ours && (
         <StackItem>
           <CleanupSection id="kueue-cleanup" label="Clean up distributed workloads..." onClick={onCleanup} reason={baseReason}
-            text={`Deletes the samples, the queues and the project label this tool created, and turns the ${OPT_IN_NAME} back. The operators stay.`} />
+            text={`Deletes the samples, the queues and the project label this tool created, and turns the ${OPT_IN_NAME} back to its earlier value if nobody changed it. The operators stay.`} />
         </StackItem>
       )}
     </Stack>
@@ -291,7 +291,7 @@ export function kueueConfirm(pending: Pending, k: KueueStatus | null, setPending
             {others.length > 0 && (
               <StackItem>
                 <Alert variant="warning" isInline component="p" title={`Project ${p.project} already has other setups`}>
-                  This project already has {listText(others)}. Kueue manages only what is sent to a queue, so they keep running. A project of its own is still safer: once the {OPT_IN_NAME} is on, new workbenches and models there need the queue hardware profile.
+                  This project already has {listText(others)}. Kueue manages only what is sent to a queue, so {others.length === 1 ? "it keeps" : "they keep"} running. A project of its own is still safer: once the {OPT_IN_NAME} is on, new workbenches and models there need the queue hardware profile.
                 </Alert>
               </StackItem>
             )}
@@ -315,7 +315,10 @@ export function kueueConfirm(pending: Pending, k: KueueStatus | null, setPending
         ),
         changes: [
           ...(exists ? [] : [
-            <>ResourceFlavor <code>{KUEUE_FLAVOR}</code> (empty), ClusterQueue <code>{KUEUE_CLUSTER_QUEUE}</code> ({k?.quota ?? "CPU and memory quota"}, namespaceSelector: project {p.project} only, no preemption) and LocalQueue <code>{KUEUE_LOCAL_QUEUE}</code> in {p.project}, created with your OpenShift account; their UIDs are recorded.</>,
+            <>ResourceFlavor <code>{KUEUE_FLAVOR}</code>: the kind of nodes the quota is for (any node).</>,
+            <>ClusterQueue <code>{KUEUE_CLUSTER_QUEUE}</code>: {k?.quota ?? "a CPU and memory quota"}, for project {p.project} only; not preemptive: a waiting workload never stops a running one.</>,
+            <>LocalQueue <code>{KUEUE_LOCAL_QUEUE}</code> in {p.project}: where the project&apos;s workloads are sent.</>,
+            <>They are created with your OpenShift account, and this tool records them, so Clean up deletes only these.</>,
             labelled ? <>Project {p.project} has the label <code>{KUEUE_LABEL}=true</code> already; it stays as it is.</> : <>Project {p.project} gets the label <code>{KUEUE_LABEL}=true</code> (recorded; Clean up removes it).</>,
           ]),
           ...(p.rayCluster ? [<>RayCluster <code>nightly-raycluster</code> in {p.project}: head and one worker, 1 CPU and 2 GiB each, image <code>{p.rayImage}</code>.</>] : []),
@@ -332,19 +335,20 @@ export function kueueConfirm(pending: Pending, k: KueueStatus | null, setPending
       };
     case "kueue-optin": {
       const apps = k?.optIn.profile.namespace ?? "the applications namespace";
-      const now = k?.optIn.disableKueue === false ? "on already" : k?.optIn.disableKueue === undefined ? "off, the default" : "off";
+      const now = k?.optIn.disableKueue === false ? "on" : k?.optIn.disableKueue === undefined ? "off (the default)" : "off";
+      const profile = <code className="pf-v6-u-text-nowrap">{KUEUE_PROFILE}</code>;
       return {
         title: `Turn on the ${OPT_IN_NAME}?`, confirm: "Turn on", runTitle: `Turn on the ${OPT_IN_NAME}`, changesOpen: true,
         summary: (
           <Stack hasGutter>
             <StackItem><Alert variant="warning" isInline component="p" title="This changes every new project">{OPT_IN_EFFECT}</Alert></StackItem>
-            <StackItem><Content component="p">Existing projects keep their labels. Workbenches and models in project {k?.project} can then use hardware profile {KUEUE_PROFILE}.</Content></StackItem>
+            <StackItem><Content component="p">Existing projects keep their labels. Workbenches and models in project {k?.project} can then use hardware profile {profile}.</Content></StackItem>
+            <StackItem><Content component="p">Turning it off, or Clean up, puts the setting back and deletes the profile. If someone changes either after this, Clean up leaves it as it is.</Content></StackItem>
           </Stack>
         ),
         changes: [
-          <>OdhDashboardConfig <code>odh-dashboard-config</code> in {apps}: <code>spec.dashboardConfig.disableKueue: false</code>, which turns Kueue on in the dashboard (it is {now} now; this tool records that).</>,
-          <>HardwareProfile <code>{KUEUE_PROFILE}</code> in the applications namespace {apps}: type Queue, local queue {KUEUE_LOCAL_QUEUE}, 1 CPU and 2 GiB by default (up to 2 CPUs and 4 GiB).</>,
-          <>Turning it off, or Clean up, puts the setting back and deletes the profile. If someone changes it after this, Clean up leaves it as it is.</>,
+          <>OdhDashboardConfig <code>odh-dashboard-config</code> in {apps}: <code>spec.dashboardConfig.disableKueue: false</code>, which turns Kueue on in the dashboard. Now: {now}. This tool records it so Clean up can turn it back.</>,
+          <>HardwareProfile {profile} in the applications namespace {apps}: type Queue, local queue {KUEUE_LOCAL_QUEUE}, 1 CPU and 2 GiB by default (up to 2 CPUs and 4 GiB).</>,
         ],
       };
     }
@@ -372,8 +376,8 @@ export function kueueConfirm(pending: Pending, k: KueueStatus | null, setPending
 /** Ordered teardown bullets for Kueue resources this application provisioned. */
 export function kueueCleanupLines(k: KueueStatus | null): React.ReactNode[] {
   return [
-    <>The samples, then LocalQueue <code>{KUEUE_LOCAL_QUEUE}</code>, ClusterQueue <code>{KUEUE_CLUSTER_QUEUE}</code> and ResourceFlavor <code>{KUEUE_FLAVOR}</code>, each only while it is this tool&apos;s and nothing else uses it.</>,
-    <>Jobs people sent to LocalQueue {KUEUE_LOCAL_QUEUE} themselves are never admitted once the queues are gone; they are deleted only if their project is deleted.</>,
+    <>The samples, then LocalQueue <code>{KUEUE_LOCAL_QUEUE}</code>, ClusterQueue <code>{KUEUE_CLUSTER_QUEUE}</code> and ResourceFlavor <code>{KUEUE_FLAVOR}</code>, each only if this tool still owns it and nothing else uses it.</>,
+    <>Jobs people sent to LocalQueue {KUEUE_LOCAL_QUEUE} themselves are never admitted once the queues are gone (those jobs are deleted only when their project is deleted).</>,
     k?.label?.addedByTool ? <>The label <code>{KUEUE_LABEL}</code> on {k.project}, once no Kueue workload is left there.</> : <>The project&apos;s labels stay (this tool added none).</>,
     k?.optIn.on ? <>The {OPT_IN_NAME} goes back to how it was, and hardware profile {KUEUE_PROFILE} is deleted, each only if nobody changed it.</> : <>The dashboard&apos;s settings stay (this tool did not change them).</>,
     <>The Red Hat build of Kueue and cert-manager stay: others may rely on them.</>,

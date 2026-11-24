@@ -48,7 +48,7 @@ describe("one-click prerequisites", () => {
     expect(spec.changesOpen).toBe(true);
     expect(spec.confirmDisabled).toBe(false);
     render(<>{spec.summary}</>);
-    expect(screen.getByText("Operators it installs stay installed after Clean up, because other features share them.")).toBeInTheDocument();
+    expect(screen.getByText(/The operators it installs stay after Clean up, because other features share them\./)).toBeInTheDocument();
     expect(screen.getByText(/Includes Red Hat Connectivity Link, for the recommended inference gateway\./)).toBeInTheDocument();
     // An answer planned for another way to reach the model: Confirm waits.
     const other = prerequisitesConfirm({ kind: "setup-prerequisites", feature: "models", exposure: "internal" }, st)!;

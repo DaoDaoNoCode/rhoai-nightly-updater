@@ -9,6 +9,7 @@ import { IDLE } from "./featureState";
 import { cleanupCandidates, cleanupSteps } from "./CleanupModal";
 import { IMAGE_HELP, OPT_IN_EFFECT, kueueCleanupLines, kueueConfirm, kueueSteps } from "./KueueTab";
 import { KUEUE_DEFAULT_IMAGE, kueueState, sampleStatus } from "./kueueState";
+import { prerequisitesConfirm } from "./Prerequisites";
 
 const none: ResourceState = { deployed: false, ready: false, message: "Not deployed", managedByTool: false };
 const status: ResourcesStatus = { minio: none, mlflow: none, pipelineServers: [], dashboardUrl: "https://rh-ai.apps.example.com" };
@@ -67,7 +68,8 @@ describe("Distributed workloads confirmations", () => {
     expect(screen.getByText(IMAGE_HELP)).toHaveTextContent("ppc64le");
     expect(screen.getByText(/already has other setups/)).toBeInTheDocument();
     expect(screen.getByText(/a pipeline server and a workbench/)).toBeInTheDocument();
-    expect(screen.getByText(/namespaceSelector: project dev only, no preemption/)).toBeInTheDocument();
+    expect(screen.getByText(/for project dev only; not preemptive: a waiting workload never stops a running one/)).toBeInTheDocument();
+    expect(screen.queryByText(/namespaceSelector|UIDs are recorded/)).toBeNull();
     expect(screen.getByText(/gets the label/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("checkbox", { name: "RayJob sample" }));
     expect(setPending).toHaveBeenCalledWith({ ...p, rayJob: true });
@@ -155,7 +157,9 @@ describe("review round: readiness and words", () => {
     render(<>{spec.summary}<ul>{spec.changes.map((c, i) => <li key={i}>{c}</li>)}</ul></>);
     expect(screen.getByText(/In every new project on this cluster, workbenches and model deployments can only use the queue hardware profile; a project without its own LocalQueue cannot create workbenches or deploy models until an admin adds one\./)).toBeInTheDocument();
     expect(screen.getByText(/in the applications namespace redhat-ods-applications/)).toBeInTheDocument();
-    expect(screen.getByText(/If someone changes it after this, Clean up leaves it as it is/)).toBeInTheDocument();
+    expect(screen.getByText(/If someone changes either after this, Clean up leaves it as it is/)).toBeInTheDocument();
+    expect(screen.getByText(/Now: off \(the default\)\. This tool records it so Clean up can turn it back\./)).toBeInTheDocument();
+    expect(spec.changes).toHaveLength(2);
     expect(screen.queryByText(/it is unset; the value before is recorded/)).toBeNull();
   });
 
@@ -172,7 +176,7 @@ describe("review round: readiness and words", () => {
     render(<>{spec.choice}</>);
     expect(screen.getByText(/^This project already has a pipeline server and a workbench\. Kueue manages only/)).toBeInTheDocument();
     expect(IMAGE_HELP).toMatch(/newest x86 image the RHOAI docs list/);
-    expect(IMAGE_HELP).toMatch(/do not run on x86 clusters like this one/);
+    expect(IMAGE_HELP).toMatch(/do not run on x86 \(amd64\) clusters\./);
   });
 });
 
@@ -193,5 +197,39 @@ describe("review round: the component rule once", () => {
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getAllByText(/no ClusterQueue or LocalQueue is left/)).toHaveLength(1);
     expect(within(dialog).queryByText(/still uses it/)).toBeNull();
+  });
+});
+
+describe("final round: words", () => {
+  it("one other setup: it keeps running; Clean up says if this tool still owns it, and whose jobs", () => {
+    const p = { kind: "setup-kueue" as const, project: "dev", rayCluster: true, rayJob: false, rayImage: KUEUE_DEFAULT_IMAGE };
+    render(<>{kueueConfirm(p, notSetUp(), () => {}, ["a pipeline server"])!.choice}</>);
+    expect(screen.getByText(/This project already has a pipeline server\. Kueue manages only what is sent to a queue, so it keeps running\./)).toBeInTheDocument();
+    render(<ul>{kueueCleanupLines(ready()).map((c, i) => <li key={i}>{c}</li>)}</ul>);
+    expect(screen.getByText(/each only if this tool still owns it and nothing else uses it/)).toBeInTheDocument();
+    expect(screen.getByText(/\(those jobs are deleted only when their project is deleted\)/)).toBeInTheDocument();
+  });
+
+  it("the prerequisites dialog is titled like its button and says each Clean up rule once", () => {
+    const st = { features: { kueue: { ready: false, parts: [], setupPlan: [
+      "Install Red Hat build of Kueue 1.5.1: Subscription openshift-kueue-operator/kueue-operator (package kueue-operator, channel stable-v1.5, from redhat-operators, automatic updates); it stays after Clean up, as other features share it",
+      "DataScienceCluster default-dsc: set kueue to Unmanaged (it is Removed; Clean up can turn it back while nothing else uses it)",
+    ] } } };
+    const spec = prerequisitesConfirm({ kind: "setup-prerequisites", feature: "kueue" }, st)!;
+    expect(spec.title).toBe("Set up Kueue's prerequisites?");
+    render(<>{spec.summary}<ul>{spec.changes.map((c, i) => <li key={i}>{c}</li>)}</ul></>);
+    expect(screen.getByText(/^Set up makes only what is missing/)).toBeInTheDocument();
+    expect(screen.getAllByText(/stays? after Clean up/)).toHaveLength(1);
+    expect(screen.getAllByText(/Clean up can turn/)).toHaveLength(1);
+    expect(screen.getByText(/set kueue to Unmanaged \(it is Removed\)\./)).toBeInTheDocument();
+  });
+
+  it("the Queues card: one refusal sentence and a clear subtitle", async () => {
+    stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/kueue": notSetUp({ refusal: "Set up its prerequisites first (above): Kueue is turned off on this cluster.", refusalCode: "prerequisites" }),
+      "/api/resources/prerequisites": { features: { kueue: { ready: false, parts: [{ id: "dsc-kueue", title: "Kueue component", state: "missing", message: "Removed" }] } } } });
+    renderAt("/test-resources?tab=kueue&project=dev");
+    expect(await screen.findAllByText("Set up its prerequisites first (above): Kueue is turned off on this cluster.")).toHaveLength(1);
+    expect(screen.getByText("Queues for project dev (the ClusterQueue and ResourceFlavor are cluster-wide)")).toBeInTheDocument();
   });
 });
