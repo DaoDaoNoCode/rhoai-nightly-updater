@@ -975,7 +975,7 @@ func TestPlayground_SetupWithAMaaSModelTheUserCannotUse(t *testing.T) {
 // error.
 func TestPlayground_UserMaaSModels(t *testing.T) {
 	e := newPlaygroundEnv(t)
-	uc := e.userPlaygroundClient("sha256~user-own-token")
+	uc := e.userPlaygroundClient("sha256~another-user-token")
 	ms, err := features.UserMaaSModels(uc, "proj")
 	if err != nil || len(ms) == 0 || !slices.ContainsFunc(ms, func(m types.PlaygroundModel) bool { return m.Name == "gpt-oss-20b" }) {
 		t.Fatalf("user's MaaS models: %+v %v", ms, err)
