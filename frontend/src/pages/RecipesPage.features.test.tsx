@@ -185,7 +185,7 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     expect(within(dialog).getByRole("checkbox", { name: "Turn back the DataScienceCluster components the run turned on: kserve" })).toBeChecked();
     // Keeping the project keeps its model, so kserve stays on, and the label says so.
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Project recipe-full, which the recipe created" }));
-    expect(dialog).toHaveTextContent("None goes back now: kserve stays on: the model in recipe-full stays.");
+    expect(dialog).toHaveTextContent("None goes back now. Stays on while what uses it stays: kserve (the model in recipe-full stays).");
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Project recipe-full, which the recipe created" }));
     // The run's success says the workbench may still be starting, not that all is ready.
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "The MaaS platform the run set up" }));

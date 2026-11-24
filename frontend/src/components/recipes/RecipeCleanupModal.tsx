@@ -97,8 +97,8 @@ export const RecipeCleanupModal: React.FC<{
   const partLabel = (p: { id: string; title: string; description?: string }): [string, string] => {
     if (p.id !== "components") return [p.title, p.description ?? "Removes everything in the project: its models, playground, workbench and pipeline server."];
     const title = split.back.length > 0 ? `Turn back the DataScienceCluster components the run turned on: ${split.back.join(", ")}` : "Turn back the DataScienceCluster components the run turned on";
-    const stay = split.stay.length > 0 ? `${split.stay.join("; ")}.` : "";
-    const desc = split.back.length > 0 ? `Each goes back to what it was.${stay ? ` ${stay[0].toUpperCase()}${stay.slice(1)}` : ""}` : `None goes back now: ${stay}`;
+    const stay = split.stay.length > 0 ? `Stays on while what uses it stays: ${split.stay.join("; ")}.` : "";
+    const desc = split.back.length > 0 ? `Each goes back to what it was.${stay ? ` ${stay}` : ""}` : `None goes back now. ${stay}`;
     return [title, desc];
   };
   const steps = cleanupSteps(sent ?? req);

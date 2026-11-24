@@ -379,7 +379,7 @@ describe("Recipes page", () => {
     ]);
     // aipipelines stays on while the pipeline server in team-b stays: the label does not promise it goes back.
     expect(within(dialog).getByRole("checkbox", { name: "Turn back the DataScienceCluster components the run turned on" })).toBeChecked();
-    expect(dialog).toHaveTextContent("None goes back now: aipipelines stays on: the pipeline server in team-b stays.");
+    expect(dialog).toHaveTextContent("None goes back now. Stays on while what uses it stays: aipipelines (the pipeline server in team-b stays).");
     expect(dialog).toHaveTextContent("Removes everything in the project: its models, playground, workbench and pipeline server.");
     expect(dialog).toHaveTextContent("Deleting project recipe-dev deletes everything in it.");
     // Left in place, from the live status: the shared parts; the project's pipeline server goes with it,

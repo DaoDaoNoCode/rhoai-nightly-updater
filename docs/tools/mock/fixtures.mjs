@@ -1830,10 +1830,10 @@ export const recipePinned = () => ({ tag: "rhoai-3.6", image: LATEST_IMAGE, dige
 
 /** The steps a mixed plan finds set up, with why. */
 const MIXED_SKIP = {
-  "pipelines-prereq": "Everything it needs is set up.", s3: "The S3 storage is set up and ready.", "pipeline-server": "The pipeline server in recipe-full is ready.",
+  "pipelines-prereq": "Everything it needs is set up.", s3: "The S3 storage is set up and ready.", "pipeline-server": "The pipeline server in PROJECT is ready.",
   "mlflow-prereq": "Everything it needs is set up.", mlflow: "MLflow is ready.", maas: "The MaaS platform is ready.",
 };
-const MIXED_BLOCKED = "Project recipe-full has a workbench nightly-workbench that this tool did not create; the recipe does not change it. Nothing was changed.";
+const MIXED_BLOCKED = "Project PROJECT has a workbench nightly-workbench that this tool did not create; the recipe does not change it. Nothing was changed.";
 
 /** RecipeFix pointing users to Status when one-time setup is incomplete (pkg/types RecipeFix). */
 const ONE_TIME_SETUP_FIX = { code: "one_time_setup_missing", page: "/" };
@@ -1846,9 +1846,10 @@ const ONE_TIME_SETUP_FIX = { code: "one_time_setup_missing", page: "/" };
 export function recipePlan(rcp = recipe(), installed = true, blocked = false, mixed = false) {
   const steps = recipeSteps(rcp).map(([id, title, typicalSeconds, maxSeconds], i) => {
     // A cluster where some of it is set up and one step is blocked: what a review shows.
-    if (mixed && MIXED_SKIP[id]) return { id, title, action: "skip", reason: MIXED_SKIP[id], typicalSeconds, maxSeconds };
-    if (mixed && id === "workbench") return { id, title, action: "blocked", reason: MIXED_BLOCKED, fix: { code: "feature_blocked", page: "/environment" }, typicalSeconds, maxSeconds };
-    if (mixed && i > 0 && !MIXED_SKIP[id]) return { id, title, action: id === "project" || id === "dsc" ? "skip" : "run", ...(id === "dsc" ? { reason: "DataScienceCluster default-dsc exists." } : id === "project" ? { reason: "Project recipe-full was created by a recipe." } : {}), typicalSeconds, maxSeconds };
+    const proj = rcp.spec.project?.name ?? "recipe-dev";
+    if (mixed && MIXED_SKIP[id]) return { id, title, action: "skip", reason: MIXED_SKIP[id].replace("PROJECT", proj), typicalSeconds, maxSeconds };
+    if (mixed && id === "workbench") return { id, title, action: "blocked", reason: MIXED_BLOCKED.replace("PROJECT", proj), fix: { code: "feature_blocked", page: "/environment" }, typicalSeconds, maxSeconds };
+    if (mixed && i > 0 && !MIXED_SKIP[id]) return { id, title, action: id === "project" || id === "dsc" ? "skip" : "run", ...(id === "dsc" ? { reason: "DataScienceCluster default-dsc exists." } : id === "project" ? { reason: `Project ${proj} was created by a recipe.` } : {}), typicalSeconds, maxSeconds };
     if (id === "rhoai" && blocked) return { id, title, action: "blocked", reason: "The one-time cluster setup is not done: additional-pull-secret is missing in kube-system.", fix: ONE_TIME_SETUP_FIX, typicalSeconds, maxSeconds };
     if (id === "rhoai" && installed) return { id, title, action: "skip", reason: "RHOAI 3.6.0 is installed; the recipe keeps it.", typicalSeconds, maxSeconds };
     if (i <= 2) return { id, title, action: "run", typicalSeconds, maxSeconds };
@@ -1857,7 +1858,7 @@ export function recipePlan(rcp = recipe(), installed = true, blocked = false, mi
   const counted = steps.filter((s) => s.action !== "skip");
   return {
     recipe: rcp, steps, pinned: recipePinned(),
-    problems: mixed ? [{ message: `Workbench: ${MIXED_BLOCKED}`, fix: { code: "feature_blocked", page: "/environment" } }] : blocked ? [
+    problems: mixed ? [{ message: `Workbench: ${MIXED_BLOCKED.replace("PROJECT", rcp.spec.project?.name ?? "recipe-dev")}`, fix: { code: "feature_blocked", page: "/environment" } }] : blocked ? [
       { message: "The one-time cluster setup is not done: additional-pull-secret is missing in kube-system. Run the one-time setup on the Status page first.", fix: ONE_TIME_SETUP_FIX },
       { field: "spec.rhoai.build", message: "Cannot resolve the build on Quay.", fix: { code: "build_unresolvable" } },
     ] : [],

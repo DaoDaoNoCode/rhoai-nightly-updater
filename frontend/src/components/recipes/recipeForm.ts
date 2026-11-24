@@ -395,7 +395,7 @@ export function componentsSplit(status: ResourcesStatus | null, run: RecipeRun, 
   const stay: string[] = [];
   for (const key of offered?.components ?? []) {
     const w = why(key);
-    if (w) stay.push(`${key} stays on: ${w}`); else back.push(key);
+    if (w) stay.push(`${key} (${w})`); else back.push(key);
   }
   return { back, stay };
 }
