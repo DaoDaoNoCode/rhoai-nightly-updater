@@ -1817,11 +1817,11 @@ export function recipeSteps(rcp = recipe()) {
   if (f.maas?.enabled) out.push(["maas", "Models as a Service", 600, 900]);
   if (f.models?.enabled) {
     out.push(["models-prereq", "What Models needs", 240, 900], ["model", `Model ${MODEL_NAMES[f.models.model || "qwen25-05b-instruct"] ?? f.models.model}`, 300, 900]);
-    if (f.maas?.enabled && f.maas.publish && f.models.exposure !== "maas") out.push(["maas-publish", "Publish the model through MaaS", 120, 300]);
+    if (f.maas?.enabled && f.maas.publish && f.models.exposure !== "maas") out.push(["maas-publish", "Publish the model through MaaS", 120, 900]);
   }
   if (f.playground?.enabled) out.push(["playground-prereq", "What the playground needs", 120, 600], ["playground", "Playground", 120, 540]);
   if (f.modelRegistry?.enabled) out.push(["model-registry-prereq", "What the model registry needs", 120, 600], ["model-registry", "Model registry", 120, 720]);
-  if (f.workbench?.enabled) out.push(["workbench", "Workbench", 30, 120]);
+  if (f.workbench?.enabled) out.push(["workbench", "Workbench", 30, 900]);
   if (f.kueue?.enabled) out.push(["kueue-prereq", "What distributed workloads need", 240, 900], ["kueue", "Distributed workloads", 60, 600]);
   const d = sp.dashboardDev ?? {};
   if (d.deploy === "main" || d.deploy === "pr") out.push(["dashboard-dev", d.deploy === "pr" ? `Dashboard Dev (PR #${d.pr})` : "Dashboard Dev (main)", 180, 480]);
