@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -23,8 +24,18 @@ func putNotebook(f *resourceFake, ns, name, conns string) {
 	if conns != "" {
 		ann = `{"` + storage.NotebookConnectionsAnnotation + `":"` + conns + `"}`
 	}
-	f.putJSON(notebookPath(ns, name), `{"metadata":{"name":"`+name+`","namespace":"`+ns+`","uid":"uid-`+name+`","annotations":`+ann+`},
-		"spec":{"template":{"spec":{"containers":[{"name":"`+name+`","envFrom":[{"secretRef":{"name":"`+storage.ConnectionSecretName+`"}}]}]}}}}`)
+	env := `[]`
+	if strings.Contains(conns, storage.ConnectionSecretName) {
+		env = `[{"secretRef":{"name":"` + storage.ConnectionSecretName + `"}}]`
+	}
+	putNotebookRaw(f, ns, name, ann, env)
+}
+
+// putNotebookRaw stores a workbench with the annotations and envFrom given
+// as JSON.
+func putNotebookRaw(f *resourceFake, ns, name, annotations, envFrom string) {
+	f.putJSON(notebookPath(ns, name), `{"metadata":{"name":"`+name+`","namespace":"`+ns+`","uid":"uid-`+name+`","annotations":`+annotations+`},
+		"spec":{"template":{"spec":{"containers":[{"name":"`+name+`","envFrom":`+envFrom+`}]}}}}`)
 }
 
 // confirmBoth confirms wb-a and wb-b as putConnectionUsers made them.
@@ -77,13 +88,19 @@ func TestTeardownPipelineServer_RemovesTheConnectionFromItsWorkbenchesFirst(t *t
 		if env == nil {
 			t.Errorf("%s: envFrom is the webhook's to change", nb)
 		}
+		// A server-side dry run first, then the change, both with the user's token.
 		patches := f.callsTo(http.MethodPatch, notebookPath("proj", nb))
-		if len(patches) != 1 || patches[0].Token != fakeUserToken || patches[0].ContentType != "application/json-patch+json" {
+		if len(patches) != 2 || patches[0].Query.Get("dryRun") != "All" || patches[1].Query.Get("dryRun") != "" {
 			t.Fatalf("%s: patches %+v", nb, patches)
 		}
+		for _, p := range patches {
+			if p.Token != fakeUserToken || p.ContentType != "application/json-patch+json" {
+				t.Fatalf("%s: patch %+v", nb, p)
+			}
+		}
 		for _, test := range []string{`"op":"test","path":"/metadata/uid"`, `"op":"test","path":"/metadata/resourceVersion"`, `"op":"test","path":"/metadata/annotations/opendatahub.io~1connections"`} {
-			if !strings.Contains(patches[0].Body, test) {
-				t.Errorf("%s: patch %s lacks %s", nb, patches[0].Body, test)
+			if !strings.Contains(patches[1].Body, test) {
+				t.Errorf("%s: patch %s lacks %s", nb, patches[1].Body, test)
 			}
 		}
 		if i, d := requestIndex(f, "PATCH "+notebookPath("proj", nb)), requestIndex(f, "DELETE "+dspaPath("proj", storage.DSPAName)); i < 0 || d < 0 || i > d {
@@ -274,17 +291,20 @@ func TestCleanUp_RecipeProjectDeleteLeavesWorkbenchesAlone(t *testing.T) {
 // Connection, read with the user's token (the ServiceAccount may not list
 // Notebooks); one that cannot be read says so.
 func TestStatus_ListsTheConnectionsWorkbenches(t *testing.T) {
-	bothRefs := []types.ConnectionWorkbench{{Name: "wb-a", UID: "uid-wb-a"}, {Name: "wb-b", UID: "uid-wb-b"}}
+	bothRefs := []types.ConnectionWorkbench{{Name: "wb-a", UID: "uid-wb-a", Running: true}, {Name: "wb-b", UID: "uid-wb-b"}}
 	f, c := newResourceFake(t)
 	putConnectionUsers(f)
 	putDSProject(f, "proj")
 	f.putProject("proj")
+	// wb-b is stopped; wb-env loads the Connection without naming it.
+	putNotebookRaw(f, "proj", "wb-b", `{"`+storage.NotebookConnectionsAnnotation+`":"proj/`+storage.ConnectionSecretName+`","`+storage.NotebookStoppedAnnotation+`":"2026-11-24T10:00:00Z"}`, `[]`)
+	putNotebookRaw(f, "proj", "wb-env", `{}`, `[{"secretRef":{"name":"`+storage.ConnectionSecretName+`"}}]`)
 	u := userClientOf(c, fakeUserToken)
 	st, err := GetResourcesStatusFor(c, u, "proj")
 	if err != nil || len(st.PipelineServers) != 1 {
 		t.Fatalf("got %+v, %v", st, err)
 	}
-	if ps := st.PipelineServers[0]; !slices.Equal(ps.ConnectionWorkbenches, bothRefs) {
+	if ps := st.PipelineServers[0]; !slices.Equal(ps.ConnectionWorkbenches, bothRefs) || !slices.Equal(ps.ConnectionEnvOnlyWorkbenches, []string{"wb-env"}) {
 		t.Errorf("admin status: %+v", ps)
 	}
 	for _, call := range f.callsTo(http.MethodGet, "/apis/kubeflow.org/v1/namespaces/proj/notebooks") {
@@ -352,5 +372,63 @@ func TestCleanUp_LateWorkbenchRefusalListsThem(t *testing.T) {
 	last := events[len(events)-1]
 	if last.Step != "pipeline-server:proj" || last.Status != "failed" || last.Detail != "wb-new=uid-wb-new" {
 		t.Fatalf("events %+v", events)
+	}
+}
+
+// webhookDeniedBody is the API server's answer when the workbenches
+// connection webhook denies a Notebook update (an admission denial: 403,
+// reason Forbidden, the webhook's own message).
+const webhookDeniedBody = `{"kind":"Status","apiVersion":"v1","metadata":{},"status":"Failure","message":"admission webhook \"connection-notebook.opendatahub.io\" denied the request: the following connection secret(s) are invalid — they may not exist, or you may not have permission to access them: proj/gone","reason":"Forbidden","code":403}`
+
+// The webhook denies the change of a workbench whose other Connection is
+// gone: the teardown names the workbench and the webhook's reason with its
+// own code, never "your account is not allowed"; refused in the dry run,
+// no workbench is changed at all.
+func TestTeardownPipelineServer_WebhookDenial(t *testing.T) {
+	fastPipelineTimings(t)
+	for name, dryRun := range map[string]bool{"in the dry run": true, "in the change": false} {
+		t.Run(name, func(t *testing.T) {
+			f, c := newResourceFake(t)
+			putConnectionUsers(f)
+			f.intercept = func(w http.ResponseWriter, r *http.Request, _ []byte) bool {
+				if r.Method != http.MethodPatch || r.URL.Path != notebookPath("proj", "wb-b") || (r.URL.Query().Get("dryRun") == "All") != dryRun {
+					return false
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(webhookDeniedBody))
+				return true
+			}
+			resp, _ := TeardownPipelineServer(userClientOf(c, fakeUserToken), "proj", toolDSPAUID(c, "proj"), confirmBoth())
+			if resp.Success || resp.ErrorCode != storage.ErrorCodeWebhookRefused || !strings.Contains(resp.Message, "workbench wb-b") || !strings.Contains(resp.Message, "proj/gone") ||
+				!strings.Contains(resp.Message, "Fix that workbench's other connections in the dashboard first") || strings.Contains(resp.Message, kube.UserForbiddenMessage) {
+				t.Fatalf("got %+v", resp)
+			}
+			if hasMutation(f, "DELETE ") {
+				t.Errorf("nothing may be deleted: %v", f.mutations())
+			}
+			if dryRun && hasMutation(f, "PATCH ") {
+				t.Errorf("a dry-run refusal must leave every workbench unchanged: %v", f.mutations())
+			}
+			if _, ok := notebookAnnotation(f, "wb-b"); !ok {
+				t.Error("wb-b keeps its annotation")
+			}
+		})
+	}
+}
+
+// A workbench that loads the Connection through envFrom only (no
+// annotation entry) is not changed; the result says it will fail to start.
+func TestTeardownPipelineServer_EnvOnlyWorkbenchIsReported(t *testing.T) {
+	fastPipelineTimings(t)
+	f, c := newResourceFake(t)
+	putConnectionUsers(f)
+	putNotebookRaw(f, "proj", "wb-env", `{}`, `[{"secretRef":{"name":"`+storage.ConnectionSecretName+`"}}]`)
+	resp, _ := TeardownPipelineServer(c, "proj", toolDSPAUID(c, "proj"), confirmBoth())
+	if !resp.Success || !strings.Contains(resp.Message, "wb-env") || !strings.Contains(resp.Message, "fail to start") {
+		t.Fatalf("got %+v", resp)
+	}
+	if hasMutation(f, "PATCH "+notebookPath("proj", "wb-env")) {
+		t.Error("wb-env must not be changed")
 	}
 }

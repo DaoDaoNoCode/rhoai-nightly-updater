@@ -133,23 +133,23 @@ func connectionState(u *Client, project string, terminating bool) (string, strin
 // of project whose opendatahub.io/connections annotation names the tool's
 // dashboard Connection (storage.ConnectionWorkbenches). A cluster without
 // the Notebook API has none.
-func listConnectionWorkbenches(u *Client, project string) ([]types.ConnectionWorkbench, error) {
+func listConnectionWorkbenches(u *Client, project string) ([]types.ConnectionWorkbench, []string, error) {
 	if !u.ActsAsUser() {
-		return nil, authz.ErrNotUserClient
+		return nil, nil, authz.ErrNotUserClient
 	}
 	var list storage.NotebookList
 	found, err := u.GetIntoOptional(rhoai.NamespacedPath("kubeflow.org/v1", "notebooks", project, ""), &list)
 	if err != nil || !found {
-		return nil, err
+		return nil, nil, err
 	}
-	return connectionWorkbenchRefs(storage.ConnectionWorkbenches(list, project)), nil
+	return connectionWorkbenchRefs(storage.ConnectionWorkbenches(list, project)), storage.ConnectionEnvOnlyWorkbenches(list, project), nil
 }
 
 // connectionWorkbenchRefs are wbs by name and UID, as the API returns them.
 func connectionWorkbenchRefs(wbs []storage.ConnectionWorkbench) []types.ConnectionWorkbench {
 	out := make([]types.ConnectionWorkbench, 0, len(wbs))
 	for _, w := range wbs {
-		out = append(out, types.ConnectionWorkbench{Name: w.Name, UID: w.UID})
+		out = append(out, types.ConnectionWorkbench{Name: w.Name, UID: w.UID, Running: w.Running})
 	}
 	return out
 }
@@ -157,12 +157,12 @@ func connectionWorkbenchRefs(wbs []storage.ConnectionWorkbench) []types.Connecti
 // addConnectionWorkbenches sets ps.ConnectionWorkbenches (or why they could
 // not be read) for the tool's present Connection in project.
 func addConnectionWorkbenches(u *Client, project string, ps *types.ResourceState) {
-	names, err := listConnectionWorkbenches(u, project)
+	names, envOnly, err := listConnectionWorkbenches(u, project)
 	if err != nil {
 		ps.ConnectionWorkbenchesMessage, _ = userReadProblem("the workbenches", project, err)
 		return
 	}
-	ps.ConnectionWorkbenches = names
+	ps.ConnectionWorkbenches, ps.ConnectionEnvOnlyWorkbenches = names, envOnly
 }
 
 // userReadProblem explains a part of a user's read that failed, with its

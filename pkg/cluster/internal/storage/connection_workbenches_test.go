@@ -21,6 +21,10 @@ func TestWithoutConnection(t *testing.T) {
 		{"proj/" + c + "-2", "proj/" + c + "-2", false},
 		{"proj/x/" + c, "proj/x/" + c, false},
 		{"", "", false},
+		{"proj/" + c + ",", "", true},
+		{"proj/" + c + ",  ", "", true},
+		{" ,proj/" + c + ", ", "", true},
+		{"proj/a , proj/" + c + ",  proj/b ", "proj/a ,  proj/b ", true},
 	}
 	for _, tc := range cases {
 		got, found := withoutConnection(tc.value, "proj")

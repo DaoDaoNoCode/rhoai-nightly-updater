@@ -761,9 +761,9 @@ func TeardownPipelineServer(c *kube.Client, project, confirmedUID string, confir
 			note += deleteProjectKey(c, project, nil, all, &logs)
 		}
 		if note != "" {
-			return fail(fmt.Sprintf("No pipeline server created by this tool remains in %s.%s", project, note), "partial_failure", "orphan secret")
+			return fail(fmt.Sprintf("No pipeline server created by this tool remains in %s.%s%s", project, note, envOnlyNote(project, wbs)), "partial_failure", "orphan secret")
 		}
-		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("No pipeline server created by this tool remains in %s.", project), Logs: logs}, nil
+		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("No pipeline server created by this tool remains in %s.%s", project, envOnlyNote(project, wbs)), Logs: logs}, nil
 	}
 
 	dspaPath, ok := toolDSPAPath(project, target.Meta.Name)
@@ -852,7 +852,7 @@ func TeardownPipelineServer(c *kube.Client, project, confirmedUID string, confir
 	slog.Info("pipeline server teardown", "project", project, "dspa", target.Meta.Name, "user", kube.GetUser(c))
 	record.Action(c, "teardown-pipeline-server", fmt.Sprintf("project=%s dspa=%s", project, target.Meta.Name), secretNote == "")
 
-	msg := fmt.Sprintf("Pipeline server removed from %s.", project)
+	msg := fmt.Sprintf("Pipeline server removed from %s.", project) + envOnlyNote(project, wbs)
 	if !target.ExternalDB {
 		msg += fmt.Sprintf(" Its database PVC 'mariadb-%s' (pipeline runs and experiments) was deleted with it.", target.Meta.Name)
 	}

@@ -2052,6 +2052,11 @@ type ResourceState struct {
 	// ConnectionWorkbenchesMessage says why they could not be read.
 	ConnectionWorkbenches        []ConnectionWorkbench `json:"connectionWorkbenches,omitempty"`
 	ConnectionWorkbenchesMessage string                `json:"connectionWorkbenchesMessage,omitempty"`
+	// ConnectionEnvOnlyWorkbenches load that Connection through envFrom
+	// without naming it in the annotation (attached the RHOAI 2.x way):
+	// nothing takes it off them, and they fail to start once it is
+	// deleted.
+	ConnectionEnvOnlyWorkbenches []string `json:"connectionEnvOnlyWorkbenches,omitempty"`
 }
 
 // KeptPVC is a PersistentVolumeClaim and its size.
@@ -2067,6 +2072,10 @@ type KeptPVC struct {
 type ConnectionWorkbench struct {
 	Name string `json:"name"`
 	UID  string `json:"uid"`
+	// Running: the workbench is not stopped. Taking the Connection off it
+	// changes its pod template, which restarts its pod (work not saved to
+	// disk is lost).
+	Running bool `json:"running,omitempty"`
 }
 
 // PipelineServerRequest is the JSON body for pipeline server setup/teardown.
