@@ -54,7 +54,8 @@ describe("Workbench confirmations", () => {
     render(<>{spec.summary}</>);
     expect(screen.getByText(/with Jupyter \| Minimal \| CPU \| Python 3\.12 \(2025\.2\)/)).toBeInTheDocument();
     expect(screen.getByText(/^Default/)).toBeInTheDocument();
-    expect(screen.getByText(/20Gi, storage class/)).toBeInTheDocument();
+    expect(screen.getByText("storage class gp3-csi")).toBeInTheDocument();
+    expect(screen.getByText("20Gi")).toBeInTheDocument();
   });
 
   it("Delete keeps the storage unless ticked; the tick asks for the storage's deletion", () => {
@@ -169,7 +170,7 @@ describe("Workbench tab", () => {
     expect(open).toHaveClass("pf-m-primary");
     // One profile and storage format before and after Set up.
     expect(within(part).getByText("Default (2 CPU, 4Gi memory)")).toBeInTheDocument();
-    expect(within(part).getByText("nightly-workbench-storage, 20Gi, storage class gp3-csi")).toBeInTheDocument();
+    expect(within(part).getByText((_t, el) => el?.textContent === "nightly-workbench-storage, 20Gi, storage class gp3-csi" && el.tagName !== "DIV")).toBeInTheDocument();
     fireEvent.click(within(part).getByRole("button", { name: "Stop" }));
     const dialog = await screen.findByRole("dialog", { name: /Stop the workbench in dev\?/ });
     expect(within(dialog).getByText(/only files saved under \/opt\/app-root\/src are in the storage/)).toBeInTheDocument();
@@ -206,8 +207,8 @@ describe("Storage used by another workbench", () => {
   it("the tab warns, Delete cannot tick the storage, Delete storage cannot be confirmed", async () => {
     stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] }, "/api/resources/workbench": usedBy() });
     renderAt("/test-resources?tab=workbench&project=dev");
-    const part = await screen.findByRole("listitem", { name: "Workbench" });
-    expect(within(part).getByText(/Storage nightly-workbench-storage is used by workbench my-wb; remove it from that workbench in the dashboard first/)).toBeInTheDocument();
+    await screen.findByRole("listitem", { name: "Workbench" });
+    expect(screen.getByText(/Storage nightly-workbench-storage is used by workbench my-wb; remove it from that workbench in the dashboard first/)).toBeInTheDocument();
     const del = workbenchConfirm({ kind: "teardown-workbench", project: "dev", deleteStorage: true }, usedBy())!;
     render(<>{del.choice}</>);
     expect(screen.getByRole("checkbox", { name: "Also delete its storage (files are lost)" })).toBeDisabled();
@@ -219,6 +220,41 @@ describe("Storage used by another workbench", () => {
   it("Clean up offers its storage disabled, never in the request", () => {
     const offered = cleanupCandidates(status, "workbench", false, null, null, null, usedBy());
     expect(offered.storageOf("dev")?.usedBy).toEqual(["workbench my-wb"]);
+  });
+});
+
+describe("Kept storage another workbench uses", () => {
+  const keptUsed = (): WorkbenchStatus => {
+    const st = notSetUp();
+    st.items = [{ ...running().items![0], deployed: false, ready: false, state: undefined }];
+    st.items[0].storage!.usedBy = ["workbench my-wb"];
+    return st;
+  };
+  const REASON = "Storage nightly-workbench-storage is used by workbench my-wb; a new workbench could not mount it (single-node storage). Remove it from my-wb in the dashboard first.";
+  it("Set up is disabled with the reason, and the card does not promise reuse", async () => {
+    expect(workbenchState(keptUsed(), "dev", IDLE).next).toMatchObject({ kind: "set-up", reason: REASON });
+    stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] }, "/api/resources/workbench": keptUsed() });
+    renderAt("/test-resources?tab=workbench&project=dev");
+    const part = await screen.findByRole("listitem", { name: "Workbench" });
+    expect(within(part).queryByText(/reused by the next Set up/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Set up a workbench in dev" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getAllByText(REASON).length).toBeGreaterThan(0);
+    // The in-use alert spans the tab (outside the card), as for a running workbench.
+    expect(within(part).queryByText("Its storage is used by another workbench")).toBeNull();
+    expect(screen.getByText("Its storage is used by another workbench")).toBeInTheDocument();
+  });
+  it("Delete storage: the in-use alert first, no data-loss alert while Delete is disabled", () => {
+    const spec = workbenchConfirm({ kind: "delete-workbench-storage", project: "dev" }, keptUsed())!;
+    expect(spec.confirmDisabled).toBe(true);
+    expect(spec.dataLoss).toBeUndefined();
+    render(<>{spec.summary}</>);
+    expect(screen.getByText("The storage is in use")).toBeInTheDocument();
+  });
+  it("the Storage row never breaks a storage class name", async () => {
+    stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] }, "/api/resources/workbench": running() });
+    renderAt("/test-resources?tab=workbench&project=dev");
+    const part = await screen.findByRole("listitem", { name: "Workbench" });
+    expect(within(part).getByText("storage class gp3-csi")).toHaveClass("pf-v6-u-text-nowrap");
   });
 });
 

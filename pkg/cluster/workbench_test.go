@@ -870,3 +870,50 @@ func TestWorkbenchDryRunRefusalWording(t *testing.T) {
 		t.Fatalf("got %q", res.Message)
 	}
 }
+
+// Set up never reuses kept storage another workbench mounts: refused up
+// front, and again right before the create when a user appears in between.
+func TestWorkbenchSetupKeptStorageInUse(t *testing.T) {
+	keptCluster := func(t *testing.T) (*resourceFake, *Client) {
+		f, c := newResourceFake(t)
+		putWorkbenchCluster(t, f, true)
+		putToolWorkbench(t, f, c)
+		f.deleteObject(wbNotebook)
+		if err := writeWorkbenchRecord(c, "", "pvc-1"); err != nil {
+			t.Fatal(err)
+		}
+		return f, c
+	}
+	const want = "Storage nightly-workbench-storage is used by workbench my-wb; a new workbench could not mount it (single-node storage). Remove it from my-wb in the dashboard first."
+	t.Run("in use before", func(t *testing.T) {
+		f, c := keptCluster(t)
+		putStorageUser(f)
+		res := wbSteps(t, userClientOf(c, fakeUserToken), types.WorkbenchRequest{Action: "setup", Project: "proj"})
+		if res.Success || res.ErrorCode != "storage_in_use" || !strings.Contains(res.Message, want) || len(f.callsTo("POST", wbNotebooks)) != 0 {
+			t.Fatalf("got %+v", res)
+		}
+	})
+	t.Run("in use by the time it is created", func(t *testing.T) {
+		f, c := keptCluster(t)
+		f.beforeRequest = func(r *http.Request) {
+			if r.Method == http.MethodPost && r.URL.Path == wbNotebooks && r.URL.Query().Get("dryRun") == "All" {
+				putStorageUser(f)
+			}
+		}
+		res := wbSteps(t, userClientOf(c, fakeUserToken), types.WorkbenchRequest{Action: "setup", Project: "proj"})
+		if res.Success || res.ErrorCode != "storage_in_use" || f.has(wbNotebook) {
+			t.Fatalf("got %+v", res)
+		}
+		for _, call := range f.callsTo("POST", wbNotebooks) {
+			if call.Query.Get("dryRun") == "" {
+				t.Fatal("created the workbench")
+			}
+		}
+	})
+	t.Run("free: reused", func(t *testing.T) {
+		f, c := keptCluster(t)
+		if res := wbSteps(t, userClientOf(c, fakeUserToken), types.WorkbenchRequest{Action: "setup", Project: "proj"}); !res.Success || !f.has(wbNotebook) || len(f.callsTo("POST", wbPVCs)) != 0 {
+			t.Fatalf("got %+v", res)
+		}
+	})
+}

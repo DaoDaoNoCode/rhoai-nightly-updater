@@ -162,6 +162,11 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 	case pvcFound && pvc.Metadata.Terminating():
 		return r.fail("check", fmt.Sprintf("PersistentVolumeClaim %s in %s is being deleted; set up again once it is gone. Nothing was changed.", StorageName, project), "terminating", "storage terminating")
 	}
+	if pvcFound {
+		if msg, code := r.keptStorageInUse(project, rec); msg != "" {
+			return r.fail("check", msg+" Nothing was changed.", code, "kept storage in use")
+		}
+	}
 	plan, msg, code := BuildPlan(c, project, dsc)
 	if msg != "" {
 		return r.fail("check", msg+" Nothing was changed.", code, "plan failed")
@@ -207,6 +212,13 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 		r.step("storage", "success", fmt.Sprintf("Created storage %s.", StorageName))
 	}
 
+	// Again right before the create: a workbench that mounted the kept
+	// storage in the meantime keeps it (fail closed).
+	if pvcFound {
+		if msg, code := r.keptStorageInUse(project, rec); msg != "" {
+			return r.fail("workbench", msg+" No workbench was created.", code, "kept storage in use")
+		}
+	}
 	r.step("workbench", "running", fmt.Sprintf("Creating workbench %s...", Name))
 	body, err := create(c, rhoai.NamespacedPath(notebookAPI, "notebooks", project, ""), nbObj, false)
 	if err != nil {
@@ -615,4 +627,23 @@ func (r *run) storageInUseCheck(project string, rec Record) (string, string) {
 		return msg, "storage_in_use"
 	}
 	return "", ""
+}
+
+// keptStorageInUse is Set up's refusal when the kept storage is mounted by
+// another workbench or pod (a new workbench could not mount it on
+// single-node storage), or "". Users that cannot be read refuse too.
+func (r *run) keptStorageInUse(project string, rec Record) (string, string) {
+	e, _ := rec.Get(project)
+	users, err := storageUsers(r.c, project, e.UID)
+	if err != nil {
+		return fmt.Sprintf("Cannot check what uses storage %s in %s: %v.", StorageName, project, err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
+	}
+	if len(users) == 0 {
+		return "", ""
+	}
+	from := "them"
+	if len(users) == 1 {
+		_, from, _ = strings.Cut(users[0], " ")
+	}
+	return fmt.Sprintf("Storage %s is used by %s; a new workbench could not mount it (single-node storage). Remove it from %s in the dashboard first.", StorageName, strings.Join(users, ", "), from), "storage_in_use"
 }

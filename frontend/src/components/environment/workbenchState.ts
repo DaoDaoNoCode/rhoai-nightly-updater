@@ -72,7 +72,14 @@ export function workbenchSetUpReason(wb: WorkbenchStatus | null, project: string
   if (wb.blocked) return wb.blocked.reason;
   if (wb.unsupported) return wb.unsupported;
   if (wb.planProblem) return wb.planProblem;
-  return null;
+  return keptStorageInUseText(keptStorage(wb, project)?.usedBy);
+}
+
+/** Why Set up cannot reuse the kept storage now (another workbench mounts it), or null: the backend's refusal, word for word. */
+export function keptStorageInUseText(usedBy: string[] | undefined): string | null {
+  if (!usedBy?.length) return null;
+  const from = usedBy.length === 1 ? usedBy[0].split(" ").slice(1).join(" ") : "them";
+  return `Storage ${WORKBENCH_STORAGE} is used by ${usedBy.join(", ")}; a new workbench could not mount it (single-node storage). Remove it from ${from} in the dashboard first.`;
 }
 
 function inProject(wb: WorkbenchStatus | null, project: string, busy: Busy): FeatureState {

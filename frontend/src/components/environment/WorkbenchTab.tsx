@@ -25,7 +25,7 @@ import { ComponentAlert, NoProjectsAlert } from "./UseIt";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
 import { LoadFailed, PartsSkeleton } from "./Loading";
 import type { Busy, FeatureState } from "./featureState";
-import { WORKBENCH_FILES, WORKBENCH_NAME, WORKBENCH_STORAGE, keptStorage, storageInUseText, profileText, storageText, workbenchIn, workbenchSetUpReason, workbenchStatusOf, workbenchUnreadable } from "./workbenchState";
+import { WORKBENCH_FILES, WORKBENCH_NAME, WORKBENCH_STORAGE, keptStorage, keptStorageInUseText, storageInUseText, profileText, storageText, workbenchIn, workbenchSetUpReason, workbenchStatusOf, workbenchUnreadable } from "./workbenchState";
 
 export interface WorkbenchTabProps {
   status: ResourcesStatus;
@@ -50,6 +50,11 @@ export interface WorkbenchTabProps {
 }
 
 /** Image, hardware profile, storage, and connection fields use one layout both before and after Set up. */
+/** A storage line whose parts never break inside ("storage class gp3-csi" stays whole). */
+const StorageLine: React.FC<{ text: string }> = ({ text }) => (
+  <>{text.split(", ").map((part, i) => <React.Fragment key={i}>{i > 0 && ", "}<span className="pf-v6-u-text-nowrap">{part}</span></React.Fragment>)}</>
+);
+
 const DetailsList: React.FC<{ label: string; image?: string; profile: string; storage?: string; connection: boolean }> = ({ label, image, profile, storage, connection }) => (
   <DescriptionList isCompact isHorizontal aria-label={label}>
     {image && (
@@ -65,7 +70,7 @@ const DetailsList: React.FC<{ label: string; image?: string; profile: string; st
     {storage && (
       <DescriptionListGroup>
         <DescriptionListTerm>Storage</DescriptionListTerm>
-        <DescriptionListDescription>{storage}</DescriptionListDescription>
+        <DescriptionListDescription><StorageLine text={storage} /></DescriptionListDescription>
       </DescriptionListGroup>
     )}
     <DescriptionListGroup>
@@ -124,6 +129,7 @@ const WorkbenchPart: React.FC<WorkbenchTabProps & { project: string }> = ({ work
   else if (unmanaged) text = `A workbench named ${WORKBENCH_NAME} exists in ${project}, but this tool did not create it: use it in the dashboard. This tool does not start, stop or delete it.`;
   else if (exists) text = <>Jupyter workbench {WORKBENCH_NAME}. Files saved under <code>{WORKBENCH_FILES}</code> are in its storage and stay when it stops.</>;
   else if (planProblem) text = `A workbench cannot be set up in ${project} now: the alert below says why.`;
+  else if (kept && kept.usedBy?.length) text = <>Storage kept from a deleted workbench: <code>{WORKBENCH_STORAGE}</code>. Another workbench uses it now, so Set up cannot use it: the alert below says what to do.</>;
   else if (kept) text = <>Storage kept from a deleted workbench: <code>{WORKBENCH_STORAGE}</code>, reused by the next Set up with its files.</>;
   else text = `Not set up in ${project} yet. Set up creates a Jupyter workbench as the dashboard's Create workbench does; it starts in 1 to 3 minutes.`;
   return (
@@ -134,9 +140,6 @@ const WorkbenchPart: React.FC<WorkbenchTabProps & { project: string }> = ({ work
         <Alert variant="warning" isInline component="div" title="The workbench cannot be read" actionLinks={<AlertActionLink onClick={onRetry}>Retry</AlertActionLink>}>
           <Content component="p">{workbench?.itemsProblem ?? "The read failed."} This tool does not set up or delete anything here until it can read it.</Content>
         </Alert>
-      )}
-      {item?.storage?.managedByTool && storageInUseText(item.storage.usedBy) && (
-        <Alert variant="warning" isInline component="p" title="Its storage is used by another workbench">{storageInUseText(item.storage.usedBy)} Until then this tool does not delete the storage.</Alert>
       )}
       {item?.state === "failed" && (
         <Alert variant="danger" isInline component="div" title="The workbench can't start">
@@ -150,7 +153,7 @@ const WorkbenchPart: React.FC<WorkbenchTabProps & { project: string }> = ({ work
         <DescriptionList isCompact isHorizontal aria-label="Kept storage">
           <DescriptionListGroup>
             <DescriptionListTerm>Storage</DescriptionListTerm>
-            <DescriptionListDescription>{storageText(kept.size, kept.storageClass)}</DescriptionListDescription>
+            <DescriptionListDescription><StorageLine text={storageText(kept.size, kept.storageClass)} /></DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>
       )}
@@ -210,6 +213,13 @@ export const WorkbenchTab: React.FC<WorkbenchTabProps> = (props) => {
           </PartList>
         )}
       </StackItem>
+      {project && current && item?.storage?.managedByTool && storageInUseText(item.storage.usedBy) && (
+        <StackItem>
+          <Alert variant="warning" isInline component="p" title="Its storage is used by another workbench">
+            {item.deployed ? `${storageInUseText(item.storage.usedBy)} Until then this tool does not delete the storage.` : `${keptStorageInUseText(item.storage.usedBy)} Until then this tool does not reuse or delete it.`}
+          </Alert>
+        </StackItem>
+      )}
       {planProblem && (
         <StackItem><Alert variant="warning" isInline component="p" title={planAlertTitle(workbench?.planProblemCode)}>{planProblem}</Alert></StackItem>
       )}
@@ -313,12 +323,15 @@ export function workbenchConfirm(pending: Pending, wb: WorkbenchStatus | null, s
     case "delete-workbench-storage": {
       const kept = keptStorage(wb, pending.project);
       const inUse = storageInUseText(kept?.usedBy);
+      const what = <Content component="p">Deletes {storageText(kept?.size, kept?.storageClass)}, which this tool kept when its workbench was deleted. The next Set up creates new, empty storage.</Content>;
       return {
-        ...(inUse ? { confirmDisabled: true, extra: <Alert variant="warning" isInline component="p" title="The storage is in use">{inUse}</Alert> } : {}),
-        title: `Delete the kept storage in ${pending.project}?`, confirm: "Delete", danger: true, titleIcon: "danger", runTitle: `Delete the kept storage in ${pending.project}`,
-        summary: <Content component="p">Deletes {storageText(kept?.size, kept?.storageClass)}, which this tool kept when its workbench was deleted. The next Set up creates new, empty storage.</Content>,
+        title: `Delete the kept storage in ${pending.project}?`, confirm: "Delete", danger: true, runTitle: `Delete the kept storage in ${pending.project}`,
         changes: [<>Deleted: PersistentVolumeClaim <code>{WORKBENCH_STORAGE}</code> (only the one this tool created).</>],
-        dataLoss: <>The files of the deleted workbench in <code>{WORKBENCH_STORAGE}</code> are lost.</>,
+        // In use, Delete is disabled: the reason comes first, and no data-loss
+        // alert speaks of a deletion that cannot happen now.
+        ...(inUse
+          ? { confirmDisabled: true, summary: <Stack hasGutter><StackItem><Alert variant="warning" isInline component="p" title="The storage is in use">{inUse}</Alert></StackItem><StackItem>{what}</StackItem></Stack> }
+          : { titleIcon: "danger" as const, summary: what, dataLoss: <>The files of the deleted workbench in <code>{WORKBENCH_STORAGE}</code> are lost.</> }),
       };
     }
     case "teardown-workbench": {
