@@ -512,20 +512,36 @@ func TestKueueStatus(t *testing.T) {
 	if st.Quota != "6 CPUs and 19Gi of memory" || st.Objects[1].Outdated != "" || st.Samples[0].Outdated != "" {
 		t.Fatalf("quota %q, queue %+v, sample %+v", st.Quota, st.Objects[1], st.Samples[0])
 	}
-	// An earlier version's queue (11Gi) and sample (2Gi head, requests =
-	// limits) are flagged; Set up keeps them.
-	cq := f.get(kqAPI + "/clusterqueues/" + kueue.ClusterQueueName)
-	cq["spec"].(map[string]any)["resourceGroups"].([]any)[0].(map[string]any)["flavors"].([]any)[0].(map[string]any)["resources"].([]any)[1].(map[string]any)["nominalQuota"] = "11Gi"
-	rc := f.get(kqRayCs + "/" + kueue.RayClusterName)
-	head := rc["spec"].(map[string]any)["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
-	head["resources"] = map[string]any{"requests": map[string]any{"cpu": "1", "memory": "2Gi"}, "limits": map[string]any{"cpu": "1", "memory": "2Gi"}}
-	for path, obj := range map[string]map[string]any{kqAPI + "/clusterqueues/" + kueue.ClusterQueueName: cq, kqRayCs + "/" + kueue.RayClusterName: rc} {
-		raw, _ := json.Marshal(obj)
-		f.putJSON(path, string(raw))
+	// The same amounts in other forms (custom resources keep what was
+	// written: numbers, 1000m, bytes) are not outdated; an earlier
+	// version's queue (11Gi) and sample (2Gi head, requests = limits) are.
+	cqPath, rcPath := kqAPI+"/clusterqueues/"+kueue.ClusterQueueName, kqRayCs+"/"+kueue.RayClusterName
+	setSizes := func(cpuQuota any, memoryQuota string, headRes map[string]any) {
+		t.Helper()
+		cq := f.get(cqPath)
+		res := cq["spec"].(map[string]any)["resourceGroups"].([]any)[0].(map[string]any)["flavors"].([]any)[0].(map[string]any)["resources"].([]any)
+		res[0].(map[string]any)["nominalQuota"], res[1].(map[string]any)["nominalQuota"] = cpuQuota, memoryQuota
+		rc := f.get(rcPath)
+		rc["spec"].(map[string]any)["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)["resources"] = headRes
+		for path, obj := range map[string]map[string]any{cqPath: cq, rcPath: rc} {
+			raw, _ := json.Marshal(obj)
+			f.putJSON(path, string(raw))
+		}
 	}
+	setSizes(6, "19456Mi", map[string]any{"requests": map[string]any{"cpu": 1, "memory": "5368709120"}, "limits": map[string]any{"cpu": "2000m", "memory": "8Gi"}})
+	st, err = GetKueueStatus(u, u, "proj")
+	if err != nil || st.Quota != "6 CPUs and 19456Mi of memory" || st.Objects[1].Outdated != "" || st.Samples[0].Outdated != "" || !st.Samples[0].Present {
+		t.Fatalf("equivalent forms: %v quota %q, queue %+v, sample %+v", err, st.Quota, st.Objects[1], st.Samples[0])
+	}
+	// A value that cannot be read is not called outdated.
+	setSizes("lots", "19Gi", map[string]any{"requests": map[string]any{"cpu": "one", "memory": "5Gi"}, "limits": map[string]any{"cpu": "2", "memory": "8Gi"}})
+	if st, _ = GetKueueStatus(u, u, "proj"); st.Objects[1].Outdated != "" || st.Samples[0].Outdated != "" {
+		t.Fatalf("unreadable: queue %+v, sample %+v", st.Objects[1], st.Samples[0])
+	}
+	setSizes("6", "11Gi", map[string]any{"requests": map[string]any{"cpu": "1", "memory": "2Gi"}, "limits": map[string]any{"cpu": "1", "memory": "2Gi"}})
 	st, _ = GetKueueStatus(u, u, "proj")
 	if st.Quota != "6 CPUs and 11Gi of memory" || st.Objects[1].Outdated != "its quota is 6 CPUs and 11Gi of memory; this version sets 6 CPUs and 19Gi of memory" ||
-		st.Samples[0].Outdated != "its head and worker have other CPU and memory than this version sets (head 1 CPU and 5Gi requested, up to 2 CPUs and 8Gi; worker 1 CPU and 3Gi, up to 1 CPU and 6Gi)" {
+		st.Samples[0].Outdated != "its head and worker have other CPU and memory than this version sets (head 1 CPU and 5Gi requested, up to 2 CPUs and 8Gi; worker 1 CPU and 3Gi requested, up to 1 CPU and 6Gi)" {
 		t.Fatalf("outdated: quota %q, queue %+v, sample %+v", st.Quota, st.Objects[1], st.Samples[0])
 	}
 	// One Ray state for the RayJob: its job's, in words.

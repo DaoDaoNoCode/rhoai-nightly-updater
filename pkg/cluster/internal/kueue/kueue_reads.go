@@ -114,8 +114,8 @@ type Queue struct {
 			Flavors []struct {
 				Name      string `json:"name"`
 				Resources []struct {
-					Name         string `json:"name"`
-					NominalQuota any    `json:"nominalQuota"`
+					Name         string        `json:"name"`
+					NominalQuota kube.Quantity `json:"nominalQuota"`
 				} `json:"resources"`
 			} `json:"flavors"`
 		} `json:"resourceGroups"`
@@ -142,14 +142,11 @@ func (q Queue) nominalQuota() (cpu, memory string) {
 				continue
 			}
 			for _, r := range f.Resources {
-				if r.NominalQuota == nil {
-					continue
-				}
 				switch r.Name {
 				case "cpu":
-					cpu = fmt.Sprint(r.NominalQuota)
+					cpu = string(r.NominalQuota)
 				case "memory":
-					memory = fmt.Sprint(r.NominalQuota)
+					memory = string(r.NominalQuota)
 				}
 			}
 		}
@@ -246,8 +243,8 @@ func listWorkloads(c *kube.Client, project string) ([]Workload, error) {
 type rayContainer struct {
 	Image     string `json:"image"`
 	Resources struct {
-		Requests map[string]string `json:"requests"`
-		Limits   map[string]string `json:"limits"`
+		Requests map[string]kube.Quantity `json:"requests"`
+		Limits   map[string]kube.Quantity `json:"limits"`
 	} `json:"resources"`
 }
 
@@ -300,32 +297,34 @@ func (r Ray) image() string {
 
 // sizedAsManifest reports whether the sample's head and first worker
 // request and limit the CPU and memory this version's manifests set
-// (RayClusterSpec); a sample an earlier version made with other sizes is
-// not.
-func (r Ray) sizedAsManifest() bool {
+// (headSize, workerSize), as amounts; a sample an earlier version made with
+// other sizes is not. known is false when a value cannot be read.
+func (r Ray) sizedAsManifest() (same, known bool) {
 	cl := r.cluster()
-	want := RayClusterSpec("")
-	same := func(g rayGroup, w any) bool {
+	container := func(g rayGroup) (map[string]kube.Quantity, map[string]kube.Quantity, bool) {
 		cs := g.Template.Spec.Containers
-		res := w.(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)["resources"].(map[string]any)
 		if len(cs) == 0 {
-			return false
+			return nil, nil, false
 		}
-		for _, kind := range []string{"requests", "limits"} {
-			got := cs[0].Resources.Requests
-			if kind == "limits" {
-				got = cs[0].Resources.Limits
-			}
-			for _, name := range []string{"cpu", "memory"} {
-				if got[name] != res[kind].(map[string]any)[name] {
-					return false
-				}
-			}
-		}
-		return true
+		return cs[0].Resources.Requests, cs[0].Resources.Limits, true
 	}
-	workers := want["workerGroupSpecs"].([]any)
-	return len(cl.WorkerGroupSpecs) > 0 && same(cl.HeadGroupSpec, want["headGroupSpec"]) && same(cl.WorkerGroupSpecs[0], workers[0])
+	hr, hl, okHead := container(cl.HeadGroupSpec)
+	if !okHead || len(cl.WorkerGroupSpecs) == 0 {
+		return false, true
+	}
+	wr, wl, okWorker := container(cl.WorkerGroupSpecs[0])
+	if !okWorker {
+		return false, true
+	}
+	headSame, headKnown := headSize.matches(hr, hl)
+	workerSame, workerKnown := workerSize.matches(wr, wl)
+	switch {
+	case (headKnown && !headSame) || (workerKnown && !workerSame):
+		return false, true
+	case !headKnown || !workerKnown:
+		return false, false
+	}
+	return true, true
 }
 
 func samplePath(kind, project string) string {

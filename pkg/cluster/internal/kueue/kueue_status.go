@@ -2,6 +2,7 @@ package kueue
 
 import (
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 
@@ -231,9 +232,14 @@ func sampleState(u *kube.Client, kind, project string, rec Record, workloads []W
 	s.Foreign = !s.ManagedByTool
 	s.Terminating = r.Metadata.Terminating()
 	s.Image = r.image()
-	if s.ManagedByTool && !r.sizedAsManifest() {
-		s.Outdated = fmt.Sprintf("its head and worker have other CPU and memory than this version sets (head %s requested, up to %s; worker %s, up to %s)",
-			sizeText(headCPUMilli, headMemoryMi), sizeText(headCPULimitMilli, headMemoryLimitMi), sizeText(workerCPUMilli, workerMemoryMi), sizeText(workerCPULimitMilli, workerMemoryLimitMi))
+	if s.ManagedByTool {
+		switch same, known := r.sizedAsManifest(); {
+		case !known:
+			// A size that cannot be read is not called outdated.
+			slog.Debug("cannot compare a Kueue sample's resources with this version's", "sample", name, "project", project)
+		case !same:
+			s.Outdated = fmt.Sprintf("its head and worker have other CPU and memory than this version sets (head %s; worker %s)", headSize.text(), workerSize.text())
+		}
 	}
 	// One state: a RayJob's job status when it has one (RUNNING,
 	// SUCCEEDED...), else its deployment status; a RayCluster's state.
@@ -247,13 +253,14 @@ func sampleState(u *kube.Client, kind, project string, rec Record, workloads []W
 	return s, nil
 }
 
-// sizeText is "1 CPU and 5Gi" for milli CPUs and mebibytes.
-func sizeText(milli, mi int) string {
-	unit := "CPUs"
-	if milli == 1000 {
-		unit = "CPU"
-	}
-	return fmt.Sprintf("%s %s and %s", milliText(milli), unit, miText(mi))
+// quotaDiffers says whether a live nominal quota is known to differ from
+// the one this version sets, as amounts ("19456Mi" is "19Gi"); a quota
+// that cannot be read is not called different.
+func quotaDiffers(cpu, memory string) bool {
+	wantCPU, wantMemory := Quota()
+	sameCPU, knownCPU := kube.SameQuantity(cpu, wantCPU)
+	sameMemory, knownMemory := kube.SameQuantity(memory, wantMemory)
+	return (knownCPU && !sameCPU) || (knownMemory && !sameMemory)
 }
 
 // GetStatus powers the Distributed workloads tab: DataScienceCluster data via
@@ -309,7 +316,7 @@ func GetStatus(sa, u *kube.Client, project string) (*types.KueueStatus, error) {
 			// a ClusterQueue that is there.
 			if cpu, memory := cq.nominalQuota(); cpu != "" || memory != "" {
 				st.Quota = fmt.Sprintf("%s CPUs and %s of memory", kube.FirstNonEmpty(cpu, "no"), kube.FirstNonEmpty(memory, "no"))
-				if wantCPU, wantMemory := Quota(); cqState.ManagedByTool && (cpu != wantCPU || memory != wantMemory) {
+				if cqState.ManagedByTool && quotaDiffers(cpu, memory) {
 					cqState.Outdated = fmt.Sprintf("its quota is %s; this version sets %s", st.Quota, describeQuota())
 				}
 			}

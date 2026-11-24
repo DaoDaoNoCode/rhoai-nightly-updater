@@ -99,17 +99,13 @@ var Operator = envkit.OperatorSpec{ID: "kueue-operator", Title: "Red Hat build o
 // from these container limits (ray-project/kuberay ray-operator
 // controllers/ray/common/pod.go generateRayStartCommand), keeping Ray's view in
 // step with the pod size. The RayJob adds its submitter pod.
+var (
+	headSize      = podSize{CPUMilli: 1000, CPULimitMilli: 2000, MemoryMi: 5 * 1024, MemoryLimitMi: 8 * 1024}
+	workerSize    = podSize{CPUMilli: 1000, CPULimitMilli: 1000, MemoryMi: 3 * 1024, MemoryLimitMi: 6 * 1024}
+	submitterSize = podSize{CPUMilli: 500, CPULimitMilli: 500, MemoryMi: 1024, MemoryLimitMi: 1024}
+)
+
 const (
-	headCPUMilli        = 1000
-	headCPULimitMilli   = 2000
-	headMemoryMi        = 5 * 1024
-	headMemoryLimitMi   = 8 * 1024
-	workerCPUMilli      = 1000
-	workerCPULimitMilli = 1000
-	workerMemoryMi      = 3 * 1024
-	workerMemoryLimitMi = 6 * 1024
-	submitterCPUMilli   = 500
-	submitterMemoryMi   = 1024
 	// Default capacity on the opt-in hardware profile: one workload should fit
 	// alongside both samples.
 	profileCPUMilli = 1000
@@ -123,8 +119,8 @@ const (
 // requests, not limits; free capacity on nodes is not validated (admission
 // accounting only).
 func Quota() (cpu, memory string) {
-	milli := 2*(headCPUMilli+workerCPUMilli) + submitterCPUMilli + profileCPUMilli
-	mi := 2*(headMemoryMi+workerMemoryMi) + submitterMemoryMi + profileMemoryMi
+	milli := 2*(headSize.CPUMilli+workerSize.CPUMilli) + submitterSize.CPUMilli + profileCPUMilli
+	mi := 2*(headSize.MemoryMi+workerSize.MemoryMi) + submitterSize.MemoryMi + profileMemoryMi
 	return fmt.Sprint((milli + 999) / 1000), fmt.Sprintf("%dGi", (mi+1023)/1024)
 }
 
@@ -203,13 +199,74 @@ func rayVersion(image string) string {
 	return rayVersionTag.FindString(image[i+1:])
 }
 
-func resources(milli, mi int) map[string]any { return sizedResources(milli, milli, mi, mi) }
+// podSize is a sample container's CPU (milli) and memory (MiB) requests
+// and limits: the manifests are built from it and a live sample is
+// compared with it.
+type podSize struct {
+	CPUMilli, CPULimitMilli, MemoryMi, MemoryLimitMi int
+}
 
-func sizedResources(milli, limitMilli, mi, limitMi int) map[string]any {
-	return map[string]any{
-		"requests": map[string]any{"cpu": milliText(milli), "memory": miText(mi)},
-		"limits":   map[string]any{"cpu": milliText(limitMilli), "memory": miText(limitMi)},
+// quantities are the size as the manifests write it, by "requests" and
+// "limits", then "cpu" and "memory".
+func (z podSize) quantities() map[string]map[string]string {
+	return map[string]map[string]string{
+		"requests": {"cpu": milliText(z.CPUMilli), "memory": miText(z.MemoryMi)},
+		"limits":   {"cpu": milliText(z.CPULimitMilli), "memory": miText(z.MemoryLimitMi)},
 	}
+}
+
+// resources is the container's resources field.
+func (z podSize) resources() map[string]any {
+	out := map[string]any{}
+	for kind, values := range z.quantities() {
+		m := map[string]any{}
+		for name, v := range values {
+			m[name] = v
+		}
+		out[kind] = m
+	}
+	return out
+}
+
+// matches compares a live container's requests and limits with the size,
+// as amounts ("1000m" is "1"). A value that is missing differs; known is
+// false when a value cannot be read (nothing can be said then).
+func (z podSize) matches(requests, limits map[string]kube.Quantity) (same, known bool) {
+	unknown := false
+	for kind, values := range z.quantities() {
+		live := requests
+		if kind == "limits" {
+			live = limits
+		}
+		for name, want := range values {
+			got, ok := live[name]
+			if !ok || got == "" {
+				return false, true
+			}
+			eq, readable := kube.SameQuantity(string(got), want)
+			switch {
+			case !readable:
+				unknown = true
+			case !eq:
+				return false, true
+			}
+		}
+	}
+	return !unknown, !unknown
+}
+
+// text is "1 CPU and 5Gi requested, up to 2 CPUs and 8Gi".
+func (z podSize) text() string {
+	return fmt.Sprintf("%s requested, up to %s", sizeText(z.CPUMilli, z.MemoryMi), sizeText(z.CPULimitMilli, z.MemoryLimitMi))
+}
+
+// sizeText is "1 CPU and 5Gi" for milli CPUs and mebibytes.
+func sizeText(milli, mi int) string {
+	unit := "CPUs"
+	if milli == 1000 {
+		unit = "CPU"
+	}
+	return fmt.Sprintf("%s %s and %s", milliText(milli), unit, miText(mi))
 }
 
 // RayClusterSpec is the shared cluster shape for both samples: head plus one
@@ -227,7 +284,7 @@ func RayClusterSpec(image string) map[string]any {
 					map[string]any{"containerPort": 8265, "name": "dashboard"},
 					map[string]any{"containerPort": 10001, "name": "client"},
 				},
-				"resources": sizedResources(headCPUMilli, headCPULimitMilli, headMemoryMi, headMemoryLimitMi),
+				"resources": headSize.resources(),
 			}}}},
 		},
 		"workerGroupSpecs": []any{map[string]any{
@@ -235,7 +292,7 @@ func RayClusterSpec(image string) map[string]any {
 			"rayStartParams": map[string]any{},
 			"template": map[string]any{"spec": map[string]any{"containers": []any{map[string]any{
 				"name": "ray-worker", "image": image,
-				"resources": sizedResources(workerCPUMilli, workerCPULimitMilli, workerMemoryMi, workerMemoryLimitMi),
+				"resources": workerSize.resources(),
 			}}}},
 		}},
 	}
@@ -275,7 +332,7 @@ func RayJobManifest(project, image string) map[string]any {
 			"restartPolicy": "Never",
 			"containers": []any{map[string]any{
 				"name": "ray-job-submitter", "image": image,
-				"resources": resources(submitterCPUMilli, submitterMemoryMi),
+				"resources": submitterSize.resources(),
 			}},
 		}},
 		"rayClusterSpec": RayClusterSpec(image),
