@@ -21,6 +21,8 @@ export function baseWorld() {
     resources: { minio: F.s3States.running, mlflow: F.mlflowStates.none, pipelineServers: [F.pipelineServer] },
     // The Gen AI playground (GET /api/resources/playground).
     playground: F.playgroundWorld(),
+    // The Workbench tab (GET /api/resources/workbench): items, and the plan of a project.
+    workbench: { items: [] },
     // Models as a Service (GET /api/resources/maas).
     maas: F.maasWorld("none"),
     // This tool's model registry (GET /api/resources/model-registry).
@@ -560,6 +562,12 @@ export const scenarios = {
   },
   // Others publish through the platform: Remove refuses before changing anything.
   "env-maas-in-use": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(false)] }); w.maasRefusal = F.MAAS_IN_USE; },
+  // The Workbench tab: not set up (the plan shown), running, stopped, and no hardware profile fits.
+  "env-workbench-none": () => {},
+  "env-workbench-running": (w) => { w.workbench.items = [F.workbenchItem("dev-project", "running")]; },
+  "env-workbench-stopped": (w) => { w.workbench.items = [{ ...F.workbenchItem("dev-project", "stopped"), ready: false }]; },
+  "env-workbench-no-profile": (w) => { w.workbench.noProfile = true; },
+  "env-workbench-kept-storage": (w) => { const { state: _s, url: _u, image: _i, hardwareProfile: _h, cpu: _c, memory: _m, connectionAttached: _a, ...kept } = F.workbenchItem("dev-project", "stopped"); w.workbench.items = [{ ...kept, deployed: false, ready: false }]; },
   "env-playground-no-model": (w) => { w.playground.modelsByProject["dev-project"] = []; },
   "env-playground-model-not-ready": (w) => {
     scenarios["env-models-ready"](w);

@@ -33,6 +33,8 @@ export interface ConfirmActionModalProps {
   choice?: React.ReactNode;
   confirmLabel: string;
   confirmVariant?: "primary" | "danger";
+  /** The title icon; by default a warning for a danger confirmation. */
+  titleIconVariant?: "warning" | "danger";
   isLoading?: boolean;
   /** Disable Confirm (for example while the preconditions load). */
   confirmDisabled?: boolean;
@@ -48,7 +50,7 @@ export interface ConfirmActionModalProps {
  * of them; Cancel is always available and Escape closes the dialog.
  */
 export const ConfirmActionModal: React.FC<ConfirmActionModalProps> = ({
-  isOpen, title, changes, summary, children, dataLoss, choice, confirmLabel, confirmVariant = "primary", isLoading, confirmDisabled, changesOpen, onConfirm, onCancel,
+  isOpen, title, changes, summary, children, dataLoss, choice, confirmLabel, confirmVariant = "primary", titleIconVariant, isLoading, confirmDisabled, changesOpen, onConfirm, onCancel,
 }) => {
   const titleId = React.useId();
   const [detailsOpen, setDetailsOpen] = React.useState(false);
@@ -62,7 +64,7 @@ export const ConfirmActionModal: React.FC<ConfirmActionModalProps> = ({
   );
   return (
     <Modal aria-labelledby={titleId} variant={ModalVariant.medium} isOpen={isOpen} onClose={() => !isLoading && onCancel()}>
-      <ModalHeader title={title} labelId={titleId} titleIconVariant={confirmVariant === "danger" ? "warning" : undefined} />
+      <ModalHeader title={title} labelId={titleId} titleIconVariant={titleIconVariant ?? (confirmVariant === "danger" ? "warning" : undefined)} />
       <ModalBody>
         <Stack hasGutter>
           <StackItem>{summary ?? changeList}</StackItem>

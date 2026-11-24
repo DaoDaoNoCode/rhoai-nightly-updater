@@ -1572,6 +1572,67 @@ export interface PRContainsResponse {
   retryAfterSeconds?: number;
 }
 
+/** GET /api/resources/workbench (pkg/types WorkbenchStatus): the Workbench feature, read with the admin's own token. */
+export interface WorkbenchStatus {
+  project?: string;
+  /** Why no workbench can be set up (the workbenches component is off). */
+  blocked?: ComponentBlock;
+  /** Why this platform cannot have one (RHOAI 2.x). */
+  unsupported?: string;
+  /** This tool's workbenches, and the chosen project's nightly-workbench. */
+  items?: WorkbenchState[];
+  itemsProblem?: string;
+  /** Projects whose workbench could not be read: unknown, never absent. */
+  itemsUnreadable?: string[];
+  /** What Set up would create in project; planProblem says why it cannot. */
+  plan?: WorkbenchPlan;
+  planProblem?: string;
+  planProblemCode?: string;
+}
+
+export interface WorkbenchPlan {
+  image: string;
+  imageStream: string;
+  imageTag: string;
+  hardwareProfile: string;
+  hardwareProfileName: string;
+  cpu?: string;
+  memory?: string;
+  queue?: string;
+  storageSize: string;
+  storageClass?: string;
+  connection?: boolean;
+  pipelines?: boolean;
+  mlflow?: boolean;
+}
+
+export type WorkbenchRunState = "starting" | "running" | "stopping" | "stopped" | "failed";
+
+export interface WorkbenchState extends ResourceState {
+  state?: WorkbenchRunState;
+  url?: string;
+  image?: string;
+  hardwareProfile?: string;
+  cpu?: string;
+  memory?: string;
+  connectionAttached?: boolean;
+  storage?: WorkbenchStorage;
+}
+
+export interface WorkbenchStorage {
+  name: string;
+  size?: string;
+  storageClass?: string;
+  managedByTool: boolean;
+}
+
+/** POST /api/resources/workbench/stream. */
+export interface WorkbenchRequest {
+  action: "setup" | "start" | "stop" | "teardown" | "delete-storage";
+  project: string;
+  deleteStorage?: boolean;
+}
+
 /** The Gen AI playground feature (GET /api/resources/playground; pkg/types PlaygroundStatus). */
 export interface PlaygroundStatus {
   /** Why no playground can be set up (its operator's component is off). */

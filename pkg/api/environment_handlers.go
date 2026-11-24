@@ -173,11 +173,11 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 	if !decodeBody(w, r, cleanupBodyLimit, &req, false) {
 		return
 	}
-	if len(req.PipelineServers) > maxCleanupProjects || len(req.Models) > maxCleanupProjects || len(req.Playgrounds) > maxCleanupProjects || len(req.MaaSPublished) > maxCleanupProjects || len(req.RecipeProjects) > maxCleanupProjects {
-		writeError(w, fmt.Sprintf("at most %d pipeline servers, models, playgrounds and recipe projects each per clean-up", maxCleanupProjects), http.StatusBadRequest, "validation")
+	if len(req.PipelineServers) > maxCleanupProjects || len(req.Models) > maxCleanupProjects || len(req.Playgrounds) > maxCleanupProjects || len(req.MaaSPublished) > maxCleanupProjects || len(req.RecipeProjects) > maxCleanupProjects || len(req.Workbenches) > maxCleanupProjects || len(req.WorkbenchStorage) > maxCleanupProjects {
+		writeError(w, fmt.Sprintf("at most %d pipeline servers, models, playgrounds, workbenches and recipe projects each per clean-up", maxCleanupProjects), http.StatusBadRequest, "validation")
 		return
 	}
-	for _, list := range [][]string{req.PipelineServers, req.Models, req.Playgrounds, req.MaaSPublished, req.RecipeProjects} {
+	for _, list := range [][]string{req.PipelineServers, req.Models, req.Playgrounds, req.MaaSPublished, req.RecipeProjects, req.Workbenches, req.WorkbenchStorage} {
 		seen := map[string]bool{}
 		for _, p := range list {
 			if !namespaceRegex.MatchString(p) {
@@ -240,11 +240,17 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 		}
 		seenComponents[k] = true
 	}
-	if len(req.PipelineServers) == 0 && !req.Storage && !req.MLflow && !req.ModelRegistry && len(req.Models) == 0 && !req.InferenceGateway && len(req.Playgrounds) == 0 && len(req.MaaSPublished) == 0 && !req.MaaSPlatform && len(req.Components) == 0 && len(req.RecipeProjects) == 0 {
+	if len(req.Workbenches) == 0 && len(req.WorkbenchStorage) == 0 && len(req.PipelineServers) == 0 && !req.Storage && !req.MLflow && !req.ModelRegistry && len(req.Models) == 0 && !req.InferenceGateway && len(req.Playgrounds) == 0 && len(req.MaaSPublished) == 0 && !req.MaaSPlatform && len(req.Components) == 0 && len(req.RecipeProjects) == 0 {
 		writeError(w, "nothing to clean up was selected", http.StatusBadRequest, "validation")
 		return
 	}
 	var target []string
+	if n := len(req.Workbenches); n > 0 {
+		target = append(target, fmt.Sprintf("%d %s", n, map[bool]string{true: "workbench", false: "workbenches"}[n == 1]))
+	}
+	if n := len(req.WorkbenchStorage); n > 0 {
+		target = append(target, fmt.Sprintf("%d workbench %s", n, map[bool]string{true: "storage", false: "storages"}[n == 1]))
+	}
 	if n := len(req.MaaSPublished); n > 0 {
 		target = append(target, fmt.Sprintf("%d MaaS %s", n, map[bool]string{true: "publication", false: "publications"}[n == 1]))
 	}

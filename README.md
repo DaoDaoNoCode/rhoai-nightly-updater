@@ -214,6 +214,15 @@ An unavailable choice says why under it, with a link to fix it where there is on
 
 Each part's menu has **Delete**, for the chosen model only; the gateway stays while a model uses it. **Clean up Models** deletes every model of this tool in the projects you choose, then the gateway. Troubleshooting: [RUNBOOK §10.2](RUNBOOK.md#102-models-the-inference-gateway-and-cpu-models).
 
+#### Workbench: a Jupyter workbench made as the dashboard makes it
+
+The Workbench tab sets up a Jupyter workbench `nightly-workbench` in a project you choose, exactly as the dashboard's **Create workbench** form does, so the dashboard lists and runs it like any other.
+
+1. **Set up** names what it creates before it runs: the image RHOAI marks as its default workbench image (Jupyter Minimal on 3.6), the dashboard's default hardware profile for the project (in a Kueue-managed project only a Queue profile whose LocalQueue the project has), storage `nightly-workbench-storage` of the dashboard's default size and storage class, and the pipeline server's S3 connection when the project has one. When no hardware profile fits, or the cluster runs RHOAI 2.x, it says why and Set up stays off.
+2. **Workbench**: its state as the dashboard shows it (Starting, Running, Stopping, Stopped, Failed), with **Open workbench**, **Start** and **Stop** (the dashboard's own patches), and **Delete workbench**, which keeps the storage unless you tick **Also delete its storage (files are lost)**. Setting up again uses kept storage; until then the card shows it, with **Delete storage** in its menu. A `nightly-workbench` this tool did not create reads **Not managed by this tool**; one whose state cannot be read reads **Unknown**, with **Retry**.
+
+Troubleshooting: [RUNBOOK §10.6](RUNBOOK.md#106-workbench).
+
 #### Playground: the dashboard's Gen AI playground
 
 The Playground tab sets up the RHOAI dashboard's Gen AI playground, a chat page where you try a project's models and ask about your documents, in a project you choose.

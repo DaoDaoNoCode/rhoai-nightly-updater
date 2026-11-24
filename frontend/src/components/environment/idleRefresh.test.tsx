@@ -3,6 +3,7 @@ import { act, renderHook } from "@testing-library/react";
 import { jsonResponse, setDocumentHidden } from "../../test/utils";
 import { useMaaSStatus } from "./MaaSTab";
 import { usePrerequisites } from "./Prerequisites";
+import { useWorkbenchStatus } from "./workbenchState";
 
 const tick = (ms = 0) => act(() => vi.advanceTimersByTimeAsync(ms));
 
@@ -52,5 +53,26 @@ describe("idle re-reads", () => {
     await act(async () => { renderHook(() => useMaaSStatus(0, false, false)); });
     await tick(10 * 60_000);
     expect(reads()).toBe(0);
+  });
+});
+
+// C4: the Workbench status is read again slowly while nothing settles, not
+// while the browser tab is hidden, and at once when it is shown.
+describe("idle re-reads: Workbench", () => {
+  it("every idle interval, not while hidden, at once when shown", async () => {
+    const reads = stub("/api/resources/workbench", { items: [] });
+    await act(async () => { renderHook(() => useWorkbenchStatus("dev", 0, false, true)); });
+    await tick();
+    expect(reads()).toBe(1);
+    await tick(44_000);
+    expect(reads()).toBe(1);
+    await tick(1_000);
+    expect(reads()).toBe(2);
+    act(() => setDocumentHidden(true));
+    await tick(10 * 60_000);
+    expect(reads()).toBe(2);
+    await act(async () => { setDocumentHidden(false); });
+    await tick();
+    expect(reads()).toBe(3);
   });
 });

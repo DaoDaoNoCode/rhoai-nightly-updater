@@ -24,6 +24,8 @@ export interface Busy {
   playground?: PlaygroundOp | null;
   /** MaaS work in progress from this page: action, project (e.g. publish). */
   maas?: MaaSOp | null;
+  /** Workbench work in progress from this page: action plus project. */
+  workbench?: WorkbenchOp | null;
   /** Model registry work in progress from this page. */
   modelRegistry?: ModelRegistryOp | null;
 }
@@ -56,6 +58,12 @@ export interface ModelsOp {
   /** Catalog model name within the project. */
   model?: string | null;
   allowProject?: string;
+}
+
+/** Fields a Workbench in-flight operation is allowed to change. */
+export interface WorkbenchOp {
+  action: "setup" | "start" | "stop" | "teardown" | "delete-storage";
+  project: string;
 }
 
 export const IDLE: Busy = { resAction: null, actionProject: null, migrating: false, models: null };

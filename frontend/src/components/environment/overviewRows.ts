@@ -7,8 +7,8 @@ import { PIPELINE_SAMPLE_ID } from "./PipelineSample";
 import { STORAGE_HREF, TAB_TITLES } from "./environmentTabs";
 
 /** The Overview's rows: each feature's summary state (with its prerequisites) and its tab's address. */
-export function overviewRows(summaries: { storage: FeatureState; pipelines: FeatureState; mlflow: FeatureState; modelRegistry: FeatureState; models: FeatureState; playground: FeatureState; maas: FeatureState }, prereq: PrerequisitesStatus | null): OverviewRow[] {
-  const { storage: storageNow, pipelines: pipelinesSummary, mlflow: mlflowNow, modelRegistry: modelRegistryNow, models: modelsSummary, playground: playgroundSummary, maas: maasNow } = summaries;
+export function overviewRows(summaries: { storage: FeatureState; pipelines: FeatureState; workbench: FeatureState; mlflow: FeatureState; modelRegistry: FeatureState; models: FeatureState; playground: FeatureState; maas: FeatureState }, prereq: PrerequisitesStatus | null): OverviewRow[] {
+  const { storage: storageNow, pipelines: pipelinesSummary, workbench: workbenchSummary, mlflow: mlflowNow, modelRegistry: modelRegistryNow, models: modelsSummary, playground: playgroundSummary, maas: maasNow } = summaries;
   // Once a feature works, its samples are the natural next step.
   const pipelinesSamples = pipelinesSummary.status === "ready" && !!pipelinesSummary.project;
   const prereqFor = (feature: PrerequisiteFeature) => prereq?.features?.[feature];
@@ -20,6 +20,10 @@ export function overviewRows(summaries: { storage: FeatureState; pipelines: Feat
       id: "pipelines", name: "Pipelines", gives: "Run data science pipelines; artifacts in S3", state: withPrerequisites(pipelinesSummary, prereqFor("pipelines"), "pipelines"),
       href: `?tab=pipelines${pipelinesSummary.project ? `&project=${encodeURIComponent(pipelinesSummary.project)}` : ""}`,
       ...(pipelinesSamples ? { samples: { label: "Run a sample pipeline", focus: PIPELINE_SAMPLE_ID } } : {}),
+    },
+    {
+      id: "workbench", name: TAB_TITLES.workbench, gives: "Develop in a Jupyter workbench, made as the dashboard makes it", state: workbenchSummary,
+      href: `?tab=workbench${workbenchSummary.project ? `&project=${encodeURIComponent(workbenchSummary.project)}` : ""}`,
     },
     {
       id: "mlflow", name: "MLflow", gives: "Track experiments, runs and models", state: withPrerequisites(mlflowNow, prereqFor("mlflow"), "mlflow"), href: "?tab=mlflow",

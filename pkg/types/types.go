@@ -1362,6 +1362,105 @@ type ModelsRequest struct {
 	GatewayRef string `json:"gatewayRef,omitempty"`
 }
 
+// WorkbenchStatus is the Workbench feature (GET /api/resources/workbench):
+// what a workbench needs on the cluster, this tool's workbenches, and for
+// the chosen project the workbench there and what Set up would create.
+// Everything about a project is read with the signed-in admin's own token.
+type WorkbenchStatus struct {
+	// Project is the project the answer is about ("" for none).
+	Project string `json:"project,omitempty"`
+	// Blocked says why no workbench can be set up (the workbenches
+	// component is off), or is nil; Unsupported says why this platform
+	// cannot have one (RHOAI 2.x), or is "".
+	Blocked     *ComponentBlock `json:"blocked,omitempty"`
+	Unsupported string          `json:"unsupported,omitempty"`
+	// Items are this tool's workbenches (in the projects it recorded one)
+	// and the chosen project's nightly-workbench, whoever made it.
+	Items []WorkbenchState `json:"items,omitempty"`
+	// ItemsProblem says why this tool's workbenches could not be read;
+	// ItemsUnreadable are the projects whose workbench could not be read
+	// (their state is unknown: never shown as absent).
+	ItemsProblem    string   `json:"itemsProblem,omitempty"`
+	ItemsUnreadable []string `json:"itemsUnreadable,omitempty"`
+	// Plan is what Set up would create in Project (nil when it cannot:
+	// PlanProblem says why, PlanProblemCode is "no_profile", "no_image",
+	// "validation", "forbidden", ...).
+	Plan            *WorkbenchPlan `json:"plan,omitempty"`
+	PlanProblem     string         `json:"planProblem,omitempty"`
+	PlanProblemCode string         `json:"planProblemCode,omitempty"`
+}
+
+// WorkbenchPlan is what Set up would create, chosen as the dashboard's
+// Create workbench form would choose it.
+type WorkbenchPlan struct {
+	// Image is the image's display name, ImageStream and ImageTag the
+	// ImageStream tag it runs.
+	Image       string `json:"image"`
+	ImageStream string `json:"imageStream"`
+	ImageTag    string `json:"imageTag"`
+	// HardwareProfile is the profile's display name, HardwareProfileName
+	// its "<namespace>/<name>"; CPU and Memory are what the workbench
+	// requests (the profile's defaults).
+	HardwareProfile     string `json:"hardwareProfile"`
+	HardwareProfileName string `json:"hardwareProfileName"`
+	CPU                 string `json:"cpu,omitempty"`
+	Memory              string `json:"memory,omitempty"`
+	// Queue is the Kueue LocalQueue the profile sends the workbench to
+	// ("" for none).
+	Queue string `json:"queue,omitempty"`
+	// StorageSize and StorageClass are its storage's ("" class: the
+	// cluster's default).
+	StorageSize  string `json:"storageSize"`
+	StorageClass string `json:"storageClass,omitempty"`
+	// Connection: the tool's S3 Connection is attached; Pipelines: the
+	// pipeline server's settings are mounted (Elyra); MLflow: it is
+	// linked to MLflow.
+	Connection bool `json:"connection,omitempty"`
+	Pipelines  bool `json:"pipelines,omitempty"`
+	MLflow     bool `json:"mlflow,omitempty"`
+}
+
+// WorkbenchState is one workbench named nightly-workbench (Namespace).
+type WorkbenchState struct {
+	ResourceState
+	// State is how the dashboard shows it: "starting", "running",
+	// "stopping", "stopped" or "failed".
+	State string `json:"state,omitempty"`
+	// URL is where it opens (the dashboard's address and
+	// /notebook/<project>/<name>); "" when unknown.
+	URL string `json:"url,omitempty"`
+	// Image is the image's display name and tag, HardwareProfile the
+	// profile's name, as the workbench records them.
+	Image           string `json:"image,omitempty"`
+	HardwareProfile string `json:"hardwareProfile,omitempty"`
+	// CPU and Memory are what its container requests.
+	CPU    string `json:"cpu,omitempty"`
+	Memory string `json:"memory,omitempty"`
+	// ConnectionAttached: its connections annotation names the tool's S3
+	// Connection.
+	ConnectionAttached bool `json:"connectionAttached,omitempty"`
+	// Storage is its storage nightly-workbench-storage (nil when absent).
+	Storage *WorkbenchStorage `json:"storage,omitempty"`
+}
+
+// WorkbenchStorage is a workbench's storage, a PersistentVolumeClaim.
+type WorkbenchStorage struct {
+	Name          string `json:"name"`
+	Size          string `json:"size,omitempty"`
+	StorageClass  string `json:"storageClass,omitempty"`
+	ManagedByTool bool   `json:"managedByTool"`
+}
+
+// WorkbenchRequest is the body of POST /api/resources/workbench/stream.
+type WorkbenchRequest struct {
+	// Action is "setup", "start", "stop", "teardown" or "delete-storage"
+	// (the storage kept from a deleted workbench).
+	Action  string `json:"action"`
+	Project string `json:"project"`
+	// DeleteStorage (teardown) also deletes its storage: its files are lost.
+	DeleteStorage bool `json:"deleteStorage,omitempty"`
+}
+
 // PlaygroundStatus is what the Gen AI playground feature needs and the
 // playgrounds in data science projects (GET /api/resources/playground).
 // The cluster parts are read with the app's ServiceAccount; everything about
@@ -1787,6 +1886,12 @@ type CleanupRequest struct {
 	// Playgrounds are the projects whose playground (requested by this
 	// tool) goes, before the models it uses.
 	Playgrounds []string `json:"playgrounds,omitempty"`
+	// Workbenches are the projects whose workbench (nightly-workbench, made
+	// by this tool) goes; WorkbenchStorage are the projects whose storage
+	// (nightly-workbench-storage) goes, with the workbench or, for storage
+	// kept from a deleted workbench, on its own: its files are lost.
+	Workbenches      []string `json:"workbenches,omitempty"`
+	WorkbenchStorage []string `json:"workbenchStorage,omitempty"`
 	// MaaSPublished are the projects whose models this tool unpublishes from
 	// Models as a Service first, before anything else goes; MaaSPlatform
 	// removes the MaaS platform this tool set up, last.

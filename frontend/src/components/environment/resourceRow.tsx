@@ -212,6 +212,9 @@ export function consolePodsHref(consoleURL: string | undefined, namespace: strin
 
 /** A change the user is asked to confirm. */
 export type Pending =
+  /** The Workbench tab: one streamed request (pkg/api HandleWorkbenchStream). */
+  | { kind: "setup-workbench" | "start-workbench" | "stop-workbench" | "delete-workbench-storage"; project: string }
+  | { kind: "teardown-workbench"; project: string; deleteStorage?: boolean }
   | { kind: "setup-minio" | "repair-minio" | "setup-mlflow" | "revert-mlflow" | "teardown-mlflow" }
   /** deleteNamespace: also delete namespace seaweedfs (the user's informed choice). */
   | { kind: "teardown-minio"; deleteNamespace?: boolean }
@@ -282,7 +285,9 @@ export type ModelRegistryPending = Extract<Pending, { kind: "setup-model-registr
 export const isModelRegistryPending = (p: Pending): p is ModelRegistryPending => p.kind === "setup-model-registry" || p.kind === "teardown-model-registry";
 const MAAS_KINDS: string[] = ["setup-maas", "teardown-maas", "publish-maas", "unpublish-maas", "restore-routing-maas", "maas-action", "maas-limit", "maas-access", "maas-database"];
 export const isMaaSPending = (p: Pending): p is MaaSPending => MAAS_KINDS.includes(p.kind);
-export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending | PlaygroundPending | MaaSPending | PrerequisitesPending | ModelRegistryPending>;
+export type WorkbenchPending = Extract<Pending, { kind: "setup-workbench" | "start-workbench" | "stop-workbench" | "teardown-workbench" | "delete-workbench-storage" }>;
+export const isWorkbenchPending = (p: Pending): p is WorkbenchPending => p.kind === "setup-workbench" || p.kind === "start-workbench" || p.kind === "stop-workbench" || p.kind === "teardown-workbench" || p.kind === "delete-workbench-storage";
+export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending | PlaygroundPending | MaaSPending | PrerequisitesPending | ModelRegistryPending | WorkbenchPending>;
 export const isPlaygroundPending = (p: Pending): p is PlaygroundPending => p.kind === "setup-playground" || p.kind === "teardown-playground";
 export const isSamplePending = (p: Pending): p is SamplePending => p.kind === "mlflow-samples";
 export const isModelsPending = (p: Pending): p is ModelsPending => p.kind === "setup-models" || p.kind === "teardown-model" || p.kind === "teardown-gateway" || p.kind === "allow-gateway-project" || p.kind === "disallow-gateway-project" || p.kind === "check-model";
@@ -299,6 +304,8 @@ export interface ConfirmSpec {
   /** A choice that changes what is deleted, shown above the data-loss alert it changes. */
   choice?: React.ReactNode;
   danger?: boolean;
+  /** The title icon matches the data-loss alert ("danger") when set. */
+  titleIcon?: "warning" | "danger";
   /** Confirm stays disabled (a form in the dialog is not complete or valid yet). */
   confirmDisabled?: boolean;
   /** Show the changes open after the summary, not under "Details" (a plan the user should read). */

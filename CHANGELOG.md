@@ -24,6 +24,20 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Added
 
+- **Workbench on the Environment page.** A new **Workbench** tab (and
+  Overview row) sets up a Jupyter workbench `nightly-workbench` in a data
+  science project exactly as the dashboard's Create workbench does: the
+  image RHOAI marks as its default workbench image, the dashboard's default
+  hardware profile (with its Kueue rule), its storage size and class, the
+  pipeline server's S3 connection by annotation, and nothing the workbench
+  controllers add themselves. It shows the dashboard's state (Starting,
+  Running, Stopping, Stopped, Failed) with **Open**, **Start**, **Stop**
+  (the dashboard's own patches) and **Delete**, which keeps the storage
+  `nightly-workbench-storage` unless you tick it; kept storage shows on the
+  tab and in Clean up, where it can be deleted on its own. Refused on RHOAI 2.x and
+  when no hardware profile fits. Clean up offers the workbenches, storage
+  unticked. All reads and writes use your own token (new user-token
+  rights only; no ServiceAccount change).
 - **Environment recipes (backend, first version).** A recipe
   (`rhoai-nightly-updater/v1alpha1`, YAML or JSON, no secrets) describes a
   dev cluster: an RHOAI build (latest, a nightly line or an image; kept or

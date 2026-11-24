@@ -84,6 +84,9 @@ func TestUserReadsRefuseTheServiceAccount(t *testing.T) {
 	if _, err := GetMLflowSamplesStatus(c, c, "p"); !errors.Is(err, authz.ErrNotUserClient) {
 		t.Fatalf("samples status: %v", err)
 	}
+	if _, err := GetWorkbenchStatus(c, c, "p"); !errors.Is(err, authz.ErrNotUserClient) {
+		t.Fatalf("workbench status: %v", err)
+	}
 	if len(k8s.calls) != 0 {
 		t.Fatalf("calls: %+v", k8s.calls)
 	}

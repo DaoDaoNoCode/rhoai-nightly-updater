@@ -40,13 +40,14 @@ const qwen: PlaygroundModel = { name: "qwen25-05b-instruct", displayName: "Qwen2
 
 /** Every read the page makes, held; the pipeline sample's spec never answers (it is not what these tests look at). */
 function stubHeld() {
-  const g = { status: gate(), projects: gate(), playground: gate(), maas: gate(), registry: gate() };
+  const g = { status: gate(), projects: gate(), playground: gate(), maas: gate(), registry: gate(), workbench: gate() };
   stubApi({
     "/api/resources/status": g.status.handler,
     "/api/resources/projects": g.projects.handler,
     "/api/resources/playground": g.playground.handler,
     "/api/resources/maas": g.maas.handler,
     "/api/resources/model-registry": g.registry.handler,
+    "/api/resources/workbench": g.workbench.handler,
     "/api/resources/samples/pipeline/spec": () => new Promise<Response>(() => {}),
   });
   return g;
@@ -62,7 +63,7 @@ function renderAt(path: string) {
 
 const panel = () => screen.getByRole("tabpanel");
 /** Not one empty, missing or not-set-up word while the data that would say so is not in. */
-const NEGATIVE = /Not set up|No data science projects|No model of this tool yet|no ready chat model|Not published|of 7 ready/;
+const NEGATIVE = /Not set up|No data science projects|No model of this tool yet|no ready chat model|Not published|of 8 ready/;
 
 /** Picks a project in the tab's project picker. */
 async function chooseProject(name: string) {
@@ -89,7 +90,7 @@ describe("Environment loading: the Overview", () => {
     expect(screen.getByRole("tab", { name: "MaaS" })).toBeInTheDocument();
     const table = screen.getByRole("grid", { name: "Features" });
     expect(table).toHaveAttribute("aria-busy", "true");
-    for (const name of ["S3 storage", "Pipelines", "MLflow", "Model registry", "Models", "Playground", "MaaS"]) {
+    for (const name of ["S3 storage", "Pipelines", "Workbench", "MLflow", "Model registry", "Models", "Playground", "MaaS"]) {
       expect(within(table).getByText(`Loading the state of ${name}`)).toBeInTheDocument();
     }
     expect(panel()).not.toHaveTextContent(NEGATIVE);
@@ -102,14 +103,16 @@ describe("Environment loading: the Overview", () => {
     expect(within(table).getAllByText("Not set up in any project", { selector: ".pf-v6-c-label *" })).toHaveLength(2);
     expect(within(table).getByText("Loading the state of Playground")).toBeInTheDocument();
     expect(within(table).getByText("Loading the state of MaaS")).toBeInTheDocument();
-    expect(panel()).not.toHaveTextContent(/of 7 ready/);
+    expect(panel()).not.toHaveTextContent(/of 8 ready/);
 
     await g.playground.send(playground);
     await g.maas.send(maas);
     await g.registry.send(registryAbsent);
+    expect(within(table).getByText("Loading the state of Workbench")).toBeInTheDocument();
+    await g.workbench.send({ items: [] });
     expect(within(table).queryByText(/^Loading the state of/)).toBeNull();
     expect(table).toHaveAttribute("aria-busy", "false");
-    expect(panel()).toHaveTextContent("0 of 7 ready");
+    expect(panel()).toHaveTextContent("0 of 8 ready");
     expect(screen.getByRole("button", { name: /^Set up MaaS/ })).toBeInTheDocument();
   });
 
@@ -139,20 +142,22 @@ describe("Environment loading: the Overview", () => {
     await g.playground.send(playground);
     await g.maas.send(maas);
     await g.registry.send(registryAbsent);
+    await g.workbench.send({ items: [] });
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await tick();
     expect(g.status.pending()).toHaveLength(1);
+    expect(g.workbench.pending()).toHaveLength(1);
     expect(g.projects.pending()).toHaveLength(1);
     expect(g.playground.pending()).toHaveLength(1);
     expect(g.maas.pending()).toHaveLength(1);
     expect(g.registry.pending()).toHaveLength(1);
     const table = screen.getByRole("grid", { name: "Features" });
     expect(within(table).queryByText(/^Loading the state of/)).toBeNull();
-    expect(panel()).toHaveTextContent("0 of 7 ready");
+    expect(panel()).toHaveTextContent("0 of 8 ready");
     await g.status.send({ ...status, mlflow: { deployed: true, ready: true, managedByTool: true, uiRoute: "https://mlflow.example.com" } });
-    expect(panel()).toHaveTextContent("0 of 7 ready");
+    expect(panel()).toHaveTextContent("0 of 8 ready");
     await g.projects.send(projects);
-    expect(panel()).toHaveTextContent("1 of 7 ready");
+    expect(panel()).toHaveTextContent("1 of 8 ready");
   });
 });
 

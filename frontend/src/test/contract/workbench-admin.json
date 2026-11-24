@@ -1,0 +1,45 @@
+{
+  "items": [
+    {
+      "connectionAttached": true,
+      "cpu": "2",
+      "deployed": true,
+      "hardwareProfile": "Default",
+      "image": "Jupyter | Minimal | CPU | Python 3.12 (2025.2)",
+      "managedByTool": true,
+      "memory": "4Gi",
+      "name": "nightly-workbench",
+      "namespace": "team-a",
+      "ready": true,
+      "state": "running",
+      "storage": {
+        "managedByTool": true,
+        "name": "nightly-workbench-storage",
+        "size": "20Gi",
+        "storageClass": "gp3-csi"
+      },
+      "uid": "nb-uid",
+      "url": "https://rh-ai.apps.example.com/notebook/team-a/nightly-workbench"
+    }
+  ],
+  "itemsProblem": "Cannot read the workbench in team-b: k8s API error 503.",
+  "itemsUnreadable": [
+    "team-b"
+  ],
+  "plan": {
+    "connection": true,
+    "cpu": "2",
+    "hardwareProfile": "Default",
+    "hardwareProfileName": "redhat-ods-applications/default-profile",
+    "image": "Jupyter | Minimal | CPU | Python 3.12",
+    "imageStream": "s2i-minimal-notebook",
+    "imageTag": "2025.2",
+    "memory": "4Gi",
+    "mlflow": true,
+    "pipelines": true,
+    "queue": "lq",
+    "storageClass": "gp3-csi",
+    "storageSize": "20Gi"
+  },
+  "project": "team-a"
+}
