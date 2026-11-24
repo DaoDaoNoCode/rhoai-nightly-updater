@@ -858,6 +858,22 @@ with these differences:
   the catalog image pulls. A missing credential for the bundle or operator
   images fails the install, and Update restores as after any failed
   install. The Status page shows the pull secret as *Not used*.
+
+  <a id="workbench-images-on-rosa-hcp"></a>**Workbench images on ROSA HCP.** The internal registry, which pulls
+  RHOAI's workbench images, does not see `kube-system/additional-pull-secret`
+  ([SECURITY.md](../SECURITY.md#the-internal-registrys-copy-of-the-pull-secret-rosa-hcp-500)).
+  The full profile copies the `quay.io/rhoai` entry into Secret
+  `rhoai-nightly-updater-pull` in RHOAI's applications namespace; this
+  profile does not. Manage that Secret in Git, or let a cluster-admin create
+  it (the token is read at a silent prompt and reaches `jq` through its
+  environment, not its arguments):
+
+  ```bash
+  NS=$(oc get dscinitializations -o jsonpath='{.items[0].spec.applicationsNamespace}')
+  printf 'quay.io/rhoai auth token (base64 user:password): '; read -rs QUAY_AUTH; echo
+  [ -n "$QUAY_AUTH" ] && [ -n "$NS" ] && QUAY_AUTH="$QUAY_AUTH" jq -n '{auths: {"quay.io/rhoai": {auth: $ENV.QUAY_AUTH}}}' \
+    | oc create secret generic rhoai-nightly-updater-pull -n "$NS" --type=kubernetes.io/dockerconfigjson --from-file=.dockerconfigjson=/dev/stdin
+  ```
 - It **never writes a CatalogSource**. The full profile checks the build in a
   temporary verification catalog first; the gitops profile cannot, because
   OLM sets a CatalogSource's `spec.image` from its

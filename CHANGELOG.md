@@ -298,15 +298,19 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   hosted control plane that Secret reaches the nodes only. So every
   workbench, made by this tool or in the RHOAI dashboard, stayed in
   `ImagePullBackOff`. On ROSA HCP the tool now also writes Secret
-  `rhoai-nightly-updater-pull` (only the `quay.io/rhoai` entry, labelled as
-  the tool's) into RHOAI's applications namespace, which it reads from the
-  DSCInitialization: when the pull secret is saved, and after Update,
-  Reinstall, Refresh, creating the DataScienceCluster and before a workbench
-  is created (a fresh cluster has no applications namespace when the pull
-  secret is saved). A Secret of that name the tool did not create is never
-  changed. The **Pull secret** item says whether the internal registry can
-  pull nightly images. Self-managed clusters are unchanged (their registry
-  uses `openshift-config/pull-secret`).
+  `rhoai-nightly-updater-pull` (only an exact `quay.io/rhoai` entry, never a
+  generic `quay.io` login; labelled as the tool's) into RHOAI's applications
+  namespace, which it reads from the DSCInitialization: when the pull secret
+  is saved, and after Update (also under Argo CD), Reinstall, Refresh,
+  creating the DataScienceCluster and setting up a workbench (a fresh cluster
+  has no applications namespace when the pull secret is saved). The
+  **Pull secret** item says whether the internal registry can pull nightly
+  images and offers **Copy for the internal registry** and **Remove the
+  internal registry's copy**. A Secret of that name the tool did not create
+  is never changed or removed. Self-managed clusters are unchanged (their
+  registry uses `openshift-config/pull-secret`); the gitops profile reads no
+  Secret, so it documents an `oc` command instead
+  ([GITOPS](docs/GITOPS.md#workbench-images-on-rosa-hcp)).
 
 - **Deleting a pipeline server no longer breaks the workbenches that use its
   dashboard Connection.** A workbench a user attached
