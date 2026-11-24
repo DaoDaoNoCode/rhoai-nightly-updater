@@ -327,7 +327,7 @@ func markMaaSCreated(c *kube.Client, s *State) (*types.RecipeCreatedPart, error)
 	case err != nil:
 		return nil, err
 	case !found || !serving.ToolOwned(meta) || meta.UID == "":
-		return nil, fmt.Errorf("Secret maas-db-config in %s is not this tool's", rec.DBNamespace)
+		return nil, fmt.Errorf("the database Secret maas-db-config in %s is not this tool's", rec.DBNamespace)
 	}
 	if err := annotateDBConfig(c, rec.DBNamespace, meta.UID, RecipeRunAnnotation, s.RunID); err != nil {
 		return nil, err
