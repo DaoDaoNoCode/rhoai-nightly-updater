@@ -333,7 +333,7 @@ export const CleanupModal: React.FC<{
                 {offered.modelRegistry && (
                   <FormGroup role="group" isStack label="Model registry" fieldId="cleanup-model-registry">
                     <Checkbox id="cleanup-model-registry" label={<code>{modelRegistry?.name}</code>} isChecked={registry} onChange={(_e, v) => setRegistry(v)}
-                      description="Its registered models and its database are deleted with it. The DataScienceCluster component that runs it stays on unless you also tick it below." />
+                      description={`Its registered models and its database are deleted with it. The DataScienceCluster component that runs it stays on${offeredComponents.some((r) => r.feature === "model-registry") ? " unless you also tick it below" : ""}.`} />
                   </FormGroup>
                 )}
                 {offered.playgrounds.length > 0 && (

@@ -153,6 +153,8 @@ describe("Model registry tab", () => {
     const dialog = await screen.findByRole("dialog", { name: /Clean up the model registry\?/ });
     expect(within(dialog).queryByRole("checkbox", { name: /aiHub/ })).toBeNull();
     expect(dialog).not.toHaveTextContent("Model Catalog");
+    expect(dialog).toHaveTextContent("The DataScienceCluster component that runs it stays on.");
+    expect(dialog).not.toHaveTextContent("tick it below");
     expect(modelRegistryComponentLine("aiHub")).toBe("this also removes the Model Catalog.");
     expect(modelRegistryComponentLine("modelregistry")).toBe("");
     expect(modelRegistryComponentLine("kserve")).toBeNull();
