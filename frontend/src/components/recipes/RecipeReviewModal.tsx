@@ -50,7 +50,7 @@ function stepDef(step: RecipePlanStep): PipelineStepDef {
     case "blocked":
       return { id: step.id, label: step.title, variant: "danger", description: <>Blocked: {step.reason ?? "the run would stop here."}<RecipeFixLink fix={step.fix} /></> };
     case "later":
-      return { id: step.id, label: step.title, description: `Checked when the run gets there; if it runs, ${time}.` };
+      return { id: step.id, label: step.title, description: `Later: ${time}.` };
     default:
       return { id: step.id, label: step.title, description: `Runs: ${time}.` };
   }
@@ -129,6 +129,13 @@ export const RecipeReviewModal: React.FC<{
                 title={otherError.errorCode === "cluster_busy" ? "Another operation is changing this cluster" : runError ? "The run did not start" : "The recipe could not be checked"}>
                 {otherError.message}
               </Alert>
+            </StackItem>
+          )}
+          {shownPlan && shownPlan.steps.some((s) => s.action === "later") && (
+            <StackItem>
+              <Content component="p">
+                Steps marked Later are checked when the run gets there: a step before them changes what they find.
+              </Content>
             </StackItem>
           )}
           {shownPlan && (

@@ -685,12 +685,15 @@ scenarios["recipe-succeeded"] = (w) => {
 // succeeded with its Clean up offering the MaaS platform and the model
 // registry it created.
 scenarios["recipe-full-new"] = (w) => { scenarios["recipe-new"](w); };
+// The review of a recipe on a cluster that has part of it: skipped steps,
+// steps that run, and a blocked one with its problem.
+scenarios["recipe-full-review-mixed"] = (w) => { scenarios["recipe-new"](w); w.recipePlanMixed = true; };
 scenarios["recipe-full-running"] = (w) => {
   const rcp = F.fullRecipe();
   const steps = F.recipeSteps(rcp);
   const at = steps.findIndex(([id]) => id === "model");
   w.recipeRun = { run: F.recipeRun({ rcp, done: at }), running: true, pod: "rhoai-nightly-updater-6f7b8c9d5-x2k4p",
-    step: { step: "model-ready", status: "running", message: "Waiting for qwen3-1-7b to serve: pulling the image on worker-2 (3:10 so far, usually 3 to 6 minutes)" } };
+    step: { step: "model-ready", status: "running", message: "Waiting for Qwen3 1.7B to serve: pulling its image on worker-2" } };
   RECIPE_OPERATION(w, at + 1, steps[at][1], "full", steps.length);
 };
 scenarios["recipe-full-succeeded"] = (w) => {

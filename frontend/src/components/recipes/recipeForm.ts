@@ -309,10 +309,10 @@ export function cleanupParts(ready: CleanupRequest | undefined): RecipeCleanupPa
   for (const p of ready?.recipeProjects ?? []) parts.push({ id: `recipe-project:${p}`, title: `Project ${p}, which the recipe created`, chosen: true });
   // Cluster-wide parts the run created: teammates may use them since, so they are offered, not chosen.
   if (ready?.modelRegistry) {
-    parts.push({ id: "model-registry", title: "The model registry the run created", description: "With its registered models and its database. Others may use it.", chosen: false });
+    parts.push({ id: "model-registry", title: "The model registry the run created", description: "With its registered models and its database. Others may use it: it stays unless you tick it.", chosen: false });
   }
   if (ready?.maasPlatform) {
-    parts.push({ id: "maas-platform", title: "The MaaS platform the run set up", description: "MaaS API keys and the MaaS database go with it. Others may use it.", chosen: false });
+    parts.push({ id: "maas-platform", title: "The MaaS platform the run set up", description: "MaaS API keys and the MaaS database go with it. Others may use it: it stays unless you tick it.", chosen: false });
   }
   if (ready?.components?.length) parts.push({ id: "components", title: `The DataScienceCluster components the run turned on: ${ready.components.join(", ")}`, chosen: true });
   return parts;
@@ -344,9 +344,9 @@ export function cleanupRequest(ready: CleanupRequest | undefined, chosen: Readon
  * Resources the run provisioned but this cleanup keeps, per current cluster
  * status (GET /api/resources/status): cluster-wide S3 and MLflow, plus the
  * pipeline server in the run project when that project is not part of the delete request,
- * the cluster-wide parts offered (offered) but not chosen, and a Dashboard Dev build.
+ * (the parts offered as checkboxes and a Dashboard Dev build are said elsewhere).
  */
-export function leftInPlace(status: ResourcesStatus, run: RecipeRun, req: CleanupRequest, offered?: CleanupRequest): string[] {
+export function leftInPlace(status: ResourcesStatus, run: RecipeRun, req: CleanupRequest): string[] {
   const up = (r: ResourceState | null | undefined) => !!r?.deployed && !isTerminating(r);
   const out: string[] = [];
   const project = run.project?.name;
@@ -355,9 +355,47 @@ export function leftInPlace(status: ResourcesStatus, run: RecipeRun, req: Cleanu
   }
   if (up(status.minio)) out.push("The S3 storage");
   if (up(status.mlflow)) out.push("MLflow");
-  if (offered?.modelRegistry && !req.modelRegistry) out.push("The model registry");
-  if (offered?.maasPlatform && !req.maasPlatform) out.push("The MaaS platform");
-  const dev = run.recipe.spec.dashboardDev;
-  if (dev.deploy === "main" || dev.deploy === "pr") out.push("The Dashboard Dev build: revert it on the Dashboard Dev page");
   return out;
+}
+
+/** Whether the run deployed a Dashboard Dev build, which Clean up leaves (Revert on the Dashboard Dev page ends it). */
+export function dashboardDevLeft(run: RecipeRun): boolean {
+  const dev = run.recipe.spec.dashboardDev;
+  return dev.deploy === "main" || dev.deploy === "pr";
+}
+
+/**
+ * The DataScienceCluster components a recipe's Clean up would turn back, and
+ * those that stay on because something that uses them stays (the backend
+ * keeps a component while anything on the cluster uses it): MLflow for
+ * mlflowoperator, a pipeline server that is not deleted for aipipelines, the
+ * model in a project that is not deleted for kserve, and a model registry
+ * that is not deleted for modelregistry.
+ */
+export function componentsSplit(status: ResourcesStatus | null, run: RecipeRun, req: CleanupRequest, offered: CleanupRequest | undefined): { back: string[]; stay: string[] } {
+  const up = (r: ResourceState | null | undefined) => !!r?.deployed && !isTerminating(r);
+  const deleted = new Set(req.recipeProjects ?? []);
+  const project = run.project?.name;
+  const why = (key: string): string | null => {
+    switch (key) {
+      case "mlflowoperator":
+        return status && up(status.mlflow) ? "MLflow stays" : null;
+      case "aipipelines": {
+        const kept = (status?.pipelineServers ?? []).filter((ps) => up(ps) && ps.namespace && !deleted.has(ps.namespace)).map((ps) => ps.namespace);
+        return kept.length ? `the pipeline server in ${kept.join(", ")} stays` : null;
+      }
+      case "kserve":
+        return project && run.recipe.spec.features.models.enabled && !deleted.has(project) ? `the model in ${project} stays` : null;
+      case "modelregistry":
+        return offered?.modelRegistry && !req.modelRegistry ? "the model registry stays" : null;
+    }
+    return null;
+  };
+  const back: string[] = [];
+  const stay: string[] = [];
+  for (const key of offered?.components ?? []) {
+    const w = why(key);
+    if (w) stay.push(`${key} stays on: ${w}`); else back.push(key);
+  }
+  return { back, stay };
 }

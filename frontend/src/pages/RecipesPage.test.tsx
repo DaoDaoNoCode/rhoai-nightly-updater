@@ -127,7 +127,9 @@ describe("Recipes page", () => {
     const plan = within(dialog).getByRole("list", { name: "Steps of this operation" });
     expect(plan).toHaveTextContent("RHOAIRuns: usually 7 minutes, up to 15 minutes.");
     expect(plan).toHaveTextContent("S3 storageAlready set up: The S3 storage is set up and ready.");
-    expect(plan).toHaveTextContent("DataScienceClusterChecked when the run gets there");
+    expect(plan).toHaveTextContent("DataScienceClusterLater: usually 1 minute, up to 7 minutes.");
+    // Said once, above the steps.
+    expect(within(dialog).getAllByText(/checked when the run gets there/i)).toHaveLength(1);
     expect(api.bodies["POST /api/recipes/plan"]).toEqual([{ recipe: {
       apiVersion: "rhoai-nightly-updater/v1alpha1", kind: "EnvironmentRecipe", metadata: { name: "dev" },
       spec: {
@@ -139,7 +141,7 @@ describe("Recipes page", () => {
     } }]);
     fireEvent.click(within(dialog).getByRole("button", { name: "Run recipe" }));
     await settle();
-    expect(screen.getByRole("heading", { level: 2, name: "Running: recipe dev" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Recipe dev" })).toBeInTheDocument();
     expect(api.bodies["POST /api/recipes/run"]).toEqual(api.bodies["POST /api/recipes/plan"]);
     await dialogClosed();
     // One run at a time: no editor while it runs.
@@ -211,7 +213,8 @@ describe("Recipes page", () => {
     await settleApps();
     await settle();
     const list = screen.getByRole("list", { name: "Recipe dev: steps" });
-    expect(list).toHaveTextContent(/What Pipelines needsTurning on aipipelines in the DataScienceCluster \(1:0\d\)\. Usually 2 minutes, up to 10 minutes\./);
+    // One line: the phase, the time so far, one estimate.
+    expect(list).toHaveTextContent(/What Pipelines needsTurning on aipipelines in the DataScienceCluster\. 1:0\d so far; usually 2 minutes, up to 10 minutes\./);
     // The steps still to come say how long they usually take; the ones done say what they did.
     expect(list).toHaveTextContent("S3 storageUsually 1 minute, up to 5 minutes.");
     expect(list).toHaveTextContent("Project recipe-devProject recipe-dev is set up.");
@@ -294,7 +297,7 @@ describe("Recipes page", () => {
     expect(within(dialog).getByRole("checkbox", { name: "Look up the newest build again" })).not.toBeChecked();
     fireEvent.click(within(dialog).getByRole("button", { name: "Resume" }));
     await settle();
-    expect(screen.getByRole("heading", { level: 2, name: "Running: recipe dev" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Recipe dev" })).toBeInTheDocument();
     expect(api.bodies["POST /api/recipes/resume"]).toEqual([{ runId: "run1" }]);
   });
 
@@ -374,7 +377,9 @@ describe("Recipes page", () => {
     expect(within(dialog).getAllByRole("checkbox").map((c) => [c.getAttribute("id"), (c as HTMLInputElement).checked])).toEqual([
       ["recipe-cleanup-recipe-project:recipe-dev", true], ["recipe-cleanup-components", true],
     ]);
-    expect(within(dialog).getByRole("checkbox", { name: "The DataScienceCluster components the run turned on: aipipelines" })).toBeChecked();
+    // aipipelines stays on while the pipeline server in team-b stays: the label does not promise it goes back.
+    expect(within(dialog).getByRole("checkbox", { name: "Turn back the DataScienceCluster components the run turned on" })).toBeChecked();
+    expect(dialog).toHaveTextContent("None goes back now: aipipelines stays on: the pipeline server in team-b stays.");
     expect(dialog).toHaveTextContent("Removes everything in the project: its models, playground, workbench and pipeline server.");
     expect(dialog).toHaveTextContent("Deleting project recipe-dev deletes everything in it.");
     // Left in place, from the live status: the shared parts; the project's pipeline server goes with it,

@@ -22,7 +22,7 @@ import type { RecipeRun, ResourcesStatus } from "../../types";
 import { StepProgress, type StepState } from "../environment/StepProgress";
 import { cleanupSteps } from "../environment/CleanupModal";
 import { TooltipButton } from "../TooltipButton";
-import { cleanupParts, cleanupRequest, leftInPlace } from "./recipeForm";
+import { cleanupParts, cleanupRequest, componentsSplit, dashboardDevLeft, leftInPlace } from "./recipeForm";
 
 /** The clean-up's refusal of a recipe project that still holds what the tool did not create (pkg/cluster recipe.ErrorCodeConfirmContents). */
 const CONFIRM_CONTENTS = "confirm_project_contents";
@@ -90,7 +90,17 @@ export const RecipeCleanupModal: React.FC<{
 
   const confirmedContents = Object.fromEntries(Object.entries(contents).filter(([p]) => confirmed.has(p)));
   const req = cleanupRequest(offered, chosen, confirmedContents);
-  const stays = run && resources ? leftInPlace(resources, run, req, offered) : [];
+  const stays = run && resources ? leftInPlace(resources, run, req) : [];
+  const devLeft = !!run && dashboardDevLeft(run);
+  // Which components would go back, and which stay on for what is kept (U7).
+  const split = run ? componentsSplit(resources || null, run, req, offered) : { back: offered?.components ?? [], stay: [] };
+  const partLabel = (p: { id: string; title: string; description?: string }): [string, string] => {
+    if (p.id !== "components") return [p.title, p.description ?? "Removes everything in the project: its models, playground, workbench and pipeline server."];
+    const title = split.back.length > 0 ? `Turn back the DataScienceCluster components the run turned on: ${split.back.join(", ")}` : "Turn back the DataScienceCluster components the run turned on";
+    const stay = split.stay.length > 0 ? `${split.stay.join("; ")}.` : "";
+    const desc = split.back.length > 0 ? `Each goes back to what it was.${stay ? ` ${stay[0].toUpperCase()}${stay.slice(1)}` : ""}` : `None goes back now: ${stay}`;
+    return [title, desc];
+  };
   const steps = cleanupSteps(sent ?? req);
   const started = running || outcome !== null;
   const asking = Object.keys(contents).filter((p) => chosen.has(`${PROJECT_STEP}${p}`));
@@ -161,11 +171,10 @@ export const RecipeCleanupModal: React.FC<{
               <StackItem>
                 <Form onSubmit={(e) => e.preventDefault()}>
                   <FormGroup role="group" isStack fieldId="recipe-cleanup-parts" label="Delete">
-                    {parts.map((p) => (
-                      <Checkbox key={p.id} id={`recipe-cleanup-${p.id}`} label={p.title} isChecked={chosen.has(p.id)} onChange={(_e, v) => toggle(p.id, v)}
-                        description={p.description ?? (p.id === "components" ? "Each goes back to what it was, unless something on the cluster uses it."
-                          : "Removes everything in the project: its models, playground, workbench and pipeline server.")} />
-                    ))}
+                    {parts.map((p) => {
+                      const [label, description] = partLabel(p);
+                      return <Checkbox key={p.id} id={`recipe-cleanup-${p.id}`} label={label} isChecked={chosen.has(p.id)} onChange={(_e, v) => toggle(p.id, v)} description={description} />;
+                    })}
                   </FormGroup>
                 </Form>
               </StackItem>
@@ -176,26 +185,34 @@ export const RecipeCleanupModal: React.FC<{
                   </Alert>
                 </StackItem>
               ))}
-              {run && (stays.length > 0 || resources === false) && (
+              {run && (stays.length > 0 || resources === false || devLeft) && (
                 <StackItem>
                   <Alert variant="info" isInline title="Left in place">
                     <Stack hasGutter>
-                      {stays.length > 0 ? (
+                      {stays.length > 0 && (
                         <>
                           <StackItem>This clean-up does not delete these:</StackItem>
                           <StackItem>
                             <List>{stays.map((s) => <ListItem key={s}>{s}</ListItem>)}</List>
                           </StackItem>
                         </>
-                      ) : (
+                      )}
+                      {resources === false && (
                         <StackItem>
                           This clean-up does not delete the S3 storage, MLflow or a pipeline server in a project the recipe did not create.
                           Their status could not be read.
                         </StackItem>
                       )}
-                      <StackItem>
-                        To delete them, use Clean up everything on the <Link to="/environment">Environment page</Link>.
-                      </StackItem>
+                      {(stays.length > 0 || resources === false) && (
+                        <StackItem>
+                          To delete them, use Clean up everything on the <Link to="/environment">Environment page</Link>.
+                        </StackItem>
+                      )}
+                      {devLeft && (
+                        <StackItem>
+                          The Dashboard Dev build stays: revert it on the <Link to="/dashboard-dev">Dashboard Dev page</Link>.
+                        </StackItem>
+                      )}
                     </Stack>
                   </Alert>
                 </StackItem>

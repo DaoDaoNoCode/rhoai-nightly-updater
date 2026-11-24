@@ -44,7 +44,7 @@ describe("Recipes page follow-ups", () => {
     renderPage(<RecipesPage />, "/recipes");
     await settleApps();
     await settle();
-    const section = screen.getByRole("region", { name: "Projects recipes created" });
+    const section = screen.getByRole("region", { name: "Projects created by recipes" });
     expect(within(section).getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["recipe-dev", "recipe-old"]);
     expect(within(section).getAllByRole("row")[2]).toHaveTextContent("old");
     fireEvent.click(within(section).getByRole("button", { name: "Delete project recipe-old..." }));
@@ -95,7 +95,7 @@ describe("Recipes page follow-ups", () => {
     renderPage(<RecipesPage />, "/recipes");
     await settleApps();
     await settle();
-    fireEvent.click(within(screen.getByRole("region", { name: "Projects recipes created" })).getByRole("button", { name: "Delete project recipe-old..." }));
+    fireEvent.click(within(screen.getByRole("region", { name: "Projects created by recipes" })).getByRole("button", { name: "Delete project recipe-old..." }));
     const dialog = screen.getByRole("dialog", { name: /Delete project recipe-old\?/ });
     await settle();
     fireEvent.click(within(dialog).getByRole("button", { name: "Clean up" }));
@@ -158,7 +158,7 @@ describe("Recipes page follow-ups", () => {
     renderPage(<RecipesPage />, "/recipes");
     await settleApps();
     await settle();
-    const section = screen.getByRole("region", { name: "Projects recipes created" });
+    const section = screen.getByRole("region", { name: "Projects created by recipes" });
     expect(section).toHaveTextContent("Cannot read the projects recipes created: read namespace recipe-dev: 500");
     expect(within(section).queryByRole("button", { name: /Delete project/ })).not.toBeInTheDocument();
   });

@@ -285,17 +285,20 @@ export const RecipeEditor: React.FC<{
                   </FeatureSwitch>
                   <FeatureSwitch id="recipe-workbench" label="Workbench" checked={form.workbench} reason={needsProjectReason(form, "A workbench needs")}
                     onChange={(v) => set("workbench", v)}
-                    help={`A workbench in the project, as the dashboard creates one${form.pipelines ? ", with the S3 Connection of the pipeline server" : ""}.`} />
+                    help={form.pipelines
+                      ? "A workbench in the project, as the dashboard creates one. It gets the S3 Connection of the pipeline server."
+                      : "A workbench in the project, as the dashboard creates one. Without Pipelines it has no S3 Connection: turn Pipelines on to attach one."} />
                   <FeatureSwitch id="recipe-model-registry" label="Model registry" checked={form.modelRegistry} onChange={(v) => set("modelRegistry", v)}
                     help="A model registry for the cluster, with its default database. Turns on its DataScienceCluster component if it is off.">
-                    <Checkbox id="recipe-registry-sample" label="Register the sample model" isChecked={form.registrySample} onChange={(_e, v) => set("registrySample", v)} />
+                    <Checkbox id="recipe-registry-sample" label="Register the sample model" isChecked={form.registrySample} onChange={(_e, v) => set("registrySample", v)}
+                      description="Needs the model registry: adds a sample model to it, as the Model registry tab does." />
                   </FeatureSwitch>
                 </FormSection>
               </GridItem>
               <GridItem lg={6}>
                 <FormSection>
                   <FeatureSwitch id="recipe-models" label="Models" checked={form.models} reason={needsProjectReason(form, "Models needs")} onChange={(v) => set("models", v)}
-                    help="A model of the catalog in the project, served on a CPU worker (usually 3 to 6 minutes). Adds what Models needs: KServe and cert-manager, and Connectivity Link for a gateway.">
+                    help="A model of the catalog in the project, served on a CPU worker. First adds what Models needs: KServe and cert-manager, and Connectivity Link for a gateway. Usually about 9 minutes in all, up to 30.">
                     <FormGroup label="Model" fieldId="recipe-model">
                       <SingleSelect id="recipe-model" label="Model" selected={form.model || defaultModel?.name} text={modelText} isDisabled={!catalog || catalog.length === 0}
                         options={(catalog ?? []).map((m) => ({ value: m.name, label: m.displayName }))} onSelect={(v) => set("model", v === defaultModel?.name ? "" : v)} />
@@ -309,7 +312,7 @@ export const RecipeEditor: React.FC<{
                     </FormGroup>
                   </FeatureSwitch>
                   <FeatureSwitch id="recipe-playground" label="Playground" checked={form.playground} reason={playgroundReason(form)} onChange={(v) => set("playground", v)}
-                    help="The Gen AI playground in the project, with its ready chat models. Turns on what it needs." />
+                    help="Needs Models. The Gen AI playground in the project, with its ready chat models. Turns on what it needs." />
                   <FeatureSwitch id="recipe-maas" label="Models as a Service" checked={form.maas} onChange={(v) => set("maas", v)}
                     help="The MaaS platform for the cluster (usually 10 minutes): Connectivity Link, its database and the MaaS gateway.">
                     <FormGroup role="radiogroup" isStack fieldId="recipe-maas-database" label="Database">
@@ -320,7 +323,7 @@ export const RecipeEditor: React.FC<{
                     </FormGroup>
                     <Checkbox id="recipe-maas-publish" label="Publish the model through MaaS" isChecked={form.maasPublish && !maasPublishReason(form)}
                       isDisabled={!!maasPublishReason(form)} onChange={(_e, v) => set("maasPublish", v)}
-                      description={maasPublishReason(form) ?? "As Publish on the MaaS tab."} />
+                      description={maasPublishReason(form) ?? "Needs Models. As Publish on the MaaS tab."} />
                   </FeatureSwitch>
                 </FormSection>
               </GridItem>

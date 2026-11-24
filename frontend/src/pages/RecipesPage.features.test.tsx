@@ -76,7 +76,12 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     fireEvent.click(switchNamed("Model registry"));
     fireEvent.click(screen.getByRole("checkbox", { name: "Register the sample model" }));
     fireEvent.click(switchNamed("Workbench"));
-    expect(screen.getByText("A workbench in the project, as the dashboard creates one, with the S3 Connection of the pipeline server.")).toBeInTheDocument();
+    expect(screen.getByText("A workbench in the project, as the dashboard creates one. It gets the S3 Connection of the pipeline server.")).toBeInTheDocument();
+    // Without Pipelines it says what the workbench lacks.
+    fireEvent.click(switchNamed("Pipelines"));
+    expect(screen.getByText("A workbench in the project, as the dashboard creates one. Without Pipelines it has no S3 Connection: turn Pipelines on to attach one.")).toBeInTheDocument();
+    fireEvent.click(switchNamed("Pipelines"));
+    expect(screen.getByText(/Usually about 9 minutes in all, up to 30\./)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("radio", { name: "A pull request build" }));
     expect(screen.getByText(/Deployed last: it pauses the dashboard's operator/)).toBeInTheDocument();
     // PR number validation runs on the client before any plan request goes out.
@@ -107,7 +112,7 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
       "What the playground needs", "Playground", "What the model registry needs", "Model registry", "Workbench", "Dashboard Dev (PR #4321)"].entries()) {
       expect(titles[8 + i]).toContain(title);
     }
-    expect(plan).toHaveTextContent("Model Qwen3 1.7B (CPU, tool calling)Checked when the run gets there; if it runs, usually 5 minutes, up to 15 minutes.");
+    expect(plan).toHaveTextContent("Model Qwen3 1.7B (CPU, tool calling)Later: usually 5 minutes, up to 15 minutes.");
   });
 
   it("dependencies: the playground needs a model, publishing is part of a MaaS exposure, and a project is kept while features live in it", async () => {
@@ -157,6 +162,8 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     await settleApps();
     await settle();
     expect(screen.getByText("Every step of full is set up.")).toBeInTheDocument();
+    expect(screen.getByText("Project recipe-full is set up. Its workbench may still be starting: the Workbench tab shows when it runs.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Last run of recipe full" })).toBeInTheDocument();
     for (const title of ["Models as a Service", "Model Qwen3 1.7B (CPU, tool calling)", "Publish the model through MaaS", "Playground", "Model registry", "Workbench", "Dashboard Dev (PR #4321)"]) {
       expect(screen.getAllByText(title).length).toBeGreaterThan(0);
     }
@@ -171,7 +178,16 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
       ["recipe-cleanup-recipe-project:recipe-full", true], ["recipe-cleanup-model-registry", false], ["recipe-cleanup-maas-platform", false], ["recipe-cleanup-components", true],
     ]);
     const left = within(within(dialog).getByText("Left in place").closest(".pf-v6-c-alert") as HTMLElement).getAllByRole("listitem").map((li) => li.textContent);
-    expect(left).toEqual(["The S3 storage", "MLflow", "The model registry", "The MaaS platform", "The Dashboard Dev build: revert it on the Dashboard Dev page"]);
+    // What the checkboxes offer is not listed again; Dashboard Dev has its own page, not the Environment page's Clean up.
+    expect(left).toEqual(["The S3 storage", "MLflow"]);
+    expect(dialog).toHaveTextContent("The Dashboard Dev build stays: revert it on the Dashboard Dev page.");
+    expect(within(dialog).getByRole("link", { name: "Dashboard Dev page" })).toHaveAttribute("href", "/dashboard-dev");
+    expect(within(dialog).getByRole("checkbox", { name: "Turn back the DataScienceCluster components the run turned on: kserve" })).toBeChecked();
+    // Keeping the project keeps its model, so kserve stays on, and the label says so.
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Project recipe-full, which the recipe created" }));
+    expect(dialog).toHaveTextContent("None goes back now: kserve stays on: the model in recipe-full stays.");
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Project recipe-full, which the recipe created" }));
+    // The run's success says the workbench may still be starting, not that all is ready.
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "The MaaS platform the run set up" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Clean up" }));
     await settle();

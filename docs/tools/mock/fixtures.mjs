@@ -1802,6 +1802,9 @@ export const fullRecipe = () => ({
  * A recipe's steps as the runner lists them (pkg/cluster internal/recipe
  * Steps): id, title, typical and max seconds, in the runner's order.
  */
+/** The catalog's display names (pkg/cluster internal/serving ModelCatalog), which the model step's title uses. */
+const MODEL_NAMES = { "qwen25-05b-instruct": "Qwen2.5 0.5B Instruct (CPU)", "qwen3-1-7b": "Qwen3 1.7B (CPU, tool calling)", "smollm2-135m-instruct": "SmolLM2 135M Instruct (CPU)" };
+
 export function recipeSteps(rcp = recipe()) {
   const sp = rcp.spec;
   const f = sp.features;
@@ -1812,7 +1815,7 @@ export function recipeSteps(rcp = recipe()) {
   if (f.mlflow?.enabled && f.mlflow.samples) out.push(["mlflow-samples", "MLflow samples", 60, 900]);
   if (f.maas?.enabled) out.push(["maas", "Models as a Service", 600, 900]);
   if (f.models?.enabled) {
-    out.push(["models-prereq", "What Models needs", 240, 900], ["model", `Model ${f.models.model || "qwen25-05b-instruct"}`, 300, 900]);
+    out.push(["models-prereq", "What Models needs", 240, 900], ["model", `Model ${MODEL_NAMES[f.models.model || "qwen25-05b-instruct"] ?? f.models.model}`, 300, 900]);
     if (f.maas?.enabled && f.maas.publish && f.models.exposure !== "maas") out.push(["maas-publish", "Publish the model through MaaS", 120, 300]);
   }
   if (f.playground?.enabled) out.push(["playground-prereq", "What the playground needs", 120, 600], ["playground", "Playground", 120, 540]);
@@ -1825,6 +1828,13 @@ export function recipeSteps(rcp = recipe()) {
 
 export const recipePinned = () => ({ tag: "rhoai-3.6", image: LATEST_IMAGE, digest: digest(latestBuild.seed) });
 
+/** The steps a mixed plan finds set up, with why. */
+const MIXED_SKIP = {
+  "pipelines-prereq": "Everything it needs is set up.", s3: "The S3 storage is set up and ready.", "pipeline-server": "The pipeline server in recipe-full is ready.",
+  "mlflow-prereq": "Everything it needs is set up.", mlflow: "MLflow is ready.", maas: "The MaaS platform is ready.",
+};
+const MIXED_BLOCKED = "Project recipe-full has a workbench nightly-workbench that this tool did not create; the recipe does not change it. Nothing was changed.";
+
 /** RecipeFix pointing users to Status when one-time setup is incomplete (pkg/types RecipeFix). */
 const ONE_TIME_SETUP_FIX = { code: "one_time_setup_missing", page: "/" };
 
@@ -1833,17 +1843,21 @@ const ONE_TIME_SETUP_FIX = { code: "one_time_setup_missing", page: "/" };
  * downstream checks until runtime. blocked injects missing one-time-setup errors
  * with navigation fixes plus a build-resolution problem.
  */
-export function recipePlan(rcp = recipe(), installed = true, blocked = false) {
+export function recipePlan(rcp = recipe(), installed = true, blocked = false, mixed = false) {
   const steps = recipeSteps(rcp).map(([id, title, typicalSeconds, maxSeconds], i) => {
+    // A cluster where some of it is set up and one step is blocked: what a review shows.
+    if (mixed && MIXED_SKIP[id]) return { id, title, action: "skip", reason: MIXED_SKIP[id], typicalSeconds, maxSeconds };
+    if (mixed && id === "workbench") return { id, title, action: "blocked", reason: MIXED_BLOCKED, fix: { code: "feature_blocked", page: "/environment" }, typicalSeconds, maxSeconds };
+    if (mixed && i > 0 && !MIXED_SKIP[id]) return { id, title, action: id === "project" || id === "dsc" ? "skip" : "run", ...(id === "dsc" ? { reason: "DataScienceCluster default-dsc exists." } : id === "project" ? { reason: "Project recipe-full was created by a recipe." } : {}), typicalSeconds, maxSeconds };
     if (id === "rhoai" && blocked) return { id, title, action: "blocked", reason: "The one-time cluster setup is not done: additional-pull-secret is missing in kube-system.", fix: ONE_TIME_SETUP_FIX, typicalSeconds, maxSeconds };
-    if (id === "rhoai" && installed) return { id, title, action: "skip", reason: "RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).", typicalSeconds, maxSeconds };
+    if (id === "rhoai" && installed) return { id, title, action: "skip", reason: "RHOAI 3.6.0 is installed; the recipe keeps it.", typicalSeconds, maxSeconds };
     if (i <= 2) return { id, title, action: "run", typicalSeconds, maxSeconds };
     return { id, title, action: "later", reason: "Checked when the run gets here: it depends on a step before it.", typicalSeconds, maxSeconds };
   });
   const counted = steps.filter((s) => s.action !== "skip");
   return {
     recipe: rcp, steps, pinned: recipePinned(),
-    problems: blocked ? [
+    problems: mixed ? [{ message: `Workbench: ${MIXED_BLOCKED}`, fix: { code: "feature_blocked", page: "/environment" } }] : blocked ? [
       { message: "The one-time cluster setup is not done: additional-pull-secret is missing in kube-system. Run the one-time setup on the Status page first.", fix: ONE_TIME_SETUP_FIX },
       { field: "spec.rhoai.build", message: "Cannot resolve the build on Quay.", fix: { code: "build_unresolvable" } },
     ] : [],
@@ -1864,7 +1878,7 @@ export function recipeRun({ done = 0, current = "running", message = "", state =
     const times = { typicalSeconds, maxSeconds };
     if (i < done) {
       return id === "rhoai"
-        ? { id, title, ...times, status: "skipped", message: "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it (ifInstalled: keep).", startedAt: ago(start), finishedAt: ago(start) }
+        ? { id, title, ...times, status: "skipped", message: "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it.", startedAt: ago(start), finishedAt: ago(start) }
         : { id, title, ...times, status: "success", ...(RECIPE_OWNS.has(id) ? { created: true } : {}), message: (RECIPE_DONE[id] ?? `${title} is set up.`).replaceAll("recipe-dev", project), startedAt: ago(start - i * 2.5), finishedAt: ago(start - (i + 1) * 2.5) };
     }
     if (i === done && current) {
@@ -1899,8 +1913,9 @@ const RECIPE_COMPONENTS = { "pipelines-prereq": "aipipelines", "mlflow-prereq": 
 export function recipeCleanup(run) {
   const req = {
     ...(run.project?.owned ? { recipeProjects: [run.project.name], recipeProjectUIDs: { [run.project.name]: run.project.uid || "uid-recipe-dev" } } : {}),
-    ...(run.createdParts?.some((p) => p.part === "model-registry") ? { modelRegistry: true } : {}),
-    ...(run.createdParts?.some((p) => p.part === "maas-platform") ? { maasPlatform: true } : {}),
+    ...(run.createdParts?.some((p) => p.part === "model-registry") ? { modelRegistry: true, modelRegistryUid: run.createdParts.find((p) => p.part === "model-registry").uid } : {}),
+    ...(run.createdParts?.some((p) => p.part === "maas-platform") ? { maasPlatform: true, maasPlatformUid: run.createdParts.find((p) => p.part === "maas-platform").uid } : {}),
+    ...(run.createdParts?.length ? { recipeRunId: run.id } : {}),
     ...(run.components?.length ? { components: run.components } : {}),
   };
   return Object.keys(req).length ? req : null;
@@ -1926,7 +1941,7 @@ const RECIPE_DONE = {
   mlflow: "MLflow is ready.",
   "mlflow-samples": "Samples added in project 'recipe-dev'.",
   maas: "The MaaS platform is set up and ready.",
-  "models-prereq": "Turned on kserve and installed cert-manager and Connectivity Link; they are ready.",
+  "models-prereq": "Turned on KServe (kserve) in the DataScienceCluster, and installed cert-manager and Connectivity Link; they are ready.",
   model: "qwen3-1-7b in recipe-dev serves, through the cluster's default gateway.",
   "maas-publish": "Published qwen3-1-7b in recipe-dev through MaaS.",
   "playground-prereq": "Everything it needs is set up.",
