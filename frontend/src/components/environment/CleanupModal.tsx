@@ -22,7 +22,7 @@ import { confirmationOf, type ConnectionWorkbench, type PlaygroundStatus, type R
 import type { CleanupRequest } from "../../services/api";
 import { TooltipButton } from "../TooltipButton";
 import { isTerminating } from "./resourceRow";
-import { connectionWorkbenchesChange, unrecordedPipelineServerNote } from "./PipelinesTab";
+import { connectionEnvOnlyChange, connectionWorkbenchesChange, unrecordedPipelineServerNote } from "./PipelinesTab";
 import { S3_NAMESPACE, storageTeardownOffered } from "./StorageTab";
 import { gatewayListRelease } from "./modelsConfirm";
 
@@ -214,6 +214,9 @@ export const CleanupModal: React.FC<{
   };
   const usersByServer = Object.fromEntries(chosenServers.map((p) => [p, connectionUsers(p)] as const).filter(([, w]) => w.length > 0));
   const confirmWorkbenches = Object.fromEntries(Object.entries(usersByServer).map(([p, w]) => [p, confirmationOf(w)]));
+  // Workbenches that load the Connection without the annotation (as the status shows them): nothing changes them.
+  const envOnlyByServer = Object.fromEntries(chosenServers.map((p) => [p, toolServers(status).find((ps) => ps.namespace === p)?.connectionEnvOnlyWorkbenches ?? []] as const).filter(([, w]) => w.length > 0));
+  const affected = chosenServers.filter((p) => usersByServer[p] || envOnlyByServer[p]);
   const req: CleanupRequest = {
     ...(chosenPublished.length ? { maasPublished: chosenPublished } : {}),
     ...(chosenServers.length ? { pipelineServers: chosenServers } : {}),
@@ -360,10 +363,13 @@ export const CleanupModal: React.FC<{
               </Alert>
             </StackItem>
           ))}
-          {Object.entries(usersByServer).map(([p, wbs]) => (
+          {affected.map((p) => (
             <StackItem key={`workbenches-${p}`}>
               <Alert variant="warning" isInline component="div" title={`Workbenches in ${p} use the dashboard Connection`}>
-                {connectionWorkbenchesChange(p, wbs)}
+                <Stack hasGutter>
+                  {usersByServer[p] && <StackItem>{connectionWorkbenchesChange(p, usersByServer[p])}</StackItem>}
+                  {envOnlyByServer[p] && <StackItem>{connectionEnvOnlyChange(p, envOnlyByServer[p])}</StackItem>}
+                </Stack>
               </Alert>
             </StackItem>
           ))}

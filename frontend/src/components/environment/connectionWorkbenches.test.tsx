@@ -12,7 +12,9 @@ const dspa = (ns: string, over: Partial<ResourceState> = {}): ResourceState => (
   deployed: true, ready: true, managedByTool: true, namespace: ns, name: "dspa", message: "Running", dataPVCs: ["mariadb-dspa"],
   connection: "rhoai-nightly-updater-s3", ...over,
 });
-const used = dspa("dev", { connectionState: "present", connectionWorkbenches: [{ name: "wb-a", uid: "u-a" }, { name: "wb-b", uid: "u-b" }] });
+const used = dspa("dev", { connectionState: "present", connectionWorkbenches: [{ name: "wb-a", uid: "u-a", running: true }, { name: "wb-b", uid: "u-b" }], connectionEnvOnlyWorkbenches: ["old-wb"] });
+const RESTART = "Running workbenches restart; work not saved to disk is lost.";
+const ENV_ONLY = "These workbenches use the Connection without the annotation: dev/old-wb. They will fail to start after the deletion; edit them in the dashboard and remove the Connection.";
 
 function renderAt(path: string) {
   return render(<MemoryRouter initialEntries={[path]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
@@ -35,7 +37,8 @@ describe("workbenches that use the pipeline server's Connection", () => {
     stubApi({ "/api/resources/status": { minio: readyMinio, mlflow: noMlflow, pipelineServers: [used] }, "/api/resources/projects": { projects: ["dev"] } });
     renderAt("/test-resources?tab=pipelines&project=dev");
     const details = await screen.findByLabelText("Pipeline server details");
-    expect(details).toHaveTextContent("Used by workbenches wb-a, wb-b. Deleting the pipeline server removes the Connection from them first.");
+    expect(details).toHaveTextContent("Used by workbenches wb-a (running), wb-b. Deleting the pipeline server removes the Connection from them first; running workbenches restart.");
+    expect(details).toHaveTextContent("Also loaded without the annotation by old-wb: they will fail to start after the pipeline server is deleted; edit them in the dashboard and remove the Connection.");
   });
 
   it("says when they cannot be read", async () => {
@@ -53,7 +56,9 @@ describe("workbenches that use the pipeline server's Connection", () => {
     renderAt("/test-resources?tab=pipelines&project=dev");
     fireEvent.click((await menuItem("Pipeline server", /Delete pipeline server/))!);
     const dialog = await screen.findByRole("dialog", { name: /Delete the pipeline server in dev\?/ });
-    expect(dialog).toHaveTextContent("These workbenches use the Connection rhoai-nightly-updater-s3; it is removed from them first: dev/wb-a, dev/wb-b.");
+    expect(dialog).toHaveTextContent("These workbenches use the Connection rhoai-nightly-updater-s3; it is removed from them first: dev/wb-a (running), dev/wb-b.");
+    expect(dialog).toHaveTextContent(RESTART);
+    expect(dialog).toHaveTextContent(ENV_ONLY);
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(api.bodies["POST /api/resources/pipeline-server/teardown"]).toEqual([{ project: "dev", confirmWorkbenches: { "wb-a": "u-a", "wb-b": "u-b" } }]));
   });
@@ -77,7 +82,10 @@ describe("workbenches that use the pipeline server's Connection", () => {
     const onConfirm = vi.fn();
     render(<CleanupModal scope="pipelines" status={status} minioLeftovers={false} baseReason={null} onConfirm={onConfirm} onCancel={() => {}}
       retry={{ req: { pipelineServers: ["dev", "other"] }, contents: {}, workbenches: { dev: [], other: [{ name: "notebook", uid: "u-n" }] } }} />);
-    expect(screen.getByText("Workbenches in dev use the dashboard Connection")).toBeInTheDocument();
+    const devAlert = screen.getByText("Workbenches in dev use the dashboard Connection").closest(".pf-v6-c-alert");
+    expect(devAlert).toHaveTextContent("dev/wb-a (running)");
+    expect(devAlert).toHaveTextContent(RESTART);
+    expect(devAlert).toHaveTextContent(ENV_ONLY);
     expect(screen.getByText("Workbenches in other use the dashboard Connection").closest(".pf-v6-c-alert")).toHaveTextContent("other/notebook");
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(onConfirm).toHaveBeenLastCalledWith({ pipelineServers: ["dev", "other"], confirmWorkbenches: { dev: { "wb-a": "u-a", "wb-b": "u-b" }, other: { notebook: "u-n" } } });
@@ -140,5 +148,22 @@ describe("workbenches that use the pipeline server's Connection", () => {
     fireEvent.click(within(again).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(api.bodies["POST /api/resources/cleanup/stream"]).toHaveLength(2));
     expect(api.bodies["POST /api/resources/cleanup/stream"][1]).toMatchObject({ confirmWorkbenches: { other: { "late-wb": "u-late" } } });
+  });
+
+  it("Recreate says the running workbenches restart, and sends the confirmation", async () => {
+    const old = { ...used, name: "nightly-dspa", nonStandardName: true, dataPVCs: ["mariadb-nightly-dspa"] };
+    const api = stubApi({
+      "/api/resources/status": { minio: readyMinio, mlflow: noMlflow, pipelineServers: [old] } satisfies ResourcesStatus,
+      "/api/resources/projects": { projects: ["dev"] },
+      "POST /api/resources/pipeline-server/setup": () => jsonResponse({ success: true, message: "Recreated.", logs: [] }),
+    });
+    renderAt("/test-resources?tab=pipelines&project=dev");
+    fireEvent.click(await screen.findByRole("button", { name: "Recreate with the standard name" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("it is removed from them first: dev/wb-a (running), dev/wb-b.");
+    expect(dialog).toHaveTextContent(RESTART);
+    expect(dialog).toHaveTextContent(ENV_ONLY);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Recreate" }));
+    await waitFor(() => expect(api.bodies["POST /api/resources/pipeline-server/setup"]).toEqual([{ project: "dev", recreate: true, confirmWorkbenches: { "wb-a": "u-a", "wb-b": "u-b" } }]));
   });
 });

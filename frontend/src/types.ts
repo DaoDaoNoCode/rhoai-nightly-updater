@@ -1259,12 +1259,16 @@ export interface ResourceState {
   connectionWorkbenches?: ConnectionWorkbench[];
   /** Why connectionWorkbenches could not be read. */
   connectionWorkbenchesMessage?: string;
+  /** Workbenches that load that Connection through envFrom without naming it in the annotation (RHOAI 2.x): not changed; they fail to start once it is deleted. */
+  connectionEnvOnlyWorkbenches?: string[];
 }
 
 /** A workbench (Notebook) that uses the tool's dashboard Connection (pkg/types ConnectionWorkbench): a confirmation names it with the UID reviewed. */
 export interface ConnectionWorkbench {
   name: string;
   uid: string;
+  /** Not stopped: taking the Connection off restarts its pod (work not saved to disk is lost). */
+  running?: boolean;
 }
 
 /** A confirmation of workbenches as requests carry it: each name mapped to the UID the user reviewed. */

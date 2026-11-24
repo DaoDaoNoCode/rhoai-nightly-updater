@@ -108,7 +108,10 @@ const ConnectionState: React.FC<{ server: ResourceState; project: string; readOn
         <Stack hasGutter>
           <StackItem>{name}, listed as &quot;{CONNECTION_DISPLAY_NAME}&quot;: an S3 connection with the storage&apos;s keys, endpoint and bucket <code>pipelines</code>. Usable from workbenches and model deployments in {project}; in-cluster address only, so it does not work from outside the cluster.</StackItem>
           {users.length > 0 && (
-            <StackItem>Used by {users.length === 1 ? "workbench" : "workbenches"} {users.map((w, i) => <React.Fragment key={w.name}>{i > 0 ? ", " : ""}<code>{w.name}</code></React.Fragment>)}. Deleting the pipeline server removes the Connection from {users.length === 1 ? "it" : "them"} first.</StackItem>
+            <StackItem>Used by {users.length === 1 ? "workbench" : "workbenches"} {workbenchList(null, users)}. Deleting the pipeline server removes the Connection from {users.length === 1 ? "it" : "them"} first; running workbenches restart.</StackItem>
+          )}
+          {(server.connectionEnvOnlyWorkbenches ?? []).length > 0 && (
+            <StackItem>Also loaded without the annotation by {server.connectionEnvOnlyWorkbenches!.map((n, i) => <React.Fragment key={n}>{i > 0 ? ", " : ""}<code>{n}</code></React.Fragment>)}: they will fail to start after the pipeline server is deleted; edit them in the dashboard and remove the Connection.</StackItem>
           )}
           {server.connectionWorkbenchesMessage && <StackItem>Cannot check which workbenches use it: {server.connectionWorkbenchesMessage}</StackItem>}
         </Stack>
@@ -131,14 +134,27 @@ const ConnectionState: React.FC<{ server: ResourceState; project: string; readOn
   }
 };
 
-/** The workbenches a delete of server confirms removing the Connection from (as the status lists them). */
-function connectionWorkbenchesOf(server: ResourceState): { workbenches?: ConnectionWorkbench[] } {
-  return server.connectionWorkbenches?.length ? { workbenches: server.connectionWorkbenches } : {};
+/** What a delete of server confirms about the workbenches that use its Connection (as the status lists them). */
+function connectionWorkbenchesOf(server: ResourceState): { workbenches?: ConnectionWorkbench[]; envOnly?: string[] } {
+  return {
+    ...(server.connectionWorkbenches?.length ? { workbenches: server.connectionWorkbenches } : {}),
+    ...(server.connectionEnvOnlyWorkbenches?.length ? { envOnly: server.connectionEnvOnlyWorkbenches } : {}),
+  };
+}
+
+/** A list of workbench names, each in code, running ones marked. */
+function workbenchList(project: string | null, workbenches: ConnectionWorkbench[]): React.ReactNode {
+  return workbenches.map((w, i) => <React.Fragment key={w.name}>{i > 0 ? ", " : ""}<code>{project ? `${project}/${w.name}` : w.name}</code>{w.running ? " (running)" : ""}</React.Fragment>);
 }
 
 /** The confirmation's line for the workbenches that lose the dashboard Connection before it is deleted. */
 export function connectionWorkbenchesChange(project: string, workbenches: ConnectionWorkbench[]): React.ReactNode {
-  return <>These workbenches use the Connection <code>{CONNECTION_NAME}</code>; it is removed from them first: {workbenches.map((w, i) => <React.Fragment key={w.name}>{i > 0 ? ", " : ""}<code>{project}/{w.name}</code></React.Fragment>)}. Their other connections stay; attach it again in the dashboard once a new pipeline server made it again.</>;
+  return <>These workbenches use the Connection <code>{CONNECTION_NAME}</code>; it is removed from them first: {workbenchList(project, workbenches)}. Running workbenches restart; work not saved to disk is lost. Their other connections stay; attach it again in the dashboard once a new pipeline server made it again.</>;
+}
+
+/** The confirmation's line for the workbenches that load the Connection without the annotation (nothing changes them). */
+export function connectionEnvOnlyChange(project: string, names: string[]): React.ReactNode {
+  return <>These workbenches use the Connection without the annotation: {names.map((n, i) => <React.Fragment key={n}>{i > 0 ? ", " : ""}<code>{project}/{n}</code></React.Fragment>)}. They will fail to start after the deletion; edit them in the dashboard and remove the Connection.</>;
 }
 
 /** Renders the selected project's pipeline server, or guidance until a project is picked. */
@@ -382,6 +398,7 @@ export function pipelineServerConfirm(pending: Pending, pipelineServers: Resourc
           <Content component="p">Replaces pipeline server <code>{pending.name}</code> in {pending.project} with one named <code>{DSPA_NAME}</code>, which workbench pipelines use. Everything is checked first; nothing is deleted if the new one would be refused. Takes 1 to 3 minutes, plus the old one&apos;s cleanup.</Content>
           {pending.unrecorded && <Content component="p">{unrecordedPipelineServerNote(pending.project)}</Content>}
           {!!pending.workbenches?.length && <Content component="p">{connectionWorkbenchesChange(pending.project, pending.workbenches)}</Content>}
+          {!!pending.envOnly?.length && <Content component="p">{connectionEnvOnlyChange(pending.project, pending.envOnly)}</Content>}
         </>,
         changes: [
           <>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name}</code> and Secret <code>{DSPA_SECRET_NAME}</code> are deleted; its database goes with it.</>,
@@ -401,6 +418,7 @@ export function pipelineServerConfirm(pending: Pending, pipelineServers: Resourc
           <Content component="p">Deletes the pipeline server in {pending.project}, with its runs and experiments. The project and the S3 storage stay.</Content>
           {pending.unrecorded && <Content component="p">{unrecordedPipelineServerNote(pending.project)}</Content>}
           {!!pending.workbenches?.length && <Content component="p">{connectionWorkbenchesChange(pending.project, pending.workbenches)}</Content>}
+          {!!pending.envOnly?.length && <Content component="p">{connectionEnvOnlyChange(pending.project, pending.envOnly)}</Content>}
         </>,
         changes: [<>Project <code>{pending.project}</code>: DataSciencePipelinesApplication <code>{pending.name || DSPA_NAME}</code> and its S3 credentials Secret are deleted, with the dashboard S3 Connection <code>{CONNECTION_NAME}</code> this tool created (workbenches or model deployments that use it lose it). The project stays.</>],
         dataLoss: pvcsLost(ps, "the pipeline database: runs, experiments and their history") ?? <>The pipeline database: runs, experiments and their history.</>,
