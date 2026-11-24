@@ -25,7 +25,7 @@ type KueueStatus struct {
 	// Objects lists ResourceFlavor, ClusterQueue, and LocalQueue in that
 	// sequence, each with status even when the object is missing.
 	Objects []KueueObject `json:"objects"`
-	// Quota summarizes the ClusterQueue limits (e.g. "6 CPUs and 12Gi of memory").
+	// Quota summarizes the ClusterQueue limits (e.g. "6 CPUs and 19Gi of memory").
 	Quota string `json:"quota"`
 	// Label reflects the project's kueue.openshift.io/managed label.
 	Label *KueueLabel `json:"label,omitempty"`

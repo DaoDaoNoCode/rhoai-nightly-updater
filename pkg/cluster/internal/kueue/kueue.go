@@ -87,28 +87,42 @@ var Operator = envkit.OperatorSpec{ID: "kueue-operator", Title: "Red Hat build o
 	SubName: "kueue-operator", SubNames: []string{"kueue-operator"}, Namespace: "openshift-kueue-operator",
 	Source: "redhat-operators", Group: "openshift-kueue-operator", API: APIGroup, Controller: "kueue-controller-manager"}
 
-// Sample sizing: one head and one worker with requests matching limits (to be
-// validated in-cluster as the minimum viable footprint) plus the RayJob
-// submitter pod. Kueue models a RayCluster as a single Workload spanning its
-// pods and includes the RayJob submitter, so quota must cover the aggregate.
+// Sample sizing: the CodeFlare SDK's defaults for a Ray cluster
+// (project-codeflare/codeflare-sdk src/codeflare_sdk/ray/cluster/config.py
+// lines 325-337): head 1 CPU request / 2 limit and 5Gi / 8Gi memory, each
+// worker 1 / 1 CPU and 3Gi / 6Gi. Live, a head with 1 CPU and 2Gi (requests =
+// limits) was OOMKilled about 11 s after start (2026-11-24). Requests stay
+// below limits as CodeFlare sets them. The samples set neither num-cpus nor
+// memory in rayStartParams, so KubeRay derives `ray start --num-cpus/--memory`
+// from these container limits (ray-project/kuberay ray-operator
+// controllers/ray/common/pod.go generateRayStartCommand), keeping Ray's view in
+// step with the pod size. The RayJob adds its submitter pod.
 const (
-	nodeCPUMilli      = 1000
-	nodeMemoryMi      = 2048
-	submitterCPUMilli = 500
-	submitterMemoryMi = 1024
+	headCPUMilli        = 1000
+	headCPULimitMilli   = 2000
+	headMemoryMi        = 5 * 1024
+	headMemoryLimitMi   = 8 * 1024
+	workerCPUMilli      = 1000
+	workerCPULimitMilli = 1000
+	workerMemoryMi      = 3 * 1024
+	workerMemoryLimitMi = 6 * 1024
+	submitterCPUMilli   = 500
+	submitterMemoryMi   = 1024
 	// Default capacity on the opt-in hardware profile: one workload should fit
 	// alongside both samples.
 	profileCPUMilli = 1000
 	profileMemoryMi = 2048
 )
 
-// Quota derives the ClusterQueue nominal limits so both samples and one
-// opt-in-profile workload can run concurrently, rounded to whole CPUs and GiB.
-// Kueue tracks requests; free capacity on nodes is not validated (admission
+// Quota derives the ClusterQueue nominal limits so both samples (head plus one
+// worker each, and the RayJob's submitter) and one opt-in-profile workload can
+// run concurrently, rounded up to whole CPUs and GiB: 6 CPUs and 19Gi. Kueue
+// models a RayCluster as a single Workload spanning its pods and counts their
+// requests, not limits; free capacity on nodes is not validated (admission
 // accounting only).
 func Quota() (cpu, memory string) {
-	milli := 2*nodeCPUMilli + 2*nodeCPUMilli + submitterCPUMilli + profileCPUMilli
-	mi := 2*nodeMemoryMi + 2*nodeMemoryMi + submitterMemoryMi + profileMemoryMi
+	milli := 2*(headCPUMilli+workerCPUMilli) + submitterCPUMilli + profileCPUMilli
+	mi := 2*(headMemoryMi+workerMemoryMi) + submitterMemoryMi + profileMemoryMi
 	return fmt.Sprint((milli + 999) / 1000), fmt.Sprintf("%dGi", (mi+1023)/1024)
 }
 
@@ -187,14 +201,19 @@ func rayVersion(image string) string {
 	return rayVersionTag.FindString(image[i+1:])
 }
 
-func resources(milli, mi int) map[string]any {
-	r := map[string]any{"cpu": milliText(milli), "memory": miText(mi)}
-	return map[string]any{"requests": r, "limits": map[string]any{"cpu": r["cpu"], "memory": r["memory"]}}
+func resources(milli, mi int) map[string]any { return sizedResources(milli, milli, mi, mi) }
+
+func sizedResources(milli, limitMilli, mi, limitMi int) map[string]any {
+	return map[string]any{
+		"requests": map[string]any{"cpu": milliText(milli), "memory": miText(mi)},
+		"limits":   map[string]any{"cpu": milliText(limitMilli), "memory": miText(limitMi)},
+	}
 }
 
 // RayClusterSpec is the shared cluster shape for both samples: head plus one
 // worker on CPU only (mirrors odh-dashboard rhoai-3.6
-// packages/cypress/cypress/fixtures/resources/yaml/ray-job.yaml).
+// packages/cypress/cypress/fixtures/resources/yaml/ray-job.yaml), sized as the
+// CodeFlare SDK's defaults.
 func RayClusterSpec(image string) map[string]any {
 	spec := map[string]any{
 		"headGroupSpec": map[string]any{
@@ -206,7 +225,7 @@ func RayClusterSpec(image string) map[string]any {
 					map[string]any{"containerPort": 8265, "name": "dashboard"},
 					map[string]any{"containerPort": 10001, "name": "client"},
 				},
-				"resources": resources(nodeCPUMilli, nodeMemoryMi),
+				"resources": sizedResources(headCPUMilli, headCPULimitMilli, headMemoryMi, headMemoryLimitMi),
 			}}}},
 		},
 		"workerGroupSpecs": []any{map[string]any{
@@ -214,7 +233,7 @@ func RayClusterSpec(image string) map[string]any {
 			"rayStartParams": map[string]any{},
 			"template": map[string]any{"spec": map[string]any{"containers": []any{map[string]any{
 				"name": "ray-worker", "image": image,
-				"resources": resources(nodeCPUMilli, nodeMemoryMi),
+				"resources": sizedResources(workerCPUMilli, workerCPULimitMilli, workerMemoryMi, workerMemoryLimitMi),
 			}}}},
 		}},
 	}

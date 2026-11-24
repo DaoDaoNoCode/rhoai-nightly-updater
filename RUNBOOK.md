@@ -772,7 +772,7 @@ oc get cm rhoai-nightly-updater-snapshot -n <tool namespace> -o jsonpath='{.data
 | Set up refused: "Cannot read Kueue's API versions" | API discovery of `kueue.x-k8s.io` failed (403, 500, or a document that does not parse); only a 404 means Kueue is absent. Check your access and the API server |
 | Set up refused: "has the label kueue.openshift.io/managed=false" (or another value) | Someone chose that value; this tool never overwrites it. Set it to `true` in the dashboard, or use another project |
 | Turning on the Dashboard Kueue setting refused | The recorded setup is not there as recorded (queue made again, label gone, project made again, Kueue not ready). Clean up, then set up again |
-| A sample stays **Inadmissible** or **Queued** | Kueue's message says why (quota, or a resource the ClusterQueue does not cover). The quota is 6 CPUs and 11 GiB; the nodes must also have room. The Ray image is large: the first pull can take minutes |
+| A sample stays **Inadmissible** or **Queued** | Kueue's message says why (quota, or a resource the ClusterQueue does not cover). The quota is 6 CPUs and 19 GiB; the nodes must also have room. The Ray image is large: the first pull can take minutes |
 | A sample is **Admitted** but its pods do not start | The image cannot be pulled on this architecture, or KubeRay (DataScienceCluster `ray`) is off. Check `oc get pods -n <project>` |
 | Clean up: "is used by ..." | Another LocalQueue, ClusterQueue or Workload uses the tool's queue; remove it first. Clean up deletes nothing of anyone else |
 | Clean up: "Kept the label" | Kueue still has Workloads in the project; delete them, then clean up again |
