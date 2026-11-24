@@ -486,6 +486,11 @@ func (r *run) teardown() (*types.OperationResponse, error) {
 		r.target = "distributed workloads in " + rec.Project
 	}
 	if rec.Empty() {
+		if rec.Project != "" {
+			if err := writeRecord(c, Record{}); err != nil {
+				return r.fail("samples", err.Error(), codeOf(err), "record write failed")
+			}
+		}
 		r.step("samples", "success", "This tool has set up nothing.")
 		return r.done("This tool has no distributed workloads set up; nothing was deleted.")
 	}
@@ -572,6 +577,12 @@ func (r *run) teardown() (*types.OperationResponse, error) {
 	r.step("opt-in", "success", msg)
 	if strings.HasPrefix(msg, "Kept") {
 		kept = append(kept, msg)
+	}
+	// Nothing of the tool's is left: the record forgets the project.
+	if final, err := ReadRecord(c); err == nil && final.Empty() {
+		if err := writeRecord(c, Record{}); err != nil {
+			slog.Warn("cannot clear the Kueue record", "error", err)
+		}
 	}
 	done := "Deleted this tool's distributed workloads setup."
 	if len(kept) > 0 {

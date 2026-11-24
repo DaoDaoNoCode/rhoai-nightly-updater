@@ -99,7 +99,7 @@ func ReadRecord(c *kube.Client) (Record, error) {
 // writeRecord persists rec; clearing everything drops project fields. The
 // cluster lock serializes callers, so read-modify-write cannot conflict.
 func writeRecord(c *kube.Client, rec Record) error {
-	if rec.Empty() {
+	if rec.Empty() && rec.Project == "" {
 		rec = Record{}
 	} else {
 		rec.At, rec.By = kube.NowRFC3339(), kube.GetUser(c)
