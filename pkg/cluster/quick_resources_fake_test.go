@@ -90,6 +90,9 @@ type resourceFake struct {
 	// serverClockOffset, when not zero, is how far the API server's clock
 	// (its responses' Date header) is from the wall clock.
 	serverClockOffset time.Duration
+	// noDate: responses carry no Date header (net/http leaves it out when
+	// the handler sets it to nil).
+	noDate bool
 }
 
 // fakeCall is one request to resourceFake.
@@ -331,7 +334,9 @@ func (f *resourceFake) addManagedField(meta map[string]any, manager, op string) 
 }
 
 func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
-	if f.serverClockOffset != 0 {
+	if f.noDate {
+		w.Header()["Date"] = nil
+	} else if f.serverClockOffset != 0 {
 		// net/http adds a Date header only when the handler sets none.
 		w.Header().Set("Date", time.Now().Add(f.serverClockOffset).UTC().Format(http.TimeFormat))
 	}
