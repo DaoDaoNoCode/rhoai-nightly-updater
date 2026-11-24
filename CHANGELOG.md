@@ -96,6 +96,25 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   what it leaves in place (the S3 storage, MLflow, a pipeline server in an
   existing project) and links to the Environment page.
 
+- **Recipes: every Environment feature, and Dashboard Dev.** A recipe now
+  also runs the MLflow samples, Models as a Service (development or
+  CloudNativePG database), the Models prerequisites and a catalog model
+  in the project (reached the recommended way, through the default
+  gateway, through MaaS or only inside the cluster), publishing it
+  through MaaS, the playground, the model registry (with its sample
+  model), a workbench (with the tool's S3 Connection when the project has
+  the pipeline server) and a Dashboard Dev main or pull request build,
+  deployed last. Each step calls what the Environment or Dashboard Dev
+  page's own button calls, and checks the cluster first, so a resume
+  skips what is set up; how the model is reached is resolved once and
+  kept for a resume. New optional recipe fields: `features.modelRegistry`
+  (`enabled`, `sample`) and `features.workbench` (`enabled`); recipes
+  without them read as before. Clean up also offers, unticked, the MaaS
+  platform and the model registry, but only when the run created them
+  and they are still as it created them. The form has a switch and the
+  few options of each feature. No new permission
+  ([RUNBOOK §5.1](RUNBOOK.md#51-environment-recipe-runs-resume-interrupted-sign-in-again)).
+
 - **Pre-releases.** A version can now be tried out before it is released:
   `make release VERSION=v5.0.0-rc.1` tags a pre-release (`-alpha.N`,
   `-beta.N` or `-rc.N`, numbered from 1), on `main` or on an `integ/*`
