@@ -276,3 +276,28 @@ func TestValidate_ReportsEveryBrokenRule(t *testing.T) {
 		})
 	}
 }
+
+// Combinations of the recipes phase 2 fields that are valid: none of them
+// reports a problem.
+func TestValidate_AcceptsTheFeatureCombinations(t *testing.T) {
+	project := "  project: {mode: existing, name: p}\n"
+	for name, spec := range map[string]string{
+		"the registry and its sample need no project": "  features: {modelRegistry: {enabled: true, sample: true}}\n",
+		"a workbench in an existing project":          project + "  features: {workbench: {enabled: true}}\n",
+		"a workbench without Pipelines":               project + "  features: {workbench: {enabled: true}, pipelines: {enabled: false}}\n",
+		"published while reached inside the cluster":  project + "  features: {models: {enabled: true, exposure: internal}, maas: {enabled: true, publish: true}}\n",
+		"published and reached through MaaS":          project + "  features: {models: {enabled: true, exposure: maas}, maas: {enabled: true, publish: true}}\n",
+		"MaaS on its own":                             "  features: {maas: {enabled: true, database: cnpg}}\n",
+		"every feature with Dashboard Dev main":       allFeatures + "  dashboardDev: {deploy: main}\n",
+		"the samples with MLflow in a project":        project + "  features: {mlflow: {enabled: true, samples: true}}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if strings.Contains(spec, "dashboardDev: {deploy: main}") {
+				spec = strings.Replace(spec, "  dashboardDev: {deploy: pr, pr: 77}\n", "", 1)
+			}
+			if _, problems := Validate([]byte(source(latest + spec))); len(problems) > 0 {
+				t.Errorf("problems %+v", problems)
+			}
+		})
+	}
+}
