@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/authz"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -101,8 +103,9 @@ func (p HardwareProfileObject) visibleForModelServing() bool {
 
 // Fits says why the profile cannot hold the model, or "" when it can: it
 // must be enabled, describe only CPU and memory (no accelerator), add no
-// scheduling (the tool would have to apply it as the wizard does), and its
-// ranges must contain the model's requests and limits.
+// node scheduling (the tool would have to apply it as the wizard does), and
+// its ranges must contain the model's requests and limits. Whether a Queue
+// profile fits the project is the Kueue rule's (kueueFilter).
 func (p HardwareProfileObject) Fits(entry CatalogModel) string {
 	if p.Metadata.Annotations[hardwareProfileDisabledAnnotation] == "true" {
 		return "disabled"
@@ -110,7 +113,7 @@ func (p HardwareProfileObject) Fits(entry CatalogModel) string {
 	if !p.visibleForModelServing() {
 		return "the dashboard shows it only for " + p.Metadata.Annotations[hardwareProfileVisibilityAnnotation]
 	}
-	if s := p.Spec.Scheduling; s != nil && (s.Kueue != nil || (s.Node != nil && (len(s.Node.NodeSelector) > 0 || len(s.Node.Tolerations) > 0))) {
+	if s := p.Spec.Scheduling; s != nil && (s.Node != nil && (len(s.Node.NodeSelector) > 0 || len(s.Node.Tolerations) > 0)) {
 		return "it adds scheduling rules"
 	}
 	want := map[string][]string{"cpu": {entry.CPU, entry.CPU}, "memory": {entry.MemoryRequest, entry.Memory}}
@@ -136,14 +139,114 @@ func (p HardwareProfileObject) Fits(entry CatalogModel) string {
 	return ""
 }
 
+// isQueue: the profile sends workloads to a Kueue LocalQueue (spec.scheduling
+// type Queue).
+func (p HardwareProfileObject) isQueue() bool {
+	return p.Spec.Scheduling != nil && p.Spec.Scheduling.Type == "Queue"
+}
+
+func (p HardwareProfileObject) queue() string {
+	if p.isQueue() && p.Spec.Scheduling.Kueue != nil {
+		return p.Spec.Scheduling.Kueue.LocalQueueName
+	}
+	return ""
+}
+
+// kueueFilter applies the dashboard's Kueue rule (envkit.KueueMode,
+// filterProfilesByKueue): in a project of OnlyKueue only Queue profiles whose
+// LocalQueue the project has (or that name none), elsewhere only the others.
+// A Queue profile's queue is put on the model by RHOAI's HardwareProfile
+// webhook (rhods-operator rhoai-3.6 internal/webhook/hardwareprofile
+// mutating.go applyHardwareProfileToWorkload, for InferenceServices and
+// LLMInferenceServices: label kueue.x-k8s.io/queue-name), as for a model the
+// dashboard deploys.
+func kueueFilter(p HardwareProfileObject, mode envkit.KueueMode, queues []string) string {
+	switch {
+	case mode == envkit.OnlyKueue && !p.isQueue():
+		return "the project uses Kueue, and this profile does not send models to a queue"
+	case mode == envkit.OnlyKueue && p.queue() != "" && !slices.Contains(queues, p.queue()):
+		return "its LocalQueue " + p.queue() + " is not in the project"
+	case mode != envkit.OnlyKueue && p.isQueue():
+		return "it sends models to a Kueue queue, and the project does not use Kueue"
+	}
+	return ""
+}
+
+// projectKueueMode is the dashboard's Kueue rule for a model in project
+// (envkit.KueueModeFor), and the project's LocalQueues when it uses Kueue.
+// Unreadable settings are an error: the caller then records no profile.
+func projectKueueMode(c *kube.Client, project, apps string) (envkit.KueueMode, []string, error) {
+	meta, found, err := kube.ReadObjectMeta(c, "/api/v1/namespaces/"+project)
+	if err != nil {
+		return envkit.OnlyNonKueue, nil, err
+	}
+	labelled := found && meta.Labels[envkit.KueueProjectLabel] == "true"
+	if !labelled {
+		return envkit.OnlyNonKueue, nil, nil
+	}
+	dsc, err := rhoai.ReadFirstDSC(c)
+	if err != nil {
+		return envkit.OnlyNonKueue, nil, err
+	}
+	var cfg struct {
+		Spec struct {
+			DashboardConfig struct {
+				DisableKueue *bool `json:"disableKueue"`
+			} `json:"dashboardConfig"`
+		} `json:"spec"`
+	}
+	if _, err := c.GetIntoOptional(rhoai.NamespacedPath("opendatahub.io/v1alpha", "odhdashboardconfigs", apps, "odh-dashboard-config"), &cfg); err != nil {
+		return envkit.OnlyNonKueue, nil, err
+	}
+	mode := envkit.KueueModeFor(true, envkit.KueueAvailable(dsc, cfg.Spec.DashboardConfig.DisableKueue))
+	if mode != envkit.OnlyKueue {
+		return mode, nil, nil
+	}
+	// The dashboard keeps every Queue profile when the LocalQueues cannot
+	// be read (fail-open); here no profile is recorded instead.
+	queues, err := listModelLocalQueues(c, project)
+	return mode, queues, err
+}
+
+// listModelLocalQueues lists the names of a project's Kueue LocalQueues
+// (kueue.x-k8s.io/v1beta2, the dashboard's LocalQueueModel), with the
+// signed-in user's token only (a model's setup).
+func listModelLocalQueues(c *kube.Client, project string) ([]string, error) {
+	if !c.ActsAsUser() {
+		return nil, authz.ErrNotUserClient
+	}
+	var items []struct {
+		Metadata kube.ObjectMeta `json:"metadata"`
+	}
+	if err := c.ListInto(rhoai.NamespacedPath("kueue.x-k8s.io/v1beta2", "localqueues", project, ""), &items); err != nil {
+		if kube.IsK8sNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	names := make([]string, 0, len(items))
+	for _, q := range items {
+		names = append(names, q.Metadata.Name)
+	}
+	return names, nil
+}
+
 // pickHardwareProfile finds, in the dashboard's namespace, the first
-// profile by name that fits the model (see fits). It returns the profile,
-// or a zero profile and why none was used; a read error is a reason too:
-// the profile is a label in the dashboard, never a reason to stop.
-func pickHardwareProfile(c *kube.Client, entry CatalogModel) (HardwareProfile, string) {
+// profile by name that fits the model (see fits) and the dashboard's Kueue
+// rule for the project (kueueFilter). It returns the profile, or a zero
+// profile and why none was used; a read error is a reason too: the profile
+// is a label in the dashboard, never a reason to stop.
+func pickHardwareProfile(c *kube.Client, project string, entry CatalogModel) (HardwareProfile, string) {
 	ns, err := rhoai.AppsNamespace(c)
 	if err != nil {
 		return HardwareProfile{}, fmt.Sprintf("the dashboard's namespace is not known (%v)", err)
+	}
+	mode, queues, err := projectKueueMode(c, project, ns)
+	if err != nil {
+		return HardwareProfile{}, fmt.Sprintf("the project's Kueue settings cannot be read (%v)", err)
+	}
+	if mode == envkit.NoProfiles {
+		return HardwareProfile{}, "the project uses Kueue (label kueue.openshift.io/managed=true) while Kueue is off in the dashboard, so the dashboard offers no hardware profile there"
 	}
 	var items []HardwareProfileObject
 	if err := c.ListInto(rhoai.NamespacedPath("infrastructure.opendatahub.io/v1", "hardwareprofiles", ns, ""), &items); err != nil {
@@ -155,7 +258,10 @@ func pickHardwareProfile(c *kube.Client, entry CatalogModel) (HardwareProfile, s
 	sort.Slice(items, func(i, j int) bool { return items[i].Metadata.Name < items[j].Metadata.Name })
 	var why []string
 	for _, p := range items {
-		reason := p.Fits(entry)
+		reason := kueueFilter(p, mode, queues)
+		if reason == "" {
+			reason = p.Fits(entry)
+		}
 		if reason == "" {
 			return HardwareProfile{Name: p.Metadata.Name, Namespace: ns, ResourceVersion: p.Metadata.ResourceVersion}, ""
 		}

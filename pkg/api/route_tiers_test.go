@@ -45,7 +45,7 @@ func TestRouteTiersMatchTheDesign(t *testing.T) {
 		tierAdmin: {
 			"GET /api/activity", "GET /api/components", "GET /api/components/dsc", "GET /api/components/dsc/plan",
 			"GET /api/dashboard/builds", "GET /api/dashboard/state", "GET /api/debug", "GET /api/diagnostics",
-			"GET /api/latest-nightly", "GET /api/nightly-tags", "GET /api/recipes/run", "GET /api/resources/maas", "GET /api/resources/maas/groups",
+			"GET /api/latest-nightly", "GET /api/nightly-tags", "GET /api/recipes/run", "GET /api/resources/kueue", "GET /api/resources/maas", "GET /api/resources/maas/groups",
 			"GET /api/resources/models/exposures", "GET /api/resources/prerequisites", "GET /api/resources/s3/admin-password", "GET /api/resources/workbench",
 			"GET /api/setup/dsc/preview", "GET /api/status", "GET /api/test-pull-secret", "GET /api/verify-nodes",
 		},

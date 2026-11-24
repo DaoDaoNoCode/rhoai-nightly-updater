@@ -40,20 +40,8 @@ func Unsupported(dsc rhoai.DSCRead) string {
 	return ""
 }
 
-// componentOn implements dashboard isAreaAvailable for one component—true when
-// status.components.<key>.managementState is Managed or Unmanaged, with spec
-// used as fallback if status lacks the entry.
-func componentOn(dsc rhoai.DSCRead, key string) bool {
-	status, _ := dsc.Object["status"].(map[string]any)
-	comps, _ := status["components"].(map[string]any)
-	if comp, ok := comps[key].(map[string]any); ok {
-		if s, _ := comp["managementState"].(string); s != "" {
-			return s == "Managed" || s == "Unmanaged"
-		}
-	}
-	s, _ := envkit.ComponentManagement(dsc.Object, key)
-	return s == "Managed" || s == "Unmanaged"
-}
+// componentOn is envkit.ComponentOn.
+func componentOn(dsc rhoai.DSCRead, key string) bool { return envkit.ComponentOn(dsc, key) }
 
 // stopped follows dashboard isStopped: the stop annotation is present and
 // differs from the controller create-time lock token.
@@ -286,9 +274,7 @@ func BuildPlan(c *kube.Client, project string, dsc rhoai.DSCRead) (Plan, string,
 	if err != nil {
 		return fail("the project's hardware profiles", err)
 	}
-	disable := cfg.Spec.DashboardConfig.DisableKueue
-	kueueOn := componentOn(dsc, "kueue") && disable != nil && !*disable
-	mode := ModeFor(labels[KueueProjectLabel] == "true", kueueOn)
+	mode := ModeFor(labels[KueueProjectLabel] == "true", envkit.KueueAvailable(dsc, cfg.Spec.DashboardConfig.DisableKueue))
 	var queues []string
 	if mode == OnlyKueue {
 		// The dashboard keeps every Queue profile when the LocalQueues

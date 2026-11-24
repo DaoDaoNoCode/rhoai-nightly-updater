@@ -24,6 +24,19 @@ type FeatureComponent struct {
 	// component the DataScienceCluster does not name yet is written with
 	// it at v1, else with keys[0]).
 	V1Key string
+	// On is the managementState that turns it on: "" means Managed. RHOAI
+	// 3.x accepts only Unmanaged for kueue (rhods-operator rhoai-3.6
+	// internal/webhook/datasciencecluster/v3/validating.go: "Managed is
+	// no longer supported as a managementState").
+	On string
+}
+
+// OnState is the managementState that turns the component on.
+func (fc FeatureComponent) OnState() string {
+	if fc.On != "" {
+		return fc.On
+	}
+	return "Managed"
 }
 
 // KeyIn is the key the component is written with in the DataScienceCluster
@@ -51,6 +64,11 @@ var (
 	// datasciencecluster_conversion.go). The key the DataScienceCluster as
 	// read has is used, so no release is named.
 	ModelRegistryComponent = FeatureComponent{Feature: "Model registry", Keys: []string{"aiHub", "modelregistry"}, V1Key: "modelregistry"}
+	// KueueComponent integrates the Red Hat build of Kueue: on is
+	// Unmanaged, the only on state RHOAI 3.x accepts (RHOAI docs, Managing
+	// OpenShift AI, "Manage workloads with Kueue": Managed is deprecated,
+	// Unmanaged is supported, Removed disables).
+	KueueComponent = FeatureComponent{Feature: "Kueue", Keys: []string{"kueue"}, On: "Unmanaged"}
 )
 
 // ComponentManagement is a component's managementState in a
@@ -100,7 +118,7 @@ func ComponentBlock(r rhoai.DSCRead, fc FeatureComponent) *types.ComponentBlock 
 		if !found {
 			continue
 		}
-		if state == "Managed" {
+		if state == fc.OnState() {
 			return nil
 		}
 		shown := state
@@ -108,7 +126,7 @@ func ComponentBlock(r rhoai.DSCRead, fc FeatureComponent) *types.ComponentBlock 
 			shown = "not set"
 		}
 		return &types.ComponentBlock{Component: key, DSC: name, State: state,
-			Reason: fmt.Sprintf("%s is turned off on this cluster: component %s is %s in DataScienceCluster %s, so nothing would run it. A cluster-admin turns it on by setting it to Managed.", fc.Feature, key, shown, name)}
+			Reason: fmt.Sprintf("%s is turned off on this cluster: component %s is %s in DataScienceCluster %s, so nothing would run it. A cluster-admin turns it on by setting it to %s.", fc.Feature, key, shown, name, fc.OnState())}
 	}
 	return nil
 }

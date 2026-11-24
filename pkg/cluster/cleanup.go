@@ -10,6 +10,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kueue"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/modelregistry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/recipe"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
@@ -24,6 +25,7 @@ var (
 	cleanupPipelineServer = TeardownPipelineServer
 	cleanupStorage        = TeardownS3Storage
 	cleanupMLflow         = TeardownMLflow
+	cleanupKueue          = kueue.Teardown
 	cleanupModelRegistry  = func(c *Client) (*types.OperationResponse, error) {
 		return modelregistry.Run(c, types.ModelRegistryRequest{Action: "teardown"}, nil)
 	}
@@ -64,7 +66,7 @@ func cleanupConfirmCode(code string) bool {
 // CleanupStepID identifies each clean-up slice in the stream, e.g.
 // "pipeline-server:<project>", "storage", "mlflow", "model-registry",
 // "playground:<project>",
-// "model:<project>", "inference-gateway", "maas-unpublish:<project>"
+// "model:<project>", "inference-gateway", "kueue", "maas-unpublish:<project>"
 // (first), "maas-platform", "recipe-project:<project>", and "components"
 // (last).
 func CleanupStepID(part, project string) string {
@@ -169,6 +171,12 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 	}
 	if req.InferenceGateway {
 		parts = append(parts, cleanupPart{id: CleanupStepID("inference-gateway", ""), title: "the inference gateway", run: func() (*types.OperationResponse, error) { return cleanupGateway(c, len(req.Models) > 0) }})
+	}
+	if req.Kueue {
+		// After the workbenches and models that may use its queue, before
+		// recipe projects (its project may be one) and the components
+		// (DataScienceCluster kueue goes back only once no queue is left).
+		parts = append(parts, cleanupPart{id: CleanupStepID("kueue", ""), title: "the distributed workloads setup", run: func() (*types.OperationResponse, error) { return cleanupKueue(c) }, says: true})
 	}
 	if req.MaaSPlatform {
 		parts = append(parts, cleanupPart{id: CleanupStepID("maas-platform", ""), title: "the MaaS platform", run: func() (*types.OperationResponse, error) { return cleanupMaaSPlatform(c) }})

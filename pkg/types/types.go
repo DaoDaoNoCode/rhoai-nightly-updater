@@ -1883,6 +1883,9 @@ type CleanupRequest struct {
 	// ModelRegistry deletes the model registry this tool created (with
 	// its registered models and its default database).
 	ModelRegistry bool `json:"modelRegistry,omitempty"`
+	// Kueue deletes this tool's distributed workloads setup: its samples,
+	// queues and project label, and turns back its dashboard opt-in.
+	Kueue bool `json:"kueue,omitempty"`
 	// Models are the projects whose models of the tool's catalog go (all
 	// of them);
 	// InferenceGateway deletes the inference gateway after them.
