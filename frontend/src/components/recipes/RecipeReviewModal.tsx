@@ -131,6 +131,13 @@ export const RecipeReviewModal: React.FC<{
               </Alert>
             </StackItem>
           )}
+          {shownPlan?.warnings && shownPlan.warnings.length > 0 && (
+            <StackItem>
+              <Alert variant="warning" isInline component="p" title="The run also changes this">
+                <List>{shownPlan.warnings.map((w) => <ListItem key={w}>{w}</ListItem>)}</List>
+              </Alert>
+            </StackItem>
+          )}
           {shownPlan && shownPlan.steps.some((s) => s.action === "later") && (
             <StackItem>
               <Content component="p">

@@ -3,6 +3,8 @@
     "components": [
       "kserve"
     ],
+    "kueue": true,
+    "kueueUid": "clusterqueue-uid",
     "maasPlatform": true,
     "maasPlatformUid": "creds-uid",
     "modelRegistry": true,
@@ -43,10 +45,14 @@
       {
         "part": "model-registry",
         "uid": "registry-uid"
+      },
+      {
+        "part": "kueue",
+        "uid": "clusterqueue-uid"
       }
     ],
     "exposure": "default-gateway",
-    "finishedAt": "2026-11-20T15:57:00Z",
+    "finishedAt": "2026-11-20T16:03:00Z",
     "id": "run2",
     "operationId": "op3",
     "pod": "pod-2",
@@ -71,6 +77,11 @@
           "create": true
         },
         "features": {
+          "kueue": {
+            "dashboardOptIn": true,
+            "enabled": true,
+            "rayCluster": true
+          },
           "maas": {
             "database": "development",
             "enabled": true,
@@ -297,10 +308,31 @@
       },
       {
         "finishedAt": "2026-11-20T15:56:00Z",
+        "id": "kueue-prereq",
+        "maxSeconds": 900,
+        "message": "What distributed workloads need is set up.",
+        "startedAt": "2026-11-20T15:54:00Z",
+        "status": "success",
+        "title": "What distributed workloads need",
+        "typicalSeconds": 240
+      },
+      {
+        "created": true,
+        "finishedAt": "2026-11-20T15:59:00Z",
+        "id": "kueue",
+        "maxSeconds": 600,
+        "message": "Distributed workloads is set up.",
+        "startedAt": "2026-11-20T15:57:00Z",
+        "status": "success",
+        "title": "Distributed workloads",
+        "typicalSeconds": 60
+      },
+      {
+        "finishedAt": "2026-11-20T16:02:00Z",
         "id": "dashboard-dev",
         "maxSeconds": 480,
         "message": "Dashboard Dev (PR #4321) is set up.",
-        "startedAt": "2026-11-20T15:54:00Z",
+        "startedAt": "2026-11-20T16:00:00Z",
         "status": "success",
         "title": "Dashboard Dev (PR #4321)",
         "typicalSeconds": 180

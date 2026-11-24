@@ -44,7 +44,8 @@ const editorReads = {
 function featuresPlan(): RecipePlan {
   const run = contract.recipeRunFeatures().run!;
   const steps = run.steps.map((s, i) => ({ id: s.id, title: s.title, action: i === 0 ? "run" as const : "later" as const, typicalSeconds: s.typicalSeconds, maxSeconds: s.maxSeconds }));
-  return { recipe: run.recipe, steps, problems: [], typicalSeconds: steps.reduce((n, s) => n + s.typicalSeconds, 0), maxSeconds: steps.reduce((n, s) => n + s.maxSeconds, 0) };
+  const warnings = ["Project recipe-full also gets a pipeline server, a model and a workbench. Kueue manages only what is sent to a queue, so they keep running.", "The dashboard's Kueue setting changes every new project on this cluster."];
+  return { recipe: run.recipe, steps, problems: [], warnings, typicalSeconds: steps.reduce((n, s) => n + s.typicalSeconds, 0), maxSeconds: steps.reduce((n, s) => n + s.maxSeconds, 0) };
 }
 
 const switchNamed = (name: string) => screen.getByRole("switch", { name });
@@ -76,6 +77,17 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     fireEvent.click(switchNamed("Model registry"));
     fireEvent.click(screen.getByRole("checkbox", { name: "Register the sample model" }));
     fireEvent.click(switchNamed("Workbench"));
+    // Distributed workloads: the tab's options; the dashboard setting is off by default, with its cluster-wide effect.
+    fireEvent.click(switchNamed("Distributed workloads"));
+    expect(screen.getByText("The project also gets a pipeline server and a model and a workbench. Kueue manages only what is sent to a queue, so they keep running; a project of its own is still safer.")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Turn on the dashboard's Kueue setting" })).not.toBeChecked();
+    expect(screen.getByText(/It changes every new project on this cluster/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("checkbox", { name: "RayCluster sample" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Sample image" }), { target: { value: "bad image!" } });
+    fireEvent.blur(screen.getByRole("textbox", { name: "Sample image" }));
+    expect(screen.getByText("Enter an image reference, such as quay.io/project/ray:2.47.")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "Sample image" }), { target: { value: "quay.io/x/ray:2" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Turn on the dashboard's Kueue setting" }));
     expect(screen.getByText("A workbench in the project, as the dashboard creates one. It gets the S3 Connection of the pipeline server.")).toBeInTheDocument();
     // Without Pipelines it says what the workbench lacks.
     fireEvent.click(switchNamed("Pipelines"));
@@ -101,6 +113,7 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
           pipelines: { enabled: true }, mlflow: { enabled: true, samples: true },
           models: { enabled: true, model: "qwen3-1-7b", exposure: "default-gateway" }, playground: { enabled: true },
           maas: { enabled: true, database: "cnpg", publish: true }, modelRegistry: { enabled: true, sample: true }, workbench: { enabled: true },
+          kueue: { enabled: true, rayCluster: true, rayImage: "quay.io/x/ray:2", dashboardOptIn: true },
         },
         dashboardDev: { deploy: "pr", pr: 4321, flavor: "rhoai" },
       },
@@ -109,9 +122,12 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     const plan = within(screen.getByRole("dialog", { name: "Run recipe dev?" })).getByRole("list", { name: "Steps of this operation" });
     const titles = within(plan).getAllByRole("listitem").map((li) => li.textContent ?? "");
     for (const [i, title] of ["MLflow samples", "Models as a Service", "What Models needs", "Model Qwen3 1.7B (CPU, tool calling)", "Publish the model through MaaS",
-      "What the playground needs", "Playground", "What the model registry needs", "Model registry", "Workbench", "Dashboard Dev (PR #4321)"].entries()) {
+      "What the playground needs", "Playground", "What the model registry needs", "Model registry", "Workbench", "What distributed workloads need", "Distributed workloads", "Dashboard Dev (PR #4321)"].entries()) {
       expect(titles[8 + i]).toContain(title);
     }
+    // The plan's warnings: what else the run changes.
+    const warning = within(screen.getByRole("dialog", { name: "Run recipe dev?" })).getByText("The run also changes this").closest(".pf-v6-c-alert") as HTMLElement;
+    expect(within(warning).getAllByRole("listitem").map((li) => li.textContent)).toHaveLength(2);
     expect(plan).toHaveTextContent("Model Qwen3 1.7B (CPU, tool calling)Later: usually 5 minutes, up to 15 minutes.");
   });
 
@@ -175,7 +191,7 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     const dialog = screen.getByRole("dialog", { name: /Clean up what recipe full set up\?/ });
     await settle();
     expect(within(dialog).getAllByRole("checkbox").map((c) => [c.getAttribute("id"), (c as HTMLInputElement).checked])).toEqual([
-      ["recipe-cleanup-recipe-project:recipe-full", true], ["recipe-cleanup-model-registry", false], ["recipe-cleanup-maas-platform", false], ["recipe-cleanup-components", true],
+      ["recipe-cleanup-recipe-project:recipe-full", true], ["recipe-cleanup-model-registry", false], ["recipe-cleanup-maas-platform", false], ["recipe-cleanup-kueue", false], ["recipe-cleanup-components", true],
     ]);
     const left = within(within(dialog).getByText("Left in place").closest(".pf-v6-c-alert") as HTMLElement).getAllByRole("listitem").map((li) => li.textContent);
     // What the checkboxes offer is not listed again; Dashboard Dev has its own page, not the Environment page's Clean up.
@@ -189,12 +205,13 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Project recipe-full, which the recipe created" }));
     // The run's success says the workbench may still be starting, not that all is ready.
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "The MaaS platform the run set up" }));
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "The distributed workloads setup the run created" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Clean up" }));
     await settle();
     expect(streams).toHaveLength(1);
     expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([
       // The reviewed identities: the backend checks them again before it deletes the platform.
-      { recipeProjects: ["recipe-full"], recipeProjectUIDs: { "recipe-full": "1a2b3c4d-uid" }, maasPlatform: true, maasPlatformUid: "creds-uid", recipeRunId: "run2", components: ["kserve"] },
+      { recipeProjects: ["recipe-full"], recipeProjectUIDs: { "recipe-full": "1a2b3c4d-uid" }, maasPlatform: true, maasPlatformUid: "creds-uid", kueue: true, kueueUid: "clusterqueue-uid", recipeRunId: "run2", components: ["kserve"] },
     ]);
     await act(async () => { streams[0].close(); });
     await settle();

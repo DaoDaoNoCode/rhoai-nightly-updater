@@ -2084,6 +2084,8 @@ export interface EnvironmentRecipe {
       /** Optional: absent is off. */
       modelRegistry?: { enabled: boolean; sample?: boolean };
       workbench?: { enabled: boolean };
+      /** Distributed workloads (Kueue), as the Distributed workloads tab sets them up. */
+      kueue?: { enabled: boolean; rayCluster?: boolean; rayJob?: boolean; rayImage?: string; dashboardOptIn?: boolean };
     };
     dashboardDev: { deploy?: string; pr?: number; flavor?: string };
   };
@@ -2136,6 +2138,8 @@ export interface RecipePlan {
   pinned?: RecipePinnedBuild;
   typicalSeconds: number;
   maxSeconds: number;
+  /** What the run changes beyond the recipe's own parts; they do not refuse it. */
+  warnings?: string[];
 }
 
 export type RecipeRunState = "running" | "succeeded" | "failed" | "stopped";
@@ -2182,7 +2186,7 @@ export interface RecipeRun {
   exposure?: string;
   gatewayRef?: string;
   /** The cluster-wide parts the run created (they were not this tool's before): its Clean up offers those still as it created them. */
-  createdParts?: { part: "maas-platform" | "model-registry"; uid?: string }[];
+  createdParts?: { part: "maas-platform" | "model-registry" | "kueue"; uid?: string }[];
 }
 
 /** GET /api/recipes/run. */

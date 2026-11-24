@@ -104,5 +104,8 @@
       "typicalSeconds": 60
     }
   ],
-  "typicalSeconds": 780
+  "typicalSeconds": 780,
+  "warnings": [
+    "The dashboard's Kueue setting changes every new project on this cluster."
+  ]
 }

@@ -61,6 +61,11 @@ function useCatalog(wanted: boolean) {
   return { catalog, error };
 }
 
+/** What else the recipe sets up in the project Kueue labels (the tab's own warning). */
+function kueueOthers(f: RecipeForm): string[] {
+  return [f.pipelines && "a pipeline server", f.models && "a model", f.workbench && "a workbench"].filter((x): x is string => !!x);
+}
+
 /** The ways the model can be reached, as the Models tab names them. */
 const EXPOSURES: { value: ExposureChoice; label: string }[] = [
   { value: "", label: "The recommended way, chosen when the run gets there" },
@@ -292,6 +297,30 @@ export const RecipeEditor: React.FC<{
                     help="A model registry for the cluster, with its default database. Turns on its DataScienceCluster component if it is off.">
                     <Checkbox id="recipe-registry-sample" label="Register the sample model" isChecked={form.registrySample} onChange={(_e, v) => set("registrySample", v)}
                       description="Needs the model registry: adds a sample model to it, as the Model registry tab does." />
+                  </FeatureSwitch>
+                  <FeatureSwitch id="recipe-kueue" label="Distributed workloads" checked={form.kueue} reason={needsProjectReason(form, "Distributed workloads need")}
+                    onChange={(v) => set("kueue", v)}
+                    help="Kueue queues for the project, as the Distributed workloads tab sets them up: a ClusterQueue and ResourceFlavor (cluster-wide, for this project only) and its LocalQueue. Adds what they need first: the kueue component, cert-manager and the Kueue operator. Set up after the project's other parts.">
+                    {kueueOthers(form).length > 0 && (
+                      <FieldHelperText variant="warning">
+                        {`The project also gets ${kueueOthers(form).join(" and ")}. Kueue manages only what is sent to a queue, so ${kueueOthers(form).length === 1 ? "it keeps" : "they keep"} running; a project of its own is still safer.`}
+                      </FieldHelperText>
+                    )}
+                    <Checkbox id="recipe-kueue-raycluster" label="RayCluster sample" isChecked={form.kueueRayCluster} onChange={(_e, v) => set("kueueRayCluster", v)}
+                      description="Needs the ray component. Shows on the dashboard's Distributed workloads page." />
+                    <Checkbox id="recipe-kueue-rayjob" label="RayJob sample" isChecked={form.kueueRayJob} onChange={(_e, v) => set("kueueRayJob", v)}
+                      description="Needs the ray component. Runs once, then finishes." />
+                    {(form.kueueRayCluster || form.kueueRayJob) && (
+                      <FormGroup label="Sample image" fieldId="recipe-kueue-image">
+                        <TextInput id="recipe-kueue-image" value={form.kueueRayImage} placeholder="The tab's default Ray image" onChange={(_e, v) => set("kueueRayImage", v)}
+                          onBlur={() => touch("kueueRayImage")} validated={shown("kueueRayImage") ? "error" : "default"} aria-describedby="recipe-kueue-image-helper" />
+                        <FieldHelperText id="recipe-kueue-image-helper" variant={shown("kueueRayImage") ? "error" : "default"}>
+                          {shown("kueueRayImage") ?? "Empty uses the Distributed workloads tab's default image."}
+                        </FieldHelperText>
+                      </FormGroup>
+                    )}
+                    <Checkbox id="recipe-kueue-optin" label="Turn on the dashboard's Kueue setting" isChecked={form.kueueOptIn} onChange={(_e, v) => set("kueueOptIn", v)}
+                      description="Off by default. It changes every new project on this cluster: workbenches and model deployments there can only use the queue hardware profile, and a project without its own LocalQueue cannot create them until an admin adds one." />
                   </FeatureSwitch>
                 </FormSection>
               </GridItem>

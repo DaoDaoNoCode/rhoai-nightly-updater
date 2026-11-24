@@ -294,6 +294,7 @@ func stubRecipeContract(t *testing.T, started time.Time) {
 	planRecipe = func(_ *cluster.Client, r types.EnvironmentRecipe, _ *types.RecipePinnedBuild) (*types.RecipePlan, cluster.RecipeState) {
 		return &types.RecipePlan{
 			Recipe: r, Pinned: pinned, TypicalSeconds: 780, MaxSeconds: 3120,
+			Warnings: []string{"The dashboard's Kueue setting changes every new project on this cluster."},
 			Steps: []types.RecipePlanStep{
 				{ID: "rhoai", Title: "RHOAI", Action: types.RecipeStepRun, TypicalSeconds: 420, MaxSeconds: 900},
 				{ID: "dsc", Title: "DataScienceCluster", Action: types.RecipeStepLater, Reason: "Checked when the run gets here: it depends on a step before it.", TypicalSeconds: 60, MaxSeconds: 420},
@@ -338,7 +339,8 @@ func stubEndedRecipeRun(t *testing.T) {
 const testRecipeFeatures = `{"apiVersion":"rhoai-nightly-updater/v1alpha1","kind":"EnvironmentRecipe","metadata":{"name":"full"},
 "spec":{"rhoai":{"build":"latest"},"dataScienceCluster":{"create":true},"project":{"mode":"create","name":"recipe-full"},
 "features":{"pipelines":{"enabled":true},"mlflow":{"enabled":true,"samples":true},"models":{"enabled":true,"model":"qwen3-1-7b"},
-"playground":{"enabled":true},"maas":{"enabled":true,"database":"development","publish":true},"modelRegistry":{"enabled":true,"sample":true},"workbench":{"enabled":true}},
+"playground":{"enabled":true},"maas":{"enabled":true,"database":"development","publish":true},"modelRegistry":{"enabled":true,"sample":true},"workbench":{"enabled":true},
+"kueue":{"enabled":true,"rayCluster":true,"dashboardOptIn":true}},
 "dashboardDev":{"deploy":"pr","pr":4321}}}`
 
 // stubFeaturesRecipeRun is a run of every feature that succeeded: its
@@ -366,14 +368,15 @@ func stubFeaturesRecipeRun(t *testing.T) {
 			StartedAt: at(0), FinishedAt: at(len(steps) * 3), State: types.RecipeRunSucceeded, StopReason: "Every step of full is set up.",
 			Recipe: rcp, Project: &types.RecipeProjectRef{Name: "recipe-full", UID: "1a2b3c4d-uid", Owned: true}, Steps: steps,
 			Exposure:     "default-gateway",
-			CreatedParts: []types.RecipeCreatedPart{{Part: types.RecipePartMaaSPlatform, UID: "creds-uid"}, {Part: types.RecipePartModelRegistry, UID: "registry-uid"}},
+			CreatedParts: []types.RecipeCreatedPart{{Part: types.RecipePartMaaSPlatform, UID: "creds-uid"}, {Part: types.RecipePartModelRegistry, UID: "registry-uid"}, {Part: types.RecipePartKueue, UID: "clusterqueue-uid"}},
 			Components:   []string{"aipipelines", "kserve"},
 		}, nil
 	}
 	recipeOwnership = func(_, _ *cluster.Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
-		return map[string]bool{"project": true, "maas": true, "model-registry": true, "models-prereq": true},
+		return map[string]bool{"project": true, "maas": true, "model-registry": true, "models-prereq": true, "kueue": true},
 			&types.CleanupRequest{RecipeProjects: []string{run.Project.Name}, RecipeProjectUIDs: map[string]string{run.Project.Name: run.Project.UID},
 				MaaSPlatform: true, ModelRegistry: true, Components: []string{"kserve"},
+				Kueue: true, KueueUID: "clusterqueue-uid",
 				RecipeRunID: run.ID, MaaSPlatformUID: "creds-uid", ModelRegistryUID: "registry-uid"}
 	}
 }

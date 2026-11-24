@@ -59,6 +59,14 @@ export interface RecipeForm {
   dashboardPR: string;
   /** Kept from an imported or earlier recipe; the editor does not show it. */
   dashboardFlavor: string;
+  /** Distributed workloads (Kueue) in the project, with the tab's options. */
+  kueue: boolean;
+  kueueRayCluster: boolean;
+  kueueRayJob: boolean;
+  /** The samples' image; "" is the tab's default. */
+  kueueRayImage: string;
+  /** The dashboard's Kueue setting: cluster-wide, off by default. */
+  kueueOptIn: boolean;
 }
 
 export const DEFAULT_RECIPE_FORM: RecipeForm = {
@@ -89,6 +97,11 @@ export const DEFAULT_RECIPE_FORM: RecipeForm = {
   dashboardDev: "none",
   dashboardPR: "",
   dashboardFlavor: "rhoai",
+  kueue: false,
+  kueueRayCluster: false,
+  kueueRayJob: false,
+  kueueRayImage: "",
+  kueueOptIn: false,
 };
 
 /** Map a stored recipe into editor fields; UI-hidden values remain at defaults. */
@@ -125,6 +138,11 @@ export function formFromRecipe(r: EnvironmentRecipe): RecipeForm {
     dashboardDev: d.deploy === "main" || d.deploy === "pr" ? d.deploy : "none",
     dashboardPR: d.deploy === "pr" && d.pr ? String(d.pr) : "",
     dashboardFlavor: d.flavor || "rhoai",
+    kueue: !!f.kueue?.enabled,
+    kueueRayCluster: !!f.kueue?.rayCluster,
+    kueueRayJob: !!f.kueue?.rayJob,
+    kueueRayImage: f.kueue?.rayImage ?? "",
+    kueueOptIn: !!f.kueue?.dashboardOptIn,
   };
 }
 
@@ -153,6 +171,13 @@ export function recipeFromForm(f: RecipeForm): EnvironmentRecipe {
         maas: e.maas ? { enabled: true, database: e.maasDatabase, ...(e.maasPublish ? { publish: true } : {}) } : { enabled: false },
         ...(e.modelRegistry ? { modelRegistry: { enabled: true, ...(e.registrySample ? { sample: true } : {}) } } : {}),
         ...(e.workbench ? { workbench: { enabled: true } } : {}),
+        ...(e.kueue ? { kueue: {
+          enabled: true,
+          ...(e.kueueRayCluster ? { rayCluster: true } : {}),
+          ...(e.kueueRayJob ? { rayJob: true } : {}),
+          ...((e.kueueRayCluster || e.kueueRayJob) && e.kueueRayImage.trim() ? { rayImage: e.kueueRayImage.trim() } : {}),
+          ...(e.kueueOptIn ? { dashboardOptIn: true } : {}),
+        } } : {}),
       },
       dashboardDev: e.dashboardDev === "none" ? { deploy: "none" }
         : { deploy: e.dashboardDev, ...(e.dashboardDev === "pr" ? { pr: Number(e.dashboardPR.trim()) } : {}), flavor: e.dashboardFlavor },
@@ -178,11 +203,12 @@ export function effectiveForm(f: RecipeForm): RecipeForm {
     maasPublish: f.maasPublish && f.maas && models && f.exposure !== "maas",
     registrySample: f.registrySample && f.modelRegistry,
     workbench: f.workbench && project,
+    kueue: f.kueue && project,
   };
 }
 
 /** Invalid fields keyed to their client-side message; server validation matches. */
-export type FormProblems = Partial<Record<"name" | "tag" | "image" | "newProject" | "existingProject" | "dashboardPR", string>>;
+export type FormProblems = Partial<Record<"name" | "tag" | "image" | "newProject" | "existingProject" | "dashboardPR" | "kueueRayImage", string>>;
 
 function nameProblem(name: string, what: string): string | undefined {
   const n = name.trim();
@@ -203,6 +229,8 @@ export function formProblems(f: RecipeForm): FormProblems {
   }
   if (f.project === "existing" && !f.existingProject) p.existingProject = "Choose a project.";
   if (f.dashboardDev === "pr" && !/^[1-9][0-9]{0,8}$/.test(f.dashboardPR.trim())) p.dashboardPR = "Enter the number of an odh-dashboard pull request.";
+  // As the Distributed workloads tab checks it.
+  if (f.kueue && (f.kueueRayCluster || f.kueueRayJob) && f.kueueRayImage.trim() && !/^[a-zA-Z0-9][a-zA-Z0-9._/:@+-]*$/.test(f.kueueRayImage.trim())) p.kueueRayImage = "Enter an image reference, such as quay.io/project/ray:2.47.";
   return p;
 }
 
@@ -236,6 +264,7 @@ export function noProjectReason(f: RecipeForm): string | null {
     f.models && "Models",
     f.models && f.playground && "the playground",
     f.workbench && "the workbench",
+    f.kueue && "distributed workloads",
   ].filter((x): x is string => !!x);
   if (inProject.length === 0) return null;
   const capital = (t: string) => `${t[0].toUpperCase()}${t.slice(1)}`;
@@ -314,6 +343,9 @@ export function cleanupParts(ready: CleanupRequest | undefined): RecipeCleanupPa
   if (ready?.maasPlatform) {
     parts.push({ id: "maas-platform", title: "The MaaS platform the run set up", description: "MaaS API keys and the MaaS database go with it. Others may use it: it stays unless you tick it.", chosen: false });
   }
+  if (ready?.kueue) {
+    parts.push({ id: "kueue", title: "The distributed workloads setup the run created", description: "Its ClusterQueue and ResourceFlavor (cluster-wide), the LocalQueue, the samples, the project's Kueue label and the dashboard's Kueue setting the run turned on. Others may use it: it stays unless you tick it.", chosen: false });
+  }
   if (ready?.components?.length) parts.push({ id: "components", title: `The DataScienceCluster components the run turned on: ${ready.components.join(", ")}`, chosen: true });
   return parts;
 }
@@ -335,7 +367,8 @@ export function cleanupRequest(ready: CleanupRequest | undefined, chosen: Readon
   // The reviewed identities go with them: the backend checks each again before it deletes it.
   if (ready?.modelRegistry && chosen.has("model-registry")) Object.assign(req, { modelRegistry: true, modelRegistryUid: ready.modelRegistryUid ?? "" });
   if (ready?.maasPlatform && chosen.has("maas-platform")) Object.assign(req, { maasPlatform: true, maasPlatformUid: ready.maasPlatformUid ?? "" });
-  if (req.modelRegistry || req.maasPlatform) req.recipeRunId = ready?.recipeRunId ?? "";
+  if (ready?.kueue && chosen.has("kueue")) Object.assign(req, { kueue: true, kueueUid: ready.kueueUid ?? "" });
+  if (req.modelRegistry || req.maasPlatform || req.kueue) req.recipeRunId = ready?.recipeRunId ?? "";
   if (ready?.components?.length && chosen.has("components")) req.components = ready.components;
   return req;
 }
@@ -388,6 +421,8 @@ export function componentsSplit(status: ResourcesStatus | null, run: RecipeRun, 
         return project && run.recipe.spec.features.models.enabled && !deleted.has(project) ? `the model in ${project} stays` : null;
       case "modelregistry":
         return offered?.modelRegistry && !req.modelRegistry ? "the model registry stays" : null;
+      case "kueue":
+        return offered?.kueue && !req.kueue ? "the distributed workloads setup stays" : null;
     }
     return null;
   };
