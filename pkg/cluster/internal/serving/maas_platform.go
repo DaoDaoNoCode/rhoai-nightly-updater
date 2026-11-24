@@ -271,7 +271,7 @@ const authorinoDefaultSecret = "authorino-server-cert"
 func configureAuthorinoTLS(c *kube.Client, ns string, dryRun bool) ([]string, error) {
 	read, err := rhoai.GetServed(c, authorinoGroup, "/apis/"+authorinoGroup+"/%s/namespaces/"+ns+"/authorinos/authorino", []string{"v1beta1"})
 	if kube.IsK8sNotFound(err) || (err == nil && read.Body == nil) {
-		return nil, fmt.Errorf("%w: no Authorino authorino in %s", errAuthorinoNotYet, ns)
+		return nil, fmt.Errorf("%w: %w in %s", errAuthorinoNotYet, errNoAuthorinoCR, ns)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read Authorino %s/authorino: %w", ns, err)

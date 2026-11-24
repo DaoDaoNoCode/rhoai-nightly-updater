@@ -294,3 +294,81 @@ func TestPrerequisites_KuadrantCRIsNotCreatedWhenItsCRDCannotBeTrusted(t *testin
 		})
 	}
 }
+
+// Authorino's wait, when Kuadrant has not made Authorino: the message says
+// what the polls found, not the wait's own deadline, quotes Kuadrant's
+// Ready condition, and names the operator restart only when Kuadrant is
+// not Ready and made no Authorino CR (its operator does not try again
+// after the API server refused its first try). The tool restarts nothing.
+func TestMaaSSetup_AuthorinoMissingSaysWhy(t *testing.T) {
+	const limitador = `{"status":{"conditions":[{"type":"Ready","status":"False","reason":"LimitadorNotReady","message":"limitador resource not in topology"}]}}`
+	for _, tc := range []struct {
+		name     string
+		kuadrant string
+		keepCR   bool // the Authorino CR and Service are there (the Deployment is not)
+		want     []string
+		restart  bool
+	}{
+		{"not ready, no Authorino", limitador, false, []string{
+			"Authorino in kuadrant-system is not there after 5:00 (kuadrant has not made Authorino yet: no Authorino authorino in kuadrant-system).",
+			" Kuadrant kuadrant-system/kuadrant is not Ready (LimitadorNotReady: limitador resource not in topology) and has not made Authorino; its operator does not try again by itself.",
+			" A cluster-admin restarts it (oc rollout restart deployment/kuadrant-operator-controller-manager -n openshift-operators). Once Kuadrant is Ready, Set up again to continue.",
+		}, true},
+		{"not ready, Authorino without its Deployment", limitador, true, []string{
+			"Authorino in kuadrant-system is not there after 5:00 (kuadrant has not made Authorino yet: no Deployment kuadrant-system/authorino).",
+			" Kuadrant kuadrant-system/kuadrant is not Ready (LimitadorNotReady: limitador resource not in topology). Once Kuadrant is Ready, Set up again to continue.",
+		}, false},
+		{"ready, no Authorino", `{"status":{"conditions":[{"type":"Ready","status":"True","reason":"Ready"}]}}`, false, []string{
+			"(kuadrant has not made Authorino yet: no Authorino authorino in kuadrant-system). Kuadrant kuadrant-system/kuadrant is Ready; Set up again to continue.",
+		}, false},
+		{"no Ready condition, no Authorino", `{"status":{}}`, false, []string{
+			" Kuadrant kuadrant-system/kuadrant is not Ready yet (it reports no Ready condition). Once Kuadrant is Ready, Set up again to continue.",
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mc := newMaaSCluster(t)
+			mc.f.putJSON("/apis/kuadrant.io/v1beta1/namespaces/kuadrant-system/kuadrants/kuadrant", tc.kuadrant)
+			mc.f.mu.Lock()
+			for k := range mc.f.objects {
+				if k.ns == "kuadrant-system" && (k.plural == "deployments" || (!tc.keepCR && (k.plural == "services" || k.plural == "authorinos"))) {
+					delete(mc.f.objects, k)
+				}
+			}
+			mc.f.mu.Unlock()
+			res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG})
+			if res.Success || res.ErrorCode != "not_ready" || !strings.HasSuffix(finalSteps(events), "authorino-tls=failed") {
+				t.Fatalf("setup: %+v (%s)", res, finalSteps(events))
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(res.Message, want) {
+					t.Errorf("message lacks %q:\n%s", want, res.Message)
+				}
+			}
+			for _, banned := range []string{"deadline", "network error", "context"} {
+				if strings.Contains(res.Message, banned) {
+					t.Errorf("message shows the wait's own end (%q):\n%s", banned, res.Message)
+				}
+			}
+			if got := strings.Contains(res.Message, "rollout restart"); got != tc.restart {
+				t.Errorf("restart named %t, want %t:\n%s", got, tc.restart, res.Message)
+			}
+			for _, m := range mc.f.mutations() {
+				if strings.Contains(m, serving.KuadrantController) || strings.Contains(m, "/pods") {
+					t.Errorf("the tool changed Kuadrant's operator itself: %s", m)
+				}
+			}
+		})
+	}
+}
+
+// Set up's wait for Kuadrant to be Ready quotes its Ready condition's
+// reason and message when it gives up waiting.
+func TestMaaSSetup_KuadrantNotReadyQuotesItsCondition(t *testing.T) {
+	mc := newMaaSCluster(t)
+	mc.f.putJSON("/apis/kuadrant.io/v1beta1/namespaces/kuadrant-system/kuadrants/kuadrant", `{"status":{"conditions":[{"type":"Ready","status":"False","reason":"LimitadorNotReady","message":"limitador resource not in topology"}]}}`)
+	_, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG})
+	want := "Kuadrant is not Ready after 5:00 (LimitadorNotReady: limitador resource not in topology); continuing."
+	if msgs := kuadrantMessages(events); len(msgs) == 0 || msgs[len(msgs)-1] != want {
+		t.Fatalf("kuadrant step: %q, want last %q", msgs, want)
+	}
+}
