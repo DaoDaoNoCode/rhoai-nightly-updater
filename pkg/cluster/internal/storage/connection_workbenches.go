@@ -264,9 +264,12 @@ func detachConnection(c *kube.Client, project string, users *connectionUsers, lo
 	if users == nil {
 		return "", ""
 	}
-	// Every change as a server-side dry run first (the webhook has
-	// sideEffects None, so it answers dry runs): a workbench the webhook
-	// refuses, or that changed, stops the teardown before any is changed.
+	// Every change as a server-side dry run first (the Notebook webhooks
+	// declare sideEffects None, so the API server sends them dry runs):
+	// a workbench the webhook refuses, or that changed, stops the teardown
+	// before any is changed. The declaration is not a guarantee:
+	// odh-notebook-controller's webhook can still create its ConfigMaps
+	// and Secret ds-pipeline-config in the project on a dry run.
 	for _, w := range users.wbs {
 		if err := patchOutConnection(c, project, w, true); err != nil {
 			*logs = append(*logs, fmt.Sprintf("Warning: workbench %s cannot be changed (dry run): %v", w.Name, err))

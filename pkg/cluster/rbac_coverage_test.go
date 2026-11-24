@@ -92,6 +92,21 @@ var rbacUserTokenReads = map[string]string{
 	"user_reads.go:listConnectionWorkbenches":       "the workbenches of one of the user's projects that use the tool's dashboard Connection",
 	"model_registry.go:userReadCR":                  "the Model registry tab's status: this tool's ModelRegistry",
 	"model_registry.go:userReadService":             "the Model registry tab's status: the registry's Service (its gateway address)",
+	// The Workbench status of an admin (GET /api/resources/workbench) and
+	// the Workbench operations read with the admin's own token.
+	"workbench_reads.go:readNotebook":         "a project's nightly-workbench Notebook",
+	"workbench_reads.go:readStorage":          "a project's nightly-workbench-storage PersistentVolumeClaim",
+	"workbench_reads.go:listPods":             "the pods of a project's nightly-workbench",
+	"workbench_reads.go:projectLabels":        "a project's namespace, for its labels",
+	"workbench_reads.go:listImageStreams":     "the workbench images (ImageStreams) the dashboard offers",
+	"workbench_reads.go:listProfiles":         "the hardware profiles of the applications namespace and of a project",
+	"workbench_reads.go:listLocalQueues":      "a project's Kueue LocalQueues",
+	"workbench_reads.go:listStorageClasses":   "the cluster's StorageClasses",
+	"workbench_reads.go:readDashboardConfig":  "the dashboard's OdhDashboardConfig",
+	"workbench_reads.go:pipelineConfigExists": "whether a project has Secret ds-pipeline-config",
+	"workbench_reads.go:listNotebooks":        "a project's Notebooks, for which use the workbench storage",
+	"workbench_reads.go:listProjectPods":      "a project's pods, for which mount the workbench storage",
+	"workbench_reads.go:toolConnection":       "a project's dashboard Connection rhoai-nightly-updater-s3",
 }
 
 // Best-effort reads of paths found by API discovery at run time, whose API

@@ -426,6 +426,51 @@ function removePlayground(project) {
   world.playground.items = world.playground.items.filter((i) => i.namespace !== project);
 }
 
+/** GET /api/resources/workbench (pkg/cluster GetWorkbenchStatus): the plan is the project's when nothing is there. */
+function workbenchOf(project) {
+  const { items, noProfile } = world.workbench;
+  if (!project) return { items };
+  if (items.some((i) => i.namespace === project && i.deployed)) return { project, items };
+  return noProfile
+    ? { project, items, planProblem: F.WORKBENCH_NO_PROFILE, planProblemCode: "no_profile" }
+    : { project, items, plan: F.workbenchPlan };
+}
+
+/** POST /api/resources/workbench/stream (pkg/cluster RunWorkbench). */
+async function workbenchStream(req, res) {
+  const { action, project, deleteStorage = false } = await body(req);
+  beginOperation("workbench", "Workbench", `${action} workbench in ${project}`);
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+  let n = 0;
+  const send = (ev) => res.write(`data: ${JSON.stringify({ ...ev, elapsedMs: ++n * 3000 })}\n\n`);
+  const others = world.workbench.items.filter((i) => i.namespace !== project);
+  let message;
+  if (action === "delete-storage") {
+    world.workbench.items = others;
+    send({ step: "storage", status: "success", message: "Deleted storage nightly-workbench-storage; its files are gone." });
+    message = `Deleted storage nightly-workbench-storage in ${project}.`;
+  } else if (action === "teardown") {
+    const was = world.workbench.items.find((i) => i.namespace === project);
+    world.workbench.items = deleteStorage || !was?.storage ? others : [...others, { namespace: project, name: "nightly-workbench", deployed: false, ready: false, managedByTool: true, storage: was.storage }];
+    send({ step: "workbench", status: "success", message: "Deleted workbench nightly-workbench." });
+    if (deleteStorage) send({ step: "storage", status: "success", message: "Deleted storage nightly-workbench-storage; its files are gone." });
+    message = `Deleted workbench nightly-workbench in ${project}.`;
+  } else {
+    const state = action === "stop" ? "stopped" : "running";
+    if (action === "setup") {
+      send({ step: "check", status: "success", message: "Image Jupyter | Minimal | CPU | Python 3.12 (2025.2), hardware profile Default, storage 20Gi." });
+      send({ step: "storage", status: "success", message: "Created storage nightly-workbench-storage." });
+    }
+    await nextStep();
+    world.workbench.items = [...others, { ...F.workbenchItem(project, state), ready: state === "running" }];
+    message = `Workbench nightly-workbench in ${project} is ${state === "stopped" ? "stopped" : "starting"}.`;
+    send({ step: "workbench", status: "success", message });
+  }
+  endOperation(true, message);
+  send({ step: "operation_complete", status: "success", message });
+  res.end();
+}
+
 /** POST /api/resources/playground/stream (pkg/cluster RunPlayground). */
 async function playgroundStream(req, res) {
   const { action, project, models = [] } = await body(req);
@@ -656,6 +701,7 @@ const routes = {
   "GET /api/resources/projects": () => reads["GET /api/resources/projects"](world),
   "GET /api/summary": () => reads["GET /api/summary"](world),
   "GET /api/resources/playground": (u) => playgroundOf(u.searchParams.get("project") || ""),
+  "GET /api/resources/workbench": (u) => workbenchOf(u.searchParams.get("project") || ""),
   "GET /api/resources/maas": () => reads["GET /api/resources/maas"](world),
   "GET /api/resources/model-registry": () => reads["GET /api/resources/model-registry"](world),
   "GET /api/resources/maas/groups": (u) => F.maasGroupProblems(u.searchParams.getAll("name")),
@@ -780,6 +826,7 @@ async function api(req, res, u) {
   if (key === "POST /api/resources/models/stream") return modelsStream(req, res);
   if (key === "POST /api/resources/playground/stream") return playgroundStream(req, res);
   if (key === "POST /api/resources/model-registry/stream") return modelRegistryStream(req, res);
+  if (key === "POST /api/resources/workbench/stream") return workbenchStream(req, res);
   if (key === "POST /api/resources/maas/stream") return maasStream(req, res);
   if (key.startsWith("POST /api/resources/samples/") && world.canMutate === false) {
     return json(res, 403, { error: "Only cluster-admins can change the cluster through the updater.", errorCode: "forbidden" });

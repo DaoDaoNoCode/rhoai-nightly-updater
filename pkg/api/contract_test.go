@@ -69,6 +69,8 @@ func TestFrontendContract(t *testing.T) {
 		// Admin-only answers the Recipes page reads.
 		{"recipe-run-admin.json", "/api/recipes/run", "user:admin", HandleRecipeRunStatus, "", nil},
 		{"recipe-run-ended-admin.json", "/api/recipes/run", "user:admin", HandleRecipeRunStatus, "", stubEndedRecipeRun},
+		// The Workbench tab's status (admin-only, read with the admin's token).
+		{"workbench-admin.json", "/api/resources/workbench?project=team-a", "user:admin", HandleWorkbenchStatus, "", nil},
 		{"recipe-plan-admin.json", "/api/recipes/plan", "user:admin", HandleRecipePlan, `{"recipe":` + testRecipe + `}`, nil},
 	}
 	update := *updateContract || os.Getenv("UPDATE_CONTRACT") == "1"
@@ -133,9 +135,9 @@ func TestFrontendContract(t *testing.T) {
 // field set, so a renamed or retyped field shows in the fixtures.
 func stubContractData(t *testing.T) {
 	t.Helper()
-	origSummary, origProject, origPlayground, origSamples, origRegistry := getSummary, getProjectStatus, getPlaygroundStatus, getMLflowSamplesStatus, getModelRegistryStatus
+	origSummary, origProject, origPlayground, origSamples, origRegistry, origWorkbench := getSummary, getProjectStatus, getPlaygroundStatus, getMLflowSamplesStatus, getModelRegistryStatus, getWorkbenchStatus
 	t.Cleanup(func() {
-		getSummary, getProjectStatus, getPlaygroundStatus, getMLflowSamplesStatus, getModelRegistryStatus = origSummary, origProject, origPlayground, origSamples, origRegistry
+		getSummary, getProjectStatus, getPlaygroundStatus, getMLflowSamplesStatus, getModelRegistryStatus, getWorkbenchStatus = origSummary, origProject, origPlayground, origSamples, origRegistry, origWorkbench
 	})
 	getModelRegistryStatus = func(_, _ *cluster.Client) (*types.ModelRegistryStatus, error) {
 		return &types.ModelRegistryStatus{
@@ -143,6 +145,21 @@ func stubContractData(t *testing.T) {
 			Address: "https://rh-ai.apps.example.com/model-registry/nightly-registry", DashboardURL: "https://rh-ai.apps.example.com",
 			Sample: &types.ModelRegistrySample{Model: "qwen25-05b-instruct", Version: "v1", Registered: true, Complete: true, State: "LIVE", ID: "1",
 				URI: "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775"},
+		}, nil
+	}
+	getWorkbenchStatus = func(_, _ *cluster.Client, project string) (*types.WorkbenchStatus, error) {
+		return &types.WorkbenchStatus{
+			Project: project,
+			Items: []types.WorkbenchState{{
+				ResourceState: types.ResourceState{Deployed: true, Ready: true, Namespace: project, Name: "nightly-workbench", ManagedByTool: true, UID: "nb-uid"},
+				State:         "running", URL: "https://rh-ai.apps.example.com/notebook/" + project + "/nightly-workbench",
+				Image: "Jupyter | Minimal | CPU | Python 3.12 (2025.2)", HardwareProfile: "Default", CPU: "2", Memory: "4Gi", ConnectionAttached: true,
+				Storage: &types.WorkbenchStorage{Name: "nightly-workbench-storage", Size: "20Gi", StorageClass: "gp3-csi", ManagedByTool: true},
+			}},
+			Plan: &types.WorkbenchPlan{Image: "Jupyter | Minimal | CPU | Python 3.12", ImageStream: "s2i-minimal-notebook", ImageTag: "2025.2",
+				HardwareProfile: "Default", HardwareProfileName: "redhat-ods-applications/default-profile", CPU: "2", Memory: "4Gi", Queue: "lq",
+				StorageSize: "20Gi", StorageClass: "gp3-csi", Connection: true, Pipelines: true, MLflow: true},
+			ItemsProblem: "Cannot read the workbench in team-b: k8s API error 503.", ItemsUnreadable: []string{"team-b"},
 		}, nil
 	}
 	getSummary = func(*cluster.Client) (*types.Summary, error) {

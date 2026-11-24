@@ -1,6 +1,6 @@
 /** Environment page coverage: S3 storage, pipeline servers, MLflow, models, playground, MaaS, samples, prerequisites, and clean-up. */
 
-import { OperationResponse, ProjectStatus, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, ModelsRequest, PlaygroundRequest, PlaygroundStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelRegistryRequest, ModelRegistryStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest } from '../../types';
+import { OperationResponse, ProjectStatus, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, ModelsRequest, PlaygroundRequest, PlaygroundStatus, WorkbenchRequest, WorkbenchStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelRegistryRequest, ModelRegistryStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest } from '../../types';
 import { request } from './client';
 import { StreamDoneHandler, StreamDetachHandler, streamSSE } from './stream';
 
@@ -143,6 +143,9 @@ export interface CleanupRequest {
   inferenceGateway?: boolean;
   /** Projects losing this tool’s playground, before models. */
   playgrounds?: string[];
+  /** Projects losing this tool’s workbench (first); workbenchStorage: those whose storage goes too. */
+  workbenches?: string[];
+  workbenchStorage?: string[];
   /** Projects whose models this tool unpublishes from MaaS; runs first. */
   maasPublished?: string[];
   /** MaaS platform this tool installed; runs last. */
@@ -240,6 +243,21 @@ export function streamPlayground(
   onConnectionDrop?: StreamDetachHandler,
 ): AbortController {
   return streamSSE('/api/resources/playground/stream', req, onStep, onDone, onConnectionDrop);
+}
+
+/** The Workbench feature: this tool's workbenches, and a project's with what Set up would create (admin only). */
+export function getWorkbench(project: string | null, signal?: AbortSignal): Promise<WorkbenchStatus> {
+  return request(`/api/resources/workbench${project ? `?project=${encodeURIComponent(project)}` : ''}`, { signal });
+}
+
+/** Set up, start, stop or delete a project's workbench: steps "check", "storage", "workbench" (teardown: "workbench", "storage"). */
+export function streamWorkbench(
+  req: WorkbenchRequest,
+  onStep: (step: UpdateStep) => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+): AbortController {
+  return streamSSE('/api/resources/workbench/stream', req, onStep, onDone, onConnectionDrop);
 }
 
 /** Models as a Service: platform pieces and this tool’s models with publication state. */

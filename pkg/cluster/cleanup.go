@@ -3,6 +3,8 @@ package cluster
 import (
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/workbench"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -29,6 +32,8 @@ var (
 	}
 	cleanupGateway      = serving.TeardownInferenceGateway
 	cleanupPlayground   = features.TeardownPlayground
+	cleanupWorkbench    = workbench.Teardown
+	cleanupWbStorage    = workbench.DeleteStorage
 	cleanupUnpublish    = serving.UnpublishMaaSModel
 	cleanupMaaSPlatform = serving.TeardownMaaSPlatform
 	cleanupComponents   = features.RestoreComponents
@@ -99,13 +104,37 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 			run:   func() (*types.OperationResponse, error) { return cleanupUnpublish(c, project) },
 		})
 	}
+	// Workbenches go before the pipeline servers, whose teardown takes the
+	// tool's Connection off every workbench still using it.
+	for _, project := range req.Workbenches {
+		storage := slices.Contains(req.WorkbenchStorage, project)
+		title := fmt.Sprintf("the workbench in '%s'", project)
+		if storage {
+			title = fmt.Sprintf("the workbench and its storage in '%s'", project)
+		}
+		parts = append(parts, cleanupPart{
+			id:    CleanupStepID("workbench", project),
+			title: title,
+			run:   func() (*types.OperationResponse, error) { return cleanupWorkbench(c, project, storage) },
+		})
+	}
+	for _, project := range req.WorkbenchStorage {
+		if slices.Contains(req.Workbenches, project) {
+			continue
+		}
+		parts = append(parts, cleanupPart{
+			id:    CleanupStepID("workbench-storage", project),
+			title: fmt.Sprintf("the workbench storage kept in '%s'", project),
+			run:   func() (*types.OperationResponse, error) { return cleanupWbStorage(c, project) },
+		})
+	}
 	for _, project := range req.PipelineServers {
 		parts = append(parts, cleanupPart{
 			id:      CleanupStepID("pipeline-server", project),
 			project: project,
 			title:   fmt.Sprintf("the pipeline server in '%s'", project),
 			run: func() (*types.OperationResponse, error) {
-				return cleanupPipelineServer(c, project, req.ConfirmUnrecorded[project], req.ConfirmWorkbenches[project])
+				return cleanupPipelineServer(c, project, req.ConfirmUnrecorded[project], confirmedWorkbenches(c, req, project))
 			},
 		})
 	}
@@ -164,6 +193,33 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 	return parts
 }
 
+// confirmedWorkbenches are the workbenches (name to UID) of project whose
+// loss of the tool's Connection the clean-up may go ahead with: those the
+// user confirmed, and this tool's own nightly-workbench (by its recorded
+// UID) when the clean-up deletes it first. Its part runs before the
+// pipeline server's and stops the clean-up when it is not this tool's; a
+// Notebook of that name with another UID stays unconfirmed.
+func confirmedWorkbenches(c *Client, req types.CleanupRequest, project string) map[string]string {
+	confirmed := req.ConfirmWorkbenches[project]
+	if !slices.Contains(req.Workbenches, project) {
+		return confirmed
+	}
+	rec, err := workbench.ReadRecord(c)
+	if err != nil {
+		return confirmed
+	}
+	e, ok := rec.Get(project)
+	if !ok || e.UID == "" {
+		return confirmed
+	}
+	out := maps.Clone(confirmed)
+	if out == nil {
+		out = map[string]string{}
+	}
+	out[workbench.Name] = e.UID
+	return out
+}
+
 // CleanUp removes resources this tool created as a single operation: pipeline
 // servers in the named projects, then S3 storage (including legacy storage
 // from an earlier version and the seaweedfs namespace when requested), then
@@ -214,7 +270,10 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 	// refusal deletes nothing. The step's detail lists the workbenches that
 	// use it now, one per line, for the UI to ask about.
 	for _, project := range req.PipelineServers {
-		problem, code, current := pipelineWorkbenchesProblem(c, project, req.ConfirmWorkbenches[project])
+		// This tool's workbench that the clean-up deletes first needs no
+		// confirmation: its part runs before (and stops the clean-up when
+		// it is not this tool's).
+		problem, code, current := pipelineWorkbenchesProblem(c, project, confirmedWorkbenches(c, req, project))
 		if problem == "" {
 			continue
 		}

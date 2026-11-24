@@ -1,11 +1,12 @@
 import { useState } from "react";
-import type { ConnectionWorkbench, MaaSStatus, ModelRegistryStatus, OperationResponse, PlaygroundStatus, PrerequisitesStatus, ResourcesStatus } from "../../types";
+import type { ConnectionWorkbench, WorkbenchStatus, MaaSStatus, ModelRegistryStatus, OperationResponse, PlaygroundStatus, PrerequisitesStatus, ResourcesStatus } from "../../types";
 import {
   trackFeature,
   streamCleanup,
   streamMLflowSamples,
   streamModels,
   streamPlayground,
+  streamWorkbench,
   streamMaaS,
   streamModelRegistry,
   streamPrerequisites,
@@ -14,7 +15,8 @@ import {
   type CleanupRequest,
 } from "../../services/api";
 import { errorResult } from "../../outcomes";
-import { type ConfirmSpec, type ModelsPending, type Pending, type PlaygroundPending, type MaaSPending, isMaaSPending, type PrerequisitesPending, isPrerequisitesPending, type ModelRegistryPending, isModelRegistryPending, type SamplePending, isModelsPending, isPlaygroundPending, isSamplePending } from "./resourceRow";
+import { type ConfirmSpec, type ModelsPending, type Pending, type PlaygroundPending, type MaaSPending, isMaaSPending, type PrerequisitesPending, isPrerequisitesPending, type ModelRegistryPending, isModelRegistryPending, type SamplePending, isModelsPending, isPlaygroundPending, isSamplePending, type WorkbenchPending, isWorkbenchPending } from "./resourceRow";
+import { workbenchConfirm, workbenchSteps } from "./WorkbenchTab";
 import { modelsConfirm, modelsSteps } from "./modelsConfirm";
 import { playgroundConfirm, playgroundSteps } from "./PlaygroundTab";
 import { maasConfirm, maasRequestOf, maasSteps } from "./MaaSTab";
@@ -22,7 +24,7 @@ import { modelRegistryConfirm, modelRegistrySteps } from "./ModelRegistryTab";
 import { type SampleOp, mlflowSampleSteps, samplesConfirm } from "./samples";
 import { useGoalRun, type GoalRunStep } from "./useGoalRun";
 import { type CleanupRetry, type CleanupScope, cleanupSteps } from "./CleanupModal";
-import { type FeatureState, type MaaSOp, type ModelRegistryOp, type ModelsOp, type PlaygroundOp, mlflowState, pipelinesState, setUpBlocked, storageState } from "./featureState";
+import { type FeatureState, type MaaSOp, type ModelRegistryOp, type ModelsOp, type PlaygroundOp, type WorkbenchOp, mlflowState, pipelinesState, setUpBlocked, storageState } from "./featureState";
 import { prerequisitesConfirm, prerequisitesSteps } from "./Prerequisites";
 import { modelsOpOf, modelsRequest, resourceRequest, setUpWait } from "./runRequests";
 import { TAB_TITLES, type RunFeature } from "./environmentTabs";
@@ -81,6 +83,10 @@ export function useRunState() {
   const [playgroundOp, setPlaygroundOp] = useState<PlaygroundOp | null>(null);
   const [playgroundRun, setPlaygroundRun] = useState<PlaygroundOp | null>(null);
   const [playgroundRefresh, setPlaygroundRefresh] = useState(0);
+  // The Workbench operation running now, the last one, and a key that reads its state again.
+  const [workbenchOp, setWorkbenchOp] = useState<WorkbenchOp | null>(null);
+  const [workbenchRun, setWorkbenchRun] = useState<WorkbenchOp | null>(null);
+  const [workbenchRefresh, setWorkbenchRefresh] = useState(0);
   const [maasOp, setMaaSOp] = useState<MaaSOp | null>(null);
   // The last MaaS operation, for the run dialog's next step.
   const [maasRun, setMaaSRun] = useState<MaaSOp | null>(null);
@@ -102,6 +108,7 @@ export function useRunState() {
     sampleOp, setSampleOp, sampleRun, setSampleRun, samplesRefresh, setSamplesRefresh,
     modelsOp, setModelsOp, modelsRun, setModelsRun,
     playgroundOp, setPlaygroundOp, playgroundRun, setPlaygroundRun, playgroundRefresh, setPlaygroundRefresh,
+    workbenchOp, setWorkbenchOp, workbenchRun, setWorkbenchRun, workbenchRefresh, setWorkbenchRefresh,
     maasOp, setMaaSOp, maasRun, setMaaSRun, runFeature, setRunFeature, maasRefresh, setMaaSRefresh,
     modelRegistryOp, setModelRegistryOp, modelRegistryRefresh, setModelRegistryRefresh,
     prereqRefresh, setPrereqRefresh, checking, setChecking, checkError, setCheckError,
@@ -121,6 +128,7 @@ export interface EnvironmentActionsContext {
   /** Polls quickly again (after a change). */
   restartPolling: () => void;
   pg: PlaygroundStatus | null;
+  wb: WorkbenchStatus | null;
   maas: MaaSStatus | null;
   modelRegistry: ModelRegistryStatus | null;
   prereq: PrerequisitesStatus | null;
@@ -136,10 +144,11 @@ export interface EnvironmentActionsContext {
  * then checks every part's prerequisites, then runs the missing parts.
  */
 export function environmentActions(ctx: EnvironmentActionsContext) {
-  const { runs, status: resStatus, statusRef, fetchResources, readFresh, restartPolling, pg, maas, modelRegistry, prereq, confirmOf, setPending, projectNames, onResult } = ctx;
+  const { runs, status: resStatus, statusRef, fetchResources, readFresh, restartPolling, pg, wb, maas, modelRegistry, prereq, confirmOf, setPending, projectNames, onResult } = ctx;
   const {
     setResAction, setActionProject, run, setRunOpen, setupConfirm, setSetupConfirm, setCleanupScope, setCleanupRetry,
     setSampleOp, setSampleRun, setSamplesRefresh, setModelsOp, setModelsRun, setPlaygroundOp, setPlaygroundRun, setPlaygroundRefresh,
+    setWorkbenchOp, setWorkbenchRun, setWorkbenchRefresh,
     setMaaSOp, setMaaSRun, setRunFeature, setMaaSRefresh, setPrereqRefresh, checking, setChecking, setCheckError,
     setModelRegistryOp, setModelRegistryRefresh,
   } = runs;
@@ -168,6 +177,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
   const checkAgain = () => {
     restartPolling();
     setPlaygroundRefresh((n) => n + 1);
+    setWorkbenchRefresh((n) => n + 1);
     setMaaSRefresh((n) => n + 1);
     setModelRegistryRefresh((n) => n + 1);
     setSamplesRefresh((n) => n + 1);
@@ -240,6 +250,31 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       project: op.project,
       ...(p.kind === "setup-playground" && p.models?.length ? { models: p.models } : {}),
     }, onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }), op.action === "setup" ? "setup" : "delete");
+  };
+
+  /** A confirmed Workbench change: one streamed request whose steps the run dialog shows. */
+  const startWorkbench = (p: WorkbenchPending) => {
+    if (run.run?.running) return;
+    const spec = workbenchConfirm(p, wb);
+    const action = p.kind === "setup-workbench" ? "setup" : p.kind === "start-workbench" ? "start" : p.kind === "stop-workbench" ? "stop" : p.kind === "delete-workbench-storage" ? "delete-storage" : "teardown";
+    const op: WorkbenchOp = { action, project: p.project };
+    setPending(null);
+    setSampleRun(null);
+    setModelsRun(null);
+    setPlaygroundRun(null);
+    setRunOpen(true);
+    trackFeature(p.kind);
+    setRunFeature("workbench");
+    setWorkbenchOp(op);
+    setWorkbenchRun(op);
+    const end = () => {
+      setWorkbenchOp(null);
+      setWorkbenchRefresh((n) => n + 1);
+    };
+    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, workbenchSteps(p), (onStep, onDone, onDetach) => streamWorkbench({
+      action, project: p.project, ...(p.kind === "teardown-workbench" && p.deleteStorage ? { deleteStorage: true } : {}),
+    }, onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }),
+    action === "teardown" || action === "delete-storage" ? "delete" : action === "setup" ? "setup" : "change");
   };
 
   /** A confirmed MaaS change: one streamed request whose steps the run dialog shows. */
@@ -353,6 +388,10 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       startPlayground(p);
       return;
     }
+    if (isWorkbenchPending(p)) {
+      startWorkbench(p);
+      return;
+    }
     if (isMaaSPending(p)) {
       startMaaS(p);
       return;
@@ -386,6 +425,11 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setPending(models);
       return;
     }
+    const workbenchSetup = setup.find(isWorkbenchPending);
+    if (workbenchSetup) {
+      setPending(workbenchSetup);
+      return;
+    }
     const playground = setup.find(isPlaygroundPending);
     if (playground) {
       setPending(playground);
@@ -409,7 +453,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     const specs: ConfirmSpec[] = [];
     const steps: GoalRunStep[] = [];
     for (const p of setup) {
-      if (isSamplePending(p) || isModelsPending(p) || isPlaygroundPending(p) || isMaaSPending(p) || isPrerequisitesPending(p) || isModelRegistryPending(p)) continue;
+      if (isSamplePending(p) || isModelsPending(p) || isPlaygroundPending(p) || isWorkbenchPending(p) || isMaaSPending(p) || isPrerequisitesPending(p) || isModelRegistryPending(p)) continue;
       const spec = confirmOf(p);
       if (spec) specs.push(spec);
       const [action, fn, target] = resourceRequest(p);
@@ -468,6 +512,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     }, (success, error, apiError) => {
       void fetchResources();
       setPlaygroundRefresh((n) => n + 1);
+      setWorkbenchRefresh((n) => n + 1);
       setMaaSRefresh((n) => n + 1);
       setModelRegistryRefresh((n) => n + 1);
       onDone(success, error, apiError);

@@ -1,4 +1,4 @@
-import type { ClusterSummary, MLflowSamplesStatus, ModelRegistryStatus, PlaygroundStatus, ProjectStatus, RecipePlan, RecipeRunStatus, UserOperationStatus, UserPermissions } from "../types";
+import type { WorkbenchStatus, ClusterSummary, MLflowSamplesStatus, ModelRegistryStatus, PlaygroundStatus, ProjectStatus, RecipePlan, RecipeRunStatus, UserOperationStatus, UserPermissions } from "../types";
 import summaryJson from "./contract/summary.json";
 import operationUserJson from "./contract/operation-user.json";
 import permissionsUserJson from "./contract/user-permissions-user.json";
@@ -12,6 +12,7 @@ import recipeRunJson from "./contract/recipe-run-admin.json";
 import recipePlanJson from "./contract/recipe-plan-admin.json";
 import recipeRunEndedJson from "./contract/recipe-run-ended-admin.json";
 import modelRegistryJson from "./contract/model-registry-admin.json";
+import workbenchJson from "./contract/workbench-admin.json";
 
 /*
  * The backend's answers to a user who is not a cluster-admin, as the Go
@@ -56,6 +57,8 @@ export const contract = {
   recipePlan: (): RecipePlan => clone<RecipePlan>(recipePlanJson),
   // The Model registry tab's answer: this tool's registry, ready, with the sample model.
   modelRegistry: (): ModelRegistryStatus => clone<ModelRegistryStatus>(modelRegistryJson),
+  // A cluster-admin's GET /api/resources/workbench: a running workbench and the plan.
+  workbench: (project = CONTRACT_PROJECT): WorkbenchStatus => forProject<WorkbenchStatus>(workbenchJson, CONTRACT_PROJECT, project),
 };
 
 // Compile-time checks: the generated JSON fits the frontend's types. A
@@ -77,6 +80,7 @@ const typed: {
   recipeRunEnded: Widen<RecipeRunStatus>;
   recipePlan: Widen<RecipePlan>;
   modelRegistry: Widen<ModelRegistryStatus>;
+  workbench: Widen<WorkbenchStatus>;
 } = {
   summary: summaryJson,
   operation: operationUserJson,
@@ -90,5 +94,6 @@ const typed: {
   recipeRunEnded: recipeRunEndedJson,
   recipePlan: recipePlanJson,
   modelRegistry: modelRegistryJson,
+  workbench: workbenchJson,
 };
 void typed;

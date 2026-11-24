@@ -20,6 +20,8 @@ import { type Pending, isTerminating, terminalReason } from "./environment/resou
 import { ModelsTab } from "./environment/ModelsTab";
 import { modelsConfirm } from "./environment/modelsConfirm";
 import { PlaygroundTab, playgroundConfirm } from "./environment/PlaygroundTab";
+import { WorkbenchTab, workbenchConfirm } from "./environment/WorkbenchTab";
+import { defaultWorkbenchProject, useWorkbenchStatus, workbenchState } from "./environment/workbenchState";
 import { MaaSTab, maasConfirm, useMaaSStatus } from "./environment/MaaSTab";
 import { usePlaygroundStatus } from "./environment/usePlaygroundStatus";
 import { useModelRegistryStatus } from "./environment/useModelRegistryStatus";
@@ -112,7 +114,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
 
   const runs = useRunState();
   const { resAction, actionProject, run, runOpen, setRunOpen, setupConfirm, setSetupConfirm, cleanupScope, setCleanupScope, cleanupRetry, setCleanupRetry,
-    sampleOp, samplesRefresh, modelsOp, playgroundOp, playgroundRefresh, maasOp, maasRefresh, prereqRefresh, checking, checkError,
+    sampleOp, samplesRefresh, modelsOp, playgroundOp, playgroundRefresh, workbenchOp, workbenchRefresh, maasOp, maasRefresh, prereqRefresh, checking, checkError,
     modelRegistryOp, modelRegistryRefresh } = runs;
   // Single poll loop: aggressive right after activity, then 30 s cadence for ten minutes,
   // else leisurely refresh; inactive tabs skip polling (A06-5).
@@ -130,6 +132,11 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const playgroundProjectParam = searchParams.has("project") ? urlProject : playgroundDefault;
   const playgroundRead = usePlaygroundStatus(tab === "playground" ? playgroundProjectParam : null, playgroundRefresh, !!playgroundOp, tab === "overview" || tab === "playground" || !!cleanupScope);
   const pg = playgroundRead.data;
+  // The Workbench tab's project: the URL's, else the first with this tool's workbench.
+  const [workbenchDefault, setWorkbenchDefault] = useState<string | null>(null);
+  const workbenchProjectParam = searchParams.has("project") ? urlProject : workbenchDefault;
+  const workbenchRead = useWorkbenchStatus(tab === "workbench" ? workbenchProjectParam : null, workbenchRefresh, !!workbenchOp, !readOnly && (tab === "overview" || tab === "workbench" || !!cleanupScope));
+  const wb = workbenchRead.data;
   const maasRead = useMaaSStatus(maasRefresh, !!maasOp, tab === "overview" || tab === "maas" || !!cleanupScope);
   const maas = maasRead.data;
   const registryRead = useModelRegistryStatus(modelRegistryRefresh, !!modelRegistryOp, tab === "overview" || tab === "model-registry" || !!cleanupScope);
@@ -140,8 +147,8 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const prereq = prereqRead.data;
   // Cleanup uses live data, not stale snapshots—opening it retriggers status, MaaS, and
   // playground reads (those fetches wake only while Clean up is open).
-  const freshReads = useRef({ resources: fetchResources, maas: maasRead.reload, playground: playgroundRead.reload, registry: registryRead.reload });
-  freshReads.current = { resources: fetchResources, maas: maasRead.reload, playground: playgroundRead.reload, registry: registryRead.reload };
+  const freshReads = useRef({ resources: fetchResources, maas: maasRead.reload, playground: playgroundRead.reload, registry: registryRead.reload, workbench: workbenchRead.reload });
+  freshReads.current = { resources: fetchResources, maas: maasRead.reload, playground: playgroundRead.reload, registry: registryRead.reload, workbench: workbenchRead.reload };
   const cleanupOpen = !!cleanupScope;
   useEffect(() => {
     if (!cleanupOpen) return;
@@ -151,6 +158,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       void r.maas();
       void r.playground();
       void r.registry();
+      void r.workbench();
     }
     // Fires when Clean up opens, on whichever tab was active then.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -158,8 +166,11 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   useEffect(() => {
     if (!searchParams.has("project")) setPlaygroundDefault(defaultPlaygroundProject(pg, null));
   }, [pg, searchParams]);
+  useEffect(() => {
+    if (!searchParams.has("project") && !workbenchDefault) setWorkbenchDefault(defaultWorkbenchProject(wb));
+  }, [wb, searchParams, workbenchDefault]);
 
-  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, [...pipelineServers, ...(resStatus?.outsidePipelineServers ?? [])]) ?? modelsConfirm(p, resStatus) ?? playgroundConfirm(p, pg) ?? maasConfirm(p, maas, setPending) ?? modelRegistryConfirm(p, registry, setPending) ?? prerequisitesConfirm(p, prereq) ?? samplesConfirm(p);
+  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, [...pipelineServers, ...(resStatus?.outsidePipelineServers ?? [])]) ?? modelsConfirm(p, resStatus) ?? playgroundConfirm(p, pg) ?? workbenchConfirm(p, wb, setPending) ?? maasConfirm(p, maas, setPending) ?? modelRegistryConfirm(p, registry, setPending) ?? prerequisitesConfirm(p, prereq) ?? samplesConfirm(p);
 
   // Finished runs whose dialog was dismissed surface as toast with a path back—outcomes stay
   // visible without shifting page layout.
@@ -183,7 +194,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     : migration.run?.running ? { title: MIGRATE_TITLES[migration.run.kind], startedAt: migration.run.startedAt, step: migrateStepNow(migration.run), open: reopenMigration } : null);
 
   const runningSomething = !!resAction || migrating || securing || !!run.run?.running || !!checking;
-  const busy: Busy = { resAction: securing ? "secure-minio" : resAction, actionProject, migrating, models: modelsOp, playground: playgroundOp, maas: maasOp, modelRegistry: modelRegistryOp };
+  const busy: Busy = { resAction: securing ? "secure-minio" : resAction, actionProject, migrating, models: modelsOp, playground: playgroundOp, workbench: workbenchOp, maas: maasOp, modelRegistry: modelRegistryOp };
   const baseReason = mutateBlocker ?? (runningSomething ? BUSY_REASON : null);
   // Post-delete the namespace may remain (deployed:false, managedByTool:true). Keep Delete
   // available while tool-owned storage artifacts persist—data PVC, Routes, or other leftovers.
@@ -231,13 +242,17 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     : !pg && playgroundRead.error ? unreadableState(playgroundProject) : playgroundState(resStatus, pg, playgroundProject, busy);
   // Missing playground payload with no error yet reads as loading; failures get an unreadable state.
   const playgroundSummary = !pg && playgroundRead.error ? unreadableState() : playgroundState(resStatus, pg, null, busy);
+  const workbenchProject = missingProject ? null : workbenchProjectParam;
+  const workbenchNow: FeatureState = cleared ? noProjectState() : !wb && workbenchRead.error ? unreadableState(workbenchProject) : workbenchState(wb, workbenchProject, busy);
+  // The workbench status is admin-only: a read-only viewer sees no state for it.
+  const workbenchSummary = readOnly ? unreadableState() : !wb && workbenchRead.error ? unreadableState() : workbenchState(wb, null, busy);
   const maasNow = !maas && maasRead.error ? unreadableState() : maasState(maas, busy);
   const registryNow = !registry && registryRead.error ? unreadableState() : modelRegistryState(registry, busy);
   const playgroundOptions = playgroundProjectOptions(pg, projectNames);
-  const overviewRows = buildOverviewRows({ storage: storageNow, pipelines: pipelinesSummary, mlflow: mlflowNow, modelRegistry: registryNow, models: modelsSummary, playground: playgroundSummary, maas: maasNow }, prereq);
+  const overviewRows = buildOverviewRows({ storage: storageNow, pipelines: pipelinesSummary, workbench: workbenchSummary, mlflow: mlflowNow, modelRegistry: registryNow, models: modelsSummary, playground: playgroundSummary, maas: maasNow }, prereq);
   const anythingToClean = !!resStatus && (() => {
-    const c = cleanupCandidates(resStatus, "all", minioLeftovers, pg, maas, registry);
-    return c.servers.length > 0 || c.storage || c.mlflow || c.modelRegistry || c.models.length > 0 || c.gateway || c.playgrounds.length > 0 || c.maasPublished.length > 0 || c.maasPlatform || c.recipeProjects.length > 0;
+    const c = cleanupCandidates(resStatus, "all", minioLeftovers, pg, maas, registry, wb);
+    return c.workbenches.length > 0 || c.keptStorage.length > 0 || c.servers.length > 0 || c.storage || c.mlflow || c.modelRegistry || c.models.length > 0 || c.gateway || c.playgrounds.length > 0 || c.maasPublished.length > 0 || c.maasPlatform || c.recipeProjects.length > 0;
   })();
 
   const { open: runNext, whatNext } = runFollowUp({
@@ -248,7 +263,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
 
   const { checkAgain, checkModel, execute, setUp, startSetUp, startCleanup } = environmentActions({
     runs, status: resStatus, statusRef, fetchResources, readFresh: resources.readFresh, restartPolling: polling.restart,
-    pg, maas, modelRegistry: registry, prereq, confirmOf, setPending, projectNames, onResult,
+    pg, wb, maas, modelRegistry: registry, prereq, confirmOf, setPending, projectNames, onResult,
   });
 
   // Shared prerequisites block rendered above each feature tab's sections.
@@ -344,6 +359,13 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                   setPending={setPending} onSetUp={(setup) => setUp("Pipelines", setup)} onCleanup={() => setCleanupScope("pipelines")}
                   sampleOp={sampleOp} samplesRefresh={samplesRefresh} />
               )}
+              {tab === "workbench" && resStatus && (
+                <WorkbenchTab status={resStatus} workbench={wb} workbenchError={workbenchRead.error} onRetry={() => void workbenchRead.reload()}
+                  project={workbenchProject} projects={workspaceOptions} projectsLoaded={projectList !== null}
+                  onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
+                  state={workbenchNow} busy={busy} baseReason={baseReason} readOnly={readOnly}
+                  setPending={setPending} onSetUp={(setup) => setUp("Workbench", setup)} onCleanup={() => setCleanupScope("workbench")} />
+              )}
               {tab === "mlflow" && resStatus && (
                 <MLflowTab prerequisites={prereqNode("mlflow")} status={resStatus} state={headerWithPrerequisites(mlflowNow, prereq?.features?.mlflow)} prerequisitesReason={prerequisitesReason(prereq?.features?.mlflow, "mlflow")} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}
                   project={project} projects={workspaceOptions} projectsLoaded={projectList !== null}
@@ -420,6 +442,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
           choice={modal.choice}
           confirmLabel={modal.confirm}
           confirmVariant={modal.danger ? "danger" : "primary"}
+          titleIconVariant={modal.titleIcon}
           confirmDisabled={modal.confirmDisabled}
           changesOpen={modal.changesOpen}
           onConfirm={() => pending && execute(pending)}
@@ -444,7 +467,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
       )}
 
       {cleanupScope && resStatus && (
-        <CleanupModal scope={cleanupScope} status={resStatus} playground={pg} maas={maas} modelRegistry={registry} minioLeftovers={minioLeftovers} baseReason={baseReason}
+        <CleanupModal scope={cleanupScope} status={resStatus} playground={pg} workbench={wb} maas={maas} modelRegistry={registry} minioLeftovers={minioLeftovers} baseReason={baseReason}
           restorable={Object.values(prereq?.features ?? {}).flatMap((f) => f?.restorable ?? [])}
           retry={cleanupRetry} onConfirm={startCleanup} onCancel={() => { setCleanupScope(null); setCleanupRetry(null); }} />
       )}

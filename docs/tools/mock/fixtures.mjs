@@ -11,6 +11,22 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 
 /** Screenshot timeline anchor; Playwright aligns the browser clock to the same instant. */
+/** The Workbench tab (GET /api/resources/workbench): what Set up would create, and this tool's workbench in states. */
+export const workbenchPlan = {
+  image: "Jupyter | Minimal | CPU | Python 3.12", imageStream: "s2i-minimal-notebook", imageTag: "2025.2",
+  hardwareProfile: "Default", hardwareProfileName: "redhat-ods-applications/default-profile", cpu: "2", memory: "4Gi",
+  storageSize: "20Gi", storageClass: "gp3-csi", connection: true, pipelines: true, mlflow: false,
+};
+export const WORKBENCH_NO_PROFILE = "No enabled hardware profile is offered for workbenches. A cluster-admin enables one in the dashboard (Settings, Hardware profiles).";
+export function workbenchItem(ns, state) {
+  return {
+    deployed: true, ready: state === "running", namespace: ns, name: "nightly-workbench", managedByTool: true, uid: "3f1c2b9e-workbench",
+    state, url: `${DASHBOARD_URL}/notebook/${ns}/nightly-workbench`,
+    image: "Jupyter | Minimal | CPU | Python 3.12 (2025.2)", hardwareProfile: "Default", cpu: "2", memory: "4Gi", connectionAttached: true,
+    storage: { name: "nightly-workbench-storage", size: "20Gi", storageClass: "gp3-csi", managedByTool: true },
+  };
+}
+
 export const NOW = Date.parse("2026-10-06T14:30:00Z");
 
 /** Returns an RFC 3339 timestamp `minutes` earlier than NOW. */

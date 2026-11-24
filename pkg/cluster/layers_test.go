@@ -23,7 +23,7 @@ var clusterLayers = [][]string{
 	{"catalog", "components"},
 	{"dashdev", "envkit", "node"},
 	{"mlflow", "storage", "operator"},
-	{"serving", "gitops"},
+	{"serving", "gitops", "workbench"},
 	{"modelregistry"},
 	{"dsc"},
 	{"features", "diagnostics"},
