@@ -227,7 +227,8 @@ func stubContractData(t *testing.T) {
 			st.APIProblem, st.APICode = "The dashboard's gen-ai API refused the request (HTTP 403: Forbidden).", "forbidden"
 			return st, nil
 		}
-		st.Items = []types.PlaygroundState{{ResourceState: types.ResourceState{Deployed: true, Ready: true, Namespace: project, Name: "lsd-genai-playground", Message: "Ready", ManagedByTool: true}, Phase: "Ready", Requested: true}}
+		st.Items = []types.PlaygroundState{{ResourceState: types.ResourceState{Deployed: true, Ready: true, Namespace: project, Name: "lsd-genai-playground", Message: "Ready", ManagedByTool: true}, Phase: "Ready", Requested: true,
+			Models: []types.PlaygroundModelRef{{Name: "qwen25-05b-instruct", Source: "namespace"}}}}
 		st.Models = []types.PlaygroundModel{{Name: "qwen25-05b-instruct", DisplayName: "Qwen2.5 0.5B Instruct (CPU)", Source: "namespace", Status: "Running", Ready: true, Chat: true}}
 		return st, nil
 	}
