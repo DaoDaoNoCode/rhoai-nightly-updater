@@ -101,10 +101,13 @@ const kuadrantAdmissionWait = 30*time.Second + 15*time.Second
 //
 // The CRD is read from the cluster-wide CRD list, by name, which the
 // template already grants (Set up itself reads it with the signed-in
-// user's token, as every change does). Its time is the cluster's, so it is
-// compared with the wall clock, as object ages are; the wait itself runs on
-// kube.Clock() and never lasts longer than kuadrantAdmissionWait, whatever
-// the gap between the clocks.
+// user's token, as every change does). Its Established time is the API
+// server's, so its age is measured against the API server's time in the
+// same response (the Date header), not this tool's clock, which can be
+// ahead when the tool runs outside the cluster; only a response without a
+// Date falls back to the local clock. A time missing, malformed or in the
+// future waits the whole time. The wait itself runs on kube.Clock() and
+// never lasts longer than kuadrantAdmissionWait.
 func (m *Run) WaitKuadrantKindAdmissible(step string) (*types.OperationResponse, error) {
 	c := m.Client
 	var crds []struct {
@@ -119,7 +122,8 @@ func (m *Run) WaitKuadrantKindAdmissible(step string) (*types.OperationResponse,
 			} `json:"conditions"`
 		} `json:"status"`
 	}
-	if err := c.ListInto("/apis/apiextensions.k8s.io/v1/customresourcedefinitions?fieldSelector="+url.QueryEscape("metadata.name="+KuadrantCRD), &crds); err != nil {
+	serverNow, err := c.ListIntoAt("/apis/apiextensions.k8s.io/v1/customresourcedefinitions?fieldSelector="+url.QueryEscape("metadata.name="+KuadrantCRD), &crds)
+	if err != nil {
 		return m.Fail(step, fmt.Sprintf("Cannot read CRD %s, so this tool cannot tell whether the API server accepts the new Kuadrant type yet: %v. The Kuadrant CR was not created; Set up again to retry.%s", KuadrantCRD, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "kuadrant crd read failed")
 	}
 	found := false
@@ -145,9 +149,12 @@ func (m *Run) WaitKuadrantKindAdmissible(step string) (*types.OperationResponse,
 	case status != "True":
 		return m.Fail(step, fmt.Sprintf("CRD %s is not Established (%s). The Kuadrant CR was not created; Set up again to retry.", KuadrantCRD, why), "not_ready", "kuadrant crd not established")
 	}
+	if serverNow.IsZero() {
+		serverNow = time.Now() // no Date header: the local clock is all there is
+	}
 	wait := kuadrantAdmissionWait
 	if at, err := time.Parse(time.RFC3339, established); err == nil {
-		wait = min(max(kuadrantAdmissionWait-time.Since(at), 0), kuadrantAdmissionWait)
+		wait = min(max(kuadrantAdmissionWait-serverNow.Sub(at), 0), kuadrantAdmissionWait)
 	}
 	if wait <= 0 {
 		return nil, nil

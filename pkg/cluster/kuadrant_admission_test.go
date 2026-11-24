@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"sync"
@@ -29,16 +30,25 @@ const (
 // its Established condition at status since established (the API server
 // keeps condition times to the second, as RFC 3339).
 func kuadrantCRD(established time.Time, status string) map[string]any {
-	at := established.UTC().Format(time.RFC3339)
-	conds := []any{
-		map[string]any{"type": "NamesAccepted", "status": "True", "reason": "NoConflicts", "message": "no conflicts found", "lastTransitionTime": at},
+	return kuadrantCRDAt(established.UTC().Format(time.RFC3339), status)
+}
+
+// kuadrantCRDAt is kuadrantCRD with the conditions' lastTransitionTime as
+// it is written ("" none).
+func kuadrantCRDAt(at, status string) map[string]any {
+	cond := func(c map[string]any) map[string]any {
+		if at != "" {
+			c["lastTransitionTime"] = at
+		}
+		return c
 	}
+	conds := []any{cond(map[string]any{"type": "NamesAccepted", "status": "True", "reason": "NoConflicts", "message": "no conflicts found"})}
 	if status != "" {
-		est := map[string]any{"type": "Established", "status": status, "reason": "InitialNamesAccepted", "message": "the initial names have been accepted", "lastTransitionTime": at}
+		est := map[string]any{"type": "Established", "status": status, "reason": "InitialNamesAccepted", "message": "the initial names have been accepted"}
 		if status != "True" {
 			est["reason"], est["message"] = "Installing", "the initial names have not been accepted yet"
 		}
-		conds = append(conds, est)
+		conds = append(conds, cond(est))
 	}
 	return map[string]any{
 		"metadata": map[string]any{"name": serving.KuadrantCRD},
@@ -140,19 +150,34 @@ func maasClusterWithoutKuadrant(t *testing.T, established time.Time, status stri
 }
 
 func TestMaaSSetup_KuadrantCRWaitsUntilTheAPIServerKnowsItsKind(t *testing.T) {
+	stamp := func(age time.Duration) string { return time.Now().Add(-age).UTC().Format(time.RFC3339) }
 	for _, tc := range []struct {
-		name     string
-		age      time.Duration
-		min, max time.Duration
+		name string
+		at   string // the CRD's lastTransitionTime
+		// serverClock is how far the API server's clock is from this
+		// tool's.
+		serverClock time.Duration
+		min, max    time.Duration
 	}{
-		// The CRD's time is kept to the second, so it may read up to a
-		// second older than it is.
-		{"just established", 0, 43 * time.Second, 45 * time.Second},
-		{"established 20 seconds ago", 20 * time.Second, 23 * time.Second, 25 * time.Second},
-		{"established a day ago", 24 * time.Hour, 0, 0},
+		// The CRD's time and the Date header are kept to the second, so
+		// the CRD may read up to a second older than it is.
+		{"just established", stamp(0), 0, 43 * time.Second, 45 * time.Second},
+		{"established 20 seconds ago", stamp(20 * time.Second), 0, 23 * time.Second, 25 * time.Second},
+		{"established a day ago", stamp(24 * time.Hour), 0, 0, 0},
+		// This tool's clock is 45 seconds ahead of the API server's (the
+		// tool runs outside the cluster): by its own clock the CRD looks 45
+		// seconds old, by the server's it is new.
+		{"just established, the server's clock 45 seconds behind", stamp(45 * time.Second), -45 * time.Second, 43 * time.Second, 45 * time.Second},
+		{"established a day ago, the server's clock 45 seconds ahead", stamp(24 * time.Hour), 45 * time.Second, 0, 0},
+		// A time that cannot be trusted waits the whole time.
+		{"no lastTransitionTime", "", 0, 45 * time.Second, 45 * time.Second},
+		{"malformed lastTransitionTime", "yesterday", 0, 45 * time.Second, 45 * time.Second},
+		{"lastTransitionTime in the future", time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339), 0, 45 * time.Second, 45 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mc := maasClusterWithoutKuadrant(t, time.Now().Add(-tc.age), "True")
+			mc := maasClusterWithoutKuadrant(t, time.Time{}, "")
+			mc.f.put(kuadrantCRDPath, kuadrantCRDAt(tc.at, "True"))
+			mc.f.serverClockOffset = tc.serverClock
 			tm := watchKuadrantCreate(mc.f)
 			res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG})
 			if !res.Success {
@@ -169,6 +194,35 @@ func TestMaaSSetup_KuadrantCRWaitsUntilTheAPIServerKnowsItsKind(t *testing.T) {
 				t.Fatalf("wait shown %t; kuadrant step: %q", waitShown, kuadrantMessages(events))
 			}
 		})
+	}
+}
+
+// A Set up whose request ends while it waits stops there: the Kuadrant CR
+// is not created.
+func TestMaaSSetup_KuadrantCRIsNotCreatedWhenTheWaitIsCancelled(t *testing.T) {
+	mc := maasClusterWithoutKuadrant(t, time.Now(), "True")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	editTestClient(mc.c, func(o *testClientOptions) { o.Ctx = ctx })
+	var events []UpdateStepEvent
+	res, err := RunMaaS(mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG}, func(e UpdateStepEvent) {
+		events = append(events, e)
+		if e.Step == "kuadrant" && strings.HasPrefix(e.Message, kuadrantCRDWaitUp) {
+			cancel() // the user's request ends while the wait runs
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "Stopped waiting for the API server to accept the new Kuadrant type: context canceled. The Kuadrant CR was not created."
+	if res.Success || res.Message != want || res.ErrorCode != "cancelled" {
+		t.Fatalf("setup: %+v", res)
+	}
+	if !strings.HasSuffix(finalSteps(events), "kuadrant=failed") {
+		t.Fatalf("steps = %s", finalSteps(events))
+	}
+	if hasPrefixIn(mc.f.mutations(), kuadrantCRCreate) {
+		t.Fatalf("the Kuadrant CR was created: %v", mc.f.mutations())
 	}
 }
 

@@ -275,7 +275,8 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   create Authorino and Limitador, never tried again, and Kuadrant stayed not
   Ready ("limitador resource not in topology") until its operator restarted.
   Set up now waits until 45 seconds after CRD `kuadrants.kuadrant.io` turned
-  Established before it creates the CR (no wait for an older CRD), and stops
+  Established, by the API server's clock, before it creates the CR (no wait
+  for an older CRD), and stops
   without creating it when the CRD cannot be read or is not Established. When
   Authorino does not appear, the message now gives the last thing the wait
   found (not the wait's own deadline), quotes Kuadrant's Ready condition, and,
