@@ -371,12 +371,14 @@ While the page reads the cluster, each Overview row and each tab shows loading p
 1. The state in the selected project.
 2. The project.
 3. The S3 storage's health; **Open S3 storage** opens its tab.
-4. The dashboard S3 Connection `rhoai-nightly-updater-s3` set up with the pipeline server (owned by it; in-cluster address).
+4. The dashboard S3 Connection `rhoai-nightly-updater-s3` set up with the pipeline server (owned by it; in-cluster address), and the workbenches that use it.
 5. **Open pipelines**.
 
 | Problem | Fix |
 |---|---|
 | S3 storage setup: "not created by this tool" | Namespace `seaweedfs` holds foreign objects (or was not created by this tool). Nothing was changed. Remove them or use another cluster |
+| Delete pipeline server (or Clean up) refused: "workbenches ... use the dashboard connection rhoai-nightly-updater-s3, and removing it from them was not confirmed" | A workbench started using the Connection after the dialog opened (or the dialog did not know it). Nothing was changed. Open Delete again (Clean up comes back on its own) and check the workbenches it lists: the Connection is removed from each of them first, because the workbenches webhook refuses every later update (Stop, Start) of a workbench naming a deleted Secret |
+| Delete pipeline server stopped: "Cannot remove the dashboard connection ... from workbench ..." | That workbench changed since it was read, or its update was refused (the message says why; another Connection it names may be missing too). Nothing was deleted; workbenches named as done before it no longer use the Connection. Run Delete again: it finds only the rest |
 | "The updater's ServiceAccount is not allowed to do this ... run `make upgrade`" | A read the updater makes with its ServiceAccount (a status, an ownership check) was refused: the image is newer than the template (the banner says the template is outdated). An admin runs `make upgrade`, then retry. A refusal of a setup or teardown step itself says "your OpenShift account is not allowed to do this" instead, since changes run with your own token ([§4](#4-sign-in-and-permissions)) |
 | Storage "Migration needed" with **Migrate storage** | Storage from an earlier version is in namespace `minio`. **Migrate storage** moves it (§10.1); Set up, and a new pipeline server, wait until it has copied the data |
 | Storage **Not secured** with **Secure S3 storage...** | The storage was set up by an earlier version: every pipeline project holds its admin key, and a new pipeline server cannot be set up. **Secure S3 storage...** on the S3 storage tab restarts SeaweedFS with a new admin key and turns on per-server keys, then gives each pipeline server this tool recorded its own key (SeaweedFS user `rnu-dspa-<project>`) in `nightly-dspa-s3` and the Connection. The confirmation lists the pipeline servers it leaves on the old key, which then stops working. Pipeline runs in progress may fail; restart workbenches and model deployments that use the Connection or run pipelines afterwards. Runs only when you start it (SECURITY.md, "S3 storage keys") |

@@ -193,6 +193,19 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **Deleting a pipeline server no longer breaks the workbenches that use its
+  dashboard Connection.** A workbench a user attached
+  `rhoai-nightly-updater-s3` to in the dashboard kept naming it after the
+  pipeline server (and with it the Connection) was deleted, and the
+  workbenches webhook then refused every update of it, Stop and Start
+  included. Delete, Recreate and Clean up now take the Connection off those
+  workbenches first (only that entry of `opendatahub.io/connections`; the
+  others stay), after you confirm each one: the confirmation lists them, a
+  workbench that started using it since refuses the request before anything
+  changes, and a failed change stops before anything is deleted. The
+  Pipelines tab names the workbenches that use the Connection. New
+  permission used with your own token: `patch` on Notebooks.
+
 - **A recipe project's Clean up deletes the project you reviewed, and a
   second confirmation no longer loses the first.** A dialog left open while
   its project was deleted and a recipe made it again deleted the new
