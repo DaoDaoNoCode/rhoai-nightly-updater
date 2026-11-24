@@ -458,10 +458,10 @@ func TestOwnership_OffersOnlyWhatTheRunCreated(t *testing.T) {
 	maas := types.RecipeCreatedPart{Part: types.RecipePartMaaSPlatform, UID: "creds-1"}
 	reg := types.RecipeCreatedPart{Part: types.RecipePartModelRegistry, UID: "reg-1"}
 	cases := []struct {
-		name          string
-		run           *types.RecipeRun
-		edit          func(fc *fakeCluster)
-		maas, registy bool
+		name           string
+		run            *types.RecipeRun
+		edit           func(fc *fakeCluster)
+		maas, registry bool
 	}{
 		{"both, as created", run(maas, reg), nil, true, true},
 		{"nothing recorded, though both are this tool's", run(), nil, false, false},
@@ -482,10 +482,10 @@ func TestOwnership_OffersOnlyWhatTheRunCreated(t *testing.T) {
 			fc.install(t)
 			created, req := Ownership(nil, tc.run)
 			gotMaaS, gotReg := req != nil && req.MaaSPlatform, req != nil && req.ModelRegistry
-			if gotMaaS != tc.maas || gotReg != tc.registy || created[StepMaaS] != tc.maas || created[StepModelRegistry] != tc.registy {
+			if gotMaaS != tc.maas || gotReg != tc.registry || created[StepMaaS] != tc.maas || created[StepModelRegistry] != tc.registry {
 				t.Errorf("req %+v created %v", req, created)
 			}
-			if !tc.maas && !tc.registy && req != nil {
+			if !tc.maas && !tc.registry && req != nil {
 				t.Errorf("a clean-up with nothing in it: %+v", req)
 			}
 		})
