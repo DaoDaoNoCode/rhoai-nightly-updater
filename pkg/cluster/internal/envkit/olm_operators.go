@@ -686,18 +686,26 @@ func PatchSubscription(c *kube.Client, sub *OLMSubscription, spec map[string]any
 // are never reconciled. The field selector narrows the list on a real API
 // server; the name is checked here too.
 func ControllerDeployed(c *kube.Client, name string) (bool, error) {
+	_, found, err := ControllerNamespace(c, name)
+	return found, err
+}
+
+// ControllerNamespace is the namespace of the Deployment of that name, the
+// first one listed when there are several, and whether there is one.
+func ControllerNamespace(c *kube.Client, name string) (string, bool, error) {
 	var items []struct {
 		Metadata struct {
-			Name string `json:"name"`
+			Name      string `json:"name"`
+			Namespace string `json:"namespace"`
 		} `json:"metadata"`
 	}
 	if err := c.ListInto("/apis/apps/v1/deployments?fieldSelector="+url.QueryEscape("metadata.name="+name), &items); err != nil {
-		return false, fmt.Errorf("list Deployments named %s: %w", name, err)
+		return "", false, fmt.Errorf("list Deployments named %s: %w", name, err)
 	}
 	for _, d := range items {
 		if d.Metadata.Name == name {
-			return true, nil
+			return d.Metadata.Namespace, true, nil
 		}
 	}
-	return false, nil
+	return "", false, nil
 }

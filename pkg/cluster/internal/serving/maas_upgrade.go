@@ -115,7 +115,7 @@ func (m *Run) upgradeRHCL() (*types.OperationResponse, error) {
 	kq, err := ReadKuadrant(c)
 	if err != nil || !kq.Found {
 		m.Step("authorino-tls", "success", "No Kuadrant CR to check Authorino TLS on.")
-	} else if r, err := m.applyAuthorinoTLS(&rec, kq.Namespace, "authorino-tls"); r != nil || err != nil {
+	} else if r, err := m.applyAuthorinoTLS(&rec, kq.Namespace, "authorino-tls", "run the upgrade again to continue"); r != nil || err != nil {
 		return r, err
 	}
 
@@ -313,7 +313,7 @@ func (m *Run) authorinoTLSOnly() (*types.OperationResponse, error) {
 		return m.Fail("check", fmt.Sprintf("Authorino TLS cannot be configured: %v. Nothing was changed.%s", err, kube.TemplateHint(err)), MaaSWriteCode(err), "dry run failed")
 	}
 	m.Step("check", "success", "Authorino "+kq.Namespace+"/authorino can be configured.")
-	if r, err := m.applyAuthorinoTLS(&rec, kq.Namespace, "authorino-tls"); r != nil || err != nil {
+	if r, err := m.applyAuthorinoTLS(&rec, kq.Namespace, "authorino-tls", "run it again"); r != nil || err != nil {
 		return r, err
 	}
 	return m.Done("Authorino TLS is configured in " + kq.Namespace + ".")

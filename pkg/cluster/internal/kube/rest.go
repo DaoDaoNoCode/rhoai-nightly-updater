@@ -13,6 +13,7 @@ import (
 	"errors"
 	"net/http"
 	"reflect"
+	"time"
 )
 
 // IsK8sNotFound reports whether err is the API server's 404: the object (or
@@ -83,6 +84,16 @@ func (c *Client) GetIntoOptional(path string, out any) (found bool, err error) {
 // the unnamed list struct the call sites declared, so a decode error (a
 // *decodeError) has the message json.Unmarshal gave them.
 func (c *Client) ListInto(path string, items any) error {
+	_, err := c.ListIntoAt(path, items)
+	return err
+}
+
+// ListIntoAt is ListInto that also returns the API server's time when it
+// answered: its Date header (RFC 9110 section 6.6.1, to the second), or the
+// zero time when the response carries none that parses. A caller that
+// compares an object's timestamps with "now" uses it, so the gap between
+// this tool's clock and the cluster's does not count.
+func (c *Client) ListIntoAt(path string, items any) (time.Time, error) {
 	out := reflect.ValueOf(items)
 	if out.Kind() != reflect.Pointer || out.Elem().Kind() != reflect.Slice {
 		panic("ListInto: items must be a pointer to a slice")
@@ -92,11 +103,19 @@ func (c *Client) ListInto(path string, items any) error {
 		Type: out.Elem().Type(),
 		Tag:  `json:"items"`,
 	}}))
-	if err := c.GetInto(path, list.Interface()); err != nil {
-		return err
+	body, header, _, err := c.doWithHeader(http.MethodGet, path, "", nil, nil)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if err := json.Unmarshal(body, list.Interface()); err != nil {
+		return time.Time{}, &decodeError{err}
 	}
 	out.Elem().Set(list.Elem().Field(0))
-	return nil
+	at, err := http.ParseTime(header.Get("Date"))
+	if err != nil {
+		return time.Time{}, nil
+	}
+	return at, nil
 }
 
 // PatchJSON sends patch, marshalled to JSON, as a merge patch (Patch). A

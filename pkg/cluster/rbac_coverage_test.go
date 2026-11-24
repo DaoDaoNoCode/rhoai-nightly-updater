@@ -203,6 +203,7 @@ var methodVerbs = map[string][]string{
 // is refused, as anywhere else.
 var transportMethods = map[string]string{
 	"applyWithOptions": "the body of Apply and DryRunApply",
+	"doWithHeader":     "the body of Do and ListIntoAt",
 }
 
 // isTransport reports whether fn is a Client method that implements the
@@ -242,6 +243,7 @@ var helperMethods = map[string]string{
 	"GetInto":         "Get",
 	"GetIntoOptional": "Get",
 	"ListInto":        "Get",
+	"ListIntoAt":      "Get",
 	"DeleteIfExists":  "Delete",
 	"PatchJSON":       "Patch",
 }

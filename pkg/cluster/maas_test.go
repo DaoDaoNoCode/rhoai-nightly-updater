@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
@@ -38,6 +39,9 @@ func newMaaSCluster(t *testing.T) *modelsCluster {
 	f := mc.f
 	f.putJSON(tMaaSDSC, `{"spec":{"components":{"kserve":{"managementState":"Managed"},"aigateway":{"managementState":"Managed","modelsAsAService":{"managementState":"Removed"}}}}}`)
 	f.putJSON("/apis/kuadrant.io/v1beta1/namespaces/kuadrant-system/kuadrants/kuadrant", `{"status":{"conditions":[{"type":"Ready","status":"True"}]}}`)
+	// Connectivity Link was installed a day ago: its Kuadrant CRD is long
+	// Established.
+	f.put(kuadrantCRDPath, kuadrantCRD(time.Now().Add(-24*time.Hour), "True"))
 	// The group's discovery as RHCL 1.4 serves it (live): v1 first, where
 	// AuthPolicy is, while Kuadrant is only in v1beta1.
 	// ...and, as the API server does, 404 for Kuadrant at v1, which does not

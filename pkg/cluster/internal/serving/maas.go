@@ -575,7 +575,20 @@ type kuadrantState struct {
 	Found, Ready bool
 	Namespace    string
 	Message      string
-	Meta         kube.ObjectMeta
+	// ReadyStatus and Reason are the Ready condition's status ("True",
+	// "False", "Unknown"; "" when it reports none) and reason.
+	ReadyStatus, Reason string
+	Meta                kube.ObjectMeta
+}
+
+// readyText is the Ready condition's reason and message ("" when it
+// reports neither), as Kuadrant words why it is not Ready.
+func (k kuadrantState) readyText() string {
+	// Message falls back to the reason when the condition has no message.
+	if k.Reason == "" || k.Message == k.Reason {
+		return kube.TruncateText(k.Message, 300)
+	}
+	return k.Reason + ": " + kube.TruncateText(k.Message, 300)
 }
 
 func ReadKuadrant(c *kube.Client) (kuadrantState, error) {
@@ -609,6 +622,7 @@ func ReadKuadrant(c *kube.Client) (kuadrantState, error) {
 	if cond, ok := kube.FindCondition(k.Status.Conditions, "Ready"); ok {
 		st.Ready = cond.Status == "True"
 		st.Message = kube.FirstNonEmpty(cond.Message, cond.Reason)
+		st.ReadyStatus, st.Reason = cond.Status, cond.Reason
 	}
 	return st, nil
 }
