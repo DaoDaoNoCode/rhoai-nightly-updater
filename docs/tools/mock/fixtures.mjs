@@ -1868,8 +1868,17 @@ export function recipePlan(rcp = recipe(), installed = true, blocked = false, mi
       { field: "spec.rhoai.build", message: "Cannot resolve the build on Quay.", fix: { code: "build_unresolvable" } },
     ] : [],
     typicalSeconds: counted.reduce((n, s) => n + s.typicalSeconds, 0), maxSeconds: counted.reduce((n, s) => n + s.maxSeconds, 0),
-    ...(kueueWarnings(rcp).length ? { warnings: kueueWarnings(rcp) } : {}),
+    ...([...kueueWarnings(rcp), ...playgroundWarnings(rcp)].length ? { warnings: [...kueueWarnings(rcp), ...playgroundWarnings(rcp)] } : {}),
   };
+}
+
+/** The plan's warning that the playground reaches the model through Models as a Service (pkg/cluster internal/recipe playgroundWarnings). */
+function playgroundWarnings(rcp) {
+  const f = rcp.spec.features;
+  const maas = f.models?.enabled && ((f.maas?.enabled && f.maas.publish) || f.models.exposure === "maas");
+  if (!f.playground?.enabled || !maas) return [];
+  const how = f.models.exposure === "maas" ? "it is reached through Models as a Service" : "the run publishes it there";
+  return [{ kind: "advice", message: `Model Qwen2.5 0.5B Instruct (CPU) is offered to the playground only through Models as a Service (${how}), so the playground uses it from there: the dashboard sets the playground up with your sign-in, as when you choose a Models as a Service model in its Gen AI studio. Chatting with it needs a Models as a Service subscription to it.` }];
 }
 
 /** The plan's warnings for distributed workloads (pkg/cluster internal/recipe kueueWarnings). */

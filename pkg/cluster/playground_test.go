@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -354,6 +355,16 @@ func TestPlayground_SetupWithTheUsersTokenAddsAMaaSModel(t *testing.T) {
 	body, _ := json.Marshal(e.g.installs[0])
 	if want := `{"enable_guardrails":false,"enable_tracing":false,"models":[{"model_name":"qwen25-05b-instruct","model_source_type":"namespace","model_type":"llm"},{"model_name":"gpt-oss-20b","model_source_type":"maas","model_type":"llm"}],"vector_stores":[]}`; string(body) != want {
 		t.Errorf("install body\n got %s\nwant %s", body, want)
+	}
+	// The record keeps the models the request asked for, and the check
+	// names the MaaS model as Models as a Service.
+	if got := e.records(t)["proj"].Models; fmt.Sprint(got) != fmt.Sprint(req.Models) {
+		t.Errorf("recorded models %+v", got)
+	}
+	if !slices.ContainsFunc(steps, func(s UpdateStepEvent) bool {
+		return s.Step == "check" && strings.Contains(s.Message, "with qwen25-05b-instruct, GPT OSS 20B (Models as a Service, gpt-oss-20b).")
+	}) {
+		t.Errorf("check step %+v", steps)
 	}
 	for _, a := range e.g.auth {
 		if a != "Bearer "+userToken {
@@ -913,6 +924,52 @@ func TestPlayground_StatusListsMaaSModelsFromTheirModelRefs(t *testing.T) {
 		if !strings.Contains(p, "/aaa/models") && !strings.Contains(p, "/lsd/status") {
 			t.Errorf("gen-ai call %s", p)
 		}
+	}
+}
+
+// The status shows, for this tool's playground, the models its Set up
+// asked for (from the record); a playground that is not this tool's shows
+// none.
+func TestPlayground_StatusShowsTheRecordedModels(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	if res, _ := e.run(t, setup()); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	features.PurgePlaygroundStatus()
+	st, err := GetPlaygroundStatus(e.c, e.reader, "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Items) != 1 || !st.Items[0].ManagedByTool || fmt.Sprint(st.Items[0].Models) != fmt.Sprint([]types.PlaygroundModelRef{{Name: "qwen25-05b-instruct", Source: "namespace"}}) {
+		t.Fatalf("items %+v", st.Items)
+	}
+}
+
+// MaaSPlaygroundModelOf finds the MaaS entry of a model by the MaaSModelRef
+// that names it (in the model's project), under the name the playground
+// lists: not by a name built from the model's.
+func TestPlayground_MaaSPlaygroundModelOf(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	e.putMaaSModels()
+	cases := []struct {
+		project, model, want string
+		found                bool
+	}{
+		{"team", "gpt-oss-20b", "gpt-oss-20b ready=true [rhoai-nightly-updater-subscription team-sub]", true},
+		{"team", "unoffered", "unoffered ready=true []", true},
+		{"proj", "gpt-oss-20b", "", false},
+		// An ExternalModel's reference is not an LLMInferenceService's.
+		{"llm", "opt-125m", "", false},
+	}
+	for _, tc := range cases {
+		m, found, err := features.MaaSPlaygroundModelOf(e.c, tc.project, tc.model)
+		if err != nil || found != tc.found || (found && fmt.Sprintf("%s ready=%t %v", m.Name, m.Ready, m.Subscriptions) != tc.want) || (found && m.Source != "maas") {
+			t.Errorf("%s/%s: %+v %v %v", tc.project, tc.model, m, found, err)
+		}
+	}
+	e.k8s.fail["GET /apis/maas.opendatahub.io/v1alpha1/maasmodelrefs"] = http.StatusForbidden
+	if _, found, err := features.MaaSPlaygroundModelOf(e.c, "team", "gpt-oss-20b"); err == nil || found {
+		t.Errorf("a list that fails: %v %v", found, err)
 	}
 }
 

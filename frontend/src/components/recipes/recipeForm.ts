@@ -249,6 +249,16 @@ export function playgroundReason(f: RecipeForm): string | null {
   return needsProjectReason(f, "The playground needs") ?? (!f.models ? "The playground needs a model: turn Models on." : null);
 }
 
+/**
+ * Whether the recipe's playground reaches its model through Models as a Service: the model is published there, or reached
+ * through it, so the dashboard offers it to the playground only as a Models as a Service model (pkg/cluster
+ * internal/recipe playgroundThroughMaaS; a recommended way the run resolves to Models as a Service is known only then).
+ */
+export function playgroundThroughMaaS(f: RecipeForm): boolean {
+  const e = effectiveForm(f);
+  return e.playground && (e.maasPublish || e.exposure === "maas");
+}
+
 /** Why the model cannot be published through MaaS here, or null. */
 export function maasPublishReason(f: RecipeForm): string | null {
   if (!f.models || f.project === "none") return "Publishing needs a model: turn Models on.";

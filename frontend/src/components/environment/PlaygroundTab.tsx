@@ -73,8 +73,23 @@ export interface PlaygroundTabProps {
   onModels: () => void;
 }
 
-/** A model's name for people: its display name, else its name. */
-const modelKey = (m: PlaygroundModel) => `${m.source}/${m.name}`;
+const modelKey = (m: Pick<PlaygroundModel, "source" | "name">) => `${m.source}/${m.name}`;
+
+/** A model's name for people: its display name, else its name; a Models as a Service model says so. */
+function modelWords(m: Pick<PlaygroundModel, "source" | "name" | "displayName">): string {
+  const name = m.displayName || m.name;
+  return m.source === "maas" ? `${name} (Models as a Service)` : name;
+}
+
+/** The models a reference list names, as the project's model list describes them (a model no longer listed by its name only). */
+function modelsOf(refs: PlaygroundModelRef[], pg: PlaygroundStatus | null): PlaygroundModel[] {
+  return refs.map((r) => pg?.models?.find((m) => modelKey(m) === modelKey(r)) ?? { ...r, ready: false, chat: true });
+}
+
+/** Items in prose: "a", "a and b", "a, b and c". */
+function joinWords(items: string[]): string {
+  return items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
 const sourceWords = (m: PlaygroundModel) => (m.source === "maas" ? "Models as a Service" : "Deployed in the project");
 
 /** A technical name that may wrap after each "/" (never inside a word). */
@@ -103,13 +118,14 @@ export function playgroundCurl(dashboardUrl: string, project: string, model: str
   ].join("\n");
 }
 
-/** What the playground does with a model, in words. */
-function playgroundUse(m: PlaygroundModel, picked: string[] | null): string {
+/** What the playground does with a model, in words; recorded: the models this tool's Set up chose (after Set up). */
+function playgroundUse(m: PlaygroundModel, picked: string[] | null, recorded: string[]): string {
   if (picked) {
     if (picked.includes(modelKey(m))) return "Used";
     return m.source === "maas" ? "Not used unless you choose it (needs a Models as a Service subscription)" : "Not used";
   }
-  return m.source === "maas" ? "Only with a Models as a Service subscription" : "Used";
+  if (m.source === "maas") return recorded.includes(modelKey(m)) ? "Used, with a Models as a Service subscription" : "Only with a Models as a Service subscription";
+  return "Used";
 }
 
 /**
@@ -131,6 +147,8 @@ const ModelsPart: React.FC<PlaygroundTabProps & { project: string; picked: strin
   const usable = playgroundUsableModels(playground, project);
   const otherEmbedding = playgroundOtherEmbeddingModels(playground, project);
   const notReady = playgroundModelsNotReady(playground, project);
+  const recorded = playgroundIn(playground, project)?.models ?? [];
+  const recordedMaaS = modelsOf(recorded.filter((r) => r.source === "maas"), playground);
   const toggle = (m: PlaygroundModel, on: boolean) => onPick?.(on ? [...(picked ?? []).filter((k) => k !== modelKey(m)), modelKey(m)] : (picked ?? []).filter((k) => k !== modelKey(m)));
   return (
     <PartItem id="playground-models" title="Models" scope={`In project ${project}`} status={s} unmanaged={false}
@@ -141,7 +159,9 @@ const ModelsPart: React.FC<PlaygroundTabProps & { project: string; picked: strin
           : chat.length > 0
             ? onPick
               ? "The playground uses the models you choose: the project's own ready models are chosen, chat models and this tool's embedding model. A chat model added to the project later shows up in the playground without setting it up again."
-              : "The playground chats with the project's own ready models. A model added to the project later shows up without setting it up again."
+              : recordedMaaS.length > 0
+                ? `Set up chose ${joinWords(modelsOf(recorded, playground).map(modelWords))}. The playground reaches ${recordedMaaS.length === 1 ? "that model" : "those models"} through Models as a Service: chatting with ${recordedMaaS.length === 1 ? "it" : "them"} needs a Models as a Service subscription to ${recordedMaaS.length === 1 ? "it" : "them"}.`
+                : "The playground chats with the project's own ready models. A model added to the project later shows up without setting it up again."
             : `${project} has no ready chat model yet. The playground needs one: the Models tab sets up a small one on CPU.`}
       </Content>
       {usable.length > 0 && chat.length > 0 && (
@@ -167,7 +187,7 @@ const ModelsPart: React.FC<PlaygroundTabProps & { project: string; picked: strin
                 </Td>
                 <Td dataLabel="Type" modifier="wrap">{m.chat ? "Chat" : `Embedding (${m.embeddingDimension} dimensions), for searching documents`}</Td>
                 <Td dataLabel="Where it runs" modifier="wrap">{sourceWords(m)}</Td>
-                <Td dataLabel="In the playground" modifier="wrap">{playgroundUse(m, picked)}</Td>
+                <Td dataLabel="In the playground" modifier="wrap">{playgroundUse(m, picked, recorded.map(modelKey))}</Td>
               </Tr>
             ))}
           </Tbody>
@@ -401,10 +421,10 @@ export function playgroundConfirm(pending: Pending, pg: PlaygroundStatus | null)
   switch (pending.kind) {
     case "setup-playground": {
       const { project } = pending;
-      const names = pending.models?.length ? pending.models.map((m) => m.name) : (pg ? defaultPlaygroundModels(pg, project).map((m) => m.name) : []);
+      const names = (pending.models?.length ? modelsOf(pending.models, pg) : defaultPlaygroundModels(pg, project)).map(modelWords);
       return {
         title: `Set up the playground in ${project}?`, confirm: "Set up", runTitle: `Set up the playground in ${project}`,
-        summary: <Content component="p">The dashboard sets up its Gen AI playground in {project}, as its own Gen AI studio does, with {names.length ? names.join(", ") : "the project's ready chat models"}. It takes 1 to 2 minutes.</Content>,
+        summary: <Content component="p">The dashboard sets up its Gen AI playground in {project}, as its own Gen AI studio does, with {names.length ? joinWords(names) : "the project's ready chat models"}. It takes 1 to 2 minutes.{pending.models?.some((m) => m.source === "maas") && " The dashboard reaches the Models as a Service model with your sign-in, as when you choose one in its Gen AI studio."}</Content>,
         changes: [
           <>Project <code>{project}</code>: the dashboard creates an OGXServer (the chat server), its configuration ConfigMaps, and a PostgreSQL database with pgvector (Deployment, 5 GiB PersistentVolumeClaim, Secret, Service).</>,
           <>This tool records in its own namespace that it asked for the playground.</>,

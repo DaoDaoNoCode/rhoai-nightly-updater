@@ -23,7 +23,7 @@ import { SingleSelect } from "../SingleSelect";
 import { TooltipButton } from "../TooltipButton";
 import { FieldHelperText, NestedFields } from "../FormFields";
 import {
-  RECIPE_IMAGE_PREFIX, formProblems, maasPublishReason, needsProjectReason, noProjectReason, pipelinesReason, playgroundReason,
+  RECIPE_IMAGE_PREFIX, formProblems, maasPublishReason, needsProjectReason, noProjectReason, pipelinesReason, playgroundReason, playgroundThroughMaaS,
   type DashboardDevChoice, type ExposureChoice, type RecipeForm,
 } from "./recipeForm";
 
@@ -349,7 +349,9 @@ export const RecipeEditor: React.FC<{
                     </FormGroup>
                   </FeatureSwitch>
                   <FeatureSwitch id="recipe-playground" label="Playground" checked={form.playground} reason={playgroundReason(form)} onChange={(v) => set("playground", v)}
-                    help="Needs Models. The Gen AI playground in the project, with its ready chat models. Turns on what it needs." />
+                    help={playgroundThroughMaaS(form)
+                      ? "Needs Models. The Gen AI playground in the project. The model is offered only through Models as a Service, so the playground reaches it there: the dashboard sets the playground up with your sign-in, as when you choose a Models as a Service model in its Gen AI studio. Turns on what it needs."
+                      : "Needs Models. The Gen AI playground in the project, with its ready chat models. Turns on what it needs."} />
                   <FeatureSwitch id="recipe-maas" label="Models as a Service" checked={form.maas} onChange={(v) => set("maas", v)}
                     help="The MaaS platform for the cluster: Connectivity Link, its database and the MaaS gateway. Usually 10 minutes, up to 15.">
                     <FormGroup role="radiogroup" isStack fieldId="recipe-maas-database" label="Database">

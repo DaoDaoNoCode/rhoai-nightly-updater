@@ -1550,6 +1550,10 @@ type PlaygroundState struct {
 	// Requested is true when this tool's record says it requested a
 	// playground in the project (also when none exists any more).
 	Requested bool `json:"requested,omitempty"`
+	// Models (this tool's playground only) are the models its Set up asked
+	// the dashboard for, from this tool's record; none when the record
+	// does not say (a playground set up before the record kept them).
+	Models []PlaygroundModelRef `json:"models,omitempty"`
 }
 
 // PlaygroundModel is a model the dashboard offers the playground.

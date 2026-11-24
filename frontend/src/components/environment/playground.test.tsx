@@ -124,7 +124,7 @@ describe("Playground tab", () => {
     expect(within(table).getByText("Not used unless you choose it (needs a Models as a Service subscription)")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Set up the playground in dev" }));
     const dialog = await screen.findByRole("dialog", { name: /Set up the playground in dev\?/ });
-    expect(within(dialog).getByText(/with qwen25-05b-instruct/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/with Qwen2.5 0.5B Instruct \(CPU\)\. It takes/)).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Set up" }));
     await screen.findByRole("dialog", { name: "Set up the playground in dev" });
     expect(api.bodies["POST /api/resources/playground/stream"]).toEqual([{ action: "setup", project: "dev", models: [{ name: "qwen25-05b-instruct", source: "namespace" }] }]);
@@ -169,6 +169,50 @@ describe("Playground tab", () => {
     expect(await screen.findByText(/not ready, so Set up leaves them out: deepseek \(Failed\)/)).toBeInTheDocument();
     expect(screen.queryByText(/every model/i)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Set up the playground in dev" })).not.toHaveAttribute("aria-disabled", "true");
+  });
+
+  // A model published through Models as a Service is offered only as a MaaS model, listed by its MaaS name.
+  const maasQwen: PlaygroundModel = { name: "publishers/dev/models/qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct", source: "maas", status: "Ready", ready: true, chat: true, subscriptions: ["rhoai-nightly-updater-subscription"] };
+
+  it("the set-up confirmation names a Models as a Service model by its display name and says the dashboard uses your sign-in (N1)", async () => {
+    const api = stubApi({
+      "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/playground": pg({ models: [maasQwen] }),
+      "POST /api/resources/playground/stream": sse({ step: "operation_complete", status: "success", message: "done" }),
+    });
+    renderAt("/test-resources?tab=playground&project=dev");
+    const table = await screen.findByRole("grid", { name: "Models the playground can use" });
+    fireEvent.click(within(table).getByRole("checkbox", { name: "Select row 0" }));
+    fireEvent.click(screen.getByRole("button", { name: "Set up the playground in dev" }));
+    const dialog = await screen.findByRole("dialog", { name: /Set up the playground in dev\?/ });
+    expect(dialog).toHaveTextContent("as its own Gen AI studio does, with Qwen2.5 0.5B Instruct (Models as a Service). It takes 1 to 2 minutes. The dashboard reaches the Models as a Service model with your sign-in, as when you choose one in its Gen AI studio.");
+    expect(dialog).not.toHaveTextContent("publishers/");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Set up" }));
+    await screen.findByRole("dialog", { name: "Set up the playground in dev" });
+    expect(api.bodies["POST /api/resources/playground/stream"]).toEqual([{ action: "setup", project: "dev", models: [{ name: "publishers/dev/models/qwen25-05b-instruct", source: "maas" }] }]);
+  });
+
+  it("after Set up with a Models as a Service model, the tab says what was chosen, not the project's own models (N2)", async () => {
+    stubApi({
+      "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/playground": pg({ models: [maasQwen], items: [item("dev", { models: [{ name: maasQwen.name, source: "maas" }] })] }),
+    });
+    renderAt("/test-resources?tab=playground&project=dev");
+    const models = await screen.findByRole("listitem", { name: "Models" });
+    expect(within(models).getByText("Set up chose Qwen2.5 0.5B Instruct (Models as a Service). The playground reaches that model through Models as a Service: chatting with it needs a Models as a Service subscription to it.")).toBeInTheDocument();
+    expect(within(models).queryByText(/project's own ready models/)).toBeNull();
+    expect(within(models).getByText("Used, with a Models as a Service subscription")).toBeInTheDocument();
+  });
+
+  it("after Set up with the project's own models, the tab keeps saying so", async () => {
+    stubApi({
+      "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/playground": pg({ items: [item("dev", { models: [{ name: qwen.name, source: "namespace" }] })] }),
+    });
+    renderAt("/test-resources?tab=playground&project=dev");
+    const models = await screen.findByRole("listitem", { name: "Models" });
+    expect(within(models).getByText(/^The playground chats with the project's own ready models\./)).toBeInTheDocument();
+    expect(within(models).getByText("Only with a Models as a Service subscription")).toBeInTheDocument();
   });
 
   it("a playground someone else set up: open it, no Delete", async () => {

@@ -313,6 +313,20 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   Secret, so it documents an `oc` command instead
   ([GITOPS](docs/GITOPS.md#workbench-images-on-rosa-hcp)).
 
+- **A recipe's playground works when its model is offered only through
+  Models as a Service.** Publishing the model through MaaS (or reaching it
+  through MaaS) takes it out of the dashboard's Gen AI assets, so the
+  playground offers it only as a Models as a Service model, and the
+  Playground step stopped with "has no ready chat model". The step now sets
+  the playground up with that model's Models as a Service entry (found from
+  its MaaSModelRef), fails with the reason when it is missing or not ready,
+  and counts a playground as done only when this tool set it up with that
+  model. The recipe form and the review say so. The Playground tab's
+  set-up confirmation names models by their display names, and after a Set
+  up with a Models as a Service model the tab says which models were
+  chosen instead of "the project's own ready models" (the tool now records
+  the models a Set up asked for).
+
 - **The Ray samples' head no longer runs out of memory.** In the 5.0.0
   pre-releases the samples' head and worker had 1 CPU and 2 GiB (requests
   equal to limits), and the head was OOMKilled seconds after it started. They

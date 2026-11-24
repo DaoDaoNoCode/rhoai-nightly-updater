@@ -1684,6 +1684,8 @@ export interface PlaygroundStatus {
 export interface PlaygroundState extends ResourceState {
   phase?: string;
   requested?: boolean;
+  /** This tool's playground only: the models its Set up asked the dashboard for (none when not recorded). */
+  models?: PlaygroundModelRef[];
 }
 
 /** A model the dashboard offers the playground. */

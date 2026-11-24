@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanupParts, componentName, componentsSplit } from "./recipeForm";
+import { DEFAULT_RECIPE_FORM, cleanupParts, componentName, componentsSplit, playgroundThroughMaaS } from "./recipeForm";
 import { planText } from "./RecipeReviewModal";
 import { contract } from "../../test/contract";
 import type { ResourcesStatus } from "../../types";
@@ -45,5 +45,17 @@ describe("recipe Clean up and plan words", () => {
     expect(planText("Project p has a workbench this tool did not create; the recipe does not change it. Nothing was changed.")).toBe(
       "Project p has a workbench this tool did not create; the recipe does not change it.");
     expect(planText("Cannot resolve the build on Quay: 503. Nothing was changed; try again.")).toBe("Cannot resolve the build on Quay: 503. Try again.");
+  });
+});
+
+describe("the playground through Models as a Service", () => {
+  const form = { ...DEFAULT_RECIPE_FORM, models: true, playground: true, maasPublish: false, exposure: "" as const };
+  it("is when the model is published through MaaS or reached through it, and the playground is on", () => {
+    expect(playgroundThroughMaaS({ ...form, maas: true, maasPublish: true })).toBe(true);
+    expect(playgroundThroughMaaS({ ...form, maas: true, exposure: "maas" })).toBe(true);
+    expect(playgroundThroughMaaS({ ...form, maas: true })).toBe(false);
+    expect(playgroundThroughMaaS({ ...form, maas: true, maasPublish: true, playground: false })).toBe(false);
+    // Without MaaS, neither choice counts (the editor shows them off).
+    expect(playgroundThroughMaaS({ ...form, maas: false, maasPublish: true, exposure: "maas" })).toBe(false);
   });
 });
