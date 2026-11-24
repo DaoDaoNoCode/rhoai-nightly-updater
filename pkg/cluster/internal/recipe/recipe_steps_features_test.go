@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -63,9 +64,13 @@ type fakeCluster struct {
 	// maasEntry is the model's Models as a Service entry for the
 	// playground (nil: no MaaSModelRef names it); maasEntryErr fails its
 	// read. playgroundReq is the last playground setup request.
-	maasEntry     *types.PlaygroundModel
-	maasExtra     []types.PlaygroundModel
-	maasEntryErr  error
+	maasEntry    *types.PlaygroundModel
+	maasExtra    []types.PlaygroundModel
+	maasEntryErr error
+	// userOffered names the MaaS models the dashboard offers the user (nil:
+	// every entry); userMaaSErr fails that list.
+	userOffered   []string
+	userMaaSErr   error
 	playgroundReq types.PlaygroundRequest
 	registry      types.ModelRegistryStatus
 	registryRec   modelregistry.Record
@@ -107,13 +112,13 @@ func (fc *fakeCluster) install(t *testing.T) {
 	p7, p8, p9, p10, p11, p12, p13 := readModel, runModels, maasPublished, playgroundStatus, runPlayground, registryStatus, registryRecord
 	p14, p15, p16, p17, p18, p19, p20 := runRegistry, workbenchStatus, runWorkbench, dashboardSession, deployMain, deployPR, waitDashboard
 	p21, p22, p24, p25, p26, p27 := registryMeta, dbConfigMeta, dashboardReady, stepPoll, dashboardState, prPublished
-	p28 := maasPlayground
+	p28, p29 := maasPlayground, userMaaSModels
 	t.Cleanup(func() {
 		prereqStatus, samplesStatus, runSamples, maasStatus, maasRecord, runMaaS, modelExposures = p0, p1, p2, p3, p4, p5, p6
 		readModel, runModels, maasPublished, playgroundStatus, runPlayground, registryStatus, registryRecord = p7, p8, p9, p10, p11, p12, p13
 		runRegistry, workbenchStatus, runWorkbench, dashboardSession, deployMain, deployPR, waitDashboard = p14, p15, p16, p17, p18, p19, p20
 		registryMeta, dbConfigMeta, dashboardReady, stepPoll, dashboardState, prPublished = p21, p22, p24, p25, p26, p27
-		maasPlayground = p28
+		maasPlayground, userMaaSModels = p28, p29
 	})
 	stepPoll = 0
 	if fc.prereqReady == nil {
@@ -236,6 +241,19 @@ func (fc *fakeCluster) install(t *testing.T) {
 			out = append(out, *fc.maasEntry)
 		}
 		return append(out, fc.maasExtra...), nil
+	}
+	userMaaSModels = func(_ *kube.Client, project string) ([]types.PlaygroundModel, error) {
+		if fc.userMaaSErr != nil {
+			return nil, fc.userMaaSErr
+		}
+		all, _ := maasPlayground(nil, project, "qwen3-1-7b")
+		var out []types.PlaygroundModel
+		for _, m := range all {
+			if fc.userOffered == nil || slices.Contains(fc.userOffered, m.Name) {
+				out = append(out, m)
+			}
+		}
+		return out, nil
 	}
 	registryStatus = func(_, _ *kube.Client) (*types.ModelRegistryStatus, error) {
 		st := fc.registry
@@ -893,6 +911,41 @@ func TestPlaygroundThroughMaaS(t *testing.T) {
 				t.Errorf("warnings %+v", w)
 			} else if len(w) == 1 && (w[0].Kind != types.RecipeWarningAdvice || !strings.Contains(w[0].Message, "only through Models as a Service") || !strings.Contains(w[0].Message, "with your sign-in")) {
 				t.Errorf("warning %+v", w[0])
+			}
+		})
+	}
+}
+
+// The MaaS entry is resolved against what the dashboard offers the user
+// first: this tool's subscription's entry is preferred only when the user
+// may use it, and none the user may use stops the step with the reason.
+func TestRunPlaygroundStep_MaaSEntryTheUserMayUse(t *testing.T) {
+	cases := []struct {
+		name    string
+		offered []string
+		err     error
+		want    string
+		failure string
+	}{
+		{"this tool's subscription's entry not offered to the user: the other one", []string{"a/qwen"}, nil, "a/qwen", ""},
+		{"both offered: this tool's subscription's", []string{"a/qwen", maasEntryName}, nil, maasEntryName, ""},
+		{"none offered", []string{}, nil, "", "Your Models as a Service subscriptions do not include model qwen3-1-7b in proj (publishers/proj/models/qwen3-1-7b, a/qwen)"},
+		{"the user's list fails", nil, errors.New("HTTP 502"), "", "Cannot list the Models as a Service models the dashboard offers you in proj: HTTP 502"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := &fakeCluster{maasEntry: readyMaaSEntry(), maasExtra: []types.PlaygroundModel{aEntry(true, true)}, userOffered: tc.offered, userMaaSErr: tc.err}
+			fc.install(t)
+			res, err := runPlaygroundStep(testClient(), &State{Recipe: validRecipe(t, playgroundPublish)}, func(types.UpdateStepEvent) {})
+			switch {
+			case err != nil:
+				t.Fatal(err)
+			case tc.failure != "":
+				if res.Success || !strings.Contains(res.Message, tc.failure) || len(fc.ran) != 0 {
+					t.Fatalf("got %+v, ran %v", res, fc.ran)
+				}
+			case !res.Success || len(fc.playgroundReq.Models) != 1 || fc.playgroundReq.Models[0].Name != tc.want:
+				t.Fatalf("got %+v, request %+v", res, fc.playgroundReq)
 			}
 		})
 	}

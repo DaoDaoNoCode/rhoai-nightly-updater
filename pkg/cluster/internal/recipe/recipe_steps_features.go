@@ -54,6 +54,7 @@ var (
 	playgroundStatus = features.GetPlaygroundStatus
 	runPlayground    = features.RunPlayground
 	maasPlayground   = features.MaaSPlaygroundModelsOf
+	userMaaSModels   = features.UserMaaSModels
 	registryStatus   = modelregistry.ReadStatus
 	registryRecord   = modelregistry.ReadRecord
 	runRegistry      = modelregistry.RunAnnotated
@@ -648,9 +649,31 @@ func playgroundMaaSModel(c *kube.Client, s *State) (maasChoice, string, string) 
 			usable = append(usable, m)
 		}
 	}
-	// The entry this tool's subscription offers first: maas-api lists, for
-	// the user's token, only subscriptions the user's groups and name may
-	// use, and this tool's is the one its Publish adds the model to.
+	if len(usable) > 0 {
+		// Only what the dashboard offers this user: maas-api lists the
+		// subscriptions the user's groups and name may use, and Set up
+		// checks the choice against that list.
+		offered, err := userMaaSModels(c, project)
+		if err != nil {
+			return maasChoice{}, fmt.Sprintf("Cannot list the Models as a Service models the dashboard offers you in %s: %v. Nothing was changed.", project, err), kube.ErrorCodeOr(err, "prerequisites")
+		}
+		var mine []types.PlaygroundModel
+		for _, m := range usable {
+			if slices.ContainsFunc(offered, func(o types.PlaygroundModel) bool { return o.Name == m.Name }) {
+				mine = append(mine, m)
+			}
+		}
+		if len(mine) == 0 {
+			var names []string
+			for _, m := range usable {
+				names = append(names, m.Name)
+			}
+			return maasChoice{}, fmt.Sprintf("Your Models as a Service subscriptions do not include model %s in %s (%s), so the dashboard would not set the playground up with it for you. Ask whoever manages Models as a Service to add you to a subscription that offers it (this tool's subscription %s offers the models this tool publishes; the Models as a Service tab shows who it is for), then Resume. Nothing was changed.", name, project, strings.Join(names, ", "), serving.MaaSSubscriptionName), "prerequisites"
+		}
+		usable = mine
+	}
+	// Of the entries the user may use, the one this tool's subscription
+	// offers first: this tool's Publish adds the model to it.
 	tool := func(m types.PlaygroundModel) bool {
 		return slices.Contains(m.Subscriptions, serving.MaaSSubscriptionName)
 	}

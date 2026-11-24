@@ -970,6 +970,30 @@ func TestPlayground_SetupWithAMaaSModelTheUserCannotUse(t *testing.T) {
 	}
 }
 
+// UserMaaSModels lists, with the user's own token only, the MaaS models
+// the dashboard offers that user (maas/models); a failed answer is an
+// error.
+func TestPlayground_UserMaaSModels(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	uc := e.userPlaygroundClient("sha256~user-own-token")
+	ms, err := features.UserMaaSModels(uc, "proj")
+	if err != nil || len(ms) == 0 || !slices.ContainsFunc(ms, func(m types.PlaygroundModel) bool { return m.Name == "gpt-oss-20b" }) {
+		t.Fatalf("user's MaaS models: %+v %v", ms, err)
+	}
+	for _, m := range ms {
+		if m.Source != "maas" {
+			t.Errorf("not a MaaS model: %+v", m)
+		}
+	}
+	if _, err := features.UserMaaSModels(e.c, "proj"); err == nil {
+		t.Error("the ServiceAccount's client listed MaaS models")
+	}
+	e.g.maasModels = "not json"
+	if _, err := features.UserMaaSModels(uc, "proj"); err == nil {
+		t.Error("a failed maas/models answer is no error")
+	}
+}
+
 // The status shows, for this tool's playground, the models its Set up
 // asked for (from the record); a playground that is not this tool's shows
 // none.

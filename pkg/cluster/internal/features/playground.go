@@ -596,6 +596,32 @@ func MaaSPlaygroundModelsOf(c *kube.Client, project, model string) ([]types.Play
 	return out, nil
 }
 
+// UserMaaSModels is the Models as a Service models the dashboard offers
+// the signed-in user (c, the user's own client) in project: maas/models
+// with the user's token, the list a Set up with a MaaS model checks its
+// choice against (maas-api lists only the subscriptions the user's groups
+// and name may use). An error when it cannot be listed.
+func UserMaaSModels(c *kube.Client, project string) ([]types.PlaygroundModel, error) {
+	if !c.ActsAsUser() {
+		return nil, authz.ErrNotUserClient
+	}
+	api, problem, _ := PlaygroundAPI(c)
+	if problem != "" {
+		return nil, errors.New(problem)
+	}
+	models, err := api.listProjectModels(project, true)
+	if err != nil {
+		return nil, err
+	}
+	var out []types.PlaygroundModel
+	for _, m := range models {
+		if m.Source == "maas" {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
 // maasSubscriptionsByModel names, by MaaSModelRef ("<namespace>/<name>"),
 // the MaaSSubscriptions that offer it, or the error that kept them from
 // being read.
