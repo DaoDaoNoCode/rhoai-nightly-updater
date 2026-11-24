@@ -280,7 +280,7 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   Authorino does not appear, the message now gives the last thing the wait
   found (not the wait's own deadline), quotes Kuadrant's Ready condition, and,
   when Kuadrant is not Ready and made no Authorino, says that a cluster-admin
-  restarts Kuadrant's operator (`oc rollout restart
+  can restart Kuadrant's operator (`oc rollout restart
   deployment/kuadrant-operator-controller-manager -n <namespace>`); the tool
   restarts nothing itself. No new permission: the CRD is read from the
   cluster-wide CRD list, by name, which the tool already reads.

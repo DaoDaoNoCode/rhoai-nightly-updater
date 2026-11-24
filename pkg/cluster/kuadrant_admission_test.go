@@ -298,8 +298,8 @@ func TestPrerequisites_KuadrantCRIsNotCreatedWhenItsCRDCannotBeTrusted(t *testin
 // Authorino's wait, when Kuadrant has not made Authorino: the message says
 // what the polls found, not the wait's own deadline, quotes Kuadrant's
 // Ready condition, and names the operator restart only when Kuadrant is
-// not Ready and made no Authorino CR (its operator does not try again
-// after the API server refused its first try). The tool restarts nothing.
+// not Ready and made no Authorino CR (its operator may not try again after
+// the API server refused its first try). The tool restarts nothing.
 func TestMaaSSetup_AuthorinoMissingSaysWhy(t *testing.T) {
 	const limitador = `{"status":{"conditions":[{"type":"Ready","status":"False","reason":"LimitadorNotReady","message":"limitador resource not in topology"}]}}`
 	for _, tc := range []struct {
@@ -311,8 +311,8 @@ func TestMaaSSetup_AuthorinoMissingSaysWhy(t *testing.T) {
 	}{
 		{"not ready, no Authorino", limitador, false, []string{
 			"Authorino in kuadrant-system is not there after 5:00 (kuadrant has not made Authorino yet: no Authorino authorino in kuadrant-system).",
-			" Kuadrant kuadrant-system/kuadrant is not Ready (LimitadorNotReady: limitador resource not in topology) and has not made Authorino; its operator does not try again by itself.",
-			" A cluster-admin restarts it (oc rollout restart deployment/kuadrant-operator-controller-manager -n openshift-operators). Once Kuadrant is Ready, Set up again to continue.",
+			" Kuadrant kuadrant-system/kuadrant is not Ready (LimitadorNotReady: limitador resource not in topology) and has not made Authorino; its operator may not retry by itself (this happens when the Kuadrant CR is created right after Connectivity Link is installed).",
+			" A cluster-admin can restart it (oc rollout restart deployment/kuadrant-operator-controller-manager -n openshift-operators). Once Kuadrant is Ready, Set up again to continue.",
 		}, true},
 		{"not ready, Authorino without its Deployment", limitador, true, []string{
 			"Authorino in kuadrant-system is not there after 5:00 (kuadrant has not made Authorino yet: no Deployment kuadrant-system/authorino).",

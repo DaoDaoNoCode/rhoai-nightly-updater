@@ -512,10 +512,11 @@ func (m *Run) applyAuthorinoTLS(rec *MaaSRecord, ns, step, again string) (*types
 // authorinoMissing says why Authorino in ns is not there after the wait,
 // last being what the last poll found, from the Kuadrant CR's Ready
 // condition. When Kuadrant is not Ready and has not made even the Authorino
-// CR, it names the recovery: Kuadrant's operator does not try again after
-// the API server refused its first Authorino and Limitador (seen live with
-// Connectivity Link 1.5; WaitKuadrantKindAdmissible), so a cluster-admin
-// restarts it. This tool restarts nothing itself.
+// CR, it names the likely recovery: Kuadrant's operator does not try again
+// after the API server refused its first Authorino and Limitador (seen live
+// with Connectivity Link 1.5; WaitKuadrantKindAdmissible), which this state
+// suggests but does not prove, so a cluster-admin can restart it. This tool
+// restarts nothing itself.
 func (m *Run) authorinoMissing(ns string, last error, again string) string {
 	c := m.Client
 	msg := fmt.Sprintf("Authorino in %s is not there after %s (%s).", ns, ClockText(maasKuadrantTimeout), kube.FirstNonEmpty(errText(last), "no answer"))
@@ -536,7 +537,7 @@ func (m *Run) authorinoMissing(ns string, last error, again string) string {
 	if err != nil || opNS == "" {
 		opNS = RHCLOperator.Namespace
 	}
-	return msg + fmt.Sprintf(" Kuadrant %s/kuadrant is not Ready (%s) and has not made Authorino; its operator does not try again by itself. A cluster-admin restarts it (oc rollout restart deployment/%s -n %s). Once Kuadrant is Ready, %s.", k.Namespace, kube.FirstNonEmpty(k.readyText(), "no reason given"), KuadrantController, opNS, again)
+	return msg + fmt.Sprintf(" Kuadrant %s/kuadrant is not Ready (%s) and has not made Authorino; its operator may not retry by itself (this happens when the Kuadrant CR is created right after Connectivity Link is installed). A cluster-admin can restart it (oc rollout restart deployment/%s -n %s). Once Kuadrant is Ready, %s.", k.Namespace, kube.FirstNonEmpty(k.readyText(), "no reason given"), KuadrantController, opNS, again)
 }
 
 // errText is err's text, "" for nil.
