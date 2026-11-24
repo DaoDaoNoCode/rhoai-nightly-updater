@@ -156,19 +156,24 @@ describe("The internal registry's copy of the token (ROSA HCP)", () => {
   afterEach(cleanup);
   const valid = { exists: true, valid: true };
   const copy = { name: "rhoai-nightly-updater-pull", namespace: "redhat-ods-applications", exists: true, ours: true, current: true };
+  const COPY = "Copy for the internal registry";
+  const REMOVE = "Remove the internal registry's copy";
 
   it.each([
-    [copy, "Workbench images: the internal registry can pull nightly images", "It uses Secret rhoai-nightly-updater-pull in redhat-ods-applications, a copy of this token."],
-    [{ ...copy, current: false }, "Workbench images: the internal registry has an older token", "Save the token again with Replace token, or run Update or Refresh"],
-    [{ ...copy, exists: false, ours: false, current: false }, "Workbench images: the internal registry cannot pull nightly images", "copies it to Secret rhoai-nightly-updater-pull in redhat-ods-applications."],
-    [{ ...copy, ours: false, current: false }, "Workbench images: Secret rhoai-nightly-updater-pull in redhat-ods-applications was not created by this updater", "The updater leaves it as it is"],
-    [{ name: "rhoai-nightly-updater-pull", noApplicationsNamespace: true, exists: false, ours: false, current: false }, "Workbench images: RHOAI is not installed yet", "Once it is, the updater copies the token"],
-    [{ name: "rhoai-nightly-updater-pull", exists: false, ours: false, current: false, problem: "Could not read Secret x: forbidden" }, "Workbench images: could not check whether the internal registry can pull nightly images", "Could not read Secret x: forbidden."],
-  ])("says plainly whether workbench images can be pulled (%#)", async (registry, title, body) => {
+    [copy, "Workbench images: the internal registry can pull nightly images", "It uses Secret rhoai-nightly-updater-pull in redhat-ods-applications, a copy of this token.", false, true],
+    [{ ...copy, current: false }, "Workbench images: the internal registry has an older token", "Copy for the internal registry makes Secret rhoai-nightly-updater-pull in redhat-ods-applications from the token saved here.", true, true],
+    [{ ...copy, exists: false, ours: false, current: false }, "Workbench images: the internal registry cannot pull nightly images", "Copy for the internal registry makes Secret rhoai-nightly-updater-pull in redhat-ods-applications", true, false],
+    [{ ...copy, ours: false, current: false }, "Workbench images: Secret rhoai-nightly-updater-pull in redhat-ods-applications was not created by this updater", "The updater leaves it as it is", false, false],
+    [{ ...copy, current: false, unusable: "It has the annotation openshift.io/image.excludeImageSecret=true, so the internal registry does not use it." }, "Workbench images: the internal registry does not use Secret rhoai-nightly-updater-pull in redhat-ods-applications", "openshift.io/image.excludeImageSecret=true", false, true],
+    [{ name: "rhoai-nightly-updater-pull", noApplicationsNamespace: true, exists: false, ours: false, current: false }, "Workbench images: RHOAI is not installed yet", "Once it is, the updater copies the token", false, false],
+    [{ name: "rhoai-nightly-updater-pull", exists: false, ours: false, current: false, problem: "Could not read Secret x: forbidden" }, "Workbench images: could not check whether the internal registry can pull nightly images", "Could not read Secret x: forbidden.", false, false],
+  ])("says plainly whether workbench images can be pulled, and offers only what fits (%#)", async (registry, title, body, offersCopy, offersRemove) => {
     renderWithApp(<PullSecretSetup pullSecret={{ ...valid, registry }} controlPlane="hosted" />);
     await settleApps();
     expect(screen.getByText(title)).toBeInTheDocument();
     expect(screen.getByText(title).closest(".pf-v6-c-alert")).toHaveTextContent(body);
+    expect(!!screen.queryByRole("button", { name: COPY })).toBe(offersCopy);
+    expect(!!screen.queryByRole("button", { name: REMOVE })).toBe(offersRemove);
   });
 
   it("is not shown without the copy's state (self-managed, gitops profile)", async () => {
@@ -179,5 +184,49 @@ describe("The internal registry's copy of the token (ROSA HCP)", () => {
     renderWithApp(<PullSecretSetup pullSecret={{ ...valid, registry: copy }} readOnly />);
     await settleApps();
     expect(screen.queryByText(/Workbench images/)).not.toBeInTheDocument();
+  });
+
+  function stubCopyRoutes() {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
+      if (url === "/api/setup/pull-secret/registry-copy") {
+        return new Response(JSON.stringify({ success: true, message: "Workbench images: copied the quay.io/rhoai token to Secret redhat-ods-applications/rhoai-nightly-updater-pull", logs: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url === "/api/setup/pull-secret/registry-copy/remove") {
+        return new Response(JSON.stringify({ success: true, message: "removed Secret redhat-ods-applications/rhoai-nightly-updater-pull.", logs: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response("{}", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+  const posts = (m: ReturnType<typeof stubCopyRoutes>) => m.mock.calls.filter(([, init]) => init?.method === "POST").map(([url]) => url);
+
+  it("copies the token with one click", async () => {
+    const fetchMock = stubCopyRoutes();
+    renderWithApp(<PullSecretSetup pullSecret={{ ...valid, registry: { ...copy, exists: false, ours: false, current: false } }} controlPlane="hosted" />);
+    await settleApps();
+    const button = screen.getByRole("button", { name: COPY });
+    await waitFor(() => expect(button).not.toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(button);
+    expect(await screen.findByText(/copied the quay.io\/rhoai token/)).toBeInTheDocument();
+    expect(posts(fetchMock)).toEqual(["/api/setup/pull-secret/registry-copy"]);
+    await settleApps();
+  });
+
+  it("removes the tool's copy only after the confirmation, and Cancel sends nothing", async () => {
+    const fetchMock = stubCopyRoutes();
+    renderWithApp(<PullSecretSetup pullSecret={{ ...valid, registry: copy }} controlPlane="hosted" />);
+    await settleApps();
+    const open = screen.getByRole("button", { name: REMOVE });
+    await waitFor(() => expect(open).not.toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(open);
+    expect(screen.getByText(/Remove Secret rhoai-nightly-updater-pull in redhat-ods-applications\? Workbenches then cannot pull nightly images/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(posts(fetchMock)).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: REMOVE }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(await screen.findByText(/removed Secret/)).toBeInTheDocument();
+    expect(posts(fetchMock)).toEqual(["/api/setup/pull-secret/registry-copy/remove"]);
+    await settleApps();
   });
 });

@@ -201,8 +201,10 @@ export interface RegistryPullCopyInfo {
   exists: boolean;
   /** It carries this updater's label (only then does the updater change it). */
   ours: boolean;
-  /** It holds only the pull secret's current token. */
+  /** It holds only the pull secret's current token, and the registry can use it. */
   current: boolean;
+  /** Why the registry does not use it (being deleted, another type, excluded). */
+  unusable?: string;
   problem?: string;
 }
 

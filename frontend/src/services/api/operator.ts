@@ -110,6 +110,16 @@ export function createPullSecret(auth: string): Promise<OperationResponse> {
   });
 }
 
+/** ROSA HCP: (re)make only the internal registry's copy of the pull secret's quay.io/rhoai entry. */
+export function copyPullSecretForRegistry(): Promise<OperationResponse> {
+  return request('/api/setup/pull-secret/registry-copy', { method: 'POST', body: '{}' });
+}
+
+/** Delete only this updater's copy of the pull secret for the internal registry. */
+export function removeRegistryPullCopy(): Promise<OperationResponse> {
+  return request('/api/setup/pull-secret/registry-copy/remove', { method: 'POST', body: '{}' });
+}
+
 export function fetchLatestNightly(signal?: AbortSignal): Promise<LatestNightlyResponse> {
   return request('/api/latest-nightly', { signal });
 }
