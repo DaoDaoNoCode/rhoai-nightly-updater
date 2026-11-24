@@ -1487,8 +1487,34 @@ export const modelRegistryStates = {
   terminating: { ...REGISTRY_BASE, state: "terminating", managedByTool: true, message: "Being deleted." },
 };
 
+/** The Distributed workloads tab (GET /api/resources/kueue): Kueue on the cluster, the tool's setup in states. */
+export const KUEUE_IMAGE = "quay.io/modh/ray:2.47.1-py311-cu121";
+export function kueueWorld(state = "none", { optIn = false, samples = false, project = "dev-project" } = {}) {
+  const set = state === "ready";
+  const obj = (kind, name, namespace) => ({ kind, name, ...(namespace ? { namespace } : {}), present: set, ...(set ? { managedByTool: true, active: true } : {}) });
+  const missing = state === "operator-missing";
+  return {
+    project: state === "none" || missing ? undefined : project,
+    instance: missing ? { found: false, available: false, v1beta2: false, ready: false } : { found: true, available: true, kueueReady: "True", v1beta2: true, ready: true },
+    ...(missing ? { refusal: "First set up what distributed workloads need on the cluster (above): Kueue is turned off on this cluster: component kueue is Removed in DataScienceCluster default-dsc, so nothing would run it. A cluster-admin turns it on by setting it to Unmanaged.", refusalCode: "prerequisites",
+      blocked: { component: "kueue", dsc: "default-dsc", state: "Removed", reason: "Kueue is turned off on this cluster: component kueue is Removed in DataScienceCluster default-dsc, so nothing would run it. A cluster-admin turns it on by setting it to Unmanaged." } } : {}),
+    objects: missing ? [] : [obj("ResourceFlavor", "nightly-kueue-cpu"), obj("ClusterQueue", "nightly-kueue"), obj("LocalQueue", "nightly-kueue", project)],
+    quota: "6 CPUs and 11Gi of memory",
+    ...(set ? { label: { present: true, addedByTool: true } } : {}),
+    samples: [
+      samples ? { kind: "raycluster", name: "nightly-raycluster", present: true, managedByTool: true, image: KUEUE_IMAGE, state: "Running", rayState: "ready" } : { kind: "raycluster", name: "nightly-raycluster", present: false },
+      samples ? { kind: "rayjob", name: "nightly-rayjob", present: true, managedByTool: true, image: KUEUE_IMAGE, state: "Admitted", rayState: "Running (job RUNNING)" } : { kind: "rayjob", name: "nightly-rayjob", present: false },
+    ],
+    optIn: optIn
+      ? { disableKueue: false, setByTool: true, previous: "unset", on: true, profile: { kind: "HardwareProfile", name: "nightly-kueue-cpu", namespace: "redhat-ods-applications", present: true, managedByTool: true, active: true } }
+      : { profile: { kind: "HardwareProfile", name: "nightly-kueue-cpu", namespace: "redhat-ods-applications", present: false } },
+    defaultRayImage: KUEUE_IMAGE,
+    dashboardUrl: DASHBOARD_URL,
+  };
+}
+
 /** Feature prerequisite matrix for GET /api/resources/prerequisites. */
-export function prerequisites({ models = "ready", pipelines = "ready", registryRestorable = false, exposure = "" } = {}) {
+export function prerequisites({ models = "ready", pipelines = "ready", registryRestorable = false, kueue = "ready", exposure = "" } = {}) {
   const readyPart = (id, title, message) => ({ id, title, state: "ready", message, notManaged: true });
   const ready = (parts) => ({ ready: true, parts });
   const missingModels = {
@@ -1523,6 +1549,20 @@ export function prerequisites({ models = "ready", pipelines = "ready", registryR
       mlflow: ready([readyPart("dsc-mlflowoperator", "MLflow (mlflowoperator)", "Managed in DataScienceCluster default-dsc")]),
       models: models === "ready" ? ready([readyPart("dsc-kserve", "Model serving (KServe)", "Managed in DataScienceCluster default-dsc"), readyPart("cert-manager", "cert-manager Operator for Red Hat OpenShift", "Version 1.20.1 runs in cert-manager-operator")]) : missingModels,
       playground: ready([readyPart("dsc-ogx", "Gen AI playground (ogx)", "Managed in DataScienceCluster default-dsc")]),
+      kueue: kueue === "missing"
+        ? {
+          ready: false,
+          parts: [
+            readyPart("cert-manager", "cert-manager Operator for Red Hat OpenShift", "Version 1.20.1 runs in cert-manager-operator"),
+            { id: "kueue-operator", title: "Red Hat build of Kueue", state: "missing", message: "Not installed. Set up installs version 1.5.1 from redhat-operators (channel stable-v1.5)." },
+            { id: "dsc-kueue", title: "Kueue (kueue)", state: "missing", message: "Removed in DataScienceCluster default-dsc. Set up sets it to Unmanaged; Clean up can turn it back.", commands: `oc patch datasciencecluster default-dsc --type=merge -p '{"spec":{"components":{"kueue":{"managementState":"Unmanaged"}}}}'` },
+          ],
+          setupPlan: [
+            "Install Red Hat build of Kueue 1.5.1: Namespace openshift-kueue-operator, OperatorGroup openshift-kueue-operator, Subscription openshift-kueue-operator/kueue-operator (package kueue-operator, channel stable-v1.5, from redhat-operators, automatic updates); it stays after Clean up, as other features share it",
+            "DataScienceCluster default-dsc: set kueue to Unmanaged (it is Removed; Clean up can turn it back while nothing else uses it)",
+          ],
+        }
+        : { ready: true, parts: [readyPart("cert-manager", "cert-manager Operator for Red Hat OpenShift", "Version 1.20.1 runs in cert-manager-operator"), readyPart("kueue-operator", "Red Hat build of Kueue", "Version 1.5.1 runs in openshift-kueue-operator"), { id: "dsc-kueue", title: "Kueue (kueue)", state: "ready", message: "Unmanaged in DataScienceCluster default-dsc (turned on by this tool)", managedByTool: true }], restorable: [{ component: "kueue", previous: "Removed", feature: "kueue" }] },
       "model-registry": registryRestorable
         ? { ready: true, parts: [{ id: "dsc-aiHub", title: "Model registry (aiHub)", state: "ready", message: "Managed in DataScienceCluster default-dsc (turned on by this tool)", managedByTool: true }], restorable: [{ component: "aiHub", previous: "Removed", feature: "model-registry" }] }
         : ready([readyPart("dsc-aiHub", "Model registry (aiHub)", "Managed in DataScienceCluster default-dsc")]),

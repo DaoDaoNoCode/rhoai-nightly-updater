@@ -471,6 +471,50 @@ async function workbenchStream(req, res) {
   res.end();
 }
 
+/** GET /api/resources/kueue (pkg/cluster GetKueueStatus): one setup per cluster, in its project. */
+function kueueOf(project) {
+  const k = world.kueue;
+  if (!k.project && project) return { ...k, project, objects: k.objects.map((o) => (o.kind === "LocalQueue" ? { ...o, namespace: project } : o)) };
+  return { ...k, ...(k.project && project && project !== k.project ? { setUpIn: k.project } : {}) };
+}
+
+/** POST /api/resources/kueue/stream (pkg/cluster RunKueue). */
+async function kueueStream(req, res) {
+  const { action, project, rayCluster = false, rayJob = false, sample } = await body(req);
+  beginOperation("kueue", "Distributed workloads", `${action} distributed workloads`);
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+  let n = 0;
+  const send = (ev) => res.write(`data: ${JSON.stringify({ ...ev, elapsedMs: ++n * 3000 })}\n\n`);
+  let message;
+  const k = world.kueue;
+  if (action === "setup") {
+    const was = k.project ? k : F.kueueWorld("ready", { project });
+    send({ step: "check", status: "success", message: `Kueue is ready; queues for 6 CPUs and 11Gi of memory in ${project}.` });
+    send({ step: "queues", status: "success", message: "ClusterQueue nightly-kueue and LocalQueue nightly-kueue are there." });
+    send({ step: "project", status: "success", message: `Labelled ${project}: Kueue admits its workloads sent to a queue.` });
+    await nextStep();
+    const samples = was.samples.map((s) => ((s.kind === "raycluster" && rayCluster) || (s.kind === "rayjob" && rayJob) ? { ...s, present: true, managedByTool: true, image: F.KUEUE_IMAGE, state: "Queued" } : s));
+    world.kueue = { ...was, samples, optIn: k.optIn };
+    if (rayCluster || rayJob) send({ step: "samples", status: "success", message: "Created the samples." });
+    message = `Distributed workloads are set up in ${project}.`;
+  } else if (action === "optin" || action === "optout") {
+    world.kueue = { ...k, optIn: F.kueueWorld("ready", { optIn: action === "optin" }).optIn };
+    message = action === "optin" ? "The dashboard's Kueue opt-in is on." : "disableKueue is unset again; deleted hardware profile nightly-kueue-cpu.";
+    send({ step: action === "optin" ? "profile" : "opt-in", status: "success", message });
+  } else if (action === "delete-sample") {
+    world.kueue = { ...k, samples: k.samples.map((s) => (s.kind === sample ? { kind: s.kind, name: s.name, present: false } : s)) };
+    message = "Deleted the sample.";
+    send({ step: "samples", status: "success", message });
+  } else {
+    world.kueue = F.kueueWorld("none");
+    message = "Deleted this tool's distributed workloads setup.";
+    send({ step: "opt-in", status: "success", message });
+  }
+  endOperation(true, message);
+  send({ step: "operation_complete", status: "success", message });
+  res.end();
+}
+
 /** POST /api/resources/playground/stream (pkg/cluster RunPlayground). */
 async function playgroundStream(req, res) {
   const { action, project, models = [] } = await body(req);
@@ -702,6 +746,7 @@ const routes = {
   "GET /api/summary": () => reads["GET /api/summary"](world),
   "GET /api/resources/playground": (u) => playgroundOf(u.searchParams.get("project") || ""),
   "GET /api/resources/workbench": (u) => workbenchOf(u.searchParams.get("project") || ""),
+  "GET /api/resources/kueue": (u) => kueueOf(u.searchParams.get("project") || ""),
   "GET /api/resources/maas": () => reads["GET /api/resources/maas"](world),
   "GET /api/resources/model-registry": () => reads["GET /api/resources/model-registry"](world),
   "GET /api/resources/maas/groups": (u) => F.maasGroupProblems(u.searchParams.getAll("name")),
@@ -827,6 +872,7 @@ async function api(req, res, u) {
   if (key === "POST /api/resources/playground/stream") return playgroundStream(req, res);
   if (key === "POST /api/resources/model-registry/stream") return modelRegistryStream(req, res);
   if (key === "POST /api/resources/workbench/stream") return workbenchStream(req, res);
+  if (key === "POST /api/resources/kueue/stream") return kueueStream(req, res);
   if (key === "POST /api/resources/maas/stream") return maasStream(req, res);
   if (key.startsWith("POST /api/resources/samples/") && world.canMutate === false) {
     return json(res, 403, { error: "Only cluster-admins can change the cluster through the updater.", errorCode: "forbidden" });
