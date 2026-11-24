@@ -105,7 +105,7 @@ export const ModelRegistryTab: React.FC<ModelRegistryTabProps> = (props) => {
             actions={canAddSample ? <ActionListItem><TooltipButton variant="secondary" disabledReason={baseReason}
               onClick={() => setPending({ kind: "setup-model-registry", samples: true })}>{sample?.registered ? "Restore the sample" : "Add the sample"}</TooltipButton></ActionListItem> : undefined}>
             <Content component="p">
-              {sample?.model ?? "A small chat model"}, version {sample?.version ?? "v1"}: the model the Models tab serves, registered as the dashboard&apos;s Register model form does, with its weights at <code>{sample?.uri ?? "its Hugging Face address"}</code>.
+              {sample ? <><code>{sample.model}</code>, version {sample.version}</> : <>The Models tab&apos;s default chat model, version v1</>}: registered as the dashboard&apos;s Register model form does, with its weights {sample?.uri ? <>at <code>{sample.uri}</code></> : "on Hugging Face"}.
               {!ours || mr?.state !== "ready" ? " It can be added once this tool's registry is ready." : !mr.address ? " This registry has no address through the cluster's gateway, so it cannot be added." : ""}
             </Content>
             {sample?.problem && <WarningAlert text={sample.problem} />}

@@ -1451,6 +1451,26 @@ export const routed = (m, { exposure = "default-gateway", check = "ok" } = {}) =
         : undefined,
 });
 
+// --- Model registry (GET /api/resources/model-registry, modelregistry.ReadStatus) ---
+
+const REGISTRY_BASE = { name: "nightly-registry", namespace: "rhoai-model-registries", component: "aiHub", dashboardUrl: DASHBOARD_URL };
+const REGISTRY_SAMPLE = { model: "qwen25-05b-instruct", version: "v1", uri: "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775" };
+
+/** This tool's model registry, one state each. */
+export const modelRegistryStates = {
+  absent: { ...REGISTRY_BASE, state: "absent" },
+  starting: { ...REGISTRY_BASE, state: "starting", managedByTool: true, message: "Deployment nightly-registry-postgres is progressing: waiting for the database to be available" },
+  ready: {
+    ...REGISTRY_BASE, state: "ready", managedByTool: true, address: `${DASHBOARD_URL}/model-registry/nightly-registry`,
+    sample: { ...REGISTRY_SAMPLE, registered: true, state: "LIVE", id: "1" },
+  },
+  readyNoSample: {
+    ...REGISTRY_BASE, state: "ready", managedByTool: true, address: `${DASHBOARD_URL}/model-registry/nightly-registry`,
+    sample: { ...REGISTRY_SAMPLE, registered: false },
+  },
+  terminating: { ...REGISTRY_BASE, state: "terminating", managedByTool: true, message: "Being deleted." },
+};
+
 /** Feature prerequisite matrix for GET /api/resources/prerequisites. */
 export function prerequisites({ models = "ready", pipelines = "ready", exposure = "" } = {}) {
   const readyPart = (id, title, message) => ({ id, title, state: "ready", message, notManaged: true });
@@ -1487,6 +1507,7 @@ export function prerequisites({ models = "ready", pipelines = "ready", exposure 
       mlflow: ready([readyPart("dsc-mlflowoperator", "MLflow (mlflowoperator)", "Managed in DataScienceCluster default-dsc")]),
       models: models === "ready" ? ready([readyPart("dsc-kserve", "Model serving (KServe)", "Managed in DataScienceCluster default-dsc"), readyPart("cert-manager", "cert-manager Operator for Red Hat OpenShift", "Version 1.20.1 runs in cert-manager-operator")]) : missingModels,
       playground: ready([readyPart("dsc-ogx", "Gen AI playground (ogx)", "Managed in DataScienceCluster default-dsc")]),
+      "model-registry": ready([readyPart("dsc-aiHub", "Model registry (aiHub)", "Managed in DataScienceCluster default-dsc")]),
     },
   };
 }

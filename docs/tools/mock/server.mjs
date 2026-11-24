@@ -463,6 +463,39 @@ async function playgroundStream(req, res) {
   res.end();
 }
 
+/** POST /api/resources/model-registry/stream (pkg/cluster RunModelRegistry), in the backend's steps. */
+async function modelRegistryStream(req, res) {
+  const { action, samples } = await body(req);
+  beginOperation("model-registry", "Model registry", `${action} model registry`);
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+  let n = 0;
+  const send = (ev) => res.write(`data: ${JSON.stringify({ ...ev, elapsedMs: ++n * 3000 })}\n\n`);
+  let message;
+  if (action === "teardown") {
+    send({ step: "check", status: "success", message: "Model registry rhoai-model-registries/nightly-registry is the one this tool created." });
+    send({ step: "delete", status: "running", message: "Deleting model registry rhoai-model-registries/nightly-registry with its database..." });
+    world.modelRegistry = F.modelRegistryStates.terminating;
+    await nextStep();
+    send({ step: "delete", status: "success", message: "Model registry rhoai-model-registries/nightly-registry is being deleted; its operator and the garbage collector remove its database." });
+    world.modelRegistry = F.modelRegistryStates.absent;
+    send({ step: "gone", status: "success", message: "The registry and its database are gone." });
+    message = "Model registry nightly-registry removed, with its registered models and its database.";
+  } else {
+    send({ step: "check", status: "success", message: "Component aiHub is Managed; registries go in rhoai-model-registries." });
+    send({ step: "create", status: "success", message: "Model registry rhoai-model-registries/nightly-registry created; its operator starts a PostgreSQL database and the registry server." });
+    world.modelRegistry = F.modelRegistryStates.starting;
+    send({ step: "ready", status: "running", message: "Waiting for the registry to be available (usually 1 to 3 minutes)..." });
+    await nextStep();
+    world.modelRegistry = samples ? F.modelRegistryStates.ready : F.modelRegistryStates.readyNoSample;
+    send({ step: "ready", status: "success", message: "The registry is available; its REST address is https://rh-ai.apps.example-cluster.example.com/model-registry/nightly-registry." });
+    if (samples) send({ step: "samples", status: "success", message: "Sample model qwen25-05b-instruct (version v1) is registered." });
+    message = "Model registry nightly-registry is ready in rhoai-model-registries.";
+  }
+  endOperation(true, message);
+  send({ step: "operation_complete", status: "success", message });
+  res.end();
+}
+
 /** POST /api/resources/maas/stream (pkg/cluster RunMaaS), in the backend's steps. */
 async function maasStream(req, res) {
   const { action, project, model = "qwen25-05b-instruct", limit, access } = await body(req);
@@ -624,6 +657,7 @@ const routes = {
   "GET /api/summary": () => reads["GET /api/summary"](world),
   "GET /api/resources/playground": (u) => playgroundOf(u.searchParams.get("project") || ""),
   "GET /api/resources/maas": () => reads["GET /api/resources/maas"](world),
+  "GET /api/resources/model-registry": () => reads["GET /api/resources/model-registry"](world),
   "GET /api/resources/maas/groups": (u) => F.maasGroupProblems(u.searchParams.getAll("name")),
   // Models routing and one-click prerequisites.
   "GET /api/resources/models/exposures": (u) => F.modelExposures(u.searchParams.get("project") || "", u.searchParams.get("model") || "qwen25-05b-instruct", world.resources.inferenceGateway ?? F.gatewayStates.none, world.routing ?? {}),
@@ -745,6 +779,7 @@ async function api(req, res, u) {
   if (key === "POST /api/resources/cleanup/stream") return cleanupStream(req, res);
   if (key === "POST /api/resources/models/stream") return modelsStream(req, res);
   if (key === "POST /api/resources/playground/stream") return playgroundStream(req, res);
+  if (key === "POST /api/resources/model-registry/stream") return modelRegistryStream(req, res);
   if (key === "POST /api/resources/maas/stream") return maasStream(req, res);
   if (key.startsWith("POST /api/resources/samples/") && world.canMutate === false) {
     return json(res, 403, { error: "Only cluster-admins can change the cluster through the updater.", errorCode: "forbidden" });

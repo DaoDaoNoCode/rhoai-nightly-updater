@@ -177,7 +177,7 @@ export const Overview: React.FC<{
       {onCleanup && (
         <StackItem>
           <CleanupSection id="overview-cleanup" label="Clean up everything…" onClick={onCleanup} reason={baseReason}
-            text="Deletes everything this tool created on this cluster: it unpublishes its models from Models as a Service, then deletes the pipeline servers, the S3 storage, MLflow, the playgrounds, the models, the inference gateway and the MaaS platform. You choose what goes, then it runs as one operation." />
+            text="Deletes everything this tool created on this cluster: it unpublishes its models from Models as a Service, then deletes the pipeline servers, the S3 storage, MLflow, the model registry, the playgrounds, the models, the inference gateway and the MaaS platform. You choose what goes, then it runs as one operation." />
         </StackItem>
       )}
     </Stack>
