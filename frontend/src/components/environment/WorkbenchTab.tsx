@@ -129,7 +129,7 @@ const WorkbenchPart: React.FC<WorkbenchTabProps & { project: string }> = ({ work
   else if (unmanaged) text = `A workbench named ${WORKBENCH_NAME} exists in ${project}, but this tool did not create it: use it in the dashboard. This tool does not start, stop or delete it.`;
   else if (exists) text = <>Jupyter workbench {WORKBENCH_NAME}. Files saved under <code>{WORKBENCH_FILES}</code> are in its storage and stay when it stops.</>;
   else if (planProblem) text = `A workbench cannot be set up in ${project} now: the alert below says why.`;
-  else if (kept && kept.usedBy?.length) text = <>Storage kept from a deleted workbench: <code>{WORKBENCH_STORAGE}</code>. Another workbench uses it now, so Set up cannot use it: the alert below says what to do.</>;
+  else if (kept && kept.usedBy?.length) text = <>Storage kept from a deleted workbench: <code>{WORKBENCH_STORAGE}</code>. Another workbench uses it now, so Set up cannot use it: Set up below says what to do.</>;
   else if (kept) text = <>Storage kept from a deleted workbench: <code>{WORKBENCH_STORAGE}</code>, reused by the next Set up with its files.</>;
   else text = `Not set up in ${project} yet. Set up creates a Jupyter workbench as the dashboard's Create workbench does; it starts in 1 to 3 minutes.`;
   return (
