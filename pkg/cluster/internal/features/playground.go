@@ -513,6 +513,9 @@ type maasPlaygroundRef struct {
 // readMaaSPlaygroundModels reads every MaaSModelRef that is not being
 // deleted and has a name, as listMaaSPlaygroundModels describes, sorted by
 // that name; a reference no MaaSSubscription offers has no Subscriptions.
+// A failed read of the references or of the subscriptions is an error, so
+// a caller that must decide (the recipe) never takes it for "offered by
+// none"; listMaaSPlaygroundModels shows none then.
 func readMaaSPlaygroundModels(c *kube.Client) ([]maasPlaygroundRef, error) {
 	var items []struct {
 		Metadata kube.ObjectMeta `json:"metadata"`
@@ -530,7 +533,10 @@ func readMaaSPlaygroundModels(c *kube.Client) ([]maasPlaygroundRef, error) {
 	if err := c.ListInto("/apis/"+serving.MaaSAPI(c)+"/maasmodelrefs", &items); err != nil {
 		return nil, err
 	}
-	subs := maasSubscriptionsByModel(c)
+	subs, err := maasSubscriptionsByModel(c)
+	if err != nil {
+		return nil, fmt.Errorf("list the MaaS subscriptions: %w", err)
+	}
 	var out []maasPlaygroundRef
 	for _, r := range items {
 		name := r.Metadata.Name
@@ -581,8 +587,9 @@ func MaaSPlaygroundModelOf(c *kube.Client, project, model string) (m types.Playg
 }
 
 // maasSubscriptionsByModel names, by MaaSModelRef ("<namespace>/<name>"),
-// the MaaSSubscriptions that offer it (none when they cannot be read).
-func maasSubscriptionsByModel(c *kube.Client) map[string][]string {
+// the MaaSSubscriptions that offer it, or the error that kept them from
+// being read.
+func maasSubscriptionsByModel(c *kube.Client) (map[string][]string, error) {
 	out := map[string][]string{}
 	var items []struct {
 		Metadata kube.ObjectMeta `json:"metadata"`
@@ -593,8 +600,8 @@ func maasSubscriptionsByModel(c *kube.Client) map[string][]string {
 			} `json:"modelRefs"`
 		} `json:"spec"`
 	}
-	if c.ListInto(rhoai.NamespacedPath(serving.MaaSAPI(c), "maassubscriptions", serving.MaaSTenantNamespace, ""), &items) != nil {
-		return out
+	if err := c.ListInto(rhoai.NamespacedPath(serving.MaaSAPI(c), "maassubscriptions", serving.MaaSTenantNamespace, ""), &items); err != nil {
+		return nil, err
 	}
 	for _, s := range items {
 		for _, ref := range s.Spec.ModelRefs {
@@ -607,7 +614,7 @@ func maasSubscriptionsByModel(c *kube.Client) map[string][]string {
 	for k := range out {
 		sort.Strings(out[k])
 	}
-	return out
+	return out, nil
 }
 
 // --- what this tool requested --------------------------------------------------------

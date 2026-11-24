@@ -967,6 +967,16 @@ func TestPlayground_MaaSPlaygroundModelOf(t *testing.T) {
 			t.Errorf("%s/%s: %+v %v %v", tc.project, tc.model, m, found, err)
 		}
 	}
+	// Subscriptions that cannot be read are an error, never "offered by none".
+	e.k8s.fail["GET /apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maassubscriptions"] = http.StatusForbidden
+	if _, found, err := features.MaaSPlaygroundModelOf(e.c, "team", "gpt-oss-20b"); err == nil || found || !strings.Contains(err.Error(), "list the MaaS subscriptions") {
+		t.Errorf("subscriptions that cannot be read: %v %v", found, err)
+	}
+	// The status still lists the project's own models (MaaS is optional there).
+	features.PurgePlaygroundStatus()
+	if st, err := GetPlaygroundStatus(e.c, e.reader, "proj"); err != nil || len(st.Models) != 1 || st.Models[0].Source != "namespace" {
+		t.Errorf("status with unreadable subscriptions: %+v %v", st, err)
+	}
 	e.k8s.fail["GET /apis/maas.opendatahub.io/v1alpha1/maasmodelrefs"] = http.StatusForbidden
 	if _, found, err := features.MaaSPlaygroundModelOf(e.c, "team", "gpt-oss-20b"); err == nil || found {
 		t.Errorf("a list that fails: %v %v", found, err)
