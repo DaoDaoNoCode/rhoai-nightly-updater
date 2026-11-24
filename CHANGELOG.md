@@ -323,10 +323,10 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   ready; a ready playground of this tool counts as done, since the
   playground offers each user's Models as a Service models per request.
   The recipe form and the review say so. The Playground tab's
-  set-up confirmation names models by their display names, and after a Set
-  up with a Models as a Service model the tab says which models were
-  chosen instead of "the project's own ready models" (the tool now records
-  the models a Set up asked for).
+  set-up confirmation names models by their display names, and the tab says
+  which models Set up chose (the tool now records them) and that the
+  playground offers the project's own ready models and the Models as a
+  Service models each user's subscriptions allow.
 
 - **The Ray samples' head no longer runs out of memory.** In the 5.0.0
   pre-releases the samples' head and worker had 1 CPU and 2 GiB (requests

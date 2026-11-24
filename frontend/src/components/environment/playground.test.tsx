@@ -192,27 +192,34 @@ describe("Playground tab", () => {
     expect(api.bodies["POST /api/resources/playground/stream"]).toEqual([{ action: "setup", project: "dev", models: [{ name: "publishers/dev/models/qwen25-05b-instruct", source: "maas" }] }]);
   });
 
-  it("after Set up with a Models as a Service model, the tab says what was chosen, not the project's own models (N2)", async () => {
+  it("after Set up with a Models as a Service model, the tab says what was chosen and what the playground offers (N2)", async () => {
     stubApi({
       "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] },
       "/api/resources/playground": pg({ models: [maasQwen], items: [item("dev", { models: [{ name: maasQwen.name, source: "maas" }] })] }),
     });
     renderAt("/test-resources?tab=playground&project=dev");
     const models = await screen.findByRole("listitem", { name: "Models" });
-    expect(within(models).getByText("Set up chose Qwen2.5 0.5B Instruct (Models as a Service). The playground reaches that model through Models as a Service: chatting with it needs a Models as a Service subscription to it.")).toBeInTheDocument();
-    expect(within(models).queryByText(/project's own ready models/)).toBeNull();
-    expect(within(models).getByText("Used, with a Models as a Service subscription")).toBeInTheDocument();
+    expect(within(models).getByText("Set up chose Qwen2.5 0.5B Instruct (Models as a Service). The playground offers the project's own ready models and the Models as a Service models your subscriptions allow.")).toBeInTheDocument();
+    // The same rule for every Models as a Service row.
+    expect(within(models).getByText("Only with a Models as a Service subscription")).toBeInTheDocument();
   });
 
-  it("after Set up with the project's own models, the tab keeps saying so", async () => {
+  it("after Set up with the project's own models, the tab names them; without a record it says what the playground offers", async () => {
     stubApi({
       "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] },
       "/api/resources/playground": pg({ items: [item("dev", { models: [{ name: qwen.name, source: "namespace" }] })] }),
     });
     renderAt("/test-resources?tab=playground&project=dev");
     const models = await screen.findByRole("listitem", { name: "Models" });
-    expect(within(models).getByText(/^The playground chats with the project's own ready models\./)).toBeInTheDocument();
+    expect(within(models).getByText("Set up chose Qwen2.5 0.5B Instruct (CPU). The playground offers the project's own ready models and the Models as a Service models your subscriptions allow.")).toBeInTheDocument();
     expect(within(models).getByText("Only with a Models as a Service subscription")).toBeInTheDocument();
+  });
+
+  it("a playground set up before the record kept its models says what the playground offers", async () => {
+    stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] }, "/api/resources/playground": pg({ items: [item("dev")] }) });
+    renderAt("/test-resources?tab=playground&project=dev");
+    const models = await screen.findByRole("listitem", { name: "Models" });
+    expect(within(models).getByText("The playground offers the project's own ready models and the Models as a Service models your subscriptions allow. A model added to the project later shows up without setting it up again.")).toBeInTheDocument();
   });
 
   it("a playground someone else set up: open it, no Delete", async () => {

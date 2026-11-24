@@ -118,14 +118,13 @@ export function playgroundCurl(dashboardUrl: string, project: string, model: str
   ].join("\n");
 }
 
-/** What the playground does with a model, in words; recorded: the models this tool's Set up chose (after Set up). */
-function playgroundUse(m: PlaygroundModel, picked: string[] | null, recorded: string[]): string {
+/** What the playground does with a model, in words (after Set up the same for every Models as a Service model: the playground lists the ones each user's subscriptions allow). */
+function playgroundUse(m: PlaygroundModel, picked: string[] | null): string {
   if (picked) {
     if (picked.includes(modelKey(m))) return "Used";
     return m.source === "maas" ? "Not used unless you choose it (needs a Models as a Service subscription)" : "Not used";
   }
-  if (m.source === "maas") return recorded.includes(modelKey(m)) ? "Used, with a Models as a Service subscription" : "Only with a Models as a Service subscription";
-  return "Used";
+  return m.source === "maas" ? "Only with a Models as a Service subscription" : "Used";
 }
 
 /**
@@ -148,7 +147,6 @@ const ModelsPart: React.FC<PlaygroundTabProps & { project: string; picked: strin
   const otherEmbedding = playgroundOtherEmbeddingModels(playground, project);
   const notReady = playgroundModelsNotReady(playground, project);
   const recorded = playgroundIn(playground, project)?.models ?? [];
-  const recordedMaaS = modelsOf(recorded.filter((r) => r.source === "maas"), playground);
   const toggle = (m: PlaygroundModel, on: boolean) => onPick?.(on ? [...(picked ?? []).filter((k) => k !== modelKey(m)), modelKey(m)] : (picked ?? []).filter((k) => k !== modelKey(m)));
   return (
     <PartItem id="playground-models" title="Models" scope={`In project ${project}`} status={s} unmanaged={false}
@@ -159,9 +157,9 @@ const ModelsPart: React.FC<PlaygroundTabProps & { project: string; picked: strin
           : chat.length > 0
             ? onPick
               ? "The playground uses the models you choose: the project's own ready models are chosen, chat models and this tool's embedding model. A chat model added to the project later shows up in the playground without setting it up again."
-              : recordedMaaS.length > 0
-                ? `Set up chose ${joinWords(modelsOf(recorded, playground).map(modelWords))}. The playground reaches ${recordedMaaS.length === 1 ? "that model" : "those models"} through Models as a Service: chatting with ${recordedMaaS.length === 1 ? "it" : "them"} needs a Models as a Service subscription to ${recordedMaaS.length === 1 ? "it" : "them"}.`
-                : "The playground chats with the project's own ready models. A model added to the project later shows up without setting it up again."
+              : recorded.length > 0
+                ? `Set up chose ${joinWords(modelsOf(recorded, playground).map(modelWords))}. The playground offers the project's own ready models and the Models as a Service models your subscriptions allow.`
+                : "The playground offers the project's own ready models and the Models as a Service models your subscriptions allow. A model added to the project later shows up without setting it up again."
             : `${project} has no ready chat model yet. The playground needs one: the Models tab sets up a small one on CPU.`}
       </Content>
       {usable.length > 0 && chat.length > 0 && (
@@ -187,7 +185,7 @@ const ModelsPart: React.FC<PlaygroundTabProps & { project: string; picked: strin
                 </Td>
                 <Td dataLabel="Type" modifier="wrap">{m.chat ? "Chat" : `Embedding (${m.embeddingDimension} dimensions), for searching documents`}</Td>
                 <Td dataLabel="Where it runs" modifier="wrap">{sourceWords(m)}</Td>
-                <Td dataLabel="In the playground" modifier="wrap">{playgroundUse(m, picked, recorded.map(modelKey))}</Td>
+                <Td dataLabel="In the playground" modifier="wrap">{playgroundUse(m, picked)}</Td>
               </Tr>
             ))}
           </Tbody>
