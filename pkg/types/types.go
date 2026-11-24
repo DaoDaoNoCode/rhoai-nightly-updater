@@ -211,6 +211,41 @@ type PullSecretInfo struct {
 	// (cluster.controlPlane absent). Absent on a hosted control plane and in
 	// the gitops profile.
 	Nodes *NodePullSecretInfo `json:"nodes,omitempty"`
+	// Registry is the internal registry's copy of the quay.io/rhoai
+	// credential, which RHOAI's workbench images are pulled with on a
+	// hosted control plane. Set only there, when the pull secret exists
+	// and the request carries the signed-in cluster-admin's token (the
+	// ServiceAccount may not read it).
+	Registry *RegistryPullCopyInfo `json:"registry,omitempty"`
+}
+
+// RegistryPullCopyInfo is the state of Secret Name in RHOAI's applications
+// namespace, the internal registry's copy of the quay.io/rhoai credential.
+// It never holds the credential.
+type RegistryPullCopyInfo struct {
+	Name string `json:"name"`
+	// Namespace is RHOAI's applications namespace; empty when it is not
+	// known.
+	Namespace string `json:"namespace,omitempty"`
+	// NoQuayRHOAIEntry: the pull secret has no entry exactly for
+	// quay.io/rhoai (only a generic or repository login, or none), so
+	// nothing is copied and no copy counts as current.
+	NoQuayRHOAIEntry bool `json:"noQuayRHOAIEntry,omitempty"`
+	// NoApplicationsNamespace: RHOAI has no DSCInitialization yet, so
+	// there is nowhere to copy to.
+	NoApplicationsNamespace bool `json:"noApplicationsNamespace,omitempty"`
+	Exists                  bool `json:"exists"`
+	// Ours: the Secret carries this tool's label (only then does the tool
+	// change it).
+	Ours bool `json:"ours"`
+	// Current: it holds only the pull secret's current quay.io/rhoai
+	// credential and the registry can use it (Unusable is empty).
+	Current bool `json:"current"`
+	// Unusable says why the registry does not use the Secret: being
+	// deleted, another type, or openshift.io/image.excludeImageSecret=true.
+	Unusable string `json:"unusable,omitempty"`
+	// Problem says why the state could not be read.
+	Problem string `json:"problem,omitempty"`
 }
 
 // NodePullSecretInfo is the nodes' side of the quay.io/rhoai credentials on

@@ -31,12 +31,15 @@ type statusRegistryReads struct {
 	pullSecret   func(c *Client) (types.PullSecretInfo, string, error)
 	nightly      func(ctx context.Context, basicAuth string, sub types.SubscriptionInfo, cs types.CatalogSourceInfo) *types.NightlyStatus
 	controlPlane func(c *Client) string
+	// registryCopy reads the internal registry's copy of the credential
+	// with the signed-in user's client (ROSA HCP only).
+	registryCopy func(u *Client) *types.RegistryPullCopyInfo
 }
 
 // GetStatus aggregates cluster, operator, and RHOAI status into a single response.
 // All K8s API calls run in parallel since none depend on each other.
 func GetStatus(c *Client) (*types.StatusResponse, error) {
-	return getStatus(c, statusRegistryReads{pullSecret: registry.ReadPullSecret, nightly: registry.NightlyStatus, controlPlane: rhoai.CachedControlPlane})
+	return getStatus(c, statusRegistryReads{pullSecret: registry.ReadPullSecret, nightly: registry.NightlyStatus, controlPlane: rhoai.CachedControlPlane, registryCopy: registry.ReadRegistryPullCopy})
 }
 
 // GetStatusGitOps is GetStatus in the gitops profile, which reads no Secret
@@ -266,6 +269,15 @@ func getStatus(c *Client, reads statusRegistryReads) (*types.StatusResponse, err
 		status.PullSecret.Nodes = rhoai.NodePullInfo(controlPlane, status.CatalogSource)
 		if status.PullSecret.Nodes != nil {
 			status.PullSecret.Nodes.AddedByTool = node.PullRecordInfo(nodeRecord, quayAuth)
+		}
+	}
+	// On a hosted control plane, the internal registry's copy of the
+	// credential (workbench images). The ServiceAccount may not read
+	// Secrets in RHOAI's applications namespace, so it is read with the
+	// signed-in cluster-admin's own client, and left out without one.
+	if reads.registryCopy != nil && controlPlane == rhoai.ControlPlaneHosted && status.PullSecret.Exists {
+		if u := c.SignedInUser(); u != nil {
+			status.PullSecret.Registry = reads.registryCopy(u)
 		}
 	}
 

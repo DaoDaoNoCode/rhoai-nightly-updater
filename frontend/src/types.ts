@@ -185,6 +185,29 @@ export interface PullSecretInfo {
    * self-managed cluster, or one whose control plane could not be read.
    */
   nodes?: NodePullSecretInfo;
+  /**
+   * ROSA HCP only: the internal registry's copy of the quay.io/rhoai token,
+   * which RHOAI's workbench images are pulled with. Absent elsewhere.
+   */
+  registry?: RegistryPullCopyInfo;
+}
+
+/** Secret `name` in RHOAI's applications namespace; never the token. */
+export interface RegistryPullCopyInfo {
+  name: string;
+  namespace?: string;
+  /** The pull secret has no entry exactly for quay.io/rhoai (only a generic quay.io login, or none): nothing is copied. */
+  noQuayRHOAIEntry?: boolean;
+  /** RHOAI has no DSCInitialization yet, so there is nowhere to copy to. */
+  noApplicationsNamespace?: boolean;
+  exists: boolean;
+  /** It carries this updater's label (only then does the updater change it). */
+  ours: boolean;
+  /** It holds only the pull secret's current token, and the registry can use it. */
+  current: boolean;
+  /** Why the registry does not use it (being deleted, another type, excluded). */
+  unusable?: string;
+  problem?: string;
 }
 
 /** The nodes' side of the quay.io/rhoai credentials: openshift-config/pull-secret, which the updater cannot read. */

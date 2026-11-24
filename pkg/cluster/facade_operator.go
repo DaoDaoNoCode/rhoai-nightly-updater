@@ -45,6 +45,16 @@ func CreatePullSecret(c *Client, auth string) (*types.OperationResponse, error) 
 	return operator.CreatePullSecret(c, auth)
 }
 
+// CopyPullSecretForRegistry is operator.CopyPullSecretForRegistry.
+func CopyPullSecretForRegistry(c *Client) (*types.OperationResponse, error) {
+	return operator.CopyPullSecretForRegistry(c)
+}
+
+// RemovePullSecretRegistryCopy is operator.RemovePullSecretRegistryCopy.
+func RemovePullSecretRegistryCopy(c *Client) (*types.OperationResponse, error) {
+	return operator.RemovePullSecretRegistryCopy(c)
+}
+
 // TestPullSecret is operator.TestPullSecret.
 func TestPullSecret(c *Client) (*types.OperationResponse, error) {
 	return operator.TestPullSecret(c)

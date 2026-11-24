@@ -14,6 +14,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -150,6 +151,13 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 			return r.fail("check", notOurs(project)+" Nothing was changed.", "not_managed", "not this tool's")
 		}
 		r.step("check", "success", "The workbench is already set up.")
+		// The internal registry's copy of the token, which an existing
+		// workbench needs to pull its image again (ROSA HCP).
+		copyLogs := registry.EnsureRegistryPullCopyFromPullSecret(c)
+		r.logs = append(r.logs, copyLogs...)
+		if registry.CopyChanged(copyLogs) {
+			return r.done(fmt.Sprintf("Workbench %s in %s is already set up; the token was copied for the internal registry, which pulls its image.", Name, project))
+		}
 		return r.done(fmt.Sprintf("Workbench %s in %s is already set up; nothing was changed.", Name, project))
 	}
 	pvc, pvcFound, err := readStorage(c, project)
@@ -219,6 +227,11 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 			return r.fail("workbench", msg+" No workbench was created.", code, "kept storage in use")
 		}
 	}
+	// ROSA HCP: the workbench image is pulled through the internal
+	// registry, which needs its own copy of the quay.io/rhoai token
+	// (registry.EnsureRegistryPullCopyFromPullSecret); a problem with it is
+	// a warning in the logs, the workbench is created anyway.
+	r.logs = append(r.logs, registry.EnsureRegistryPullCopyFromPullSecret(c)...)
 	r.step("workbench", "running", fmt.Sprintf("Creating workbench %s...", Name))
 	body, err := create(c, rhoai.NamespacedPath(notebookAPI, "notebooks", project, ""), nbObj, false)
 	if err != nil {

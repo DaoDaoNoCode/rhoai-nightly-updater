@@ -26,13 +26,14 @@ import {
 } from "@patternfly/react-core";
 import EyeIcon from "@patternfly/react-icons/dist/esm/icons/eye-icon";
 import EyeSlashIcon from "@patternfly/react-icons/dist/esm/icons/eye-slash-icon";
-import type { ClusterInfo, NodeSetupAction, OperationResponse, PullSecretInfo } from "../types";
+import type { ClusterInfo, NodeSetupAction, OperationResponse, PullSecretInfo, RegistryPullCopyInfo } from "../types";
 import { NodeSetupDialog } from "./NodeSetupDialog";
-import { checkNodePull, createPullSecret, testPullSecret, toApiError } from "../services/api";
+import { checkNodePull, copyPullSecretForRegistry, createPullSecret, removeRegistryPullCopy, testPullSecret, toApiError } from "../services/api";
 import { CopyableCode } from "./environment/UseIt";
 import { describeError } from "../errors";
 import { formatBuildDate, sentence } from "../build";
 import { TooltipButton } from "./TooltipButton";
+import { ConfirmActionModal } from "./ConfirmActionModal";
 import { StatusLabel } from "./StatusLabel";
 import { useClusterBusyHandler, useMutationBlocker } from "../state/AppInfo";
 import { errorResult } from "../outcomes";
@@ -304,6 +305,104 @@ const CREDENTIALS_HELP = (
   </>
 );
 
+/**
+ * ROSA HCP: whether the internal registry, which pulls RHOAI's workbench
+ * images, has its copy of the token (Secret rhoai-nightly-updater-pull in
+ * the applications namespace), with Copy and Remove. The updater also
+ * copies it when the pull secret is saved, and after Update, Reinstall,
+ * Refresh, creating the DataScienceCluster or setting up a workbench.
+ */
+export const RegistryPullCopy: React.FC<{ copy: RegistryPullCopyInfo; onStatusRefresh?: () => void }> = ({ copy, onStatusRefresh }) => {
+  const disabledReason = useMutationBlocker({ ignoreReconcile: true });
+  const onBusy = useClusterBusyHandler();
+  const [busy, setBusy] = useState<"copy" | "remove" | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [result, setResult] = useState<OperationResponse | null>(null);
+  const where = `Secret ${copy.name}${copy.namespace ? ` in ${copy.namespace}` : ""}`;
+  const [variant, title, body]: ["success" | "warning" | "info", string, string] = copy.problem
+    ? ["warning", "Workbench images: could not check whether the internal registry can pull nightly images", sentence(copy.problem)]
+    : copy.noApplicationsNamespace
+    ? ["info", "Workbench images: RHOAI is not installed yet", "Once it is, the updater copies the token for the internal registry, which pulls the workbench images."]
+    : copy.noQuayRHOAIEntry
+    ? ["warning", "Workbench images: the pull secret has no quay.io/rhoai entry", "The internal registry gets only a token saved for quay.io/rhoai, not a general quay.io login. Save the quay.io/rhoai token with Replace token; the updater then copies it."]
+    : !copy.exists
+    ? ["warning", "Workbench images: the internal registry cannot pull nightly images", `It has no copy of the token yet. Copy for the internal registry creates ${where} from the token saved here.`]
+    : !copy.ours
+    ? ["warning", `Workbench images: ${where} was not created by this updater`, "The updater leaves it as it is, so whether the internal registry can pull nightly images depends on the token in it."]
+    : copy.unusable
+    ? ["warning", `Workbench images: the internal registry does not use ${where}`, sentence(copy.unusable)]
+    : !copy.current
+    ? ["warning", "Workbench images: the internal registry has an older token", `${where} holds an older token. Copy for the internal registry replaces it with the token saved here.`]
+    : ["success", "Workbench images: the internal registry can pull nightly images", `It uses ${where}, a copy of this token.`];
+  const canCopy = !copy.problem && !copy.noApplicationsNamespace && !copy.noQuayRHOAIEntry && (!copy.exists || (copy.ours && !copy.unusable && !copy.current));
+  const canRemove = copy.exists && copy.ours;
+  const run = async (what: "copy" | "remove") => {
+    setBusy(what);
+    setResult(null);
+    try {
+      setResult(await (what === "copy" ? copyPullSecretForRegistry() : removeRegistryPullCopy()));
+      setConfirmRemove(false);
+      onStatusRefresh?.();
+    } catch (e) {
+      const fallback = what === "copy" ? "Could not copy the token for the internal registry" : "Could not remove the internal registry's copy";
+      const { title: t, body: b } = describeError(e, fallback);
+      setResult({ success: false, message: `${t}: ${b}`, logs: [] });
+      onBusy(errorResult(e, fallback));
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <Stack hasGutter>
+      <StackItem>
+        <Alert variant={variant} isInline isPlain component="p" title={title}>
+          {body}
+        </Alert>
+      </StackItem>
+      {(canCopy || canRemove) && (
+        <StackItem>
+          <ActionList>
+            <ActionListGroup>
+              {canCopy && (
+                <ActionListItem>
+                  <TooltipButton variant="secondary" onClick={() => void run("copy")} isLoading={busy === "copy" || undefined} isDisabled={busy !== null} disabledReason={disabledReason}>
+                    Copy for the internal registry
+                  </TooltipButton>
+                </ActionListItem>
+              )}
+              {canRemove && (
+                <ActionListItem>
+                  <TooltipButton variant="secondary" isDanger onClick={() => setConfirmRemove(true)} isDisabled={busy !== null} disabledReason={disabledReason}>
+                    Remove the internal registry&apos;s copy
+                  </TooltipButton>
+                </ActionListItem>
+              )}
+            </ActionListGroup>
+          </ActionList>
+        </StackItem>
+      )}
+      <ConfirmActionModal
+        isOpen={confirmRemove}
+        title="Remove the internal registry's copy?"
+        confirmLabel="Remove"
+        confirmVariant="danger"
+        isLoading={busy === "remove"}
+        confirmDisabled={!!disabledReason}
+        changes={[`Deletes ${where}. Only this updater's Secret is removed; the pull secret stays.`]}
+        summary="Workbenches cannot pull nightly images through the internal registry until the token is copied again."
+        changesOpen
+        onConfirm={() => void run("remove")}
+        onCancel={() => setConfirmRemove(false)}
+      />
+      {result && (
+        <StackItem>
+          <Alert component="p" variant={result.success ? "success" : "danger"} title={result.message} isInline isPlain isLiveRegion />
+        </StackItem>
+      )}
+    </Stack>
+  );
+};
+
 /** The pull secret row of the cluster setup: its state, Test with Quay, and the create or replace form. */
 export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
   pullSecret,
@@ -572,6 +671,12 @@ export const PullSecretSetup: React.FC<PullSecretSetupProps> = ({
             isPlain
             isLiveRegion
           />
+        </StackItem>
+      )}
+
+      {!notUsed && pullSecret.exists && pullSecret.registry && (
+        <StackItem>
+          <RegistryPullCopy copy={pullSecret.registry} onStatusRefresh={onStatusRefresh} />
         </StackItem>
       )}
 

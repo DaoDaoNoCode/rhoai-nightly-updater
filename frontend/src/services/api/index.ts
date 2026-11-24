@@ -5,7 +5,7 @@
 export { ApiError, CLIENT_ERROR_CODES, isSessionExpired, onSessionExpired, isApiError, parseErrorResponse, toApiError, errorMessage } from './client';
 export { STREAM_IDLE_TIMEOUT_MS, streamSSE } from './stream';
 export type { StreamDetachReason, StreamDoneHandler, StreamDetachHandler, StreamOptions } from './stream';
-export { getStatus, getOperation, isUserOperation, getSummary, getVersion, getUpdateCheck, updateOperator, testPullSecret, verifyNodes, checkNodePull, createPullSecret, planNodeSetup, streamNodeSetup, fetchLatestNightly, fetchNightlyTags, trackPageView, trackFeature, getUserPermissions, streamUpdate, streamReinstall, streamRefresh } from './operator';
+export { getStatus, getOperation, isUserOperation, getSummary, getVersion, getUpdateCheck, updateOperator, testPullSecret, verifyNodes, checkNodePull, createPullSecret, copyPullSecretForRegistry, removeRegistryPullCopy, planNodeSetup, streamNodeSetup, fetchLatestNightly, fetchNightlyTags, trackPageView, trackFeature, getUserPermissions, streamUpdate, streamReinstall, streamRefresh } from './operator';
 export type { OperatorOperationOptions } from './operator';
 export { getComponents, getComponentsWithLabels, getDSCPreview, createDSC, repairDSC, getDSCManager, getDSCPlan, setDSCManagementState, finishDSCHardReset, runDSCPlan, streamDSCHardReset, assistRolloutFor } from './components';
 export type { DSCPreviewResponse } from './components';

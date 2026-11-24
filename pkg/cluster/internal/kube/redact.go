@@ -22,8 +22,13 @@ func RedactSecrets(msg string, secrets ...string) string {
 		}
 		forms = append(forms, s)
 		if quoted, err := json.Marshal(s); err == nil {
-			if q := string(quoted[1 : len(quoted)-1]); q != s {
+			q := string(quoted[1 : len(quoted)-1])
+			if q != s {
 				forms = append(forms, q)
+			}
+			// Some JSON encoders also escape "/" (base64 holds it).
+			if e := strings.ReplaceAll(q, "/", `\/`); e != q {
+				forms = append(forms, e)
 			}
 		}
 	}

@@ -762,6 +762,23 @@ const routes = {
   "GET /api/test-pull-secret": () => ({ success: true, message: "The pull secret can pull from quay.io/rhoai.", logs: [] }),
   "GET /api/verify-nodes": () => ({ success: true, message: "All 3 nodes have the pull secret and the image mirror.", logs: [] }),
   "POST /api/setup/node-pull-check": () => F.nodePullCheck(F.latestNightly().image, !world.nodePullFails),
+  // ROSA HCP: the internal registry's copy of the pull secret (made up, like every value here).
+  "POST /api/setup/pull-secret/registry-copy": () => {
+    const reg = world.status?.pullSecret?.registry;
+    if (!reg || !reg.namespace) return { success: false, errorCode: "prerequisites", message: "This cluster does not have a hosted control plane: its internal registry pulls with openshift-config/pull-secret, so no copy is made.", logs: [] };
+    if (reg.noQuayRHOAIEntry) return { success: false, errorCode: "prerequisites", message: "Workbench images: the pull secret has no quay.io/rhoai entry, so nothing was copied for the internal registry; add the quay.io/rhoai token under Pull secret.", logs: [] };
+    if (reg.exists && !reg.ours) return { success: false, errorCode: "not_managed", message: `Workbench images: Secret ${reg.namespace}/${reg.name} exists and was not created by this updater, so it was not changed.`, logs: [] };
+    const updated = reg.exists;
+    world.status.pullSecret.registry = { ...reg, exists: true, ours: true, current: true, unusable: undefined };
+    return { success: true, message: updated ? `Workbench images: updated Secret ${reg.namespace}/${reg.name} with the new token for the internal registry` : `Workbench images: copied the quay.io/rhoai token to Secret ${reg.namespace}/${reg.name}, so the internal registry can pull nightly workbench images`, logs: [] };
+  },
+  "POST /api/setup/pull-secret/registry-copy/remove": () => {
+    const reg = world.status?.pullSecret?.registry;
+    if (!reg?.exists) return { success: true, message: "Secret does not exist; nothing to remove.", logs: [] };
+    if (!reg.ours) return { success: false, errorCode: "not_managed", message: `Secret ${reg.namespace}/${reg.name} was not created by this updater, so it is not removed.`, logs: [] };
+    world.status.pullSecret.registry = { ...reg, exists: false, ours: false, current: false, unusable: undefined };
+    return { success: true, message: `removed Secret ${reg.namespace}/${reg.name}. Workbenches cannot pull nightly images through the internal registry until the token is copied again.`, logs: [] };
+  },
   "GET /api/setup/dsc/preview": () => ({
     yaml: `apiVersion: ${world.previewAPIVersion || "datasciencecluster.opendatahub.io/v2"}\n` + "kind: DataScienceCluster\nmetadata:\n  name: default-dsc\nspec:\n  components:\n    aipipelines:\n      managementState: Managed\n    dashboard:\n      managementState: Managed\n    kserve:\n      managementState: Managed\n    workbenches:\n      managementState: Managed\n",
     apiVersion: world.previewAPIVersion || "datasciencecluster.opendatahub.io/v2",
