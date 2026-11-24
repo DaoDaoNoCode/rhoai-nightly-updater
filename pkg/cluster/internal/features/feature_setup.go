@@ -35,6 +35,10 @@ import (
 // datasciencepipelines):
 //   - Pipelines: aipipelines Managed. No operator.
 //   - MLflow: mlflowoperator Managed. No operator.
+//   - Model registry: aiHub Managed (DataScienceCluster v3, RHOAI 3.6;
+//     it also runs the Model Catalog), modelregistry before. No operator.
+//     Its namespace is left to the component's default (it cannot change
+//     while Managed).
 //   - Models: kserve Managed, and the cert-manager Operator for Red Hat
 //     OpenShift, which KServe checks for (red-hat-data-services/kserve
 //     rhoai-3.6 kserve-module/pkg/kservemodule/dependencies.go, the
@@ -117,6 +121,7 @@ func featureSetupFor(id, exposure string) featureSetup {
 var featureSetups = []featureSetup{
 	{id: "pipelines", title: "Pipelines", components: []envkit.FeatureComponent{envkit.PipelinesComponent}},
 	{id: "mlflow", title: "MLflow", components: []envkit.FeatureComponent{envkit.MLflowComponent}},
+	{id: "model-registry", title: "Model registry", components: []envkit.FeatureComponent{envkit.ModelRegistryComponent}},
 	{id: "models", title: "Models", components: []envkit.FeatureComponent{serving.KServeComponent}, operators: []envkit.OperatorSpec{certManagerOperator}, dependency: serving.LLMDependenciesCondition},
 	{id: "playground", title: "Playground", components: []envkit.FeatureComponent{playgroundComponent, dashboardComponent}},
 }
@@ -664,7 +669,7 @@ func GetPrerequisitesStatusFor(c *kube.Client, modelsExposure string) (*types.Pr
 // ValidatePrerequisitesRequest returns why req cannot run, or "".
 func ValidatePrerequisitesRequest(req types.PrerequisitesRequest) string {
 	if _, ok := featureSetupOf(req.Feature); !ok {
-		return "feature must be pipelines, mlflow, models or playground"
+		return "feature must be pipelines, mlflow, model-registry, models or playground"
 	}
 	if req.Exposure != "" && (req.Feature != "models" || !serving.ValidExposure(req.Exposure)) {
 		return "exposure is how a model is reached (models only): default-gateway, maas, gateway or internal"
@@ -968,6 +973,13 @@ func restoreCheck(c *kube.Client, rec prereqRecord, dscRead rhoai.DSCRead, key s
 	}
 	if argoCD := argo.TrackingOf(c, dscRead.Object, rhoai.DSCGroup, "DataScienceCluster"); argoCD.ManagedBy() != "" {
 		return restoreVerdict{refusal: argo.GitOpsRefusal("The DataScienceCluster", argoCD.ManagedBy(), "turning "+key+" back to "+prev) + argoCD.UnconfirmedNote(), code: kube.ErrorCodeGitOpsManaged}
+	}
+	if slices.Contains(envkit.ModelRegistryComponent.Keys, key) {
+		// Whether a model registry still uses it needs a list of every
+		// ModelRegistry, which this tool does not make (yet): it stays
+		// Managed (fail closed). On RHOAI 3.6 aiHub also runs the Model
+		// Catalog.
+		return restoreVerdict{kept: key + " (this tool does not check which model registries use it, so it stays on; turn it off in the DataScienceCluster)"}
 	}
 	users, err := dsc.ComponentUsers(c, key)
 	if err != nil {

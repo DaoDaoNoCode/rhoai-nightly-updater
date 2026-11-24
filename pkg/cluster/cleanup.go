@@ -8,6 +8,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/modelregistry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/recipe"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
@@ -20,7 +21,10 @@ var (
 	cleanupPipelineServer = TeardownPipelineServer
 	cleanupStorage        = TeardownS3Storage
 	cleanupMLflow         = TeardownMLflow
-	cleanupModels         = func(c *Client, project string) (*types.OperationResponse, error) {
+	cleanupModelRegistry  = func(c *Client) (*types.OperationResponse, error) {
+		return modelregistry.Run(c, types.ModelRegistryRequest{Action: "teardown"}, nil)
+	}
+	cleanupModels = func(c *Client, project string) (*types.OperationResponse, error) {
 		return serving.TeardownModels(c, project)
 	}
 	cleanupGateway      = serving.TeardownInferenceGateway
@@ -53,7 +57,8 @@ func cleanupConfirmCode(code string) bool {
 }
 
 // CleanupStepID identifies each clean-up slice in the stream, e.g.
-// "pipeline-server:<project>", "storage", "mlflow", "playground:<project>",
+// "pipeline-server:<project>", "storage", "mlflow", "model-registry",
+// "playground:<project>",
 // "model:<project>", "inference-gateway", "maas-unpublish:<project>"
 // (first), "maas-platform", "recipe-project:<project>", and "components"
 // (last).
@@ -77,10 +82,10 @@ type cleanupPart struct {
 
 // cleanupParts returns clean-up slices in execution order: pipeline servers
 // first (storage teardown blocks while one still references storage), then
-// storage, then MLflow (independent of both), then playgrounds (which
-// depend on models), then models and—after those—the inference gateway they
-// traffic through (its teardown blocks while a model still routes via it).
-// A MaaS-published model is unpublished ahead of everything else (Models
+// storage, then MLflow and the model registry (independent of both), then
+// playgrounds (which depend on models), then models and—after those—the
+// inference gateway they traffic through (its teardown blocks while a
+// model still routes via it). A MaaS-published model is unpublished ahead of everything else (Models
 // teardown blocks while publication remains), and the MaaS platform runs
 // near the end except for recipe-provisioned projects, which run once
 // in-project resources are gone, and DataScienceCluster components this
@@ -115,6 +120,9 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 	}
 	if req.MLflow {
 		parts = append(parts, cleanupPart{id: CleanupStepID("mlflow", ""), title: "MLflow", run: func() (*types.OperationResponse, error) { return cleanupMLflow(c) }})
+	}
+	if req.ModelRegistry {
+		parts = append(parts, cleanupPart{id: CleanupStepID("model-registry", ""), title: "the model registry", run: func() (*types.OperationResponse, error) { return cleanupModelRegistry(c) }})
 	}
 	for _, project := range req.Playgrounds {
 		parts = append(parts, cleanupPart{
