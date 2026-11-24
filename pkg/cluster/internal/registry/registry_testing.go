@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // Test hooks of the registry and GitHub reads. Each panics outside a test
@@ -16,6 +18,15 @@ func SetHTTPClientForTest(c *http.Client) (restore func()) {
 	prev := quayHTTPClient
 	quayHTTPClient = c
 	return func() { quayHTTPClient = prev }
+}
+
+// SetCopyFromPullSecretForTest makes f the copy the flows make for the
+// internal registry (EnsureRegistryPullCopyFromPullSecret).
+func SetCopyFromPullSecretForTest(f func(c *kube.Client) ([]string, string)) (restore func()) {
+	mustBeTest("SetCopyFromPullSecretForTest")
+	prev := copyFromPullSecret
+	copyFromPullSecret = f
+	return func() { copyFromPullSecret = prev }
 }
 
 // SetVerifyQuayCredentialsForTest makes verify the check of the pull

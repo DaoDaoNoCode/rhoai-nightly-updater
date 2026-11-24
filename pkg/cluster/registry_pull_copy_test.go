@@ -101,6 +101,25 @@ func (s *secretStore) serve(f *fakeAPI, ns string, names ...string) {
 		}
 		f.handle("PUT", path, write)
 		f.handle("PATCH", path, write)
+		f.handle("DELETE", path, func(_ *http.Request, body []byte) (int, string) {
+			old := s.get(path)
+			if old == nil {
+				return http.StatusNotFound, k8sNotFound
+			}
+			var opts struct {
+				Preconditions struct {
+					UID string `json:"uid"`
+				} `json:"preconditions"`
+			}
+			_ = json.Unmarshal(body, &opts)
+			if opts.Preconditions.UID != old["metadata"].(map[string]any)["uid"] {
+				return http.StatusConflict, `{"kind":"Status","code":409,"reason":"Conflict"}`
+			}
+			s.mu.Lock()
+			delete(s.objs, path)
+			s.mu.Unlock()
+			return http.StatusOK, `{}`
+		})
 	}
 }
 
@@ -329,7 +348,7 @@ func TestRegistryPullCopy_BeforeRHOAIIsInstalled(t *testing.T) {
 	if got := k.f.writes(); strings.Join(got, ",") != "POST /api/v1/namespaces/kube-system/secrets" {
 		t.Fatalf("writes = %v, want only the pull secret", got)
 	}
-	if !strings.Contains(resultText(res), "RHOAI is not installed yet") {
+	if !strings.Contains(resultText(res), "RHOAI has no applications namespace yet") {
 		t.Errorf("the logs do not say when the copy is made:\n%s", resultText(res))
 	}
 
@@ -438,5 +457,269 @@ func TestGetStatus_RegistryCopyOnlyOnHCPWithTheUsersClient(t *testing.T) {
 				t.Fatal("the copy was read with the ServiceAccount's client")
 			}
 		})
+	}
+}
+
+func copyWrites(k *copyCluster) []string {
+	var out []string
+	for _, w := range k.f.writes() {
+		if strings.Contains(w, copyAppsNS) {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// Only an exact quay.io/rhoai entry is copied: never a generic quay.io or
+// a repository-scoped login.
+func TestRegistryPullCopy_OnlyAnExactQuayRHOAIEntry(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		auths map[string]any
+		want  bool
+	}{
+		{"generic quay.io login", map[string]any{"quay.io": map[string]any{"auth": copyOldAuth}}, false},
+		{"repository-scoped login", map[string]any{"quay.io/rhoai/rhoai-fbc-fragment": map[string]any{"auth": copyOldAuth}}, false},
+		{"another spelling of quay.io/rhoai", map[string]any{"https://quay.io/rhoai/": map[string]any{"auth": copyNewAuth}, "quay.io": map[string]any{"auth": copyOldAuth}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k := newCopyCluster(t, "External", true)
+			k.secrets.put("kube-system", "additional-pull-secret", dockerSecret(tc.auths, nil))
+			logs := registry.EnsureRegistryPullCopyFromPullSecret(k.c)
+			if !tc.want {
+				if w := copyWrites(k); len(w) != 0 {
+					t.Fatalf("a login that is not exactly quay.io/rhoai was copied: %v", w)
+				}
+				if !strings.Contains(strings.Join(logs, "\n"), "the pull secret has no quay.io/rhoai entry, so nothing was copied for the internal registry; add the quay.io/rhoai token under Pull secret") {
+					t.Errorf("logs = %v", logs)
+				}
+				return
+			}
+			auths := secretAuths(t, k.secrets.get(copyPath))
+			if len(auths) != 1 || registry.AuthFromEntry(auths["quay.io/rhoai"]) != copyNewAuth {
+				t.Fatalf("copy = %v", auths)
+			}
+			assertNoToken(t, strings.Join(logs, "\n"))
+		})
+	}
+}
+
+// A webhook that refuses the update may quote the new object and the old
+// one: neither credential, in any form, reaches the message.
+func TestRegistryPullCopy_RejectedUpdateIsRedacted(t *testing.T) {
+	k := newCopyCluster(t, "External", true)
+	k.secrets.put(copyAppsNS, registry.RegistryPullCopyName, dockerSecret(map[string]any{"quay.io/rhoai": map[string]any{"auth": copyOldAuth}}, toolLabel))
+	oldObj, _ := json.Marshal(k.secrets.get(copyPath))
+	oldCfg, _ := base64.StdEncoding.DecodeString(k.secrets.get(copyPath)["data"].(map[string]any)[".dockerconfigjson"].(string))
+	k.f.handle("PUT", copyPath, func(_ *http.Request, body []byte) (int, string) {
+		var obj struct {
+			Data map[string]string `json:"data"`
+		}
+		_ = json.Unmarshal(body, &obj)
+		newCfg, _ := base64.StdEncoding.DecodeString(obj.Data[".dockerconfigjson"])
+		msg, _ := json.Marshal(map[string]any{"kind": "Status", "status": "Failure", "code": 422, "reason": "Invalid",
+			"message": "denied object " + string(body) + " config " + string(newCfg) + " oldObject " + string(oldObj) + " old config " + string(oldCfg) + " olduser:old-s3cr3t newuser:new-s3cr3t"})
+		return http.StatusUnprocessableEntity, string(msg)
+	})
+	logs, warning := registry.EnsureRegistryPullCopy(k.c, copyNewAuth)
+	if !strings.Contains(warning, "could not update Secret") || !strings.Contains(warning, kube.RedactedText) {
+		t.Fatalf("warning = %q", warning)
+	}
+	assertNoToken(t, warning+"\n"+strings.Join(logs, "\n"))
+}
+
+// Writes and removals refuse a client without the signed-in user's token
+// before any request to the copy.
+func TestRegistryPullCopy_RefusesTheServiceAccount(t *testing.T) {
+	k := newCopyCluster(t, "External", true)
+	k.secrets.put("kube-system", "additional-pull-secret", dockerSecret(map[string]any{"quay.io/rhoai": map[string]any{"auth": copyNewAuth}}, nil))
+	k.secrets.put(copyAppsNS, registry.RegistryPullCopyName, dockerSecret(map[string]any{"quay.io/rhoai": map[string]any{"auth": copyOldAuth}}, toolLabel))
+	editTestClient(k.c, func(o *testClientOptions) { o.AsUser = false })
+	if _, w := registry.EnsureRegistryPullCopy(k.c, copyNewAuth); !strings.Contains(w, "only with the signed-in user's own token") {
+		t.Errorf("EnsureRegistryPullCopy: %q", w)
+	}
+	if logs := registry.EnsureRegistryPullCopyFromPullSecret(k.c); !strings.Contains(strings.Join(logs, ""), "only with the signed-in user's own token") {
+		t.Errorf("EnsureRegistryPullCopyFromPullSecret: %v", logs)
+	}
+	if _, problem, _ := registry.RemoveRegistryPullCopy(k.c); problem == "" {
+		t.Error("RemoveRegistryPullCopy ran with the ServiceAccount")
+	}
+	if n := len(k.f.requests("GET", copyPath)) + len(copyWrites(k)); n != 0 {
+		t.Fatalf("%d requests to the copy with the ServiceAccount's token", n)
+	}
+}
+
+// The update keeps the object as read (finalizers, owner references,
+// annotations); a conflict is accepted when the copy now holds the token.
+func TestRegistryPullCopy_UpdateKeepsMetadataAndToleratesARace(t *testing.T) {
+	k := newCopyCluster(t, "External", true)
+	old := dockerSecret(map[string]any{"quay.io/rhoai": map[string]any{"auth": copyOldAuth}}, toolLabel)
+	meta := old["metadata"].(map[string]any)
+	meta["finalizers"] = []any{"example.com/keep"}
+	meta["ownerReferences"] = []any{map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "name": "owner", "uid": "u1"}}
+	k.secrets.put(copyAppsNS, registry.RegistryPullCopyName, old)
+	if _, w := registry.EnsureRegistryPullCopy(k.c, copyNewAuth); w != "" {
+		t.Fatal(w)
+	}
+	got := k.secrets.get(copyPath)["metadata"].(map[string]any)
+	if fmt.Sprint(got["finalizers"]) != "[example.com/keep]" || got["ownerReferences"] == nil {
+		t.Fatalf("metadata lost: %v", got)
+	}
+
+	// Someone else wrote the same token between the read and the update.
+	k.secrets.put(copyAppsNS, registry.RegistryPullCopyName, dockerSecret(map[string]any{"quay.io/rhoai": map[string]any{"auth": copyOldAuth}}, toolLabel))
+	k.f.handle("PUT", copyPath, func(*http.Request, []byte) (int, string) {
+		k.secrets.put(copyAppsNS, registry.RegistryPullCopyName, dockerSecret(map[string]any{"quay.io/rhoai": map[string]any{"auth": copyNewAuth}}, toolLabel))
+		return http.StatusConflict, `{"kind":"Status","status":"Failure","code":409,"reason":"Conflict"}`
+	})
+	logs, w := registry.EnsureRegistryPullCopy(k.c, copyNewAuth)
+	if w != "" || !strings.Contains(strings.Join(logs, ""), "holds the quay.io/rhoai token") {
+		t.Fatalf("race: logs %v, warning %q", logs, w)
+	}
+}
+
+// A namespace the DSCInitialization names but that is not there yet is not
+// a warning.
+func TestRegistryPullCopy_NamespaceNotThereYet(t *testing.T) {
+	k := newCopyCluster(t, "External", true)
+	k.f.status("POST", copyListPath, http.StatusNotFound, "NotFound")
+	logs, w := registry.EnsureRegistryPullCopy(k.c, copyNewAuth)
+	if w != "" || !strings.Contains(strings.Join(logs, ""), "RHOAI's applications namespace "+copyAppsNS+" does not exist yet") {
+		t.Fatalf("logs %v, warning %q", logs, w)
+	}
+}
+
+func TestRegistryPullCopy_UnknownControlPlaneWarnsInTheFlows(t *testing.T) {
+	k := newCopyCluster(t, "External", true)
+	k.f.status("GET", "/apis/config.openshift.io/v1/infrastructures/cluster", http.StatusForbidden, "Forbidden")
+	logs := registry.EnsureRegistryPullCopyFromPullSecret(k.c)
+	if !strings.Contains(strings.Join(logs, ""), "Warning: Workbench images: the updater could not read whether this cluster has a hosted control plane") {
+		t.Fatalf("logs = %v", logs)
+	}
+}
+
+// The registry does not use a Secret being deleted, of another type, or
+// excluded by annotation: the status says so and does not call it current,
+// and the copy does not change it.
+func TestRegistryPullCopy_UnusableCopies(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(obj map[string]any)
+		want string
+	}{
+		{"being deleted", func(o map[string]any) { o["metadata"].(map[string]any)["deletionTimestamp"] = "2026-11-24T00:00:00Z" }, "being deleted"},
+		{"another type", func(o map[string]any) { o["type"] = "Opaque" }, "type Opaque"},
+		{"excluded", func(o map[string]any) {
+			o["metadata"].(map[string]any)["annotations"] = map[string]any{registry.ExcludeImageSecretAnnotation: "true"}
+		}, registry.ExcludeImageSecretAnnotation + "=true"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k := newCopyCluster(t, "External", true)
+			obj := dockerSecret(map[string]any{"quay.io/rhoai": map[string]any{"auth": copyNewAuth}}, toolLabel)
+			tc.edit(obj)
+			k.secrets.put(copyAppsNS, registry.RegistryPullCopyName, obj)
+			info := registry.ReadRegistryPullCopy(k.c, copyNewAuth)
+			if info.Current || !strings.Contains(info.Unusable, tc.want) {
+				t.Errorf("status = %+v", info)
+			}
+			if _, w := registry.EnsureRegistryPullCopy(k.c, copyNewAuth); !strings.Contains(w, tc.want) {
+				t.Errorf("warning = %q", w)
+			}
+			if w := copyWrites(k); len(w) != 0 {
+				t.Errorf("an unusable copy was written: %v", w)
+			}
+		})
+	}
+}
+
+// Copy and Remove, the Pull secret item's actions.
+func TestRegistryPullCopy_Actions(t *testing.T) {
+	k := newCopyCluster(t, "External", true)
+	if res, _ := CopyPullSecretForRegistry(k.c); res.Success || !strings.Contains(res.Message, "kube-system/additional-pull-secret is missing") {
+		t.Fatalf("copy without a pull secret = %+v", res)
+	}
+	k.secrets.put("kube-system", "additional-pull-secret", dockerSecret(map[string]any{"quay.io/rhoai": map[string]any{"auth": copyNewAuth}}, nil))
+	res, err := CopyPullSecretForRegistry(k.c)
+	if err != nil || !res.Success || !strings.Contains(res.Message, "copied the quay.io/rhoai token to Secret "+copyAppsNS) {
+		t.Fatalf("copy = %+v, %v", res, err)
+	}
+	assertNoToken(t, resultText(res))
+
+	res, err = RemovePullSecretRegistryCopy(k.c)
+	if err != nil || !res.Success || k.secrets.get(copyPath) != nil {
+		t.Fatalf("remove = %+v, %v", res, err)
+	}
+	del := k.f.requests("DELETE", copyPath)
+	if len(del) != 1 || !strings.Contains(del[0].Body, `"uid":"uid-`+registry.RegistryPullCopyName+`"`) {
+		t.Errorf("the delete must carry the UID it checked: %v", del)
+	}
+
+	// A Secret of that name the tool did not create is never removed.
+	k.secrets.put(copyAppsNS, registry.RegistryPullCopyName, dockerSecret(map[string]any{"quay.io/rhoai": map[string]any{"auth": copyOldAuth}}, nil))
+	res, _ = RemovePullSecretRegistryCopy(k.c)
+	if res.Success || res.ErrorCode != "not_managed" || k.secrets.get(copyPath) == nil {
+		t.Fatalf("foreign remove = %+v", res)
+	}
+	if len(k.f.requests("DELETE", copyPath)) != 1 {
+		t.Fatal("a foreign Secret got a delete request")
+	}
+
+	// Not a hosted control plane: refused, nothing written.
+	k2 := newCopyCluster(t, "HighlyAvailable", true)
+	if res, _ := CopyPullSecretForRegistry(k2.c); res.Success || res.ErrorCode != "prerequisites" || len(copyWrites(k2)) != 0 {
+		t.Fatalf("self-managed copy = %+v", res)
+	}
+}
+
+// Which flows make the copy: each on success only.
+func TestRegistryPullCopy_FlowsCopyOnSuccessOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(*testing.T)
+		want int
+	}{
+		{"Update", TestUpdateStream, 1},
+		{"Update fails", TestUpdateStream_CatalogSourceTimeout, 0},
+		{"Update under GitOps", TestUpdateUnderGitOps_InstallsWhatTheCatalogServes, 1},
+		{"Update under GitOps refused", TestUpdateUnderGitOps_RefusesAnotherImage, 0},
+		{"Reinstall (two successful runs)", TestReinstallDowngradeGuard_SameVersionProceeds, 2},
+		{"Reinstall with nothing to install", TestReinstall_StableCSVSucceeded, 0},
+		{"Reinstall fails", TestReinstall_Subscription404, 0},
+		{"Refresh", TestRefreshOperator_Success, 1},
+		{"Refresh refused", TestRefreshOperator_MissingSubscriptionChangesNothing, 0},
+		{"Create the DataScienceCluster", TestCreateDefaultDSC_CreatesSuccessfully, 1},
+		{"Create the DataScienceCluster fails", TestCreateDefaultDSC_ApplyFailure, 0},
+		{"Workbench setup refused", TestWorkbenchSetupRefusals, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			t.Cleanup(registry.SetCopyFromPullSecretForTest(func(*Client) ([]string, string) {
+				calls++
+				return []string{"OK: Workbench images: (test)"}, ""
+			}))
+			tc.run(t)
+			if calls != tc.want {
+				t.Fatalf("copies = %d, want %d", calls, tc.want)
+			}
+		})
+	}
+}
+
+// A workbench setup copies before the create, and so does a setup of a
+// workbench that is already there.
+func TestRegistryPullCopy_WorkbenchSetupCopies(t *testing.T) {
+	calls := 0
+	t.Cleanup(registry.SetCopyFromPullSecretForTest(func(*Client) ([]string, string) {
+		calls++
+		return []string{"OK: Workbench images: (test)"}, ""
+	}))
+	f, c := newResourceFake(t)
+	putWorkbenchCluster(t, f, true)
+	u := userClientOf(c, fakeUserToken)
+	for i, want := range []string{"is starting", "already set up"} {
+		res := wbSteps(t, u, types.WorkbenchRequest{Action: "setup", Project: "proj"})
+		if !res.Success || !strings.Contains(res.Message, want) || calls != i+1 || !strings.Contains(strings.Join(res.Logs, "\n"), "Workbench images: (test)") {
+			t.Fatalf("setup %d: %+v, copies %d", i+1, res, calls)
+		}
 	}
 }

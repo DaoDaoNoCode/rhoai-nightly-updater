@@ -235,8 +235,11 @@ type RegistryPullCopyInfo struct {
 	// change it).
 	Ours bool `json:"ours"`
 	// Current: it holds only the pull secret's current quay.io/rhoai
-	// credential.
+	// credential and the registry can use it (Unusable is empty).
 	Current bool `json:"current"`
+	// Unusable says why the registry does not use the Secret: being
+	// deleted, another type, or openshift.io/image.excludeImageSecret=true.
+	Unusable string `json:"unusable,omitempty"`
 	// Problem says why the state could not be read.
 	Problem string `json:"problem,omitempty"`
 }

@@ -313,7 +313,7 @@ func UpdateStreamWithOptions(c *kube.Client, image string, opts OperationOptions
 	}
 
 	if gitOps.Active() {
-		return UpdateUnderGitOps(c, image, target, currentCSV, gitOps, recovery, &logs, emit, fail, nil, rhoai.NodePullAdvice)
+		return withRegistryPullCopy(c)(UpdateUnderGitOps(c, image, target, currentCSV, gitOps, recovery, &logs, emit, fail, nil, rhoai.NodePullAdvice))
 	}
 
 	// --- Step 3: apply_catalog_source ---
@@ -2096,6 +2096,46 @@ func CreatePullSecret(c *kube.Client, auth string) (*types.OperationResponse, er
 		Message: message,
 		Logs:    logs,
 	}, nil
+}
+
+// CopyPullSecretForRegistry (re)makes only the internal registry's copy of
+// the pull secret's quay.io/rhoai entry (ROSA HCP), with the signed-in
+// user's token: registry.CopyFromPullSecret.
+func CopyPullSecretForRegistry(c *kube.Client) (*types.OperationResponse, error) {
+	if cp := rhoai.CachedControlPlane(c); cp != rhoai.ControlPlaneHosted {
+		msg := "This cluster does not have a hosted control plane: its internal registry pulls with openshift-config/pull-secret, so no copy is made."
+		if cp == "" {
+			msg = "The updater could not read whether this cluster has a hosted control plane, so it did not copy the token for the internal registry."
+		}
+		return &types.OperationResponse{Success: false, Message: msg, ErrorCode: "prerequisites"}, nil
+	}
+	logs, warning := registry.CopyFromPullSecret(c)
+	ok := false
+	for _, l := range logs {
+		ok = ok || strings.HasPrefix(l, "OK: ")
+	}
+	record.Action(c, "copy-registry-pull-secret", registry.RegistryPullCopyName, ok && warning == "")
+	switch {
+	case warning != "":
+		return &types.OperationResponse{Success: false, Message: warning, Logs: logs, ErrorCode: "validation"}, nil
+	case !ok && len(logs) > 0:
+		return &types.OperationResponse{Success: false, Message: logs[len(logs)-1], Logs: logs, ErrorCode: "prerequisites"}, nil
+	case !ok:
+		return &types.OperationResponse{Success: false, Message: "The pull secret kube-system/additional-pull-secret is missing. Save the token under Pull secret first.", ErrorCode: "prerequisites"}, nil
+	}
+	return &types.OperationResponse{Success: true, Message: strings.TrimPrefix(logs[len(logs)-1], "OK: "), Logs: logs}, nil
+}
+
+// RemovePullSecretRegistryCopy deletes only the tool's copy of the pull
+// secret for the internal registry, with the signed-in user's token
+// (registry.RemoveRegistryPullCopy).
+func RemovePullSecretRegistryCopy(c *kube.Client) (*types.OperationResponse, error) {
+	logs, problem, code := registry.RemoveRegistryPullCopy(c)
+	record.Action(c, "remove-registry-pull-secret", registry.RegistryPullCopyName, problem == "")
+	if problem != "" {
+		return &types.OperationResponse{Success: false, Message: problem, Logs: logs, ErrorCode: code}, nil
+	}
+	return &types.OperationResponse{Success: true, Message: strings.TrimPrefix(logs[len(logs)-1], "OK: "), Logs: logs}, nil
 }
 
 // TestPullSecret validates that the pull secret exists and contains quay.io/rhoai credentials.
