@@ -272,16 +272,21 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   was served. For up to 30 seconds after a CRD is Established, the API server
   refuses objects owned by its CRs with `blockOwnerDeletion` (its admission
   RESTMapper is reset every 30 seconds), so Kuadrant's operator failed to
-  create Authorino and Limitador, never tried again, and Kuadrant stayed not
-  Ready ("limitador resource not in topology") until its operator restarted.
+  create Authorino and Limitador. It retries such errors, but can drop its
+  own retry (Kuadrant/kuadrant-operator#2102), and Kuadrant then stays not
+  Ready ("limitador resource not in topology") until its operator restarts.
   Set up now waits until 45 seconds after CRD `kuadrants.kuadrant.io` turned
   Established, by the API server's clock, before it creates the CR (no wait
-  for an older CRD), and stops
-  without creating it when the CRD cannot be read or is not Established. When
-  Authorino does not appear, the message now gives the last thing the wait
-  found (not the wait's own deadline), quotes Kuadrant's Ready condition, and,
-  when Kuadrant is not Ready and made no Authorino, says that a cluster-admin
-  can restart Kuadrant's operator (`oc rollout restart
+  for an older CRD; a CRD not Established yet is read again for up to 30
+  seconds), and stops without creating it when the CRD cannot be read or does
+  not turn Established. When Kuadrant is not Ready after 5 minutes and has
+  not made Authorino, Set up stops there instead of going on to the database
+  and the gateway and waiting for Authorino as long again. Its message, and
+  the Authorino TLS step's (also when the operation ends while it waits),
+  gives what the wait found (not the wait's own deadline) and quotes
+  Kuadrant's Ready condition; when Kuadrant reports Authorino or Limitador
+  missing from its topology, it says that a cluster-admin can restart
+  Kuadrant's operator (`oc rollout restart
   deployment/kuadrant-operator-controller-manager -n <namespace>`); the tool
   restarts nothing itself. No new permission: the CRD is read from the
   cluster-wide CRD list, by name, which the tool already reads.
