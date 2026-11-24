@@ -14,7 +14,7 @@ const dspa = (ns: string, over: Partial<ResourceState> = {}): ResourceState => (
 });
 const used = dspa("dev", { connectionState: "present", connectionWorkbenches: [{ name: "wb-a", uid: "u-a", running: true }, { name: "wb-b", uid: "u-b" }], connectionEnvOnlyWorkbenches: ["old-wb"] });
 const RESTART = "Running workbenches restart; work not saved to disk is lost.";
-const ENV_ONLY = "These workbenches use the Connection without the annotation: dev/old-wb. They will fail to start after the deletion; edit them in the dashboard and remove the Connection.";
+const ENV_ONLY = "Workbench dev/old-wb loads the Connection directly, an older way this tool cannot undo. It will fail to start after the pipeline server is deleted: before deleting, edit it in the dashboard and remove the Connection. This tool does not change it.";
 
 function renderAt(path: string) {
   return render(<MemoryRouter initialEntries={[path]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
@@ -38,7 +38,7 @@ describe("workbenches that use the pipeline server's Connection", () => {
     renderAt("/test-resources?tab=pipelines&project=dev");
     const details = await screen.findByLabelText("Pipeline server details");
     expect(details).toHaveTextContent("Used by workbenches wb-a (running), wb-b. Deleting the pipeline server removes the Connection from them first; running workbenches restart.");
-    expect(details).toHaveTextContent("Also loaded without the annotation by old-wb: they will fail to start after the pipeline server is deleted; edit them in the dashboard and remove the Connection.");
+    expect(details).toHaveTextContent("Workbench old-wb loads the Connection directly, an older way this tool cannot undo. It will fail to start after the pipeline server is deleted: before deleting, edit it in the dashboard and remove the Connection. This tool does not change it.");
   });
 
   it("says when they cannot be read", async () => {

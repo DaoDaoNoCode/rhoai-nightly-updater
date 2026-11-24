@@ -111,7 +111,7 @@ const ConnectionState: React.FC<{ server: ResourceState; project: string; readOn
             <StackItem>Used by {users.length === 1 ? "workbench" : "workbenches"} {workbenchList(null, users)}. Deleting the pipeline server removes the Connection from {users.length === 1 ? "it" : "them"} first; running workbenches restart.</StackItem>
           )}
           {(server.connectionEnvOnlyWorkbenches ?? []).length > 0 && (
-            <StackItem>Also loaded without the annotation by {server.connectionEnvOnlyWorkbenches!.map((n, i) => <React.Fragment key={n}>{i > 0 ? ", " : ""}<code>{n}</code></React.Fragment>)}: they will fail to start after the pipeline server is deleted; edit them in the dashboard and remove the Connection.</StackItem>
+            <StackItem>{envOnlyText(null, server.connectionEnvOnlyWorkbenches!)}</StackItem>
           )}
           {server.connectionWorkbenchesMessage && <StackItem>Cannot check which workbenches use it: {server.connectionWorkbenchesMessage}</StackItem>}
         </Stack>
@@ -144,17 +144,25 @@ function connectionWorkbenchesOf(server: ResourceState): { workbenches?: Connect
 
 /** A list of workbench names, each in code, running ones marked. */
 function workbenchList(project: string | null, workbenches: ConnectionWorkbench[]): React.ReactNode {
-  return workbenches.map((w, i) => <React.Fragment key={w.name}>{i > 0 ? ", " : ""}<code>{project ? `${project}/${w.name}` : w.name}</code>{w.running ? " (running)" : ""}</React.Fragment>);
+  return workbenches.map((w, i) => <React.Fragment key={w.name}>{i > 0 ? ", " : ""}<code style={{ whiteSpace: "nowrap" }}>{project ? `${project}/${w.name}` : w.name}</code>{w.running ? " (running)" : ""}</React.Fragment>);
 }
 
 /** The confirmation's line for the workbenches that lose the dashboard Connection before it is deleted. */
 export function connectionWorkbenchesChange(project: string, workbenches: ConnectionWorkbench[]): React.ReactNode {
-  return <>These workbenches use the Connection <code>{CONNECTION_NAME}</code>; it is removed from them first: {workbenchList(project, workbenches)}. Running workbenches restart; work not saved to disk is lost. Their other connections stay; attach it again in the dashboard once a new pipeline server made it again.</>;
+  const many = workbenches.length > 1;
+  return <>{many ? "These workbenches use" : "This workbench uses"} the Connection <code>{CONNECTION_NAME}</code>; it is removed from {many ? "them" : "it"} first: {workbenchList(project, workbenches)}. Running workbenches restart; work not saved to disk is lost. {many ? "Their" : "Its"} other connections stay; attach the Connection again in the dashboard after a new pipeline server has created it again.</>;
 }
 
 /** The confirmation's line for the workbenches that load the Connection without the annotation (nothing changes them). */
 export function connectionEnvOnlyChange(project: string, names: string[]): React.ReactNode {
-  return <>These workbenches use the Connection without the annotation: {names.map((n, i) => <React.Fragment key={n}>{i > 0 ? ", " : ""}<code>{project}/{n}</code></React.Fragment>)}. They will fail to start after the deletion; edit them in the dashboard and remove the Connection.</>;
+  return envOnlyText(project, names);
+}
+
+/** Workbenches that load the Connection directly (an older way, without the dashboard's connections list): nothing changes them. */
+function envOnlyText(project: string | null, names: string[]): React.ReactNode {
+  const many = names.length > 1;
+  const list = names.map((n, i) => <React.Fragment key={n}>{i > 0 ? ", " : ""}<code style={{ whiteSpace: "nowrap" }}>{project ? `${project}/${n}` : n}</code></React.Fragment>);
+  return <>{many ? "Workbenches" : "Workbench"} {list} {many ? "load" : "loads"} the Connection directly, an older way this tool cannot undo. {many ? "They" : "It"} will fail to start after the pipeline server is deleted: before deleting, edit {many ? "them" : "it"} in the dashboard and remove the Connection. This tool does not change {many ? "them" : "it"}.</>;
 }
 
 /** Renders the selected project's pipeline server, or guidance until a project is picked. */
