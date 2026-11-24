@@ -56,7 +56,14 @@ var HandleResourcesStatus = withAuth(func(c *cluster.Client, w http.ResponseWrit
 	if !namespaceRegex.MatchString(project) {
 		project = ""
 	}
-	status, err := cluster.GetResourcesStatusFor(c, project)
+	// The workbenches that use the selected project's Connection are read
+	// with the admin's own token (the ServiceAccount may not list
+	// Notebooks).
+	var u *cluster.Client
+	if project != "" {
+		u = userReadClient(r.Context(), c, extractUserToken(r), resolveUsername(r))
+	}
+	status, err := cluster.GetResourcesStatusFor(c, u, project)
 	if err != nil {
 		slog.Error("resources status error", "error", err)
 		writeReadError(w, "failed to get resources status", err)
@@ -140,6 +147,11 @@ var runCleanUp = cluster.CleanUp
 // maxCleanupProjects limits how many pipeline servers a single clean-up may remove.
 const maxCleanupProjects = 200
 
+// cleanupBodyLimit fits the largest valid clean-up: every list at its
+// bound, maxConfirmedContents entries, and maxConfirmWorkbenches workbench
+// confirmations with the longest names and UIDs (about 460 KiB).
+const cleanupBodyLimit = 512 << 10
+
 // maxConfirmedContents caps total confirmed content entries across recipe projects.
 const maxConfirmedContents = 500
 
@@ -158,7 +170,7 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 	}
 	defer releaseClusterMutationLock()
 	var req types.CleanupRequest
-	if !decodeBody(w, r, 16<<10, &req, false) {
+	if !decodeBody(w, r, cleanupBodyLimit, &req, false) {
 		return
 	}
 	if len(req.PipelineServers) > maxCleanupProjects || len(req.Models) > maxCleanupProjects || len(req.Playgrounds) > maxCleanupProjects || len(req.MaaSPublished) > maxCleanupProjects || len(req.RecipeProjects) > maxCleanupProjects {
@@ -206,6 +218,14 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 				writeError(w, "invalid confirmProjectContents entry", http.StatusBadRequest, "validation")
 				return
 			}
+		}
+	}
+	workbenches := 0
+	for project, confirm := range req.ConfirmWorkbenches {
+		workbenches += len(confirm)
+		if !slices.Contains(req.PipelineServers, project) || workbenches > maxConfirmWorkbenches || !validConfirmWorkbenches(confirm) {
+			writeError(w, fmt.Sprintf("confirmWorkbenches names only projects of pipelineServers, with at most %d workbench names and their UIDs in all", maxConfirmWorkbenches), http.StatusBadRequest, "validation")
+			return
 		}
 	}
 	if req.DeleteNamespace && !req.Storage {

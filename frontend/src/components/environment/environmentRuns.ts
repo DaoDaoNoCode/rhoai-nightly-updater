@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { MaaSStatus, OperationResponse, PlaygroundStatus, PrerequisitesStatus, ResourcesStatus } from "../../types";
+import type { ConnectionWorkbench, MaaSStatus, OperationResponse, PlaygroundStatus, PrerequisitesStatus, ResourcesStatus } from "../../types";
 import {
   trackFeature,
   streamCleanup,
@@ -44,6 +44,15 @@ export interface SetupConfirm {
  */
 /** The clean-up's refusal of a recipe project that holds what this tool did not create (pkg/cluster recipe.ErrorCodeConfirmContents). */
 const CONFIRM_PROJECT_CONTENTS = "confirm_project_contents";
+const CONFIRM_WORKBENCHES = "confirm_connection_workbenches";
+
+/** The workbenches a refused step's detail lists: one "<name>=<uid>" per line (pkg/cluster workbenchesDetail). */
+export function parseWorkbenches(detail?: string): ConnectionWorkbench[] {
+  return (detail ?? "").split("\n").filter(Boolean).map((line) => {
+    const at = line.indexOf("=");
+    return at < 0 ? { name: line, uid: "" } : { name: line.slice(0, at), uid: line.slice(at + 1) };
+  });
+}
 
 export function useRunState() {
   // The action running from this page ("setup-minio", ...) and its project.
@@ -402,21 +411,34 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     // Recipe projects the server refused because they hold what this tool
     // did not create, with what to confirm (the step's detail, one per line).
     const refusals: Record<string, string[]> = {};
+    // Pipeline servers refused because workbenches use their Connection, with those workbenches.
+    const workbenches: Record<string, ConnectionWorkbench[]> = {};
+    // Whether a part already changed the cluster before a refusal: its outcome then stays on screen.
+    let changed = false;
     run.follow("Clean up", cleanupSteps(req), (onStep, onDone, onDetach) => streamCleanup(req, (step) => {
       if (step.step.startsWith("recipe-project:") && step.errorCode === CONFIRM_PROJECT_CONTENTS) {
         refusals[step.step.slice("recipe-project:".length)] = (step.detail ?? "").split("\n").filter(Boolean);
       }
+      if (step.step.startsWith("pipeline-server:") && step.errorCode === CONFIRM_WORKBENCHES) {
+        workbenches[step.step.slice("pipeline-server:".length)] = parseWorkbenches(step.detail);
+      }
+      if (step.status === "success" && step.step !== "operation_complete") changed = true;
       onStep(step);
     }, (success, error, apiError) => {
       void fetchResources();
       setPlaygroundRefresh((n) => n + 1);
       setMaaSRefresh((n) => n + 1);
       onDone(success, error, apiError);
-      if (apiError?.errorCode === CONFIRM_PROJECT_CONTENTS && Object.keys(refusals).length > 0) {
-        // Nothing was deleted: back to Clean up, with the same choices, to confirm.
-        setCleanupRetry({ req, contents: refusals });
-        setRunOpen(false);
-        setCleanupScope("all");
+      const code = apiError?.errorCode;
+      if ((code === CONFIRM_PROJECT_CONTENTS || code === CONFIRM_WORKBENCHES) && Object.keys(refusals).length + Object.keys(workbenches).length > 0) {
+        // Back to Clean up, with the same choices, to confirm: at once when nothing changed yet; when parts already ran,
+        // the run's outcome stays on screen and the next Clean up asks.
+        const confirmed = Object.fromEntries(Object.entries(req.confirmWorkbenches ?? {}).map(([p, c]) => [p, Object.entries(c).map(([name, uid]) => ({ name, uid }))]));
+        setCleanupRetry({ req, contents: refusals, workbenches: { ...confirmed, ...workbenches } });
+        if (!changed) {
+          setRunOpen(false);
+          setCleanupScope("all");
+        }
       }
     }, (reason) => {
       void fetchResources();

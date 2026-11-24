@@ -1255,6 +1255,25 @@ export interface ResourceState {
   /** What the Connection Secret itself says, read only for the selected project (GET /api/resources/status?project=): present, missing, foreign or unreadable; absent when not read. */
   connectionState?: "present" | "missing" | "foreign" | "unreadable";
   connectionMessage?: string;
+  /** The project's workbenches whose opendatahub.io/connections annotation names that Connection (read with the user's token, only when present); deleting the pipeline server removes it from them first. */
+  connectionWorkbenches?: ConnectionWorkbench[];
+  /** Why connectionWorkbenches could not be read. */
+  connectionWorkbenchesMessage?: string;
+  /** Workbenches that load that Connection through envFrom without naming it in the annotation (RHOAI 2.x): not changed; they fail to start once it is deleted. */
+  connectionEnvOnlyWorkbenches?: string[];
+}
+
+/** A workbench (Notebook) that uses the tool's dashboard Connection (pkg/types ConnectionWorkbench): a confirmation names it with the UID reviewed. */
+export interface ConnectionWorkbench {
+  name: string;
+  uid: string;
+  /** Not stopped: taking the Connection off restarts its pod (work not saved to disk is lost). */
+  running?: boolean;
+}
+
+/** A confirmation of workbenches as requests carry it: each name mapped to the UID the user reviewed. */
+export function confirmationOf(workbenches: ConnectionWorkbench[]): Record<string, string> {
+  return Object.fromEntries(workbenches.map((w) => [w.name, w.uid]));
 }
 
 // --- Models (pkg/types InferenceGatewayState, ModelsStatus, ModelState) ---

@@ -1765,6 +1765,11 @@ type CleanupRequest struct {
 	// (PipelineServerRequest.ConfirmUnrecorded).
 	PipelineServers   []string          `json:"pipelineServers,omitempty"`
 	ConfirmUnrecorded map[string]string `json:"confirmUnrecorded,omitempty"`
+	// ConfirmWorkbenches maps a project of PipelineServers to the
+	// workbenches the user confirmed removing the tool's dashboard
+	// Connection from, each by name to the UID reviewed
+	// (PipelineServerRequest.ConfirmWorkbenches).
+	ConfirmWorkbenches map[string]map[string]string `json:"confirmWorkbenches,omitempty"`
 	// Storage deletes the S3 storage (and storage an earlier version left).
 	Storage bool `json:"storage,omitempty"`
 	// DeleteNamespace also deletes namespace seaweedfs (needs Storage).
@@ -2040,12 +2045,37 @@ type ResourceState struct {
 	// "unreadable" (ConnectionMessage says why). "" means not read.
 	ConnectionState   string `json:"connectionState,omitempty"`
 	ConnectionMessage string `json:"connectionMessage,omitempty"`
+	// ConnectionWorkbenches are the workbenches of the project whose
+	// opendatahub.io/connections annotation names that Connection, read
+	// with the user's token along with ConnectionState (present only);
+	// deleting the pipeline server removes it from them first.
+	// ConnectionWorkbenchesMessage says why they could not be read.
+	ConnectionWorkbenches        []ConnectionWorkbench `json:"connectionWorkbenches,omitempty"`
+	ConnectionWorkbenchesMessage string                `json:"connectionWorkbenchesMessage,omitempty"`
+	// ConnectionEnvOnlyWorkbenches load that Connection through envFrom
+	// without naming it in the annotation (attached the RHOAI 2.x way):
+	// nothing takes it off them, and they fail to start once it is
+	// deleted.
+	ConnectionEnvOnlyWorkbenches []string `json:"connectionEnvOnlyWorkbenches,omitempty"`
 }
 
 // KeptPVC is a PersistentVolumeClaim and its size.
 type KeptPVC struct {
 	Name string `json:"name"`
 	Size string `json:"size,omitempty"`
+}
+
+// ConnectionWorkbench is a workbench (Notebook) that uses the tool's
+// dashboard Connection: a confirmation names it with the UID the user
+// reviewed, so one deleted and made again since under the same name is not
+// confirmed.
+type ConnectionWorkbench struct {
+	Name string `json:"name"`
+	UID  string `json:"uid"`
+	// Running: the workbench is not stopped. Taking the Connection off it
+	// changes its pod template, which restarts its pod (work not saved to
+	// disk is lost).
+	Running bool `json:"running,omitempty"`
 }
 
 // PipelineServerRequest is the JSON body for pipeline server setup/teardown.
@@ -2060,6 +2090,13 @@ type PipelineServerRequest struct {
 	// that UID is deleted without the record; another one (made again
 	// since) is not.
 	ConfirmUnrecorded string `json:"confirmUnrecorded,omitempty"`
+	// ConfirmWorkbenches (teardown and Recreate) maps each workbench of
+	// the project the user confirmed removing the tool's dashboard
+	// Connection from to the UID they reviewed
+	// (ResourceState.ConnectionWorkbenches): a workbench that uses it and
+	// is not named with its current UID refuses the request before
+	// anything changes.
+	ConfirmWorkbenches map[string]string `json:"confirmWorkbenches,omitempty"`
 }
 
 // DiagnosticsFixRequest is the JSON body for POST /api/diagnostics/fix.

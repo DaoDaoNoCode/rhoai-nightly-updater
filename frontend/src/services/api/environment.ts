@@ -58,19 +58,22 @@ export function getS3AdminLogin(): Promise<{ user: string; password: string; acc
  * Provisions the pipeline server in project; recreate swaps nightly-dspa for dspa.
  * confirmUnrecorded: UID of a pipeline server this tool never tracked that the user acknowledged as theirs (Recreate removes it).
  */
-export function setupPipelineServer(project: string, recreate = false, confirmUnrecorded = ""): Promise<OperationResponse> {
+export function setupPipelineServer(project: string, recreate = false, confirmUnrecorded = "", confirmWorkbenches: Record<string, string> = {}): Promise<OperationResponse> {
   return request('/api/resources/pipeline-server/setup', {
     method: 'POST',
-    body: JSON.stringify(recreate ? { project, recreate: true, ...(confirmUnrecorded ? { confirmUnrecorded } : {}) } : { project }),
+    body: JSON.stringify(recreate ? { project, recreate: true, ...(confirmUnrecorded ? { confirmUnrecorded } : {}), ...(Object.keys(confirmWorkbenches).length ? { confirmWorkbenches } : {}) } : { project }),
     acceptStatuses: [422],
   });
 }
 
-/** Removes the pipeline server in project; confirmUnrecorded: UID of an unrecorded server the user confirmed as theirs. */
-export function teardownPipelineServer(project: string, confirmUnrecorded = ""): Promise<OperationResponse> {
+/**
+ * Removes the pipeline server in project; confirmUnrecorded: UID of an unrecorded server the user confirmed as theirs;
+ * confirmWorkbenches: the workbenches the user confirmed removing the dashboard Connection from, by name to the UID reviewed (refused when another uses it).
+ */
+export function teardownPipelineServer(project: string, confirmUnrecorded = "", confirmWorkbenches: Record<string, string> = {}): Promise<OperationResponse> {
   return request('/api/resources/pipeline-server/teardown', {
     method: 'POST',
-    body: JSON.stringify(confirmUnrecorded ? { project, confirmUnrecorded } : { project }),
+    body: JSON.stringify({ project, ...(confirmUnrecorded ? { confirmUnrecorded } : {}), ...(Object.keys(confirmWorkbenches).length ? { confirmWorkbenches } : {}) }),
     acceptStatuses: [422],
   });
 }
@@ -126,6 +129,8 @@ export interface CleanupRequest {
   pipelineServers?: string[];
   /** Subset with unrecorded servers the user attributed to this tool: project mapped to that server’s UID. */
   confirmUnrecorded?: Record<string, string>;
+  /** Per project of pipelineServers, the workbenches the user confirmed removing the dashboard Connection from (errorCode confirm_connection_workbenches otherwise). */
+  confirmWorkbenches?: Record<string, Record<string, string>>;
   storage?: boolean;
   /** When storage is selected, additionally remove namespace seaweedfs. */
   deleteNamespace?: boolean;

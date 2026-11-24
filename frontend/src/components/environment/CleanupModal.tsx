@@ -18,11 +18,11 @@ import {
   Stack,
   StackItem,
 } from "@patternfly/react-core";
-import type { PlaygroundStatus, ResourcesStatus, MaaSStatus, RestorableComponent } from "../../types";
+import { confirmationOf, type ConnectionWorkbench, type PlaygroundStatus, type ResourcesStatus, type MaaSStatus, type RestorableComponent } from "../../types";
 import type { CleanupRequest } from "../../services/api";
 import { TooltipButton } from "../TooltipButton";
 import { isTerminating } from "./resourceRow";
-import { unrecordedPipelineServerNote } from "./PipelinesTab";
+import { connectionEnvOnlyChange, connectionWorkbenchesChange, unrecordedPipelineServerNote } from "./PipelinesTab";
 import { S3_NAMESPACE, storageTeardownOffered } from "./StorageTab";
 import { gatewayListRelease } from "./modelsConfirm";
 
@@ -78,6 +78,8 @@ export function cleanupCandidates(status: ResourcesStatus, scope: CleanupScope, 
 export interface CleanupRetry {
   req: CleanupRequest;
   contents: Record<string, string[]>;
+  /** Per pipeline server's project, the workbenches that use its dashboard Connection (errorCode confirm_connection_workbenches). */
+  workbenches?: Record<string, ConnectionWorkbench[]>;
 }
 
 /** The steps a clean-up streams, in its order (pkg/cluster CleanUp). */
@@ -203,10 +205,23 @@ export const CleanupModal: React.FC<{
   const chosenModels = models.filter((m) => offered.models.includes(m));
   const chosenServers = servers.filter(serverTicked);
   const confirmedServers = Object.fromEntries(chosenServers.filter((s) => unrecordedUID.has(s)).map((s) => [s, unrecordedUID.get(s)!]));
+  // The workbenches that lose each chosen server's dashboard Connection first: as a refused clean-up listed them, else as
+  // the status does (the selected project's only); the request confirms exactly these.
+  // An empty list from the refusal does not hide what the status shows now.
+  const connectionUsers = (p: string): ConnectionWorkbench[] => {
+    const refused = retry?.workbenches?.[p] ?? [];
+    return refused.length > 0 ? refused : toolServers(status).find((ps) => ps.namespace === p)?.connectionWorkbenches ?? [];
+  };
+  const usersByServer = Object.fromEntries(chosenServers.map((p) => [p, connectionUsers(p)] as const).filter(([, w]) => w.length > 0));
+  const confirmWorkbenches = Object.fromEntries(Object.entries(usersByServer).map(([p, w]) => [p, confirmationOf(w)]));
+  // Workbenches that load the Connection without the annotation (as the status shows them): nothing changes them.
+  const envOnlyByServer = Object.fromEntries(chosenServers.map((p) => [p, toolServers(status).find((ps) => ps.namespace === p)?.connectionEnvOnlyWorkbenches ?? []] as const).filter(([, w]) => w.length > 0));
+  const affected = chosenServers.filter((p) => usersByServer[p] || envOnlyByServer[p]);
   const req: CleanupRequest = {
     ...(chosenPublished.length ? { maasPublished: chosenPublished } : {}),
     ...(chosenServers.length ? { pipelineServers: chosenServers } : {}),
     ...(Object.keys(confirmedServers).length ? { confirmUnrecorded: confirmedServers } : {}),
+    ...(Object.keys(confirmWorkbenches).length ? { confirmWorkbenches } : {}),
     ...(storage && offered.storage ? { storage: true, ...(namespace && offered.namespace ? { deleteNamespace: true } : {}) } : {}),
     ...(mlflow && offered.mlflow ? { mlflow: true } : {}),
     ...(chosenPlaygrounds.length ? { playgrounds: chosenPlaygrounds } : {}),
@@ -344,6 +359,16 @@ export const CleanupModal: React.FC<{
                   <StackItem>
                     <Checkbox id={`cleanup-confirm-${p}`} label={`Delete ${retry!.contents[p].length === 1 ? "it" : "them"} with project ${p}`} isChecked={confirmedContents.includes(p)} onChange={(_e, v) => toggleConfirmedContents(p, v)} />
                   </StackItem>
+                </Stack>
+              </Alert>
+            </StackItem>
+          ))}
+          {affected.map((p) => (
+            <StackItem key={`workbenches-${p}`}>
+              <Alert variant="warning" isInline component="div" title={`Workbenches in ${p} use the dashboard Connection`}>
+                <Stack hasGutter>
+                  {usersByServer[p] && <StackItem>{connectionWorkbenchesChange(p, usersByServer[p])}</StackItem>}
+                  {envOnlyByServer[p] && <StackItem>{connectionEnvOnlyChange(p, envOnlyByServer[p])}</StackItem>}
                 </Stack>
               </Alert>
             </StackItem>

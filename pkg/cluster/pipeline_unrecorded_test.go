@@ -20,7 +20,7 @@ func TestTeardownPipelineServer_AnUnrecordedServerNeedsConfirmation(t *testing.T
 	fastPipelineTimings(t)
 	f, c := newResourceFake(t)
 	putDSPA(f, "proj", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, "", "")
-	resp, _ := TeardownPipelineServer(c, "proj", "")
+	resp, _ := TeardownPipelineServer(c, "proj", "", nil)
 	if resp.Success || resp.ErrorCode != "not_managed" || !strings.Contains(resp.Message, "no record") || !strings.Contains(resp.Message, "Nothing was deleted") {
 		t.Fatalf("unconfirmed = %+v", resp)
 	}
@@ -28,7 +28,7 @@ func TestTeardownPipelineServer_AnUnrecordedServerNeedsConfirmation(t *testing.T
 		t.Fatal("deleted an unrecorded pipeline server without confirmation")
 	}
 	f.finalizeOnGet = true
-	if resp, _ := TeardownPipelineServer(c, "proj", dspaUID(f, "proj", storage.DSPAName)); !resp.Success {
+	if resp, _ := TeardownPipelineServer(c, "proj", dspaUID(f, "proj", storage.DSPAName), nil); !resp.Success {
 		t.Fatalf("confirmed = %+v", resp)
 	}
 }
@@ -68,7 +68,7 @@ func TestTeardownPipelineServer_AConfirmationIsOfTheServerTheUserSaw(t *testing.
 	if len(st.PipelineServers) != 1 || !st.PipelineServers[0].Unrecorded || st.PipelineServers[0].UID != uid || uid == "" {
 		t.Fatalf("status = %+v (uid %q)", st.PipelineServers, uid)
 	}
-	resp, _ := TeardownPipelineServer(c, "proj", "uid-of-the-server-the-user-saw")
+	resp, _ := TeardownPipelineServer(c, "proj", "uid-of-the-server-the-user-saw", nil)
 	if resp.Success || resp.ErrorCode != "not_managed" || !strings.Contains(resp.Message, "not the one you confirmed") || !strings.Contains(resp.Message, "Nothing was deleted") {
 		t.Fatalf("other uid = %+v", resp)
 	}
@@ -84,7 +84,7 @@ func TestTeardownPipelineServer_AnUnreadableRecordRefuses(t *testing.T) {
 	f, c := newResourceFake(t)
 	putDSPA(f, "proj", storage.DSPAName, toolLabelJSON, envkit.ToolFieldManager, "Apply", storage.S3Host(), storage.DSPASecretName, "", "")
 	f.fail["GET "+rhoai.NamespacedPath("v1", "configmaps", record.GetActivityNamespace(), record.SnapshotConfigMapName)] = 500
-	resp, _ := TeardownPipelineServer(c, "proj", "")
+	resp, _ := TeardownPipelineServer(c, "proj", "", nil)
 	if resp.Success || !strings.Contains(resp.Message, "Nothing was deleted") {
 		t.Fatalf("got %+v", resp)
 	}
@@ -96,9 +96,11 @@ func TestTeardownPipelineServer_AnUnreadableRecordRefuses(t *testing.T) {
 // Clean up propagates the confirmation flag only for projects the user
 // affirmed; all other projects receive no confirmation.
 func TestCleanUp_PassesTheConfirmationOfUnrecordedPipelineServers(t *testing.T) {
-	defer func(f func(*Client, string, string) (*types.OperationResponse, error)) { cleanupPipelineServer = f }(cleanupPipelineServer)
+	defer func(f func(*Client, string, string, map[string]string) (*types.OperationResponse, error)) {
+		cleanupPipelineServer = f
+	}(cleanupPipelineServer)
 	got := map[string]string{}
-	cleanupPipelineServer = func(_ *Client, project, confirmedUID string) (*types.OperationResponse, error) {
+	cleanupPipelineServer = func(_ *Client, project, confirmedUID string, _ map[string]string) (*types.OperationResponse, error) {
 		got[project] = confirmedUID
 		return &types.OperationResponse{Success: true}, nil
 	}

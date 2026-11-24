@@ -11,6 +11,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/recipe"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -30,7 +31,26 @@ var (
 	cleanupProject      = recipe.DeleteProject
 	// Bound to recipe.ProjectTeardownProblem; swappable in tests.
 	recipeProjectProblem = recipe.ProjectTeardownProblem
+	// Bound to storage.ConnectionWorkbenchesProblem; swappable in tests.
+	pipelineWorkbenchesProblem = storage.ConnectionWorkbenchesProblem
 )
+
+// workbenchesDetail is the detail of a step refused for workbenches that use
+// the tool's Connection: one "<name>=<uid>" per line (a Notebook's name
+// cannot hold "=" or a line break), for the UI to confirm each as it is.
+func workbenchesDetail(wbs []storage.ConnectionWorkbench) string {
+	lines := make([]string, 0, len(wbs))
+	for _, w := range wbs {
+		lines = append(lines, w.Name+"="+w.UID)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// cleanupConfirmCode reports whether code refuses a clean-up only until the
+// user confirms what it lists.
+func cleanupConfirmCode(code string) bool {
+	return code == recipe.ErrorCodeConfirmContents || code == storage.ErrorCodeConfirmWorkbenches
+}
 
 // CleanupStepID identifies each clean-up slice in the stream, e.g.
 // "pipeline-server:<project>", "storage", "mlflow", "playground:<project>",
@@ -47,6 +67,8 @@ func CleanupStepID(part, project string) string {
 type cleanupPart struct {
 	id, title string
 	run       func() (*types.OperationResponse, error)
+	// project is the part's project, when it has one.
+	project string
 	// When true, the overall clean-up message quotes this part's own result
 	// (which may report no change—component retained, project already
 	// absent) rather than wording like "Deleted <title>".
@@ -74,10 +96,11 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 	}
 	for _, project := range req.PipelineServers {
 		parts = append(parts, cleanupPart{
-			id:    CleanupStepID("pipeline-server", project),
-			title: fmt.Sprintf("the pipeline server in '%s'", project),
+			id:      CleanupStepID("pipeline-server", project),
+			project: project,
+			title:   fmt.Sprintf("the pipeline server in '%s'", project),
 			run: func() (*types.OperationResponse, error) {
-				return cleanupPipelineServer(c, project, req.ConfirmUnrecorded[project])
+				return cleanupPipelineServer(c, project, req.ConfirmUnrecorded[project], req.ConfirmWorkbenches[project])
 			},
 		})
 	}
@@ -173,9 +196,29 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 		}
 		problems = append(problems, problem)
 		// Refusals beyond “needs confirmation” keep a distinct error code.
-		if refusalCode == "" || refusalCode == recipe.ErrorCodeConfirmContents {
+		if refusalCode == "" || cleanupConfirmCode(refusalCode) && !cleanupConfirmCode(code) {
 			refusalCode = code
 		}
+	}
+	// A pipeline server whose dashboard Connection workbenches use goes
+	// only with the user's confirmation of each of them (its teardown
+	// removes the Connection from them first): checked up front too, so a
+	// refusal deletes nothing. The step's detail lists the workbenches that
+	// use it now, one per line, for the UI to ask about.
+	for _, project := range req.PipelineServers {
+		problem, code, current := pipelineWorkbenchesProblem(c, project, req.ConfirmWorkbenches[project])
+		if problem == "" {
+			continue
+		}
+		problems = append(problems, problem)
+		if refusalCode == "" || cleanupConfirmCode(refusalCode) && !cleanupConfirmCode(code) {
+			refusalCode = code
+		}
+		detail := ""
+		if code == storage.ErrorCodeConfirmWorkbenches {
+			detail = workbenchesDetail(current)
+		}
+		emit(UpdateStepEvent{Step: CleanupStepID("pipeline-server", project), Status: "failed", Message: problem, ErrorCode: code, Detail: detail})
 	}
 	for _, chk := range checks {
 		// Detail enumerates non-tool resources still in the project, one
@@ -191,7 +234,7 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 				detail = strings.Join(chk.left, "\n")
 			}
 			emit(UpdateStepEvent{Step: CleanupStepID("recipe-project", chk.project), Status: "failed", Message: chk.problem, ErrorCode: chk.code, Detail: detail})
-		case refusalCode == recipe.ErrorCodeConfirmContents && len(chk.left) > 0:
+		case cleanupConfirmCode(refusalCode) && len(chk.left) > 0:
 			emit(UpdateStepEvent{Step: CleanupStepID("recipe-project", chk.project), Status: "failed", ErrorCode: recipe.ErrorCodeConfirmContents,
 				Message: fmt.Sprintf("Project %s holds what this tool did not create, all of it confirmed: %s. It was not deleted, as the clean-up asks to confirm what another project holds.", chk.project, strings.Join(chk.left, ", ")),
 				Detail:  strings.Join(chk.left, "\n")})
@@ -217,7 +260,15 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 		}
 		logs = append(logs, res.Logs...)
 		if !res.Success {
-			emit(UpdateStepEvent{Step: p.id, Status: "failed", Message: res.Message, ErrorCode: res.ErrorCode})
+			detail := ""
+			if res.ErrorCode == storage.ErrorCodeConfirmWorkbenches && strings.HasPrefix(p.id, "pipeline-server:") {
+				// Refused by the teardown itself (a workbench attached the
+				// Connection after the check up front): the step lists the
+				// workbenches that use it now, as that check's refusal does.
+				_, _, current := pipelineWorkbenchesProblem(c, p.project, nil)
+				detail = workbenchesDetail(current)
+			}
+			emit(UpdateStepEvent{Step: p.id, Status: "failed", Message: res.Message, ErrorCode: res.ErrorCode, Detail: detail})
 			return cleanupStopped(c, parts[i+1:], done, said, logs, res.Message, res.ErrorCode), nil
 		}
 		emit(UpdateStepEvent{Step: p.id, Status: "success", Message: res.Message, Detail: time.Since(start).Round(time.Second).String()})

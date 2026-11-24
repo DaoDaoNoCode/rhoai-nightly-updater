@@ -306,6 +306,11 @@ export const scenarios = {
   mlflow: (w) => { w.resources.mlflow = F.mlflowStates.running; },
   // The Environment page's other states, one scenario each.
   "env-ready": (w) => { w.resources.mlflow = F.mlflowStates.running; },
+  // Workbenches use the pipeline server's Connection: the Pipelines tab names them, Delete lists them.
+  "env-connection-workbenches": (w) => {
+    w.resources.mlflow = F.mlflowStates.running;
+    w.resources.pipelineServers = [{ ...F.pipelineServer, connectionWorkbenches: [{ name: "my-notebook", uid: "0b5e2c1a-6f0d-4c4e-9a52-3f1d7e8a9b10", running: true }, { name: "training-wb", uid: "7c9d4e2f-1a3b-4d5e-8f60-2b4c6d8e0f12" }], connectionEnvOnlyWorkbenches: ["old-notebook"] }];
+  },
   // A pipeline server an earlier version set up as nightly-dspa: the workbench notice and Recreate.
   "env-old-name": (w) => {
     w.resources.pipelineServers = [F.pipelineServerOldName];

@@ -343,7 +343,7 @@ func TestPipelineServer_OwnKeyLifecycle(t *testing.T) {
 	}
 
 	f.finalizeOnGet = true
-	down, _ := TeardownPipelineServer(c, "proj", "")
+	down, _ := TeardownPipelineServer(c, "proj", "", nil)
 	if !down.Success {
 		t.Fatalf("teardown: %+v", down)
 	}
@@ -612,7 +612,7 @@ func TestS3Keys_LeftoverUserListedAndRemovedOnlyByTheAction(t *testing.T) {
 	}
 	f.finalizeOnGet = true
 	f.sw.failIAM["ListAccessKeys"] = 503
-	if down, _ := TeardownPipelineServer(c, "proj", ""); down.Success {
+	if down, _ := TeardownPipelineServer(c, "proj", "", nil); down.Success {
 		t.Fatalf("teardown should report the key it could not delete: %+v", down)
 	}
 	delete(f.sw.failIAM, "ListAccessKeys")
