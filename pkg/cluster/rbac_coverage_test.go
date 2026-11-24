@@ -89,6 +89,7 @@ var rbacUserTokenReads = map[string]string{
 	"user_projects.go:ListUserDSProjects":           "the user's data science projects, through the projects API",
 	"user_reads.go:listProjectLLMInferenceServices": "the LLMInferenceServices of one of the user's projects",
 	"user_reads.go:listProjectInferenceServices":    "the InferenceServices of one of the user's projects",
+	"user_reads.go:listConnectionWorkbenches":       "the workbenches of one of the user's projects that use the tool's dashboard Connection",
 }
 
 // Best-effort reads of paths found by API discovery at run time, whose API

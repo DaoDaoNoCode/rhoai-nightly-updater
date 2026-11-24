@@ -11,6 +11,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/recipe"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -30,7 +31,15 @@ var (
 	cleanupProject      = recipe.DeleteProject
 	// Bound to recipe.ProjectTeardownProblem; swappable in tests.
 	recipeProjectProblem = recipe.ProjectTeardownProblem
+	// Bound to storage.ConnectionWorkbenchesProblem; swappable in tests.
+	pipelineWorkbenchesProblem = storage.ConnectionWorkbenchesProblem
 )
+
+// cleanupConfirmCode reports whether code refuses a clean-up only until the
+// user confirms what it lists.
+func cleanupConfirmCode(code string) bool {
+	return code == recipe.ErrorCodeConfirmContents || code == storage.ErrorCodeConfirmWorkbenches
+}
 
 // CleanupStepID identifies each clean-up slice in the stream, e.g.
 // "pipeline-server:<project>", "storage", "mlflow", "playground:<project>",
@@ -77,7 +86,7 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 			id:    CleanupStepID("pipeline-server", project),
 			title: fmt.Sprintf("the pipeline server in '%s'", project),
 			run: func() (*types.OperationResponse, error) {
-				return cleanupPipelineServer(c, project, req.ConfirmUnrecorded[project])
+				return cleanupPipelineServer(c, project, req.ConfirmUnrecorded[project], req.ConfirmWorkbenches[project])
 			},
 		})
 	}
@@ -173,9 +182,29 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 		}
 		problems = append(problems, problem)
 		// Refusals beyond “needs confirmation” keep a distinct error code.
-		if refusalCode == "" || refusalCode == recipe.ErrorCodeConfirmContents {
+		if refusalCode == "" || cleanupConfirmCode(refusalCode) && !cleanupConfirmCode(code) {
 			refusalCode = code
 		}
+	}
+	// A pipeline server whose dashboard Connection workbenches use goes
+	// only with the user's confirmation of each of them (its teardown
+	// removes the Connection from them first): checked up front too, so a
+	// refusal deletes nothing. The step's detail lists the workbenches that
+	// use it now, one per line, for the UI to ask about.
+	for _, project := range req.PipelineServers {
+		problem, code, current := pipelineWorkbenchesProblem(c, project, req.ConfirmWorkbenches[project])
+		if problem == "" {
+			continue
+		}
+		problems = append(problems, problem)
+		if refusalCode == "" || cleanupConfirmCode(refusalCode) && !cleanupConfirmCode(code) {
+			refusalCode = code
+		}
+		detail := ""
+		if code == storage.ErrorCodeConfirmWorkbenches {
+			detail = strings.Join(current, "\n")
+		}
+		emit(UpdateStepEvent{Step: CleanupStepID("pipeline-server", project), Status: "failed", Message: problem, ErrorCode: code, Detail: detail})
 	}
 	for _, chk := range checks {
 		// Detail enumerates non-tool resources still in the project, one
@@ -191,7 +220,7 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 				detail = strings.Join(chk.left, "\n")
 			}
 			emit(UpdateStepEvent{Step: CleanupStepID("recipe-project", chk.project), Status: "failed", Message: chk.problem, ErrorCode: chk.code, Detail: detail})
-		case refusalCode == recipe.ErrorCodeConfirmContents && len(chk.left) > 0:
+		case cleanupConfirmCode(refusalCode) && len(chk.left) > 0:
 			emit(UpdateStepEvent{Step: CleanupStepID("recipe-project", chk.project), Status: "failed", ErrorCode: recipe.ErrorCodeConfirmContents,
 				Message: fmt.Sprintf("Project %s holds what this tool did not create, all of it confirmed: %s. It was not deleted, as the clean-up asks to confirm what another project holds.", chk.project, strings.Join(chk.left, ", ")),
 				Detail:  strings.Join(chk.left, "\n")})

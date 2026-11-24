@@ -1765,6 +1765,10 @@ type CleanupRequest struct {
 	// (PipelineServerRequest.ConfirmUnrecorded).
 	PipelineServers   []string          `json:"pipelineServers,omitempty"`
 	ConfirmUnrecorded map[string]string `json:"confirmUnrecorded,omitempty"`
+	// ConfirmWorkbenches maps a project of PipelineServers to the
+	// workbenches the user confirmed removing the tool's dashboard
+	// Connection from (PipelineServerRequest.ConfirmWorkbenches).
+	ConfirmWorkbenches map[string][]string `json:"confirmWorkbenches,omitempty"`
 	// Storage deletes the S3 storage (and storage an earlier version left).
 	Storage bool `json:"storage,omitempty"`
 	// DeleteNamespace also deletes namespace seaweedfs (needs Storage).
@@ -2040,6 +2044,13 @@ type ResourceState struct {
 	// "unreadable" (ConnectionMessage says why). "" means not read.
 	ConnectionState   string `json:"connectionState,omitempty"`
 	ConnectionMessage string `json:"connectionMessage,omitempty"`
+	// ConnectionWorkbenches are the workbenches of the project whose
+	// opendatahub.io/connections annotation names that Connection, read
+	// with the user's token along with ConnectionState (present only);
+	// deleting the pipeline server removes it from them first.
+	// ConnectionWorkbenchesMessage says why they could not be read.
+	ConnectionWorkbenches        []string `json:"connectionWorkbenches,omitempty"`
+	ConnectionWorkbenchesMessage string   `json:"connectionWorkbenchesMessage,omitempty"`
 }
 
 // KeptPVC is a PersistentVolumeClaim and its size.
@@ -2060,6 +2071,12 @@ type PipelineServerRequest struct {
 	// that UID is deleted without the record; another one (made again
 	// since) is not.
 	ConfirmUnrecorded string `json:"confirmUnrecorded,omitempty"`
+	// ConfirmWorkbenches (teardown and Recreate) names the workbenches of
+	// the project the user confirmed removing the tool's dashboard
+	// Connection from (ResourceState.ConnectionWorkbenches): a workbench
+	// that uses it and is not named refuses the request before anything
+	// changes.
+	ConfirmWorkbenches []string `json:"confirmWorkbenches,omitempty"`
 }
 
 // DiagnosticsFixRequest is the JSON body for POST /api/diagnostics/fix.

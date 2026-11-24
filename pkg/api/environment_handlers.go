@@ -56,7 +56,14 @@ var HandleResourcesStatus = withAuth(func(c *cluster.Client, w http.ResponseWrit
 	if !namespaceRegex.MatchString(project) {
 		project = ""
 	}
-	status, err := cluster.GetResourcesStatusFor(c, project)
+	// The workbenches that use the selected project's Connection are read
+	// with the admin's own token (the ServiceAccount may not list
+	// Notebooks).
+	var u *cluster.Client
+	if project != "" {
+		u = userReadClient(r.Context(), c, extractUserToken(r), resolveUsername(r))
+	}
+	status, err := cluster.GetResourcesStatusFor(c, u, project)
 	if err != nil {
 		slog.Error("resources status error", "error", err)
 		writeReadError(w, "failed to get resources status", err)

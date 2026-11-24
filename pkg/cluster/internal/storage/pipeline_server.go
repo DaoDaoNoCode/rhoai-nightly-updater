@@ -361,7 +361,7 @@ func PipelineServerState(d DSPA, dashboardURL string) types.ResourceState {
 
 // SetupPipelineServer creates a pipeline server (DSPA) in the given project.
 func SetupPipelineServer(c *kube.Client, project string) (*types.OperationResponse, error) {
-	return setupPipelineServer(c, project, false, "")
+	return setupPipelineServer(c, project, false, "", nil)
 }
 
 // RecreatePipelineServer replaces the pipeline server the tool set up in
@@ -370,11 +370,11 @@ func SetupPipelineServer(c *kube.Client, project string) (*types.OperationRespon
 // come first; only then is the old server deleted (its database, and so its
 // run history, goes with it; artifacts in the S3 storage stay) and the new
 // one set up. Without an old server it is a plain setup.
-func RecreatePipelineServer(c *kube.Client, project, confirmedUID string) (*types.OperationResponse, error) {
-	return setupPipelineServer(c, project, true, confirmedUID)
+func RecreatePipelineServer(c *kube.Client, project, confirmedUID string, confirmedWorkbenches []string) (*types.OperationResponse, error) {
+	return setupPipelineServer(c, project, true, confirmedUID, confirmedWorkbenches)
 }
 
-func setupPipelineServer(c *kube.Client, project string, recreate bool, confirmedUID string) (*types.OperationResponse, error) {
+func setupPipelineServer(c *kube.Client, project string, recreate bool, confirmedUID string, confirmedWorkbenches []string) (*types.OperationResponse, error) {
 	logs := []string{}
 	op := "setup-pipeline-server"
 	if recreate {
@@ -558,7 +558,7 @@ func setupPipelineServer(c *kube.Client, project string, recreate bool, confirme
 		return fail(msg+" Nothing was changed.", code, "DSPA dry run failed")
 	}
 	if old != nil {
-		return replacePipelineServer(c, project, old, logs, confirmedUID)
+		return replacePipelineServer(c, project, old, logs, confirmedUID, confirmedWorkbenches)
 	}
 
 	// Step 3: the project's own key: its SeaweedFS user (rnu-dspa-<project>)
@@ -650,9 +650,9 @@ func setupPipelineServer(c *kube.Client, project string, recreate bool, confirme
 // checks the operator before deleting and waits for the finalizer), then
 // sets up the new one from scratch, so every check runs again on what is
 // there now.
-func replacePipelineServer(c *kube.Client, project string, old *DSPA, logs []string, confirmedUID string) (*types.OperationResponse, error) {
+func replacePipelineServer(c *kube.Client, project string, old *DSPA, logs []string, confirmedUID string, confirmedWorkbenches []string) (*types.OperationResponse, error) {
 	logs = append(logs, "OK: The API server accepts the new pipeline server", fmt.Sprintf("Deleting pipeline server %s...", old.Meta.Name))
-	down, err := TeardownPipelineServer(c, project, confirmedUID)
+	down, err := TeardownPipelineServer(c, project, confirmedUID, confirmedWorkbenches)
 	if err != nil {
 		return nil, err
 	}
@@ -665,7 +665,7 @@ func replacePipelineServer(c *kube.Client, project string, old *DSPA, logs []str
 		}
 		return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: down.ErrorCode}, nil
 	}
-	up, err := setupPipelineServer(c, project, false, "")
+	up, err := setupPipelineServer(c, project, false, "", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -710,8 +710,10 @@ func dspoRunning(c *kube.Client) (bool, error) {
 // (set up before 3.0.1, or labelled by someone in the project) is deleted
 // only when confirmedUID is its UID (the user confirmed that very server;
 // one made again since is not it): the label alone is something a project
-// editor can set.
-func TeardownPipelineServer(c *kube.Client, project, confirmedUID string) (*types.OperationResponse, error) {
+// editor can set. Workbenches that use the tool's dashboard Connection lose
+// it first (detachConnection), each only when confirmedWorkbenches names
+// it; until then nothing is deleted.
+func TeardownPipelineServer(c *kube.Client, project, confirmedUID string, confirmedWorkbenches []string) (*types.OperationResponse, error) {
 	logs := []string{}
 	fail := func(msg, code, activity string) (*types.OperationResponse, error) {
 		record.Action(c, "teardown-pipeline-server", fmt.Sprintf("project=%s (%s)", project, activity), false)
@@ -746,6 +748,13 @@ func TeardownPipelineServer(c *kube.Client, project, confirmedUID string) (*type
 		}
 		logs = append(logs, "No pipeline server created by this tool in this project")
 		// A previous run may have removed the DSPA but not its secret.
+		wbs, problem, code := connectionWorkbenchesToDetach(c, project, confirmedWorkbenches)
+		if problem != "" {
+			return fail(problem+" Nothing was deleted.", code, "workbenches not confirmed")
+		}
+		if msg, code := detachConnection(c, project, wbs, &logs); msg != "" {
+			return fail(msg, code, "workbench change failed")
+		}
 		orphan := &DSPA{Meta: kube.ObjectMeta{UID: "none"}, SecretName: DSPASecretName}
 		note := deleteDSPASecret(c, project, orphan, all, &logs) + deleteConnection(c, project, &logs)
 		if !listMissing {
@@ -773,8 +782,17 @@ func TeardownPipelineServer(c *kube.Client, project, confirmedUID string) (*type
 			return fail(fmt.Sprintf("Pipeline server %s in %s carries this tool's label, but this tool has no record that it set it up (set up before version 3.0.1, or labelled by someone in %s). Confirm it as this tool's in the Delete dialog. Nothing was deleted.", target.Meta.Name, project, project), "not_managed", "unrecorded")
 		}
 	}
+	// The DSPA owns the Connection, so the garbage collector deletes it with
+	// the DSPA: its workbenches lose it before the DSPA goes.
+	wbs, problem, code := connectionWorkbenchesToDetach(c, project, confirmedWorkbenches)
+	if problem != "" {
+		return fail(problem+" Nothing was deleted.", code, "workbenches not confirmed")
+	}
 	if target.Meta.Terminating() {
 		logs = append(logs, fmt.Sprintf("Pipeline server %s is already being deleted", target.Meta.Name))
+		if msg, code := detachConnection(c, project, wbs, &logs); msg != "" {
+			return fail(msg, code, "workbench change failed")
+		}
 	} else {
 		// The DSPA finalizer is removed only by the running operator. Deleting
 		// while it is down would leave the DSPA stuck in Terminating.
@@ -786,6 +804,9 @@ func TeardownPipelineServer(c *kube.Client, project, confirmedUID string) (*type
 			if !running {
 				return fail("The data-science-pipelines operator is not running, so the pipeline server's finalizer could not complete and it would stay in Terminating. Nothing was deleted. Make sure the aipipelines component is Managed and its operator is ready, then retry.", "prerequisites", "operator not running")
 			}
+		}
+		if msg, code := detachConnection(c, project, wbs, &logs); msg != "" {
+			return fail(msg, code, "workbench change failed")
 		}
 		logs = append(logs, fmt.Sprintf("Deleting pipeline server %s...", target.Meta.Name))
 		if _, delErr := kube.DeleteWithUID(c, dspaPath, target.Meta.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {

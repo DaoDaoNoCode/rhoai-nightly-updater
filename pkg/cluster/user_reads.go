@@ -79,6 +79,9 @@ func GetProjectStatus(sa, u *Client, project string) (*types.ProjectStatus, erro
 					ps.UID = d.Meta.UID
 				}
 				ps.ConnectionState, ps.ConnectionMessage = connectionState(u, project, ps.Terminating)
+				if ps.ConnectionState == ConnectionPresent {
+					addConnectionWorkbenches(u, project, &ps)
+				}
 			}
 			st.PipelineServers = append(st.PipelineServers, ps)
 		}
@@ -124,6 +127,33 @@ func connectionState(u *Client, project string, terminating bool) (string, strin
 		return ConnectionForeign, ""
 	}
 	return ConnectionPresent, ""
+}
+
+// listConnectionWorkbenches lists, with the user's token, the workbenches
+// of project whose opendatahub.io/connections annotation names the tool's
+// dashboard Connection (storage.ConnectionWorkbenches). A cluster without
+// the Notebook API has none.
+func listConnectionWorkbenches(u *Client, project string) ([]string, error) {
+	if !u.ActsAsUser() {
+		return nil, authz.ErrNotUserClient
+	}
+	var list storage.NotebookList
+	found, err := u.GetIntoOptional(rhoai.NamespacedPath("kubeflow.org/v1", "notebooks", project, ""), &list)
+	if err != nil || !found {
+		return nil, err
+	}
+	return storage.ConnectionWorkbenchNames(storage.ConnectionWorkbenches(list, project)), nil
+}
+
+// addConnectionWorkbenches sets ps.ConnectionWorkbenches (or why they could
+// not be read) for the tool's present Connection in project.
+func addConnectionWorkbenches(u *Client, project string, ps *types.ResourceState) {
+	names, err := listConnectionWorkbenches(u, project)
+	if err != nil {
+		ps.ConnectionWorkbenchesMessage, _ = userReadProblem("the workbenches", project, err)
+		return
+	}
+	ps.ConnectionWorkbenches = names
 }
 
 // userReadProblem explains a part of a user's read that failed, with its

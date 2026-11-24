@@ -238,7 +238,7 @@ var HandlePipelineServerSetup = withMutationAuth(func(c *cluster.Client, w http.
 	var result *types.OperationResponse
 	var err error
 	if req.Recreate {
-		result, err = cluster.RecreatePipelineServer(c, req.Project, req.ConfirmUnrecorded)
+		result, err = cluster.RecreatePipelineServer(c, req.Project, req.ConfirmUnrecorded, req.ConfirmWorkbenches)
 	} else {
 		result, err = cluster.SetupPipelineServer(c, req.Project)
 	}
@@ -267,7 +267,7 @@ var HandlePipelineServerTeardown = withMutationAuth(func(c *cluster.Client, w ht
 	}
 	beginOperation(w, req.Project)
 	slog.Info("mutation", "op", "teardown-pipeline-server", "project", req.Project, "confirmUnrecorded", req.ConfirmUnrecorded)
-	result, err := cluster.TeardownPipelineServer(c, req.Project, req.ConfirmUnrecorded)
+	result, err := cluster.TeardownPipelineServer(c, req.Project, req.ConfirmUnrecorded, req.ConfirmWorkbenches)
 	if err != nil {
 		slog.Error("teardown-pipeline-server failed", "error", err)
 		writeOperationError(w, "pipeline server teardown failed", err)

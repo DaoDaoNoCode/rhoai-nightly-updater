@@ -21,7 +21,7 @@ func TestTeardownPipelineServer_KeepsAHashedUserTaggedForAnotherProject(t *testi
 	recordDSPAs(f, long+"/dspa")
 	f.sw.giveScopedKey(long)
 	f.sw.retag(storage.ScopedUserName(long), "other")
-	TeardownPipelineServer(c, long, "")
+	TeardownPipelineServer(c, long, "", nil)
 	if !slices.Contains(f.sw.userNames(), storage.ScopedUserName(long)) {
 		t.Error("teardown deleted a hashed user tagged for another project")
 	}
@@ -35,7 +35,7 @@ func TestTeardownPipelineServer_DSPAListNotFoundKeepsTheUser(t *testing.T) {
 	putReadyManagedS3(f)
 	f.sw.giveScopedKey("proj")
 	f.fail["GET /apis/"+storage.DSPAAPIGroup+"/namespaces/proj/datasciencepipelinesapplications"] = 404
-	TeardownPipelineServer(c, "proj", "")
+	TeardownPipelineServer(c, "proj", "", nil)
 	if !slices.Contains(f.sw.userNames(), storage.ScopedUserName("proj")) {
 		t.Error("teardown deleted the user while the DSPA list answered 404")
 	}
@@ -52,7 +52,7 @@ func TestTeardownPipelineServer_KeptLogOnlyForAnExistingUser(t *testing.T) {
 	putToolDSPAOnStorage(f, "proj")
 	recordDSPAs(f, "proj/dspa")
 	putDSPA(f, "proj", "other", `{}`, "Mozilla", "Update", storage.S3Host(), "other-secret", "", "")
-	resp, _ := TeardownPipelineServer(c, "proj", "")
+	resp, _ := TeardownPipelineServer(c, "proj", "", nil)
 	if strings.Contains(strings.Join(resp.Logs, "\n"), "Kept SeaweedFS user") {
 		t.Errorf("logged a kept user that does not exist: %v", resp.Logs)
 	}
