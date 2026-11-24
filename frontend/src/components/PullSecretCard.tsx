@@ -323,6 +323,8 @@ export const RegistryPullCopy: React.FC<{ copy: RegistryPullCopyInfo; onStatusRe
     ? ["warning", "Workbench images: could not check whether the internal registry can pull nightly images", sentence(copy.problem)]
     : copy.noApplicationsNamespace
     ? ["info", "Workbench images: RHOAI is not installed yet", "Once it is, the updater copies the token for the internal registry, which pulls the workbench images."]
+    : copy.noQuayRHOAIEntry
+    ? ["warning", "Workbench images: the pull secret has no quay.io/rhoai entry", "The internal registry gets only a token saved for quay.io/rhoai, not a general quay.io login. Save the quay.io/rhoai token with Replace token; the updater then copies it."]
     : !copy.exists
     ? ["warning", "Workbench images: the internal registry cannot pull nightly images", `It has no copy of the token yet. Copy for the internal registry creates ${where} from the token saved here.`]
     : !copy.ours
@@ -332,7 +334,7 @@ export const RegistryPullCopy: React.FC<{ copy: RegistryPullCopyInfo; onStatusRe
     : !copy.current
     ? ["warning", "Workbench images: the internal registry has an older token", `${where} holds an older token. Copy for the internal registry replaces it with the token saved here.`]
     : ["success", "Workbench images: the internal registry can pull nightly images", `It uses ${where}, a copy of this token.`];
-  const canCopy = !copy.problem && !copy.noApplicationsNamespace && (!copy.exists || (copy.ours && !copy.unusable && !copy.current));
+  const canCopy = !copy.problem && !copy.noApplicationsNamespace && !copy.noQuayRHOAIEntry && (!copy.exists || (copy.ours && !copy.unusable && !copy.current));
   const canRemove = copy.exists && copy.ours;
   const run = async (what: "copy" | "remove") => {
     setBusy(what);

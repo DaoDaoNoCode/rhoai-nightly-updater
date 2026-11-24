@@ -766,7 +766,8 @@ const routes = {
   "POST /api/setup/pull-secret/registry-copy": () => {
     const reg = world.status?.pullSecret?.registry;
     if (!reg || !reg.namespace) return { success: false, errorCode: "prerequisites", message: "This cluster does not have a hosted control plane: its internal registry pulls with openshift-config/pull-secret, so no copy is made.", logs: [] };
-    if (reg.exists && !reg.ours) return { success: false, errorCode: "validation", message: `Workbench images: Secret ${reg.namespace}/${reg.name} exists and was not created by this updater, so it was not changed.`, logs: [] };
+    if (reg.noQuayRHOAIEntry) return { success: false, errorCode: "prerequisites", message: "Workbench images: the pull secret has no quay.io/rhoai entry, so nothing was copied for the internal registry; add the quay.io/rhoai token under Pull secret.", logs: [] };
+    if (reg.exists && !reg.ours) return { success: false, errorCode: "not_managed", message: `Workbench images: Secret ${reg.namespace}/${reg.name} exists and was not created by this updater, so it was not changed.`, logs: [] };
     const updated = reg.exists;
     world.status.pullSecret.registry = { ...reg, exists: true, ours: true, current: true, unusable: undefined };
     return { success: true, message: updated ? `Workbench images: updated Secret ${reg.namespace}/${reg.name} with the new token for the internal registry` : `Workbench images: copied the quay.io/rhoai token to Secret ${reg.namespace}/${reg.name}, so the internal registry can pull nightly workbench images`, logs: [] };

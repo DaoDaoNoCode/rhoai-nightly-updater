@@ -196,6 +196,8 @@ export interface PullSecretInfo {
 export interface RegistryPullCopyInfo {
   name: string;
   namespace?: string;
+  /** The pull secret has no entry exactly for quay.io/rhoai (only a generic quay.io login, or none): nothing is copied. */
+  noQuayRHOAIEntry?: boolean;
   /** RHOAI has no DSCInitialization yet, so there is nowhere to copy to. */
   noApplicationsNamespace?: boolean;
   exists: boolean;
