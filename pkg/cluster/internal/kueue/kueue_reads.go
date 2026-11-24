@@ -112,7 +112,11 @@ type Queue struct {
 		ClusterQueue   string `json:"clusterQueue"`
 		ResourceGroups []struct {
 			Flavors []struct {
-				Name string `json:"name"`
+				Name      string `json:"name"`
+				Resources []struct {
+					Name         string `json:"name"`
+					NominalQuota any    `json:"nominalQuota"`
+				} `json:"resources"`
 			} `json:"flavors"`
 		} `json:"resourceGroups"`
 	} `json:"spec"`
@@ -127,6 +131,30 @@ func (q Queue) active() (bool, string) {
 		return false, "Kueue has not reported it yet"
 	}
 	return cond.Status == "True", kube.FirstNonEmpty(cond.Message, cond.Reason)
+}
+
+// nominalQuota is the ClusterQueue's nominal CPU and memory quota for the
+// tool's flavor, as the API returns them ("" when not set).
+func (q Queue) nominalQuota() (cpu, memory string) {
+	for _, g := range q.Spec.ResourceGroups {
+		for _, f := range g.Flavors {
+			if f.Name != FlavorName {
+				continue
+			}
+			for _, r := range f.Resources {
+				if r.NominalQuota == nil {
+					continue
+				}
+				switch r.Name {
+				case "cpu":
+					cpu = fmt.Sprint(r.NominalQuota)
+				case "memory":
+					memory = fmt.Sprint(r.NominalQuota)
+				}
+			}
+		}
+	}
+	return cpu, memory
 }
 
 func (q Queue) usesFlavor(name string) bool {
@@ -213,30 +241,37 @@ func listWorkloads(c *kube.Client, project string) ([]Workload, error) {
 	return items, err
 }
 
+// rayContainer is a Ray pod's container: its image and resources (the
+// quantities as the API returns them).
+type rayContainer struct {
+	Image     string `json:"image"`
+	Resources struct {
+		Requests map[string]string `json:"requests"`
+		Limits   map[string]string `json:"limits"`
+	} `json:"resources"`
+}
+
+// rayGroup is a head or worker group's pod template.
+type rayGroup struct {
+	Template struct {
+		Spec struct {
+			Containers []rayContainer `json:"containers"`
+		} `json:"spec"`
+	} `json:"template"`
+}
+
+// rayClusterShape is a RayCluster's spec, or a RayJob's rayClusterSpec.
+type rayClusterShape struct {
+	HeadGroupSpec    rayGroup   `json:"headGroupSpec"`
+	WorkerGroupSpecs []rayGroup `json:"workerGroupSpecs"`
+}
+
 // Ray captures a RayCluster or RayJob as returned by reads.
 type Ray struct {
 	Metadata kube.ObjectMeta `json:"metadata"`
 	Spec     struct {
-		HeadGroupSpec struct {
-			Template struct {
-				Spec struct {
-					Containers []struct {
-						Image string `json:"image"`
-					} `json:"containers"`
-				} `json:"spec"`
-			} `json:"template"`
-		} `json:"headGroupSpec"`
-		RayClusterSpec *struct {
-			HeadGroupSpec struct {
-				Template struct {
-					Spec struct {
-						Containers []struct {
-							Image string `json:"image"`
-						} `json:"containers"`
-					} `json:"spec"`
-				} `json:"template"`
-			} `json:"headGroupSpec"`
-		} `json:"rayClusterSpec"`
+		rayClusterShape
+		RayClusterSpec *rayClusterShape `json:"rayClusterSpec"`
 	} `json:"spec"`
 	Status struct {
 		State               string `json:"state"`
@@ -246,15 +281,51 @@ type Ray struct {
 	} `json:"status"`
 }
 
-func (r Ray) image() string {
-	cs := r.Spec.HeadGroupSpec.Template.Spec.Containers
+// cluster is the Ray cluster the sample runs: a RayCluster's own spec, or a
+// RayJob's rayClusterSpec.
+func (r Ray) cluster() rayClusterShape {
 	if r.Spec.RayClusterSpec != nil {
-		cs = r.Spec.RayClusterSpec.HeadGroupSpec.Template.Spec.Containers
+		return *r.Spec.RayClusterSpec
 	}
+	return r.Spec.rayClusterShape
+}
+
+func (r Ray) image() string {
+	cs := r.cluster().HeadGroupSpec.Template.Spec.Containers
 	if len(cs) == 0 {
 		return ""
 	}
 	return cs[0].Image
+}
+
+// sizedAsManifest reports whether the sample's head and first worker
+// request and limit the CPU and memory this version's manifests set
+// (RayClusterSpec); a sample an earlier version made with other sizes is
+// not.
+func (r Ray) sizedAsManifest() bool {
+	cl := r.cluster()
+	want := RayClusterSpec("")
+	same := func(g rayGroup, w any) bool {
+		cs := g.Template.Spec.Containers
+		res := w.(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)["resources"].(map[string]any)
+		if len(cs) == 0 {
+			return false
+		}
+		for _, kind := range []string{"requests", "limits"} {
+			got := cs[0].Resources.Requests
+			if kind == "limits" {
+				got = cs[0].Resources.Limits
+			}
+			for _, name := range []string{"cpu", "memory"} {
+				if got[name] != res[kind].(map[string]any)[name] {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	workers := want["workerGroupSpecs"].([]any)
+	return len(cl.WorkerGroupSpecs) > 0 && same(cl.HeadGroupSpec, want["headGroupSpec"]) && same(cl.WorkerGroupSpecs[0], workers[0])
 }
 
 func samplePath(kind, project string) string {

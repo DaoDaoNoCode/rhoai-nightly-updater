@@ -331,8 +331,11 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   pre-releases the samples' head and worker had 1 CPU and 2 GiB (requests
   equal to limits), and the head was OOMKilled seconds after it started. They
   now use the CodeFlare SDK's defaults (above), and the ClusterQueue quota
-  grows from 6 CPUs / 11 GiB to 6 CPUs / 19 GiB to hold them. Set up again
-  (Clean up first) to get the new sizes.
+  grows from 6 CPUs / 11 GiB to 6 CPUs / 19 GiB to hold them. Set up keeps
+  what is there, so the Distributed workloads tab now shows the live
+  ClusterQueue's quota and flags a queue or sample an earlier version made
+  with other sizes, and a recipe no longer counts those as set up: Clean
+  up, then Set up.
 
 - **Deleting a pipeline server no longer breaks the workbenches that use its
   dashboard Connection.** A workbench a user attached

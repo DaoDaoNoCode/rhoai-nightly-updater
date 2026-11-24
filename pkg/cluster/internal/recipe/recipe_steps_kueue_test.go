@@ -280,3 +280,22 @@ func TestValidate_KueueFields(t *testing.T) {
 		t.Errorf("unknown field: %+v", problems)
 	}
 }
+
+// A queue or an asked-for sample an earlier version made with other sizes
+// is not counted as set up: the check says so (Set up would keep it).
+func TestKueueOutdated(t *testing.T) {
+	st := &types.KueueStatus{
+		Objects: []types.KueueObject{{Kind: "ClusterQueue", Name: "nightly-kueue", Present: true, ManagedByTool: true}},
+		Samples: []types.KueueSample{{Kind: kueue.SampleRayCluster, Name: "nightly-raycluster", Present: true, ManagedByTool: true, Outdated: "old sizes"}},
+	}
+	if why := kueueOutdated(st, types.RecipeKueue{Enabled: true}, "proj"); why != "" {
+		t.Errorf("a sample not asked for: %q", why)
+	}
+	if why := kueueOutdated(st, types.RecipeKueue{Enabled: true, RayCluster: true}, "proj"); !strings.Contains(why, "An earlier version of this tool made the sample nightly-raycluster (old sizes) in proj") || !strings.Contains(why, "Clean up on the Distributed workloads tab, then Resume") {
+		t.Errorf("outdated sample: %q", why)
+	}
+	st.Samples[0].Outdated, st.Objects[0].Outdated = "", "its quota is 6 CPUs and 11Gi of memory"
+	if why := kueueOutdated(st, types.RecipeKueue{Enabled: true}, "proj"); !strings.Contains(why, "ClusterQueue nightly-kueue (its quota is 6 CPUs and 11Gi of memory)") {
+		t.Errorf("outdated queue: %q", why)
+	}
+}

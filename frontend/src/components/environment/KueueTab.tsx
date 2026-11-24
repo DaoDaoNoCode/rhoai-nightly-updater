@@ -71,6 +71,7 @@ const objectText = (o: KueueObject | undefined) => {
   if (!o?.present) return "Not created yet";
   if (o.foreign) return "Exists, not created by this tool";
   if (o.terminating) return "Being deleted";
+  if (o.outdated) return `Made by an earlier version of this tool: ${o.outdated}. Clean up, then Set up again.`;
   if (o.kind !== "ResourceFlavor" && !o.active) return `Not active yet${o.message ? `: ${o.message}` : ""}`;
   return "Created by this tool";
 };
@@ -179,6 +180,11 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
                 <Content component="p">
                   {kind === "raycluster" ? "A small CPU-only RayCluster" : "A RayJob on the same cluster spec that prints the cluster's resources, runs five minutes and completes"}, sent to LocalQueue {KUEUE_LOCAL_QUEUE}. {SAMPLE_WHERE[kind]}
                 </Content>
+                {s?.outdated && s.present && (
+                  <Alert variant="warning" isInline component="p" title="Made by an earlier version of this tool">
+                    {`${s.outdated[0].toUpperCase()}${s.outdated.slice(1)}. Delete it and add it again, or Clean up, then Set up again.`}
+                  </Alert>
+                )}
                 {s?.message && s.present && <Content component="p">Kueue: {s.message}</Content>}
                 {s?.present && (s.image || s.rayState) && (
                   <DescriptionList isCompact isHorizontal aria-label={`${SAMPLE_TITLES[kind]} details`}>

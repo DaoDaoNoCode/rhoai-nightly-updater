@@ -1985,6 +1985,8 @@ export interface KueueObject {
   active?: boolean;
   message?: string;
   terminating?: boolean;
+  /** This tool's ClusterQueue made by an earlier version with another quota: how it differs. */
+  outdated?: string;
 }
 
 /** The RayCluster or RayJob sample (pkg/types KueueSample). */
@@ -2000,6 +2002,8 @@ export interface KueueSample {
   state?: string;
   message?: string;
   rayState?: string;
+  /** This tool's sample made by an earlier version with other sizes: how it differs. */
+  outdated?: string;
 }
 
 /** The dashboard's Kueue switch and the tool's Queue hardware profile. */
