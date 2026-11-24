@@ -26,8 +26,8 @@ func putNotebook(f *resourceFake, ns, name, conns string) {
 		"spec":{"template":{"spec":{"containers":[{"name":"`+name+`","envFrom":[{"secretRef":{"name":"`+storage.ConnectionSecretName+`"}}]}]}}}}`)
 }
 
-func notebookAnnotation(f *resourceFake, ns, name string) (string, bool) {
-	v, ok := ensureMap(ensureMap(f.get(notebookPath(ns, name)), "metadata"), "annotations")[storage.NotebookConnectionsAnnotation].(string)
+func notebookAnnotation(f *resourceFake, name string) (string, bool) {
+	v, ok := ensureMap(ensureMap(f.get(notebookPath("proj", name)), "metadata"), "annotations")[storage.NotebookConnectionsAnnotation].(string)
 	return v, ok
 }
 
@@ -60,10 +60,10 @@ func TestTeardownPipelineServer_RemovesTheConnectionFromItsWorkbenchesFirst(t *t
 	if err != nil || !resp.Success {
 		t.Fatalf("got %+v, %v", resp, err)
 	}
-	if got, _ := notebookAnnotation(f, "proj", "wb-a"); got != "proj/other,proj/third" {
+	if got, _ := notebookAnnotation(f, "wb-a"); got != "proj/other,proj/third" {
 		t.Errorf("wb-a keeps its other Connections: got %q", got)
 	}
-	if got, ok := notebookAnnotation(f, "proj", "wb-b"); ok {
+	if got, ok := notebookAnnotation(f, "wb-b"); ok {
 		t.Errorf("wb-b's annotation must go when nothing is left, got %q", got)
 	}
 	for _, nb := range []string{"wb-a", "wb-b"} {
@@ -84,7 +84,7 @@ func TestTeardownPipelineServer_RemovesTheConnectionFromItsWorkbenchesFirst(t *t
 			t.Errorf("%s must lose the Connection before the DSPA is deleted (patch %d, delete %d)", nb, i, d)
 		}
 	}
-	if got, _ := notebookAnnotation(f, "proj", "wb-c"); got != "proj/other" || hasMutation(f, "PATCH "+notebookPath("proj", "wb-c")) {
+	if got, _ := notebookAnnotation(f, "wb-c"); got != "proj/other" || hasMutation(f, "PATCH "+notebookPath("proj", "wb-c")) {
 		t.Errorf("wb-c does not use the Connection and must be left alone: %q", got)
 	}
 	if hasMutation(f, "PATCH "+notebookPath("other", "wb-d")) {
@@ -124,7 +124,7 @@ func TestTeardownPipelineServer_ResumesWithTheSameConfirmation(t *testing.T) {
 	if resp, _ := TeardownPipelineServer(c, "proj", toolDSPAUID(c, "proj"), []string{"wb-a", "wb-b"}); !resp.Success {
 		t.Fatalf("got %+v", resp)
 	}
-	if _, ok := notebookAnnotation(f, "proj", "wb-b"); ok || hasMutation(f, "PATCH "+notebookPath("proj", "wb-a")) {
+	if _, ok := notebookAnnotation(f, "wb-b"); ok || hasMutation(f, "PATCH "+notebookPath("proj", "wb-a")) {
 		t.Errorf("only wb-b is left to change: %v", f.mutations())
 	}
 }
@@ -152,7 +152,7 @@ func TestTeardownPipelineServer_WorkbenchChangedAbortsBeforeDelete(t *testing.T)
 			t.Errorf("nothing may be deleted: %s", m)
 		}
 	}
-	if _, ok := notebookAnnotation(f, "proj", "wb-b"); !ok {
+	if _, ok := notebookAnnotation(f, "wb-b"); !ok {
 		t.Error("wb-b must keep its annotation")
 	}
 }
@@ -204,7 +204,7 @@ func TestTeardownPipelineServer_LeftoverConnectionLeavesWorkbenchesFirst(t *test
 	if resp, _ := TeardownPipelineServer(c, "proj", "", []string{"wb-a", "wb-b"}); !resp.Success || f.has(secretPath("proj", storage.ConnectionSecretName)) {
 		t.Fatalf("confirmed: %+v", resp)
 	}
-	if _, ok := notebookAnnotation(f, "proj", "wb-b"); ok {
+	if _, ok := notebookAnnotation(f, "wb-b"); ok {
 		t.Error("wb-b must lose the Connection")
 	}
 }
