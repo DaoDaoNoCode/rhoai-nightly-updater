@@ -2,9 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActionListItem,
   Alert,
-  AlertActionCloseButton,
   AlertActionLink,
-  AlertGroup,
   Content,
   PageSection,
   Stack,
@@ -35,14 +33,9 @@ import { MLflowTab, mlflowConfirm } from "./environment/MLflowTab";
 import { Overview } from "./environment/Overview";
 import { FEATURE_PURPOSE, READ_ONLY_SETUP, partTitleId } from "./environment/FeatureLayout";
 import { TooltipButton } from "./TooltipButton";
-import { MigrateStorageModal } from "./environment/MigrateStorageModal";
-import { SecureStorageModal, secureExtraSteps } from "./environment/SecureStorageModal";
-import { MIGRATE_TITLES, migrateStepNow, useMigrateStorage, type MigrateKind } from "./environment/useMigrateStorage";
 import { type ProjectOption } from "./environment/ProjectSelect";
-import { RunModal, runOutcome } from "./environment/SetupRun";
 import { samplesConfirm } from "./environment/samples";
-import { runStepNow } from "./environment/useGoalRun";
-import { useRegisterBackgroundRun } from "./ProgressViews";
+import { EnvironmentRunsProvider, useEnvironmentRuns, useHasEnvironmentRuns, useLinkEnvironmentPage } from "./environment/EnvironmentRunsProvider";
 import { CleanupModal, cleanupCandidates } from "./environment/CleanupModal";
 import {
   type Busy,
@@ -67,7 +60,7 @@ import type { ModelExposureKind, PrerequisiteFeature } from "../types";
 import { BUSY_REASON, PROJECT_TABS, TAB_PARTS, TAB_TITLES, ENVIRONMENT_TABS, type EnvironmentTab } from "./environment/environmentTabs";
 import { useEnvironmentLocation } from "./environment/useEnvironmentLocation";
 import { useResourcePolling, useResourceStatus } from "./environment/useResourceStatus";
-import { environmentActions, useRunState } from "./environment/environmentRuns";
+import { environmentActions } from "./environment/environmentRuns";
 import { environmentProjectNames, modelsProjectOptions, pipelinesProjectOptions, playgroundProjectOptions } from "./environment/projectOptions";
 import { overviewRows as buildOverviewRows } from "./environment/overviewRows";
 import { runFollowUp } from "./environment/runFollowUp";
@@ -98,9 +91,15 @@ interface QuickResourceCreatorProps {
  * between Overview rows and its tab body. ?tab= and ?project= in the URL preserve
  * navigation across reloads and history (useEnvironmentLocation). Status and project
  * lists load and poll via useResourceStatus; mutations run through a single progress
- * dialog (environmentRuns).
+ * dialog (environmentRuns). The runs and their dialogs live in EnvironmentRunsProvider,
+ * above the routes in the app, so they outlive the page; rendered on its own (tests),
+ * the page brings its own.
  */
-export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, readBlocker = null, consoleURL, onResult, renderHeader }) => {
+export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = (props) => (
+  useHasEnvironmentRuns() ? <EnvironmentView {...props} /> : <EnvironmentRunsProvider><EnvironmentView {...props} /></EnvironmentRunsProvider>
+);
+
+const EnvironmentView: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, readBlocker = null, consoleURL, onResult, renderHeader }) => {
   const { searchParams, tab, urlProject, navigate, setFocusTarget, chooseModel } = useEnvironmentLocation();
   const [pending, setPending] = useState<Pending | null>(null);
   const readOnly = !!readBlocker;
@@ -116,8 +115,9 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   // action. Steady terminal states are not settling—they await an explicit change (A08-3).
   const resourcesSettling = allResources.some((r) => isTerminating(r) || (r.deployed && !r.ready && !terminalReason(r)));
 
-  const runs = useRunState();
-  const { resAction, actionProject, run, runOpen, setRunOpen, setupConfirm, setSetupConfirm, cleanupScope, setCleanupScope, cleanupRetry, setCleanupRetry,
+  const env = useEnvironmentRuns();
+  const { runs, migration, setMigrateKind } = env;
+  const { resAction, actionProject, run, setupConfirm, setSetupConfirm, cleanupScope, setCleanupScope, cleanupRetry, setCleanupRetry,
     sampleOp, samplesRefresh, modelsOp, playgroundOp, playgroundRefresh, workbenchOp, workbenchRefresh, maasOp, maasRefresh, prereqRefresh, checking, checkError,
     modelRegistryOp, modelRegistryRefresh, kueueOp, kueueRefresh } = runs;
   // Single poll loop: aggressive right after activity, then 30 s cadence for ten minutes,
@@ -125,8 +125,6 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   const settlingNow = !!resAction || resourcesSettling || !!run.run?.running;
   const polling = useResourcePolling(fetchResources, settlingNow);
 
-  const [migrateKind, setMigrateKind] = useState<MigrateKind | null>(null);
-  const migration = useMigrateStorage(useCallback(() => { void fetchResources(); }, [fetchResources]));
   // Secure S3 storage runs the same way but is not a migration: it shows as the storage's own action.
   const migrating = !!migration.run?.running && migration.run.kind !== "secure";
   const securing = !!migration.run?.running && migration.run.kind === "secure";
@@ -187,27 +185,6 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     ...((pg?.items ?? []).some((i) => i.namespace === project && i.deployed) ? ["a playground"] : []),
   ];
   const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, [...pipelineServers, ...(resStatus?.outsidePipelineServers ?? [])]) ?? modelsConfirm(p, resStatus) ?? playgroundConfirm(p, pg) ?? workbenchConfirm(p, wb, setPending) ?? maasConfirm(p, maas, setPending) ?? modelRegistryConfirm(p, registry, setPending) ?? kueueConfirm(p, kueueData, setPending, p.kind === "setup-kueue" ? othersIn(p.project) : []) ?? prerequisitesConfirm(p, prereq) ?? samplesConfirm(p);
-
-  // Finished runs whose dialog was dismissed surface as toast with a path back—outcomes stay
-  // visible without shifting page layout.
-  const [toast, setToast] = useState(false);
-  const wasRunning = useRef(false);
-  useEffect(() => {
-    const now = !!run.run?.running;
-    // When cleanup aborts before confirmation, reopen the Clean up flow.
-    if (wasRunning.current && !now && !runOpen && !cleanupRetry) setToast(true);
-    wasRunning.current = now;
-  }, [run.run?.running, runOpen, cleanupRetry]);
-
-  // Background runs (dialog closed) still appear in the global operation strip with step text
-  // and View progress to restore the run dialog.
-  const reopenRun = useCallback(() => { setToast(false); setRunOpen(true); }, [setRunOpen]);
-  const migrationKind = migration.run?.running ? migration.run.kind : null;
-  const reopenMigration = useCallback(() => { if (migrationKind) setMigrateKind(migrationKind); }, [migrationKind]);
-  const goal = run.run?.running ? run.run : null;
-  useRegisterBackgroundRun(goal
-    ? { title: goal.title, startedAt: goal.startedAt, step: runStepNow(goal), open: reopenRun }
-    : migration.run?.running ? { title: MIGRATE_TITLES[migration.run.kind], startedAt: migration.run.startedAt, step: migrateStepNow(migration.run), open: reopenMigration } : null);
 
   const runningSomething = !!resAction || migrating || securing || !!run.run?.running || !!checking;
   const busy: Busy = { resAction: securing ? "secure-minio" : resAction, actionProject, migrating, models: modelsOp, playground: playgroundOp, workbench: workbenchOp, maas: maasOp, modelRegistry: modelRegistryOp, kueue: kueueOp };
@@ -274,14 +251,18 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   })();
 
   const { open: runNext, whatNext } = runFollowUp({
-    run: run.run, runFeature: runs.runFeature, sampleRun: runs.sampleRun, modelsRun: runs.modelsRun, playgroundRun: runs.playgroundRun, maasRun: runs.maasRun,
-    status: resStatus, pg, busy, projectNames, mlflowNow, maasNow, pipelines,
+    run: run.run, runFeature: runs.runFeature, runProject: runs.runProject, sampleRun: runs.sampleRun, modelsRun: runs.modelsRun, playgroundRun: runs.playgroundRun, maasRun: runs.maasRun,
+    status: resStatus, pg, busy, projectNames, mlflowNow, maasNow,
   });
-  const outcome = run.run ? runOutcome(run.run) : null;
+  // The runs call the page's reads through the provider: those of the page open when they need them.
+  useLinkEnvironmentPage(
+    { fetchResources, restartPolling: polling.restart, statusRef, project: selectedPipelinesProject, onResult },
+    { next: runNext?.kind === "open" ? runNext : null, whatNext, legacy, keys: resStatus?.s3Keys, mutateBlocker },
+  );
 
   const { checkAgain, checkModel, execute, setUp, startSetUp, startCleanup } = environmentActions({
-    runs, status: resStatus, statusRef, fetchResources, readFresh: resources.readFresh, restartPolling: polling.restart,
-    pg, wb, maas, modelRegistry: registry, kueue: kueueData, othersIn, prereq, confirmOf, setPending, projectNames, onResult,
+    runs, status: resStatus, latestStatus: env.latestStatus, refreshStatus: env.refreshStatus, fetchResources: env.fetchResources, readFresh: resources.readFresh, restartPolling: env.restartPolling, askCleanupConfirmation: env.askCleanupConfirmation,
+    pg, wb, maas, modelRegistry: registry, kueue: kueueData, othersIn, prereq, confirmOf, setPending, projectNames, onResult: env.onResult,
   });
 
   // Shared prerequisites block rendered above each feature tab's sections.
@@ -434,35 +415,6 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
         </Stack>
       </PageSection>
 
-      {migrateKind === "secure" && (
-        <SecureStorageModal
-          isOpen
-          keys={resStatus?.s3Keys}
-          run={migration.run}
-          baseReason={securing ? null : mutateBlocker ?? (resAction || migrating || run.run?.running ? BUSY_REASON : null)}
-          onStart={() => migration.start("secure", { removeLeftoverKeys: (resStatus?.s3Keys?.leftovers ?? []).map((l) => l.user) }, secureExtraSteps(resStatus?.s3Keys))}
-          onClose={() => {
-            setMigrateKind(null);
-            migration.reset();
-          }}
-        />
-      )}
-
-      {migrateKind && migrateKind !== "secure" && (
-        <MigrateStorageModal
-          isOpen
-          kind={migrateKind}
-          legacy={legacy}
-          run={migration.run}
-          baseReason={migrating ? null : mutateBlocker ?? (resAction || run.run?.running ? BUSY_REASON : null)}
-          onStart={(kind, deleteNamespace, confirmProjects) => migration.start(kind, kind === "remove" ? { removeOldStorage: true, deleteNamespace } : confirmProjects.length > 0 ? { confirmProjects } : {})}
-          onClose={() => {
-            setMigrateKind(null);
-            migration.reset();
-          }}
-        />
-      )}
-
       {modal && (
         <ConfirmActionModal
           isOpen
@@ -503,17 +455,6 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
           retry={cleanupRetry} onConfirm={startCleanup} onCancel={() => { setCleanupScope(null); setCleanupRetry(null); }} />
       )}
 
-      <RunModal run={run.run} isOpen={runOpen} open={runNext} whatNext={whatNext}
-        onClose={() => { setRunOpen(false); if (!run.run?.running) run.reset(); }} />
-
-      <AlertGroup isToast isLiveRegion>
-        {toast && run.run && outcome && (
-          <Alert variant={outcome.variant} title={outcome.variant === "danger" ? outcome.title : `${run.run.title}: ${outcome.title}`}
-            timeout={outcome.variant === "success" ? 8000 : false} onTimeout={() => setToast(false)}
-            actionClose={<AlertActionCloseButton onClose={() => setToast(false)} />}
-            actionLinks={<AlertActionLink onClick={() => { setToast(false); setRunOpen(true); }}>Show details</AlertActionLink>} />
-        )}
-      </AlertGroup>
     </>
   );
 };

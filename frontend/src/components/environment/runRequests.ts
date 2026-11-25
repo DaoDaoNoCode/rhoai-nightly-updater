@@ -50,14 +50,15 @@ export function resourceRequest(p: ResourcePending): [string, () => Promise<Oper
 
 /**
  * A step of a Set up run: the request returns once the part is created; the
- * step waits until the status the page keeps loading reports it working.
+ * step waits until the latest status (the page's, or the run's own read
+ * while the page is closed) reports it working.
  */
-export function setUpWait(p: ResourcePending, target: string | null, statusRef: { current: ResourcesStatus | null }): Pick<GoalRunStep, "waitReady" | "readyMessage"> {
+export function setUpWait(p: ResourcePending, target: string | null, latestStatus: () => ResourcesStatus | null): Pick<GoalRunStep, "waitReady" | "readyMessage"> {
   const waitReady: GoalRunStep["waitReady"] = p.kind === "setup-pipeline-server"
-    ? { check: () => readyCheck("pipeline", pipelineServerIn(statusRef.current, target!)), typical: "1 to 3 minutes" }
+    ? { check: () => readyCheck("pipeline", pipelineServerIn(latestStatus(), target!)), typical: "1 to 3 minutes" }
     : p.kind === "setup-mlflow"
-      ? { check: () => readyCheck("mlflow", statusRef.current?.mlflow), typical: "1 to 3 minutes" }
-      : { check: () => readyCheck("minio", statusRef.current?.minio), typical: "under a minute" };
+      ? { check: () => readyCheck("mlflow", latestStatus()?.mlflow), typical: "1 to 3 minutes" }
+      : { check: () => readyCheck("minio", latestStatus()?.minio), typical: "under a minute" };
   const readyMessage = p.kind === "setup-minio" ? "The S3 storage is ready." : p.kind === "setup-mlflow" ? "MLflow is ready." : `The pipeline server in ${target} is ready.`;
   return { waitReady, readyMessage };
 }

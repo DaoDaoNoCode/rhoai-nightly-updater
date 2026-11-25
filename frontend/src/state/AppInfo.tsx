@@ -9,7 +9,8 @@ import {
   type ApiError,
 } from "../services/api";
 import { DASHBOARD_OVERRIDE_POLL_MS, GITOPS_POLICY_POLL_MS, UPDATE_CHECK_REFRESH_MS } from "../constants";
-import { usePermissions, useRole } from "./Permissions";
+import { usePermissions, useRole, useSessionExpired } from "./Permissions";
+import { useBackgroundRun } from "../components/ProgressViews";
 import { usePolling } from "../hooks/usePolling";
 import { useLatestRequest } from "../hooks/useLatestRequest";
 import { OPERATION_NAMES, RECIPE_OPERATION_TYPE, STEP_SETS, operationKindForServerType, recipeTarget, stepLabel } from "../operationSteps";
@@ -101,6 +102,21 @@ export function useProfile(): "full" | "gitops" | null {
 }
 
 /** True when the backend runs the gitops profile (docs/GITOPS.md, "Profiles"). */
+/**
+ * The screens that replace every page (AppLayout): the session ended, or
+ * (gitops profile) the cluster-admin check said no or could not answer.
+ * `any` is true while one of them shows.
+ */
+export function useAppScreens(): { sessionExpired: boolean; adminRequired: boolean; permissionsUnknown: boolean; any: boolean } {
+  const sessionExpired = useSessionExpired();
+  const gitOpsProfile = useGitOpsProfile();
+  const role = useRole();
+  const { status } = usePermissions();
+  const adminRequired = gitOpsProfile && role !== "admin" && status === "denied";
+  const permissionsUnknown = gitOpsProfile && role !== "admin" && status === "unknown";
+  return { sessionExpired, adminRequired, permissionsUnknown, any: sessionExpired || adminRequired || permissionsUnknown };
+}
+
 export function useGitOpsProfile(): boolean {
   return isGitOpsProfile(useAppInfo().version);
 }
@@ -328,7 +344,10 @@ export function useMutationBlocker(options: { ignoreReconcile?: boolean } = {}):
   const { reason } = usePermissions();
   const { run, server, state } = useOperation();
   const { status } = useClusterStatus();
+  // A run of the Environment page: between the parts of a Set up the backend lock is free.
+  const background = useBackgroundRun();
   if (reason) return reason;
+  if (background) return `${background.title} is still running. Wait for it to finish.`;
   if (options.ignoreReconcile && !isRunning(run) && !server.inProgress) return null;
   if (isRunning(run) && run.source === "stream") {
     return `Your ${OPERATION_NAMES[run.kind].toLowerCase()} is still running. Wait for it to finish.`;

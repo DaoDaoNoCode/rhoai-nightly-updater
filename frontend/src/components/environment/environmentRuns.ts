@@ -1,4 +1,3 @@
-import { useState } from "react";
 import type { ConnectionWorkbench, KueueRequest, KueueStatus, WorkbenchStatus, MaaSStatus, ModelRegistryStatus, OperationResponse, PlaygroundStatus, PrerequisitesStatus, ResourcesStatus } from "../../types";
 import {
   trackFeature,
@@ -25,30 +24,14 @@ import { modelRegistryConfirm, modelRegistrySteps } from "./ModelRegistryTab";
 import { kueueConfirm, kueueSteps } from "./KueueTab";
 import type { KueueOp } from "./kueueState";
 import { type SampleOp, mlflowSampleSteps, samplesConfirm } from "./samples";
-import { useGoalRun, type GoalRunStep } from "./useGoalRun";
-import { type CleanupRetry, type CleanupScope, cleanupSteps } from "./CleanupModal";
-import { type FeatureState, type MaaSOp, type ModelRegistryOp, type ModelsOp, type PlaygroundOp, type WorkbenchOp, mlflowState, pipelinesState, setUpBlocked, storageState } from "./featureState";
+import type { RunState } from "./runState";
+import type { GoalRunStep } from "./useGoalRun";
+import { cleanupSteps } from "./CleanupModal";
+import { type ModelRegistryOp, type PlaygroundOp, type WorkbenchOp, mlflowState, pipelinesState, setUpBlocked, storageState } from "./featureState";
 import { prerequisitesConfirm, prerequisitesSteps } from "./Prerequisites";
 import { modelsOpOf, modelsRequest, resourceRequest, setUpWait } from "./runRequests";
-import { TAB_TITLES, type RunFeature } from "./environmentTabs";
+import { TAB_TITLES } from "./environmentTabs";
 
-/** A Set up waiting for its confirmation. */
-export interface SetupConfirm {
-  feature: string;
-  title: string;
-  specs: ConfirmSpec[];
-  steps: GoalRunStep[];
-  done: string;
-  /** The feature's state on fresh data, for the run's first check. */
-  recheck: (s: ResourcesStatus | null, projects: string[]) => FeatureState;
-}
-
-/**
- * The Environment page's changes in progress: the run dialog's run, what
- * each feature's running operation changes (its parts show it busy), the
- * last run of each (for the run dialog's next step), and the keys that make
- * a feature read its state again.
- */
 /** The clean-up's refusal of a recipe project that holds what this tool did not create (pkg/cluster recipe.ErrorCodeConfirmContents). */
 const CONFIRM_PROJECT_CONTENTS = "confirm_project_contents";
 const CONFIRM_WORKBENCHES = "confirm_connection_workbenches";
@@ -61,79 +44,21 @@ export function parseWorkbenches(detail?: string): ConnectionWorkbench[] {
   });
 }
 
-export function useRunState() {
-  // The action running from this page ("setup-minio", ...) and its project.
-  const [resAction, setResAction] = useState<string | null>(null);
-  const [actionProject, setActionProject] = useState<string | null>(null);
-  // errorCode of this tab's last storage deletion that did not succeed.
-  const run = useGoalRun();
-  const [runOpen, setRunOpen] = useState(false);
-  const [setupConfirm, setSetupConfirm] = useState<SetupConfirm | null>(null);
-  const [cleanupScope, setCleanupScope] = useState<CleanupScope | null>(null);
-  // A clean-up refused because recipe projects hold what this tool did not
-  // create: Clean up opens again with its choices and asks (null otherwise).
-  const [cleanupRetry, setCleanupRetry] = useState<CleanupRetry | null>(null);
-  // The sample operation running now (its rows show it), the last sample
-  // run (for the run dialog's next step), and a key that changes when one
-  // ends, so the tabs read the sample state again.
-  const [sampleOp, setSampleOp] = useState<SampleOp | null>(null);
-  const [sampleRun, setSampleRun] = useState<SampleOp | null>(null);
-  const [samplesRefresh, setSamplesRefresh] = useState(0);
-  // The Models operation running now (its parts show it), and the last one (for the run dialog's next step).
-  const [modelsOp, setModelsOp] = useState<ModelsOp | null>(null);
-  const [modelsRun, setModelsRun] = useState<ModelsOp | null>(null);
-  // The Playground operation running now, the last one, and a key that reads its state again.
-  const [playgroundOp, setPlaygroundOp] = useState<PlaygroundOp | null>(null);
-  const [playgroundRun, setPlaygroundRun] = useState<PlaygroundOp | null>(null);
-  const [playgroundRefresh, setPlaygroundRefresh] = useState(0);
-  // The Workbench operation running now, the last one, and a key that reads its state again.
-  const [workbenchOp, setWorkbenchOp] = useState<WorkbenchOp | null>(null);
-  const [workbenchRun, setWorkbenchRun] = useState<WorkbenchOp | null>(null);
-  const [workbenchRefresh, setWorkbenchRefresh] = useState(0);
-  const [maasOp, setMaaSOp] = useState<MaaSOp | null>(null);
-  // The last MaaS operation, for the run dialog's next step.
-  const [maasRun, setMaaSRun] = useState<MaaSOp | null>(null);
-  // Which feature the run dialog's run belongs to, set by whatever starts
-  // it: the dialog's next step and words come from it (never guessed from
-  // the run's title or the last runs of other features).
-  const [runFeature, setRunFeature] = useState<RunFeature>("other");
-  const [maasRefresh, setMaaSRefresh] = useState(0);
-  // The Model registry operation running now, and a key that reads its state again.
-  const [modelRegistryOp, setModelRegistryOp] = useState<ModelRegistryOp | null>(null);
-  const [modelRegistryRefresh, setModelRegistryRefresh] = useState(0);
-  // The Distributed workloads operation running now, and a key that reads its state again.
-  const [kueueOp, setKueueOp] = useState<KueueOp | null>(null);
-  const [kueueRefresh, setKueueRefresh] = useState(0);
-  const [prereqRefresh, setPrereqRefresh] = useState(0);
-  // A model's Check again, which runs in place (no dialog), and why it could not run.
-  const [checking, setChecking] = useState<{ project: string; model: string } | null>(null);
-  const [checkError, setCheckError] = useState<string | null>(null);
-  return {
-    resAction, setResAction, actionProject, setActionProject,
-    run, runOpen, setRunOpen, setupConfirm, setSetupConfirm, cleanupScope, setCleanupScope, cleanupRetry, setCleanupRetry,
-    sampleOp, setSampleOp, sampleRun, setSampleRun, samplesRefresh, setSamplesRefresh,
-    modelsOp, setModelsOp, modelsRun, setModelsRun,
-    playgroundOp, setPlaygroundOp, playgroundRun, setPlaygroundRun, playgroundRefresh, setPlaygroundRefresh,
-    workbenchOp, setWorkbenchOp, workbenchRun, setWorkbenchRun, workbenchRefresh, setWorkbenchRefresh,
-    maasOp, setMaaSOp, maasRun, setMaaSRun, runFeature, setRunFeature, maasRefresh, setMaaSRefresh,
-    modelRegistryOp, setModelRegistryOp, modelRegistryRefresh, setModelRegistryRefresh,
-    kueueOp, setKueueOp, kueueRefresh, setKueueRefresh,
-    prereqRefresh, setPrereqRefresh, checking, setChecking, checkError, setCheckError,
-  };
-}
-
-export type RunState = ReturnType<typeof useRunState>;
 
 export interface EnvironmentActionsContext {
   runs: RunState;
   /** The resource status shown, and the latest one (for a Set up's ready checks). */
   status: ResourcesStatus | null;
-  statusRef: { current: ResourcesStatus | null };
+  latestStatus: () => ResourcesStatus | null;
+  /** Reads the status again before a Set up's later ready checks while the page is closed. */
+  refreshStatus: (remainingMs: number) => Promise<void>;
   fetchResources: () => Promise<void>;
   /** Reads the status now and shows it: a Set up's preflight. */
   readFresh: () => Promise<ResourcesStatus>;
   /** Polls quickly again (after a change). */
   restartPolling: () => void;
+  /** A Clean up refused for confirmation, nothing changed: Clean up opens again on the page, or a notification offers it. */
+  askCleanupConfirmation: () => void;
   pg: PlaygroundStatus | null;
   wb: WorkbenchStatus | null;
   maas: MaaSStatus | null;
@@ -154,14 +79,23 @@ export interface EnvironmentActionsContext {
  * then checks every part's prerequisites, then runs the missing parts.
  */
 export function environmentActions(ctx: EnvironmentActionsContext) {
-  const { runs, status: resStatus, statusRef, fetchResources, readFresh, restartPolling, pg, wb, maas, modelRegistry, kueue, othersIn, prereq, confirmOf, setPending, projectNames, onResult } = ctx;
+  const { runs, status: resStatus, latestStatus, refreshStatus, fetchResources, readFresh, restartPolling, askCleanupConfirmation, pg, wb, maas, modelRegistry, kueue, othersIn, prereq, confirmOf, setPending, projectNames, onResult } = ctx;
   const {
     setResAction, setActionProject, run, setRunOpen, setupConfirm, setSetupConfirm, setCleanupScope, setCleanupRetry,
     setSampleOp, setSampleRun, setSamplesRefresh, setModelsOp, setModelsRun, setPlaygroundOp, setPlaygroundRun, setPlaygroundRefresh,
     setWorkbenchOp, setWorkbenchRun, setWorkbenchRefresh,
-    setMaaSOp, setMaaSRun, setRunFeature, setMaaSRefresh, setPrereqRefresh, checking, setChecking, setCheckError,
+    setMaaSOp, setMaaSRun, setRunFeature, setRunProject, setMaaSRefresh, setPrereqRefresh, checking, setChecking, setCheckError,
     setModelRegistryOp, setModelRegistryRefresh, setKueueOp, setKueueRefresh,
   } = runs;
+
+  /**
+   * A streamed run: as run.follow, and a refusal before it started
+   * (cluster_busy) reaches onResult as a request's answer does.
+   */
+  const follow: typeof run.follow = (title, steps, stream, kind) => run.follow(title, steps, (onStep, onDone, onDetach) => stream(onStep, (success, error, apiError) => {
+    if (!success && apiError?.errorCode) onResult?.({ success: false, message: error ?? apiError.message, errorCode: apiError.errorCode, logs: [] });
+    onDone(success, error, apiError);
+  }, onDetach), kind);
 
   /** Runs one request of a run; the run's dialog shows its outcome. */
   const runAction = async (action: string, fn: () => Promise<OperationResponse>, target: string | null): Promise<OperationResponse> => {
@@ -235,7 +169,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setModelsOp(null);
       void fetchResources();
     };
-    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, modelsSteps(p), (onStep, onDone, onDetach) => streamModels(modelsRequest(op, p),
+    follow(spec?.runTitle ?? spec?.title ?? p.kind, modelsSteps(p), (onStep, onDone, onDetach) => streamModels(modelsRequest(op, p),
       onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }), op.action === "teardown" || op.action === "disallow" ? "delete" : op.action === "check" ? "change" : "setup");
   };
 
@@ -256,7 +190,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setPlaygroundOp(null);
       setPlaygroundRefresh((n) => n + 1);
     };
-    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, playgroundSteps(p), (onStep, onDone, onDetach) => streamPlayground({
+    follow(spec?.runTitle ?? spec?.title ?? p.kind, playgroundSteps(p), (onStep, onDone, onDetach) => streamPlayground({
       action: op.action,
       project: op.project,
       ...(p.kind === "setup-playground" && p.models?.length ? { models: p.models } : {}),
@@ -282,7 +216,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setWorkbenchOp(null);
       setWorkbenchRefresh((n) => n + 1);
     };
-    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, workbenchSteps(p), (onStep, onDone, onDetach) => streamWorkbench({
+    follow(spec?.runTitle ?? spec?.title ?? p.kind, workbenchSteps(p), (onStep, onDone, onDetach) => streamWorkbench({
       action, project: p.project, ...(p.kind === "teardown-workbench" && p.deleteStorage ? { deleteStorage: true } : {}),
     }, onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }),
     action === "teardown" || action === "delete-storage" ? "delete" : action === "setup" ? "setup" : "change");
@@ -310,7 +244,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setMaaSRefresh((n) => n + 1);
       void fetchResources();
     };
-    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, maasSteps(p), (onStep, onDone, onDetach) => streamMaaS(req,
+    follow(spec?.runTitle ?? spec?.title ?? p.kind, maasSteps(p), (onStep, onDone, onDetach) => streamMaaS(req,
       onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }),
     action === "teardown" || action === "unpublish" || action === "remove-tier-policies" ? "delete" : "setup");
   };
@@ -333,7 +267,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setModelRegistryRefresh((n) => n + 1);
       setPrereqRefresh((n) => n + 1);
     };
-    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, modelRegistrySteps(p), (onStep, onDone, onDetach) => streamModelRegistry(
+    follow(spec?.runTitle ?? spec?.title ?? p.kind, modelRegistrySteps(p), (onStep, onDone, onDetach) => streamModelRegistry(
       { action: op.action, ...(p.kind === "setup-model-registry" && p.samples ? { samples: true } : {}) },
       onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }), op.action === "setup" ? "setup" : "delete");
   };
@@ -360,7 +294,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     const req: KueueRequest = p.kind === "setup-kueue"
       ? { action, project: p.project, ...(p.rayCluster ? { rayCluster: true } : {}), ...(p.rayJob ? { rayJob: true } : {}), ...(p.rayCluster || p.rayJob ? { rayImage: p.rayImage } : {}) }
       : p.kind === "delete-kueue-sample" ? { action, sample: p.sample } : { action };
-    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, kueueSteps(p), (onStep, onDone, onDetach) => streamKueue(req,
+    follow(spec?.runTitle ?? spec?.title ?? p.kind, kueueSteps(p), (onStep, onDone, onDetach) => streamKueue(req,
       onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }),
     action === "setup" || action === "optin" ? "setup" : "delete");
   };
@@ -381,7 +315,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setPrereqRefresh((n) => n + 1);
       void fetchResources();
     };
-    run.follow(spec?.runTitle ?? p.kind, prerequisitesSteps(p, prereq), (onStep, onDone, onDetach) => streamPrerequisites({ feature: p.feature, ...(p.exposure ? { exposure: p.exposure } : {}) },
+    follow(spec?.runTitle ?? p.kind, prerequisitesSteps(p, prereq), (onStep, onDone, onDetach) => streamPrerequisites({ feature: p.feature, ...(p.exposure ? { exposure: p.exposure } : {}) },
       onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }), "setup");
   };
 
@@ -405,7 +339,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setSamplesRefresh((n) => n + 1);
     };
     const steps = mlflowSampleSteps(p.action, p.samples);
-    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, steps, (onStep, onDone, onDetach) => {
+    follow(spec?.runTitle ?? spec?.title ?? p.kind, steps, (onStep, onDone, onDetach) => {
       const done: StreamDoneHandler = (success, error, apiError) => { end(); onDone(success, error, apiError); };
       const detach: StreamDetachHandler = (reason) => { end(); onDetach(reason); };
       return streamMLflowSamples({ project: p.project, action: p.action, samples: p.samples }, onStep, done, detach);
@@ -511,21 +445,22 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       if (spec) specs.push(spec);
       const [action, fn, target] = resourceRequest(p);
       const title = spec?.runTitle ?? action;
-      steps.push({ id: p.kind, title, run: () => runAction(action, fn, target), ...setUpWait(p, target, statusRef) });
+      steps.push({ id: p.kind, title, run: () => runAction(action, fn, target), ...setUpWait(p, target, latestStatus) });
     }
     const project = setup.flatMap((p) => (p.kind === "setup-pipeline-server" ? [p.project] : []))[0];
     const done = project ? `Pipelines are ready in ${project}.` : `${feature} is ready.`;
     const title = steps.length === 1 ? steps[0].title : project ? `Set up ${feature} in ${project}` : `Set up ${feature}`;
     const recheck = (s: ResourcesStatus | null, projects: string[]) => (feature === "MLflow" ? mlflowState(s) : feature === TAB_TITLES.storage ? storageState(s) : pipelinesState(s, project ?? null, projects));
-    if (steps.length > 0) setSetupConfirm({ feature, title, specs, steps, done, recheck });
+    if (steps.length > 0) setSetupConfirm({ feature, title, specs, steps, done, project, recheck });
   };
 
   /** Runs the confirmed Set up. */
   const startSetUp = () => {
     if (!setupConfirm) return;
-    const { feature, title, steps, done, recheck } = setupConfirm;
+    const { feature, title, steps, done, project, recheck } = setupConfirm;
     setSetupConfirm(null);
     setRunFeature(feature === "MLflow" ? "mlflow" : feature === TAB_TITLES.storage ? "storage" : "pipelines");
+    setRunProject(project ?? null);
     setSampleRun(null);
     setRunOpen(true);
     void run.start(title, steps, {
@@ -533,6 +468,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       doneMessage: done,
       // Every part's prerequisites on the latest status, before anything changes.
       preflight: async () => setUpBlocked(recheck(await readFresh(), projectNames)),
+      refresh: refreshStatus,
     });
   };
 
@@ -553,7 +489,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     const workbenches: Record<string, ConnectionWorkbench[]> = {};
     // Whether a part already changed the cluster before a refusal: its outcome then stays on screen.
     let changed = false;
-    run.follow(title, cleanupSteps(req), (onStep, onDone, onDetach) => streamCleanup(req, (step) => {
+    follow(title, cleanupSteps(req), (onStep, onDone, onDetach) => streamCleanup(req, (step) => {
       if (step.step.startsWith("recipe-project:") && step.errorCode === CONFIRM_PROJECT_CONTENTS) {
         refusals[step.step.slice("recipe-project:".length)] = (step.detail ?? "").split("\n").filter(Boolean);
       }
@@ -580,7 +516,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
         setCleanupRetry({ req, contents: refusals, workbenches: { ...confirmed, ...workbenches } });
         if (!changed) {
           setRunOpen(false);
-          setCleanupScope("all");
+          askCleanupConfirmation();
         }
       }
     }, (reason) => {

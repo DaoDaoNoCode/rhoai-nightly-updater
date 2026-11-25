@@ -17,8 +17,8 @@ import {
 } from "@patternfly/react-core";
 import type { LegacyStorageState } from "../../types";
 import { TooltipButton } from "../TooltipButton";
-import { S3_ENDPOINT, S3_NAMESPACE } from "./StorageTab";
-import { runSteps, type MigrateKind, type MigrateRun } from "./useMigrateStorage";
+import { S3_ENDPOINT, S3_NAMESPACE } from "./s3Location";
+import { migrateOutcome, runSteps, type MigrateKind, type MigrateRun } from "./useMigrateStorage";
 import { StepProgress } from "./StepProgress";
 import { withIds } from "./s3KeysText";
 
@@ -183,6 +183,7 @@ export const MigrateStorageModal: React.FC<{
   const showAction = !!legacy && !ownRun?.running && !succeeded;
   const showPlan = showAction && !finished;
   const blocked = baseReason ?? (stage === "remove" ? legacy?.removeBlockedReason || null : null);
+  const outcome = ownRun ? migrateOutcome(ownRun) : null;
   return (
     <Modal aria-labelledby={titleId} variant={ModalVariant.medium} isOpen={isOpen} onClose={onClose}>
       <ModalHeader title={stage === "remove" ? (succeeded ? "Delete the old storage" : "Delete the old storage?") : "Migrate storage"} labelId={titleId}
@@ -194,10 +195,9 @@ export const MigrateStorageModal: React.FC<{
               <RunProgress run={ownRun} formatMessage={withIds} />
             </StackItem>
           )}
-          {ownRun?.result && (
+          {ownRun?.result && outcome && (
             <StackItem>
-              <Alert component="p" isInline isLiveRegion variant={ownRun.result.success ? "success" : ownRun.result.errorCode === "in_progress" || ownRun.result.errorCode === "detached" ? "info" : "danger"}
-                title={ownRun.result.success ? (ownRun.kind === "migrate" ? "The data is in the new storage" : "The old storage was deleted") : ownRun.result.errorCode === "in_progress" || ownRun.result.errorCode === "detached" ? "Still running" : "Stopped"}>
+              <Alert component="p" isInline isLiveRegion variant={outcome.variant} title={outcome.title}>
                 {ownRun.result.message}
               </Alert>
             </StackItem>

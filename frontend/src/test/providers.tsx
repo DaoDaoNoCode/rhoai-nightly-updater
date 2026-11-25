@@ -6,6 +6,7 @@ import { AppInfoProvider } from "../state/AppInfo";
 import { PermissionsProvider } from "../state/Permissions";
 import { LiveAnnouncerProvider } from "../state/LiveAnnouncer";
 import { ProgressViewsProvider } from "../components/ProgressViews";
+import { AppEnvironmentRunsProvider } from "../components/environment/EnvironmentRunsProvider";
 import { getUserPermissions } from "../services/api";
 import type { DashboardState, OperationStatusResponse, StatusResponse, UpdateCheck, UserOperationStatus, UserPermissions, VersionInfo } from "../types";
 import { contract } from "./contract";
@@ -190,7 +191,7 @@ export function renderWithApp(ui: React.ReactNode, fetchers: AppFetchers = {}, r
         <PermissionsProvider fetchPermissions={permissions}>
           <RoleAppStateProvider fetchStatus={status} fetchOperation={operation}>
             <AppInfoProvider fetchVersion={version} fetchUpdateCheck={update} fetchDashboardState={dashboard}>
-              <ProgressViewsProvider>{ui}</ProgressViewsProvider>
+              <ProgressViewsProvider><AppEnvironmentRunsProvider>{ui}</AppEnvironmentRunsProvider></ProgressViewsProvider>
             </AppInfoProvider>
           </RoleAppStateProvider>
         </PermissionsProvider>

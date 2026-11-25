@@ -3,7 +3,7 @@ import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-li
 import { stubApi } from "../../test/apiStub";
 import type { ResourceState } from "../../types";
 import { envStatus, notManaged } from "./resourceStatus";
-import { useGoalRun } from "./useGoalRun";
+import { READY_CHECK_MS, READY_TIMEOUT_MS, useGoalRun } from "./useGoalRun";
 import { S3SecretField, copyFetchedText, s3EnvText } from "./AdminLogin";
 import { storageNotReadyReason } from "./featureState";
 
@@ -78,6 +78,46 @@ describe("useGoalRun", () => {
     }], { doneMessage: "Goal is ready." }));
     expect(result.current.run?.result).toEqual({ success: true, message: "Goal is ready." });
     expect(result.current.run?.states.a).toEqual({ status: "success", message: "A is ready. (0:06)" });
+  });
+  it("reads the status again before each later check, so a check never judges a status nobody reads any more", async () => {
+    const c = fakeClock();
+    const seen: string[] = [];
+    let latest = "starting";
+    let reads = 0;
+    const refresh = vi.fn(async () => { seen.push("refresh"); reads += 1; latest = reads >= 2 ? "ready" : "starting"; });
+    const { result } = renderHook(() => useGoalRun(c.now, c.sleep));
+    await act(() => result.current.start("Goal", [{
+      id: "a", title: "A", run: ok("created"),
+      waitReady: { typical: "x", check: () => { seen.push(`check ${latest}`); return latest === "ready" ? { state: "ready" } : { state: "starting" }; } },
+    }], { refresh }));
+    expect(seen).toEqual(["check starting", "refresh", "check starting", "refresh", "check ready"]);
+    expect(result.current.run?.result).toMatchObject({ success: true });
+  });
+  it("a status read that fails for good (the session ended) stops the run at that part; no read after the waiting time is up", async () => {
+    const c = fakeClock();
+    const next = vi.fn(ok("B"));
+    const left: number[] = [];
+    const { result } = renderHook(() => useGoalRun(c.now, c.sleep));
+    await act(() => result.current.start("Goal", [
+      { id: "a", title: "A", run: ok("created"), waitReady: { typical: "x", check: () => ({ state: "starting" }) } },
+      { id: "b", title: "B", run: next },
+    ], { refresh: async (remainingMs) => { left.push(remainingMs); if (left.length === 2) throw Object.assign(new Error("Your OpenShift session has expired."), { errorCode: "session_expired" }); } }));
+    expect(left).toEqual([READY_TIMEOUT_MS - READY_CHECK_MS, READY_TIMEOUT_MS - 2 * READY_CHECK_MS]);
+    expect(result.current.run?.states.a.status).toBe("failed");
+    expect(result.current.run?.result).toMatchObject({ success: false, message: "Your OpenShift session has expired." });
+    expect(next).not.toHaveBeenCalled();
+  });
+  it("a part found ready only by a read that ended past the waiting time does not start the next change", async () => {
+    const c = fakeClock();
+    const next = vi.fn(ok("B"));
+    let read = false;
+    const { result } = renderHook(() => useGoalRun(c.now, c.sleep));
+    await act(() => result.current.start("Goal", [
+      { id: "a", title: "A", run: ok("created"), waitReady: { typical: "x", check: () => (read ? { state: "ready" } : { state: "starting" }) } },
+      { id: "b", title: "B", run: next },
+    ], { refresh: async (remainingMs) => { await c.sleep(remainingMs + 1); read = true; } }));
+    expect(next).not.toHaveBeenCalled();
+    expect(result.current.run?.result).toMatchObject({ success: false, errorCode: "in_progress" });
   });
   it("a part that cannot start fails the run with the reason and the fix", async () => {
     const c = fakeClock();

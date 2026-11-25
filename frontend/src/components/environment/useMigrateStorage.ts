@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { streamMigrateStorage, streamSecureStorage, trackFeature, type MigrateStorageOptions } from "../../services/api";
-import type { UpdateStep } from "../../types";
+import type { OperationResponse, UpdateStep } from "../../types";
 
 /** Migrate storage, the removal of the old storage, or Secure S3 storage (the same kind of streamed run). */
 export type MigrateKind = "migrate" | "remove" | "secure";
@@ -65,11 +65,31 @@ export function migrateStepNow(run: MigrateRun): { title: string; index: number;
 }
 
 /**
+ * A finished run's outcome: the alert in its dialog (Migrate storage,
+ * Delete the old storage) and the notification when it ended with its
+ * dialog closed. Secure S3 storage's dialog says more, from the keys'
+ * status; this is its short form.
+ */
+export function migrateOutcome(run: MigrateRun): { variant: "success" | "info" | "warning" | "danger"; title: string } | null {
+  const r = run.result;
+  if (!r) return null;
+  if (r.success && run.kind === "secure") {
+    return r.errorCode === "partial"
+      ? { variant: "warning", title: "The S3 storage is secured; some pipeline servers still use the old key" }
+      : { variant: "success", title: "The S3 storage is secured" };
+  }
+  if (r.success) return { variant: "success", title: run.kind === "migrate" ? "The data is in the new storage" : "The old storage was deleted" };
+  if (r.errorCode === "detached" || (run.kind !== "secure" && r.errorCode === "in_progress")) return { variant: "info", title: "Still running" };
+  if (run.kind === "secure" && r.errorCode === "out_of_time") return { variant: "warning", title: "Stopped: out of time; run Secure S3 storage again to continue" };
+  return { variant: "danger", title: "Stopped" };
+}
+
+/**
  * Runs Migrate storage (or the removal of the old storage) and keeps its
  * progress while the dialog is closed: the operation runs on the server
  * either way. onFinished runs when it ends, to reload the status.
  */
-export function useMigrateStorage(onFinished: () => void) {
+export function useMigrateStorage(onFinished: () => void, onRefused?: (res: OperationResponse) => void) {
   const [run, setRun] = useState<MigrateRun | null>(null);
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
@@ -99,10 +119,14 @@ export function useMigrateStorage(onFinished: () => void) {
         return { ...r, extraSteps: extra, steps: { ...r.steps, [step.step]: { status: step.status, message: step.message } } };
       });
     };
-    const onDone = (success: boolean, error?: string, apiError?: { errorCode?: string }) => finish(success, success ? finalMessage : error || finalMessage || "The operation failed.", success ? finalCode : apiError?.errorCode);
+    const onDone = (success: boolean, error?: string, apiError?: { errorCode?: string }) => {
+      // A refusal before it started (cluster_busy) reaches the app as a request's answer does.
+      if (!success && apiError?.errorCode) onRefused?.({ success: false, message: error ?? "", errorCode: apiError.errorCode, logs: [] });
+      finish(success, success ? finalMessage : error || finalMessage || "The operation failed.", success ? finalCode : apiError?.errorCode);
+    };
     const onDrop = () => finish(false, "The connection to the server was lost. The operation continues on the server; the S3 storage tab shows the outcome when it ends.", "detached");
     controller.current = kind === "secure" ? streamSecureStorage(options.removeLeftoverKeys ?? [], onStep, onDone, onDrop) : streamMigrateStorage(options, onStep, onDone, onDrop);
-  }, [onFinished]);
+  }, [onFinished, onRefused]);
 
   const reset = useCallback(() => setRun((r) => (r && !r.running ? null : r)), []);
   return { run, start, reset };

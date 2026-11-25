@@ -492,6 +492,8 @@ export const scenarios = {
   "env-playground-none": (w) => { scenarios["env-models-several"](w); w.playground.modelsByProject["dev-project"] = [F.playgroundModels.qwen, F.playgroundModels.granite, F.playgroundModels.maas, F.playgroundModels.opt]; },
   // MaaS: the platform and this tool's model in dev-project.
   "env-maas-none": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { items: [F.maasModel(false)] }); },
+  // Set up MaaS step by step: each step waits for /__docs/advance (leave the page mid-run and come back).
+  "env-maas-flow": (w) => { scenarios["env-maas-none"](w); w.gated = true; },
   "env-maas-blocked": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { blocked: F.MAAS_BLOCKED, items: [F.maasModel(false)] }); },
   "env-maas-no-cnpg": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("none", { noCNPG: true, items: [F.maasModel(false)] }); },
   // A cluster that never had MaaS: Set up installs and creates everything.

@@ -49,7 +49,7 @@ export const RunModal: React.FC<{
   /** The feature's next step after a successful run: an Open link becomes the primary button. */
   open: NextStep | null;
   /** What to do next, under a successful outcome. */
-  whatNext?: React.ReactNode;
+  whatNext?: string;
 }> = ({ run, isOpen, onClose, open, whatNext }) => {
   const titleId = React.useId();
   if (!run) return null;
@@ -72,7 +72,7 @@ export const RunModal: React.FC<{
           {outcome && (
             <StackItem>
               <Alert component="p" isInline isLiveRegion variant={outcome.variant} title={outcome.title}>
-                {success ? whatNext : run.result?.message}
+                {success ? whatNext && <Content component="p">{whatNext}</Content> : run.result?.message}
               </Alert>
             </StackItem>
           )}

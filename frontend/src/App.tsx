@@ -56,12 +56,13 @@ import { StatusLabel } from "./components/StatusLabel";
 import { ADMIN_ONLY_PAGES, NAV_ITEMS } from "./constants";
 import { LOGO_SRC } from "./logo";
 import { RoleAppStateProvider, useClusterStatus, useOperation } from "./state/AppState";
-import { AppInfoProvider, useGitOpsProfile, useVersion } from "./state/AppInfo";
-import { PermissionsProvider, usePermissions, useRole, useSessionExpired, useSignedInUser, type ViewRole } from "./state/Permissions";
+import { AppInfoProvider, useAppScreens, useGitOpsProfile, useVersion } from "./state/AppInfo";
+import { PermissionsProvider, usePermissions, useRole, useSignedInUser, type ViewRole } from "./state/Permissions";
 import { GITOPS_PROFILE_PAGES } from "./profile";
 import { isReleaseVersion } from "./utils";
 import { LiveAnnouncerProvider } from "./state/LiveAnnouncer";
 import { ProgressViewsProvider } from "./components/ProgressViews";
+import { AppEnvironmentRunsProvider } from "./components/environment/EnvironmentRunsProvider";
 import { ThemeProvider } from "./theme/ThemeContext";
 import { ThemeMenuGroups, ThemeSwitcher } from "./theme/ThemeSwitcher";
 
@@ -165,18 +166,17 @@ RoutedPage.displayName = "RoutedPage";
 const AppLayout: React.FC = () => {
   const { status, error: statusError } = useClusterStatus();
   const { state: operationState } = useOperation();
-  const sessionExpired = useSessionExpired();
   const runningVersion = useVersion()?.version;
   const reconciling = operationState.reconcile.active;
   // The gitops profile has only some pages, and only for cluster-admins.
   const gitOpsProfile = useGitOpsProfile();
-  const { status: permissionStatus, retry: retryPermissions } = usePermissions();
+  const { retry: retryPermissions } = usePermissions();
   // admin: every page, as before 5.0.0; user: the summary, Build Explorer and
   // their own projects; checking: nothing role-specific until the answer.
   const role = useRole();
   const signedInUser = useSignedInUser();
-  const adminRequired = gitOpsProfile && role !== "admin" && permissionStatus === "denied";
-  const permissionsUnknown = gitOpsProfile && role !== "admin" && permissionStatus === "unknown";
+  // The screens shown instead of every page; the Environment page's run dialogs hide behind them too.
+  const { sessionExpired, adminRequired, permissionsUnknown } = useAppScreens();
   const navItems = NAV_ITEMS.filter((item) => (!gitOpsProfile || GITOPS_PROFILE_PAGES.has(item.path)) && (role === "admin" || !ADMIN_ONLY_PAGES.has(item.path)));
   // The user menu names the signed-in user: from the status for a cluster-admin (as before), else from the permission check.
   const userName = role === "admin" ? status?.cluster.user : signedInUser ?? undefined;
@@ -421,7 +421,9 @@ export const App: React.FC = () => {
               <RoleAppStateProvider>
                 <AppInfoProvider>
                   <ProgressViewsProvider>
-                    <AppLayout />
+                    <AppEnvironmentRunsProvider>
+                      <AppLayout />
+                    </AppEnvironmentRunsProvider>
                   </ProgressViewsProvider>
                 </AppInfoProvider>
               </RoleAppStateProvider>

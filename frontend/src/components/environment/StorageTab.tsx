@@ -36,10 +36,9 @@ import { Id, KeptServer, joinAnd, keptEntry } from "./s3KeysText";
 import { notManaged } from "./resourceStatus";
 import { STORAGE_HREF, TAB_TITLES } from "./environmentTabs";
 import { type Busy, type FeatureState, LEFTOVER_KEYS, storageKeyWarning, storageNeedsSecuring, storageStatus, storageStatusText } from "./featureState";
+import { S3_ENDPOINT, S3_NAMESPACE } from "./s3Location";
 
-/** Namespace where storage runs and its in-cluster URL (pkg/cluster s3Namespace, s3Host). */
-export const S3_NAMESPACE = "seaweedfs";
-export const S3_ENDPOINT = "http://seaweedfs-s3.seaweedfs.svc:8333";
+export { S3_ENDPOINT, S3_NAMESPACE };
 /** Bucket name used for artifacts from each pipeline server this tool provisions. */
 export const PIPELINES_BUCKET = "pipelines";
 
