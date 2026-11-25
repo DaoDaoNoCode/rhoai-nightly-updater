@@ -279,16 +279,17 @@ func (m *Run) setupKuadrant(rec *MaaSRecord, kq *kuadrantState, kVersion, kuadra
 		m.Step("kuadrant", "running", "Waiting for Connectivity Link's Kuadrant API...")
 		version := kVersion
 		start := kube.Clock().Now()
-		_, err := kube.WaitForGone(c, envkit.OperatorTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
+		var throttled error
+		_, err := kube.WaitForGone(c, envkit.OperatorTimeout, envkit.PollInterval, ServedPoll(func(cc *kube.Client) (bool, error) {
 			v, err := KuadrantServedVersion(cc)
 			version = v
 			return v != "", err
-		})
+		}, &throttled))
 		switch {
 		case err != nil:
 			return m.Fail("kuadrant", StoppedWaitingText("Connectivity Link's Kuadrant API", kube.Clock().Since(start), err)+" Set up again to continue; the MaaS tab shows Connectivity Link's state.", kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "not_ready"), "kuadrant api missing")
 		case version == "":
-			return m.Fail("kuadrant", fmt.Sprintf("Connectivity Link's Kuadrant API is not served after %s. Set up again to continue; the MaaS tab shows Connectivity Link's state.", ClockText(envkit.OperatorTimeout)), "not_ready", "kuadrant api missing")
+			return m.Fail("kuadrant", NotServedText("Connectivity Link's Kuadrant API", envkit.OperatorTimeout, throttled)+" Set up again to continue; the MaaS tab shows Connectivity Link's state.", "not_ready", "kuadrant api missing")
 		}
 		rec.setShared("kuadrant", "Kuadrant "+kuadrantNS+"/kuadrant")
 		if err := WriteMaaSRecord(c, *rec); err != nil {
@@ -409,6 +410,37 @@ func ByWhom(tool bool) string {
 // <err>."
 func StoppedWaitingText(what string, elapsed time.Duration, err error) string {
 	return fmt.Sprintf("Stopped waiting for %s after %s: %v.", what, ClockText(elapsed), err)
+}
+
+// ServedPoll wraps the poll of a wait until an API is served: a 429 that
+// the client's retries did not get past (the API server throttles, or the
+// new CRD's watch cache still initializes) means "not served yet", so the
+// wait goes on until its timeout. throttled keeps such an answer of the
+// last poll that the wait's end did not cut off, for the timeout's message
+// (NotServedText).
+func ServedPoll(poll func(cc *kube.Client) (bool, error), throttled *error) func(cc *kube.Client) (bool, error) {
+	return func(cc *kube.Client) (bool, error) {
+		served, err := poll(cc)
+		switch {
+		case kube.IsK8sError(err, http.StatusTooManyRequests):
+			*throttled = err
+			return false, nil
+		case cc.Context().Err() == nil:
+			// A read cut off by the wait's end keeps the answer before it.
+			*throttled = nil
+		}
+		return served, err
+	}
+}
+
+// NotServedText is the message of a wait until an API is served that ran
+// out: "<what> is not served after <timeout>.", with the last poll's 429
+// when it was throttled (ServedPoll).
+func NotServedText(what string, timeout time.Duration, throttled error) string {
+	if throttled != nil {
+		return fmt.Sprintf("%s is not served after %s; the API server last answered: %v.", what, ClockText(timeout), throttled)
+	}
+	return fmt.Sprintf("%s is not served after %s.", what, ClockText(timeout))
 }
 
 func ErrSuffix(err error) string {

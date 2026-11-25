@@ -44,7 +44,12 @@ func kuadrantObject(version, ns string) map[string]any {
 // The group's preferred version is not it: RHCL 1.4 serves AuthPolicy in v1
 // and Kuadrant only in v1beta1 (seen live).
 func KuadrantServedVersion(c *kube.Client) (string, error) {
-	read, err := rhoai.ListServed(c, KuadrantGroup, "/apis/kuadrant.io/%s/kuadrants", nil, []string{"v1beta1"})
+	// limit=1: while a new CRD's watch cache initializes, the API server
+	// answers a list without a limit 429 "storage is (re)initializing",
+	// and serves one with a limit from etcd (ResilientWatchCacheInitialization,
+	// k8s.io/apiserver v0.33.4 pkg/storage/cacher/delegator.go:195-200,
+	// 253-259). Only whether a version lists matters here.
+	read, err := rhoai.ListServed(c, KuadrantGroup, "/apis/kuadrant.io/%s/kuadrants", url.Values{"limit": {"1"}}, []string{"v1beta1"})
 	if err != nil {
 		return "", err
 	}

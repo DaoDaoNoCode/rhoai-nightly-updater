@@ -998,16 +998,17 @@ func ensureKuadrant(m *serving.Run, rec *prereqRecord, recorded bool, apiWait ti
 	m.Step("kuadrant", "running", "Waiting for Connectivity Link's Kuadrant API...")
 	version := ""
 	start := kube.Clock().Now()
-	_, err = kube.WaitForGone(c, apiWait, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
+	var throttled error
+	_, err = kube.WaitForGone(c, apiWait, envkit.PollInterval, serving.ServedPoll(func(cc *kube.Client) (bool, error) {
 		v, err := serving.KuadrantServedVersion(cc)
 		version = v
 		return v != "", err
-	})
+	}, &throttled))
 	switch {
 	case err != nil:
 		return m.Fail("kuadrant", serving.StoppedWaitingText("Connectivity Link's Kuadrant API", kube.Clock().Since(start), err)+" Set up again to continue.", kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "not_ready"), "kuadrant api missing")
 	case version == "":
-		return m.Fail("kuadrant", fmt.Sprintf("Connectivity Link's Kuadrant API is not served after %s. Set up again to continue.", serving.ClockText(apiWait)), "not_ready", "kuadrant api missing")
+		return m.Fail("kuadrant", serving.NotServedText("Connectivity Link's Kuadrant API", apiWait, throttled)+" Set up again to continue.", "not_ready", "kuadrant api missing")
 	}
 	if !recorded {
 		if rec.Shared == nil {

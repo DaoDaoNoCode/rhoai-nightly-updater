@@ -1059,12 +1059,13 @@ func (m *Run) ensureCNPG(rec *MaaSRecord, p *MaaSDBPlan) (*types.OperationRespon
 		}
 	}
 	start := kube.Clock().Now()
-	served, err := kube.WaitForGone(c, envkit.OperatorTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) { return GroupServed(cc, CNPGGroup) })
+	var throttled error
+	served, err := kube.WaitForGone(c, envkit.OperatorTimeout, envkit.PollInterval, ServedPoll(func(cc *kube.Client) (bool, error) { return GroupServed(cc, CNPGGroup) }, &throttled))
 	switch {
 	case err != nil:
 		return m.Fail("cnpg", StoppedWaitingText("CloudNativePG's API (postgresql.cnpg.io)", kube.Clock().Since(start), err)+" Run it again to continue.", kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "not_ready"), "cnpg api missing")
 	case !served:
-		return m.Fail("cnpg", fmt.Sprintf("CloudNativePG's API (postgresql.cnpg.io) is not served after %s. Run it again to continue.", ClockText(envkit.OperatorTimeout)), "not_ready", "cnpg api missing")
+		return m.Fail("cnpg", NotServedText("CloudNativePG's API (postgresql.cnpg.io)", envkit.OperatorTimeout, throttled)+" Run it again to continue.", "not_ready", "cnpg api missing")
 	}
 	p.cnpgServed = true
 	m.Step("cnpg", "success", "CloudNativePG runs.")
