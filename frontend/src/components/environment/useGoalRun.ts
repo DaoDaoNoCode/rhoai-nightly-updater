@@ -86,9 +86,11 @@ export interface StartOptions {
   preflight?: () => Promise<string | null>;
   /**
    * Reads the status again before each later ready check: the run goes on
-   * when its page is left, and that page's own polling stops with it.
+   * when its page is left, and that page's own polling stops with it. It
+   * gets the time left to wait for the part. A read it cannot do (the
+   * session ended) rejects: the run stops there.
    */
-  refresh?: () => Promise<void>;
+  refresh?: (remainingMs: number) => Promise<void>;
 }
 
 /** A streamed operation of several parts (Clean up): it reports each step itself. */
@@ -159,12 +161,27 @@ export function useGoalRun(now: () => number = Date.now, sleep: (ms: number) => 
       if (step.waitReady) {
         const t1 = now();
         let outcome: ReadyCheck = step.waitReady.check();
+        let unreadable: OperationResponse | null = null;
         while (outcome.state === "starting" && now() - t1 < READY_TIMEOUT_MS) {
           const detail = outcome.detail ? ` ${outcome.detail}` : "";
           setStep(step.id, { status: "running", message: `Created. Starting (typically ${step.waitReady.typical}), ${clock(now() - t1)}.${detail}` });
           await sleep(READY_CHECK_MS);
-          await refresh?.();
+          // The time is up while it slept: no read past it.
+          if (now() - t1 >= READY_TIMEOUT_MS) break;
+          if (refresh) {
+            try {
+              await refresh(READY_TIMEOUT_MS - (now() - t1));
+            } catch (e) {
+              unreadable = errorResult(e, "The status could not be read");
+              break;
+            }
+          }
           outcome = step.waitReady.check();
+        }
+        if (unreadable) {
+          setStep(step.id, { status: "failed", message: unreadable.message });
+          result = { success: false, message: unreadable.message, errorCode: unreadable.errorCode };
+          break;
         }
         if (outcome.state === "failed") {
           setStep(step.id, { status: "failed", message: outcome.reason });

@@ -51,12 +51,14 @@ export interface EnvironmentActionsContext {
   status: ResourcesStatus | null;
   latestStatus: () => ResourcesStatus | null;
   /** Reads the status again before a Set up's later ready checks while the page is closed. */
-  refreshStatus: () => Promise<void>;
+  refreshStatus: (remainingMs: number) => Promise<void>;
   fetchResources: () => Promise<void>;
   /** Reads the status now and shows it: a Set up's preflight. */
   readFresh: () => Promise<ResourcesStatus>;
   /** Polls quickly again (after a change). */
   restartPolling: () => void;
+  /** A Clean up refused for confirmation, nothing changed: Clean up opens again on the page, or a notification offers it. */
+  askCleanupConfirmation: () => void;
   pg: PlaygroundStatus | null;
   wb: WorkbenchStatus | null;
   maas: MaaSStatus | null;
@@ -77,12 +79,12 @@ export interface EnvironmentActionsContext {
  * then checks every part's prerequisites, then runs the missing parts.
  */
 export function environmentActions(ctx: EnvironmentActionsContext) {
-  const { runs, status: resStatus, latestStatus, refreshStatus, fetchResources, readFresh, restartPolling, pg, wb, maas, modelRegistry, kueue, othersIn, prereq, confirmOf, setPending, projectNames, onResult } = ctx;
+  const { runs, status: resStatus, latestStatus, refreshStatus, fetchResources, readFresh, restartPolling, askCleanupConfirmation, pg, wb, maas, modelRegistry, kueue, othersIn, prereq, confirmOf, setPending, projectNames, onResult } = ctx;
   const {
     setResAction, setActionProject, run, setRunOpen, setupConfirm, setSetupConfirm, setCleanupScope, setCleanupRetry,
     setSampleOp, setSampleRun, setSamplesRefresh, setModelsOp, setModelsRun, setPlaygroundOp, setPlaygroundRun, setPlaygroundRefresh,
     setWorkbenchOp, setWorkbenchRun, setWorkbenchRefresh,
-    setMaaSOp, setMaaSRun, setRunFeature, setMaaSRefresh, setPrereqRefresh, checking, setChecking, setCheckError,
+    setMaaSOp, setMaaSRun, setRunFeature, setRunProject, setMaaSRefresh, setPrereqRefresh, checking, setChecking, setCheckError,
     setModelRegistryOp, setModelRegistryRefresh, setKueueOp, setKueueRefresh,
   } = runs;
 
@@ -440,15 +442,16 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     const done = project ? `Pipelines are ready in ${project}.` : `${feature} is ready.`;
     const title = steps.length === 1 ? steps[0].title : project ? `Set up ${feature} in ${project}` : `Set up ${feature}`;
     const recheck = (s: ResourcesStatus | null, projects: string[]) => (feature === "MLflow" ? mlflowState(s) : feature === TAB_TITLES.storage ? storageState(s) : pipelinesState(s, project ?? null, projects));
-    if (steps.length > 0) setSetupConfirm({ feature, title, specs, steps, done, recheck });
+    if (steps.length > 0) setSetupConfirm({ feature, title, specs, steps, done, project, recheck });
   };
 
   /** Runs the confirmed Set up. */
   const startSetUp = () => {
     if (!setupConfirm) return;
-    const { feature, title, steps, done, recheck } = setupConfirm;
+    const { feature, title, steps, done, project, recheck } = setupConfirm;
     setSetupConfirm(null);
     setRunFeature(feature === "MLflow" ? "mlflow" : feature === TAB_TITLES.storage ? "storage" : "pipelines");
+    setRunProject(project ?? null);
     setSampleRun(null);
     setRunOpen(true);
     void run.start(title, steps, {
@@ -504,7 +507,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
         setCleanupRetry({ req, contents: refusals, workbenches: { ...confirmed, ...workbenches } });
         if (!changed) {
           setRunOpen(false);
-          setCleanupScope("all");
+          askCleanupConfirmation();
         }
       }
     }, (reason) => {

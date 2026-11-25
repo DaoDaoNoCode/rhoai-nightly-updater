@@ -65,6 +65,26 @@ export function migrateStepNow(run: MigrateRun): { title: string; index: number;
 }
 
 /**
+ * A finished run's outcome: the alert in its dialog (Migrate storage,
+ * Delete the old storage) and the notification when it ended with its
+ * dialog closed. Secure S3 storage's dialog says more, from the keys'
+ * status; this is its short form.
+ */
+export function migrateOutcome(run: MigrateRun): { variant: "success" | "info" | "warning" | "danger"; title: string } | null {
+  const r = run.result;
+  if (!r) return null;
+  if (r.success && run.kind === "secure") {
+    return r.errorCode === "partial"
+      ? { variant: "warning", title: "The S3 storage is secured; some pipeline servers still use the old key" }
+      : { variant: "success", title: "The S3 storage is secured" };
+  }
+  if (r.success) return { variant: "success", title: run.kind === "migrate" ? "The data is in the new storage" : "The old storage was deleted" };
+  if (r.errorCode === "detached" || (run.kind !== "secure" && r.errorCode === "in_progress")) return { variant: "info", title: "Still running" };
+  if (run.kind === "secure" && r.errorCode === "out_of_time") return { variant: "warning", title: "Stopped: out of time; run Secure S3 storage again to continue" };
+  return { variant: "danger", title: "Stopped" };
+}
+
+/**
  * Runs Migrate storage (or the removal of the old storage) and keeps its
  * progress while the dialog is closed: the operation runs on the server
  * either way. onFinished runs when it ends, to reload the status.

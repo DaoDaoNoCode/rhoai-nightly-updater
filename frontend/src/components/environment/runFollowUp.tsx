@@ -1,5 +1,5 @@
 import type { PlaygroundStatus, ResourcesStatus } from "../../types";
-import { type Busy, type FeatureState, type MaaSOp, type ModelsOp, type NextStep, type PlaygroundOp, modelsState, playgroundState } from "./featureState";
+import { type Busy, type FeatureState, type MaaSOp, type ModelsOp, type NextStep, type PlaygroundOp, modelsState, pipelinesState, playgroundState } from "./featureState";
 import type { SampleOp } from "./samples";
 import { mlflowOpenHref } from "./UseIt";
 import type { GoalRun } from "./useGoalRun";
@@ -8,6 +8,8 @@ import type { RunFeature } from "./environmentTabs";
 export interface RunFollowUpInput {
   run: GoalRun | null;
   runFeature: RunFeature;
+  /** The project a Set up of Pipelines ran in. */
+  runProject: string | null;
   sampleRun: SampleOp | null;
   modelsRun: ModelsOp | null;
   playgroundRun: PlaygroundOp | null;
@@ -19,7 +21,6 @@ export interface RunFollowUpInput {
   /** The features' states now. */
   mlflowNow: FeatureState;
   maasNow: FeatureState;
-  pipelines: FeatureState;
 }
 
 /**
@@ -27,7 +28,7 @@ export interface RunFollowUpInput {
  * feature the run set up. A sample run: after adding MLflow samples, open
  * the project's workspace.
  */
-export function runFollowUp({ run, runFeature, sampleRun, modelsRun, playgroundRun, maasRun, status, pg, busy, projectNames, mlflowNow, maasNow, pipelines }: RunFollowUpInput): { open: NextStep | null; whatNext: string | undefined } {
+export function runFollowUp({ run, runFeature, runProject, sampleRun, modelsRun, playgroundRun, maasRun, status, pg, busy, projectNames, mlflowNow, maasNow }: RunFollowUpInput): { open: NextStep | null; whatNext: string | undefined } {
   const mlflow = status?.mlflow;
   const sampleNext: NextStep | null = sampleRun?.feature === "mlflow" && sampleRun.action !== "remove" && mlflow?.uiRoute
     ? { kind: "open", label: `Open ${sampleRun.project} in MLflow`, href: mlflowOpenHref(status?.dashboardUrl, mlflow.uiRoute, sampleRun.project) }
@@ -35,8 +36,10 @@ export function runFollowUp({ run, runFeature, sampleRun, modelsRun, playgroundR
   const modelsNext = modelsRun?.project ? modelsState(status, modelsRun.project, projectNames, busy, modelsRun.model ?? undefined).next : null;
   const playgroundNext = playgroundRun ? playgroundState(status, pg, playgroundRun.project, busy).next : null;
   const maasNext = runFeature === "maas" && maasNow.next?.kind === "open" ? maasNow.next : null;
+  // The run's own project, whichever project the tab shows now.
+  const pipelinesNext = runProject ? pipelinesState(status, runProject, projectNames, busy).next : null;
   const runNext: NextStep | null = run?.kind === "setup"
-    ? (runFeature === "playground" ? playgroundNext : runFeature === "models" ? modelsNext : runFeature === "mlflow" ? mlflowNow.next : runFeature === "maas" ? maasNext : runFeature === "pipelines" ? pipelines.next : null)
+    ? (runFeature === "playground" ? playgroundNext : runFeature === "models" ? modelsNext : runFeature === "mlflow" ? mlflowNow.next : runFeature === "maas" ? maasNext : runFeature === "pipelines" ? pipelinesNext : null)
     : runFeature === "samples" ? sampleNext : null;
   const whatNext = run?.kind === "setup" && runFeature === "maas"
     ? (maasRun?.action === "publish"

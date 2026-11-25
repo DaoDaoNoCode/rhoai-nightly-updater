@@ -7,8 +7,13 @@ import { QuickResourceCreator } from "../QuickResourceCreator";
 import { renderWithApp, settleApps } from "../../test/providers";
 import { jsonResponse, stubApi } from "../../test/apiStub";
 import { sseEvent, sseResponse } from "../../test/utils";
-import type { LegacyStorageState, MaaSStatus, ResourceState, ResourcesStatus } from "../../types";
-import { READY_CHECK_MS } from "./useGoalRun";
+import type { LegacyStorageState, MaaSStatus, OperationStatusResponse, ResourceState, ResourcesStatus } from "../../types";
+import { READY_CHECK_MS, type GoalRun } from "./useGoalRun";
+import { useMutationBlocker } from "../../state/AppInfo";
+import { IDLE, maasState, mlflowState } from "./featureState";
+import { runFollowUp } from "./runFollowUp";
+import { RESOURCE_POLL_BASE_MS } from "../../constants";
+import { deferred } from "../../test/utils";
 
 // Routing narrowed to the Environment screen plus one alternate destination, with
 // helpers so the spec can switch paths the way the sidebar would.
@@ -18,13 +23,15 @@ const Navigator: React.FC = () => {
   go = (to) => { void navigate(to); };
   return null;
 };
+// What another page's change buttons say while a run of the Environment page goes on.
+const Blocker: React.FC = () => <p>Changes: {useMutationBlocker() ?? "allowed"}</p>;
 const Shell: React.FC = () => (
   <>
     <GlobalBanners />
     <Navigator />
     <Routes>
       <Route path="/test-resources" element={<QuickResourceCreator mutateBlocker={null} />} />
-      <Route path="/components" element={<p>Another page</p>} />
+      <Route path="/components" element={<><p>Another page</p><Blocker /></>} />
     </Routes>
   </>
 );
@@ -42,17 +49,19 @@ const closeDialog = async (dialog: HTMLElement) => {
 const viewProgress = (title: RegExp) => fireEvent.click(within(alertOf(title)).getByRole("button", { name: "View progress" }));
 const gets = (calls: string[], path: string) => calls.filter((c) => c === `GET ${path}` || c.startsWith(`GET ${path}?`)).length;
 
+const maasNone: MaaSStatus = {
+  platform: { deployed: false, ready: false, managedByTool: false },
+  parts: [{ id: "dsc", title: "MaaS in the DataScienceCluster", state: "missing" }, { id: "database", title: "Database", state: "missing" }],
+  subscription: "rhoai-nightly-updater-subscription",
+};
+
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 describe("leaving the Environment page while its run goes on", () => {
-  const maas: MaaSStatus = {
-    platform: { deployed: false, ready: false, managedByTool: false },
-    parts: [{ id: "dsc", title: "MaaS in the DataScienceCluster", state: "missing" }, { id: "database", title: "Database", state: "missing" }],
-    subscription: "rhoai-nightly-updater-subscription",
-  };
+  const maas = maasNone;
 
   it("MaaS setup: View progress opens the same dialog, with its step list, on another page and after returning; the stream keeps updating it; the page reads again when it ends", async () => {
     const stream = sseResponse();
@@ -234,5 +243,207 @@ describe("leaving the Environment page while its run goes on", () => {
     expect(api.calls.filter((c) => c.startsWith("POST /api/resources/s3/migrate/stream"))).toHaveLength(1);
     await closeDialog(away);
     await settleApps();
+  });
+});
+
+describe("what a run of the Environment page leaves when the page closes", () => {
+  const ownMlflow: ResourceState = { deployed: true, ready: true, managedByTool: true, namespace: "redhat-ods-applications", message: "Running" };
+
+  it("a confirmation open when the page is left (Set up, Clean up, Migrate storage) is cancelled: it does not open again on return", async () => {
+    const legacy: LegacyStorageState = {
+      namespace: "minio", server: "SeaweedFS", ready: true, endpoint: "minio-service.minio.svc:9000", objects: ["Deployment seaweedfs"],
+      dataPVCs: [], usedBy: [], stage: "migrate", repoint: [], namespaceDeletable: false, namespaceKeptReason: "kept",
+    };
+    // MLflow is there to clean up, and old storage to migrate; then a cluster with only the S3 storage, for Set up.
+    let status: ResourcesStatus = { minio: { ...none, namespace: "seaweedfs", migrationPending: true }, mlflow: ownMlflow, pipelineServers: [], legacyStorage: legacy };
+    stubApi({
+      "/api/resources/status": () => jsonResponse(status),
+      "/api/resources/projects": { projects: ["dev"] },
+    });
+    renderWithApp(<Shell />, {}, "/test-resources");
+    await settleApps();
+    const cases: [string, () => Promise<void>][] = [
+      ["/test-resources", async () => { fireEvent.click(await screen.findByRole("button", { name: /^Clean up everything/ })); await screen.findByRole("dialog", { name: /Clean up everything\?/ }); }],
+      ["/test-resources?tab=storage", async () => { fireEvent.click(await screen.findByRole("button", { name: "Migrate storage" })); await screen.findByRole("dialog", { name: "Migrate storage" }); }],
+      ["/test-resources?tab=mlflow", async () => { fireEvent.click((await screen.findAllByRole("button", { name: /^Set up MLflow/ }))[0]); await screen.findByRole("dialog"); }],
+    ];
+    for (const [path, open] of cases) {
+      if (path.endsWith("mlflow")) status = { minio: readyMinio, mlflow: none, pipelineServers: [] };
+      // Each from a fresh visit, so the page reads the status above.
+      await leave();
+      await back(path);
+      await settleApps();
+      await open();
+      await leave();
+      await back(path);
+      await settleApps();
+      expect(await screen.findByRole("tab", { name: "Overview" })).toBeInTheDocument();
+      expect(screen.queryByRole("dialog")).toBeNull();
+    }
+  });
+
+  it("a Clean up refused for confirmation while away: a notification says so, and Open Clean up opens it on the Environment page with what to confirm", async () => {
+    const stream = sseResponse();
+    stubApi({
+      "/api/resources/status": { minio: none, mlflow: ownMlflow, pipelineServers: [], recipeProjects: [{ name: "recipe-old", uid: "u2", recipe: "old", createdAt: "2026-11-22T05:20:00Z" }] },
+      "/api/resources/projects": { projects: ["dev"] },
+      "POST /api/resources/cleanup/stream": () => stream.response,
+    });
+    renderWithApp(<Shell />, {}, "/test-resources");
+    await settleApps();
+    fireEvent.click(await screen.findByRole("button", { name: /^Clean up everything/ }));
+    fireEvent.click(within(await screen.findByRole("dialog", { name: /Clean up everything\?/ })).getByRole("button", { name: "Delete" }));
+    await closeDialog(await screen.findByRole("dialog", { name: "Clean up" }));
+    await leave();
+    await act(async () => {
+      stream.push(sseEvent("recipe-project:recipe-old", "failed", "Project recipe-old still holds what this tool did not create.", { errorCode: "confirm_project_contents", detail: "Notebook wb" }));
+      stream.push(sseEvent("operation_complete", "failed", "Project recipe-old still holds what this tool did not create. Nothing was deleted.", { errorCode: "confirm_project_contents" }));
+      stream.close();
+    });
+    const toast = (await screen.findByText("Clean up needs your confirmation")).closest(".pf-v6-c-alert") as HTMLElement;
+    expect(toast).toHaveTextContent("Nothing was deleted.");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(within(toast).getByRole("button", { name: "Open Clean up" }));
+    const dialog = await screen.findByRole("dialog", { name: /Clean up everything\?/ });
+    expect(within(dialog).getByText("Project recipe-old holds what this tool did not create")).toBeInTheDocument();
+    expect(screen.queryByText("Clean up needs your confirmation")).toBeNull();
+    await settleApps();
+  });
+
+  it("while a run goes on, other pages' changes are off; a request answered cluster_busy reads the operation again (the app's handler, not the page's)", async () => {
+    const stream = sseResponse();
+    const refused = deferred<Response>();
+    let operationReads = 0;
+    const busy = { error: "Another operation is changing this cluster.", errorCode: "cluster_busy" };
+    stubApi({
+      "/api/resources/status": { minio: none, mlflow: ownMlflow, pipelineServers: [] },
+      "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/maas": maasNone,
+      "POST /api/resources/maas/stream": () => stream.response,
+      "POST /api/resources/mlflow/teardown": () => refused.promise,
+    });
+    const operation = async (): Promise<OperationStatusResponse> => { operationReads += 1; return { inProgress: false, operation: null }; };
+    renderWithApp(<Shell />, { operation }, "/test-resources?tab=maas");
+    await settleApps();
+    fireEvent.click(await screen.findByRole("button", { name: "Set up MaaS" }));
+    fireEvent.click(within(await screen.findByRole("dialog", { name: /Set up Models as a Service\?/ })).getByRole("button", { name: "Set up" }));
+    await closeDialog(await screen.findByRole("dialog", { name: "Set up Models as a Service" }));
+    await leave();
+    expect(screen.getByText("Changes: Set up Models as a Service is still running. Wait for it to finish.")).toBeInTheDocument();
+    await act(async () => {
+      stream.push(sseEvent("operation_complete", "success", "The MaaS platform is ready."));
+      stream.close();
+    });
+    expect(await screen.findByText("Changes: allowed")).toBeInTheDocument();
+
+    await back("/test-resources?tab=mlflow");
+    await settleApps();
+    const before = operationReads;
+    fireEvent.click(await screen.findByRole("button", { name: "MLflow server actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Delete MLflow/ }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
+    await screen.findByRole("dialog", { name: "Delete MLflow" });
+    await act(async () => refused.resolve(jsonResponse(busy, 409)));
+    await settleApps();
+    expect(operationReads).toBeGreaterThan(before);
+  });
+
+  it("a Set up away from its page reads the status at the page's pace, and stops when the session ended; nothing draws over the sign-in screen", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let status: ResourcesStatus = { minio: none, mlflow: none, pipelineServers: [] };
+    let expired = false;
+    const api = stubApi({
+      "/api/resources/status": () => (expired ? jsonResponse({ error: "Your OpenShift session has expired.", errorCode: "session_expired" }, 401) : jsonResponse(status)),
+      "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/prerequisites": { features: {} },
+      "POST /api/resources/s3/setup": () => {
+        status = { ...status, minio: { ...readyMinio, ready: false, message: "Starting" } };
+        return jsonResponse({ success: true, message: "S3 storage deployed.", logs: [] });
+      },
+      "POST /api/resources/pipeline-server/setup": () => jsonResponse({ success: true, message: "created", logs: [] }),
+    });
+    renderWithApp(<Shell />, {}, "/test-resources?tab=pipelines&project=dev");
+    await settleApps();
+    fireEvent.click(await screen.findByRole("button", { name: "Set up Pipelines in dev" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Set up" }));
+    const run = await screen.findByRole("dialog", { name: "Set up Pipelines in dev" });
+    expect(await within(run).findByText(/Created\. Starting \(typically under a minute\)/)).toBeInTheDocument();
+    await closeDialog(run);
+    await leave();
+    const reads = () => gets(api.calls, "/api/resources/status");
+    const atLeave = reads();
+    // Two ready checks: the page polls no sooner than RESOURCE_POLL_BASE_MS, nor does the run.
+    await act(() => vi.advanceTimersByTimeAsync(2 * READY_CHECK_MS));
+    expect(reads()).toBe(atLeave);
+    await act(() => vi.advanceTimersByTimeAsync(RESOURCE_POLL_BASE_MS));
+    expect(reads()).toBe(atLeave + 1);
+    // Then backing off: one more read in the next 8 s, not four.
+    await act(() => vi.advanceTimersByTimeAsync(4 * READY_CHECK_MS));
+    expect(reads()).toBeLessThanOrEqual(atLeave + 2);
+
+    // The session ends: the run stops at its next read instead of waiting out the 10 minutes.
+    expired = true;
+    await act(() => vi.advanceTimersByTimeAsync(4 * RESOURCE_POLL_BASE_MS));
+    await waitFor(() => expect(screen.queryByText(/Set up Pipelines in dev is running/)).toBeNull());
+    expect(api.calls.filter((c) => c.startsWith("POST /api/resources/pipeline-server"))).toEqual([]);
+    // Its outcome waits behind the sign-in screen: no notification or dialog over it.
+    expect(screen.queryByText(/^Set up Pipelines in dev: /)).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await settleApps();
+  });
+
+  it("Migrate storage that ends with its dialog closed shows its outcome, with Show details; a new run replaces an old outcome", async () => {
+    const stream = sseResponse();
+    const teardown = deferred<Response>();
+    const legacy: LegacyStorageState = {
+      namespace: "minio", server: "SeaweedFS", ready: true, endpoint: "minio-service.minio.svc:9000", objects: ["Deployment seaweedfs"],
+      dataPVCs: [], usedBy: [], stage: "migrate", repoint: [], namespaceDeletable: false, namespaceKeptReason: "kept",
+    };
+    let teardowns = 0;
+    stubApi({
+      "/api/resources/status": { minio: { ...none, namespace: "seaweedfs", migrationPending: true }, mlflow: ownMlflow, pipelineServers: [], legacyStorage: legacy },
+      "/api/resources/projects": { projects: ["dev"] },
+      "POST /api/resources/s3/migrate/stream": () => stream.response,
+      "POST /api/resources/mlflow/teardown": () => (++teardowns === 1 ? teardown.promise : new Promise<Response>(() => {})),
+    });
+    renderWithApp(<Shell />, {}, "/test-resources?tab=storage");
+    await settleApps();
+    fireEvent.click(await screen.findByRole("button", { name: "Migrate storage" }));
+    const dialog = await screen.findByRole("dialog", { name: "Migrate storage" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Migrate storage" }));
+    await closeDialog(dialog);
+    await act(async () => {
+      stream.push(sseEvent("operation_complete", "success", "Migrated 4 objects."));
+      stream.close();
+    });
+    const toast = (await screen.findByText("Migrate storage: The data is in the new storage")).closest(".pf-v6-c-alert") as HTMLElement;
+    fireEvent.click(within(toast).getByRole("button", { name: "Show details" }));
+    const details = await screen.findByRole("dialog", { name: "Migrate storage" });
+    expect(within(details).getByText("Migrated 4 objects.")).toBeInTheDocument();
+    await closeDialog(details);
+
+    // A run that fails with its dialog closed: its outcome stays until the next run starts.
+    await back("/test-resources?tab=mlflow");
+    await settleApps();
+    const deleteMlflow = async () => {
+      fireEvent.click(await screen.findByRole("button", { name: "MLflow server actions" }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: /Delete MLflow/ }));
+      fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
+      await closeDialog(await screen.findByRole("dialog", { name: "Delete MLflow" }));
+    };
+    await deleteMlflow();
+    await act(async () => teardown.resolve(jsonResponse({ success: false, message: "MLflow is in use.", logs: [] })));
+    expect(await screen.findByText("Delete MLflow: stopped")).toBeInTheDocument();
+    await deleteMlflow();
+    expect(screen.queryByText("Delete MLflow: stopped")).toBeNull();
+  });
+
+  it("a Set up's next step opens the project it ran in, not the one the tab shows now", () => {
+    const dspa = (ns: string): ResourceState => ({ deployed: true, ready: true, managedByTool: true, namespace: ns, name: "dspa", message: "Running", uiRoute: `https://rh-ai.apps.example.com/pipelines/${ns}` });
+    const status: ResourcesStatus = { minio: readyMinio, mlflow: none, pipelineServers: [dspa("dev"), dspa("other")] };
+    const run: GoalRun = { title: "Set up Pipelines in dev", kind: "setup", startedAt: 0, steps: [], states: {}, running: false, result: { success: true, message: "Pipelines are ready in dev." } };
+    const follow = runFollowUp({ run, runFeature: "pipelines", runProject: "dev", sampleRun: null, modelsRun: null, playgroundRun: null, maasRun: null,
+      status, pg: null, busy: IDLE, projectNames: ["dev", "other"], mlflowNow: mlflowState(status), maasNow: maasState(null) });
+    expect(follow.open).toMatchObject({ kind: "open", href: "https://rh-ai.apps.example.com/pipelines/dev" });
   });
 });

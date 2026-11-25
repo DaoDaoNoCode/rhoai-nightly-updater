@@ -251,8 +251,8 @@ const EnvironmentView: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, r
   })();
 
   const { open: runNext, whatNext } = runFollowUp({
-    run: run.run, runFeature: runs.runFeature, sampleRun: runs.sampleRun, modelsRun: runs.modelsRun, playgroundRun: runs.playgroundRun, maasRun: runs.maasRun,
-    status: resStatus, pg, busy, projectNames, mlflowNow, maasNow, pipelines,
+    run: run.run, runFeature: runs.runFeature, runProject: runs.runProject, sampleRun: runs.sampleRun, modelsRun: runs.modelsRun, playgroundRun: runs.playgroundRun, maasRun: runs.maasRun,
+    status: resStatus, pg, busy, projectNames, mlflowNow, maasNow,
   });
   // The runs call the page's reads through the provider: those of the page open when they need them.
   useLinkEnvironmentPage(
@@ -261,7 +261,7 @@ const EnvironmentView: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, r
   );
 
   const { checkAgain, checkModel, execute, setUp, startSetUp, startCleanup } = environmentActions({
-    runs, status: resStatus, latestStatus: env.latestStatus, refreshStatus: env.refreshStatus, fetchResources: env.fetchResources, readFresh: resources.readFresh, restartPolling: env.restartPolling,
+    runs, status: resStatus, latestStatus: env.latestStatus, refreshStatus: env.refreshStatus, fetchResources: env.fetchResources, readFresh: resources.readFresh, restartPolling: env.restartPolling, askCleanupConfirmation: env.askCleanupConfirmation,
     pg, wb, maas, modelRegistry: registry, kueue: kueueData, othersIn, prereq, confirmOf, setPending, projectNames, onResult: env.onResult,
   });
 

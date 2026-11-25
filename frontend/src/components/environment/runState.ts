@@ -15,6 +15,8 @@ export interface SetupConfirm {
   specs: ConfirmSpec[];
   steps: GoalRunStep[];
   done: string;
+  /** The project it sets Pipelines up in, if any. */
+  project?: string;
   /** The feature's state on fresh data, for the run's first check. */
   recheck: (s: ResourcesStatus | null, projects: string[]) => FeatureState;
 }
@@ -62,6 +64,8 @@ export function useRunState() {
   // it: the dialog's next step and words come from it (never guessed from
   // the run's title or the last runs of other features).
   const [runFeature, setRunFeature] = useState<RunFeature>("other");
+  // The project a Set up of Pipelines runs in: its next step opens that one, not the tab's current project.
+  const [runProject, setRunProject] = useState<string | null>(null);
   const [maasRefresh, setMaaSRefresh] = useState(0);
   // The Model registry operation running now, and a key that reads its state again.
   const [modelRegistryOp, setModelRegistryOp] = useState<ModelRegistryOp | null>(null);
@@ -80,7 +84,7 @@ export function useRunState() {
     modelsOp, setModelsOp, modelsRun, setModelsRun,
     playgroundOp, setPlaygroundOp, playgroundRun, setPlaygroundRun, playgroundRefresh, setPlaygroundRefresh,
     workbenchOp, setWorkbenchOp, workbenchRun, setWorkbenchRun, workbenchRefresh, setWorkbenchRefresh,
-    maasOp, setMaaSOp, maasRun, setMaaSRun, runFeature, setRunFeature, maasRefresh, setMaaSRefresh,
+    maasOp, setMaaSOp, maasRun, setMaaSRun, runFeature, setRunFeature, runProject, setRunProject, maasRefresh, setMaaSRefresh,
     modelRegistryOp, setModelRegistryOp, modelRegistryRefresh, setModelRegistryRefresh,
     kueueOp, setKueueOp, kueueRefresh, setKueueRefresh,
     prereqRefresh, setPrereqRefresh, checking, setChecking, checkError, setCheckError,

@@ -358,10 +358,18 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   read, so it never saw the part work and did not set up the parts after
   it. The runs and their dialogs now belong to the app, not to the page:
   **View progress** opens the same dialog, with its steps, from any page; a
-  Set up reads the status itself while the page is closed; a run that ends
-  meanwhile shows its outcome where you are; and the page takes the run up
-  again when you come back, without starting a second one. A reload,
-  another tab or another user still see the server's latest step.
+  Set up reads the status itself while the page is closed, no more often
+  than the page would, and stops if your session ended; a run that ends
+  with its dialog closed shows its outcome where you are, with **Show
+  details** (now also Migrate storage, Delete the old storage and Secure S3
+  storage); a Clean up that needs your confirmation says so, with **Open
+  Clean up**; and the page takes the run up again when you come back,
+  without starting a second one. While the run goes on, changes on other
+  pages are off, also between the parts of a Set up. A confirmation open
+  when you leave the page is cancelled. After a Set up of Pipelines, its
+  **Open pipelines** opens the project it set up, not the one the tab shows
+  now. A reload, another tab or another user still see the server's latest
+  step.
 - **A recipe says when the dashboard will mark its workbench as bypassing
   Kueue.** A recipe that sets up a workbench and turns the dashboard's Kueue
   setting on creates the workbench first, so the dashboard marks it
