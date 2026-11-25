@@ -114,7 +114,7 @@ type ImageChoice struct {
 	DisplayName string
 	// BuildCommit is the tag's opendatahub.io/notebook-build-commit.
 	BuildCommit string
-	// Deprecated: the stream is deprecated (opendatahub.io/deprecated),
+	// Deprecated is true for a deprecated stream (opendatahub.io/deprecated),
 	// chosen because every image the dashboard offers is (ChooseImage).
 	Deprecated bool
 }
