@@ -731,6 +731,23 @@ scenarios["recipe-full-parallel"] = (w) => {
   w.recipeRun = { run, running: true, pod: "rhoai-nightly-updater-6f7b8c9d5-x2k4p", step: progress.maas, progress };
   RECIPE_OPERATION(w, head + 1, run.steps.filter((s) => s.status === "running").map((s) => s.title), "full", steps.length);
 };
+// The same run while it ends after a failure: the pipeline server failed,
+// MLflow finished, and the MaaS platform still runs; no other step starts
+// (the status's ending).
+scenarios["recipe-full-parallel-failing"] = (w) => {
+  scenarios["recipe-full-parallel"](w);
+  const run = w.recipeRun.run;
+  run.steps = run.steps.map((s) => (s.id === "pipeline-server"
+    ? { ...s, status: "failed", message: "The pipeline server did not become ready in 10 minutes: pod ds-pipeline-dspa-6c9f7d8b5-k8w2n is in ImagePullBackOff (registry.redhat.io/rhoai/odh-ml-pipelines-api-server-v2-rhel9).", errorCode: "timeout", finishedAt: F.ago(0.5) }
+    : s.id === "mlflow" ? { ...s, status: "success", message: "MLflow is set up and ready.", finishedAt: F.ago(1) } : s));
+  w.recipeRun = { ...w.recipeRun, ending: "failed", progress: { maas: w.recipeRun.progress.maas }, step: w.recipeRun.progress.maas };
+  RECIPE_OPERATION(w, run.steps.filter((s) => s.status === "success" || s.status === "skipped").length, ["Models as a Service"], "full", run.steps.length);
+};
+// The same run after Stop: the three running steps finish, nothing else starts.
+scenarios["recipe-full-parallel-stopping"] = (w) => {
+  scenarios["recipe-full-parallel"](w);
+  w.recipeRun = { ...w.recipeRun, stopRequested: true, ending: "stopped" };
+};
 // The same run once two lanes failed: the pipeline server and the MaaS
 // platform failed, MLflow finished, and nothing else started.
 scenarios["recipe-full-parallel-failed"] = (w) => {

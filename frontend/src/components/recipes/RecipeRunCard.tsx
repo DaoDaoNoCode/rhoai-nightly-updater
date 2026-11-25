@@ -173,10 +173,13 @@ export const RecipeRunCard: React.FC<{
     }
   };
 
-  const [labelKind, phaseLabel] = LABELS[phase];
-  const labelText = phase === "stopping" && several ? "Stopping after the running steps" : phaseLabel;
+  // The run starts no other step and ends once the running ones finished (pkg/types RecipeRunStatus ending).
+  const ending = live ? status.ending ?? "" : "";
+  const [phaseKind, phaseLabel] = LABELS[phase];
+  const labelKind: StatusKind = ending === "failed" ? "warning" : phaseKind;
+  const labelText = ending === "failed" ? "Stopping: a step failed" : phase === "stopping" && several ? "Stopping after the running steps" : phaseLabel;
   const runStarted = Date.parse(run.resumedAt || run.startedAt);
-  const stopReason = phase === "stopping" ? `Stop was asked for: the run stops after ${several ? "the running steps" : "the current step"}.` : status.remote
+  const stopReason = ending ? "No other step starts: the run stops once the running steps finish." : phase === "stopping" ? `Stop was asked for: the run stops after ${several ? "the running steps" : "the current step"}.` : status.remote
     ? `Updater pod ${status.pod || "(unknown)"} runs it; only that pod can stop it, and it does when it shuts down.`
     : permissionReason;
   const resumeButton = next && (
@@ -238,9 +241,37 @@ export const RecipeRunCard: React.FC<{
       );
       break;
     case "running":
-    case "stopping":
-      // The steps above show it; the outcome comes when it ends.
+    case "stopping": {
+      // Steps still run, but no other starts: say so now, not only when the run ends.
+      if (!ending && phase !== "stopping") break;
+      const finishing = runningSteps.length > 0
+        ? `${listText(runningSteps.map((s) => s.title))} ${runningSteps.length > 1 ? "finish" : "finishes"} first, then the run stops.`
+        : "The run stops now.";
+      const resumeLine = "Resume runs the steps that are not set up.";
+      if (ending === "failed") {
+        const why = failedSteps.length === 1 ? failedSteps[0].message : "";
+        outcome = (
+          <Alert variant="warning" isInline component="p" isLiveRegion
+            title={`${listText(failedSteps.map((s) => s.title)) || "A step"} failed`}>
+            {why ? `${why.replace(/\.?\s*$/, ".")} ` : ""}No other step starts; {finishing} {resumeLine}
+          </Alert>
+        );
+      } else if (ending === "gate") {
+        outcome = (
+          <Alert variant="warning" isInline component="p" isLiveRegion title="Stopping before the next steps">
+            Your sign-in or permission no longer allows a new step, so no other step starts; {finishing} Log in again if asked, then Resume.
+          </Alert>
+        );
+      } else {
+        const title = ending === "restart" ? "Stopping: the updater is restarting" : ending === "timeout" || ending === "lock_lost" ? "Stopping" : "Stopping as asked";
+        outcome = (
+          <Alert variant={ending === "timeout" || ending === "lock_lost" ? "warning" : "info"} isInline component="p" isLiveRegion title={title}>
+            No other step starts; {finishing} {resumeLine}
+          </Alert>
+        );
+      }
       break;
+    }
   }
 
   return (
@@ -272,12 +303,14 @@ export const RecipeRunCard: React.FC<{
               </Content>
             </StackItem>
           )}
+          {/* While the run ends, why no other step starts comes first, above the steps. */}
+          {live && outcome && <StackItem>{outcome}</StackItem>}
           <StackItem>
             <StepProgress idPrefix="recipe-run" aria-label={`Recipe ${name}: steps`} states={states} running={live}
               steps={run.steps.map((s) => ({ id: s.id, title: s.title, pending: usuallySentence(s.typicalSeconds, s.maxSeconds) }))}
-              shownElsewhere={phase === "failed" ? failed?.message || run.stopReason : undefined} />
+              shownElsewhere={phase === "failed" ? failed?.message || run.stopReason : ending === "failed" && failedSteps.length === 1 ? failed?.message : undefined} />
           </StackItem>
-          {outcome && <StackItem>{outcome}</StackItem>}
+          {!live && outcome && <StackItem>{outcome}</StackItem>}
           {!live && next && phase !== "succeeded" && <StackItem><Content component="p">{continuesAt}</Content></StackItem>}
           {(live || resumeButton || onCleanup) && (
             <StackItem>

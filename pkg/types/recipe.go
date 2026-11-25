@@ -504,6 +504,13 @@ type RecipeRunStatus struct {
 	// while the run runs in this updater process (several steps run at
 	// once).
 	Progress map[string]UpdateStepEvent `json:"progress,omitempty"`
+	// Ending says, while the run runs in this updater process, that it
+	// starts no other step and ends once the running ones finished, and
+	// why: "failed" (a step failed; the steps show which), "stopped"
+	// (Stop), "restart" (the updater is restarting), "gate" (the sign-in
+	// or permission check before steps refused), "timeout" (the run's
+	// limit) or "lock_lost"; "" while it goes on.
+	Ending string `json:"ending,omitempty"`
 	// Cleanup is the clean-up request for what the run created (POST
 	// /api/resources/cleanup/stream), as the cluster shows it now, when
 	// the run is not running and there is any (internal/recipe

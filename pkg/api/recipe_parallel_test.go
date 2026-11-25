@@ -179,8 +179,9 @@ func TestRecipeRun_FailureLetsRunningStepsFinish(t *testing.T) {
 	// primary failure to a.
 	close(b.release)
 	waitRecord(t, f, statusesAre("head=success a=running b=failed c=running a2=pending"))
-	if st := recipeRunStatus(nil, nil); !st.Running {
-		t.Error("the run ended while steps still ran")
+	// While a and c finish, the status says a step failed and none starts.
+	if st := recipeRunStatus(nil, nil); !st.Running || st.Ending != "failed" || stepStatuses(st.Run) != "head=success a=running b=failed c=running a2=pending" {
+		t.Errorf("status while the run ends: running %v, ending %q, %s", st.Running, st.Ending, stepStatuses(st.Run))
 	}
 	close(c.release) // c done might admit a2, but failure already doomed the run
 	waitRecord(t, f, statusesAre("head=success a=running b=failed c=success a2=pending"))
@@ -220,6 +221,9 @@ func TestRecipeRun_StopWithTwoStepsInFlightThenResume(t *testing.T) {
 	waitRecord(t, f, statusesAre("head=success a=success b=running a2=pending"))
 	if started(a2) {
 		t.Error("a step started after Stop")
+	}
+	if st := recipeRunStatus(nil, nil); !st.Running || !st.StopRequested || st.Ending != "stopped" {
+		t.Errorf("status while b finishes: %+v", st)
 	}
 	close(b.release)
 	waitDone(t, done)

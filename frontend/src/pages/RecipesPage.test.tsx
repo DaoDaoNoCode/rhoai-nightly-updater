@@ -321,6 +321,31 @@ describe("Recipes page", () => {
     expect(list).not.toHaveTextContent("Waiting for MLflow");
   });
 
+  it("a step failed while others run: says so right away, the failed row is failed, and no other step starts", async () => {
+    const failing = steps(4, "failed", "SeaweedFS did not start.").map((s) => (s.id === "mlflow" ? { ...s, status: "running" as const, startedAt: new Date(Date.now() - 30_000).toISOString() } : s));
+    stubApi({ "GET /api/recipes/run": runStatus({ steps: failing }, { running: true, ending: "failed", progress: { mlflow: { step: "mlflow", status: "running", message: "Waiting for MLflow" } } }) });
+    renderPage(<RecipesPage />, "/recipes", { operation: async () => RECIPE_OPERATION });
+    await settleApps();
+    await settle();
+    expect(screen.getByText("S3 storage failed")).toBeInTheDocument();
+    expect(screen.getByText(/SeaweedFS did not start\. No other step starts; MLflow finishes first, then the run stops\. Resume runs the steps that are not set up\./)).toBeInTheDocument();
+    // The message once: in the alert, not again on the row.
+    expect(screen.getAllByText(/SeaweedFS did not start/)).toHaveLength(1);
+    expect(screen.getByText("Stopping: a step failed", { selector: ".pf-v6-c-label__text" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop after this step" })).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("stop with steps in flight: says which finish first", async () => {
+    const two = steps(4, "running").map((s) => (s.id === "mlflow" ? { ...s, status: "running" as const, startedAt: new Date(Date.now() - 30_000).toISOString() } : s));
+    stubApi({ "GET /api/recipes/run": runStatus({ steps: two }, { running: true, stopRequested: true, ending: "stopped" }) });
+    renderPage(<RecipesPage />, "/recipes", { operation: async () => RECIPE_OPERATION });
+    await settleApps();
+    await settle();
+    expect(screen.getByText("Stopping as asked")).toBeInTheDocument();
+    expect(screen.getByText(/No other step starts; S3 storage and MLflow finish first, then the run stops\./)).toBeInTheDocument();
+    expect(screen.getByText("Stopping after the running steps", { selector: ".pf-v6-c-label__text" })).toBeInTheDocument();
+  });
+
   it("several failed steps: the alert names each, with the backend's reason", async () => {
     const why = "Step 5 of 8 (S3 storage) failed: SeaweedFS did not start. Also failed: step 8 of 8 (MLflow).";
     const failedSteps = steps(4, "failed", "SeaweedFS did not start.").map((s) => (s.id === "mlflow" ? { ...s, status: "failed" as const, message: "MLflow did not start." } : s));

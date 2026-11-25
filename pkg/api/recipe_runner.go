@@ -119,6 +119,9 @@ type recipeRunner struct {
 	// steps is the latest progress of each running step of the run, by
 	// step ID (runStep's emit; stepEnded forgets it).
 	steps map[string]types.UpdateStepEvent
+	// ending: the running run starts no other step, and why
+	// (types.RecipeRunStatus.Ending).
+	ending string
 	// done is closed when the running run has ended (lock released).
 	done chan struct{}
 }
@@ -141,6 +144,7 @@ func (rr *recipeRunner) status() *types.RecipeRunStatus {
 		if len(rr.steps) > 0 {
 			st.Progress = maps.Clone(rr.steps)
 		}
+		st.Ending = rr.ending
 	}
 	return st
 }
@@ -157,6 +161,15 @@ func (rr *recipeRunner) progress(opID, stepID string, e types.UpdateStepEvent) {
 		rr.steps = map[string]types.UpdateStepEvent{}
 	}
 	rr.steps[stepID] = types.UpdateStepEvent{Step: e.Step, Status: e.Status, Message: e.Message}
+}
+
+// setEnding records why opID's running run starts no other step.
+func (rr *recipeRunner) setEnding(opID, why string) {
+	rr.mu.Lock()
+	defer rr.mu.Unlock()
+	if rr.running && rr.opID == opID {
+		rr.ending = why
+	}
 }
 
 // endProgress forgets an ended step's progress.
@@ -338,7 +351,7 @@ func beginRecipeRun(c *cluster.Client, w http.ResponseWriter, st *recipeStart, r
 	}
 	beginHeldOperation(st.op.ID, recipeTarget(rcp, 0, len(steps), nil))
 	recipes.mu.Lock()
-	recipes.run, recipes.opID, recipes.running, recipes.stop, recipes.steps = run, st.op.ID, true, false, nil
+	recipes.run, recipes.opID, recipes.running, recipes.stop, recipes.steps, recipes.ending = run, st.op.ID, true, false, nil, ""
 	done := make(chan struct{})
 	recipes.done = done
 	recipes.mu.Unlock()
@@ -545,6 +558,14 @@ func (x *recipeExec) loop() (end recipeEnd) {
 		// starts while others run (the run's end writes the last one).
 		if unsaved && !saved && l.running > 0 {
 			x.save(x.snapshot())
+		}
+		// Steps still run, but no other starts: the status says so now.
+		if l.running > 0 && (l.failed || l.halt != nil) {
+			why := "failed"
+			if !l.failed {
+				why = l.halt.kind
+			}
+			recipes.setEnding(x.opID, why)
 		}
 		if l.running == 0 {
 			break
