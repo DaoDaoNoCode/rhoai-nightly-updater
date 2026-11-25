@@ -134,8 +134,8 @@ func create(c *kube.Client, collection string, obj map[string]any, dryRun bool) 
 	return kube.ParseObjectMeta(body)
 }
 
-// queuePath and queueCollection spell out object path and collection for a
-// queue kind so static RBAC analysis can resolve both endpoints.
+// queuePath and queueCollection expose the object path and collection URL for
+// a queue kind so RBAC static analysis can reach both surfaces.
 func queuePath(kind, project string) string {
 	switch kind {
 	case "ResourceFlavor":
@@ -156,7 +156,7 @@ func queueCollection(kind, project string) string {
 	return rhoai.NamespacedPath(kueueAPI, "localqueues", project, "")
 }
 
-// toolObject bundles one queue resource in the order setup creates them.
+// toolObject describes a single queue resource in setup creation order.
 type toolObject struct {
 	kind, name, project string
 	manifest            map[string]any
@@ -220,23 +220,23 @@ func (r *run) setup(req types.KueueRequest) (*types.OperationResponse, error) {
 	case ns.Metadata.Labels[dashboardLabel] != "true":
 		return r.fail("check", fmt.Sprintf("Namespace %s is not a data science project (it lacks the label %s=true), so the dashboard does not show its workloads. Choose a data science project. Nothing was changed.", project, dashboardLabel), "validation", "not a ds project")
 	}
-	// If the namespace was removed and recreated after we wrote the record,
-	// its LocalQueue, samples, and label went with the old UID. Setup then
-	// treats the name as a fresh project—objects that share names may belong
-	// to others. We only rewrite the record during the queues step, so an
-	// early refusal below still leaves the cluster unchanged.
+	// When the namespace disappears and comes back after the record was saved,
+	// the old UID took LocalQueue, samples, and label with it. Setup then sees
+	// the name as new—same-named objects may belong elsewhere. The record is
+	// updated only in the queues step, so any refusal here still means no
+	// cluster mutations yet.
 	if rec.ProjectUID != "" && ns.Metadata.UID != rec.ProjectUID {
 		rec.forgetProject()
 	}
-	// Project label policy: missing means we may add it; "true" is acceptable
-	// as-is; any other value was chosen deliberately and we never stomp it.
+	// Label rules for the project: absent lets us add it; "true" is fine
+	// unchanged; any other value was set on purpose and we do not overwrite it.
 	labelValue, labelled := ns.Metadata.Labels[ProjectLabel]
 	if labelled && labelValue != "true" {
 		return r.fail("check", fmt.Sprintf("Project %s has the label %s=%s; this tool does not change it. Choose another project, or set it to true in the dashboard. Nothing was changed.", project, ProjectLabel, labelValue), "validation", "label value")
 	}
-	// When a project already has a LocalQueue named default, Kueue routes new
-	// pod-backed work there once labelled—so we reject setup outright, including
-	// when the label predates later sample installs.
+	// An existing LocalQueue named default makes Kueue send new pod-backed work
+	// there after labelling—setup is refused up front, even if the label arrived
+	// before samples were added later.
 	qs, err := listLocalQueues(c, project)
 	if err != nil {
 		return r.fail("check", fmt.Sprintf("Cannot read the LocalQueues of %s: %v. Nothing was changed.", project, err), codeOf(err), "lq read failed")
@@ -246,8 +246,8 @@ func (r *run) setup(req types.KueueRequest) (*types.OperationResponse, error) {
 			return r.fail("check", fmt.Sprintf("Project %s has a LocalQueue named default: with the label %s=true, Kueue queues every new Deployment, StatefulSet and Pod in it there. Choose another project. Nothing was changed.", project, ProjectLabel), "validation", "default queue")
 		}
 	}
-	// Adopt queues we already own (label and stored UID); block same-name
-	// resources owned by something else.
+	// Reuse queues this tool already owns (label plus stored UID); refuse
+	// same-named resources held by another actor.
 	objs := queueObjects(c, project)
 	for i := range objs {
 		if objs[i].kind != "LocalQueue" {
@@ -282,9 +282,9 @@ func (r *run) setup(req types.KueueRequest) (*types.OperationResponse, error) {
 		}
 		samplePresent[kind] = found
 	}
-	// Server-side dry-run each pending create first. Because LocalQueue
-	// admission hinges on ClusterQueue that already exists or will, checking
-	// all three in one pass is sound.
+	// Run server-side dry-run for every create still pending. LocalQueue
+	// admission depends on an existing or forthcoming ClusterQueue, so validating
+	// all three together is coherent.
 	for _, o := range objs {
 		if present[o.kind] {
 			continue
@@ -308,8 +308,8 @@ func (r *run) setup(req types.KueueRequest) (*types.OperationResponse, error) {
 	}
 	r.step("check", "success", fmt.Sprintf("Kueue is ready; queues for %s in %s.", describeQuota(), project))
 
-	// First phase: materialize queues and write each UID to the record right
-	// after a successful create.
+	// Phase one: create queues and persist each UID to the record immediately
+	// after the corresponding create succeeds.
 	r.step("queues", "running", fmt.Sprintf("Creating ResourceFlavor %s, ClusterQueue %s and LocalQueue %s", FlavorName, ClusterQueueName, LocalQueueName))
 	if _, err := updateRecord(c, func(e *Record) {
 		if e.ProjectUID != "" && e.ProjectUID != ns.Metadata.UID {
@@ -338,7 +338,7 @@ func (r *run) setup(req types.KueueRequest) (*types.OperationResponse, error) {
 	}
 	r.step("queues", "success", fmt.Sprintf("ClusterQueue %s (%s, project %s only) and LocalQueue %s are there.", ClusterQueueName, describeQuota(), project, LocalQueueName))
 
-	// Second phase: add the project label once ownership is recorded.
+	// Phase two: apply the project label after ownership is on the record.
 	if labelled {
 		r.step("project", "success", fmt.Sprintf("Project %s already has the label %s=true.", project, ProjectLabel))
 	} else {
@@ -356,7 +356,7 @@ func (r *run) setup(req types.KueueRequest) (*types.OperationResponse, error) {
 		r.step("project", "success", msg)
 	}
 
-	// Third phase: optional Ray sample workloads.
+	// Phase three: optional Ray sample workloads.
 	if len(samples) == 0 {
 		slog.Info("kueue setup", "project", project, "user", kube.GetUser(c))
 		return r.done(fmt.Sprintf("Distributed workloads are set up in %s: LocalQueue %s.", project, LocalQueueName))
