@@ -199,7 +199,7 @@ func runKueueStep(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*
 		}
 	}
 	// The dashboard's mark on the recipe's workbench, from the cluster as it
-	// was before this step (the workbench step ran before it).
+	// was before this step (a workbench that comes before it).
 	if note := kueueWorkbenchNote(s.Recipe, kueueLiveOf(before)); err == nil && res != nil && res.Success && note != "" {
 		res.Message = strings.TrimSpace(res.Message + " " + note)
 	}
@@ -288,18 +288,21 @@ func kueuePartProblem(sa, u *kube.Client, runID, uid string, notIt func(string) 
 
 // kueueLive is what the plan's Kueue notes read on the cluster before the
 // run: this tool's dashboard opt-in in effect (optInLive), the dashboard's
-// Kueue setting on (disableKueue false, whoever set it), and the project
-// carrying kueue.openshift.io/managed=true that this tool did not add.
+// Kueue setting on (disableKueue false, whoever set it), the project
+// carrying kueue.openshift.io/managed=true that this tool did not add, and
+// the project there.
 type kueueLive struct {
-	OptInOn, SettingOn, ProjectManaged bool
+	OptInOn, SettingOn, ProjectManaged, ProjectExists bool
 }
 
-// kueueLiveOf reads kueueLive from the Distributed workloads status.
+// kueueLiveOf reads kueueLive from the Distributed workloads status (it has
+// the project's label only when the project is there).
 func kueueLiveOf(st *types.KueueStatus) kueueLive {
 	d := st.OptIn.DisableKueue
 	return kueueLive{
 		OptInOn: optInLive(st), SettingOn: d != nil && !*d,
 		ProjectManaged: st.Label != nil && st.Label.Present && !st.Label.AddedByTool,
+		ProjectExists:  st.Label != nil,
 	}
 }
 
@@ -307,29 +310,26 @@ func kueueLiveOf(st *types.KueueStatus) kueueLive {
 // workbench, or "" (F7, live on RHOAI 3.7-ea.1): it marks a workbench in a
 // Kueue project without a queue label "Workbench bypasses Kueue queue
 // management" (odh-dashboard NotebookTableRow.tsx L108-111, once the
-// setting and the project label are both on). The recipe creates the
-// workbench before its Kueue step, so the workbench gets a profile without a
-// queue unless both were on before the run. Editing it to a Queue profile
+// setting and the project label are both on). A recipe that turns the
+// setting on creates its workbench after its Kueue step
+// (workbenchAfterKueue), with a Queue hardware profile, so it has no note.
+// Without the opt-in, with the setting on before the run, the workbench
+// comes first: in a project there that is not Kueue's it gets a profile
+// without a queue, and the Kueue step's label then brings the mark (a
+// project the run creates is Kueue's from the start, and the plan refuses
+// a workbench there: checkWorkbenchLater). Editing it to a Queue profile
 // clears the mark and restarts it; RHOAI's notebook controller does not
 // copy the queue label to the workbench's pod, so Kueue does not admit it
-// either way, and the note does not claim it does. The model is not marked
-// (llm-d deployments, live), so it is not named.
+// either way, and the note does not claim it does (nor, before it is
+// verified live, that Kueue admits a workbench created with a Queue
+// profile). The model is not marked (llm-d deployments, live), so it is
+// not named.
 func kueueWorkbenchNote(r types.EnvironmentRecipe, live kueueLive) string {
 	f := r.Spec.Features
-	settingOnAfter := f.Kueue.DashboardOptIn || live.SettingOn
-	if !f.Kueue.Enabled || !f.Workbench.Enabled || !settingOnAfter || (live.SettingOn && live.ProjectManaged) {
+	if !f.Kueue.Enabled || !f.Workbench.Enabled || workbenchAfterKueue(r) || !live.SettingOn || !live.ProjectExists || live.ProjectManaged {
 		return ""
 	}
-	why := "it is created before the Kueue setting is on"
-	if live.SettingOn {
-		why = "it is created before its project uses Kueue"
-	}
-	profile := "a Queue hardware profile"
-	if f.Kueue.DashboardOptIn {
-		// This run's Turn on creates or keeps the tool's Queue profile.
-		profile = "the hardware profile " + kueue.ProfileDisplayName
-	}
-	return fmt.Sprintf("The dashboard will mark this recipe's workbench 'Workbench bypasses Kueue queue management': %s. Choosing %s for it in the dashboard (Edit workbench) removes the mark and restarts the workbench.", why, profile)
+	return "The dashboard will mark this recipe's workbench 'Workbench bypasses Kueue queue management': it is created before its project uses Kueue. Choosing a Queue hardware profile for it in the dashboard (Edit workbench) removes the mark and restarts the workbench."
 }
 
 // kueueWarnings are the plan's notes for distributed workloads, from what

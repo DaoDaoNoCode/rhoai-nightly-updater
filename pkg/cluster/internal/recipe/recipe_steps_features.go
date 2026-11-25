@@ -117,10 +117,17 @@ func featureSteps(r types.EnvironmentRecipe) []Step {
 	if f.ModelRegistry.Enabled {
 		add(StepModelRegistry, "Model registry", 2*time.Minute, 12*time.Minute, checkModelRegistry, runModelRegistry)
 	}
-	if f.Workbench.Enabled {
+	addWorkbench := func() {
 		add(StepWorkbench, "Workbench", 30*time.Second, 15*time.Minute, checkWorkbench, runWorkbenchStep)
 	}
+	if f.Workbench.Enabled && !workbenchAfterKueue(r) {
+		addWorkbench()
+	}
 	steps = append(steps, kueueSteps(r)...)
+	if workbenchAfterKueue(r) {
+		// After its distributed workloads, as it runs (runOrder).
+		addWorkbench()
+	}
 	if d := r.Spec.DashboardDev; d.Deploy == DashboardDevMain || d.Deploy == DashboardDevPR {
 		// Placed last: a paused dashboard module operator stalls RHOAI upgrades
 		// until the pause ends.
@@ -892,10 +899,12 @@ func runModelRegistry(c *kube.Client, s *State, emit func(types.UpdateStepEvent)
 // --- Workbench ---------------------------------------------------------------
 
 // checkWorkbench: this tool's workbench in the project exists and is not
-// being deleted → done (started or not: the Workbench tab starts it); one
-// being deleted is not (the step waits until it is gone and sets it up
-// again); one the tool did not create, a component that is off, or a
-// platform without workbenches blocks.
+// being deleted → done (started or not: the Workbench tab starts it; its
+// hardware profile is not changed, since that restarts it); one being
+// deleted is not (the step waits until it is gone and sets it up again);
+// one the tool did not create, a component that is off, a platform without
+// workbenches, or a project where the Workbench tab's Set up finds no
+// hardware profile (workbenchProfileBlock) blocks.
 func checkWorkbench(c *kube.Client, s *State) (Check, error) {
 	project := projectOf(s)
 	item, st, err := workbenchIn(c, project)
@@ -906,13 +915,99 @@ func checkWorkbench(c *kube.Client, s *State) (Check, error) {
 		return blockedAt(st.Unsupported), nil
 	case st.Blocked != nil:
 		return Check{Blocked: st.Blocked.Reason, Fix: fixAt(types.RecipeFixFeatureBlocked, pageComponents)}, nil
-	case item == nil || item.Terminating:
-		return Check{}, nil
-	case !item.ManagedByTool:
+	case item != nil && !item.Terminating && !item.ManagedByTool:
 		return blockedAt(fmt.Sprintf("Project %s has a workbench %s that this tool did not create; the recipe does not change it. Nothing was changed.", project, workbench.Name)), nil
+	case item != nil && !item.Terminating:
+		return Check{Done: true, Reason: fmt.Sprintf("Workbench %s in %s is set up (%s).", workbench.Name, project, kube.FirstNonEmpty(item.State, "state unknown"))}, nil
 	}
-	return Check{Done: true, Reason: fmt.Sprintf("Workbench %s in %s is set up (%s).", workbench.Name, project, kube.FirstNonEmpty(item.State, "state unknown"))}, nil
+	return workbenchProfileBlock(s.Recipe, st), nil
 }
+
+// checkWorkbenchLater is the plan's check of a workbench step that waits for
+// steps that will run (types.RecipeStepLater): it blocks when no hardware
+// profile will fit the project once the run gets there, so the run does
+// not stop halfway for it. What decides the profile (the project's Kueue
+// label, the dashboard's Kueue setting, the project's LocalQueues and the
+// hardware profiles) is changed before the workbench step only by the Kueue
+// steps and the project step:
+//
+//   - a workbench created after the Kueue steps (workbenchAfterKueue) gets
+//     the Queue profile they make for the project's LocalQueue while they
+//     will run; once they are set up, the project is read as it is;
+//   - a project the run creates is labelled kueue.openshift.io/managed=true
+//     when the dashboard's Kueue setting is on (EnsureProject, as the
+//     dashboard's Create project does), and has no LocalQueue before a
+//     Kueue step. The dashboard then offers its workbench no profile: in a
+//     Kueue project only Queue profiles of a LocalQueue the project has, and
+//     a Queue profile names its LocalQueue (the dashboard's hardware profile
+//     form requires the name, odh-dashboard packages/hardware-profiles
+//     src/pages/manage/validationUtils.ts schedulingSchema; this tool's
+//     Queue profile names nightly-kueue);
+//   - a project that is there is read as it is, as the Workbench tab's Set
+//     up reads it (workbenchProfileBlock); a workbench already there is not
+//     changed.
+//
+// A read that fails is an error (the plan refuses: fail closed).
+func checkWorkbenchLater(c *kube.Client, s *State, willRun map[string]bool) (Check, error) {
+	r := s.Recipe
+	if workbenchAfterKueue(r) && (willRun[StepKueuePrereq] || willRun[StepKueue]) {
+		return Check{}, nil
+	}
+	if p := r.Spec.Project; p != nil && p.Mode == ProjectCreate && s.Project == nil {
+		if !willRun[StepProject] {
+			return Check{}, nil // the project step is refused, and the plan says why
+		}
+		on, err := dashboardKueueOn(c)
+		if err != nil {
+			return Check{}, fmt.Errorf("read the dashboard's Kueue setting: %w", err)
+		}
+		if !on {
+			return Check{}, nil
+		}
+		return Check{Blocked: strings.TrimSpace(fmt.Sprintf("The dashboard's Kueue setting is on, so project %s is created with the label kueue.openshift.io/managed=true (as the dashboard's Create project does), and the run creates its workbench before the project has a LocalQueue: the dashboard offers no hardware profile for a workbench there, and the workbench step would fail. %s", p.Name, workbenchKueueHint(r))) + " Nothing was changed."}, nil
+	}
+	item, st, err := workbenchIn(c, projectOf(s))
+	switch {
+	case err != nil:
+		return Check{}, err
+	case item != nil && !item.Terminating:
+		return Check{}, nil // there: the step finds it set up, or blocks on one the tool did not create
+	}
+	return workbenchProfileBlock(r, st), nil
+}
+
+// workbenchProfileBlock blocks when the Workbench tab's plan for the project
+// finds no hardware profile for a new workbench (workbench.BuildPlan,
+// "no_profile" or "no_profile_project"): its Set up would refuse the same
+// way. With the project's Kueue rule as the reason, it adds what the
+// recipe can change (workbenchKueueHint).
+func workbenchProfileBlock(r types.EnvironmentRecipe, st *types.WorkbenchStatus) Check {
+	switch st.PlanProblemCode {
+	case "no_profile":
+		return blockedAt(strings.TrimSpace(st.PlanProblem) + " Nothing was changed.")
+	case "no_profile_project":
+		return blockedAt(strings.TrimSpace(st.PlanProblem+" "+workbenchKueueHint(r)) + " Nothing was changed.")
+	}
+	return Check{}
+}
+
+// workbenchKueueHint is what recipe r can change when its workbench finds
+// no hardware profile in a Kueue project: create the workbench after
+// distributed workloads with the dashboard's opt-in (workbenchAfterKueue).
+// "" when r does so already.
+func workbenchKueueHint(r types.EnvironmentRecipe) string {
+	switch k := r.Spec.Features.Kueue; {
+	case workbenchAfterKueue(r):
+		return ""
+	case k.Enabled:
+		return "With spec.features.kueue.dashboardOptIn the run creates the workbench after distributed workloads, with a Queue hardware profile of the project's LocalQueue."
+	}
+	return "A recipe with distributed workloads with dashboardOptIn creates the workbench after them, with a Queue hardware profile of the project's LocalQueue."
+}
+
+// dashboardKueueOn reads whether the dashboard's Create project labels a
+// new project for Kueue (kueueManaged); tests may stub it.
+var dashboardKueueOn = kueueManaged
 
 // workbenchIn reads the Workbench tab's status of project and its
 // workbench nightly-workbench (nil when there is none).

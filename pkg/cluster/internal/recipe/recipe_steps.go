@@ -364,8 +364,8 @@ type Step struct {
 	Typical, Max time.Duration
 	// After names the steps of the run this one starts after: each must
 	// have ended well (succeeded, or found set up) first. Steps sets it
-	// from the run's order (stepsFirst, stepLanes, stepsLast); steps
-	// without one between them run side by side.
+	// from the run's order (stepsFirst, then runOrder's lanes and last
+	// steps); steps without one between them run side by side.
 	After []string
 	Check func(c *kube.Client, s *State) (Check, error)
 	Run   func(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error)
@@ -408,7 +408,7 @@ func Steps(r types.EnvironmentRecipe) []Step {
 			Step{ID: StepMLflow, Title: "MLflow", Typical: 2 * time.Minute, Max: 10 * time.Minute, Check: checkMLflow, Run: runMLflow},
 		)
 	}
-	return withAfter(append(steps, featureSteps(r)...))
+	return withAfter(append(steps, featureSteps(r)...), r)
 }
 
 // fail is a step's refusal or failure.

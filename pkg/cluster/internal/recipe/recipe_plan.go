@@ -3,6 +3,7 @@ package recipe
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -40,6 +41,17 @@ var stepDependsOn = map[string][]string{
 	StepKueuePrereq:  {StepRHOAI, StepDSC, StepPrerequisites},
 	StepKueue:        {StepRHOAI, StepDSC, StepProject, StepKueuePrereq},
 	StepDashboardDev: {StepRHOAI, StepDSC},
+}
+
+// dependsOn is stepDependsOn[id] for recipe r: a workbench created after
+// distributed workloads (workbenchAfterKueue) also depends on the Kueue
+// steps, which give its project the LocalQueue and the Queue hardware
+// profile its profile is chosen from.
+func dependsOn(r types.EnvironmentRecipe, id string) []string {
+	if id == StepWorkbench && workbenchAfterKueue(r) {
+		return append(slices.Clone(stepDependsOn[id]), StepKueuePrereq, StepKueue)
+	}
+	return stepDependsOn[id]
 }
 
 // buildResolveTimeout bounds resolving the recipe's build on Quay.
@@ -101,27 +113,7 @@ func Plan(c *kube.Client, r types.EnvironmentRecipe, pinned *types.RecipePinnedB
 	for i, step := range steps {
 		ps := types.RecipePlanStep{ID: step.ID, Title: step.Title}
 		ps.TypicalSeconds, ps.MaxSeconds = step.Seconds()
-		later := false
-		for _, dep := range stepDependsOn[step.ID] {
-			later = later || willRun[dep]
-		}
-		if later {
-			ps.Action, ps.Reason = types.RecipeStepLater, "Checked when the run gets here: it depends on a step before it."
-			willRun[step.ID] = true
-		} else {
-			chk, err := step.Check(c, &s)
-			switch {
-			case err != nil:
-				ps.Action, ps.Reason, ps.Fix = types.RecipeStepBlocked, fmt.Sprintf("Cannot check it: %v.", err), checkFailed()
-			case chk.Blocked != "":
-				ps.Action, ps.Reason, ps.Fix = types.RecipeStepBlocked, chk.Blocked, chk.Fix
-			case chk.Done:
-				ps.Action, ps.Reason = types.RecipeStepSkip, chk.Reason
-			default:
-				ps.Action = types.RecipeStepRun
-				willRun[step.ID] = true
-			}
-		}
+		ps.Action, ps.Reason, ps.Fix = planStep(c, &s, step, willRun)
 		if ps.Action == types.RecipeStepBlocked {
 			p.addFix(ps.Fix, "", "%s: %s", step.Title, ps.Reason)
 		}
@@ -142,6 +134,49 @@ func Plan(c *kube.Client, r types.EnvironmentRecipe, pinned *types.RecipePinnedB
 	plan.Problems = append(plan.Problems, p...)
 	return plan, s
 }
+
+// planStep is what the plan says of step, given the steps before it that
+// will run (willRun, which gains step when it will run too): checked when
+// the run gets there while a step its check depends on will run
+// (dependsOn), else its Check. A workbench checked later is still refused
+// now when no hardware profile will fit its project when the run gets
+// there (checkWorkbenchLater).
+func planStep(c *kube.Client, s *State, step Step, willRun map[string]bool) (action, reason string, fix *types.RecipeFix) {
+	later := false
+	for _, dep := range dependsOn(s.Recipe, step.ID) {
+		later = later || willRun[dep]
+	}
+	var (
+		chk Check
+		err error
+	)
+	switch {
+	case later && step.ID == StepWorkbench:
+		if chk, err = checkWorkbenchLater(c, s, willRun); err == nil && chk.Blocked == "" {
+			willRun[step.ID] = true
+			return types.RecipeStepLater, laterReason, nil
+		}
+	case later:
+		willRun[step.ID] = true
+		return types.RecipeStepLater, laterReason, nil
+	default:
+		chk, err = step.Check(c, s)
+	}
+	switch {
+	case err != nil:
+		return types.RecipeStepBlocked, fmt.Sprintf("Cannot check it: %v.", err), checkFailed()
+	case chk.Blocked != "":
+		return types.RecipeStepBlocked, chk.Blocked, chk.Fix
+	case chk.Done:
+		return types.RecipeStepSkip, chk.Reason, nil
+	}
+	willRun[step.ID] = true
+	return types.RecipeStepRun, "", nil
+}
+
+// laterReason is the plan's reason for a step checked when the run gets
+// there.
+const laterReason = "Checked when the run gets here: it depends on a step before it."
 
 // gitOpsManager names what manages the operator.
 func gitOpsManager(g argo.OperatorGitOps) string {

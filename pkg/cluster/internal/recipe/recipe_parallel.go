@@ -3,6 +3,8 @@ package recipe
 import (
 	"maps"
 	"slices"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 // MaxRunningSteps caps concurrent step execution within a single run.
@@ -39,14 +41,49 @@ var (
 	// dashboard's Kueue opt-in changes how new workbenches and model
 	// deployments are created, so distributed workloads come after them,
 	// and a Dashboard Dev build, which pauses the dashboard's operator,
-	// comes last.
+	// comes last. A recipe that turns the opt-in on creates its workbench
+	// between the two instead (runOrder).
 	stepsLast = []string{StepKueuePrereq, StepKueue, StepDashboardDev}
 )
 
-// withAfter populates After on each step from the declared run order. Any step
-// omitted from that order (currently none; a test enforces this) depends on
-// every step listed before it.
-func withAfter(steps []Step) []Step {
+// workbenchAfterKueue reports whether recipe r creates its workbench after
+// its distributed workloads: r sets up a workbench and turns the
+// dashboard's Kueue setting on (dashboardOptIn). Once the setting is on,
+// the project step labels a new project kueue.openshift.io/managed=true,
+// as the dashboard's Create project does (kueueManaged), and the dashboard
+// offers a workbench there only a Queue hardware profile of a LocalQueue
+// the project has (envkit.KueueModeFor, workbench.ChooseProfile). The Kueue
+// step makes that LocalQueue, labels the project and, with the opt-in,
+// makes the tool's Queue profile; a workbench created after it gets a Queue
+// profile on every run, a first one and one after a Clean up of the project
+// alike. Without the opt-in the run does not turn the setting on, so the
+// workbench stays in its lane: after the Kueue step's label, with the
+// setting off, the dashboard would offer it no profile at all.
+func workbenchAfterKueue(r types.EnvironmentRecipe) bool {
+	f := r.Spec.Features
+	return f.Workbench.Enabled && f.Kueue.Enabled && f.Kueue.DashboardOptIn
+}
+
+// runOrder is recipe r's stepLanes and stepsLast: as declared, or, when r
+// creates its workbench after its distributed workloads
+// (workbenchAfterKueue), with the workbench moved from the pipelines lane
+// to right after the Kueue step. It still comes after the pipeline server
+// (every lane ends before stepsLast) and before Dashboard Dev; the model
+// keeps its lane, before the Kueue steps.
+func runOrder(r types.EnvironmentRecipe) (lanes [][]string, last []string) {
+	if !workbenchAfterKueue(r) {
+		return stepLanes, stepsLast
+	}
+	for _, lane := range stepLanes {
+		lanes = append(lanes, slices.DeleteFunc(slices.Clone(lane), func(id string) bool { return id == StepWorkbench }))
+	}
+	return lanes, slices.Insert(slices.Clone(stepsLast), slices.Index(stepsLast, StepKueue)+1, StepWorkbench)
+}
+
+// withAfter populates After on each step from recipe r's run order
+// (runOrder). Any step omitted from that order (currently none; a test
+// enforces this) depends on every step listed before it.
+func withAfter(steps []Step, r types.EnvironmentRecipe) []Step {
 	present := map[string]bool{}
 	for _, s := range steps {
 		present[s.ID] = true
@@ -63,9 +100,10 @@ func withAfter(steps []Step) []Step {
 		}
 		return deps
 	}
+	lanes, last := runOrder(r)
 	head := chain(stepsFirst, nil)
 	var ends []string
-	for _, lane := range stepLanes {
+	for _, lane := range lanes {
 		if end := chain(lane, head); !slices.Equal(end, head) {
 			ends = append(ends, end...)
 		}
@@ -73,7 +111,7 @@ func withAfter(steps []Step) []Step {
 	if len(ends) == 0 {
 		ends = head
 	}
-	chain(stepsLast, ends)
+	chain(last, ends)
 	var earlier []string
 	for i := range steps {
 		deps, listed := after[steps[i].ID]

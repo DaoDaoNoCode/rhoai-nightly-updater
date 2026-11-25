@@ -278,36 +278,36 @@
         "typicalSeconds": 120
       },
       {
-        "finishedAt": "2026-11-20T15:44:00Z",
-        "id": "workbench",
-        "maxSeconds": 900,
-        "message": "Workbench is set up.",
-        "startedAt": "2026-11-20T15:42:00Z",
-        "status": "success",
-        "title": "Workbench",
-        "typicalSeconds": 30
-      },
-      {
         "created": true,
-        "finishedAt": "2026-11-20T15:47:00Z",
+        "finishedAt": "2026-11-20T15:44:00Z",
         "id": "kueue-prereq",
         "maxSeconds": 900,
         "message": "What distributed workloads need is set up.",
-        "startedAt": "2026-11-20T15:45:00Z",
+        "startedAt": "2026-11-20T15:42:00Z",
         "status": "success",
         "title": "What distributed workloads need",
         "typicalSeconds": 120
       },
       {
         "created": true,
-        "finishedAt": "2026-11-20T15:50:00Z",
+        "finishedAt": "2026-11-20T15:47:00Z",
         "id": "kueue",
         "maxSeconds": 600,
         "message": "Distributed workloads is set up.",
-        "startedAt": "2026-11-20T15:48:00Z",
+        "startedAt": "2026-11-20T15:45:00Z",
         "status": "success",
         "title": "Distributed workloads",
         "typicalSeconds": 60
+      },
+      {
+        "finishedAt": "2026-11-20T15:50:00Z",
+        "id": "workbench",
+        "maxSeconds": 900,
+        "message": "Workbench is set up.",
+        "startedAt": "2026-11-20T15:48:00Z",
+        "status": "success",
+        "title": "Workbench",
+        "typicalSeconds": 30
       },
       {
         "finishedAt": "2026-11-20T15:53:00Z",

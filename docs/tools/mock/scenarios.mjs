@@ -806,8 +806,9 @@ scenarios["recipe-full-succeeded"] = (w) => {
   w.recipeRun = { run: F.recipeRun({ rcp, done: steps.length, current: "", state: "succeeded", stopReason: "Every step of recipe full is set up." }), running: false };
   w.resources = { ...w.resources, mlflow: F.mlflowStates.running, pipelineServers: [...w.resources.pipelineServers, { ...F.pipelineServer, namespace: "recipe-full", apiRoute: undefined, uiRoute: undefined }] };
 };
-// The full recipe with the dashboard's Kueue setting turned on: the review and the Kueue step say the dashboard marks
-// its workbench (kueueWorkbenchNote).
+// The full recipe with the dashboard's Kueue setting turned on: the run creates the workbench after distributed
+// workloads, with the Queue hardware profile (internal/recipe workbenchAfterKueue), so nothing notes the dashboard's
+// mark on it.
 scenarios["recipe-full-kueue-optin"] = (w) => {
   scenarios["recipe-full-succeeded"](w);
   const rcp = F.fullRecipe();

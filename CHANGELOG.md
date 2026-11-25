@@ -457,14 +457,34 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   now. A reload, another tab or another user still see the server's latest
   step.
 - **A recipe says when the dashboard will mark its workbench as bypassing
-  Kueue.** A recipe that sets up a workbench and turns the dashboard's Kueue
-  setting on creates the workbench first, so the dashboard marks it
-  "Workbench bypasses Kueue queue management" (seen live on RHOAI 3.7). The
-  review and the Kueue step's result now say so, and that choosing the
-  hardware profile Kueue CPU (RHOAI Nightly Updater) (or a Queue profile)
-  in the dashboard's Edit workbench removes the mark and restarts it. They
-  do not claim Kueue then admits the workbench: RHOAI's notebook controller
-  does not pass the queue label to its pod.
+  Kueue.** A recipe with a workbench and distributed workloads but without
+  `kueue.dashboardOptIn`, run while the dashboard's Kueue setting is on in
+  a project that is not Kueue's yet, creates the workbench before its Kueue
+  step labels the project, so the dashboard marks it "Workbench bypasses
+  Kueue queue management" (seen live on RHOAI 3.7). The review and the
+  Kueue step's result now say so, and that choosing a Queue hardware
+  profile in the dashboard's Edit workbench removes the mark and restarts
+  it. They do not claim Kueue then admits the workbench: RHOAI's notebook
+  controller does not pass the queue label to its pod.
+- **A recipe with a workbench and the dashboard's Kueue opt-in runs again.**
+  Run a second time after a Clean up of its project only, with the
+  dashboard's Kueue setting still on, such a recipe failed at the workbench
+  step ("no enabled workbench hardware profile sends workloads to a
+  LocalQueue the project has", live on RHOAI 3.7.0-ea.1): the project step
+  labels a new project `kueue.openshift.io/managed=true` once the setting
+  is on, as the dashboard's Create project does, and the workbench came
+  before the Kueue step that makes the project's LocalQueue and the Queue
+  hardware profile. A recipe with `kueue.dashboardOptIn` now creates its
+  workbench right after Distributed workloads (before Dashboard Dev), on
+  every run, so the workbench step picks a Queue profile of the project's
+  LocalQueue as the Workbench tab does, and the dashboard no longer marks
+  it as bypassing Kueue: the review and the Kueue step no longer say it
+  will. A workbench already there is not changed. Without the opt-in the
+  workbench still comes first, and the review now refuses, before anything
+  runs, a workbench that would find no hardware profile (the setting on and
+  a project the run creates, or a Kueue project without a Queue profile of
+  its LocalQueues, or with Kueue not available), with what to change in the
+  recipe, instead of failing halfway.
 - **The Distributed workloads tab can turn Kueue back.** Once its setup
   was cleaned up, the prerequisites still read "kueue Unmanaged (turned on
   by this tool)", but only Clean up everything could turn it back. The
