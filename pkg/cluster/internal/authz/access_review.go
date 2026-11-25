@@ -2,8 +2,9 @@ package authz
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"strings"
+	"log/slog"
 	"sync"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
@@ -43,21 +44,33 @@ func (r AccessRequest) String() string {
 }
 
 // AccessReviewConcurrency bounds the reviews one call of ReviewUserAccess
-// sends at once.
-const AccessReviewConcurrency = 8
+// sends at once; maxReviewsInFlight bounds those of every call of this
+// process together, so concurrent preflights and capability reads cannot
+// multiply the load on the API server.
+const (
+	AccessReviewConcurrency = 8
+	maxReviewsInFlight      = 32
+)
+
+var reviewsInFlight = make(chan struct{}, maxReviewsInFlight)
+
+// ErrAccessReviewFailed: an access review could not be made or came back
+// without a decision. Its text names only how it failed (an HTTP status or
+// a category), never the API server's or the authorizer's words.
+var ErrAccessReviewFailed = errors.New("an access review with your token could not be made")
 
 // ReviewUserAccess asks the API server, with the signed-in user's own token
 // (u, NewUserClient), whether that user's RBAC allows each request: one
 // SelfSubjectAccessReview per request, at most AccessReviewConcurrency at
-// once. Every authenticated user may create one (Kubernetes
-// system:basic-user, OpenShift basic-user, both bound to
-// system:authenticated). It returns the requests that are not allowed, in
-// the order of reqs.
+// once (and maxReviewsInFlight in the process). Every authenticated user
+// may create one (Kubernetes system:basic-user, OpenShift basic-user, both
+// bound to system:authenticated). It returns the requests that are not
+// allowed, in the order of reqs.
 //
 // It fails closed: a review that cannot be sent, is refused, or comes back
-// without a decision (no "allowed", or an evaluationError) makes the call
-// fail, and no answer is returned for any request. A 401 is
-// ErrUnauthenticated.
+// without a decision makes the call fail (ErrAccessReviewFailed), and no
+// answer is returned for any request. A 401 is ErrUnauthenticated. The
+// failures are logged with their category only.
 func ReviewUserAccess(u *kube.Client, reqs []AccessRequest) ([]AccessRequest, error) {
 	if !u.ActsAsUser() {
 		return nil, ErrNotUserClient
@@ -70,23 +83,34 @@ func ReviewUserAccess(u *kube.Client, reqs []AccessRequest) ([]AccessRequest, er
 		wg.Go(func() {
 			slots <- struct{}{}
 			defer func() { <-slots }()
+			select {
+			case reviewsInFlight <- struct{}{}:
+			case <-u.Context().Done():
+				errs[i] = u.Context().Err()
+				return
+			}
+			defer func() { <-reviewsInFlight }()
 			allowed[i], errs[i] = reviewOne(u, reqs[i])
 		})
 	}
 	wg.Wait()
-	var failed []string
-	for i, err := range errs {
-		if err != nil {
-			failed = append(failed, fmt.Sprintf("%s: %v", reqs[i], err))
+	failed := 0
+	var first error
+	for _, err := range errs {
+		if err == nil {
+			continue
+		}
+		if isUnauthenticated(err) {
+			return nil, fmt.Errorf("access review: %w", ErrUnauthenticated)
+		}
+		failed++
+		if first == nil {
+			first = err
 		}
 	}
-	if len(failed) > 0 {
-		for _, err := range errs {
-			if err != nil && isUnauthenticated(err) {
-				return nil, fmt.Errorf("access review: %w", ErrUnauthenticated)
-			}
-		}
-		return nil, fmt.Errorf("cannot check your permissions (%d of %d access reviews failed): %s", len(failed), len(reqs), strings.Join(failed, "; "))
+	if failed > 0 {
+		kube.LogFactReadFailure("access reviews with the user's token failed", "SelfSubjectAccessReview", first, "failed", failed, "of", len(reqs))
+		return nil, fmt.Errorf("%w (%d of %d failed: %s)", ErrAccessReviewFailed, failed, len(reqs), reviewProblem(first))
 	}
 	var denied []AccessRequest
 	for i, ok := range allowed {
@@ -97,11 +121,27 @@ func ReviewUserAccess(u *kube.Client, reqs []AccessRequest) ([]AccessRequest, er
 	return denied, nil
 }
 
+// errNoDecision: a review came back without "allowed".
+var errNoDecision = errors.New("no decision")
+
+// reviewProblem says how a review failed, without its text.
+func reviewProblem(err error) string {
+	if errors.Is(err, errNoDecision) {
+		return "no decision"
+	}
+	return kube.FactReadProblem(err)
+}
+
 func isUnauthenticated(err error) bool {
 	return kube.IsK8sError(err, 401)
 }
 
-// reviewOne sends one SelfSubjectAccessReview with u's token.
+// reviewOne sends one SelfSubjectAccessReview with u's token. Its
+// decision is status.allowed: RBAC allows a request when one rule allows
+// it, so an evaluationError beside allowed true (a rule that could not be
+// read) does not change it, and beside allowed false the request is denied
+// (fail closed). The evaluationError is logged, never returned: it may
+// name roles and bindings.
 func reviewOne(u *kube.Client, r AccessRequest) (bool, error) {
 	attrs := map[string]any{"verb": r.Verb, "group": r.Group, "resource": r.Resource, "namespace": r.Namespace}
 	if r.Subresource != "" {
@@ -128,10 +168,13 @@ func reviewOne(u *kube.Client, r AccessRequest) (bool, error) {
 		} `json:"status"`
 	}
 	if err := json.Unmarshal(body, &review); err != nil {
-		return false, fmt.Errorf("parse the access review: %w", err)
+		return false, errNoDecision
 	}
-	if review.Status.Allowed == nil || review.Status.EvaluationError != "" {
-		return false, fmt.Errorf("the access review came back without a decision (%s)", kube.FirstNonEmpty(review.Status.EvaluationError, "no allowed field"))
+	if review.Status.Allowed == nil {
+		return false, errNoDecision
+	}
+	if review.Status.EvaluationError != "" {
+		slog.Debug("an access review came back with an evaluation error", "verb", r.Verb, "resource", r.Resource, "allowed", *review.Status.Allowed, "evaluationError", review.Status.EvaluationError)
 	}
 	return *review.Status.Allowed, nil
 }

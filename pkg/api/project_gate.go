@@ -160,18 +160,116 @@ func userProjectCheck(w http.ResponseWriter, u *cluster.Client, project, refused
 	return true
 }
 
-// preflight is step 7 for the actions ids: what each misses, with u's
-// token. apps is read only when an action needs it.
-func preflight(u *cluster.Client, ids []string, project string) (map[string][]cluster.MissingPermission, error) {
+// actionVerdict is a project action's answer to the gate's checks 5, 7
+// and 8 (projectActionVerdicts): "" reason when it may run, else the
+// refusal's HTTP status, errorCode and reason (without "Nothing was
+// changed"), and for a preflight refusal what is missing.
+type actionVerdict struct {
+	status  int
+	code    string
+	reason  string
+	missing []cluster.MissingPermission
+}
+
+// projectActionVerdicts runs the gate's checks after the project check,
+// for the actions ids of a request (one) or of the capabilities (all), in
+// the gate's order: the action is one the user may run; the cluster's
+// prerequisites of its feature (the facts: a component that is off says
+// so, not "ask for edit"); then the preflight with the user's token u,
+// every distinct request once. A failure counts only for the actions it
+// concerns: an applications namespace that cannot be read refuses only
+// the actions that read there. Texts never carry an API server's,
+// authorizer's or ServiceAccount's words, only an HTTP status or category.
+func projectActionVerdicts(u *cluster.Client, admin bool, ids []string, project string) map[string]actionVerdict {
+	out := map[string]actionVerdict{}
+	blocks := map[string][2]string{}
+	var review []string
+	for _, id := range ids {
+		a, known := cluster.ProjectActionByID(id)
+		label := a.Label
+		if !known {
+			label = id
+		}
+		if !admin && (!known || !a.ForUsers) {
+			out[id] = actionVerdict{status: http.StatusForbidden, code: adminOnlyCode, reason: label + " is done by a cluster-admin in this tool."}
+			continue
+		}
+		b, seen := blocks[a.Feature]
+		if !seen {
+			b[0], b[1] = projectFeatureBlock(u, a.Feature)
+			blocks[a.Feature] = b
+		}
+		if b[0] != "" {
+			out[id] = actionVerdict{status: http.StatusConflict, code: b[1], reason: b[0]}
+			continue
+		}
+		if admin {
+			out[id] = actionVerdict{}
+			continue
+		}
+		review = append(review, id)
+	}
+	if len(review) == 0 {
+		return out
+	}
 	apps := ""
-	if cluster.NeedsAppsNamespace(ids) {
+	if cluster.NeedsAppsNamespace(review) {
 		ns, err := projectAppsNamespace(u)
 		if err != nil {
-			return nil, err
+			// Only the actions that read in the applications namespace
+			// cannot be checked; the others are.
+			var rest []string
+			for _, id := range review {
+				if !cluster.NeedsAppsNamespace([]string{id}) {
+					rest = append(rest, id)
+					continue
+				}
+				a, _ := cluster.ProjectActionByID(id)
+				out[id] = actionVerdict{status: http.StatusConflict, code: "prerequisites_unknown", reason: fmt.Sprintf("Cannot check %s in %s: %v.", a.Label, project, err)}
+			}
+			review = rest
+			if len(review) == 0 {
+				return out
+			}
 		}
 		apps = ns
 	}
-	return reviewProjectActions(u, ids, project, apps)
+	reviews, err := reviewProjectActions(u, review, project, apps)
+	for _, id := range review {
+		a, _ := cluster.ProjectActionByID(id)
+		switch {
+		case errors.Is(err, cluster.ErrUnauthenticated):
+			out[id] = actionVerdict{status: http.StatusUnauthorized, code: "session_expired", reason: "Your OpenShift session has expired. Log in again."}
+		case err != nil:
+			out[id] = actionVerdict{status: http.StatusServiceUnavailable, code: "authorization_unavailable", reason: fmt.Sprintf("Cannot check your permissions for %s in %s (%v); try again.", a.Label, project, err)}
+		case reviews[id].Err != nil:
+			out[id] = actionVerdict{status: http.StatusConflict, code: "prerequisites_unknown", reason: fmt.Sprintf("Cannot check %s in %s: %v.", a.Label, project, reviews[id].Err)}
+		case len(reviews[id].Missing) > 0:
+			out[id] = actionVerdict{status: http.StatusForbidden, code: missingPermissionsCode, reason: cluster.MissingSummaryFor(a.Label, project, reviews[id].Missing), missing: reviews[id].Missing}
+		default:
+			out[id] = actionVerdict{}
+		}
+	}
+	if err != nil {
+		slog.Warn("project action preflight failed", "project", project, "error", err)
+	}
+	return out
+}
+
+// projectStartProblem is what keeps an accepted project action from
+// taking its lock, shared by the gate and the capabilities: the project's
+// namespace UID (the lock's key) cannot be read with the user's token. A
+// user gets the "not one of your projects" answer then.
+func projectStartProblem(u *cluster.Client, project string, admin bool) (uid string, status int, code, reason string) {
+	uid, err := readProjectUID(u, project)
+	if err != nil {
+		if !admin {
+			return "", http.StatusForbidden, cluster.ErrorCodeForbiddenForUser, notYourProjectMessage(project)
+		}
+		status, code := cluster.HTTPStatusForError(err)
+		return "", status, code, fmt.Sprintf("Cannot read project %s (%s).", project, cluster.FactReadProblem(err))
+	}
+	return uid, 0, "", ""
 }
 
 // withProjectMutationAuth wraps the handler of a project action's route
@@ -227,62 +325,46 @@ func withProjectMutationAuth(route projectRoute, fn func(c *cluster.Client, w ht
 			label = action
 		}
 		u := projectCheckClient(r.Context(), userToken, username, saToken)
-		if !admin {
-			// 5. An action users may run.
-			if !known || !pa.ForUsers {
-				writeError(w, adminOnlyActionMessage(label), http.StatusForbidden, adminOnlyCode)
-				return
-			}
-			// 6. One of their projects, before any ServiceAccount read.
-			if !userProjectCheck(w, u, project, "Nothing was changed.") {
-				return
-			}
-			// 7. The preflight.
-			missing, err := preflight(u, []string{id}, project)
-			if errors.Is(err, cluster.ErrUnauthenticated) {
-				writeError(w, "Your OpenShift session has expired. Log in again.", http.StatusUnauthorized, "session_expired")
-				return
-			}
-			if err != nil {
-				slog.Warn("project action preflight failed", "action", id, "project", project, "user", username, "error", err)
-				writeError(w, fmt.Sprintf("Cannot check your permissions for %s in %s (%v). Nothing was changed; try again.", label, project, err), http.StatusServiceUnavailable, "authorization_unavailable")
-				return
-			}
-			if m := missing[id]; len(m) > 0 {
-				slog.Info("project action refused: missing permissions", "action", id, "project", project, "user", username, "missing", len(m))
-				writeMissingPermissions(w, label, project, m)
-				return
-			}
-		}
-		// 8. The cluster's prerequisites (the ServiceAccount's facts).
-		if reason, code := projectFeatureBlock(u, route.feature); reason != "" {
-			writeError(w, reason+" Nothing was changed.", http.StatusConflict, code)
+		// 5. An action users may run.
+		if !admin && (!known || !pa.ForUsers) {
+			writeError(w, adminOnlyActionMessage(label), http.StatusForbidden, adminOnlyCode)
 			return
 		}
-		// The project's lock is keyed by its namespace UID.
-		uid, err := readProjectUID(u, project)
-		if err != nil {
-			status, code := cluster.HTTPStatusForError(err)
-			if !admin {
-				// A project that went away since step 6: the same
-				// answer as one that is not the user's.
-				status, code = http.StatusForbidden, cluster.ErrorCodeForbiddenForUser
-				err = errors.New(notYourProjectMessage(project))
-			}
-			writeError(w, fmt.Sprintf("Cannot read project %s: %v. Nothing was changed.", project, err), status, code)
+		// 6. One of their projects, before any ServiceAccount read.
+		if !admin && !userProjectCheck(w, u, project, "Nothing was changed.") {
 			return
 		}
-
-		// 9. The rate limit and the shutdown gate, as withMutationAuth.
+		// The rate limit before the reviews: a burst of requests does not
+		// become a burst of access reviews.
 		rateLimitKey := username + ":" + r.URL.Path
 		slot, acquired := mutationLimiter.tryAcquire(rateLimitKey)
 		if !acquired {
 			wait := mutationLimiter.retryAfter(rateLimitKey)
-			slog.Warn("rate limited", "user", username, "path", r.URL.Path, "retryAfter", wait)
+			slog.Warn("rate limited", "path", r.URL.Path, "retryAfter", wait)
 			w.Header().Set("Retry-After", strconv.Itoa(wait))
 			writeError(w, fmt.Sprintf("This tool allows one change per user every %d seconds on this action. Nothing was changed; try again in %d %s.", int(mutationLimiter.window/time.Second), wait, map[bool]string{true: "second", false: "seconds"}[wait == 1]), http.StatusTooManyRequests, "user_rate_limited")
 			return
 		}
+		// 7 and 8. The prerequisites (facts), then the preflight.
+		if v := projectActionVerdicts(u, admin, []string{id}, project)[id]; v.reason != "" {
+			mutationLimiter.release(rateLimitKey, slot)
+			if v.code == missingPermissionsCode {
+				slog.Info("project action refused: missing permissions", "action", id, "missing", len(v.missing))
+				writeMissingPermissions(w, label, project, v.missing)
+				return
+			}
+			writeError(w, v.reason+" Nothing was changed.", v.status, v.code)
+			return
+		}
+		// The project's lock is keyed by its namespace UID.
+		uid, status, code, reason := projectStartProblem(u, project, admin)
+		if reason != "" {
+			mutationLimiter.release(rateLimitKey, slot)
+			writeError(w, reason+" Nothing was changed.", status, code)
+			return
+		}
+
+		// 9. The shutdown gate and the lock, as withMutationAuth.
 		if !mutations.begin() {
 			mutationLimiter.release(rateLimitKey, slot)
 			w.Header().Set("Retry-After", "30")

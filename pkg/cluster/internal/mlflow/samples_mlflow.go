@@ -444,7 +444,7 @@ func RunSamples(c *kube.Client, req types.MLflowSamplesRequest, onStep func(type
 		}
 		emit(types.UpdateStepEvent{Step: id, Status: "success", Message: fmt.Sprintf("%s: %s", name, msg)})
 	}
-	slog.Info("mlflow samples", "action", req.Action, "samples", req.Samples, "project", req.Project, "failed", failed, "user", kube.GetUser(c))
+	slog.Info("mlflow samples", "action", req.Action, "samples", req.Samples, "project", req.Project, "failed", failed)
 	if len(failed) > 0 {
 		record.Action(c, "mlflow-samples", activity+" (failed: "+strings.Join(failed, ", ")+")", false)
 		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Failed: %s. See the steps for the reason.", strings.Join(failed, ", ")), Logs: logs, ErrorCode: code}, nil

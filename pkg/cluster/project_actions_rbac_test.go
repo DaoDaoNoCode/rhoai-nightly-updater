@@ -167,9 +167,27 @@ func projectActionScanIfUsers(t *testing.T, a ProjectAction) []rbacRequest {
 	return projectActionScan(t, a.ID)
 }
 
+// gateRequests are what the project actions' gate and capabilities send
+// with the user's token for every action, before the action's own
+// requests (pkg/api withProjectMutationAuth, HandleProjectCapabilities):
+// fixed, listed in the golden file for review with the rest.
+var gateRequests = []string{
+	"get user.openshift.io/users name=~ (identity, authz.go LookupUserWithToken)",
+	"create authorization.openshift.io/subjectaccessreviews */*/* cluster-wide (the role, authz.go CheckUserPermissionWithToken)",
+	"get oauth.openshift.io/useroauthaccesstokens name=<the token's object> (the sign-in, authz.go ReadSessionToken)",
+	"list project.openshift.io/projects labelSelector=opendatahub.io/dashboard=true (the user's project, user_projects.go ListUserDSProjects)",
+	"get /namespaces name=<the project> (its UID, the lock's key, access_review.go ProjectUID)",
+	"create authorization.k8s.io/selfsubjectaccessreviews, one per request below (the preflight, access_review.go reviewOne)",
+	"get /namespaces name=<the project>, get opendatahub.io/odhdashboardconfigs in apps (workbench setup only: whether it reads LocalQueues, workbench_status.go QueuesNeeded)",
+}
+
 // writeProjectActionRequests is the golden file's "project action
-// requests" section: per action users may run, the scan's requests and
-// the hand-listed ones with their source.
+// requests" section: the gate's own requests, then per action users may
+// run the requests the scan derives from its code, each with the class of
+// its namespace (project, apps: RHOAI's applications namespace from the
+// facts, cluster: cluster-scoped), and the hand-listed ones with their
+// source. A scanned request in a literal namespace other than the
+// project's fails: a project action acts in the project.
 func writeProjectActionRequests(t *testing.T, b *strings.Builder) {
 	t.Helper()
 	actions := ProjectActions()
@@ -181,17 +199,57 @@ func writeProjectActionRequests(t *testing.T, b *strings.Builder) {
 		}
 	}
 	fmt.Fprintf(b, "\n## project action requests (%d actions)\n", n)
+	fmt.Fprintf(b, "### gate requests (every action) (%d)\n", len(gateRequests))
+	for _, g := range gateRequests {
+		b.WriteString(g + "\n")
+	}
 	for _, a := range actions {
 		if !a.ForUsers {
 			continue
 		}
-		var rows []string
+		scopes := map[string][]string{}
+		when := map[string]string{}
 		for _, r := range a.Requests {
-			src := "scan"
-			if r.Source != SourceScan {
-				src = r.Source
+			if r.Source == SourceScan {
+				k := actionKey(r.Verb, r.Group, r.Resource, r.Name)
+				scopes[k] = append(scopes[k], r.Scope)
+				if r.When != "" {
+					when[k] = " when=" + r.When
+				}
 			}
-			rows = append(rows, fmt.Sprintf("%s ns=%s %s", actionKey(r.Verb, r.Group, r.Resource, r.Name), r.Scope, src))
+		}
+		var rows []string
+		for _, r := range projectActionScan(t, a.ID) {
+			name := r.Name
+			if r.Resource == "namespaces" && r.Group == "" && name == anyNS {
+				name = ProjectNameSelf
+			}
+			k := actionKey(r.Verb, r.Group, r.Resource, name)
+			switch r.Namespace {
+			case anyNS:
+				for _, sc := range scopes[k] {
+					rows = append(rows, fmt.Sprintf("%s ns=%s scan%s", k, sc, when[k]))
+				}
+				if len(scopes[k]) == 0 {
+					rows = append(rows, fmt.Sprintf("%s ns=? scan", k))
+				}
+			case "":
+				// Cluster-scoped in the API: a read every user may make,
+				// or the project's own namespace (by its name: RBAC
+				// decides it in the project).
+				sc := ScopeCluster
+				if name == ProjectNameSelf {
+					sc = ScopeProject
+				}
+				rows = append(rows, fmt.Sprintf("%s ns=%s scan", k, sc))
+			default:
+				t.Errorf("%s: the scan derives %s in the literal namespace %q, not the project", a.ID, k, r.Namespace)
+			}
+		}
+		for _, r := range a.Requests {
+			if r.Source != SourceScan {
+				rows = append(rows, fmt.Sprintf("%s ns=%s %s", actionKey(r.Verb, r.Group, r.Resource, r.Name), r.Scope, r.Source))
+			}
 		}
 		slices.Sort(rows)
 		rows = slices.Compact(rows)

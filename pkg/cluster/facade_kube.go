@@ -50,3 +50,6 @@ func HTTPStatusForError(err error) (int, string) { return kube.HTTPStatusForErro
 func SetUserAgentVersion(v string) {
 	kube.SetUserAgentVersion(v)
 }
+
+// FactReadProblem is kube.FactReadProblem.
+func FactReadProblem(err error) string { return kube.FactReadProblem(err) }

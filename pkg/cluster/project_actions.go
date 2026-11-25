@@ -68,7 +68,16 @@ type ProjectRequest struct {
 	Verb, Group, Resource, Name string
 	Scope                       string
 	Source                      string
+	// When, if set, is the condition under which the action makes the
+	// request on this cluster and project (WhenKueueQueues); the preflight
+	// reviews it only then.
+	When string
 }
+
+// WhenKueueQueues: a workbench setup reads the project's LocalQueues only
+// when the project is Kueue-managed and Kueue is available to the
+// dashboard (workbench.QueuesNeeded).
+const WhenKueueQueues = "kueue-queues"
 
 // ProjectAction is an action of the Environment page that acts in one
 // project.
@@ -172,7 +181,7 @@ var projectActions = []ProjectAction{
 		scanned("list", "image.openshift.io", "imagestreams", "", ScopeApps),
 		wbAppsProfiles, wbProjProfiles,
 		wbListNotebooks,
-		scanned("list", "kueue.x-k8s.io", "localqueues", "", ScopeProject),
+		{Verb: "list", Group: "kueue.x-k8s.io", Resource: "localqueues", Scope: ScopeProject, When: WhenKueueQueues},
 		scanned("list", "storage.k8s.io", "storageclasses", "", ScopeCluster),
 	}},
 	{ID: "workbench.start", Feature: "workbench", Action: "start", Label: "Start the workbench", ForUsers: true, Requests: []ProjectRequest{
@@ -258,33 +267,84 @@ type MissingPermission struct {
 	Text string `json:"text"`
 }
 
+// ActionReview is the preflight's answer for one action: what the user's
+// RBAC does not allow (none: allowed), or Err when it could not be told
+// (fail closed: the action is not allowed).
+type ActionReview struct {
+	Missing []MissingPermission
+	Err     error
+}
+
 // ReviewProjectActions reviews the requests of the actions ids in project
-// with the user's own token (u; apps is RHOAI's applications namespace)
-// and returns what each action misses (no entry: allowed). Each distinct
-// request is reviewed once, however many actions send it. It fails closed:
-// an unknown action, an unknown applications namespace that an action
-// needs, or any review that fails is an error, and nothing is allowed.
-func ReviewProjectActions(u *Client, ids []string, project, apps string) (map[string][]MissingPermission, error) {
+// with the user's own token (u; apps is RHOAI's applications namespace, ""
+// when it is not known) and returns each action's answer. Each distinct
+// request is reviewed once, however many actions send it, and a
+// conditional request (When) only where the action makes it. An action
+// whose requests cannot be resolved (it needs the applications namespace,
+// or its condition cannot be read) gets its own Err, the others are still
+// reviewed. It fails closed: an action users may not run, or a review that
+// fails, is an error for the whole call.
+func ReviewProjectActions(u *Client, ids []string, project, apps string) (map[string]ActionReview, error) {
 	type key = AccessRequest
+	out := map[string]ActionReview{}
 	index := map[key]int{}
 	var distinct []AccessRequest
 	per := map[string][]key{}
+	type cond struct {
+		v   bool
+		err error
+	}
+	conds := map[string]cond{}
+	condition := func(when string) (bool, error) {
+		if c, ok := conds[when]; ok {
+			return c.v, c.err
+		}
+		var c cond
+		switch when {
+		case WhenKueueQueues:
+			c.v, c.err = workbench.QueuesNeeded(u, project, apps)
+		default:
+			c.err = fmt.Errorf("unknown condition %q", when)
+		}
+		conds[when] = c
+		return c.v, c.err
+	}
+actions:
 	for _, id := range ids {
 		a, ok := ProjectActionByID(id)
 		if !ok || !a.ForUsers {
 			return nil, fmt.Errorf("%q is not a project action users may run", id)
 		}
+		var reqs []key
 		for _, r := range a.Requests {
+			if r.When != "" {
+				if apps == "" {
+					out[id] = ActionReview{Err: ErrAppsNamespaceUnknown}
+					continue actions
+				}
+				needed, err := condition(r.When)
+				if err != nil {
+					out[id] = ActionReview{Err: err}
+					continue actions
+				}
+				if !needed {
+					continue
+				}
+			}
 			req, err := r.accessRequest(project, apps)
 			if err != nil {
-				return nil, err
+				out[id] = ActionReview{Err: err}
+				continue actions
 			}
+			if !slices.Contains(reqs, req) {
+				reqs = append(reqs, req)
+			}
+		}
+		per[id] = reqs
+		for _, req := range reqs {
 			if _, seen := index[req]; !seen {
 				index[req] = len(distinct)
 				distinct = append(distinct, req)
-			}
-			if !slices.Contains(per[id], req) {
-				per[id] = append(per[id], req)
 			}
 		}
 	}
@@ -296,13 +356,14 @@ func ReviewProjectActions(u *Client, ids []string, project, apps string) (map[st
 	for _, d := range denied {
 		no[d] = true
 	}
-	out := map[string][]MissingPermission{}
-	for _, id := range ids {
-		for _, req := range per[id] {
+	for id, reqs := range per {
+		r := ActionReview{}
+		for _, req := range reqs {
 			if no[req] {
-				out[id] = append(out[id], MissingPermission{Request: req, Text: missingText(req, project)})
+				r.Missing = append(r.Missing, MissingPermission{Request: req, Text: missingText(req, project)})
 			}
 		}
+		out[id] = r
 	}
 	return out, nil
 }

@@ -260,7 +260,7 @@ func TestMLflowAddPreflightCoversTheRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := map[string]bool{}
-	for _, m := range missing["mlflow-samples.add"] {
+	for _, m := range missing["mlflow-samples.add"].Missing {
 		got[m.Request.Resource+"/"+m.Request.Name] = true
 	}
 	for _, want := range []string{"experiments/" + mlflow.TrainingExperiment, "registeredmodels/" + mlflow.TrainingModel, "mcpservers/" + mlflow.MCPSampleName, "skills/" + mlflow.SkillSampleName} {
@@ -296,4 +296,42 @@ func TestWorkbenchRecordAdmissionIsAtomic(t *testing.T) {
 	if len(f.callsTo("DELETE", wbPVC)) != 1 {
 		t.Fatalf("the storage made was not deleted again: %v", f.mutations())
 	}
+}
+
+// A user's workbench status reads their project only: the tool's
+// workbenches in other projects are not read, with their token or another.
+func TestWorkbenchProjectStatusReadsNoOtherProject(t *testing.T) {
+	f, c := newResourceFake(t)
+	putWorkbenchCluster(t, f, true)
+	if err := writeWorkbenchRecord(c, "nb-uid", "pvc-uid"); err != nil {
+		t.Fatal(err)
+	}
+	other := map[string]workbench.Recorded{"proj/" + workbench.Name: {UID: "nb-uid"}, "elsewhere/" + workbench.Name: {UID: "x"}}
+	data, _ := json.Marshal(other)
+	f.putJSON("/api/v1/namespaces/"+record.GetActivityNamespace()+"/configmaps/"+record.SnapshotConfigMapName,
+		`{"metadata":{},"data":{"`+workbench.RecordKey+`":`+strconvQuote(string(data))+`}}`)
+	u := userClientOf(c, fakeUserToken)
+	if _, err := GetWorkbenchProjectStatus(c, u, "proj"); err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range f.calls {
+		if strings.Contains(call.Path, "/namespaces/elsewhere/") {
+			t.Fatalf("read in another project: %s", call.Path)
+		}
+	}
+	if _, err := GetWorkbenchStatus(c, u, "proj"); err != nil {
+		t.Fatal(err)
+	}
+	seen := false
+	for _, call := range f.calls {
+		seen = seen || strings.Contains(call.Path, "/namespaces/elsewhere/")
+	}
+	if !seen {
+		t.Fatal("the admin's status no longer reads the tool's other workbenches (the check above proves nothing)")
+	}
+}
+
+func strconvQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }

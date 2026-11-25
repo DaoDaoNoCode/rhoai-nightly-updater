@@ -1291,7 +1291,7 @@ func (p *playgroundRun) fail(id, msg, code, activity string) (*types.OperationRe
 		p.emit(types.UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: code})
 	}
 	p.logs = append(p.logs, msg)
-	slog.Warn("playground operation stopped", "step", id, "reason", activity, "project", p.project, "user", kube.GetUser(p.c))
+	slog.Warn("playground operation stopped", "step", id, "reason", activity, "project", p.project)
 	p.record(fmt.Sprintf("project=%s (%s)", p.project, activity), false)
 	return &types.OperationResponse{Success: false, Message: msg, Logs: p.logs, ErrorCode: code}, nil
 }

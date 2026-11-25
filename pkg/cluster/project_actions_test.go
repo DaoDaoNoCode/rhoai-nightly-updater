@@ -23,12 +23,20 @@ type ssarFake struct {
 	tokens map[string]bool
 	allow  func(AccessRequest) bool
 	fail   func(AccessRequest) bool
+	// body, when set, is the review's answer as sent.
+	body func(AccessRequest) string
 }
 
 func newSSARClient(t *testing.T, f *ssarFake) *Client {
 	t.Helper()
 	f.tokens = map[string]bool{}
 	srv := newFakeServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The project's namespace (not Kueue-managed): the workbench
+		// setup's conditional LocalQueues row is not reviewed.
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/namespaces/") {
+			fmt.Fprintf(w, `{"metadata":{"name":%q,"labels":{"opendatahub.io/dashboard":"true"}},"status":{"phase":"Active"}}`, strings.TrimPrefix(r.URL.Path, "/api/v1/namespaces/"))
+			return
+		}
 		if r.Method != http.MethodPost || r.URL.Path != "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews" {
 			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -51,6 +59,10 @@ func newSSARClient(t *testing.T, f *ssarFake) *Client {
 		if f.fail != nil && f.fail(req) {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(`{"kind":"Status","status":"Failure","code":500}`))
+			return
+		}
+		if f.body != nil {
+			w.Write([]byte(f.body(req)))
 			return
 		}
 		fmt.Fprintf(w, `{"status":{"allowed":%v}}`, f.allow(req))
@@ -87,10 +99,10 @@ func TestReviewProjectActionsDedupesAndListsMissing(t *testing.T) {
 		t.Errorf("reviews sent with %v", f.tokens)
 	}
 	for _, id := range ids {
-		if len(missing[id]) != 2 {
+		if len(missing[id].Missing) != 2 {
 			t.Errorf("%s misses %v", id, missing[id])
 		}
-		for _, m := range missing[id] {
+		for _, m := range missing[id].Missing {
 			if m.Request.Verb != "delete" || !strings.Contains(m.Text, "ask an admin of project team-a to give you the edit role") {
 				t.Errorf("%s: %+v", id, m)
 			}
@@ -111,8 +123,11 @@ func TestReviewProjectActionsFailsClosed(t *testing.T) {
 	if m, err := ReviewProjectActions(u, []string{"workbench.teardown"}, "team-a", "apps-ns"); err == nil || m != nil {
 		t.Fatalf("a failed review allowed: %v %v", m, err)
 	}
-	if _, err := ReviewProjectActions(u, []string{"workbench.setup"}, "team-a", ""); !errors.Is(err, ErrAppsNamespaceUnknown) {
-		t.Fatalf("no applications namespace: %v", err)
+	// Without the applications namespace only the action that reads there
+	// cannot be told; the others are reviewed.
+	f.fail = nil
+	if r, err := ReviewProjectActions(u, []string{"workbench.setup", "workbench.stop"}, "team-a", ""); err != nil || !errors.Is(r["workbench.setup"].Err, ErrAppsNamespaceUnknown) || r["workbench.stop"].Err != nil {
+		t.Fatalf("no applications namespace: %+v %v", r, err)
 	}
 	if _, err := ReviewProjectActions(u, []string{"mlflow-samples.regenerate"}, "team-a", "apps"); err == nil {
 		t.Fatal("a cluster-admin's action was reviewed for a user")
@@ -260,5 +275,94 @@ func TestAdmitUserEntry(t *testing.T) {
 	a.SetUsername("alice")
 	if err := record.AdmitUserEntry(a, "proj", nil, []byte(strings.Repeat("x", 10*record.MaxUserRecordEntryBytes))); err != nil {
 		t.Fatalf("a cluster-admin's entry: %v", err)
+	}
+}
+
+// A workbench setup's preflight reviews "list localqueues" only where the
+// setup reads them: in a Kueue-managed project while Kueue is available to
+// the dashboard. A user whose role lacks it (Kueue absent, or an RHBoK
+// whose roles do not aggregate into edit) is refused only there.
+func TestWorkbenchPreflightReviewsLocalQueuesOnlyWhereRead(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		kueue       bool
+		wantMissing bool
+	}{
+		{"not Kueue-managed", false, false},
+		{"Kueue-managed with Kueue available", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, c := newResourceFake(t)
+			putWorkbenchCluster(t, f, true)
+			if tc.kueue {
+				f.putJSON(wbProjectNS, `{"metadata":{"name":"proj","labels":{"opendatahub.io/dashboard":"true","kueue.openshift.io/managed":"true"}}}`)
+				f.putJSON(wbDSCv2+"/default-dsc", `{"metadata":{"name":"default-dsc"},"spec":{"components":{"workbenches":{"managementState":"Managed"},"kueue":{"managementState":"Unmanaged"}}}}`)
+				f.putJSON("/apis/opendatahub.io/v1alpha/namespaces/"+wbApps+"/odhdashboardconfigs/odh-dashboard-config", `{"spec":{"dashboardConfig":{"disableKueue":false}}}`)
+			}
+			var asked []AccessRequest
+			inner := f.intercept
+			f.intercept = func(w http.ResponseWriter, r *http.Request, body []byte) bool {
+				if r.URL.Path != "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews" {
+					return inner != nil && inner(w, r, body)
+				}
+				var review struct {
+					Spec struct {
+						ResourceAttributes AccessRequest `json:"resourceAttributes"`
+					} `json:"spec"`
+				}
+				_ = json.Unmarshal(body, &review)
+				asked = append(asked, review.Spec.ResourceAttributes)
+				// An editor whose role does not include Kueue's LocalQueues.
+				fmt.Fprintf(w, `{"status":{"allowed":%v}}`, review.Spec.ResourceAttributes.Resource != "localqueues")
+				return true
+			}
+			u := userClientOf(c, fakeUserToken)
+			missing, err := ReviewProjectActions(u, []string{"workbench.setup"}, "proj", wbApps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := missing["workbench.setup"].Missing
+			got := len(m) == 1 && m[0].Request.Resource == "localqueues"
+			if got != tc.wantMissing || len(m) > 1 {
+				t.Fatalf("missing %+v", missing)
+			}
+			reviewed := false
+			for _, r := range asked {
+				reviewed = reviewed || r.Resource == "localqueues"
+			}
+			if reviewed != tc.kueue {
+				t.Fatalf("localqueues reviewed: %v", reviewed)
+			}
+		})
+	}
+}
+
+// The review's decision is status.allowed, whatever evaluationError says
+// beside it; a review without a decision or one the API server refuses
+// fails the call with a fixed text: never the authorizer's or the API
+// server's words.
+func TestAccessReviewDecisionAndErrorText(t *testing.T) {
+	const secret = "role reader-of-team-b not found in namespace team-b"
+	f := &ssarFake{allow: func(AccessRequest) bool { return true }, body: func(r AccessRequest) string {
+		allowed := r.Verb != "delete"
+		return fmt.Sprintf(`{"status":{"allowed":%v,"evaluationError":%q}}`, allowed, secret)
+	}}
+	u := newSSARClient(t, f)
+	denied, err := authz.ReviewUserAccess(u, []AccessRequest{{Verb: "get", Resource: "pods", Namespace: "p"}, {Verb: "delete", Resource: "pods", Namespace: "p"}})
+	if err != nil || len(denied) != 1 || denied[0].Verb != "delete" {
+		t.Fatalf("denied %v err %v", denied, err)
+	}
+	for name, body := range map[string]string{"no decision": `{"status":{"evaluationError":"` + secret + `"}}`, "not JSON": secret} {
+		f.body = func(AccessRequest) string { return body }
+		_, err := authz.ReviewUserAccess(u, []AccessRequest{{Verb: "get", Resource: "pods", Namespace: "p"}})
+		if !errors.Is(err, authz.ErrAccessReviewFailed) || strings.Contains(err.Error(), "team-b") {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	f.body = nil
+	f.fail = func(AccessRequest) bool { return true }
+	_, err = authz.ReviewUserAccess(u, []AccessRequest{{Verb: "get", Resource: "pods", Namespace: "p"}})
+	if !errors.Is(err, authz.ErrAccessReviewFailed) || !strings.Contains(err.Error(), "HTTP 500") || strings.Contains(err.Error(), "Failure") {
+		t.Fatalf("a refused review: %v", err)
 	}
 }

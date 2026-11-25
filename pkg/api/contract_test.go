@@ -147,9 +147,9 @@ func stubContractData(t *testing.T) {
 	// The project actions' checks: team-a is the users' project; carol
 	// may not remove MLflow samples there (one review denied).
 	isUserProject = func(_ *cluster.Client, project string) (bool, error) { return project == "team-a", nil }
-	reviewProjectActions = func(_ *cluster.Client, ids []string, project, _ string) (map[string][]cluster.MissingPermission, error) {
+	reviewProjectActions = func(_ *cluster.Client, ids []string, project, _ string) (map[string]cluster.ActionReview, error) {
 		req := cluster.AccessRequest{Verb: "delete", Group: "mlflow.kubeflow.org", Resource: "experiments", Namespace: project, Name: "nightly-sample-training"}
-		return map[string][]cluster.MissingPermission{"mlflow-samples.remove": {{Request: req, Text: req.String() + ": ask an admin of project " + project + " to give you the edit role there."}}}, nil
+		return map[string]cluster.ActionReview{"mlflow-samples.remove": {Missing: []cluster.MissingPermission{{Request: req, Text: req.String() + ": ask an admin of project " + project + " to give you the edit role there."}}}}, nil
 	}
 	origSummary, origProject, origPlayground, origSamples, origRegistry, origWorkbench, origKueue, origObservability := getSummary, getProjectStatus, getPlaygroundStatus, getMLflowSamplesStatus, getModelRegistryStatus, getWorkbenchStatus, getKueueStatus, getObservabilityStatus
 	t.Cleanup(func() {
@@ -216,6 +216,9 @@ func stubContractData(t *testing.T) {
 			ItemsProblem: "Cannot read the workbench in team-b: k8s API error 503.", ItemsUnreadable: []string{"team-b"},
 		}, nil
 	}
+	origProjectWorkbench := getWorkbenchProjectStatus
+	t.Cleanup(func() { getWorkbenchProjectStatus = origProjectWorkbench })
+	getWorkbenchProjectStatus = getWorkbenchStatus
 	getSummary = func(*cluster.Client) (*types.Summary, error) {
 		return &types.Summary{
 			RHOAI: types.SummaryRHOAI{Installed: true, Version: "3.6.0", Channel: "beta", Phase: "Succeeded"},

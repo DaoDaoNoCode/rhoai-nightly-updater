@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -147,9 +148,13 @@ func TestUserSeesOnlyOwnEntries(t *testing.T) {
 // A user's workbench read names one of their projects, checked first, and
 // shows that project's workbench only.
 func TestWorkbenchStatusPerRole(t *testing.T) {
-	orig := getWorkbenchStatus
-	t.Cleanup(func() { getWorkbenchStatus = orig })
-	reads := 0
+	orig, origProject := getWorkbenchStatus, getWorkbenchProjectStatus
+	t.Cleanup(func() { getWorkbenchStatus, getWorkbenchProjectStatus = orig, origProject })
+	reads, projectReads := 0, 0
+	getWorkbenchProjectStatus = func(sa, u *cluster.Client, project string) (*types.WorkbenchStatus, error) {
+		projectReads++
+		return getWorkbenchStatus(sa, u, project)
+	}
 	getWorkbenchStatus = func(_, _ *cluster.Client, project string) (*types.WorkbenchStatus, error) {
 		reads++
 		return &types.WorkbenchStatus{Project: project, Items: []types.WorkbenchState{
@@ -175,13 +180,64 @@ func TestWorkbenchStatusPerRole(t *testing.T) {
 	w := get("team-a")
 	var st types.WorkbenchStatus
 	json.Unmarshal(w.Body.Bytes(), &st)
-	if w.Code != http.StatusOK || len(st.Items) != 1 || st.Items[0].Namespace != "team-a" || len(st.ItemsUnreadable) != 0 || strings.Contains(w.Body.String(), "other") {
-		t.Fatalf("%d %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK || len(st.Items) != 1 || st.Items[0].Namespace != "team-a" || len(st.ItemsUnreadable) != 0 || strings.Contains(w.Body.String(), "other") || projectReads != 1 {
+		t.Fatalf("%d %s (project reads %d)", w.Code, w.Body.String(), projectReads)
 	}
 	newProjectGateEnv(t, roleClusterAdmin)
 	w = get("team-a")
 	json.Unmarshal(w.Body.Bytes(), &st)
-	if w.Code != http.StatusOK || len(st.Items) != 2 {
-		t.Fatalf("admin: %d %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK || len(st.Items) != 2 || projectReads != 1 {
+		t.Fatalf("admin: %d %s (project reads %d)", w.Code, w.Body.String(), projectReads)
+	}
+}
+
+// A failure counts only for the actions it concerns: an applications
+// namespace that cannot be read refuses the actions that read there
+// (workbench set up), not Stop; a sign-in that cannot carry a change and
+// a project whose UID cannot be read refuse every action, as the gate does.
+func TestCapabilitiesScopeFailuresToTheirActions(t *testing.T) {
+	newProjectGateEnv(t, roleEditor)
+	projectAppsNamespace = func(*cluster.Client) (string, error) { return "", cluster.ErrAppsNamespaceUnknown }
+	_, caps := getCapabilities(t, "team-a")
+	if cp := caps.Actions["workbench.setup"]; cp.Allowed || cp.Code != "prerequisites_unknown" {
+		t.Fatalf("setup: %+v", cp)
+	}
+	if !caps.Actions["workbench.stop"].Allowed || !caps.Actions["playground.teardown"].Allowed {
+		t.Fatalf("an applications namespace failure reached other actions: %+v", caps.Actions)
+	}
+
+	newProjectGateEnv(t, roleEditor)
+	readProjectUID = func(*cluster.Client, string) (string, error) { return "", errors.New("HTTP 500") }
+	_, caps = getCapabilities(t, "team-a")
+	for id, cp := range caps.Actions {
+		if cp.Allowed {
+			t.Errorf("%s allowed while the gate cannot read the project's UID", id)
+		}
+	}
+}
+
+// Concurrent identical capability reads share one set of reviews.
+func TestCapabilitiesCoalesce(t *testing.T) {
+	env := newProjectGateEnv(t, roleEditor)
+	inner := reviewProjectActions
+	entered, release := make(chan struct{}), make(chan struct{})
+	reviewProjectActions = func(u *cluster.Client, ids []string, project, apps string) (map[string]cluster.ActionReview, error) {
+		close(entered)
+		<-release
+		return inner(u, ids, project, apps)
+	}
+	joined := make(chan struct{})
+	onCapabilitiesJoin = func() { close(joined) }
+	t.Cleanup(func() { onCapabilitiesJoin = func() {} })
+	done := make(chan struct{}, 2)
+	go func() { getCapabilities(t, "team-a"); done <- struct{}{} }()
+	<-entered
+	go func() { getCapabilities(t, "team-a"); done <- struct{}{} }()
+	<-joined
+	close(release)
+	<-done
+	<-done
+	if env.reviews != 1 {
+		t.Fatalf("%d review sets for two concurrent reads", env.reviews)
 	}
 }

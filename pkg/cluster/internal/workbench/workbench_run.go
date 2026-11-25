@@ -61,7 +61,7 @@ func (r *run) fail(id, msg, code, why string) (*types.OperationResponse, error) 
 		r.emit(types.UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: code})
 	}
 	r.logs = append(r.logs, msg)
-	slog.Warn("workbench operation stopped", "step", id, "reason", why, "user", kube.GetUser(r.c))
+	slog.Warn("workbench operation stopped", "step", id, "reason", why)
 	record.Action(r.c, r.activity, fmt.Sprintf("%s (%s)", r.target, why), false)
 	return &types.OperationResponse{Success: false, Message: msg, Logs: r.logs, ErrorCode: code}, nil
 }
@@ -255,7 +255,7 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 		return r.fail("workbench", fmt.Sprintf("Workbench %s was created, but this tool could not record it as its own (%s), so it was deleted again. Set up again to retry.", Name, record.ErrorText(c, err)), record.ErrorCode(err), "record failed")
 	}
 	r.step("workbench", "success", fmt.Sprintf("Created workbench %s; it is starting (usually 1 to 3 minutes while the image is pulled).", Name))
-	slog.Info("workbench setup", "project", project, "user", kube.GetUser(c))
+	slog.Info("workbench setup", "project", project)
 	return r.done(fmt.Sprintf("Workbench %s is starting in %s with %s (%s) on hardware profile %s.%s", Name, project, plan.Image.DisplayName, plan.Image.Tag, plan.Profile.DisplayName, deprecatedNote(plan.Image)))
 }
 

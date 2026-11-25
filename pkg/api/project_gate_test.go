@@ -43,15 +43,17 @@ func newProjectGateEnv(t *testing.T, role string) *projectGateEnv {
 	isUserProject = func(_ *cluster.Client, project string) (bool, error) {
 		return project == "team-a" && role != roleNothing, nil
 	}
-	reviewProjectActions = func(_ *cluster.Client, ids []string, project, apps string) (map[string][]cluster.MissingPermission, error) {
+	reviewProjectActions = func(_ *cluster.Client, ids []string, project, apps string) (map[string]cluster.ActionReview, error) {
 		env.reviews++
-		out := map[string][]cluster.MissingPermission{}
+		out := map[string]cluster.ActionReview{}
 		for _, id := range ids {
 			a, _ := cluster.ProjectActionByID(id)
 			for _, r := range a.Requests {
 				if role == roleViewer && r.Verb != "get" && r.Verb != "list" {
 					req := cluster.AccessRequest{Verb: r.Verb, Group: r.Group, Resource: r.Resource, Namespace: project, Name: r.Name}
-					out[id] = append(out[id], cluster.MissingPermission{Request: req, Text: req.String() + ": ask an admin of project " + project + " to give you the edit role there."})
+					r := out[id]
+					r.Missing = append(r.Missing, cluster.MissingPermission{Request: req, Text: req.String() + ": ask an admin of project " + project + " to give you the edit role there."})
+					out[id] = r
 				}
 			}
 		}
@@ -188,15 +190,17 @@ func TestMissingPermissionsListsAll(t *testing.T) {
 // namespace unknown) refuses before any write: fail closed.
 func TestPreflightErrorRefusesBeforeWrite(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		setup func()
+		name   string
+		status int
+		code   string
+		setup  func()
 	}{
-		{"review failed", func() {
-			reviewProjectActions = func(*cluster.Client, []string, string, string) (map[string][]cluster.MissingPermission, error) {
+		{"review failed", http.StatusServiceUnavailable, "authorization_unavailable", func() {
+			reviewProjectActions = func(*cluster.Client, []string, string, string) (map[string]cluster.ActionReview, error) {
 				return nil, errors.New("access review: HTTP 500")
 			}
 		}},
-		{"applications namespace unknown", func() {
+		{"applications namespace unknown", http.StatusConflict, "prerequisites_unknown", func() {
 			projectAppsNamespace = func(*cluster.Client) (string, error) { return "", cluster.ErrAppsNamespaceUnknown }
 		}},
 	} {
@@ -204,7 +208,7 @@ func TestPreflightErrorRefusesBeforeWrite(t *testing.T) {
 			env := newProjectGateEnv(t, roleEditor)
 			tc.setup()
 			w := serveProjectAction(t, "/api/resources/workbench/stream", `{"action":"setup","project":"team-a"}`)
-			if w.Code != http.StatusServiceUnavailable || decodeError(t, w)["errorCode"] != "authorization_unavailable" || env.runs != 0 {
+			if w.Code != tc.status || decodeError(t, w)["errorCode"] != tc.code || env.runs != 0 {
 				t.Fatalf("%d %s runs=%d", w.Code, w.Body.String(), env.runs)
 			}
 		})
@@ -372,5 +376,59 @@ func TestAdminSamplesHoldTheClusterLock(t *testing.T) {
 		if locks.clusterHeld() || locks.projectOp("uid-team-a") != "" {
 			t.Fatalf("%s: a lock is left", role)
 		}
+	}
+}
+
+// The prerequisites come before the preflight: a component that is off
+// says so to a viewer too, instead of asking for the edit role, and no
+// review is made.
+func TestPrerequisitesBeforePreflight(t *testing.T) {
+	env := newProjectGateEnv(t, roleViewer)
+	projectFeatureBlock = func(*cluster.Client, string) (string, string) {
+		return "Workbenches is turned off on this cluster.", "prerequisites"
+	}
+	w := serveProjectAction(t, "/api/resources/workbench/stream", `{"action":"setup","project":"team-a"}`)
+	if w.Code != http.StatusConflict || decodeError(t, w)["errorCode"] != "prerequisites" || env.reviews != 0 || env.runs != 0 {
+		t.Fatalf("%d %s reviews %d", w.Code, w.Body.String(), env.reviews)
+	}
+}
+
+// The rate limit comes before the reviews: a second request within the
+// window is refused without a review, and a refused request (here the
+// viewer's) gives its slot back.
+func TestRateLimitBeforePreflight(t *testing.T) {
+	env := newProjectGateEnv(t, roleEditor)
+	body := `{"action":"stop","project":"team-a"}`
+	if w := serveProjectAction(t, "/api/resources/workbench/stream", body); w.Code != http.StatusOK {
+		t.Fatal(w.Body.String())
+	}
+	w := serveProjectAction(t, "/api/resources/workbench/stream", body)
+	if w.Code != http.StatusTooManyRequests || env.reviews != 1 {
+		t.Fatalf("%d %s reviews %d", w.Code, w.Body.String(), env.reviews)
+	}
+	viewer := newProjectGateEnv(t, roleViewer)
+	for range 2 {
+		if w := serveProjectAction(t, "/api/resources/workbench/stream", body); w.Code != http.StatusForbidden {
+			t.Fatalf("%d %s", w.Code, w.Body.String())
+		}
+	}
+	if viewer.reviews != 2 {
+		t.Fatalf("a refusal kept the rate-limit slot: %d reviews", viewer.reviews)
+	}
+}
+
+// No log line of a project action names the user.
+func TestProjectActionLogsNameNobody(t *testing.T) {
+	logs := captureLogs(t)
+	newProjectGateEnv(t, roleViewer)
+	serveProjectAction(t, "/api/resources/workbench/stream", `{"action":"setup","project":"team-a"}`)
+	serveProjectAction(t, "/api/resources/workbench/stream", `{"action":"setup","project":"team-a"}`)
+	newProjectGateEnv(t, roleEditor)
+	reviewProjectActions = func(*cluster.Client, []string, string, string) (map[string]cluster.ActionReview, error) {
+		return nil, errors.New("access review failed (HTTP 500)")
+	}
+	serveProjectAction(t, "/api/resources/workbench/stream", `{"action":"setup","project":"team-a"}`)
+	if logs.Len() == 0 || strings.Contains(logs.String(), "alice") {
+		t.Fatalf("logs:\n%s", logs.String())
 	}
 }

@@ -2,8 +2,6 @@ package api
 
 import (
 	"crypto/sha256"
-	"errors"
-	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -17,11 +15,11 @@ import (
 const capabilitiesTTL = time.Minute
 
 type capabilitiesEntry struct {
-	missing map[string][]cluster.MissingPermission
-	expires time.Time
+	verdicts map[string]actionVerdict
+	expires  time.Time
 }
 
-// capabilitiesCache keeps the preflight's answers by token hash and
+// capabilitiesCache keeps the capabilities' answers by token hash and
 // project; never the token itself.
 type capabilitiesCache struct {
 	mu      sync.Mutex
@@ -34,23 +32,23 @@ func capabilitiesKey(token, project string) [32]byte {
 	return sha256.Sum256([]byte(token + "\x00" + project))
 }
 
-func (c *capabilitiesCache) get(key [32]byte, now time.Time) (map[string][]cluster.MissingPermission, bool) {
+func (c *capabilitiesCache) get(key [32]byte, now time.Time) (map[string]actionVerdict, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.entries[key]
 	if !ok || now.After(e.expires) {
 		return nil, false
 	}
-	return e.missing, true
+	return e.verdicts, true
 }
 
-func (c *capabilitiesCache) put(key [32]byte, missing map[string][]cluster.MissingPermission, now time.Time) {
+func (c *capabilitiesCache) put(key [32]byte, verdicts map[string]actionVerdict, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if len(c.entries) >= 512 {
 		c.entries = map[[32]byte]capabilitiesEntry{}
 	}
-	c.entries[key] = capabilitiesEntry{missing: missing, expires: now.Add(capabilitiesTTL)}
+	c.entries[key] = capabilitiesEntry{verdicts: verdicts, expires: now.Add(capabilitiesTTL)}
 }
 
 func (c *capabilitiesCache) reset() {
@@ -59,17 +57,81 @@ func (c *capabilitiesCache) reset() {
 	c.entries = map[[32]byte]capabilitiesEntry{}
 }
 
+// capabilitiesFlight coalesces concurrent capability reads of the same
+// token and project: one set of reviews answers them all.
+var capabilitiesFlight = struct {
+	sync.Mutex
+	calls map[[32]byte]*capabilitiesCall
+}{calls: map[[32]byte]*capabilitiesCall{}}
+
+// onCapabilitiesJoin runs when a read joins another's reviews; tests
+// replace it.
+var onCapabilitiesJoin = func() {}
+
+type capabilitiesCall struct {
+	done     chan struct{}
+	verdicts map[string]actionVerdict
+}
+
+// capabilityVerdicts is projectActionVerdicts for every project action,
+// from the cache (a minute, by token hash and project) or one call shared
+// by concurrent requests of the same token and project.
+func capabilityVerdicts(u *cluster.Client, admin bool, ids []string, token, project string) map[string]actionVerdict {
+	key := capabilitiesKey(token, project)
+	if admin {
+		key = capabilitiesKey("admin\x00"+token, project)
+	}
+	if v, ok := capabilities.get(key, clk.Now()); ok {
+		return v
+	}
+	capabilitiesFlight.Lock()
+	if call, ok := capabilitiesFlight.calls[key]; ok {
+		capabilitiesFlight.Unlock()
+		onCapabilitiesJoin()
+		<-call.done
+		return call.verdicts
+	}
+	call := &capabilitiesCall{done: make(chan struct{})}
+	capabilitiesFlight.calls[key] = call
+	capabilitiesFlight.Unlock()
+	defer func() {
+		capabilitiesFlight.Lock()
+		delete(capabilitiesFlight.calls, key)
+		capabilitiesFlight.Unlock()
+		close(call.done)
+	}()
+	call.verdicts = projectActionVerdicts(u, admin, ids, project)
+	if !verdictsFailed(call.verdicts) {
+		capabilities.put(key, call.verdicts, clk.Now())
+	}
+	return call.verdicts
+}
+
+// verdictsFailed reports whether an answer could not be told (a review or
+// a read failed): such an answer is not kept.
+func verdictsFailed(v map[string]actionVerdict) bool {
+	for _, a := range v {
+		if a.code == "authorization_unavailable" || a.code == "session_expired" || a.code == "prerequisites_unknown" {
+			return true
+		}
+	}
+	return false
+}
+
 // HandleProjectCapabilities answers what the signed-in user may do in one
 // of their data science projects (?project=; tier user-token): for each
 // project action, whether it is allowed, what their RBAC misses and what
-// blocks it on the cluster. It shares the gate's checks and their order
-// (withProjectMutationAuth): the project must be one of the user's (the
-// projects API with their token) before anything else is read, and a
-// project that does not exist gets the same answer as one that is not
-// theirs; then the access reviews with their token (all actions' requests,
-// each once, cached a minute); then the prerequisites with the
-// ServiceAccount's facts client. Advisory only: each action's gate checks
-// again.
+// blocks it on the cluster. It runs the gate's own checks
+// (withProjectMutationAuth) in the gate's order, through the same
+// functions: the project must be one of the user's (the projects API with
+// their token) before anything else is read, and a project that does not
+// exist gets the same answer as one that is not theirs; then the role, the
+// sign-in and the project's UID (what keeps every action from starting);
+// then per action the prerequisites with the ServiceAccount's facts client
+// and the access reviews with their token (projectActionVerdicts: a
+// failure counts only for the actions it concerns). Cached a minute per
+// token hash and project; concurrent identical reads share one review.
+// Advisory: each action's gate checks again.
 var HandleProjectCapabilities = withAuth(func(sa *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
 	if !namespaceRegex.MatchString(project) {
@@ -90,60 +152,35 @@ var HandleProjectCapabilities = withAuth(func(sa *cluster.Client, w http.Respons
 		out.Role = roleAdmin
 	}
 	actions := cluster.ProjectActions()
-	var missing map[string][]cluster.MissingPermission
-	if !admin {
-		var ids []string
-		for _, a := range actions {
-			if a.ForUsers {
-				ids = append(ids, a.ID)
-			}
-		}
-		key := capabilitiesKey(token, project)
-		cached, hit := capabilities.get(key, clk.Now())
-		if hit {
-			missing = cached
-		} else {
-			m, err := preflight(u, ids, project)
-			if errors.Is(err, cluster.ErrUnauthenticated) {
-				writeError(w, "Your OpenShift session has expired. Log in again.", http.StatusUnauthorized, "session_expired")
-				return
-			}
-			if err != nil {
-				slog.Warn("project capabilities: the access reviews failed", "project", project, "error", err)
-				writeError(w, "Cannot check your permissions in "+project+": "+err.Error(), http.StatusServiceUnavailable, "authorization_unavailable")
-				return
-			}
-			missing = m
-			capabilities.put(key, m, clk.Now())
-		}
+	ids := make([]string, 0, len(actions))
+	for _, a := range actions {
+		ids = append(ids, a.ID)
 	}
-	type block struct{ reason, code string }
-	blocks := map[string]block{}
+	// What keeps every action from starting.
+	allReason, allCode := "", ""
+	if msg, code, _ := sessionProblem(r.Context(), token); msg != "" {
+		allReason, allCode = msg, code
+	} else if _, _, code, reason := projectStartProblem(u, project, admin); reason != "" {
+		allReason, allCode = reason, code
+	}
+	var verdicts map[string]actionVerdict
+	if allReason == "" {
+		verdicts = capabilityVerdicts(u, admin, ids, token, project)
+	}
 	for _, a := range actions {
 		cp := types.ProjectCapability{Label: a.Label, Missing: []string{}, BlockedBy: []string{}}
-		switch {
-		case !admin && !a.ForUsers:
-			cp.Reason, cp.Code = a.Label+" is done by a cluster-admin in this tool.", adminOnlyCode
-			out.Actions[a.ID] = cp
-			continue
-		case !admin && len(missing[a.ID]) > 0:
-			for _, m := range missing[a.ID] {
-				cp.Missing = append(cp.Missing, m.Text)
-			}
-			cp.Reason, cp.Code = cluster.MissingSummaryFor(a.Label, project, missing[a.ID]), missingPermissionsCode
+		v := verdicts[a.ID]
+		if allReason != "" {
+			v = actionVerdict{code: allCode, reason: allReason}
 		}
-		b, seen := blocks[a.Feature]
-		if !seen {
-			b.reason, b.code = projectFeatureBlock(u, a.Feature)
-			blocks[a.Feature] = b
+		for _, m := range v.missing {
+			cp.Missing = append(cp.Missing, m.Text)
 		}
-		if b.reason != "" {
-			cp.BlockedBy = append(cp.BlockedBy, b.code)
-			if cp.Reason == "" {
-				cp.Reason, cp.Code = b.reason, b.code
-			}
+		if v.code == "prerequisites" || v.code == "prerequisites_unknown" {
+			cp.BlockedBy = append(cp.BlockedBy, v.code)
 		}
-		cp.Allowed = cp.Reason == ""
+		cp.Reason, cp.Code = v.reason, v.code
+		cp.Allowed = v.reason == ""
 		out.Actions[a.ID] = cp
 	}
 	writeJSON(w, out, "project-capabilities")

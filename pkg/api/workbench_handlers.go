@@ -11,6 +11,10 @@ import (
 // getWorkbenchStatus reads the Workbench feature; tests replace it.
 var getWorkbenchStatus = cluster.GetWorkbenchStatus
 
+// getWorkbenchProjectStatus reads one project's Workbench feature for a
+// user who is not a cluster-admin; tests replace it.
+var getWorkbenchProjectStatus = cluster.GetWorkbenchProjectStatus
+
 // runWorkbench runs a Workbench operation; tests replace it.
 var runWorkbench = cluster.RunWorkbench
 
@@ -45,7 +49,12 @@ var HandleWorkbenchStatus = withAuth(func(c *cluster.Client, w http.ResponseWrit
 			return
 		}
 	}
-	st, err := getWorkbenchStatus(c, u, project)
+	read := getWorkbenchStatus
+	if !admin {
+		// Only their project is read: nothing in the tool's others.
+		read = getWorkbenchProjectStatus
+	}
+	st, err := read(c, u, project)
 	if err != nil {
 		writeUserReadError(w, "Cannot read the workbench state", err)
 		return

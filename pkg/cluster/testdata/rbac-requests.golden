@@ -537,6 +537,14 @@
 1 update /configmaps ns=${NS} name=rhoai-nightly-updater-activity
 
 ## project action requests (9 actions)
+### gate requests (every action) (7)
+get user.openshift.io/users name=~ (identity, authz.go LookupUserWithToken)
+create authorization.openshift.io/subjectaccessreviews */*/* cluster-wide (the role, authz.go CheckUserPermissionWithToken)
+get oauth.openshift.io/useroauthaccesstokens name=<the token's object> (the sign-in, authz.go ReadSessionToken)
+list project.openshift.io/projects labelSelector=opendatahub.io/dashboard=true (the user's project, user_projects.go ListUserDSProjects)
+get /namespaces name=<the project> (its UID, the lock's key, access_review.go ProjectUID)
+create authorization.k8s.io/selfsubjectaccessreviews, one per request below (the preflight, access_review.go reviewOne)
+get /namespaces name=<the project>, get opendatahub.io/odhdashboardconfigs in apps (workbench setup only: whether it reads LocalQueues, workbench_status.go QueuesNeeded)
 ### mlflow-samples.add (18)
 create mlflow.kubeflow.org/datasets name= ns=project mlflow
 create mlflow.kubeflow.org/experiments name= ns=project mlflow
@@ -622,7 +630,7 @@ list image.openshift.io/imagestreams name= ns=apps scan
 list infrastructure.opendatahub.io/hardwareprofiles name= ns=apps scan
 list infrastructure.opendatahub.io/hardwareprofiles name= ns=project scan
 list kubeflow.org/notebooks name= ns=project scan
-list kueue.x-k8s.io/localqueues name= ns=project scan
+list kueue.x-k8s.io/localqueues name= ns=project scan when=kueue-queues
 list storage.k8s.io/storageclasses name= ns=cluster scan
 ### workbench.start (4)
 get /secrets name=ds-pipeline-config ns=project scan
