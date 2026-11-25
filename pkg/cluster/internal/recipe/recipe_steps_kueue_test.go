@@ -363,3 +363,35 @@ func TestKueueOutdated(t *testing.T) {
 		t.Errorf("outdated queue: %q", why)
 	}
 }
+
+// With distributed workloads first, the workbench's plan check waits for
+// the Kueue steps (they make its LocalQueue and Queue profile); otherwise
+// its dependencies are as declared.
+func TestDependsOn_WorkbenchWaitsForKueueFirst(t *testing.T) {
+	if got := dependsOn(&State{KueueFirst: true}, StepWorkbench); !slices.Contains(got, StepKueuePrereq) || !slices.Contains(got, StepKueue) {
+		t.Errorf("kueue first: %v", got)
+	}
+	if got := dependsOn(&State{}, StepWorkbench); slices.Contains(got, StepKueue) || !slices.Equal(got, stepDependsOn[StepWorkbench]) {
+		t.Errorf("unchanged: %v", got)
+	}
+	if got := dependsOn(&State{KueueFirst: true}, StepModel); !slices.Equal(got, stepDependsOn[StepModel]) {
+		t.Errorf("model: %v", got)
+	}
+}
+
+// The Workbench tab's preflight for a new workbench: no image or no
+// hardware profile refuses as its Set up would; other plan problems do not.
+func TestCheckWorkbench_TabPreflight(t *testing.T) {
+	orig := workbenchStatus
+	t.Cleanup(func() { workbenchStatus = orig })
+	r := validRecipe(t, "  project: {mode: existing, name: proj}\n  features:\n    workbench: {enabled: true}\n")
+	for code, blocked := range map[string]bool{"no_image": true, "no_profile": true, "no_profile_project": true, "": false, "validation": false} {
+		workbenchStatus = func(_, _ *kube.Client, _ string) (*types.WorkbenchStatus, error) {
+			return &types.WorkbenchStatus{PlanProblem: "why " + code + ".", PlanProblemCode: code}, nil
+		}
+		chk, err := checkWorkbench(nil, &State{Recipe: r})
+		if err != nil || (chk.Blocked != "") != blocked || (blocked && chk.Blocked != "why "+code+". Nothing was changed.") {
+			t.Errorf("%q: %+v %v", code, chk, err)
+		}
+	}
+}

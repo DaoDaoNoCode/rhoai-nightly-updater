@@ -324,6 +324,10 @@ func TestKueueSetupRefusals(t *testing.T) {
 			f.putJSON(wbDSCv2+"/default-dsc", `{"metadata":{"name":"default-dsc"},"spec":{"components":{"kueue":{"managementState":"Unmanaged","autoCreateQueues":true},"ray":{"managementState":"Managed"}}},
 				"status":{"conditions":[{"type":"KueueReady","status":"True"}]}}`)
 		}},
+		{"DSC autoCreateQueues named like the tool's LocalQueue", "LocalQueue named nightly-kueue", "unsupported", func(f *resourceFake) {
+			f.putJSON(wbDSCv2+"/default-dsc", `{"metadata":{"name":"default-dsc"},"spec":{"components":{"kueue":{"managementState":"Unmanaged","autoCreateQueues":true,"defaultLocalQueueName":"nightly-kueue"},"ray":{"managementState":"Managed"}}},
+				"status":{"conditions":[{"type":"KueueReady","status":"True"}]}}`)
+		}},
 		{"not a ds project", "not a data science project", "validation", func(f *resourceFake) {
 			f.putJSON(wbProjectNS, `{"metadata":{"name":"proj","uid":"ns-uid"}}`)
 		}},
@@ -836,6 +840,31 @@ func TestModelsHardwareProfileKueueRule(t *testing.T) {
 	}
 }
 
+// The dashboard's namespace cannot be found: a Kueue project's model is
+// refused (fail closed), a project that is not Kueue's still gets set up
+// without a profile, as before.
+func TestModelsHardwareProfileAppsNamespaceUnknown(t *testing.T) {
+	for _, labelled := range []bool{true, false} {
+		mc := newModelsCluster(t)
+		label := ""
+		if labelled {
+			label = `,"kueue.openshift.io/managed":"true"`
+		}
+		mc.f.putJSON("/api/v1/namespaces/proj", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"`+label+`}}}`)
+		mc.f.fail["GET /apis/dscinitialization.opendatahub.io/v1/dscinitializations"] = 500
+		mc.f.fail["GET /apis/dscinitialization.opendatahub.io/v2/dscinitializations"] = 500
+		res, _ := runModels(t, userClientOf(mc.c, fakeUserToken), types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+		// The model's setup reads the same namespace earlier and refuses
+		// first; pickHardwareProfile refuses too (defence in depth).
+		if labelled && (res.Success || !strings.Contains(res.Message, "Nothing was changed") || mc.f.get(testModelPath) != nil) {
+			t.Fatalf("Kueue project: %+v", res)
+		}
+		if !labelled && strings.Contains(res.Message, "uses Kueue") {
+			t.Fatalf("not a Kueue project: %+v", res)
+		}
+	}
+}
+
 // kueueTurnedOnByTool leaves the DataScienceCluster's kueue as the
 // Distributed workloads prerequisites (and a recipe's kueue-prereq step)
 // leave it, without the operator installs: Unmanaged, written by the
@@ -1221,12 +1250,12 @@ func TestKueueStatusAfterProjectMadeAgain(t *testing.T) {
 	if o := st.Objects[1]; o.Kind != "ClusterQueue" || !o.ManagedByTool {
 		t.Fatalf("ClusterQueue %+v", o)
 	}
-	if st.ProjectGone != "Project proj was deleted and made again since this tool's setup; set up again." {
+	if st.ProjectGone != "Project proj was deleted and made again since this tool's setup; set up again." || !st.ProjectRemade {
 		t.Fatalf("project gone %q", st.ProjectGone)
 	}
 	// Deleted and not made again: the status says the project is gone.
 	f.deleteObject(wbProjectNS)
-	if st, err = GetKueueStatus(u, u, "proj"); err != nil || st.ProjectGone != "Project proj is gone; set up again." {
+	if st, err = GetKueueStatus(u, u, "proj"); err != nil || st.ProjectGone != "Project proj is gone; clean up, or make it again and set up." || st.ProjectRemade {
 		t.Fatalf("gone: %q %v", st.ProjectGone, err)
 	}
 }

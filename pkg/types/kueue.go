@@ -45,6 +45,9 @@ type KueueStatus struct {
 	// samples and label went with it ("Project recipe-dev is gone; set up
 	// again."). Empty otherwise.
 	ProjectGone string `json:"projectGone,omitempty"`
+	// ProjectRemade: the project of ProjectGone was made again (a project
+	// of that name is there), so Set up can run in it again.
+	ProjectRemade bool `json:"projectRemade,omitempty"`
 	// ItemsProblem names anything that failed to load; empty when reads succeeded.
 	ItemsProblem string `json:"itemsProblem,omitempty"`
 	// DashboardURL is the RHOAI dashboard base URL for hyperlinking.

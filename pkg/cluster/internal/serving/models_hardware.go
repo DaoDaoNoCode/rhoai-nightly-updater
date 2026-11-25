@@ -281,6 +281,12 @@ func ChooseModelProfile(items []HardwareProfileObject, mode envkit.KueueMode, qu
 func pickHardwareProfile(c *kube.Client, project string, entry CatalogModel) (hw HardwareProfile, why, refusal string) {
 	ns, err := rhoai.AppsNamespace(c)
 	if err != nil {
+		// Whether the project is Kueue's does not need the dashboard's
+		// namespace: one that is (or cannot be read) refuses.
+		meta, found, rerr := kube.ReadObjectMeta(c, "/api/v1/namespaces/"+project)
+		if rerr != nil || (found && meta.Labels[envkit.KueueProjectLabel] == "true") {
+			return HardwareProfile{}, "", fmt.Sprintf("Cannot tell which hardware profile the dashboard offers in project %s, which uses Kueue or cannot be read: the dashboard's namespace is not known (%v).", project, err)
+		}
 		return HardwareProfile{}, fmt.Sprintf("the dashboard's namespace is not known (%v)", err), ""
 	}
 	mode, queues, err := projectKueueMode(c, project, ns)

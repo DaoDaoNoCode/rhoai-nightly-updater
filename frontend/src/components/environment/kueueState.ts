@@ -112,7 +112,12 @@ export function kueueState(k: KueueStatus | null, project: string | null, busy: 
       if (!where) return { status: s, label: "Not set up", next: { kind: "choose-project" }, project: null };
       return { status: s, label: "Not set up", next: { kind: "set-up", label: "Set up distributed workloads", setup: [kueueSetupPending(where, k)], reason: k?.refusal ?? null }, project: where };
     case "needs-attention":
-      if (k?.projectGone) return { status: s, label: k.projectGone.replace(/\.$/, ""), next: { kind: "show-issue", part: "kueue-queues", ...(where ? { project: where } : {}) }, project: where };
+      // A project made again: Set up again there. One that is gone: the tab's Clean up (or make it again).
+      if (k?.projectGone) {
+        const label = k.projectGone.replace(/\.$/, "");
+        if (k.projectRemade && where) return { status: s, label, next: { kind: "set-up", label: "Set up distributed workloads", setup: [kueueSetupPending(where, k)], reason: k.refusal ?? null }, project: where };
+        return { status: s, label, next: { kind: "show-issue", part: "kueue-queues", ...(where ? { project: where } : {}) }, project: where };
+      }
       return { status: s, label: kueueSetUp(k) ? (!k?.label?.present ? `Project label missing${target}` : `Kueue not ready${target}`) : `Incomplete${target}`, next: { kind: "show-issue", part: "kueue-queues", ...(where ? { project: where } : {}) }, project: where };
     default:
       return { status: s, label: "Unknown", next: { kind: "show-issue", part: "kueue-queues" }, project: where };

@@ -129,8 +129,8 @@ func checkCluster(u *kube.Client, dsc rhoai.DSCRead, block *types.ComponentBlock
 		}
 		refuse(msg, "prerequisites")
 	}
-	if AutoCreatedQueue(dsc) == "default" {
-		refuse(AutoQueuesRefusal, "unsupported")
+	if why := AutoQueuesRefusal(dsc); why != "" {
+		refuse(why, "unsupported")
 	}
 	ck.instance.KueueReady, ck.instance.Message = kueueReady(dsc)
 	served, group, err := v1beta2Served(u)
@@ -320,9 +320,9 @@ func GetStatus(sa, u *kube.Client, project string) (*types.KueueStatus, error) {
 		ns, nsFound, nsErr = readNamespace(u, st.Project)
 		if nsErr == nil && rec.Project != "" && rec.ProjectUID != "" && !rec.projectEntriesValid(ns, nsFound) {
 			rec.forgetProject()
-			st.ProjectGone = fmt.Sprintf("Project %s is gone; set up again.", rec.Project)
+			st.ProjectGone = fmt.Sprintf("Project %s is gone; clean up, or make it again and set up.", rec.Project)
 			if nsFound {
-				st.ProjectGone = fmt.Sprintf("Project %s was deleted and made again since this tool's setup; set up again.", rec.Project)
+				st.ProjectGone, st.ProjectRemade = fmt.Sprintf("Project %s was deleted and made again since this tool's setup; set up again.", rec.Project), true
 			}
 		}
 	}

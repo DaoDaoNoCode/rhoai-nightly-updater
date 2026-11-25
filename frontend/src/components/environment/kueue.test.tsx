@@ -47,8 +47,11 @@ describe("kueueState", () => {
   });
 
   it("a project gone since setup says so; a project that cannot be read is unknown, not the tool's", () => {
-    const gone = { ...ready(), projectGone: "Project dev is gone; set up again.", objects: ready().objects.map((o) => (o.kind === "LocalQueue" ? { ...o, present: false, managedByTool: false } : o)), label: undefined };
-    expect(kueueState(gone, "dev", IDLE)).toMatchObject({ status: "needs-attention", label: "Project dev is gone; set up again" });
+    const gone = { ...ready(), projectGone: "Project dev is gone; clean up, or make it again and set up.", objects: ready().objects.map((o) => (o.kind === "LocalQueue" ? { ...o, present: false, managedByTool: false } : o)), label: undefined };
+    expect(kueueState(gone, "dev", IDLE)).toMatchObject({ status: "needs-attention", label: "Project dev is gone; clean up, or make it again and set up", next: { kind: "show-issue" } });
+    // Made again: Set up runs there again.
+    const remade = { ...gone, projectGone: "Project dev was deleted and made again since this tool's setup; set up again.", projectRemade: true };
+    expect(kueueState(remade, "dev", IDLE)).toMatchObject({ label: "Project dev was deleted and made again since this tool's setup; set up again", next: { kind: "set-up", setup: [{ kind: "setup-kueue", project: "dev" }] } });
     const unreadable = { ...ready(), objects: ready().objects.map((o) => (o.kind === "LocalQueue" ? { ...o, managedByTool: false, unknown: true } : o)) };
     expect(kueueState(unreadable, "dev", IDLE)).toMatchObject({ status: "unknown" });
     expect(sampleStatus({ kind: "raycluster", name: "x", present: true, unknown: true })).toBe("unknown");
@@ -207,11 +210,11 @@ describe("Distributed workloads tab", () => {
   });
 
   it("a project gone since setup: the LocalQueue went with it, and the queues say to set up again", async () => {
-    const gone = { ...ready(), projectGone: "Project dev is gone; set up again.", objects: ready().objects.map((o) => (o.kind === "LocalQueue" ? { ...o, present: false, managedByTool: false } : o)), label: undefined };
+    const gone = { ...ready(), projectGone: "Project dev is gone; clean up, or make it again and set up.", objects: ready().objects.map((o) => (o.kind === "LocalQueue" ? { ...o, present: false, managedByTool: false } : o)), label: undefined };
     stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] }, "/api/resources/kueue": gone, "/api/resources/prerequisites": prereq(true) });
     renderAt("/test-resources?tab=kueue&project=dev");
     const queues = await screen.findByRole("listitem", { name: "Queues" });
-    expect(within(queues).getByText("Project dev is gone; set up again.")).toBeInTheDocument();
+    expect(within(queues).getByText("Project dev is gone; clean up, or make it again and set up.")).toBeInTheDocument();
     expect(within(queues).getByText(/: Went with the project$/)).toBeInTheDocument();
     expect(within(queues).queryByText(/Not created yet/)).not.toBeInTheDocument();
   });

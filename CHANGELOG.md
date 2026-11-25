@@ -476,7 +476,10 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   a Kueue project without such a profile (or one Kueue is off for in the
   dashboard) instead of deploying it without one. The review refuses, before
   anything runs, a workbench or model the dashboard would offer no usable
-  profile, and says what to change in the recipe. The review and the Kueue
+  profile, and says what to change in the recipe (on a fresh cluster,
+  where the RHOAI step installs the dashboard, when the run gets there), and
+  again the Workbench tab's own preflight (no image, no hardware profile)
+  when no step before the workbench changes it. The review and the Kueue
   step no longer say the dashboard will mark the workbench as bypassing
   Kueue: the recipe no longer creates such a workbench.
 - **Distributed workloads say up front when RHOAI makes its own LocalQueue.**
@@ -484,7 +487,8 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   default), RHOAI creates a LocalQueue named `default` in every labelled
   project, which Set up refuses: a recipe's Kueue step stopped halfway, and
   every later Set up refused. The tab's Set up and the recipe's review now
-  refuse before anything is labelled, and say what to change.
+  refuse before anything is labelled, and say what to change; the same
+  when the queue's name is `nightly-kueue`, the tool's own.
 - **The Kueue quota holds a workbench and a model on the Queue profile.**
   The ClusterQueue's 19 GiB did not count the workbench's kube-rbac-proxy
   sidecar (100m CPU, 64 MiB requested) nor a model. New setups get 10 CPUs,
@@ -510,7 +514,8 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   Deleting a sample of a project deleted or made again since says so and
   deletes nothing (it no longer claims the sample is gone). The tab's
   status says "Project recipe-dev is gone; set up again" (or that it was
-  made again) instead of "Incomplete" and "Not created yet", and while the
+  made again, and then offers Set up) instead of "Incomplete" and "Not
+  created yet", and while the
   project cannot be read it shows its LocalQueue and samples as unknown,
   not as the tool's.
 - **The Distributed workloads tab can turn Kueue back.** Once its setup
