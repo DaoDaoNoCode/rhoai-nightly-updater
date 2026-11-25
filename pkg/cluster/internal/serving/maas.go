@@ -1367,7 +1367,10 @@ func (r *maasStatusRun) statusRHCL() (rhcl, cnpg envkit.OperatorState, cnpgReadE
 		rhclPart.Message = "Kuadrant's API is served without an rhcl-operator CSV (an upstream Kuadrant, or another install); MaaS uses it as it is"
 	case rhcl.Pending() != nil:
 		p := rhcl.Pending()
-		rhclPart.ManagedByTool, rhclPart.NotManaged = rhclByTool, !rhclByTool
+		// A record is written before the install: the Subscription itself
+		// must be this tool's too.
+		owned := rhclByTool && ToolOwned(p.Metadata)
+		rhclPart.ManagedByTool, rhclPart.NotManaged = owned, !owned
 		rhclPart.State, rhclPart.Message = "waiting", fmt.Sprintf("Subscription %s/%s exists; OLM is installing it (%s)", p.Metadata.Namespace, p.Metadata.Name, kube.FirstNonEmpty(p.Status.State, "no state yet"))
 	default:
 		rhclPart.State = "missing"
