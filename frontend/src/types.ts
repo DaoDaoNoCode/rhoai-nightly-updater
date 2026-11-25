@@ -1375,6 +1375,8 @@ export interface ModelState extends ResourceState {
   imageVersion?: string;
   /** The dashboard hardware profile it is recorded under ("<namespace>/<name>"), when one fits. */
   hardwareProfile?: string;
+  /** The vLLM options the tool's model runs with ("" for none); they can differ from the catalog's until it is set up again. */
+  vllmArgs?: string;
   /** The preset's image is not in the registry (a nightly build's): setting it up with the newest released image fixes it. */
   presetImageMissing?: boolean;
   /** With presetImageMissing: a registry answered "manifest unknown" while another refused the node's credentials, so the image may be missing or the node may lack the pull secret. */

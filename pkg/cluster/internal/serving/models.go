@@ -274,8 +274,14 @@ const usageFlag = "--enable-force-include-usage"
 // lacksUsageFlag: the main container's VLLM_ADDITIONAL_ARGS does not carry
 // usageFlag (a chat model set up before every chat model had it).
 func (m LLMISvcObject) lacksUsageFlag() bool {
+	return !slices.Contains(strings.Fields(m.vllmArgs()), usageFlag)
+}
+
+// vllmArgs is the main container's VLLM_ADDITIONAL_ARGS: the vLLM options
+// the model runs with ("" when it has none).
+func (m LLMISvcObject) vllmArgs() string {
 	if m.Spec.Template == nil {
-		return true
+		return ""
 	}
 	for _, c := range m.Spec.Template.Containers {
 		if c.Name != "main" {
@@ -283,11 +289,11 @@ func (m LLMISvcObject) lacksUsageFlag() bool {
 		}
 		for _, e := range c.Env {
 			if e.Name == "VLLM_ADDITIONAL_ARGS" {
-				return !slices.Contains(strings.Fields(e.Value), usageFlag)
+				return e.Value
 			}
 		}
 	}
-	return true
+	return ""
 }
 
 func (m LLMISvcObject) mainImage() string {
@@ -387,6 +393,10 @@ func olderThan(meta kube.ObjectMeta, d time.Duration) bool {
 func ModelState(c *kube.Client, m LLMISvcObject, inspect bool, rec ModelsRecord) types.ModelState {
 	s := types.ModelState{Deployed: true, Namespace: m.Metadata.Namespace, Name: m.Metadata.Name}
 	s.ManagedByTool = rec.Owns(m.Metadata)
+	if s.ManagedByTool {
+		args := m.vllmArgs()
+		s.VLLMArgs = &args
+	}
 	if s.ManagedByTool && rec[ModelRecordKey(m.Metadata.Namespace, m.Metadata.Name)].TokenSecretUID != "" {
 		s.TokenSecret, s.TokenServiceAccount = tokenSecretName(m.Metadata.Name), tokenSAName(m.Metadata.Name)
 	}

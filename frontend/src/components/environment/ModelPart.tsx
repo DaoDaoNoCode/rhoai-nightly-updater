@@ -20,7 +20,7 @@ import { ImageRef } from "../ImageRef";
 import { ExternalLink, ProblemAlerts, StartingNote, isTerminating, terminalReason } from "./resourceRow";
 import { PartItem, type PartMenuItem } from "./FeatureLayout";
 import { notManaged } from "./resourceStatus";
-import { callCheckFailed, catalogModel, dashboardProjectHref, modelIn, modelStatus, shortModelName } from "./featureState";
+import { callCheckFailed, catalogModel, dashboardProjectHref, modelIn, modelStatus, modelsBlockedReason, shortModelName } from "./featureState";
 import type { ModelsTabProps } from "./ModelsTab";
 import { AUTH_WORDS } from "./GatewayPart";
 import { modelNeeds, modelUseWords } from "./ModelPicker";
@@ -93,8 +93,14 @@ export const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: na
   const managed = !!model && model.managedByTool !== false;
   const href = dashboardProjectHref(status.dashboardUrl, project);
   const menu: PartMenuItem[] = managed && !readOnly && !isTerminating(model)
-    ? [{ key: "delete", label: "Delete model", onClick: () => setPending({ kind: "teardown-model", project, model: name, ...(model?.maasOnlySetup ? { unpublish: true } : {}) }), disabledReason: baseReason ?? null, isDanger: true }]
+    ? [
+      // The same setup as a new model's, in place: same model, project and way it is reached.
+      { key: "setup-again", label: "Set up again", onClick: () => setPending({ kind: "setup-models", gateway: false, project, model: name, again: true }), disabledReason: baseReason ?? modelsBlockedReason(status) },
+      { key: "delete", label: "Delete model", onClick: () => setPending({ kind: "teardown-model", project, model: name, ...(model?.maasOnlySetup ? { unpublish: true } : {}) }), disabledReason: baseReason ?? null, isDanger: true },
+    ]
     : [];
+  // The options the tool's model runs with; the catalog's for one not set up.
+  const liveArgs = managed && model?.vllmArgs !== undefined ? model.vllmArgs : undefined;
   const useReleased = () => setPending({ kind: "setup-models", gateway: false, project, model: name, releasedImage: true });
   const s = modelStatus(status, project, busy, name);
   const isChecking = !!checking && checking.project === project && checking.model === name;
@@ -164,7 +170,12 @@ export const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: na
         {c && (
           <DescriptionListGroup>
             <DescriptionListTerm>vLLM options</DescriptionListTerm>
-            <DescriptionListDescription><code>{c.args}</code></DescriptionListDescription>
+            <DescriptionListDescription>
+              {liveArgs === undefined ? <code>{c.args}</code> : liveArgs ? <code>{liveArgs}</code> : "None"}
+              {liveArgs !== undefined && liveArgs !== c.args && (
+                <HelperText><HelperTextItem>This tool now sets up {c.displayName} with <code>{c.args}</code>. Set up again (in the model&apos;s menu) applies them; the model restarts.</HelperTextItem></HelperText>
+              )}
+            </DescriptionListDescription>
           </DescriptionListGroup>
         )}
         {model?.exposure && (

@@ -24,6 +24,16 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Added
 
+- **Set up again on a model's card.** The Models tab's model card menu has
+  **Set up again** next to Delete model: the model's own setup, in place
+  (the same model, project and way it is reached), which applies this
+  tool's current spec, such as `--enable-force-include-usage`, and publishes
+  a model reached through MaaS again when its publication is missing. Its
+  confirmation says that KServe restarts the model when its spec changes,
+  and which vLLM options change. The messages that said to set a model up
+  again on the Models tab had no such action for an existing model. The
+  card's **vLLM options** now shows the options the model runs with (they
+  were the catalog's), with the catalog's when they differ.
 - **Observability: MaaS usage logs and dashboards on the Environment page.**
   A new **Observability** tab (and Overview row) sets up RHOAI's monitoring
   as its docs do (odh-observability `docs/usage-logs.md`,
