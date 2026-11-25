@@ -207,6 +207,19 @@ func (rr *recipeRunner) update(fn func(run *types.RecipeRun)) *types.RecipeRun {
 	return copyRecipeRun(rr.run)
 }
 
+// updateEnding is update for a change that can end opID's running run: fn
+// changes the run and returns why the run starts no other step ("" for
+// none), recorded under the same lock: no status read sees the change (a
+// failed step) without why the run ends.
+func (rr *recipeRunner) updateEnding(opID string, fn func(run *types.RecipeRun) string) *types.RecipeRun {
+	rr.mu.Lock()
+	defer rr.mu.Unlock()
+	if why := fn(rr.run); why != "" && rr.running && rr.opID == opID {
+		rr.ending = why
+	}
+	return copyRecipeRun(rr.run)
+}
+
 func copyRecipeRun(run *types.RecipeRun) *types.RecipeRun {
 	cp := *run
 	cp.Steps = append([]types.RecipeRunStep(nil), run.Steps...)
@@ -483,6 +496,21 @@ type recipeLoop struct {
 	failed    bool
 }
 
+// ending is why the loop starts no other step (types.RecipeRunStatus
+// Ending): "failed" once a step failed, otherwise the halt's kind; ""
+// while steps may start. The status shows it no later than what makes it
+// true: a failure in the same change as the step's outcome, a halt before
+// the loop's next write of the run.
+func (l *recipeLoop) ending() string {
+	switch {
+	case l.failed:
+		return "failed"
+	case l.halt != nil:
+		return l.halt.kind
+	}
+	return ""
+}
+
 func newRecipeLoop(steps []cluster.RecipeStep) *recipeLoop {
 	index := map[string]int{}
 	for i, s := range steps {
@@ -540,13 +568,8 @@ func (x *recipeExec) loop() (end recipeEnd) {
 		x.recoverLoop(l, results)
 	})
 	unsaved := false
-	// ended takes over a step's end; the loop alone calls it.
 	ended := func(r stepResult) {
-		l.running--
-		x.state.Merge(r.base, r.state)
-		x.stepEnded(r.i, r.status, r.msg, r.code)
-		l.status[r.i], l.lastEnded = r.status, r.i
-		l.failed = l.failed || r.status == types.RecipeStepFailed
+		x.takeEnd(l, r)
 		unsaved = true
 	}
 	for {
@@ -558,14 +581,6 @@ func (x *recipeExec) loop() (end recipeEnd) {
 		// starts while others run (the run's end writes the last one).
 		if unsaved && !saved && l.running > 0 {
 			x.save(x.snapshot())
-		}
-		// Steps still run, but no other starts: the status says so now.
-		if l.running > 0 && (l.failed || l.halt != nil) {
-			why := "failed"
-			if !l.failed {
-				why = l.halt.kind
-			}
-			recipes.setEnding(x.opID, why)
 		}
 		if l.running == 0 {
 			break
@@ -585,6 +600,17 @@ func (x *recipeExec) loop() (end recipeEnd) {
 	return x.ended(l)
 }
 
+// takeEnd takes over a step's end; the loop alone calls it. A failure
+// shows in the status together with the run's ending ("failed"), also
+// when no step runs any more and the run ends right away.
+func (x *recipeExec) takeEnd(l *recipeLoop, r stepResult) {
+	l.running--
+	x.state.Merge(r.base, r.state)
+	l.status[r.i], l.lastEnded = r.status, r.i
+	l.failed = l.failed || r.status == types.RecipeStepFailed
+	x.stepEnded(r.i, r.status, r.msg, r.code, l.ending())
+}
+
 // recoverLoop ends a run whose loop panicked: the running steps end (each
 // by its deadline) and what they changed in the State is kept; none starts.
 // Every step the record shows running (also one marked running for a start
@@ -598,21 +624,27 @@ func (x *recipeExec) recoverLoop(l *recipeLoop, results chan stepResult) {
 		x.state.Merge(r.base, r.state)
 		drained = append(drained, r)
 	}
-	recipes.update(func(run *types.RecipeRun) {
+	recipes.updateEnding(x.opID, func(run *types.RecipeRun) string {
 		// What ended while the loop was broken is recorded as it ended.
 		for _, r := range drained {
 			s := &run.Steps[r.i]
 			s.Status, s.Message, s.ErrorCode = r.status, truncateText(r.msg, maxOperationMessageBytes), r.code
 		}
+		why := ""
 		for i := range run.Steps {
-			if s := &run.Steps[i]; s.Status == types.RecipeStepRunning {
+			s := &run.Steps[i]
+			if s.Status == types.RecipeStepRunning {
 				s.Status, s.Message, s.ErrorCode = types.RecipeStepFailed, operationPanicMessage, "internal"
+			}
+			if s.Status == types.RecipeStepFailed {
+				why = "failed"
 			}
 		}
 		run.Components = slices.Clone(x.state.Components)
 		run.ComponentIDs = maps.Clone(x.state.ComponentIDs)
 		run.CreatedParts = slices.Clone(x.state.Created)
 		run.Exposure, run.GatewayRef = x.state.Exposure, x.state.GatewayRef
+		return why
 	})
 }
 
@@ -630,6 +662,8 @@ func (x *recipeExec) startSteps(l *recipeLoop, results chan<- stepResult) bool {
 	}
 	if halt := x.beforeSteps(); halt != nil {
 		l.halt = halt
+		// Before the loop's next write: steps may still run.
+		recipes.setEnding(x.opID, l.ending())
 		return false
 	}
 	for _, i := range batch {
@@ -642,12 +676,12 @@ func (x *recipeExec) startSteps(l *recipeLoop, results chan<- stepResult) bool {
 	// check and the steps' deadlines (runStep's first line), so every step
 	// that starts ends by the drain's start plus OperationDeadline.
 	if draining, stop := mutations.isDraining(), recipes.stopRequested(); draining || stop {
-		for _, i := range batch {
-			x.stepEnded(i, types.RecipeStepPending, "", "")
-		}
 		l.halt = &recipeHalt{kind: haltStopped}
 		if draining {
 			l.halt.kind = haltRestart
+		}
+		for _, i := range batch {
+			x.stepEnded(i, types.RecipeStepPending, "", "", l.ending())
 		}
 		if l.running > 0 {
 			x.save(x.snapshot())
@@ -863,9 +897,10 @@ func (x *recipeExec) showTarget(run *types.RecipeRun) {
 
 // stepEnded records step i's outcome in memory (the loop writes it) and
 // takes over what the steps learnt (the project, components, created
-// parts, the exposure: x.state, merged).
-func (x *recipeExec) stepEnded(i int, status, msg, code string) {
-	run := recipes.update(func(run *types.RecipeRun) {
+// parts, the exposure: x.state, merged). ending is why the run starts no
+// other step (recipeLoop.ending), recorded in the same change.
+func (x *recipeExec) stepEnded(i int, status, msg, code, ending string) {
+	run := recipes.updateEnding(x.opID, func(run *types.RecipeRun) string {
 		s := &run.Steps[i]
 		s.Status, s.Message, s.ErrorCode = status, truncateText(msg, maxOperationMessageBytes), code
 		s.FinishedAt = time.Now().UTC().Format(time.RFC3339)
@@ -884,6 +919,7 @@ func (x *recipeExec) stepEnded(i int, status, msg, code string) {
 		run.ComponentIDs = maps.Clone(x.state.ComponentIDs)
 		run.CreatedParts = slices.Clone(x.state.Created)
 		run.Exposure, run.GatewayRef = x.state.Exposure, x.state.GatewayRef
+		return ending
 	})
 	recipes.endProgress(x.opID, x.steps[i].ID)
 	x.showTarget(run)
