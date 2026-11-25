@@ -38,7 +38,7 @@ func TestCleanUp_RecipeCreatedPartsAreCheckedAgainBeforeTheirTeardown(t *testing
 	run := func(req types.CleanupRequest) map[string]*types.OperationResponse {
 		torn, checked = nil, nil
 		out := map[string]*types.OperationResponse{}
-		for _, p := range cleanupParts(nil, req) {
+		for _, p := range cleanupParts(nil, req, nil) {
 			res, err := p.run()
 			if err != nil {
 				t.Fatal(err)
@@ -96,7 +96,7 @@ func TestCleanUp_RecipeKueueIsCheckedAgainBeforeItsTeardown(t *testing.T) {
 		torn int
 	}{{"cq-1", 1}, {"cq-0", 0}} {
 		torn = 0
-		for _, p := range cleanupParts(nil, types.CleanupRequest{Kueue: true, RecipeRunID: "run-1", KueueUID: tc.uid}) {
+		for _, p := range cleanupParts(nil, types.CleanupRequest{Kueue: true, RecipeRunID: "run-1", KueueUID: tc.uid}, nil) {
 			res, err := p.run()
 			if err != nil || (tc.torn == 0) == res.Success {
 				t.Errorf("%s: %+v %v", tc.uid, res, err)

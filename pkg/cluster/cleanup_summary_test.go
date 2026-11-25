@@ -43,7 +43,7 @@ func TestCleanUp_SaysWhatEachPartDid(t *testing.T) {
 			cleanupComponents = func(*Client, []string, map[string]string) (*types.OperationResponse, error) {
 				return &types.OperationResponse{Success: true, Message: tc.components}, nil
 			}
-			cleanupProject = func(*Client, string, string, []string) (*types.OperationResponse, error) {
+			cleanupProject = func(*Client, string, string, []string, []string) (*types.OperationResponse, error) {
 				return &types.OperationResponse{Success: true, Message: tc.project}, nil
 			}
 			_, c := newResourceFake(t)

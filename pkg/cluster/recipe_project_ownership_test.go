@@ -6,6 +6,8 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/recipe"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 // The playground's pieces in a recipe project, as RHOAI 3.7.0-ea.1 made
@@ -143,7 +145,7 @@ func TestRecipeProjectLeftovers_PlaygroundReadsFailClosed(t *testing.T) {
 			if left, err := recipe.ProjectLeftovers(c, "recipe-dev"); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("leftovers %v %v", left, err)
 			}
-			res, err := recipe.DeleteProject(c, "recipe-dev", s.Project.UID, []string{"Pod mine"})
+			res, err := recipe.DeleteProject(c, "recipe-dev", s.Project.UID, []string{"Pod mine"}, nil)
 			if err != nil || res.Success || !strings.Contains(res.Message, tc.refusal) {
 				t.Fatalf("delete %+v %v", res, err)
 			}
@@ -170,5 +172,123 @@ func TestRecipeProjectLeftovers_PipelineServerRoots(t *testing.T) {
 	left, err := recipe.ProjectLeftovers(c, "recipe-dev")
 	if err != nil || strings.Join(left, ",") != "PersistentVolumeClaim mariadb-theirs" {
 		t.Fatalf("leftovers %v %v", left, err)
+	}
+}
+
+// The owners the first check finds count at the check just before the
+// delete although they are gone by then: the playground's OGXServer
+// deleted and its record dropped, and the garbage collector has removed
+// one ReplicaSet but not yet its pod, the claim or the other pieces.
+// Without them that check refuses.
+func TestRecipeProject_DeleteKeepsTheFirstCheckOwners(t *testing.T) {
+	f, c, uid := createdRecipeProject(t)
+	putRecipePlayground(f, "ogx-uid")
+	recordRecipePlayground(t, c, "ogx-uid", true)
+	confirmed := []string{"Pod mine"}
+	problem, _, left, owners, err := recipe.ProjectTeardownProblem(c, "recipe-dev", uid, confirmed, nil)
+	if err != nil || problem != "" || strings.Join(left, ",") != "Pod mine" {
+		t.Fatalf("first check %q %v %v", problem, left, err)
+	}
+	if strings.Join(owners, ",") != "dep-lsd,dep-pg,ogx-uid,rs-lsd,rs-pg" {
+		t.Fatalf("owners %v", owners)
+	}
+	f.deleteObject(tOGXServer)
+	recordRecipePlayground(t, c, "", false)
+	f.deleteObject(tRecipeRSList + "/lsd-genai-playground-7f9b")
+
+	res, err := recipe.DeleteProject(c, "recipe-dev", uid, confirmed, nil)
+	if err != nil || res.Success || res.ErrorCode != recipe.ErrorCodeConfirmContents || !strings.Contains(res.Message, "PersistentVolumeClaim genai-pgvector-storage") {
+		t.Fatalf("without the first check's owners: %+v %v", res, err)
+	}
+	// An owner UID only: a server made again under the name is not the tool's.
+	f.putJSON(tOGXServer, `{"metadata":{"uid":"new-ogx-uid"}}`)
+	f.putJSON("/api/v1/namespaces/recipe-dev/persistentvolumeclaims/theirs", `{"metadata":{"ownerReferences":[{"kind":"OGXServer","name":"lsd-genai-playground","uid":"new-ogx-uid"}]}}`)
+	res, err = recipe.DeleteProject(c, "recipe-dev", uid, confirmed, owners)
+	if err != nil || res.Success || res.ErrorCode != recipe.ErrorCodeConfirmContents || res.Message != "Project recipe-dev still holds what this tool did not create: PersistentVolumeClaim theirs. Deleting the project deletes them too; confirm them to go ahead." {
+		t.Fatalf("a server made again: %+v %v", res, err)
+	}
+	if len(f.callsTo("DELETE", tRecipeNS)) != 0 {
+		t.Fatal("deleted with unconfirmed contents")
+	}
+	f.deleteObject("/api/v1/namespaces/recipe-dev/persistentvolumeclaims/theirs")
+	res, err = recipe.DeleteProject(c, "recipe-dev", uid, confirmed, owners)
+	if err != nil || !res.Success || f.has(tRecipeNS) {
+		t.Fatalf("with the first check's owners: %+v %v", res, err)
+	}
+}
+
+// Clean up everything with a part that deletes an owner in a recipe
+// project (the playground, the pipeline server) and the project: the
+// part's dependents the garbage collector has not removed yet do not stop
+// the project's delete, as the first check found their owner; a pod
+// someone made in the project between the two checks still does.
+func TestCleanUp_RecipeProjectKeepsTheOwnersOfEarlierParts(t *testing.T) {
+	const dspaPath = "/apis/datasciencepipelinesapplications.opendatahub.io/v1/namespaces/recipe-dev/datasciencepipelinesapplications/dspa"
+	for _, tc := range []struct {
+		name     string
+		pipeline bool
+		intruder bool
+	}{
+		{name: "the playground"},
+		{name: "the pipeline server", pipeline: true},
+		{name: "a pod made between the checks", intruder: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, c, uid := createdRecipeProject(t)
+			pg, ps, wp := cleanupPlayground, cleanupPipelineServer, pipelineWorkbenchesProblem
+			t.Cleanup(func() { cleanupPlayground, cleanupPipelineServer, pipelineWorkbenchesProblem = pg, ps, wp })
+			req := types.CleanupRequest{RecipeProjects: []string{"recipe-dev"}, RecipeProjectUIDs: map[string]string{"recipe-dev": uid},
+				ConfirmProjectContents: map[string][]string{"recipe-dev": {"Pod mine"}}}
+			var ran []string
+			if tc.pipeline {
+				recordRecipePlayground(t, c, "", false)
+				f.putJSON("/api/v1/namespaces/recipe-dev/pods/mine", `{}`)
+				f.putJSON(dspaPath, `{"metadata":{"uid":"dspa-uid","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}}}`)
+				f.putJSON("/api/v1/namespaces/recipe-dev/persistentvolumeclaims/mariadb-dspa", `{"metadata":{"ownerReferences":[{"kind":"DataSciencePipelinesApplication","name":"dspa","uid":"dspa-uid"}]}}`)
+				f.putJSON(tRecipeDepList+"/ds-pipeline-dspa", `{"metadata":{"uid":"dep-dspa","ownerReferences":[{"kind":"DataSciencePipelinesApplication","name":"dspa","uid":"dspa-uid","controller":true}]}}`)
+				f.putJSON(tRecipeRSList+"/ds-pipeline-dspa-6c", `{"metadata":{"uid":"rs-dspa","ownerReferences":[{"kind":"Deployment","name":"ds-pipeline-dspa","uid":"dep-dspa","controller":true}]}}`)
+				f.putJSON("/api/v1/namespaces/recipe-dev/pods/ds-pipeline-dspa-6c-x", `{"metadata":{"labels":{"dspa":"dspa"},"ownerReferences":[{"kind":"ReplicaSet","name":"ds-pipeline-dspa-6c","uid":"rs-dspa","controller":true}]}}`)
+				req.PipelineServers = []string{"recipe-dev"}
+				pipelineWorkbenchesProblem = func(*Client, string, map[string]string) (string, string, []storage.ConnectionWorkbench) {
+					return "", "", nil
+				}
+				cleanupPipelineServer = func(_ *Client, project, _ string, _ map[string]string) (*types.OperationResponse, error) {
+					ran = append(ran, "pipeline-server:"+project)
+					f.deleteObject(dspaPath)
+					return &types.OperationResponse{Success: true, Message: "Pipeline server deleted."}, nil
+				}
+			} else {
+				putRecipePlayground(f, "ogx-uid")
+				recordRecipePlayground(t, c, "ogx-uid", true)
+				req.Playgrounds = []string{"recipe-dev"}
+				cleanupPlayground = func(c *Client, project string) (*types.OperationResponse, error) {
+					ran = append(ran, "playground:"+project)
+					// As the dashboard's delete and the wait for it leave it:
+					// the server and the record gone, the rest not yet.
+					f.deleteObject(tOGXServer)
+					recordRecipePlayground(t, c, "", false)
+					if tc.intruder {
+						f.putJSON("/api/v1/namespaces/recipe-dev/pods/intruder", `{}`)
+					}
+					return &types.OperationResponse{Success: true, Message: "Playground deleted."}, nil
+				}
+			}
+			res, err := CleanUp(c, req, nil)
+			if err != nil || len(ran) != 1 {
+				t.Fatalf("got %+v, %v, ran %v", res, err, ran)
+			}
+			if tc.intruder {
+				if res.Success || !strings.Contains(res.Message, "still holds what this tool did not create: Pod intruder.") || strings.Contains(res.Message, "genai-pgvector") {
+					t.Fatalf("got %+v", res)
+				}
+				if len(f.callsTo("DELETE", tRecipeNS)) != 0 || !f.has(tRecipeNS) {
+					t.Fatal("deleted the project with a pod nobody confirmed")
+				}
+				return
+			}
+			if !res.Success || f.has(tRecipeNS) {
+				t.Fatalf("got %+v, project still there: %v", res, f.has(tRecipeNS))
+			}
+		})
 	}
 }

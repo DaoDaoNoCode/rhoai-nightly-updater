@@ -812,7 +812,7 @@ func writeTestPrereqRecord(c *Client, raw string) error {
 // may use its queue, and before the components (kueue goes back last).
 func TestKueueCleanupOrder(t *testing.T) {
 	_, c := newResourceFake(t)
-	parts := cleanupParts(c, types.CleanupRequest{Kueue: true, Workbenches: []string{"proj"}, Models: []string{"proj"}, RecipeProjects: []string{"proj"}, Components: []string{"kueue"}})
+	parts := cleanupParts(c, types.CleanupRequest{Kueue: true, Workbenches: []string{"proj"}, Models: []string{"proj"}, RecipeProjects: []string{"proj"}, Components: []string{"kueue"}}, nil)
 	var ids []string
 	for _, p := range parts {
 		ids = append(ids, p.id)

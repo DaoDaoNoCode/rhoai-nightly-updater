@@ -99,7 +99,7 @@ type cleanupPart struct {
 // near the end except for recipe-provisioned projects, which run once
 // in-project resources are gone, and DataScienceCluster components this
 // tool enabled, which revert once nothing in the clean-up still needs them.
-func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
+func cleanupParts(c *Client, req types.CleanupRequest, toolOwners map[string][]string) []cleanupPart {
 	var parts []cleanupPart
 	for _, project := range req.MaaSPublished {
 		parts = append(parts, cleanupPart{
@@ -206,7 +206,7 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 			id:    CleanupStepID("recipe-project", project),
 			title: fmt.Sprintf("project '%s', which a recipe created", project),
 			run: func() (*types.OperationResponse, error) {
-				return cleanupProject(c, project, req.RecipeProjectUIDs[project], req.ConfirmProjectContents[project])
+				return cleanupProject(c, project, req.RecipeProjectUIDs[project], req.ConfirmProjectContents[project], toolOwners[project])
 			},
 			says: true,
 		})
@@ -282,7 +282,13 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 			onStep(e)
 		}
 	}
-	parts := cleanupParts(c, req)
+	// The owners of this tool each recipe project's first check finds
+	// (recipe.ProjectTeardownProblem), for its check just before the
+	// delete: the parts between may delete them before the garbage
+	// collector removed what they own. Filled by this operation's checks
+	// only, never from the request.
+	toolOwners := map[string][]string{}
+	parts := cleanupParts(c, req, toolOwners)
 	var done, said []string
 	// When a recipe project would be rejected (not the reviewed instance,
 	// no longer owned by the recipe, or still holding unconfirmed content),
@@ -297,10 +303,11 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 	var problems []string
 	refusalCode := ""
 	for _, project := range req.RecipeProjects {
-		problem, code, left, err := recipeProjectProblem(c, project, req.RecipeProjectUIDs[project], req.ConfirmProjectContents[project])
+		problem, code, left, owners, err := recipeProjectProblem(c, project, req.RecipeProjectUIDs[project], req.ConfirmProjectContents[project], nil)
 		if err != nil {
 			problem, code, left = fmt.Sprintf("Cannot check project %s: %v.", project, err), kube.ErrorCodeOr(err, "prerequisites"), nil
 		}
+		toolOwners[project] = owners
 		checks = append(checks, projectCheck{project: project, problem: problem, code: code, left: left})
 		if problem == "" {
 			continue

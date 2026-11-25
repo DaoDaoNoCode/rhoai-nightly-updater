@@ -171,7 +171,7 @@ func fakeRecipeProjectTeardown(t *testing.T, ran *[]string, holds map[string][]s
 	t.Helper()
 	pr, cp, co := recipeProjectProblem, cleanupProject, cleanupComponents
 	t.Cleanup(func() { recipeProjectProblem, cleanupProject, cleanupComponents = pr, cp, co })
-	recipeProjectProblem = func(_ *Client, name, _ string, confirmed []string) (string, string, []string, error) {
+	recipeProjectProblem = func(_ *Client, name, _ string, confirmed, _ []string) (string, string, []string, []string, error) {
 		var unconfirmed []string
 		for _, h := range holds[name] {
 			if !slices.Contains(confirmed, h) {
@@ -179,11 +179,11 @@ func fakeRecipeProjectTeardown(t *testing.T, ran *[]string, holds map[string][]s
 			}
 		}
 		if len(unconfirmed) > 0 {
-			return "Project " + name + " still holds what this tool did not create: " + strings.Join(unconfirmed, ", ") + ".", "confirm_project_contents", holds[name], nil
+			return "Project " + name + " still holds what this tool did not create: " + strings.Join(unconfirmed, ", ") + ".", "confirm_project_contents", holds[name], nil, nil
 		}
-		return "", "", holds[name], nil
+		return "", "", holds[name], nil, nil
 	}
-	cleanupProject = func(_ *Client, name, uid string, confirmed []string) (*types.OperationResponse, error) {
+	cleanupProject = func(_ *Client, name, uid string, confirmed, _ []string) (*types.OperationResponse, error) {
 		id := CleanupStepID("recipe-project", name)
 		if uid != "" {
 			id += "@" + uid

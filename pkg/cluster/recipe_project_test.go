@@ -210,14 +210,14 @@ func TestRecipeProject_Teardown(t *testing.T) {
 	if err != nil || strings.Join(left, ",") != "LLMInferenceService theirs,Notebook my-wb,PersistentVolumeClaim my-wb,Pod named-smol,Pod theirs-kserve-1" {
 		t.Fatalf("leftovers %v %v", left, err)
 	}
-	res, err := recipe.DeleteProject(c, "recipe-dev", uid, []string{"Notebook my-wb"})
+	res, err := recipe.DeleteProject(c, "recipe-dev", uid, []string{"Notebook my-wb"}, nil)
 	if err != nil || res.Success || res.ErrorCode != recipe.ErrorCodeConfirmContents || !strings.Contains(res.Message, "PersistentVolumeClaim my-wb") || strings.Contains(res.Message, "Notebook my-wb") {
 		t.Fatalf("unconfirmed: %+v %v", res, err)
 	}
 	if len(f.callsTo("DELETE", tRecipeNS)) != 0 {
 		t.Fatal("deleted with unconfirmed contents")
 	}
-	res, err = recipe.DeleteProject(c, "recipe-dev", uid, left)
+	res, err = recipe.DeleteProject(c, "recipe-dev", uid, left, nil)
 	if err != nil || !res.Success {
 		t.Fatalf("confirmed: %+v %v", res, err)
 	}
@@ -230,7 +230,7 @@ func TestRecipeProject_Teardown(t *testing.T) {
 	}
 	// With no snapshot entry left, deletion is refused.
 	f.putJSON(tRecipeNS, `{"metadata":{"labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}}}`)
-	if res, _ := recipe.DeleteProject(c, "recipe-dev", uid, nil); res.Success || !strings.Contains(res.Message, "not created by a recipe") {
+	if res, _ := recipe.DeleteProject(c, "recipe-dev", uid, nil, nil); res.Success || !strings.Contains(res.Message, "not created by a recipe") {
 		t.Fatalf("unrecorded: %+v", res)
 	}
 }
@@ -249,7 +249,7 @@ func TestRecipeProject_TeardownGuards(t *testing.T) {
 			if err := record.WriteSnapshotKey(c, "recipeProject", "test", `{"projects":[{"name":"recipe-dev","uid":"rec-uid","recipe":"dev"}]}`); err != nil {
 				t.Fatal(err)
 			}
-			res, _ := recipe.DeleteProject(c, "recipe-dev", "rec-uid", nil)
+			res, _ := recipe.DeleteProject(c, "recipe-dev", "rec-uid", nil, nil)
 			if res.Success || !strings.Contains(res.Message, tc.want) || len(f.callsTo("DELETE", tRecipeNS)) != 0 {
 				t.Fatalf("%+v", res)
 			}
@@ -267,7 +267,7 @@ func TestRecipeProject_TeardownGuards(t *testing.T) {
 			f.putJSON(tRecipeNS, `{"metadata":{"uid":"swapped","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}}}`)
 		}
 	}
-	res, _ := recipe.DeleteProject(c, "recipe-dev", "rec-uid", nil)
+	res, _ := recipe.DeleteProject(c, "recipe-dev", "rec-uid", nil, nil)
 	if res.Success || !f.has(tRecipeNS) {
 		t.Fatalf("deleted a swapped namespace: %+v", res)
 	}
@@ -354,7 +354,7 @@ func TestRecipeProject_DeleteRequiresTheCheckedVersion(t *testing.T) {
 			f.mu.Unlock()
 		}
 	}
-	res, _ := recipe.DeleteProject(c, "recipe-dev", s.Project.UID, nil)
+	res, _ := recipe.DeleteProject(c, "recipe-dev", s.Project.UID, nil, nil)
 	if res.Success || !f.has(tRecipeNS) {
 		t.Fatalf("deleted a namespace whose label was removed meanwhile: %+v", res)
 	}
@@ -373,7 +373,7 @@ func TestRecipeProject_UnreadableDSCIRefuses(t *testing.T) {
 	if res := ensureProject(t, c, &recipe.State{Recipe: tRecipe(t, "create")}); res.Success || len(f.callsTo("POST", tProjectRequest)) != 0 {
 		t.Fatalf("ensure %+v", res)
 	}
-	problem, _, _, err := recipe.ProjectTeardownProblem(c, "recipe-dev", "some-uid", nil)
+	problem, _, _, _, err := recipe.ProjectTeardownProblem(c, "recipe-dev", "some-uid", nil, nil)
 	if err == nil && problem == "" {
 		t.Fatal("clean-up allowed without knowing RHOAI's namespaces")
 	}

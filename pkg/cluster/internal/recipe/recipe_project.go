@@ -543,36 +543,43 @@ func setMapOps(path string, absent bool, entries map[string]string) []kube.JSONP
 // Whenever it lists the project's leftovers it also returns all of them,
 // confirmed or not, as confirmProjectContents takes them: a refusal names
 // the unconfirmed ones, and the browser replaces its confirmation with the
-// whole list.
-func ProjectTeardownProblem(c *kube.Client, name, uid string, confirmed []string) (string, string, []string, error) {
+// whole list. It then also returns owners, the UIDs of the tool's owners
+// in the project (projectLeftovers), and takes known, those the check
+// before found (nil for the first check): CleanUp hands the first
+// check's to DeleteProject, so what the parts between them deleted (the
+// playground's OGXServer, a pipeline server) still owns, for the second
+// check, the dependents the garbage collector has not removed yet. A UID
+// names one object only, never one made again under its name. known comes
+// only from a check of the same operation, never from the request.
+func ProjectTeardownProblem(c *kube.Client, name, uid string, confirmed, known []string) (problem, code string, left, owners []string, err error) {
 	why, err := refusedProjectName(c, name)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", nil, nil, err
 	}
 	if why != "" {
-		return why + " Clean up does not delete it.", "validation", nil, nil
+		return why + " Clean up does not delete it.", "validation", nil, nil, nil
 	}
 	if uid == "" {
-		return fmt.Sprintf("The clean-up does not say which project %s you reviewed (its UID), so Clean up does not delete it. Reload the page and try again.", name), "validation", nil, nil
+		return fmt.Sprintf("The clean-up does not say which project %s you reviewed (its UID), so Clean up does not delete it. Reload the page and try again.", name), "validation", nil, nil, nil
 	}
 	found, rec, err := findProject(c, name)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", nil, nil, err
 	}
 	r, recorded := rec.recorded(name)
 	switch {
 	case !recorded:
-		return fmt.Sprintf("Project %s was not created by a recipe (there is no record of it), so Clean up does not delete it.", name), "validation", nil, nil
+		return fmt.Sprintf("Project %s was not created by a recipe (there is no record of it), so Clean up does not delete it.", name), "validation", nil, nil, nil
 	case r.UID != uid || (found.found && found.meta.UID != uid):
-		return fmt.Sprintf("Project %s is not the one you reviewed: it was deleted and made again since, so Clean up does not delete it. Reload the page to see the project there now.", name), "prerequisites", nil, nil
+		return fmt.Sprintf("Project %s is not the one you reviewed: it was deleted and made again since, so Clean up does not delete it. Reload the page to see the project there now.", name), "prerequisites", nil, nil, nil
 	case !found.found || found.meta.Terminating():
-		return "", "", nil, nil
+		return "", "", nil, nil, nil
 	case !found.deletable():
-		return fmt.Sprintf("Project %s no longer carries this tool's label and the recipe annotation, so Clean up does not delete it.", name), "prerequisites", nil, nil
+		return fmt.Sprintf("Project %s no longer carries this tool's label and the recipe annotation, so Clean up does not delete it.", name), "prerequisites", nil, nil, nil
 	}
-	left, err := projectLeftovers(c, name)
+	left, owners, err = projectLeftovers(c, name, known)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("this tool cannot tell what else is in project %s: %w", name, err)
+		return "", "", nil, nil, fmt.Errorf("this tool cannot tell what else is in project %s: %w", name, err)
 	}
 	var unconfirmed []string
 	for _, l := range left {
@@ -581,16 +588,17 @@ func ProjectTeardownProblem(c *kube.Client, name, uid string, confirmed []string
 		}
 	}
 	if len(unconfirmed) > 0 {
-		return fmt.Sprintf("Project %s still holds what this tool did not create: %s. Deleting the project deletes them too; confirm them to go ahead.", name, strings.Join(unconfirmed, ", ")), ErrorCodeConfirmContents, left, nil
+		return fmt.Sprintf("Project %s still holds what this tool did not create: %s. Deleting the project deletes them too; confirm them to go ahead.", name, strings.Join(unconfirmed, ", ")), ErrorCodeConfirmContents, left, owners, nil
 	}
-	return "", "", left, nil
+	return "", "", left, owners, nil
 }
 
 // ProjectLeftovers lists what is in recipe project name that this tool did
 // not create, for the confirmation; ErrorCodeConfirmContents refusals name
 // the same strings.
 func ProjectLeftovers(c *kube.Client, name string) ([]string, error) {
-	return projectLeftovers(c, name)
+	left, _, err := projectLeftovers(c, name, nil)
+	return left, err
 }
 
 // projectLeftovers names what is in project ns that this tool did not
@@ -607,7 +615,11 @@ func ProjectLeftovers(c *kube.Client, name string) ([]string, error) {
 // cluster (KubeRay's) stay listed: the ServiceAccount does not read Ray
 // objects. A kind whose API is not served has none. A read that fails is
 // returned (fail closed); an owner that is not there leaves the object
-// listed.
+// listed, unless known (the owners an earlier check of the same
+// operation returned) has its UID. owners are the UIDs of the tool's
+// owners found: known, the roots, and the ReplicaSets and Deployments
+// that lead to one (so a pod still counts once the garbage collector has
+// removed its ReplicaSet but not yet the pod).
 //
 // The trust model: what leaves an object out is a label or field that an
 // editor of the project can set (the tool's label, dspa=<name>, KServe's
@@ -617,12 +629,17 @@ func ProjectLeftovers(c *kube.Client, name string) ([]string, error) {
 // with the project, the forger's own object without asking. Nothing else
 // in the project is listed either (Secrets, ConfigMaps, Deployments, ...):
 // it goes with the project unlisted.
-func projectLeftovers(c *kube.Client, ns string) ([]string, error) {
+func projectLeftovers(c *kube.Client, ns string, known []string) (left, owners []string, err error) {
 	toolDSPAs := map[string]bool{}
 	roots := map[string]bool{}
+	for _, uid := range known {
+		if uid != "" {
+			roots[uid] = true
+		}
+	}
 	dspas, err := storage.ListDSPAs(c, ns)
 	if err != nil && !errors.Is(err, storage.ErrDSPACRDMissing) {
-		return nil, fmt.Errorf("list the pipeline servers in %s: %w", ns, err)
+		return nil, nil, fmt.Errorf("list the pipeline servers in %s: %w", ns, err)
 	}
 	for _, d := range dspas {
 		if d.ManagedByTool() {
@@ -632,18 +649,27 @@ func projectLeftovers(c *kube.Client, ns string) ([]string, error) {
 	}
 	playground, err := features.ToolPlaygroundServerUID(c, ns)
 	if err != nil {
-		return nil, fmt.Errorf("tell whether the playground in %s is this tool's: %w", ns, err)
+		return nil, nil, fmt.Errorf("tell whether the playground in %s is this tool's: %w", ns, err)
 	}
 	if playground != "" {
 		roots[playground] = true
 	}
 	links, err := listOwnerChainLinks(c, ns, len(roots) > 0)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ownedByTool := func(m kube.ObjectMeta) bool {
 		return ownedByToolRoot(m, roots, links)
 	}
+	for uid := range roots {
+		owners = append(owners, uid)
+	}
+	for uid, link := range links {
+		if !roots[uid] && ownedByTool(link.meta) {
+			owners = append(owners, uid)
+		}
+	}
+	sort.Strings(owners)
 	// The tool's models (LLMInferenceServices with its label), filled in as
 	// they are listed, before the pods. KServe runs a model in pods of a
 	// Deployment it owns and labels them part-of llminferenceservice and
@@ -668,9 +694,9 @@ func projectLeftovers(c *kube.Client, ns string) ([]string, error) {
 		found, err := c.GetIntoOptional(l.path, &list)
 		if err != nil {
 			if kube.IsDecodeError(err) {
-				return nil, fmt.Errorf("parse the %s list: %w", l.kind, err)
+				return nil, nil, fmt.Errorf("parse the %s list: %w", l.kind, err)
 			}
-			return nil, fmt.Errorf("list the %ss in %s: %w", l.kind, ns, err)
+			return nil, nil, fmt.Errorf("list the %ss in %s: %w", l.kind, ns, err)
 		}
 		if !found {
 			continue // the API is not served
@@ -687,7 +713,7 @@ func projectLeftovers(c *kube.Client, ns string) ([]string, error) {
 		}
 	}
 	sort.Strings(out)
-	return out, nil
+	return out, owners, nil
 }
 
 // maxOwnerLinks bounds the walk of ownedByToolRoot: a pod reaches a root
@@ -776,14 +802,15 @@ func ownedByToolRoot(m kube.ObjectMeta, roots map[string]bool, links map[string]
 // DeleteProject is Clean up's part for a recipe project: it deletes the
 // namespace with the UID the user reviewed (uid, which the record also
 // holds) as a precondition (kube.DeleteWithPreconditions), after
-// ProjectTeardownProblem allows it, and forgets the record. A project
-// that is gone or being deleted only loses its record.
-func DeleteProject(c *kube.Client, name, uid string, confirmed []string) (*types.OperationResponse, error) {
+// ProjectTeardownProblem allows it (with known, the owners CleanUp's first
+// check found), and forgets the record. A project that is gone or being
+// deleted only loses its record.
+func DeleteProject(c *kube.Client, name, uid string, confirmed, known []string) (*types.OperationResponse, error) {
 	fail := func(msg, code string) (*types.OperationResponse, error) {
 		record.Action(c, "delete-recipe-project", fmt.Sprintf("project=%s (%s)", name, msg), false)
 		return &types.OperationResponse{Success: false, Message: msg, ErrorCode: code}, nil
 	}
-	problem, code, _, err := ProjectTeardownProblem(c, name, uid, confirmed)
+	problem, code, _, _, err := ProjectTeardownProblem(c, name, uid, confirmed, known)
 	if err != nil {
 		return fail(fmt.Sprintf("Kept project %s: %v.", name, err), kube.ErrorCodeOr(err, "prerequisites"))
 	}

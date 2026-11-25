@@ -608,7 +608,7 @@ func TestWorkbenchTeardown(t *testing.T) {
 // retains PVCs unless WorkbenchStorage names them, and skips workbench confirm maps.
 func TestCleanupWorkbenchPart(t *testing.T) {
 	_, c := newResourceFake(t)
-	parts := cleanupParts(c, types.CleanupRequest{PipelineServers: []string{"proj"}, Workbenches: []string{"proj", "b"}, WorkbenchStorage: []string{"b"}})
+	parts := cleanupParts(c, types.CleanupRequest{PipelineServers: []string{"proj"}, Workbenches: []string{"proj", "b"}, WorkbenchStorage: []string{"b"}}, nil)
 	if len(parts) != 3 || parts[0].id != "workbench:proj" || parts[1].id != "workbench:b" || parts[2].id != "pipeline-server:proj" {
 		t.Fatalf("order: %+v", parts)
 	}
@@ -666,7 +666,7 @@ func TestWorkbenchDeleteKeptStorage(t *testing.T) {
 		}
 	})
 	_, c := newResourceFake(t)
-	parts := cleanupParts(c, types.CleanupRequest{Workbenches: []string{"a"}, WorkbenchStorage: []string{"a", "b"}, PipelineServers: []string{"b"}})
+	parts := cleanupParts(c, types.CleanupRequest{Workbenches: []string{"a"}, WorkbenchStorage: []string{"a", "b"}, PipelineServers: []string{"b"}}, nil)
 	if len(parts) != 3 || parts[0].id != "workbench:a" || parts[1].id != "workbench-storage:b" || parts[2].id != "pipeline-server:b" {
 		t.Fatalf("parts %+v", parts)
 	}
