@@ -309,7 +309,7 @@ func Setup(c *kube.Client) (*types.OperationResponse, error) {
 	// A component that is not Managed leaves its CRD behind: the CR would
 	// be created and never start. Unknown is refused too.
 	if reason, code := envkit.SetupComponentBlock(c, envkit.MLflowComponent); reason != "" {
-		record.Action(c, "setup-mlflow", "component not managed", false)
+		record.Action(c, "setup-mlflow", envkit.SetupBlockActivity(code), false)
 		return &types.OperationResponse{Success: false, Message: reason + " Nothing was changed.", Logs: logs, ErrorCode: code}, nil
 	}
 

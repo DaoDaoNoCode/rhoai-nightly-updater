@@ -1,6 +1,11 @@
 package kube
 
-import "errors"
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+)
 
 // The cluster facts a change reads with the ServiceAccount's token.
 //
@@ -65,3 +70,59 @@ func (c *Client) factsSource() *Client {
 
 // ReadOnly reports whether the client only reads (a facts client, Facts).
 func (c *Client) ReadOnly() bool { return c.readOnly }
+
+// FactReadFailure is how a read of a cluster fact failed, without the API
+// server's text: the ServiceAccount's error may name objects, namespaces
+// or the ServiceAccount itself, which a project user must not see. status
+// is the HTTP status (0 when no answer came); category is one of a fixed
+// set: "forbidden", "unauthorized", "not_found", "throttled",
+// "server_error", "client_error", "network", "timeout", "cancelled",
+// "read_only", "other".
+func FactReadFailure(err error) (status int, category string) {
+	if k, ok := errors.AsType[*K8sError](err); ok {
+		switch {
+		case k.Status == 401:
+			return k.Status, "unauthorized"
+		case k.Status == 403:
+			return k.Status, "forbidden"
+		case k.Status == 404:
+			return k.Status, "not_found"
+		case k.Status == 429:
+			return k.Status, "throttled"
+		case k.Status >= 500:
+			return k.Status, "server_error"
+		}
+		return k.Status, "client_error"
+	}
+	switch {
+	case IsNetworkError(err):
+		return 0, "network"
+	case errors.Is(err, context.DeadlineExceeded):
+		return 0, "timeout"
+	case errors.Is(err, context.Canceled):
+		return 0, "cancelled"
+	case errors.Is(err, ErrFactsReadOnly):
+		return 0, "read_only"
+	}
+	return 0, "other"
+}
+
+// FactReadProblem says for people how a read of a cluster fact failed,
+// without the API server's text (FactReadFailure): "HTTP 500", or the
+// category ("network") when no answer came.
+func FactReadProblem(err error) string {
+	status, category := FactReadFailure(err)
+	if status != 0 {
+		return fmt.Sprintf("HTTP %d", status)
+	}
+	return category
+}
+
+// LogFactReadFailure logs a failed read of a cluster fact with the fact,
+// the HTTP status and the category only (FactReadFailure), never the
+// error's text: what a log shows from a project user's request stays the
+// same whatever the ServiceAccount's error says.
+func LogFactReadFailure(msg, fact string, err error, attrs ...any) {
+	status, category := FactReadFailure(err)
+	slog.Warn(msg, append([]any{"fact", fact, "status", status, "category", category}, attrs...)...)
+}

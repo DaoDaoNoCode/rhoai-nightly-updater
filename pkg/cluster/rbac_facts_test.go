@@ -254,3 +254,46 @@ func TestFactsReachIsInTheServiceAccountScan(t *testing.T) {
 	sort.Strings(only)
 	t.Logf("facts roots: %v; reached only through a facts client: %d nodes", pg.factsRoots, len(only))
 }
+
+// wantFactsRequests are the requests a facts client makes today (verb,
+// group/resource and name; the namespaces are found at run time): each new
+// cluster fact the ServiceAccount reads for a change is a reviewed change
+// of this list (non-admin design 3.1), not only a verb the scan allows.
+var wantFactsRequests = []string{
+	"get apps/deployments name=gen-ai-ui",
+	"get config.openshift.io/infrastructures name=cluster",
+	"get mlflow.opendatahub.io/mlflows name=mlflow",
+	"get route.openshift.io/routes name=rhods-dashboard",
+	"list admissionregistration.k8s.io/validatingwebhookconfigurations name=",
+	"list components.platform.opendatahub.io/dashboards name=",
+	"list datasciencecluster.opendatahub.io/datascienceclusters name=",
+	"list dscinitialization.opendatahub.io/dscinitializations name=",
+}
+
+// The facts client's requests, pinned by resource and name; and what it
+// must never read for a user: no Secret, no list of the namespaces, nothing
+// of MaaS (whose objects list other tenants' models).
+func TestFactsRequestsArePinned(t *testing.T) {
+	pg := loadProfileGraph(t)
+	reqs, _ := serviceAccountRequestsIn(t, pg.clusterFuncs(pg.graph.reach(pg.factsRoots, nil)))
+	seen := map[string]bool{}
+	for _, r := range reqs {
+		seen[r.Verb+" "+r.Group+"/"+r.Resource+" name="+r.Name] = true
+		switch {
+		case r.Resource == "secrets":
+			t.Errorf("a facts client reads a Secret: %s (%s)", r.key(), r.Site)
+		case r.Resource == "namespaces" && r.Name == "":
+			t.Errorf("a facts client lists namespaces: %s (%s)", r.key(), r.Site)
+		case strings.HasPrefix(r.Group, "maas.opendatahub.io"):
+			t.Errorf("a facts client reads MaaS: %s (%s)", r.key(), r.Site)
+		}
+	}
+	got := make([]string, 0, len(seen))
+	for k := range seen {
+		got = append(got, k)
+	}
+	sort.Strings(got)
+	if !slices.Equal(got, wantFactsRequests) {
+		t.Errorf("the facts client's requests changed; review the new fact (non-admin design 3.1, SECURITY.md \"Cluster facts of a change\"), then update wantFactsRequests:\ngot  %q\nwant %q", got, wantFactsRequests)
+	}
+}

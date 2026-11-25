@@ -1,9 +1,7 @@
 package envkit
 
 import (
-	"errors"
 	"fmt"
-	"log/slog"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -141,20 +139,24 @@ const ErrorCodePrerequisitesUnknown = "prerequisites_unknown"
 // ("prerequisites"), or "" when it may run.
 //
 // The DataScienceCluster is a cluster fact, read with the facts client
-// (c.Facts(), the ServiceAccount's) through ReadFirstDSC, which tries each
-// served version in turn and skips one whose objects the conversion
-// webhook cannot convert (RHOAI 3.6's v3 next to an older operator), so
-// such a version alone blocks nothing. A read that still fails (every
-// served version refused, an API error) blocks the setup with
+// (c.Facts(), the ServiceAccount's) through ReadFirstDSC, which tries the
+// served versions in turn (rhoai.ListServed). It moves on to the next
+// version only when a version is not served (404) or its objects cannot be
+// converted: HTTP 500, or 429 "storage is (re)initializing", whose message
+// names the conversion webhook (rhoai.IsConversionWebhookError; the 429's
+// Retry-After is not waited for). So RHOAI 3.6's v3 next to an older
+// operator blocks nothing on its own. Any other error at a version (a
+// generic 500, 403, a network error) stops the read, as does a conversion
+// failure at every version; the setup is then refused with
 // ErrorCodePrerequisitesUnknown: whether the component is on is unknown,
 // and a CR of a component that is off is created and never starts. The
-// reason gives the read's HTTP status, not its text (the ServiceAccount's
-// error may name what a user does not see); the log has the error.
+// reason and the log give the read's HTTP status and a fixed category, not
+// its text (the ServiceAccount's error may name what a user does not see).
 func SetupComponentBlock(c *kube.Client, fc FeatureComponent) (reason, errorCode string) {
 	r, err := rhoai.ReadFirstDSC(c.Facts())
 	if err != nil {
-		slog.Warn("cannot read the DataScienceCluster for a setup check; the setup is refused", "feature", fc.Feature, "error", err)
-		return fmt.Sprintf("Cannot read whether %s is turned on: the DataScienceCluster could not be read (%s).", fc.Feature, factReadProblem(err)), ErrorCodePrerequisitesUnknown
+		kube.LogFactReadFailure("cannot read the DataScienceCluster for a setup check; the setup is refused", "DataScienceCluster", err, "feature", fc.Feature)
+		return fmt.Sprintf("Cannot read whether %s is turned on: the DataScienceCluster could not be read (%s).", fc.Feature, kube.FactReadProblem(err)), ErrorCodePrerequisitesUnknown
 	}
 	if b := ComponentBlock(r, fc); b != nil {
 		return b.Reason, "prerequisites"
@@ -162,11 +164,11 @@ func SetupComponentBlock(c *kube.Client, fc FeatureComponent) (reason, errorCode
 	return "", ""
 }
 
-// factReadProblem says how a read of a cluster fact failed without the
-// API server's text: its HTTP status, or that the log has the error.
-func factReadProblem(err error) string {
-	if k, ok := errors.AsType[*kube.K8sError](err); ok {
-		return fmt.Sprintf("HTTP %d", k.Status)
+// SetupBlockActivity is the activity log's word for a SetupComponentBlock
+// refusal with errorCode.
+func SetupBlockActivity(errorCode string) string {
+	if errorCode == ErrorCodePrerequisitesUnknown {
+		return "component state unknown"
 	}
-	return "the updater's log has the error"
+	return "component not managed"
 }

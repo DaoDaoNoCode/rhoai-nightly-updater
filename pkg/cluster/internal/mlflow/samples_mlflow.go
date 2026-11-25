@@ -378,9 +378,12 @@ func RunSamples(c *kube.Client, req types.MLflowSamplesRequest, onStep func(type
 	if !ok {
 		return fail("check", fmt.Sprintf("'%s' is not one of your data science projects.", req.Project), "validation")
 	}
-	t, reason, err := SampleTarget(c, req.Project)
+	// MLflow is asked with the token of the user just checked (u), never
+	// with c's own, whoever c is.
+	t, reason, err := mlflowSampleTargetAs(c, req.Project, u.BearerToken())
 	if err != nil {
-		return fail("check", fmt.Sprintf("Cannot read MLflow: %v", err), kube.ErrorCodeFromK8sErr(err))
+		kube.LogFactReadFailure("cannot read the MLflow CR for the samples", "MLflow", err, "project", req.Project)
+		return fail("check", fmt.Sprintf("Cannot read MLflow's CR (%s).", kube.FactReadProblem(err)), kube.ErrorCodeFromK8sErr(err))
 	}
 	if t == nil {
 		return fail("check", reason, "prerequisites")

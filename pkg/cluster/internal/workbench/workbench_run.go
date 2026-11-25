@@ -132,7 +132,8 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 	// a project user's own token may not read the DataScienceCluster.
 	dsc, err := rhoai.ReadFirstDSC(c.Facts())
 	if err != nil {
-		return r.fail("check", fmt.Sprintf("Cannot read the DataScienceCluster: %v. Nothing was changed.", err), kube.ErrorCodeFromK8sErr(err), "dsc read failed")
+		kube.LogFactReadFailure("cannot read the DataScienceCluster for a workbench setup", "DataScienceCluster", err, "project", project)
+		return r.fail("check", fmt.Sprintf("Cannot read the DataScienceCluster (%s). Nothing was changed.", kube.FactReadProblem(err)), kube.ErrorCodeFromK8sErr(err), "dsc read failed")
 	}
 	if b := envkit.ComponentBlock(dsc, Component); b != nil {
 		return r.fail("check", b.Reason+" Nothing was changed.", "prerequisites", "component off")

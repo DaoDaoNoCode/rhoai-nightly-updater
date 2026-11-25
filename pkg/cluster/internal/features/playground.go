@@ -1335,7 +1335,9 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 		return stop(st.Blocked.Reason, "component_off", "component off")
 	}
 	if st.OperatorReady == "False" {
-		return stop(fmt.Sprintf("The playground's operator is not ready: the DataScienceCluster reports it not ready (%s). The dashboard cannot create a playground until it is; the Components page shows the details.", kube.FirstNonEmpty(st.OperatorMessage, "no message")), "component_not_ready", "operator not ready")
+		// Not the condition's message: it is the ServiceAccount's read of
+		// the DataScienceCluster, which a project user may not see.
+		return stop("The playground's operator is not ready: the DataScienceCluster reports it not ready. The dashboard cannot create a playground until it is; the Components page shows the details.", "component_not_ready", "operator not ready")
 	}
 	switch st.GenAIUI {
 	case "missing":
