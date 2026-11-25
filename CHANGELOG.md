@@ -435,6 +435,21 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   on the Models tab, which restarts it; one already published keeps
   counting 0 for streams until it is set up again, and its row on the MaaS
   tab warns about it until then (nothing is changed automatically).
+- **A model reached through MaaS only is published while its server still
+  starts.** The Models tab's setup (and an environment recipe's model step)
+  published such a model only when its server ran within the setup's
+  10-minute wait. A slower start (10m21s live, mostly a slow Hugging Face
+  download) ended in success ("It may still start") without the
+  publication, and the model could then never become Ready: its route needs
+  the MaaS gateway to admit the project, which only a publication does. The
+  recipe's model step then waited until its deadline. Setup now publishes it
+  when the wait ends, as the MaaS docs order it (deploy, admit the namespace,
+  add the MaaSModelRef; Ready is not asked first), and the wait for MaaS to
+  accept it ends before the operation's deadline. A start that failed, or an
+  image pull still failing, is not published: set the model up again (or
+  Resume the run) once the pull succeeds. The "Can it be called?" check and
+  the confirmation of the MaaS tab's **Restore direct routing** now point to
+  setting the model up again on the Models tab.
 - **Dry runs of a delete no longer delete.** Five deletes asked for a
   server-side dry run in the URL (`?dryRun=All`) while sending
   DeleteOptions (UID preconditions) in the body, and the API server then

@@ -686,7 +686,7 @@ func TestModelStep_WaitsUntilTheModelServes(t *testing.T) {
 		return types.ModelState{ResourceState: types.ResourceState{Deployed: true, ManagedByTool: true}}, true, nil
 	}
 	res, err := runModel(c, &State{Recipe: r}, func(types.UpdateStepEvent) {})
-	if err != nil || res.Success || res.ErrorCode != "timeout" || !strings.Contains(res.Message, "Resume waits again") {
+	if err != nil || res.Success || res.ErrorCode != "timeout" || !strings.Contains(res.Message, "Resume checks again") {
 		t.Fatalf("%+v %v", res, err)
 	}
 }

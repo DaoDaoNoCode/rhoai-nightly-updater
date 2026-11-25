@@ -29,10 +29,13 @@ type Run struct {
 	Activity string
 	Target   string
 	// newModel (Models routing): publish a model the Models tab just set
-	// up to be reached through MaaS only. Its server runs, but it is not
-	// Ready until published: its route needs the MaaS gateway to admit the
-	// project, which publish does. Publish waits for Ready on its route.
+	// up to be reached through MaaS only. It is not Ready until published:
+	// its route needs the MaaS gateway to admit the project, which publish
+	// does. Publish waits for Ready on its route, unless starting: its
+	// server has not rolled out yet (the setup's wait ended first), so
+	// the route on the MaaS gateway alone is enough.
 	newModel bool
+	starting bool
 	// Annotations go on the database connection Secret maas-db-config
 	// when this run creates it (never on one that exists): an environment
 	// recipe marks the platform its run created (RunMaaSAnnotated).
@@ -1285,11 +1288,19 @@ func (m *Run) publishMaaSObjects(pl *maasPublish) (*types.OperationResponse, err
 }
 
 // publishWaitReady waits for MaaS to accept the model and ends the run.
+// The wait ends 30 s before the operation's deadline, so a publish that
+// starts late still ends as published and still being accepted.
 func (m *Run) publishWaitReady(pl *maasPublish) (*types.OperationResponse, error) {
 	c, project, name := m.Client, pl.project, pl.name
 	m.Step("ready", "running", "Waiting for MaaS to accept the model")
+	timeout := maasPublishTimeout
+	if dl, ok := c.Context().Deadline(); ok {
+		if left := kube.Clock().Until(dl) - 30*time.Second; left < timeout {
+			timeout = left
+		}
+	}
 	last := ""
-	ready, err := kube.WaitForGone(c, maasPublishTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
+	ready, err := kube.WaitForGone(c, timeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 		r, _, err := readMaaSModelRef(cc, project, name)
 		if err != nil {
 			return false, err
@@ -1307,7 +1318,7 @@ func (m *Run) publishWaitReady(pl *maasPublish) (*types.OperationResponse, error
 		return m.Fail("ready", fmt.Sprintf("Stopped waiting: %v. The model is published; the MaaS tab shows its state.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "wait failed")
 	}
 	if !ready {
-		m.Step("ready", "success", fmt.Sprintf("Not ready after %s (%s). The MaaS tab shows its state.", ClockText(maasPublishTimeout), last))
+		m.Step("ready", "success", fmt.Sprintf("Not ready after %s (%s). The MaaS tab shows its state.", ClockText(timeout), kube.FirstNonEmpty(last, "not read in time")))
 		return m.Done(fmt.Sprintf("%s in %s is published and still being accepted.", name, project))
 	}
 	m.Step("ready", "success", "MaaS lists the model.")

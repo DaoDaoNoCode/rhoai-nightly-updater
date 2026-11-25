@@ -424,7 +424,7 @@ func maasCallCheck(c *kube.Client, project, name string) types.ModelCallCheck {
 	case err != nil:
 		return types.ModelCallCheck{Result: "not-checked", Message: "Not checked: MaaS's model reference cannot be read: " + err.Error() + "."}
 	case !found:
-		return types.ModelCallCheck{Result: "not-checked", Message: "Not checked: the model routes through MaaS's gateway but is not published (no MaaSModelRef). Publish it on the MaaS tab."}
+		return types.ModelCallCheck{Result: "not-checked", Message: "Not checked: the model routes through MaaS's gateway but is not published (no MaaSModelRef). Set it up again on the Models tab to publish it."}
 	case ref.Status.Phase != "Ready":
 		return types.ModelCallCheck{Result: "not-checked", Message: fmt.Sprintf("MaaS does not list the model yet (its reference is %s).", kube.FirstNonEmpty(ref.Status.Phase, "pending"))}
 	}

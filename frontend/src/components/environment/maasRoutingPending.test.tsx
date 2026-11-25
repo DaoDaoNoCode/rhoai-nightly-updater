@@ -49,6 +49,8 @@ describe("A model whose MaaS reference was deleted outside the tool", () => {
     fireEvent.click(within(row).getByRole("button", { name: "Restore direct routing" }));
     const confirm = await screen.findByRole("dialog", { name: /Restore direct routing of Qwen2.5 0.5B Instruct in dev\?/ });
     expect(within(confirm).getByText(/its direct address answers again/)).toBeInTheDocument();
+    // The other way out: a setup through MaaS publishes it.
+    expect(within(confirm).getByText(/To publish it instead, set it up again on the Models tab/)).toBeInTheDocument();
     fireEvent.click(within(confirm).getByRole("button", { name: "Restore direct routing" }));
     await screen.findByRole("dialog", { name: "Restore direct routing of Qwen2.5 0.5B Instruct in dev" });
     expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "restore-routing", project: "dev", model: "qwen25-05b-instruct" }]);
