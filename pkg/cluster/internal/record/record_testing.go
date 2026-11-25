@@ -25,6 +25,19 @@ func SetRestoreCSVBudgetForTest(d time.Duration) (restore func()) {
 	return func() { RestoreCSVBudget = prev }
 }
 
+// SetActivityBackoffForTest makes backoff the wait before each retry of
+// an activity write after a conflict, and returns the function that puts
+// the previous one back. It panics outside a test binary.
+func SetActivityBackoffForTest(backoff func(attempt int) time.Duration) (restore func()) {
+	mustBeTest("SetActivityBackoffForTest")
+	prev := activityBackoff
+	activityBackoff = backoff
+	return func() { activityBackoff = prev }
+}
+
+// MaxActivityAttempts is how many times one activity write is tried.
+const MaxActivityAttempts = maxConflictRetries
+
 func mustBeTest(what string) {
 	if !testing.Testing() {
 		panic(what + " is only for tests")
