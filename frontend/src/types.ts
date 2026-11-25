@@ -1617,6 +1617,8 @@ export interface WorkbenchPlan {
   image: string;
   imageStream: string;
   imageTag: string;
+  /** Its ImageStream is deprecated (the dashboard labels it Deprecated), chosen because every image the dashboard offers is. */
+  imageDeprecated?: boolean;
   hardwareProfile: string;
   hardwareProfileName: string;
   cpu?: string;

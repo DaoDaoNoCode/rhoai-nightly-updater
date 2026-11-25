@@ -229,7 +229,7 @@ func GetStatus(sa, u *kube.Client, project string) (*types.WorkbenchStatus, erro
 // PlanView converts an internal Plan into the struct the UI exposes.
 func PlanView(p Plan) *types.WorkbenchPlan {
 	v := &types.WorkbenchPlan{
-		Image: p.Image.DisplayName, ImageStream: p.Image.Stream, ImageTag: p.Image.Tag,
+		Image: p.Image.DisplayName, ImageStream: p.Image.Stream, ImageTag: p.Image.Tag, ImageDeprecated: p.Image.Deprecated,
 		HardwareProfile: p.Profile.DisplayName, HardwareProfileName: p.Profile.Namespace + "/" + p.Profile.Name,
 		CPU: ResourceText(p.Profile.Resources["cpu"]), Memory: ResourceText(p.Profile.Resources["memory"]),
 		Queue:       p.Profile.Queue,

@@ -7,7 +7,7 @@ import { contract } from "../../test/contract";
 import type { ResourceState, ResourcesStatus, WorkbenchState, WorkbenchStatus } from "../../types";
 import { IDLE } from "./featureState";
 import { cleanupCandidates, cleanupSteps } from "./CleanupModal";
-import { workbenchConfirm, workbenchSteps } from "./WorkbenchTab";
+import { DEPRECATED_IMAGE_NOTE, workbenchConfirm, workbenchSteps } from "./WorkbenchTab";
 import { workbenchState } from "./workbenchState";
 
 const none: ResourceState = { deployed: false, ready: false, message: "Not deployed", managedByTool: false };
@@ -56,6 +56,21 @@ describe("Workbench confirmations", () => {
     expect(screen.getByText(/^Default/)).toBeInTheDocument();
     expect(screen.getByText("storage class gp3-csi")).toBeInTheDocument();
     expect(screen.getByText("20Gi")).toBeInTheDocument();
+  });
+
+  it("Set up with a deprecated image labels it as the dashboard does and says why", () => {
+    const st = notSetUp();
+    st.plan = { ...st.plan!, imageDeprecated: true };
+    const spec = workbenchConfirm({ kind: "setup-workbench", project: "dev" }, st)!;
+    render(<>{spec.summary}</>);
+    expect(screen.getByText("Deprecated")).toBeInTheDocument();
+    expect(screen.getByText("Its image is deprecated")).toBeInTheDocument();
+    expect(screen.getByText(DEPRECATED_IMAGE_NOTE)).toBeInTheDocument();
+  });
+
+  it("Set up with a current image shows no Deprecated label", () => {
+    render(<>{workbenchConfirm({ kind: "setup-workbench", project: "dev" }, notSetUp())!.summary}</>);
+    expect(screen.queryByText("Deprecated")).not.toBeInTheDocument();
   });
 
   it("Delete keeps the storage unless ticked; the tick asks for the storage's deletion", () => {

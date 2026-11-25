@@ -14,6 +14,7 @@ import {
   FormHelperText,
   HelperText,
   HelperTextItem,
+  Label,
   Stack,
   StackItem,
 } from "@patternfly/react-core";
@@ -55,12 +56,16 @@ const StorageLine: React.FC<{ text: string }> = ({ text }) => (
   <>{text.split(", ").map((part, i) => <React.Fragment key={i}>{i > 0 && ", "}<span className="pf-v6-u-text-nowrap">{part}</span></React.Fragment>)}</>
 );
 
-const DetailsList: React.FC<{ label: string; image?: string; profile: string; storage?: string; connection: boolean }> = ({ label, image, profile, storage, connection }) => (
+const DetailsList: React.FC<{ label: string; image?: string; imageDeprecated?: boolean; profile: string; storage?: string; connection: boolean }> = ({ label, image, imageDeprecated, profile, storage, connection }) => (
   <DescriptionList isCompact isHorizontal aria-label={label}>
     {image && (
       <DescriptionListGroup>
         <DescriptionListTerm>Image</DescriptionListTerm>
-        <DescriptionListDescription>{image}</DescriptionListDescription>
+        <DescriptionListDescription>
+          {image}
+          {/* As the dashboard labels a deprecated image (ImageStreamDropdownLabel.tsx). */}
+          {imageDeprecated && <> <Label color="yellow" isCompact>Deprecated</Label></>}
+        </DescriptionListDescription>
       </DescriptionListGroup>
     )}
     <DescriptionListGroup>
@@ -81,7 +86,7 @@ const DetailsList: React.FC<{ label: string; image?: string; profile: string; st
 );
 
 const PlanDetails: React.FC<{ plan: WorkbenchPlan; label: string; kept?: boolean }> = ({ plan, label, kept }) => (
-  <DetailsList label={label} image={`${plan.image} (${plan.imageTag})`}
+  <DetailsList label={label} image={`${plan.image} (${plan.imageTag})`} imageDeprecated={plan.imageDeprecated}
     profile={`${profileText(plan.hardwareProfile, plan.cpu, plan.memory)}${plan.queue ? `, queue ${plan.queue}` : ""}`}
     storage={kept ? `${WORKBENCH_STORAGE}, kept from the deleted workbench, with its files` : storageText(plan.storageSize, plan.storageClass)} connection={!!plan.connection} />
 );
@@ -283,6 +288,9 @@ export function workbenchSteps(p: WorkbenchPending): { id: string; title: string
   }
 }
 
+/** Rationale when Set up picks a deprecated image (pkg/cluster/internal/workbench DeprecatedImageNote). */
+export const DEPRECATED_IMAGE_NOTE = "The dashboard labels this image Deprecated (it gets no new versions): every workbench image it offers on this cluster is deprecated.";
+
 /** Explains in-memory loss on stop or teardown; shared wording across Stop, Delete, and Clean up. */
 export const RUNNING_SESSION_LOST = `Unsaved work in the running session is lost: only files saved under ${WORKBENCH_FILES} are in the storage.`;
 
@@ -299,6 +307,7 @@ export function workbenchConfirm(pending: Pending, wb: WorkbenchStatus | null, s
           <Stack hasGutter>
             <StackItem><Content component="p">Creates workbench {WORKBENCH_NAME} in {project}{plan ? <> with {plan.image} ({plan.imageTag})</> : null}, as the dashboard&apos;s Create workbench does. It starts in 1 to 3 minutes.</Content></StackItem>
             {plan && <StackItem><PlanDetails plan={plan} label="What the workbench gets" kept={kept} /></StackItem>}
+            {plan?.imageDeprecated && <StackItem><Alert variant="info" isInline component="p" title="Its image is deprecated">{DEPRECATED_IMAGE_NOTE}</Alert></StackItem>}
           </Stack>
         ),
         changes: [

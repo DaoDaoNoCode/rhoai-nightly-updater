@@ -314,6 +314,15 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **A new workbench no longer gets a deprecated image.** RHOAI 3.7 marks
+  most workbench images deprecated (the dashboard labels them Deprecated:
+  they get no new versions), including Jupyter Minimal, whose tag still
+  carries RHOAI's `default-image` mark, so the Workbench tab and a recipe
+  set workbenches up on it. Set up now picks RHOAI's own images that are not
+  deprecated first (on 3.7 Jupyter | CPU, the first in the dashboard's image
+  list), then custom images, and a deprecated one only when every image is:
+  the Workbench tab labels it Deprecated, and the result says why. RHOAI 3.6
+  keeps Jupyter Minimal. A workbench already set up keeps its image.
 - **A recipe's Clean up offers to turn the DataScienceCluster's `kueue`
   back.** Clean up what the recipe set up kept a component only while it
   read `Managed`, so `kueue`, which a run turns on as `Unmanaged`, was never
