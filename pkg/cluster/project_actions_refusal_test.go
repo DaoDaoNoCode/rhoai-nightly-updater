@@ -335,3 +335,28 @@ func strconvQuote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
+
+// A user's Add whose create finds a demo made in the meantime (the
+// create conflicts and returns that marked experiment) is refused like an
+// Add on an existing demo: no reset and no generator request.
+func TestUserAddRefusedOnCreateConflict(t *testing.T) {
+	env := newSamplesEnv(t)
+	env.user.SetProjectUser("uid-proj")
+	env.mlflow.onRequest = func(method, path string) {
+		if method == "POST" && path == "/api/2.0/mlflow/experiments/create" && env.mlflow.expByName(mlflow.DemoExperiment) == nil {
+			e := &fakeExperiment{id: "made-meanwhile", name: mlflow.DemoExperiment, stage: "active",
+				tags: map[string]string{mlflow.SampleMarkerKey: SampleGenAIDemo, mlflow.DemoVersionTagPrefix + "retired_feature": "0"}}
+			env.mlflow.experiments[e.id] = e
+		}
+	}
+	n := len(env.mlflow.requests)
+	ok, msg, steps := env.run(t, "add", SampleGenAIDemo)
+	if ok || !strings.Contains(stepMessages(steps), "exists in this project already") || env.mlflow.generates != 0 {
+		t.Fatalf("%s\n%s generates %d", msg, stepMessages(steps), env.mlflow.generates)
+	}
+	for _, r := range env.mlflow.requests[n:] {
+		if strings.Contains(r, "set-experiment-tag") || strings.Contains(r, "delete-experiment-tag") || strings.Contains(r, "demo/generate") {
+			t.Fatalf("a reset or generator request after the conflict: %v", env.mlflow.requests[n:])
+		}
+	}
+}
