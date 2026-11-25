@@ -2,6 +2,7 @@ package recipe
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,8 +14,10 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kueue"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/modelregistry"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/workbench"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -926,69 +929,119 @@ func checkWorkbench(c *kube.Client, s *State) (Check, error) {
 // checkWorkbenchLater is the plan's check of a workbench step that waits for
 // steps that will run (types.RecipeStepLater): it blocks when no hardware
 // profile will fit the project once the run gets there, so the run does
-// not stop halfway for it. What decides the profile (the project's Kueue
-// label, the dashboard's Kueue setting, the project's LocalQueues and the
-// hardware profiles) is changed before the workbench step only by the Kueue
-// steps and the project step:
+// not stop halfway for it. The profile is chosen from what
+// workbench.ProfileInputs reads; of the steps before the workbench, these
+// change it:
 //
-//   - a workbench created after the Kueue steps (workbenchAfterKueue) gets
-//     the Queue profile they make for the project's LocalQueue while they
-//     will run; once they are set up, the project is read as it is;
-//   - a project the run creates is labelled kueue.openshift.io/managed=true
-//     when the dashboard's Kueue setting is on (EnsureProject, as the
-//     dashboard's Create project does), and has no LocalQueue before a
-//     Kueue step. The dashboard then offers its workbench no profile: in a
-//     Kueue project only Queue profiles of a LocalQueue the project has, and
-//     a Queue profile names its LocalQueue (the dashboard's hardware profile
-//     form requires the name, odh-dashboard packages/hardware-profiles
-//     src/pages/manage/validationUtils.ts schedulingSchema; this tool's
-//     Queue profile names nightly-kueue);
-//   - a project that is there is read as it is, as the Workbench tab's Set
-//     up reads it (workbenchProfileBlock); a workbench already there is not
-//     changed.
+//   - RHOAI and the DataScienceCluster install or change all of it, so a
+//     workbench after them is checked when the run gets there;
+//   - the project step labels a project it creates, or one it created
+//     whose setup it completes (a resumed run),
+//     kueue.openshift.io/managed=true when the dashboard's Kueue setting is
+//     on (EnsureProject, as the dashboard's Create project does);
+//   - with the opt-in, the Kueue steps before the workbench
+//     (workbenchAfterKueue) turn the kueue component and the setting on,
+//     label the project, make LocalQueue nightly-kueue and, when it is not
+//     there, the tool's Queue profile (Turn on keeps one that is there, as
+//     it is, disabled or not).
 //
-// A read that fails is an error (the plan refuses: fail closed).
+// A new project has no LocalQueue before a Kueue step but the one RHOAI
+// makes in a Kueue project when the DataScienceCluster's autoCreateQueues
+// is on (workbench.AutoQueue), and in a Kueue project the dashboard offers
+// only Queue profiles of a LocalQueue the project has; a Queue profile
+// names its LocalQueue (the HardwareProfile CRD requires a non-empty
+// localQueueName, opendatahub-operator api/infrastructure/v1
+// hardwareprofile_types.go L88-89, L118-120). A workbench already there is
+// not changed. A read that fails is an error (the plan refuses: fail
+// closed).
 func checkWorkbenchLater(c *kube.Client, s *State, willRun map[string]bool) (Check, error) {
 	r := s.Recipe
-	if workbenchAfterKueue(r) && (willRun[StepKueuePrereq] || willRun[StepKueue]) {
+	p := r.Spec.Project
+	if willRun[StepRHOAI] || willRun[StepDSC] || p == nil {
 		return Check{}, nil
 	}
-	if p := r.Spec.Project; p != nil && p.Mode == ProjectCreate && s.Project == nil {
-		if !willRun[StepProject] {
-			return Check{}, nil // the project step is refused, and the plan says why
-		}
-		on, err := dashboardKueueOn(c)
-		if err != nil {
-			return Check{}, fmt.Errorf("read the dashboard's Kueue setting: %w", err)
-		}
-		if !on {
-			return Check{}, nil
-		}
-		return Check{Blocked: strings.TrimSpace(fmt.Sprintf("The dashboard's Kueue setting is on, so project %s is created with the label kueue.openshift.io/managed=true (as the dashboard's Create project does), and the run creates its workbench before the project has a LocalQueue: the dashboard offers no hardware profile for a workbench there, and the workbench step would fail. %s", p.Name, workbenchKueueHint(r))) + " Nothing was changed."}, nil
+	create := p.Mode == ProjectCreate
+	if create && s.Project == nil && !willRun[StepProject] {
+		return Check{}, nil // the project step is refused, and the plan says why
 	}
-	item, st, err := workbenchIn(c, projectOf(s))
-	switch {
-	case err != nil:
+	project := projectOf(s)
+	if !create || s.Project != nil {
+		item, _, err := workbenchIn(c, project)
+		switch {
+		case err != nil:
+			return Check{}, err
+		case item != nil && !item.Terminating:
+			return Check{}, nil // there: the step finds it set up, or blocks on one the tool did not create
+		}
+	}
+	in, err := workbenchProfileInputs(c, project)
+	if err != nil {
 		return Check{}, err
-	case item != nil && !item.Terminating:
-		return Check{}, nil // there: the step finds it set up, or blocks on one the tool did not create
 	}
-	return workbenchProfileBlock(r, st), nil
+	labelledByProjectStep := create && willRun[StepProject] && in.SettingOn && !in.Labelled
+	if labelledByProjectStep {
+		in.Labelled = true
+	}
+	if workbenchAfterKueue(r) && (willRun[StepKueuePrereq] || willRun[StepKueue]) {
+		in = withKueueSetUp(in)
+	}
+	_, why := in.Choose()
+	switch {
+	case why == "":
+		return Check{}, nil
+	case labelledByProjectStep:
+		why = fmt.Sprintf("The dashboard's Kueue setting is on, so the project step labels project %s kueue.openshift.io/managed=true (as the dashboard's Create project does) before the run creates its workbench, and then: %s", p.Name, why)
+	}
+	return blockedAt(strings.TrimSpace(why+" "+workbenchKueueHint(r)) + " Nothing was changed."), nil
+}
+
+// withKueueSetUp is in once the recipe's Kueue steps with the opt-in have
+// run: the kueue component and the dashboard's setting on, the project
+// labelled, LocalQueue nightly-kueue in it, and the tool's Queue profile
+// (kueue.ProfileManifest) when there is none of its name yet.
+func withKueueSetUp(in workbench.ProfileInputs) workbench.ProfileInputs {
+	in.KueueComponent, in.SettingOn, in.Labelled = true, true, true
+	if !slices.Contains(in.Queues, kueue.LocalQueueName) {
+		in.Queues = append(slices.Clone(in.Queues), kueue.LocalQueueName)
+	}
+	if !slices.ContainsFunc(in.Global, func(p workbench.HardwareProfile) bool { return p.Metadata.Name == kueue.ProfileName }) {
+		var tool workbench.HardwareProfile
+		raw, _ := json.Marshal(kueue.ProfileManifest("", ""))
+		_ = json.Unmarshal(raw, &tool)
+		in.Global = append(slices.Clone(in.Global), tool)
+	}
+	return in
+}
+
+// workbenchProfileInputs reads what a new workbench's hardware profile is
+// chosen from in project; tests may stub it.
+var workbenchProfileInputs = readWorkbenchProfileInputs
+
+func readWorkbenchProfileInputs(c *kube.Client, project string) (workbench.ProfileInputs, error) {
+	dsc, err := rhoai.ReadFirstDSC(c)
+	if err != nil {
+		return workbench.ProfileInputs{}, fmt.Errorf("read the DataScienceCluster: %w", err)
+	}
+	return workbench.ReadProfileInputs(c, project, dsc)
 }
 
 // workbenchProfileBlock blocks when the Workbench tab's plan for the project
-// finds no hardware profile for a new workbench (workbench.BuildPlan,
-// "no_profile" or "no_profile_project"): its Set up would refuse the same
-// way. With the project's Kueue rule as the reason, it adds what the
-// recipe can change (workbenchKueueHint).
+// cannot be made (workbench.BuildPlan: no hardware profile fits, or a read
+// it needs failed): its Set up would refuse the same way, and the run gets
+// there with the same inputs. With the project's Kueue rule as the reason
+// it adds what the recipe can change (workbenchKueueHint); a read that
+// failed is said as such (fail closed).
 func workbenchProfileBlock(r types.EnvironmentRecipe, st *types.WorkbenchStatus) Check {
-	switch st.PlanProblemCode {
-	case "no_profile":
-		return blockedAt(strings.TrimSpace(st.PlanProblem) + " Nothing was changed.")
-	case "no_profile_project":
-		return blockedAt(strings.TrimSpace(st.PlanProblem+" "+workbenchKueueHint(r)) + " Nothing was changed.")
+	why := strings.TrimSpace(st.PlanProblem)
+	switch {
+	case why == "":
+		return Check{}
+	case st.PlanProblemCode == "no_profile_project":
+		why = strings.TrimSpace(why + " " + workbenchKueueHint(r))
+	case !slices.Contains([]string{"no_profile", "no_image", "prerequisites", "validation"}, st.PlanProblemCode):
+		return Check{Blocked: why + " Nothing was changed.", Fix: checkFailed()} // a read that failed
 	}
-	return Check{}
+	return blockedAt(why + " Nothing was changed.")
 }
 
 // workbenchKueueHint is what recipe r can change when its workbench finds
@@ -1004,10 +1057,6 @@ func workbenchKueueHint(r types.EnvironmentRecipe) string {
 	}
 	return "A recipe with distributed workloads with dashboardOptIn creates the workbench after them, with a Queue hardware profile of the project's LocalQueue."
 }
-
-// dashboardKueueOn reads whether the dashboard's Create project labels a
-// new project for Kueue (kueueManaged); tests may stub it.
-var dashboardKueueOn = kueueManaged
 
 // workbenchIn reads the Workbench tab's status of project and its
 // workbench nightly-workbench (nil when there is none).

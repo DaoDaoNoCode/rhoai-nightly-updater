@@ -308,10 +308,13 @@ func TestKueueWorkbenchNote(t *testing.T) {
 			}
 		})
 	}
-	// kueueLiveOf: a label this tool added does not make the project Kueue's before the run.
+	// kueueLiveOf: the label present now makes the project Kueue's, whoever
+	// added it (an existing project this tool labelled earlier: a workbench
+	// made there gets a Queue profile, so no note).
 	f := false
-	if l := kueueLiveOf(&types.KueueStatus{Label: &types.KueueLabel{Present: true, AddedByTool: true}, OptIn: types.KueueOptIn{DisableKueue: &f}}); l.ProjectManaged || !l.SettingOn || l.OptInOn || !l.ProjectExists {
-		t.Errorf("tool's label: %+v", l)
+	tool := kueueLiveOf(&types.KueueStatus{Label: &types.KueueLabel{Present: true, AddedByTool: true}, OptIn: types.KueueOptIn{DisableKueue: &f}})
+	if !tool.ProjectManaged || !tool.SettingOn || tool.OptInOn || !tool.ProjectExists || kueueWorkbenchNote(noOptIn, tool) != "" {
+		t.Errorf("tool's label: %+v", tool)
 	}
 	if l := kueueLiveOf(&types.KueueStatus{Label: &types.KueueLabel{Present: true}}); !l.ProjectManaged || l.SettingOn || !l.ProjectExists {
 		t.Errorf("someone's label: %+v", l)

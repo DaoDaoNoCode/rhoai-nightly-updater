@@ -289,8 +289,8 @@ func kueuePartProblem(sa, u *kube.Client, runID, uid string, notIt func(string) 
 // kueueLive is what the plan's Kueue notes read on the cluster before the
 // run: this tool's dashboard opt-in in effect (optInLive), the dashboard's
 // Kueue setting on (disableKueue false, whoever set it), the project
-// carrying kueue.openshift.io/managed=true that this tool did not add, and
-// the project there.
+// carrying kueue.openshift.io/managed=true now (whoever added it: a
+// workbench made in it gets a Queue profile), and the project there.
 type kueueLive struct {
 	OptInOn, SettingOn, ProjectManaged, ProjectExists bool
 }
@@ -301,7 +301,7 @@ func kueueLiveOf(st *types.KueueStatus) kueueLive {
 	d := st.OptIn.DisableKueue
 	return kueueLive{
 		OptInOn: optInLive(st), SettingOn: d != nil && !*d,
-		ProjectManaged: st.Label != nil && st.Label.Present && !st.Label.AddedByTool,
+		ProjectManaged: st.Label != nil && st.Label.Present,
 		ProjectExists:  st.Label != nil,
 	}
 }
@@ -318,11 +318,19 @@ func kueueLiveOf(st *types.KueueStatus) kueueLive {
 // without a queue, and the Kueue step's label then brings the mark (a
 // project the run creates is Kueue's from the start, and the plan refuses
 // a workbench there: checkWorkbenchLater). Editing it to a Queue profile
-// clears the mark and restarts it; RHOAI's notebook controller does not
-// copy the queue label to the workbench's pod, so Kueue does not admit it
-// either way, and the note does not claim it does (nor, before it is
-// verified live, that Kueue admits a workbench created with a Queue
-// profile). The model is not marked (llm-d deployments, live), so it is
+// clears the mark and restarts it, but Kueue does not admit a workbench
+// edited so, and the note does not claim it does: the notebook controller
+// copies no template labels on an update (kubeflow notebook-controller
+// util.go L107-134), and Kueue refuses a queue name added to a running
+// StatefulSet (kueue release-0.19 statefulset_webhook.go L90-92,
+// L175-182). A workbench created with a Queue profile is admitted once the
+// ClusterQueue has room (live on 3.7-ea.1, 2026-11-25): the hardware
+// profile webhook sets kueue.x-k8s.io/queue-name on the Notebook
+// (workbenches-operator mutating.go L961-984), the notebook controller
+// copies the Notebook's labels to the StatefulSet's pod template when it
+// creates it (notebook_controller.go L474-483), and RHOAI turns on Kueue's
+// StatefulSet and Pod integrations (rhods-operator kueue_config.go L30-35,
+// L205-210). The model is not marked (llm-d deployments, live), so it is
 // not named.
 func kueueWorkbenchNote(r types.EnvironmentRecipe, live kueueLive) string {
 	f := r.Spec.Features
