@@ -976,7 +976,7 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   rows that differ with their parents. Only real problems count as
   differences to fix, not user choices or values the API server fills in;
   **Fix** adds or removes exactly the reviewed ones. **Reset to the release
-  default**: a soft reset changes in place only what differs, keeping the
+  default…**: a soft reset changes in place only what differs, keeping the
   workbench and AI hub namespaces; a hard reset (typed DSC name) deletes the
   DSC and creates the release default with the same name and namespaces,
   after validating the new spec against the live DSC in a dry run; it
@@ -1958,7 +1958,7 @@ changed.
   you choose, the GA release, any nightly build (older ones too) or a
   custom catalog image; it is also the last resort when Update and
   Re-deploy cannot recover the operator. Its button reads **Choose a
-  build**, the form's choice **Install**, and the confirmation asks you
+  build...**, the form's choice **Install**, and the confirmation asks you
   to type `install`. Messages, the activity log, help and docs use the new
   name; the API and metrics names stay.
 - Rows in cards (Recovery, Environment, Cluster setup) are separated by
@@ -2028,7 +2028,7 @@ changed.
 - In **Install a different build**, each choice's description touched the
   next choice: the choices were not inside a form, and PatternFly sets
   the space between stacked choices only on forms. The choices, the build
-  fields and the **Install** button are now one form.
+  fields and the **Install...** button are now one form.
 
 - Links to the RHOAI dashboard (the app launcher's **RHOAI dashboard**,
   Dashboard Dev's **Open the dashboard**, a pipeline server's **Open
