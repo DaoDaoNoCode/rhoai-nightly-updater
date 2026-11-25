@@ -407,7 +407,11 @@ export function cleanupRequest(ready: CleanupRequest | undefined, chosen: Readon
   if (ready?.maasPlatform && chosen.has("maas-platform")) Object.assign(req, { maasPlatform: true, maasPlatformUid: ready.maasPlatformUid ?? "" });
   if (ready?.kueue && chosen.has("kueue")) Object.assign(req, { kueue: true, kueueUid: ready.kueueUid ?? "" });
   if (req.modelRegistry || req.maasPlatform || req.kueue) req.recipeRunId = ready?.recipeRunId ?? "";
-  if (ready?.components?.length && chosen.has("components")) req.components = ready.components;
+  if (ready?.components?.length && chosen.has("components")) {
+    req.components = ready.components;
+    // The enablement reviewed of each: the backend turns back only that one.
+    if (ready.componentIds) req.componentIds = ready.componentIds;
+  }
   return req;
 }
 
@@ -439,8 +443,8 @@ export function dashboardDevLeft(run: RecipeRun): boolean {
  * The DataScienceCluster components a recipe's Clean up would turn back, and
  * those that stay on because something that uses them stays (the backend
  * keeps a component while anything on the cluster uses it): MLflow for
- * mlflowoperator, a pipeline server that is not deleted for aipipelines, the
- * model in a project that is not deleted for kserve, and a model registry
+ * mlflowoperator, a pipeline server that is not deleted for aipipelines, a
+ * model the status shows in a project that is not deleted for kserve, and a model registry
  * that is not deleted for modelregistry and aiHub.
  */
 export function componentsSplit(status: ResourcesStatus | null, run: RecipeRun, req: CleanupRequest, offered: CleanupRequest | undefined): { back: string[]; stay: string[]; backKeys: string[] } {
@@ -455,8 +459,13 @@ export function componentsSplit(status: ResourcesStatus | null, run: RecipeRun, 
         const kept = (status?.pipelineServers ?? []).filter((ps) => up(ps) && ps.namespace && !deleted.has(ps.namespace)).map((ps) => ps.namespace);
         return kept.length ? `the pipeline server in ${kept.join(", ")} stays` : null;
       }
-      case "kserve":
-        return project && run.recipe.spec.features.models.enabled && !deleted.has(project) ? `the model in ${project} stays` : null;
+      case "kserve": {
+        // The models the status shows now, in projects this Clean up keeps (a model that failed or was deleted keeps
+        // nothing on); without the status, the recipe's own model counts while its project stays.
+        if (!status) return project && run.recipe.spec.features.models.enabled && !deleted.has(project) ? `the model in ${project} stays` : null;
+        const kept = [...new Set([...(status.models?.items ?? []), ...(status.models?.outside ?? [])].filter((m) => up(m) && m.namespace && !deleted.has(m.namespace)).map((m) => m.namespace))];
+        return kept.length ? `the model in ${kept.join(", ")} stays` : null;
+      }
       // Turned back only with the setup this Clean up removes (as the backend
       // keeps a component while what uses it stays).
       case "modelregistry":
@@ -490,6 +499,10 @@ export function withComponentsBack(req: CleanupRequest, backKeys: string[]): Cle
   if (!req.components) return req;
   const out: CleanupRequest = { ...req };
   delete out.components;
-  if (backKeys.length > 0) out.components = backKeys;
+  delete out.componentIds;
+  if (backKeys.length === 0) return out;
+  out.components = backKeys;
+  const ids = Object.fromEntries(backKeys.flatMap((k) => (req.componentIds?.[k] ? [[k, req.componentIds[k]]] : [])));
+  if (Object.keys(ids).length > 0) out.componentIds = ids;
   return out;
 }

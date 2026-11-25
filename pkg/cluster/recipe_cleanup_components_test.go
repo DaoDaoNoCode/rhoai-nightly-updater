@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kueue"
@@ -44,12 +43,12 @@ func TestRecipeOwnership_EveryComponentInItsOnState(t *testing.T) {
 				map[string][]string{"fieldManager": {"rhoai-nightly-updater-dsc-" + comp.Key}}); err != nil {
 				t.Fatal(err)
 			}
-			if err := writeTestPrereqRecord(c, `{"components":{"`+comp.Key+`":{"previous":"Removed","feature":"`+comp.Feature+`"}}}`); err != nil {
+			if err := writeTestPrereqRecord(c, `{"components":{"`+comp.Key+`":{"previous":"Removed","feature":"`+comp.Feature+`","id":"en-1"}}}`); err != nil {
 				t.Fatal(err)
 			}
-			run := &types.RecipeRun{Steps: []types.RecipeRunStep{{ID: step}}, Components: []string{comp.Key}}
+			run := &types.RecipeRun{Steps: []types.RecipeRunStep{{ID: step}}, Components: []string{comp.Key}, ComponentIDs: map[string]string{comp.Key: "en-1"}}
 			created, req := recipe.Ownership(c, nil, run)
-			if req == nil || !reflect.DeepEqual(req.Components, []string{comp.Key}) || !reflect.DeepEqual(created, map[string]bool{step: true}) {
+			if req == nil || !reflect.DeepEqual(req.Components, []string{comp.Key}) || !reflect.DeepEqual(req.ComponentIDs, map[string]string{comp.Key: "en-1"}) || !reflect.DeepEqual(created, map[string]bool{step: true}) {
 				t.Fatalf("%s turned on as %s: created %v, cleanup %+v", comp.Key, comp.On, created, req)
 			}
 		})
@@ -64,7 +63,7 @@ func recipeKueueRun(t *testing.T, f *resourceFake, u *Client) *types.RecipeRun {
 	t.Helper()
 	f.putJSON(tDSC, `{"metadata":{"name":"default-dsc","resourceVersion":"1"},"spec":{"components":{"kueue":{"managementState":"Removed"},"ray":{"managementState":"Managed"}}},
 		"status":{"components":{"ray":{"managementState":"Managed"}},"conditions":[{"type":"KueueReady","status":"True"}]}}`)
-	kueueTurnedOnByTool(t, u)
+	kueueTurnedOnByToolAs(t, u, "en-1")
 	res, err := kueue.RunAnnotated(u, types.KueueRequest{Action: "setup", Project: "proj"}, map[string]string{recipe.RecipeRunAnnotation: "run-1"}, nil)
 	if err != nil || !res.Success {
 		t.Fatalf("kueue setup: %+v %v", res, err)
@@ -74,7 +73,7 @@ func recipeKueueRun(t *testing.T, f *resourceFake, u *Client) *types.RecipeRun {
 		t.Fatal("no ClusterQueue")
 	}
 	return &types.RecipeRun{ID: "run-1", Steps: []types.RecipeRunStep{{ID: recipe.StepKueuePrereq}, {ID: recipe.StepKueue}},
-		Components: []string{"kueue"}, CreatedParts: []types.RecipeCreatedPart{{Part: types.RecipePartKueue, UID: uid}}}
+		Components: []string{"kueue"}, ComponentIDs: map[string]string{"kueue": "en-1"}, CreatedParts: []types.RecipeCreatedPart{{Part: types.RecipePartKueue, UID: uid}}}
 }
 
 // recipeKueueCleanUp runs the recipe's Clean up of run with the request
@@ -86,7 +85,7 @@ func recipeKueueCleanUp(t *testing.T, u *Client, run *types.RecipeRun, at func(U
 	t.Helper()
 	created, req := recipe.Ownership(u, u, run)
 	if req == nil || !req.Kueue || req.KueueUID != run.CreatedParts[0].UID || req.RecipeRunID != "run-1" || !reflect.DeepEqual(req.Components, []string{"kueue"}) ||
-		!created[recipe.StepKueuePrereq] || !created[recipe.StepKueue] {
+		!reflect.DeepEqual(req.ComponentIDs, map[string]string{"kueue": "en-1"}) || !created[recipe.StepKueuePrereq] || !created[recipe.StepKueue] {
 		t.Fatalf("offer: created %v, cleanup %+v", created, req)
 	}
 	steps := map[string]string{}
@@ -144,6 +143,32 @@ func TestRecipeCleanUp_TurnsKueueBackFromItsOffer(t *testing.T) {
 			t.Fatalf("kueue %s, ClusterQueue left %v", componentState(f, "kueue"), f.has(kqCQ))
 		}
 	})
+	// Turned back and turned on again (another enablement) between the
+	// review and the click: refused for this run, left as it is, and kept
+	// in the record for its own Clean up.
+	t.Run("turned on again since the review", func(t *testing.T) {
+		f, u := putKueueCluster(t)
+		run := recipeKueueRun(t, f, u)
+		res, steps, _ := recipeKueueCleanUp(t, u, run, func(e UpdateStepEvent) {
+			if e.Step == "kueue" && e.Status == "running" {
+				for _, state := range []string{"Removed", "Unmanaged"} {
+					if _, _, err := u.Do(http.MethodPatch, tDSC, "application/merge-patch+json", []byte(`{"spec":{"components":{"kueue":{"managementState":"`+state+`"}}}}`),
+						map[string][]string{"fieldManager": {"rhoai-nightly-updater-dsc-kueue"}}); err != nil {
+						t.Error(err)
+					}
+				}
+				if err := writeTestPrereqRecord(u, `{"components":{"kueue":{"previous":"Removed","feature":"kueue","id":"en-2"}}}`); err != nil {
+					t.Error(err)
+				}
+			}
+		})
+		if !res.Success || steps["components"] != "success" || !strings.Contains(res.Message, "Not turned back: kueue (turned on again since you reviewed this Clean up") {
+			t.Fatalf("clean-up %+v, steps %v", res, steps)
+		}
+		if componentState(f, "kueue") != "Unmanaged" || prereqRecordID(t, u, "kueue") != "en-2" {
+			t.Fatalf("kueue %s, record %q", componentState(f, "kueue"), prereqRecordID(t, u, "kueue"))
+		}
+	})
 	t.Run("the queue list is refused", func(t *testing.T) {
 		f, u := putKueueCluster(t)
 		run := recipeKueueRun(t, f, u)
@@ -165,62 +190,60 @@ func TestRecipeCleanUp_TurnsKueueBackFromItsOffer(t *testing.T) {
 	})
 }
 
-// A run claims a component only when the prerequisites record says it was
-// turned on while the run ran: kueue turned back by the run's Clean up and
-// turned on again later from the Environment tab is not the old run's. A
-// record written before the time was kept still counts (as before); a run
-// with no end does not.
-func TestRecipeOwnership_ComponentTurnedOnInTheRun(t *testing.T) {
-	pc := newPrereqCluster(t)
-	pc.f.putJSON(tDSC, `{"metadata":{"name":"default-dsc","resourceVersion":"1"},"spec":{"components":{"kueue":{"managementState":"Removed"}}}}`)
-	u := userClientOf(pc.c, fakeUserToken)
-	kueueTurnedOnByTool(t, u)
-	record := func(at string) {
-		t.Helper()
-		if err := writeTestPrereqRecord(u, `{"components":{"kueue":{"previous":"Removed","feature":"kueue"`+at+`}}}`); err != nil {
-			t.Fatal(err)
-		}
-	}
-	run := func(started, stepEnd, end string) *types.RecipeRun {
-		return &types.RecipeRun{StartedAt: started, FinishedAt: end, Components: []string{"kueue"},
-			Steps: []types.RecipeRunStep{{ID: recipe.StepKueuePrereq, FinishedAt: stepEnd}, {ID: recipe.StepKueue, FinishedAt: end}}}
-	}
-	offered := func(r *types.RecipeRun) bool {
-		created, req := recipe.Ownership(pc.c, nil, r)
-		return req != nil && reflect.DeepEqual(req.Components, []string{"kueue"}) && created[recipe.StepKueuePrereq]
-	}
-	old := run("2026-11-20T10:00:00Z", "2026-11-20T10:05:00Z", "2026-11-20T10:30:00Z")
-	for _, tc := range []struct {
-		name, at string
-		run      *types.RecipeRun
-		want     bool
-	}{
-		{"turned on by its prerequisites step", `,"at":"2026-11-20T10:03:00Z"`, old, true},
-		{"turned on in its last second", `,"at":"2026-11-20T10:05:00Z"`, old, true},
-		{"turned on again after the run", `,"at":"2026-11-24T09:00:00Z"`, old, false},
-		{"turned on before the run", `,"at":"2026-11-20T09:59:59Z"`, old, false},
-		{"its step has no end: the run's", `,"at":"2026-11-20T10:20:00Z"`, run("2026-11-20T10:00:00Z", "", "2026-11-20T10:30:00Z"), true},
-		{"a run with no end", `,"at":"2026-11-20T10:03:00Z"`, run("2026-11-20T10:00:00Z", "", ""), false},
-		{"a time that does not parse", `,"at":"yesterday"`, old, false},
-		{"a record from before the time was kept", ``, old, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			record(tc.at)
-			if got := offered(tc.run); got != tc.want {
-				t.Fatalf("offered %v, want %v", got, tc.want)
-			}
-		})
-	}
-	// The setup records when it turned the component on.
-	c := newPrereqCluster(t).c
-	if res, _ := runPrereqs(t, c, "pipelines"); !res.Success {
-		t.Fatalf("setup %+v", res)
-	}
+// prereqRecordID is the enablement ID the prerequisites record has for key.
+func prereqRecordID(t *testing.T, c *Client, key string) string {
+	t.Helper()
 	rec, err := features.ReadPrereqRecord(c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := time.Parse(time.RFC3339, rec.Components["aipipelines"].At); err != nil {
-		t.Fatalf("record %+v: %v", rec.Components["aipipelines"], err)
+	return rec.Components[key].ID
+}
+
+// A run claims only the enablement its step recorded: a component turned
+// back and turned on again (even in the same second) has another ID. A run
+// and a record from before IDs match as before; a run without an ID never
+// claims an enablement that has one.
+func TestRecipeOwnership_ClaimsOnlyItsEnablement(t *testing.T) {
+	pc := newPrereqCluster(t)
+	if res, _ := runPrereqs(t, pc.c, "pipelines"); !res.Success {
+		t.Fatalf("setup %+v", res)
+	}
+	first := prereqRecordID(t, pc.c, "aipipelines")
+	// Turned back, and turned on again right away (the same second, as a
+	// rule): another enablement.
+	if res, err := features.RestoreComponents(pc.c, []string{"aipipelines"}); err != nil || !res.Success || componentState(pc.f, "aipipelines") != "Removed" {
+		t.Fatalf("restore %+v %v", res, err)
+	}
+	if res, _ := runPrereqs(t, pc.c, "pipelines"); !res.Success {
+		t.Fatalf("setup again %+v", res)
+	}
+	second := prereqRecordID(t, pc.c, "aipipelines")
+	if first == "" || second == "" || first == second {
+		t.Fatalf("enablement IDs %q and %q", first, second)
+	}
+	offered := func(ids map[string]string) bool {
+		run := &types.RecipeRun{Steps: []types.RecipeRunStep{{ID: recipe.StepPipelinesPrereq}}, Components: []string{"aipipelines"}, ComponentIDs: ids}
+		_, req := recipe.Ownership(pc.c, nil, run)
+		return req != nil && reflect.DeepEqual(req.Components, []string{"aipipelines"})
+	}
+	if offered(map[string]string{"aipipelines": first}) {
+		t.Error("the run that turned it on first claims the second enablement")
+	}
+	if !offered(map[string]string{"aipipelines": second}) {
+		t.Error("the run that turned it on now does not claim it")
+	}
+	if offered(nil) {
+		t.Error("a run without an ID claims an enablement that has one")
+	}
+	// A record from before IDs, and a run from before them: as before.
+	if err := writeTestPrereqRecord(pc.c, `{"components":{"aipipelines":{"previous":"Removed","feature":"pipelines"}}}`); err != nil {
+		t.Fatal(err)
+	}
+	if !offered(nil) {
+		t.Error("a run and a record from before IDs no longer match")
+	}
+	if offered(map[string]string{"aipipelines": second}) {
+		t.Error("a run with an ID claims a record entry without one")
 	}
 }

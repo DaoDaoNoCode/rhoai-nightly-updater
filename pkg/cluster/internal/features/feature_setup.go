@@ -1,6 +1,8 @@
 package features
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -175,10 +177,19 @@ type prereqRecord struct {
 type prereqComponent struct {
 	Previous string `json:"previous,omitempty"`
 	Feature  string `json:"feature"`
-	// At is when setup turned it on (RFC 3339; "" in records written
-	// before 5.0.0): a recipe run claims only a component turned on while
-	// it ran (recipe liveComponents).
-	At string `json:"at,omitempty"`
+	// ID names this enablement (random, one per time setup turns the
+	// component on; "" in records written before 5.0.0). A recipe run
+	// records the ID its step turned on and claims only that one, and its
+	// Clean up names it, so a component turned back and turned on again
+	// since (even in the same second) is not turned back for that run.
+	ID string `json:"id,omitempty"`
+}
+
+// newEnablementID is a prereqComponent ID.
+func newEnablementID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b) // crypto/rand.Read never returns an error (Go 1.24)
+	return hex.EncodeToString(b)
 }
 
 // ReadPrereqRecord reads what the feature setups recorded (empty when nothing).
@@ -770,7 +781,7 @@ func RunPrerequisites(c *kube.Client, req types.PrerequisitesRequest, onStep fun
 			}
 			for _, cp := range p.components {
 				if cp.turnOn {
-					rec.Components[cp.key] = prereqComponent{Previous: cp.state, Feature: fs.id, At: kube.NowRFC3339()}
+					rec.Components[cp.key] = prereqComponent{Previous: cp.state, Feature: fs.id, ID: newEnablementID()}
 				}
 			}
 			m.Step("dsc", "running", fmt.Sprintf("Setting %s to %s in DataScienceCluster %s (Clean up can turn %s back)...", kube.JoinTitles(on), onStateOf(p.components), p.dscName, kube.Verb(len(on), "it", "them")))
@@ -1094,23 +1105,24 @@ func checkSetUp(rec prereqRecord, dsc map[string]any, key string) (prereqCompone
 
 // StillAsSetUp reports whether key is still as this tool's setup left it
 // on the DataScienceCluster dsc (as read; nil is not), with the feature
-// that turned it on and when (the record's At, "" when the record predates
+// that turned it on and that enablement's ID ("" when the record predates
 // it): the record names it, it is in its own on state, and this tool's
 // field manager still owns it. It is the check Clean up makes
 // first (restoreCheck), and what the Environment tabs and a recipe run
 // offer to turn back. Whether anything still uses the component is checked
 // only by Clean up, when it runs, after the parts before it (which may
 // remove what uses it).
-func StillAsSetUp(rec prereqRecord, dsc map[string]any, key string) (feature, at string, ok bool) {
+func StillAsSetUp(rec prereqRecord, dsc map[string]any, key string) (feature, id string, ok bool) {
 	rc, _, chk := checkSetUp(rec, dsc, key)
-	return rc.Feature, rc.At, chk == stillSetUp
+	return rc.Feature, rc.ID, chk == stillSetUp
 }
 
 // restoreCheck runs every check of turning key back, on dscRead: still as
-// this tool's setup left it (checkSetUp), Argo CD does not manage the
-// DataScienceCluster, and nothing on the cluster uses it (a list that
-// fails refuses).
-func restoreCheck(c *kube.Client, rec prereqRecord, dscRead rhoai.DSCRead, key string) restoreVerdict {
+// this tool's setup left it (checkSetUp), still the enablement the user
+// reviewed when the request names one (reviewed, the record's ID; a
+// recipe's Clean up), Argo CD does not manage the DataScienceCluster, and
+// nothing on the cluster uses it (a list that fails refuses).
+func restoreCheck(c *kube.Client, rec prereqRecord, dscRead rhoai.DSCRead, key, reviewed string) restoreVerdict {
 	rc, state, chk := checkSetUp(rec, dscRead.Object, key)
 	switch chk {
 	case notRecorded:
@@ -1119,6 +1131,12 @@ func restoreCheck(c *kube.Client, rec prereqRecord, dscRead rhoai.DSCRead, key s
 		return restoreVerdict{drop: true, log: key + " is " + kube.FirstNonEmpty(state, "not set") + " already"}
 	case changedSince:
 		return restoreVerdict{drop: true, kept: key + " (changed by someone since this tool's setup)"}
+	}
+	if reviewed != "" && rc.ID != reviewed {
+		// Turned back and turned on again since the review (by the
+		// Environment page or another run): that enablement is not the
+		// one reviewed, and stays recorded for its own Clean up.
+		return restoreVerdict{kept: key + " (turned on again since you reviewed this Clean up; it is not turned back for this run)"}
 	}
 	prev := kube.FirstNonEmpty(rc.Previous, "Removed")
 	if argoCD := argo.TrackingOf(c, dscRead.Object, rhoai.DSCGroup, "DataScienceCluster"); argoCD.ManagedBy() != "" {
@@ -1170,6 +1188,15 @@ func restoreCheck(c *kube.Client, rec prereqRecord, dscRead rhoai.DSCRead, key s
 // tool's manager (the API server moves a field only when its value
 // changes), so then the in-use check is what keeps a component in use on.
 func RestoreComponents(c *kube.Client, keys []string) (*types.OperationResponse, error) {
+	return RestoreReviewedComponents(c, keys, nil)
+}
+
+// RestoreReviewedComponents is RestoreComponents for a Clean up that names
+// the enablement it reviewed of each component (reviewed: key to the
+// prerequisites record's ID; a recipe's Clean up): a component turned on
+// again since is not turned back (restoreCheck). A key without an ID is
+// checked as RestoreComponents checks it.
+func RestoreReviewedComponents(c *kube.Client, keys []string, reviewed map[string]string) (*types.OperationResponse, error) {
 	rec, err := ReadPrereqRecord(c)
 	if err != nil {
 		return &types.OperationResponse{Success: false, Message: err.Error() + " Nothing was changed.", ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
@@ -1194,7 +1221,7 @@ func RestoreComponents(c *kube.Client, keys []string) (*types.OperationResponse,
 		}
 	}
 	for _, key := range keys {
-		v := restoreCheck(c, rec, dsc, key)
+		v := restoreCheck(c, rec, dsc, key, reviewed[key])
 		if v.refusal != "" {
 			return &types.OperationResponse{Success: false, Message: v.refusal + " Nothing was changed.", ErrorCode: v.code}, nil
 		}
@@ -1224,7 +1251,7 @@ func RestoreComponents(c *kube.Client, keys []string) (*types.OperationResponse,
 		for attempt := 1; ; attempt++ {
 			v := restoreVerdict{restore: true, prev: kube.FirstNonEmpty(rec.Components[key].Previous, "Removed")}
 			if checkedOn[key] != reads {
-				if v = restoreCheck(c, rec, dsc, key); v.refusal != "" {
+				if v = restoreCheck(c, rec, dsc, key, reviewed[key]); v.refusal != "" {
 					return stop(v.refusal, v.code)
 				}
 				checkedOn[key] = reads

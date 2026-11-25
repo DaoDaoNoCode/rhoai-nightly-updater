@@ -2211,6 +2211,8 @@ export interface RecipeRun {
   steps: RecipeRunStep[];
   /** The DataScienceCluster components the run turned on, which its Clean up turns back. */
   components?: string[];
+  /** The prerequisites record's enablement ID of each of components: the run claims only the one its step turned on. */
+  componentIds?: Record<string, string>;
   /** How the run's model is reached, once the Models prerequisites step resolved it. */
   exposure?: string;
   gatewayRef?: string;

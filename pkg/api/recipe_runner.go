@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"slices"
@@ -149,6 +150,7 @@ func copyRecipeRun(run *types.RecipeRun) *types.RecipeRun {
 	cp := *run
 	cp.Steps = append([]types.RecipeRunStep(nil), run.Steps...)
 	cp.Components = slices.Clone(run.Components)
+	cp.ComponentIDs = maps.Clone(run.ComponentIDs)
 	cp.CreatedParts = slices.Clone(run.CreatedParts)
 	if run.Pinned != nil {
 		p := *run.Pinned
@@ -319,7 +321,11 @@ func beginRecipeRun(c *cluster.Client, w http.ResponseWriter, st *recipeStart, r
 // is resolved again.
 func keepComponents(run *types.RecipeRun, state *cluster.RecipeState, prior *types.RecipeRun) {
 	state.AddComponents(prior.Components...)
+	for key, id := range prior.ComponentIDs {
+		state.AddComponentID(key, id)
+	}
 	run.Components = slices.Clone(state.Components)
+	run.ComponentIDs = maps.Clone(state.ComponentIDs)
 	for _, p := range prior.CreatedParts {
 		state.AddCreated(p)
 	}
@@ -526,6 +532,7 @@ func (x *recipeExec) stepEnded(i int, status, msg, code string) {
 			run.Pinned = &p
 		}
 		run.Components = slices.Clone(x.state.Components)
+		run.ComponentIDs = maps.Clone(x.state.ComponentIDs)
 		run.CreatedParts = slices.Clone(x.state.Created)
 		run.Exposure, run.GatewayRef = x.state.Exposure, x.state.GatewayRef
 	})

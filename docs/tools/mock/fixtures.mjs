@@ -1926,11 +1926,14 @@ export function recipeRun({ done = 0, current = "running", message = "", state =
     id: "run-7c1e", operationId: "op-recipe", bootId: "b-4e2a", pod, user: USER, startedAt: ago(start),
     ...(state !== "running" ? { finishedAt: ago(0.5) } : {}), state, ...(stopReason ? { stopReason } : {}), ...(errorCode ? { errorCode } : {}),
     recipe: rcp, pinned: recipePinned(), project: { name: project, uid: "5d1c0a3e-9b7f-4c2e-8a61-2f0d9e4b7c13", owned: true }, steps,
-    ...(components.length ? { components } : {}),
+    ...(components.length ? { components, componentIds: Object.fromEntries(components.map((k) => [k, enablementId(k)])) } : {}),
     ...(rcp.spec.features.models?.enabled && steps.some((s) => s.id === "models-prereq" && s.status === "success") ? { exposure: rcp.spec.features.models.exposure || "default-gateway" } : {}),
     ...(createdParts.length ? { createdParts } : {}),
   };
 }
+
+/** The prerequisites record's enablement ID of a component (pkg/cluster/internal/features prereqComponent ID). */
+export const enablementId = (key) => `e1a7${[...key].reduce((n, ch) => (n * 31 + ch.charCodeAt(0)) >>> 0, 7).toString(16).padStart(8, "0")}0c9d`;
 
 /** Step IDs the recipe may mark created (project + DSC prereq phases). */
 const RECIPE_OWNS = new Set(["project", "pipelines-prereq", "mlflow-prereq", "models-prereq", "model-registry-prereq", "kueue-prereq", "maas", "model-registry", "kueue"]);
@@ -1949,7 +1952,7 @@ export function recipeCleanup(run) {
     ...(run.createdParts?.some((p) => p.part === "maas-platform") ? { maasPlatform: true, maasPlatformUid: run.createdParts.find((p) => p.part === "maas-platform").uid } : {}),
     ...(run.createdParts?.some((p) => p.part === "kueue") ? { kueue: true, kueueUid: run.createdParts.find((p) => p.part === "kueue").uid } : {}),
     ...(run.createdParts?.length ? { recipeRunId: run.id } : {}),
-    ...(run.components?.length ? { components: run.components } : {}),
+    ...(run.components?.length ? { components: run.components, ...(run.componentIds ? { componentIds: run.componentIds } : {}) } : {}),
   };
   return Object.keys(req).length ? req : null;
 }

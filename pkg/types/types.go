@@ -1948,6 +1948,12 @@ type CleanupRequest struct {
 	// tool turned on that go back to what they were, last, each only while
 	// this tool still owns the field and nothing on the cluster uses it.
 	Components []string `json:"components,omitempty"`
+	// ComponentIDs: a recipe's Clean up names the enablement it reviewed
+	// of each of Components (the prerequisites record's ID). One turned on
+	// again since has another ID and is not turned back (checked under
+	// the cluster lock right before); a component without one is checked
+	// as the Environment page's Clean up checks it.
+	ComponentIDs map[string]string `json:"componentIds,omitempty"`
 	// RecipeProjects are projects recipes created, each deleted after the
 	// parts that live in it and before the components: only while it
 	// carries the recipe's label and the UID the recipe recorded.

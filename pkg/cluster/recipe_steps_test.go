@@ -147,6 +147,10 @@ func TestRecipePrereqSteps_RecordTheComponentsTheyTurnedOn(t *testing.T) {
 	if strings.Join(st.Components, ",") != "aipipelines" {
 		t.Errorf("components %v", st.Components)
 	}
+	// With the enablement it turned on, as the record has it.
+	if id := prereqRecordID(t, pc.c, "aipipelines"); id == "" || !reflect.DeepEqual(st.ComponentIDs, map[string]string{"aipipelines": id}) {
+		t.Errorf("component IDs %v, record %q", st.ComponentIDs, id)
+	}
 }
 
 // Ownership comes from live cluster state, not the run record alone:
@@ -157,22 +161,20 @@ func TestRecipePrereqSteps_RecordTheComponentsTheyTurnedOn(t *testing.T) {
 func TestRecipeOwnership_FromTheCluster(t *testing.T) {
 	t.Run("components", func(t *testing.T) {
 		pc := newPrereqCluster(t)
-		// The run's window around its setup (the record's time is the wall clock's, to the second).
-		started := time.Now().UTC().Add(-time.Second).Format(time.RFC3339)
 		if res, _ := runPrereqs(t, pc.c, "pipelines"); !res.Success {
 			t.Fatalf("setup %+v", res)
 		}
-		finished := time.Now().UTC().Add(time.Second).Format(time.RFC3339)
+		id := prereqRecordID(t, pc.c, "aipipelines")
 		run := &types.RecipeRun{
-			StartedAt: started,
+			ComponentIDs: map[string]string{"aipipelines": id},
 			Steps: []types.RecipeRunStep{
-				{ID: recipe.StepPipelinesPrereq, FinishedAt: finished}, {ID: recipe.StepS3, Created: true}, {ID: recipe.StepPipelineServer, Created: true}, {ID: recipe.StepMLflow, Created: true},
+				{ID: recipe.StepPipelinesPrereq}, {ID: recipe.StepS3, Created: true}, {ID: recipe.StepPipelineServer, Created: true}, {ID: recipe.StepMLflow, Created: true},
 			},
 			// mlflowoperator is Removed and absent from Set up's record.
 			Components: []string{"aipipelines", "mlflowoperator"},
 		}
 		created, req := recipe.Ownership(pc.c, nil, run)
-		want := types.CleanupRequest{Components: []string{"aipipelines"}}
+		want := types.CleanupRequest{Components: []string{"aipipelines"}, ComponentIDs: map[string]string{"aipipelines": id}}
 		if req == nil || !reflect.DeepEqual(*req, want) || !reflect.DeepEqual(created, map[string]bool{recipe.StepPipelinesPrereq: true}) {
 			t.Fatalf("created %v, cleanup %+v", created, req)
 		}

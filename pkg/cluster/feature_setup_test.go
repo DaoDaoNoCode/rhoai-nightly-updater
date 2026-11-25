@@ -845,9 +845,11 @@ func TestRestoreComponents(t *testing.T) {
 // Clean up runs the restore last, after what used the components.
 func TestCleanUp_RestoresComponentsLast(t *testing.T) {
 	var order []string
-	defer func(prev func(*Client, []string) (*types.OperationResponse, error)) { cleanupComponents = prev }(cleanupComponents)
+	defer func(prev func(*Client, []string, map[string]string) (*types.OperationResponse, error)) {
+		cleanupComponents = prev
+	}(cleanupComponents)
 	defer func(prev func(*Client) (*types.OperationResponse, error)) { cleanupMLflow = prev }(cleanupMLflow)
-	cleanupComponents = func(_ *Client, keys []string) (*types.OperationResponse, error) {
+	cleanupComponents = func(_ *Client, keys []string, _ map[string]string) (*types.OperationResponse, error) {
 		order = append(order, "components:"+strings.Join(keys, ","))
 		return &types.OperationResponse{Success: true}, nil
 	}

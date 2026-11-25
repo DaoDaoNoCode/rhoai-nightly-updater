@@ -175,7 +175,9 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     const api = stubApi({
       ...editorReads,
       "GET /api/recipes/run": ended,
-      "GET /api/resources/status": { minio: { deployed: true, ready: true }, mlflow: { deployed: true, ready: true } } as ResourcesStatus,
+      // The run's model, deployed in its project.
+      "GET /api/resources/status": { minio: { deployed: true, ready: true }, mlflow: { deployed: true, ready: true },
+        models: { catalog: null, items: [{ name: "qwen3-1-7b", namespace: "recipe-full", deployed: true, ready: true }] } } as unknown as ResourcesStatus,
       "POST /api/resources/cleanup/stream": () => { const s = sseResponse(); streams.push(s); return s.response; },
       "POST /api/recipes/plan": () => jsonResponse(featuresPlan()),
     });
@@ -222,7 +224,8 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     expect(streams).toHaveLength(1);
     expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([
       // The reviewed identities: the backend checks them again before it deletes the platform.
-      { recipeProjects: ["recipe-full"], recipeProjectUIDs: { "recipe-full": "1a2b3c4d-uid" }, maasPlatform: true, maasPlatformUid: "creds-uid", kueue: true, kueueUid: "clusterqueue-uid", recipeRunId: "run2", components: ["kserve", "kueue"] },
+      { recipeProjects: ["recipe-full"], recipeProjectUIDs: { "recipe-full": "1a2b3c4d-uid" }, maasPlatform: true, maasPlatformUid: "creds-uid", kueue: true, kueueUid: "clusterqueue-uid", recipeRunId: "run2", components: ["kserve", "kueue"],
+        componentIds: ended.cleanup!.componentIds },
     ]);
     await act(async () => { streams[0].close(); });
     await settle();
@@ -258,7 +261,8 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     await settle();
     expect(streams).toHaveLength(1);
     expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([
-      { recipeProjects: ["recipe-full"], recipeProjectUIDs: { "recipe-full": "1a2b3c4d-uid" }, modelRegistry: true, modelRegistryUid: "registry-uid", recipeRunId: "run2", components: ["aiHub", "kserve", "ogx"] },
+      { recipeProjects: ["recipe-full"], recipeProjectUIDs: { "recipe-full": "1a2b3c4d-uid" }, modelRegistry: true, modelRegistryUid: "registry-uid", recipeRunId: "run2", components: ["aiHub", "kserve", "ogx"],
+        componentIds: { kserve: ended.cleanup!.componentIds!.kserve } },
     ]);
     await act(async () => { streams[0].close(); });
     await settle();
@@ -284,7 +288,7 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     fireEvent.click(within(dialog).getByRole("button", { name: "Clean up" }));
     await settle();
     expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([
-      { recipeProjects: ["recipe-full"], recipeProjectUIDs: { "recipe-full": "1a2b3c4d-uid" }, components: ["kserve"] },
+      { recipeProjects: ["recipe-full"], recipeProjectUIDs: { "recipe-full": "1a2b3c4d-uid" }, components: ["kserve"], componentIds: { kserve: ended.cleanup!.componentIds!.kserve } },
     ]);
     await act(async () => { streams[0].close(); });
     await settle();

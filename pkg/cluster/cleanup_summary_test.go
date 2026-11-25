@@ -40,7 +40,7 @@ func TestCleanUp_SaysWhatEachPartDid(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ran := fakeTeardowns(t, nil)
 			fakeRecipeProjectTeardown(t, ran, nil)
-			cleanupComponents = func(*Client, []string) (*types.OperationResponse, error) {
+			cleanupComponents = func(*Client, []string, map[string]string) (*types.OperationResponse, error) {
 				return &types.OperationResponse{Success: true, Message: tc.components}, nil
 			}
 			cleanupProject = func(*Client, string, string, []string) (*types.OperationResponse, error) {
@@ -59,7 +59,7 @@ func TestCleanUp_SaysWhatEachPartDid(t *testing.T) {
 func TestCleanUp_StoppedNamesWhatThePartsSaid(t *testing.T) {
 	ran := fakeTeardowns(t, map[string]*types.OperationResponse{"mlflow": {Success: false, Message: "MLflow is still being deleted.", ErrorCode: "in_progress"}})
 	fakeRecipeProjectTeardown(t, ran, nil)
-	cleanupComponents = func(*Client, []string) (*types.OperationResponse, error) {
+	cleanupComponents = func(*Client, []string, map[string]string) (*types.OperationResponse, error) {
 		t.Fatal("ran after a failed part")
 		return nil, nil
 	}

@@ -49,6 +49,10 @@ type State struct {
 	// Components names DataScienceCluster pieces enabled by prerequisite
 	// steps; the runner retains the slice when Resume runs.
 	Components []string
+	// ComponentIDs are the prerequisites record's enablement IDs of
+	// Components, as the step that turned each on found them; the runner
+	// keeps them when Resume runs.
+	ComponentIDs map[string]string
 	// Exposure and GatewayRef are how the run's model is reached, once the
 	// Models prerequisites step resolved it; the runner keeps them when
 	// Resume runs.
@@ -65,6 +69,19 @@ func (s *State) AddCreated(p types.RecipeCreatedPart) {
 	s.Created = slices.DeleteFunc(s.Created, func(e types.RecipeCreatedPart) bool { return e.Part == p.Part })
 	s.Created = append(s.Created, p)
 	slices.SortFunc(s.Created, func(a, b types.RecipeCreatedPart) int { return strings.Compare(a.Part, b.Part) })
+}
+
+// AddComponentID records the enablement ID of key a step turned on (""
+// none: a record written before IDs).
+func (s *State) AddComponentID(key, id string) {
+	s.AddComponents(key)
+	if id == "" {
+		return
+	}
+	if s.ComponentIDs == nil {
+		s.ComponentIDs = map[string]string{}
+	}
+	s.ComponentIDs[key] = id
 }
 
 // AddComponents logs newly enabled components (deduplicated, sorted).
@@ -88,8 +105,9 @@ func (s *State) AddComponents(keys ...string) {
 //     terminating; clean-up includes that UID (RecipeProjectUIDs);
 //   - DataScienceCluster components the run turned on and that are still
 //     as its setup left them (liveComponents: in their own on state,
-//     Unmanaged for kueue, this tool's field manager owns it, and the
-//     record says they were turned on while the run ran); a
+//     Unmanaged for kueue, this tool's field manager owns it, and still the
+//     enablement the run's step recorded, by its ID); the request names
+//     each one's ID (ComponentIDs), checked again before it goes back; a
 //     prerequisite step reads as created while any of its feature
 //     components do;
 //   - the cluster-wide parts the run created, proven on the objects
@@ -120,9 +138,15 @@ func Ownership(c, u *kube.Client, run *types.RecipeRun) (map[string]bool, *types
 			req.RecipeProjectUIDs = map[string]string{p.Name: p.UID}
 		}
 	}
-	for key, feature := range liveComponents(c, run) {
+	for key, live := range liveComponents(c, run) {
 		req.Components = append(req.Components, key)
-		created[prereqStepOf[feature]] = true
+		if live.id != "" {
+			if req.ComponentIDs == nil {
+				req.ComponentIDs = map[string]string{}
+			}
+			req.ComponentIDs[key] = live.id
+		}
+		created[prereqStepOf[live.feature]] = true
 	}
 	for part, uid := range liveCreated(c, u, run) {
 		switch part {
@@ -157,12 +181,12 @@ var prereqStepOf = map[string]string{
 // with the enabling feature: still as this tool's setup left them on the
 // DataScienceCluster (features.StillAsSetUp, the check Clean up itself
 // makes first: named in the tool's prerequisite record, in the component's
-// own on state, its field manager still the tool's), and turned on while
-// the run ran (turnedOnInRun). Whether anything uses a component is not
-// checked here: Clean up checks it when it runs, after the parts before it
-// (the Kueue setup's queues go first). Failed reads yield an empty map
-// (Clean up everything remains available).
-func liveComponents(c *kube.Client, run *types.RecipeRun) map[string]string {
+// own on state, its field manager still the tool's), and the enablement
+// the run's step recorded (runsEnablement). Whether anything uses a
+// component is not checked here: Clean up checks it when it runs, after
+// the parts before it (the Kueue setup's queues go first). Failed reads
+// yield an empty map (Clean up everything remains available).
+func liveComponents(c *kube.Client, run *types.RecipeRun) map[string]liveComponent {
 	keys := run.Components
 	if len(keys) == 0 {
 		return nil
@@ -175,41 +199,22 @@ func liveComponents(c *kube.Client, run *types.RecipeRun) map[string]string {
 	if err != nil || read.State != rhoai.DSCStatePresent {
 		return nil
 	}
-	out := map[string]string{}
+	out := map[string]liveComponent{}
 	for _, k := range keys {
-		if feature, at, ok := features.StillAsSetUp(rec, read.Object, k); ok && turnedOnInRun(run, feature, at) {
-			out[k] = feature
+		if feature, id, ok := features.StillAsSetUp(rec, read.Object, k); ok && id == run.ComponentIDs[k] {
+			out[k] = liveComponent{feature: feature, id: id}
 		}
 	}
 	return out
 }
 
-// turnedOnInRun reports whether a component feature's setup turned on at
-// at (the prerequisites record's time) was turned on by run: between the
-// run's start and the end of its prerequisites step for feature (else the
-// run's end). The record names a component by key only, so a component
-// turned back and turned on again later (from the Environment tab, or by
-// another run) is not this run's. A record written before the time was
-// kept ("") counts as before; a time that cannot be compared, or a run
-// with no end, does not count (Clean up everything still offers it).
-func turnedOnInRun(run *types.RecipeRun, feature, at string) bool {
-	if at == "" {
-		return true
-	}
-	end := run.FinishedAt
-	for _, st := range run.Steps {
-		if st.ID == prereqStepOf[feature] && st.FinishedAt != "" {
-			end = st.FinishedAt
-		}
-	}
-	t, err1 := time.Parse(time.RFC3339, at)
-	from, err2 := time.Parse(time.RFC3339, run.StartedAt)
-	to, err3 := time.Parse(time.RFC3339, end)
-	if err1 != nil || err2 != nil || err3 != nil {
-		return false
-	}
-	return !t.Before(from) && !t.After(to)
-}
+// liveComponent is a component a run still owns: the feature that turned
+// it on and its enablement ID. The run owns the enablement its step
+// recorded and no other: a component turned back and turned on again
+// since has another ID. A run and a record from before IDs ("" both) are
+// matched as before; a run without an ID never claims an enablement that
+// has one (it was turned on by a setup the run did not record).
+type liveComponent struct{ feature, id string }
 
 // CreatedKueueSetting is Ownership's created entry (not a step) saying the
 // offered distributed workloads setup's teardown also turns the dashboard's
@@ -623,9 +628,9 @@ func runPrereqFor(c *kube.Client, s *State, step, feature, exposure string, emit
 		defer cancel()
 		var after prereqRecordKeys
 		if after, readErr = readPrereqKeys(c.WithContext(ctx)); readErr == nil {
-			for key, f := range after {
-				if _, had := before.Components[key]; !had && f == feature {
-					s.AddComponents(key)
+			for key, e := range after {
+				if _, had := before.Components[key]; !had && e.feature == feature {
+					s.AddComponentID(key, e.id)
 				}
 			}
 		}
@@ -643,8 +648,8 @@ func runPrereqFor(c *kube.Client, s *State, step, feature, exposure string, emit
 }
 
 // prereqRecordKeys are the components of the prerequisites record, with
-// the feature that turned each on.
-type prereqRecordKeys map[string]string
+// the feature that turned each on and its enablement ID.
+type prereqRecordKeys map[string]struct{ feature, id string }
 
 func readPrereqKeys(c *kube.Client) (prereqRecordKeys, error) {
 	rec, err := features.ReadPrereqRecord(c)
@@ -653,7 +658,7 @@ func readPrereqKeys(c *kube.Client) (prereqRecordKeys, error) {
 	}
 	out := prereqRecordKeys{}
 	for key, comp := range rec.Components {
-		out[key] = comp.Feature
+		out[key] = struct{ feature, id string }{comp.Feature, comp.ID}
 	}
 	return out, nil
 }

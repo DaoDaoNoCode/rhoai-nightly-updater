@@ -434,8 +434,13 @@ type RecipeRun struct {
 	CreatedParts []RecipeCreatedPart `json:"createdParts,omitempty"`
 	// Components are the DataScienceCluster components this run (any of
 	// its attempts) turned on (the keys its prerequisite steps added to
-	// the prerequisites record). Its Clean up offers those still Managed.
+	// the prerequisites record). Its Clean up offers those still as the
+	// run set them.
 	Components []string `json:"components,omitempty"`
+	// ComponentIDs are the prerequisites record's enablement IDs of
+	// Components (absent for a run or a record from before IDs): the run
+	// claims only the enablement its step turned on.
+	ComponentIDs map[string]string `json:"componentIds,omitempty"`
 }
 
 // The cluster-wide parts a run can create (RecipeCreatedPart.Part).

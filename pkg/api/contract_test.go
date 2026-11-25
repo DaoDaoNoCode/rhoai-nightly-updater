@@ -376,13 +376,15 @@ func stubFeaturesRecipeRun(t *testing.T) {
 			Exposure:     "default-gateway",
 			CreatedParts: []types.RecipeCreatedPart{{Part: types.RecipePartMaaSPlatform, UID: "creds-uid"}, {Part: types.RecipePartModelRegistry, UID: "registry-uid"}, {Part: types.RecipePartKueue, UID: "clusterqueue-uid"}},
 			Components:   []string{"aipipelines", "kserve", "kueue"},
+			ComponentIDs: map[string]string{"aipipelines": "5f0c2a9e1b7d4c36", "kserve": "a41e9c07d2b85f13", "kueue": "c3d8e15a90f2b674"},
 		}, nil
 	}
 	recipeOwnership = func(_, _ *cluster.Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
 		return map[string]bool{"project": true, "maas": true, "model-registry": true, "models-prereq": true, "kueue-prereq": true, "kueue": true},
 			&types.CleanupRequest{RecipeProjects: []string{run.Project.Name}, RecipeProjectUIDs: map[string]string{run.Project.Name: run.Project.UID},
 				MaaSPlatform: true, ModelRegistry: true, Components: []string{"kserve", "kueue"},
-				Kueue: true, KueueUID: "clusterqueue-uid",
+				ComponentIDs: map[string]string{"kserve": "a41e9c07d2b85f13", "kueue": "c3d8e15a90f2b674"},
+				Kueue:        true, KueueUID: "clusterqueue-uid",
 				RecipeRunID: run.ID, MaaSPlatformUID: "creds-uid", ModelRegistryUID: "registry-uid"}
 	}
 }

@@ -766,10 +766,17 @@ func TestModelsHardwareProfileKueueRule(t *testing.T) {
 // The fake's merge patches must record field ownership.
 func kueueTurnedOnByTool(t *testing.T, u *Client) {
 	t.Helper()
+	kueueTurnedOnByToolAs(t, u, "")
+}
+
+// kueueTurnedOnByToolAs is kueueTurnedOnByTool with the record's
+// enablement ID ("" a record from before IDs).
+func kueueTurnedOnByToolAs(t *testing.T, u *Client, id string) {
+	t.Helper()
 	if _, _, err := u.Do(http.MethodPatch, tDSC, "application/merge-patch+json", []byte(`{"spec":{"components":{"kueue":{"managementState":"Unmanaged"}}}}`), map[string][]string{"fieldManager": {"rhoai-nightly-updater-dsc-kueue"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeTestPrereqRecord(u, `{"components":{"kueue":{"previous":"Removed","feature":"kueue"}}}`); err != nil {
+	if err := writeTestPrereqRecord(u, `{"components":{"kueue":{"previous":"Removed","feature":"kueue","id":"`+id+`"}}}`); err != nil {
 		t.Fatal(err)
 	}
 }

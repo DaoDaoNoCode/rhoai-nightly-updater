@@ -722,6 +722,7 @@ scenarios["recipe-full-succeeded-aihub"] = (w) => {
   scenarios["recipe-full-succeeded"](w);
   const run = w.recipeRun.run;
   run.components = [...run.components.map((k) => (k === "modelregistry" ? "aiHub" : k)), "ogx"].sort();
+  run.componentIds = Object.fromEntries(run.components.map((k) => [k, F.enablementId(k)]));
   run.steps = run.steps.map((s) => (s.id === "playground-prereq" && s.status === "success" ? { ...s, created: true } : s));
 };
 scenarios["recipe-interrupted"] = (w) => {

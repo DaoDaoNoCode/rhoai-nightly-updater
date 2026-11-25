@@ -38,7 +38,7 @@ var (
 	cleanupWbStorage    = workbench.DeleteStorage
 	cleanupUnpublish    = serving.UnpublishMaaSModel
 	cleanupMaaSPlatform = serving.TeardownMaaSPlatform
-	cleanupComponents   = features.RestoreComponents
+	cleanupComponents   = features.RestoreReviewedComponents
 	cleanupProject      = recipe.DeleteProject
 	// Bound to recipe.CreatedPartProblem; swappable in tests.
 	recipeCreatedPartProblem = recipe.CreatedPartProblem
@@ -213,7 +213,9 @@ func cleanupParts(c *Client, req types.CleanupRequest) []cleanupPart {
 	}
 	if len(req.Components) > 0 {
 		// Final step: component consumers are already removed.
-		parts = append(parts, cleanupPart{id: CleanupStepID("components", ""), title: "the DataScienceCluster components this tool turned on", run: func() (*types.OperationResponse, error) { return cleanupComponents(c, req.Components) }, says: true})
+		parts = append(parts, cleanupPart{id: CleanupStepID("components", ""), title: "the DataScienceCluster components this tool turned on", run: func() (*types.OperationResponse, error) {
+			return cleanupComponents(c, req.Components, req.ComponentIDs)
+		}, says: true})
 	}
 	return parts
 }

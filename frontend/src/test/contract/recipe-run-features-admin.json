@@ -1,5 +1,9 @@
 {
   "cleanup": {
+    "componentIds": {
+      "kserve": "a41e9c07d2b85f13",
+      "kueue": "c3d8e15a90f2b674"
+    },
     "components": [
       "kserve",
       "kueue"
@@ -34,6 +38,11 @@
   ],
   "run": {
     "bootId": "another-process",
+    "componentIds": {
+      "aipipelines": "5f0c2a9e1b7d4c36",
+      "kserve": "a41e9c07d2b85f13",
+      "kueue": "c3d8e15a90f2b674"
+    },
     "components": [
       "aipipelines",
       "kserve",
