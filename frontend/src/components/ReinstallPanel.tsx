@@ -188,7 +188,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
               description={
                 status?.stableChannel
                   ? `From ${status.stableSource} / ${status.stableChannel}${stableDirection === "downgrade" ? `; older than the installed ${installedVersion}` : ""}.`
-                  : status?.stableDiscoveryError ? "The stable release could not be found in the cluster catalog." : "Looking up the stable release in the cluster catalog..."
+                  : status?.stableDiscoveryError ? "The stable release could not be found in the cluster catalog." : "Looking up the stable release in the cluster catalog"
               }
               isChecked={targetType === "stable"}
               onChange={() => { setTargetType("stable"); setChannelOverride(""); }}
@@ -265,7 +265,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
                           isExpanded={tagSelectOpen}
                           isDisabled={running}
                         >
-                          {tagsLoading ? <><Spinner size="sm" aria-label="Loading builds" /> Loading builds...</> : selectedTagInfo?.tag || "Select a build"}
+                          {tagsLoading ? <><Spinner size="sm" aria-label="Loading builds" /> Loading builds</> : selectedTagInfo?.tag || "Select a build"}
                         </MenuToggle>
                       ),
                     }}
@@ -326,7 +326,7 @@ export const ReinstallPanel: React.FC<ReinstallPanelProps> = ({
                   disabledReason={disabledReason}
                   isLoading={running}
                 >
-                  {running ? "Installing..." : "Install..."}
+                  {running ? "Installing" : "Install"}
                 </TooltipButton>
               </ActionListItem>
             </ActionListGroup>

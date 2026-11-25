@@ -72,7 +72,7 @@ export const ModelRegistryTab: React.FC<ModelRegistryTabProps> = (props) => {
   const actions: React.ReactNode[] = [];
   if (mr?.state === "ready" && href) actions.push(<ActionListItem key="open"><ExternalLink href={href}>{OPEN_MODEL_REGISTRY}</ExternalLink></ActionListItem>);
   const menu: PartMenuItem[] = ours && !readOnly && mr?.state !== "terminating"
-    ? [{ key: "delete", label: "Delete the model registry...", onClick: () => setPending({ kind: "teardown-model-registry" }), disabledReason: baseReason, isDanger: true }]
+    ? [{ key: "delete", label: "Delete the model registry", onClick: () => setPending({ kind: "teardown-model-registry" }), disabledReason: baseReason, isDanger: true }]
     : [];
   const sampleStatus = modelRegistrySampleStatus(mr);
   const sample = mr?.sample;
@@ -163,7 +163,7 @@ export const ModelRegistryTab: React.FC<ModelRegistryTabProps> = (props) => {
       </StackItem>
       {!readOnly && ours && mr?.state !== "terminating" && (
         <StackItem>
-          <CleanupSection id="model-registry-cleanup" label="Clean up the model registry..." onClick={onCleanup} reason={baseReason}
+          <CleanupSection id="model-registry-cleanup" label="Clean up the model registry" onClick={onCleanup} reason={baseReason}
             text="Deletes the model registry this tool created, with every registered model in it and its database." />
         </StackItem>
       )}

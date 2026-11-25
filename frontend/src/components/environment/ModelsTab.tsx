@@ -101,7 +101,7 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
   const option = ex?.options.find((o) => o.key === selectedKey);
   const { onExposure } = props;
   useEffect(() => { onExposure?.(choosing && option ? option.exposure : null); }, [choosing, option, onExposure]);
-  const exposureReason = !choosing ? null : !ex ? "Reading how the model can be reached..." : !option ? "Choose how the model is reached." : !option.available ? option.reason ?? "This way cannot be used now." : option.needsAuth ? "Needs Red Hat Connectivity Link for this choice: Set up what Models needs (above) first." : null;
+  const exposureReason = !choosing ? null : !ex ? "Reading how the model can be reached" : !option ? "Choose how the model is reached." : !option.available ? option.reason ?? "This way cannot be used now." : option.needsAuth ? "Needs Red Hat Connectivity Link for this choice: Set up what Models needs (above) first." : null;
   const setUpGateway = readOnly || baseReason || gw?.deployed ? null : () => props.setPending({ kind: "setup-models", gateway: true, project: null, model: "" });
   // The inference gateway's card comes first only when the model uses it
   // (or the choice is not known yet): otherwise the model's own card leads.
@@ -192,7 +192,7 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
       </StackItem>
       {!readOnly && anythingToClean && (
         <StackItem>
-          <CleanupSection id="models-cleanup" label="Clean up Models..." onClick={onCleanup} reason={baseReason}
+          <CleanupSection id="models-cleanup" label="Clean up Models" onClick={onCleanup} reason={baseReason}
             text="Deletes what this tool created for Models: every model in every project, then the inference gateway and its load balancer. You choose what goes, then it runs as one operation." />
         </StackItem>
       )}

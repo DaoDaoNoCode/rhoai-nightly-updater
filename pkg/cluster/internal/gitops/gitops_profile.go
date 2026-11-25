@@ -66,7 +66,7 @@ func UpdateStream(c *kube.Client, image string, emit func(types.UpdateStepEvent)
 	logs = append(logs, "Profile: gitops (Update installs the build the managed catalog serves; nothing else is changed)")
 
 	// --- Step 1: validate_prerequisites ---
-	emit(types.UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Checking prerequisites..."})
+	emit(types.UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Checking prerequisites"})
 	g, err := argo.ReadOperatorGitOps(c)
 	if err != nil {
 		return fail("Cannot check whether Argo CD manages the operator: "+err.Error()+". Nothing was changed.", kube.ErrorCodeFromK8sErr(err))
@@ -133,7 +133,7 @@ func UpdateStream(c *kube.Client, image string, emit func(types.UpdateStepEvent)
 	// pkg/controller/operators/catalogtemplate/operator.go). The build is
 	// read from the managed catalog once it serves the image.
 	from := gitOps.CatalogSpecFrom()
-	emit(types.UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Waiting for the catalog " + from + " manages to serve the build..."})
+	emit(types.UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Waiting for the catalog " + from + " manages to serve the build"})
 	target, preflightErr := LiveCatalogTarget(c, image, channelOverride, gitOps.CatalogChanger(), emit, &logs)
 	if preflightErr != nil {
 		var changed *operator.CatalogImageChangedError
@@ -175,7 +175,7 @@ func UpdateStream(c *kube.Client, image string, emit func(types.UpdateStepEvent)
 	emit(types.UpdateStepEvent{Step: "validate_prerequisites", Status: "success", Message: "Prerequisites validated"})
 
 	// --- Step 2: save_snapshot ---
-	emit(types.UpdateStepEvent{Step: "save_snapshot", Status: "running", Message: "Saving deployment snapshot..."})
+	emit(types.UpdateStepEvent{Step: "save_snapshot", Status: "running", Message: "Saving deployment snapshot"})
 	if snapErr := components.SaveDeploymentSnapshot(c); snapErr != nil {
 		slog.Warn("failed to save deployment snapshot", "error", snapErr)
 		logs = append(logs, fmt.Sprintf("Warning: failed to save deployment snapshot: %v", snapErr))

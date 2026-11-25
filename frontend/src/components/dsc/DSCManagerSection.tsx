@@ -123,7 +123,7 @@ export const DSCManagerSection: React.FC<{
         <CardHeader actions={{
           actions: (
             <TooltipButton variant="secondary" onClick={() => setResetOpen(true)} isDisabled={!!disabledReason || !!manager.defaultsError || running !== null} disabledReason={disabledReason ?? (manager.defaultsError || null)}>
-              Reset to the release default…
+              Reset to the release default
             </TooltipButton>
           ),
           hasNoOffset: false,

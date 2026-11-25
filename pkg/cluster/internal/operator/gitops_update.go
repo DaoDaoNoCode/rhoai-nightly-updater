@@ -174,8 +174,8 @@ func UpdateUnderGitOps(c *kube.Client, image string, target catalog.Target, curr
 	emit(types.UpdateStepEvent{Step: "apply_catalog_source", Status: "success", Message: leftAs, Detail: image})
 
 	// --- Steps 4 and 5: wait_catalog_ready, detect_channel ---
-	emit(types.UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: "Waiting for the catalog to serve the build..."})
-	*logs = append(*logs, "Waiting for the catalog to serve the build...")
+	emit(types.UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: "Waiting for the catalog to serve the build"})
+	*logs = append(*logs, "Waiting for the catalog to serve the build")
 	serving, err := waitForCatalogServing(c, image, target, changedBy, emit, logs, pullAdvice)
 	var changed *CatalogImageChangedError
 	switch {
@@ -232,7 +232,7 @@ func UpdateUnderGitOps(c *kube.Client, image string, target catalog.Target, curr
 	}
 
 	// --- Step 6: delete_csv ---
-	emit(types.UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting old CSV and InstallPlan..."})
+	emit(types.UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting old CSV and InstallPlan"})
 	if ipName := recovery.installPlanName(); ipName != "" {
 		ipPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "installplans", rhoai.SubNS, ipName)
 		if _, err := c.DeleteIfExists(ipPath); err != nil {
@@ -265,7 +265,7 @@ func UpdateUnderGitOps(c *kube.Client, image string, target catalog.Target, curr
 	emit(types.UpdateStepEvent{Step: "delete_csv", Status: "success", Message: "Old CSV and InstallPlan deleted"})
 
 	// --- Step 7: apply_subscription ---
-	emit(types.UpdateStepEvent{Step: "apply_subscription", Status: "running", Message: "Recreating the Subscription..."})
+	emit(types.UpdateStepEvent{Step: "apply_subscription", Status: "running", Message: "Recreating the Subscription"})
 	// The live Subscription is Git's spec as Argo CD last synced it, which
 	// may be newer than the one read at the start; the recreated one must
 	// still install what was verified. When Git moved it elsewhere

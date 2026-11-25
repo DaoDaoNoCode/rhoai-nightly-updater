@@ -145,7 +145,7 @@ const StuckGuidanceCard: React.FC<StuckGuidanceCardProps> = ({
 
   if (diagLoading) {
     return withResult(
-      <Alert component="p" variant="info" title="Checking for problems..." isInline isPlain customIcon={<Spinner size="sm" aria-label="Diagnosing" />}>
+      <Alert component="p" variant="info" title="Checking for problems" isInline isPlain customIcon={<Spinner size="sm" aria-label="Diagnosing" />}>
         Running read-only diagnostics on the cluster.
       </Alert>,
     );
@@ -194,7 +194,7 @@ const StuckGuidanceCard: React.FC<StuckGuidanceCardProps> = ({
               isDisabled={fixLoading}
               disabledReason={fixDisabledReason}
             >
-              Apply fix...
+              Apply fix
             </TooltipButton>
           </StackItem>
         )}

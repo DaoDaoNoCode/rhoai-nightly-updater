@@ -872,7 +872,7 @@ func RunModels(c *kube.Client, req types.ModelsRequest, onStep func(types.Update
 func (m *modelsRun) check(req types.ModelsRequest) (*types.OperationResponse, error) {
 	c := m.c
 	entry, _ := CatalogEntry(req.Model)
-	m.step("callable", "running", fmt.Sprintf("Calling %s in %s once...", entry.Name, req.Project))
+	m.step("callable", "running", fmt.Sprintf("Calling %s in %s once", entry.Name, req.Project))
 	model, found, err := ReadToolModel(c, req.Project, entry.Name)
 	if err != nil {
 		return m.fail("callable", fmt.Sprintf("Cannot read %s in %s: %v.", entry.Name, req.Project, err), kube.ErrorCodeFromK8sErr(err), "model read failed")
@@ -915,7 +915,7 @@ func (m *modelsRun) callable(project, name string, rec ModelsRecord) (*types.Ope
 // never changed: the refusal gives RHOAI's documented step.
 func (m *modelsRun) allow(project string) (*types.OperationResponse, error) {
 	c := m.c
-	m.step("check", "running", fmt.Sprintf("Checking the inference gateway and project %s...", project))
+	m.step("check", "running", fmt.Sprintf("Checking the inference gateway and project %s", project))
 	if _, msg, code := ProjectNamespace(c, project); msg != "" {
 		return m.fail("check", msg+" Nothing was changed.", code, "project check failed")
 	}
@@ -944,7 +944,7 @@ func (m *modelsRun) allow(project string) (*types.OperationResponse, error) {
 		return m.fail("check", msg, code, "gateway dry run failed")
 	}
 	m.step("check", "success", "The gateway is this tool's; the project exists.")
-	m.step("gateway", "running", fmt.Sprintf("Adding %s to the projects the inference gateway allows...", project))
+	m.step("gateway", "running", fmt.Sprintf("Adding %s to the projects the inference gateway allows", project))
 	if err := recordGatewayProject(c, project); err != nil {
 		return m.fail("gateway", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
 	}
@@ -966,7 +966,7 @@ func (m *modelsRun) teardown(req types.ModelsRequest) (*types.OperationResponse,
 		if res, err := m.unpublishMaaSOnly(req.Project, entry.Name); res != nil || err != nil {
 			return res, err
 		}
-		m.step("model", "running", fmt.Sprintf("Deleting %s in %s...", entry.Name, req.Project))
+		m.step("model", "running", fmt.Sprintf("Deleting %s in %s", entry.Name, req.Project))
 		res, _ := TeardownModels(m.c, req.Project, entry.Name)
 		m.logs = append(m.logs, res.Logs...)
 		if !res.Success {
@@ -979,7 +979,7 @@ func (m *modelsRun) teardown(req types.ModelsRequest) (*types.OperationResponse,
 		done = append(done, res.Message)
 	}
 	if req.Gateway {
-		m.step("gateway", "running", "Deleting the inference gateway...")
+		m.step("gateway", "running", "Deleting the inference gateway")
 		res, _ := TeardownInferenceGateway(m.c, req.Project != "")
 		m.logs = append(m.logs, res.Logs...)
 		if !res.Success {
@@ -1013,7 +1013,7 @@ func (m *modelsRun) unpublishMaaSOnly(project, name string) (*types.OperationRes
 	if !only {
 		return nil, nil
 	}
-	m.step("unpublish", "running", "The model is reached through MaaS only, so it is unpublished first...")
+	m.step("unpublish", "running", "The model is reached through MaaS only, so it is unpublished first")
 	pub := &Run{Client: m.c, Activity: "unpublish-maas", Target: fmt.Sprintf("model %s in %s", name, project)}
 	pub.Emit = m.innerSteps("unpublish")
 	res, err := pub.unpublish(project, name, true)
@@ -1094,7 +1094,7 @@ func (m *modelsRun) setup(req types.ModelsRequest) (*types.OperationResponse, er
 // every write.
 func (m *modelsRun) setupCheck(req types.ModelsRequest, s *modelsSetup) (*types.OperationResponse, error) {
 	c := m.c
-	m.step("check", "running", "Checking what every part needs...")
+	m.step("check", "running", "Checking what every part needs")
 	var notes []string
 
 	// The gateway part.
@@ -1169,7 +1169,7 @@ func (m *modelsRun) setupGateway(req types.ModelsRequest, s *modelsSetup) (*type
 		m.step("gateway-ready", "success", "Not checked: the existing gateway's health is shown on the Models tab.")
 		s.summary = append(s.summary, "The existing inference gateway is used.")
 	} else {
-		m.step("gateway", "running", "Creating the inference gateway...")
+		m.step("gateway", "running", "Creating the inference gateway")
 		if listed, _ := gw.gateway.listedNamespaces(); req.Project != "" && !slices.Contains(listed, req.Project) {
 			if err := recordGatewayProject(c, req.Project); err != nil {
 				return m.fail("gateway", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
@@ -1180,7 +1180,7 @@ func (m *modelsRun) setupGateway(req types.ModelsRequest, s *modelsSetup) (*type
 			return m.fail("gateway", msg, code, "gateway apply failed")
 		}
 		m.step("gateway", "success", fmt.Sprintf("GatewayClass, ConfigMap and Gateway %s/%s applied; external hostname %s. Projects it allows: %s.", inferenceGatewayNamespace, inferenceGatewayName, gw.host, strings.Join(written.names, ", ")))
-		m.step("gateway-ready", "running", "Waiting for the gateway and its load balancer...")
+		m.step("gateway-ready", "running", "Waiting for the gateway and its load balancer")
 		ready, dns, problem, pending, err := waitInferenceGateway(c, gw.host, func(line string) { m.step("gateway-ready", "running", line) })
 		switch {
 		case err != nil:
@@ -1208,7 +1208,7 @@ func (m *modelsRun) setupGateway(req types.ModelsRequest, s *modelsSetup) (*type
 func (m *modelsRun) setupModelApply(s *modelsSetup) (*types.OperationResponse, error) {
 	c, mp, allow := m.c, s.mp, s.allow
 	if allow != nil {
-		m.step("model", "running", fmt.Sprintf("Adding %s to the projects the inference gateway allows...", mp.project))
+		m.step("model", "running", fmt.Sprintf("Adding %s to the projects the inference gateway allows", mp.project))
 		if err := recordGatewayProject(c, mp.project); err != nil {
 			return m.fail("model", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
 		}
@@ -1216,7 +1216,7 @@ func (m *modelsRun) setupModelApply(s *modelsSetup) (*types.OperationResponse, e
 			return m.fail("model", msg, code, "gateway list failed")
 		}
 	}
-	m.step("model", "running", fmt.Sprintf("Creating %s in %s (%s)...", mp.entry.DisplayName, mp.project, mp.image.describe()))
+	m.step("model", "running", fmt.Sprintf("Creating %s in %s (%s)", mp.entry.DisplayName, mp.project, mp.image.describe()))
 	if msg, code := m.applyModel(mp, false); msg != "" {
 		return m.fail("model", msg, code, "model apply failed")
 	}
@@ -1235,7 +1235,7 @@ func (m *modelsRun) setupModelApply(s *modelsSetup) (*types.OperationResponse, e
 // reached through MaaS), then calls it once.
 func (m *modelsRun) setupModelReady(s *modelsSetup) (*types.OperationResponse, error) {
 	c, mp := m.c, s.mp
-	m.step("model-ready", "running", "Waiting for the model to start (typically 3 to 5 minutes the first time)...")
+	m.step("model-ready", "running", "Waiting for the model to start (typically 3 to 5 minutes the first time)")
 	timeout := modelReadyTimeout
 	if dl, ok := c.Context().Deadline(); ok {
 		if left := kube.Clock().Until(dl) - 30*time.Second; left < timeout {
@@ -1277,7 +1277,7 @@ func (m *modelsRun) setupModelReady(s *modelsSetup) (*types.OperationResponse, e
 		}
 		// Ready is not enough: one request through the way it is
 		// reached tells whether a caller gets an answer.
-		m.step("callable", "running", "Calling the model once, as a user would...")
+		m.step("callable", "running", "Calling the model once, as a user would")
 		// The record as written by this setup (the token's UID).
 		rec, err := ReadModelsRecord(c)
 		if err != nil {
@@ -1522,7 +1522,7 @@ func TeardownModels(c *kube.Client, project string, names ...string) (*types.Ope
 		path, _ := ToolModelPath(project, entry.Name)
 		if !model.Metadata.Terminating() {
 			logs = append(logs, deleteModelToken(c, project, entry.Name, model.Metadata.UID, rec[ModelRecordKey(project, entry.Name)].TokenSecretUID)...)
-			logs = append(logs, fmt.Sprintf("Deleting LLMInferenceService %s/%s...", project, entry.Name))
+			logs = append(logs, fmt.Sprintf("Deleting LLMInferenceService %s/%s", project, entry.Name))
 			if _, err := kube.DeleteWithUID(c, path, model.Metadata.UID); err != nil && !kube.IsK8sNotFound(err) {
 				code := kube.ErrorCodeFromK8sErr(err)
 				if kube.IsK8sConflict(err) {
@@ -1703,7 +1703,7 @@ func DescribeModelPods(pods []ModelPod, newest *ModelEvent) modelProgress {
 		}
 	}
 	if first == nil {
-		return modelProgress{Message: "Waiting for KServe to create the model's pod..." + event}
+		return modelProgress{Message: "Waiting for KServe to create the model's pod" + event}
 	}
 	return *first
 }
@@ -1743,11 +1743,11 @@ func DescribeModelPod(p ModelPod, event string) modelProgress {
 				if init {
 					return modelProgress{}, false
 				}
-				return modelProgress{Message: "Pulling the runtime image (several GB; a few minutes the first time on a node)..." + event}, true
+				return modelProgress{Message: "Pulling the runtime image (several GB; a few minutes the first time on a node)" + event}, true
 			}
 		}
 		if init && s.State.Running != nil {
-			return modelProgress{Message: "Downloading the model from Hugging Face (storage-initializer)..." + event}, true
+			return modelProgress{Message: "Downloading the model from Hugging Face (storage-initializer)" + event}, true
 		}
 		return modelProgress{}, false
 	}
@@ -1763,14 +1763,14 @@ func DescribeModelPod(p ModelPod, event string) modelProgress {
 	}
 	for _, s := range p.Status.ContainerStatuses {
 		if s.Name == "main" && s.State.Running != nil && !s.Ready {
-			msg := "Starting vLLM and loading the model..."
+			msg := "Starting vLLM and loading the model"
 			if t := s.LastState.Terminated; t != nil && t.Reason == "OOMKilled" {
-				msg = "Restarted after running out of memory (OOMKilled); starting vLLM again..."
+				msg = "Restarted after running out of memory (OOMKilled); starting vLLM again"
 			}
 			return modelProgress{Message: msg}
 		}
 	}
-	return modelProgress{Message: "Starting..." + event}
+	return modelProgress{Message: "Starting" + event}
 }
 
 type modelWait struct {
@@ -1846,7 +1846,7 @@ func readModelWorkload(c *kube.Client, project, name string) (modelWorkload, err
 		return modelWorkload{}, err
 	}
 	if len(items) == 0 {
-		return modelWorkload{message: "Waiting for KServe to create the model's Deployment..."}, nil
+		return modelWorkload{message: "Waiting for KServe to create the model's Deployment"}, nil
 	}
 	w := modelWorkload{observed: true, rolledOut: true, images: map[string]bool{}}
 	for _, d := range items {
@@ -1856,7 +1856,7 @@ func readModelWorkload(c *kube.Client, project, name string) (modelWorkload, err
 		}
 		st := d.Status
 		if st.ObservedGeneration < d.Metadata.Generation {
-			return modelWorkload{message: "Waiting for KServe to apply the change to the model's Deployment..."}, nil
+			return modelWorkload{message: "Waiting for KServe to apply the change to the model's Deployment"}, nil
 		}
 		for _, c := range d.Spec.Template.Spec.Containers {
 			if c.Name == "main" && c.Image != "" {
@@ -1865,7 +1865,7 @@ func readModelWorkload(c *kube.Client, project, name string) (modelWorkload, err
 		}
 		if st.UpdatedReplicas < want || st.Replicas > st.UpdatedReplicas || st.AvailableReplicas < st.UpdatedReplicas {
 			w.rolledOut = false
-			w.message = "Rolling out the change: the new pod is starting, and the previous one serves until it is ready..."
+			w.message = "Rolling out the change: the new pod is starting, and the previous one serves until it is ready"
 		}
 	}
 	return w, nil
@@ -1908,7 +1908,7 @@ func waitModelReady(c *kube.Client, project, name string, presetImage, workloadO
 		// Until KServe has seen the spec just applied, its conditions and
 		// the pods are the previous revision's.
 		if model.Status.ObservedGeneration < model.Metadata.Generation {
-			say("Waiting for KServe to apply the change...")
+			say("Waiting for KServe to apply the change")
 			return false, nil
 		}
 		if cond, ok := kube.FindCondition(model.Status.Conditions, "PresetsCombined"); ok && cond.Status == "False" {
@@ -1957,7 +1957,7 @@ func waitModelReady(c *kube.Client, project, name string, presetImage, workloadO
 				return true, nil
 			}
 			res.pulling = fmt.Sprintf("%s.%s Check that the cluster's pull secret can read it (on ROSA, the additional pull secret), that a mirror covers its registry if the cluster uses one, and that the image exists.", pr.PullFailure, pullNote)
-			say(fmt.Sprintf("%s%s Waiting up to %s for it to succeed...", pr.Message, pullNote, ClockText(pullGrace)))
+			say(fmt.Sprintf("%s%s Waiting up to %s for it to succeed", pr.Message, pullNote, ClockText(pullGrace)))
 			return false, nil
 		}
 		pullSince, res.pulling = time.Time{}, ""

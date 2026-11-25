@@ -216,7 +216,7 @@ const PlaygroundPart: React.FC<PlaygroundTabProps & { project: string }> = ({ st
   const s = playgroundStatusOf(playground, project, busy);
   const href = playgroundHref(status.dashboardUrl, project);
   const menu: PartMenuItem[] = exists && !unmanaged && !readOnly && !isTerminating(item)
-    ? [{ key: "delete", label: "Delete playground...", onClick: () => setPending({ kind: "teardown-playground", project }), disabledReason: baseReason ?? null, isDanger: true }]
+    ? [{ key: "delete", label: "Delete playground", onClick: () => setPending({ kind: "teardown-playground", project }), disabledReason: baseReason ?? null, isDanger: true }]
     : [];
   return (
     <PartItem id="playground" title="Playground" scope={`In project ${project}`} status={s} unmanaged={unmanaged}
@@ -392,7 +392,7 @@ export const PlaygroundTab: React.FC<PlaygroundTabProps> = (props) => {
       </StackItem>
       {!readOnly && toolPlaygrounds.length > 0 && (
         <StackItem>
-          <CleanupSection id="playground-cleanup" label="Clean up Playground..." onClick={onCleanup} reason={baseReason}
+          <CleanupSection id="playground-cleanup" label="Clean up Playground" onClick={onCleanup} reason={baseReason}
             text="Deletes the playgrounds this tool set up, in every project, through the dashboard. You choose which, then it runs as one operation." />
         </StackItem>
       )}

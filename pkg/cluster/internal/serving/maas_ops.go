@@ -520,7 +520,7 @@ func (m *Run) teardown() (*types.OperationResponse, error) {
 // someone else uses MaaS. It ends the run when nothing was set up.
 func (m *Run) teardownCheck(t *maasTeardown) (*types.OperationResponse, error) {
 	c := m.Client
-	m.Step("check", "running", "Checking what this tool set up...")
+	m.Step("check", "running", "Checking what this tool set up")
 	rec, err := ReadMaaSRecord(c)
 	if err != nil {
 		return m.Fail("check", err.Error()+" Nothing was deleted.", kube.ErrorCodeFromK8sErr(err), "record read failed")
@@ -584,7 +584,7 @@ func (m *Run) teardownCheck(t *maasTeardown) (*types.OperationResponse, error) {
 // they changed again.
 func (m *Run) teardownUnpublish(t *maasTeardown) (*types.OperationResponse, error) {
 	c, rec := m.Client, &t.rec
-	m.Step("unpublish", "running", "Unpublishing this tool's models...")
+	m.Step("unpublish", "running", "Unpublishing this tool's models")
 	pubs := rec.Pubs()
 	for _, p := range pubs {
 		res, _ := (&Run{Client: c, Activity: "unpublish-maas", Target: fmt.Sprintf("model %s in %s", p.Model, p.Project)}).unpublish(p.Project, p.Model, false)
@@ -622,7 +622,7 @@ func (m *Run) teardownDSC(t *maasTeardown) (*types.OperationResponse, error) {
 	if rec.DSCChanged {
 		prev := kube.FirstNonEmpty(rec.PreviousModelsAsAService, "Removed")
 		if dsc.maas == "Managed" {
-			m.Step("dsc", "running", fmt.Sprintf("Setting aigateway.modelsAsAService back to %s...", prev))
+			m.Step("dsc", "running", fmt.Sprintf("Setting aigateway.modelsAsAService back to %s", prev))
 			if err := patchModelsAsAService(c, prev); err != nil {
 				return m.Fail("dsc", fmt.Sprintf("Failed to restore modelsAsAService: %v. Nothing else was deleted.", err), kube.ErrorCodeFromK8sErr(err), "dsc patch failed")
 			}
@@ -678,7 +678,7 @@ func (m *Run) teardownDelete(step, infra string, o maasTeardownObj) (bool, *type
 		return false, nil
 	}
 	path := maasObjectPath(o.kind, infra)
-	m.Step(step, "running", "Deleting "+maasDesc(o.kind, infra)+"...")
+	m.Step(step, "running", "Deleting "+maasDesc(o.kind, infra))
 	if _, err := kube.DeleteWithUID(c, path, o.meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 		res, _ := m.Fail(step, fmt.Sprintf("Failed to delete %s: %v. Remove again to retry.", maasDesc(o.kind, infra), err), MaaSWriteCode(err), "delete failed")
 		return false, res
@@ -972,7 +972,7 @@ func (m *Run) publish(project, name string, access *types.MaaSAudience, limitReq
 // version and the other subscriptions' priorities.
 func (m *Run) publishCheckPlatform(pl *maasPublish, limitReq *types.MaaSLimit) (*types.OperationResponse, error) {
 	c := m.Client
-	m.Step("check", "running", "Checking the platform and the model...")
+	m.Step("check", "running", "Checking the platform and the model")
 	limit, problem := ParseMaaSLimit(limitReq)
 	if problem != "" {
 		return m.Fail("check", "Invalid limit: "+problem+". Nothing was changed.", "validation", "invalid limit")
@@ -1226,7 +1226,7 @@ func (m *Run) publishGateway(pl *maasPublish) (*types.OperationResponse, error) 
 		return m.Fail("gateway", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
 	}
 	if gwPlan != nil {
-		m.Step("gateway", "running", fmt.Sprintf("Letting the MaaS gateway admit routes from %s...", project))
+		m.Step("gateway", "running", fmt.Sprintf("Letting the MaaS gateway admit routes from %s", project))
 		if msg, code := m.applyGateway(gwPlan, false); msg != "" {
 			return m.Fail("gateway", msg+" Unpublish to undo.", code, "gateway apply failed")
 		}
@@ -1255,7 +1255,7 @@ func (m *Run) publishModel(pl *maasPublish) (*types.OperationResponse, error) {
 // authorization policy.
 func (m *Run) publishMaaSObjects(pl *maasPublish) (*types.OperationResponse, error) {
 	c, project, name, refPath, refObj, sub, auth := m.Client, pl.project, pl.name, pl.refPath, pl.refObj, pl.sub, pl.auth
-	m.Step("maas", "running", "Creating the model reference, the subscription and the authorization policy...")
+	m.Step("maas", "running", "Creating the model reference, the subscription and the authorization policy")
 	for _, w := range []struct {
 		desc, path, create string
 		obj                map[string]any
@@ -1276,7 +1276,7 @@ func (m *Run) publishMaaSObjects(pl *maasPublish) (*types.OperationResponse, err
 // publishWaitReady waits for MaaS to accept the model and ends the run.
 func (m *Run) publishWaitReady(pl *maasPublish) (*types.OperationResponse, error) {
 	c, project, name := m.Client, pl.project, pl.name
-	m.Step("ready", "running", "Waiting for MaaS to accept the model...")
+	m.Step("ready", "running", "Waiting for MaaS to accept the model")
 	last := ""
 	ready, err := kube.WaitForGone(c, maasPublishTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 		r, _, err := readMaaSModelRef(cc, project, name)
@@ -1361,7 +1361,7 @@ func (m *Run) unpublish(project, name string, stepped bool) (*types.OperationRes
 // published.
 func (m *Run) unpublishCheck(u *maasUnpublish) (*types.OperationResponse, error) {
 	c, project, name, say := m.Client, u.project, u.name, u.say
-	say("check", "running", "Checking the publication...")
+	say("check", "running", "Checking the publication")
 	rec, err := ReadMaaSRecord(c)
 	if err != nil {
 		return m.Fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
@@ -1443,7 +1443,7 @@ func (m *Run) restoreRouting(project, name string, stepped bool) (*types.Operati
 			m.Logs = append(m.Logs, msg)
 		}
 	}
-	say("check", "running", "Checking the model...")
+	say("check", "running", "Checking the model")
 	rec, err := ReadMaaSRecord(c)
 	if err != nil {
 		return m.Fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
@@ -1519,7 +1519,7 @@ func (m *Run) restoreRouting(project, name string, stepped bool) (*types.Operati
 // subscription, and deletes them when no publication is left.
 func (m *Run) unpublishAccess(u *maasUnpublish) (*types.OperationResponse, error) {
 	c, say, live := m.Client, u.say, u.live
-	say("maas", "running", "Removing the model from the authorization policy and the subscription...")
+	say("maas", "running", "Removing the model from the authorization policy and the subscription")
 	// The models left keep their limits and the audience (fail closed: a
 	// subscription that cannot be read is not rewritten with defaults).
 	cur, err := readMaaSToolSubscription(c)
@@ -1601,7 +1601,7 @@ func (m *Run) unpublishModel(u *maasUnpublish) (*types.OperationResponse, error)
 	// The model's gateway refs. The record keeps the publication until the
 	// route has left the MaaS gateway, so the tab shows a route that did not
 	// as partly published.
-	say("model", "running", "Routing the model as before publishing...")
+	say("model", "running", "Routing the model as before publishing")
 	switch {
 	case !modelFound:
 		say("model", "success", "The model is gone; nothing to change on it.")

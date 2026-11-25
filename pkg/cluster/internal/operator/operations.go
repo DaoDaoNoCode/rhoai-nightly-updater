@@ -205,7 +205,7 @@ func VerifyNodeReadiness(c *kube.Client) (*types.OperationResponse, error) {
 	logs = append(logs, fmt.Sprintf("OK: IDMS exists (%s -> quay.io/rhoai)", idms.Source))
 
 	// Step 3: Test registry access by fetching a manifest from quay.io/rhoai
-	logs = append(logs, "Testing registry access to quay.io/rhoai...")
+	logs = append(logs, "Testing registry access to quay.io/rhoai")
 	quayAuth := registry.QuayAuth(c)
 	if quayAuth == "" {
 		return &types.OperationResponse{
@@ -338,7 +338,7 @@ func UpdateStreamWithOptions(c *kube.Client, image string, opts OperationOptions
 	}
 
 	// --- Step 7: apply_subscription ---
-	emit(types.UpdateStepEvent{Step: "apply_subscription", Status: "running", Message: "Creating Subscription..."})
+	emit(types.UpdateStepEvent{Step: "apply_subscription", Status: "running", Message: "Creating Subscription"})
 	newSub := BuildSubscription(recovery.SubscriptionBase(), rhoai.CatalogName, nightlyChannel)
 	recovery.SubscriptionChanged = true
 	if r, err := applyUpdateSubscription(c, newSub, nightlyChannel, recovery, &logs, emit, fail); r != nil || err != nil {
@@ -377,7 +377,7 @@ type updateChecks struct {
 // and group, the installed CSV and Argo CD. It returns a nil response to go
 // on.
 func updateCheckCluster(c *kube.Client, image string, opts OperationOptions, chk *updateChecks, logs *[]string, emit func(types.UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error)) (*types.OperationResponse, error) {
-	emit(types.UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Checking prerequisites..."})
+	emit(types.UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Checking prerequisites"})
 	refusal, revertDashboard, guardErr := dashboardDevGuard(c, opts, "Update")
 	if guardErr != nil {
 		return fail(guardErr.Error(), kube.ErrorCodeFromK8sErr(guardErr))
@@ -449,7 +449,7 @@ func updateVerifyTarget(c *kube.Client, image string, chk *updateChecks, logs *[
 	// Verify the exact image in a fresh catalog before switching the active
 	// catalog or removing any installed resources. The channel head it
 	// reports is the bundle OLM will install, so the downgrade check uses it.
-	emit(types.UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Verifying the selected catalog image..."})
+	emit(types.UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Verifying the selected catalog image"})
 	target, preflightErr := catalog.PreflightReinstall(c, image, channelOverride)
 	if preflightErr != nil {
 		if c.Context().Err() != nil {
@@ -482,7 +482,7 @@ func updateVerifyTarget(c *kube.Client, image string, chk *updateChecks, logs *[
 		return fail(blocked, "prerequisites")
 	}
 	if revertDashboard {
-		emit(types.UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Ending the Dashboard Dev session..."})
+		emit(types.UpdateStepEvent{Step: "validate_prerequisites", Status: "running", Message: "Ending the Dashboard Dev session"})
 		if err := dashdev.RevertForOperation(c); err != nil {
 			return fail("Could not end the Dashboard Dev session, so the update was not started: "+err.Error(), ErrorCodeDashboardDevActive)
 		}
@@ -496,7 +496,7 @@ func updateVerifyTarget(c *kube.Client, image string, chk *updateChecks, logs *[
 // saveSnapshotStep is Update's and Install a different build's
 // save_snapshot step; a snapshot that cannot be saved does not stop them.
 func saveSnapshotStep(c *kube.Client, logs *[]string, emit func(types.UpdateStepEvent)) {
-	emit(types.UpdateStepEvent{Step: "save_snapshot", Status: "running", Message: "Saving deployment snapshot..."})
+	emit(types.UpdateStepEvent{Step: "save_snapshot", Status: "running", Message: "Saving deployment snapshot"})
 	if snapErr := components.SaveDeploymentSnapshot(c); snapErr != nil {
 		slog.Warn("failed to save deployment snapshot", "error", snapErr)
 		*logs = append(*logs, fmt.Sprintf("Warning: failed to save deployment snapshot: %v", snapErr))
@@ -511,7 +511,7 @@ func saveSnapshotStep(c *kube.Client, logs *[]string, emit func(types.UpdateStep
 // Subscription, then recreates the nightly CatalogSource with image. It
 // returns a nil response to go on.
 func updateApplyCatalog(c *kube.Client, image string, recovery *Recovery, logs *[]string, emit func(types.UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error)) (*types.OperationResponse, error) {
-	emit(types.UpdateStepEvent{Step: "apply_catalog_source", Status: "running", Message: "Applying CatalogSource..."})
+	emit(types.UpdateStepEvent{Step: "apply_catalog_source", Status: "running", Message: "Applying CatalogSource"})
 	if recovery.Subscription != nil {
 		recovery.SubscriptionChanged = true
 		if _, err := c.DeleteIfExists(rhoai.SubscriptionPath()); err != nil {
@@ -520,7 +520,7 @@ func updateApplyCatalog(c *kube.Client, image string, recovery *Recovery, logs *
 		*logs = append(*logs, "OK: Subscription removed while the catalog is replaced (the operator keeps running)")
 	}
 
-	*logs = append(*logs, fmt.Sprintf("Applying CatalogSource %s...", rhoai.CatalogName))
+	*logs = append(*logs, fmt.Sprintf("Applying CatalogSource %s", rhoai.CatalogName))
 	csPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 	recovery.NoteCatalogChanged()
 	// Recreate this source so READY and PackageManifest cannot describe its
@@ -539,8 +539,8 @@ func updateApplyCatalog(c *kube.Client, image string, recovery *Recovery, logs *
 // updateWaitCatalog is Update's wait_catalog_ready step, then the wait for
 // the catalog's channels. It returns a nil response to go on.
 func updateWaitCatalog(c *kube.Client, image string, logs *[]string, emit func(types.UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error)) (*types.OperationResponse, error) {
-	emit(types.UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: "Waiting for CatalogSource to become READY..."})
-	*logs = append(*logs, "Waiting for CatalogSource to become READY...")
+	emit(types.UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: "Waiting for CatalogSource to become READY"})
+	*logs = append(*logs, "Waiting for CatalogSource to become READY")
 	catalogReady, catalogErr := WaitForNightlyCatalogReady(c, image, emit, logs)
 	if msg, code, stopErr := catalogWaitFailure(catalogReady, catalogErr); msg != "" {
 		r, _ := fail(msg, code)
@@ -551,7 +551,7 @@ func updateWaitCatalog(c *kube.Client, image string, logs *[]string, emit func(t
 
 	// Poll PackageManifest until the nightly catalog's channels appear.
 	// The CatalogSource reports READY before OLM refreshes the PackageManifest.
-	emit(types.UpdateStepEvent{Step: "detect_channel", Status: "running", Message: "Waiting for catalog channels to refresh..."})
+	emit(types.UpdateStepEvent{Step: "detect_channel", Status: "running", Message: "Waiting for catalog channels to refresh"})
 	if err := waitForNightlyPackageManifest(c, image, logs); err != nil {
 		return &types.OperationResponse{Success: false, Message: "Operation stopped while waiting for the catalog channels", Logs: *logs}, err
 	}
@@ -562,8 +562,8 @@ func updateWaitCatalog(c *kube.Client, image string, logs *[]string, emit func(t
 // the nightly catalog's channel for image. It returns a nil response to go
 // on.
 func updateDetectChannel(c *kube.Client, image string, channel *string, logs *[]string, emit func(types.UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error)) (*types.OperationResponse, error) {
-	emit(types.UpdateStepEvent{Step: "detect_channel", Status: "running", Message: "Detecting target channel..."})
-	*logs = append(*logs, "Detecting target channel...")
+	emit(types.UpdateStepEvent{Step: "detect_channel", Status: "running", Message: "Detecting target channel"})
+	*logs = append(*logs, "Detecting target channel")
 	var nightlyChannel string
 	var detectErr error
 	for attempt := 1; attempt <= 3; attempt++ {
@@ -595,7 +595,7 @@ func updateDetectChannel(c *kube.Client, image string, channel *string, logs *[]
 func updateDeleteCSV(c *kube.Client, currentCSV types.CSVInfo, recovery *Recovery, logs *[]string, emit func(types.UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error)) (*types.OperationResponse, error) {
 	// Delete the CSV and its InstallPlan so OLM installs the target as a
 	// fresh CSV; a same-version build is not an upgrade OLM would perform.
-	emit(types.UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting old CSV and InstallPlan..."})
+	emit(types.UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting old CSV and InstallPlan"})
 	if ipName := recovery.installPlanName(); ipName != "" {
 		ipPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "installplans", rhoai.SubNS, ipName)
 		if _, err := c.DeleteIfExists(ipPath); err != nil {
@@ -661,8 +661,8 @@ func readCSVMetaRetrying(c *kube.Client, csv string) (meta kube.ObjectMeta, foun
 // target's head CSV and builds the result.
 func verifyUpdateInstall(c *kube.Client, target catalog.Target, recovery *Recovery, logs *[]string, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	// --- Step 8: verify_installplan (wait for OLM's result) ---
-	emit(types.UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: "Waiting for OLM to install the operator..."})
-	*logs = append(*logs, "Waiting for OLM to install the operator...")
+	emit(types.UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: "Waiting for OLM to install the operator"})
+	*logs = append(*logs, "Waiting for OLM to install the operator")
 	outcome := WaitForInstall(c, emit, logs, recovery, target.HeadCSV)
 	if !outcome.Succeeded {
 		recovery.keepNewInstall = outcome.keepNewInstall
@@ -742,7 +742,7 @@ func Update(c *kube.Client, image string, dryRun bool) (*types.OperationResponse
 	}
 
 	logs = append(logs, fmt.Sprintf("Target image: %s", image))
-	logs = append(logs, "[DRY-RUN] Checking prerequisites...")
+	logs = append(logs, "[DRY-RUN] Checking prerequisites")
 
 	ps, err := registry.PullSecret(c)
 	if err != nil {
@@ -1029,7 +1029,7 @@ type reinstallChecks struct {
 // Dev. It returns a nil response to go on.
 func reinstallCheckRequest(c *kube.Client, targetType, image string, opts OperationOptions, rs *reinstallChecks, logs *[]string, emit func(types.UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error)) (*types.OperationResponse, error) {
 	isNightly := rs.isNightly
-	emit(types.UpdateStepEvent{Step: "validate_target", Status: "running", Message: "Validating the build to install..."})
+	emit(types.UpdateStepEvent{Step: "validate_target", Status: "running", Message: "Validating the build to install"})
 	if targetType != "stable" && targetType != "nightly" && targetType != "custom" {
 		rs.recordActivity = false
 		return fail("Invalid build to install", "validation")
@@ -1075,7 +1075,7 @@ func reinstallResolveTarget(c *kube.Client, targetType, image string, rs *reinst
 	approveCSV := ""
 	var targetCRDs map[string][]string
 	if isNightly {
-		emit(types.UpdateStepEvent{Step: "validate_target", Status: "running", Message: "Verifying the selected catalog image..."})
+		emit(types.UpdateStepEvent{Step: "validate_target", Status: "running", Message: "Verifying the selected catalog image"})
 		target, err := catalog.PreflightReinstall(c, image, channelOverride)
 		if err != nil {
 			if c.Context().Err() != nil {
@@ -1228,7 +1228,7 @@ func reinstallCaptureRecovery(c *kube.Client, rs *reinstallChecks, logs *[]strin
 		return fail(blocked, "prerequisites")
 	}
 	if revertDashboard {
-		emit(types.UpdateStepEvent{Step: "validate_target", Status: "running", Message: "Ending the Dashboard Dev session..."})
+		emit(types.UpdateStepEvent{Step: "validate_target", Status: "running", Message: "Ending the Dashboard Dev session"})
 		if err := dashdev.RevertForOperation(c); err != nil {
 			return fail("Could not end the Dashboard Dev session, so the install was not started: "+err.Error(), ErrorCodeDashboardDevActive)
 		}
@@ -1244,7 +1244,7 @@ func reinstallCaptureRecovery(c *kube.Client, rs *reinstallChecks, logs *[]strin
 // returns a nil response to go on.
 func reinstallRemoveOperator(c *kube.Client, csv types.CSVInfo, recovery *Recovery, logs *[]string, emit func(types.UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error)) (*types.OperationResponse, error) {
 	// --- Step 3: delete_catalog_source ---
-	emit(types.UpdateStepEvent{Step: "delete_catalog_source", Status: "running", Message: "Removing nightly CatalogSource..."})
+	emit(types.UpdateStepEvent{Step: "delete_catalog_source", Status: "running", Message: "Removing nightly CatalogSource"})
 	csPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 	switch existed, delErr := c.DeleteIfExists(csPath); {
 	case delErr != nil:
@@ -1259,7 +1259,7 @@ func reinstallRemoveOperator(c *kube.Client, csv types.CSVInfo, recovery *Recove
 	}
 
 	// --- Step 4: delete_subscription ---
-	emit(types.UpdateStepEvent{Step: "delete_subscription", Status: "running", Message: "Removing operator Subscription..."})
+	emit(types.UpdateStepEvent{Step: "delete_subscription", Status: "running", Message: "Removing operator Subscription"})
 	switch existed, delErr := c.DeleteIfExists(rhoai.SubscriptionPath()); {
 	case delErr != nil:
 		return fail(fmt.Sprintf("Failed to delete Subscription: %v", delErr), kube.ErrorCodeFromK8sErr(delErr))
@@ -1273,7 +1273,7 @@ func reinstallRemoveOperator(c *kube.Client, csv types.CSVInfo, recovery *Recove
 	}
 
 	// --- Step 5: delete_csv ---
-	emit(types.UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Removing current CSV..."})
+	emit(types.UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Removing current CSV"})
 	if csv.Name != "" {
 		if _, err := c.DeleteIfExists(CSVPath(csv.Name)); err != nil {
 			return fail("Cannot delete current CSV: "+err.Error(), kube.ErrorCodeFromK8sErr(err))
@@ -1302,7 +1302,7 @@ func reinstallCleanUp(c *kube.Client, logs *[]string, emit func(types.UpdateStep
 	// --- Step 6: cleanup_webhooks ---
 	// Only configurations that can no longer be served are removed; operand
 	// webhooks such as KServe's keep serving while the operator is reinstalled.
-	emit(types.UpdateStepEvent{Step: "cleanup_webhooks", Status: "running", Message: "Cleaning up stale webhooks..."})
+	emit(types.UpdateStepEvent{Step: "cleanup_webhooks", Status: "running", Message: "Cleaning up stale webhooks"})
 	removedWebhooks := CleanupStaleWebhooksForReinstall(c, logs)
 	emit(types.UpdateStepEvent{Step: "cleanup_webhooks", Status: "success", Message: fmt.Sprintf("Removed %d stale webhooks", removedWebhooks)})
 
@@ -1319,7 +1319,7 @@ func reinstallCleanUp(c *kube.Client, logs *[]string, emit func(types.UpdateStep
 	}
 
 	// --- Step 7: patch_crds ---
-	emit(types.UpdateStepEvent{Step: "patch_crds", Status: "running", Message: "Checking CRD conversion webhooks..."})
+	emit(types.UpdateStepEvent{Step: "patch_crds", Status: "running", Message: "Checking CRD conversion webhooks"})
 	patchedCRDs, crdWarnings := patchCRDConversionWebhooks(c)
 	*logs = append(*logs, fmt.Sprintf("CRD conversion: %d CRD(s) with a missing conversion Service switched to strategy None (OLM normally does this when the CSV is deleted)", patchedCRDs))
 	for _, w := range crdWarnings {
@@ -1329,7 +1329,7 @@ func reinstallCleanUp(c *kube.Client, logs *[]string, emit func(types.UpdateStep
 	emit(types.UpdateStepEvent{Step: "patch_crds", Status: "success", Message: fmt.Sprintf("Patched %d CRDs", patchedCRDs)})
 
 	// --- Step 8: wait_propagation ---
-	emit(types.UpdateStepEvent{Step: "wait_propagation", Status: "running", Message: "Waiting for cleanup to propagate..."})
+	emit(types.UpdateStepEvent{Step: "wait_propagation", Status: "running", Message: "Waiting for cleanup to propagate"})
 	if err := kube.Clock().Sleep(c.Context(), propagationWait); err != nil {
 		return &types.OperationResponse{Success: false, Message: "Operation cancelled during cleanup wait.", Logs: *logs}, err
 	}
@@ -1366,7 +1366,7 @@ func reinstallNightlySteps(c *kube.Client, image, channel, approveCSV string, re
 	}
 
 	// --- Step 9: create_catalog_source ---
-	emit(types.UpdateStepEvent{Step: "create_catalog_source", Status: "running", Message: "Creating CatalogSource with nightly image..."})
+	emit(types.UpdateStepEvent{Step: "create_catalog_source", Status: "running", Message: "Creating CatalogSource with nightly image"})
 	csApplyPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 	recovery.NoteCatalogChanged()
 	if _, _, err := c.Apply(csApplyPath, catalog.SourceSpec(image)); err != nil {
@@ -1376,8 +1376,8 @@ func reinstallNightlySteps(c *kube.Client, image, channel, approveCSV string, re
 	emit(types.UpdateStepEvent{Step: "create_catalog_source", Status: "success", Message: "CatalogSource created", Detail: image})
 
 	// --- Step 10: wait_catalog_ready ---
-	emit(types.UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: "Waiting for CatalogSource to become READY..."})
-	logs = append(logs, "Waiting for CatalogSource to become READY...")
+	emit(types.UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: "Waiting for CatalogSource to become READY"})
+	logs = append(logs, "Waiting for CatalogSource to become READY")
 	catalogReady, catalogErr := WaitForNightlyCatalogReady(c, image, emit, &logs)
 	if msg, code, stopErr := catalogWaitFailure(catalogReady, catalogErr); msg != "" {
 		r, _ := fail(msg, code)
@@ -1387,13 +1387,13 @@ func reinstallNightlySteps(c *kube.Client, image, channel, approveCSV string, re
 	emit(types.UpdateStepEvent{Step: "wait_catalog_ready", Status: "success", Message: "CatalogSource is READY"})
 
 	// Poll PackageManifest until the nightly catalog's channels appear (same as UpdateStream)
-	emit(types.UpdateStepEvent{Step: "detect_channel", Status: "running", Message: "Waiting for catalog channels to refresh..."})
+	emit(types.UpdateStepEvent{Step: "detect_channel", Status: "running", Message: "Waiting for catalog channels to refresh"})
 	if err := waitForNightlyPackageManifest(c, image, &logs); err != nil {
 		return &types.OperationResponse{Success: false, Message: "Operation stopped while waiting for the catalog channels", Logs: logs}, err
 	}
 
 	// --- Step 11: detect_channel ---
-	emit(types.UpdateStepEvent{Step: "detect_channel", Status: "running", Message: "Detecting target channel..."})
+	emit(types.UpdateStepEvent{Step: "detect_channel", Status: "running", Message: "Detecting target channel"})
 	exists, channelErr := ChannelExistsInCatalog(c, channel)
 	if channelErr != nil || !exists || channel == "" {
 		msg := fmt.Sprintf("Selected channel %q is unavailable in the replacement catalog", channel)
@@ -1406,7 +1406,7 @@ func reinstallNightlySteps(c *kube.Client, image, channel, approveCSV string, re
 	emit(types.UpdateStepEvent{Step: "detect_channel", Status: "success", Message: "Verified replacement channel: " + channel, Detail: channel})
 
 	// --- Step 12: create_subscription ---
-	emit(types.UpdateStepEvent{Step: "create_subscription", Status: "running", Message: "Creating Subscription to nightly catalog..."})
+	emit(types.UpdateStepEvent{Step: "create_subscription", Status: "running", Message: "Creating Subscription to nightly catalog"})
 	return withRegistryPullCopy(c)(createSubscriptionAndWait(c, rhoai.CatalogName, channel, "nightly", approveCSV, recovery, logs, emit))
 }
 
@@ -1414,7 +1414,7 @@ func reinstallNightlySteps(c *kube.Client, image, channel, approveCSV string, re
 // create the Subscription to the stable catalog and wait for OLM to install it.
 func reinstallStableSteps(c *kube.Client, stableSource, stableChannel, approveCSV string, recovery *Recovery, logs []string, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	// --- Step 9: create_subscription ---
-	emit(types.UpdateStepEvent{Step: "create_subscription", Status: "running", Message: "Creating fresh Subscription to stable catalog..."})
+	emit(types.UpdateStepEvent{Step: "create_subscription", Status: "running", Message: "Creating fresh Subscription to stable catalog"})
 	return withRegistryPullCopy(c)(createSubscriptionAndWait(c, stableSource, stableChannel, "stable", approveCSV, recovery, logs, emit))
 }
 
@@ -1428,7 +1428,7 @@ func createSubscriptionAndWait(c *kube.Client, source, channel, kind, approveCSV
 		if willRetry {
 			slog.Warn("failed to create Subscription, retrying", "target", kind, "attempt", attempt, "error", err, "backoff", backoff)
 			logs = append(logs, fmt.Sprintf("Warning: Subscription creation attempt %d failed: %v -- retrying in %s", attempt, err, backoff))
-			emit(types.UpdateStepEvent{Step: "create_subscription", Status: "running", Message: fmt.Sprintf("Attempt %d failed, retrying...", attempt)})
+			emit(types.UpdateStepEvent{Step: "create_subscription", Status: "running", Message: fmt.Sprintf("Attempt %d failed, retrying", attempt)})
 		}
 	})
 	if cancelErr != nil {
@@ -1444,8 +1444,8 @@ func createSubscriptionAndWait(c *kube.Client, source, channel, kind, approveCSV
 	emit(types.UpdateStepEvent{Step: "create_subscription", Status: "success", Message: "Subscription created", Detail: channel})
 
 	// --- verify_installplan: wait for OLM's result ---
-	emit(types.UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: "Waiting for OLM to install the operator..."})
-	logs = append(logs, "Waiting for OLM to install the operator...")
+	emit(types.UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: "Waiting for OLM to install the operator"})
+	logs = append(logs, "Waiting for OLM to install the operator")
 	outcome := WaitForInstall(c, emit, &logs, recovery, approveCSV)
 	if !outcome.Succeeded {
 		recovery.keepNewInstall = outcome.keepNewInstall
@@ -1632,7 +1632,7 @@ func RefreshStreamWithOptions(c *kube.Client, opts OperationOptions, emit func(t
 	}
 
 	// --- Step 1: verify_csv ---
-	emit(types.UpdateStepEvent{Step: "verify_csv", Status: "running", Message: "Verifying operator is installed..."})
+	emit(types.UpdateStepEvent{Step: "verify_csv", Status: "running", Message: "Verifying operator is installed"})
 
 	if g, err := argo.ReadOperatorGitOps(c); err != nil {
 		return fail("Cannot check whether Argo CD manages the operator: "+err.Error()+". Nothing was changed.", kube.ErrorCodeFromK8sErr(err))
@@ -1691,7 +1691,7 @@ func RefreshStreamWithOptions(c *kube.Client, opts OperationOptions, emit func(t
 	emit(types.UpdateStepEvent{Step: "verify_csv", Status: "success", Message: fmt.Sprintf("CSV to re-deploy: %s", target), Detail: target})
 
 	// --- Step 2: save_snapshot ---
-	emit(types.UpdateStepEvent{Step: "save_snapshot", Status: "running", Message: "Saving deployment snapshot..."})
+	emit(types.UpdateStepEvent{Step: "save_snapshot", Status: "running", Message: "Saving deployment snapshot"})
 	if snapErr := components.SaveDeploymentSnapshot(c); snapErr != nil {
 		slog.Warn("failed to save deployment snapshot", "error", snapErr)
 		logs = append(logs, fmt.Sprintf("Warning: failed to save deployment snapshot: %v", snapErr))
@@ -1702,7 +1702,7 @@ func RefreshStreamWithOptions(c *kube.Client, opts OperationOptions, emit func(t
 	}
 
 	// --- Step 3: get_subscription ---
-	emit(types.UpdateStepEvent{Step: "get_subscription", Status: "running", Message: "Reading current Subscription..."})
+	emit(types.UpdateStepEvent{Step: "get_subscription", Status: "running", Message: "Reading current Subscription"})
 	if subMissing && recorded != nil {
 		// A crash between deleting and recreating the Subscription leaves
 		// none; the spec recorded before that operation is used instead.
@@ -1764,7 +1764,7 @@ func RefreshStreamWithOptions(c *kube.Client, opts OperationOptions, emit func(t
 	// The Subscription goes first: with it still in place, OLM would start a
 	// new InstallPlan as soon as the CSV disappears, and deleting the
 	// Subscription afterwards would garbage-collect that plan mid-install.
-	emit(types.UpdateStepEvent{Step: "delete_subscription", Status: "running", Message: "Deleting Subscription..."})
+	emit(types.UpdateStepEvent{Step: "delete_subscription", Status: "running", Message: "Deleting Subscription"})
 	if _, subDelErr := c.DeleteIfExists(rhoai.SubscriptionPath()); subDelErr != nil {
 		return fail(fmt.Sprintf("Failed to delete Subscription: %v", subDelErr), kube.ErrorCodeFromK8sErr(subDelErr))
 	}
@@ -1776,8 +1776,8 @@ func RefreshStreamWithOptions(c *kube.Client, opts OperationOptions, emit func(t
 	if csv.Name == "" {
 		emit(types.UpdateStepEvent{Step: "delete_csv", Status: "skipped", Message: "No current CSV"})
 	} else {
-		emit(types.UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting CSV to trigger a fresh install..."})
-		logs = append(logs, fmt.Sprintf("Deleting CSV %s...", csv.Name))
+		emit(types.UpdateStepEvent{Step: "delete_csv", Status: "running", Message: "Deleting CSV to trigger a fresh install"})
+		logs = append(logs, fmt.Sprintf("Deleting CSV %s", csv.Name))
 		if _, csvDelErr := c.DeleteIfExists(CSVPath(csv.Name)); csvDelErr != nil {
 			return fail(fmt.Sprintf("Failed to delete CSV %s: %v", csv.Name, csvDelErr), kube.ErrorCodeFromK8sErr(csvDelErr))
 		}
@@ -1786,7 +1786,7 @@ func RefreshStreamWithOptions(c *kube.Client, opts OperationOptions, emit func(t
 	}
 
 	// --- Step 6: wait_cleanup ---
-	emit(types.UpdateStepEvent{Step: "wait_cleanup", Status: "running", Message: "Waiting for the CSV to be removed..."})
+	emit(types.UpdateStepEvent{Step: "wait_cleanup", Status: "running", Message: "Waiting for the CSV to be removed"})
 	if csv.Name != "" {
 		gone, err := waitForCSVGone(c, csv.Name)
 		if err != nil {
@@ -1804,8 +1804,8 @@ func RefreshStreamWithOptions(c *kube.Client, opts OperationOptions, emit func(t
 	emit(types.UpdateStepEvent{Step: "wait_cleanup", Status: "success", Message: "Cleanup propagated"})
 
 	// --- Step 7: recreate_subscription ---
-	emit(types.UpdateStepEvent{Step: "recreate_subscription", Status: "running", Message: "Recreating Subscription..."})
-	logs = append(logs, "Recreating Subscription...")
+	emit(types.UpdateStepEvent{Step: "recreate_subscription", Status: "running", Message: "Recreating Subscription"})
+	logs = append(logs, "Recreating Subscription")
 	newSub := BuildSubscription(recovery.SubscriptionBase(), sub.Source, sub.Channel)
 	if manual {
 		newSub["spec"].(map[string]any)["startingCSV"] = target
@@ -1825,8 +1825,8 @@ func RefreshStreamWithOptions(c *kube.Client, opts OperationOptions, emit func(t
 	emit(types.UpdateStepEvent{Step: "recreate_subscription", Status: "success", Message: "Subscription recreated", Detail: sub.Channel})
 
 	// --- Step 8: verify_installplan (wait for OLM's result) ---
-	emit(types.UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: "Waiting for OLM to reinstall the operator..."})
-	logs = append(logs, "Waiting for OLM to reinstall the operator...")
+	emit(types.UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: "Waiting for OLM to reinstall the operator"})
+	logs = append(logs, "Waiting for OLM to reinstall the operator")
 	outcome := WaitForInstall(c, emit, &logs, recovery, target)
 	if !outcome.Succeeded {
 		recovery.keepNewInstall = outcome.keepNewInstall
@@ -2015,7 +2015,7 @@ func CreatePullSecret(c *kube.Client, auth string) (*types.OperationResponse, er
 	}
 
 	if secretExists {
-		logs = append(logs, "Secret already exists, updating...")
+		logs = append(logs, "Secret already exists, updating")
 		_, _, err = c.Apply(secretPath, secret)
 		if err != nil {
 			return &types.OperationResponse{
@@ -2027,7 +2027,7 @@ func CreatePullSecret(c *kube.Client, auth string) (*types.OperationResponse, er
 		}
 		logs = append(logs, "OK: Pull secret updated")
 	} else {
-		logs = append(logs, "Creating new pull secret...")
+		logs = append(logs, "Creating new pull secret")
 		secretsPath := rhoai.NamespacedPath("v1", "secrets", "kube-system", "")
 		data, marshalErr := json.Marshal(secret)
 		if marshalErr != nil {

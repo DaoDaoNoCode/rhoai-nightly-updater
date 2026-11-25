@@ -313,7 +313,7 @@ func Setup(c *kube.Client) (*types.OperationResponse, error) {
 		return &types.OperationResponse{Success: false, Message: block.Reason + " Nothing was changed.", Logs: logs, ErrorCode: "prerequisites"}, nil
 	}
 
-	logs = append(logs, "Creating MLflow CR...")
+	logs = append(logs, "Creating MLflow CR")
 	mlflowCR := map[string]any{
 		"apiVersion": APIGroup,
 		"kind":       "MLflow",
@@ -411,7 +411,7 @@ func Teardown(c *kube.Client) (*types.OperationResponse, error) {
 	if pvcErr == nil {
 		pvcs, pvcErr = mlflowOwnedPVCs(c, ns, cr.Metadata.UID)
 	}
-	logs = append(logs, "Deleting MLflow CR...")
+	logs = append(logs, "Deleting MLflow CR")
 	crPath := rhoai.ClusterPath(APIGroup, "mlflows", CRName)
 	if _, delErr := kube.DeleteWithUID(c, crPath, cr.Metadata.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
 		code := kube.ErrorCodeFromK8sErr(delErr)
@@ -497,7 +497,7 @@ func DeployPR(c *kube.Client, prNumber int) (*types.OperationResponse, error) {
 	}
 
 	tag := fmt.Sprintf("odh-pr-%d", prNumber)
-	logs = append(logs, fmt.Sprintf("Resolving quay.io/%s:%s...", mlflowImageRepo, tag))
+	logs = append(logs, fmt.Sprintf("Resolving quay.io/%s:%s", mlflowImageRepo, tag))
 	image, found, err := resolveMLflowPRImage(c.Context(), prNumber)
 	if err != nil {
 		return fail(fmt.Sprintf("Cannot verify the PR image on Quay: %v. No changes were made.", err), "network", "resolve failed")

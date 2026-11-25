@@ -69,7 +69,7 @@ describe("DashboardImages build details", () => {
     expect(find.parentElement?.textContent).toMatch(/^built 2h ago .* · committed 5h ago .* · Find in nightlies$/);
     expect(screen.getByText("3 commits behind main")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Compare/ })).toHaveAttribute("href", "https://github.com/opendatahub-io/odh-dashboard/compare/x...main");
-    expect(screen.queryByText("Checking...")).not.toBeInTheDocument();
+    expect(screen.queryByText("Checking")).not.toBeInTheDocument();
   });
 
   it.each([
@@ -123,10 +123,10 @@ describe("DashboardImages build details", () => {
   it("shows a spinner while the details load and an inline note when they fail", () => {
     const { rerender } = render(<DashboardImages images={[image("rhods-dashboard", { running: "main", flavor: "rhoai" }), image("notebooks-ui", { running: "release", currentImage: "r", defaultImage: "r" })]} defaultExpanded
       buildDetails={details([], { loading: true })} />);
-    expect(screen.getAllByText("Checking...")).toHaveLength(1);
+    expect(screen.getAllByText("Checking")).toHaveLength(1);
     rerender(<DashboardImages images={[image("rhods-dashboard", { running: "main", flavor: "rhoai" })]} defaultExpanded
       buildDetails={{ builds: [], loading: false, rateLimited: false, error: { status: 500, errorCode: "internal", message: "boom" } as never }} />);
-    expect(screen.queryByText("Checking...")).not.toBeInTheDocument();
+    expect(screen.queryByText("Checking")).not.toBeInTheDocument();
     expect(screen.getByText(/Build details could not be loaded/)).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });

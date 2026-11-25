@@ -106,7 +106,7 @@ export const Overview: React.FC<{
         const reasonId = `overview-${row.id}-reason`;
         return (
           <Stack>
-            <StackItem><TooltipButton variant="link" isInline className={ONE_LINE} onClick={() => onSetUp(row, step.setup)} disabledReason={reason} aria-describedby={reason ? reasonId : undefined}>{step.label}…</TooltipButton></StackItem>
+            <StackItem><TooltipButton variant="link" isInline className={ONE_LINE} onClick={() => onSetUp(row, step.setup)} disabledReason={reason} aria-describedby={reason ? reasonId : undefined}>{step.label}</TooltipButton></StackItem>
             {reason && <StackItem><HelperText id={reasonId}><HelperTextItem>{reason}</HelperTextItem></HelperText></StackItem>}
           </Stack>
         );
@@ -117,7 +117,7 @@ export const Overview: React.FC<{
       case "migrate":
         return setUpReason
           ? <Button variant="link" isInline className={ONE_LINE} onClick={() => onShowIssue(row, "storage")}>Show issue</Button>
-          : <Button variant="link" isInline className={ONE_LINE} onClick={onMigrate}>Migrate storage…</Button>;
+          : <Button variant="link" isInline className={ONE_LINE} onClick={onMigrate}>Migrate storage</Button>;
       case "choose-project":
         return <Button variant="link" isInline className={ONE_LINE} onClick={() => onOpenTab(row)}>Choose a project</Button>;
       default:
@@ -176,7 +176,7 @@ export const Overview: React.FC<{
       </StackItem>
       {onCleanup && (
         <StackItem>
-          <CleanupSection id="overview-cleanup" label="Clean up everything…" onClick={onCleanup} reason={baseReason}
+          <CleanupSection id="overview-cleanup" label="Clean up everything" onClick={onCleanup} reason={baseReason}
             text="Deletes everything this tool created on this cluster: it unpublishes its models from Models as a Service, then deletes the workbenches (their storage only if you tick it), the pipeline servers, the S3 storage, MLflow, the model registry, the playgrounds, the models, the inference gateway, the distributed workloads setup and the MaaS platform. You choose what goes, then it runs as one operation." />
         </StackItem>
       )}

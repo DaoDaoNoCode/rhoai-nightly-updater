@@ -178,7 +178,7 @@ func queueObjects(c *kube.Client, project string) []toolObject {
 func (r *run) setup(req types.KueueRequest) (*types.OperationResponse, error) {
 	c, project := r.c, req.Project
 	image := kube.FirstNonEmpty(req.RayImage, DefaultRayImage)
-	r.step("check", "running", fmt.Sprintf("Checking that Kueue can run workloads in %s...", project))
+	r.step("check", "running", fmt.Sprintf("Checking that Kueue can run workloads in %s", project))
 	rec, err := ReadRecord(c)
 	if err != nil {
 		return r.fail("check", err.Error()+" Nothing was changed.", codeOf(err), "record read failed")
@@ -302,7 +302,7 @@ func (r *run) setup(req types.KueueRequest) (*types.OperationResponse, error) {
 	r.step("check", "success", fmt.Sprintf("Kueue is ready; queues for %s in %s.", describeQuota(), project))
 
 	// Step 1 — create queues and persist each UID immediately after create.
-	r.step("queues", "running", fmt.Sprintf("Creating ResourceFlavor %s, ClusterQueue %s and LocalQueue %s...", FlavorName, ClusterQueueName, LocalQueueName))
+	r.step("queues", "running", fmt.Sprintf("Creating ResourceFlavor %s, ClusterQueue %s and LocalQueue %s", FlavorName, ClusterQueueName, LocalQueueName))
 	if _, err := updateRecord(c, func(e *Record) { e.Project = project; e.ProjectUID = ns.Metadata.UID }); err != nil {
 		return r.fail("queues", err.Error()+" Nothing was changed.", codeOf(err), "record write failed")
 	}
@@ -328,7 +328,7 @@ func (r *run) setup(req types.KueueRequest) (*types.OperationResponse, error) {
 	if labelled {
 		r.step("project", "success", fmt.Sprintf("Project %s already has the label %s=true.", project, ProjectLabel))
 	} else {
-		r.step("project", "running", fmt.Sprintf("Labelling project %s %s=true...", project, ProjectLabel))
+		r.step("project", "running", fmt.Sprintf("Labelling project %s %s=true", project, ProjectLabel))
 		if _, err := updateRecord(c, func(e *Record) { e.LabelAdded, e.LabelPrior = true, "absent" }); err != nil {
 			return r.fail("project", err.Error()+" The project was not labelled.", codeOf(err), "record write failed")
 		}
@@ -347,7 +347,7 @@ func (r *run) setup(req types.KueueRequest) (*types.OperationResponse, error) {
 		slog.Info("kueue setup", "project", project, "user", kube.GetUser(c))
 		return r.done(fmt.Sprintf("Distributed workloads are set up in %s: LocalQueue %s.", project, LocalQueueName))
 	}
-	r.step("samples", "running", "Creating the samples...")
+	r.step("samples", "running", "Creating the samples")
 	var made []string
 	for _, kind := range samples {
 		if samplePresent[kind] {
@@ -480,7 +480,7 @@ func (r *run) deleteSample(rec Record, kind string) (string, string) {
 }
 
 func (r *run) deleteSampleOnly(kind string) (*types.OperationResponse, error) {
-	r.step("samples", "running", fmt.Sprintf("Deleting %s...", sampleText(kind)))
+	r.step("samples", "running", fmt.Sprintf("Deleting %s", sampleText(kind)))
 	rec, err := ReadRecord(r.c)
 	if err != nil {
 		return r.fail("samples", err.Error()+" Nothing was deleted.", codeOf(err), "record read failed")
@@ -546,7 +546,7 @@ func queueUsers(c *kube.Client, o toolObject, rec Record) ([]string, error) {
 // elsewhere during Clean up (components step).
 func (r *run) teardown() (*types.OperationResponse, error) {
 	c := r.c
-	r.step("samples", "running", "Deleting the samples...")
+	r.step("samples", "running", "Deleting the samples")
 	rec, err := ReadRecord(c)
 	if err != nil {
 		return r.fail("samples", err.Error()+" Nothing was deleted.", codeOf(err), "record read failed")
@@ -576,7 +576,7 @@ func (r *run) teardown() (*types.OperationResponse, error) {
 	}
 	r.step("samples", "success", "No sample of this tool is left.")
 
-	r.step("queues", "running", fmt.Sprintf("Deleting LocalQueue %s, ClusterQueue %s and ResourceFlavor %s...", LocalQueueName, ClusterQueueName, FlavorName))
+	r.step("queues", "running", fmt.Sprintf("Deleting LocalQueue %s, ClusterQueue %s and ResourceFlavor %s", LocalQueueName, ClusterQueueName, FlavorName))
 	objs := queueObjects(c, rec.Project)
 	for i := len(objs) - 1; i >= 0; i-- {
 		o := objs[i]
@@ -621,7 +621,7 @@ func (r *run) teardown() (*types.OperationResponse, error) {
 	r.step("queues", "success", "No queue of this tool is left.")
 
 	var kept []string
-	r.step("project", "running", "Checking the project label...")
+	r.step("project", "running", "Checking the project label")
 	switch {
 	case !rec.LabelAdded:
 		r.step("project", "success", "This tool did not add the project's Kueue label; it stays as it is.")
@@ -638,7 +638,7 @@ func (r *run) teardown() (*types.OperationResponse, error) {
 		r.step("project", "success", msg)
 	}
 
-	r.step("opt-in", "running", "Turning back the dashboard opt-in...")
+	r.step("opt-in", "running", "Turning back the dashboard opt-in")
 	msg, code := r.restoreOptIn()
 	if code != "" {
 		return r.fail("opt-in", msg, code, "opt-in restore failed")
@@ -746,7 +746,7 @@ func previousText(v *bool) string {
 // changes are stored on the record.
 func (r *run) optIn() (*types.OperationResponse, error) {
 	c := r.c
-	r.step("check", "running", "Checking the dashboard's settings...")
+	r.step("check", "running", "Checking the dashboard's settings")
 	rec, err := ReadRecord(c)
 	if err != nil {
 		return r.fail("check", err.Error()+" Nothing was changed.", codeOf(err), "record read failed")
@@ -798,7 +798,7 @@ func (r *run) optIn() (*types.OperationResponse, error) {
 	if !turnOn {
 		r.step("dashboard", "success", "The dashboard's Kueue switch is on already (disableKueue: false); it stays as it is.")
 	} else {
-		r.step("dashboard", "running", "Setting disableKueue to false in the dashboard's settings...")
+		r.step("dashboard", "running", "Setting disableKueue to false in the dashboard's settings")
 		if _, err := updateRecord(c, func(e *Record) {
 			if e.OptIn == nil {
 				e.OptIn = &OptIn{}
@@ -816,7 +816,7 @@ func (r *run) optIn() (*types.OperationResponse, error) {
 	if pFound {
 		r.step("profile", "success", fmt.Sprintf("Hardware profile %s is there.", ProfileName))
 	} else {
-		r.step("profile", "running", fmt.Sprintf("Creating hardware profile %s...", ProfileName))
+		r.step("profile", "running", fmt.Sprintf("Creating hardware profile %s", ProfileName))
 		pm, err := create(c, rhoai.NamespacedPath(profileAPI, "hardwareprofiles", apps, ""), profile, false)
 		if err != nil {
 			return r.fail("profile", fmt.Sprintf("Cannot create hardware profile %s: %v. The dashboard switch stays; turn the opt-in off to restore it.", ProfileName, err), codeOf(err), "profile create failed")
@@ -873,7 +873,7 @@ func (r *run) liveSetupProblem(rec Record) (string, string) {
 }
 
 func (r *run) optOut() (*types.OperationResponse, error) {
-	r.step("opt-in", "running", "Turning back the dashboard opt-in...")
+	r.step("opt-in", "running", "Turning back the dashboard opt-in")
 	msg, code := r.restoreOptIn()
 	if code != "" {
 		return r.fail("opt-in", msg, code, "opt-in restore failed")

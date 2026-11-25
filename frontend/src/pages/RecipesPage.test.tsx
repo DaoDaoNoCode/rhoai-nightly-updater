@@ -104,7 +104,7 @@ describe("Recipes page", () => {
       ...editorReads,
       "GET /api/recipes/run": () => jsonResponse(status),
       "POST /api/recipes/plan": okPlan(),
-      "POST /api/recipes/run": () => { status = runStatus({ steps: steps(0, "running") }, { running: true, step: { step: "rhoai", status: "running", message: "Checking RHOAI..." } }); return jsonResponse({ runId: "run1" }, 202); },
+      "POST /api/recipes/run": () => { status = runStatus({ steps: steps(0, "running") }, { running: true, step: { step: "rhoai", status: "running", message: "Checking RHOAI" } }); return jsonResponse({ runId: "run1" }, 202); },
     });
     renderPage(<RecipesPage />, "/recipes");
     await settleApps();
@@ -147,7 +147,7 @@ describe("Recipes page", () => {
     await dialogClosed();
     // One run at a time: no editor while it runs.
     expect(screen.queryByRole("button", { name: "Review and run" })).not.toBeInTheDocument();
-    expect(screen.getByText(/Checking RHOAI\.\.\./)).toBeInTheDocument();
+    expect(screen.getByText(/Checking RHOAI\. /)).toBeInTheDocument();
   });
 
   it("review: a plan with problems lists them, with a link to the page that fixes each, and Run recipe stays off; nothing was changed", async () => {
@@ -307,7 +307,7 @@ describe("Recipes page", () => {
     const { unmount } = renderPage(<RecipesPage />, "/recipes", { operation: async () => RECIPE_OPERATION });
     await settleApps();
     await settle();
-    expect(screen.getByRole("list", { name: "Recipe dev: steps" })).toHaveTextContent(/S3 storageStarting\.\.\. 1:0\d so far/);
+    expect(screen.getByRole("list", { name: "Recipe dev: steps" })).toHaveTextContent(/S3 storageStarting\. 1:0\d so far/);
     unmount();
     // Another pod runs two steps: no per-step progress there, so each running row names the pod.
     const two = steps(4, "running").map((s) => (s.id === "mlflow" ? { ...s, status: "running" as const, startedAt: new Date(Date.now() - 30_000).toISOString() } : s));
@@ -459,7 +459,7 @@ describe("Recipes page", () => {
     await settleApps();
     await settle();
     expect(screen.getByText("Step 5 of 5 failed: Pipeline server")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up..." }));
+    fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up" }));
     const dialog = screen.getByRole("dialog", { name: /Clean up what recipe dev set up\?/ });
     await settle();
     expect(within(dialog).getAllByRole("checkbox").map((c) => [c.getAttribute("id"), (c as HTMLInputElement).checked])).toEqual([
@@ -524,7 +524,7 @@ describe("Recipes page", () => {
     renderPage(<RecipesPage />, "/recipes");
     await settleApps();
     await settle();
-    fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up..." }));
+    fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up" }));
     const dialog = screen.getByRole("dialog");
     await settle();
     expect(within(dialog).getAllByRole("checkbox").map((c) => c.getAttribute("id"))).toEqual(["recipe-cleanup-components"]);
@@ -547,7 +547,7 @@ describe("Recipes page", () => {
     renderPage(<RecipesPage />, "/recipes");
     await settleApps();
     await settle();
-    fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up..." }));
+    fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up" }));
     const dialog = screen.getByRole("dialog");
     await settle();
     expect(dialog).toHaveTextContent("This clean-up does not delete the S3 storage, MLflow or a pipeline server in a project the recipe did not create. Their status could not be read.");

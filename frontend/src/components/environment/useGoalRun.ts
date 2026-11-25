@@ -117,7 +117,7 @@ export function useGoalRun(now: () => number = Date.now, sleep: (ms: number) => 
     const shown = steps.map(({ id, title: t }) => ({ id, title: t }));
     setRun({ title, kind, startedAt: now(), steps: preflight ? [CHECK_STEP, ...shown] : shown, states: {}, running: true, result: null });
     if (preflight) {
-      setStep(CHECK_STEP.id, { status: "running", message: "Checking..." });
+      setStep(CHECK_STEP.id, { status: "running", message: "Checking" });
       let reason: string | null;
       try {
         reason = await preflight();
@@ -136,7 +136,7 @@ export function useGoalRun(now: () => number = Date.now, sleep: (ms: number) => 
     let lastMessage = "";
     let result: GoalRun["result"] = { success: true, message: doneMessage ?? (steps.length > 1 ? `All ${steps.length} parts are done.` : "") };
     for (const step of steps) {
-      setStep(step.id, { status: "running", message: kind === "setup" ? "Creating..." : "Working..." });
+      setStep(step.id, { status: "running", message: kind === "setup" ? "Creating" : "Working" });
       const t0 = now();
       let res: OperationResponse;
       try {

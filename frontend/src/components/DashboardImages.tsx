@@ -236,7 +236,7 @@ export const DashboardImages: React.FC<DashboardImagesProps> = ({ images, defaul
                             {build && <DivergenceChip build={build} retryAfterSeconds={buildDetails?.retryAfterSeconds} />}
                             {checking && (
                               <FlexItem className="pf-v6-u-font-size-sm pf-v6-u-text-color-subtle">
-                                <Spinner size="sm" aria-hidden="true" className="pf-v6-u-mr-xs" />Checking...
+                                <Spinner size="sm" aria-hidden="true" className="pf-v6-u-mr-xs" />Checking
                               </FlexItem>
                             )}
                           </Flex>

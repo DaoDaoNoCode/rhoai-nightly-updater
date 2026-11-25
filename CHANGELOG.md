@@ -169,6 +169,14 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Changed
 
+- **No "..." after button labels and progress text.** Buttons and menu
+  items that open a dialog read as their action (**Clean up everything**,
+  **Turn back**, **Install**, **Delete workbench**), and progress and
+  loading text is a plain phrase beside its spinner ("Looking up the newest
+  nightly build", "Checking your permissions"), as PatternFly writes them:
+  an ellipsis there marks only omitted or truncated text. The step
+  messages of every Environment, Recipes and Status operation lost theirs
+  too. ESLint now fails on a frontend string that ends with one.
 - **Recipes set up what every feature needs in one step.** A recipe run
   had a prerequisites step per feature (What Pipelines needs, What MLflow
   needs, What Models needs, ...), each with its own operator installs and
@@ -326,7 +334,7 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 - **The Distributed workloads tab can turn Kueue back.** Once its setup
   was cleaned up, the prerequisites still read "kueue Unmanaged (turned on
   by this tool)", but only Clean up everything could turn it back. The
-  Kueue part now offers **Turn back...** while this tool still owns the
+  Kueue part now offers **Turn back** while this tool still owns the
   setting, with Clean up's confirmation words and Clean up's own request and
   checks. While a ClusterQueue or LocalQueue is on the cluster (the status
   now lists them), or they cannot be read, it is off and says why.
@@ -855,14 +863,14 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   first, goes into `nightly-dspa-s3` and the dashboard Connection. Deleting
   the pipeline server deletes the user. Migrate storage ends in the same
   state. Storage an earlier version set up shows **Not secured** (S3
-  storage tab, Pipelines tab, Overview) with **Secure S3 storage...**: a new
+  storage tab, Pipelines tab, Overview) with **Secure S3 storage**: a new
   admin key and a key per recorded pipeline server, never run on its own;
   until then a new pipeline server is not set up. Restart workbenches and
   model deployments that use the Connection afterwards. Any project's key
   still reaches every project's artifacts in the bucket (SECURITY.md).
   `make test-seaweedfs-podman` checks it against the pinned SeaweedFS image.
   Keys of pipeline servers that no longer exist show as **Leftover keys**,
-  removed with **Remove leftover keys...** after a confirmation that lists
+  removed with **Remove leftover keys** after a confirmation that lists
   them. The first Set up or Repair with this version restarts SeaweedFS once
   (its pod template gets a checksum of the admin keys). No RBAC change.
 
@@ -968,7 +976,7 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   rows that differ with their parents. Only real problems count as
   differences to fix, not user choices or values the API server fills in;
   **Fix** adds or removes exactly the reviewed ones. **Reset to the release
-  default…**: a soft reset changes in place only what differs, keeping the
+  default**: a soft reset changes in place only what differs, keeping the
   workbench and AI hub namespaces; a hard reset (typed DSC name) deletes the
   DSC and creates the release default with the same name and namespaces,
   after validating the new spec against the live DSC in a dry run; it
@@ -1950,7 +1958,7 @@ changed.
   you choose, the GA release, any nightly build (older ones too) or a
   custom catalog image; it is also the last resort when Update and
   Re-deploy cannot recover the operator. Its button reads **Choose a
-  build...**, the form's choice **Install**, and the confirmation asks you
+  build**, the form's choice **Install**, and the confirmation asks you
   to type `install`. Messages, the activity log, help and docs use the new
   name; the API and metrics names stay.
 - Rows in cards (Recovery, Environment, Cluster setup) are separated by
@@ -2020,7 +2028,7 @@ changed.
 - In **Install a different build**, each choice's description touched the
   next choice: the choices were not inside a form, and PatternFly sets
   the space between stacked choices only on forms. The choices, the build
-  fields and the **Install...** button are now one form.
+  fields and the **Install** button are now one form.
 
 - Links to the RHOAI dashboard (the app launcher's **RHOAI dashboard**,
   Dashboard Dev's **Open the dashboard**, a pipeline server's **Open

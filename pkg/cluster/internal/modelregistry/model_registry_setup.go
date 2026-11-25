@@ -76,7 +76,7 @@ func readPlacement(c *kube.Client) (placement, error) {
 
 func setup(m *serving.Run, samples bool, annotations map[string]string) (*types.OperationResponse, error) {
 	c := m.Client
-	m.Step("check", "running", "Checking that the cluster can run a model registry...")
+	m.Step("check", "running", "Checking that the cluster can run a model registry")
 	p, err := readPlacement(c)
 	switch {
 	case err != nil:
@@ -126,7 +126,7 @@ func setup(m *serving.Run, samples bool, annotations map[string]string) (*types.
 	if found {
 		m.Step("create", "success", fmt.Sprintf("Model registry %s/%s exists (created by this tool).", ns, Name))
 	} else {
-		m.Step("create", "running", fmt.Sprintf("Creating model registry %s/%s with the default database...", ns, Name))
+		m.Step("create", "running", fmt.Sprintf("Creating model registry %s/%s with the default database", ns, Name))
 		if err := create(c, ns, annotations, false); err != nil {
 			if kube.IsK8sConflict(err) {
 				return m.Fail("create", fmt.Sprintf("A model registry named %s was created in %s by someone else meanwhile. Nothing was changed.", Name, ns), "conflict", "create conflict")
@@ -163,7 +163,7 @@ func setup(m *serving.Run, samples bool, annotations map[string]string) (*types.
 		case address == "":
 			m.Step("samples", "success", "Skipped: the registry has no address through the cluster's gateway, which sample data is added through.")
 		default:
-			m.Step("samples", "running", fmt.Sprintf("Registering sample model %s...", SampleName()))
+			m.Step("samples", "running", fmt.Sprintf("Registering sample model %s", SampleName()))
 			if err := registerSample(c, address, func(s string) { m.Logs = append(m.Logs, s) }); err != nil {
 				code := mlflow.SampleErrorCode(err)
 				hint := ""
@@ -194,7 +194,7 @@ func create(c *kube.Client, ns string, annotations map[string]string, dryRun boo
 // message as it changes, then reads the Service's gateway address.
 func waitReady(m *serving.Run, ns, uid string) (string, string, *types.OperationResponse, error) {
 	c := m.Client
-	m.Step("ready", "running", "Waiting for the registry to be available (usually 1 to 3 minutes)...")
+	m.Step("ready", "running", "Waiting for the registry to be available (usually 1 to 3 minutes)")
 	last := ""
 	done, err := kube.WaitForGone(c, readyTimeout, poll, func(cc *kube.Client) (bool, error) {
 		o, found, err := readCR(cc, ns)
@@ -248,7 +248,7 @@ func waitReady(m *serving.Run, ns, uid string) (string, string, *types.Operation
 // with it, and with that every registered model.
 func teardown(m *serving.Run) (*types.OperationResponse, error) {
 	c := m.Client
-	m.Step("check", "running", "Checking the model registry...")
+	m.Step("check", "running", "Checking the model registry")
 	rec, err := ReadRecord(c)
 	if err != nil {
 		return m.Fail("check", err.Error()+" Nothing was deleted.", kube.ErrorCodeFromK8sErr(err), "record read failed")
@@ -283,7 +283,7 @@ func teardown(m *serving.Run) (*types.OperationResponse, error) {
 
 	path := crPath(ns)
 	if !o.Metadata.Terminating() {
-		m.Step("delete", "running", fmt.Sprintf("Deleting model registry %s/%s with its database...", ns, Name))
+		m.Step("delete", "running", fmt.Sprintf("Deleting model registry %s/%s with its database", ns, Name))
 		if _, err := kube.DeleteWithUID(c, path, o.Metadata.UID); err != nil && !kube.IsK8sNotFound(err) {
 			code := kube.ErrorCodeFromK8sErr(err)
 			if kube.IsK8sConflict(err) {
@@ -295,7 +295,7 @@ func teardown(m *serving.Run) (*types.OperationResponse, error) {
 	}
 	m.Step("delete", "success", fmt.Sprintf("Model registry %s/%s is being deleted; its operator and the garbage collector remove its database.", ns, Name))
 
-	m.Step("gone", "running", "Waiting for the registry to be gone...")
+	m.Step("gone", "running", "Waiting for the registry to be gone")
 	gone, err := kube.WaitForDeletion(c, path, deleteTimeout, poll)
 	if err != nil {
 		return m.Fail("gone", fmt.Sprintf("Deletion was requested, but whether the registry is gone cannot be checked: %v.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "in_progress"), "gone check failed")

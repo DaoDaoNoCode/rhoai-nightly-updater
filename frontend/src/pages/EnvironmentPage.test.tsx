@@ -53,7 +53,7 @@ describe("Environment page", () => {
     expect(await row("MaaS")).toHaveTextContent(/Not set up\s*Set up MaaS/);
     expect(await row("Pipelines")).toHaveTextContent("Not set up in any project");
     expect(within(await row("Pipelines")).getByRole("button", { name: "Choose a project" })).toHaveClass("pf-m-inline");
-    expect(within(await row("MLflow")).getByRole("button", { name: "Set up MLflow…" })).toBeInTheDocument();
+    expect(within(await row("MLflow")).getByRole("button", { name: "Set up MLflow" })).toBeInTheDocument();
     // No endpoints, logins or teardown on the Overview.
     expect(screen.getByRole("tabpanel")).not.toHaveTextContent(/seaweedfs|Password|Tear down/);
   });

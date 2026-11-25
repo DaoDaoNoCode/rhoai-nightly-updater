@@ -191,7 +191,7 @@ func (m *Run) WaitKuadrantKindAdmissible(step string) (*types.OperationResponse,
 		}
 		if !shown {
 			shown = true
-			m.Step(step, "running", fmt.Sprintf("Waiting for CRD %s to be Established (up to %s)...", KuadrantCRD, ClockText(kuadrantEstablishWait)))
+			m.Step(step, "running", fmt.Sprintf("Waiting for CRD %s to be Established (up to %s)", KuadrantCRD, ClockText(kuadrantEstablishWait)))
 		}
 		return false, nil
 	})
@@ -216,7 +216,7 @@ func (m *Run) WaitKuadrantKindAdmissible(step string) (*types.OperationResponse,
 	if wait <= 0 {
 		return nil, nil
 	}
-	m.Step(step, "running", fmt.Sprintf("Waiting for the API server to accept the new Kuadrant type (up to %d seconds)...", int((wait+time.Second-1)/time.Second)))
+	m.Step(step, "running", fmt.Sprintf("Waiting for the API server to accept the new Kuadrant type (up to %d seconds)", int((wait+time.Second-1)/time.Second)))
 	if err := kube.Clock().Sleep(c.Context(), wait); err != nil {
 		return m.Fail(step, fmt.Sprintf("Stopped waiting for the API server to accept the new Kuadrant type: %v. The Kuadrant CR was not created.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "kuadrant crd wait failed")
 	}

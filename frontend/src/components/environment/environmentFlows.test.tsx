@@ -41,7 +41,7 @@ describe("Clean up", () => {
       ),
     });
     renderAt("/test-resources");
-    fireEvent.click(await screen.findByRole("button", { name: "Clean up everything…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Clean up everything" }));
     const dialog = await screen.findByRole("dialog", { name: /Clean up everything\?/ });
     for (const name of ["Pipeline server in a", "Pipeline server in b", "S3 storage", "MLflow server"]) {
       expect(within(dialog).getByRole("checkbox", { name })).toBeChecked();
@@ -119,7 +119,7 @@ describe("Clean up", () => {
       ),
     });
     renderAt("/test-resources");
-    fireEvent.click(await screen.findByRole("button", { name: "Clean up everything…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Clean up everything" }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
     const run = await screen.findByRole("dialog", { name: "Clean up" });
     expect(await within(run).findByText("Clean up: stopped")).toBeInTheDocument();

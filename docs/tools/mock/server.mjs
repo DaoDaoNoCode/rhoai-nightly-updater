@@ -218,10 +218,10 @@ async function secureStream(req, res) {
   const keptNames = kept;
   const steps = [
     { step: "check", status: "success", message: `${servers.length === 1 ? "OK: Found 1 pipeline server to give a key of its own" : `OK: Found ${servers.length} pipeline servers to give each a key of its own`}; left on the old key: ${keptNames.join(", ")}` },
-    { step: "rollout", status: "running", message: "Waiting up to 1m30s for SeaweedFS to become ready..." },
+    { step: "rollout", status: "running", message: "Waiting up to 1m30s for SeaweedFS to become ready" },
     { step: "rollout", status: "success", message: "OK: The S3 storage runs with the new admin key; the old key no longer works" },
     ...servers.flatMap((n) => [
-      { step: `server:${n}`, status: "running", message: "Checking the new key against the storage..." },
+      { step: `server:${n}`, status: "running", message: "Checking the new key against the storage" },
       { step: `server:${n}`, status: "success", message: `OK: Pipeline server ${n} uses SeaweedFS user rnu-dspa-${n.split("/")[0]}` },
     ]),
   ];
@@ -264,7 +264,7 @@ async function cleanupStream(req, res) {
   let n = 0;
   const send = (ev) => res.write(`data: ${JSON.stringify({ ...ev, elapsedMs: ++n * 3000 })}\n\n`);
   for (const p of parts) {
-    send({ step: p.id, status: "running", message: `Deleting ${p.title}...` });
+    send({ step: p.id, status: "running", message: `Deleting ${p.title}` });
     await nextStep();
     if (res.destroyed) return;
     p.apply();
@@ -307,7 +307,7 @@ async function modelsStream(req, res) {
   const m = modelsWorld();
   const done = [];
   if (action === "check") {
-    send({ step: "callable", status: "running", message: `Calling ${model} in '${project}' once...` });
+    send({ step: "callable", status: "running", message: `Calling ${model} in '${project}' once` });
     await nextStep();
     const msg = `Answers requests: a request for model "${model}" got 200.`;
     m.items = (m.items ?? []).map((i) => (i.namespace === project && i.name === model ? { ...i, callCheck: { result: "ok", ok: true, status: 200, message: msg, at: new Date().toISOString() } } : i));
@@ -315,7 +315,7 @@ async function modelsStream(req, res) {
     done.push(msg);
   } else if (action === "disallow") {
     send({ step: "check", status: "success", message: "Checked." });
-    send({ step: "gateway", status: "running", message: `Taking '${project}' off the projects the inference gateway allows...` });
+    send({ step: "gateway", status: "running", message: `Taking '${project}' off the projects the inference gateway allows` });
     await nextStep();
     const gw = world.resources.inferenceGateway;
     world.resources.inferenceGateway = { ...gw, allowedProjects: gw.allowedProjects.filter((p) => p !== project), unusedProjects: (gw.unusedProjects ?? []).filter((p) => p !== project), goneProjects: (gw.goneProjects ?? []).filter((p) => p !== project) };
@@ -326,7 +326,7 @@ async function modelsStream(req, res) {
     send({ step: "check", status: "running", message: `Checking the inference gateway and project '${project}'...` });
     await nextStep();
     send({ step: "check", status: "success", message: "The gateway is this tool's; the project exists." });
-    send({ step: "gateway", status: "running", message: `Adding '${project}' to the projects the inference gateway allows...` });
+    send({ step: "gateway", status: "running", message: `Adding '${project}' to the projects the inference gateway allows` });
     await nextStep();
     const gw = world.resources.inferenceGateway;
     const allowed = [gw.allowedProjects[0], ...[...gw.allowedProjects.slice(1), project].sort()];
@@ -339,7 +339,7 @@ async function modelsStream(req, res) {
     // A model set up through MaaS only is unpublished first, in the same
     // operation (pkg/cluster unpublishMaaSOnly).
     if (project && (m.items ?? []).some((i) => i.namespace === project && i.name === model && i.maasOnlySetup)) {
-      send({ step: "unpublish", status: "running", message: "The model is reached through MaaS only, so it is unpublished first..." });
+      send({ step: "unpublish", status: "running", message: "The model is reached through MaaS only, so it is unpublished first" });
       await nextStep();
       F.setMaaSPublished(world.resources, project, model, false);
       world.maas = { ...world.maas, items: (world.maas.items ?? []).map((i) => (i.namespace === project && i.name === model ? F.maasModel(false, { name: model }) : i)) };
@@ -354,7 +354,7 @@ async function modelsStream(req, res) {
       done.push(msg);
     }
     if (gateway) {
-      send({ step: "gateway", status: "running", message: "Deleting the inference gateway..." });
+      send({ step: "gateway", status: "running", message: "Deleting the inference gateway" });
       await nextStep();
       world.resources.inferenceGateway = F.gatewayStates.none;
       const msg = "Inference gateway deleted. OpenShift removes its load balancer and the ingress operator its DNS record.";
@@ -362,14 +362,14 @@ async function modelsStream(req, res) {
       done.push(msg);
     }
   } else {
-    send({ step: "check", status: "running", message: "Checking what every part needs..." });
+    send({ step: "check", status: "running", message: "Checking what every part needs" });
     await nextStep();
     send({ step: "check", status: "success", message: "Everything the parts need is there." });
     if (gateway) {
-      send({ step: "gateway", status: "running", message: "Creating the inference gateway..." });
+      send({ step: "gateway", status: "running", message: "Creating the inference gateway" });
       world.resources.inferenceGateway = F.gatewayStates.starting;
       send({ step: "gateway", status: "success", message: "GatewayClass, ConfigMap and Gateway openshift-ingress/openshift-ai-inference applied; external hostname inference.apps.example-cluster.example.com." });
-      send({ step: "gateway-ready", status: "running", message: "Programmed; waiting for the load balancer's address..." });
+      send({ step: "gateway-ready", status: "running", message: "Programmed; waiting for the load balancer's address" });
       await nextStep();
       world.resources.inferenceGateway = F.gatewayStates.ready([]);
       send({ step: "gateway-ready", status: "success", message: "Ready: https://inference.apps.example-cluster.example.com is published in DNS." });
@@ -380,9 +380,9 @@ async function modelsStream(req, res) {
       const others = (i) => i.namespace !== project || i.name !== model;
       m.items = [...(m.items ?? []).filter(others), F.modelStates.startingAs(model, project)];
       send({ step: "model", status: "success", message: `LLMInferenceService ${project}/${model} applied, on preset v3-6-0-kserve-config-llm-template-cpu with the newest released Red Hat vLLM CPU image 3.5.3. Reached through gateway openshift-ingress/openshift-ai-inference, KServe's default.` });
-      send({ step: "model-ready", status: "running", message: "Pulling the runtime image (several GB; a few minutes the first time on a node)..." });
+      send({ step: "model-ready", status: "running", message: "Pulling the runtime image (several GB; a few minutes the first time on a node)" });
       await nextStep();
-      send({ step: "model-ready", status: "running", message: "Starting vLLM and loading the model..." });
+      send({ step: "model-ready", status: "running", message: "Starting vLLM and loading the model" });
       await nextStep();
       m.items = [...m.items.filter(others), model !== "qwen25-05b-instruct" ? F.modelStates.readyAs(model, project) : releasedImage || m.imagePlan === "released" ? F.modelStates.released(project) : F.modelStates.ready(project)];
       const users = m.items.filter((i) => i.managedByTool !== false).map((i) => `${i.namespace}/${i.name}`);
@@ -390,13 +390,13 @@ async function modelsStream(req, res) {
       if (exposure === "maas") {
         // Published as part of its setup (pkg/cluster publishToMaaS).
         send({ step: "model-ready", status: "success", message: "The model's server runs; publishing it to MaaS gives it its route." });
-        send({ step: "publish", status: "running", message: "Publishing the model to MaaS (its route is on the MaaS gateway alone)..." });
+        send({ step: "publish", status: "running", message: "Publishing the model to MaaS (its route is on the MaaS gateway alone)" });
         await nextStep();
         send({ step: "publish", status: "success", message: `${model} in '${project}' is published to MaaS under subscription rhoai-nightly-updater-subscription.` });
       } else {
         send({ step: "model-ready", status: "success", message: `Ready at https://inference.apps.example-cluster.example.com/${project}/${model}.` });
       }
-      send({ step: "callable", status: "running", message: "Calling the model once, as a user would..." });
+      send({ step: "callable", status: "running", message: "Calling the model once, as a user would" });
       await nextStep();
       const msg = `Answers requests: a request for model "${model}" got 200.`;
       m.items = m.items.map((i) => (i.namespace === project && i.name === model ? F.routed(i, { exposure }) : i));
@@ -524,11 +524,11 @@ async function playgroundStream(req, res) {
   const send = (ev) => res.write(`data: ${JSON.stringify({ ...ev, elapsedMs: ++n * 3000 })}\n\n`);
   let message;
   if (action === "teardown") {
-    send({ step: "delete", status: "running", message: `Asking the dashboard to delete the playground lsd-genai-playground in ${project}...` });
+    send({ step: "delete", status: "running", message: `Asking the dashboard to delete the playground lsd-genai-playground in ${project}` });
     await nextStep();
     world.playground.items = [...world.playground.items.filter((i) => i.namespace !== project), F.playgroundStates.terminating(project)];
     send({ step: "delete", status: "success", message: `The dashboard is deleting the playground in ${project}.` });
-    send({ step: "gone", status: "running", message: "Waiting until the playground is gone..." });
+    send({ step: "gone", status: "running", message: "Waiting until the playground is gone" });
     await nextStep();
     removePlayground(project);
     send({ step: "gone", status: "success", message: `The playground in ${project} is gone.` });
@@ -538,13 +538,13 @@ async function playgroundStream(req, res) {
     const chosen = models.length ? models.map((r) => listed.find((m) => m.name === r.name && m.source === r.source) ?? r) : listed.filter((m) => m.source === "namespace" && m.ready && (m.chat || m.embeddingDimension));
     // As pkg/cluster checkPlayground names them (a MaaS model by its display name, with its name).
     const names = chosen.map((m) => (m.source !== "maas" ? m.name : m.displayName && m.displayName !== m.name ? `${m.displayName} (Models as a Service, ${m.name})` : `${m.name} (Models as a Service)`));
-    send({ step: "check", status: "running", message: "Checking what the playground needs..." });
+    send({ step: "check", status: "running", message: "Checking what the playground needs" });
     await nextStep();
     send({ step: "check", status: "success", message: `Ready to set up: ${project} with ${names.join(", ")}.` });
-    send({ step: "install", status: "running", message: `Asking the dashboard to set up the playground in ${project}...` });
+    send({ step: "install", status: "running", message: `Asking the dashboard to set up the playground in ${project}` });
     world.playground.items = [...world.playground.items.filter((i) => i.namespace !== project), F.playgroundStates.starting(project)];
     send({ step: "install", status: "success", message: `The dashboard is setting up the playground in ${project}.` });
-    send({ step: "ready", status: "running", message: "The playground is starting (phase Initializing)..." });
+    send({ step: "ready", status: "running", message: "The playground is starting (phase Initializing)" });
     await nextStep();
     // The record keeps the models Set up asked for (pkg/cluster PlaygroundRecord.Models).
     world.playground.items = [...world.playground.items.filter((i) => i.namespace !== project), { ...F.playgroundStates.ready(project), models: chosen.map((m) => ({ name: m.name, source: m.source })) }];
@@ -566,7 +566,7 @@ async function modelRegistryStream(req, res) {
   let message;
   if (action === "teardown") {
     send({ step: "check", status: "success", message: "Model registry rhoai-model-registries/nightly-registry is the one this tool created." });
-    send({ step: "delete", status: "running", message: "Deleting model registry rhoai-model-registries/nightly-registry with its database..." });
+    send({ step: "delete", status: "running", message: "Deleting model registry rhoai-model-registries/nightly-registry with its database" });
     world.modelRegistry = F.modelRegistryStates.terminating;
     await nextStep();
     send({ step: "delete", status: "success", message: "Model registry rhoai-model-registries/nightly-registry is being deleted; its operator and the garbage collector remove its database." });
@@ -577,7 +577,7 @@ async function modelRegistryStream(req, res) {
     send({ step: "check", status: "success", message: "Component aiHub is Managed; registries go in rhoai-model-registries." });
     send({ step: "create", status: "success", message: "Model registry rhoai-model-registries/nightly-registry created; its operator starts a PostgreSQL database and the registry server." });
     world.modelRegistry = F.modelRegistryStates.starting;
-    send({ step: "ready", status: "running", message: "Waiting for the registry to be available (usually 1 to 3 minutes)..." });
+    send({ step: "ready", status: "running", message: "Waiting for the registry to be available (usually 1 to 3 minutes)" });
     await nextStep();
     world.modelRegistry = samples ? F.modelRegistryStates.ready : F.modelRegistryStates.readyNoSample;
     send({ step: "ready", status: "success", message: "The registry is available; its REST address is https://rh-ai.apps.example-cluster.example.com/model-registry/nightly-registry." });
@@ -598,7 +598,7 @@ async function maasStream(req, res) {
   const send = (ev) => res.write(`data: ${JSON.stringify({ ...ev, elapsedMs: ++n * 3000 })}\n\n`);
   if (action === "teardown" && world.maasRefusal) {
     // A refusal at "check": nothing changed (pkg/cluster teardown).
-    send({ step: "check", status: "running", message: "Checking what this tool set up..." });
+    send({ step: "check", status: "running", message: "Checking what this tool set up" });
     await nextStep();
     send({ step: "check", status: "failed", message: world.maasRefusal, errorCode: "in_use" });
     endOperation(false, world.maasRefusal);
@@ -684,7 +684,7 @@ async function mlflowSamplesStream(req, res) {
     { step: "check", status: "running", message: `Checking MLflow for project '${project}'...` },
     { step: "check", status: "success", message: `MLflow is ready at ${current.mlflowURL}` },
     ...ids.flatMap((id) => [
-      { step: id, status: "running", message: `${F.SAMPLE_NAMES[id]}: ${action}...` },
+      { step: id, status: "running", message: `${F.SAMPLE_NAMES[id]}: ${action}` },
       { step: id, status: "success", message: `${F.SAMPLE_NAMES[id]}: ${verb}.` },
     ]),
   ];
@@ -733,7 +733,7 @@ async function recipeRoute(req, res, key) {
     });
     const title = steps.find((s) => s.id === todo[k]).title;
     world.recipeRun = { run: { ...all, state: "running", stopReason: undefined, finishedAt: undefined, steps }, running: true, pod: prior?.pod,
-      progress: { [todo[k]]: { step: todo[k], status: "running", message: `Checking ${title}...` } }, step: { step: todo[k], status: "running", message: `Checking ${title}...` } };
+      progress: { [todo[k]]: { step: todo[k], status: "running", message: `Checking ${title}` } }, step: { step: todo[k], status: "running", message: `Checking ${title}` } };
     const doneNow = steps.filter((s) => s.status === "success" || s.status === "skipped").length;
     world.operation = { inProgress: true, operation: { id: "op-recipe", type: "recipe", label: "Environment recipe", user: F.USER, target: `${name}: ${doneNow} of ${steps.length} steps done; running: ${title}`, startedAt: new Date(F.NOW).toISOString(), updatedAt: new Date(F.NOW).toISOString() } };
     nextStep().then(() => advance(k + 1));

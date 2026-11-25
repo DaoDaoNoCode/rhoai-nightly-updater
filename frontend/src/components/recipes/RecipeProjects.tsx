@@ -56,8 +56,8 @@ export const RecipeProjects: React.FC<{
                     <Td dataLabel="Recipe">{p.recipe}</Td>
                     <Td dataLabel="Created">{p.createdAt ? <RelativeTime date={p.createdAt} /> : "Not recorded"}</Td>
                     <Td dataLabel="Actions" isActionCell>
-                      <TooltipButton variant="secondary" isDanger size="sm" aria-label={`Delete project ${p.name}...`} disabledReason={blocker} onClick={() => onDelete(p)}>
-                        Delete...
+                      <TooltipButton variant="secondary" isDanger size="sm" aria-label={`Delete project ${p.name}`} disabledReason={blocker} onClick={() => onDelete(p)}>
+                        Delete
                       </TooltipButton>
                     </Td>
                   </Tr>

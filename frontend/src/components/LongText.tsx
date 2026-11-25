@@ -9,6 +9,7 @@ export function firstClause(text: string, max = 120): string {
   const firstLine = text.trim().split("\n")[0];
   const cut = firstLine.search(/(\.\s)|(:\s)|(;\s)/);
   let clause = cut > 0 ? firstLine.slice(0, cut) : firstLine.replace(/[.:;]$/, "");
+  // eslint-disable-next-line no-restricted-syntax -- truncation: the dots mark the cut, not a label
   if (clause.length > max) clause = `${clause.slice(0, max - 1).trimEnd()}…`;
   return clause;
 }

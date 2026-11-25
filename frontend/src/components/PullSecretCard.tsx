@@ -160,7 +160,7 @@ const NodePullSecret: React.FC<{
         ? "Red Hat runs this cluster (ROSA Classic or OpenShift Dedicated): its nodes pull with the cluster pull secret, openshift-config/pull-secret. Red Hat creates that secret, and the documentation of these services has no procedure for changing it, so the updater does not change it. If you choose to add the quay.io/rhoai entry yourself, the commands are below."
         : "The updater could not read what kind of cluster this is. On ROSA HCP the nodes use the token saved above. If this cluster is self-managed, its nodes pull with the cluster pull secret, openshift-config/pull-secret: a cluster-admin adds the quay.io/rhoai entry with this command, or tries Add to the nodes' pull secret:";
 
-  const checkReason = blocker ?? (checking ? null : checkImage ? null : checkImageReason ?? "Looking up the newest nightly build...");
+  const checkReason = blocker ?? (checking ? null : checkImage ? null : checkImageReason ?? "Looking up the newest nightly build");
   // Who set the quay.io/rhoai entry: this tool (its record), someone else
   // (the nodes pull and the tool has no record), or not known (the
   // updater cannot read openshift-config/pull-secret; the dialog reads it

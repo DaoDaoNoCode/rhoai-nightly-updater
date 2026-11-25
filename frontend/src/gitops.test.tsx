@@ -137,8 +137,8 @@ describe("StatusPage under Argo CD", () => {
     await settleApps();
     expect(await screen.findByText(/Argo CD manages the operator Subscription/)).toBeInTheDocument();
     const recovery = screen.getByRole("list", { name: "Recovery actions" });
-    await waitFor(() => expect(within(recovery).getByRole("button", { name: "Re-deploy operator..." })).toHaveAttribute("aria-disabled", "true"));
-    expect(within(recovery).getByRole("button", { name: "Choose a build..." })).toHaveAttribute("aria-disabled", "true");
+    await waitFor(() => expect(within(recovery).getByRole("button", { name: "Re-deploy operator" })).toHaveAttribute("aria-disabled", "true"));
+    expect(within(recovery).getByRole("button", { name: "Choose a build" })).toHaveAttribute("aria-disabled", "true");
     await settleApps();
   });
 
@@ -156,7 +156,7 @@ describe("StatusPage under Argo CD", () => {
     renderPage(<StatusPage />, "/", { status: async () => nightlyStatus() });
     await settleApps();
     const recovery = await screen.findByRole("list", { name: "Recovery actions" });
-    await waitFor(() => expect(within(recovery).getByRole("button", { name: "Choose a build..." })).not.toHaveAttribute("aria-disabled"));
+    await waitFor(() => expect(within(recovery).getByRole("button", { name: "Choose a build" })).not.toHaveAttribute("aria-disabled"));
     expect(screen.queryByText(/Argo CD manages/)).not.toBeInTheDocument();
     await settleApps();
   });

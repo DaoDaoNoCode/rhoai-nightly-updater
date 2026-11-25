@@ -43,6 +43,21 @@ export default defineConfig(
     },
   },
   {
+    // No ellipsis at the end of a label or a progress message ("Install...",
+    // "Loading builds..."): PatternFly uses one only for omitted or truncated
+    // text, labels a dialog-opening action without it, and shows loading with
+    // a Spinner. Test code may still quote old text.
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/**/*.test.{ts,tsx}", "src/test/**"],
+    rules: {
+      "no-restricted-syntax": ["error",
+        { selector: "Literal[value=/(\\.\\.\\.|\u2026)\\s*$/]", message: "No ellipsis at the end of UI text: label actions without it and show progress with a Spinner." },
+        { selector: "JSXText[value=/(\\.\\.\\.|\u2026)\\s*$/]", message: "No ellipsis at the end of UI text: label actions without it and show progress with a Spinner." },
+        { selector: "TemplateElement[tail=true][value.raw=/(\\.\\.\\.|\u2026)\\s*$/]", message: "No ellipsis at the end of UI text: label actions without it and show progress with a Spinner." },
+      ],
+    },
+  },
+  {
     files: ["**/*.cjs", "*.js"],
     languageOptions: { globals: globals.node, sourceType: "commonjs" },
     rules: { "@typescript-eslint/no-require-imports": "off" },

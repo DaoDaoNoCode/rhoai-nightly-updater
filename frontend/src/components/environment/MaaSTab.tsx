@@ -391,7 +391,7 @@ export const MaaSTab: React.FC<MaaSTabProps> = (props) => {
       </StackItem>
       {!readOnly && maas?.platform.managedByTool && (
         <StackItem>
-          <CleanupSection id="maas-cleanup" label="Clean up MaaS..." onClick={() => setPending({ kind: "teardown-maas" })} reason={baseReason}
+          <CleanupSection id="maas-cleanup" label="Clean up MaaS" onClick={() => setPending({ kind: "teardown-maas" })} reason={baseReason}
             text="Unpublishes this tool's models, puts the DataScienceCluster back as it was before, then deletes the gateway, the database and the namespace this tool created. A PostgreSQL of your own is never touched. Connectivity Link, Kuadrant, Authorino TLS and CloudNativePG stay, also if this tool installed them: other RHOAI features use them." />
         </StackItem>
       )}

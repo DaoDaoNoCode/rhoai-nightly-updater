@@ -763,7 +763,7 @@ func exposureWords(e ExposurePlan) string {
 // admits the project, then the model reference, subscription and access
 // policy list it.
 func (m *modelsRun) publishToMaaS(project, name string) (*types.OperationResponse, error) {
-	m.step("publish", "running", "Publishing the model to MaaS (its route is on the MaaS gateway alone)...")
+	m.step("publish", "running", "Publishing the model to MaaS (its route is on the MaaS gateway alone)")
 	pub := &Run{Client: m.c, Activity: "publish-maas", Target: fmt.Sprintf("model %s in %s", name, project), newModel: true}
 	pub.Emit = m.innerSteps("publish")
 	// No audience of its own: the subscription keeps who can use the

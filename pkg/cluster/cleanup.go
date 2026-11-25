@@ -367,7 +367,7 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 			return cleanupStopped(c, parts[i:], done, said, logs, fmt.Sprintf("The clean-up was stopped before %s: %v.", p.title, err), "cancelled"), nil
 		}
 		start := time.Now()
-		emit(UpdateStepEvent{Step: p.id, Status: "running", Message: fmt.Sprintf("Deleting %s...", p.title)})
+		emit(UpdateStepEvent{Step: p.id, Status: "running", Message: fmt.Sprintf("Deleting %s", p.title)})
 		res, err := p.run()
 		if err != nil {
 			res = &types.OperationResponse{Success: false, Message: err.Error(), ErrorCode: "internal"}

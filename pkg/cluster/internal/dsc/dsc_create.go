@@ -27,7 +27,7 @@ func CreateDefault(c *kube.Client) (*types.OperationResponse, error) {
 	logs := []string{}
 
 	// Step 1: Check if a DSC already exists
-	logs = append(logs, "Checking for existing DataScienceCluster...")
+	logs = append(logs, "Checking for existing DataScienceCluster")
 	read, err := rhoai.ReadFirstDSC(c)
 	if err != nil {
 		return &types.OperationResponse{
@@ -64,7 +64,7 @@ func CreateDefault(c *kube.Client) (*types.OperationResponse, error) {
 	}
 
 	// Step 2: Use the sample shipped with the installed operator version.
-	logs = append(logs, "Creating default DataScienceCluster...")
+	logs = append(logs, "Creating default DataScienceCluster")
 	defaults, fetchErr := components.FetchDefaultDSCSpec(c, "")
 	if fetchErr != nil {
 		return &types.OperationResponse{Success: false, Message: "Failed to fetch version-matched DSC defaults: " + fetchErr.Error(), Logs: logs, ErrorCode: kube.NonEmpty(kube.ErrorCodeFromK8sErr(fetchErr), "prerequisites")}, nil

@@ -62,7 +62,7 @@ func SecureS3(c *kube.Client, removeLeftover []string, onStep func(types.UpdateS
 	}
 
 	// Step 1: every check before any change.
-	step(SecureStepCheck, "running", "Checking the S3 storage and its pipeline servers...")
+	step(SecureStepCheck, "running", "Checking the S3 storage and its pipeline servers")
 	legacy, err := ReadLegacy(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Cannot check for storage from an earlier version in namespace %s: %v.%s%s", LegacyNamespace, err, kube.TemplateHint(err), unchanged), kube.ErrorCodeFromK8sErr(err), "earlier storage check failed"), nil
@@ -160,7 +160,7 @@ func SecureS3(c *kube.Client, removeLeftover []string, onStep func(types.UpdateS
 	if ep.Secured {
 		step(SecureStepRollout, "skipped", "The S3 storage already runs with a new admin key and per-server keys")
 	} else {
-		step(SecureStepRollout, "running", "Rolling out a new admin key and turning on per-server keys...")
+		step(SecureStepRollout, "running", "Rolling out a new admin key and turning on per-server keys")
 		keys, err := newAdminKeys(c)
 		if err != nil {
 			return stop(SecureStepRollout, fmt.Sprintf("Cannot make the new admin key: %v.%s", err, unchanged), "internal", "keys"), nil
@@ -209,7 +209,7 @@ func SecureS3(c *kube.Client, removeLeftover []string, onStep func(types.UpdateS
 		if deadline, ok := c.Context().Deadline(); ok && kube.Clock().Until(deadline) < secureServerBudget {
 			return stop(id, fmt.Sprintf("Not enough time is left in this run to give pipeline server %s its own key. %s Run Secure S3 storage again to continue: it skips the servers already done.", name, summary(done, skipped, failed, false)), "out_of_time", "out of time"), nil
 		}
-		step(id, "running", fmt.Sprintf("Giving pipeline server %s a key of its own...", name))
+		step(id, "running", fmt.Sprintf("Giving pipeline server %s a key of its own", name))
 		changed, err := rekeyServer(c, sw, d, func(line string) { step(id, "running", line) })
 		switch {
 		case err != nil:

@@ -1262,14 +1262,14 @@ func waitInferenceGateway(c *kube.Client, host string, progress func(string)) (r
 		for _, a := range gw.Status.Addresses {
 			addr = kube.FirstNonEmpty(addr, a.Value)
 		}
-		msg := "Waiting for the gateway controller..."
+		msg := "Waiting for the gateway controller"
 		switch {
 		case ok && programmed.Status == "True" && addr != "":
 			return true, nil
 		case ok && programmed.Status == "True":
-			msg = "Programmed; waiting for the load balancer's address..."
+			msg = "Programmed; waiting for the load balancer's address"
 		case ok:
-			msg = "Waiting for OpenShift to create the gateway's load balancer (usually under a minute)..."
+			msg = "Waiting for OpenShift to create the gateway's load balancer (usually under a minute)"
 			pending = kube.FirstNonEmpty(programmed.Message, programmed.Reason)
 		}
 		if msg != last {
@@ -1281,7 +1281,7 @@ func waitInferenceGateway(c *kube.Client, host string, progress func(string)) (r
 	if err != nil || problem != "" || !ready || host == "" {
 		return ready && problem == "", "", problem, pending, err
 	}
-	progress("Programmed; waiting for " + host + " to be published in DNS...")
+	progress("Programmed; waiting for " + host + " to be published in DNS")
 	published, werr := kube.WaitForGone(c, inferenceGatewayDNSTimeout, inferenceGatewayPoll, func(cc *kube.Client) (bool, error) {
 		return dnsPublished(cc, host) == "published", nil
 	})
@@ -1348,7 +1348,7 @@ func TeardownInferenceGateway(c *kube.Client, modelsJustDeleted bool) (*types.Op
 		current, found, err := readInferenceGateway(c)
 		if err == nil && found && current.AttachedRoutes() > 0 && modelsJustDeleted {
 			// The controller updates the count after the routes go.
-			logs = append(logs, "Waiting for the gateway controller to stop counting the deleted models' routes...")
+			logs = append(logs, "Waiting for the gateway controller to stop counting the deleted models' routes")
 			_, err = kube.WaitForGone(c, inferenceGatewayRoutesTimeout, inferenceGatewayPoll, func(cc *kube.Client) (bool, error) {
 				g, ok, err := readInferenceGateway(cc)
 				if err == nil {
@@ -1392,7 +1392,7 @@ func TeardownInferenceGateway(c *kube.Client, modelsJustDeleted bool) (*types.Op
 			}
 		}
 		path := gatewayObjectPath(kind)
-		logs = append(logs, fmt.Sprintf("Deleting %s...", gatewayDesc(kind)))
+		logs = append(logs, fmt.Sprintf("Deleting %s", gatewayDesc(kind)))
 		if _, err := kube.DeleteWithUID(c, path, cur.meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 			done := ""
 			if len(deleted) > 0 {

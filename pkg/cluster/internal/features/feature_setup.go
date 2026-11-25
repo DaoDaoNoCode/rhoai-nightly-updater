@@ -777,7 +777,7 @@ func RunPrerequisites(c *kube.Client, req types.PrerequisitesRequest, onStep fun
 	}
 	fs := featureSetupFor(req.Feature, req.Exposure)
 	m.Target = fs.title + " prerequisites"
-	m.Step("prerequisites", "running", fmt.Sprintf("Checking what %s needs on the cluster...", fs.title))
+	m.Step("prerequisites", "running", fmt.Sprintf("Checking what %s needs on the cluster", fs.title))
 	p := planFeature(c, fs, readClusterForPrerequisites(c))
 	if p.refusal != "" {
 		return m.Fail("prerequisites", p.refusal, kube.FirstNonEmpty(p.code, "prerequisites"), "check failed")
@@ -890,7 +890,7 @@ func turnOnComponents(m *serving.Run, cps []componentPlan, dscName string, recor
 		m.Step("dsc", "success", fmt.Sprintf("%s %s %s in DataScienceCluster %s.", kube.JoinTitles(componentKeys(cps)), kube.Verb(len(cps), "is", "are"), onStateOf(cps), dscName))
 		return nil, nil
 	}
-	m.Step("dsc", "running", fmt.Sprintf("Setting %s to %s in DataScienceCluster %s (Clean up can turn %s back)...", kube.JoinTitles(on), onStateOf(cps), dscName, kube.Verb(len(on), "it", "them")))
+	m.Step("dsc", "running", fmt.Sprintf("Setting %s to %s in DataScienceCluster %s (Clean up can turn %s back)", kube.JoinTitles(on), onStateOf(cps), dscName, kube.Verb(len(on), "it", "them")))
 	if r, err := record(); r != nil || err != nil {
 		return r, err
 	}
@@ -946,7 +946,7 @@ func startOperator(m *serving.Run, o operatorPlan, record func() (*types.Operati
 	op := o.op
 	switch {
 	case o.install != nil:
-		m.Step(op.ID, "running", fmt.Sprintf("Installing %s %s (channel %s) from %s...", op.Title, o.install.Head, o.install.Channel, op.Source))
+		m.Step(op.ID, "running", fmt.Sprintf("Installing %s %s (channel %s) from %s", op.Title, o.install.Head, o.install.Channel, op.Source))
 		if record != nil {
 			if r, err := record(); r != nil || err != nil {
 				return nil, r, err
@@ -995,7 +995,7 @@ func ensureKuadrant(m *serving.Run, rec *prereqRecord, recorded bool, apiWait ti
 		return m.Fail("kuadrant", fmt.Sprintf("Cannot read the installed operators: %v.", err), kube.ErrorCodeFromK8sErr(err), "csv read failed")
 	}
 	ns := kube.FirstNonEmpty(rhcl.CSVNS, serving.RHCLOperator.Namespace)
-	m.Step("kuadrant", "running", "Waiting for Connectivity Link's Kuadrant API...")
+	m.Step("kuadrant", "running", "Waiting for Connectivity Link's Kuadrant API")
 	version := ""
 	start := kube.Clock().Now()
 	var throttled error
@@ -1025,7 +1025,7 @@ func ensureKuadrant(m *serving.Run, rec *prereqRecord, recorded bool, apiWait ti
 	if r, err := m.WaitKuadrantKindAdmissible("kuadrant"); r != nil || err != nil {
 		return r, err
 	}
-	m.Step("kuadrant", "running", fmt.Sprintf("Creating the Kuadrant CR %s/kuadrant...", ns))
+	m.Step("kuadrant", "running", fmt.Sprintf("Creating the Kuadrant CR %s/kuadrant", ns))
 	if err := serving.CreateKuadrant(c, version, ns, false); err != nil {
 		return m.Fail("kuadrant", fmt.Sprintf("Failed to create the Kuadrant CR %s/kuadrant: %v. Set up again to retry.", ns, err), serving.MaaSWriteCode(err), "kuadrant create failed")
 	}
@@ -1073,7 +1073,7 @@ func planComponents(plans []*featurePlan) []componentPlan {
 func waitReady(m *serving.Run, plans []*featurePlan, timeout time.Duration, cut bool) (string, *types.OperationResponse, error) {
 	c := m.Client
 	cps := planComponents(plans)
-	m.Step("ready", "running", fmt.Sprintf("Waiting for RHOAI's operator to report %s ready (usually 1 to 3 minutes)...", kube.JoinTitles(componentKeys(cps))))
+	m.Step("ready", "running", fmt.Sprintf("Waiting for RHOAI's operator to report %s ready (usually 1 to 3 minutes)", kube.JoinTitles(componentKeys(cps))))
 	last := ""
 	// refused stops the wait; extra is what the ready hooks still wait for.
 	refused, extra := "", ""

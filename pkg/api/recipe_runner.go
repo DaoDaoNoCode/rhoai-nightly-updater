@@ -781,7 +781,7 @@ func (x *recipeExec) runStep(step cluster.RecipeStep, st *cluster.RecipeState) (
 		recipes.progress(x.opID, step.ID, e)
 		inflight.recordStep(x.opID, UpdateStep{Step: e.Step, Status: e.Status, Message: e.Message, Detail: e.Detail, ErrorCode: e.ErrorCode})
 	}
-	emit(cluster.UpdateStepEvent{Step: step.ID, Status: "running", Message: fmt.Sprintf("Checking %s...", step.Title)})
+	emit(cluster.UpdateStepEvent{Step: step.ID, Status: "running", Message: fmt.Sprintf("Checking %s", step.Title)})
 	chk, err := step.Check(c, st)
 	switch {
 	case err != nil:

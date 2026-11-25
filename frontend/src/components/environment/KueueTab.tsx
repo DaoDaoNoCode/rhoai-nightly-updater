@@ -175,7 +175,7 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
           {(["raycluster", "rayjob"] as const).map((kind) => {
             const s = k?.samples.find((x) => x.kind === kind);
             const menu: PartMenuItem[] = s?.managedByTool && !readOnly && !s.terminating
-              ? [{ key: "delete", label: `Delete the ${SAMPLE_TITLES[kind]}...`, onClick: () => setPending({ kind: "delete-kueue-sample", sample: kind }), disabledReason: baseReason, isDanger: true }]
+              ? [{ key: "delete", label: `Delete the ${SAMPLE_TITLES[kind]}`, onClick: () => setPending({ kind: "delete-kueue-sample", sample: kind }), disabledReason: baseReason, isDanger: true }]
               : [];
             const canAdd = setUp && !s?.present && !readOnly && !k?.rayBlocked && shownProject;
             return (
@@ -203,7 +203,7 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
           })}
           <PartItem id="kueue-optin" title={OPT_IN_NAME} scope="Shared by the cluster" status={optInOn ? "ready" : "not-set-up"} statusText={optInOn ? "On" : "Off"}
             unmanaged={!!optIn?.profile.foreign} loading={!k && !kueueError}
-            actions={setUp && !readOnly ? <ActionListItem><PrimaryAction variant="secondary" label={optInOn ? "Turn off..." : "Turn on..."} reason={baseReason}
+            actions={setUp && !readOnly ? <ActionListItem><PrimaryAction variant="secondary" label={optInOn ? "Turn off" : "Turn on"} reason={baseReason}
               onClick={() => setPending({ kind: optInOn ? "kueue-optout" : "kueue-optin" })} /></ActionListItem> : undefined}>
             <Content component="p">
               Off by default. Turning it on makes every new dashboard project a Kueue project (<code>disableKueue: false</code>) and adds hardware profile {KUEUE_PROFILE} for LocalQueue {KUEUE_LOCAL_QUEUE}, so that workbenches and models can start in {shownProject ?? "the project"}.
@@ -240,7 +240,7 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
       </StackItem>
       {!readOnly && ours && (
         <StackItem>
-          <CleanupSection id="kueue-cleanup" label="Clean up distributed workloads..." onClick={onCleanup} reason={baseReason}
+          <CleanupSection id="kueue-cleanup" label="Clean up distributed workloads" onClick={onCleanup} reason={baseReason}
             text={`Deletes the samples, the queues and the project label this tool created, and turns the ${OPT_IN_NAME} back to its earlier value if nobody changed it. The operators stay.`} />
         </StackItem>
       )}
@@ -286,7 +286,7 @@ export function kueueTurnBack(restorable: RestorableComponent[] | undefined, k: 
   if (!r || readOnly) return null;
   if (baseReason) return { restorable: r, reason: baseReason };
   if (running) return { restorable: r, reason: "Wait until the distributed workloads change finishes." };
-  if (!k) return { restorable: r, reason: "Reading which queues are on the cluster..." };
+  if (!k) return { restorable: r, reason: "Reading which queues are on the cluster" };
   if (k.queuesUnknown || !Array.isArray(k.queues)) return { restorable: r, reason: "The queues on the cluster could not be read, so this tool cannot tell whether anything uses Kueue." };
   if (k.queues.length > 0) {
     const shown = k.queues.length > 3 ? [...k.queues.slice(0, 3), `${k.queues.length - 3} more`] : k.queues;

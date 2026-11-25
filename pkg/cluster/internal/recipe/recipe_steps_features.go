@@ -947,7 +947,7 @@ func runWorkbenchStep(c *kube.Client, s *State, emit func(types.UpdateStepEvent)
 		if item == nil || !item.Terminating {
 			break
 		}
-		emit(types.UpdateStepEvent{Step: StepWorkbench, Status: "running", Message: fmt.Sprintf("Workbench %s in %s is being deleted; waiting until it is gone...", workbench.Name, project)})
+		emit(types.UpdateStepEvent{Step: StepWorkbench, Status: "running", Message: fmt.Sprintf("Workbench %s in %s is being deleted; waiting until it is gone", workbench.Name, project)})
 		if kube.Clock().Sleep(c.Context(), stepPoll) != nil {
 			return fail(fmt.Sprintf("Workbench %s in %s is still being deleted. Nothing was changed; Resume waits again.", workbench.Name, project), "timeout")
 		}
@@ -1074,7 +1074,7 @@ func runDashboardDev(c *kube.Client, s *State, emit func(types.UpdateStepEvent))
 		}
 	}
 	if !deployed {
-		emit(types.UpdateStepEvent{Step: StepDashboardDev, Status: "running", Message: fmt.Sprintf("Deploying the dashboard's %s build...", build)})
+		emit(types.UpdateStepEvent{Step: StepDashboardDev, Status: "running", Message: fmt.Sprintf("Deploying the dashboard's %s build", build)})
 		if d.Deploy == DashboardDevPR {
 			res, err = deployPR(c, d.PR, d.Flavor)
 		} else {
@@ -1084,7 +1084,7 @@ func runDashboardDev(c *kube.Client, s *State, emit func(types.UpdateStepEvent))
 			return res, err
 		}
 	}
-	emit(types.UpdateStepEvent{Step: StepDashboardDev, Status: "running", Message: "Waiting for the dashboard to roll out (usually 1 to 2 minutes)..."})
+	emit(types.UpdateStepEvent{Step: StepDashboardDev, Status: "running", Message: "Waiting for the dashboard to roll out (usually 1 to 2 minutes)"})
 	if module == nil {
 		return waitLegacyDashboard(c, d, res)
 	}

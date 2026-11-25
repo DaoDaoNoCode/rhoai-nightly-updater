@@ -134,7 +134,7 @@ func otherPodLease(beat time.Time) *types.OperationLease {
 func blockingRefresh() (started, release chan struct{}) {
 	started, release = make(chan struct{}), make(chan struct{})
 	runRefreshStream = func(_ *cluster.Client, _ cluster.OperationOptions, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
-		emit(cluster.UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: "Waiting for OLM to install the operator..."})
+		emit(cluster.UpdateStepEvent{Step: "verify_installplan", Status: "running", Message: "Waiting for OLM to install the operator"})
 		close(started)
 		<-release
 		return &types.OperationResponse{Success: true, Message: "refreshed"}, nil

@@ -328,7 +328,7 @@ func releaseGoneGatewayProjects(c *kube.Client) string {
 // check and the server-side dry run run on step "check", before the write.
 func (m *modelsRun) disallow(project string) (*types.OperationResponse, error) {
 	c := m.c
-	m.step("check", "running", fmt.Sprintf("Checking that no model in %s uses the inference gateway...", project))
+	m.step("check", "running", fmt.Sprintf("Checking that no model in %s uses the inference gateway", project))
 	plan, msg, code := planGatewayRemove(c, project)
 	if msg != "" {
 		return m.fail("check", msg+" Nothing was changed.", code, "gateway check failed")
@@ -343,7 +343,7 @@ func (m *modelsRun) disallow(project string) (*types.OperationResponse, error) {
 		return &types.OperationResponse{Success: true, Message: done, Logs: m.logs}, nil
 	}
 	m.step("check", "success", fmt.Sprintf("No model in %s uses the inference gateway, and the API server accepts the change.", project))
-	m.step("gateway", "running", fmt.Sprintf("Taking %s off the projects the inference gateway allows...", project))
+	m.step("gateway", "running", fmt.Sprintf("Taking %s off the projects the inference gateway allows", project))
 	if _, msg, code := writeInferenceGateway(c, plan, func(line string) { m.step("gateway", "running", line) }); msg != "" {
 		return m.fail("gateway", msg+" Nothing was changed.", code, "gateway list failed")
 	}

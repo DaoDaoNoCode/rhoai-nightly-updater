@@ -1261,7 +1261,7 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry, secu
 	}
 
 	// Step 1: Namespace. Never adopt a namespace this tool did not create.
-	log.add(fmt.Sprintf("Creating namespace %s...", S3Namespace))
+	log.add(fmt.Sprintf("Creating namespace %s", S3Namespace))
 	ns, err := lookupS3Namespace(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Cannot check namespace %s: %v.%s", S3Namespace, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "namespace check failed")
@@ -1331,7 +1331,7 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry, secu
 	var applied []string
 	write := func(r s3Resource, dryRun bool) *types.OperationResponse {
 		if !dryRun {
-			log.add(fmt.Sprintf("Applying %s...", r.name))
+			log.add(fmt.Sprintf("Applying %s", r.name))
 		}
 		path, ok := s3ApplyPath(r.Obj)
 		createPath, createOK := s3CreatePath(r.Kind)
@@ -1373,7 +1373,7 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry, secu
 	// API server rejects (validation, admission, the apply merge) stops
 	// setup before anything changed: the check-before-write rule above,
 	// extended to what only the API server can check.
-	log.add("Checking every change with the API server (dry run)...")
+	log.add("Checking every change with the API server (dry run)")
 	for _, r := range resources {
 		if resp := write(r, true); resp != nil {
 			return resp
@@ -1390,7 +1390,7 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry, secu
 	}
 
 	// Step 4: Wait for the pod. Stop early when it cannot start.
-	log.add(fmt.Sprintf("Waiting up to %s for SeaweedFS to become ready...", S3ReadyTimeout))
+	log.add(fmt.Sprintf("Waiting up to %s for SeaweedFS to become ready", S3ReadyTimeout))
 	issue, err := WaitS3Ready(c, s3Image())
 	if err != nil {
 		if errors.Is(err, ErrS3NotReady) {
@@ -1430,7 +1430,7 @@ func setupS3Storage(c *kube.Client, keys S3Keys, log *opLog, retry s3Retry, secu
 	// Step 6: Create the bucket through the Service, as pipeline servers
 	// reach it (try once, retry once if it fails). SeaweedFS also creates
 	// it on start (-bucket).
-	log.add(fmt.Sprintf("Creating bucket %s...", s3Bucket))
+	log.add(fmt.Sprintf("Creating bucket %s", s3Bucket))
 	bucketErr := s3BucketCreator(c, s3Bucket)
 	if bucketErr != nil {
 		if kube.Clock().Sleep(c.Context(), s3BucketRetryDelay) == nil {
@@ -1602,7 +1602,7 @@ func (d *storageDeletion) deleteOwnedObject(c *kube.Client, namespace, kind, nam
 		if !ok {
 			return
 		}
-		*logs = append(*logs, fmt.Sprintf("Deleting %s...", desc))
+		*logs = append(*logs, fmt.Sprintf("Deleting %s", desc))
 		if _, err := kube.DeleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 			d.failed = append(d.failed, fmt.Sprintf("%s: %v", desc, err))
 			*logs = append(*logs, fmt.Sprintf("Failed to delete %s: %v", desc, err))
