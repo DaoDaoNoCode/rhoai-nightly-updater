@@ -185,7 +185,7 @@ An operation whose pod stopped before it finished:
 - **"Stopped: your sign-in ended" (`sign_in_ended`):** the API server rejected your own token while the change ran; part of it may have run. See [§4](#4-sign-in-and-permissions).
 - **"The operation stopped on an internal error in the updater, so how far it got is not known. Check what it changed before you retry"** (errorCode `internal`; the update dry run answers it as a 500): a bug in the updater stopped the change part-way, and the updater does not know which steps ran. The lock and your 30-second slot are free again, so you can retry at once, but first check what it changed (the Status page, the page of what you changed, the activity log). The updater's log has the panic with its stack: `oc logs -n $NS deploy/$APP -c app | grep -A40 'panic in operation handler'`. Report it with that stack.
 - **"*X* was interrupted":** the operation's marker is still recorded and the process that wrote it holds no live lease: the pod or its container stopped mid-operation (SIGKILL, node loss, OOM), or an updater version without leases left it. An operation that still runs in another pod is not reported as interrupted. Check the operator status, then run the same operation again. Every step is safe to repeat; Update and Install a different build recreate a missing Subscription with the settings recorded before the last operation. For Dashboard Dev, run **Revert**.
-- **Operation deadline:** 15 minutes. OLM gets 8 minutes to reach `Succeeded`, and the CSV must then stay `Succeeded` for 20 seconds: right after an install OLM can briefly move it back to `Pending` (NeedsReinstall) while its webhooks come up. A failure restores the previous catalog and Subscription within about 1 minute.
+- **Operation deadline:** 15 minutes. OLM gets 11 minutes to reach `Succeeded` (its own bundle unpack timeout, 10 minutes, and a minute; less when the steps before took long), and the CSV must then stay `Succeeded` for 20 seconds: right after an install OLM can briefly move it back to `Pending` (NeedsReinstall) while its webhooks come up. A failure restores the previous catalog and Subscription within about 1 minute.
 
 The cross-pod lock, when a pod is evicted during an update:
 
@@ -246,10 +246,10 @@ flowchart TD
     S4 --> S5["5 Detect the channel"]
     S5 --> S6["6 Remove the old operator version (CSV, InstallPlan)"]
     S6 --> S7["7 Create the Subscription (same settings)"]
-    S7 --> S8["8 Wait for the operator install<br>(up to 8 min; Succeeded for 20 s)"]
+    S7 --> S8["8 Wait for the operator install<br>(up to 11 min; Succeeded for 20 s)"]
   end
   S8 -->|Succeeded| OK["Update complete"]
-  S8 -->|"still installing after 8 min"| KEEP["Keep the new state; the page keeps watching"]
+  S8 -->|"still installing after 11 min"| KEEP["Keep the new state; the page keeps watching"]
   C -->|"a step fails"| RS["Restore: the previous catalog and Subscription,<br>remove the half-installed CSV (about 1 min)"]
 ```
 
@@ -276,6 +276,14 @@ oc get catalogsource -n openshift-marketplace | grep rhoai
 oc get pods -n openshift-marketplace | grep rhoai-catalog
 oc get subscription rhods-operator -n redhat-ods-operator -o jsonpath='{.status.conditions}' ; echo
 oc get installplan,csv -n redhat-ods-operator
+# OLM's bundle unpack Jobs and pods (one per bundle image, named by its hash); read-only
+oc get job,pods -n openshift-marketplace -l operatorframework.io/bundle-unpack-ref
+oc get pods -n openshift-marketplace -l operatorframework.io/bundle-unpack-ref \
+  -o 'custom-columns=POD:.metadata.name,PHASE:.status.phase,NODE:.spec.nodeName,IMAGE:.status.initContainerStatuses[*].image,WAITING:.status.initContainerStatuses[*].state.waiting.reason'
+# ROSA HCP: where the nodes' pull secret stands (HyperShift's global pull secret sync); read-only
+oc get daemonset global-pull-secret-syncer -n kube-system
+oc get pods -n kube-system -l name=global-pull-secret-syncer -o wide
+oc get nodes
 ```
 
 | Message / state | Fix |
@@ -303,6 +311,8 @@ oc get installplan,csv -n redhat-ods-operator
 | Namespace has 2+ OperatorGroups / a non-global one | Keep one global OperatorGroup in `redhat-ods-operator` |
 | Re-deploy refuses: "channel head moved" (Automatic approval) | Use Update (it changes the version) |
 | `BundleUnpackFailed` keeps recurring | See §11.5 |
+| "OLM did not finish installing the operator" with "last state: OLM is unpacking the operator bundle ... OLM could not pull the operator bundle registry.redhat.io/rhoai/...: ImagePullBackOff (... manifest unknown)" | OLM's bundle unpack pod (`openshift-marketplace`, label `operatorframework.io/bundle-unpack-ref`) cannot pull the bundle. `manifest unknown` from `registry.redhat.io/rhoai` is the last source the node tried: the mirror to `quay.io/rhoai` failed first, most likely because that node has no `quay.io/rhoai` credentials (yet). Seen on ROSA HCP (OpenShift 4.22) while HyperShift replaced the workers after the pull secret was saved: the pod on the old node failed, the Job's next pod on a new node pulled the bundle, and a retry once both new nodes were up succeeded. Check the commands above: the unpack pod's node, `oc get nodes` (a node `NotReady` or `SchedulingDisabled` is joining or being drained) and the `global-pull-secret-syncer` DaemonSet (desired, ready and up-to-date equal). Run Update again once the nodes are settled. OLM on 4.22 and older reports nothing on the Subscription but `BundleUnpacking` (`UnpackingInProgress`) until its unpack timeout (10 minutes; an OperatorGroup annotation `operatorframework.io/bundle-unpack-timeout` changes it), then `BundleUnpackFailed` (§11.5) |
+| "OLM did not finish installing the operator" with "last state: Waiting for OLM to resolve the Subscription; Subscription conditions: ..." | OLM has not resolved the Subscription and set no failure. The conditions it set are quoted: `CatalogSourcesUnhealthy=True` names a catalog OLM cannot reach (it covers every catalog in scope, not only `rhoai-catalog-dev`); none at all means OLM has not acted on the Subscription yet |
 | Webhook "connection refused / no endpoints" errors | Diagnostics → stale webhooks. For a CRD conversion webhook see §11.2 |
 | "*METHOD path*: the API server's response is larger than 50 MiB" (on any page or step) | The updater reads at most 50 MiB of one API server answer, and this one was larger; before 5.0.0 it failed as "unexpected end of JSON input". The message names the request. See what makes it that big: `oc get --raw '<path from the message>' \| wc -c` (for example the PackageManifest list of `openshift-marketplace` grows with every CatalogSource). Remove what is stale (old CatalogSources, leftover objects), then retry. Nothing configures the limit; if the objects are all needed, report it |
 

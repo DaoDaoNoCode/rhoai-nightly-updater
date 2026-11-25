@@ -34,6 +34,7 @@ type fakeOLM struct {
 	channels     string // PackageManifest channels JSON for every catalog
 	stableChans  string // channels of the stable catalog (redhat-operators), "" = same as channels
 	catalogPods  string // pod list JSON for olm.catalogSource pods
+	unpackPods   string // pod list JSON for OLM's bundle-unpack pods, "" = none
 	dashboardOp  string // dashboard-operator Deployment JSON, "" = absent
 	platform     string // Platform "default" JSON, "" = absent
 	dsc          string // DataScienceCluster "default-dsc" JSON, "" = no DSC API
@@ -233,6 +234,12 @@ func (f *fakeOLM) serve(w http.ResponseWriter, r *http.Request) {
 			image, _ = f.catalog["spec"].(map[string]any)["image"].(string)
 		}
 		_, _ = fmt.Fprintf(w, `{"items":[{"metadata":{"name":"rhoai-catalog-dev-abc"},"spec":{"containers":[{"image":%q}]},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`, image)
+	case strings.HasSuffix(p, "/namespaces/"+rhoai.CatalogNS+"/pods") && r.URL.Query().Get("labelSelector") == catalog.BundleUnpackRefLabel:
+		if f.unpackPods == "" {
+			_, _ = io.WriteString(w, `{"items":[]}`)
+			return
+		}
+		_, _ = io.WriteString(w, f.unpackPods)
 	case strings.HasSuffix(p, "/namespaces/"+rhoai.CatalogNS+"/pods"):
 		_, _ = io.WriteString(w, f.catalogPods)
 	case strings.HasSuffix(p, "/subscriptions/"+rhoai.SubName):

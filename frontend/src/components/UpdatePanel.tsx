@@ -218,7 +218,7 @@ export const UpdateConfirmModal: React.FC<UpdateConfirmModalProps> = ({ target, 
               <Content component="p">
                 It usually takes a few minutes. The operator keeps running until step {REMOVE_STEP_NUMBER}; your notebooks, model servers and
                 pipelines keep running throughout. If OLM reports a failure, the previous catalog and Subscription are
-                restored automatically. If OLM is still installing after 8 minutes, the new state is kept and the tool
+                restored automatically. If OLM is still installing after 11 minutes, the new state is kept and the tool
                 keeps watching the operator status.
               </Content>
             </StackItem>
