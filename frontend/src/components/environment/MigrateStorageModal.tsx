@@ -17,7 +17,7 @@ import {
 } from "@patternfly/react-core";
 import type { LegacyStorageState } from "../../types";
 import { TooltipButton } from "../TooltipButton";
-import { S3_ENDPOINT, S3_NAMESPACE } from "./StorageTab";
+import { S3_ENDPOINT, S3_NAMESPACE } from "./s3Location";
 import { runSteps, type MigrateKind, type MigrateRun } from "./useMigrateStorage";
 import { StepProgress } from "./StepProgress";
 import { withIds } from "./s3KeysText";

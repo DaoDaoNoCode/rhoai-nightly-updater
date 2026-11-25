@@ -62,6 +62,7 @@ import { GITOPS_PROFILE_PAGES } from "./profile";
 import { isReleaseVersion } from "./utils";
 import { LiveAnnouncerProvider } from "./state/LiveAnnouncer";
 import { ProgressViewsProvider } from "./components/ProgressViews";
+import { EnvironmentRunsProvider } from "./components/environment/EnvironmentRunsProvider";
 import { ThemeProvider } from "./theme/ThemeContext";
 import { ThemeMenuGroups, ThemeSwitcher } from "./theme/ThemeSwitcher";
 
@@ -421,7 +422,9 @@ export const App: React.FC = () => {
               <RoleAppStateProvider>
                 <AppInfoProvider>
                   <ProgressViewsProvider>
-                    <AppLayout />
+                    <EnvironmentRunsProvider>
+                      <AppLayout />
+                    </EnvironmentRunsProvider>
                   </ProgressViewsProvider>
                 </AppInfoProvider>
               </RoleAppStateProvider>

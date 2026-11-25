@@ -10,8 +10,9 @@ import { withIds } from "./environment/s3KeysText";
  * A run this tab started whose progress dialog can be closed while it goes
  * on (the Environment page's runs, Migrate storage). While it runs, the
  * app's operation alert names it and its step, with View progress to open
- * the dialog again: its step list is the dialog's own state, so nothing is
- * lost by closing it.
+ * the dialog again: the run and its step list are kept above the routes
+ * (EnvironmentRunsProvider), so nothing is lost by closing the dialog or
+ * leaving the page.
  */
 export interface BackgroundRun {
   /** The run's name, its dialog's title ("Set up Pipelines in dev-project"). */

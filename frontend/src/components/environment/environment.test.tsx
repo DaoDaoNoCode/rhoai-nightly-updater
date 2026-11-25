@@ -79,6 +79,20 @@ describe("useGoalRun", () => {
     expect(result.current.run?.result).toEqual({ success: true, message: "Goal is ready." });
     expect(result.current.run?.states.a).toEqual({ status: "success", message: "A is ready. (0:06)" });
   });
+  it("reads the status again before each later check, so a check never judges a status nobody reads any more", async () => {
+    const c = fakeClock();
+    const seen: string[] = [];
+    let latest = "starting";
+    let reads = 0;
+    const refresh = vi.fn(async () => { seen.push("refresh"); reads += 1; latest = reads >= 2 ? "ready" : "starting"; });
+    const { result } = renderHook(() => useGoalRun(c.now, c.sleep));
+    await act(() => result.current.start("Goal", [{
+      id: "a", title: "A", run: ok("created"),
+      waitReady: { typical: "x", check: () => { seen.push(`check ${latest}`); return latest === "ready" ? { state: "ready" } : { state: "starting" }; } },
+    }], { refresh }));
+    expect(seen).toEqual(["check starting", "refresh", "check starting", "refresh", "check ready"]);
+    expect(result.current.run?.result).toMatchObject({ success: true });
+  });
   it("a part that cannot start fails the run with the reason and the fix", async () => {
     const c = fakeClock();
     const next = vi.fn(ok("B"));

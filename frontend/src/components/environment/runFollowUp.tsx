@@ -1,5 +1,3 @@
-import React from "react";
-import { Content } from "@patternfly/react-core";
 import type { PlaygroundStatus, ResourcesStatus } from "../../types";
 import { type Busy, type FeatureState, type MaaSOp, type ModelsOp, type NextStep, type PlaygroundOp, modelsState, playgroundState } from "./featureState";
 import type { SampleOp } from "./samples";
@@ -29,7 +27,7 @@ export interface RunFollowUpInput {
  * feature the run set up. A sample run: after adding MLflow samples, open
  * the project's workspace.
  */
-export function runFollowUp({ run, runFeature, sampleRun, modelsRun, playgroundRun, maasRun, status, pg, busy, projectNames, mlflowNow, maasNow, pipelines }: RunFollowUpInput): { open: NextStep | null; whatNext: React.ReactNode } {
+export function runFollowUp({ run, runFeature, sampleRun, modelsRun, playgroundRun, maasRun, status, pg, busy, projectNames, mlflowNow, maasNow, pipelines }: RunFollowUpInput): { open: NextStep | null; whatNext: string | undefined } {
   const mlflow = status?.mlflow;
   const sampleNext: NextStep | null = sampleRun?.feature === "mlflow" && sampleRun.action !== "remove" && mlflow?.uiRoute
     ? { kind: "open", label: `Open ${sampleRun.project} in MLflow`, href: mlflowOpenHref(status?.dashboardUrl, mlflow.uiRoute, sampleRun.project) }
@@ -41,25 +39,25 @@ export function runFollowUp({ run, runFeature, sampleRun, modelsRun, playgroundR
     ? (runFeature === "playground" ? playgroundNext : runFeature === "models" ? modelsNext : runFeature === "mlflow" ? mlflowNow.next : runFeature === "maas" ? maasNext : runFeature === "pipelines" ? pipelines.next : null)
     : runFeature === "samples" ? sampleNext : null;
   const whatNext = run?.kind === "setup" && runFeature === "maas"
-    ? <Content component="p">{maasRun?.action === "publish"
+    ? (maasRun?.action === "publish"
       ? `On the MaaS tab, Use it mints an API key (shown once) and calls ${maasRun.project ? `${maasRun.model ?? "the model"} in ${maasRun.project}` : "the model"} with it. The dashboard's Models as a Service pages list it with its subscription.`
-      : "On the MaaS tab, publish a model to offer it through MaaS: callers then use an API key instead of their OpenShift token, within the subscription's token limits."}</Content>
+      : "On the MaaS tab, publish a model to offer it through MaaS: callers then use an API key instead of their OpenShift token, within the subscription's token limits.")
     : run?.kind === "setup" && runFeature === "playground"
-    ? <Content component="p">{`Open the playground in ${playgroundRun?.project}, choose a model and ask it something. On the Playground tab, Use it also has a chat request to run from a terminal.`}</Content>
+    ? `Open the playground in ${playgroundRun?.project}, choose a model and ask it something. On the Playground tab, Use it also has a chat request to run from a terminal.`
     : run?.kind === "setup" && runFeature === "models" && modelsRun?.action === "allow"
-    ? <Content component="p">{`The models in ${modelsRun.allowProject} attach to the inference gateway within a few seconds, and the dashboard shows them as it shows any other model.`}</Content>
+    ? `The models in ${modelsRun.allowProject} attach to the inference gateway within a few seconds, and the dashboard shows them as it shows any other model.`
     : run?.kind === "setup" && runFeature === "models"
-    ? <Content component="p">{modelsRun?.project
+    ? (modelsRun?.project
       ? `On the Models tab, Use it has the model's address and commands that call it with your OpenShift token. In the dashboard, ${modelsRun.project} lists the model, and Gen AI studio offers it in the playground.`
-      : "Choose a project on the Models tab and set up a model there: it routes through this gateway."}</Content>
+      : "Choose a project on the Models tab and set up a model there: it routes through this gateway.")
     : run?.kind === "setup" && runFeature === "storage"
-    ? <Content component="p">Pipeline servers set up on the Pipelines tab keep their artifacts in it. The S3 storage tab has its endpoint and, for cluster-admins, its keys.</Content>
+    ? "Pipeline servers set up on the Pipelines tab keep their artifacts in it. The S3 storage tab has its endpoint and, for cluster-admins, its keys."
     : run?.kind === "setup" && (runFeature === "mlflow" || runFeature === "pipelines")
-    ? <Content component="p">{runFeature === "mlflow"
+    ? (runFeature === "mlflow"
       ? "Open MLflow workspaces to choose a project and see its experiments. On the MLflow tab, Sample data adds example experiments, traces and a model to a project in one click."
-      : `${runNext?.kind === "open" ? runNext.label : "Open pipelines"} to import a pipeline and create a run. The Pipelines tab has a sample pipeline to check that runs work, with the commands that run it with your own token.`}</Content>
+      : `${runNext?.kind === "open" ? runNext.label : "Open pipelines"} to import a pipeline and create a run. The Pipelines tab has a sample pipeline to check that runs work, with the commands that run it with your own token.`)
     : runFeature === "samples" && sampleRun && sampleRun.action !== "remove"
-      ? <Content component="p">{`Open ${sampleRun.project} in MLflow to see the sample data; the dashboard shows it on the pages each sample names.`}</Content>
+      ? `Open ${sampleRun.project} in MLflow to see the sample data; the dashboard shows it on the pages each sample names.`
       : undefined;
   return { open: runNext, whatNext };
 }
