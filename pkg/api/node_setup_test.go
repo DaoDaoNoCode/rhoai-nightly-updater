@@ -55,7 +55,7 @@ func TestNodeSetupValidatesTheRequest(t *testing.T) {
 		if w.Code != 400 {
 			t.Errorf("%s: status %d %s", tc.body, w.Code, w.Body.String())
 		}
-		if clusterMutationInProgress.Load() {
+		if locks.clusterHeld() {
 			t.Fatalf("%s: the lock was not released", tc.body)
 		}
 	}

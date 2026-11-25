@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -244,6 +245,13 @@ func TestOperationForAUserNamesNobody(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]any{"running": true, "label": "Gen AI playground", "startedAt": started.Format(time.RFC3339)}
+	// The list holds the same, as one entry: scope, label and start only
+	// (the interrupted marker and the other pod's details stay out).
+	ops, _ := raw["operations"].([]any)
+	if len(ops) != 1 || fmt.Sprint(ops[0]) != fmt.Sprint(map[string]any{"scope": "cluster", "label": "Gen AI playground", "startedAt": started.Format(time.RFC3339)}) {
+		t.Fatalf("a user's operation list: %v", raw["operations"])
+	}
+	delete(raw, "operations")
 	if len(raw) != len(want) {
 		t.Fatalf("a user's operation has other fields: %v", raw)
 	}
@@ -270,7 +278,7 @@ func TestOperationForAUserNamesNobody(t *testing.T) {
 	readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) { return &cluster.OperationRecord{}, nil }
 	w = httptest.NewRecorder()
 	HandleOperation(w, getAs(t, "/api/operation", "user:carol"))
-	if strings.TrimSpace(w.Body.String()) != `{"running":false,"label":"","startedAt":""}` {
+	if strings.TrimSpace(w.Body.String()) != `{"running":false,"label":"","startedAt":"","operations":[]}` {
 		t.Errorf("idle: %s", w.Body.String())
 	}
 }

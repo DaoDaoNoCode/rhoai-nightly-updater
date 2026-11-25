@@ -107,10 +107,13 @@ func TestBookkeepingUsesTheServiceAccount(t *testing.T) {
 	if err := SaveOperationMarker(c, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := WriteOperationLease(c, &types.OperationLease{ID: "op"}, func(*types.OperationLease) bool { return false }); err != nil {
+	if err := AcquireOperationLock(c, ClusterLockKey, `{"id":"op"}`, func(*OperationRecord) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if err := ReleaseOperationLease(c, LeaseOwner{ID: "op"}); err != nil {
+	if _, err := RenewOperationLocks(c, []LockRenewal{{Key: ClusterLockKey, Old: `{"id":"op"}`, New: `{"id":"op","heartbeatAt":"x"}`}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReleaseOperationLock(c, ClusterLockKey, LeaseOwner{ID: "op"}); err != nil {
 		t.Fatal(err)
 	}
 

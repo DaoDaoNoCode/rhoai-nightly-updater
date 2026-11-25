@@ -200,7 +200,7 @@
 102 delete serving.kserve.io/llminferenceservices ns=* name=qwen3-1-7b
 102 delete serving.kserve.io/llminferenceservices ns=* name=smollm2-135m-instruct
 2 get /configmaps ns=${NS} name=rhoai-nightly-updater-activity
-3 get /configmaps ns=${NS} name=rhoai-nightly-updater-operation
+2 get /configmaps ns=${NS} name=rhoai-nightly-updater-operation
 7 get /configmaps ns=${NS} name=rhoai-nightly-updater-snapshot
 2 get /configmaps ns=* name=inferenceservice-config
 16 get /configmaps ns=openshift-ingress name=maas-gateway-options
@@ -429,7 +429,7 @@
 3 list serving.kserve.io/inferenceservices ns=* name=
 1 list serving.kserve.io/llminferenceservices ns= name=
 3 list serving.kserve.io/llminferenceservices ns=* name=
-2 patch /configmaps ns=${NS} name=rhoai-nightly-updater-operation
+3 patch /configmaps ns=${NS} name=rhoai-nightly-updater-operation
 6 patch /configmaps ns=${NS} name=rhoai-nightly-updater-snapshot
 8 patch /configmaps ns=openshift-ingress name=maas-gateway-options
 3 patch /configmaps ns=openshift-ingress name=openshift-ai-inference-options
@@ -509,9 +509,9 @@
 1 create /configmaps ns=${NS} name=rhoai-nightly-updater-operation
 1 create /configmaps ns=${NS} name=rhoai-nightly-updater-snapshot
 2 get /configmaps ns=${NS} name=rhoai-nightly-updater-activity
-3 get /configmaps ns=${NS} name=rhoai-nightly-updater-operation
+2 get /configmaps ns=${NS} name=rhoai-nightly-updater-operation
 7 get /configmaps ns=${NS} name=rhoai-nightly-updater-snapshot
-2 patch /configmaps ns=${NS} name=rhoai-nightly-updater-operation
+3 patch /configmaps ns=${NS} name=rhoai-nightly-updater-operation
 6 patch /configmaps ns=${NS} name=rhoai-nightly-updater-snapshot
 1 update /configmaps ns=${NS} name=rhoai-nightly-updater-activity
 

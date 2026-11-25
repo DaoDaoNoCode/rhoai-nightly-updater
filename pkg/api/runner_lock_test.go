@@ -33,8 +33,8 @@ func TestAcquireRunnerLock_HoldsLockAndLeaseWithItsOwnCancel(t *testing.T) {
 		t.Fatalf("refused: %+v", refusal)
 	}
 	op := inflight.snapshot()
-	if !started || !clusterMutationInProgress.Load() || op == nil || op.Type != "runner-test" {
-		t.Fatalf("not held: started %t, lock %t, op %+v", started, clusterMutationInProgress.Load(), op)
+	if !started || !locks.clusterHeld() || op == nil || op.Type != "runner-test" {
+		t.Fatalf("not held: started %t, lock %t, op %+v", started, locks.clusterHeld(), op)
 	}
 	if l := f.currentLease(); l == nil || l.ID != op.ID || l.BootID != bootID || l.Type != "runner-test" {
 		t.Fatalf("lease %+v", l)
@@ -55,7 +55,7 @@ func TestAcquireRunnerLock_HoldsLockAndLeaseWithItsOwnCancel(t *testing.T) {
 	}
 
 	releaseClusterMutationLock()
-	if clusterMutationInProgress.Load() || inflight.snapshot() != nil {
+	if locks.clusterHeld() || inflight.snapshot() != nil {
 		t.Fatal("the lock or the operation was left behind")
 	}
 	if l := f.currentLease(); l == nil || l.ID != "remote-op" {
@@ -74,16 +74,16 @@ func TestAcquireRunnerLock_FailsClosed(t *testing.T) {
 	cancelled := false
 	cancel := func(error) { cancelled = true }
 
-	clusterMutationInProgress.Store(true)
+	locks.setCluster(true)
 	started := false
 	refusal := acquireRunnerLock(startRunner(c, &started), cancel)
 	if refusal == nil || !refusal.busy || refusal.holder != nil || refusal.err != nil {
 		t.Fatalf("local lock held: refusal %+v", refusal)
 	}
-	if started || !clusterMutationInProgress.Load() {
+	if started || !locks.clusterHeld() {
 		t.Fatalf("started %t, or freed a lock it did not hold", started)
 	}
-	clusterMutationInProgress.Store(false)
+	locks.setCluster(false)
 
 	f.setLease(otherPodLease(clk.Now()))
 	refusal = acquireRunnerLock(startRunner(c, &started), cancel)
@@ -103,8 +103,8 @@ func TestAcquireRunnerLock_FailsClosed(t *testing.T) {
 		t.Fatalf("unwritable lease: refusal %+v", refusal)
 	}
 
-	if clusterMutationInProgress.Load() || inflight.snapshot() != nil || cancelled {
-		t.Fatalf("after the refusals: lock %t, op %v, cancelled %t", clusterMutationInProgress.Load(), inflight.snapshot(), cancelled)
+	if locks.clusterHeld() || inflight.snapshot() != nil || cancelled {
+		t.Fatalf("after the refusals: lock %t, op %v, cancelled %t", locks.clusterHeld(), inflight.snapshot(), cancelled)
 	}
 	if f.currentLease() != nil || len(f.writes) != 0 || len(f.releases) != 0 {
 		t.Fatalf("lease %+v, writes %d, releases %d", f.currentLease(), len(f.writes), len(f.releases))
@@ -158,7 +158,7 @@ func TestAcquireRunnerLock_ReleaseClearsMarkerAndLease(t *testing.T) {
 	if len(f.releases) != 0 {
 		t.Fatalf("the lease was released apart from the marker clear: %v", f.releases)
 	}
-	if clusterMutationInProgress.Load() || inflight.snapshot() != nil {
+	if locks.clusterHeld() || inflight.snapshot() != nil {
 		t.Fatal("the lock or the operation was left behind")
 	}
 }

@@ -32,7 +32,7 @@ func TestModelsStream(t *testing.T) {
 	} {
 		w := httptest.NewRecorder()
 		HandleModelsStream(w, postJSON(t, "/api/resources/models/stream", "tok", body))
-		if w.Code != http.StatusBadRequest || clusterMutationInProgress.Load() {
+		if w.Code != http.StatusBadRequest || locks.clusterHeld() {
 			t.Errorf("%s: %d %s", body, w.Code, w.Body.String())
 		}
 	}
@@ -45,7 +45,7 @@ func TestModelsStream(t *testing.T) {
 	if got.Action != "setup" || !got.Gateway || got.Project != "p" || !got.ReleasedImage {
 		t.Errorf("request %+v", got)
 	}
-	if clusterMutationInProgress.Load() {
+	if locks.clusterHeld() {
 		t.Error("lock held after the operation")
 	}
 }

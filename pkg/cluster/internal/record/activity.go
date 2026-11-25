@@ -17,14 +17,21 @@ import (
 
 // maxConflictRetries bounds the read-modify-write attempts of one entry.
 // Writers that collide each lose at most once per other writer that wins,
-// so this many attempts let that many concurrent writers all land (up to
-// three recipe steps, the run's own entries and another pod's).
+// so this many attempts let that many concurrent writers all land. This
+// process's own entries are written one at a time (activityWriter), so
+// conflicts come from another updater pod's writes only; the bound is
+// kept as it was.
 const maxConflictRetries = 8
 
 // activityBackoff is the wait before attempt (1 or more) after a conflict:
 // a random part of 25 ms doubled per attempt, at most 800 ms, so writers
 // that collided do not collide again in step. Tests replace it.
-var activityBackoff = func(attempt int) time.Duration {
+var activityBackoff = jitteredBackoff
+
+// jitteredBackoff is the wait before attempt (1 or more) of a write retried
+// after a conflict: a random part of 25 ms doubled per attempt, at most
+// 800 ms.
+func jitteredBackoff(attempt int) time.Duration {
 	ceiling := min(25*time.Millisecond<<(attempt-1), 800*time.Millisecond)
 	return time.Duration(rand.Int64N(int64(ceiling))) + time.Millisecond
 }
@@ -245,7 +252,14 @@ func Activity(c *kube.Client, entry types.ActivityEntry) {
 	// shutting-down pod past its drain.
 	ctx, cancel := BookkeepingContext(c, ActivityWriteTimeout)
 	defer cancel()
-	recordActivityWithClient(c.WithContext(ctx), entry)
+	// This process's entries are written one at a time (activityWriter),
+	// so they never conflict with each other.
+	if err := activityWriter.do(ctx, func() error {
+		recordActivityWithClient(c.WithContext(ctx), entry)
+		return nil
+	}); err != nil {
+		slog.Warn("failed to save activity configmap", "error", err)
+	}
 }
 
 // Action records an action of the signed-in user, stamped now.

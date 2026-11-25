@@ -56,6 +56,14 @@ type OperationLease struct {
 	Step        string `json:"step,omitempty"`
 	StepStatus  string `json:"stepStatus,omitempty"`
 	Message     string `json:"message,omitempty"`
+	// Project and ProjectUID name the project of a project lock (the
+	// namespace and its UID); the cluster lock has neither, so its format
+	// stays the one earlier versions read. Begun: the project action began
+	// changing the project, so a lock that expires with it set reports the
+	// action as interrupted.
+	Project    string `json:"project,omitempty"`
+	ProjectUID string `json:"projectUid,omitempty"`
+	Begun      bool   `json:"begun,omitempty"`
 }
 
 // CompletedOperation is the most recent finished cluster operation, as

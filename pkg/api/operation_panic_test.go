@@ -93,7 +93,7 @@ func TestStreamOutcomesArePinned(t *testing.T) {
 			if !mutationLimiter.isRateLimited("admin:/api/update/stream") {
 				t.Fatal("an accepted change did not use the slot")
 			}
-			if clusterMutationInProgress.Load() {
+			if locks.clusterHeld() {
 				t.Fatal("the cluster lock is still held")
 			}
 		})
@@ -119,7 +119,7 @@ func TestStreamPanicEndsTheStreamAndFreesTheSlot(t *testing.T) {
 	if mutationLimiter.isRateLimited("admin:/api/update/stream") {
 		t.Error("the user's slot is still taken after a panic")
 	}
-	if clusterMutationInProgress.Load() {
+	if locks.clusterHeld() {
 		t.Error("the cluster lock is still held")
 	}
 	if !strings.Contains(logs.String(), "index out of range [3]") || !strings.Contains(logs.String(), "goroutine") {

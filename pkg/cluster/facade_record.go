@@ -15,6 +15,15 @@ type (
 	OperationRecord = record.OperationRecord
 	// LeaseOwner is record.LeaseOwner.
 	LeaseOwner = record.LeaseOwner
+	// LockRenewal is record.LockRenewal.
+	LockRenewal = record.LockRenewal
+)
+
+// The operation locks (see record).
+const (
+	ClusterLockKey        = record.LeaseKey
+	LockTTL               = record.LockTTL
+	InterruptedLockMaxAge = record.InterruptedLockMaxAge
 )
 
 // The operation time budget (see record).
@@ -63,15 +72,23 @@ func LeaseLive(l *types.OperationLease, now time.Time, ttl time.Duration) bool {
 // LeaseHeartbeat is record.LeaseHeartbeat.
 func LeaseHeartbeat(l *types.OperationLease) (time.Time, error) { return record.LeaseHeartbeat(l) }
 
-// WriteOperationLease is record.WriteOperationLease.
-func WriteOperationLease(c *Client, lease *types.OperationLease, heldElsewhere func(*types.OperationLease) bool) (*types.OperationLease, error) {
-	return record.WriteOperationLease(c, lease, heldElsewhere)
+// AcquireOperationLock is record.AcquireOperationLock.
+func AcquireOperationLock(c *Client, key, value string, check func(*OperationRecord) error) error {
+	return record.AcquireOperationLock(c, key, value, check)
 }
 
-// ReleaseOperationLease is record.ReleaseOperationLease.
-func ReleaseOperationLease(c *Client, owner LeaseOwner) error {
-	return record.ReleaseOperationLease(c, owner)
+// RenewOperationLocks is record.RenewOperationLocks.
+func RenewOperationLocks(c *Client, renewals []LockRenewal) (map[string]*types.OperationLease, error) {
+	return record.RenewOperationLocks(c, renewals)
 }
+
+// ReleaseOperationLock is record.ReleaseOperationLock.
+func ReleaseOperationLock(c *Client, key string, owner LeaseOwner) error {
+	return record.ReleaseOperationLock(c, key, owner)
+}
+
+// ProjectLockKey is record.ProjectLockKey.
+func ProjectLockKey(uid string) string { return record.ProjectLockKey(uid) }
 
 // SaveRecipeRun is record.SaveRecipeRun.
 func SaveRecipeRun(c *Client, run *types.RecipeRun, replace bool) error {

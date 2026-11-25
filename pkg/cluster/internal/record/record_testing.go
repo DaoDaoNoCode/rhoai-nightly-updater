@@ -43,3 +43,14 @@ func mustBeTest(what string) {
 		panic(what + " is only for tests")
 	}
 }
+
+// SetLockBackoffForTest makes backoff the wait before each retry of a
+// conditional write of the operation record after a conflict, and returns
+// the function that puts the previous one back. It panics outside a test
+// binary.
+func SetLockBackoffForTest(backoff func(attempt int) time.Duration) (restore func()) {
+	mustBeTest("SetLockBackoffForTest")
+	prev := lockBackoff
+	lockBackoff = backoff
+	return func() { lockBackoff = prev }
+}

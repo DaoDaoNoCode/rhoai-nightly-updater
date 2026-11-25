@@ -1,5 +1,12 @@
 {
   "label": "Update to nightly",
+  "operations": [
+    {
+      "label": "Update to nightly",
+      "scope": "cluster",
+      "startedAt": "2026-11-20T14:05:00Z"
+    }
+  ],
   "running": true,
   "startedAt": "2026-11-20T14:05:00Z"
 }
