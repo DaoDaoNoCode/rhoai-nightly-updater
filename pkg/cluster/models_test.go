@@ -869,40 +869,43 @@ func TestModelsSetup_GatewayWithoutAddressFails(t *testing.T) {
 	}
 }
 
-// With an address but no DNS zone (the cluster DNS configuration names
-// none, so the ingress operator never publishes the hostname and its
-// DNSRecord's status.zones stays empty), setup fails too; a record whose
-// zones are still being published is the normal wait and succeeds with a
-// note.
+// What the DNS wait finds is reported, never a failure: a record with no
+// zone (no zone in the cluster DNS configuration, or DNS managed outside
+// OpenShift), one still being published, or DNSRecords that cannot be read
+// do not prove the hostname does not resolve. The step says what to check.
 func TestModelsSetup_GatewayDNS(t *testing.T) {
+	const check = "Check that inference.apps.example.com resolves to the gateway's address (oc get gateway openshift-ai-inference -n openshift-ingress -o jsonpath='{.status.addresses[0].value}')"
 	for _, tc := range []struct {
 		name, zones string
-		ok          bool
-		want        string
+		unreadable  bool
+		want        []string
 	}{
-		{"no zone", `[]`, false, "OpenShift publishes no DNS for inference.apps.example.com: its DNSRecord in openshift-ingress lists no DNS zone"},
-		{"not published yet", `[{"conditions":[{"type":"Published","status":"False"}]}]`, true, "is not published in DNS yet"},
-		{"published", `[{"conditions":[{"type":"Published","status":"True"}]}]`, true, "is published in DNS"},
+		{"no zone", `[]`, false, []string{"Ready; Warning: OpenShift has not published https://inference.apps.example.com in DNS: its DNSRecord in openshift-ingress lists no DNS zone", check}},
+		{"not published yet", `[{"conditions":[{"type":"Published","status":"False"}]}]`, false, []string{"is not published in DNS yet", "oc get dnsrecords -n openshift-ingress -o yaml"}},
+		{"unreadable", `[]`, true, []string{"Ready; Warning: whether https://inference.apps.example.com is published in DNS could not be read", check}},
+		{"published", `[{"conditions":[{"type":"Published","status":"True"}]}]`, false, []string{"Ready: https://inference.apps.example.com is published in DNS."}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mc := newModelsCluster(t)
 			mc.f.putJSON("/apis/ingress.operator.openshift.io/v1/namespaces/openshift-ingress/dnsrecords/external",
 				`{"spec":{"dnsName":"inference.apps.example.com."},"status":{"zones":`+tc.zones+`}}`)
+			if tc.unreadable {
+				mc.f.fail["GET /apis/ingress.operator.openshift.io/v1/namespaces/openshift-ingress/dnsrecords"] = 500
+			}
 			res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
-			if res.Success != tc.ok {
+			if !res.Success {
 				t.Fatalf("setup = %+v", res)
 			}
-			msg := res.Message
+			msg := ""
 			for _, e := range events {
 				if e.Step == "gateway-ready" && e.Status != "running" {
-					msg = e.Message
+					msg = e.Status + " " + e.Message
 				}
 			}
-			if !strings.Contains(msg, tc.want) {
-				t.Errorf("gateway-ready %q lacks %q", msg, tc.want)
-			}
-			if !tc.ok && (res.ErrorCode != "not_ready" || !strings.Contains(msg, "is not supported by this tool yet") || mc.f.has(testModelPath)) {
-				t.Errorf("no-zone failure: code %q, model made %v: %s", res.ErrorCode, mc.f.has(testModelPath), msg)
+			for _, want := range tc.want {
+				if !strings.Contains(msg, want) || !strings.HasPrefix(msg, "success ") {
+					t.Errorf("gateway-ready %q lacks %q", msg, want)
+				}
 			}
 		})
 	}

@@ -487,9 +487,9 @@ func AwaitOperator(c *kube.Client, step, ns, name, title string, timeout time.Du
 const maasGatewayFailedAfter = " The gateway was created and setup stopped before Authorino TLS and the DataScienceCluster: Clean up MaaS removes what it made."
 
 // setupGateway is setup's gateway step (setup-gateway.sh loadbalancer
-// mode). A gateway that gets no load balancer address, or whose hostname
-// has no DNS zone to be published in, fails setup: MaaS would not be
-// reachable from outside the cluster.
+// mode). A gateway that gets no load balancer address fails setup: MaaS
+// would not be reachable from outside the cluster. What the DNS wait finds
+// is only reported (gatewayDNSNote).
 func (m *Run) setupGateway(gwPlan *maasGatewayPlan, foreign bool) (*types.OperationResponse, error) {
 	c := m.Client
 	if foreign {
@@ -522,14 +522,10 @@ func (m *Run) setupGateway(gwPlan *maasGatewayPlan, foreign bool) (*types.Operat
 		}
 		return state == "published", nil
 	})
-	switch {
-	case published:
-		m.Step("gateway", "success", fmt.Sprintf("Programmed; https://%s is published in DNS.", gwPlan.host))
-	case state == dnsNoZones:
-		return m.Fail("gateway", gatewayNoDNSZonesText(MaaSGatewayName, gwPlan.host)+maasGatewayFailedAfter, "not_ready", "gateway has no dns zone")
-	default:
-		m.Step("gateway", "success", fmt.Sprintf("Programmed; https://%s is not in DNS yet (a new load balancer's name can take a few minutes).", gwPlan.host))
+	if published {
+		state = "published"
 	}
+	m.Step("gateway", "success", "Programmed; "+gatewayDNSNote(MaaSGatewayName, gwPlan.host, state))
 	return nil, nil
 }
 

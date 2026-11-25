@@ -48,40 +48,35 @@ func TestMaaSSetup_GatewayWithoutAddressFails(t *testing.T) {
 	}
 }
 
-// With an address but no DNS zone the hostname never resolves: setup fails
-// there too. Zones still being published are the normal wait.
+// What the DNS wait finds is only reported: no zone, a record still being
+// published, or an unreadable list is a success with what to check.
 func TestMaaSSetup_GatewayDNS(t *testing.T) {
 	for _, tc := range []struct {
 		name, zones string
-		ok          bool
+		unreadable  bool
+		want        string
 	}{
-		{"no zone", `[]`, false},
-		{"not published yet", `[{"conditions":[{"type":"Published","status":"False"}]}]`, true},
+		{"no zone", `[]`, false, "Programmed; Warning: OpenShift has not published https://maas.apps.example.com in DNS: its DNSRecord in openshift-ingress lists no DNS zone"},
+		{"not published yet", `[{"conditions":[{"type":"Published","status":"False"}]}]`, false, "Programmed; https://maas.apps.example.com is not published in DNS yet"},
+		{"unreadable", `[]`, true, "Programmed; Warning: whether https://maas.apps.example.com is published in DNS could not be read"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mc := newMaaSCluster(t)
 			mc.f.putJSON("/apis/ingress.operator.openshift.io/v1/namespaces/openshift-ingress/dnsrecords/maas",
 				`{"spec":{"dnsName":"maas.apps.example.com."},"status":{"zones":`+tc.zones+`}}`)
+			if tc.unreadable {
+				mc.f.fail["GET /apis/ingress.operator.openshift.io/v1/namespaces/openshift-ingress/dnsrecords"] = 500
+			}
 			res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "setup", Database: tCNPG})
-			if res.Success != tc.ok {
+			if !res.Success {
 				t.Fatalf("setup = %+v", res)
 			}
-			if !tc.ok {
-				if res.ErrorCode != "not_ready" || !strings.Contains(res.Message, "OpenShift publishes no DNS for maas.apps.example.com: its DNSRecord in openshift-ingress lists no DNS zone") ||
-					!strings.Contains(res.Message, "is not supported by this tool yet") {
-					t.Errorf("failure: %+v", res)
-				}
-				if got := maasDSCState(mc); got != "Removed" {
-					t.Errorf("modelsAsAService = %v after a failed gateway", got)
-				}
-				return
-			}
-			note := false
+			found := false
 			for _, e := range events {
-				note = note || e.Step == "gateway" && e.Status == "success" && strings.Contains(e.Message, "is not in DNS yet")
+				found = found || e.Step == "gateway" && e.Status == "success" && strings.Contains(e.Message, tc.want)
 			}
-			if !note {
-				t.Error("no note that the hostname is not in DNS yet")
+			if !found {
+				t.Errorf("no gateway step with %q", tc.want)
 			}
 		})
 	}

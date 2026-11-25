@@ -1203,12 +1203,10 @@ func (m *modelsRun) setupGateway(req types.ModelsRequest, s *modelsSetup) (*type
 			return m.fail("gateway-ready", problem+" Its objects were created; delete the gateway to remove them.", "not_ready", "gateway not accepted")
 		case !ready:
 			return m.fail("gateway-ready", gatewayNoAddressText(inferenceGatewayName, inferenceGatewayReadyTimeout, pending)+inferenceGatewayFailedAfter, "not_ready", "gateway has no address")
-		case dns == dnsNoZones:
-			return m.fail("gateway-ready", gatewayNoDNSZonesText(inferenceGatewayName, gw.host)+inferenceGatewayFailedAfter, "not_ready", "gateway has no dns zone")
 		case dns == "published":
-			m.step("gateway-ready", "success", fmt.Sprintf("Ready: https://%s is published in DNS.", gw.host))
+			m.step("gateway-ready", "success", "Ready: "+gatewayDNSNote(inferenceGatewayName, gw.host, dns))
 		default:
-			m.step("gateway-ready", "success", fmt.Sprintf("Ready; https://%s is not published in DNS yet (a new load balancer's name can take a few minutes to resolve).", gw.host))
+			m.step("gateway-ready", "success", "Ready; "+gatewayDNSNote(inferenceGatewayName, gw.host, dns))
 		}
 		s.summary = append(s.summary, "The inference gateway is set up.")
 	}
