@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -431,5 +432,44 @@ func TestProjectActionLogsNameNobody(t *testing.T) {
 	serveProjectAction(t, "/api/resources/workbench/stream", `{"action":"setup","project":"team-a"}`)
 	if logs.Len() == 0 || strings.Contains(logs.String(), "alice") {
 		t.Fatalf("logs:\n%s", logs.String())
+	}
+}
+
+// A user who is not a cluster-admin is not offered Add on a demo removed
+// in MLflow (their Add refuses an existing experiment) and is told who
+// restores it; a cluster-admin still gets Add, which restores it.
+func TestRemovedDemoStatusPerRole(t *testing.T) {
+	orig := getMLflowSamplesStatus
+	t.Cleanup(func() { getMLflowSamplesStatus = orig })
+	getMLflowSamplesStatus = func(_, _ *cluster.Client, project string) (*types.MLflowSamplesStatus, error) {
+		return &types.MLflowSamplesStatus{Project: project, Available: true, Samples: []types.SampleStatus{
+			{ID: cluster.SampleGenAIDemo, State: "removed", Actions: []string{"add"}, Message: "Removed in MLflow: Add restores the experiment and generates every feature again."},
+			{ID: cluster.SampleTraining, State: "absent", Actions: []string{"add"}},
+		}}, nil
+	}
+	get := func() types.MLflowSamplesStatus {
+		mux := http.NewServeMux()
+		Register(mux)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/resources/samples/mlflow?project=team-a", nil)
+		r.Header.Set("X-Forwarded-Access-Token", "user:alice")
+		mux.ServeHTTP(w, r)
+		var st types.MLflowSamplesStatus
+		if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil {
+			t.Fatalf("%d %s", w.Code, w.Body.String())
+		}
+		return st
+	}
+	newProjectGateEnv(t, roleEditor)
+	st := get()
+	if demo := st.Samples[0]; len(demo.Actions) != 0 || !strings.Contains(demo.Message, "A cluster-admin restores it") {
+		t.Fatalf("a user's removed demo: %+v", demo)
+	}
+	if len(st.Samples[1].Actions) != 1 {
+		t.Fatalf("an absent sample lost its Add: %+v", st.Samples[1])
+	}
+	newProjectGateEnv(t, roleClusterAdmin)
+	if demo := get().Samples[0]; len(demo.Actions) != 1 || demo.Actions[0] != "add" {
+		t.Fatalf("an admin's removed demo: %+v", demo)
 	}
 }

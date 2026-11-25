@@ -39,6 +39,15 @@ var HandleMLflowSamplesStatus = withUserRead(func(sa, u *cluster.Client, w http.
 		writeUserReadError(w, "Cannot read the MLflow samples", err)
 		return
 	}
+	// A user who is not a cluster-admin is not offered what their Add would
+	// refuse (a demo removed in MLflow: a cluster-admin restores it).
+	admin, ok := requestRole(w, r)
+	if !ok {
+		return
+	}
+	if !admin {
+		st = cluster.MLflowSamplesStatusForUser(st)
+	}
 	writeJSON(w, st, "mlflow-samples")
 })
 

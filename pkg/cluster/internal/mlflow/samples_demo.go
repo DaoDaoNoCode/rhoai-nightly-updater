@@ -1,6 +1,7 @@
 package mlflow
 
 import (
+	"slices"
 	"sort"
 	"strings"
 
@@ -138,6 +139,30 @@ const demoLowMemoryForUserMessage = "MLflow still has the 2Gi memory limit an ea
 // cluster-admin where the demo's experiment exists: adding there brings
 // the demo's data up to date or resets it, which replaces it.
 const demoExistsForUserMessage = "Experiment '" + DemoExperiment + "' exists in this project already. Adding the demo there brings its data up to date or regenerates it, which replaces what is in it, so a cluster-admin does it (Regenerate on the Environment page). Nothing was changed."
+
+// DemoRemovedForUserMessage is the status of a demo removed in MLflow for
+// a user who is not a cluster-admin: restoring it brings its experiment
+// back and generates its features again, which their Add does not do on
+// an existing experiment (demoExistsForUserMessage).
+const DemoRemovedForUserMessage = "Removed in MLflow. A cluster-admin restores it (Add on the Environment page), which brings the experiment back and generates every feature again."
+
+// SamplesStatusForUser is st as a user who is not a cluster-admin gets it:
+// a demo removed in MLflow offers no Add (theirs would be refused: the
+// experiment exists) and says who restores it.
+func SamplesStatusForUser(st *types.MLflowSamplesStatus) *types.MLflowSamplesStatus {
+	if st == nil {
+		return nil
+	}
+	out := *st
+	out.Samples = slices.Clone(st.Samples)
+	for i, s := range out.Samples {
+		if s.ID == SampleGenAIDemo && s.State == "removed" {
+			out.Samples[i].Actions = []string{}
+			out.Samples[i].Message = DemoRemovedForUserMessage
+		}
+	}
+	return &out
+}
 
 func demoStatusOfExperiment(t *Target) types.SampleStatus {
 	s := types.SampleStatus{}
