@@ -3,7 +3,6 @@ package recipe
 import (
 	"math/rand/v2"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -55,11 +54,10 @@ func ordered(steps []Step, a, b string) bool {
 
 // Order is treated as data and must satisfy: each step appears exactly once;
 // every After entry points at a strictly earlier position (topological order,
-// acyclic graph); each step's check runs only after every step in dependsOn
+// acyclic graph); each step's check runs only after every step in stepDependsOn
 // has completed; prerequisite steps never share a time slice; lane membership
-// matches the documented layout; Kueue follows all other features, except
-// the workbench of a recipe that turns the dashboard's Kueue setting on,
-// which comes right after it (N12); Dashboard Dev is last.
+// matches the documented layout; Kueue follows all other features; Dashboard
+// Dev is last.
 func TestSteps_DependencyOrder(t *testing.T) {
 	listed := map[string]int{}
 	for _, id := range stepsFirst {
@@ -73,123 +71,75 @@ func TestSteps_DependencyOrder(t *testing.T) {
 	for _, id := range stepsLast {
 		listed[id]++
 	}
-	for _, optIn := range []bool{true, false} {
-		for _, exposure := range []string{"", "default-gateway"} {
-			r := everyStepRecipe(exposure)
-			r.Spec.Features.Kueue.DashboardOptIn = optIn
-			steps := Steps(r)
-			pos := map[string]int{}
-			for i, s := range steps {
-				pos[s.ID] = i
-				if listed[s.ID] != 1 {
-					t.Errorf("step %s is in the order %d times, want once", s.ID, listed[s.ID])
-				}
-				for _, a := range s.After {
-					if j, ok := pos[a]; !ok || j >= i {
-						t.Errorf("%s comes after %s, which is not an earlier step", s.ID, a)
-					}
-				}
-				for _, dep := range dependsOn(r, s.ID) {
-					if _, ok := pos[dep]; ok && !ancestors(steps, s.ID)[dep] {
-						t.Errorf("%s may start before %s, whose outcome its check depends on", s.ID, dep)
-					}
+	for _, exposure := range []string{"", "default-gateway"} {
+		steps := Steps(everyStepRecipe(exposure))
+		pos := map[string]int{}
+		for i, s := range steps {
+			pos[s.ID] = i
+			if listed[s.ID] != 1 {
+				t.Errorf("step %s is in the order %d times, want once", s.ID, listed[s.ID])
+			}
+			for _, a := range s.After {
+				if j, ok := pos[a]; !ok || j >= i {
+					t.Errorf("%s comes after %s, which is not an earlier step", s.ID, a)
 				}
 			}
-			// Prerequisite steps (each rewrites the full record it loaded) must not
-			// overlap in time.
-			prereqs := []string{StepPrerequisites, StepModelsPrereq, StepKueuePrereq}
-			for i, a := range prereqs {
-				for _, b := range prereqs[i+1:] {
-					if _, ok := pos[a]; ok {
-						if _, ok := pos[b]; ok && !ordered(steps, a, b) {
-							t.Errorf("%s and %s may run at the same time", a, b)
-						}
-					}
-				}
-			}
-			byID := map[string]Step{}
-			for _, s := range steps {
-				byID[s.ID] = s
-			}
-			want := map[string][]string{
-				StepDSC: {StepRHOAI}, StepProject: {StepDSC}, StepPrerequisites: {StepProject},
-				StepS3: {StepPrerequisites}, StepPipelineServer: {StepS3}, StepWorkbench: {StepPipelineServer},
-				StepMLflow: {StepPrerequisites}, StepMLflowSamples: {StepMLflow},
-				StepModelRegistry: {StepPrerequisites},
-				StepMaaS:          {StepPrerequisites}, StepMaaSPublish: {StepModel}, StepPlayground: {StepMaaSPublish},
-				StepKueuePrereq: {StepWorkbench, StepMLflowSamples, StepModelRegistry, StepPlayground}, StepKueue: {StepKueuePrereq},
-				StepDashboardDev: {StepKueue},
-			}
-			if optIn {
-				// The workbench after distributed workloads, the pipeline server
-				// still before it.
-				want[StepKueuePrereq] = []string{StepPipelineServer, StepMLflowSamples, StepModelRegistry, StepPlayground}
-				want[StepWorkbench], want[StepDashboardDev] = []string{StepKueue}, []string{StepWorkbench}
-			}
-			if exposure == "" {
-				want[StepModelsPrereq], want[StepModel] = []string{StepMaaS}, []string{StepModelsPrereq}
-			} else {
-				want[StepModel] = []string{StepMaaS}
-			}
-			for id, after := range want {
-				if got := byID[id].After; !slices.Equal(got, after) {
-					t.Errorf("opt-in %v, exposure %q: %s comes after %v, want %v", optIn, exposure, id, got, after)
-				}
-			}
-			if len(byID[StepRHOAI].After) != 0 {
-				t.Errorf("RHOAI comes after %v", byID[StepRHOAI].After)
-			}
-			// Opting into Kueue alters workbench and model-deployment creation, so
-			// every non-Kueue feature step must precede it; a workbench of a
-			// recipe that opts in comes after it instead.
-			for _, s := range steps {
-				last := s.ID == StepKueuePrereq || s.ID == StepKueue || s.ID == StepDashboardDev || (optIn && s.ID == StepWorkbench)
-				if !last && !ancestors(steps, StepKueuePrereq)[s.ID] {
-					t.Errorf("%s may run beside the Kueue steps", s.ID)
-				}
-			}
-			if a := ancestors(steps, StepWorkbench); optIn != a[StepKueue] || !a[StepPipelineServer] {
-				t.Errorf("opt-in %v: the workbench comes after %v", optIn, byID[StepWorkbench].After)
-			}
-			// Lanes that do not depend on one another may execute concurrently.
-			pairs := [][2]string{{StepS3, StepMLflow}, {StepS3, StepMaaS}, {StepModelRegistry, StepModel}, {StepPipelineServer, StepPlayground}}
-			if !optIn {
-				pairs = append(pairs, [2]string{StepWorkbench, StepPlayground})
-			}
-			for _, pair := range pairs {
-				if ordered(steps, pair[0], pair[1]) {
-					t.Errorf("%s and %s wait for each other", pair[0], pair[1])
+			for _, dep := range stepDependsOn[s.ID] {
+				if _, ok := pos[dep]; ok && !ancestors(steps, s.ID)[dep] {
+					t.Errorf("%s may start before %s, whose outcome its check depends on", s.ID, dep)
 				}
 			}
 		}
-	}
-}
-
-// A workbench without distributed workloads, or without their opt-in,
-// stays in its lane; with both it moves, and its check waits for them.
-func TestSteps_WorkbenchAfterKueueOnlyWithTheOptIn(t *testing.T) {
-	for _, tc := range []struct {
-		name               string
-		kueue, optIn, last bool
-	}{
-		{"no distributed workloads", false, false, false},
-		{"no opt-in", true, false, false},
-		{"opt-in", true, true, true},
-	} {
-		var r types.EnvironmentRecipe
-		f := &r.Spec.Features
-		f.Pipelines.Enabled, f.Workbench.Enabled = true, true
-		f.Kueue = types.RecipeKueue{Enabled: tc.kueue, DashboardOptIn: tc.optIn}
-		var ids []string
-		for _, s := range Steps(r) {
-			ids = append(ids, s.ID)
+		// Prerequisite steps (each rewrites the full record it loaded) must not
+		// overlap in time.
+		prereqs := []string{StepPrerequisites, StepModelsPrereq, StepKueuePrereq}
+		for i, a := range prereqs {
+			for _, b := range prereqs[i+1:] {
+				if _, ok := pos[a]; ok {
+					if _, ok := pos[b]; ok && !ordered(steps, a, b) {
+						t.Errorf("%s and %s may run at the same time", a, b)
+					}
+				}
+			}
 		}
-		order := strings.Join(ids, " ")
-		if got := strings.HasSuffix(order, "kueue workbench"); got != tc.last || workbenchAfterKueue(r) != tc.last {
-			t.Errorf("%s: order %s", tc.name, order)
+		byID := map[string]Step{}
+		for _, s := range steps {
+			byID[s.ID] = s
 		}
-		if got := slices.Contains(dependsOn(r, StepWorkbench), StepKueue); got != tc.last {
-			t.Errorf("%s: the workbench's check depends on %v", tc.name, dependsOn(r, StepWorkbench))
+		want := map[string][]string{
+			StepDSC: {StepRHOAI}, StepProject: {StepDSC}, StepPrerequisites: {StepProject},
+			StepS3: {StepPrerequisites}, StepPipelineServer: {StepS3}, StepWorkbench: {StepPipelineServer},
+			StepMLflow: {StepPrerequisites}, StepMLflowSamples: {StepMLflow},
+			StepModelRegistry: {StepPrerequisites},
+			StepMaaS:          {StepPrerequisites}, StepMaaSPublish: {StepModel}, StepPlayground: {StepMaaSPublish},
+			StepKueuePrereq: {StepWorkbench, StepMLflowSamples, StepModelRegistry, StepPlayground}, StepKueue: {StepKueuePrereq},
+			StepDashboardDev: {StepKueue},
+		}
+		if exposure == "" {
+			want[StepModelsPrereq], want[StepModel] = []string{StepMaaS}, []string{StepModelsPrereq}
+		} else {
+			want[StepModel] = []string{StepMaaS}
+		}
+		for id, after := range want {
+			if got := byID[id].After; !slices.Equal(got, after) {
+				t.Errorf("exposure %q: %s comes after %v, want %v", exposure, id, got, after)
+			}
+		}
+		if len(byID[StepRHOAI].After) != 0 {
+			t.Errorf("RHOAI comes after %v", byID[StepRHOAI].After)
+		}
+		// Opting into Kueue alters workbench and model-deployment creation, so
+		// every non-Kueue feature step must precede it.
+		for _, s := range steps {
+			if s.ID != StepKueuePrereq && s.ID != StepKueue && s.ID != StepDashboardDev && !ancestors(steps, StepKueuePrereq)[s.ID] {
+				t.Errorf("%s may run beside the Kueue steps", s.ID)
+			}
+		}
+		// Lanes that do not depend on one another may execute concurrently.
+		for _, pair := range [][2]string{{StepS3, StepMLflow}, {StepS3, StepMaaS}, {StepModelRegistry, StepModel}, {StepWorkbench, StepPlayground}} {
+			if ordered(steps, pair[0], pair[1]) {
+				t.Errorf("%s and %s wait for each other", pair[0], pair[1])
+			}
 		}
 	}
 }
@@ -242,7 +192,7 @@ func TestRunSeconds_CriticalPath(t *testing.T) {
 	steps := Steps(everyStepRecipe(""))
 	typical, sum, critical := make([]int, len(steps)), 0, 0
 	onPath := map[string]bool{StepRHOAI: true, StepDSC: true, StepProject: true, StepPrerequisites: true, StepMaaS: true, StepModelsPrereq: true,
-		StepModel: true, StepMaaSPublish: true, StepPlayground: true, StepKueuePrereq: true, StepKueue: true, StepWorkbench: true, StepDashboardDev: true}
+		StepModel: true, StepMaaSPublish: true, StepPlayground: true, StepKueuePrereq: true, StepKueue: true, StepDashboardDev: true}
 	for i, s := range steps {
 		typical[i], _ = s.Seconds()
 		sum += typical[i]
@@ -306,7 +256,6 @@ func TestRunSeconds_MaxBoundsEveryRun(t *testing.T) {
 		if rng.IntN(2) == 0 {
 			f.Models.Exposure = "internal"
 		}
-		f.Kueue.DashboardOptIn = f.Kueue.Enabled && rng.IntN(2) == 0 // the workbench after the Kueue steps, or in its lane
 		steps := Steps(r)
 		most, actual := make([]int, len(steps)), make([]int, len(steps))
 		for i, s := range steps {

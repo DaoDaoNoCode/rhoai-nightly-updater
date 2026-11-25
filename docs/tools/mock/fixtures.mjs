@@ -1841,12 +1841,8 @@ export function recipeSteps(rcp = recipe()) {
   }
   if (f.playground?.enabled) out.push(["playground", "Playground", 120, 540]);
   if (f.modelRegistry?.enabled) out.push(["model-registry", "Model registry", 120, 720]);
-  // A recipe that turns the dashboard's Kueue setting on creates its workbench after distributed workloads
-  // (internal/recipe workbenchAfterKueue).
-  const workbench = ["workbench", "Workbench", 30, 900];
-  if (f.workbench?.enabled && !workbenchAfterKueue(rcp)) out.push(workbench);
+  if (f.workbench?.enabled) out.push(["workbench", "Workbench", 30, 900]);
   if (f.kueue?.enabled) out.push(["kueue-prereq", "What distributed workloads need", 120, 900], ["kueue", "Distributed workloads", 60, 600]);
-  if (workbenchAfterKueue(rcp)) out.push(workbench);
   const d = sp.dashboardDev ?? {};
   if (d.deploy === "main" || d.deploy === "pr") out.push(["dashboard-dev", d.deploy === "pr" ? `Dashboard Dev (PR #${d.pr})` : "Dashboard Dev (main)", 180, 480]);
   return out;
@@ -1861,30 +1857,19 @@ const RECIPE_FIRST = ["rhoai", "dsc", "project", "prerequisites"];
 const RECIPE_LANES = [["s3", "pipeline-server", "workbench"], ["mlflow", "mlflow-samples"], ["model-registry"], ["maas", "models-prereq", "model", "maas-publish", "playground"]];
 const RECIPE_LAST = ["kueue-prereq", "kueue", "dashboard-dev"];
 
-/** Whether the recipe creates its workbench right after distributed workloads (internal/recipe workbenchAfterKueue). */
-function workbenchAfterKueue(rcp) {
-  const f = rcp.spec.features;
-  return !!(f.workbench?.enabled && f.kueue?.enabled && f.kueue.dashboardOptIn);
-}
-
-/**
- * Each step's After (internal/recipe withAfter and runOrder), for the step IDs of a run; workbenchLast moves the
- * workbench from its lane to right after the Kueue step.
- */
-export function recipeAfter(ids, workbenchLast = false) {
+/** Each step's After (internal/recipe withAfter), for the step IDs of a run. */
+export function recipeAfter(ids) {
   const after = {};
   const chain = (list, deps) => list.filter((id) => ids.includes(id)).reduce((d, id) => { after[id] = d; return [id]; }, deps);
-  const lanes = workbenchLast ? RECIPE_LANES.map((lane) => lane.filter((id) => id !== "workbench")) : RECIPE_LANES;
-  const last = workbenchLast ? ["kueue-prereq", "kueue", "workbench", "dashboard-dev"] : RECIPE_LAST;
   const head = chain(RECIPE_FIRST, []);
-  const ends = lanes.flatMap((lane) => { const end = chain(lane, head); return end === head ? [] : end; });
-  chain(last, ends.length ? ends : head);
+  const ends = RECIPE_LANES.flatMap((lane) => { const end = chain(lane, head); return end === head ? [] : end; });
+  chain(RECIPE_LAST, ends.length ? ends : head);
   return after;
 }
 
 /** How long steps take together as the runner runs them (internal/recipe RunSeconds): at most 3 at once, each after its After. */
-export function recipeRunSeconds(ids, seconds, workbenchLast = false) {
-  const after = recipeAfter(ids, workbenchLast);
+export function recipeRunSeconds(ids, seconds) {
+  const after = recipeAfter(ids);
   const ends = {};
   let now = 0;
   const running = new Set();
@@ -1938,8 +1923,8 @@ export function recipePlan(rcp = recipe(), installed = true, blocked = false, mi
       { field: "spec.rhoai.build", message: "Cannot resolve the build on Quay.", fix: { code: "build_unresolvable" } },
     ] : [],
     // The steps of independent lanes run side by side: about the longest chain, not the sum.
-    typicalSeconds: recipeRunSeconds(steps.map((s) => s.id), steps.map((s) => (counted.includes(s) ? s.typicalSeconds : 0)), workbenchAfterKueue(rcp)),
-    maxSeconds: recipeRunSeconds(steps.map((s) => s.id), steps.map((s) => (counted.includes(s) ? s.maxSeconds : 0)), workbenchAfterKueue(rcp)),
+    typicalSeconds: recipeRunSeconds(steps.map((s) => s.id), steps.map((s) => (counted.includes(s) ? s.typicalSeconds : 0))),
+    maxSeconds: recipeRunSeconds(steps.map((s) => s.id), steps.map((s) => (counted.includes(s) ? s.maxSeconds : 0))),
     ...([...kueueWarnings(rcp), ...playgroundWarnings(rcp)].length ? { warnings: [...kueueWarnings(rcp), ...playgroundWarnings(rcp)] } : {}),
   };
 }
@@ -1954,6 +1939,16 @@ function playgroundWarnings(rcp) {
   return [{ kind: "advice", message: `Model ${entry?.displayName ?? f.models.model} is offered to the playground only through Models as a Service (${how}), so the playground uses it from there: the dashboard sets the playground up with your sign-in, as when you choose a Models as a Service model in its Gen AI studio. Chatting with it needs a Models as a Service subscription to it.` }];
 }
 
+/**
+ * The dashboard's mark on the recipe's workbench (pkg/cluster internal/recipe kueueWorkbenchNote), for the mock's
+ * cluster: the dashboard's Kueue setting off and the project not Kueue's before the run.
+ */
+function kueueWorkbenchNote(rcp) {
+  const f = rcp.spec.features;
+  if (!f.kueue?.enabled || !f.workbench?.enabled || !f.kueue.dashboardOptIn) return "";
+  return "The dashboard will mark this recipe's workbench 'Workbench bypasses Kueue queue management': it is created before the Kueue setting is on. Choosing the hardware profile Kueue CPU (RHOAI Nightly Updater) for it in the dashboard (Edit workbench) removes the mark and restarts the workbench.";
+}
+
 /** The plan's warnings for distributed workloads (pkg/cluster internal/recipe kueueWarnings). */
 function kueueWarnings(rcp) {
   const f = rcp.spec.features;
@@ -1965,6 +1960,7 @@ function kueueWarnings(rcp) {
     const list = others.length === 1 ? others[0] : `${others.slice(0, -1).join(", ")} and ${others[others.length - 1]}`;
     out.push({ kind: "advice", message: `Project ${rcp.spec.project?.name ?? "recipe-dev"} also gets ${list}. Kueue manages only what is sent to a queue, so they keep running. A project of its own is still safer.` });
   }
+  if (kueueWorkbenchNote(rcp)) out.push({ kind: "advice", message: kueueWorkbenchNote(rcp) });
   if (f.kueue.dashboardOptIn) out.push({ kind: "cluster", message: "The dashboard's Kueue setting is turned on: in every new project on this cluster, workbenches and model deployments can only use the queue hardware profile, and a project without its own LocalQueue cannot create workbenches or deploy models until an admin adds one." });
   return out;
 }
@@ -1983,7 +1979,7 @@ export function recipeRun({ done = 0, current = "running", message = "", state =
     if (i < done) {
       return id === "rhoai"
         ? { id, title, ...times, status: "skipped", message: "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it.", startedAt: ago(start), finishedAt: ago(start) }
-        : { id, title, ...times, status: "success", ...(RECIPE_OWNS.has(id) ? { created: true } : {}), message: (id === "prerequisites" ? prerequisitesDone(rcp) : RECIPE_DONE[id] ?? `${title} is set up.`).replaceAll("recipe-dev", project), startedAt: ago(start - i * 2.5), finishedAt: ago(start - (i + 1) * 2.5) };
+        : { id, title, ...times, status: "success", ...(RECIPE_OWNS.has(id) ? { created: true } : {}), message: (id === "prerequisites" ? prerequisitesDone(rcp) : id === "kueue" && kueueWorkbenchNote(rcp) ? `${RECIPE_DONE.kueue} ${kueueWorkbenchNote(rcp)}` : RECIPE_DONE[id] ?? `${title} is set up.`).replaceAll("recipe-dev", project), startedAt: ago(start - i * 2.5), finishedAt: ago(start - (i + 1) * 2.5) };
     }
     if (i === done && current) {
       return { id, title, ...times, status: current, ...(message ? { message } : {}), ...(current === "failed" ? { errorCode: "timeout", ...(RECIPE_OWNS.has(id) ? { created: true } : {}), finishedAt: ago(0.5) } : {}), startedAt: ago(1.2) };
