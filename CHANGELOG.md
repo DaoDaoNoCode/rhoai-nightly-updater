@@ -34,8 +34,9 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   MLflow's at pinned sources); otherwise it is refused before anything is
   written, naming what is missing and who can grant it. A button the user
   may not use says why (`GET /api/resources/projects/capabilities`).
-  Cluster-admins are unchanged, except that these actions hold the
-  project's lock instead of the cluster's. The activity log shows a user
+  Cluster-admins are unchanged, except that the workbench and playground
+  actions hold the project's lock instead of the cluster's (an admin's MLflow
+  samples action keeps the cluster lock: it may restart the shared MLflow). The activity log shows a user
   their own entries; users' records are capped (100 projects, 10 per user;
   cluster-admins' records are outside the caps). `DEV_ROLE=user` tries the
   non-admin path in local development. No template change

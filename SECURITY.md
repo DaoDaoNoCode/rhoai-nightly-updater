@@ -219,11 +219,14 @@ A project user's workbench setup does not write the internal registry's copy of 
 | 4 | role (`*`/`*`/`*`); admin skips 5-7 | user's | b |
 | 5 | the action is one users may run (403 `admin_only` otherwise) | n/a | b |
 | 6 | the project is one of the user's (`IsUserDSProject`); a project that does not exist gets the same 403 `forbidden_for_user` and no ServiceAccount read is made before it | user's | b |
-| 7 | preflight: one SelfSubjectAccessReview per request of the action (at most 8 at once), from the RBAC scan (`TestProjectActionPreflightMatchesTheScan`) and the hand lists below; an error refuses (503), a denial refuses with the full list and who can grant each (403 `missing_permissions`), before any write | user's | a (a copy the API server also enforces, kept so a partial right cannot leave a half-done change) |
-| 8 | prerequisites from the facts (`ProjectFeatureBlock`: the component is on; an unreadable DataScienceCluster refuses) | SA (facts) | c |
-| 9 | rate limit, shutdown gate, the project's lock (by namespace UID, read with the user's token) | n/a / SA records | b |
+| 7 | rate limit (before any review, so a burst of requests is not a burst of reviews) | n/a | b |
+| 8 | prerequisites from the facts (`ProjectFeatureBlock`: the component is on; an unreadable DataScienceCluster refuses), before the preflight, so a component that is off says so instead of asking for a role | SA (facts) | c |
+| 9 | preflight: one SelfSubjectAccessReview per request of the action (at most 8 at once per call, 32 in the process), from the RBAC scan (`TestProjectActionPreflightMatchesTheScan`) and the hand lists below; a conditional request only where the action makes it (the workbench's LocalQueues: Kueue-managed project and Kueue available, `workbench.QueuesNeeded`); a review that fails refuses (503), a denial refuses with the full list and who can grant each (403 `missing_permissions`), before any write. The decision is `status.allowed`; an `evaluationError` beside it is logged, never returned | user's | a (a copy the API server also enforces, kept so a partial right cannot leave a half-done change) |
+| 10 | the project's UID (read with the user's token), the shutdown gate, the project's lock; a cluster-admin's MLflow samples action takes the cluster lock instead (it may remove the old memory limit from the shared MLflow CR, which restarts MLflow for every project) | user's / SA records | b |
 
-Every refusal says that nothing was changed. `GET /api/resources/projects/capabilities?project=` answers the same checks in the same order per action (advisory, cached a minute by token hash and project), so the UI disables a control with the reason. The golden file's `project action requests` section lists each action's requests, with the namespace each goes to (`project`, RHOAI's applications namespace `apps`, or a cluster-scoped read every user may make) and where the row comes from (`scan`, `gen-ai`, `mlflow`).
+Every refusal says that nothing was changed, and names only an HTTP status or a category when a read failed: never the API server's, the authorizer's or the ServiceAccount's words. Logs of project actions name no user (the activity record keeps who did what). `GET /api/resources/projects/capabilities?project=` runs the same checks through the same functions (`projectActionVerdicts`, `projectStartProblem`), advisory, cached a minute by token hash and project, concurrent identical reads sharing one set of reviews; a failure counts only for the actions it concerns (an applications namespace that cannot be read refuses only the actions that read there).
+
+A user's MLflow demo Add runs only where the demo's experiment does not exist: on an existing one the generator brings its data up to date or resets it, which replaces it (Regenerate, a cluster-admin's). An Add's preflight also reviews what the sample's remove path needs, since a refused add rolls back through it. The golden file's `project action requests` section lists each action's requests, with the namespace each goes to (`project`, RHOAI's applications namespace `apps`, or a cluster-scoped read every user may make) and where the row comes from (`scan`, `gen-ai`, `mlflow`).
 
 ### Requests made by platform services
 
@@ -239,7 +242,7 @@ A project action holds its project's lock (B1's lock table: a key of the operati
 
 ### Records caps
 
-Entries a project user's setup adds to the snapshot ConfigMap (`workbenches`, `playgrounds`) carry `actorRole: user`. At most 100 projects hold users' entries, and at most 10 of them one user's; a setup beyond either is refused before any write (`records_full`). A project that no longer exists is not counted (the facts client's Namespace `get`). Entries without `actorRole` (written before, all by cluster-admins) and admins' entries are outside both caps. Read-change-write cycles of the snapshot keys are serialized per pod (`record.UpdateSnapshot`), since project actions in different projects run at once.
+Entries a project user's setup adds to the snapshot ConfigMap (`workbenches`, `playgrounds`) carry `actorRole: user` and the project's namespace UID (`projectUID`): the caps count projects by UID, so a project deleted and made again under its name is another one. At most 100 projects hold users' entries, at most 10 of them one user's, and a user's entry is at most 2 KiB. Every write of a user's entry is admitted inside the per-pod critical section of that write (`record.AdmitUserEntry` in `record.UpdateSnapshot`), a new entry and one taken over from a cluster-admin or another user alike; the setup also checks early, before anything is made, and a refusal at write time deletes what was made (`records_full`). An entry whose project no longer exists, or now has another UID, is not counted (the facts client's Namespace `get`). Entries without `actorRole` (written before, all by cluster-admins) and admins' entries are outside both caps. Read-change-write cycles of the snapshot keys are serialized per pod (`record.UpdateSnapshot`), since project actions in different projects run at once.
 
 ### Local development
 
@@ -247,7 +250,7 @@ Entries a project user's setup adds to the snapshot ConfigMap (`workbenches`, `p
 
 ### RBAC
 
-No new row in the golden's requests: the preflight's access reviews and the project's namespace UID read are user-token call sites (excluded), the records caps' Namespace `get` is an existing SA row. The project actions' own requests are already in the golden (admins' paths).
+The golden's `project action requests` section lists the gate's own user-token requests and, per action, the scan's requests with each one's namespace class; a scanned request in a literal namespace other than the project's fails the test. No new row in the golden's requests: the preflight's access reviews and the project's namespace UID read are user-token call sites (excluded), the records caps' Namespace `get` is an existing SA row. The project actions' own requests are already in the golden (admins' paths).
 
 ### Not verified (live checks pending)
 
