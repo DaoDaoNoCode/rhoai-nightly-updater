@@ -93,7 +93,7 @@ func TestKueueManifests(t *testing.T) {
 	assertJSONEqual(t, kueue.ClusterQueueManifest("proj"), `{"apiVersion":"kueue.x-k8s.io/v1beta2","kind":"ClusterQueue",
 		"metadata":{"name":"nightly-kueue","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}},
 		"spec":{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"proj"}},
-			"resourceGroups":[{"coveredResources":["cpu","memory"],"flavors":[{"name":"nightly-kueue-cpu","resources":[{"name":"cpu","nominalQuota":"6"},{"name":"memory","nominalQuota":"20Gi"}]}]}]}}`)
+			"resourceGroups":[{"coveredResources":["cpu","memory","ephemeral-storage"],"flavors":[{"name":"nightly-kueue-cpu","resources":[{"name":"cpu","nominalQuota":"10"},{"name":"memory","nominalQuota":"32Gi"},{"name":"ephemeral-storage","nominalQuota":"6Gi"}]}]}]}}`)
 	assertJSONEqual(t, kueue.FlavorManifest(), `{"apiVersion":"kueue.x-k8s.io/v1beta2","kind":"ResourceFlavor","metadata":{"name":"nightly-kueue-cpu","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}},"spec":{}}`)
 	// Sample requests plus the profile default must remain within the quota ceiling.
 	sum := func(obj map[string]any) (cpu, memMi float64) {
@@ -125,10 +125,36 @@ func TestKueueManifests(t *testing.T) {
 	c1, m1 := sum(kueue.RayClusterManifest("proj", kueue.DefaultRayImage))
 	c2, m2 := sum(kueue.RayJobManifest("proj", kueue.DefaultRayImage))
 	// Opt-in-profile workbench uses 1 CPU and 2Gi, with kube-rbac-proxy at
-	// 100m CPU and 64Mi—19Gi total memory would not cover that.
+	// 100m CPU and 64Mi; the largest catalog model (Qwen3: 4 CPUs, 12Gi
+	// requested, 6.2G of ephemeral storage) on the same profile.
 	wbCPU, wbMi := 1.0+0.1, 2048.0+64
-	if c1+c2+wbCPU > 6 || m1+m2+wbMi > 20*1024 || m1+m2+wbMi <= 19*1024 || c1 != 2 || c2 != 2.5 || m1 != 8*1024 || m2 != 9*1024 {
-		t.Fatalf("quota 6 CPUs / 20Gi does not hold the samples and the workbench: %v+%v+%v CPU, %v+%v+%v Mi", c1, c2, wbCPU, m1, m2, wbMi)
+	var modelCPU, modelMi, modelEph float64
+	for _, e := range serving.ModelCatalog {
+		cpu, _ := serving.ParseQuantity(e.CPU)
+		mem, _ := serving.ParseQuantity(e.MemoryRequest)
+		eph, ok := serving.ParseQuantity(e.EphemeralStorage)
+		if !ok {
+			t.Fatalf("%s: ephemeral storage %q", e.Name, e.EphemeralStorage)
+		}
+		modelCPU, modelMi, modelEph = max(modelCPU, cpu), max(modelMi, mem/(1<<20)), max(modelEph, eph)
+	}
+	if modelCPU != 4 || modelMi != 12*1024 || modelEph != 6.2e9 {
+		t.Fatalf("largest model %v CPUs, %v Mi, %v bytes", modelCPU, modelMi, modelEph)
+	}
+	if c1+c2+wbCPU+modelCPU > 10 || m1+m2+wbMi+modelMi > 32*1024 || m1+m2+wbMi+modelMi <= 31*1024 || modelEph > 6*(1<<30) || c1 != 2 || c2 != 2.5 || m1 != 8*1024 || m2 != 9*1024 {
+		t.Fatalf("quota 10 CPUs / 32Gi / 6Gi does not hold the samples, the workbench and the model: %v+%v+%v+%v CPU, %v+%v+%v+%v Mi", c1, c2, wbCPU, modelCPU, m1, m2, wbMi, modelMi)
+	}
+	// The Queue profile's ranges hold every catalog model, as the
+	// dashboard deploys one in a Kueue project only with such a profile.
+	var prof serving.HardwareProfileObject
+	raw, _ := json.Marshal(kueue.ProfileManifest("apps", "now"))
+	if err := json.Unmarshal(raw, &prof); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range serving.ModelCatalog {
+		if why := prof.Fits(e); why != "" {
+			t.Errorf("the Queue profile does not hold %s: %s", e.Name, why)
+		}
 	}
 	// Head and worker match CodeFlare SDK defaults; requests stay under limits
 	// (a 2Gi head OOMKilled in live runs).
@@ -137,8 +163,8 @@ func TestKueueManifests(t *testing.T) {
 	worker := spec["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)["resources"]
 	assertJSONEqual(t, head, `{"requests":{"cpu":"1","memory":"5Gi"},"limits":{"cpu":"2","memory":"8Gi"}}`)
 	assertJSONEqual(t, worker, `{"requests":{"cpu":"1","memory":"3Gi"},"limits":{"cpu":"1","memory":"6Gi"}}`)
-	if cpu, memory := kueue.Quota(); cpu != "6" || memory != "20Gi" {
-		t.Fatalf("Quota() = %s, %s; want 6, 20Gi", cpu, memory)
+	if cpu, memory, eph := kueue.Quota(); cpu != "10" || memory != "32Gi" || eph != "6Gi" {
+		t.Fatalf("Quota() = %s, %s, %s; want 10, 32Gi, 6Gi", cpu, memory, eph)
 	}
 	rc, rj := kueue.RayClusterManifest("proj", "img:2.47.1-x"), kueue.RayJobManifest("proj", "img:2.47.1-x")
 	a, _ := json.Marshal(rc["spec"])
@@ -513,7 +539,7 @@ func TestKueueStatus(t *testing.T) {
 		t.Fatalf("samples %+v", st.Samples)
 	}
 	// Quota reflects the live ClusterQueue; artifacts from this version are not outdated.
-	if st.Quota != "6 CPUs and 20Gi of memory" || st.Objects[1].Outdated != "" || st.Samples[0].Outdated != "" {
+	if st.Quota != "10 CPUs, 32Gi of memory and 6Gi of ephemeral storage" || st.Objects[1].Outdated != "" || st.Samples[0].Outdated != "" {
 		t.Fatalf("quota %q, queue %+v, sample %+v", st.Quota, st.Objects[1], st.Samples[0])
 	}
 	// Equivalent quantities in other representations (numbers, 1000m, bytes as
@@ -525,6 +551,10 @@ func TestKueueStatus(t *testing.T) {
 		cq := f.get(cqPath)
 		res := cq["spec"].(map[string]any)["resourceGroups"].([]any)[0].(map[string]any)["flavors"].([]any)[0].(map[string]any)["resources"].([]any)
 		res[0].(map[string]any)["nominalQuota"], res[1].(map[string]any)["nominalQuota"] = cpuQuota, memoryQuota
+		if cpuQuota == "6" {
+			// An earlier version's ClusterQueue: CPU and memory only.
+			cq["spec"].(map[string]any)["resourceGroups"].([]any)[0].(map[string]any)["flavors"].([]any)[0].(map[string]any)["resources"] = res[:2]
+		}
 		rc := f.get(rcPath)
 		rc["spec"].(map[string]any)["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)["resources"] = headRes
 		for path, obj := range map[string]map[string]any{cqPath: cq, rcPath: rc} {
@@ -532,25 +562,25 @@ func TestKueueStatus(t *testing.T) {
 			f.putJSON(path, string(raw))
 		}
 	}
-	setSizes(6, "20480Mi", map[string]any{"requests": map[string]any{"cpu": 1, "memory": "5368709120"}, "limits": map[string]any{"cpu": "2000m", "memory": "8Gi"}})
+	setSizes(10, "32768Mi", map[string]any{"requests": map[string]any{"cpu": 1, "memory": "5368709120"}, "limits": map[string]any{"cpu": "2000m", "memory": "8Gi"}})
 	st, err = GetKueueStatus(u, u, "proj")
-	if err != nil || st.Quota != "6 CPUs and 20480Mi of memory" || st.Objects[1].Outdated != "" || st.Samples[0].Outdated != "" || !st.Samples[0].Present {
+	if err != nil || st.Quota != "10 CPUs, 32768Mi of memory and 6Gi of ephemeral storage" || st.Objects[1].Outdated != "" || st.Samples[0].Outdated != "" || !st.Samples[0].Present {
 		t.Fatalf("equivalent forms: %v quota %q, queue %+v, sample %+v", err, st.Quota, st.Objects[1], st.Samples[0])
 	}
 	// Unreadable values are not labeled outdated.
-	setSizes("lots", "20Gi", map[string]any{"requests": map[string]any{"cpu": "one", "memory": "5Gi"}, "limits": map[string]any{"cpu": "2", "memory": "8Gi"}})
+	setSizes("lots", "32Gi", map[string]any{"requests": map[string]any{"cpu": "one", "memory": "5Gi"}, "limits": map[string]any{"cpu": "2", "memory": "8Gi"}})
 	if st, _ = GetKueueStatus(u, u, "proj"); st.Objects[1].Outdated != "" || st.Samples[0].Outdated != "" {
 		t.Fatalf("unreadable: queue %+v, sample %+v", st.Objects[1], st.Samples[0])
 	}
-	// 19Gi from 5.0.0 pre-releases (insufficient for the workbench sidecar) also
-	// signals an older version.
+	// 6 CPUs and 19Gi or 20Gi from 5.0.0 pre-releases (no model, no
+	// ephemeral storage) also signal an older version.
 	setSizes("6", "19Gi", map[string]any{"requests": map[string]any{"cpu": "1", "memory": "5Gi"}, "limits": map[string]any{"cpu": "2", "memory": "8Gi"}})
-	if st, _ = GetKueueStatus(u, u, "proj"); st.Objects[1].Outdated != "its quota is 6 CPUs and 19Gi of memory; this version sets 6 CPUs and 20Gi of memory" {
+	if st, _ = GetKueueStatus(u, u, "proj"); st.Objects[1].Outdated != "its quota is 6 CPUs, 19Gi of memory and no of ephemeral storage; this version sets 10 CPUs, 32Gi of memory and 6Gi of ephemeral storage" {
 		t.Fatalf("19Gi: queue %+v", st.Objects[1])
 	}
 	setSizes("6", "11Gi", map[string]any{"requests": map[string]any{"cpu": "1", "memory": "2Gi"}, "limits": map[string]any{"cpu": "1", "memory": "2Gi"}})
 	st, _ = GetKueueStatus(u, u, "proj")
-	if st.Quota != "6 CPUs and 11Gi of memory" || st.Objects[1].Outdated != "its quota is 6 CPUs and 11Gi of memory; this version sets 6 CPUs and 20Gi of memory" ||
+	if st.Quota != "6 CPUs, 11Gi of memory and no of ephemeral storage" || st.Objects[1].Outdated != "its quota is 6 CPUs, 11Gi of memory and no of ephemeral storage; this version sets 10 CPUs, 32Gi of memory and 6Gi of ephemeral storage" ||
 		st.Samples[0].Outdated != "its head and worker have other CPU and memory than this version sets (head 1 CPU and 5Gi requested, up to 2 CPUs and 8Gi; worker 1 CPU and 3Gi requested, up to 1 CPU and 6Gi)" {
 		t.Fatalf("outdated: quota %q, queue %+v, sample %+v", st.Quota, st.Objects[1], st.Samples[0])
 	}
@@ -754,19 +784,22 @@ func TestKueueComponentRestore(t *testing.T) {
 }
 
 // Models setup selects hardware profiles per the dashboard Kueue rule: Queue-type
-// profiles bound to a LocalQueue only in managed projects, none when disableKueue
-// is true, and never Queue profiles outside Kueue projects.
+// profiles bound to a LocalQueue only in managed projects, never Queue
+// profiles outside Kueue projects. In a Kueue project without a fitting
+// Queue profile, or one Kueue is off for in the dashboard, the dashboard
+// deploys no model: setup refuses and creates nothing (fail closed).
 func TestModelsHardwareProfileKueueRule(t *testing.T) {
-	queue := func(name, lq string) string {
-		p := hwProfile(name, "8", "32Gi", "")
+	queue := func(name, lq, memMax string) string {
+		p := hwProfile(name, "8", memMax, "")
 		return p[:len(p)-2] + `,"scheduling":{"type":"Queue","kueue":{"localQueueName":"` + lq + `"}}}}`
 	}
 	for _, tc := range []struct {
-		name, label, disable, want string
+		name, label, disable, queueMem, want, refused string
 	}{
-		{"not a Kueue project", "", "false", "a-node"},
-		{"Kueue project", `,"kueue.openshift.io/managed":"true"`, "false", "b-queue"},
-		{"Kueue off in the dashboard", `,"kueue.openshift.io/managed":"true"`, "true", ""},
+		{"not a Kueue project", "", "false", "32Gi", "a-node", ""},
+		{"Kueue project", `,"kueue.openshift.io/managed":"true"`, "false", "32Gi", "b-queue", ""},
+		{"Kueue project, the Queue profile too small", `,"kueue.openshift.io/managed":"true"`, "false", "4Gi", "", "b-queue: memory 6Gi is outside 2Gi-4Gi"},
+		{"Kueue off in the dashboard", `,"kueue.openshift.io/managed":"true"`, "true", "32Gi", "", "while Kueue is off in the dashboard"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mc := newModelsCluster(t)
@@ -776,9 +809,19 @@ func TestModelsHardwareProfileKueueRule(t *testing.T) {
 			mc.f.putJSON("/api/v1/namespaces/proj", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"`+tc.label+`}}}`)
 			mc.f.putJSON(kqConfig, `{"spec":{"dashboardConfig":{"disableKueue":`+tc.disable+`}}}`)
 			mc.f.putJSON(kqLQ, `{"metadata":{"name":"nightly-kueue","namespace":"proj"}}`)
-			putProfiles(mc, hwProfile("a-node", "8", "32Gi", ""), queue("b-queue", "nightly-kueue"), queue("0-other-queue", "missing"))
+			putProfiles(mc, hwProfile("a-node", "8", "32Gi", ""), queue("b-queue", "nightly-kueue", tc.queueMem), queue("0-other-queue", "missing", "32Gi"))
 			u := userClientOf(mc.c, fakeUserToken)
-			if res, _ := runModels(t, u, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+			res, _ := runModels(t, u, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+			if tc.refused != "" {
+				if res.Success || !strings.Contains(res.Message, tc.refused) || !strings.Contains(res.Message, "Nothing was changed.") {
+					t.Fatalf("not refused: %+v", res)
+				}
+				if mc.f.get(testModelPath) != nil {
+					t.Fatal("the model was created")
+				}
+				return
+			}
+			if !res.Success {
 				t.Fatalf("setup failed: %+v", res)
 			}
 			ann := mc.f.get(testModelPath)["metadata"].(map[string]any)["annotations"].(map[string]any)

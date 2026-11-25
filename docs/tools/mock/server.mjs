@@ -489,7 +489,7 @@ async function kueueStream(req, res) {
   const k = world.kueue;
   if (action === "setup") {
     const was = k.project ? k : F.kueueWorld("ready", { project });
-    send({ step: "check", status: "success", message: `Kueue is ready; queues for 6 CPUs and 20Gi of memory in ${project}.` });
+    send({ step: "check", status: "success", message: `Kueue is ready; queues for 10 CPUs, 32Gi of memory and 6Gi of ephemeral storage in ${project}.` });
     send({ step: "queues", status: "success", message: "ClusterQueue nightly-kueue and LocalQueue nightly-kueue are there." });
     send({ step: "project", status: "success", message: `Labelled ${project}: Kueue admits its workloads sent to a queue.` });
     await nextStep();

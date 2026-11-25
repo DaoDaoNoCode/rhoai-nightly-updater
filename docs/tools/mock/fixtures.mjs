@@ -1512,7 +1512,7 @@ export function kueueWorld(state = "none", { optIn = false, samples = false, pro
     ...(missing ? { refusal: "Set up its prerequisites first (above): Kueue is turned off on this cluster.", refusalCode: "prerequisites",
       blocked: { component: "kueue", dsc: "default-dsc", state: "Removed", reason: "Kueue component is turned off on this cluster: component kueue is Removed in DataScienceCluster default-dsc, so nothing would run it. A cluster-admin turns it on by setting it to Unmanaged." } } : {}),
     objects: missing ? [] : [obj("ResourceFlavor", "nightly-kueue-cpu"), obj("ClusterQueue", "nightly-kueue"), obj("LocalQueue", "nightly-kueue", project)],
-    quota: "6 CPUs and 20Gi of memory",
+    quota: "10 CPUs, 32Gi of memory and 6Gi of ephemeral storage",
     ...(set ? { label: { present: true, addedByTool: true } } : {}),
     samples: [
       samples ? { kind: "raycluster", name: "nightly-raycluster", present: true, managedByTool: true, image: KUEUE_IMAGE, state: "Running", rayState: "ready" } : { kind: "raycluster", name: "nightly-raycluster", present: false },
@@ -1842,34 +1842,47 @@ export function recipeSteps(rcp = recipe()) {
   if (f.playground?.enabled) out.push(["playground", "Playground", 120, 540]);
   if (f.modelRegistry?.enabled) out.push(["model-registry", "Model registry", 120, 720]);
   if (f.workbench?.enabled) out.push(["workbench", "Workbench", 30, 900]);
-  if (f.kueue?.enabled) out.push(["kueue-prereq", "What distributed workloads need", 120, 900], ["kueue", "Distributed workloads", 60, 600]);
+  const kueueSteps = [["kueue-prereq", "What distributed workloads need", 120, 900], ["kueue", "Distributed workloads", 60, 600]];
+  if (f.kueue?.enabled && !recipeKueueFirst(rcp)) out.push(...kueueSteps);
+  // Distributed workloads before the workloads (internal/recipe inRunOrder): right after the first steps.
+  if (recipeKueueFirst(rcp)) out.splice(out.findLastIndex(([id]) => RECIPE_FIRST.includes(id)) + 1, 0, ...kueueSteps);
   const d = sp.dashboardDev ?? {};
   if (d.deploy === "main" || d.deploy === "pr") out.push(["dashboard-dev", d.deploy === "pr" ? `Dashboard Dev (PR #${d.pr})` : "Dashboard Dev (main)", 180, 480]);
   return out;
 }
 
 /**
- * The run's order (pkg/cluster internal/recipe stepsFirst, stepLanes,
- * stepsLast): the first steps one after another, then the lanes side by
- * side, then the last steps once every lane ended.
+ * The run's order (pkg/cluster internal/recipe runOrder): the first steps one after another, then the lanes side by
+ * side, then the last steps once every lane ended; the Kueue steps right after the first steps when the recipe sets
+ * up distributed workloads before its workloads (KueueFirst), else right before the last steps.
  */
 const RECIPE_FIRST = ["rhoai", "dsc", "project", "prerequisites"];
 const RECIPE_LANES = [["s3", "pipeline-server", "workbench"], ["mlflow", "mlflow-samples"], ["model-registry"], ["maas", "models-prereq", "model", "maas-publish", "playground"]];
-const RECIPE_LAST = ["kueue-prereq", "kueue", "dashboard-dev"];
+const RECIPE_KUEUE = ["kueue-prereq", "kueue"];
+const RECIPE_LAST = ["dashboard-dev"];
+
+/**
+ * internal/recipe KueueFirst for the mock's cluster, where the dashboard's Kueue setting is off: distributed
+ * workloads come first when the recipe turns the setting on.
+ */
+export function recipeKueueFirst(rcp) {
+  const k = rcp.spec.features.kueue;
+  return !!(k?.enabled && k.dashboardOptIn);
+}
 
 /** Each step's After (internal/recipe withAfter), for the step IDs of a run. */
-export function recipeAfter(ids) {
+export function recipeAfter(ids, kueueFirst = false) {
   const after = {};
   const chain = (list, deps) => list.filter((id) => ids.includes(id)).reduce((d, id) => { after[id] = d; return [id]; }, deps);
-  const head = chain(RECIPE_FIRST, []);
+  const head = chain(kueueFirst ? [...RECIPE_FIRST, ...RECIPE_KUEUE] : RECIPE_FIRST, []);
   const ends = RECIPE_LANES.flatMap((lane) => { const end = chain(lane, head); return end === head ? [] : end; });
-  chain(RECIPE_LAST, ends.length ? ends : head);
+  chain(kueueFirst ? RECIPE_LAST : [...RECIPE_KUEUE, ...RECIPE_LAST], ends.length ? ends : head);
   return after;
 }
 
 /** How long steps take together as the runner runs them (internal/recipe RunSeconds): at most 3 at once, each after its After. */
-export function recipeRunSeconds(ids, seconds) {
-  const after = recipeAfter(ids);
+export function recipeRunSeconds(ids, seconds, kueueFirst = false) {
+  const after = recipeAfter(ids, kueueFirst);
   const ends = {};
   let now = 0;
   const running = new Set();
@@ -1923,8 +1936,8 @@ export function recipePlan(rcp = recipe(), installed = true, blocked = false, mi
       { field: "spec.rhoai.build", message: "Cannot resolve the build on Quay.", fix: { code: "build_unresolvable" } },
     ] : [],
     // The steps of independent lanes run side by side: about the longest chain, not the sum.
-    typicalSeconds: recipeRunSeconds(steps.map((s) => s.id), steps.map((s) => (counted.includes(s) ? s.typicalSeconds : 0))),
-    maxSeconds: recipeRunSeconds(steps.map((s) => s.id), steps.map((s) => (counted.includes(s) ? s.maxSeconds : 0))),
+    typicalSeconds: recipeRunSeconds(steps.map((s) => s.id), steps.map((s) => (counted.includes(s) ? s.typicalSeconds : 0)), recipeKueueFirst(rcp)),
+    maxSeconds: recipeRunSeconds(steps.map((s) => s.id), steps.map((s) => (counted.includes(s) ? s.maxSeconds : 0)), recipeKueueFirst(rcp)),
     ...([...kueueWarnings(rcp), ...playgroundWarnings(rcp)].length ? { warnings: [...kueueWarnings(rcp), ...playgroundWarnings(rcp)] } : {}),
   };
 }
@@ -1939,16 +1952,6 @@ function playgroundWarnings(rcp) {
   return [{ kind: "advice", message: `Model ${entry?.displayName ?? f.models.model} is offered to the playground only through Models as a Service (${how}), so the playground uses it from there: the dashboard sets the playground up with your sign-in, as when you choose a Models as a Service model in its Gen AI studio. Chatting with it needs a Models as a Service subscription to it.` }];
 }
 
-/**
- * The dashboard's mark on the recipe's workbench (pkg/cluster internal/recipe kueueWorkbenchNote), for the mock's
- * cluster: the dashboard's Kueue setting off and the project not Kueue's before the run.
- */
-function kueueWorkbenchNote(rcp) {
-  const f = rcp.spec.features;
-  if (!f.kueue?.enabled || !f.workbench?.enabled || !f.kueue.dashboardOptIn) return "";
-  return "The dashboard will mark this recipe's workbench 'Workbench bypasses Kueue queue management': it is created before the Kueue setting is on. Choosing the hardware profile Kueue CPU (RHOAI Nightly Updater) for it in the dashboard (Edit workbench) removes the mark and restarts the workbench.";
-}
-
 /** The plan's warnings for distributed workloads (pkg/cluster internal/recipe kueueWarnings). */
 function kueueWarnings(rcp) {
   const f = rcp.spec.features;
@@ -1960,7 +1963,6 @@ function kueueWarnings(rcp) {
     const list = others.length === 1 ? others[0] : `${others.slice(0, -1).join(", ")} and ${others[others.length - 1]}`;
     out.push({ kind: "advice", message: `Project ${rcp.spec.project?.name ?? "recipe-dev"} also gets ${list}. Kueue manages only what is sent to a queue, so they keep running. A project of its own is still safer.` });
   }
-  if (kueueWorkbenchNote(rcp)) out.push({ kind: "advice", message: kueueWorkbenchNote(rcp) });
   if (f.kueue.dashboardOptIn) out.push({ kind: "cluster", message: "The dashboard's Kueue setting is turned on: in every new project on this cluster, workbenches and model deployments can only use the queue hardware profile, and a project without its own LocalQueue cannot create workbenches or deploy models until an admin adds one." });
   return out;
 }
@@ -1979,7 +1981,7 @@ export function recipeRun({ done = 0, current = "running", message = "", state =
     if (i < done) {
       return id === "rhoai"
         ? { id, title, ...times, status: "skipped", message: "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it.", startedAt: ago(start), finishedAt: ago(start) }
-        : { id, title, ...times, status: "success", ...(RECIPE_OWNS.has(id) ? { created: true } : {}), message: (id === "prerequisites" ? prerequisitesDone(rcp) : id === "kueue" && kueueWorkbenchNote(rcp) ? `${RECIPE_DONE.kueue} ${kueueWorkbenchNote(rcp)}` : RECIPE_DONE[id] ?? `${title} is set up.`).replaceAll("recipe-dev", project), startedAt: ago(start - i * 2.5), finishedAt: ago(start - (i + 1) * 2.5) };
+        : { id, title, ...times, status: "success", ...(RECIPE_OWNS.has(id) ? { created: true } : {}), message: (id === "prerequisites" ? prerequisitesDone(rcp) : RECIPE_DONE[id] ?? `${title} is set up.`).replaceAll("recipe-dev", project), startedAt: ago(start - i * 2.5), finishedAt: ago(start - (i + 1) * 2.5) };
     }
     if (i === done && current) {
       return { id, title, ...times, status: current, ...(message ? { message } : {}), ...(current === "failed" ? { errorCode: "timeout", ...(RECIPE_OWNS.has(id) ? { created: true } : {}), finishedAt: ago(0.5) } : {}), startedAt: ago(1.2) };

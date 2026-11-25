@@ -24,7 +24,7 @@ func TestPrerequisitesStep_OneSetAfterTheProject(t *testing.T) {
 	}
 	ids := func(r types.EnvironmentRecipe) string {
 		var out []string
-		for _, s := range Steps(r) {
+		for _, s := range Steps(r, false) {
 			out = append(out, s.ID)
 		}
 		return strings.Join(out, " ")
@@ -47,7 +47,7 @@ func TestPrerequisitesStep_OneSetAfterTheProject(t *testing.T) {
 	if got := ids(gw); got != "rhoai dsc project prerequisites model kueue-prereq kueue" {
 		t.Errorf("steps %s", got)
 	}
-	for _, st := range Steps(gw) {
+	for _, st := range Steps(gw, false) {
 		if st.ID == StepPrerequisites && (st.Title != "What the features need" || st.Typical.Minutes() != 5 || st.Max.Minutes() != 15) {
 			t.Errorf("step %+v", st)
 		}
@@ -63,7 +63,7 @@ func TestPrerequisitesStep_OneSetAfterTheProject(t *testing.T) {
 func TestPrerequisitesStep_CheckAndRun(t *testing.T) {
 	r := validRecipe(t, "  project: {mode: existing, name: proj}\n  features:\n    pipelines: {enabled: true}\n    mlflow: {enabled: true}\n    kueue: {enabled: true}\n")
 	var step Step
-	for _, s := range Steps(r) {
+	for _, s := range Steps(r, false) {
 		if s.ID == StepPrerequisites {
 			step = s
 		}

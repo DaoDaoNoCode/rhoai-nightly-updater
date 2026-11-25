@@ -41,6 +41,41 @@ type Notebook struct {
 	} `json:"spec"`
 }
 
+// NotebookThere reports whether project has a workbench named Name (any
+// owner) that is not being deleted, read with the user's token through the
+// list the Workbench tab reads.
+func NotebookThere(c *kube.Client, project string) (bool, error) {
+	if err := userOnly(c); err != nil {
+		return false, err
+	}
+	var items []struct {
+		Metadata kube.ObjectMeta `json:"metadata"`
+	}
+	if err := c.ListInto(rhoai.NamespacedPath(notebookAPI, "notebooks", project, ""), &items); err != nil {
+		if kube.IsK8sNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, n := range items {
+		if n.Metadata.Name == Name && !n.Metadata.Terminating() {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ListProfiles is listProfiles, for the recipe plan's check of the
+// hardware profiles the dashboard will offer a workbench (ChooseProfile).
+func ListProfiles(c *kube.Client, namespace string) ([]HardwareProfile, error) {
+	return listProfiles(c, namespace)
+}
+
+// ListLocalQueues is listLocalQueues, for the same check.
+func ListLocalQueues(c *kube.Client, project string) ([]string, error) {
+	return listLocalQueues(c, project)
+}
+
 func notebookPath(project string) string {
 	return rhoai.NamespacedPath(notebookAPI, "notebooks", project, Name)
 }

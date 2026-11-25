@@ -31,8 +31,11 @@ func PlanRecipe(c *Client, r types.EnvironmentRecipe, pinned *types.RecipePinned
 	return recipe.Plan(c, r, pinned)
 }
 
-// RecipeSteps is recipe.Steps.
-func RecipeSteps(r types.EnvironmentRecipe) []RecipeStep { return recipe.Steps(r) }
+// RecipeSteps is recipe.Steps for the run order the plan chose (state is
+// the plan's).
+func RecipeSteps(state RecipeState) []RecipeStep {
+	return recipe.Steps(state.Recipe, state.KueueFirst)
+}
 
 // RecipeExposureKept is recipe.ExposureKept.
 func RecipeExposureKept(exposure, gatewayRef string) bool {

@@ -95,8 +95,23 @@ func Plan(c *kube.Client, r types.EnvironmentRecipe, pinned *types.RecipePinnedB
 	if r.Spec.RHOAI.IfInstalled == IfInstalledUpdate {
 		resolve()
 	}
+	// The dashboard's Kueue setting decides the run order (KueueFirst) and
+	// which hardware profiles the dashboard offers the workloads.
+	f := r.Spec.Features
+	settingKnown, settingOn := false, false
+	if (f.Kueue.Enabled && !f.Kueue.DashboardOptIn) || f.Workbench.Enabled || f.Models.Enabled {
+		on, err := dashboardKueueOn(c)
+		if err != nil {
+			p.addFix(checkFailed(), "", "Cannot read the dashboard's Kueue setting, which decides whether distributed workloads come before the workbench and the model, and which hardware profiles the dashboard offers them: %v. Nothing was changed.", err)
+		} else {
+			settingKnown, settingOn = true, on
+		}
+	}
+	s.KueueFirst = KueueFirst(r, settingOn)
+	var kueueBlocks map[string]string
+	kueueChecked := false
 	willRun := map[string]bool{}
-	steps := Steps(r)
+	steps := Steps(r, s.KueueFirst)
 	typical, most := make([]int, len(steps)), make([]int, len(steps))
 	for i, step := range steps {
 		ps := types.RecipePlanStep{ID: step.ID, Title: step.Title}
@@ -120,6 +135,20 @@ func Plan(c *kube.Client, r types.EnvironmentRecipe, pinned *types.RecipePinnedB
 			default:
 				ps.Action = types.RecipeStepRun
 				willRun[step.ID] = true
+			}
+		}
+		// A workbench or model the run creates where the dashboard will
+		// offer it no usable hardware profile (workloadKueueBlocks).
+		if (step.ID == StepWorkbench || step.ID == StepModel) && settingKnown && (ps.Action == types.RecipeStepRun || ps.Action == types.RecipeStepLater) {
+			if !kueueChecked {
+				kueueChecked = true
+				var err error
+				if kueueBlocks, err = workloadKueueBlocks(c, &s, settingOn, willRun[StepProject]); err != nil {
+					p.addFix(checkFailed(), "", "Cannot check which hardware profiles the dashboard will offer the workbench and the model: %v. Nothing was changed.", err)
+				}
+			}
+			if why := kueueBlocks[step.ID]; why != "" {
+				ps.Action, ps.Reason, ps.Fix = types.RecipeStepBlocked, why, fixAt(types.RecipeFixFeatureBlocked, pageEnvironment)
 			}
 		}
 		if ps.Action == types.RecipeStepBlocked {

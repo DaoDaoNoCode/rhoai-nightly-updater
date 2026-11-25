@@ -255,12 +255,20 @@ func sampleState(u *kube.Client, kind, project string, rec Record, workloads []W
 
 // quotaDiffers says whether a live nominal quota is known to differ from
 // the one this version sets, as amounts ("20480Mi" is "20Gi"); a quota
-// that cannot be read is not called different.
-func quotaDiffers(cpu, memory string) bool {
-	wantCPU, wantMemory := Quota()
-	sameCPU, knownCPU := kube.SameQuantity(cpu, wantCPU)
-	sameMemory, knownMemory := kube.SameQuantity(memory, wantMemory)
-	return (knownCPU && !sameCPU) || (knownMemory && !sameMemory)
+// that cannot be read is not called different, but one without ephemeral
+// storage is (an earlier version covered CPU and memory only, so a model
+// that requests it is never admitted).
+func quotaDiffers(cpu, memory, ephemeral string) bool {
+	wantCPU, wantMemory, wantEphemeral := Quota()
+	if ephemeral == "" {
+		return true
+	}
+	differs := false
+	for _, q := range [][2]string{{cpu, wantCPU}, {memory, wantMemory}, {ephemeral, wantEphemeral}} {
+		same, known := kube.SameQuantity(q[0], q[1])
+		differs = differs || (known && !same)
+	}
+	return differs
 }
 
 // GetStatus powers the Distributed workloads tab: DataScienceCluster data via
@@ -326,9 +334,9 @@ func GetStatus(sa, u *kube.Client, project string) (*types.KueueStatus, error) {
 		if found && err == nil {
 			// The live quota, not the one Set up would create: Set up keeps
 			// a ClusterQueue that is there.
-			if cpu, memory := cq.nominalQuota(); cpu != "" || memory != "" {
-				st.Quota = fmt.Sprintf("%s CPUs and %s of memory", kube.FirstNonEmpty(cpu, "no"), kube.FirstNonEmpty(memory, "no"))
-				if cqState.ManagedByTool && quotaDiffers(cpu, memory) {
+			if cpu, memory, ephemeral := cq.nominalQuota(); cpu != "" || memory != "" || ephemeral != "" {
+				st.Quota = quotaText(cpu, memory, ephemeral)
+				if cqState.ManagedByTool && quotaDiffers(cpu, memory, ephemeral) {
 					cqState.Outdated = fmt.Sprintf("its quota is %s; this version sets %s", st.Quota, describeQuota())
 				}
 			}

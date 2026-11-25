@@ -599,8 +599,8 @@ export const scenarios = {
   // Made by an earlier version: the 11Gi queue and a 2Gi RayCluster sample (Set up keeps what is there).
   "env-kueue-outdated": (w) => {
     w.kueue = F.kueueWorld("ready", { samples: true });
-    w.kueue.quota = "6 CPUs and 11Gi of memory";
-    w.kueue.objects = w.kueue.objects.map((o) => (o.kind === "ClusterQueue" ? { ...o, outdated: "its quota is 6 CPUs and 11Gi of memory; this version sets 6 CPUs and 20Gi of memory" } : o));
+    w.kueue.quota = "6 CPUs, 11Gi of memory and no of ephemeral storage";
+    w.kueue.objects = w.kueue.objects.map((o) => (o.kind === "ClusterQueue" ? { ...o, outdated: "its quota is 6 CPUs, 11Gi of memory and no of ephemeral storage; this version sets 10 CPUs, 32Gi of memory and 6Gi of ephemeral storage" } : o));
     w.kueue.samples = w.kueue.samples.map((s) => (s.kind === "raycluster" ? { ...s, state: "Admitted", rayState: "failed", outdated: "its head and worker have other CPU and memory than this version sets (head 1 CPU and 5Gi requested, up to 2 CPUs and 8Gi; worker 1 CPU and 3Gi requested, up to 1 CPU and 6Gi)" } : s));
   },
   "env-kueue-optin": (w) => { w.kueue = F.kueueWorld("ready", { samples: true, optIn: true }); },
@@ -806,8 +806,8 @@ scenarios["recipe-full-succeeded"] = (w) => {
   w.recipeRun = { run: F.recipeRun({ rcp, done: steps.length, current: "", state: "succeeded", stopReason: "Every step of recipe full is set up." }), running: false };
   w.resources = { ...w.resources, mlflow: F.mlflowStates.running, pipelineServers: [...w.resources.pipelineServers, { ...F.pipelineServer, namespace: "recipe-full", apiRoute: undefined, uiRoute: undefined }] };
 };
-// The full recipe with the dashboard's Kueue setting turned on: the review and the Kueue step say the dashboard marks
-// its workbench (kueueWorkbenchNote).
+// The full recipe with the dashboard's Kueue setting turned on: distributed workloads come right after what the
+// features need, before the workbench and the model (internal/recipe KueueFirst).
 scenarios["recipe-full-kueue-optin"] = (w) => {
   scenarios["recipe-full-succeeded"](w);
   const rcp = F.fullRecipe();

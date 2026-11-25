@@ -165,7 +165,7 @@ func installRecipeFake(t *testing.T) (*recipeFake, *fakeRecord) {
 		recipeSteps, planRecipe, saveRecipeRun, readRecipeRun, recordRecipeActivity, recipeOwnership, recipeOwnedProjects = origSteps, origPlan, origSave, origRead, origActivity, origOwnership, origOwned
 		mutations, recipes = origMutations, origRecipes
 	})
-	recipeSteps = func(types.EnvironmentRecipe) []cluster.RecipeStep { return f.clusterSteps() }
+	recipeSteps = func(cluster.RecipeState) []cluster.RecipeStep { return f.clusterSteps() }
 	planRecipe = func(_ *cluster.Client, r types.EnvironmentRecipe, pinned *types.RecipePinnedBuild) (*types.RecipePlan, cluster.RecipeState) {
 		f.mu.Lock()
 		defer f.mu.Unlock()

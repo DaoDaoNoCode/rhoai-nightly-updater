@@ -18,7 +18,7 @@ const tDSCList = "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters
 
 func recipeStep(t *testing.T, r types.EnvironmentRecipe, id string) recipe.Step {
 	t.Helper()
-	for _, s := range recipe.Steps(r) {
+	for _, s := range recipe.Steps(r, false) {
 		if s.ID == id {
 			return s
 		}

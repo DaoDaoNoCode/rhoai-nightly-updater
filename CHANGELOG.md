@@ -456,22 +456,40 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   **Open pipelines** opens the project it set up, not the one the tab shows
   now. A reload, another tab or another user still see the server's latest
   step.
-- **A recipe says when the dashboard will mark its workbench as bypassing
-  Kueue.** A recipe that sets up a workbench and turns the dashboard's Kueue
-  setting on creates the workbench first, so the dashboard marks it
-  "Workbench bypasses Kueue queue management" (seen live on RHOAI 3.7). The
-  review and the Kueue step's result now say so, and that choosing the
-  hardware profile Kueue CPU (RHOAI Nightly Updater) (or a Queue profile)
-  in the dashboard's Edit workbench removes the mark and restarts it. They
-  do not claim Kueue then admits the workbench: RHOAI's notebook controller
-  does not pass the queue label to its pod.
-- **The Kueue quota holds a workbench on the Queue profile.** The
-  ClusterQueue's 19 GiB did not count the workbench's kube-rbac-proxy
-  sidecar (100m CPU, 64 MiB requested), so with both samples running the
-  workbench waited behind the RayJob. New setups get 6 CPUs and 20 GiB. Set
-  up keeps a ClusterQueue that is there: a 19 GiB one reads "Made by an
-  earlier version of this tool", and a recipe's Distributed workloads step
-  stops on it; Clean up, then Set up.
+- **A recipe sets up distributed workloads before its workbench and model
+  when the project will be Kueue's.** It decided from its own opt-in, and
+  only for the workbench: with the dashboard's Kueue setting on (an admin's)
+  and no `kueue.dashboardOptIn`, or after a Clean up of the project, the
+  workbench step failed ("no enabled workbench hardware profile sends
+  workloads to a LocalQueue the project has", live on RHOAI 3.7.0-ea.1), and
+  the model ran before Kueue without a hardware profile, around Kueue's
+  queue and quota. Now, when the recipe has distributed workloads and the
+  dashboard's setting is on at review time or turned on by its opt-in (the
+  dashboard then offers a workload in the labelled project only a Queue
+  hardware profile of a LocalQueue it has), What distributed workloads need
+  and Distributed workloads run right after What the features need, before
+  every lane, as the documented order has it; otherwise the order is as
+  before. The model gets the Queue hardware profile as the dashboard's deploy
+  form would (the tool's profile now allows up to 4 CPUs and 14 GiB, the
+  largest catalog model), RHOAI gives it the queue label and Kueue admits
+  it within the quota. The Models tab and the model step refuse a model in
+  a Kueue project without such a profile (or one Kueue is off for in the
+  dashboard) instead of deploying it without one. The review refuses, before
+  anything runs, a workbench or model the dashboard would offer no usable
+  profile, and says what to change in the recipe. The review and the Kueue
+  step no longer say the dashboard will mark the workbench as bypassing
+  Kueue: the recipe no longer creates such a workbench.
+- **The Kueue quota holds a workbench and a model on the Queue profile.**
+  The ClusterQueue's 19 GiB did not count the workbench's kube-rbac-proxy
+  sidecar (100m CPU, 64 MiB requested) nor a model. New setups get 10 CPUs,
+  32 GiB and 6 GiB of ephemeral storage: both samples, a workbench and the
+  largest catalog model at once (the documented example ClusterQueue has 9
+  CPUs and 36 GiB). Ephemeral storage is covered because the model requests
+  it for its download, and Kueue does not admit a workload that requests a
+  resource its ClusterQueue does not cover. Set up keeps a ClusterQueue that
+  is there: an earlier one reads "Made by an earlier version of this tool",
+  and a recipe's Distributed workloads step stops on it; Clean up, then Set
+  up.
 - **Distributed workloads set up and clean up again in a project deleted
   and made again.** After a recipe's Clean up of its project only, the next
   Set up refused with "Clean up first", and Clean up stopped at a LocalQueue

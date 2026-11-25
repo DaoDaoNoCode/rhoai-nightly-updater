@@ -2,6 +2,7 @@ package recipe
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -232,102 +233,92 @@ func TestKueueOwnership_OffersOnlyWhatTheRunCreated(t *testing.T) {
 	}
 }
 
-// kueueWarnings and step ordering: warn if the project picks up extra features,
-// warn about cluster-wide dashboard opt-in impact, and place Kueue after other
-// project setups but ahead of Dashboard Dev.
-func TestKueuePlan_WarningsAndOrder(t *testing.T) {
+// kueueWarnings: warn if the project picks up extra features and about
+// the cluster-wide dashboard opt-in; never that the dashboard marks the
+// workbench (with the setting on it is created after Kueue).
+func TestKueuePlan_Warnings(t *testing.T) {
 	r := validRecipe(t, "  project: {mode: existing, name: proj}\n  features:\n    pipelines: {enabled: true}\n    workbench: {enabled: true}\n    kueue: {enabled: true, dashboardOptIn: true}\n  dashboardDev: {deploy: main}\n")
 	w := kueueWarnings(r, kueueLive{})
-	if len(w) != 3 || w[0].Kind != types.RecipeWarningAdvice || !strings.Contains(w[0].Message, "Project proj also gets a pipeline server and a workbench") ||
-		w[1].Kind != types.RecipeWarningAdvice || !strings.Contains(w[1].Message, "Workbench bypasses Kueue queue management") ||
-		w[2].Kind != types.RecipeWarningCluster || !strings.Contains(w[2].Message, "every new project on this cluster") {
+	if len(w) != 2 || w[0].Kind != types.RecipeWarningAdvice || !strings.Contains(w[0].Message, "Project proj also gets a pipeline server and a workbench") ||
+		w[1].Kind != types.RecipeWarningCluster || !strings.Contains(w[1].Message, "every new project on this cluster") {
 		t.Fatalf("warnings %q", w)
 	}
-	var ids []string
-	for _, s := range Steps(r) {
-		ids = append(ids, s.ID)
-	}
-	if got := strings.Join(ids, " "); !strings.HasSuffix(got, "workbench kueue-prereq kueue dashboard-dev") {
-		t.Errorf("order %s", got)
-	}
-	// The setting already on: no cluster warning (the project is not Kueue's yet: the workbench note stays).
-	if w := kueueWarnings(r, kueueLive{OptInOn: true, SettingOn: true}); len(w) != 2 || w[0].Kind != types.RecipeWarningAdvice || w[1].Kind != types.RecipeWarningAdvice {
+	if w := kueueWarnings(r, kueueLive{OptInOn: true}); len(w) != 1 || w[0].Kind != types.RecipeWarningAdvice {
 		t.Errorf("opt-in already on: %+v", w)
 	}
 	if w := kueueWarnings(validRecipe(t, "  project: {mode: existing, name: proj}\n  features: {kueue: {enabled: true}}\n"), kueueLive{}); len(w) != 0 {
 		t.Errorf("a project of its own, opt-in off: %q", w)
 	}
-}
-
-// The dashboard marks the recipe's workbench "bypasses Kueue queue
-// management" (F7, live on 3.7-ea.1) when the setting ends up on and the
-// workbench was made before the project used Kueue: the plan and the Kueue
-// step say so, naming the tool's Queue profile only when this run turns the
-// setting on; never the model, never that Kueue admits the workbench.
-func TestKueueWorkbenchNote(t *testing.T) {
-	const (
-		toolProfile = "Choosing the hardware profile Kueue CPU (RHOAI Nightly Updater) for it in the dashboard (Edit workbench) removes the mark and restarts the workbench."
-		anyProfile  = "Choosing a Queue hardware profile for it in the dashboard (Edit workbench) removes the mark and restarts the workbench."
-		mark        = "The dashboard will mark this recipe's workbench 'Workbench bypasses Kueue queue management': "
-	)
-	recipe := func(features string) types.EnvironmentRecipe {
-		return validRecipe(t, "  project: {mode: existing, name: proj}\n  features:\n"+features)
-	}
-	optIn := recipe("    models: {enabled: true}\n    workbench: {enabled: true}\n    kueue: {enabled: true, dashboardOptIn: true}\n")
-	noOptIn := recipe("    workbench: {enabled: true}\n    kueue: {enabled: true}\n")
-	for _, tc := range []struct {
-		name string
-		r    types.EnvironmentRecipe
-		live kueueLive
-		want string
-	}{
-		{"opt-in by this run", optIn, kueueLive{}, mark + "it is created before the Kueue setting is on. " + toolProfile},
-		{"opt-in by this run, the project already Kueue's", optIn, kueueLive{ProjectManaged: true}, mark + "it is created before the Kueue setting is on. " + toolProfile},
-		{"the setting already on, the project not Kueue's", noOptIn, kueueLive{SettingOn: true}, mark + "it is created before its project uses Kueue. " + anyProfile},
-		{"the setting already on and the project already Kueue's", optIn, kueueLive{OptInOn: true, SettingOn: true, ProjectManaged: true}, ""},
-		{"opt-in off and the setting off", noOptIn, kueueLive{}, ""},
-		{"no workbench", recipe("    models: {enabled: true}\n    kueue: {enabled: true, dashboardOptIn: true}\n"), kueueLive{}, ""},
-		{"no Kueue", recipe("    workbench: {enabled: true}\n"), kueueLive{SettingOn: true}, ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := kueueWorkbenchNote(tc.r, tc.live)
-			if got != tc.want {
-				t.Fatalf("got %q\nwant %q", got, tc.want)
-			}
-			if strings.Contains(got, "model") || strings.Contains(got, "admit") {
-				t.Fatalf("names the model or admission: %q", got)
-			}
-			var in bool
-			for _, w := range kueueWarnings(tc.r, tc.live) {
-				in = in || w.Message == tc.want
-			}
-			if tc.want != "" && !in {
-				t.Fatalf("not in the plan's warnings")
-			}
-		})
-	}
-	// kueueLiveOf: a label this tool added does not make the project Kueue's before the run.
-	f := false
-	if l := kueueLiveOf(&types.KueueStatus{Label: &types.KueueLabel{Present: true, AddedByTool: true}, OptIn: types.KueueOptIn{DisableKueue: &f}}); l.ProjectManaged || !l.SettingOn || l.OptInOn {
-		t.Errorf("tool's label: %+v", l)
-	}
-	if l := kueueLiveOf(&types.KueueStatus{Label: &types.KueueLabel{Present: true}}); !l.ProjectManaged || l.SettingOn {
-		t.Errorf("someone's label: %+v", l)
-	}
-
-	// The Kueue step's result says it too, from the cluster before the step.
+	// The Kueue step's result has no note on the workbench either.
 	fk := &fakeKueue{}
 	fk.install(t)
-	s := &State{Recipe: optIn, RunID: "run-1"}
-	res, err := runKueueStep(testClient(), s, func(types.UpdateStepEvent) {})
-	if err != nil || !res.Success || !strings.HasSuffix(res.Message, mark+"it is created before the Kueue setting is on. "+toolProfile) {
+	res, err := runKueueStep(testClient(), &State{Recipe: r, RunID: "run-1"}, func(types.UpdateStepEvent) {})
+	if err != nil || !res.Success || strings.Contains(res.Message, "bypasses") {
 		t.Fatalf("step result %+v %v", res, err)
 	}
-	// Both on before the step: no note.
-	f2 := &fakeKueue{st: types.KueueStatus{Label: &types.KueueLabel{Present: true}, OptIn: liveOptIn(true)}}
-	f2.install(t)
-	if res, err := runKueueStep(testClient(), &State{Recipe: optIn, RunID: "run-2"}, func(types.UpdateStepEvent) {}); err != nil || !res.Success || strings.Contains(res.Message, "bypasses") {
-		t.Fatalf("both on before: %+v %v", res, err)
+}
+
+// KueueFirst follows the dashboard's rule, not the opt-in alone: Kueue in
+// the recipe and the dashboard's Kueue area on when the workloads are
+// created (the setting on now, or turned on by the opt-in).
+func TestKueueFirst_FromTheDashboardRule(t *testing.T) {
+	recipe := func(kueue string) types.EnvironmentRecipe {
+		return validRecipe(t, "  project: {mode: create, name: recipe-dev}\n  features:\n    models: {enabled: true}\n    workbench: {enabled: true}\n"+kueue)
+	}
+	for _, tc := range []struct {
+		name      string
+		r         types.EnvironmentRecipe
+		settingOn bool
+		want      bool
+	}{
+		{"opt-in, setting off", recipe("    kueue: {enabled: true, dashboardOptIn: true}\n"), false, true},
+		{"opt-in, setting on", recipe("    kueue: {enabled: true, dashboardOptIn: true}\n"), true, true},
+		{"no opt-in, setting on (an admin's)", recipe("    kueue: {enabled: true}\n"), true, true},
+		{"no opt-in, setting off", recipe("    kueue: {enabled: true}\n"), false, false},
+		{"no Kueue, setting on", recipe(""), true, false},
+	} {
+		if got := KueueFirst(tc.r, tc.settingOn); got != tc.want {
+			t.Errorf("%s: KueueFirst %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// With KueueFirst the run is project -> what the features need ->
+// kueue-prereq -> kueue -> {workbench, model, ...}: every lane comes after
+// the Kueue step, and the list shows them in that order; without it the
+// order is as before (Kueue after every lane).
+func TestSteps_KueueFirstOrder(t *testing.T) {
+	r := validRecipe(t, "  project: {mode: create, name: recipe-dev}\n  features:\n    pipelines: {enabled: true}\n    models: {enabled: true}\n    workbench: {enabled: true}\n    kueue: {enabled: true, dashboardOptIn: true}\n  dashboardDev: {deploy: main}\n")
+	ids := func(steps []Step) string {
+		var out []string
+		for _, s := range steps {
+			out = append(out, s.ID)
+		}
+		return strings.Join(out, " ")
+	}
+	first := Steps(r, true)
+	if got := ids(first); got != "rhoai dsc project prerequisites kueue-prereq kueue s3 pipeline-server models-prereq model workbench dashboard-dev" {
+		t.Errorf("kueue first: %s", got)
+	}
+	byID := map[string]Step{}
+	for _, s := range first {
+		byID[s.ID] = s
+	}
+	for id, after := range map[string]string{StepKueuePrereq: StepPrerequisites, StepKueue: StepKueuePrereq, StepS3: StepKueue, StepModelsPrereq: StepKueue} {
+		if got := byID[id].After; len(got) != 1 || got[0] != after {
+			t.Errorf("%s comes after %v, want %s", id, got, after)
+		}
+	}
+	for _, id := range []string{StepWorkbench, StepModel, StepPipelineServer} {
+		if !ancestors(first, id)[StepKueue] {
+			t.Errorf("%s may start before distributed workloads", id)
+		}
+	}
+	if got := byID[StepDashboardDev].After; len(got) != 2 || !slices.Contains(got, StepWorkbench) || !slices.Contains(got, StepModel) {
+		t.Errorf("dashboard-dev after %v", got)
+	}
+	if got := ids(Steps(r, false)); got != "rhoai dsc project prerequisites s3 pipeline-server models-prereq model workbench kueue-prereq kueue dashboard-dev" {
+		t.Errorf("unchanged order: %s", got)
 	}
 }
 

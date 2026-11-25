@@ -71,6 +71,11 @@ type State struct {
 	// platform, the model registry); the runner keeps them when Resume
 	// runs.
 	Created []types.RecipeCreatedPart
+	// KueueFirst is the run order the plan chose (KueueFirst): distributed
+	// workloads right after the project and what the features need, before
+	// the workbench and the model. Plan sets it from the cluster as it is
+	// then, and the runner's steps follow it (Steps).
+	KueueFirst bool
 }
 
 // AddCreated records a cluster-wide part the run created; a part recorded
@@ -364,8 +369,8 @@ type Step struct {
 	Typical, Max time.Duration
 	// After names the steps of the run this one starts after: each must
 	// have ended well (succeeded, or found set up) first. Steps sets it
-	// from the run's order (stepsFirst, stepLanes, stepsLast); steps
-	// without one between them run side by side.
+	// from the run's order (runOrder); steps without one between them run
+	// side by side.
 	After []string
 	Check func(c *kube.Client, s *State) (Check, error)
 	Run   func(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error)
@@ -379,9 +384,11 @@ func (s Step) Seconds() (typical, most int) {
 
 // Steps lists a recipe's stages in plan order: RHOAI build,
 // DataScienceCluster, optional project, what every feature needs (one
-// step), then each feature's setup steps. Each step's After says which
-// steps it waits for; the others run side by side.
-func Steps(r types.EnvironmentRecipe) []Step {
+// step), then each feature's setup steps, with distributed workloads
+// right after what every feature needs when kueueFirst (KueueFirst, the
+// plan's State.KueueFirst). Each step's After says which steps it waits
+// for; the others run side by side.
+func Steps(r types.EnvironmentRecipe, kueueFirst bool) []Step {
 	steps := []Step{
 		{ID: StepRHOAI, Title: "RHOAI", Typical: 7 * time.Minute, Max: 15 * time.Minute, Check: checkRHOAI, Run: runRHOAI},
 		{ID: StepDSC, Title: "DataScienceCluster", Typical: time.Minute, Max: 7 * time.Minute, Check: checkDSC, Run: runDSC},
@@ -408,7 +415,7 @@ func Steps(r types.EnvironmentRecipe) []Step {
 			Step{ID: StepMLflow, Title: "MLflow", Typical: 2 * time.Minute, Max: 10 * time.Minute, Check: checkMLflow, Run: runMLflow},
 		)
 	}
-	return withAfter(append(steps, featureSteps(r)...))
+	return withAfter(inRunOrder(append(steps, featureSteps(r)...), kueueFirst), kueueFirst)
 }
 
 // fail is a step's refusal or failure.

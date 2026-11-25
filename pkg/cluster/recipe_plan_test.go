@@ -223,7 +223,7 @@ func TestRecipeSteps_PublishOnlyWhenNeededDashboardDevLast(t *testing.T) {
 			t.Fatal(problems)
 		}
 		var out []string
-		for _, s := range recipe.Steps(r) {
+		for _, s := range recipe.Steps(r, false) {
 			out = append(out, s.ID)
 		}
 		return strings.Join(out, " ")
@@ -282,7 +282,7 @@ func TestRecipePlan_StepSecondsAreTheSteps(t *testing.T) {
 	installedRHOAI(f)
 	plan, state := planRecipeFor(t, c, `{"rhoai":{"build":"latest"},"dataScienceCluster":{"create":true},"project":{"mode":"create","name":"recipe-dev"},
 "features":{"pipelines":{"enabled":true},"mlflow":{"enabled":true}}}`)
-	steps := recipe.Steps(state.Recipe)
+	steps := recipe.Steps(state.Recipe, state.KueueFirst)
 	if len(steps) != len(plan.Steps) {
 		t.Fatalf("%d steps, plan %d", len(steps), len(plan.Steps))
 	}
