@@ -16,12 +16,12 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// GoneWait limits how long delete paths wait on finalizers. Kueue keeps
-// ClusterQueue and ResourceFlavor until dependents release them; KubeRay
-// winds down RayCluster pods with comparable blocking. Tests tighten the cap.
+// GoneWait caps how long deletion flows block on finalizers. Until dependents
+// let go, Kueue retains ClusterQueue and ResourceFlavor; KubeRay tears down
+// RayCluster pods with similar waits. Tests use a shorter ceiling.
 var GoneWait = 2 * time.Minute
 
-// Validate reports why req is rejected, or "" when the request passes.
+// Validate returns a rejection reason for req, or "" if the request is valid.
 func Validate(req types.KueueRequest) string {
 	switch req.Action {
 	case "setup", "teardown", "delete-sample", "optin", "optout":
@@ -53,8 +53,8 @@ type run struct {
 	logs     []string
 	activity string
 	target   string
-	// Keys listed here are stamped onto cluster-scoped resources produced
-	// during the run (see RunAnnotated).
+	// Entries in this map are applied as annotations on cluster-scoped objects
+	// created in the run (see RunAnnotated).
 	annotations map[string]string
 }
 
@@ -82,18 +82,18 @@ func (r *run) done(msg string) (*types.OperationResponse, error) {
 
 func codeOf(err error) string { return kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal") }
 
-// Run drives setup, teardown, and the other Kueue actions in one streamed
-// sequence on client c. Step IDs by action: setup — check, queues, project,
+// Run executes setup, teardown, and the remaining Kueue actions as one
+// streamed workflow on c. Per-action step IDs: setup — check, queues, project,
 // samples; teardown — samples, queues, project, opt-in; delete-sample —
 // samples; optin — check, dashboard, profile; optout — opt-in.
 func Run(c *kube.Client, req types.KueueRequest, onStep func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	return RunAnnotated(c, req, nil, onStep)
 }
 
-// RunAnnotated matches Run but merges annotations into cluster-scoped
-// creates (setup: ResourceFlavor and ClusterQueue; optin: Queue hardware
-// profile) so an environment recipe can tag what that invocation built.
-// Pre-existing objects are left untouched.
+// RunAnnotated is like Run but folds annotations into cluster-scoped creates
+// (setup: ResourceFlavor and ClusterQueue; optin: Queue hardware profile) so
+// a recipe can mark what that call materialized. Objects already on the
+// cluster are not modified.
 func RunAnnotated(c *kube.Client, req types.KueueRequest, annotations map[string]string, onStep func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	r := &run{c: c, emit: onStep, activity: req.Action + "-kueue", target: "distributed workloads", annotations: annotations}
 	if req.Project != "" {
@@ -115,9 +115,9 @@ func RunAnnotated(c *kube.Client, req types.KueueRequest, annotations map[string
 	return r.teardown()
 }
 
-// create POSTs obj to collection under the tool field manager. With dryRun,
-// the apiserver evaluates a server-side dry run and returns parsed metadata
-// from that response.
+// create sends obj to collection with a POST under the tool field manager.
+// When dryRun is set, the apiserver performs server-side dry-run validation
+// and the function returns metadata parsed from that reply.
 func create(c *kube.Client, collection string, obj map[string]any, dryRun bool) (kube.ObjectMeta, error) {
 	data, err := json.Marshal(obj)
 	if err != nil {
@@ -656,6 +656,8 @@ func (r *run) teardown() (*types.OperationResponse, error) {
 	var kept []string
 	r.step("project", "running", "Checking the project label")
 	switch {
+	case replaced:
+		r.step("project", "success", fmt.Sprintf("Project %s was deleted or made again since this tool's setup; a Kueue label on it now is not this tool's, so it stays.", rec.Project))
 	case !rec.LabelAdded:
 		r.step("project", "success", "This tool did not add the project's Kueue label; it stays as it is.")
 	default:
