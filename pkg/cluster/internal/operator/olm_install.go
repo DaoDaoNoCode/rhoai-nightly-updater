@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
@@ -27,9 +29,22 @@ import (
 //   - ResolutionFailed is set on every failed resolution and cleared by the
 //     next successful one; OLM keeps retrying, so it can be transient right
 //     after a catalog is recreated.
-//   - BundleUnpacking stays True (with an image-pull hint) while the unpack
-//     job cannot pull the bundle; BundleUnpackFailed and InstallPlanFailed
-//     report a finished failure.
+//   - BundleUnpacking is True while OLM's bundle unpack Job runs. OLM 4.23
+//     and later add an image-pull hint to it when the Job's pod cannot pull
+//     the bundle (operator-framework/operator-lifecycle-manager #3832); 4.22
+//     and older give no message, so the wait reads the unpack pods
+//     themselves (catalog.BundleUnpackPullFailures). BundleUnpackFailed and
+//     InstallPlanFailed report a finished failure; OLM sets
+//     BundleUnpackFailed only once the Job failed, at the latest after its
+//     unpack timeout: the catalog operator's --bundle-unpack-timeout
+//     (openshift/operator-framework-olm release-4.22,
+//     staging/operator-lifecycle-manager/cmd/catalog/start.go:82), set as
+//     the Job's activeDeadlineSeconds and overridden by the OperatorGroup
+//     annotation operatorframework.io/bundle-unpack-timeout
+//     (pkg/controller/bundle/bundle_unpacker.go:40-44, 300-319, 962-987).
+//     It differs per cluster, and the catalog operator's flags are not
+//     visible on a hosted control plane, so the wait assumes no value: it
+//     waits for OLM's verdict or the end of the operation's time.
 //   - InstallPlan phases end in Complete or Failed; RequiresApproval waits
 //     for spec.approved when the Subscription uses Manual approval.
 //   - A CSV moves Pending -> InstallReady -> Installing -> Succeeded. Failed
@@ -39,16 +54,34 @@ import (
 //   - CatalogSourcesUnhealthy describes every catalog in scope, not only the
 //     Subscription's, so it is reported but never treated as a failure.
 var (
-	// installTimeout bounds the wait for OLM to install the new
-	// operator. Together with the catalog waits before it, an operation stays
-	// within the 15-minute mutation deadline.
-	installTimeout = 8 * time.Minute
+	// installTimeout bounds the install wait only when the operation's
+	// context has no deadline. Every operation has one (record.OperationDeadline,
+	// from pkg/api withMutationAuth), and then the wait runs until OLM's
+	// verdict (the CSV Succeeded, or ResolutionFailed, BundleUnpackFailed,
+	// an InstallPlan or CSV failure) or until InstallDeadlineReserve before
+	// that deadline: the updater assumes no OLM timeout of its own (see
+	// above). Seen on a ROSA HCP cluster: the first unpack pod could not
+	// pull the bundle on a node that was being replaced, and the Job's next
+	// pod, on a new node, started 8 minutes 16 seconds after the wait
+	// began; an 8-minute wait had given up 16 seconds earlier.
+	//
+	// Time budget: the wait ends at the operation's deadline (15 minutes
+	// after the operation started) minus InstallDeadlineReserve (10 s), so
+	// it lasts 15 minutes - the earlier steps - 10 s. The longest waits of
+	// the earlier steps add up to 6 minutes (the verification catalog and
+	// the nightly catalog each up to catalog.ReadyTimeout plus
+	// PackageManifestPropagationWait, 2.5 minutes; the old CSV's deletion up
+	// to csvDeletionTimeout, 1 minute); they usually take a few. The wait
+	// then ends with the "operation's time budget" message. The restore
+	// after a failure does not come out of that budget: it runs after the
+	// operation stopped, on record.PostOperationContext with its own
+	// record.RecoveryTimeout (Recovery.Restore, operator_recovery.go:247,
+	// 275 and 300), which the pod's shutdown drain covers
+	// (TestShutdownBudgetFitsTerminationGracePeriod).
+	installTimeout = record.OperationDeadline
 	// resolutionFailedGrace is how long ResolutionFailed may persist before
 	// the operation is treated as failed.
 	resolutionFailedGrace = 60 * time.Second
-	// bundlePullFailureGrace is how long the bundle unpack job may fail to
-	// pull its image before the operation is treated as failed.
-	bundlePullFailureGrace = 3 * time.Minute
 	// csvFailedGrace is how long the new CSV may stay Failed before the
 	// operation is treated as failed.
 	csvFailedGrace = 90 * time.Second
@@ -146,7 +179,8 @@ func EnsureNamespaceAndGroup(c *kube.Client, dryRun bool) (logs []string, proble
 // rhoaiOperatorGroup is what the OperatorGroup checks read of one OperatorGroup.
 type rhoaiOperatorGroup struct {
 	Metadata struct {
-		Name string `json:"name"`
+		Name        string            `json:"name"`
+		Annotations map[string]string `json:"annotations"`
 	} `json:"metadata"`
 	Spec struct {
 		TargetNamespaces []string `json:"targetNamespaces"`
@@ -262,8 +296,7 @@ const InstallDeadlineReserve = 10 * time.Second
 
 // WaitForInstall follows the Subscription until OLM has installed its
 // CSV (phase Succeeded and recorded as installedCSV), reports a failure, or
-// installTimeout passes (or the operation's deadline comes near,
-// whichever is first). Every wait is bounded. Progress is emitted under
+// the operation's deadline comes near (installTimeout without one). Every wait is bounded. Progress is emitted under
 // step.
 //
 // With Manual approval an InstallPlan is approved only when it installs
@@ -277,21 +310,28 @@ func WaitForInstall(c *kube.Client, emit func(types.UpdateStepEvent), logs *[]st
 	waitStart := time.Now()
 	deadline := kube.Clock().Now().Add(installTimeout)
 	budgetLimited := false
-	if opDeadline, ok := c.Context().Deadline(); ok && opDeadline.Add(-InstallDeadlineReserve).Before(deadline) {
+	if opDeadline, ok := c.Context().Deadline(); ok {
 		deadline, budgetLimited = opDeadline.Add(-InstallDeadlineReserve), true
 	}
-	w := &installWait{c: c, emit: emit, logs: logs}
+	// Every sleep and read of the wait, the diagnostic ones included, ends
+	// at the cutoff: a slow API server cannot eat InstallDeadlineReserve.
+	waitCtx, cancel := kube.Clock().WithDeadline(c.Context(), deadline)
+	defer cancel()
+	operation := c
+	c = c.WithContext(waitCtx)
+	w := &installWait{c: c, operation: operation, emit: emit, logs: logs}
 	approved := map[string]bool{}
 	progress, failed, stopped := w.progress, w.failed, w.stopped
 
 	for {
-		if err := kube.Clock().Sleep(c.Context(), InstallPlanPollInterval); err != nil {
+		sleepErr := kube.Clock().Sleep(c.Context(), InstallPlanPollInterval)
+		if err := operation.Context().Err(); err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
 				return stopped("timeout", "The operation deadline passed before OLM finished installing the operator")
 			}
 			return stopped("cancelled", "The operation was cancelled before OLM finished installing the operator")
 		}
-		if kube.Clock().Now().After(deadline) {
+		if sleepErr != nil || !kube.Clock().Now().Before(deadline) {
 			if budgetLimited {
 				return stopped("install_timeout", "OLM did not finish installing the operator within the operation's time budget")
 			}
@@ -311,7 +351,7 @@ func WaitForInstall(c *kube.Client, emit func(types.UpdateStepEvent), logs *[]st
 			return failed("olm_install_failed", "The Subscription was deleted while OLM was installing the operator; another user or tool may have changed it.")
 		}
 
-		resolutionFailing, pullFailing, outcome, done := w.subscriptionConditions(sub)
+		resolutionFailing, outcome, done := w.subscriptionConditions(sub)
 		if done {
 			return outcome
 		}
@@ -334,8 +374,10 @@ func WaitForInstall(c *kube.Client, emit func(types.UpdateStepEvent), logs *[]st
 			name = sub.Status.InstalledCSV
 		}
 		if name == "" {
-			if w.ipName == "" && !resolutionFailing && !pullFailing {
-				progress("Waiting for OLM to resolve the Subscription")
+			if w.ipName == "" && !resolutionFailing {
+				if state := w.resolveState(sub); c.Context().Err() == nil {
+					progress(state) // not a state cut short by the cutoff
+				}
 			}
 			continue
 		}
@@ -350,21 +392,35 @@ func WaitForInstall(c *kube.Client, emit func(types.UpdateStepEvent), logs *[]st
 // installWait is the state of one WaitForInstall, kept across its
 // polls.
 type installWait struct {
-	c    *kube.Client
-	emit func(types.UpdateStepEvent)
-	logs *[]string
+	// c ends at the wait's cutoff; operation is the operation's own client,
+	// for the upgrade-gate note after a successful install, which has its
+	// own bound (AdminAckNote).
+	c, operation *kube.Client
+	emit         func(types.UpdateStepEvent)
+	logs         *[]string
 	// When each failing condition was first seen in a row (zero: not
 	// failing).
-	resolutionSince, pullSince, csvFailedSince, succeededSince time.Time
-	ipName, csvName, lastState, lastProgress                   string
-	sawCSVFailed, catalogsNoted                                bool
+	resolutionSince, csvFailedSince, succeededSince time.Time
+	ipName, csvName, lastState, lastProgress        string
+	sawCSVFailed, catalogsNoted                     bool
+	// unpacking: the last poll found the Subscription's BundleUnpacking
+	// condition True (OLM is still unpacking the bundle).
+	unpacking bool
+	// sourceNS is the namespace of the Subscription's CatalogSource, where
+	// OLM runs the unpack Jobs.
+	sourceNS string
+	// unpackTimeoutNote says what the OperatorGroup's unpack-timeout
+	// annotation sets, read once while OLM unpacks ("" when it sets none).
+	unpackTimeoutNote string
+	unpackTimeoutRead bool
 }
 
 // installWaitSubscription is what the wait reads of the Subscription.
 type installWaitSubscription struct {
 	Spec struct {
-		Source  string `json:"source"`
-		Channel string `json:"channel"`
+		Source          string `json:"source"`
+		SourceNamespace string `json:"sourceNamespace"`
+		Channel         string `json:"channel"`
 	} `json:"spec"`
 	Status struct {
 		CurrentCSV     string `json:"currentCSV"`
@@ -407,45 +463,44 @@ func (w *installWait) stopped(code, why string) installOutcome {
 	if keep {
 		msg += " The new Subscription was kept because OLM is still installing it; watch the operator status and re-run Update or Install a different build if it does not finish."
 	}
+	if w.unpacking && w.ipName == "" {
+		msg += fmt.Sprintf(" OLM was still unpacking the operator bundle and had reported no verdict: it reports BundleUnpackFailed only after its bundle unpack timeout, which the cluster sets (the catalog operator's --bundle-unpack-timeout, or the annotation %s on the OperatorGroup in %s). "+
+			"See why with: oc get pods -n %s -l %s, then run the operation again.",
+			catalog.BundleUnpackTimeoutAnnotation, rhoai.SubNS, kube.NonEmpty(w.sourceNS, "<catalog namespace>"), catalog.BundleUnpackRefLabel)
+	}
 	*w.logs = append(*w.logs, msg)
 	return installOutcome{csv: w.csvName, Message: msg, ErrorCode: code, keepNewInstall: keep}
 }
 
 // subscriptionConditions reads the Subscription's conditions: whether OLM's
-// resolution or the bundle pull is failing (and still retried), or the
-// failed outcome when done.
-func (w *installWait) subscriptionConditions(sub installWaitSubscription) (resolutionFailing, pullFailing bool, outcome installOutcome, done bool) {
+// resolution is failing (and still retried), or the failed outcome when
+// done. A failing bundle pull is not a verdict: OLM keeps retrying it until
+// its own unpack timeout, and a pull can recover (a node that gets the pull
+// secret, a Job pod on another node), so it is only shown (resolveState).
+func (w *installWait) subscriptionConditions(sub installWaitSubscription) (resolutionFailing bool, outcome installOutcome, done bool) {
 	progress, failed, logs := w.progress, w.failed, w.logs
+	w.unpacking, w.sourceNS = false, sub.Spec.SourceNamespace
 	for _, cond := range sub.Status.Conditions {
 		if cond.Status != "True" {
 			continue
 		}
 		switch cond.Type {
 		case "InstallPlanFailed":
-			return false, false, failed("installplan_failed", "OLM reports that the InstallPlan failed: "+describeCondition(cond)), true
+			return false, failed("installplan_failed", "OLM reports that the InstallPlan failed: "+describeCondition(cond)), true
 		case "BundleUnpackFailed":
-			return false, false, failed("bundle_unpack_failed", "OLM could not unpack the operator bundle: "+describeCondition(cond)+
-				". If this repeats, follow the OpenShift procedure for failing subscriptions: delete the failed bundle-unpack Job and its ConfigMap in openshift-marketplace (label operatorframework.io/bundle-unpack-ref), then run the operation again."), true
+			return false, failed("bundle_unpack_failed", "OLM could not unpack the operator bundle ("+bundleConditionDetail(cond)+
+				"). If this repeats, follow the OpenShift procedure for failing subscriptions: delete the failed bundle-unpack Job and its ConfigMap in "+kube.NonEmpty(w.sourceNS, "the catalog's namespace")+" (label "+catalog.BundleUnpackRefLabel+"), then run the operation again."), true
 		case "ResolutionFailed":
 			resolutionFailing = true
 			if w.resolutionSince.IsZero() {
 				w.resolutionSince = kube.Clock().Now()
 			}
 			if kube.Clock().Since(w.resolutionSince) >= resolutionFailedGrace {
-				return false, false, failed("resolution_failed", fmt.Sprintf("OLM cannot resolve %s from %s/%s: %s", rhoai.SubName, sub.Spec.Source, sub.Spec.Channel, describeCondition(cond))), true
+				return false, failed("resolution_failed", fmt.Sprintf("OLM cannot resolve %s from %s/%s: %s", rhoai.SubName, sub.Spec.Source, sub.Spec.Channel, describeCondition(cond))), true
 			}
 			progress("OLM resolution failed, retrying: " + describeCondition(cond))
 		case "BundleUnpacking":
-			if strings.Contains(strings.ToLower(cond.Message), "pull") {
-				pullFailing = true
-				if w.pullSince.IsZero() {
-					w.pullSince = kube.Clock().Now()
-				}
-				if kube.Clock().Since(w.pullSince) >= bundlePullFailureGrace {
-					return false, false, failed("bundle_image_pull", "OLM cannot pull the operator bundle image: "+cond.Message+" Check the image mirror (IDMS) for "+rhoai.IDMSSource+" and the pull secret."), true
-				}
-				progress("Bundle image pull is failing, OLM keeps retrying: " + cond.Message)
-			}
+			w.unpacking = true
 		case "CatalogSourcesUnhealthy":
 			if !w.catalogsNoted {
 				w.catalogsNoted = true
@@ -456,10 +511,108 @@ func (w *installWait) subscriptionConditions(sub installWaitSubscription) (resol
 	if !resolutionFailing {
 		w.resolutionSince = time.Time{}
 	}
-	if !pullFailing {
-		w.pullSince = time.Time{}
+	return resolutionFailing, installOutcome{}, false
+}
+
+// resolveConditionTypes are the Subscription conditions OLM sets before it
+// creates an InstallPlan (operator-framework/api pkg/operators/v1alpha1
+// subscription_types.go:108-126): what a wait without an InstallPlan or a
+// CSV can report.
+var resolveConditionTypes = []string{"CatalogSourcesUnhealthy", "ResolutionFailed", "BundleUnpacking", "BundleUnpackFailed"}
+
+// resolveState words the wait before OLM names a CSV or an InstallPlan: the
+// Subscription's resolution conditions as OLM set them and, while OLM
+// unpacks the bundle, why the unpack pods in the catalog's namespace wait
+// (an image they cannot pull) and the unpack timeout the OperatorGroup
+// sets, if it sets one.
+func (w *installWait) resolveState(sub installWaitSubscription) string {
+	state := "Waiting for OLM to resolve the Subscription"
+	if w.unpacking {
+		state = "OLM is unpacking the operator bundle"
 	}
-	return resolutionFailing, pullFailing, installOutcome{}, false
+	var conds []string
+	for _, cond := range sub.Status.Conditions {
+		if !slices.Contains(resolveConditionTypes, cond.Type) {
+			continue
+		}
+		detail := cond.Reason
+		switch {
+		case cond.Status != "True" || cond.Message == "":
+		case cond.Type == "BundleUnpacking" || cond.Type == "BundleUnpackFailed":
+			detail = bundleConditionDetail(cond)
+		default:
+			detail = describeCondition(olmCondition{Reason: cond.Reason, Message: kube.TruncateText(cond.Message, 300)})
+		}
+		conds = append(conds, strings.TrimSpace(cond.Type+"="+cond.Status+" "+parenthesize(detail)))
+	}
+	if len(conds) > 0 {
+		state += "; Subscription conditions: " + strings.Join(conds, ", ")
+	}
+	if !w.unpacking {
+		return state
+	}
+	if w.sourceNS == "" {
+		state += ". The Subscription names no catalog namespace, so OLM's bundle unpack pods were not read"
+	} else {
+		pulls, err := catalog.BundleUnpackPullFailures(w.c, w.sourceNS)
+		switch {
+		case err != nil:
+			state += fmt.Sprintf(". OLM's bundle unpack pods in %s could not be read: %v", w.sourceNS, err)
+		case len(pulls) > 0:
+			state += ". " + strings.Join(pulls, "; ")
+		}
+	}
+	if note := w.readUnpackTimeoutNote(); note != "" {
+		state += ". " + note
+	}
+	return state
+}
+
+// readUnpackTimeoutNote reads, once, whether the OperatorGroup in the
+// Subscription's namespace sets OLM's bundle unpack timeout with its
+// annotation. OLM uses the annotation only when the namespace has exactly
+// one OperatorGroup (bundle_unpacker.go:962-987). The read is the existing
+// OperatorGroup list (ReadNamespaceAndGroups); a failed read adds nothing,
+// as the note is only a hint.
+func (w *installWait) readUnpackTimeoutNote() string {
+	if w.unpackTimeoutRead {
+		return w.unpackTimeoutNote
+	}
+	w.unpackTimeoutRead = true
+	_, groups, problem, _ := ReadNamespaceAndGroups(w.c)
+	if problem != "" || len(groups) != 1 {
+		return ""
+	}
+	// Shown as the annotation's content, not as the timeout in effect: a
+	// value time.ParseDuration rejects makes OLM's sync of the namespace
+	// fail instead (bundle_unpacker.go:981-984, catalog/operator.go:1270-1273),
+	// and 0 means no timeout (bundle_unpacker.go:312-316).
+	if v, ok := groups[0].Metadata.Annotations[catalog.BundleUnpackTimeoutAnnotation]; ok {
+		w.unpackTimeoutNote = fmt.Sprintf("OperatorGroup %s has the annotation %s: %q", groups[0].Metadata.Name, catalog.BundleUnpackTimeoutAnnotation, kube.TruncateText(v, 100))
+	}
+	return w.unpackTimeoutNote
+}
+
+// bundleUnpackJobReason finds the Job's failure reason in OLM's
+// BundleUnpackFailed message, "bundle unpacking failed. Reason: <reason>,
+// and Message: <message>" (catalog/operator.go:1399-1401): a Kubernetes
+// reason word such as DeadlineExceeded or BackoffLimitExceeded.
+var bundleUnpackJobReason = regexp.MustCompile(`Reason: ([A-Za-z]+)`)
+
+// bundleConditionDetail words a BundleUnpacking or BundleUnpackFailed
+// condition without its message: OLM 4.23 and later put the unpack pod's
+// pull failure into it, and registry error text can carry a signed URL.
+// It gives the reason, the Job's failure reason when OLM quotes one, and,
+// when the message is about a pull, the same loose hint the pods get.
+func bundleConditionDetail(cond olmCondition) string {
+	parts := []string{cond.Reason}
+	if m := bundleUnpackJobReason.FindStringSubmatch(cond.Message); m != nil {
+		parts = append(parts, "Job "+m[1])
+	}
+	if strings.Contains(strings.ToLower(cond.Message), "pull") {
+		parts = append(parts, catalog.PullErrorKind(cond.Message))
+	}
+	return strings.Join(slices.DeleteFunc(parts, func(p string) bool { return p == "" }), ", ")
 }
 
 // checkCSV reads CSV name, the Subscription's current one: the outcome when
@@ -521,7 +674,7 @@ func (w *installWait) checkCSV(name, installedCSV string, deadline, waitStart ti
 			return installOutcome{}, false
 		}
 		*logs = append(*logs, fmt.Sprintf("OK: CSV %s is Succeeded", name))
-		outcome := installOutcome{Succeeded: true, csv: name, note: AdminAckNote(c, name, waitStart)}
+		outcome := installOutcome{Succeeded: true, csv: name, note: AdminAckNote(w.operation, name, waitStart)}
 		if outcome.note != "" {
 			*logs = append(*logs, "Warning: "+outcome.note)
 		}

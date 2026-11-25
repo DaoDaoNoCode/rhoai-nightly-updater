@@ -11,8 +11,8 @@ import (
 // UseTestTimings makes the operation waits short, for a test binary: the
 // catalog's (catalog.UseTestTimings), the InstallPlan poll every 10ms,
 // the propagation and refresh clean-up waits 10ms, the
-// Subscription retry backoffs 10ms and 10ms, the install wait 400ms, the
-// ResolutionFailed, bundle pull and CSV Failed graces 60ms, the CSV
+// Subscription retry backoffs 10ms and 10ms, the install wait without a
+// deadline 400ms, the ResolutionFailed and CSV Failed graces 60ms, the CSV
 // Succeeded settle 30ms and the CSV deletion wait 50ms. It panics outside a
 // test binary.
 func UseTestTimings() {
@@ -24,7 +24,6 @@ func UseTestTimings() {
 	SubRetryBackoffs = []time.Duration{10 * time.Millisecond, 10 * time.Millisecond}
 	installTimeout = 400 * time.Millisecond
 	resolutionFailedGrace = 60 * time.Millisecond
-	bundlePullFailureGrace = 60 * time.Millisecond
 	csvFailedGrace = 60 * time.Millisecond
 	CSVSucceededSettle = 30 * time.Millisecond
 	csvDeletionTimeout = 50 * time.Millisecond
