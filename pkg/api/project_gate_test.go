@@ -47,6 +47,7 @@ func newProjectGateEnv(t *testing.T, role string) *projectGateEnv {
 		env.reviews++
 		out := map[string]cluster.ActionReview{}
 		for _, id := range ids {
+			out[id] = cluster.ActionReview{}
 			a, _ := cluster.ProjectActionByID(id)
 			for _, r := range a.Requests {
 				if role == roleViewer && r.Verb != "get" && r.Verb != "list" {

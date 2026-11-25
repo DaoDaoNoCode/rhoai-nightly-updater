@@ -72,8 +72,12 @@ func resetPackageState(t *testing.T) {
 	// has the UID "uid-<name>", no prerequisite blocks, every review allows.
 	isUserProject = func(*cluster.Client, string) (bool, error) { return false, nil }
 	readProjectUID = func(_ *cluster.Client, project string) (string, error) { return "uid-" + project, nil }
-	reviewProjectActions = func(*cluster.Client, []string, string, string) (map[string]cluster.ActionReview, error) {
-		return map[string]cluster.ActionReview{}, nil
+	reviewProjectActions = func(_ *cluster.Client, ids []string, _, _ string) (map[string]cluster.ActionReview, error) {
+		out := map[string]cluster.ActionReview{}
+		for _, id := range ids {
+			out[id] = cluster.ActionReview{}
+		}
+		return out, nil
 	}
 	projectFeatureBlock = func(*cluster.Client, string) (string, string) { return "", "" }
 	projectAppsNamespace = func(*cluster.Client) (string, error) { return "redhat-ods-applications", nil }

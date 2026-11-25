@@ -149,7 +149,12 @@ func stubContractData(t *testing.T) {
 	isUserProject = func(_ *cluster.Client, project string) (bool, error) { return project == "team-a", nil }
 	reviewProjectActions = func(_ *cluster.Client, ids []string, project, _ string) (map[string]cluster.ActionReview, error) {
 		req := cluster.AccessRequest{Verb: "delete", Group: "mlflow.kubeflow.org", Resource: "experiments", Namespace: project, Name: "nightly-sample-training"}
-		return map[string]cluster.ActionReview{"mlflow-samples.remove": {Missing: []cluster.MissingPermission{{Request: req, Text: req.String() + ": ask an admin of project " + project + " to give you the edit role there."}}}}, nil
+		out := map[string]cluster.ActionReview{}
+		for _, id := range ids {
+			out[id] = cluster.ActionReview{}
+		}
+		out["mlflow-samples.remove"] = cluster.ActionReview{Missing: []cluster.MissingPermission{{Request: req, Text: req.String() + ": ask an admin of project " + project + " to give you the edit role there."}}}
+		return out, nil
 	}
 	origSummary, origProject, origPlayground, origSamples, origRegistry, origWorkbench, origKueue, origObservability := getSummary, getProjectStatus, getPlaygroundStatus, getMLflowSamplesStatus, getModelRegistryStatus, getWorkbenchStatus, getKueueStatus, getObservabilityStatus
 	t.Cleanup(func() {

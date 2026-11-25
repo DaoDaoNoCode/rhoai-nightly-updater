@@ -57,25 +57,9 @@ func (c *capabilitiesCache) reset() {
 	c.entries = map[[32]byte]capabilitiesEntry{}
 }
 
-// capabilitiesFlight coalesces concurrent capability reads of the same
-// token and project: one set of reviews answers them all.
-var capabilitiesFlight = struct {
-	sync.Mutex
-	calls map[[32]byte]*capabilitiesCall
-}{calls: map[[32]byte]*capabilitiesCall{}}
-
-// onCapabilitiesJoin runs when a read joins another's reviews; tests
-// replace it.
-var onCapabilitiesJoin = func() {}
-
-type capabilitiesCall struct {
-	done     chan struct{}
-	verdicts map[string]actionVerdict
-}
-
 // capabilityVerdicts is projectActionVerdicts for every project action,
-// from the cache (a minute, by token hash and project) or one call shared
-// by concurrent requests of the same token and project.
+// from the cache (a minute, by token hash and project) when it holds an
+// answer that could be told.
 func capabilityVerdicts(u *cluster.Client, admin bool, ids []string, token, project string) map[string]actionVerdict {
 	key := capabilitiesKey(token, project)
 	if admin {
@@ -84,27 +68,11 @@ func capabilityVerdicts(u *cluster.Client, admin bool, ids []string, token, proj
 	if v, ok := capabilities.get(key, clk.Now()); ok {
 		return v
 	}
-	capabilitiesFlight.Lock()
-	if call, ok := capabilitiesFlight.calls[key]; ok {
-		capabilitiesFlight.Unlock()
-		onCapabilitiesJoin()
-		<-call.done
-		return call.verdicts
+	verdicts := projectActionVerdicts(u, admin, ids, project)
+	if !verdictsFailed(verdicts) {
+		capabilities.put(key, verdicts, clk.Now())
 	}
-	call := &capabilitiesCall{done: make(chan struct{})}
-	capabilitiesFlight.calls[key] = call
-	capabilitiesFlight.Unlock()
-	defer func() {
-		capabilitiesFlight.Lock()
-		delete(capabilitiesFlight.calls, key)
-		capabilitiesFlight.Unlock()
-		close(call.done)
-	}()
-	call.verdicts = projectActionVerdicts(u, admin, ids, project)
-	if !verdictsFailed(call.verdicts) {
-		capabilities.put(key, call.verdicts, clk.Now())
-	}
-	return call.verdicts
+	return verdicts
 }
 
 // verdictsFailed reports whether an answer could not be told (a review or
@@ -130,7 +98,7 @@ func verdictsFailed(v map[string]actionVerdict) bool {
 // then per action the prerequisites with the ServiceAccount's facts client
 // and the access reviews with their token (projectActionVerdicts: a
 // failure counts only for the actions it concerns). Cached a minute per
-// token hash and project; concurrent identical reads share one review.
+// token hash and project.
 // Advisory: each action's gate checks again.
 var HandleProjectCapabilities = withAuth(func(sa *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
@@ -169,7 +137,7 @@ var HandleProjectCapabilities = withAuth(func(sa *cluster.Client, w http.Respons
 	}
 	for _, a := range actions {
 		cp := types.ProjectCapability{Label: a.Label, Missing: []string{}, BlockedBy: []string{}}
-		v := verdicts[a.ID]
+		v := verdictOf(verdicts, a.ID)
 		if allReason != "" {
 			v = actionVerdict{code: allCode, reason: allReason}
 		}

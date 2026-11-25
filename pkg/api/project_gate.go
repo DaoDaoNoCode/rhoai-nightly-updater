@@ -237,15 +237,19 @@ func projectActionVerdicts(u *cluster.Client, admin bool, ids []string, project 
 	reviews, err := reviewProjectActions(u, review, project, apps)
 	for _, id := range review {
 		a, _ := cluster.ProjectActionByID(id)
+		rv, answered := reviews[id]
 		switch {
 		case errors.Is(err, cluster.ErrUnauthenticated):
 			out[id] = actionVerdict{status: http.StatusUnauthorized, code: "session_expired", reason: "Your OpenShift session has expired. Log in again."}
 		case err != nil:
 			out[id] = actionVerdict{status: http.StatusServiceUnavailable, code: "authorization_unavailable", reason: fmt.Sprintf("Cannot check your permissions for %s in %s (%v); try again.", a.Label, project, err)}
-		case reviews[id].Err != nil:
-			out[id] = actionVerdict{status: http.StatusConflict, code: "prerequisites_unknown", reason: fmt.Sprintf("Cannot check %s in %s: %v.", a.Label, project, reviews[id].Err)}
-		case len(reviews[id].Missing) > 0:
-			out[id] = actionVerdict{status: http.StatusForbidden, code: missingPermissionsCode, reason: cluster.MissingSummaryFor(a.Label, project, reviews[id].Missing), missing: reviews[id].Missing}
+		case !answered:
+			// A review that gave this action no answer: fail closed.
+			out[id] = actionVerdict{status: http.StatusServiceUnavailable, code: "authorization_unavailable", reason: fmt.Sprintf("Cannot check your permissions for %s in %s; try again.", a.Label, project)}
+		case rv.Err != nil:
+			out[id] = actionVerdict{status: http.StatusConflict, code: "prerequisites_unknown", reason: fmt.Sprintf("Cannot check %s in %s: %v.", a.Label, project, rv.Err)}
+		case len(rv.Missing) > 0:
+			out[id] = actionVerdict{status: http.StatusForbidden, code: missingPermissionsCode, reason: cluster.MissingSummaryFor(a.Label, project, rv.Missing), missing: rv.Missing}
 		default:
 			out[id] = actionVerdict{}
 		}
@@ -254,6 +258,16 @@ func projectActionVerdicts(u *cluster.Client, admin bool, ids []string, project 
 		slog.Warn("project action preflight failed", "project", project, "error", err)
 	}
 	return out
+}
+
+// verdictOf is the verdict of id, fail closed: an action the checks gave
+// no answer for is not allowed (authorization_unavailable).
+func verdictOf(verdicts map[string]actionVerdict, id string) actionVerdict {
+	v, ok := verdicts[id]
+	if !ok {
+		return actionVerdict{status: http.StatusServiceUnavailable, code: "authorization_unavailable", reason: "Your permissions for this action could not be checked; try again."}
+	}
+	return v
 }
 
 // projectStartProblem is what keeps an accepted project action from
@@ -346,7 +360,7 @@ func withProjectMutationAuth(route projectRoute, fn func(c *cluster.Client, w ht
 			return
 		}
 		// 7 and 8. The prerequisites (facts), then the preflight.
-		if v := projectActionVerdicts(u, admin, []string{id}, project)[id]; v.reason != "" {
+		if v := verdictOf(projectActionVerdicts(u, admin, []string{id}, project), id); v.reason != "" {
 			mutationLimiter.release(rateLimitKey, slot)
 			if v.code == missingPermissionsCode {
 				slog.Info("project action refused: missing permissions", "action", id, "missing", len(v.missing))

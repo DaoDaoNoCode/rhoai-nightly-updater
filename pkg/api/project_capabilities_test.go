@@ -216,28 +216,25 @@ func TestCapabilitiesScopeFailuresToTheirActions(t *testing.T) {
 	}
 }
 
-// Concurrent identical capability reads share one set of reviews.
-func TestCapabilitiesCoalesce(t *testing.T) {
-	env := newProjectGateEnv(t, roleEditor)
-	inner := reviewProjectActions
-	entered, release := make(chan struct{}), make(chan struct{})
-	reviewProjectActions = func(u *cluster.Client, ids []string, project, apps string) (map[string]cluster.ActionReview, error) {
-		close(entered)
-		<-release
-		return inner(u, ids, project, apps)
+// An action the checks give no answer for is never allowed.
+func TestMissingVerdictIsNotAllowed(t *testing.T) {
+	if v := verdictOf(map[string]actionVerdict{}, "workbench.setup"); v.reason == "" || v.code != "authorization_unavailable" {
+		t.Fatalf("%+v", v)
 	}
-	joined := make(chan struct{})
-	onCapabilitiesJoin = func() { close(joined) }
-	t.Cleanup(func() { onCapabilitiesJoin = func() {} })
-	done := make(chan struct{}, 2)
-	go func() { getCapabilities(t, "team-a"); done <- struct{}{} }()
-	<-entered
-	go func() { getCapabilities(t, "team-a"); done <- struct{}{} }()
-	<-joined
-	close(release)
-	<-done
-	<-done
-	if env.reviews != 1 {
-		t.Fatalf("%d review sets for two concurrent reads", env.reviews)
+	newProjectGateEnv(t, roleEditor)
+	reviewProjectActions = func(*cluster.Client, []string, string, string) (map[string]cluster.ActionReview, error) {
+		// An answer that leaves an action out.
+		return map[string]cluster.ActionReview{"workbench.stop": {}}, nil
+	}
+	_, caps := getCapabilities(t, "team-a")
+	if !caps.Actions["workbench.stop"].Allowed {
+		t.Fatal("the answered action is not allowed")
+	}
+	if cp := caps.Actions["workbench.setup"]; cp.Allowed || cp.Code != "authorization_unavailable" {
+		t.Fatalf("an action without an answer: %+v", cp)
+	}
+	w := serveProjectAction(t, "/api/resources/workbench/stream", `{"action":"setup","project":"team-a"}`)
+	if w.Code != http.StatusServiceUnavailable || decodeError(t, w)["errorCode"] != "authorization_unavailable" {
+		t.Fatalf("the gate: %d %s", w.Code, w.Body.String())
 	}
 }
