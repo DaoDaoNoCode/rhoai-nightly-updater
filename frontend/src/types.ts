@@ -509,7 +509,7 @@ export interface UserOperationStatus {
   label?: string;
   startedAt?: string;
   /** The running cluster operation as a list entry (pkg/types OperationSummaryEntry); older backends do not send it. */
-  operations?: { scope: string; label: string; startedAt: string }[];
+  operations?: { scope: 'cluster'; label: string; startedAt: string }[];
 }
 
 export interface DashboardState {

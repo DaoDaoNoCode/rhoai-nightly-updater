@@ -602,6 +602,13 @@ users who sign in see only "Cluster-admin required".
 template: the old gate (only users who may list pods in
 `redhat-ods-operator`) and the ServiceAccount's old rules.
 
+**Old and new pods side by side.** While a replaced pod drains, both pods
+read and respect each other's cluster lock (key `lock`, same format). A pod
+older than 5.0.0 does not know project locks (keys `projectLock.<UID>`): it
+can start a cluster operation while a newer pod runs a project action.
+Project actions (later 5.0.0 pre-releases) start only once every updater
+pod runs a version that knows them, so roll out fully before using them.
+
 ## 6. Roll back
 
 From a clone, to a release or any published commit build:
