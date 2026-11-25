@@ -128,12 +128,20 @@ func ReadRedHatManaged(c *kube.Client) (bool, error) {
 var ControlPlaneCache = kube.NewLRU[string, string](8)
 
 // CachedControlPlane is readControlPlane, cached per cluster; "" when it
-// cannot be read (unknown).
+// cannot be read (unknown). It is a cluster fact: read with the facts
+// client (c.Facts(), the ServiceAccount's), so the cache all users share
+// is filled only by the ServiceAccount. A client that acts with the
+// signed-in user's token and has no facts client reads afresh and caches
+// nothing (as ServedVersions).
 func CachedControlPlane(c *kube.Client) string {
+	if c.Facts().ActsAsUser() {
+		cp, _ := ReadControlPlane(c.Facts())
+		return cp
+	}
 	if cp, ok := ControlPlaneCache.Get(c.BaseURL()); ok {
 		return cp
 	}
-	cp, err := ReadControlPlane(c)
+	cp, err := ReadControlPlane(c.Facts())
 	if err != nil {
 		return ""
 	}

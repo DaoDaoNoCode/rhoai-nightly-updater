@@ -2,7 +2,6 @@ package envkit
 
 import (
 	"fmt"
-	"log/slog"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -131,15 +130,45 @@ func ComponentBlock(r rhoai.DSCRead, fc FeatureComponent) *types.ComponentBlock 
 	return nil
 }
 
-// SetupComponentBlock reads the DataScienceCluster for a setup: the reason
-// the feature's component is not turned on, or nil. A DataScienceCluster
-// that cannot be read blocks nothing: the setup's own checks (the CRD)
-// still apply.
-func SetupComponentBlock(c *kube.Client, fc FeatureComponent) *types.ComponentBlock {
-	r, err := rhoai.ReadFirstDSC(c)
+// ErrorCodePrerequisitesUnknown: whether a setup's prerequisites are met
+// could not be read, so it was refused before any change (fail closed).
+const ErrorCodePrerequisitesUnknown = "prerequisites_unknown"
+
+// SetupComponentBlock reads the DataScienceCluster for a setup: why the
+// feature's component keeps it from running, with its errorCode
+// ("prerequisites"), or "" when it may run.
+//
+// The DataScienceCluster is a cluster fact, read with the facts client
+// (c.Facts(), the ServiceAccount's) through ReadFirstDSC, which tries the
+// served versions in turn (rhoai.ListServed). It moves on to the next
+// version only when a version is not served (404) or its objects cannot be
+// converted: HTTP 500, or 429 "storage is (re)initializing", whose message
+// names the conversion webhook (rhoai.IsConversionWebhookError; the 429's
+// Retry-After is not waited for). So RHOAI 3.6's v3 next to an older
+// operator blocks nothing on its own. Any other error at a version (a
+// generic 500, 403, a network error) stops the read, as does a conversion
+// failure at every version; the setup is then refused with
+// ErrorCodePrerequisitesUnknown: whether the component is on is unknown,
+// and a CR of a component that is off is created and never starts. The
+// reason and the log give the read's HTTP status and a fixed category, not
+// its text (the ServiceAccount's error may name what a user does not see).
+func SetupComponentBlock(c *kube.Client, fc FeatureComponent) (reason, errorCode string) {
+	r, err := rhoai.ReadFirstDSC(c.Facts())
 	if err != nil {
-		slog.Debug("cannot read the DataScienceCluster for a setup check", "feature", fc.Feature, "error", err)
-		return nil
+		kube.LogFactReadFailure("cannot read the DataScienceCluster for a setup check; the setup is refused", "DataScienceCluster", err, "feature", fc.Feature)
+		return fmt.Sprintf("Cannot read whether %s is turned on: the DataScienceCluster could not be read (%s).", fc.Feature, kube.FactReadProblem(err)), ErrorCodePrerequisitesUnknown
 	}
-	return ComponentBlock(r, fc)
+	if b := ComponentBlock(r, fc); b != nil {
+		return b.Reason, "prerequisites"
+	}
+	return "", ""
+}
+
+// SetupBlockActivity is the activity log's word for a SetupComponentBlock
+// refusal with errorCode.
+func SetupBlockActivity(errorCode string) string {
+	if errorCode == ErrorCodePrerequisitesUnknown {
+		return "component state unknown"
+	}
+	return "component not managed"
 }

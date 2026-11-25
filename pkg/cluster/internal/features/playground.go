@@ -948,19 +948,19 @@ func apiProblem(err error) (string, string) {
 // PlaygroundAPI is the API for a request, or why it cannot be used. It
 // calls with the client's own token: the user's for a change's client
 // (NewUserClient), which allows genAIUserCallAllowed, the ServiceAccount's
-// otherwise, which allows only genAICallAllowed.
+// otherwise, which allows only genAICallAllowed. The dashboard's address
+// is a cluster fact, found with the facts client (c.Facts()).
 func PlaygroundAPI(c *kube.Client) (GenAIAPI, string, string) {
-	return playgroundAPIAs(c, c)
+	return playgroundAPIAs(genAIBaseURL(c.Facts()), c)
 }
 
-// playgroundAPIAs is PlaygroundAPI that finds the dashboard with find (the
-// ServiceAccount's client of a user's read: the Dashboard CR and its
-// Route are no user data) and calls it with as's token.
-func playgroundAPIAs(find, as *kube.Client) (GenAIAPI, string, string) {
+// playgroundAPIAs is PlaygroundAPI at base, the dashboard's address found
+// with the ServiceAccount's facts client (the Dashboard CR and its Route
+// are no user data; "" when unknown), calling it with as's token.
+func playgroundAPIAs(base string, as *kube.Client) (GenAIAPI, string, string) {
 	if as.BearerToken() == "" {
 		return GenAIAPI{}, "No token is available to call the dashboard's gen-ai API with.", "no_token"
 	}
-	base := genAIBaseURL(find)
 	if base == "" {
 		return GenAIAPI{}, "The RHOAI dashboard's address is unknown (no Dashboard component reports one), so its gen-ai API cannot be called.", "no_dashboard"
 	}
@@ -1044,7 +1044,7 @@ func GetPlaygroundStatus(sa, u *kube.Client, project string) (*types.PlaygroundS
 	}
 	var wg sync.WaitGroup
 	wg.Go(func() { playgroundClusterParts(sa, st) })
-	api, problem, code := playgroundAPIAs(sa, c)
+	api, problem, code := playgroundAPIAs(genAIBaseURL(sa.Facts()), c)
 	if problem != "" {
 		st.APIProblem, st.APICode = problem, code
 		wg.Wait()
@@ -1328,12 +1328,17 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 		return stop(strings.Replace(msg, "would not show a model there", "would not offer a playground there", 1), code, "project")
 	}
 	var st types.PlaygroundStatus
-	playgroundClusterParts(p.c, &st)
+	// Cluster facts (the component's state, the gen-ai-ui Deployment),
+	// read with the facts client: a project user's own token may read
+	// neither.
+	playgroundClusterParts(p.c.Facts(), &st)
 	if st.Blocked != nil {
 		return stop(st.Blocked.Reason, "component_off", "component off")
 	}
 	if st.OperatorReady == "False" {
-		return stop(fmt.Sprintf("The playground's operator is not ready: the DataScienceCluster reports it not ready (%s). The dashboard cannot create a playground until it is; the Components page shows the details.", kube.FirstNonEmpty(st.OperatorMessage, "no message")), "component_not_ready", "operator not ready")
+		// Not the condition's message: it is the ServiceAccount's read of
+		// the DataScienceCluster, which a project user may not see.
+		return stop("The playground's operator is not ready: the DataScienceCluster reports it not ready. The dashboard cannot create a playground until it is; the Components page shows the details.", "component_not_ready", "operator not ready")
 	}
 	switch st.GenAIUI {
 	case "missing":

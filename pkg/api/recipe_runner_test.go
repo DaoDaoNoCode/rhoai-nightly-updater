@@ -341,6 +341,9 @@ func TestRecipeRun_StepsInOrderHoldingTheLock(t *testing.T) {
 		if bk.ActsAsUser() || bk.TestOptions().Token != want {
 			t.Errorf("step %d: bookkeeper as user %v with token %q, want %q", i, bk.ActsAsUser(), bk.TestOptions().Token, want)
 		}
+		if fc := c.Facts(); fc.ActsAsUser() || !fc.ReadOnly() || fc.TestOptions().Token != want {
+			t.Errorf("step %d: facts client as user %v, read-only %v, token %q, want %q", i, fc.ActsAsUser(), fc.ReadOnly(), fc.TestOptions().Token, want)
+		}
 	}
 	if s1.clients[0].Context() == s2.clients[0].Context() {
 		t.Error("two steps shared one context")

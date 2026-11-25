@@ -88,6 +88,7 @@ func newMREnv(t *testing.T) *mrEnv {
 	editTestClient(&u, func(o *testClientOptions) { o.Token, o.AsUser = fakeUserToken, true })
 	u.SetUsername("alice")
 	u.SetBookkeeping(sa)
+	u.SetFacts(sa)
 	e.u = &u
 	return e
 }
@@ -780,6 +781,7 @@ func TestCleanUp_ModelRegistryThenItsComponent(t *testing.T) {
 		u := *pc.c
 		editTestClient(&u, func(o *testClientOptions) { o.Token, o.AsUser = fakeUserToken, true })
 		u.SetBookkeeping(pc.c)
+		u.SetFacts(pc.c)
 		return pc, &u
 	}
 	req := types.CleanupRequest{ModelRegistry: true, Components: []string{"modelregistry"}}

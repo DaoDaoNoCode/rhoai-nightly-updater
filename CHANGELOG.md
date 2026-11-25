@@ -169,6 +169,17 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Changed
 
+- **Setups refuse when the DataScienceCluster cannot be read.** Setting up a
+  pipeline server or MLflow used to go ahead when the DataScienceCluster
+  could not be read; it now stops before any change with
+  `prerequisites_unknown` ("Blocked: prerequisites could not be checked").
+  A served version whose objects the conversion webhook cannot convert (a
+  500, or a 429 from the watch cache, naming the webhook) is still skipped
+  for the next one; any other error (a plain 500, 403, a network error)
+  blocks, as does a conversion failure at every version. Cluster facts a change needs
+  (RHOAI's namespaces, component states, the control plane, the dashboard's
+  and MLflow's addresses) are read with the ServiceAccount's read-only
+  facts client; the ServiceAccount gains no permission.
 - **No "..." after button labels and progress text.** Buttons and menu
   items that open a dialog read as their action (**Clean up everything**,
   **Turn back**, **Install**, **Delete workbench**), progress and loading

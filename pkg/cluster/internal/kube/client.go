@@ -186,6 +186,13 @@ type Client struct {
 	// signedInUser, when set, is the client of the signed-in user's own
 	// token for a ServiceAccount client (see SetSignedInUser).
 	signedInUser *Client
+	// facts, when set, is the ServiceAccount's client that Facts reads
+	// the cluster facts with (see SetFacts).
+	facts *Client
+	// readOnly: the client sends only GET and HEAD requests (a facts
+	// client, see Facts); any other request fails with ErrFactsReadOnly
+	// before it is sent.
+	readOnly bool
 	// statusRead: the client serves a read request (pkg/api withAuth),
 	// whose pages poll every few seconds, so an expensive read may reuse a
 	// recent answer (argoApplicationsCache). Clients of changes never set
@@ -226,7 +233,7 @@ func (c *Client) SignedInUser() *Client {
 		return nil
 	}
 	u := *c.signedInUser
-	u.ctx, u.signedInUser, u.bookkeeper = c.ctx, nil, c.bookkeeper
+	u.ctx, u.signedInUser, u.bookkeeper, u.facts = c.ctx, nil, c.bookkeeper, c.factsSource()
 	if u.username == "" {
 		u.username = c.username
 	}
@@ -419,8 +426,12 @@ func (c *Client) retryWait(method string, header http.Header, code int, err erro
 	return wait, true
 }
 
-// doOnce sends the request once.
+// doOnce sends the request once. A read-only client (Facts) sends only
+// GET and HEAD: every request goes through here, so nothing else leaves it.
 func (c *Client) doOnce(method, path, contentType string, body []byte, query url.Values) ([]byte, http.Header, int, error) {
+	if c.readOnly && method != http.MethodGet && method != http.MethodHead {
+		return nil, nil, 0, fmt.Errorf("%w (%s %s)", ErrFactsReadOnly, method, path)
+	}
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)

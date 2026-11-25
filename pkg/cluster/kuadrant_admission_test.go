@@ -384,6 +384,7 @@ func TestMaaSSetup_KuadrantCRDReadRefusedForTheUser(t *testing.T) {
 	o := mc.c.TestOptions()
 	user := newTestClient(testClientOptions{BaseURL: o.BaseURL, Token: fakeUserToken, HTTPClient: o.HTTPClient, Ctx: context.Background(), AsUser: true})
 	user.SetBookkeeping(mc.c)
+	user.SetFacts(mc.c)
 	failKuadrantCRDRead(mc.f)
 	res, _ := runMaaSOp(t, user, types.MaaSRequest{Action: "setup", Database: tCNPG})
 	if res.Success || res.ErrorCode != "forbidden" || !strings.Contains(res.Message, "Cannot read CRD kuadrants.kuadrant.io") || strings.Contains(res.Message, "ServiceAccount") {

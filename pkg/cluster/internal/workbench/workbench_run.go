@@ -128,9 +128,12 @@ func notOurs(project string) string {
 func (r *run) setup(project string) (*types.OperationResponse, error) {
 	c := r.c
 	r.step("check", "running", fmt.Sprintf("Checking what a workbench in %s needs", project))
-	dsc, err := rhoai.ReadFirstDSC(c)
+	// A cluster fact, read with the facts client (the ServiceAccount's):
+	// a project user's own token may not read the DataScienceCluster.
+	dsc, err := rhoai.ReadFirstDSC(c.Facts())
 	if err != nil {
-		return r.fail("check", fmt.Sprintf("Cannot read the DataScienceCluster: %v. Nothing was changed.", err), kube.ErrorCodeFromK8sErr(err), "dsc read failed")
+		kube.LogFactReadFailure("cannot read the DataScienceCluster for a workbench setup", "DataScienceCluster", err, "project", project)
+		return r.fail("check", fmt.Sprintf("Cannot read the DataScienceCluster (%s). Nothing was changed.", kube.FactReadProblem(err)), kube.ErrorCodeFromK8sErr(err), "dsc read failed")
 	}
 	if b := envkit.ComponentBlock(dsc, Component); b != nil {
 		return r.fail("check", b.Reason+" Nothing was changed.", "prerequisites", "component off")
@@ -388,7 +391,7 @@ func (r *run) start(project string) (*types.OperationResponse, error) {
 		return r.fail("workbench", fmt.Sprintf("Cannot read Secret %s in %s: %v. Nothing was changed.", PipelineSecret, project, err), kube.ErrorCodeFromK8sErr(err), "read failed")
 	}
 	mlflow := false
-	if dsc, err := rhoai.ReadFirstDSC(r.c); err == nil {
+	if dsc, err := rhoai.ReadFirstDSC(r.c.Facts()); err == nil {
 		mlflow = componentOn(dsc, "mlflowoperator")
 	}
 	gone, err := profileGone(r.c, nb)
@@ -439,7 +442,7 @@ func (r *run) teardown(project string, deleteStorage bool) (*types.OperationResp
 	case found:
 		// Notebook finalizers are cleared solely by odh-notebook-controller;
 		// deleting while that component is off would hang indefinitely.
-		if dsc, err := rhoai.ReadFirstDSC(c); err == nil {
+		if dsc, err := rhoai.ReadFirstDSC(c.Facts()); err == nil {
 			if b := envkit.ComponentBlock(dsc, Component); b != nil {
 				return r.fail("workbench", b.Reason+" The workbench's controller removes its finalizers, so it cannot be deleted now. Nothing was deleted.", "prerequisites", "component off")
 			}

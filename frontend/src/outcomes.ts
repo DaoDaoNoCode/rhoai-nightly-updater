@@ -18,6 +18,7 @@ export function outcomeVariant(res: Pick<OperationResponse, "success" | "errorCo
     case "not_managed":
     case "conflict":
     case "prerequisites":
+    case "prerequisites_unknown":
     case "partial_failure":
     case "cluster_busy":
     case "lock_unavailable":
@@ -40,6 +41,7 @@ export function outcomeTitle(res: Pick<OperationResponse, "success" | "errorCode
     case "not_managed": return "Not managed by this tool";
     case "conflict": return "The object changed in the meantime";
     case "prerequisites": return "Blocked: prerequisites not met";
+    case "prerequisites_unknown": return "Blocked: prerequisites could not be checked";
     case "partial_failure": return "Partly done";
     case "cluster_busy": return "Cluster busy";
     case "lock_lost": return "Stopped: another updater pod took over";

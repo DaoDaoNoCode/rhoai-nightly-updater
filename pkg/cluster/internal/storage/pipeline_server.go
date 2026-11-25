@@ -386,9 +386,9 @@ func setupPipelineServer(c *kube.Client, project string, recreate bool, confirme
 	}
 
 	// A component that is not Managed leaves its CRD behind: the DSPA
-	// would be created and never start.
-	if block := envkit.SetupComponentBlock(c, envkit.PipelinesComponent); block != nil {
-		return fail(block.Reason+" Nothing was changed.", "prerequisites", "component not managed")
+	// would be created and never start. Unknown is refused too.
+	if reason, code := envkit.SetupComponentBlock(c, envkit.PipelinesComponent); reason != "" {
+		return fail(reason+" Nothing was changed.", code, envkit.SetupBlockActivity(code))
 	}
 	storage, storageEP, _ := S3StatusAndEndpoints(c)
 	if !storage.Deployed || !storage.ManagedByTool || !storage.Ready {

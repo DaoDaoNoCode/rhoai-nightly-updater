@@ -178,6 +178,10 @@ func mutationAuth(asUser bool, fn func(c *cluster.Client, w http.ResponseWriter,
 		}
 		client.SetUsername(username)
 		client.SetBookkeeping(bookkeeper)
+		// The cluster facts a change reads that a project user's token
+		// cannot (where RHOAI runs, whether a component is on): read-only,
+		// with the ServiceAccount (cluster.Client.Facts).
+		client.SetFacts(bookkeeper)
 
 		sw := &statusWriter{ResponseWriter: w, path: r.URL.Path, user: username, bookkeeper: bookkeeper, cancelOp: cancelOp,
 			// A recipe run outlives the request: each of its steps gets a
