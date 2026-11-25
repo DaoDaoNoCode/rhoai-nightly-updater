@@ -299,6 +299,18 @@ func GetStatus(sa, u *kube.Client, project string) (*types.KueueStatus, error) {
 	note := func(what string, err error) {
 		problems = append(problems, fmt.Sprintf("Cannot read %s: %v.", what, err))
 	}
+	// The project read first: when it is gone or was made again, the
+	// record's project entries no longer describe it (projectEntriesValid),
+	// and what has the tool's names there is shown as someone else's.
+	var ns Namespace
+	var nsFound bool
+	var nsErr error
+	if st.Project != "" {
+		ns, nsFound, nsErr = readNamespace(u, st.Project)
+		if nsErr == nil && rec.Project != "" && rec.ProjectUID != "" && !rec.projectEntriesValid(ns, nsFound) {
+			rec.forgetProject()
+		}
+	}
 	// Queue objects are fetched only after Kueue's API is served.
 	if st.Instance.V1beta2 {
 		rf, found, err := readFlavor(u)
@@ -338,11 +350,10 @@ func GetStatus(sa, u *kube.Client, project string) (*types.KueueStatus, error) {
 		}
 	}
 	if st.Project != "" {
-		ns, found, err := readNamespace(u, st.Project)
 		switch {
-		case err != nil:
-			note("project "+st.Project, err)
-		case found:
+		case nsErr != nil:
+			note("project "+st.Project, nsErr)
+		case nsFound:
 			st.Label = &types.KueueLabel{Present: ns.Metadata.Labels[ProjectLabel] == "true", AddedByTool: rec.LabelAdded && rec.Project == st.Project && ns.Metadata.UID == rec.ProjectUID}
 		}
 		var workloads []Workload

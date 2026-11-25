@@ -502,6 +502,14 @@ func (r *run) deleteSampleOnly(kind string) (*types.OperationResponse, error) {
 	if rec.Project == "" || rec.SampleUID(kind) == "" {
 		return r.fail("samples", fmt.Sprintf("This tool has no %s to delete.", sampleText(kind)), "validation", "no sample")
 	}
+	rec, replaced, msg, code := r.forgetReplacedProject(rec)
+	if msg != "" {
+		return r.fail("samples", msg+" Nothing was deleted.", code, "project check failed")
+	}
+	if replaced {
+		r.step("samples", "success", fmt.Sprintf("%s went with project %s, which was deleted or made again since this tool's setup.", sampleText(kind), rec.Project))
+		return r.done(fmt.Sprintf("%s in %s is gone already. Nothing was deleted.", sampleText(kind), rec.Project))
+	}
 	if msg, code := r.deleteSample(rec, kind); msg != "" {
 		return r.fail("samples", msg, code, "sample delete failed")
 	}
@@ -534,7 +542,7 @@ func queueUsers(c *kube.Client, o toolObject, rec Record) ([]string, error) {
 			return nil, err
 		}
 		for _, q := range qs {
-			ours := q.Metadata.Namespace == rec.Project && q.Metadata.Name == LocalQueueName
+			ours := q.Metadata.Namespace == rec.Project && q.Metadata.Name == LocalQueueName && rec.LocalQueueUID != "" && q.Metadata.UID == rec.LocalQueueUID
 			if q.Spec.ClusterQueue == ClusterQueueName && !ours {
 				users = append(users, "LocalQueue "+q.Metadata.Namespace+"/"+q.Metadata.Name)
 			}
@@ -576,6 +584,17 @@ func (r *run) teardown() (*types.OperationResponse, error) {
 		}
 		r.step("samples", "success", "This tool has set up nothing.")
 		return r.done("This tool has no distributed workloads set up; nothing was deleted.")
+	}
+	// A project deleted (and maybe made again) since setup took the
+	// recorded LocalQueue, samples and label with it: their entries are
+	// cleared first, so Clean up skips them and goes on to the cluster-wide
+	// queues and the opt-in.
+	rec, replaced, problem, code := r.forgetReplacedProject(rec)
+	if problem != "" {
+		return r.fail("samples", problem+" Nothing was deleted.", code, "project check failed")
+	}
+	if replaced {
+		r.logs = append(r.logs, fmt.Sprintf("Project %s was deleted or made again since this tool's setup; its LocalQueue, samples and label went with it.", rec.Project))
 	}
 	for _, kind := range []string{SampleRayCluster, SampleRayJob} {
 		if rec.Project == "" || rec.SampleUID(kind) == "" {
@@ -851,6 +870,29 @@ func (r *run) optIn() (*types.OperationResponse, error) {
 	return r.done("The dashboard's Kueue opt-in is on.")
 }
 
+// forgetReplacedProject reads rec.Project and, when rec's project entries
+// are no longer valid (projectEntriesValid), clears them and stores the
+// record (forgetProject). It returns the record to go on with, whether it
+// cleared them, and on a failed read or write why, and an error code, with
+// nothing changed (fail closed).
+func (r *run) forgetReplacedProject(rec Record) (Record, bool, string, string) {
+	if rec.Project == "" || rec.ProjectUID == "" {
+		return rec, false, "", ""
+	}
+	ns, found, err := readNamespace(r.c, rec.Project)
+	if err != nil {
+		return rec, false, fmt.Sprintf("Cannot read project %s: %v.", rec.Project, err), codeOf(err)
+	}
+	if rec.projectEntriesValid(ns, found) {
+		return rec, false, "", ""
+	}
+	stored, err := updateRecord(r.c, func(e *Record) { e.forgetProject() })
+	if err != nil {
+		return rec, false, err.Error(), codeOf(err)
+	}
+	return stored, true, "", ""
+}
+
 // liveSetupProblem checks, right before the opt-in changes the dashboard,
 // that the recorded setup is still there as recorded: Kueue ready, the
 // project the recorded one (its UID) with the label, the ClusterQueue and
@@ -869,7 +911,7 @@ func (r *run) liveSetupProblem(rec Record) (string, string) {
 	switch {
 	case err != nil:
 		return fmt.Sprintf("Cannot read project %s: %v.", rec.Project, err), codeOf(err)
-	case !found || ns.Metadata.UID != rec.ProjectUID || ns.Metadata.Terminating():
+	case !rec.projectEntriesValid(ns, found) || ns.Metadata.Terminating():
 		return fmt.Sprintf("Project %s is gone, being deleted or was made again since this tool's setup. Set up again.", rec.Project), "validation"
 	case ns.Metadata.Labels[ProjectLabel] != "true":
 		return fmt.Sprintf("Project %s no longer has the label %s=true. Set up again first.", rec.Project, ProjectLabel), "validation"

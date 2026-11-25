@@ -82,6 +82,17 @@ func (r *Record) forgetProject() {
 	r.LocalQueueUID, r.RayClusterUID, r.RayJobUID = "", "", ""
 }
 
+// projectEntriesValid reports whether r's project entries (ProjectUID, the
+// label, the LocalQueue and sample UIDs) still describe the project the
+// caller read (ns, found): it is there with the UID r.ProjectUID. A
+// namespace being deleted with that UID still counts. When it is gone or
+// was made again, the entries are cleared (forgetProject): what has the
+// tool's names in a new project is someone else's. A caller that cannot
+// read the namespace stops with nothing changed.
+func (r Record) projectEntriesValid(ns Namespace, found bool) bool {
+	return found && ns.Metadata.UID == r.ProjectUID
+}
+
 func (r *Record) setSampleUID(kind, uid string) {
 	if kind == SampleRayJob {
 		r.RayJobUID = uid
