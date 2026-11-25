@@ -35,8 +35,8 @@ export const KUEUE_DOCS = "https://docs.redhat.com/en/documentation/red_hat_open
 
 const SAMPLE_TITLES: Record<KueueSample["kind"], string> = { raycluster: "RayCluster sample", rayjob: "RayJob sample" };
 const SAMPLE_WHERE: Record<KueueSample["kind"], string> = {
-  raycluster: "Shows on the dashboard's Distributed workloads page (Observe & monitor, Workload metrics), with its CPU and memory use.",
-  rayjob: "Shows as a row on the dashboard's Observe & monitor, Infrastructure, Workloads tab (and its Workload on the Distributed workloads page).",
+  raycluster: "Shows on the dashboard's Workload metrics page (Observe & monitor), with its CPU and memory use.",
+  rayjob: "Shows as a row on the dashboard's Observe & monitor, Infrastructure, Workloads tab (and its Workload on the Workload metrics page).",
 };
 
 /** User-facing explanation beside the Ray image field for why the default reference is chosen. */
@@ -217,7 +217,7 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
       {setUp && (href || infra) && (
         <StackItem>
           <WhatNext id="kueue-next" items={[
-            ...(href ? [<><ExternalLink href={href} isInline>Open Distributed workloads in the dashboard</ExternalLink>: the RayCluster sample&apos;s status, quota use and metrics.</>] : []),
+            ...(href ? [<><ExternalLink href={href} isInline>Open Workload metrics in the dashboard</ExternalLink>: the RayCluster sample&apos;s status, quota use and metrics.</>] : []),
             ...(infra ? [<><ExternalLink href={infra} isInline>Open Observe &amp; monitor, Infrastructure</ExternalLink>: the RayJob sample on its Workloads tab.</>] : []),
             <>Send your own Ray or training jobs to the queue with the label <code>kueue.x-k8s.io/queue-name: {KUEUE_LOCAL_QUEUE}</code>.</>,
           ]} />
@@ -308,7 +308,7 @@ export function kueueConfirm(pending: Pending, k: KueueStatus | null, setPending
             )}
             <StackItem>
               <Checkbox id="kueue-raycluster" label="RayCluster sample" isChecked={p.rayCluster} onChange={(_e, v) => setPending({ ...p, rayCluster: v })}
-                description="Shows on the dashboard's Distributed workloads page, with usage metrics." />
+                description="Shows on the dashboard's Workload metrics page (Observe & monitor), with usage metrics." />
             </StackItem>
             <StackItem>
               <Checkbox id="kueue-rayjob" label="RayJob sample" isChecked={p.rayJob} onChange={(_e, v) => setPending({ ...p, rayJob: v })}

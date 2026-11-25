@@ -121,7 +121,7 @@ describe("Distributed workloads tab", () => {
     expect(screen.getByText(/added by this tool/)).toBeInTheDocument();
     expect(screen.getByText("Admitted")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Turn off..." })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Open Distributed workloads in the dashboard/ })).toHaveAttribute("href", "https://rh-ai.apps.example.com/observe-monitor/workload-metrics/workload-status/dev");
+    expect(screen.getByRole("link", { name: /Open Workload metrics in the dashboard/ })).toHaveAttribute("href", "https://rh-ai.apps.example.com/observe-monitor/workload-metrics/workload-status/dev");
     fireEvent.click(screen.getByRole("button", { name: "Clean up distributed workloads..." }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByRole("checkbox", { name: "Distributed workloads setup" })).toBeChecked();

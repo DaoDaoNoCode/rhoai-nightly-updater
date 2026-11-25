@@ -37,7 +37,7 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   samples (image editable, default `quay.io/modh/ray:2.47.1-py311-cu121`;
   sized as the CodeFlare SDK's defaults: head 1 CPU / 5 GiB requested, up to
   2 CPUs / 8 GiB, one worker 1 CPU / 3 GiB, up to 6 GiB) for the dashboard's
-  Distributed workloads and Infrastructure pages. An
+  Workload metrics and Infrastructure pages (Observe & monitor). An
   opt-in, with its own confirmation, sets the dashboard's `disableKueue` to
   false and adds a Queue hardware profile. Refused when Kueue does not
   serve `v1beta2`, runs outside OLM, or has `labelPolicy: None`. Clean up
@@ -314,6 +314,12 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **The Distributed workloads tab names the dashboard's pages as the
+  dashboard does.** Its texts sent you to the dashboard's "Distributed
+  workloads" page; on RHOAI 3.6 and 3.7 that page is **Workload metrics**
+  under **Observe & monitor** (RayJobs also show on **Infrastructure**,
+  Workloads tab). The tab, its link, the Overview, the recipe form and Clean
+  up now say so.
 - **A new workbench no longer gets a deprecated image.** RHOAI 3.7 marks
   most workbench images deprecated (the dashboard labels them Deprecated:
   they get no new versions), including Jupyter Minimal, whose tag still

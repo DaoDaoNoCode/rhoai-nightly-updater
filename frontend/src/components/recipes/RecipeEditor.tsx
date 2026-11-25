@@ -307,7 +307,7 @@ export const RecipeEditor: React.FC<{
                       </FieldHelperText>
                     )}
                     <Checkbox id="recipe-kueue-raycluster" label="RayCluster sample" isChecked={form.kueueRayCluster} onChange={(_e, v) => set("kueueRayCluster", v)}
-                      description="Added by the Distributed workloads step. Shows on the dashboard's Distributed workloads page." />
+                      description="Added by the Distributed workloads step. Shows on the dashboard's Workload metrics page (Observe & monitor)." />
                     <Checkbox id="recipe-kueue-rayjob" label="RayJob sample" isChecked={form.kueueRayJob} onChange={(_e, v) => set("kueueRayJob", v)}
                       description="Added by the Distributed workloads step. Runs once, then finishes." />
                     {(form.kueueRayCluster || form.kueueRayJob) && (
