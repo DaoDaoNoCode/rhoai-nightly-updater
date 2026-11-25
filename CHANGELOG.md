@@ -318,9 +318,9 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   was cleaned up, the prerequisites still read "kueue Unmanaged (turned on
   by this tool)", but only Clean up everything could turn it back. The
   Kueue part now offers **Turn back...** while this tool still owns the
-  setting and no ClusterQueue or LocalQueue is left on the cluster (the
-  status now lists them), with Clean up's confirmation words and Clean up's
-  own request and checks.
+  setting, with Clean up's confirmation words and Clean up's own request and
+  checks. While a ClusterQueue or LocalQueue is on the cluster (the status
+  now lists them), or they cannot be read, it is off and says why.
 - **A recipe's Clean up says everything it leaves in place.** "Left in
   place" named only the S3 storage and MLflow. It now also lists the
   inference gateway the run's model used (Clean up everything deletes it),
@@ -328,15 +328,18 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   Clean up removes: Connectivity Link with its Kuadrant instance (and
   Authorino TLS with MaaS), the CloudNativePG operator (a MaaS CloudNativePG
   database), cert-manager (models, distributed workloads), the Red Hat
-  build of Kueue, and GatewayClass `openshift-default` (MaaS). Only the
-  pieces of features whose steps finished are listed.
+  build of Kueue, and GatewayClass `openshift-default` (MaaS). Only what the
+  run's steps installed or used is listed: the operators once its
+  prerequisites step finished (also when a later step failed), MaaS's pieces
+  once its MaaS step did, the inference gateway once its model step did.
 - **The app no longer sends you to files of its repository.** The recipe
   review's playground warning ended "SECURITY.md (Which token is used where)
   says where your sign-in goes" (dropped), and the gitops profile's
-  messages, banners and Diagnostics fix named `docs/GITOPS.md`: they now link
-  that guide on the public GitHub mirror, at the section they mean. The
-  missing image mirror points to the Status page's One-time cluster setup
-  instead of `docs/QUICKSTART.md`.
+  messages, banners and Diagnostics fix named `docs/GITOPS.md`, the upgrade
+  banners `docs/UPGRADING.md`, and the gitops profile's missing image mirror
+  `docs/QUICKSTART.md`: they now link those guides on the public GitHub
+  mirror, at the section they mean, of the running release (its tag; `main`
+  for a development build).
 - **The Distributed workloads tab names the dashboard's pages as the
   dashboard does.** Its texts sent you to the dashboard's "Distributed
   workloads" page; on RHOAI 3.6 and 3.7 that page is **Workload metrics**
@@ -349,9 +352,11 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   carries RHOAI's `default-image` mark, so the Workbench tab and a recipe
   set workbenches up on it. Set up now picks RHOAI's own images that are not
   deprecated first (on 3.7 Jupyter | CPU, the first in the dashboard's image
-  list), then custom images, and a deprecated one only when every image is:
+  list), then custom images (an admin's custom image is not known to work as
+  a workbench), and a deprecated one only when no current image is ready:
   the Workbench tab labels it Deprecated, and the result says why. RHOAI 3.6
-  keeps Jupyter Minimal. A workbench already set up keeps its image.
+  keeps Jupyter Minimal. A workbench already set up keeps its image; the tab
+  labels it Deprecated when its image is, as the dashboard's table does.
 - **A recipe's Clean up offers to turn the DataScienceCluster's `kueue`
   back.** Clean up what the recipe set up kept a component only while it
   read `Managed`, so `kueue`, which a run turns on as `Unmanaged`, was never

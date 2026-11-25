@@ -588,6 +588,10 @@ export const scenarios = {
   "env-workbench-no-profile": (w) => { w.workbench.noProfile = true; },
   // Every workbench image the cluster offers is deprecated: Set up uses the default one and labels it.
   "env-workbench-deprecated-image": (w) => { w.workbench.plan = { ...F.workbenchPlan, imageTag: "3.7", imageDeprecated: true }; },
+  // A workbench this tool set up before its image was deprecated: it keeps it, labelled as the dashboard does.
+  "env-workbench-running-deprecated": (w) => { w.workbench.items = [{ ...F.workbenchItem("dev-project", "running"), imageDeprecated: true }]; },
+  // Kueue turned on by this tool, its setup gone, someone else's queues on the cluster: Turn back is off and says why.
+  "env-kueue-turn-back-in-use": (w) => { w.kueue = { ...F.kueueWorld("none"), queues: ["ClusterQueue team-queue", "LocalQueue team-a/team-queue"] }; },
   "env-workbench-storage-used": (w) => { const it = F.workbenchItem("dev-project", "running"); w.workbench.items = [{ ...it, storage: { ...it.storage, usedBy: ["workbench my-wb"] } }]; },
   "env-workbench-kept-storage-used": (w) => { scenarios["env-workbench-kept-storage"](w); w.workbench.items[0].storage = { ...w.workbench.items[0].storage, usedBy: ["workbench my-wb"] }; },
   "env-workbench-kept-storage": (w) => { const { state: _s, url: _u, image: _i, hardwareProfile: _h, cpu: _c, memory: _m, connectionAttached: _a, ...kept } = F.workbenchItem("dev-project", "stopped"); w.workbench.items = [{ ...kept, deployed: false, ready: false }]; },
