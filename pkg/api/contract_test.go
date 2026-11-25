@@ -68,6 +68,7 @@ func TestFrontendContract(t *testing.T) {
 		{"model-registry-admin.json", "/api/resources/model-registry", "user:admin", HandleModelRegistryStatus, "", nil},
 		// Admin-only answers the Recipes page reads.
 		{"recipe-run-admin.json", "/api/recipes/run", "user:admin", HandleRecipeRunStatus, "", nil},
+		{"recipe-run-stopping-admin.json", "/api/recipes/run", "user:admin", HandleRecipeRunStatus, "", stubStoppingRecipeRun},
 		{"recipe-run-ended-admin.json", "/api/recipes/run", "user:admin", HandleRecipeRunStatus, "", stubEndedRecipeRun},
 		{"recipe-run-features-admin.json", "/api/recipes/run", "user:admin", HandleRecipeRunStatus, "", stubFeaturesRecipeRun},
 		// The Workbench tab's status (admin-only, read with the admin's token).
@@ -316,6 +317,23 @@ func stubRecipeContract(t *testing.T, started time.Time) {
 
 // stubEndedRecipeRun is a run that failed after a resume: what its
 // attempts set up is the run's, and the answer carries its Clean up.
+// stubStoppingRecipeRun is the run of recipe-run-admin.json (the case
+// before, whose stub it wraps) without its failed step, recorded by its
+// pod with ending stopped: Stop was asked for there.
+func stubStoppingRecipeRun(t *testing.T) {
+	t.Helper()
+	read := readRecipeRun
+	readRecipeRun = func(c *cluster.Client) (*types.RecipeRun, error) {
+		run, err := read(c)
+		if run != nil {
+			run.Ending = "stopped"
+			s := &run.Steps[2]
+			s.Status, s.Message, s.ErrorCode = types.RecipeStepSuccess, "Project recipe-dev created.", ""
+		}
+		return run, err
+	}
+}
+
 func stubEndedRecipeRun(t *testing.T) {
 	t.Helper()
 	rcp, _ := cluster.ValidateRecipe([]byte(testRecipe))

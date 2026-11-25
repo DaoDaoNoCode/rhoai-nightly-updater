@@ -2197,6 +2197,9 @@ export interface RecipeRunStep {
   created?: boolean;
 }
 
+/** Why a running run starts no other step (pkg/types RecipeRunStatus Ending); "internal": the runner broke. */
+export type RecipeRunEnding = "failed" | "stopped" | "restart" | "gate" | "timeout" | "lock_lost" | "internal";
+
 /** The record of the last recipe run (pkg/types RecipeRun). */
 export interface RecipeRun {
   id: string;
@@ -2212,6 +2215,8 @@ export interface RecipeRun {
   stopReason?: string;
   /** sign_in_again, session_expired, forbidden, lock_lost, stopped, restart, timeout, internal, or the failed step's. */
   errorCode?: string;
+  /** While the run runs: why it starts no other step, as its pod recorded it (the status's ending is what to show). */
+  ending?: RecipeRunEnding;
   recipe: EnvironmentRecipe;
   pinned?: RecipePinnedBuild;
   /** The run's project; owned when the recipe created it. */
@@ -2244,7 +2249,7 @@ export interface RecipeRunStatus {
   /** Each running step's latest progress, by step ID, while the run runs in the answering updater pod (several steps run at once). */
   progress?: Record<string, { step: string; status: string; message: string }>;
   /** While the run runs: it starts no other step and ends once the running ones finished, and why ("internal": the runner broke). Of a run in another pod, what that pod recorded. */
-  ending?: "failed" | "stopped" | "restart" | "gate" | "timeout" | "lock_lost" | "internal";
+  ending?: RecipeRunEnding;
   /** The clean-up request for what the run created, once it is not running and created anything. */
   cleanup?: CleanupRequest;
   /** Removing the offered distributed workloads setup also turns the dashboard's Kueue setting back, which the run turned on. */

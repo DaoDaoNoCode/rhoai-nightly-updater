@@ -217,6 +217,18 @@ func (rr *recipeRunner) updateEnding(opID string, fn func(run *types.RecipeRun) 
 	return copyRecipeRun(rr.run)
 }
 
+// end changes opID's run with its outcome and, under the same lock, ends
+// its running, and returns a copy.
+func (rr *recipeRunner) end(opID string, fn func(run *types.RecipeRun)) *types.RecipeRun {
+	rr.mu.Lock()
+	defer rr.mu.Unlock()
+	fn(rr.run)
+	if rr.opID == opID {
+		rr.running = false
+	}
+	return copyRecipeRun(rr.run)
+}
+
 func copyRecipeRun(run *types.RecipeRun) *types.RecipeRun {
 	cp := *run
 	cp.Steps = append([]types.RecipeRunStep(nil), run.Steps...)
@@ -614,15 +626,25 @@ func (x *recipeExec) takeEnd(l *recipeLoop, r stepResult) {
 
 // recoverLoop ends a run whose loop panicked: the running steps end (each
 // by its deadline) and what they changed in the State is kept; none starts.
-// Every step the record shows running (also one marked running for a start
-// that never happened) counts as failed: the run's bookkeeping broke. A
-// second panic here is logged, never let through: the run still ends.
+// A step marked running for a start that never happened is pending again
+// (Resume runs it). A step the record still shows running once the
+// running ones ended (its end was lost in the panic) counts as failed: the
+// run's bookkeeping broke. A second panic here is logged, never let
+// through: the run still ends.
 func (x *recipeExec) recoverLoop(l *recipeLoop, results chan stepResult) {
 	defer recoverRun("recipe recovery", func() {})
-	// The run ends: the status and the record say so while the running
-	// steps end, which can take their whole budget. The write's own panic
-	// does not keep the steps from being waited for.
-	recipes.setEnding(x.opID, endingInternal)
+	// The run ends: the status and the record say so, with only the steps
+	// that run shown running, while those end, which can take their whole
+	// budget. The write's own panic does not keep the steps from being
+	// waited for.
+	recipes.updateEnding(x.opID, func(run *types.RecipeRun) string {
+		for i := range run.Steps {
+			if s := &run.Steps[i]; s.Status == types.RecipeStepRunning && !l.started[i] {
+				s.Status, s.StartedAt, s.FinishedAt, s.Message, s.ErrorCode = types.RecipeStepPending, "", "", "", ""
+			}
+		}
+		return endingInternal
+	})
 	func() {
 		defer recoverRun("recipe recovery record", func() {})
 		x.save(x.snapshot())
@@ -638,6 +660,7 @@ func (x *recipeExec) recoverLoop(l *recipeLoop, results chan stepResult) {
 		for _, r := range drained {
 			s := &run.Steps[r.i]
 			s.Status, s.Message, s.ErrorCode = r.status, truncateText(r.msg, maxOperationMessageBytes), r.code
+			s.FinishedAt = time.Now().UTC().Format(time.RFC3339)
 		}
 		for i := range run.Steps {
 			if s := &run.Steps[i]; s.Status == types.RecipeStepRunning {
@@ -973,7 +996,12 @@ func (x *recipeExec) activity(action, detail string, success bool) {
 // marker clear, which is longer, bounds all three), then the run's
 // mutation slot is given back.
 func (x *recipeExec) finish(end recipeEnd) {
-	run := recipes.update(func(run *types.RecipeRun) {
+	// The outcome and not running any more in one change, so no status
+	// read sees a running run that ended. Before the lock is free: a run
+	// started as soon as it is (also while this one's bookkeeping still
+	// runs) owns the runner's state from then on, and nothing below
+	// touches it.
+	run := recipes.end(x.opID, func(run *types.RecipeRun) {
 		run.State, run.StopReason, run.ErrorCode, run.Ending = end.state, end.reason, end.code, ""
 		run.FinishedAt = time.Now().UTC().Format(time.RFC3339)
 	})
@@ -986,14 +1014,6 @@ func (x *recipeExec) finish(end recipeEnd) {
 	var wg sync.WaitGroup
 	wg.Go(func() { x.save(run) })
 	wg.Go(func() { x.activity("recipe", end.state+": "+end.reason, end.state == types.RecipeRunSucceeded) })
-	// Not running any more before the lock is free: a run started as soon
-	// as it is (also while this one's bookkeeping still runs) owns the
-	// runner's state from then on, and nothing below touches it.
-	recipes.mu.Lock()
-	if recipes.opID == x.opID {
-		recipes.running = false
-	}
-	recipes.mu.Unlock()
 	releaseClusterMutationLock()
 	wg.Wait()
 	mutations.end()

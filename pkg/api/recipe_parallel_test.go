@@ -306,6 +306,31 @@ func TestRecipeRun_StopShowsItsEndingWithTheNextWrite(t *testing.T) {
 	assertReleased(t, rec)
 }
 
+// The run's end shows at once as not running: a status read during the
+// last record write (which runs after the outcome is set) never sees a
+// running run that ended.
+func TestRecipeRun_EndShowsNotRunningWithItsOutcome(t *testing.T) {
+	f, rec := installRecipeFake(t)
+	a := f.addStep("a")
+	a.result = &types.OperationResponse{Success: false, Message: "a broke", ErrorCode: "timeout"}
+	close(a.release)
+	origSave := saveRecipeRun
+	var ended []string
+	saveRecipeRun = func(cl *cluster.Client, run *types.RecipeRun, replace bool) error {
+		if run.State != types.RecipeRunRunning {
+			st := recipes.status()
+			ended = append(ended, fmt.Sprintf("running %v, state %s, ending %q", st.Running, st.Run.State, st.Ending))
+		}
+		return origSave(cl, run, replace)
+	}
+	_, done := startRun(t)
+	waitDone(t, done)
+	if want := []string{`running false, state failed, ending ""`}; !slices.Equal(ended, want) {
+		t.Errorf("status during the last write %q, want %q", ended, want)
+	}
+	assertReleased(t, rec)
+}
+
 // Stop while two steps run, and the only step left waits for the slower
 // one: when the faster ends nothing may start yet, but the write of its
 // end already shows ending stopped (also in the record), and the run
@@ -699,10 +724,10 @@ func TestRecipeRun_StopDuringTheStartWrite(t *testing.T) {
 
 // A panic of the loop while it starts a batch: the running step ends and
 // keeps its outcome and its State changes, the step marked running for the
-// start that never happened counts as failed, and no step is left running
+// start that never happened is pending again, and no step is left running
 // in the record. While the running step ends, the status and the record
-// say the run ends (internal): the recovery's write is read before b may
-// end.
+// say the run ends (internal) and show only b running: the recovery's
+// write is read before b may end.
 func TestRecipeRun_LoopPanicDuringAStart(t *testing.T) {
 	captureLog(t)
 	f, rec := installRecipeFake(t)
@@ -721,7 +746,7 @@ func TestRecipeRun_LoopPanicDuringAStart(t *testing.T) {
 		if panicked && recovering == "" && run.State == types.RecipeRunRunning {
 			// The recovery's write, before it waits for b.
 			st := recipes.status()
-			recovering = fmt.Sprintf("running %v, ending %q, record ending %q", st.Running, st.Ending, run.Ending)
+			recovering = fmt.Sprintf("running %v, ending %q, %s; record ending %q, %s", st.Running, st.Ending, stepStatuses(st.Run), run.Ending, stepStatuses(run))
 			close(b.release)
 		}
 		return origSave(cl, run, replace)
@@ -732,13 +757,13 @@ func TestRecipeRun_LoopPanicDuringAStart(t *testing.T) {
 	close(a.release)
 	waitDone(t, done)
 	run := f.saved()
-	if run.State != types.RecipeRunFailed || run.ErrorCode != "internal" || stepStatuses(run) != "head=success a=success b=success c=failed" || c.ran {
+	if run.State != types.RecipeRunFailed || run.ErrorCode != "internal" || stepStatuses(run) != "head=success a=success b=success c=pending" || c.ran || run.Steps[3].StartedAt != "" || run.Steps[2].FinishedAt == "" {
 		t.Errorf("record %s: %+v", stepStatuses(run), run)
 	}
 	if strings.Join(run.Components, ",") != "aipipelines,mlflowoperator" {
 		t.Errorf("components %v", run.Components)
 	}
-	if want := `running true, ending "internal", record ending "internal"`; recovering != want {
+	if want := `running true, ending "internal", head=success a=success b=running c=pending; record ending "internal", head=success a=success b=running c=pending`; recovering != want {
 		t.Errorf("while the running step ended: %s, want %s", recovering, want)
 	}
 	assertReleased(t, rec)

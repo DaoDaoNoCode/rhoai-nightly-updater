@@ -1,0 +1,118 @@
+{
+  "ending": "stopped",
+  "pod": "pod-2",
+  "remote": true,
+  "run": {
+    "bootId": "another-process",
+    "components": [
+      "aipipelines"
+    ],
+    "ending": "stopped",
+    "id": "run1",
+    "operationId": "op1",
+    "pinned": {
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "image": "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tag": "rhoai-3.6"
+    },
+    "pod": "pod-2",
+    "project": {
+      "name": "recipe-dev",
+      "owned": true,
+      "uid": "0f3c1d2e-uid"
+    },
+    "recipe": {
+      "apiVersion": "rhoai-nightly-updater/v1alpha1",
+      "kind": "EnvironmentRecipe",
+      "metadata": {
+        "name": "dev"
+      },
+      "spec": {
+        "dashboardDev": {
+          "deploy": "none",
+          "flavor": "rhoai"
+        },
+        "dataScienceCluster": {
+          "create": true
+        },
+        "features": {
+          "maas": {
+            "enabled": false
+          },
+          "mlflow": {
+            "enabled": true
+          },
+          "models": {
+            "enabled": false
+          },
+          "pipelines": {
+            "enabled": true
+          },
+          "playground": {
+            "enabled": false
+          }
+        },
+        "project": {
+          "mode": "create",
+          "name": "recipe-dev"
+        },
+        "rhoai": {
+          "build": "latest",
+          "ifInstalled": "keep"
+        }
+      }
+    },
+    "resumedAt": "2026-11-20T14:14:00Z",
+    "startedAt": "2026-11-20T14:05:00Z",
+    "state": "running",
+    "steps": [
+      {
+        "finishedAt": "2026-11-20T14:14:00Z",
+        "id": "rhoai",
+        "maxSeconds": 900,
+        "message": "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it.",
+        "startedAt": "2026-11-20T14:14:00Z",
+        "status": "skipped",
+        "title": "RHOAI",
+        "typicalSeconds": 420
+      },
+      {
+        "finishedAt": "2026-11-20T14:15:00Z",
+        "id": "dsc",
+        "maxSeconds": 420,
+        "message": "DataScienceCluster created with default components",
+        "startedAt": "2026-11-20T14:14:00Z",
+        "status": "success",
+        "title": "DataScienceCluster",
+        "typicalSeconds": 60
+      },
+      {
+        "finishedAt": "2026-11-20T14:15:00Z",
+        "id": "project",
+        "maxSeconds": 60,
+        "message": "Project recipe-dev created.",
+        "startedAt": "2026-11-20T14:15:00Z",
+        "status": "success",
+        "title": "Project recipe-dev",
+        "typicalSeconds": 10
+      },
+      {
+        "id": "prerequisites",
+        "maxSeconds": 900,
+        "startedAt": "2026-11-20T14:16:00Z",
+        "status": "running",
+        "title": "What the features need",
+        "typicalSeconds": 300
+      },
+      {
+        "id": "s3",
+        "maxSeconds": 300,
+        "status": "pending",
+        "title": "S3 storage",
+        "typicalSeconds": 60
+      }
+    ],
+    "user": "alice"
+  },
+  "running": true
+}

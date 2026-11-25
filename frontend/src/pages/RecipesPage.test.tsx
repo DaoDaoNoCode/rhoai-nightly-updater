@@ -254,6 +254,17 @@ describe("Recipes page", () => {
     await settleApps();
   });
 
+  it("a run on another updater pod that was asked to stop: says so from the recorded ending", async () => {
+    stubApi({ "GET /api/recipes/run": contract.recipeRunStopping() });
+    renderPage(<RecipesPage />, "/recipes", { operation: async () => RECIPE_OPERATION });
+    await settleApps();
+    await settle();
+    expect(screen.getByText(/Running on updater pod pod-2 for/)).toBeInTheDocument();
+    expect(screen.getByText("Stopping as asked")).toBeInTheDocument();
+    expect(screen.getByText(/No other step starts; What the features need finishes first, then the run stops\./)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop after this step" })).toHaveAttribute("aria-disabled", "true");
+  });
+
   it("stop: asks first, then the run says it stops after this step", async () => {
     let status = runStatus({ steps: steps(4, "running") }, { running: true, step: { step: "s3", status: "running", message: "Waiting for SeaweedFS" } });
     const api = stubApi({
