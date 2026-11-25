@@ -201,7 +201,12 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   finish, then the run ends failed, naming the first failed step with its
   message and every other one that failed. Each step keeps its own 15
   minutes. Resume runs every step that did not end well, also for a run
-  recorded by an earlier version.
+  recorded by an earlier version. While a run ends after a failure or
+  Stop, the card says so at once ("Pipeline server failed: ... No other
+  step starts; Models as a Service finishes first, then the run stops").
+  The project step ends only once OpenShift lists the new project among
+  your data science projects (its project list lags by about a second),
+  so the steps that start right after it find it.
   A refusal for any feature (a GitOps-managed DataScienceCluster, an
   operator that cannot be installed, a dry run the API server rejects)
   now stops the step for all of them, before any change (one exception:
