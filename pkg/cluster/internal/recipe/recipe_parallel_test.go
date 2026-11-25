@@ -1,6 +1,7 @@
 package recipe
 
 import (
+	"math/rand/v2"
 	"slices"
 	"testing"
 	"time"
@@ -235,5 +236,36 @@ func TestState_CloneAndMerge(t *testing.T) {
 	run.Merge(base, base.Clone())
 	if run.Exposure != "internal" {
 		t.Errorf("an unchanged copy reset the exposure to %q", run.Exposure)
+	}
+}
+
+// The plan's "at most" holds for the current order: for random recipes
+// (features on or off) and random step durations up to each step's Max,
+// the run as the runner schedules it never takes longer than RunSeconds of
+// the Max figures. List scheduling can in general take longer when steps
+// end sooner; this keeps a future change of the lanes from doing so
+// unnoticed. Seeded, so a failure repeats.
+func TestRunSeconds_MaxBoundsEveryRun(t *testing.T) {
+	rng := rand.New(rand.NewPCG(20261124, 1))
+	for range 3000 {
+		r := everyStepRecipe("")
+		f := &r.Spec.Features
+		f.Pipelines.Enabled, f.Playground.Enabled, f.Workbench.Enabled = rng.IntN(2) == 0, rng.IntN(2) == 0, rng.IntN(2) == 0
+		f.ModelRegistry.Enabled, f.MLflow.Enabled, f.MLflow.Samples = rng.IntN(2) == 0, rng.IntN(2) == 0, rng.IntN(2) == 0
+		f.Models.Enabled, f.MaaS.Enabled, f.MaaS.Publish, f.Kueue.Enabled = rng.IntN(2) == 0, rng.IntN(2) == 0, rng.IntN(2) == 0, rng.IntN(2) == 0
+		if rng.IntN(2) == 0 {
+			f.Models.Exposure = "internal"
+		}
+		steps := Steps(r)
+		most, actual := make([]int, len(steps)), make([]int, len(steps))
+		for i, s := range steps {
+			_, most[i] = s.Seconds()
+			if rng.IntN(4) > 0 { // a quarter of the steps are found set up
+				actual[i] = rng.IntN(most[i] + 1)
+			}
+		}
+		if got, bound := RunSeconds(steps, actual), RunSeconds(steps, most); got > bound {
+			t.Fatalf("a run took %ds, longer than the plan's at most %ds: %+v", got, bound, actual)
+		}
 	}
 }
