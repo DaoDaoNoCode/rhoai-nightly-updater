@@ -813,7 +813,8 @@ oc get persesdatasources,persesdashboards -n redhat-ods-monitoring -o custom-col
 | Clean up refused: "changed since this tool's setup" | Someone changed the fields the tool added. Put back what the tool set, or remove the fields and the annotation yourself |
 | Clean up kept disks "made again or changed owner", or lists disks "this tool's setup did not record" | They are not provably the tool's (another UID, an owner, or a setup that stopped before it recorded them): delete them yourself with the command shown when nothing needs them |
 | The S3 storage cannot be deleted: "usage logs keep their data in this storage" | Clean up Observability first (Clean up everything does it first when both are ticked) |
-| Set up refused: bucket `rhoai-usage-logs` "has no object rhoai-nightly-updater/bucket-owner", or user `rnu-usage-logs` "is not tagged" | Something else made them: the tool never uses, empties or deletes them. Delete or rename them in the SeaweedFS admin UI if nothing needs them |
+| Set up refused: "a bucket or SeaweedFS user of the drawn name exists already" | Something else made a bucket or user of the name this setup drew; nothing of it was used, and the names left the record. Set up again draws others |
+| Clean up refused: the record "names no bucket or user" | A setup by an earlier unreleased build. Do the steps in the message by hand, then remove the annotation |
 | Clean up lists disks "made after this tool's change but not recorded" | The setup did not record them (it stopped, or they appeared later). Delete them with the command shown once nothing needs them |
 
 ## 11. Manual recovery for operator deadlocks
