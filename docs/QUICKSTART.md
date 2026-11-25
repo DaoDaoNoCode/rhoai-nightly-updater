@@ -226,7 +226,7 @@ If a step fails, the card says which one and why. A failed install restores the 
 
 <img src="images/status-create-dsc.png" alt="The Create the DataScienceCluster card" width="760">
 
-1. Click **Create DataScienceCluster...**. The dialog shows the YAML of `default-dsc`, with the defaults of the installed operator. Click **Create**.
+1. Click **Create DataScienceCluster**. The dialog shows the YAML of `default-dsc`, with the defaults of the installed operator. Click **Create**.
 
 **What you should see:** a success message. The operator now deploys the components (dashboard, pipelines, model serving, ...); this takes a few minutes. You can change components later on the **Components** page.
 
@@ -249,7 +249,7 @@ Steps 7 to 11 are optional: each sets up one feature to develop against or repro
 Before **Set up**, each tab says what it still needs, and Set up stays disabled with the reason under it: a DataScienceCluster component that is not Managed (with **Open Components**), or no data science project. The tool never creates a project here: create one in the RHOAI dashboard (Projects, then Create project) first. (The one exception is an environment recipe with `project.mode: create`, which creates its project as the dashboard does and removes it in Clean up: [CLUSTER_CHANGES §8](CLUSTER_CHANGES.md#environment-recipes-the-recipe-project-500).) Every Set up asks first, names what it creates, and shows its steps.
 
 1. On the **Overview**, **Pipelines** reads **Not set up in any project**: click **Choose a project**, or open the **Pipelines** tab.
-2. Pick a data science project, click **Set up** and confirm. The tool deploys SeaweedFS in namespace `seaweedfs` (bucket `pipelines`, Service `seaweedfs-s3`), then the pipeline server `dspa` in the project, as the dashboard sets one up, with a dashboard S3 Connection that workbenches can use. The **S3 storage** tab shows the storage on its own; you can also set it up there first. (If the Pipelines tab says your pipeline data is in storage from an earlier version, an earlier version's storage is still in namespace `minio`: run **Migrate storage** on the **S3 storage** tab, see [UPGRADING §5](UPGRADING.md#5-upgrade-to-v300). If the storage reads **Not secured**, an earlier version set it up and gave its admin key to every pipeline project: run **Secure S3 storage...** on the **S3 storage** tab first; each pipeline server then has a key of its own.)
+2. Pick a data science project, click **Set up** and confirm. The tool deploys SeaweedFS in namespace `seaweedfs` (bucket `pipelines`, Service `seaweedfs-s3`), then the pipeline server `dspa` in the project, as the dashboard sets one up, with a dashboard S3 Connection that workbenches can use. The **S3 storage** tab shows the storage on its own; you can also set it up there first. (If the Pipelines tab says your pipeline data is in storage from an earlier version, an earlier version's storage is still in namespace `minio`: run **Migrate storage** on the **S3 storage** tab, see [UPGRADING §5](UPGRADING.md#5-upgrade-to-v300). If the storage reads **Not secured**, an earlier version set it up and gave its admin key to every pipeline project: run **Secure S3 storage** on the **S3 storage** tab first; each pipeline server then has a key of its own.)
 
 <img src="images/environment-pipelines.png" alt="Pipelines tab: Ready in the project, the S3 storage's health with Open S3 storage, and Open pipelines" width="760">
 
@@ -319,8 +319,8 @@ Each tab has **Clean up** at the bottom, and the Overview has **Clean up everyth
 | Task | Where |
 |---|---|
 | Update to a new nightly | Status → **Update to latest**, or **Update to a specific build** ([what it looks like](images/update.gif)) |
-| Re-deploy the installed version (same version, fresh pods) | Status → Recovery → **Re-deploy operator...** |
-| Switch to stable, another nightly, or an exact older build | Status → Recovery → **Choose a build...** (downgrades need a confirmation checkbox) |
+| Re-deploy the installed version (same version, fresh pods) | Status → Recovery → **Re-deploy operator** |
+| Switch to stable, another nightly, or an exact older build | Status → Recovery → **Choose a build** (downgrades need a confirmation checkbox) |
 | Test an odh-dashboard PR or main | Dashboard Dev → choose the RHOAI (Konflux) or ODH (OpenShift CI) build → **Deploy PR** or **Deploy latest main**; **Revert to default** when done. The containers card shows each container's commit, how far behind `main` (or the PR) it is, and when a newer build exists |
 | S3 storage (SeaweedFS), pipeline servers, MLflow, models, the playground, MaaS | Environment |
 | Which nightly contains PR #N? | Build Explorer → search `#123` ([Build Explorer search](../README.md#build-explorer-search)) |
