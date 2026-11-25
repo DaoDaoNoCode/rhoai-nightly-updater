@@ -314,11 +314,18 @@ func missingText(r AccessRequest, project string) string {
 // MissingSummary is the refusal of an action whose requests are missing:
 // what, who can grant it, and that nothing was changed.
 func MissingSummary(label, project string, missing []MissingPermission) string {
+	return MissingSummaryFor(label, project, missing) + " Nothing was changed."
+}
+
+// MissingSummaryFor is what a capability says of an action whose requests
+// are missing: the same as the gate's refusal, without "Nothing was
+// changed" (nothing was tried).
+func MissingSummaryFor(label, project string, missing []MissingPermission) string {
 	texts := make([]string, 0, len(missing))
 	for _, m := range missing {
 		texts = append(texts, m.Text)
 	}
-	return fmt.Sprintf("%s in %s needs permissions your OpenShift account does not have: %s Nothing was changed.", label, project, strings.Join(texts, " "))
+	return fmt.Sprintf("%s in %s needs permissions your OpenShift account does not have: %s", label, project, strings.Join(texts, " "))
 }
 
 // projectFeatureComponents are the DataScienceCluster components a

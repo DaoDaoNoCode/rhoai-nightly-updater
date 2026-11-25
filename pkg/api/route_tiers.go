@@ -74,11 +74,14 @@ var getRouteTiers = map[string]readTier{
 	"GET /api/build-explorer/content":  tierSummary,
 	"GET /api/build-explorer/contains": tierSummary,
 
-	"GET /api/user/permissions":         tierUserToken,
-	"GET /api/resources/projects":       tierUserToken,
-	"GET /api/resources/playground":     tierUserToken,
-	"GET /api/resources/model-registry": tierUserToken,
-	"GET /api/resources/samples/mlflow": tierUserToken,
+	"GET /api/user/permissions":   tierUserToken,
+	"GET /api/resources/projects": tierUserToken,
+	// What the user may do in one of their projects: the project
+	// actions' access reviews with their token (HandleProjectCapabilities).
+	"GET /api/resources/projects/capabilities": tierUserToken,
+	"GET /api/resources/playground":            tierUserToken,
+	"GET /api/resources/model-registry":        tierUserToken,
+	"GET /api/resources/samples/mlflow":        tierUserToken,
 
 	"GET /api/update-check":                    tierNoClusterRead,
 	"GET /api/resources/samples/pipeline/spec": tierNoClusterRead,

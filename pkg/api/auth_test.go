@@ -81,6 +81,7 @@ func resetPackageState(t *testing.T) {
 	setGitOpsPolicyState("")
 	mutationLimiter = newRateLimiter()
 	identities.reset()
+	capabilities.reset()
 	apiReady.reset()
 	inflight.reset()
 	markers.reset()

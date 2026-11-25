@@ -417,7 +417,15 @@ func RunSamples(c *kube.Client, req types.MLflowSamplesRequest, onStep func(type
 			continue
 		}
 		emit(types.UpdateStepEvent{Step: id, Status: "running", Message: fmt.Sprintf("%s: %s", name, req.Action)})
-		msg, err := fn(t, func(line string) { emit(types.UpdateStepEvent{Step: id, Status: "running", Message: line}) })
+		stepLog := func(line string) { emit(types.UpdateStepEvent{Step: id, Status: "running", Message: line}) }
+		// A sample that was absent before an add and that MLflow refuses
+		// half-way is removed again by its own remove path, so a refusal
+		// leaves nothing (the non-admin design, section 2.3c).
+		absentBefore := req.Action == "add" && s.remove != nil && s.status(t).State == "absent"
+		msg, err := fn(t, stepLog)
+		if err != nil && IsDenied(err) && absentBefore {
+			err = rollBackRefusedAdd(t, s, err, stepLog)
+		}
 		if err != nil {
 			failed = append(failed, name)
 			stepCode := SampleErrorCode(err)
@@ -443,6 +451,17 @@ func RunSamples(c *kube.Client, req types.MLflowSamplesRequest, onStep func(type
 	}
 	record.Action(c, "mlflow-samples", activity, true)
 	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Samples %s in project '%s'.", verbPast(req.Action), req.Project), Logs: logs}, nil
+}
+
+// rollBackRefusedAdd removes what a refused add of s made (its remove
+// path, which deletes only what this tool marks as its own) and returns
+// the refusal, saying whether the removal worked.
+func rollBackRefusedAdd(t *Target, s mlflowSample, refused error, log func(string)) error {
+	log("MLflow refused a call; removing what this run added")
+	if _, err := s.remove(t, log); err != nil {
+		return fmt.Errorf("MLflow refused: %w. Removing what this run added failed too (%w): use Remove on this sample", refused, err)
+	}
+	return fmt.Errorf("MLflow refused: %w. What this run added was removed again", refused)
 }
 
 func verbPast(action string) string {
