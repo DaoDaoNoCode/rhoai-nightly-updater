@@ -721,7 +721,7 @@ async function recipeRoute(req, res, key) {
       return;
     }
     world.recipeRun = { run: F.recipeRun({ done: n }), running: true, pod: world.recipeRun.run?.pod, step: { step: "", status: "running", message: `Checking ${titles[n]}...` } };
-    world.operation = { inProgress: true, operation: { id: "op-recipe", type: "recipe", label: "Environment recipe", user: F.USER, target: `dev: step ${n + 1} of ${titles.length} (${titles[n]})`, startedAt: new Date(F.NOW).toISOString(), updatedAt: new Date(F.NOW).toISOString() } };
+    world.operation = { inProgress: true, operation: { id: "op-recipe", type: "recipe", label: "Environment recipe", user: F.USER, target: `dev: ${n} of ${titles.length} steps done; running: ${titles[n]}`, startedAt: new Date(F.NOW).toISOString(), updatedAt: new Date(F.NOW).toISOString() } };
     nextStep().then(() => advance(n + 1));
   };
   advance(done);

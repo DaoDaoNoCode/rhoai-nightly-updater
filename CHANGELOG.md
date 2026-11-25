@@ -183,6 +183,25 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   `models.exposure`, **What the model's access needs** adds what the
   resolved way needs after the MaaS step. A run recorded by an earlier
   version resumes with the new steps, keeping the components it turned on.
+- **Recipe steps that do not depend on each other run at the same time.**
+  After RHOAI, the DataScienceCluster, the project and what the features
+  need (still one after another), the features run in lanes side by side,
+  at most three steps at once: S3 storage, the pipeline server and the
+  workbench; MLflow and its samples; the model registry; and serving as
+  one lane (Models as a Service, the model's access, the model, its MaaS
+  publication and the playground, which share Connectivity Link and the
+  gateway). Distributed workloads come after every other feature, as the
+  dashboard's Kueue setting changes how workbenches and models are
+  created, and Dashboard Dev stays last. The review's time estimate is the
+  longest chain of steps instead of their sum. The Recipes page shows
+  "4 of 17 steps done; running: Pipeline server, MLflow, Models as a
+  Service", each running step with its own progress; Stop becomes **Stop
+  after the running steps** while several run: they finish and nothing
+  else starts. A failure starts no more steps either: the running ones
+  finish, then the run ends failed, naming the first failed step with its
+  message and every other one that failed. Each step keeps its own 15
+  minutes. Resume runs every step that did not end well, also for a run
+  recorded by an earlier version.
   A refusal for any feature (a GitOps-managed DataScienceCluster, an
   operator that cannot be installed, a dry run the API server rejects)
   now stops the step for all of them, before any change (one exception:

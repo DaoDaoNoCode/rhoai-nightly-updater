@@ -668,16 +668,19 @@ scenarios["diag-leftovers-refused"] = (w) => { scenarios["diag-leftovers"](w); w
 // Environment recipes (the Recipes page): no run yet on a cluster with
 // RHOAI and no DataScienceCluster (new, and its review), a run at step 5
 // (POST /__docs/advance moves it on), one that failed at the pipeline
-// server, and one whose updater pod went away.
-const RECIPE_OPERATION = (w, step, title, name = "dev", of = 7) => {
-  w.operation = { inProgress: true, operation: { id: "op-recipe", type: "recipe", label: "Environment recipe", user: F.USER, target: `${name}: step ${step} of ${of} (${title})`, startedAt: F.ago(12), updatedAt: F.ago(0.1) } };
+// server, and one whose updater pod went away. The operation's target is
+// the runner's (pkg/api recipeTarget): how many steps are done, and which
+// run.
+const RECIPE_OPERATION = (w, done, running, name = "dev", of = 7) => {
+  const target = `${name}: ${done} of ${of} steps done${running.length ? `; running: ${running.join(", ")}` : ""}`;
+  w.operation = { inProgress: true, operation: { id: "op-recipe", type: "recipe", label: "Environment recipe", user: F.USER, target, startedAt: F.ago(12), updatedAt: F.ago(0.1) } };
 };
 scenarios["recipe-new"] = (w) => { scenarios["no-dsc"](w); w.resources = { minio: F.s3States.none, mlflow: F.mlflowStates.none, pipelineServers: [] }; };
 scenarios["recipe-review"] = (w) => { scenarios["recipe-new"](w); };
 scenarios["recipe-review-blocked"] = (w) => { scenarios["recipe-new"](w); w.recipePlanBlocked = true; };
 scenarios["recipe-running"] = (w) => {
   w.recipeRun = { run: F.recipeRun({ done: 4 }), running: true, pod: "rhoai-nightly-updater-6f7b8c9d5-x2k4p", step: { step: "s3", status: "running", message: "Waiting for SeaweedFS to start (1/1 pods starting)" } };
-  RECIPE_OPERATION(w, 5, "S3 storage");
+  RECIPE_OPERATION(w, 4, ["S3 storage"]);
 };
 scenarios["recipe-failed"] = (w) => {
   const why = "The pipeline server did not become ready in 10 minutes: pod ds-pipeline-dspa-6c9f7d8b5-k8w2n is in ImagePullBackOff (registry.redhat.io/rhoai/odh-ml-pipelines-api-server-v2-rhel9).";
@@ -707,7 +710,45 @@ scenarios["recipe-full-running"] = (w) => {
   const at = steps.findIndex(([id]) => id === "model");
   w.recipeRun = { run: F.recipeRun({ rcp, done: at }), running: true, pod: "rhoai-nightly-updater-6f7b8c9d5-x2k4p",
     step: { step: "model-ready", status: "running", message: "Waiting for Qwen3 1.7B to serve: pulling its image on worker-2" } };
-  RECIPE_OPERATION(w, at + 1, steps[at][1], "full", steps.length);
+  RECIPE_OPERATION(w, at, [steps[at][1]], "full", steps.length);
+};
+// Steps of independent lanes run side by side (at most 3): the full
+// recipe with its first steps done, the S3 storage done, and the pipeline
+// server, MLflow and the MaaS platform running, each with its own
+// progress.
+const PARALLEL_PROGRESS = {
+  "pipeline-server": "Waiting for the pipeline server to start (2/3 pods ready)",
+  mlflow: "Waiting for MLflow to start (1/1 pods starting)",
+  maas: "Waiting for the MaaS database to be ready",
+};
+scenarios["recipe-full-parallel"] = (w) => {
+  const rcp = F.fullRecipe();
+  const steps = F.recipeSteps(rcp);
+  const head = steps.findIndex(([id]) => id === "s3");
+  const run = F.recipeRun({ rcp, done: head + 1, current: "" });
+  run.steps = run.steps.map((s, i) => (PARALLEL_PROGRESS[s.id] ? { ...s, status: "running", startedAt: F.ago(i === head + 1 ? 1.5 : 2.4) } : s));
+  const progress = Object.fromEntries(Object.entries(PARALLEL_PROGRESS).map(([id, message]) => [id, { step: id, status: "running", message }]));
+  w.recipeRun = { run, running: true, pod: "rhoai-nightly-updater-6f7b8c9d5-x2k4p", step: progress.maas, progress };
+  RECIPE_OPERATION(w, head + 1, run.steps.filter((s) => s.status === "running").map((s) => s.title), "full", steps.length);
+};
+// The same run once two lanes failed: the pipeline server and the MaaS
+// platform failed, MLflow finished, and nothing else started.
+scenarios["recipe-full-parallel-failed"] = (w) => {
+  scenarios["recipe-full-parallel"](w);
+  const run = w.recipeRun.run;
+  const why = {
+    "pipeline-server": "The pipeline server did not become ready in 10 minutes: pod ds-pipeline-dspa-6c9f7d8b5-k8w2n is in ImagePullBackOff (registry.redhat.io/rhoai/odh-ml-pipelines-api-server-v2-rhel9).",
+    maas: "The MaaS database did not become ready in 10 minutes: its PostgreSQL cluster has no ready instance.",
+  };
+  run.steps = run.steps.map((s) => (s.status !== "running" ? s : why[s.id]
+    ? { ...s, status: "failed", message: why[s.id], errorCode: "timeout", finishedAt: F.ago(0.5) }
+    : { ...s, status: "success", message: "MLflow is set up and ready.", finishedAt: F.ago(1) }));
+  const n = run.steps.length;
+  const at = (id) => run.steps.findIndex((s) => s.id === id) + 1;
+  Object.assign(run, { state: "failed", errorCode: "timeout", finishedAt: F.ago(0.5),
+    stopReason: `Step ${at("pipeline-server")} of ${n} (Pipeline server) failed: ${why["pipeline-server"]} Also failed: step ${at("maas")} of ${n} (Models as a Service).` });
+  w.recipeRun = { run, running: false };
+  w.operation = { inProgress: false, operation: null };
 };
 scenarios["recipe-full-succeeded"] = (w) => {
   const rcp = F.fullRecipe();
@@ -727,7 +768,7 @@ scenarios["recipe-full-succeeded-aihub"] = (w) => {
 };
 scenarios["recipe-interrupted"] = (w) => {
   w.recipeRun = { run: F.recipeRun({ done: 3, pod: "rhoai-nightly-updater-6f7b8c9d5-q9m3z" }), running: false, interrupted: true };
-  w.operation = { inProgress: false, operation: null, interrupted: { type: "recipe", label: "Environment recipe", user: F.USER, target: "dev: step 4 of 7 (What the features need)", startedAt: F.ago(14), pod: "rhoai-nightly-updater-6f7b8c9d5-q9m3z", id: "op-recipe", bootId: "b-4e2a" } };
+  w.operation = { inProgress: false, operation: null, interrupted: { type: "recipe", label: "Environment recipe", user: F.USER, target: "dev: 3 of 7 steps done; running: What the features need", startedAt: F.ago(14), pod: "rhoai-nightly-updater-6f7b8c9d5-q9m3z", id: "op-recipe", bootId: "b-4e2a" } };
 };
 
 // The reads every page makes, as the server answers them; the frontend's

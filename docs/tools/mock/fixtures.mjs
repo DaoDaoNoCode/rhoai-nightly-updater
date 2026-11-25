@@ -1836,6 +1836,44 @@ export function recipeSteps(rcp = recipe()) {
   return out;
 }
 
+/**
+ * The run's order (pkg/cluster internal/recipe stepsFirst, stepLanes,
+ * stepsLast): the first steps one after another, then the lanes side by
+ * side, then the last steps once every lane ended.
+ */
+const RECIPE_FIRST = ["rhoai", "dsc", "project", "prerequisites"];
+const RECIPE_LANES = [["s3", "pipeline-server", "workbench"], ["mlflow", "mlflow-samples"], ["model-registry"], ["maas", "models-prereq", "model", "maas-publish", "playground"]];
+const RECIPE_LAST = ["kueue-prereq", "kueue", "dashboard-dev"];
+
+/** Each step's After (internal/recipe withAfter), for the step IDs of a run. */
+export function recipeAfter(ids) {
+  const after = {};
+  const chain = (list, deps) => list.filter((id) => ids.includes(id)).reduce((d, id) => { after[id] = d; return [id]; }, deps);
+  const head = chain(RECIPE_FIRST, []);
+  const ends = RECIPE_LANES.flatMap((lane) => { const end = chain(lane, head); return end === head ? [] : end; });
+  chain(RECIPE_LAST, ends.length ? ends : head);
+  return after;
+}
+
+/** How long steps take together as the runner runs them (internal/recipe RunSeconds): at most 3 at once, each after its After. */
+export function recipeRunSeconds(ids, seconds) {
+  const after = recipeAfter(ids);
+  const ends = {};
+  let now = 0;
+  const running = new Set();
+  while (Object.keys(ends).filter((id) => ends[id] <= now && !running.has(id)).length < ids.length) {
+    for (const id of ids) {
+      if (id in ends || running.size >= 3 || !(after[id] ?? []).every((a) => a in ends && !running.has(a))) continue;
+      ends[id] = now + seconds[ids.indexOf(id)];
+      running.add(id);
+    }
+    if (running.size === 0) break;
+    now = Math.min(...[...running].map((id) => ends[id]));
+    for (const id of [...running]) if (ends[id] === now) running.delete(id);
+  }
+  return now;
+}
+
 export const recipePinned = () => ({ tag: "rhoai-3.6", image: LATEST_IMAGE, digest: digest(latestBuild.seed) });
 
 /** The steps a mixed plan finds set up, with why. */
@@ -1872,7 +1910,9 @@ export function recipePlan(rcp = recipe(), installed = true, blocked = false, mi
       { message: "The one-time cluster setup is not done: additional-pull-secret is missing in kube-system. Run the one-time setup on the Status page first.", fix: ONE_TIME_SETUP_FIX },
       { field: "spec.rhoai.build", message: "Cannot resolve the build on Quay.", fix: { code: "build_unresolvable" } },
     ] : [],
-    typicalSeconds: counted.reduce((n, s) => n + s.typicalSeconds, 0), maxSeconds: counted.reduce((n, s) => n + s.maxSeconds, 0),
+    // The steps of independent lanes run side by side: about the longest chain, not the sum.
+    typicalSeconds: recipeRunSeconds(steps.map((s) => s.id), steps.map((s) => (counted.includes(s) ? s.typicalSeconds : 0))),
+    maxSeconds: recipeRunSeconds(steps.map((s) => s.id), steps.map((s) => (counted.includes(s) ? s.maxSeconds : 0))),
     ...([...kueueWarnings(rcp), ...playgroundWarnings(rcp)].length ? { warnings: [...kueueWarnings(rcp), ...playgroundWarnings(rcp)] } : {}),
   };
 }
