@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -553,6 +554,27 @@ func TestKueueStatus(t *testing.T) {
 	f.groups[kqGroup] = `{"versions":[{"version":"v1beta1"}]}`
 	if st, _ = GetKueueStatus(u, u, "proj"); st.RefusalCode != "unsupported" {
 		t.Fatalf("v1beta1: %+v", st)
+	}
+}
+
+// The status names every ClusterQueue and LocalQueue on the cluster (what
+// keeps Clean up from turning the DataScienceCluster's kueue back), of any
+// owner; a list that fails says the queues are unknown (the tab then offers
+// no turning back).
+func TestKueueStatusQueuesOnTheCluster(t *testing.T) {
+	f, u := putKueueCluster(t)
+	if st, err := GetKueueStatus(u, u, "proj"); err != nil || len(st.Queues) != 0 || st.QueuesUnknown {
+		t.Fatalf("no queues: %+v %v", st, err)
+	}
+	f.putJSON(kqAPI+"/clusterqueues/team", `{"metadata":{"name":"team"}}`)
+	f.putJSON(kqAPI+"/namespaces/team-a/localqueues/q", `{"metadata":{"name":"q","namespace":"team-a"}}`)
+	st, err := GetKueueStatus(u, u, "proj")
+	if err != nil || !reflect.DeepEqual(st.Queues, []string{"ClusterQueue team", "LocalQueue team-a/q"}) || st.QueuesUnknown {
+		t.Fatalf("someone's queues: %+v %v", st.Queues, err)
+	}
+	f.fail["GET "+kqAPI+"/clusterqueues"] = 403
+	if st, err = GetKueueStatus(u, u, "proj"); err != nil || !st.QueuesUnknown || len(st.Queues) != 0 || !strings.Contains(st.ItemsProblem, "ClusterQueues and LocalQueues") {
+		t.Fatalf("unreadable: %+v %v", st, err)
 	}
 }
 

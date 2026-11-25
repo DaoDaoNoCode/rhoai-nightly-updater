@@ -273,7 +273,9 @@ export type Pending =
   | { kind: "teardown-kueue" }
   | { kind: "delete-kueue-sample"; sample: "raycluster" | "rayjob" }
   | { kind: "kueue-optin" }
-  | { kind: "kueue-optout" };
+  | { kind: "kueue-optout" }
+  /** The DataScienceCluster's kueue back to what it was before this tool turned it on (Clean up's components part). */
+  | { kind: "turn-back-kueue"; previous?: string };
 
 /** A sample change: a streamed request of its own, not a resource's setup or deletion. */
 export type SamplePending = Extract<Pending, { kind: "mlflow-samples" }>;
@@ -297,7 +299,9 @@ export const isWorkbenchPending = (p: Pending): p is WorkbenchPending => p.kind 
 export type KueuePending = Extract<Pending, { kind: "setup-kueue" | "teardown-kueue" | "delete-kueue-sample" | "kueue-optin" | "kueue-optout" }>;
 const KUEUE_KINDS: string[] = ["setup-kueue", "teardown-kueue", "delete-kueue-sample", "kueue-optin", "kueue-optout"];
 export const isKueuePending = (p: Pending): p is KueuePending => KUEUE_KINDS.includes(p.kind);
-export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending | PlaygroundPending | MaaSPending | PrerequisitesPending | ModelRegistryPending | WorkbenchPending | KueuePending>;
+/** Turning the DataScienceCluster's kueue back: Clean up's components part (pkg/api HandleCleanupStream). */
+export type TurnBackPending = Extract<Pending, { kind: "turn-back-kueue" }>;
+export type ResourcePending = Exclude<Pending, SamplePending | ModelsPending | PlaygroundPending | MaaSPending | PrerequisitesPending | ModelRegistryPending | WorkbenchPending | KueuePending | TurnBackPending>;
 export const isPlaygroundPending = (p: Pending): p is PlaygroundPending => p.kind === "setup-playground" || p.kind === "teardown-playground";
 export const isSamplePending = (p: Pending): p is SamplePending => p.kind === "mlflow-samples";
 export const isModelsPending = (p: Pending): p is ModelsPending => p.kind === "setup-models" || p.kind === "teardown-model" || p.kind === "teardown-gateway" || p.kind === "allow-gateway-project" || p.kind === "disallow-gateway-project" || p.kind === "check-model";

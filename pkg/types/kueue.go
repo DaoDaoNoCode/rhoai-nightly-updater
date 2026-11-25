@@ -44,6 +44,11 @@ type KueueStatus struct {
 	ItemsProblem string `json:"itemsProblem,omitempty"`
 	// DashboardURL is the RHOAI dashboard base URL for hyperlinking.
 	DashboardURL string `json:"dashboardUrl,omitempty"`
+	// Queues names every ClusterQueue and LocalQueue on the cluster, of any
+	// owner: what keeps Clean up from turning the DataScienceCluster's kueue
+	// back (kueue.Users). QueuesUnknown: they could not be read.
+	Queues        []string `json:"queues,omitempty"`
+	QueuesUnknown bool     `json:"queuesUnknown,omitempty"`
 }
 
 // KueueInstance captures the cluster Kueue CR (kueue.openshift.io/v1) plus the

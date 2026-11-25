@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QuickResourceCreator } from "../QuickResourceCreator";
 import { stubApi } from "../../test/apiStub";
@@ -7,7 +7,7 @@ import { contract } from "../../test/contract";
 import type { KueueStatus, ResourceState, ResourcesStatus } from "../../types";
 import { IDLE } from "./featureState";
 import { cleanupCandidates, cleanupSteps } from "./CleanupModal";
-import { IMAGE_HELP, OPT_IN_EFFECT, kueueCleanupLines, kueueConfirm, kueueSteps } from "./KueueTab";
+import { IMAGE_HELP, OPT_IN_EFFECT, kueueCleanupLines, kueueConfirm, kueueSteps, kueueTurnBack } from "./KueueTab";
 import { KUEUE_DEFAULT_IMAGE, kueueState, sampleStatus } from "./kueueState";
 import { prerequisitesConfirm } from "./Prerequisites";
 
@@ -112,6 +112,44 @@ describe("Distributed workloads tab", () => {
     expect(screen.getByRole("heading", { name: "Distributed workloads", level: 2 })).toBeInTheDocument();
     expect(screen.getByText(/Set up sets it to Unmanaged/)).toBeInTheDocument();
     expect(await screen.findByText(/First set up what the distributed workloads setup needs/)).toBeInTheDocument();
+  });
+
+  // This tool turned kueue on and its setup is gone: the prerequisites' kueue part offers Turn back.
+  const turnedOn = { features: { kueue: { ready: true, parts: [{ id: "dsc-kueue", title: "Kueue (kueue)", state: "ready", message: "Unmanaged in DataScienceCluster default-dsc (turned on by this tool)", managedByTool: true }], restorable: [{ component: "kueue", previous: "Removed", feature: "kueue" }] } } };
+
+  it("Turn back is offered only while this tool still owns kueue and no queue is left on the cluster", () => {
+    const restorable = turnedOn.features.kueue.restorable;
+    expect(kueueTurnBack(restorable, notSetUp({ queues: [] }))).toEqual(restorable[0]);
+    expect(kueueTurnBack(restorable, notSetUp())).toEqual(restorable[0]);
+    expect(kueueTurnBack(restorable, notSetUp({ queues: ["LocalQueue team-a/q"] }))).toBeNull();
+    expect(kueueTurnBack(restorable, notSetUp({ queuesUnknown: true }))).toBeNull();
+    expect(kueueTurnBack(restorable, null)).toBeNull();
+    expect(kueueTurnBack([], notSetUp())).toBeNull();
+    expect(kueueTurnBack([{ component: "aiHub", previous: "Removed", feature: "model-registry" }], notSetUp())).toBeNull();
+  });
+
+  it("Turn back confirms with Clean up's words and runs Clean up's components part", async () => {
+    const api = stubApi({
+      "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/kueue": notSetUp({ queues: [] }), "/api/resources/prerequisites": turnedOn,
+      "POST /api/resources/cleanup/stream": () => new Response(`data: ${JSON.stringify({ step: "components", status: "success", message: "kueue is back to Removed." })}\n\n`, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+    });
+    renderAt("/test-resources?tab=kueue&project=dev");
+    fireEvent.click(await screen.findByRole("button", { name: "Turn back..." }));
+    const dialog = await screen.findByRole("dialog", { name: "Turn Kueue back?" });
+    expect(dialog).toHaveTextContent("back from Unmanaged to Removed, only once no ClusterQueue or LocalQueue is left on the cluster");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Turn back" }));
+    await waitFor(() => expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([{ components: ["kueue"] }]));
+  });
+
+  it("Turn back is not offered while a queue is on the cluster", async () => {
+    stubApi({
+      "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/kueue": notSetUp({ queues: ["ClusterQueue team"] }), "/api/resources/prerequisites": turnedOn,
+    });
+    renderAt("/test-resources?tab=kueue&project=dev");
+    expect(await screen.findByText(/turned on by this tool/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Turn back..." })).not.toBeInTheDocument();
   });
 
   it("ready: the queues, the samples and the opt-in, with Clean up", async () => {

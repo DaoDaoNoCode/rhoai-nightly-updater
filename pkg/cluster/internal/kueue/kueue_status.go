@@ -362,6 +362,14 @@ func GetStatus(sa, u *kube.Client, project string) (*types.KueueStatus, error) {
 	if apps, err := rhoai.AppsNamespace(u); err == nil {
 		st.OptIn = optInState(u, apps, rec, note)
 	}
+	// The queues Clean up's turning kueue back counts (restoreCheck): the
+	// tab offers that only while there are none.
+	if users, err := Users(u); err != nil {
+		st.QueuesUnknown = true
+		note("the cluster's ClusterQueues and LocalQueues", err)
+	} else {
+		st.Queues = users
+	}
 	st.ItemsProblem = strings.Join(problems, " ")
 	return st, nil
 }

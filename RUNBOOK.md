@@ -784,6 +784,7 @@ oc get cm rhoai-nightly-updater-snapshot -n <tool namespace> -o jsonpath='{.data
 | Clean up kept `disableKueue` or the profile | Someone changed it after the Dashboard Kueue setting was turned on; the tool leaves it. Change it in the dashboard |
 | Clean up waits on a queue or Workload "being deleted" | Objects being deleted count until they are gone (their finalizers); clean up again once they are |
 | The DataScienceCluster's `kueue` stays Unmanaged after Clean up | It goes back only when ticked and while no ClusterQueue or LocalQueue is left on the cluster (any owner) |
+| No **Turn back...** on the prerequisites' Kueue part | The tab offers turning `kueue` back (Clean up's components part, `POST /api/resources/cleanup/stream` with `components: ["kueue"]`) only while this tool still owns the field and the status lists no ClusterQueue or LocalQueue on the cluster (`oc get clusterqueues,localqueues -A`); a queue list that cannot be read offers nothing. Delete the queues, or use **Clean up everything** |
 
 ## 11. Manual recovery for operator deadlocks
 

@@ -18,11 +18,12 @@ import {
   StackItem,
   TextInput,
 } from "@patternfly/react-core";
-import type { KueueObject, KueueSample, KueueStatus } from "../../types";
+import type { KueueObject, KueueSample, KueueStatus, RestorableComponent } from "../../types";
 import { type ConfirmSpec, type KueuePending, type Pending, ExternalLink, WarningAlert } from "./resourceRow";
 import { CleanupSection, CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, READ_ONLY_SETUP, WhatNext } from "./FeatureLayout";
 import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
 import { ComponentAlert, NoProjectsAlert } from "./UseIt";
+import { componentLabel } from "./CleanupModal";
 import { LoadFailed } from "./Loading";
 import type { Busy, FeatureState } from "./featureState";
 import {
@@ -273,6 +274,17 @@ export function kueueSteps(p: KueuePending): { id: string; title: string }[] {
   }
 }
 
+/**
+ * The Distributed workloads tab's Turn back for the DataScienceCluster's kueue, or null: offered only while this tool's
+ * setup left it as it is (features.StillAsSetUp: the prerequisites' restorable) and no ClusterQueue or LocalQueue is on
+ * the cluster (the rule Clean up checks again when it runs).
+ */
+export function kueueTurnBack(restorable: RestorableComponent[] | undefined, k: KueueStatus | null): RestorableComponent | null {
+  const r = (restorable ?? []).find((c) => c.component === "kueue");
+  if (!r || !k || k.queuesUnknown || (k.queues ?? []).length > 0) return null;
+  return r;
+}
+
 /** One-line description of dashboard opt-in behavior for projects created afterward. */
 export const OPT_IN_EFFECT = "In every new project on this cluster, workbenches and model deployments can only use the queue hardware profile; a project without its own LocalQueue cannot create workbenches or deploy models until an admin adds one.";
 
@@ -370,6 +382,14 @@ export function kueueConfirm(pending: Pending, k: KueueStatus | null, setPending
         changes: [
           <>Each only if nobody changed it after this tool turned the setting on; otherwise it stays, and the result says so.</>,
           <>Projects the dashboard labelled while it was on keep their label.</>,
+        ],
+      };
+    case "turn-back-kueue":
+      return {
+        title: "Turn Kueue back?", confirm: "Turn back", runTitle: "Turn the DataScienceCluster's kueue back",
+        summary: <Content component="p">{componentLabel({ component: "kueue", previous: pending.previous, feature: "kueue" })}</Content>,
+        changes: [
+          <>DataScienceCluster: <code>kueue</code> goes back to {pending.previous || "Removed"}, as Clean up everything does it: only while this tool still owns the setting and no ClusterQueue or LocalQueue is left (checked again when it runs; otherwise it stays, and the result says why).</>,
         ],
       };
     case "teardown-kueue":

@@ -40,8 +40,8 @@ export function modelRegistryComponentLine(component: string): string | null {
   return null;
 }
 
-/** A restorable component's checkbox label. */
-function componentLabel(r: RestorableComponent): React.ReactNode {
+/** A restorable component's checkbox label (also the Distributed workloads tab's Turn back). */
+export function componentLabel(r: RestorableComponent): React.ReactNode {
   if (r.component === "kueue") {
     return <>Turn the DataScienceCluster&apos;s <code>kueue</code> back from Unmanaged to {r.previous || "Removed"}, only once no ClusterQueue or LocalQueue is left on the cluster: the dashboard&apos;s Workload metrics page (Observe &amp; monitor) goes away. The Red Hat build of Kueue and cert-manager stay.</>;
   }

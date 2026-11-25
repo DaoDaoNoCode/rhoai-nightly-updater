@@ -2037,6 +2037,10 @@ export interface KueueStatus {
   defaultRayImage: string;
   itemsProblem?: string;
   dashboardUrl?: string;
+  /** Every ClusterQueue and LocalQueue on the cluster, of any owner: while there is one, Clean up keeps kueue on. */
+  queues?: string[];
+  /** The queues could not be read. */
+  queuesUnknown?: boolean;
 }
 
 /** The body of POST /api/resources/kueue/stream. */

@@ -1513,6 +1513,8 @@ export function kueueWorld(state = "none", { optIn = false, samples = false, pro
       : { profile: { kind: "HardwareProfile", name: "nightly-kueue-cpu", namespace: "redhat-ods-applications", present: false } },
     defaultRayImage: KUEUE_IMAGE,
     dashboardUrl: DASHBOARD_URL,
+    // Every queue on the cluster (pkg/cluster/internal/kueue Users): the tool's while it is set up.
+    queues: set ? ["ClusterQueue nightly-kueue", `LocalQueue ${project}/nightly-kueue`] : [],
   };
 }
 

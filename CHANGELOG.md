@@ -314,6 +314,13 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **The Distributed workloads tab can turn Kueue back.** Once its setup
+  was cleaned up, the prerequisites still read "kueue Unmanaged (turned on
+  by this tool)", but only Clean up everything could turn it back. The
+  Kueue part now offers **Turn back...** while this tool still owns the
+  setting and no ClusterQueue or LocalQueue is left on the cluster (the
+  status now lists them), with Clean up's confirmation words and Clean up's
+  own request and checks.
 - **A recipe's Clean up says everything it leaves in place.** "Left in
   place" named only the S3 storage and MLflow. It now also lists the
   inference gateway the run's model used (Clean up everything deletes it),
