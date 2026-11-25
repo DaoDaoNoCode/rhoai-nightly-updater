@@ -171,12 +171,13 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 - **No "..." after button labels and progress text.** Buttons and menu
   items that open a dialog read as their action (**Clean up everything**,
-  **Turn back**, **Install**, **Delete workbench**), and progress and
-  loading text is a plain phrase beside its spinner ("Looking up the newest
-  nightly build", "Checking your permissions"), as PatternFly writes them:
-  an ellipsis there marks only omitted or truncated text. The step
-  messages of every Environment, Recipes and Status operation lost theirs
-  too. ESLint now fails on a frontend string that ends with one.
+  **Turn back**, **Install**, **Delete workbench**), progress and loading
+  text is a plain phrase beside its spinner ("Loading builds"), and a
+  reason shown among sentences is one ("Checking your permissions."), as
+  PatternFly writes them: an ellipsis there marks only omitted or
+  truncated text. The step messages of every Environment, Recipes and
+  Status operation lost theirs too. ESLint now fails on a frontend string
+  that ends with one.
 - **Recipes set up what every feature needs in one step.** A recipe run
   had a prerequisites step per feature (What Pipelines needs, What MLflow
   needs, What Models needs, ...), each with its own operator installs and

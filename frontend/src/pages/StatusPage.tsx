@@ -102,7 +102,7 @@ export const StatusPage: React.FC = () => {
     ? undefined
     : latest?.error
       ? `The newest nightly build could not be looked up: ${latest.error}`
-      : "Looking up the newest nightly build";
+      : "Looking up the newest nightly build.";
   const setupCard = (collapsible: boolean) => status && (
     <ClusterSetupCard
       status={status}

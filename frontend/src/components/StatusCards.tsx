@@ -178,7 +178,7 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
       <TooltipButton
         variant="primary"
         onClick={() => target && onUpdate(target)}
-        disabledReason={actionReason ?? (target ? null : latestLoading ? "Looking up the latest nightly" : "The latest nightly could not be read from Quay; choose a build below.")}
+        disabledReason={actionReason ?? (target ? null : latestLoading ? "Looking up the latest nightly." : "The latest nightly could not be read from Quay; choose a build below.")}
       >
         Install latest nightly{target?.tag ? ` (${target.tag})` : ""}
       </TooltipButton>

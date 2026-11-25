@@ -403,7 +403,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                   busy={busy} baseReason={baseReason} readOnly={readOnly} setPending={setPending} onSetUp={(setup) => setUp(TAB_TITLES["model-registry"], setup)} onCleanup={() => setCleanupScope("model-registry")} />
               )}
               {tab === "models" && resStatus && (
-                <ModelsTab prerequisites={prereqNode("models", modelsExposure)} prerequisitesReason={prereqRead.stale ? "Checking what this way to reach the model needs on the cluster" : prerequisitesReason(prereq?.features?.models, "models")} onExposure={onModelsExposure} status={resStatus} project={modelsProject} projects={modelOptions} projectsLoaded={projectList !== null}
+                <ModelsTab prerequisites={prereqNode("models", modelsExposure)} prerequisitesReason={prereqRead.stale ? "Checking what this way to reach the model needs on the cluster." : prerequisitesReason(prereq?.features?.models, "models")} onExposure={onModelsExposure} status={resStatus} project={modelsProject} projects={modelOptions} projectsLoaded={projectList !== null}
                   onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
                   model={modelsModel} onModel={chooseModel}
                   state={headerWithPrerequisites(models, prereq?.features?.models)} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}

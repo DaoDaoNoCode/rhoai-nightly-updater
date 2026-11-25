@@ -307,7 +307,7 @@ describe("Recipes page", () => {
     const { unmount } = renderPage(<RecipesPage />, "/recipes", { operation: async () => RECIPE_OPERATION });
     await settleApps();
     await settle();
-    expect(screen.getByRole("list", { name: "Recipe dev: steps" })).toHaveTextContent(/S3 storageStarting\. 1:0\d so far/);
+    expect(screen.getByRole("list", { name: "Recipe dev: steps" })).toHaveTextContent(/S3 storageThe step is starting\. 1:0\d so far/);
     unmount();
     // Another pod runs two steps: no per-step progress there, so each running row names the pod.
     const two = steps(4, "running").map((s) => (s.id === "mlflow" ? { ...s, status: "running" as const, startedAt: new Date(Date.now() - 30_000).toISOString() } : s));

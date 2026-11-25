@@ -126,7 +126,7 @@ describe("Distributed workloads tab", () => {
     // Absent (null) is not empty: the queues could not be read.
     expect(kueueTurnBack(restorable, notSetUp({ queues: null, queuesUnknown: true }))?.reason).toBe("The queues on the cluster could not be read, so this tool cannot tell whether anything uses Kueue.");
     expect(kueueTurnBack(restorable, notSetUp({ queues: undefined }))?.reason).toContain("could not be read");
-    expect(kueueTurnBack(restorable, null)?.reason).toBe("Reading which queues are on the cluster");
+    expect(kueueTurnBack(restorable, null)?.reason).toBe("Reading which queues are on the cluster.");
     // A distributed workloads change running, or the page's own reason.
     expect(kueueTurnBack(restorable, notSetUp({ queues: [] }), { running: true })?.reason).toBe("Wait until the distributed workloads change finishes.");
     expect(kueueTurnBack(restorable, notSetUp({ queues: [] }), { baseReason: "Another operation is running." })?.reason).toBe("Another operation is running.");

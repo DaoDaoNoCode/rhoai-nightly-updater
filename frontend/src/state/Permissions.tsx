@@ -36,7 +36,7 @@ export interface PermissionsValue {
 }
 
 export const NO_PERMISSION_REASON = "Read-only access: changing the cluster through this tool requires the cluster-admin role.";
-export const PERMISSION_CHECKING_REASON = "Checking your permissions";
+export const PERMISSION_CHECKING_REASON = "Checking your permissions.";
 export const PERMISSION_UNKNOWN_REASON = "Your permissions could not be checked, so changes are disabled. Retry from the banner at the top of the page.";
 export const SESSION_EXPIRED_REASON = "Your session has expired. Sign in again to make changes.";
 

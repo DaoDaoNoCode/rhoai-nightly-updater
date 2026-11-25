@@ -250,7 +250,7 @@ export const ContainsSearchResults: React.FC<{
       <StackItem>
         {running ? (
           <Content component="p" aria-live="polite">
-            <Spinner size="sm" aria-label="Searching builds" />{" "}Checked {search.checked} of {total} builds for {inSentence}
+            <Spinner size="sm" aria-label="Searching builds" />{" "}Checked {search.checked} of {total} builds for {inSentence}.
           </Content>
         ) : (
           <>

@@ -286,7 +286,7 @@ export function kueueTurnBack(restorable: RestorableComponent[] | undefined, k: 
   if (!r || readOnly) return null;
   if (baseReason) return { restorable: r, reason: baseReason };
   if (running) return { restorable: r, reason: "Wait until the distributed workloads change finishes." };
-  if (!k) return { restorable: r, reason: "Reading which queues are on the cluster" };
+  if (!k) return { restorable: r, reason: "Reading which queues are on the cluster." };
   if (k.queuesUnknown || !Array.isArray(k.queues)) return { restorable: r, reason: "The queues on the cluster could not be read, so this tool cannot tell whether anything uses Kueue." };
   if (k.queues.length > 0) {
     const shown = k.queues.length > 3 ? [...k.queues.slice(0, 3), `${k.queues.length - 3} more`] : k.queues;
