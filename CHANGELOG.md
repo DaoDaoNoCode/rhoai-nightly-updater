@@ -16,6 +16,8 @@ release date (`YYYY-MM-DD`); the release guard (`scripts/release.sh check`)
 only accepts a tag whose version is the top dated section. See
 [CONTRIBUTING.md](CONTRIBUTING.md#releases).
 
+## [4.0.1] - unreleased
+
 ## [4.0.0] - 2026-11-20
 
 - **Requires a full redeploy** (template revision 7; 3.0.0 has revision 5):
