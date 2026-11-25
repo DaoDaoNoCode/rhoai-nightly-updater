@@ -22,7 +22,7 @@ import type { RecipeRun, ResourcesStatus } from "../../types";
 import { StepProgress, type StepState } from "../environment/StepProgress";
 import { cleanupSteps } from "../environment/CleanupModal";
 import { TooltipButton } from "../TooltipButton";
-import { cleanupParts, cleanupRequest, componentsSplit, dashboardDevLeft, leftInPlace, listText } from "./recipeForm";
+import { cleanupParts, cleanupRequest, componentName, componentsSplit, dashboardDevLeft, leftInPlace, listText } from "./recipeForm";
 
 /** The clean-up's refusal of a recipe project that still holds what the tool did not create (pkg/cluster recipe.ErrorCodeConfirmContents). */
 const CONFIRM_CONTENTS = "confirm_project_contents";
@@ -100,7 +100,9 @@ export const RecipeCleanupModal: React.FC<{
     if (p.id !== "components") return [p.title, p.description ?? "Removes everything in the project: its models, playground, workbench and pipeline server."];
     const title = split.back.length > 0 ? `Turn back the DataScienceCluster components the run turned on: ${listText(split.back)}` : "Turn back the DataScienceCluster components the run turned on";
     const stay = split.stay.length > 0 ? `Stays on while what uses it stays: ${split.stay.join("; ")}.` : "";
-    const desc = split.back.length > 0 ? `Each goes back to what it was.${stay ? ` ${stay}` : ""}` : `None goes back now. ${stay}`;
+    // Kueue's own condition, as the Distributed workloads tab's Clean up says it (the server checks it when it runs).
+    const kueue = split.back.includes(componentName("kueue")) ? " Kueue goes back last, only once no ClusterQueue or LocalQueue is left on the cluster." : "";
+    const desc = split.back.length > 0 ? `Each goes back to what it was.${kueue}${stay ? ` ${stay}` : ""}` : `None goes back now. ${stay}`;
     return [title, desc];
   };
   const steps = cleanupSteps(sent ?? req);

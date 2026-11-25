@@ -1,7 +1,8 @@
 {
   "cleanup": {
     "components": [
-      "kserve"
+      "kserve",
+      "kueue"
     ],
     "kueue": true,
     "kueueUid": "clusterqueue-uid",
@@ -35,7 +36,8 @@
     "bootId": "another-process",
     "components": [
       "aipipelines",
-      "kserve"
+      "kserve",
+      "kueue"
     ],
     "createdParts": [
       {
@@ -307,6 +309,7 @@
         "typicalSeconds": 30
       },
       {
+        "created": true,
         "finishedAt": "2026-11-20T15:56:00Z",
         "id": "kueue-prereq",
         "maxSeconds": 900,
