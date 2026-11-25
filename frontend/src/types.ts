@@ -2056,6 +2056,8 @@ export interface KueueObject {
   active?: boolean;
   message?: string;
   terminating?: boolean;
+  /** The LocalQueue only: whose it is cannot be told, the project cannot be read. */
+  unknown?: boolean;
   /** This tool's ClusterQueue made by an earlier version with another quota: how it differs. */
   outdated?: string;
 }
@@ -2073,6 +2075,8 @@ export interface KueueSample {
   state?: string;
   message?: string;
   rayState?: string;
+  /** Whose it is cannot be told: the project cannot be read. */
+  unknown?: boolean;
   /** This tool's sample made by an earlier version with other sizes: how it differs. */
   outdated?: string;
 }
@@ -2105,6 +2109,10 @@ export interface KueueStatus {
   optIn: KueueOptIn;
   defaultRayImage: string;
   itemsProblem?: string;
+  /** The project of the tool's setup is gone, or was made again since: "Project recipe-dev is gone; set up again." */
+  projectGone?: string;
+  /** The project of projectGone was made again: Set up can run in it again. */
+  projectRemade?: boolean;
   dashboardUrl?: string;
   /** Every ClusterQueue and LocalQueue on the cluster, of any owner: while there is one, Clean up keeps kueue on. null: unread. */
   queues?: string[] | null;

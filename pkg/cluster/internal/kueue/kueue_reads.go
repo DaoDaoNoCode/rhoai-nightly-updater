@@ -133,9 +133,10 @@ func (q Queue) active() (bool, string) {
 	return cond.Status == "True", kube.FirstNonEmpty(cond.Message, cond.Reason)
 }
 
-// nominalQuota is the ClusterQueue's nominal CPU and memory quota for the
-// tool's flavor, as the API returns them ("" when not set).
-func (q Queue) nominalQuota() (cpu, memory string) {
+// nominalQuota is the ClusterQueue's nominal CPU, memory and ephemeral
+// storage quota for the tool's flavor, as the API returns them ("" when
+// not set).
+func (q Queue) nominalQuota() (cpu, memory, ephemeral string) {
 	for _, g := range q.Spec.ResourceGroups {
 		for _, f := range g.Flavors {
 			if f.Name != FlavorName {
@@ -147,11 +148,13 @@ func (q Queue) nominalQuota() (cpu, memory string) {
 					cpu = string(r.NominalQuota)
 				case "memory":
 					memory = string(r.NominalQuota)
+				case "ephemeral-storage":
+					ephemeral = string(r.NominalQuota)
 				}
 			}
 		}
 	}
-	return cpu, memory
+	return cpu, memory, ephemeral
 }
 
 func (q Queue) usesFlavor(name string) bool {
@@ -460,4 +463,40 @@ func olmInstalled(m kube.ObjectMeta) bool {
 		}
 	}
 	return false
+}
+
+// AutoQueuesRefusal is why Set up refuses while RHOAI creates a LocalQueue
+// in every labelled project (AutoCreatedQueue) under a name that collides
+// with this tool's setup, or "": named default, Kueue queues every new
+// Deployment, StatefulSet and Pod of the project in it (kubernetes-sigs/kueue
+// v0.19.0 pkg/controller/jobframework/defaults.go) and Set up refuses a
+// project with that queue; named nightly-kueue, it is a LocalQueue of the
+// tool's name that the tool did not create, which Set up refuses. Labelling
+// the project makes it, so it is said up front.
+func AutoQueuesRefusal(dsc rhoai.DSCRead) string {
+	switch q := AutoCreatedQueue(dsc); q {
+	case "default", LocalQueueName:
+		return fmt.Sprintf("The DataScienceCluster sets kueue.autoCreateQueues: true, so RHOAI creates a LocalQueue named %s in every project with the label kueue.openshift.io/managed=true, which collides with this tool's setup (a LocalQueue named default takes every new Deployment, StatefulSet and Pod of the project; %s is this tool's LocalQueue). Use RHOAI's queues (a Queue hardware profile for that LocalQueue), or a cluster-admin sets autoCreateQueues to false (or defaultLocalQueueName to another name). Nothing was changed.", q, LocalQueueName)
+	}
+	return ""
+}
+
+// AutoCreatedQueue is the LocalQueue RHOAI creates in every project with
+// the label kueue.openshift.io/managed=true when the DataScienceCluster's
+// spec.components.kueue.autoCreateQueues is true (rhods-operator rhoai-3.6
+// api/components/v1alpha1/kueue_types.go L126-151, default false;
+// internal/controller/components/kueue/kueue_controller_actions.go
+// L153-204): its defaultLocalQueueName, "default" when unset. "" when
+// autoCreateQueues is off or unset.
+func AutoCreatedQueue(dsc rhoai.DSCRead) string {
+	spec, _ := dsc.Object["spec"].(map[string]any)
+	comps, _ := spec["components"].(map[string]any)
+	k, _ := comps["kueue"].(map[string]any)
+	if on, _ := k["autoCreateQueues"].(bool); !on {
+		return ""
+	}
+	if name, _ := k["defaultLocalQueueName"].(string); name != "" {
+		return name
+	}
+	return "default"
 }

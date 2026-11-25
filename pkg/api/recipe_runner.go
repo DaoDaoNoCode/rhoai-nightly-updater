@@ -332,7 +332,9 @@ func beginRecipeRun(c *cluster.Client, w http.ResponseWriter, st *recipeStart, r
 		writeRecipeRefusal(w, http.StatusUnprocessableEntity, "prerequisites", "The recipe cannot run on this cluster now. Nothing was changed.", plan.Problems, plan)
 		return
 	}
-	steps := recipeSteps(rcp)
+	// The steps in the order the plan chose (distributed workloads before
+	// the workloads or after them).
+	steps := recipeSteps(state)
 	now := time.Now().UTC().Format(time.RFC3339)
 	run := &types.RecipeRun{
 		ID: newOperationID(), OperationID: st.op.ID, BootID: bootID, Pod: os.Getenv("HOSTNAME"), User: st.sw.user,

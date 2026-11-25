@@ -231,30 +231,23 @@ func listModelLocalQueues(c *kube.Client, project string) ([]string, error) {
 	return names, nil
 }
 
-// pickHardwareProfile finds, in the dashboard's namespace, the first
-// profile by name that fits the model (see fits) and the dashboard's Kueue
-// rule for the project (kueueFilter). It returns the profile, or a zero
-// profile and why none was used; a read error is a reason too: the profile
-// is a label in the dashboard, never a reason to stop.
-func pickHardwareProfile(c *kube.Client, project string, entry CatalogModel) (HardwareProfile, string) {
-	ns, err := rhoai.AppsNamespace(c)
-	if err != nil {
-		return HardwareProfile{}, fmt.Sprintf("the dashboard's namespace is not known (%v)", err)
-	}
-	mode, queues, err := projectKueueMode(c, project, ns)
-	if err != nil {
-		return HardwareProfile{}, fmt.Sprintf("the project's Kueue settings cannot be read (%v)", err)
-	}
-	if mode == envkit.NoProfiles {
-		return HardwareProfile{}, "the project uses Kueue (label kueue.openshift.io/managed=true) while Kueue is off in the dashboard, so the dashboard offers no hardware profile there"
-	}
+// ListHardwareProfiles lists the hardware profiles in ns (the
+// dashboard's namespace holds the global ones).
+func ListHardwareProfiles(c *kube.Client, ns string) ([]HardwareProfileObject, error) {
 	var items []HardwareProfileObject
-	if err := c.ListInto(rhoai.NamespacedPath("infrastructure.opendatahub.io/v1", "hardwareprofiles", ns, ""), &items); err != nil {
-		if kube.IsDecodeError(err) {
-			return HardwareProfile{}, "the hardware profiles cannot be parsed"
-		}
-		return HardwareProfile{}, fmt.Sprintf("the hardware profiles in %s cannot be read (%v)", ns, err)
+	err := c.ListInto(rhoai.NamespacedPath("infrastructure.opendatahub.io/v1", "hardwareprofiles", ns, ""), &items)
+	return items, err
+}
+
+// ChooseModelProfile is the profile a model of entry is recorded under:
+// the first by name that the dashboard's Kueue rule keeps for the project
+// (kueueFilter: mode, and its LocalQueues when mode is OnlyKueue) and that
+// fits the model (Fits). It returns why none does otherwise.
+func ChooseModelProfile(items []HardwareProfileObject, mode envkit.KueueMode, queues []string, entry CatalogModel) (HardwareProfileObject, string) {
+	if mode == envkit.NoProfiles {
+		return HardwareProfileObject{}, "the project uses Kueue (label kueue.openshift.io/managed=true) while Kueue is off in the dashboard, so the dashboard offers no hardware profile there"
 	}
+	items = slices.Clone(items)
 	sort.Slice(items, func(i, j int) bool { return items[i].Metadata.Name < items[j].Metadata.Name })
 	var why []string
 	for _, p := range items {
@@ -263,12 +256,62 @@ func pickHardwareProfile(c *kube.Client, project string, entry CatalogModel) (Ha
 			reason = p.Fits(entry)
 		}
 		if reason == "" {
-			return HardwareProfile{Name: p.Metadata.Name, Namespace: ns, ResourceVersion: p.Metadata.ResourceVersion}, ""
+			return p, ""
 		}
 		why = append(why, p.Metadata.Name+": "+reason)
 	}
 	if len(why) == 0 {
-		return HardwareProfile{}, "the cluster has no hardware profiles"
+		return HardwareProfileObject{}, "the cluster has no hardware profiles"
 	}
-	return HardwareProfile{}, fmt.Sprintf("no hardware profile allows %s CPUs and %s-%s of memory (%s)", entry.CPU, entry.MemoryRequest, entry.Memory, strings.Join(why, "; "))
+	return HardwareProfileObject{}, fmt.Sprintf("no hardware profile allows %s CPUs and %s-%s of memory (%s)", entry.CPU, entry.MemoryRequest, entry.Memory, strings.Join(why, "; "))
+}
+
+// pickHardwareProfile finds, in the dashboard's namespace, the profile the
+// model is recorded under (ChooseModelProfile). It returns the profile, or
+// a zero profile and why none was used. Outside a Kueue project the
+// profile is a label in the dashboard, never a reason to stop (a read
+// error is a reason too). In a project the dashboard treats as Kueue's
+// (envkit.KueueModeFor: OnlyKueue or NoProfiles) the dashboard deploys a
+// model only with a Queue hardware profile of a LocalQueue the project
+// has (the deploy form's hardware profile is required, odh-dashboard
+// rhoai-3.7-ea.1 packages/hardware-profiles/shared/HardwareProfileFormSection.tsx
+// L141, and HardwareProfileSelect.tsx L455-459 offers only those), so a
+// model without one would run around Kueue's queue and quota: refusal is
+// then why the model is not set up (fail closed, also when a read fails).
+func pickHardwareProfile(c *kube.Client, project string, entry CatalogModel) (hw HardwareProfile, why, refusal string) {
+	ns, err := rhoai.AppsNamespace(c)
+	if err != nil {
+		// Whether the project is Kueue's does not need the dashboard's
+		// namespace: one that is (or cannot be read) refuses.
+		meta, found, rerr := kube.ReadObjectMeta(c, "/api/v1/namespaces/"+project)
+		if rerr != nil || (found && meta.Labels[envkit.KueueProjectLabel] == "true") {
+			return HardwareProfile{}, "", fmt.Sprintf("Cannot tell which hardware profile the dashboard offers in project %s, which uses Kueue or cannot be read: the dashboard's namespace is not known (%v).", project, err)
+		}
+		return HardwareProfile{}, fmt.Sprintf("the dashboard's namespace is not known (%v)", err), ""
+	}
+	mode, queues, err := projectKueueMode(c, project, ns)
+	if err != nil {
+		return HardwareProfile{}, "", fmt.Sprintf("Cannot tell whether project %s uses Kueue: %v.", project, err)
+	}
+	refuse := func(why string) (HardwareProfile, string, string) {
+		switch mode {
+		case envkit.OnlyNonKueue:
+			return HardwareProfile{}, why, ""
+		case envkit.NoProfiles:
+			return HardwareProfile{}, why, fmt.Sprintf("Project %s has the label %s=true while Kueue is off in the dashboard, so the dashboard offers no hardware profile there and deploys no model; this tool does not deploy one around Kueue either.", project, envkit.KueueProjectLabel)
+		}
+		return HardwareProfile{}, why, fmt.Sprintf("Project %s uses Kueue, where the dashboard deploys a model only with a Queue hardware profile of a LocalQueue the project has, and %s.", project, why)
+	}
+	items, err := ListHardwareProfiles(c, ns)
+	if err != nil {
+		if kube.IsDecodeError(err) {
+			return refuse("the hardware profiles cannot be parsed")
+		}
+		return refuse(fmt.Sprintf("the hardware profiles in %s cannot be read (%v)", ns, err))
+	}
+	p, why := ChooseModelProfile(items, mode, queues, entry)
+	if why != "" {
+		return refuse(why)
+	}
+	return HardwareProfile{Name: p.Metadata.Name, Namespace: ns, ResourceVersion: p.Metadata.ResourceVersion}, "", ""
 }

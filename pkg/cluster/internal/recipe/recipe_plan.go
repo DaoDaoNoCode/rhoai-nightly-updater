@@ -3,11 +3,13 @@ package recipe
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kueue"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/node"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
@@ -40,6 +42,17 @@ var stepDependsOn = map[string][]string{
 	StepKueuePrereq:  {StepRHOAI, StepDSC, StepPrerequisites},
 	StepKueue:        {StepRHOAI, StepDSC, StepProject, StepKueuePrereq},
 	StepDashboardDev: {StepRHOAI, StepDSC},
+}
+
+// dependsOn is stepDependsOn[id] for the run s plans: with distributed
+// workloads first (KueueFirst) the workbench's check also depends on the
+// Kueue steps, which make the LocalQueue and the Queue hardware profile
+// its profile is chosen from.
+func dependsOn(s *State, id string) []string {
+	if id == StepWorkbench && s.KueueFirst {
+		return append(slices.Clone(stepDependsOn[id]), StepKueuePrereq, StepKueue)
+	}
+	return stepDependsOn[id]
 }
 
 // buildResolveTimeout bounds resolving the recipe's build on Quay.
@@ -95,14 +108,29 @@ func Plan(c *kube.Client, r types.EnvironmentRecipe, pinned *types.RecipePinnedB
 	if r.Spec.RHOAI.IfInstalled == IfInstalledUpdate {
 		resolve()
 	}
+	// The dashboard's Kueue setting decides the run order (KueueFirst) and
+	// which hardware profiles the dashboard offers the workloads.
+	f := r.Spec.Features
+	settingKnown, settingOn := false, false
+	if (f.Kueue.Enabled && !f.Kueue.DashboardOptIn) || f.Workbench.Enabled || f.Models.Enabled {
+		on, err := dashboardKueueOn(c)
+		if err != nil {
+			p.addFix(checkFailed(), "", "Cannot read the dashboard's Kueue setting, which decides whether distributed workloads come before the workbench and the model, and which hardware profiles the dashboard offers them: %v. Nothing was changed.", err)
+		} else {
+			settingKnown, settingOn = true, on
+		}
+	}
+	s.KueueFirst = KueueFirst(r, settingOn)
+	var kueueBlocks map[string]string
+	kueueChecked := false
 	willRun := map[string]bool{}
-	steps := Steps(r)
+	steps := Steps(r, s.KueueFirst)
 	typical, most := make([]int, len(steps)), make([]int, len(steps))
 	for i, step := range steps {
 		ps := types.RecipePlanStep{ID: step.ID, Title: step.Title}
 		ps.TypicalSeconds, ps.MaxSeconds = step.Seconds()
 		later := false
-		for _, dep := range stepDependsOn[step.ID] {
+		for _, dep := range dependsOn(&s, step.ID) {
 			later = later || willRun[dep]
 		}
 		if later {
@@ -120,6 +148,32 @@ func Plan(c *kube.Client, r types.EnvironmentRecipe, pinned *types.RecipePinnedB
 			default:
 				ps.Action = types.RecipeStepRun
 				willRun[step.ID] = true
+			}
+		}
+		// RHOAI's auto-created LocalQueue default (K4): the Kueue step
+		// would refuse once the project is labelled.
+		if step.ID == StepKueue && (ps.Action == types.RecipeStepRun || ps.Action == types.RecipeStepLater) {
+			if dsc, err := rhoai.ReadFirstDSC(c); err != nil {
+				ps.Action, ps.Reason, ps.Fix = types.RecipeStepBlocked, fmt.Sprintf("Cannot check it: read the DataScienceCluster: %v.", err), checkFailed()
+			} else if why := kueue.AutoQueuesRefusal(dsc); why != "" {
+				ps.Action, ps.Reason, ps.Fix = types.RecipeStepBlocked, why, fixAt(types.RecipeFixFeatureBlocked, pageComponents)
+			}
+		}
+		// A workbench or model the run creates where the dashboard will
+		// offer it no usable hardware profile (workloadKueueBlocks).
+		// Deferred while the RHOAI or DataScienceCluster step will run: they
+		// bring the dashboard, its settings and the HardwareProfile API,
+		// so the workloads are checked when the run gets there.
+		if (step.ID == StepWorkbench || step.ID == StepModel) && settingKnown && !willRun[StepRHOAI] && !willRun[StepDSC] && (ps.Action == types.RecipeStepRun || ps.Action == types.RecipeStepLater) {
+			if !kueueChecked {
+				kueueChecked = true
+				var err error
+				if kueueBlocks, err = workloadKueueBlocks(c, &s, settingOn, willRun[StepProject]); err != nil {
+					p.addFix(checkFailed(), "", "Cannot check which hardware profiles the dashboard will offer the workbench and the model: %v. Nothing was changed.", err)
+				}
+			}
+			if why := kueueBlocks[step.ID]; why != "" {
+				ps.Action, ps.Reason, ps.Fix = types.RecipeStepBlocked, why, fixAt(types.RecipeFixFeatureBlocked, pageEnvironment)
 			}
 		}
 		if ps.Action == types.RecipeStepBlocked {

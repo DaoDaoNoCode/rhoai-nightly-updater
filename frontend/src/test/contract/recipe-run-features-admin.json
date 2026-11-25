@@ -176,138 +176,138 @@
         "typicalSeconds": 300
       },
       {
+        "created": true,
         "finishedAt": "2026-11-20T15:14:00Z",
-        "id": "s3",
-        "maxSeconds": 300,
-        "message": "S3 storage is set up.",
-        "startedAt": "2026-11-20T15:12:00Z",
-        "status": "success",
-        "title": "S3 storage",
-        "typicalSeconds": 60
-      },
-      {
-        "finishedAt": "2026-11-20T15:17:00Z",
-        "id": "pipeline-server",
-        "maxSeconds": 600,
-        "message": "Pipeline server is set up.",
-        "startedAt": "2026-11-20T15:15:00Z",
-        "status": "success",
-        "title": "Pipeline server",
-        "typicalSeconds": 120
-      },
-      {
-        "finishedAt": "2026-11-20T15:20:00Z",
-        "id": "mlflow",
-        "maxSeconds": 600,
-        "message": "MLflow is set up.",
-        "startedAt": "2026-11-20T15:18:00Z",
-        "status": "success",
-        "title": "MLflow",
-        "typicalSeconds": 120
-      },
-      {
-        "finishedAt": "2026-11-20T15:23:00Z",
-        "id": "mlflow-samples",
-        "maxSeconds": 900,
-        "message": "MLflow samples is set up.",
-        "startedAt": "2026-11-20T15:21:00Z",
-        "status": "success",
-        "title": "MLflow samples",
-        "typicalSeconds": 60
-      },
-      {
-        "created": true,
-        "finishedAt": "2026-11-20T15:26:00Z",
-        "id": "maas",
-        "maxSeconds": 900,
-        "message": "Models as a Service is set up.",
-        "startedAt": "2026-11-20T15:24:00Z",
-        "status": "success",
-        "title": "Models as a Service",
-        "typicalSeconds": 600
-      },
-      {
-        "finishedAt": "2026-11-20T15:29:00Z",
-        "id": "models-prereq",
-        "maxSeconds": 900,
-        "message": "What the model's access needs is set up.",
-        "startedAt": "2026-11-20T15:27:00Z",
-        "status": "success",
-        "title": "What the model's access needs",
-        "typicalSeconds": 60
-      },
-      {
-        "finishedAt": "2026-11-20T15:32:00Z",
-        "id": "model",
-        "maxSeconds": 900,
-        "message": "Model Qwen3 1.7B (CPU, tool calling) is set up.",
-        "startedAt": "2026-11-20T15:30:00Z",
-        "status": "success",
-        "title": "Model Qwen3 1.7B (CPU, tool calling)",
-        "typicalSeconds": 300
-      },
-      {
-        "finishedAt": "2026-11-20T15:35:00Z",
-        "id": "maas-publish",
-        "maxSeconds": 900,
-        "message": "Publish the model through MaaS is set up.",
-        "startedAt": "2026-11-20T15:33:00Z",
-        "status": "success",
-        "title": "Publish the model through MaaS",
-        "typicalSeconds": 120
-      },
-      {
-        "finishedAt": "2026-11-20T15:38:00Z",
-        "id": "playground",
-        "maxSeconds": 540,
-        "message": "Playground is set up.",
-        "startedAt": "2026-11-20T15:36:00Z",
-        "status": "success",
-        "title": "Playground",
-        "typicalSeconds": 120
-      },
-      {
-        "created": true,
-        "finishedAt": "2026-11-20T15:41:00Z",
-        "id": "model-registry",
-        "maxSeconds": 720,
-        "message": "Model registry is set up.",
-        "startedAt": "2026-11-20T15:39:00Z",
-        "status": "success",
-        "title": "Model registry",
-        "typicalSeconds": 120
-      },
-      {
-        "finishedAt": "2026-11-20T15:44:00Z",
-        "id": "workbench",
-        "maxSeconds": 900,
-        "message": "Workbench is set up.",
-        "startedAt": "2026-11-20T15:42:00Z",
-        "status": "success",
-        "title": "Workbench",
-        "typicalSeconds": 30
-      },
-      {
-        "created": true,
-        "finishedAt": "2026-11-20T15:47:00Z",
         "id": "kueue-prereq",
         "maxSeconds": 900,
         "message": "What distributed workloads need is set up.",
-        "startedAt": "2026-11-20T15:45:00Z",
+        "startedAt": "2026-11-20T15:12:00Z",
         "status": "success",
         "title": "What distributed workloads need",
         "typicalSeconds": 120
       },
       {
         "created": true,
-        "finishedAt": "2026-11-20T15:50:00Z",
+        "finishedAt": "2026-11-20T15:17:00Z",
         "id": "kueue",
         "maxSeconds": 600,
         "message": "Distributed workloads is set up.",
-        "startedAt": "2026-11-20T15:48:00Z",
+        "startedAt": "2026-11-20T15:15:00Z",
         "status": "success",
         "title": "Distributed workloads",
         "typicalSeconds": 60
+      },
+      {
+        "finishedAt": "2026-11-20T15:20:00Z",
+        "id": "s3",
+        "maxSeconds": 300,
+        "message": "S3 storage is set up.",
+        "startedAt": "2026-11-20T15:18:00Z",
+        "status": "success",
+        "title": "S3 storage",
+        "typicalSeconds": 60
+      },
+      {
+        "finishedAt": "2026-11-20T15:23:00Z",
+        "id": "pipeline-server",
+        "maxSeconds": 600,
+        "message": "Pipeline server is set up.",
+        "startedAt": "2026-11-20T15:21:00Z",
+        "status": "success",
+        "title": "Pipeline server",
+        "typicalSeconds": 120
+      },
+      {
+        "finishedAt": "2026-11-20T15:26:00Z",
+        "id": "mlflow",
+        "maxSeconds": 600,
+        "message": "MLflow is set up.",
+        "startedAt": "2026-11-20T15:24:00Z",
+        "status": "success",
+        "title": "MLflow",
+        "typicalSeconds": 120
+      },
+      {
+        "finishedAt": "2026-11-20T15:29:00Z",
+        "id": "mlflow-samples",
+        "maxSeconds": 900,
+        "message": "MLflow samples is set up.",
+        "startedAt": "2026-11-20T15:27:00Z",
+        "status": "success",
+        "title": "MLflow samples",
+        "typicalSeconds": 60
+      },
+      {
+        "created": true,
+        "finishedAt": "2026-11-20T15:32:00Z",
+        "id": "maas",
+        "maxSeconds": 900,
+        "message": "Models as a Service is set up.",
+        "startedAt": "2026-11-20T15:30:00Z",
+        "status": "success",
+        "title": "Models as a Service",
+        "typicalSeconds": 600
+      },
+      {
+        "finishedAt": "2026-11-20T15:35:00Z",
+        "id": "models-prereq",
+        "maxSeconds": 900,
+        "message": "What the model's access needs is set up.",
+        "startedAt": "2026-11-20T15:33:00Z",
+        "status": "success",
+        "title": "What the model's access needs",
+        "typicalSeconds": 60
+      },
+      {
+        "finishedAt": "2026-11-20T15:38:00Z",
+        "id": "model",
+        "maxSeconds": 900,
+        "message": "Model Qwen3 1.7B (CPU, tool calling) is set up.",
+        "startedAt": "2026-11-20T15:36:00Z",
+        "status": "success",
+        "title": "Model Qwen3 1.7B (CPU, tool calling)",
+        "typicalSeconds": 300
+      },
+      {
+        "finishedAt": "2026-11-20T15:41:00Z",
+        "id": "maas-publish",
+        "maxSeconds": 900,
+        "message": "Publish the model through MaaS is set up.",
+        "startedAt": "2026-11-20T15:39:00Z",
+        "status": "success",
+        "title": "Publish the model through MaaS",
+        "typicalSeconds": 120
+      },
+      {
+        "finishedAt": "2026-11-20T15:44:00Z",
+        "id": "playground",
+        "maxSeconds": 540,
+        "message": "Playground is set up.",
+        "startedAt": "2026-11-20T15:42:00Z",
+        "status": "success",
+        "title": "Playground",
+        "typicalSeconds": 120
+      },
+      {
+        "created": true,
+        "finishedAt": "2026-11-20T15:47:00Z",
+        "id": "model-registry",
+        "maxSeconds": 720,
+        "message": "Model registry is set up.",
+        "startedAt": "2026-11-20T15:45:00Z",
+        "status": "success",
+        "title": "Model registry",
+        "typicalSeconds": 120
+      },
+      {
+        "finishedAt": "2026-11-20T15:50:00Z",
+        "id": "workbench",
+        "maxSeconds": 900,
+        "message": "Workbench is set up.",
+        "startedAt": "2026-11-20T15:48:00Z",
+        "status": "success",
+        "title": "Workbench",
+        "typicalSeconds": 30
       },
       {
         "finishedAt": "2026-11-20T15:53:00Z",

@@ -3,6 +3,7 @@ package cluster
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -32,11 +33,10 @@ const (
 	kqV1beta2   = `{"name":"kueue.x-k8s.io","versions":[{"version":"v1beta2"},{"version":"v1beta1"}],"preferredVersion":{"version":"v1beta2"}}`
 )
 
-// putKueueCluster builds a fake cluster with Kueue ready to exercise: DSC
-// has kueue Unmanaged and KueueReady True, ray Managed, kueue.x-k8s.io/v1beta2
-// on the API, the Kueue CR cluster Available, namespace proj marked as a data
-// science project, and dashboard config without disableKueue. The caller gets
-// a user-scoped client.
+// putKueueCluster assembles a fake cluster ready for Kueue exercises: DSC
+// kueue is Unmanaged with KueueReady True, ray Managed, kueue.x-k8s.io/v1beta2
+// is served, the cluster Kueue CR is Available, proj is a data science project,
+// and dashboard config has no disableKueue. The caller receives a user-scoped client.
 func putKueueCluster(t *testing.T) (*resourceFake, *Client) {
 	t.Helper()
 	f, c := newResourceFake(t)
@@ -77,12 +77,11 @@ func nsLabels(f *resourceFake) map[string]any {
 	return ensureMap(ensureMap(f.get(wbProjectNS), "metadata"), "labels")
 }
 
-// Queue manifests match the self-managed layout from the docs: LocalQueue must
-// not be "default" (otherwise Kueue would admit every new pod workload), the
-// ClusterQueue scopes to the project only, disables preemption, and sets
-// nominal quotas large enough for both Ray samples plus one opt-in-profile
-// workload; the Ray samples share a single cluster spec and both bear the
-// queue name label.
+// Manifests follow the documented self-managed layout: LocalQueue cannot be
+// "default" (Kueue would otherwise admit every new pod workload), ClusterQueue
+// limits scope to the project, turns off preemption, and sets nominal quotas for
+// both Ray samples and one opt-in-profile workload; the Ray samples reuse one
+// cluster spec and both carry the queue name label.
 func TestKueueManifests(t *testing.T) {
 	if kueue.LocalQueueName == "default" || kueue.ClusterQueueName == "default" {
 		t.Fatal("a queue is named default")
@@ -94,9 +93,9 @@ func TestKueueManifests(t *testing.T) {
 	assertJSONEqual(t, kueue.ClusterQueueManifest("proj"), `{"apiVersion":"kueue.x-k8s.io/v1beta2","kind":"ClusterQueue",
 		"metadata":{"name":"nightly-kueue","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}},
 		"spec":{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"proj"}},
-			"resourceGroups":[{"coveredResources":["cpu","memory"],"flavors":[{"name":"nightly-kueue-cpu","resources":[{"name":"cpu","nominalQuota":"6"},{"name":"memory","nominalQuota":"19Gi"}]}]}]}}`)
+			"resourceGroups":[{"coveredResources":["cpu","memory","ephemeral-storage"],"flavors":[{"name":"nightly-kueue-cpu","resources":[{"name":"cpu","nominalQuota":"10"},{"name":"memory","nominalQuota":"32Gi"},{"name":"ephemeral-storage","nominalQuota":"6Gi"}]}]}]}}`)
 	assertJSONEqual(t, kueue.FlavorManifest(), `{"apiVersion":"kueue.x-k8s.io/v1beta2","kind":"ResourceFlavor","metadata":{"name":"nightly-kueue-cpu","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}},"spec":{}}`)
-	// Combined sample requests plus the profile default must fit under the quota.
+	// Sample requests plus the profile default must remain within the quota ceiling.
 	sum := func(obj map[string]any) (cpu, memMi float64) {
 		raw, _ := json.Marshal(obj)
 		var walk func(v any)
@@ -125,18 +124,47 @@ func TestKueueManifests(t *testing.T) {
 	}
 	c1, m1 := sum(kueue.RayClusterManifest("proj", kueue.DefaultRayImage))
 	c2, m2 := sum(kueue.RayJobManifest("proj", kueue.DefaultRayImage))
-	if c1+c2+1 > 6 || m1+m2+2048 > 19*1024 || c1 != 2 || c2 != 2.5 || m1 != 8*1024 || m2 != 9*1024 {
-		t.Fatalf("quota 6 CPUs / 19Gi does not hold the samples: %v+%v CPU, %v+%v Mi", c1, c2, m1, m2)
+	// Opt-in-profile workbench uses 1 CPU and 2Gi, with kube-rbac-proxy at
+	// 100m CPU and 64Mi; the largest catalog model (Qwen3: 4 CPUs, 12Gi
+	// requested, 6.2G of ephemeral storage) on the same profile.
+	wbCPU, wbMi := 1.0+0.1, 2048.0+64
+	var modelCPU, modelMi, modelEph float64
+	for _, e := range serving.ModelCatalog {
+		cpu, _ := serving.ParseQuantity(e.CPU)
+		mem, _ := serving.ParseQuantity(e.MemoryRequest)
+		eph, ok := serving.ParseQuantity(e.EphemeralStorage)
+		if !ok {
+			t.Fatalf("%s: ephemeral storage %q", e.Name, e.EphemeralStorage)
+		}
+		modelCPU, modelMi, modelEph = max(modelCPU, cpu), max(modelMi, mem/(1<<20)), max(modelEph, eph)
 	}
-	// Head and worker sized as the CodeFlare SDK's defaults, requests below
-	// limits (a 2Gi head was OOMKilled live).
+	if modelCPU != 4 || modelMi != 12*1024 || modelEph != 6.2e9 {
+		t.Fatalf("largest model %v CPUs, %v Mi, %v bytes", modelCPU, modelMi, modelEph)
+	}
+	if c1+c2+wbCPU+modelCPU > 10 || m1+m2+wbMi+modelMi > 32*1024 || m1+m2+wbMi+modelMi <= 31*1024 || modelEph > 6*(1<<30) || c1 != 2 || c2 != 2.5 || m1 != 8*1024 || m2 != 9*1024 {
+		t.Fatalf("quota 10 CPUs / 32Gi / 6Gi does not hold the samples, the workbench and the model: %v+%v+%v+%v CPU, %v+%v+%v+%v Mi", c1, c2, wbCPU, modelCPU, m1, m2, wbMi, modelMi)
+	}
+	// The Queue profile's ranges hold every catalog model, as the
+	// dashboard deploys one in a Kueue project only with such a profile.
+	var prof serving.HardwareProfileObject
+	raw, _ := json.Marshal(kueue.ProfileManifest("apps", "now"))
+	if err := json.Unmarshal(raw, &prof); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range serving.ModelCatalog {
+		if why := prof.Fits(e); why != "" {
+			t.Errorf("the Queue profile does not hold %s: %s", e.Name, why)
+		}
+	}
+	// Head and worker match CodeFlare SDK defaults; requests stay under limits
+	// (a 2Gi head OOMKilled in live runs).
 	spec := kueue.RayClusterSpec(kueue.DefaultRayImage)
 	head := spec["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)["resources"]
 	worker := spec["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)["resources"]
 	assertJSONEqual(t, head, `{"requests":{"cpu":"1","memory":"5Gi"},"limits":{"cpu":"2","memory":"8Gi"}}`)
 	assertJSONEqual(t, worker, `{"requests":{"cpu":"1","memory":"3Gi"},"limits":{"cpu":"1","memory":"6Gi"}}`)
-	if cpu, memory := kueue.Quota(); cpu != "6" || memory != "19Gi" {
-		t.Fatalf("Quota() = %s, %s; want 6, 19Gi", cpu, memory)
+	if cpu, memory, eph := kueue.Quota(); cpu != "10" || memory != "32Gi" || eph != "6Gi" {
+		t.Fatalf("Quota() = %s, %s, %s; want 10, 32Gi, 6Gi", cpu, memory, eph)
 	}
 	rc, rj := kueue.RayClusterManifest("proj", "img:2.47.1-x"), kueue.RayJobManifest("proj", "img:2.47.1-x")
 	a, _ := json.Marshal(rc["spec"])
@@ -184,7 +212,7 @@ func TestKueueValidate(t *testing.T) {
 	}
 }
 
-// WorkloadState mirrors dashboard ordering when it maps conditions to a state.
+// WorkloadState uses the same condition-to-state ordering as the dashboard.
 func TestKueueWorkloadState(t *testing.T) {
 	c := func(typ, status, reason, msg string) kueue.Condition {
 		return kueue.Condition{Type: typ, Status: status, Reason: reason, Message: msg}
@@ -209,9 +237,9 @@ func TestKueueWorkloadState(t *testing.T) {
 	}
 }
 
-// Setup dry-runs each create server-side, then provisions queues, patches the
-// project label, and creates samples—in that sequence—all authenticated as
-// the user, persisting UIDs and whether the label was applied.
+// Setup server-side dry-runs every create, then provisions queues, patches the
+// project label, and creates samples in that order, all as the user, storing UIDs
+// and whether the label was applied.
 func TestKueueSetup(t *testing.T) {
 	f, u := putKueueCluster(t)
 	res, events := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj", RayCluster: true, RayJob: true})
@@ -250,19 +278,19 @@ func TestKueueSetup(t *testing.T) {
 	if rec.Project != "proj" || rec.ProjectUID != "ns-uid" || !rec.LabelAdded || rec.FlavorUID == "" || rec.ClusterQueueUID == "" || rec.LocalQueueUID == "" || rec.RayClusterUID == "" || rec.RayJobUID == "" {
 		t.Fatalf("record %+v", rec)
 	}
-	// A repeat setup must not issue further creates.
+	// A second setup must not trigger any more creates.
 	before := len(f.mutations())
 	if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj", RayCluster: true}); !res.Success || len(f.mutations()) != before {
 		t.Fatalf("second setup: %+v %v", res, f.mutations()[before:])
 	}
-	// Status calls with the ServiceAccount client must fail.
+	// GetKueueStatus with the ServiceAccount client must error.
 	if _, err := GetKueueStatus(u, u.Bookkeeping(), "proj"); !errors.Is(err, authz.ErrNotUserClient) {
 		t.Fatalf("status with the ServiceAccount: %v", err)
 	}
 }
 
-// Setup aborts with no mutations when prerequisites would hide the flow in the
-// dashboard or would collide with existing project queue state.
+// Setup bails out without mutations when prerequisites would obscure the dashboard
+// flow or conflict with queue state already present on the project.
 func TestKueueSetupRefusals(t *testing.T) {
 	for _, tc := range []struct {
 		name, want, code string
@@ -292,6 +320,14 @@ func TestKueueSetupRefusals(t *testing.T) {
 			f.putJSON(wbDSCv2+"/default-dsc", `{"metadata":{"name":"default-dsc"},"spec":{"components":{"kueue":{"managementState":"Unmanaged"},"ray":{"managementState":"Removed"}}},
 				"status":{"conditions":[{"type":"KueueReady","status":"True"}]}}`)
 		}},
+		{"DSC autoCreateQueues", "kueue.autoCreateQueues: true", "unsupported", func(f *resourceFake) {
+			f.putJSON(wbDSCv2+"/default-dsc", `{"metadata":{"name":"default-dsc"},"spec":{"components":{"kueue":{"managementState":"Unmanaged","autoCreateQueues":true},"ray":{"managementState":"Managed"}}},
+				"status":{"conditions":[{"type":"KueueReady","status":"True"}]}}`)
+		}},
+		{"DSC autoCreateQueues named like the tool's LocalQueue", "LocalQueue named nightly-kueue", "unsupported", func(f *resourceFake) {
+			f.putJSON(wbDSCv2+"/default-dsc", `{"metadata":{"name":"default-dsc"},"spec":{"components":{"kueue":{"managementState":"Unmanaged","autoCreateQueues":true,"defaultLocalQueueName":"nightly-kueue"},"ray":{"managementState":"Managed"}}},
+				"status":{"conditions":[{"type":"KueueReady","status":"True"}]}}`)
+		}},
 		{"not a ds project", "not a data science project", "validation", func(f *resourceFake) {
 			f.putJSON(wbProjectNS, `{"metadata":{"name":"proj","uid":"ns-uid"}}`)
 		}},
@@ -310,8 +346,8 @@ func TestKueueSetupRefusals(t *testing.T) {
 	}
 }
 
-// If the project already carries the managed label, setup skips recording it
-// and teardown must not strip it.
+// When the project already has the managed label, setup does not record it and
+// teardown must leave it in place.
 func TestKueueLabelOnlyTheTools(t *testing.T) {
 	f, u := putKueueCluster(t)
 	f.putJSON(wbProjectNS, `{"metadata":{"name":"proj","uid":"ns-uid","labels":{"opendatahub.io/dashboard":"true","kueue.openshift.io/managed":"true"}}}`)
@@ -329,9 +365,9 @@ func TestKueueLabelOnlyTheTools(t *testing.T) {
 	}
 }
 
-// Teardown removes samples, LocalQueue, ClusterQueue, and ResourceFlavor in
-// that order using stored UIDs, drops only the label this tool added, and
-// clears the bookkeeping record.
+// Teardown deletes samples, LocalQueue, ClusterQueue, and ResourceFlavor in that
+// sequence by stored UID, removes only the label this tool added, and wipes the
+// bookkeeping record.
 func TestKueueTeardownOrder(t *testing.T) {
 	f, u := putKueueCluster(t)
 	if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj", RayCluster: true, RayJob: true}); !res.Success {
@@ -370,8 +406,9 @@ func TestKueueTeardownOrder(t *testing.T) {
 	}
 }
 
-// Teardown respects ownership: recreated queues with a new UID stay, ClusterQueues
-// referenced elsewhere stay, and remaining Workloads can force keeping the label.
+// Teardown honors ownership: queues recreated under a new UID remain, ClusterQueues
+// still referenced elsewhere remain, and lingering Workloads can require keeping
+// the label.
 func TestKueueTeardownOwnership(t *testing.T) {
 	t.Run("recreated LocalQueue", func(t *testing.T) {
 		f, u := putKueueCluster(t)
@@ -430,9 +467,9 @@ func TestKueueTeardownOwnership(t *testing.T) {
 	})
 }
 
-// Opt-in flips disableKueue to false and provisions the Queue hardware profile,
-// with both captured in the record; opt-out reverts disableKueue to unset and
-// removes the profile unless an outsider changed either object.
+// Opt-in sets disableKueue false and creates the Queue hardware profile, both
+// recorded; opt-out clears disableKueue and deletes the profile unless someone
+// else modified either object.
 func TestKueueOptIn(t *testing.T) {
 	f, u := putKueueCluster(t)
 	if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "optin"}); res.Success || !strings.Contains(res.Message, "Set up the queues first") {
@@ -466,7 +503,7 @@ func TestKueueOptIn(t *testing.T) {
 		t.Fatalf("config %v, profile %v", cfg, f.has(kqProfile))
 	}
 
-	// After external edits, teardown keeps the profile and disableKueue as left.
+	// Once edited externally, teardown retains the profile and disableKueue as found.
 	if res, _ = runKueueOp(t, u, types.KueueRequest{Action: "optin"}); !res.Success {
 		t.Fatalf("opt-in: %+v", res)
 	}
@@ -483,8 +520,8 @@ func TestKueueOptIn(t *testing.T) {
 	}
 }
 
-// GetKueueStatus loads each object as the user and infers sample states from
-// matching Workload conditions.
+// GetKueueStatus fetches each object as the user and derives sample states from
+// corresponding Workload conditions.
 func TestKueueStatus(t *testing.T) {
 	f, u := putKueueCluster(t)
 	st, err := GetKueueStatus(u, u, "proj")
@@ -509,19 +546,23 @@ func TestKueueStatus(t *testing.T) {
 	if s := st.Samples[0]; !s.Present || !s.ManagedByTool || s.State != kueue.StateInadmissible || s.Message != "insufficient quota" || st.Samples[1].Present {
 		t.Fatalf("samples %+v", st.Samples)
 	}
-	// The quota is the live ClusterQueue's; what this version made is not outdated.
-	if st.Quota != "6 CPUs and 19Gi of memory" || st.Objects[1].Outdated != "" || st.Samples[0].Outdated != "" {
+	// Quota reflects the live ClusterQueue; artifacts from this version are not outdated.
+	if st.Quota != "10 CPUs, 32Gi of memory and 6Gi of ephemeral storage" || st.Objects[1].Outdated != "" || st.Samples[0].Outdated != "" {
 		t.Fatalf("quota %q, queue %+v, sample %+v", st.Quota, st.Objects[1], st.Samples[0])
 	}
-	// The same amounts in other forms (custom resources keep what was
-	// written: numbers, 1000m, bytes) are not outdated; an earlier
-	// version's queue (11Gi) and sample (2Gi head, requests = limits) are.
+	// Equivalent quantities in other representations (numbers, 1000m, bytes as
+	// written on custom resources) are not outdated; queues and samples from an
+	// older release (11Gi queue, 2Gi head with requests equal to limits) are.
 	cqPath, rcPath := kqAPI+"/clusterqueues/"+kueue.ClusterQueueName, kqRayCs+"/"+kueue.RayClusterName
 	setSizes := func(cpuQuota any, memoryQuota string, headRes map[string]any) {
 		t.Helper()
 		cq := f.get(cqPath)
 		res := cq["spec"].(map[string]any)["resourceGroups"].([]any)[0].(map[string]any)["flavors"].([]any)[0].(map[string]any)["resources"].([]any)
 		res[0].(map[string]any)["nominalQuota"], res[1].(map[string]any)["nominalQuota"] = cpuQuota, memoryQuota
+		if cpuQuota == "6" {
+			// An earlier version's ClusterQueue: CPU and memory only.
+			cq["spec"].(map[string]any)["resourceGroups"].([]any)[0].(map[string]any)["flavors"].([]any)[0].(map[string]any)["resources"] = res[:2]
+		}
 		rc := f.get(rcPath)
 		rc["spec"].(map[string]any)["headGroupSpec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)["resources"] = headRes
 		for path, obj := range map[string]map[string]any{cqPath: cq, rcPath: rc} {
@@ -529,38 +570,43 @@ func TestKueueStatus(t *testing.T) {
 			f.putJSON(path, string(raw))
 		}
 	}
-	setSizes(6, "19456Mi", map[string]any{"requests": map[string]any{"cpu": 1, "memory": "5368709120"}, "limits": map[string]any{"cpu": "2000m", "memory": "8Gi"}})
+	setSizes(10, "32768Mi", map[string]any{"requests": map[string]any{"cpu": 1, "memory": "5368709120"}, "limits": map[string]any{"cpu": "2000m", "memory": "8Gi"}})
 	st, err = GetKueueStatus(u, u, "proj")
-	if err != nil || st.Quota != "6 CPUs and 19456Mi of memory" || st.Objects[1].Outdated != "" || st.Samples[0].Outdated != "" || !st.Samples[0].Present {
+	if err != nil || st.Quota != "10 CPUs, 32768Mi of memory and 6Gi of ephemeral storage" || st.Objects[1].Outdated != "" || st.Samples[0].Outdated != "" || !st.Samples[0].Present {
 		t.Fatalf("equivalent forms: %v quota %q, queue %+v, sample %+v", err, st.Quota, st.Objects[1], st.Samples[0])
 	}
-	// A value that cannot be read is not called outdated.
-	setSizes("lots", "19Gi", map[string]any{"requests": map[string]any{"cpu": "one", "memory": "5Gi"}, "limits": map[string]any{"cpu": "2", "memory": "8Gi"}})
+	// Unreadable values are not labeled outdated.
+	setSizes("lots", "32Gi", map[string]any{"requests": map[string]any{"cpu": "one", "memory": "5Gi"}, "limits": map[string]any{"cpu": "2", "memory": "8Gi"}})
 	if st, _ = GetKueueStatus(u, u, "proj"); st.Objects[1].Outdated != "" || st.Samples[0].Outdated != "" {
 		t.Fatalf("unreadable: queue %+v, sample %+v", st.Objects[1], st.Samples[0])
 	}
+	// 6 CPUs and 19Gi or 20Gi from 5.0.0 pre-releases (no model, no
+	// ephemeral storage) also signal an older version.
+	setSizes("6", "19Gi", map[string]any{"requests": map[string]any{"cpu": "1", "memory": "5Gi"}, "limits": map[string]any{"cpu": "2", "memory": "8Gi"}})
+	if st, _ = GetKueueStatus(u, u, "proj"); st.Objects[1].Outdated != "its quota is 6 CPUs, 19Gi of memory and no ephemeral storage; this version sets 10 CPUs, 32Gi of memory and 6Gi of ephemeral storage" {
+		t.Fatalf("19Gi: queue %+v", st.Objects[1])
+	}
 	setSizes("6", "11Gi", map[string]any{"requests": map[string]any{"cpu": "1", "memory": "2Gi"}, "limits": map[string]any{"cpu": "1", "memory": "2Gi"}})
 	st, _ = GetKueueStatus(u, u, "proj")
-	if st.Quota != "6 CPUs and 11Gi of memory" || st.Objects[1].Outdated != "its quota is 6 CPUs and 11Gi of memory; this version sets 6 CPUs and 19Gi of memory" ||
+	if st.Quota != "6 CPUs, 11Gi of memory and no ephemeral storage" || st.Objects[1].Outdated != "its quota is 6 CPUs, 11Gi of memory and no ephemeral storage; this version sets 10 CPUs, 32Gi of memory and 6Gi of ephemeral storage" ||
 		st.Samples[0].Outdated != "its head and worker have other CPU and memory than this version sets (head 1 CPU and 5Gi requested, up to 2 CPUs and 8Gi; worker 1 CPU and 3Gi requested, up to 1 CPU and 6Gi)" {
 		t.Fatalf("outdated: quota %q, queue %+v, sample %+v", st.Quota, st.Objects[1], st.Samples[0])
 	}
-	// One Ray state for the RayJob: its job's, in words.
+	// RayJob exposes a single Ray state: the job's, rendered as text.
 	f.putJSON(kqRayJobs+"/"+kueue.RayJobName, `{"metadata":{"name":"nightly-rayjob","namespace":"proj"},"status":{"jobDeploymentStatus":"Running","jobStatus":"RUNNING"}}`)
 	if st, _ = GetKueueStatus(u, u, "proj"); st.Samples[1].RayState != "Running" {
 		t.Fatalf("RayJob state %q", st.Samples[1].RayState)
 	}
-	// Unsupported API versions surface as refusal codes on status as well.
+	// Unsupported API versions also appear as refusal codes in status.
 	f.groups[kqGroup] = `{"versions":[{"version":"v1beta1"}]}`
 	if st, _ = GetKueueStatus(u, u, "proj"); st.RefusalCode != "unsupported" {
 		t.Fatalf("v1beta1: %+v", st)
 	}
 }
 
-// The status names every ClusterQueue and LocalQueue on the cluster (what
-// keeps Clean up from turning the DataScienceCluster's kueue back), of any
-// owner; a list that fails says the queues are unknown (the tab then offers
-// no turning back).
+// Status enumerates all ClusterQueues and LocalQueues on the cluster (so Clean up
+// knows when it may revert the DataScienceCluster's kueue), regardless of owner;
+// a failed list marks queues unknown (the tab then blocks irreversible actions).
 func TestKueueStatusQueuesOnTheCluster(t *testing.T) {
 	f, u := putKueueCluster(t)
 	if st, err := GetKueueStatus(u, u, "proj"); err != nil || len(st.Queues) != 0 || st.QueuesUnknown {
@@ -578,7 +624,7 @@ func TestKueueStatusQueuesOnTheCluster(t *testing.T) {
 	}
 }
 
-// delete-sample removes a single Ray object identified by the stored UID.
+// delete-sample deletes one Ray object, keyed by the UID stored in the record.
 func TestKueueDeleteSample(t *testing.T) {
 	f, u := putKueueCluster(t)
 	if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj", RayCluster: true, RayJob: true}); !res.Success {
@@ -593,9 +639,9 @@ func TestKueueDeleteSample(t *testing.T) {
 	}
 }
 
-// The kueue prerequisite path installs cert-manager and the Red Hat Kueue
-// build, patches DataScienceCluster kueue to Unmanaged (never Managed), and
-// blocks until RHOAI's Kueue CR reports Available.
+// Kueue prerequisites install cert-manager and the Red Hat Kueue build, patch
+// DataScienceCluster kueue to Unmanaged (never Managed), and wait until RHOAI's
+// Kueue CR is Available.
 func TestKueuePrerequisites(t *testing.T) {
 	pc := newPrereqCluster(t)
 	f := pc.f
@@ -681,20 +727,20 @@ func TestKueuePrerequisites(t *testing.T) {
 	}
 }
 
-// If Kueue APIs are already served by a non-OLM controller, prerequisite setup
-// is blocked to avoid duplicate controllers and unmatched RHOAI state.
+// When Kueue APIs are already served by a non-OLM controller, prerequisite setup
+// is refused to prevent duplicate controllers and RHOAI state drift.
 func TestKueuePrerequisitesRefuseKueueOutsideOLM(t *testing.T) {
 	const crdList = "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/clusterqueues.kueue.x-k8s.io"
 	for _, tc := range []struct {
 		name, crd, deployment string
 		refused               bool
 	}{
-		// Upstream manifests: no OLM labels on the CRD; the controller renamed.
+		// Upstream manifests lack OLM labels on the CRD; the controller has a new name.
 		{"renamed controller", `{"metadata":{"name":"clusterqueues.kueue.x-k8s.io"}}`, "my-kueue", true},
 		{"usual controller", `{"metadata":{"name":"clusterqueues.kueue.x-k8s.io"}}`, "kueue-controller-manager", true},
-		// No CRD named as Kueue's, but the API is served: cannot confirm, so refused.
+		// API is served without Kueue's CRD name: confirmation impossible, so refuse.
 		{"no CRD", "", "", true},
-		// CRDs OLM installed for kueue-operator and left after an uninstall: installing adopts them.
+		// OLM-installed kueue-operator CRDs left after uninstall: a new install can adopt them.
 		{"OLM leftovers", `{"metadata":{"name":"clusterqueues.kueue.x-k8s.io","labels":{"olm.managed":"true","operators.coreos.com/kueue-operator.openshift-kueue-operator":""}}}`, "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -721,8 +767,8 @@ func TestKueuePrerequisitesRefuseKueueOutsideOLM(t *testing.T) {
 	}
 }
 
-// Restoring the kueue component reverts DataScienceCluster only after queues are
-// gone (Clean up components); until then management stays Unmanaged.
+// Restoring the kueue component changes DataScienceCluster only once queues are
+// removed (Clean up components); until then kueue stays Unmanaged.
 func TestKueueComponentRestore(t *testing.T) {
 	pc := newPrereqCluster(t)
 	f := pc.f
@@ -745,20 +791,23 @@ func TestKueueComponentRestore(t *testing.T) {
 	}
 }
 
-// Models setup picks hardware profiles using the dashboard Kueue rule: Queue-type
-// profiles tied to a LocalQueue only inside managed projects, none when
-// disableKueue is true, and never Queue profiles outside Kueue projects.
+// Models setup selects hardware profiles per the dashboard Kueue rule: Queue-type
+// profiles bound to a LocalQueue only in managed projects, never Queue
+// profiles outside Kueue projects. In a Kueue project without a fitting
+// Queue profile, or one Kueue is off for in the dashboard, the dashboard
+// deploys no model: setup refuses and creates nothing (fail closed).
 func TestModelsHardwareProfileKueueRule(t *testing.T) {
-	queue := func(name, lq string) string {
-		p := hwProfile(name, "8", "32Gi", "")
+	queue := func(name, lq, memMax string) string {
+		p := hwProfile(name, "8", memMax, "")
 		return p[:len(p)-2] + `,"scheduling":{"type":"Queue","kueue":{"localQueueName":"` + lq + `"}}}}`
 	}
 	for _, tc := range []struct {
-		name, label, disable, want string
+		name, label, disable, queueMem, want, refused string
 	}{
-		{"not a Kueue project", "", "false", "a-node"},
-		{"Kueue project", `,"kueue.openshift.io/managed":"true"`, "false", "b-queue"},
-		{"Kueue off in the dashboard", `,"kueue.openshift.io/managed":"true"`, "true", ""},
+		{"not a Kueue project", "", "false", "32Gi", "a-node", ""},
+		{"Kueue project", `,"kueue.openshift.io/managed":"true"`, "false", "32Gi", "b-queue", ""},
+		{"Kueue project, the Queue profile too small", `,"kueue.openshift.io/managed":"true"`, "false", "4Gi", "", "b-queue: memory 6Gi is outside 2Gi-4Gi"},
+		{"Kueue off in the dashboard", `,"kueue.openshift.io/managed":"true"`, "true", "32Gi", "", "while Kueue is off in the dashboard"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mc := newModelsCluster(t)
@@ -768,9 +817,19 @@ func TestModelsHardwareProfileKueueRule(t *testing.T) {
 			mc.f.putJSON("/api/v1/namespaces/proj", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"`+tc.label+`}}}`)
 			mc.f.putJSON(kqConfig, `{"spec":{"dashboardConfig":{"disableKueue":`+tc.disable+`}}}`)
 			mc.f.putJSON(kqLQ, `{"metadata":{"name":"nightly-kueue","namespace":"proj"}}`)
-			putProfiles(mc, hwProfile("a-node", "8", "32Gi", ""), queue("b-queue", "nightly-kueue"), queue("0-other-queue", "missing"))
+			putProfiles(mc, hwProfile("a-node", "8", "32Gi", ""), queue("b-queue", "nightly-kueue", tc.queueMem), queue("0-other-queue", "missing", "32Gi"))
 			u := userClientOf(mc.c, fakeUserToken)
-			if res, _ := runModels(t, u, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+			res, _ := runModels(t, u, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+			if tc.refused != "" {
+				if res.Success || !strings.Contains(res.Message, tc.refused) || !strings.Contains(res.Message, "Nothing was changed.") {
+					t.Fatalf("not refused: %+v", res)
+				}
+				if mc.f.get(testModelPath) != nil {
+					t.Fatal("the model was created")
+				}
+				return
+			}
+			if !res.Success {
 				t.Fatalf("setup failed: %+v", res)
 			}
 			ann := mc.f.get(testModelPath)["metadata"].(map[string]any)["annotations"].(map[string]any)
@@ -778,6 +837,31 @@ func TestModelsHardwareProfileKueueRule(t *testing.T) {
 				t.Fatalf("hardware profile %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// The dashboard's namespace cannot be found: a Kueue project's model is
+// refused (fail closed), a project that is not Kueue's still gets set up
+// without a profile, as before.
+func TestModelsHardwareProfileAppsNamespaceUnknown(t *testing.T) {
+	for _, labelled := range []bool{true, false} {
+		mc := newModelsCluster(t)
+		label := ""
+		if labelled {
+			label = `,"kueue.openshift.io/managed":"true"`
+		}
+		mc.f.putJSON("/api/v1/namespaces/proj", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true"`+label+`}}}`)
+		mc.f.fail["GET /apis/dscinitialization.opendatahub.io/v1/dscinitializations"] = 500
+		mc.f.fail["GET /apis/dscinitialization.opendatahub.io/v2/dscinitializations"] = 500
+		res, _ := runModels(t, userClientOf(mc.c, fakeUserToken), types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+		// The model's setup reads the same namespace earlier and refuses
+		// first; pickHardwareProfile refuses too (defence in depth).
+		if labelled && (res.Success || !strings.Contains(res.Message, "Nothing was changed") || mc.f.get(testModelPath) != nil) {
+			t.Fatalf("Kueue project: %+v", res)
+		}
+		if !labelled && strings.Contains(res.Message, "uses Kueue") {
+			t.Fatalf("not a Kueue project: %+v", res)
+		}
 	}
 }
 
@@ -888,6 +972,314 @@ func TestKueueDefaultQueueRefusedOnEverySetup(t *testing.T) {
 	before := len(f2.mutations())
 	if res, _ := runKueueOp(t, u2, types.KueueRequest{Action: "setup", Project: "proj", RayJob: true}); res.Success || !strings.Contains(res.Message, "LocalQueue named default") || len(f2.mutations()) != before {
 		t.Fatalf("sample added: %+v", res)
+	}
+}
+
+// kqLeftover is the tool's object at path as setup made it (its UID and
+// label), to put back after the project is made again, as a namespace an
+// admin force-finalized leaves its objects in etcd for the next namespace
+// of that name.
+func kqLeftover(t *testing.T, f *resourceFake, path string) map[string]any {
+	t.Helper()
+	obj := f.get(path)
+	if obj == nil {
+		t.Fatalf("%s is not there", path)
+	}
+	raw, _ := json.Marshal(obj)
+	var out map[string]any
+	_ = json.Unmarshal(raw, &out)
+	return out
+}
+
+// kqDeleteProject deletes project proj with its LocalQueue and samples, as
+// deleting the namespace does.
+func kqDeleteProject(f *resourceFake) {
+	for _, p := range []string{kqLQ, kqRayCs + "/" + kueue.RayClusterName, kqRayJobs + "/" + kueue.RayJobName, wbProjectNS} {
+		f.deleteObject(p)
+	}
+}
+
+// kqRemakeProject deletes project proj and makes it again with UID new-uid
+// and the dashboard label plus labels (a JSON fragment starting with a
+// comma).
+func kqRemakeProject(f *resourceFake, labels string) {
+	kqDeleteProject(f)
+	f.putJSON(wbProjectNS, `{"metadata":{"name":"proj","uid":"new-uid","labels":{"opendatahub.io/dashboard":"true"`+labels+`}},"status":{"phase":"Active"}}`)
+}
+
+// kqSetUpBoth sets up the queues and both samples in proj and returns the
+// record.
+func kqSetUpBoth(t *testing.T) (*resourceFake, *Client, kueue.Record) {
+	t.Helper()
+	f, u := putKueueCluster(t)
+	if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj", RayCluster: true, RayJob: true}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	return f, u, kueueRecord(t, u)
+}
+
+// A foreign LocalQueue named like the tool's in the new project: a new UID
+// (UIDs are never reused) and the tool's label, which anyone can copy.
+const kqForeignLQ = `{"metadata":{"name":"nightly-kueue","namespace":"proj","uid":"foreign-uid","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}},"spec":{"clusterQueue":"%s"}}`
+
+// A foreign RayJob named like the tool's sample in the new project.
+const kqForeignJob = `{"metadata":{"name":"nightly-rayjob","namespace":"proj","uid":"their-job","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}}}`
+
+// The project deleted and made again (a recipe's project-only Clean up, then
+// a new run): deleting it deleted the recorded LocalQueue, samples and label,
+// so setup sets them up again in the new project, keeps the cluster-scoped
+// queues, and claims only what it adds there now.
+func TestKueueSetupAfterProjectMadeAgain(t *testing.T) {
+	t.Run("set up again in the new project", func(t *testing.T) {
+		f, u, old := kqSetUpBoth(t)
+		kqRemakeProject(f, "")
+		before := len(f.mutations())
+		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj", RayCluster: true, RayJob: true})
+		if !res.Success {
+			t.Fatalf("setup again: %+v", res)
+		}
+		want := []string{"POST " + kqLQs, "PATCH " + wbProjectNS, "POST " + kqRayCs, "POST " + kqRayJobs}
+		if got := f.mutations()[before:]; strings.Join(got, "\n") != strings.Join(want, "\n") {
+			t.Fatalf("writes:\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+		}
+		rec := kueueRecord(t, u)
+		if rec.ProjectUID != "new-uid" || !rec.LabelAdded || rec.FlavorUID != old.FlavorUID || rec.ClusterQueueUID != old.ClusterQueueUID ||
+			rec.LocalQueueUID == "" || rec.LocalQueueUID == old.LocalQueueUID || rec.RayClusterUID == "" || rec.RayClusterUID == old.RayClusterUID ||
+			rec.RayJobUID == "" || rec.RayJobUID == old.RayJobUID {
+			t.Fatalf("record %+v (was %+v)", rec, old)
+		}
+		for path, uid := range map[string]string{kqLQ: rec.LocalQueueUID, kqRayCs + "/" + kueue.RayClusterName: rec.RayClusterUID, kqRayJobs + "/" + kueue.RayJobName: rec.RayJobUID} {
+			if got := ensureMap(f.get(path), "metadata")["uid"]; got != uid {
+				t.Fatalf("%s has UID %v, the record %s", path, got, uid)
+			}
+		}
+	})
+	t.Run("label set by someone else is not claimed", func(t *testing.T) {
+		f, u, _ := kqSetUpBoth(t)
+		kqRemakeProject(f, `,"kueue.openshift.io/managed":"true"`)
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"}); !res.Success {
+			t.Fatalf("setup again: %+v", res)
+		}
+		if rec := kueueRecord(t, u); rec.LabelAdded || rec.LabelPrior != "" || rec.ProjectUID != "new-uid" {
+			t.Fatalf("label claimed: %+v", rec)
+		}
+	})
+	// A same-named LocalQueue in the new project is refused, whether it has
+	// a new UID (someone else's) or the old one with the tool's label (left
+	// behind by a namespace an admin force-finalized): nothing is deleted
+	// and the record stays as it was.
+	for _, tc := range []struct {
+		name string
+		lq   func(f *resourceFake) map[string]any
+	}{
+		{"someone else's queue with a new UID", func(*resourceFake) map[string]any {
+			var obj map[string]any
+			_ = json.Unmarshal([]byte(fmt.Sprintf(kqForeignLQ, kueue.ClusterQueueName)), &obj)
+			return obj
+		}},
+		{"the tool's queue left behind with its old UID", func(f *resourceFake) map[string]any { return kqLeftover(t, f, kqLQ) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, u, old := kqSetUpBoth(t)
+			lq := tc.lq(f)
+			kqRemakeProject(f, "")
+			f.put(kqLQ, lq)
+			before := len(f.mutations())
+			res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"})
+			if res.Success || res.ErrorCode != "not_managed" || !strings.Contains(res.Message, "LocalQueue nightly-kueue exists and was not created by this tool") || len(f.mutations()) != before {
+				t.Fatalf("got %+v, writes %v", res, f.mutations()[before:])
+			}
+			if !f.has(kqLQ) {
+				t.Fatal("the LocalQueue was deleted")
+			}
+			if rec := kueueRecord(t, u); !reflect.DeepEqual(rec, old) {
+				t.Fatalf("a refused check changed the record: %+v (was %+v)", rec, old)
+			}
+		})
+	}
+}
+
+// Clean up after the project was deleted (and made again): the project's
+// LocalQueue, samples and label went with it, so their entries are cleared
+// first and Clean up goes on to the cluster-wide queues; what has the tool's
+// names in the new project is not deleted, and a ClusterQueue a LocalQueue
+// there uses stays.
+func TestKueueTeardownAfterProjectMadeAgain(t *testing.T) {
+	t.Run("someone else's queue and sample of the names", func(t *testing.T) {
+		f, u, _ := kqSetUpBoth(t)
+		kqRemakeProject(f, "")
+		f.putJSON(kqLQ, fmt.Sprintf(kqForeignLQ, "team-cq"))
+		f.putJSON(kqRayJobs+"/"+kueue.RayJobName, kqForeignJob)
+		before := len(f.mutations())
+		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"})
+		if !res.Success {
+			t.Fatalf("teardown: %+v", res)
+		}
+		want := []string{"DELETE " + kqCQ, "DELETE " + kqFlavor}
+		if got := f.mutations()[before:]; strings.Join(got, "\n") != strings.Join(want, "\n") {
+			t.Fatalf("writes:\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+		}
+		if !f.has(kqLQ) || !f.has(kqRayJobs+"/"+kueue.RayJobName) || f.has(kqCQ) || f.has(kqFlavor) {
+			t.Fatal("wrong objects deleted")
+		}
+		if rec := kueueRecord(t, u); !rec.Empty() || rec.Project != "" {
+			t.Fatalf("record %+v", rec)
+		}
+	})
+	// A LocalQueue in the new project that uses the tool's ClusterQueue
+	// keeps it: someone else's (a new UID) or the tool's own left behind by
+	// a force-finalized namespace (its old UID), which only a person deletes.
+	for _, tc := range []struct {
+		name string
+		lq   func(f *resourceFake) map[string]any
+	}{
+		{"someone else's queue uses the ClusterQueue", func(*resourceFake) map[string]any {
+			var obj map[string]any
+			_ = json.Unmarshal([]byte(fmt.Sprintf(kqForeignLQ, kueue.ClusterQueueName)), &obj)
+			return obj
+		}},
+		{"the tool's queue left behind with its old UID stays", func(f *resourceFake) map[string]any { return kqLeftover(t, f, kqLQ) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, u, old := kqSetUpBoth(t)
+			lq := tc.lq(f)
+			kqRemakeProject(f, "")
+			f.put(kqLQ, lq)
+			before := len(f.mutations())
+			res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"})
+			if res.Success || res.ErrorCode != "in_use" || !strings.Contains(res.Message, "LocalQueue proj/nightly-kueue") {
+				t.Fatalf("got %+v", res)
+			}
+			if got := f.mutations()[before:]; len(got) != 0 || !f.has(kqCQ) || !f.has(kqFlavor) || !f.has(kqLQ) {
+				t.Fatalf("writes %v", got)
+			}
+			if rec := kueueRecord(t, u); rec.LocalQueueUID != "" || rec.ProjectUID != "" || rec.LabelAdded || rec.RayClusterUID != "" || rec.RayJobUID != "" ||
+				rec.ClusterQueueUID != old.ClusterQueueUID || rec.FlavorUID != old.FlavorUID || rec.Project != "proj" {
+				t.Fatalf("record %+v", rec)
+			}
+		})
+	}
+	t.Run("a label someone else set stays", func(t *testing.T) {
+		f, u, _ := kqSetUpBoth(t)
+		kqRemakeProject(f, `,"kueue.openshift.io/managed":"true"`)
+		patches := len(f.callsTo("PATCH", wbProjectNS))
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"}); !res.Success {
+			t.Fatalf("teardown: %+v", res)
+		}
+		if nsLabels(f)[kueue.ProjectLabel] != "true" || len(f.callsTo("PATCH", wbProjectNS)) != patches {
+			t.Fatal("removed a label someone else set")
+		}
+		if f.has(kqCQ) || f.has(kqFlavor) {
+			t.Fatal("left a queue of the tool's")
+		}
+	})
+	t.Run("project gone", func(t *testing.T) {
+		f, u, _ := kqSetUpBoth(t)
+		kqDeleteProject(f)
+		before := len(f.mutations())
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"}); !res.Success {
+			t.Fatalf("teardown: %+v", res)
+		}
+		want := []string{"DELETE " + kqCQ, "DELETE " + kqFlavor}
+		if got := f.mutations()[before:]; strings.Join(got, "\n") != strings.Join(want, "\n") {
+			t.Fatalf("writes:\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+		}
+		if rec := kueueRecord(t, u); !rec.Empty() || rec.Project != "" {
+			t.Fatalf("record %+v", rec)
+		}
+	})
+	t.Run("project unreadable", func(t *testing.T) {
+		f, u, old := kqSetUpBoth(t)
+		f.fail["GET "+wbProjectNS] = 500
+		before := len(f.mutations())
+		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"})
+		if res.Success || !strings.Contains(res.Message, "Cannot read project proj") || !strings.HasSuffix(res.Message, "Nothing was deleted.") || len(f.mutations()) != before {
+			t.Fatalf("got %+v, writes %v", res, f.mutations()[before:])
+		}
+		if rec := kueueRecord(t, u); !reflect.DeepEqual(rec, old) {
+			t.Fatalf("record %+v (was %+v)", rec, old)
+		}
+	})
+	t.Run("project being deleted is still the recorded one", func(t *testing.T) {
+		f, u, _ := kqSetUpBoth(t)
+		ns := f.get(wbProjectNS)
+		ensureMap(ns, "metadata")["deletionTimestamp"] = "2026-11-25T10:00:00Z"
+		ensureMap(ns, "status")["phase"] = "Terminating"
+		f.put(wbProjectNS, ns)
+		patches := len(f.callsTo("PATCH", wbProjectNS))
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"}); !res.Success {
+			t.Fatalf("teardown: %+v", res)
+		}
+		if len(f.callsTo("DELETE", kqLQ)) != 1 || len(f.callsTo("DELETE", kqRayCs+"/"+kueue.RayClusterName)) != 1 || len(f.callsTo("PATCH", wbProjectNS)) != patches+1 {
+			t.Fatalf("writes %v", f.mutations())
+		}
+	})
+}
+
+// delete-sample after the project was deleted and made again: the sample
+// went with it; a same-named one of someone else's stays.
+func TestKueueDeleteSampleAfterProjectMadeAgain(t *testing.T) {
+	f, u, _ := kqSetUpBoth(t)
+	kqRemakeProject(f, "")
+	f.putJSON(kqRayJobs+"/"+kueue.RayJobName, kqForeignJob)
+	before := len(f.mutations())
+	res, _ := runKueueOp(t, u, types.KueueRequest{Action: "delete-sample", Sample: "rayjob"})
+	if !res.Success || res.Message != "Project proj was deleted or made again since this tool's setup, so its RayJob nightly-rayjob is not this tool's to delete. Nothing was deleted." || len(f.mutations()) != before || !f.has(kqRayJobs+"/"+kueue.RayJobName) {
+		t.Fatalf("got %+v, writes %v", res, f.mutations()[before:])
+	}
+	if rec := kueueRecord(t, u); rec.RayJobUID != "" || rec.ProjectUID != "" || rec.LabelAdded || rec.LocalQueueUID != "" || rec.ClusterQueueUID == "" {
+		t.Fatalf("record %+v", rec)
+	}
+}
+
+// The status of a project deleted and made again shows the tool's
+// LocalQueue left behind with its old UID as someone else's, and the label
+// as not the tool's.
+func TestKueueStatusAfterProjectMadeAgain(t *testing.T) {
+	f, u, _ := kqSetUpBoth(t)
+	lq := kqLeftover(t, f, kqLQ)
+	kqRemakeProject(f, `,"kueue.openshift.io/managed":"true"`)
+	f.put(kqLQ, lq)
+	st, err := GetKueueStatus(u, u, "proj")
+	if err != nil || st.Label == nil || !st.Label.Present || st.Label.AddedByTool {
+		t.Fatalf("status %+v %v", st, err)
+	}
+	if o := st.Objects[2]; o.Kind != "LocalQueue" || !o.Present || o.ManagedByTool || !o.Foreign {
+		t.Fatalf("LocalQueue %+v", o)
+	}
+	if o := st.Objects[1]; o.Kind != "ClusterQueue" || !o.ManagedByTool {
+		t.Fatalf("ClusterQueue %+v", o)
+	}
+	if st.ProjectGone != "Project proj was deleted and made again since this tool's setup; set up again." || !st.ProjectRemade {
+		t.Fatalf("project gone %q", st.ProjectGone)
+	}
+	// Deleted and not made again: the status says the project is gone.
+	f.deleteObject(wbProjectNS)
+	if st, err = GetKueueStatus(u, u, "proj"); err != nil || st.ProjectGone != "Project proj is gone; clean up, or make it again and set up." || st.ProjectRemade {
+		t.Fatalf("gone: %q %v", st.ProjectGone, err)
+	}
+}
+
+// A project that cannot be read: its LocalQueue and samples are shown
+// neither as the tool's nor as someone else's (Unknown), and the reason is
+// in ItemsProblem; the cluster-wide queues stay the tool's.
+func TestKueueStatusProjectUnreadable(t *testing.T) {
+	f, u, _ := kqSetUpBoth(t)
+	f.fail["GET "+wbProjectNS] = 500
+	st, err := GetKueueStatus(u, u, "proj")
+	if err != nil || !strings.Contains(st.ItemsProblem, "Cannot read project proj") || st.ProjectGone != "" {
+		t.Fatalf("status %+v %v", st, err)
+	}
+	if o := st.Objects[2]; !o.Present || o.ManagedByTool || o.Foreign || !o.Unknown {
+		t.Fatalf("LocalQueue %+v", o)
+	}
+	for _, s := range st.Samples {
+		if s.ManagedByTool || s.Foreign || !s.Unknown {
+			t.Fatalf("sample %+v", s)
+		}
+	}
+	if o := st.Objects[1]; !o.ManagedByTool || o.Unknown {
+		t.Fatalf("ClusterQueue %+v", o)
 	}
 }
 

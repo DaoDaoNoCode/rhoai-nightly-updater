@@ -27,6 +27,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 )
 
 // Objects owned by the tool. LocalQueue is intentionally not "default": Kueue
@@ -108,22 +109,83 @@ var (
 )
 
 const (
-	// Default capacity on the opt-in hardware profile: one workload should fit
-	// alongside both samples.
+	// Default capacity on the opt-in hardware profile (what the dashboard
+	// fills in for a workbench on it): one workload should fit alongside
+	// both samples.
 	profileCPUMilli = 1000
 	profileMemoryMi = 2048
+	// A workbench on that profile also runs the kube-rbac-proxy sidecar
+	// that RHOAI 3's notebook controller adds for inject-auth, with requests
+	// of 100m CPU and 64Mi (kubeflow odh-notebook-controller, RHOAI
+	// 3.7-ea.1, notebook_controller.go L69-72 and
+	// notebook_mutating_webhook.go L487-494); Kueue counts every container
+	// of the workbench's pod.
+	sidecarCPUMilli = 100
+	sidecarMemoryMi = 64
 )
 
-// Quota derives the ClusterQueue nominal limits so both samples (head plus one
-// worker each, and the RayJob's submitter) and one opt-in-profile workload can
-// run concurrently, rounded up to whole CPUs and GiB: 6 CPUs and 19Gi. Kueue
-// models a RayCluster as a single Workload spanning its pods and counts their
-// requests, not limits; free capacity on nodes is not validated (admission
-// accounting only).
-func Quota() (cpu, memory string) {
-	milli := 2*(headSize.CPUMilli+workerSize.CPUMilli) + submitterSize.CPUMilli + profileCPUMilli
-	mi := 2*(headSize.MemoryMi+workerSize.MemoryMi) + submitterSize.MemoryMi + profileMemoryMi
-	return fmt.Sprint((milli + 999) / 1000), fmt.Sprintf("%dGi", (mi+1023)/1024)
+// modelSize is the largest model a recipe deploys (the Models catalog,
+// serving.ModelCatalog): its main container's CPU, memory requested and
+// its limit, and the ephemeral storage it requests for the download
+// (models_storage.go), each the catalog's largest. In a Kueue project the
+// dashboard deploys a model only with a Queue hardware profile of a
+// LocalQueue the project has (envkit.KueueModeFor); RHOAI's hardware
+// profile webhook then labels it with the queue and keeps its own
+// requests (rhods-operator rhoai-3.6 internal/webhook/hardwareprofile
+// mutating.go L833-884, applyIdentifiersToRequests L1121-1141), KServe
+// copies kueue.x-k8s.io labels to its Deployment and pod template (kserve
+// rhoai-3.6 pkg/controller/v1alpha2/llmisvc workload_single_node.go
+// L414-445), and Kueue's Deployment and Pod integrations (on in RHOAI,
+// rhods-operator kueue_config.go L28-33) queue its pod. So the tool's
+// Queue profile's ranges hold it (serving Fits) and the quota counts it.
+type modelSize struct {
+	CPUMilli, MemoryMi, MemoryLimitMi, EphemeralMi int
+}
+
+// catalogModelSize is modelSize from the catalog; a value that does not
+// parse counts as 0 (a test checks that every one parses).
+func catalogModelSize() modelSize {
+	var m modelSize
+	ceil := func(v, unit float64) int { return int((v + unit - 1) / unit) }
+	for _, e := range serving.ModelCatalog {
+		cpu, _ := serving.ParseQuantity(e.CPU)
+		req, _ := serving.ParseQuantity(e.MemoryRequest)
+		limit, _ := serving.ParseQuantity(e.Memory)
+		eph, _ := serving.ParseQuantity(e.EphemeralStorage)
+		m.CPUMilli = max(m.CPUMilli, ceil(cpu*1000, 1))
+		m.MemoryMi = max(m.MemoryMi, ceil(req, 1<<20))
+		m.MemoryLimitMi = max(m.MemoryLimitMi, ceil(limit, 1<<20))
+		m.EphemeralMi = max(m.EphemeralMi, ceil(eph, 1<<20))
+	}
+	return m
+}
+
+// Quota derives the ClusterQueue nominal limits so that everything this
+// tool creates in the project can run at once: both samples (head plus
+// one worker each, and the RayJob's submitter), one workbench on the
+// opt-in profile (its container and the kube-rbac-proxy sidecar) and the
+// largest catalog model on that profile (catalogModelSize: 4 CPUs, 12Gi
+// requested, 6.2G of ephemeral storage). With the catalog of this version
+// that is 9.6 CPUs and 31808Mi requested, rounded up to whole CPUs and
+// GiB: 10 CPUs, 32Gi, and 6Gi of ephemeral storage. The documented
+// example ClusterQueue has 9 CPUs and 36Gi (opendatahub-documentation
+// modules/configuring-quota-management-for-distributed-workloads.adoc
+// L157-174). Ephemeral storage is a covered resource because the model
+// requests it, and Kueue refuses a workload that requests a resource its
+// ClusterQueue does not cover (kubernetes-sigs/kueue release-0.19
+// pkg/scheduler/flavorassigner/flavorassigner.go L801-806, "resource ...
+// unavailable in ClusterQueue"; the docs: "You must specify a quota for
+// each resource that the user can request", L177). Kueue models a
+// RayCluster as a single Workload spanning its pods and counts their
+// requests, not limits; free capacity on nodes is not validated
+// (admission accounting only). Set up keeps a ClusterQueue that is there,
+// so only a new setup gets this size; the tab flags one with another
+// quota as made by an earlier version.
+func Quota() (cpu, memory, ephemeral string) {
+	m := catalogModelSize()
+	milli := 2*(headSize.CPUMilli+workerSize.CPUMilli) + submitterSize.CPUMilli + profileCPUMilli + sidecarCPUMilli + m.CPUMilli
+	mi := 2*(headSize.MemoryMi+workerSize.MemoryMi) + submitterSize.MemoryMi + profileMemoryMi + sidecarMemoryMi + m.MemoryMi
+	return fmt.Sprint((milli + 999) / 1000), fmt.Sprintf("%dGi", (mi+1023)/1024), fmt.Sprintf("%dGi", (m.EphemeralMi+1023)/1024)
 }
 
 func milliText(m int) string {
@@ -159,19 +221,20 @@ func FlavorManifest() map[string]any {
 // a label selector). Preemption is off: workbenches require a non-preemptive
 // ClusterQueue (they cannot suspend), and preemption defaults to Never.
 func ClusterQueueManifest(project string) map[string]any {
-	cpu, memory := Quota()
+	cpu, memory, ephemeral := Quota()
 	return map[string]any{
 		"apiVersion": kueueAPI, "kind": "ClusterQueue",
 		"metadata": map[string]any{"name": ClusterQueueName, "labels": toolLabels()},
 		"spec": map[string]any{
 			"namespaceSelector": map[string]any{"matchLabels": map[string]any{"kubernetes.io/metadata.name": project}},
 			"resourceGroups": []any{map[string]any{
-				"coveredResources": []any{"cpu", "memory"},
+				"coveredResources": []any{"cpu", "memory", "ephemeral-storage"},
 				"flavors": []any{map[string]any{
 					"name": FlavorName,
 					"resources": []any{
 						map[string]any{"name": "cpu", "nominalQuota": cpu},
 						map[string]any{"name": "memory", "nominalQuota": memory},
+						map[string]any{"name": "ephemeral-storage", "nominalQuota": ephemeral},
 					},
 				}},
 			}},
@@ -346,8 +409,11 @@ func RayJobManifest(project, image string) map[string]any {
 // profile flow emits (odh-dashboard rhoai-3.6 frontend/src/api/k8s/hardwareProfiles.ts
 // assembleHardwareProfile, globally visible), with the tool label added. Only
 // namespaces that contain the LocalQueue surface the profile (kueueUtils.ts
-// filterProfilesByKueue).
+// filterProfilesByKueue). Its ranges also hold the largest catalog model
+// (catalogModelSize), which the dashboard deploys in a Kueue project only
+// with such a profile.
 func ProfileManifest(apps string, now string) map[string]any {
+	m := catalogModelSize()
 	return map[string]any{
 		"apiVersion": profileAPI, "kind": "HardwareProfile",
 		"metadata": map[string]any{
@@ -362,8 +428,8 @@ func ProfileManifest(apps string, now string) map[string]any {
 		},
 		"spec": map[string]any{
 			"identifiers": []any{
-				map[string]any{"identifier": "cpu", "displayName": "CPU", "resourceType": "CPU", "defaultCount": milliText(profileCPUMilli), "minCount": milliText(profileCPUMilli), "maxCount": "2"},
-				map[string]any{"identifier": "memory", "displayName": "Memory", "resourceType": "Memory", "defaultCount": miText(profileMemoryMi), "minCount": "1Gi", "maxCount": "4Gi"},
+				map[string]any{"identifier": "cpu", "displayName": "CPU", "resourceType": "CPU", "defaultCount": milliText(profileCPUMilli), "minCount": milliText(profileCPUMilli), "maxCount": milliText(max(2000, m.CPUMilli))},
+				map[string]any{"identifier": "memory", "displayName": "Memory", "resourceType": "Memory", "defaultCount": miText(profileMemoryMi), "minCount": "1Gi", "maxCount": miText(max(4096, m.MemoryLimitMi))},
 			},
 			"scheduling": map[string]any{"type": "Queue", "kueue": map[string]any{"localQueueName": LocalQueueName}},
 		},
@@ -398,8 +464,17 @@ func sampleText(kind string) string {
 }
 
 func describeQuota() string {
-	cpu, memory := Quota()
-	return fmt.Sprintf("%s CPUs and %s of memory", cpu, memory)
+	return quotaText(Quota())
+}
+
+// quotaText is "10 CPUs, 32Gi of memory and 6Gi of ephemeral storage";
+// a quota not set reads "no" ("no ephemeral storage").
+func quotaText(cpu, memory, ephemeral string) string {
+	eph := "no ephemeral storage"
+	if ephemeral != "" {
+		eph = ephemeral + " of ephemeral storage"
+	}
+	return fmt.Sprintf("%s CPUs, %s of memory and %s", kube.FirstNonEmpty(cpu, "no"), kube.FirstNonEmpty(memory, "no"), eph)
 }
 
 // HasToolLabel reports whether the object carries the tool label (ownership half).

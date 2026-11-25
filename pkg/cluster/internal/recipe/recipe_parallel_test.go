@@ -68,11 +68,11 @@ func TestSteps_DependencyOrder(t *testing.T) {
 			listed[id]++
 		}
 	}
-	for _, id := range stepsLast {
+	for _, id := range slices.Concat(stepsKueue, stepsLast) {
 		listed[id]++
 	}
 	for _, exposure := range []string{"", "default-gateway"} {
-		steps := Steps(everyStepRecipe(exposure))
+		steps := Steps(everyStepRecipe(exposure), false)
 		pos := map[string]int{}
 		for i, s := range steps {
 			pos[s.ID] = i
@@ -150,7 +150,7 @@ func TestSteps_DependencyOrderWithFewFeatures(t *testing.T) {
 	var r types.EnvironmentRecipe
 	r.Spec.Features.Kueue.Enabled = true
 	r.Spec.Features.MLflow.Enabled = true
-	steps := Steps(r)
+	steps := Steps(r, false)
 	got := map[string][]string{}
 	for _, s := range steps {
 		got[s.ID] = s.After
@@ -159,7 +159,7 @@ func TestSteps_DependencyOrderWithFewFeatures(t *testing.T) {
 		t.Errorf("order %v", got)
 	}
 	r.Spec.Features.MLflow.Enabled = false
-	steps = Steps(r)
+	steps = Steps(r, false)
 	for _, s := range steps {
 		got[s.ID] = s.After
 	}
@@ -189,7 +189,7 @@ func TestRunSeconds_CriticalPath(t *testing.T) {
 		t.Errorf("three lanes: %d, want 61", got)
 	}
 
-	steps := Steps(everyStepRecipe(""))
+	steps := Steps(everyStepRecipe(""), false)
 	typical, sum, critical := make([]int, len(steps)), 0, 0
 	onPath := map[string]bool{StepRHOAI: true, StepDSC: true, StepProject: true, StepPrerequisites: true, StepMaaS: true, StepModelsPrereq: true,
 		StepModel: true, StepMaaSPublish: true, StepPlayground: true, StepKueuePrereq: true, StepKueue: true, StepDashboardDev: true}
@@ -256,7 +256,7 @@ func TestRunSeconds_MaxBoundsEveryRun(t *testing.T) {
 		if rng.IntN(2) == 0 {
 			f.Models.Exposure = "internal"
 		}
-		steps := Steps(r)
+		steps := Steps(r, false)
 		most, actual := make([]int, len(steps)), make([]int, len(steps))
 		for i, s := range steps {
 			_, most[i] = s.Seconds()

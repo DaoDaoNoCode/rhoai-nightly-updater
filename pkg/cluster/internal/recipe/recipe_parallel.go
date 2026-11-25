@@ -3,6 +3,8 @@ package recipe
 import (
 	"maps"
 	"slices"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 // MaxRunningSteps caps concurrent step execution within a single run.
@@ -35,18 +37,88 @@ var (
 		{StepModelRegistry},
 		{StepMaaS, StepModelsPrereq, StepModel, StepMaaSPublish, StepPlayground},
 	}
-	// stepsLast run serially after every lane finishes: the
-	// dashboard's Kueue opt-in changes how new workbenches and model
-	// deployments are created, so distributed workloads come after them,
-	// and a Dashboard Dev build, which pauses the dashboard's operator,
-	// comes last.
-	stepsLast = []string{StepKueuePrereq, StepKueue, StepDashboardDev}
+	// stepsKueue set up distributed workloads: Kueue's component, then the
+	// queues, the project's label and (asked for) the dashboard's Kueue
+	// setting with its Queue hardware profile. They run right after
+	// stepsFirst or right before stepsLast (runOrder, KueueFirst).
+	stepsKueue = []string{StepKueuePrereq, StepKueue}
+	// stepsLast run serially after every lane finishes: a Dashboard Dev
+	// build, which pauses the dashboard's operator.
+	stepsLast = []string{StepDashboardDev}
 )
 
-// withAfter populates After on each step from the declared run order. Any step
-// omitted from that order (currently none; a test enforces this) depends on
-// every step listed before it.
-func withAfter(steps []Step) []Step {
+// KueueFirst is the run order's rule for distributed workloads: whether
+// recipe r sets them up before its workloads (the workbench and the
+// model), as the documented path does in a project that will be Kueue's
+// (opendatahub-documentation modules/kueue-workflow.adoc L8-49: queues,
+// the dashboard's Kueue setting and Queue hardware profiles come before
+// users create workloads). It decides from what the dashboard will offer
+// those workloads (odh-dashboard rhoai-3.7-ea.1 packages/hardware-profiles
+// shared/kueueUtils.ts L76-119, envkit.KueueModeFor), not from the
+// recipe's opt-in alone:
+//
+//   - the Kueue step labels the recipe's project
+//     kueue.openshift.io/managed=true, whether the run creates it or uses
+//     one that is there, so with distributed workloads in the recipe the
+//     project is Kueue's once that step ran;
+//   - the dashboard's Kueue area is on when its setting is on now
+//     (settingOn, disableKueue false; a project the run creates is then
+//     labelled at creation, as the dashboard's Create project does) or the
+//     recipe's dashboardOptIn turns it on (the Kueue step); the
+//     DataScienceCluster's kueue is turned on by the step before it;
+//   - with both, the dashboard offers a workload in the project only a
+//     Queue hardware profile of a LocalQueue the project has, which the
+//     Kueue step makes: so the Kueue steps run right after the project and
+//     what the features need, before every lane.
+//
+// Otherwise (no distributed workloads, or the setting off and no opt-in)
+// the order is unchanged: the workloads come first, as in a project that
+// is not Kueue's, and the Kueue steps come after every lane (with the
+// setting off the dashboard offers a labelled project no hardware profile
+// at all, so a workload after the label would find none).
+func KueueFirst(r types.EnvironmentRecipe, settingOn bool) bool {
+	k := r.Spec.Features.Kueue
+	return k.Enabled && (k.DashboardOptIn || settingOn)
+}
+
+// runOrder is the run's order of step IDs: stepsFirst, the lanes side by
+// side, then stepsLast, with stepsKueue right after stepsFirst when
+// kueueFirst (KueueFirst) and right before stepsLast otherwise.
+func runOrder(kueueFirst bool) (first []string, lanes [][]string, last []string) {
+	if kueueFirst {
+		return slices.Concat(stepsFirst, stepsKueue), stepLanes, stepsLast
+	}
+	return stepsFirst, stepLanes, slices.Concat(stepsKueue, stepsLast)
+}
+
+// inRunOrder lists steps as the run takes them: with kueueFirst the Kueue
+// steps move from the end of the feature steps to right after the last of
+// stepsFirst, so the plan and the run record show them where they run.
+func inRunOrder(steps []Step, kueueFirst bool) []Step {
+	if !kueueFirst {
+		return steps
+	}
+	var kueueSteps, rest []Step
+	for _, s := range steps {
+		if slices.Contains(stepsKueue, s.ID) {
+			kueueSteps = append(kueueSteps, s)
+		} else {
+			rest = append(rest, s)
+		}
+	}
+	at := 0
+	for i, s := range rest {
+		if slices.Contains(stepsFirst, s.ID) {
+			at = i + 1
+		}
+	}
+	return slices.Concat(rest[:at], kueueSteps, rest[at:])
+}
+
+// withAfter populates After on each step from the run order (runOrder).
+// Any step omitted from that order (currently none; a test enforces this)
+// depends on every step listed before it.
+func withAfter(steps []Step, kueueFirst bool) []Step {
 	present := map[string]bool{}
 	for _, s := range steps {
 		present[s.ID] = true
@@ -63,9 +135,10 @@ func withAfter(steps []Step) []Step {
 		}
 		return deps
 	}
-	head := chain(stepsFirst, nil)
+	first, lanes, last := runOrder(kueueFirst)
+	head := chain(first, nil)
 	var ends []string
-	for _, lane := range stepLanes {
+	for _, lane := range lanes {
 		if end := chain(lane, head); !slices.Equal(end, head) {
 			ends = append(ends, end...)
 		}
@@ -73,7 +146,7 @@ func withAfter(steps []Step) []Step {
 	if len(ends) == 0 {
 		ends = head
 	}
-	chain(stepsLast, ends)
+	chain(last, ends)
 	var earlier []string
 	for i := range steps {
 		deps, listed := after[steps[i].ID]

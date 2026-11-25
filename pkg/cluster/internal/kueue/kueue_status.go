@@ -129,6 +129,9 @@ func checkCluster(u *kube.Client, dsc rhoai.DSCRead, block *types.ComponentBlock
 		}
 		refuse(msg, "prerequisites")
 	}
+	if why := AutoQueuesRefusal(dsc); why != "" {
+		refuse(why, "unsupported")
+	}
 	ck.instance.KueueReady, ck.instance.Message = kueueReady(dsc)
 	served, group, err := v1beta2Served(u)
 	switch {
@@ -254,13 +257,21 @@ func sampleState(u *kube.Client, kind, project string, rec Record, workloads []W
 }
 
 // quotaDiffers says whether a live nominal quota is known to differ from
-// the one this version sets, as amounts ("19456Mi" is "19Gi"); a quota
-// that cannot be read is not called different.
-func quotaDiffers(cpu, memory string) bool {
-	wantCPU, wantMemory := Quota()
-	sameCPU, knownCPU := kube.SameQuantity(cpu, wantCPU)
-	sameMemory, knownMemory := kube.SameQuantity(memory, wantMemory)
-	return (knownCPU && !sameCPU) || (knownMemory && !sameMemory)
+// the one this version sets, as amounts ("20480Mi" is "20Gi"); a quota
+// that cannot be read is not called different, but one without ephemeral
+// storage is (an earlier version covered CPU and memory only, so a model
+// that requests it is never admitted).
+func quotaDiffers(cpu, memory, ephemeral string) bool {
+	wantCPU, wantMemory, wantEphemeral := Quota()
+	if ephemeral == "" {
+		return true
+	}
+	differs := false
+	for _, q := range [][2]string{{cpu, wantCPU}, {memory, wantMemory}, {ephemeral, wantEphemeral}} {
+		same, known := kube.SameQuantity(q[0], q[1])
+		differs = differs || (known && !same)
+	}
+	return differs
 }
 
 // GetStatus powers the Distributed workloads tab: DataScienceCluster data via
@@ -299,6 +310,22 @@ func GetStatus(sa, u *kube.Client, project string) (*types.KueueStatus, error) {
 	note := func(what string, err error) {
 		problems = append(problems, fmt.Sprintf("Cannot read %s: %v.", what, err))
 	}
+	// The project read first: when it is gone or was made again, the
+	// record's project entries no longer describe it (projectEntriesValid),
+	// and what has the tool's names there is shown as someone else's.
+	var ns Namespace
+	var nsFound bool
+	var nsErr error
+	if st.Project != "" {
+		ns, nsFound, nsErr = readNamespace(u, st.Project)
+		if nsErr == nil && rec.Project != "" && rec.ProjectUID != "" && !rec.projectEntriesValid(ns, nsFound) {
+			rec.forgetProject()
+			st.ProjectGone = fmt.Sprintf("Project %s is gone; clean up, or make it again and set up.", rec.Project)
+			if nsFound {
+				st.ProjectGone, st.ProjectRemade = fmt.Sprintf("Project %s was deleted and made again since this tool's setup; set up again.", rec.Project), true
+			}
+		}
+	}
 	// Queue objects are fetched only after Kueue's API is served.
 	if st.Instance.V1beta2 {
 		rf, found, err := readFlavor(u)
@@ -314,9 +341,9 @@ func GetStatus(sa, u *kube.Client, project string) (*types.KueueStatus, error) {
 		if found && err == nil {
 			// The live quota, not the one Set up would create: Set up keeps
 			// a ClusterQueue that is there.
-			if cpu, memory := cq.nominalQuota(); cpu != "" || memory != "" {
-				st.Quota = fmt.Sprintf("%s CPUs and %s of memory", kube.FirstNonEmpty(cpu, "no"), kube.FirstNonEmpty(memory, "no"))
-				if cqState.ManagedByTool && quotaDiffers(cpu, memory) {
+			if cpu, memory, ephemeral := cq.nominalQuota(); cpu != "" || memory != "" || ephemeral != "" {
+				st.Quota = quotaText(cpu, memory, ephemeral)
+				if cqState.ManagedByTool && quotaDiffers(cpu, memory, ephemeral) {
 					cqState.Outdated = fmt.Sprintf("its quota is %s; this version sets %s", st.Quota, describeQuota())
 				}
 			}
@@ -338,11 +365,10 @@ func GetStatus(sa, u *kube.Client, project string) (*types.KueueStatus, error) {
 		}
 	}
 	if st.Project != "" {
-		ns, found, err := readNamespace(u, st.Project)
 		switch {
-		case err != nil:
-			note("project "+st.Project, err)
-		case found:
+		case nsErr != nil:
+			note("project "+st.Project, nsErr)
+		case nsFound:
 			st.Label = &types.KueueLabel{Present: ns.Metadata.Labels[ProjectLabel] == "true", AddedByTool: rec.LabelAdded && rec.Project == st.Project && ns.Metadata.UID == rec.ProjectUID}
 		}
 		var workloads []Workload
@@ -357,6 +383,19 @@ func GetStatus(sa, u *kube.Client, project string) (*types.KueueStatus, error) {
 				note(sampleText(kind), err)
 			}
 			st.Samples = append(st.Samples, s)
+		}
+	}
+	// A project that cannot be read: the record's entries for it can be
+	// neither trusted nor forgotten, so nothing in it is shown as the
+	// tool's (nor as someone else's).
+	if nsErr != nil {
+		for i := range st.Objects {
+			if st.Objects[i].Namespace != "" {
+				st.Objects[i].ManagedByTool, st.Objects[i].Foreign, st.Objects[i].Outdated, st.Objects[i].Unknown = false, false, "", true
+			}
+		}
+		for i := range st.Samples {
+			st.Samples[i].ManagedByTool, st.Samples[i].Foreign, st.Samples[i].Outdated, st.Samples[i].Unknown = false, false, "", true
 		}
 	}
 	if apps, err := rhoai.AppsNamespace(u); err == nil {

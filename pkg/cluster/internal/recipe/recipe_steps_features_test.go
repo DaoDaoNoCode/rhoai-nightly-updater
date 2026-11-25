@@ -892,7 +892,7 @@ func TestOwnership_OffersOnlyWhatTheRunCreated(t *testing.T) {
 // (15 minutes), with Typical positive and not above Max.
 func TestFeatureSteps_FitTheStepDeadline(t *testing.T) {
 	r := validRecipe(t, allFeatures)
-	for _, s := range Steps(r) {
+	for _, s := range Steps(r, false) {
 		if s.Max > record.OperationDeadline || s.Typical > s.Max || s.Typical <= 0 {
 			t.Errorf("%s: typical %v, max %v, deadline %v", s.ID, s.Typical, s.Max, record.OperationDeadline)
 		}

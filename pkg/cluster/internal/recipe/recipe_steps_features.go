@@ -906,10 +906,18 @@ func checkWorkbench(c *kube.Client, s *State) (Check, error) {
 		return blockedAt(st.Unsupported), nil
 	case st.Blocked != nil:
 		return Check{Blocked: st.Blocked.Reason, Fix: fixAt(types.RecipeFixFeatureBlocked, pageComponents)}, nil
-	case item == nil || item.Terminating:
-		return Check{}, nil
-	case !item.ManagedByTool:
+	case item != nil && !item.Terminating && !item.ManagedByTool:
 		return blockedAt(fmt.Sprintf("Project %s has a workbench %s that this tool did not create; the recipe does not change it. Nothing was changed.", project, workbench.Name)), nil
+	case item == nil || item.Terminating:
+		// The Workbench tab's own preflight for a new workbench: no image
+		// or no hardware profile refuses as its Set up would. The plan
+		// checks it here only when no step before it changes those inputs
+		// (dependsOn); otherwise it is checked when the run gets there.
+		switch st.PlanProblemCode {
+		case "no_image", "no_profile", "no_profile_project":
+			return blockedAt(strings.TrimSpace(st.PlanProblem) + " Nothing was changed."), nil
+		}
+		return Check{}, nil
 	}
 	return Check{Done: true, Reason: fmt.Sprintf("Workbench %s in %s is set up (%s).", workbench.Name, project, kube.FirstNonEmpty(item.State, "state unknown"))}, nil
 }

@@ -121,13 +121,16 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
         dashboardDev: { deploy: "pr", pr: 4321, flavor: "rhoai" },
       },
     } }]);
-    // Dialog step list mirrors runner order and shows each title without adornment.
+    // Dialog step list mirrors runner order and shows each title without adornment; with the dashboard's Kueue opt-in
+    // distributed workloads come right after what the features need, before the workbench and the model.
     const plan = within(screen.getByRole("dialog", { name: "Run recipe dev?" })).getByRole("list", { name: "Steps of this operation" });
     const titles = within(plan).getAllByRole("listitem").map((li) => li.textContent ?? "");
     expect(titles[3]).toContain("What the features need");
+    expect(titles[4]).toContain("What distributed workloads need");
+    expect(titles[5]).toContain("Distributed workloads");
     for (const [i, title] of ["MLflow samples", "Models as a Service", "What the model's access needs", "Model Qwen3 1.7B (CPU, tool calling)", "Publish the model through MaaS",
-      "Playground", "Model registry", "Workbench", "What distributed workloads need", "Distributed workloads", "Dashboard Dev (PR #4321)"].entries()) {
-      expect(titles[7 + i]).toContain(title);
+      "Playground", "Model registry", "Workbench", "Dashboard Dev (PR #4321)"].entries()) {
+      expect(titles[9 + i]).toContain(title);
     }
     // The plan's warnings: what else the run changes.
     // The plan's notes, each titled by what it is: advice, and a change to the shared cluster.

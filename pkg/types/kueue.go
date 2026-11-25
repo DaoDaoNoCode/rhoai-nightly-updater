@@ -26,7 +26,7 @@ type KueueStatus struct {
 	// sequence, each with status even when the object is missing.
 	Objects []KueueObject `json:"objects"`
 	// Quota summarizes the ClusterQueue's nominal quota (e.g. "6 CPUs and
-	// 19Gi of memory"): the live ClusterQueue's, or what Set up creates
+	// 20Gi of memory"): the live ClusterQueue's, or what Set up creates
 	// when there is none.
 	Quota string `json:"quota"`
 	// Label reflects the project's kueue.openshift.io/managed label.
@@ -40,6 +40,14 @@ type KueueStatus struct {
 	OptIn KueueOptIn `json:"optIn"`
 	// DefaultRayImage is the prefilled image for sample workloads.
 	DefaultRayImage string `json:"defaultRayImage"`
+	// ProjectGone says that the project this tool's setup is recorded in
+	// is gone, or was deleted and made again, since setup: its LocalQueue,
+	// samples and label went with it ("Project recipe-dev is gone; set up
+	// again."). Empty otherwise.
+	ProjectGone string `json:"projectGone,omitempty"`
+	// ProjectRemade: the project of ProjectGone was made again (a project
+	// of that name is there), so Set up can run in it again.
+	ProjectRemade bool `json:"projectRemade,omitempty"`
 	// ItemsProblem names anything that failed to load; empty when reads succeeded.
 	ItemsProblem string `json:"itemsProblem,omitempty"`
 	// DashboardURL is the RHOAI dashboard base URL for hyperlinking.
@@ -83,6 +91,10 @@ type KueueObject struct {
 	// Message carries the Active condition message when the object is inactive.
 	Message     string `json:"message,omitempty"`
 	Terminating bool   `json:"terminating,omitempty"`
+	// Unknown (the LocalQueue only) means whose it is cannot be told: the
+	// project cannot be read, so the record's entries for it are not
+	// trusted (ManagedByTool and Foreign are false).
+	Unknown bool `json:"unknown,omitempty"`
 	// Outdated (this tool's ClusterQueue only) says how an earlier
 	// version made it differently from this version's manifest (its
 	// quota); Set up keeps an object that is there, so Clean up and Set up
@@ -115,6 +127,9 @@ type KueueSample struct {
 	// RayState is the Ray resource's native status (RayCluster status.state or
 	// RayJob status.jobDeploymentStatus).
 	RayState string `json:"rayState,omitempty"`
+	// Unknown means whose it is cannot be told: the project cannot be
+	// read (ManagedByTool and Foreign are false).
+	Unknown bool `json:"unknown,omitempty"`
 	// Outdated (this tool's sample only) says how an earlier version made
 	// it differently from this version's manifest (its head and worker
 	// sizes); deleting and adding it again, or Clean up and Set up, makes
