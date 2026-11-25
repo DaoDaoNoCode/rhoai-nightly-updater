@@ -433,7 +433,7 @@ function workbenchOf(project) {
   if (items.some((i) => i.namespace === project && i.deployed)) return { project, items };
   return noProfile
     ? { project, items, planProblem: F.WORKBENCH_NO_PROFILE, planProblemCode: "no_profile" }
-    : { project, items, plan: F.workbenchPlan };
+    : { project, items, plan: world.workbench.plan ?? F.workbenchPlan };
 }
 
 /** POST /api/resources/workbench/stream (pkg/cluster RunWorkbench). */

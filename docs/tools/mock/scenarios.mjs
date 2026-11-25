@@ -581,6 +581,8 @@ export const scenarios = {
   "env-workbench-running": (w) => { w.workbench.items = [F.workbenchItem("dev-project", "running")]; },
   "env-workbench-stopped": (w) => { w.workbench.items = [{ ...F.workbenchItem("dev-project", "stopped"), ready: false }]; },
   "env-workbench-no-profile": (w) => { w.workbench.noProfile = true; },
+  // Every workbench image the cluster offers is deprecated: Set up uses the default one and labels it.
+  "env-workbench-deprecated-image": (w) => { w.workbench.plan = { ...F.workbenchPlan, imageTag: "3.7", imageDeprecated: true }; },
   "env-workbench-storage-used": (w) => { const it = F.workbenchItem("dev-project", "running"); w.workbench.items = [{ ...it, storage: { ...it.storage, usedBy: ["workbench my-wb"] } }]; },
   "env-workbench-kept-storage-used": (w) => { scenarios["env-workbench-kept-storage"](w); w.workbench.items[0].storage = { ...w.workbench.items[0].storage, usedBy: ["workbench my-wb"] }; },
   "env-workbench-kept-storage": (w) => { const { state: _s, url: _u, image: _i, hardwareProfile: _h, cpu: _c, memory: _m, connectionAttached: _a, ...kept } = F.workbenchItem("dev-project", "stopped"); w.workbench.items = [{ ...kept, deployed: false, ready: false }]; },
