@@ -3,6 +3,7 @@ package cluster
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"slices"
@@ -350,4 +351,18 @@ func TestValidateModelsRequest_UnknownModel(t *testing.T) {
 func defaultEntry() serving.CatalogModel {
 	e, _ := serving.CatalogEntry("")
 	return e
+}
+
+// The README's catalog table shows each model's vLLM options exactly as the
+// catalog passes them.
+func TestModelCatalog_ReadmeShowsTheArguments(t *testing.T) {
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range serving.ModelCatalog {
+		if !strings.Contains(string(readme), "| `"+m.Args+"` |") {
+			t.Errorf("README.md does not show %s's arguments as `%s`", m.Name, m.Args)
+		}
+	}
 }
