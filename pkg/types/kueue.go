@@ -46,8 +46,9 @@ type KueueStatus struct {
 	DashboardURL string `json:"dashboardUrl,omitempty"`
 	// Queues names every ClusterQueue and LocalQueue on the cluster, of any
 	// owner: what keeps Clean up from turning the DataScienceCluster's kueue
-	// back (kueue.Users). QueuesUnknown: they could not be read.
-	Queues        []string `json:"queues,omitempty"`
+	// back (kueue.Users); [] when there is none, null when they could not be
+	// read (QueuesUnknown then).
+	Queues        []string `json:"queues"`
 	QueuesUnknown bool     `json:"queuesUnknown,omitempty"`
 }
 

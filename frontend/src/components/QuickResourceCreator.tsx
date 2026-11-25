@@ -285,12 +285,12 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
 
   // Shared prerequisites block rendered above each feature tab's sections.
   // Distributed workloads: the DataScienceCluster's kueue this tool turned on, offered back once nothing uses it.
-  const kueueBack = !readOnly && !kueueOp ? kueueTurnBack(prereq?.features?.kueue?.restorable, kueueData) : null;
+  const kueueBack = kueueTurnBack(prereq?.features?.kueue?.restorable, kueueData, { readOnly, baseReason, running: !!kueueOp });
   const prereqNode = (feature: PrerequisiteFeature, exposure?: ModelExposureKind | null) => (
     <PrerequisitesSection feature={feature} prereq={prereq?.features?.[feature]} error={prereqRead.error} onRetry={() => void prereqRead.reload()}
       exposure={exposure ?? undefined} stale={feature === "models" && prereqRead.stale} readOnly={readOnly} baseReason={baseReason} setPending={setPending}
       partActions={feature === "kueue" && kueueBack ? {
-        "dsc-kueue": <ActionListItem><PrimaryAction variant="secondary" label="Turn back..." reason={baseReason} onClick={() => setPending({ kind: "turn-back-kueue", previous: kueueBack.previous })} /></ActionListItem>,
+        "dsc-kueue": <ActionListItem><PrimaryAction variant="secondary" label="Turn back..." reason={kueueBack.reason} onClick={() => setPending({ kind: "turn-back-kueue", previous: kueueBack.restorable.previous })} /></ActionListItem>,
       } : undefined} />
   );
   const onModelsExposure = useCallback((e: ModelExposureKind | null) => setModelsExposure(e), []);

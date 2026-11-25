@@ -1637,6 +1637,8 @@ export interface WorkbenchState extends ResourceState {
   state?: WorkbenchRunState;
   url?: string;
   image?: string;
+  /** Its ImageStream is deprecated: the dashboard labels it Deprecated. */
+  imageDeprecated?: boolean;
   hardwareProfile?: string;
   cpu?: string;
   memory?: string;
@@ -2037,8 +2039,8 @@ export interface KueueStatus {
   defaultRayImage: string;
   itemsProblem?: string;
   dashboardUrl?: string;
-  /** Every ClusterQueue and LocalQueue on the cluster, of any owner: while there is one, Clean up keeps kueue on. */
-  queues?: string[];
+  /** Every ClusterQueue and LocalQueue on the cluster, of any owner: while there is one, Clean up keeps kueue on. null: unread. */
+  queues?: string[] | null;
   /** The queues could not be read. */
   queuesUnknown?: boolean;
 }

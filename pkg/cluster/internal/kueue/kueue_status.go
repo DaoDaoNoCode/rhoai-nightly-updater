@@ -368,7 +368,7 @@ func GetStatus(sa, u *kube.Client, project string) (*types.KueueStatus, error) {
 		st.QueuesUnknown = true
 		note("the cluster's ClusterQueues and LocalQueues", err)
 	} else {
-		st.Queues = users
+		st.Queues = append([]string{}, users...)
 	}
 	st.ItemsProblem = strings.Join(problems, " ")
 	return st, nil

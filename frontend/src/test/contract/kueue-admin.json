@@ -51,6 +51,7 @@
     "setByTool": true
   },
   "project": "team-a",
+  "queues": null,
   "quota": "6 CPUs and 19Gi of memory",
   "samples": [
     {

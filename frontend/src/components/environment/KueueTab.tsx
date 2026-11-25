@@ -279,10 +279,20 @@ export function kueueSteps(p: KueuePending): { id: string; title: string }[] {
  * setup left it as it is (features.StillAsSetUp: the prerequisites' restorable) and no ClusterQueue or LocalQueue is on
  * the cluster (the rule Clean up checks again when it runs).
  */
-export function kueueTurnBack(restorable: RestorableComponent[] | undefined, k: KueueStatus | null): RestorableComponent | null {
+export function kueueTurnBack(restorable: RestorableComponent[] | undefined, k: KueueStatus | null,
+  { readOnly = false, baseReason = null, running = false }: { readOnly?: boolean; baseReason?: string | null; running?: boolean } = {}): { restorable: RestorableComponent; reason: string | null } | null {
   const r = (restorable ?? []).find((c) => c.component === "kueue");
-  if (!r || !k || k.queuesUnknown || (k.queues ?? []).length > 0) return null;
-  return r;
+  // Hidden in read-only mode; otherwise shown, off with the reason.
+  if (!r || readOnly) return null;
+  if (baseReason) return { restorable: r, reason: baseReason };
+  if (running) return { restorable: r, reason: "Wait until the distributed workloads change finishes." };
+  if (!k) return { restorable: r, reason: "Reading which queues are on the cluster..." };
+  if (k.queuesUnknown || !Array.isArray(k.queues)) return { restorable: r, reason: "The queues on the cluster could not be read, so this tool cannot tell whether anything uses Kueue." };
+  if (k.queues.length > 0) {
+    const shown = k.queues.length > 3 ? [...k.queues.slice(0, 3), `${k.queues.length - 3} more`] : k.queues;
+    return { restorable: r, reason: `In use: ${shown.join(", ")}. Kueue goes back only once no ClusterQueue or LocalQueue is left on the cluster.` };
+  }
+  return { restorable: r, reason: null };
 }
 
 /** One-line description of dashboard opt-in behavior for projects created afterward. */
