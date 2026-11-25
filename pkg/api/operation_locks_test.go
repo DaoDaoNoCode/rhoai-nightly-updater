@@ -448,7 +448,7 @@ func TestOperationListShowsConfirmedHoldersOnly(t *testing.T) {
 	f.setLease(otherPodLease(clk.Now()))
 	locks.setCluster(true)
 	inflight.startBackground("update", "Update to nightly", "bob", nil)
-	status, _ := getOperationAs(t, "user:admin")
+	status := getOperationAs(t, "user:admin")
 	if len(status.Operations) != 1 || !status.Operations[0].Remote || status.Operations[0].ID != "remote-op" {
 		t.Fatalf("operations %+v", status.Operations)
 	}
@@ -474,7 +474,7 @@ func TestOperationListKeepsInterruptionsDuringAClusterOperation(t *testing.T) {
 		reads++
 		return &cluster.OperationRecord{}, nil
 	}
-	status, _ := getOperationAs(t, "user:admin")
+	status := getOperationAs(t, "user:admin")
 	if reads != 0 || len(status.Operations) != 2 {
 		t.Fatalf("reads %d operations %+v", reads, status.Operations)
 	}
@@ -560,7 +560,7 @@ func TestBusyRefusalNamesNobodyForUsers(t *testing.T) {
 	}
 }
 
-func getOperationAs(t *testing.T, token string) (OperationStatus, string) {
+func getOperationAs(t *testing.T, token string) OperationStatus {
 	t.Helper()
 	w := httptest.NewRecorder()
 	HandleOperation(w, getAs(t, "/api/operation", token))
@@ -568,5 +568,5 @@ func getOperationAs(t *testing.T, token string) (OperationStatus, string) {
 	if err := json.Unmarshal(w.Body.Bytes(), &status); err != nil {
 		t.Fatal(err)
 	}
-	return status, w.Body.String()
+	return status
 }
