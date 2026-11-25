@@ -831,21 +831,81 @@ func TestModelsSetup_GatewayWaitSpeaksPlainly(t *testing.T) {
 	}
 }
 
-// When the gateway is still not programmed at the end of the wait, the step
-// names the controller's reason: then it is the clue.
-func TestModelsSetup_GatewayNotProgrammedNamesTheReason(t *testing.T) {
+// When the gateway is still not programmed at the end of the wait, setup
+// fails (a gateway without a load balancer address cannot be reached from
+// outside the cluster), names the controller's reason, which is then the
+// clue, and the documented Route alternative this tool does not build; no
+// model is set up behind it.
+func TestModelsSetup_GatewayWithoutAddressFails(t *testing.T) {
 	mc := newModelsCluster(t)
 	notProgrammedGateway(mc, 0)
-	_, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
-	for _, e := range events {
-		if e.Step == "gateway-ready" && e.Status != "running" {
-			if !strings.Contains(e.Message, "not programmed after") || !strings.Contains(e.Message, "The gateway controller says: Failed to assign to any requested addresses") {
-				t.Errorf("gateway-ready: %q", e.Message)
-			}
-			return
+	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	if res.Success || res.ErrorCode != "not_ready" {
+		t.Fatalf("setup = %+v", res)
+	}
+	for _, want := range []string{
+		"Gateway openshift-ingress/openshift-ai-inference has no load balancer address after 2:00",
+		"The gateway controller says: Failed to assign to any requested addresses",
+		"a cloud load balancer, or MetalLB on bare metal",
+		"INGRESS_MODE=ocproute and odh-gitops' openshiftRoute do) is not supported by this tool yet",
+		"no model was set up: delete the gateway to remove them",
+		"reached only inside the cluster",
+	} {
+		if !strings.Contains(res.Message, want) {
+			t.Errorf("message lacks %q: %s", want, res.Message)
 		}
 	}
-	t.Fatal("no final gateway-ready step")
+	final := ""
+	for _, e := range events {
+		if e.Step == "gateway-ready" && e.Status != "running" {
+			final = e.Status
+		}
+	}
+	if final != "failed" {
+		t.Errorf("gateway-ready ended %q", final)
+	}
+	if mc.f.has(testModelPath) {
+		t.Error("the model was created behind a gateway nobody can reach")
+	}
+}
+
+// With an address but no DNS zone (the cluster DNS configuration names
+// none, so the ingress operator never publishes the hostname and its
+// DNSRecord's status.zones stays empty), setup fails too; a record whose
+// zones are still being published is the normal wait and succeeds with a
+// note.
+func TestModelsSetup_GatewayDNS(t *testing.T) {
+	for _, tc := range []struct {
+		name, zones string
+		ok          bool
+		want        string
+	}{
+		{"no zone", `[]`, false, "OpenShift publishes no DNS for inference.apps.example.com: its DNSRecord in openshift-ingress lists no DNS zone"},
+		{"not published yet", `[{"conditions":[{"type":"Published","status":"False"}]}]`, true, "is not published in DNS yet"},
+		{"published", `[{"conditions":[{"type":"Published","status":"True"}]}]`, true, "is published in DNS"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mc := newModelsCluster(t)
+			mc.f.putJSON("/apis/ingress.operator.openshift.io/v1/namespaces/openshift-ingress/dnsrecords/external",
+				`{"spec":{"dnsName":"inference.apps.example.com."},"status":{"zones":`+tc.zones+`}}`)
+			res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+			if res.Success != tc.ok {
+				t.Fatalf("setup = %+v", res)
+			}
+			msg := res.Message
+			for _, e := range events {
+				if e.Step == "gateway-ready" && e.Status != "running" {
+					msg = e.Message
+				}
+			}
+			if !strings.Contains(msg, tc.want) {
+				t.Errorf("gateway-ready %q lacks %q", msg, tc.want)
+			}
+			if !tc.ok && (res.ErrorCode != "not_ready" || !strings.Contains(msg, "is not supported by this tool yet") || mc.f.has(testModelPath)) {
+				t.Errorf("no-zone failure: code %q, model made %v: %s", res.ErrorCode, mc.f.has(testModelPath), msg)
+			}
+		})
+	}
 }
 
 // Before set up, the status names the address set up would give the

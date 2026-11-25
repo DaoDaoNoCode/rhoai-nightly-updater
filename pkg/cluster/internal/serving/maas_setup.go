@@ -482,7 +482,14 @@ func AwaitOperator(c *kube.Client, step, ns, name, title string, timeout time.Du
 	return nil
 }
 
-// setupGateway is setup's gateway step (setup-gateway.sh loadbalancer mode).
+// maasGatewayFailedAfter ends setup's message when the MaaS gateway it
+// created cannot be reached from outside the cluster.
+const maasGatewayFailedAfter = " The gateway was created and setup stopped before Authorino TLS and the DataScienceCluster: Clean up MaaS removes what it made."
+
+// setupGateway is setup's gateway step (setup-gateway.sh loadbalancer
+// mode). A gateway that gets no load balancer address, or whose hostname
+// has no DNS zone to be published in, fails setup: MaaS would not be
+// reachable from outside the cluster.
 func (m *Run) setupGateway(gwPlan *maasGatewayPlan, foreign bool) (*types.OperationResponse, error) {
 	c := m.Client
 	if foreign {
@@ -494,22 +501,34 @@ func (m *Run) setupGateway(gwPlan *maasGatewayPlan, foreign bool) (*types.Operat
 		return m.Fail("gateway", msg, code, "gateway apply failed")
 	}
 	m.Step("gateway", "running", "Waiting for the gateway to be programmed (up to "+ClockText(maasGatewayTimeout)+")")
+	pending := ""
 	programmed, err := kube.WaitForGone(c, maasGatewayTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 		gw, err := readMaaSGateway(cc)
+		if cond, ok := kube.FindCondition(gw.gw.Status.Conditions, "Programmed"); ok && cond.Status != "True" {
+			pending = kube.FirstNonEmpty(cond.Message, cond.Reason)
+		}
 		return gw.programmed && gw.address != "", err
 	})
 	switch {
 	case err != nil:
 		return m.Fail("gateway", fmt.Sprintf("Stopped waiting for the gateway: %v. It was created.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "gateway wait failed")
 	case !programmed:
-		m.Step("gateway", "success", fmt.Sprintf("Created; not programmed after %s. It may still come up; the MaaS tab shows its state.", ClockText(maasGatewayTimeout)))
-	default:
-		published, _ := kube.WaitForGone(c, inferenceGatewayDNSTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) { return dnsPublished(cc, gwPlan.host) == "published", nil })
-		if published {
-			m.Step("gateway", "success", fmt.Sprintf("Programmed; https://%s is published in DNS.", gwPlan.host))
-		} else {
-			m.Step("gateway", "success", fmt.Sprintf("Programmed; https://%s is not in DNS yet (a new load balancer's name can take a few minutes).", gwPlan.host))
+		return m.Fail("gateway", gatewayNoAddressText(MaaSGatewayName, maasGatewayTimeout, pending)+maasGatewayFailedAfter, "not_ready", "gateway has no address")
+	}
+	state := ""
+	published, _ := kube.WaitForGone(c, inferenceGatewayDNSTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
+		if st := dnsRecordState(cc, gwPlan.host); st != "" {
+			state = st // an unreadable list (the poll after the deadline) keeps the last
 		}
+		return state == "published", nil
+	})
+	switch {
+	case published:
+		m.Step("gateway", "success", fmt.Sprintf("Programmed; https://%s is published in DNS.", gwPlan.host))
+	case state == dnsNoZones:
+		return m.Fail("gateway", gatewayNoDNSZonesText(MaaSGatewayName, gwPlan.host)+maasGatewayFailedAfter, "not_ready", "gateway has no dns zone")
+	default:
+		m.Step("gateway", "success", fmt.Sprintf("Programmed; https://%s is not in DNS yet (a new load balancer's name can take a few minutes).", gwPlan.host))
 	}
 	return nil, nil
 }

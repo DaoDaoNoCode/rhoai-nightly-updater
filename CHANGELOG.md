@@ -362,6 +362,16 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **Gateway setup fails when the gateway cannot be reached.** Setting up
+  the inference gateway or MaaS reported success when the cluster gave the
+  gateway no load balancer address ("may still come up"), or when OpenShift
+  had no DNS zone to publish its hostname in, although nothing outside the
+  cluster could reach it (bare metal without MetalLB, clusters without
+  managed DNS). Both now fail at the gateway step with the reason; the
+  inference gateway's setup then sets up no model, and MaaS stops before
+  the DataScienceCluster. An OpenShift Route in front of a ClusterIP
+  gateway (the MaaS docs' `INGRESS_MODE=ocproute`, odh-gitops'
+  `openshiftRoute`) is not supported by this tool yet.
 - **MaaS token limits count streamed chats.** The Models tab's chat models
   now run with vLLM's `--enable-force-include-usage` (appended to
   `VLLM_ADDITIONAL_ARGS`), as the MaaS docs require for token rate limits

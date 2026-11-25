@@ -1202,11 +1202,9 @@ func (m *modelsRun) setupGateway(req types.ModelsRequest, s *modelsSetup) (*type
 		case problem != "":
 			return m.fail("gateway-ready", problem+" Its objects were created; delete the gateway to remove them.", "not_ready", "gateway not accepted")
 		case !ready:
-			why := ""
-			if pending != "" {
-				why = " The gateway controller says: " + kube.TruncateText(pending, 300) + "."
-			}
-			m.step("gateway-ready", "success", fmt.Sprintf("Created, but not programmed after %s. It may still come up; the Models tab shows its state.%s", ClockText(inferenceGatewayReadyTimeout), why))
+			return m.fail("gateway-ready", gatewayNoAddressText(inferenceGatewayName, inferenceGatewayReadyTimeout, pending)+inferenceGatewayFailedAfter, "not_ready", "gateway has no address")
+		case dns == dnsNoZones:
+			return m.fail("gateway-ready", gatewayNoDNSZonesText(inferenceGatewayName, gw.host)+inferenceGatewayFailedAfter, "not_ready", "gateway has no dns zone")
 		case dns == "published":
 			m.step("gateway-ready", "success", fmt.Sprintf("Ready: https://%s is published in DNS.", gw.host))
 		default:
@@ -1216,6 +1214,10 @@ func (m *modelsRun) setupGateway(req types.ModelsRequest, s *modelsSetup) (*type
 	}
 	return nil, nil
 }
+
+// inferenceGatewayFailedAfter ends setup's message when the inference
+// gateway it created cannot be reached from outside the cluster.
+const inferenceGatewayFailedAfter = " Its objects were created and no model was set up: delete the gateway to remove them. A model can still be set up reached only inside the cluster, which needs no gateway."
 
 // setupModelApply adds the model's project to this tool's gateway when it
 // needs it, then applies the model and its token objects.
