@@ -715,6 +715,15 @@ scenarios["recipe-full-succeeded"] = (w) => {
   w.recipeRun = { run: F.recipeRun({ rcp, done: steps.length, current: "", state: "succeeded", stopReason: "Every step of recipe full is set up." }), running: false };
   w.resources = { ...w.resources, mlflow: F.mlflowStates.running, pipelineServers: [...w.resources.pipelineServers, { ...F.pipelineServer, namespace: "recipe-full", apiRoute: undefined, uiRoute: undefined }] };
 };
+// The same run on a DataScienceCluster that names the model registry
+// component aiHub (v3, RHOAI 3.6), with the playground's ogx turned on too:
+// the Clean up dialog names both as the dashboard does.
+scenarios["recipe-full-succeeded-aihub"] = (w) => {
+  scenarios["recipe-full-succeeded"](w);
+  const run = w.recipeRun.run;
+  run.components = [...run.components.map((k) => (k === "modelregistry" ? "aiHub" : k)), "ogx"].sort();
+  run.steps = run.steps.map((s) => (s.id === "playground-prereq" && s.status === "success" ? { ...s, created: true } : s));
+};
 scenarios["recipe-interrupted"] = (w) => {
   w.recipeRun = { run: F.recipeRun({ done: 3, pod: "rhoai-nightly-updater-6f7b8c9d5-q9m3z" }), running: false, interrupted: true };
   w.operation = { inProgress: false, operation: null, interrupted: { type: "recipe", label: "Environment recipe", user: F.USER, target: "dev: step 4 of 8 (What Pipelines needs)", startedAt: F.ago(14), pod: "rhoai-nightly-updater-6f7b8c9d5-q9m3z", id: "op-recipe", bootId: "b-4e2a" } };

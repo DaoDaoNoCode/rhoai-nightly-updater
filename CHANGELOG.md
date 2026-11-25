@@ -278,6 +278,11 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   back last, only once no ClusterQueue or LocalQueue is left on the cluster,
   and Clean up's messages about a component that stays on name its on state
   (`Unmanaged` for `kueue`) instead of `Managed`.
+- **The recipe's Clean up dialog names RHOAI 3.6's components.** It listed
+  `aiHub` and `ogx` by their keys; they now read AI hub and OGX. AI hub stays
+  on while the model registry stays, as `modelregistry` does (Clean up keeps
+  it while a registry is left), and turning it back says that it also
+  removes the Model Catalog, as the Environment page's Clean up does.
 - **A fresh Connectivity Link install no longer leaves Kuadrant stuck
   without Authorino and Limitador.** Set up (the MaaS tab, and models'
   prerequisites through a gateway) created the Kuadrant CR as soon as its API

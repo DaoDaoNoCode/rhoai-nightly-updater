@@ -102,7 +102,9 @@ export const RecipeCleanupModal: React.FC<{
     const stay = split.stay.length > 0 ? `Stays on while what uses it stays: ${split.stay.join("; ")}.` : "";
     // Kueue's own condition, as the Distributed workloads tab's Clean up says it (the server checks it when it runs).
     const kueue = split.back.includes(componentName("kueue")) ? " Kueue goes back last, only once no ClusterQueue or LocalQueue is left on the cluster." : "";
-    const desc = split.back.length > 0 ? `Each goes back to what it was.${kueue}${stay ? ` ${stay}` : ""}` : `None goes back now. ${stay}`;
+    // RHOAI 3.6's aiHub also runs the Model Catalog, as the Environment page's Clean up says.
+    const catalog = split.back.includes(componentName("aiHub")) ? " Turning AI hub back also removes the Model Catalog." : "";
+    const desc = split.back.length > 0 ? `Each goes back to what it was.${kueue}${catalog}${stay ? ` ${stay}` : ""}` : `None goes back now. ${stay}`;
     return [title, desc];
   };
   const steps = cleanupSteps(sent ?? req);

@@ -8,6 +8,10 @@ describe("recipe Clean up and plan words", () => {
   it("names DataScienceCluster components as RHOAI does, never by their keys (U1)", () => {
     expect(["aipipelines", "mlflowoperator", "modelregistry", "kserve", "kueue"].map(componentName)).toEqual(
       ["Data Science Pipelines", "MLflow", "Model registry", "KServe", "Kueue"]);
+    // Every key the feature setups turn on (pkg/cluster/internal/features featureSetups) has a name.
+    const keys = ["aipipelines", "datasciencepipelines", "mlflowoperator", "aiHub", "modelregistry", "kserve", "ogx", "llamastackoperator", "dashboard", "kueue"];
+    expect(keys.filter((k) => componentName(k) === k)).toEqual([]);
+    expect(["aiHub", "ogx"].map(componentName)).toEqual(["AI hub", "OGX"]);
     const parts = cleanupParts({ components: ["aipipelines", "kserve"] });
     expect(parts[0].title).toBe("The DataScienceCluster components the run turned on: Data Science Pipelines and KServe");
   });
@@ -39,6 +43,13 @@ describe("recipe Clean up and plan words", () => {
     expect(componentsSplit(status, run, { recipeProjects: ["recipe-full"] }, { ...offered, modelRegistry: false, kueue: false }).stay).toEqual([
       "Model registry (the model registry is not removed here)", "Kueue (the distributed workloads setup is not removed here)",
     ]);
+    // RHOAI 3.6 names the model registry component aiHub: it stays on while the registry stays, as modelregistry does.
+    const on36 = { ...offered, components: ["kserve", "aiHub", "kueue"] };
+    expect(componentsSplit(status, run, { recipeProjects: ["recipe-full"] }, on36).stay).toEqual([
+      "AI hub (the model registry stays)", "Kueue (the distributed workloads setup stays)",
+    ]);
+    expect(componentsSplit(status, run, { recipeProjects: ["recipe-full"], modelRegistry: true, kueue: true }, on36).back).toEqual(["KServe", "AI hub", "Kueue"]);
+    expect(componentsSplit(status, run, { recipeProjects: ["recipe-full"] }, { ...on36, modelRegistry: false }).stay[0]).toBe("AI hub (the model registry is not removed here)");
   });
 
   it("a plan's messages do not repeat that nothing was changed (U3)", () => {

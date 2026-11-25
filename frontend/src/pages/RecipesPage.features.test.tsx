@@ -227,4 +227,28 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     await act(async () => { streams[0].close(); });
     await settle();
   });
+
+  it("Clean up on RHOAI 3.6: AI hub and OGX by name, AI hub kept while the registry stays and its Model Catalog said", async () => {
+    const ended = contract.recipeRunFeatures();
+    const cleanup = { ...ended.cleanup!, components: ["aiHub", "kserve", "ogx"] };
+    stubApi({
+      ...editorReads,
+      "GET /api/recipes/run": { ...ended, cleanup },
+      "GET /api/resources/status": { minio: { deployed: true, ready: true }, mlflow: { deployed: true, ready: true } } as ResourcesStatus,
+      "POST /api/recipes/plan": () => jsonResponse(featuresPlan()),
+    });
+    renderPage(<RecipesPage />, "/recipes");
+    await settleApps();
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up..." }));
+    const dialog = screen.getByRole("dialog", { name: /Clean up what recipe full set up\?/ });
+    await settle();
+    expect(within(dialog).getByRole("checkbox", { name: "Turn back the DataScienceCluster components the run turned on: KServe and OGX" })).toBeChecked();
+    expect(dialog).toHaveTextContent("Stays on while what uses it stays: AI hub (the model registry stays).");
+    expect(dialog).not.toHaveTextContent("Model Catalog");
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "The model registry the run created" }));
+    expect(within(dialog).getByRole("checkbox", { name: "Turn back the DataScienceCluster components the run turned on: AI hub, KServe and OGX" })).toBeChecked();
+    expect(dialog).toHaveTextContent("Each goes back to what it was. Turning AI hub back also removes the Model Catalog.");
+    expect(dialog).not.toHaveTextContent("aiHub");
+  });
 });

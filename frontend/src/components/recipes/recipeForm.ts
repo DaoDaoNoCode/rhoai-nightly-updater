@@ -343,10 +343,15 @@ export interface RecipeCleanupPart {
  * and DataScienceCluster components the run enabled. Shared S3 storage, MLflow, and
  * pipeline servers outside recipe-created projects are omitted (see leftInPlace).
  */
-/** The DataScienceCluster components a recipe turns on, by the names the dashboard and RHOAI's docs use. */
+/**
+ * The DataScienceCluster components a recipe turns on, by the names the dashboard and RHOAI's docs use: every key
+ * the feature setups write (pkg/cluster/internal/features featureSetups). aiHub is RHOAI 3.6's model registry
+ * component (it also runs the Model Catalog; the dashboard calls the area AI hub), ogx the playground's operator
+ * (llamastackoperator before).
+ */
 const COMPONENT_NAMES: Record<string, string> = {
   aipipelines: "Data Science Pipelines", datasciencepipelines: "Data Science Pipelines", mlflowoperator: "MLflow", modelregistry: "Model registry",
-  kserve: "KServe", kueue: "Kueue", ray: "Ray", dashboard: "Dashboard", llamastackoperator: "Llama Stack",
+  aiHub: "AI hub", kserve: "KServe", kueue: "Kueue", ray: "Ray", dashboard: "Dashboard", llamastackoperator: "Llama Stack", ogx: "OGX",
 };
 
 /** A component's plain name ("aipipelines" as Data Science Pipelines). */
@@ -436,7 +441,7 @@ export function dashboardDevLeft(run: RecipeRun): boolean {
  * keeps a component while anything on the cluster uses it): MLflow for
  * mlflowoperator, a pipeline server that is not deleted for aipipelines, the
  * model in a project that is not deleted for kserve, and a model registry
- * that is not deleted for modelregistry.
+ * that is not deleted for modelregistry and aiHub.
  */
 export function componentsSplit(status: ResourcesStatus | null, run: RecipeRun, req: CleanupRequest, offered: CleanupRequest | undefined): { back: string[]; stay: string[] } {
   const up = (r: ResourceState | null | undefined) => !!r?.deployed && !isTerminating(r);
@@ -455,6 +460,7 @@ export function componentsSplit(status: ResourcesStatus | null, run: RecipeRun, 
       // Turned back only with the setup this Clean up removes (as the backend
       // keeps a component while what uses it stays).
       case "modelregistry":
+      case "aiHub":
         return offered?.modelRegistry && req.modelRegistry ? null : offered?.modelRegistry ? "the model registry stays" : "the model registry is not removed here";
       case "kueue":
         return offered?.kueue && req.kueue ? null : offered?.kueue ? "the distributed workloads setup stays" : "the distributed workloads setup is not removed here";
