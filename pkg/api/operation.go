@@ -64,21 +64,26 @@ func lockCluster(w http.ResponseWriter) bool {
 
 // writeLockRefusal answers a refusal of acquireRunnerLock: 409
 // cluster_busy naming the operation that holds the lock (in this pod or
-// another), or 503 lock_unavailable when the lease could not be read or
-// written.
+// another) to a cluster-admin, and nobody else's to anyone else (see
+// writeClusterBusy), or 503 lock_unavailable when the lease could not be
+// read or written.
 func writeLockRefusal(w http.ResponseWriter, refusal *lockRefusal) {
+	var viewer busyViewer
+	if sw, ok := w.(*statusWriter); ok {
+		viewer = busyViewer{admin: sw.admin, user: sw.user}
+	}
 	switch {
 	case refusal.busy:
 		op := inflight.get(refusal.opID)
 		if op == nil {
 			op = inflight.snapshot()
 		}
-		writeClusterBusy(w, op, "")
+		writeClusterBusy(w, op, refusal.reason, viewer)
 		return
 	case refusal.holder != nil:
 		holder := refusal.holder
 		slog.Info("operation refused: another updater pod runs one", "holder", holder.ID, "holderPod", holder.Pod, "type", holder.Type, "project", holder.Project)
-		writeClusterBusy(w, remoteOperation(holder), "")
+		writeClusterBusy(w, remoteOperation(holder), refusal.reason, viewer)
 		return
 	}
 	slog.Warn("operation refused: the cross-pod operation lock could not be read or written", "error", refusal.err)
@@ -135,15 +140,24 @@ const (
 	lockUnavailableRetryAfter = 10 * time.Second
 )
 
-// writeClusterBusy answers 409 cluster_busy, naming op when it is known.
-func writeClusterBusy(w http.ResponseWriter, op *Operation, message string) {
+// busyViewer is who is refused: a cluster-admin (withMutationAuth checked
+// it) or not, and their user name.
+type busyViewer struct {
+	admin bool
+	user  string
+}
+
+// writeClusterBusy answers 409 cluster_busy. A cluster-admin learns op
+// when it is known: who runs it, where, and the operation itself. Anyone
+// else learns no other user's name and no project but their own action's
+// (per-user views decision 4): see busyMessageForUser.
+func writeClusterBusy(w http.ResponseWriter, op *Operation, reason string, viewer busyViewer) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusConflict)
-	if message == "" {
-		message = "Another cluster operation is in progress. Please wait."
-	}
-	body := map[string]any{"error": message, "errorCode": "cluster_busy"}
-	if op != nil {
+	body := map[string]any{"error": "Another cluster operation is in progress. Please wait.", "errorCode": "cluster_busy"}
+	if !viewer.admin {
+		body["error"] = busyMessageForUser(op, reason, viewer.user)
+	} else if op != nil {
 		body["operation"] = op
 		where := ""
 		if op.Project != "" {
@@ -157,6 +171,26 @@ func writeClusterBusy(w http.ResponseWriter, op *Operation, message string) {
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		slog.Error("response encode error", "label", "cluster-busy", "error", err)
 	}
+}
+
+// busyMessageForUser is the refusal a user who is not a cluster-admin
+// reads: a cluster operation by its start only, their own action by its
+// label and project, another action in the project they asked for by its
+// label and start; never another user's name or another project.
+func busyMessageForUser(op *Operation, reason, user string) string {
+	switch {
+	case reason == conflictCap:
+		return "Too many project actions are running at once. Try again in a few minutes."
+	case op == nil:
+		return "Another operation is in progress. Please wait."
+	case op.ProjectUID == "":
+		return "A cluster operation is running since " + op.StartedAt.UTC().Format("15:04") + " UTC. Project actions can start when it ends."
+	case op.User == user:
+		return "You already have an action running (" + op.Label + " in project " + op.Project + "). Wait for it to finish."
+	case reason == conflictProject:
+		return "An action (" + op.Label + ") is running in this project since " + op.StartedAt.UTC().Format("15:04") + " UTC. Wait for it to finish."
+	}
+	return "Another operation is in progress. Please wait."
 }
 
 // beginOperation marks a validated request as a running cluster operation:
@@ -249,6 +283,9 @@ type Operation struct {
 	freshBookkeeper func(ctx context.Context) *cluster.Client
 	sw              *statusWriter // the response, for the outcome of non-streaming operations
 	begun           bool          // set by beginOperation
+	// confirmed: its lock is held (confirmLock); a pending acquisition
+	// is not listed in OperationStatus.Operations.
+	confirmed bool
 	// lockLost: the lease heartbeat stopped the operation because its lease
 	// was lost; its outcome is cluster.LockLostMessage.
 	lockLost bool
@@ -654,7 +691,7 @@ var HandleOperation = withAuth(func(c *cluster.Client, w http.ResponseWriter, r 
 	if !ok {
 		return
 	}
-	status := operationStatus(c)
+	status := operationStatus(c, admin)
 	if !admin {
 		writeJSON(w, operationSummary(status), "operation")
 		return
@@ -684,8 +721,11 @@ const (
 	scopeProject = "project"
 )
 
-// operationStatus is the operation status (HandleOperation).
-func operationStatus(c *cluster.Client) (status OperationStatus) {
+// operationStatus is the operation status (HandleOperation). While this
+// process runs a cluster operation it makes no cluster call; a
+// cluster-admin (admin) then gets the interrupted project actions of the
+// record as this process last read it (seenProjectLocks).
+func operationStatus(c *cluster.Client, admin bool) (status OperationStatus) {
 	local := locks.clusterHeld()
 	status = OperationStatus{InProgress: local, Operation: inflight.snapshot()}
 	running := inflight.list()
@@ -694,7 +734,11 @@ func operationStatus(c *cluster.Client) (status OperationStatus) {
 		// No other operation runs anywhere while this one holds the
 		// cluster lock.
 		status.LastCompleted = last
-		status.Operations = operationList(running, nil, nil)
+		var rec *cluster.OperationRecord
+		if admin {
+			rec = &cluster.OperationRecord{ProjectLocks: seenProjectLocks.interrupted()}
+		}
+		status.Operations = operationList(running, rec, nil)
 		return status
 	}
 	rec, err := readOperationState(c)
@@ -704,6 +748,7 @@ func operationStatus(c *cluster.Client) (status OperationStatus) {
 		status.Operations = operationList(running, nil, nil)
 		return status
 	}
+	seenProjectLocks.remember(rec)
 	status.LastCompleted = inflight.rememberLast(rec.LastCompleted)
 	defer func() { status.Operations = operationList(running, rec, status.Interrupted) }()
 	if local {
@@ -731,12 +776,16 @@ func operationStatus(c *cluster.Client) (status OperationStatus) {
 	return status
 }
 
-// operationList is OperationStatus.Operations: running (this process's),
-// and, from rec when it was read, the live locks of other processes and
-// the interrupted operations (interrupted: the cluster operation's).
+// operationList is OperationStatus.Operations: running (this process's
+// operations whose lock is held: confirmed), and, from rec when it was
+// read, the live locks of other processes and the interrupted operations
+// (interrupted: the cluster operation's).
 func operationList(running []*Operation, rec *cluster.OperationRecord, interrupted *types.OperationMarker) []*Operation {
 	out := make([]*Operation, 0, len(running))
 	for _, op := range running {
+		if !op.confirmed {
+			continue
+		}
 		op.Scope = scopeOf(op)
 		out = append(out, op)
 	}
@@ -765,6 +814,37 @@ func operationList(running []*Operation, rec *cluster.OperationRecord, interrupt
 			Target: interrupted.Target, StartedAt: started, Pod: interrupted.Pod, Scope: scopeCluster, Interrupted: true})
 	}
 	sortOperations(out)
+	return out
+}
+
+// projectLockCache is the project locks of the operation record as this
+// process read it last (GET /api/operation, a lock's check). While a
+// cluster operation runs here no project action can start anywhere, so
+// the interrupted ones it lists change only by age (projectLockInterrupted
+// is applied when they are listed).
+type projectLockCache struct {
+	mu    sync.Mutex
+	locks map[string]*types.OperationLease
+}
+
+var seenProjectLocks = &projectLockCache{}
+
+func (p *projectLockCache) remember(rec *cluster.OperationRecord) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.locks = rec.ProjectLocks
+}
+
+// interrupted is the remembered locks of interrupted project actions.
+func (p *projectLockCache) interrupted() map[string]*types.OperationLease {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := map[string]*types.OperationLease{}
+	for uid, l := range p.locks {
+		if projectLockInterrupted(l) {
+			out[uid] = l
+		}
+	}
 	return out
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"sort"
@@ -128,6 +129,7 @@ func remoteOperation(l *types.OperationLease) *Operation {
 // heldLease is one entry this process holds in the operation record.
 type heldLease struct {
 	key   string
+	uid   string // the project's namespace UID, "" for the cluster lock
 	opID  string
 	owner cluster.LeaseOwner
 	// value is the value written last: what the next renewal tests.
@@ -172,7 +174,14 @@ type leaseKeeper struct {
 	lossAfter time.Duration
 	// wake tells the heartbeat that an entry was lost between ticks.
 	wake chan struct{}
+	// round serialises the renewals of a heartbeat tick and the immediate
+	// ones (renewNow): both test the value written last.
+	round sync.Mutex
 }
+
+// errEntryReleased: the entry a recovery would take again was stopped
+// (released, or taken by the next action) meanwhile; nothing is written.
+var errEntryReleased = errors.New("the operation lock entry was released")
 
 var leases = &leaseKeeper{}
 
@@ -192,7 +201,7 @@ func (k *leaseKeeper) acquire(c *cluster.Client, key string, op *Operation, canc
 	}
 	renewed, _ := cluster.LeaseHeartbeat(lease)
 	k.add(&heldLease{
-		key: key, opID: op.ID, owner: cluster.LeaseOwner{BootID: bootID, ID: op.ID}, value: value, renewed: renewed,
+		key: key, uid: op.ProjectUID, opID: op.ID, owner: cluster.LeaseOwner{BootID: bootID, ID: op.ID}, value: value, renewed: renewed,
 		cancelOp: cancelOp, client: c, fresh: op.freshBookkeeper, check: check,
 	})
 	return nil
@@ -347,9 +356,13 @@ type renewal struct {
 // An entry the renewal finds free, or holding a lease that is not another
 // process's live one (this process's own value from a renewal whose answer
 // was lost, an expired lease, the key removed by hand), is taken again
-// with its acquire's check, as a renewal always did before the renewals
-// were tested JSON patches: it is lost only when that check refuses.
+// (recover), as a renewal always did before the renewals were tested JSON
+// patches: it is lost only when that is refused. The results that need no
+// write are applied first; each recovery then writes with a context of its
+// own, bounded by its own deadline (a successful renewal ends the batch's).
 func (k *leaseKeeper) renewOnce(ctx context.Context) {
+	k.round.Lock()
+	defer k.round.Unlock()
 	k.mu.Lock()
 	keys := make([]string, 0, len(k.held))
 	for key, h := range k.held {
@@ -397,6 +410,7 @@ func (k *leaseKeeper) renewOnce(ctx context.Context) {
 		wc = fresh(wctx)
 	}
 	lostKeys, err := renewOperationLocks(wc, renewals)
+	var recoveries []renewal
 	for _, r := range batch {
 		if ctx.Err() != nil {
 			return
@@ -408,34 +422,141 @@ func (k *leaseKeeper) renewOnce(ctx context.Context) {
 		if !current {
 			continue
 		}
-		renewErr := err
 		if holder, isLost := lostKeys[r.h.key]; isLost {
 			if leaseHeldElsewhere(holder) {
 				k.lose(r.h, "another updater pod took over the cross-pod operation lock", "holder", holder.ID, "holderPod", holder.Pod)
 				continue
 			}
-			renewErr = acquireOperationLock(wc, r.h.key, r.value, r.h.check)
-			var conflict *lockConflict
-			if errors.As(renewErr, &conflict) {
-				attrs := []any{"reason", conflict.reason}
-				if conflict.holder.lease != nil {
-					attrs = append(attrs, "holder", conflict.holder.lease.ID, "holderPod", conflict.holder.lease.Pod)
-				}
-				k.lose(r.h, "another updater pod took over the cross-pod operation lock", attrs...)
-				continue
-			}
+			recoveries = append(recoveries, r)
+			continue
 		}
-		switch {
-		case lost.Err() != nil:
-			// The deadline passed while the renewal ran: fail closed,
-			// also when the write went through.
-			k.expired(r.h, r.h.renewed, renewErr)
-		case renewErr != nil:
-			slog.Warn("could not renew the cross-pod operation lock", "operation", r.h.opID, "key", r.h.key, "error", renewErr)
-		default:
-			k.renewed(r)
-		}
+		k.settle(r, lost, err)
 	}
+	wcancel()
+	for _, r := range recoveries {
+		if ctx.Err() != nil {
+			return
+		}
+		k.recover(ctx, r)
+	}
+}
+
+// settle applies the outcome err of r's write.
+func (k *leaseKeeper) settle(r renewal, lost context.Context, err error) {
+	switch {
+	case lost.Err() != nil:
+		// The deadline passed while the renewal ran: fail closed, also
+		// when the write went through.
+		k.expired(r.h, r.h.renewed, err)
+	case err != nil:
+		slog.Warn("could not renew the cross-pod operation lock", "operation", r.h.opID, "key", r.h.key, "error", err)
+	default:
+		k.renewed(r)
+	}
+}
+
+// recover takes r's entry again (see renewOnce) with a context of its own,
+// bounded by the entry's deadline. The check runs where the write is made
+// (cluster.AcquireOperationLock runs it under this process's writer, as a
+// release's write is): it refuses when the entry was stopped meanwhile
+// (released, or its project taken by the next action of this process), or
+// when the record holds another operation of this process under the key.
+// So a recovery never revives a released entry nor overwrites a
+// successor's.
+func (k *leaseKeeper) recover(ctx context.Context, r renewal) {
+	k.mu.Lock()
+	lost := r.h.lost
+	k.mu.Unlock()
+	rctx, cancel := context.WithTimeout(lost, leaseWriteTimeout)
+	defer cancel()
+	stopWrite := context.AfterFunc(ctx, cancel)
+	defer stopWrite()
+	c := r.h.client.WithContext(rctx)
+	if r.h.fresh != nil {
+		c = r.h.fresh(rctx)
+	}
+	err := acquireOperationLock(c, r.h.key, r.value, k.recoveryCheck(r.h))
+	k.mu.Lock()
+	current := k.held[r.h.key] == r.h && !r.h.gone
+	k.mu.Unlock()
+	var conflict *lockConflict
+	switch {
+	case errors.Is(err, errEntryReleased), !current:
+		// Stopped meanwhile (its stop also ends this write's context):
+		// the operation ended, nothing to report.
+		return
+	case errors.As(err, &conflict):
+		attrs := []any{"reason", conflict.reason}
+		if conflict.holder.lease != nil {
+			attrs = append(attrs, "holder", conflict.holder.lease.ID, "holderPod", conflict.holder.lease.Pod)
+		} else {
+			attrs = append(attrs, "holder", conflict.holder.opID)
+		}
+		k.lose(r.h, "another operation took over the operation lock", attrs...)
+		return
+	}
+	k.settle(r, lost, err)
+}
+
+// recoveryCheck is the check of a recovery of h (recover).
+func (k *leaseKeeper) recoveryCheck(h *heldLease) func(*cluster.OperationRecord) error {
+	return func(rec *cluster.OperationRecord) error {
+		k.mu.Lock()
+		held := k.held[h.key] == h && !h.gone
+		k.mu.Unlock()
+		if !held {
+			return errEntryReleased
+		}
+		entry := rec.Lease
+		if h.uid != "" {
+			entry = rec.ProjectLocks[h.uid]
+		}
+		if entry != nil && entry.BootID == bootID && entry.ID != h.opID {
+			return &lockConflict{reason: conflictProject, holder: lockHolder{projectUID: h.uid, user: entry.User, opID: entry.ID}}
+		}
+		return h.check(rec)
+	}
+}
+
+// renewNow renews the entry key at once (a project action that begins
+// records Begun before it changes anything). It returns an error when the
+// entry is not held, was taken over, or could not be written; the
+// heartbeat deals with the entry as usual afterwards.
+func (k *leaseKeeper) renewNow(key string) error {
+	k.round.Lock()
+	defer k.round.Unlock()
+	k.mu.Lock()
+	h := k.held[key]
+	if h == nil || h.gone {
+		k.mu.Unlock()
+		return fmt.Errorf("the operation lock %s is not held", key)
+	}
+	old, lost, hb := h.value, h.lost, k.clock
+	k.mu.Unlock()
+	op := inflight.get(h.opID)
+	if op == nil {
+		return fmt.Errorf("the operation of the lock %s has ended", key)
+	}
+	l := leaseFor(op, hb.Now())
+	r := renewal{h: h, lease: l, value: lockValue(l)}
+	wctx, cancel := context.WithTimeout(lost, leaseWriteTimeout)
+	defer cancel()
+	c := h.client.WithContext(wctx)
+	if h.fresh != nil {
+		c = h.fresh(wctx)
+	}
+	lostKeys, err := renewOperationLocks(c, []cluster.LockRenewal{{Key: key, Old: old, New: r.value}})
+	if _, isLost := lostKeys[key]; isLost {
+		return fmt.Errorf("the operation lock %s holds another value", key)
+	}
+	if err != nil {
+		return err
+	}
+	if lost.Err() != nil {
+		return fmt.Errorf("the operation lock %s may have expired", key)
+	}
+	k.renewed(r)
+	return nil
 }
 
 // renewed records r's successful write: its value and heartbeat, and a

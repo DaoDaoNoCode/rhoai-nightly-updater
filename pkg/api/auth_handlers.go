@@ -174,7 +174,7 @@ func mutationAuth(asUser bool, fn func(c *cluster.Client, w http.ResponseWriter,
 		client.SetUsername(username)
 		client.SetBookkeeping(bookkeeper)
 
-		sw := &statusWriter{ResponseWriter: w, path: r.URL.Path, user: username, bookkeeper: bookkeeper, cancelOp: cancelOp,
+		sw := &statusWriter{ResponseWriter: w, path: r.URL.Path, user: username, bookkeeper: bookkeeper, cancelOp: cancelOp, admin: true,
 			// A recipe run outlives the request: each of its steps gets a
 			// bookkeeper made now, with the ServiceAccount token read
 			// again (it rotates; getClusterToken caches it 5 minutes).

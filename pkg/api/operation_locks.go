@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 
@@ -221,6 +222,7 @@ func (l *lockTable) clusterHeld() bool {
 // and the live entries of other processes. A refusal is a *lockConflict.
 func lockCheck(want lockWant) func(*cluster.OperationRecord) error {
 	return func(rec *cluster.OperationRecord) error {
+		seenProjectLocks.remember(rec)
 		locks.mu.Lock()
 		holders := locks.holdersLocked(want.key())
 		locks.mu.Unlock()
@@ -281,11 +283,16 @@ func acquireLock(want lockWant, start func() *Operation, cancelOp context.Cancel
 	if op != nil && want.projectUID != "" {
 		locks.bindProject(want.projectUID, op.ID)
 	}
-	if op == nil || op.bookkeeper == nil {
+	if op == nil {
+		return nil
+	}
+	if op.bookkeeper == nil {
+		confirmLock(op.ID)
 		return nil
 	}
 	err := leases.acquire(op.bookkeeper, want.key(), op, cancelOp, lockCheck(want))
 	if err == nil {
+		confirmLock(op.ID)
 		return nil
 	}
 	inflight.finishID(op.ID)
@@ -295,6 +302,30 @@ func acquireLock(want lockWant, start func() *Operation, cancelOp context.Cancel
 		return refusalOf(conflict, nil)
 	}
 	return refusalOf(nil, err)
+}
+
+// confirmLock marks the operation as holding its lock: from now on GET
+// /api/operation lists it (a pending acquisition is not a holder).
+func confirmLock(opID string) {
+	inflight.update(opID, func(op *Operation) { op.confirmed = true })
+}
+
+// beginProjectAction marks the project action opID as begun, with what it
+// acts on, and records Begun on its lock entry at once, so the entry
+// reports the action as interrupted should this process die from then on.
+// It runs before the action's first change; an error means the action
+// must not change anything (its lock may be lost).
+func beginProjectAction(opID, target string) error {
+	var uid string
+	inflight.update(opID, func(op *Operation) {
+		op.Target = truncateText(target, maxOperationTargetBytes)
+		op.begun = true
+		uid = op.ProjectUID
+	})
+	if uid == "" {
+		return fmt.Errorf("operation %q is not a running project action", opID)
+	}
+	return leases.renewNow(cluster.ProjectLockKey(uid))
 }
 
 // acquireProjectLock is acquireLock of the project with this namespace

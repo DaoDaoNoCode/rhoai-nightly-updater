@@ -43,11 +43,14 @@ func installFakeRecord(t *testing.T) *fakeRecord {
 		defer f.mu.Unlock()
 		return f.recordLocked(), nil
 	}
-	acquireOperationLock = func(_ *cluster.Client, key, value string, check func(*cluster.OperationRecord) error) error {
+	acquireOperationLock = func(c *cluster.Client, key, value string, check func(*cluster.OperationRecord) error) error {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		if err := f.failLocked(); err != nil {
 			return err
+		}
+		if c != nil && c.Context() != nil && c.Context().Err() != nil {
+			return c.Context().Err() // the request never leaves
 		}
 		if err := check(f.recordLocked()); err != nil {
 			return err

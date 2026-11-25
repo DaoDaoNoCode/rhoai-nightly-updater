@@ -49,6 +49,9 @@ func (l *lockTable) reset() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.cluster, l.projects = false, nil
+	seenProjectLocks.mu.Lock()
+	seenProjectLocks.locks = nil
+	seenProjectLocks.mu.Unlock()
 }
 
 // setCluster takes or frees the cluster slot directly, standing for an

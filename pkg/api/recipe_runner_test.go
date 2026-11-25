@@ -474,7 +474,7 @@ func TestRecipeRun_DrainStopsBeforeTheNextStep(t *testing.T) {
 	if marker != nil {
 		t.Errorf("marker left: %+v", marker)
 	}
-	if st := operationStatus(nil); st.Interrupted != nil {
+	if st := operationStatus(nil, true); st.Interrupted != nil {
 		t.Errorf("reported interrupted: %+v", st.Interrupted)
 	}
 	if st := recipeRunStatus(nil, nil); st.Interrupted || st.Running {

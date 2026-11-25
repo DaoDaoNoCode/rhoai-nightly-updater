@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -319,4 +320,253 @@ func TestOperationListsEveryOperation(t *testing.T) {
 		t.Fatalf("user: %s", got)
 	}
 	releaseProjectLock("uid-local")
+}
+
+// tick moves the fake clock one heartbeat interval on and waits until the
+// heartbeat handled it.
+func tick() {
+	testClock.Advance(leaseHeartbeatInterval)
+	testClock.WaitForTicksHandled()
+}
+
+// ownNewerValue makes the record hold this process's own entry of uid with
+// another value than it wrote last (a renewal whose answer was lost): the
+// next renewal's test fails, and the entry is recovered.
+func ownNewerValue(f *fakeRecord, uid string) {
+	l := f.project(uid)
+	l.HeartbeatAt = clk.Now().Add(time.Second).UTC().Format(time.RFC3339)
+	f.setProject(uid, l)
+}
+
+// beforeRecovery runs fn once, when the heartbeat is about to take key
+// again (after the renewal found it changed), and then lets the recovery's
+// write go on as one already under way: past the waits that the stop of
+// the entry ends (its context), so only the check made where the write is
+// made can refuse it.
+func beforeRecovery(key string, fn func()) {
+	inner := acquireOperationLock
+	var ran atomic.Bool
+	acquireOperationLock = func(c *cluster.Client, k, value string, check func(*cluster.OperationRecord) error) error {
+		if k == key && ran.CompareAndSwap(false, true) {
+			fn() // fn may take the lock itself: not under a sync.Once
+			return inner(c.WithContext(context.Background()), k, value, check)
+		}
+		return inner(c, k, value, check)
+	}
+}
+
+// The action of a project ends (its entry released) between the renewal
+// that found the entry changed and its recovery's write: the recovery does not
+// write the entry back. The heartbeat goes on for the other entry.
+func TestRecoveryDoesNotReviveAReleasedEntry(t *testing.T) {
+	setupDevMode(t)
+	f := installFakeRecord(t)
+	a := takeProject(t, "uid-a", "alice")
+	b := takeProject(t, "uid-b", "bob")
+	if a.refusal != nil || b.refusal != nil {
+		t.Fatal(a.refusal, b.refusal)
+	}
+	ownNewerValue(f, "uid-a")
+	beforeRecovery(cluster.ProjectLockKey("uid-a"), func() { releaseProjectLock("uid-a") })
+	tick()
+	if l := f.project("uid-a"); l != nil {
+		t.Fatalf("the released entry was written back: %+v", l)
+	}
+	if a.ctx.Err() != nil || b.ctx.Err() != nil {
+		t.Fatal("an operation was stopped")
+	}
+	if l := f.project("uid-b"); l == nil || l.HeartbeatAt != clk.Now().UTC().Format(time.RFC3339) {
+		t.Fatalf("b not renewed: %+v", l)
+	}
+	releaseProjectLock("uid-b")
+}
+
+// The next action in the project (this process, another user) takes the
+// lock between the renewal and the recovery: the recovery leaves the
+// successor's entry alone.
+func TestRecoveryDoesNotOverwriteASuccessor(t *testing.T) {
+	setupDevMode(t)
+	f := installFakeRecord(t)
+	a := takeProject(t, "uid-a", "alice")
+	b := takeProject(t, "uid-b", "bob")
+	if a.refusal != nil || b.refusal != nil {
+		t.Fatal(a.refusal, b.refusal)
+	}
+	ownNewerValue(f, "uid-a")
+	var successor *projectHolder
+	beforeRecovery(cluster.ProjectLockKey("uid-a"), func() {
+		releaseProjectLock("uid-a")
+		successor = takeProject(t, "uid-a", "carol")
+	})
+	tick()
+	if successor == nil || successor.refusal != nil {
+		t.Fatalf("successor %+v", successor)
+	}
+	if l := f.project("uid-a"); l == nil || l.User != "carol" || l.ID != locks.projectOp("uid-a") {
+		t.Fatalf("the successor's entry was overwritten: %+v", l)
+	}
+	if successor.ctx.Err() != nil {
+		t.Fatal("the successor was stopped")
+	}
+	releaseProjectLock("uid-a")
+	releaseProjectLock("uid-b")
+}
+
+// In one round, the entry whose deadline comes first is renewed (which
+// ends the batch write's context) and a later one is recovered: the
+// recovery writes with a context of its own and succeeds.
+func TestRecoveryAfterASuccessfulRenewalHasItsOwnContext(t *testing.T) {
+	setupDevMode(t)
+	f := installFakeRecord(t)
+	a := takeProject(t, "uid-a", "alice")
+	testClock.Advance(time.Second) // b's deadline comes later
+	b := takeProject(t, "uid-b", "bob")
+	if a.refusal != nil || b.refusal != nil {
+		t.Fatal(a.refusal, b.refusal)
+	}
+	ownNewerValue(f, "uid-b")
+	testClock.Advance(leaseHeartbeatInterval - time.Second) // a's first tick
+	testClock.WaitForTicksHandled()
+	now := clk.Now().UTC().Format(time.RFC3339)
+	if la, lb := f.project("uid-a"), f.project("uid-b"); la.HeartbeatAt != now || lb.HeartbeatAt != now {
+		t.Fatalf("a %s, b %s, want both %s", la.HeartbeatAt, lb.HeartbeatAt, now)
+	}
+	if a.ctx.Err() != nil || b.ctx.Err() != nil {
+		t.Fatal("an operation was stopped")
+	}
+	releaseProjectLock("uid-a")
+	releaseProjectLock("uid-b")
+}
+
+// A pending acquisition (this process's slot taken, its entry not written
+// yet) is not listed: the other pod's cluster operation that holds the
+// lock is the only running one.
+func TestOperationListShowsConfirmedHoldersOnly(t *testing.T) {
+	setupDevMode(t)
+	setAdmin(t)
+	f := installFakeRecord(t)
+	f.setLease(otherPodLease(clk.Now()))
+	locks.setCluster(true)
+	inflight.startBackground("update", "Update to nightly", "bob", nil)
+	status, _ := getOperationAs(t, "user:admin")
+	if len(status.Operations) != 1 || !status.Operations[0].Remote || status.Operations[0].ID != "remote-op" {
+		t.Fatalf("operations %+v", status.Operations)
+	}
+}
+
+// While this process runs a cluster operation it answers from memory (no
+// cluster call), and still lists the interrupted project actions of the
+// record it read last (its acquire's).
+func TestOperationListKeepsInterruptionsDuringAClusterOperation(t *testing.T) {
+	setupDevMode(t)
+	setAdmin(t)
+	f := installFakeRecord(t)
+	interrupted := otherPodProjectLease("uid-int", "carol", clk.Now().Add(-2*leaseTTL))
+	interrupted.Begun, interrupted.StartedAt = true, time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	f.setProject("uid-int", interrupted)
+	if refusal := takeCluster(t); refusal != nil {
+		t.Fatal(refusal)
+	}
+	defer releaseClusterMutationLock()
+	inflight.rememberLast(&types.CompletedOperation{ID: "earlier", FinishedAt: time.Now().UTC().Format(time.RFC3339)})
+	reads := 0
+	readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) {
+		reads++
+		return &cluster.OperationRecord{}, nil
+	}
+	status, _ := getOperationAs(t, "user:admin")
+	if reads != 0 || len(status.Operations) != 2 {
+		t.Fatalf("reads %d operations %+v", reads, status.Operations)
+	}
+	var sawInterrupted, sawCluster bool
+	for _, op := range status.Operations {
+		sawInterrupted = sawInterrupted || (op.Interrupted && op.ProjectUID == "uid-int")
+		sawCluster = sawCluster || (op.Scope == scopeCluster && op.Type == "runner-test")
+	}
+	if !sawInterrupted || !sawCluster {
+		t.Fatalf("operations %+v", status.Operations)
+	}
+}
+
+// A project action that begins records Begun on its entry at once, before
+// it changes anything; when its entry is no longer its own it cannot
+// begin.
+func TestBeginProjectActionRecordsBegunAtOnce(t *testing.T) {
+	setupDevMode(t)
+	f := installFakeRecord(t)
+	if h := takeProject(t, "uid-1", "alice"); h.refusal != nil {
+		t.Fatal(h.refusal)
+	}
+	if err := beginProjectAction(locks.projectOp("uid-1"), "workbench in team-uid-1"); err != nil {
+		t.Fatal(err)
+	}
+	if l := f.project("uid-1"); l == nil || !l.Begun || l.Target != "workbench in team-uid-1" {
+		t.Fatalf("entry %+v", l)
+	}
+	// The next renewal tests the value the begin wrote.
+	tick()
+	if l := f.project("uid-1"); !l.Begun || l.HeartbeatAt != clk.Now().UTC().Format(time.RFC3339) {
+		t.Fatalf("after a tick %+v", l)
+	}
+	if h := takeProject(t, "uid-2", "bob"); h.refusal != nil {
+		t.Fatal(h.refusal)
+	}
+	f.setProject("uid-2", otherPodProjectLease("uid-2", "carol", clk.Now()))
+	if err := beginProjectAction(locks.projectOp("uid-2"), "x"); err == nil {
+		t.Fatal("began on an entry that is another pod's")
+	}
+	if err := beginProjectAction("no-such-op", "x"); err == nil {
+		t.Fatal("began an operation that does not run")
+	}
+	releaseProjectLock("uid-1")
+	releaseProjectLock("uid-2")
+}
+
+// A refusal names the holder to a cluster-admin only. Anyone else reads a
+// cluster operation by its start, their own action by label and project,
+// and never another user's name or another project.
+func TestBusyRefusalNamesNobodyForUsers(t *testing.T) {
+	setupDevMode(t)
+	started := clk.Now().Add(-time.Minute)
+	clusterOp := otherPodLease(started)
+	projectOp := otherPodProjectLease("uid-1", "alice", started)
+	for _, tc := range []struct {
+		name    string
+		viewer  busyViewer
+		refusal *lockRefusal
+		want    string
+		hidden  []string
+	}{
+		{"admin, cluster", busyViewer{admin: true, user: "root"}, &lockRefusal{holder: clusterOp, reason: conflictCluster}, "alice is running", nil},
+		{"user, cluster", busyViewer{user: "bob"}, &lockRefusal{holder: clusterOp, reason: conflictCluster}, "A cluster operation is running since", []string{"alice", "updater-old-pod", "rhoai-3.6"}},
+		{"user, same project", busyViewer{user: "bob"}, &lockRefusal{holder: projectOp, reason: conflictProject}, "An action (Workbench) is running in this project", []string{"alice", "team-uid-1"}},
+		{"user, own action", busyViewer{user: "alice"}, &lockRefusal{holder: projectOp, reason: conflictUser}, "You already have an action running (Workbench in project team-uid-1)", nil},
+		{"user, cap", busyViewer{user: "bob"}, &lockRefusal{holder: projectOp, reason: conflictCap}, "Too many project actions", []string{"alice", "team-uid-1"}},
+	} {
+		w := httptest.NewRecorder()
+		writeLockRefusal(&statusWriter{ResponseWriter: w, admin: tc.viewer.admin, user: tc.viewer.user}, tc.refusal)
+		body := w.Body.String()
+		if w.Code != 409 || !strings.Contains(body, tc.want) {
+			t.Errorf("%s: %d %s", tc.name, w.Code, body)
+		}
+		for _, h := range tc.hidden {
+			if strings.Contains(body, h) {
+				t.Errorf("%s: names %q: %s", tc.name, h, body)
+			}
+		}
+		if !tc.viewer.admin && strings.Contains(body, `"operation"`) {
+			t.Errorf("%s: the operation is in the answer: %s", tc.name, body)
+		}
+	}
+}
+
+func getOperationAs(t *testing.T, token string) (OperationStatus, string) {
+	t.Helper()
+	w := httptest.NewRecorder()
+	HandleOperation(w, getAs(t, "/api/operation", token))
+	var status OperationStatus
+	if err := json.Unmarshal(w.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	return status, w.Body.String()
 }

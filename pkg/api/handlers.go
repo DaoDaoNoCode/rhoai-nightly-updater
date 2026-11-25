@@ -102,6 +102,8 @@ type statusWriter struct {
 	// A recipe run calls it before each step.
 	gate func(ctx context.Context) (msg, code string)
 	opID string // set by lockCluster
+	// admin: the caller is a cluster-admin (withMutationAuth checked it).
+	admin bool
 
 	// The start of a JSON response body, from which the operation's
 	// outcome is read; streams report it in their final event instead.
