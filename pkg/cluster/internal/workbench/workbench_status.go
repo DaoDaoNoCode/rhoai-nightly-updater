@@ -260,7 +260,14 @@ func getStatus(sa, u *kube.Client, project string, onlyProject bool) (*types.Wor
 		return st, nil
 	}
 	if dscErr != nil {
-		st.PlanProblem, st.PlanProblemCode = fmt.Sprintf("Cannot read the DataScienceCluster: %v.", dscErr), kube.ErrorCodeFromK8sErr(dscErr)
+		// The ServiceAccount's read: a user's answer names how it failed
+		// only, never its text.
+		why := dscErr.Error()
+		if onlyProject {
+			kube.LogFactReadFailure("cannot read the DataScienceCluster for a user's workbench status", "DataScienceCluster", dscErr)
+			why = kube.FactReadProblem(dscErr)
+		}
+		st.PlanProblem, st.PlanProblemCode = fmt.Sprintf("Cannot read the DataScienceCluster: %s.", why), kube.ErrorCodeFromK8sErr(dscErr)
 		return st, nil
 	}
 	plan, msg, code := BuildPlan(u, project, dsc)

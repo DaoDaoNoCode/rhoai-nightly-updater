@@ -1700,7 +1700,7 @@ func (p *playgroundRun) forgetIfAbsent() {
 func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
 	records, err := ReadPlaygroundRecords(p.c)
 	if err != nil {
-		return p.fail("delete", fmt.Sprintf("Cannot read this tool's records; nothing was deleted: %v.", err), kube.ErrorCodeFromK8sErr(err), "records")
+		return p.fail("delete", fmt.Sprintf("Cannot read this tool's records; nothing was deleted: %s.", record.ErrorText(p.c, err)), kube.ErrorCodeFromK8sErr(err), "records")
 	}
 	_, recorded := records[p.project]
 	srv, err := p.api.playgroundStatus(p.project)
@@ -1710,7 +1710,7 @@ func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
 	if srv == nil {
 		if recorded {
 			if err := setPlaygroundRecord(p.c, p.project, nil); err != nil {
-				return p.fail("delete", fmt.Sprintf("No playground is left in %s, but this tool's record of it cannot be cleared: %v.", p.project, err), kube.ErrorCodeFromK8sErr(err), "record")
+				return p.fail("delete", fmt.Sprintf("No playground is left in %s, but this tool's record of it cannot be cleared: %s.", p.project, record.ErrorText(p.c, err)), kube.ErrorCodeFromK8sErr(err), "record")
 			}
 		}
 		p.record("project="+p.project+" (none)", true)
@@ -1718,7 +1718,7 @@ func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
 	}
 	ours, err := p.owned(srv)
 	if err != nil {
-		return p.fail("delete", fmt.Sprintf("Cannot tell whether the playground in %s is this tool's, so nothing was deleted: %v.", p.project, err), kube.ErrorCodeFromK8sErr(err), "ownership")
+		return p.fail("delete", fmt.Sprintf("Cannot tell whether the playground in %s is this tool's, so nothing was deleted: %s.", p.project, record.ErrorText(p.c, err)), kube.ErrorCodeFromK8sErr(err), "ownership")
 	}
 	if !ours {
 		return p.fail("delete", fmt.Sprintf("The playground in %s was not set up by this tool, so it was not deleted. Delete it in the dashboard's Gen AI studio if you no longer need it.", p.project), "not_managed", "not managed")
@@ -1745,7 +1745,7 @@ func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
 		return p.fail("gone", fmt.Sprintf("The playground in %s is still being deleted after %s. Delete again to check.", p.project, serving.ClockText(playgroundDeleteTimeout)), "in_progress", "still deleting")
 	}
 	if err := setPlaygroundRecord(p.c, p.project, nil); err != nil {
-		return p.fail("gone", fmt.Sprintf("The playground in %s is deleted, but this tool's record of it cannot be cleared: %v.%s", p.project, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "record")
+		return p.fail("gone", fmt.Sprintf("The playground in %s is deleted, but this tool's record of it cannot be cleared: %s.%s", p.project, record.ErrorText(p.c, err), kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "record")
 	}
 	p.step("gone", "success", fmt.Sprintf("The playground in %s is gone.", p.project))
 	p.record("project="+p.project, true)

@@ -397,3 +397,44 @@ func TestWorkbenchProfileAnnotationStaysInTheProject(t *testing.T) {
 		t.Fatal("the applications namespace's profiles were not read")
 	}
 }
+
+// For a project user, a failed ServiceAccount read in their workbench
+// status and in a playground delete is answered with its HTTP status only,
+// never the API server's text; a cluster-admin's answer keeps the text.
+func TestUserResponsesCarryNoServiceAccountText(t *testing.T) {
+	const secret = "forbidden: User system:serviceaccount:updater:sa cannot get team-b"
+	f, c := newResourceFake(t)
+	putWorkbenchCluster(t, f, true)
+	f.fail["GET "+wbDSCv2] = 500
+	f.failMessage["GET "+wbDSCv2] = secret
+	u := userClientOf(c, fakeUserToken)
+	st, err := GetWorkbenchProjectStatus(c, u, "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(st.PlanProblem, "team-b") || !strings.Contains(st.PlanProblem, "HTTP 500") {
+		t.Fatalf("a user's plan problem: %q", st.PlanProblem)
+	}
+	admin, err := GetWorkbenchStatus(c, u, "proj")
+	if err != nil || !strings.Contains(admin.PlanProblem, "team-b") {
+		t.Fatalf("an admin's plan problem changed: %q %v", admin.PlanProblem, err)
+	}
+
+	e := newPlaygroundEnv(t)
+	snapshot := "/api/v1/namespaces/" + record.GetActivityNamespace() + "/configmaps/" + record.SnapshotConfigMapName
+	e.k8s.fail["GET "+snapshot] = 500
+	e.k8s.failMessage["GET "+snapshot] = secret
+	user := userClientOf(e.c, fakeUserToken)
+	user.SetProjectUser("uid-proj")
+	res, err := RunPlayground(user, types.PlaygroundRequest{Action: "teardown", Project: "proj"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Success || strings.Contains(res.Message, "team-b") || !strings.Contains(res.Message, "HTTP 500") {
+		t.Fatalf("a user's delete: %+v", res)
+	}
+	res, _ = RunPlayground(e.c, types.PlaygroundRequest{Action: "teardown", Project: "proj"}, nil)
+	if !strings.Contains(res.Message, "team-b") {
+		t.Fatalf("an admin's delete changed: %+v", res)
+	}
+}
