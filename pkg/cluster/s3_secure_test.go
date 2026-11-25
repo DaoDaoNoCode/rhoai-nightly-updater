@@ -160,7 +160,27 @@ func TestSecureS3_GivesEachRecordedPipelineServerItsOwnKey(t *testing.T) {
 	if !sawEvent("rollout", "Waiting up to") {
 		t.Error("the rollout's progress is not streamed")
 	}
-	for _, want := range []string{"On a key of their own: team-a/dspa, team-b/dspa.", "Left on the old admin key, which no longer works: dashboard/dspa (not set up by this tool), unrecorded/dspa (not recorded by this tool).", "Restart the workbenches"} {
+	// The API server reads its S3 key only at start (DSPO secretKeyRef env),
+	// so the message does not say it uses the new key, and gives the command
+	// that restarts each rekeyed one; its step carries the command too.
+	for _, ns := range []string{"team-a", "team-b"} {
+		cmd := "oc delete pod -n " + ns + " -l app=ds-pipeline-dspa,dspa=dspa"
+		found := false
+		for _, e := range secureEvents {
+			found = found || e.Step == "server:"+ns+"/dspa" && e.Status == "success" && e.Detail == cmd &&
+				strings.Contains(e.Message, "its API server keeps the old key, which no longer works, until its pods restart")
+		}
+		if !found {
+			t.Errorf("%s: no success step with the restart command", ns)
+		}
+		if !strings.Contains(resp.Message, cmd) {
+			t.Errorf("message lacks %q: %s", cmd, resp.Message)
+		}
+	}
+	if sawEvent("server:team-a/dspa", "uses SeaweedFS user") {
+		t.Error("a step says the server uses the new key")
+	}
+	for _, want := range []string{"Given a key of their own: team-a/dspa, team-b/dspa.", "The API servers of team-a/dspa, team-b/dspa keep using the old key, which no longer works, until their pods restart", "Left on the old admin key, which no longer works: dashboard/dspa (not set up by this tool), unrecorded/dspa (not recorded by this tool).", "Restart the workbenches"} {
 		if !strings.Contains(resp.Message, want) {
 			t.Errorf("message lacks %q: %s", want, resp.Message)
 		}
@@ -175,7 +195,7 @@ func TestSecureS3_GivesEachRecordedPipelineServerItsOwnKey(t *testing.T) {
 	// Idempotent re-invocation must leave existing scoped keys unchanged.
 	before := f.sw.keysOf(storage.ScopedUserName("team-a"))
 	resp, _ = secureRun(t, c)
-	if !resp.Success || !strings.Contains(resp.Message, "On a key of their own: team-a/dspa, team-b/dspa.") || strings.Contains(resp.Message, "Restart") {
+	if !resp.Success || !strings.Contains(resp.Message, "Given a key of their own: team-a/dspa, team-b/dspa.") || strings.Contains(resp.Message, "Restart") {
 		t.Errorf("re-run: %+v", resp)
 	}
 	if got := strings.Join(lastStatuses(), " "); got != "check=success rollout=skipped server:team-a/dspa=success server:team-b/dspa=success" || !sawEvent("server:team-a/dspa", "already uses its own key") {
@@ -245,7 +265,7 @@ func TestSecureS3_StopsOnAFailedProbeAndResumes(t *testing.T) {
 	// The storage is secured; one server is left: a warning outcome
 	// ("partial") that names it and says a re-run finishes it.
 	if !resp.Success || resp.ErrorCode != "partial" || !strings.Contains(resp.Message, "team-b/dspa did not get its own key") ||
-		!strings.Contains(resp.Message, "On a key of their own: team-a/dspa.") || !strings.Contains(resp.Message, "Run Secure S3 storage again") {
+		!strings.Contains(resp.Message, "Given a key of their own: team-a/dspa.") || !strings.Contains(resp.Message, "Run Secure S3 storage again") {
 		t.Fatalf("first run: %+v", resp)
 	}
 	if got := strings.Join(lastStatuses(), " "); got != "check=success rollout=success server:team-a/dspa=success server:team-b/dspa=failed" {
@@ -269,7 +289,7 @@ func TestSecureS3_StopsOnAFailedProbeAndResumes(t *testing.T) {
 
 	delete(f.sw.failUserObjects, storage.ScopedUserName("team-b"))
 	resp, _ = secureRun(t, c)
-	if !resp.Success || !strings.Contains(resp.Message, "On a key of their own: team-a/dspa, team-b/dspa.") || strings.Contains(resp.Message, "Still on the old key") {
+	if !resp.Success || !strings.Contains(resp.Message, "Given a key of their own: team-a/dspa, team-b/dspa.") || strings.Contains(resp.Message, "Still on the old key") {
 		t.Fatalf("resume: %+v", resp)
 	}
 	if got := strings.Join(lastStatuses(), " "); got != "check=success rollout=skipped server:team-a/dspa=success server:team-b/dspa=success" || !sawEvent("server:team-a/dspa", "already uses its own key") {

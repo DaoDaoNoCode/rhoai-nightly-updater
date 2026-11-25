@@ -362,6 +362,15 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **Secure S3 storage no longer says a pipeline server uses its new key
+  before it does.** The pipeline API server reads its S3 key from
+  environment variables only when it starts (DSPO `deployment.yaml.tmpl`
+  `secretKeyRef`; its config hash leaves credentials out), so a pipeline
+  server given its own key keeps the old, revoked one until its pods
+  restart. Each such server's step and the result now say so, and the
+  dialog gives the restart command to copy
+  (`oc delete pod -n <project> -l app=ds-pipeline-<dspa>,dspa=<dspa>`).
+  The tool does not restart them itself: that would need a new permission.
 - **The installer refuses clusters with external OIDC sign-in.** On a
   cluster set up for direct authentication with an external OIDC provider
   (`authentications.config.openshift.io/cluster` `spec.type: OIDC`),
