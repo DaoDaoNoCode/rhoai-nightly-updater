@@ -339,8 +339,9 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   database), cert-manager (models, distributed workloads), the Red Hat
   build of Kueue, and GatewayClass `openshift-default` (MaaS). Only what the
   run's steps installed or used is listed: the operators once its
-  prerequisites step finished (also when a later step failed), MaaS's pieces
-  once its MaaS step did, the inference gateway once its model step did.
+  prerequisites step is done (set up, or already set up, as after a Stop
+  and Resume; also when a later step failed), MaaS's pieces once its MaaS
+  step is, the inference gateway once its model step is.
 - **The app no longer sends you to files of its repository.** The recipe
   review's playground warning ended "SECURITY.md (Which token is used where)
   says where your sign-in goes" (dropped), and the gitops profile's

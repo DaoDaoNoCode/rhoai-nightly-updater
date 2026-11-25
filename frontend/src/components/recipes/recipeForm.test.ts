@@ -81,11 +81,19 @@ describe("recipe Clean up and plan words", () => {
   it("lists the shared pieces that stay only for the features the run's steps set up", () => {
     const full = contract.recipeRunFeatures().run!;
     // Only Kueue ran: cert-manager and the Kueue operator, nothing of MaaS or Connectivity Link.
-    const only = (ids: string[], features: Partial<RecipeRun["recipe"]["spec"]["features"]> = {}): RecipeRun => ({
+    const only = (ids: string[], features: Partial<RecipeRun["recipe"]["spec"]["features"]> = {}, skipped: string[] = []): RecipeRun => ({
       ...full, exposure: undefined,
-      steps: full.steps.map((s) => ({ ...s, status: ids.includes(s.id) ? "success" : "pending" })),
+      steps: full.steps.map((s) => ({ ...s, status: ids.includes(s.id) ? "success" : skipped.includes(s.id) ? "skipped" : "pending" })),
       recipe: { ...full.recipe, spec: { ...full.recipe.spec, features: { ...full.recipe.spec.features, ...features } } },
     });
+    // A Stop and Resume: the run records what it set up before as skipped ("Already set up: ..."); it stays all the same.
+    expect(sharedLeft(only([], { ...full.recipe.spec.features, models: { ...full.recipe.spec.features.models, enabled: false }, maas: { enabled: true }, kueue: { enabled: false } }, ["maas"]))).toEqual([
+      "Red Hat Connectivity Link, with its Kuadrant instance and Authorino TLS", "GatewayClass openshift-default (OpenShift's shared class for gateways)",
+    ]);
+    expect(sharedLeft(only(["kueue"], { models: { ...full.recipe.spec.features.models, enabled: false }, maas: { enabled: false } }, ["prerequisites"])))
+      .toEqual(["The cert-manager Operator for Red Hat OpenShift", "The Red Hat build of Kueue"]);
+    // Pending or failed steps still count for nothing.
+    expect(sharedLeft({ ...only([], { maas: { enabled: true } }), steps: full.steps.map((s) => ({ ...s, status: s.id === "maas" ? "failed" : "pending" })) })).toEqual([]);
     const noModel = { models: { ...full.recipe.spec.features.models, enabled: false }, maas: { enabled: false } };
     // The prerequisites step installed cert-manager and the Kueue operator, whatever happened after it.
     expect(sharedLeft(only(["prerequisites"], noModel))).toEqual(["The cert-manager Operator for Red Hat OpenShift", "The Red Hat build of Kueue"]);

@@ -436,8 +436,12 @@ export function leftInPlace(status: ResourcesStatus, run: RecipeRun, req: Cleanu
   return out;
 }
 
-/** The run's step id reached success (it set its part up, or found it there and used it). */
-const stepDone = (run: RecipeRun, id: string) => run.steps.some((s) => s.id === id && s.status === "success");
+/**
+ * The run's step id is done: success (it set its part up), or skipped, which a run records only for a step whose part
+ * is already set up ("Already set up: ...", by this run before a Stop and Resume, or before it). Either way what it
+ * set up stays after Clean up.
+ */
+const stepDone = (run: RecipeRun, id: string) => run.steps.some((s) => s.id === id && (s.status === "success" || s.status === "skipped"));
 
 /**
  * What the run's steps set up or used that needs shared cluster pieces. The operators come from the prerequisites
