@@ -1636,6 +1636,9 @@ type MaaSStatus struct {
 	// subscription (nil while it does not exist).
 	Database *MaaSDatabase      `json:"database,omitempty"`
 	Access   *MaaSAudienceState `json:"access,omitempty"`
+	// SubscriptionPriority is the priority of this tool's subscription (nil
+	// while it does not exist or is not this tool's).
+	SubscriptionPriority *MaaSSubscriptionPriority `json:"subscriptionPriority,omitempty"`
 	// NoUnlimited: the cluster's MaaSSubscription API has no unlimited
 	// model reference (read from its CRD; false when that cannot be told).
 	NoUnlimited bool `json:"noUnlimited,omitempty"`
@@ -1644,6 +1647,30 @@ type MaaSStatus struct {
 	// RemovalProblem is the error of its last try, when that failed.
 	Removing       []MaaSRemoval `json:"removing,omitempty"`
 	RemovalProblem string        `json:"removalProblem,omitempty"`
+}
+
+// MaaSSubscriptionPriority is the spec.priority of this tool's
+// MaaSSubscription. Every write sets 0, the lowest value maas-api honours;
+// an earlier version wrote 10, or a value below the other subscriptions'.
+type MaaSSubscriptionPriority struct {
+	// Value is spec.priority as written (0 when unset: the CRD's default).
+	Value int64 `json:"value"`
+	// Fix sets it to 0 ("subscription-priority"); nil while it is 0.
+	Fix *MaaSAction `json:"fix,omitempty"`
+	// Ties are the other MaaSSubscriptions in models-as-a-service that
+	// maas-api ranks level with it (spec.priority 0, unset or negative,
+	// which maas-api reads as 0): for a caller in one of them and in this
+	// tool's, it takes the one whose largest single token limit on any of
+	// its models is larger (the window is not compared; unlimited counts as
+	// the largest), then the first by name.
+	Ties []MaaSPriorityTie `json:"ties,omitempty"`
+}
+
+// MaaSPriorityTie is another subscription at priority 0 for maas-api, with
+// its spec.priority as written (0 when unset; a negative one is read as 0).
+type MaaSPriorityTie struct {
+	Name     string `json:"name"`
+	Priority int64  `json:"priority"`
 }
 
 // MaaSRemoval is a publication of this tool that is gone, and why.
@@ -1657,8 +1684,8 @@ type MaaSRemoval struct {
 // /api/resources/maas/stream with Action ID), shown in a confirmation
 // that lists Changes first.
 type MaaSAction struct {
-	// ID is "upgrade-rhcl", "rhcl-memory", "authorino-tls" or
-	// "remove-tier-policies".
+	// ID is "upgrade-rhcl", "rhcl-memory", "rhcl-deny-on-failure",
+	// "authorino-tls", "remove-tier-policies" or "subscription-priority".
 	ID      string   `json:"id"`
 	Label   string   `json:"label"`
 	Summary string   `json:"summary"`
@@ -1732,9 +1759,10 @@ type MaaSModel struct {
 // MaaSRequest is the body of POST /api/resources/maas/stream.
 type MaaSRequest struct {
 	// Action is "setup" or "teardown" (the platform), "publish" or
-	// "unpublish" (the tool's model Model in Project), or a part's own fix:
+	// "unpublish" (the tool's model Model in Project), a part's own fix:
 	// "upgrade-rhcl", "rhcl-memory", "authorino-tls" or
-	// "remove-tier-policies".
+	// "remove-tier-policies", or "subscription-priority" (this tool's
+	// subscription to priority 0).
 	Action  string `json:"action"`
 	Project string `json:"project,omitempty"`
 	// Model is the catalog name of a chat model (publish and unpublish

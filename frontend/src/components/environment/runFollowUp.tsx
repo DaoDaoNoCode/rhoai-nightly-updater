@@ -42,7 +42,9 @@ export function runFollowUp({ run, runFeature, runProject, sampleRun, modelsRun,
     ? (runFeature === "playground" ? playgroundNext : runFeature === "models" ? modelsNext : runFeature === "mlflow" ? mlflowNow.next : runFeature === "maas" ? maasNext : runFeature === "pipelines" ? pipelinesNext : null)
     : runFeature === "samples" ? sampleNext : null;
   const whatNext = run?.kind === "setup" && runFeature === "maas"
-    ? (maasRun?.action === "publish"
+    ? (maasRun?.action === "subscription-priority"
+      ? "MaaS uses the new priority for keys made from now on: this tool's subscription no longer outranks other subscriptions. Naming the subscription when you create a key avoids the choice. Keys made before keep the subscription they were bound to: revoke them and make them again."
+      : maasRun?.action === "publish"
       ? `On the MaaS tab, Use it mints an API key (shown once) and calls ${maasRun.project ? `${maasRun.model ?? "the model"} in ${maasRun.project}` : "the model"} with it. The dashboard's Models as a Service pages list it with its subscription.`
       : "On the MaaS tab, publish a model to offer it through MaaS: callers then use an API key instead of their OpenShift token, within the subscription's token limits.")
     : run?.kind === "setup" && runFeature === "playground"

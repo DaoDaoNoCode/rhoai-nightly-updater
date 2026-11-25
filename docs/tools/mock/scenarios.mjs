@@ -509,6 +509,8 @@ export const scenarios = {
   "env-maas-ready": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(false)] }); },
   "env-maas-publishing": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(true, { ready: false })] }); },
   // Three models in dev-project: Qwen2.5 published, Qwen3 not, the embedding model never offered.
+  // This tool's subscription at an earlier version's priority 10: the Subscription row warns and offers Set to the lowest priority (0).
+  "env-maas-old-priority": (w) => { scenarios["env-maas-published"](w); w.maas = { ...w.maas, subscriptionPriority: F.maasOldPriority(10) }; },
   "env-maas-published": (w) => { scenarios["env-models-several"](w); w.maas = F.maasWorld("ready", { items: F.maasSeveral() }); F.setMaaSPublished(w.resources, "dev-project", "qwen25-05b-instruct", true); },
   // Two published models with different limits, for two groups (one without an OpenShift Group).
   "env-maas-limits": (w) => {

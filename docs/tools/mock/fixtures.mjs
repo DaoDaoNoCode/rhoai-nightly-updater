@@ -1396,7 +1396,17 @@ export function maasWorld(state = "none", { tls = true, items = [], blocked = nu
       .map((i) => (i.published && !i.partly && !i.limit ? { ...i, limit: maasLimit("free") } : i)),
     database: maasDatabase(state, { fresh: rhcl === "missing" || noCNPG, current: dbCurrent }),
     ...(noUnlimited ? { noUnlimited: true } : {}),
-    ...(items.some((i) => i.published) ? { access } : {}),
+    ...(items.some((i) => i.published) ? { access, subscriptionPriority: { value: 0 } } : {}),
+  };
+}
+
+/** This tool's subscription at priority 10, as an earlier version left it, with the fix and two admin subscriptions at 0 (pkg/cluster maasPriorityState). */
+export function maasOldPriority(value = 10) {
+  return {
+    value, ties: [{ name: "no-org-oidc-49315", priority: 0 }, { name: "org-49315", priority: 0 }, { name: "legacy-free", priority: -1 }],
+    fix: { id: "subscription-priority", label: "Set to the lowest priority (0)",
+      summary: `Sets the priority of this tool's subscription from ${value} to 0, the lowest MaaS honours, so that it no longer outranks other subscriptions: for a key made without naming a subscription, MaaS takes the caller's subscription with priority 1 or more, and among those at 0 the one whose largest single token limit on any of its models is larger (the time window is not compared; Unlimited counts as largest), then the first by name. Naming the subscription when you create a key avoids the choice. Keys made before keep the subscription they were bound to: revoke them and make them again.`,
+      changes: [`MaaSSubscription models-as-a-service/rhoai-nightly-updater-subscription: spec.priority ${value} to 0 (a merge patch with the read resourceVersion, after a server-side dry run); nothing else of it changes.`] },
   };
 }
 

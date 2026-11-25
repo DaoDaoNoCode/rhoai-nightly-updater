@@ -1728,6 +1728,7 @@ func (r *maasStatusRun) statusModels() {
 		if !toolSub.audience.Everyone {
 			st.Access.GroupProblems = MaaSGroupProblems(c, toolSub.audience.Groups)
 		}
+		st.SubscriptionPriority = maasPriorityState(c, toolSub)
 	}
 	owned, ownedErr := ReadModelsRecord(c)
 	if ownedErr != nil {

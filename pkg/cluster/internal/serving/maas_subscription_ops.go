@@ -1,11 +1,15 @@
 package serving
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -73,7 +77,7 @@ func (m *Run) changeLimit(project, name string, req *types.MaaSLimit) (*types.Op
 		limits[p.Key()] = cur.limitOf(p)
 	}
 	limits[pub.Key()] = limit
-	sub, _ := maasAccessObjects(c, live, limits, cur.audience, maasOwnSubscriptionPriority(c))
+	sub, _ := maasAccessObjects(c, live, limits, cur.audience)
 	desc := "MaaSSubscription " + MaaSSubscriptionName
 	if err := applyMaaSObject(c, desc, maasAccessPath(c, "MaaSSubscription"), maasAccessCreatePath(c, "MaaSSubscription"), sub, true); err != nil {
 		if why := UnlimitedRefusal(err, limit); why != "" {
@@ -119,7 +123,7 @@ func (m *Run) changeAccess(req *types.MaaSAudience) (*types.OperationResponse, e
 	for _, p := range live {
 		limits[p.Key()] = cur.limitOf(p)
 	}
-	sub, auth := maasAccessObjects(c, live, limits, aud, maasOwnSubscriptionPriority(c))
+	sub, auth := maasAccessObjects(c, live, limits, aud)
 	if !aud.Everyone {
 		for _, p := range MaaSGroupProblems(c, aud.Groups) {
 			m.Step("check", "running", p.Message)
@@ -143,6 +147,67 @@ func (m *Run) changeAccess(req *types.MaaSAudience) (*types.OperationResponse, e
 	m.Logs = append(m.Logs, "OK: "+subDesc, "OK: "+authDesc)
 	m.Step("access", "success", fmt.Sprintf("The subscription and the authorization policy are for %s. API keys of anyone else stop working for these models.", aud.Text()))
 	return m.waitAccessActive("The published models are for "+aud.Text()+" now.", true)
+}
+
+// setSubscriptionPriority sets spec.priority of this tool's MaaSSubscription
+// to 0 (maasSubscriptionPriority), where an earlier version left 10 or a
+// value below the other subscriptions'. Only that field changes, by a merge
+// patch that carries the read resourceVersion, after a server-side dry run;
+// a subscription this tool did not create is refused. Keys minted before
+// keep their subscription: maas-api stores it at mint time. There is
+// nothing to wait for: maas-api picks a subscription from its own cache of
+// MaaSSubscriptions when a key is minted, so the new priority counts as soon
+// as it is written, and maas-controller's gateway policies do not use the
+// priority. Steps: "check", "priority".
+func (m *Run) setSubscriptionPriority() (*types.OperationResponse, error) {
+	c := m.Client
+	desc := fmt.Sprintf("MaaSSubscription %s/%s", MaaSTenantNamespace, MaaSSubscriptionName)
+	m.Step("check", "running", "Checking this tool's subscription")
+	cur, err := readMaaSToolSubscription(c)
+	switch {
+	case err != nil:
+		return m.Fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "subscription read failed")
+	case !cur.found:
+		return m.Fail("check", "No model of this tool is published, so there is no subscription to change; Publish creates it at priority 0. Nothing was changed.", "prerequisites", "no subscription")
+	case !cur.owned:
+		return m.Fail("check", desc+" was not created by this tool, so it is left alone. Nothing was changed.", "not_managed", "subscription foreign")
+	case cur.meta.Terminating():
+		return m.Fail("check", desc+" is being deleted. Nothing was changed.", "conflict", "subscription deleting")
+	case cur.priority == maasSubscriptionPriority:
+		m.Step("check", "success", desc+" has priority 0 already.")
+		return m.Done(desc + " has priority 0 already; nothing changed.")
+	}
+	if err := patchMaaSSubscriptionPriority(c, cur.meta.ResourceVersion, true); err != nil {
+		return m.Fail("check", fmt.Sprintf("The API server rejects the change of %s: %v. Nothing was changed.", desc, err), MaaSWriteCode(err), "dry run failed")
+	}
+	m.Step("check", "success", fmt.Sprintf("%s has priority %d; it can change to 0.", desc, cur.priority))
+	m.Step("priority", "running", "Setting the subscription's priority to 0")
+	if err := patchMaaSSubscriptionPriority(c, cur.meta.ResourceVersion, false); err != nil {
+		if kube.IsK8sConflict(err) {
+			return m.Fail("priority", desc+" changed since it was read, so it was not changed. Run it again.", "conflict", "subscription changed")
+		}
+		return m.Fail("priority", fmt.Sprintf("Failed to update %s: %v. Its priority is unchanged; run it again to retry.", desc, err), MaaSWriteCode(err), "patch failed")
+	}
+	m.Logs = append(m.Logs, fmt.Sprintf("OK: %s spec.priority %d to 0", desc, cur.priority))
+	m.Step("priority", "success", desc+" has priority 0; maas-api uses it for the keys minted from now on. API keys made before keep the subscription they were bound to: revoke and make again those meant for another subscription.")
+	return m.Done("This tool's subscription has priority 0, the lowest MaaS honours.")
+}
+
+// patchMaaSSubscriptionPriority sets spec.priority of this tool's
+// MaaSSubscription to 0 by a merge patch, as field manager
+// rhoai-nightly-updater, with resourceVersion as a precondition.
+func patchMaaSSubscriptionPriority(c *kube.Client, resourceVersion string, dryRun bool) error {
+	data, err := json.Marshal(map[string]any{"metadata": map[string]any{"resourceVersion": resourceVersion}, "spec": map[string]any{"priority": maasSubscriptionPriority}})
+	if err != nil {
+		return err
+	}
+	query := url.Values{"fieldManager": {envkit.ToolFieldManager}}
+	if dryRun {
+		query.Set("dryRun", "All")
+	}
+	path := rhoai.NamespacedPath(MaaSAPI(c), "maassubscriptions", MaaSTenantNamespace, MaaSSubscriptionName)
+	_, _, err = c.Do(http.MethodPatch, path, "application/merge-patch+json", data, query)
+	return err
 }
 
 // waitAccessActive is the "ready" step: until maas-controller reports the

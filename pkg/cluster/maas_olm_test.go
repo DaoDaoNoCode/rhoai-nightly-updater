@@ -812,8 +812,9 @@ func TestMaaSTierPolicies(t *testing.T) {
 	}
 }
 
-// Publish: refuses on RHCL 1.4.0; with others' subscriptions, takes a
-// priority below the lowest of theirs, and refuses below the docs' minimum.
+// Publish: refuses on RHCL 1.4.0; with others' subscriptions, refuses below
+// the docs' minimum; its subscription has priority 0 whatever the others'
+// (maas-api reads a negative one as 0).
 func TestMaaSPublish_RHCLAndPriority(t *testing.T) {
 	t.Run("1.4.0", func(t *testing.T) {
 		mc := maasClusterWithModel(t)
@@ -823,14 +824,14 @@ func TestMaaSPublish_RHCLAndPriority(t *testing.T) {
 			t.Fatalf("res = %+v", res)
 		}
 	})
-	t.Run("below the lowest", func(t *testing.T) {
+	t.Run("others: 0, not below them", func(t *testing.T) {
 		mc := maasClusterWithModel(t)
 		mc.f.putJSON("/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maassubscriptions/premium", `{"spec":{"priority":10}}`)
 		mc.f.putJSON("/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maassubscriptions/free", `{"spec":{"priority":-3}}`)
 		if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj"}); !res.Success {
 			t.Fatalf("publish: %+v", res)
 		}
-		if got := fmt.Sprint(mc.f.get(tMaaSSub)["spec"].(map[string]any)["priority"]); got != "-4" {
+		if got := fmt.Sprint(mc.f.get(tMaaSSub)["spec"].(map[string]any)["priority"]); got != "0" {
 			t.Fatalf("priority = %s", got)
 		}
 	})
@@ -848,7 +849,7 @@ func TestMaaSPublish_RHCLAndPriority(t *testing.T) {
 		if res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "publish", Project: "proj"}); !res.Success {
 			t.Fatalf("publish: %+v", res)
 		}
-		if got := fmt.Sprint(mc.f.get(tMaaSSub)["spec"].(map[string]any)["priority"]); got != "10" {
+		if got := fmt.Sprint(mc.f.get(tMaaSSub)["spec"].(map[string]any)["priority"]); got != "0" {
 			t.Fatalf("priority = %s", got)
 		}
 	})

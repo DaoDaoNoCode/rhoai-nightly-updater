@@ -472,7 +472,7 @@ func TestValidateMaaSRequest(t *testing.T) {
 		{Action: "publish"}:                          "a valid project is required",
 		{Action: "publish", Project: "Bad_Name"}:     "a valid project is required",
 		{Action: "unpublish", Project: "p"}:          "",
-		{Action: "nope"}:                             "action must be setup, teardown, publish, unpublish, restore-routing, change-limit, change-access, change-database, upgrade-rhcl, rhcl-memory, rhcl-deny-on-failure, authorino-tls or remove-tier-policies",
+		{Action: "nope"}:                             "action must be setup, teardown, publish, unpublish, restore-routing, change-limit, change-access, change-database, subscription-priority, upgrade-rhcl, rhcl-memory, rhcl-deny-on-failure, authorino-tls or remove-tier-policies",
 		{Action: "upgrade-rhcl"}:                     "",
 		{Action: "restore-routing", Project: "p"}:    "",
 		{Action: "restore-routing"}:                  "a valid project is required",
