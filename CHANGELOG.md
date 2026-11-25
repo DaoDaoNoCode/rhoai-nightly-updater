@@ -1011,6 +1011,56 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   them. The first Set up or Repair with this version restarts SeaweedFS once
   (its pod template gets a checksum of the admin keys). No RBAC change.
 
+## [4.0.1] - 2026-11-25
+
+Same template as 4.0.0 (revision 7): upgrade with the release's
+`install.sh` ([UPGRADING.md](docs/UPGRADING.md#patch-and-minor-releases)),
+no full redeploy.
+
+### Fixed
+
+- **Server-side dry runs of a delete deleted.** Five checks asked for a
+  server-side dry run in the URL (`?dryRun=All`) while sending
+  DeleteOptions (UID preconditions) in the body, and the API server then
+  reads only the body's options (k8s.io/apiserver
+  `pkg/endpoints/handlers/delete.go:95-128`, v0.35+; `:95-126` in v0.32
+  and v0.33), so each "dry run" was a real delete. What that did in
+  released versions:
+  - **Removing the image mirror (4.0.0):** opening the review of **Remove
+    the image mirror** (Status page; self-managed, ROSA Classic and OSD
+    clusters only) deleted ImageDigestMirrorSet `rhoai-quay-mirror` at
+    once, also when you then clicked Cancel. The Machine Config Operator
+    then took the mirror off the nodes, draining each node first, one at a
+    time by default (a single-node cluster is not drained). Where another
+    ImageDigestMirrorSet or ImageContentSourcePolicy still redirects
+    `registry.redhat.io/rhoai` to `quay.io/rhoai`, the nodes kept that
+    mirror and normally nothing rolled out. Confirming then said "Nothing
+    to change" and wrote no activity entry. If you opened that review and
+    still want the mirror, set it up again with **Create the image
+    mirror**; without a mirror, nightly installs and updates fail.
+  - **Model setup run again (3.0.0 to 4.0.0):** setting up a model that
+    already existed deleted its token Secret in the check step and still
+    reported success, which invalidated the model's token (the next setup
+    made a new one). If you set up an existing model again, run its setup
+    once more and use the new token; tokens copied before no longer work.
+  - **Hard reset (4.0.0):** the DataScienceCluster was deleted in the first
+    check, before the new spec's dry run, the module operator check and the
+    record **Finish the hard reset** needs. A later refusal, or the DSC gone
+    before the real delete, left the cluster with no DataScienceCluster and
+    a message saying nothing was changed; create it again with **Create
+    DataScienceCluster** or `oc create`.
+  - **Remove the old tier policies (3.0.0 to 4.0.0) and the Diagnostics fix
+    that recreates a leftover workload (4.0.0):** the outcome was the one
+    asked for, but the check deleted already, so a later refusal said
+    "Nothing was deleted" after a delete, and the fix said the workload "no
+    longer exists" and wrote no activity entry.
+
+  The dry run is now in the DeleteOptions, and the updater does not send a
+  delete with DeleteOptions in its body and any of them (`dryRun`,
+  `propagationPolicy`, `gracePeriodSeconds`, `orphanDependents`) in its
+  query; its message then says the updater did not send the request and
+  that nothing was changed.
+
 ## [4.0.0] - 2026-11-20
 
 - **Requires a full redeploy** (template revision 7; 3.0.0 has revision 5):
