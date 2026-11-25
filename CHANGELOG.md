@@ -196,6 +196,15 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Changed
 
+- **Diagnostics: the JobSet Operator's commands install cert-manager
+  first.** The OpenShift documentation installs the cert-manager Operator
+  for Red Hat OpenShift before the JobSet Operator (and odh-gitops installs
+  them together), but the JobSet bundle declares no OLM dependency, so the
+  printed commands left it out. When cert-manager is not installed they now
+  install it first (from the cluster's catalog, as its own problem does);
+  while its install runs they wait for it; when it is installed the
+  evidence says so. `JobSetOperator/cluster` is still created from the
+  CSV's example when it is missing.
 - **Components: Create says what a missing prerequisite operator does.**
   The Create DataScienceCluster preview says that a component reporting a
   prerequisite operator as not installed stays not ready until an
