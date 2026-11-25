@@ -443,7 +443,7 @@ export function dashboardDevLeft(run: RecipeRun): boolean {
  * model in a project that is not deleted for kserve, and a model registry
  * that is not deleted for modelregistry and aiHub.
  */
-export function componentsSplit(status: ResourcesStatus | null, run: RecipeRun, req: CleanupRequest, offered: CleanupRequest | undefined): { back: string[]; stay: string[] } {
+export function componentsSplit(status: ResourcesStatus | null, run: RecipeRun, req: CleanupRequest, offered: CleanupRequest | undefined): { back: string[]; stay: string[]; backKeys: string[] } {
   const up = (r: ResourceState | null | undefined) => !!r?.deployed && !isTerminating(r);
   const deleted = new Set(req.recipeProjects ?? []);
   const project = run.project?.name;
@@ -469,9 +469,27 @@ export function componentsSplit(status: ResourcesStatus | null, run: RecipeRun, 
   };
   const back: string[] = [];
   const stay: string[] = [];
+  const backKeys: string[] = [];
   for (const key of offered?.components ?? []) {
     const w = why(key);
-    if (w) stay.push(`${componentName(key)} (${w})`); else back.push(componentName(key));
+    if (w) stay.push(`${componentName(key)} (${w})`);
+    else {
+      back.push(componentName(key));
+      backKeys.push(key);
+    }
   }
-  return { back, stay };
+  return { back, stay, backKeys };
+}
+
+/**
+ * The request with only the components the dialog says go back (componentsSplit backKeys): one it says stays on is
+ * not sent, so the server cannot turn back what the user was told stays (a Kueue whose setup is not removed here but
+ * has no queue left, an AI hub with no registry left). No component going back sends no components step.
+ */
+export function withComponentsBack(req: CleanupRequest, backKeys: string[]): CleanupRequest {
+  if (!req.components) return req;
+  const out: CleanupRequest = { ...req };
+  delete out.components;
+  if (backKeys.length > 0) out.components = backKeys;
+  return out;
 }

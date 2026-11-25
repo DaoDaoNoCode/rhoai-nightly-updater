@@ -22,7 +22,7 @@ import type { RecipeRun, ResourcesStatus } from "../../types";
 import { StepProgress, type StepState } from "../environment/StepProgress";
 import { cleanupSteps } from "../environment/CleanupModal";
 import { TooltipButton } from "../TooltipButton";
-import { cleanupParts, cleanupRequest, componentName, componentsSplit, dashboardDevLeft, leftInPlace, listText } from "./recipeForm";
+import { cleanupParts, cleanupRequest, componentName, componentsSplit, dashboardDevLeft, leftInPlace, listText, withComponentsBack } from "./recipeForm";
 
 /** The clean-up's refusal of a recipe project that still holds what the tool did not create (pkg/cluster recipe.ErrorCodeConfirmContents). */
 const CONFIRM_CONTENTS = "confirm_project_contents";
@@ -91,19 +91,22 @@ export const RecipeCleanupModal: React.FC<{
   }, [run]);
 
   const confirmedContents = Object.fromEntries(Object.entries(contents).filter(([p]) => confirmed.has(p)));
-  const req = cleanupRequest(offered, chosen, confirmedContents);
+  const draft = cleanupRequest(offered, chosen, confirmedContents);
+  // Which components would go back, and which stay on for what is kept (U7); only those that go back are sent.
+  const split = run
+    ? componentsSplit(resources || null, run, draft, offered)
+    : { back: (offered?.components ?? []).map(componentName), stay: [], backKeys: offered?.components ?? [] };
+  const req = withComponentsBack(draft, split.backKeys);
   const stays = run && resources ? leftInPlace(resources, run, req) : [];
   const devLeft = !!run && dashboardDevLeft(run);
-  // Which components would go back, and which stay on for what is kept (U7).
-  const split = run ? componentsSplit(resources || null, run, req, offered) : { back: offered?.components ?? [], stay: [] };
   const partLabel = (p: { id: string; title: string; description?: string }): [string, string] => {
     if (p.id !== "components") return [p.title, p.description ?? "Removes everything in the project: its models, playground, workbench and pipeline server."];
     const title = split.back.length > 0 ? `Turn back the DataScienceCluster components the run turned on: ${listText(split.back)}` : "Turn back the DataScienceCluster components the run turned on";
     const stay = split.stay.length > 0 ? `Stays on while what uses it stays: ${split.stay.join("; ")}.` : "";
     // Kueue's own condition, as the Distributed workloads tab's Clean up says it (the server checks it when it runs).
-    const kueue = split.back.includes(componentName("kueue")) ? " Kueue goes back last, only once no ClusterQueue or LocalQueue is left on the cluster." : "";
+    const kueue = split.backKeys.includes("kueue") ? " Kueue goes back last, only once no ClusterQueue or LocalQueue is left on the cluster." : "";
     // RHOAI 3.6's aiHub also runs the Model Catalog, as the Environment page's Clean up says.
-    const catalog = split.back.includes(componentName("aiHub")) ? " Turning AI hub back also removes the Model Catalog." : "";
+    const catalog = split.backKeys.includes("aiHub") ? " Turning AI hub back also removes the Model Catalog." : "";
     const desc = split.back.length > 0 ? `Each goes back to what it was.${kueue}${catalog}${stay ? ` ${stay}` : ""}` : `None goes back now. ${stay}`;
     return [title, desc];
   };

@@ -230,11 +230,14 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
 
   it("Clean up on RHOAI 3.6: AI hub and OGX by name, AI hub kept while the registry stays and its Model Catalog said", async () => {
     const ended = contract.recipeRunFeatures();
-    const cleanup = { ...ended.cleanup!, components: ["aiHub", "kserve", "ogx"] };
-    stubApi({
+    // The run's distributed workloads setup is not offered (gone, or not the run's): Kueue stays, and is not sent.
+    const cleanup = { ...ended.cleanup!, kueue: false, kueueUid: undefined, components: ["aiHub", "kserve", "kueue", "ogx"] };
+    const streams: ReturnType<typeof sseResponse>[] = [];
+    const api = stubApi({
       ...editorReads,
       "GET /api/recipes/run": { ...ended, cleanup },
       "GET /api/resources/status": { minio: { deployed: true, ready: true }, mlflow: { deployed: true, ready: true } } as ResourcesStatus,
+      "POST /api/resources/cleanup/stream": () => { const s = sseResponse(); streams.push(s); return s.response; },
       "POST /api/recipes/plan": () => jsonResponse(featuresPlan()),
     });
     renderPage(<RecipesPage />, "/recipes");
@@ -244,11 +247,46 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     const dialog = screen.getByRole("dialog", { name: /Clean up what recipe full set up\?/ });
     await settle();
     expect(within(dialog).getByRole("checkbox", { name: "Turn back the DataScienceCluster components the run turned on: KServe and OGX" })).toBeChecked();
-    expect(dialog).toHaveTextContent("Stays on while what uses it stays: AI hub (the model registry stays).");
+    expect(dialog).toHaveTextContent("Stays on while what uses it stays: AI hub (the model registry stays); Kueue (the distributed workloads setup is not removed here).");
     expect(dialog).not.toHaveTextContent("Model Catalog");
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "The model registry the run created" }));
     expect(within(dialog).getByRole("checkbox", { name: "Turn back the DataScienceCluster components the run turned on: AI hub, KServe and OGX" })).toBeChecked();
     expect(dialog).toHaveTextContent("Each goes back to what it was. Turning AI hub back also removes the Model Catalog.");
     expect(dialog).not.toHaveTextContent("aiHub");
+    // What is sent is what the dialog says goes back: AI hub with its registry, never the Kueue it says stays.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Clean up" }));
+    await settle();
+    expect(streams).toHaveLength(1);
+    expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([
+      { recipeProjects: ["recipe-full"], recipeProjectUIDs: { "recipe-full": "1a2b3c4d-uid" }, modelRegistry: true, modelRegistryUid: "registry-uid", recipeRunId: "run2", components: ["aiHub", "kserve", "ogx"] },
+    ]);
+    await act(async () => { streams[0].close(); });
+    await settle();
+  });
+
+  it("Clean up sends no component the dialog says stays on", async () => {
+    const ended = contract.recipeRunFeatures();
+    const streams: ReturnType<typeof sseResponse>[] = [];
+    const api = stubApi({
+      ...editorReads,
+      "GET /api/recipes/run": ended,
+      "GET /api/resources/status": { minio: { deployed: true, ready: true }, mlflow: { deployed: true, ready: true } } as ResourcesStatus,
+      "POST /api/resources/cleanup/stream": () => { const s = sseResponse(); streams.push(s); return s.response; },
+      "POST /api/recipes/plan": () => jsonResponse(featuresPlan()),
+    });
+    renderPage(<RecipesPage />, "/recipes");
+    await settleApps();
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up..." }));
+    const dialog = screen.getByRole("dialog", { name: /Clean up what recipe full set up\?/ });
+    await settle();
+    // The distributed workloads setup stays (unticked), so Kueue stays on and is not sent.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Clean up" }));
+    await settle();
+    expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([
+      { recipeProjects: ["recipe-full"], recipeProjectUIDs: { "recipe-full": "1a2b3c4d-uid" }, components: ["kserve"] },
+    ]);
+    await act(async () => { streams[0].close(); });
+    await settle();
   });
 });

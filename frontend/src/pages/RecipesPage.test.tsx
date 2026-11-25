@@ -8,6 +8,7 @@ import { App } from "../App";
 import { GlobalBanners } from "../components/GlobalBanners";
 import { RecipeRunNote } from "../components/recipes/RecipeEntry";
 import { RECIPE_RUN_POLL_MS } from "../constants";
+import type { CleanupRequest } from "../services/api";
 import { jsonResponse, stubApi } from "../test/apiStub";
 import { contract } from "../test/contract";
 import { IDLE_OPERATION, nightlyStatus, renderPage, settleApps } from "../test/providers";
@@ -418,9 +419,12 @@ describe("Recipes page", () => {
     });
     await settle();
     expect(within(dialog).getByText("Cleaned up")).toBeInTheDocument();
+    // aipipelines, which the dialog says stays on, is not sent.
+    const sent: CleanupRequest = { ...ended.cleanup };
+    delete sent.components;
     expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([
-      ended.cleanup,
-      { ...ended.cleanup, confirmProjectContents: { "recipe-dev": ["Notebook wb", "PersistentVolumeClaim wb-data"] } },
+      sent,
+      { ...sent, confirmProjectContents: { "recipe-dev": ["Notebook wb", "PersistentVolumeClaim wb-data"] } },
     ]);
   });
 
@@ -441,9 +445,12 @@ describe("Recipes page", () => {
     expect(within(dialog).getAllByRole("checkbox").map((c) => c.getAttribute("id"))).toEqual(["recipe-cleanup-components"]);
     expect(within(dialog).queryByText(/Project team-a/)).not.toBeInTheDocument();
     expect(leftInPlaceItems(dialog)).toEqual(["The pipeline server in team-a", "The S3 storage", "MLflow"]);
+    // Its pipeline server stays, so aipipelines stays on: nothing goes back, and nothing is sent.
+    expect(dialog).toHaveTextContent("None goes back now. Stays on while what uses it stays: Data Science Pipelines (the pipeline server in team-a stays).");
+    expect(within(dialog).getByRole("button", { name: "Clean up" })).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(within(dialog).getByRole("button", { name: "Clean up" }));
     await settle();
-    expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([{ components: ["aipipelines"] }]);
+    expect(api.bodies["POST /api/resources/cleanup/stream"]).toBeUndefined();
   });
 
   it("clean up says what it leaves in place even when the Environment status cannot be read", async () => {

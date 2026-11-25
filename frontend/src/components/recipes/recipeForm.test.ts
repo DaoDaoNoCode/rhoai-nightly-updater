@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_RECIPE_FORM, cleanupParts, componentName, componentsSplit, playgroundThroughMaaS } from "./recipeForm";
+import { DEFAULT_RECIPE_FORM, cleanupParts, componentName, componentsSplit, playgroundThroughMaaS, withComponentsBack } from "./recipeForm";
 import { planText } from "./RecipeReviewModal";
 import { contract } from "../../test/contract";
 import type { ResourcesStatus } from "../../types";
@@ -35,7 +35,7 @@ describe("recipe Clean up and plan words", () => {
     const offered = { recipeProjects: ["recipe-full"], modelRegistry: true, kueue: true, components: ["kserve", "modelregistry", "kueue"] };
     // Unchecked registry and queue choices mean those components stay enabled.
     expect(componentsSplit(status, run, { recipeProjects: ["recipe-full"] }, offered)).toEqual({
-      back: ["KServe"], stay: ["Model registry (the model registry stays)", "Kueue (the distributed workloads setup stays)"],
+      back: ["KServe"], stay: ["Model registry (the model registry stays)", "Kueue (the distributed workloads setup stays)"], backKeys: ["kserve"],
     });
     // Once checked, they appear in the revert set as well.
     expect(componentsSplit(status, run, { recipeProjects: ["recipe-full"], modelRegistry: true, kueue: true }, offered).back).toEqual(["KServe", "Model registry", "Kueue"]);
@@ -50,6 +50,15 @@ describe("recipe Clean up and plan words", () => {
     ]);
     expect(componentsSplit(status, run, { recipeProjects: ["recipe-full"], modelRegistry: true, kueue: true }, on36).back).toEqual(["KServe", "AI hub", "Kueue"]);
     expect(componentsSplit(status, run, { recipeProjects: ["recipe-full"] }, { ...on36, modelRegistry: false }).stay[0]).toBe("AI hub (the model registry is not removed here)");
+  });
+
+  it("sends only the components the dialog says go back", () => {
+    const req = { recipeProjects: ["recipe-full"], components: ["kserve", "kueue", "aiHub"] };
+    expect(withComponentsBack(req, ["kserve"])).toEqual({ recipeProjects: ["recipe-full"], components: ["kserve"] });
+    // None goes back: no components step at all.
+    expect(withComponentsBack(req, [])).toEqual({ recipeProjects: ["recipe-full"] });
+    // The components part unticked stays unticked.
+    expect(withComponentsBack({ recipeProjects: ["recipe-full"] }, ["kserve"])).toEqual({ recipeProjects: ["recipe-full"] });
   });
 
   it("a plan's messages do not repeat that nothing was changed (U3)", () => {
