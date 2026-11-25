@@ -37,7 +37,8 @@ import (
 // Expired project locks are removed by every conditional write
 // (prunableLockKeys): an entry whose heartbeat is LockTTL old, or, when it
 // had begun (an interrupted project action), whose start is
-// InterruptedLockMaxAge old. The renewals do not: they do not read the
+// InterruptedLockMaxAge old, or that is not among the
+// MaxInterruptedLocks newest interrupted ones. The renewals do not: they do not read the
 // record, and a removal guarded by a test of another pod's entry could
 // make the whole patch fail.
 
@@ -64,13 +65,24 @@ const (
 	InterruptedLockMaxAge = 24 * time.Hour
 )
 
+// MaxInterruptedLocks bounds the interrupted project actions kept (the
+// newest by start): with each entry under 2 KiB (its target and message
+// are truncated), they stay under 40 KiB of the ConfigMap's 1 MiB however
+// many projects saw an action interrupted within InterruptedLockMaxAge.
+const MaxInterruptedLocks = 20
+
 // prunableLockKeys are the project lock keys of rec a write removes, as of
-// now: unreadable entries, expired ones that had not begun, and
-// interrupted ones (expired after they began) older than
-// InterruptedLockMaxAge. Sorted, so a write's body does not depend on the
-// map order.
+// now: unreadable entries, expired ones that had not begun, interrupted
+// ones (expired after they began) older than InterruptedLockMaxAge, and
+// the interrupted ones beyond the MaxInterruptedLocks newest. Sorted, so a
+// write's body does not depend on the map order.
 func prunableLockKeys(rec *OperationRecord, now time.Time) []string {
 	var keys []string
+	type kept struct {
+		key     string
+		started time.Time
+	}
+	var interrupted []kept
 	for key := range rec.values {
 		if _, ok := projectLockUID(key); !ok {
 			continue
@@ -82,10 +94,22 @@ func prunableLockKeys(rec *OperationRecord, now time.Time) []string {
 			continue
 		case l.Begun:
 			if started, err := time.Parse(time.RFC3339, l.StartedAt); err == nil && now.Sub(started) < InterruptedLockMaxAge {
+				interrupted = append(interrupted, kept{key, started})
 				continue
 			}
 		}
 		keys = append(keys, key)
+	}
+	if len(interrupted) > MaxInterruptedLocks {
+		sort.Slice(interrupted, func(i, j int) bool {
+			if !interrupted[i].started.Equal(interrupted[j].started) {
+				return interrupted[i].started.After(interrupted[j].started)
+			}
+			return interrupted[i].key < interrupted[j].key
+		})
+		for _, k := range interrupted[MaxInterruptedLocks:] {
+			keys = append(keys, k.key)
+		}
 	}
 	sort.Strings(keys)
 	return keys
@@ -133,6 +157,11 @@ type LockRenewal struct {
 // first tests each entry's value against Old and then replaces it with
 // New. The patch carries no resourceVersion, so it never conflicts with
 // a write of other keys of the ConfigMap; it applies whole or not at all.
+// It does not wait for this process's other writes (operationWriter): a
+// long recipe run or hard reset record write must not hold up the
+// heartbeat. That is safe because the patch tests what it replaces: a
+// conditional write of this process that read the record before the
+// renewal fails with 409 and reads it again.
 //
 // The API server answers a failed test with a generic 422 that does not
 // say which test failed (k8s.io/apiserver applyJSPatch drops the
@@ -145,7 +174,7 @@ type LockRenewal struct {
 // own refusal, returned as the error (nothing was renewed). Other errors
 // are returned as they are, with the entries found lost so far.
 func RenewOperationLocks(c *kube.Client, renewals []LockRenewal) (lost map[string]*types.OperationLease, err error) {
-	err = operationWriter.do(c.Context(), func() error {
+	err = func() error {
 		pending := renewals
 		for len(pending) > 0 {
 			perr := patchLockValues(c, pending)
@@ -176,7 +205,7 @@ func RenewOperationLocks(c *kube.Client, renewals []LockRenewal) (lost map[strin
 			pending = still
 		}
 		return nil
-	})
+	}()
 	return lost, err
 }
 

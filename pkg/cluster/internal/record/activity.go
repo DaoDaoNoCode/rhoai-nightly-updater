@@ -250,11 +250,18 @@ func Activity(c *kube.Client, entry types.ActivityEntry) {
 	// included, and never past the operation's shared post-deadline end
 	// (see postOperationContext), so a stalled API server cannot hold a
 	// shutting-down pod past its drain.
-	ctx, cancel := BookkeepingContext(c, ActivityWriteTimeout)
-	defer cancel()
 	// This process's entries are written one at a time (activityWriter),
-	// so they never conflict with each other.
-	if err := activityWriter.do(ctx, func() error {
+	// so they never conflict with each other. The wait for the others is
+	// bounded on its own (activityWaitTimeout, within the same hard end);
+	// the write's own budget starts once it may write.
+	waitCtx, cancelWait := BookkeepingContext(c, activityWaitTimeout())
+	defer cancelWait()
+	if beforeActivityWait != nil {
+		beforeActivityWait()
+	}
+	if err := activityWriter.do(waitCtx, func() error {
+		ctx, cancel := BookkeepingContext(c, ActivityWriteTimeout)
+		defer cancel()
 		recordActivityWithClient(c.WithContext(ctx), entry)
 		return nil
 	}); err != nil {
@@ -272,6 +279,14 @@ func Action(c *kube.Client, action, detail string, success bool) {
 		Success:   success,
 	})
 }
+
+// activityWaitTimeout bounds the wait of an activity entry for this
+// process's other entries: a few writes' budgets.
+func activityWaitTimeout() time.Duration { return 4 * ActivityWriteTimeout }
+
+// beforeActivityWait, when set, runs before an entry waits for the others
+// (tests).
+var beforeActivityWait func()
 
 func recordActivityWithClient(c *kube.Client, entry types.ActivityEntry) {
 	ns := GetActivityNamespace()

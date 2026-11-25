@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -464,5 +465,144 @@ func TestAcquireRetriesConflictsEightTimesWithBackoff(t *testing.T) {
 	}
 	if checks != 8 || f.conflicts != 8 || fmt.Sprint(waits) != "[1 2 3 4 5 6 7]" {
 		t.Fatalf("checks %d conflicts %d backoffs %v", checks, f.conflicts, waits)
+	}
+}
+
+// Interrupted project actions are kept for a day, but only the
+// MaxInterruptedLocks newest: many projects interrupted within a day
+// cannot fill the ConfigMap.
+func TestInterruptedLocksAreBounded(t *testing.T) {
+	now := kube.Clock().Now()
+	f, c := newFakeOperationConfigMap(t)
+	n := record.MaxInterruptedLocks + 5
+	for i := range n {
+		uid := "uid-" + strconv.Itoa(i)
+		l := projectLease("op-"+uid, "boot-b", uid, "user"+uid, now.Add(-2*LockTTL))
+		l.Begun = true
+		l.StartedAt = now.Add(-time.Duration(i+1) * time.Minute).UTC().Format(time.RFC3339) // uid-0 newest
+		f.set(ProjectLockKey(uid), l)
+	}
+	if err := SaveRecipeRun(c, &types.RecipeRun{ID: "run"}, true); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := ReadOperationRecord(c)
+	if err != nil || len(rec.ProjectLocks) != record.MaxInterruptedLocks {
+		t.Fatalf("%d kept, err %v", len(rec.ProjectLocks), err)
+	}
+	for i := range n {
+		_, kept := rec.ProjectLocks["uid-"+strconv.Itoa(i)]
+		if kept != (i < record.MaxInterruptedLocks) {
+			t.Errorf("uid-%d kept %t", i, kept)
+		}
+	}
+}
+
+// A renewal does not wait for this process's other writes of the record:
+// while a recipe run write hangs, the lease is renewed.
+func TestRenewalDoesNotWaitForTheWriter(t *testing.T) {
+	now := kube.Clock().Now()
+	f, _ := newFakeOperationConfigMap(t)
+	mine := testLease("op-a", "boot-a", now)
+	f.set(ClusterLockKey, mine)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch && r.Header.Get("Content-Type") != "application/json-patch+json" {
+			once.Do(func() { close(entered); <-release })
+		}
+		f.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: t.Context()})
+	saved := make(chan error, 1)
+	go func() { saved <- SaveRecipeRun(c, &types.RecipeRun{ID: "run"}, true) }()
+	<-entered // the recipe run write holds this process's writer
+	renewed := *mine
+	renewed.HeartbeatAt = now.Add(10 * time.Second).UTC().Format(time.RFC3339)
+	if lost, err := RenewOperationLocks(c, []LockRenewal{{Key: ClusterLockKey, Old: leaseValue(t, mine), New: leaseValue(t, &renewed)}}); err != nil || lost != nil {
+		t.Fatalf("lost %v err %v", lost, err)
+	}
+	close(release)
+	// The recipe run write read the record before the renewal: it
+	// conflicts once and is written from a fresh read.
+	if err := <-saved; err != nil {
+		t.Fatal(err)
+	}
+	if f.get(ClusterLockKey) != leaseValue(t, &renewed) || f.get(record.RecipeRunKey) == "" {
+		t.Fatalf("lock %s run %s", f.get(ClusterLockKey), f.get(record.RecipeRunKey))
+	}
+}
+
+// An activity entry's write budget starts once this process's previous
+// entry is written, not while it waits for it: an entry queued behind a
+// slow one is still written.
+func TestActivityBudgetStartsAfterTheWait(t *testing.T) {
+	t.Setenv("NAMESPACE", "test-ns")
+	t.Cleanup(record.SetActivityWriteTimeoutForTest(time.Second))
+	// Both entries report reaching the wait; the first one to write holds
+	// its write until the other one waits behind it.
+	waiting := make(chan struct{}, 2)
+	t.Cleanup(record.SetBeforeActivityWaitForTest(func() { waiting <- struct{}{} }))
+	var mu sync.Mutex
+	var details []string
+	rv := 0
+	var first sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost || r.Method == http.MethodPut {
+			first.Do(func() {
+				<-waiting
+				<-waiting // the other entry waits for this one now
+				// This write takes longer than an entry's whole budget.
+				kube.Clock().Sleep(context.Background(), 2*time.Second)
+			})
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.Method {
+		case http.MethodGet:
+			if rv == 0 {
+				w.WriteHeader(404)
+				io.WriteString(w, `{"kind":"Status","status":"Failure","reason":"NotFound","code":404}`)
+				return
+			}
+			var entries []types.ActivityEntry
+			for _, d := range details {
+				entries = append(entries, types.ActivityEntry{Action: "update", Detail: d})
+			}
+			raw, _ := json.Marshal(entries)
+			out, _ := json.Marshal(map[string]any{"metadata": map[string]any{"resourceVersion": strconv.Itoa(rv)}, "data": map[string]string{"entries": string(raw)}})
+			w.Write(out)
+		default:
+			var cm struct {
+				Data map[string]string `json:"data"`
+			}
+			json.NewDecoder(r.Body).Decode(&cm)
+			var entries []types.ActivityEntry
+			json.Unmarshal([]byte(cm.Data["entries"]), &entries)
+			details = details[:0]
+			for _, e := range entries {
+				details = append(details, e.Detail)
+			}
+			rv++
+			w.Write([]byte(`{}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		record.Activity(c, types.ActivityEntry{Timestamp: "2026-11-25T10:00:00Z", User: "u", Action: "update", Detail: "first", Success: true})
+	}()
+	record.Activity(c, types.ActivityEntry{Timestamp: "2026-11-25T10:00:01Z", User: "u", Action: "update", Detail: "second", Success: true})
+	<-done
+	mu.Lock()
+	defer mu.Unlock()
+	found := false
+	for _, d := range details {
+		found = found || d == "second"
+	}
+	if !found {
+		t.Fatalf("the queued entry was not written: %v", details)
 	}
 }

@@ -54,3 +54,13 @@ func SetLockBackoffForTest(backoff func(attempt int) time.Duration) (restore fun
 	lockBackoff = backoff
 	return func() { lockBackoff = prev }
 }
+
+// SetBeforeActivityWaitForTest makes fn run before each activity entry
+// waits for this process's other entries, and returns the function that
+// puts the previous one back. It panics outside a test binary.
+func SetBeforeActivityWaitForTest(fn func()) (restore func()) {
+	mustBeTest("SetBeforeActivityWaitForTest")
+	prev := beforeActivityWait
+	beforeActivityWait = fn
+	return func() { beforeActivityWait = prev }
+}
