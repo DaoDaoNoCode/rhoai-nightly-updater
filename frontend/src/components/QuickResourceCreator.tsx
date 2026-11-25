@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ActionListItem,
   Alert,
   AlertActionCloseButton,
   AlertActionLink,
@@ -26,13 +27,14 @@ import { MaaSTab, maasConfirm, useMaaSStatus } from "./environment/MaaSTab";
 import { usePlaygroundStatus } from "./environment/usePlaygroundStatus";
 import { useModelRegistryStatus } from "./environment/useModelRegistryStatus";
 import { ModelRegistryTab, modelRegistryConfirm } from "./environment/ModelRegistryTab";
-import { KueueTab, kueueConfirm } from "./environment/KueueTab";
+import { KueueTab, kueueConfirm, kueueTurnBack } from "./environment/KueueTab";
 import { kueueState, useKueueStatus } from "./environment/kueueState";
 import { PipelinesTab, pipelineServerConfirm } from "./environment/PipelinesTab";
 import { StorageTab, storageConfirm } from "./environment/StorageTab";
 import { MLflowTab, mlflowConfirm } from "./environment/MLflowTab";
 import { Overview } from "./environment/Overview";
 import { FEATURE_PURPOSE, READ_ONLY_SETUP, partTitleId } from "./environment/FeatureLayout";
+import { TooltipButton } from "./TooltipButton";
 import { MigrateStorageModal } from "./environment/MigrateStorageModal";
 import { SecureStorageModal, secureExtraSteps } from "./environment/SecureStorageModal";
 import { MIGRATE_TITLES, migrateStepNow, useMigrateStorage, type MigrateKind } from "./environment/useMigrateStorage";
@@ -283,9 +285,15 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
   });
 
   // Shared prerequisites block rendered above each feature tab's sections.
+  // Distributed workloads: the DataScienceCluster's kueue this tool turned on, offered back once nothing uses it.
+  const kueueBack = kueueTurnBack(prereq?.features?.kueue?.restorable, kueueData, { readOnly, baseReason, running: !!kueueOp });
   const prereqNode = (feature: PrerequisiteFeature, exposure?: ModelExposureKind | null) => (
     <PrerequisitesSection feature={feature} prereq={prereq?.features?.[feature]} error={prereqRead.error} onRetry={() => void prereqRead.reload()}
-      exposure={exposure ?? undefined} stale={feature === "models" && prereqRead.stale} readOnly={readOnly} baseReason={baseReason} setPending={setPending} />
+      exposure={exposure ?? undefined} stale={feature === "models" && prereqRead.stale} readOnly={readOnly} baseReason={baseReason} setPending={setPending}
+      partActions={feature === "kueue" && kueueBack ? {
+        "dsc-kueue": <ActionListItem><TooltipButton variant="secondary" disabledReason={kueueBack.reason} onClick={() => setPending({ kind: "turn-back-kueue", previous: kueueBack.restorable.previous })}>Turn back...</TooltipButton></ActionListItem>,
+      } : undefined}
+      partNotes={feature === "kueue" && kueueBack?.reason ? { "dsc-kueue": kueueBack.reason } : undefined} />
   );
   const onModelsExposure = useCallback((e: ModelExposureKind | null) => setModelsExposure(e), []);
 

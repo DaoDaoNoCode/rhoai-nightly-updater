@@ -18,11 +18,12 @@ import {
   StackItem,
   TextInput,
 } from "@patternfly/react-core";
-import type { KueueObject, KueueSample, KueueStatus } from "../../types";
+import type { KueueObject, KueueSample, KueueStatus, RestorableComponent } from "../../types";
 import { type ConfirmSpec, type KueuePending, type Pending, ExternalLink, WarningAlert } from "./resourceRow";
 import { CleanupSection, CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, PartList, type PartMenuItem, PrimaryAction, READ_ONLY_SETUP, WhatNext } from "./FeatureLayout";
 import { ProjectSelect, type ProjectOption } from "./ProjectSelect";
 import { ComponentAlert, NoProjectsAlert } from "./UseIt";
+import { componentLabel } from "./CleanupModal";
 import { LoadFailed } from "./Loading";
 import type { Busy, FeatureState } from "./featureState";
 import {
@@ -35,8 +36,8 @@ export const KUEUE_DOCS = "https://docs.redhat.com/en/documentation/red_hat_open
 
 const SAMPLE_TITLES: Record<KueueSample["kind"], string> = { raycluster: "RayCluster sample", rayjob: "RayJob sample" };
 const SAMPLE_WHERE: Record<KueueSample["kind"], string> = {
-  raycluster: "Shows on the dashboard's Distributed workloads page (Observe & monitor, Workload metrics), with its CPU and memory use.",
-  rayjob: "Shows as a row on the dashboard's Observe & monitor, Infrastructure, Workloads tab (and its Workload on the Distributed workloads page).",
+  raycluster: "Shows on the dashboard's Workload metrics page (Observe & monitor), with its CPU and memory use.",
+  rayjob: "Shows as a row on the dashboard's Observe & monitor, Infrastructure, Workloads tab (and its Workload on the Workload metrics page).",
 };
 
 /** User-facing explanation beside the Ray image field for why the default reference is chosen. */
@@ -217,7 +218,7 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
       {setUp && (href || infra) && (
         <StackItem>
           <WhatNext id="kueue-next" items={[
-            ...(href ? [<><ExternalLink href={href} isInline>Open Distributed workloads in the dashboard</ExternalLink>: the RayCluster sample&apos;s status, quota use and metrics.</>] : []),
+            ...(href ? [<><ExternalLink href={href} isInline>Open Workload metrics in the dashboard</ExternalLink>: the RayCluster sample&apos;s status, quota use and metrics.</>] : []),
             ...(infra ? [<><ExternalLink href={infra} isInline>Open Observe &amp; monitor, Infrastructure</ExternalLink>: the RayJob sample on its Workloads tab.</>] : []),
             <>Send your own Ray or training jobs to the queue with the label <code>kueue.x-k8s.io/queue-name: {KUEUE_LOCAL_QUEUE}</code>.</>,
           ]} />
@@ -273,6 +274,27 @@ export function kueueSteps(p: KueuePending): { id: string; title: string }[] {
   }
 }
 
+/**
+ * The Distributed workloads tab's Turn back for the DataScienceCluster's kueue, or null: offered only while this tool's
+ * setup left it as it is (features.StillAsSetUp: the prerequisites' restorable) and no ClusterQueue or LocalQueue is on
+ * the cluster (the rule Clean up checks again when it runs).
+ */
+export function kueueTurnBack(restorable: RestorableComponent[] | undefined, k: KueueStatus | null,
+  { readOnly = false, baseReason = null, running = false }: { readOnly?: boolean; baseReason?: string | null; running?: boolean } = {}): { restorable: RestorableComponent; reason: string | null } | null {
+  const r = (restorable ?? []).find((c) => c.component === "kueue");
+  // Hidden in read-only mode; otherwise shown, off with the reason.
+  if (!r || readOnly) return null;
+  if (baseReason) return { restorable: r, reason: baseReason };
+  if (running) return { restorable: r, reason: "Wait until the distributed workloads change finishes." };
+  if (!k) return { restorable: r, reason: "Reading which queues are on the cluster..." };
+  if (k.queuesUnknown || !Array.isArray(k.queues)) return { restorable: r, reason: "The queues on the cluster could not be read, so this tool cannot tell whether anything uses Kueue." };
+  if (k.queues.length > 0) {
+    const shown = k.queues.length > 3 ? [...k.queues.slice(0, 3), `${k.queues.length - 3} more`] : k.queues;
+    return { restorable: r, reason: `In use: ${shown.join(", ")}. Kueue goes back only once no ClusterQueue or LocalQueue is left on the cluster.` };
+  }
+  return { restorable: r, reason: null };
+}
+
 /** One-line description of dashboard opt-in behavior for projects created afterward. */
 export const OPT_IN_EFFECT = "In every new project on this cluster, workbenches and model deployments can only use the queue hardware profile; a project without its own LocalQueue cannot create workbenches or deploy models until an admin adds one.";
 
@@ -308,7 +330,7 @@ export function kueueConfirm(pending: Pending, k: KueueStatus | null, setPending
             )}
             <StackItem>
               <Checkbox id="kueue-raycluster" label="RayCluster sample" isChecked={p.rayCluster} onChange={(_e, v) => setPending({ ...p, rayCluster: v })}
-                description="Shows on the dashboard's Distributed workloads page, with usage metrics." />
+                description="Shows on the dashboard's Workload metrics page (Observe & monitor), with usage metrics." />
             </StackItem>
             <StackItem>
               <Checkbox id="kueue-rayjob" label="RayJob sample" isChecked={p.rayJob} onChange={(_e, v) => setPending({ ...p, rayJob: v })}
@@ -370,6 +392,14 @@ export function kueueConfirm(pending: Pending, k: KueueStatus | null, setPending
         changes: [
           <>Each only if nobody changed it after this tool turned the setting on; otherwise it stays, and the result says so.</>,
           <>Projects the dashboard labelled while it was on keep their label.</>,
+        ],
+      };
+    case "turn-back-kueue":
+      return {
+        title: "Turn Kueue back?", confirm: "Turn back", runTitle: "Turn the DataScienceCluster's kueue back",
+        summary: <Content component="p">{componentLabel({ component: "kueue", previous: pending.previous, feature: "kueue" })}</Content>,
+        changes: [
+          <>DataScienceCluster: <code>kueue</code> goes back to {pending.previous || "Removed"}, as Clean up everything does it: only while this tool still owns the setting and no ClusterQueue or LocalQueue is left (checked again when it runs; otherwise it stays, and the result says why).</>,
         ],
       };
     case "teardown-kueue":

@@ -8,6 +8,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/report"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 // SecretAccessCheckName is the gitops profile's Diagnostics check that the
@@ -82,7 +83,7 @@ func CheckServiceAccountSecretAccess(c *kube.Client) CheckOutput {
 			Title:       "The updater's ServiceAccount can still read Secrets",
 			Description: "The gitops profile never reads a Secret, but some RBAC still lets its ServiceAccount read them. This is usually left from an install with install.sh, or a binding added by hand.",
 			Evidence:    allowed,
-			Fix:         "Sync the updater's Argo CD application (the chart empties the Role install.sh created in kube-system), then remove any other binding that grants the ServiceAccount access to Secrets (docs/GITOPS.md, section 10).",
+			Fix:         "Sync the updater's Argo CD application (the chart empties the Role install.sh created in kube-system), then remove any other binding that grants the ServiceAccount access to Secrets (" + types.DocURL("docs/GITOPS.md", "10-moving-an-install-from-installsh-to-argo-cd") + ").",
 			TechnicalCmd: "oc auth can-i get secret/additional-pull-secret -n kube-system --as=system:serviceaccount:<NAMESPACE>:<APP_NAME>\n" +
 				"oc get rolebindings,clusterrolebindings -A -o wide | grep <APP_NAME>",
 		}},

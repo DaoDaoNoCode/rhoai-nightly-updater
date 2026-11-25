@@ -1617,6 +1617,8 @@ export interface WorkbenchPlan {
   image: string;
   imageStream: string;
   imageTag: string;
+  /** Its ImageStream is deprecated (the dashboard labels it Deprecated), chosen because every image the dashboard offers is. */
+  imageDeprecated?: boolean;
   hardwareProfile: string;
   hardwareProfileName: string;
   cpu?: string;
@@ -1635,6 +1637,8 @@ export interface WorkbenchState extends ResourceState {
   state?: WorkbenchRunState;
   url?: string;
   image?: string;
+  /** Its ImageStream is deprecated: the dashboard labels it Deprecated. */
+  imageDeprecated?: boolean;
   hardwareProfile?: string;
   cpu?: string;
   memory?: string;
@@ -2035,6 +2039,10 @@ export interface KueueStatus {
   defaultRayImage: string;
   itemsProblem?: string;
   dashboardUrl?: string;
+  /** Every ClusterQueue and LocalQueue on the cluster, of any owner: while there is one, Clean up keeps kueue on. null: unread. */
+  queues?: string[] | null;
+  /** The queues could not be read. */
+  queuesUnknown?: boolean;
 }
 
 /** The body of POST /api/resources/kueue/stream. */

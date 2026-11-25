@@ -28,6 +28,7 @@ import { formatClockTime, formatElapsed, formatRelativeTime } from "../utils";
 import { sentence, shortTarget } from "../build";
 import { BackgroundRunAlert, ViewProgressLink, useBackgroundRun, useViewServerOperation } from "./ProgressViews";
 import { dashboardOperatorLabel } from "./dashboardOperator";
+import { DocLink } from "./DocLink";
 
 const INTERRUPTED_DISMISS_KEY = "rhoai-interrupted-dismissed";
 const TEMPLATE_DISMISS_KEY = "rhoai-template-hint-dismissed";
@@ -292,12 +293,12 @@ function useTemplateNotice(): Notice | null {
           <>
             {" "}Argo CD installed it from the Helm chart: in the GitOps repository, set the chart&apos;s{" "}
             <code>targetRevision</code> to the release of the image in <code>parameters.IMAGE</code>. See{" "}
-            <code>docs/GITOPS.md</code>.
+            <DocLink path="docs/GITOPS.md" anchor="6-upgrading-and-rolling-back">the GitOps guide: Upgrading and rolling back</DocLink>.
           </>
         ) : (
           <>
             {" "}Re-apply it from a checkout of the running release with <code>make upgrade</code>, or with that release&apos;s{" "}
-            <code>install.sh</code>. See <code>docs/UPGRADING.md</code>.
+            <code>install.sh</code>. See <DocLink path="docs/UPGRADING.md">the upgrade guide</DocLink>.
           </>
         )}
       </Alert>
@@ -351,7 +352,8 @@ function useUpdateNotice(): Notice | null {
             Argo CD installed this updater from the Helm chart, so an admin upgrades in Git: in one commit, set the
             chart&apos;s <code>targetRevision</code> to <code>{latest}</code> and <code>parameters.IMAGE</code> to the{" "}
             {latest} image by digest; Argo CD applies both{update.majorUpgrade ? ", including the new template" : ""}.
-            Do not run <code>install.sh</code> on this install. See <code>docs/GITOPS.md</code>.
+            Do not run <code>install.sh</code> on this install. See{" "}
+            <DocLink path="docs/GITOPS.md" anchor="6-upgrading-and-rolling-back">the GitOps guide: Upgrading and rolling back</DocLink>.
           </>
         ) : installer ? (
           <>
@@ -371,7 +373,9 @@ function useUpdateNotice(): Notice | null {
               ? <>The command checks install.sh against the SHA-256 in the {latest} release notes (on macOS without <code>sha256sum</code>, use <code>shasum -a 256 -c -</code>). </>
               : <>Before running it, check install.sh against the SHA-256 in the {latest} release notes. </>}
             Pass the options this install was made with (for example <code>--namespace</code>, <code>--app-name</code>,{" "}
-            <code>--image-repo</code>); see {update.majorUpgrade ? "" : <>&quot;Patch and minor releases&quot; in </>}<code>docs/UPGRADING.md</code>.
+            <code>--image-repo</code>); see {update.majorUpgrade
+              ? <DocLink path="docs/UPGRADING.md">the upgrade guide</DocLink>
+              : <DocLink path="docs/UPGRADING.md" anchor="patch-and-minor-releases">the upgrade guide: Patch and minor releases</DocLink>}.
             {/* A GitLab release asset of a non-public project redirects anonymous downloads to its sign-in page. */}
             {update.installerURL?.includes("/-/releases/") && <> If the download asks you to sign in, get <code>install.sh</code> from the release notes.</>}
             {" "}From a clone: {gitRoute}.

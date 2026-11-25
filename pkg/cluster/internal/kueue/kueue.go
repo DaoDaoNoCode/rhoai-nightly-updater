@@ -43,6 +43,8 @@ const (
 	RayClusterName   = "nightly-raycluster"
 	RayJobName       = "nightly-rayjob"
 	ProfileName      = "nightly-kueue-cpu"
+	// ProfileDisplayName is the Queue hardware profile's name in the dashboard.
+	ProfileDisplayName = "Kueue CPU (RHOAI Nightly Updater)"
 	// DefaultProject is the project name the UI tab proposes by default.
 	DefaultProject = "nightly-kueue"
 	// DefaultRayImage is the amd64 Ray image documented for CodeFlare SDK use
@@ -351,7 +353,7 @@ func ProfileManifest(apps string, now string) map[string]any {
 		"metadata": map[string]any{
 			"name": ProfileName, "namespace": apps, "labels": toolLabels(),
 			"annotations": map[string]any{
-				"opendatahub.io/display-name":                 "Kueue CPU (RHOAI Nightly Updater)",
+				"opendatahub.io/display-name":                 ProfileDisplayName,
 				"opendatahub.io/description":                  "Sends workloads to LocalQueue " + LocalQueueName + ", which this tool set up.",
 				"opendatahub.io/disabled":                     "false",
 				"opendatahub.io/modified-date":                now,

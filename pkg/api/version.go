@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 // Build information, set at link time:
@@ -15,6 +17,10 @@ var (
 	Commit    = "unknown"
 	BuildDate = "unknown"
 )
+
+// The docs links in messages point at this release's docs on the mirror
+// (main for a dev build). -X sets Version before init runs.
+func init() { types.SetDocsVersion(Version) }
 
 // ExpectedTemplateRevision is the deploy/template.yaml revision this binary
 // was written for. The template passes its own revision in the

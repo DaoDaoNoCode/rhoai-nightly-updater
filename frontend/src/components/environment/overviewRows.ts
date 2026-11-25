@@ -42,7 +42,7 @@ export function overviewRows(summaries: { storage: FeatureState; pipelines: Feat
       href: `?tab=playground${playgroundSummary.project ? `&project=${encodeURIComponent(playgroundSummary.project)}` : ""}`,
     },
     {
-      id: "kueue", name: TAB_TITLES.kueue, gives: "Queue Ray workloads with Kueue; see them on the dashboard's Distributed workloads pages",
+      id: "kueue", name: TAB_TITLES.kueue, gives: "Queue Ray workloads with Kueue; see them on the dashboard's Workload metrics and Infrastructure pages (Observe & monitor)",
       state: withPrerequisites(kueueNow, prereqFor("kueue"), "kueue"),
       href: `?tab=kueue${kueueNow.project ? `&project=${encodeURIComponent(kueueNow.project)}` : ""}`,
     },

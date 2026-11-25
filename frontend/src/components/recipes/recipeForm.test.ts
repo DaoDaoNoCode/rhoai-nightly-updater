@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_RECIPE_FORM, cleanupParts, componentName, componentsSplit, playgroundThroughMaaS, withComponentsBack } from "./recipeForm";
+import { DEFAULT_RECIPE_FORM, cleanupParts, componentName, componentsSplit, leftInPlace, playgroundThroughMaaS, sharedLeft, withComponentsBack } from "./recipeForm";
 import { planText } from "./RecipeReviewModal";
 import { contract } from "../../test/contract";
-import type { ResourcesStatus } from "../../types";
+import type { RecipeRun, ResourcesStatus } from "../../types";
 
 describe("recipe Clean up and plan words", () => {
   it("names DataScienceCluster components as RHOAI does, never by their keys (U1)", () => {
@@ -76,6 +76,51 @@ describe("recipe Clean up and plan words", () => {
     expect(componentsSplit(starting, run, kept, offered).stay).toEqual(["KServe (the model in recipe-full stays)"]);
     // No status: the recipe's own model counts while its project stays.
     expect(componentsSplit(null, run, kept, offered).stay).toEqual(["KServe (the model in recipe-full stays)"]);
+  });
+
+  it("lists the shared pieces that stay only for the features the run's steps set up", () => {
+    const full = contract.recipeRunFeatures().run!;
+    // Only Kueue ran: cert-manager and the Kueue operator, nothing of MaaS or Connectivity Link.
+    const only = (ids: string[], features: Partial<RecipeRun["recipe"]["spec"]["features"]> = {}, skipped: string[] = []): RecipeRun => ({
+      ...full, exposure: undefined,
+      steps: full.steps.map((s) => ({ ...s, status: ids.includes(s.id) ? "success" : skipped.includes(s.id) ? "skipped" : "pending" })),
+      recipe: { ...full.recipe, spec: { ...full.recipe.spec, features: { ...full.recipe.spec.features, ...features } } },
+    });
+    // A Stop and Resume: the run records what it set up before as skipped ("Already set up: ..."); it stays all the same.
+    expect(sharedLeft(only([], { ...full.recipe.spec.features, models: { ...full.recipe.spec.features.models, enabled: false }, maas: { enabled: true }, kueue: { enabled: false } }, ["maas"]))).toEqual([
+      "Red Hat Connectivity Link, with its Kuadrant instance and Authorino TLS", "GatewayClass openshift-default (OpenShift's shared class for gateways)",
+    ]);
+    expect(sharedLeft(only(["kueue"], { models: { ...full.recipe.spec.features.models, enabled: false }, maas: { enabled: false } }, ["prerequisites"])))
+      .toEqual(["The cert-manager Operator for Red Hat OpenShift", "The Red Hat build of Kueue"]);
+    // Pending or failed steps still count for nothing.
+    expect(sharedLeft({ ...only([], { maas: { enabled: true } }), steps: full.steps.map((s) => ({ ...s, status: s.id === "maas" ? "failed" : "pending" })) })).toEqual([]);
+    const noModel = { models: { ...full.recipe.spec.features.models, enabled: false }, maas: { enabled: false } };
+    // The prerequisites step installed cert-manager and the Kueue operator, whatever happened after it.
+    expect(sharedLeft(only(["prerequisites"], noModel))).toEqual(["The cert-manager Operator for Red Hat OpenShift", "The Red Hat build of Kueue"]);
+    expect(sharedLeft(only(["kueue-prereq"], noModel))).toEqual(["The cert-manager Operator for Red Hat OpenShift", "The Red Hat build of Kueue"]);
+    // A step that did not finish set nothing up; a feature step alone installed no operator.
+    expect(sharedLeft(only([]))).toEqual([]);
+    expect(sharedLeft(only(["kueue"], noModel))).toEqual([]);
+    // Prerequisites done, model failed: what the prerequisites installed for a model reached through the inference
+    // gateway stays (Connectivity Link without Authorino TLS, which MaaS sets, and cert-manager).
+    const gatewayModel = only(["prerequisites"], { models: { ...full.recipe.spec.features.models, exposure: "default-gateway" }, maas: { enabled: false }, kueue: { enabled: false } });
+    expect(gatewayModel.steps.find((s) => s.id === "model")?.status).not.toBe("success");
+    expect(sharedLeft(gatewayModel)).toEqual(["Red Hat Connectivity Link, with its Kuadrant instance", "The cert-manager Operator for Red Hat OpenShift"]);
+    expect(sharedLeft(only(["models-prereq"], { models: { ...full.recipe.spec.features.models, exposure: "gateway" }, maas: { enabled: false }, kueue: { enabled: false } })))
+      .toEqual(["Red Hat Connectivity Link, with its Kuadrant instance", "The cert-manager Operator for Red Hat OpenShift"]);
+    // A model reached only inside the cluster needs no Connectivity Link.
+    expect(sharedLeft(only(["prerequisites"], { models: { ...full.recipe.spec.features.models, exposure: "internal" }, maas: { enabled: false }, kueue: { enabled: false } }))).toEqual(["The cert-manager Operator for Red Hat OpenShift"]);
+    // MaaS with a CloudNativePG database: its operator too.
+    expect(sharedLeft(only(["maas"], { ...noModel, maas: { enabled: true, database: "cnpg" }, kueue: { enabled: false } }))).toEqual([
+      "Red Hat Connectivity Link, with its Kuadrant instance and Authorino TLS", "The CloudNativePG operator", "GatewayClass openshift-default (OpenShift's shared class for gateways)",
+    ]);
+    // The tool's inference gateway the run's model used stays (Clean up everything deletes it); not for another way in.
+    const status = { minio: null, mlflow: null, pipelineServers: [], inferenceGateway: { deployed: true, ready: true, managedByTool: true } } as unknown as ResourcesStatus;
+    const gatewayModelRan = only(["prerequisites", "model"], { models: { ...full.recipe.spec.features.models, exposure: "default-gateway" } });
+    expect(leftInPlace(status, gatewayModelRan, { recipeProjects: ["recipe-full"] })).toEqual(["The inference gateway"]);
+    // The model failed: it never used the gateway.
+    expect(leftInPlace(status, gatewayModel, { recipeProjects: ["recipe-full"] })).toEqual([]);
+    expect(leftInPlace(status, only(["model"], { models: { ...full.recipe.spec.features.models, exposure: "internal" } }), { recipeProjects: ["recipe-full"] })).toEqual([]);
   });
 
   it("sends only the components the dialog says go back", () => {

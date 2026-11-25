@@ -414,6 +414,12 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
 
   /** A single confirmed change: a run of one step, in the run dialog. */
   const execute = (p: Pending) => {
+    // The Distributed workloads tab's Turn back is Clean up's components part, the same server path and checks.
+    if (p.kind === "turn-back-kueue") {
+      setPending(null);
+      startCleanup({ components: ["kueue"] }, "Turn the DataScienceCluster's kueue back");
+      return;
+    }
     if (isSamplePending(p)) {
       startSample(p);
       return;
@@ -500,7 +506,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     const specs: ConfirmSpec[] = [];
     const steps: GoalRunStep[] = [];
     for (const p of setup) {
-      if (isSamplePending(p) || isModelsPending(p) || isPlaygroundPending(p) || isWorkbenchPending(p) || isMaaSPending(p) || isPrerequisitesPending(p) || isModelRegistryPending(p) || isKueuePending(p)) continue;
+      if (isSamplePending(p) || isModelsPending(p) || isPlaygroundPending(p) || isWorkbenchPending(p) || isMaaSPending(p) || isPrerequisitesPending(p) || isModelRegistryPending(p) || isKueuePending(p) || p.kind === "turn-back-kueue") continue;
       const spec = confirmOf(p);
       if (spec) specs.push(spec);
       const [action, fn, target] = resourceRequest(p);
@@ -530,7 +536,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     });
   };
 
-  const startCleanup = (req: CleanupRequest) => {
+  const startCleanup = (req: CleanupRequest, title = "Clean up") => {
     setCleanupScope(null);
     setCleanupRetry(null);
     setRunFeature("other");
@@ -547,7 +553,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     const workbenches: Record<string, ConnectionWorkbench[]> = {};
     // Whether a part already changed the cluster before a refusal: its outcome then stays on screen.
     let changed = false;
-    run.follow("Clean up", cleanupSteps(req), (onStep, onDone, onDetach) => streamCleanup(req, (step) => {
+    run.follow(title, cleanupSteps(req), (onStep, onDone, onDetach) => streamCleanup(req, (step) => {
       if (step.step.startsWith("recipe-project:") && step.errorCode === CONFIRM_PROJECT_CONTENTS) {
         refusals[step.step.slice("recipe-project:".length)] = (step.detail ?? "").split("\n").filter(Boolean);
       }
@@ -563,6 +569,8 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setMaaSRefresh((n) => n + 1);
       setModelRegistryRefresh((n) => n + 1);
       setKueueRefresh((n) => n + 1);
+      // A component turned back changes what the features' prerequisites read.
+      if (req.components?.length) setPrereqRefresh((n) => n + 1);
       onDone(success, error, apiError);
       const code = apiError?.errorCode;
       if ((code === CONFIRM_PROJECT_CONTENTS || code === CONFIRM_WORKBENCHES) && Object.keys(refusals).length + Object.keys(workbenches).length > 0) {

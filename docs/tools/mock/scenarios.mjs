@@ -153,6 +153,11 @@ export const scenarios = {
     };
   },
   "template-outdated": (w) => { w.version = F.versionInfo({ templateRevision: "3", templateOutdated: true }); },
+  // Installed from the Helm chart (Argo CD): an outdated template and a newer release say to upgrade in Git, linking the GitOps guide.
+  "chart-outdated": (w) => {
+    scenarios["major-update"](w);
+    w.version = F.versionInfo({ version: "v1.0.0", templateRevision: "2", expectedTemplateRevision: "3", templateOutdated: true, installMethod: "gitops" });
+  },
   // The user's OpenShift token expired or was revoked: the identity check
   // (GET /api/user/permissions) and every change answer 401 session_expired
   // (pkg/api writeAuthError, sessionProblem).
@@ -275,7 +280,7 @@ export const scenarios = {
   // The profile's admission policy is gone (Update is off until Argo CD syncs it).
   "gitops-profile-no-policy": (w) => {
     scenarios.gitops(w); w.profile = "gitops";
-    w.admissionPolicy = "The gitops profile's admission policy is not in place (read ValidatingAdmissionPolicy rhoai-nightly-updater-rhoai-nightly-updater-gitops: k8s API error 404 (NotFound)), so Update is off until Argo CD syncs it again (docs/GITOPS.md, section 11).";
+    w.admissionPolicy = "The gitops profile's admission policy is not in place (read ValidatingAdmissionPolicy rhoai-nightly-updater-rhoai-nightly-updater-gitops: k8s API error 404 (NotFound)), so Update is off until Argo CD syncs it again (https://github.com/DaoDaoNoCode/rhoai-nightly-updater/blob/main/docs/GITOPS.md#the-admission-policy).";
   },
   // A signed-in user who is not a cluster-admin.
   "gitops-profile-reader": (w) => { scenarios.gitops(w); w.profile = "gitops"; w.canMutate = false; },
@@ -581,6 +586,12 @@ export const scenarios = {
   "env-workbench-running": (w) => { w.workbench.items = [F.workbenchItem("dev-project", "running")]; },
   "env-workbench-stopped": (w) => { w.workbench.items = [{ ...F.workbenchItem("dev-project", "stopped"), ready: false }]; },
   "env-workbench-no-profile": (w) => { w.workbench.noProfile = true; },
+  // Every workbench image the cluster offers is deprecated: Set up uses the default one and labels it.
+  "env-workbench-deprecated-image": (w) => { w.workbench.plan = { ...F.workbenchPlan, imageTag: "3.7", imageDeprecated: true }; },
+  // A workbench this tool set up before its image was deprecated: it keeps it, labelled as the dashboard does.
+  "env-workbench-running-deprecated": (w) => { w.workbench.items = [{ ...F.workbenchItem("dev-project", "running"), imageDeprecated: true }]; },
+  // Kueue turned on by this tool, its setup gone, someone else's queues on the cluster: Turn back is off and says why.
+  "env-kueue-turn-back-in-use": (w) => { w.kueue = { ...F.kueueWorld("none"), queues: ["ClusterQueue team-queue", "LocalQueue team-a/team-queue"] }; },
   "env-workbench-storage-used": (w) => { const it = F.workbenchItem("dev-project", "running"); w.workbench.items = [{ ...it, storage: { ...it.storage, usedBy: ["workbench my-wb"] } }]; },
   "env-workbench-kept-storage-used": (w) => { scenarios["env-workbench-kept-storage"](w); w.workbench.items[0].storage = { ...w.workbench.items[0].storage, usedBy: ["workbench my-wb"] }; },
   "env-workbench-kept-storage": (w) => { const { state: _s, url: _u, image: _i, hardwareProfile: _h, cpu: _c, memory: _m, connectionAttached: _a, ...kept } = F.workbenchItem("dev-project", "stopped"); w.workbench.items = [{ ...kept, deployed: false, ready: false }]; },
@@ -772,6 +783,15 @@ scenarios["recipe-full-succeeded"] = (w) => {
   const steps = F.recipeSteps(rcp);
   w.recipeRun = { run: F.recipeRun({ rcp, done: steps.length, current: "", state: "succeeded", stopReason: "Every step of recipe full is set up." }), running: false };
   w.resources = { ...w.resources, mlflow: F.mlflowStates.running, pipelineServers: [...w.resources.pipelineServers, { ...F.pipelineServer, namespace: "recipe-full", apiRoute: undefined, uiRoute: undefined }] };
+};
+// The full recipe with the dashboard's Kueue setting turned on: the review and the Kueue step say the dashboard marks
+// its workbench (kueueWorkbenchNote).
+scenarios["recipe-full-kueue-optin"] = (w) => {
+  scenarios["recipe-full-succeeded"](w);
+  const rcp = F.fullRecipe();
+  rcp.spec.features.kueue = { ...rcp.spec.features.kueue, dashboardOptIn: true };
+  const steps = F.recipeSteps(rcp);
+  w.recipeRun = { run: F.recipeRun({ rcp, done: steps.length, current: "", state: "succeeded", stopReason: "Every step of recipe full is set up." }), running: false };
 };
 // The same run on a DataScienceCluster that names the model registry
 // component aiHub (v3, RHOAI 3.6), with the playground's ogx turned on too:

@@ -766,7 +766,7 @@ func playgroundWarnings(r types.EnvironmentRecipe) []types.RecipeWarning {
 	if r.Spec.Features.Models.Exposure == serving.ExposureMaaS {
 		how = "it is reached through Models as a Service"
 	}
-	return []types.RecipeWarning{{Kind: types.RecipeWarningAdvice, Message: fmt.Sprintf("%s is offered to the playground only through Models as a Service (%s), so the playground uses it from there: the dashboard sets the playground up with your sign-in, as when you choose a Models as a Service model in its Gen AI studio. Chatting with it needs a Models as a Service subscription to it. SECURITY.md (Which token is used where) says where your sign-in goes.", modelTitle(r), how)}}
+	return []types.RecipeWarning{{Kind: types.RecipeWarningAdvice, Message: fmt.Sprintf("%s is offered to the playground only through Models as a Service (%s), so the playground uses it from there: the dashboard sets the playground up with your sign-in, as when you choose a Models as a Service model in its Gen AI studio. Chatting with it needs a Models as a Service subscription to it.", modelTitle(r), how)}}
 }
 
 // playgroundStarted reports whether this tool's playground already exists

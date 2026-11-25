@@ -1433,6 +1433,9 @@ type WorkbenchPlan struct {
 	Image       string `json:"image"`
 	ImageStream string `json:"imageStream"`
 	ImageTag    string `json:"imageTag"`
+	// ImageDeprecated: its ImageStream is deprecated (the dashboard labels
+	// it Deprecated), chosen because every image the dashboard offers is.
+	ImageDeprecated bool `json:"imageDeprecated,omitempty"`
 	// HardwareProfile is the profile's display name, HardwareProfileName
 	// its "<namespace>/<name>"; CPU and Memory are what the workbench
 	// requests (the profile's defaults).
@@ -1466,7 +1469,10 @@ type WorkbenchState struct {
 	URL string `json:"url,omitempty"`
 	// Image is the image's display name and tag, HardwareProfile the
 	// profile's name, as the workbench records them.
-	Image           string `json:"image,omitempty"`
+	Image string `json:"image,omitempty"`
+	// ImageDeprecated: the ImageStream it runs is deprecated
+	// (opendatahub.io/deprecated), which the dashboard labels Deprecated.
+	ImageDeprecated bool   `json:"imageDeprecated,omitempty"`
 	HardwareProfile string `json:"hardwareProfile,omitempty"`
 	// CPU and Memory are what its container requests.
 	CPU    string `json:"cpu,omitempty"`

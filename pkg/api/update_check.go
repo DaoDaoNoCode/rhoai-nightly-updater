@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 // The update check compares the running release with the highest vX.Y.Z
@@ -120,7 +121,7 @@ const (
 	// release job attaches the same install.sh: the installer is generated
 	// from the tag alone (scripts/release.sh installer), so both CI systems
 	// build identical bytes (v2.0.0: SHA-256 b08dd37d… on both).
-	mirrorReleasesURL = "https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases"
+	mirrorReleasesURL = types.PublicRepoURL + "/releases"
 )
 
 // installerReleasesURL is the releases page to download install.sh from.

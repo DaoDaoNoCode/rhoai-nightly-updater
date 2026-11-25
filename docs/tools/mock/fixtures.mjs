@@ -1513,6 +1513,8 @@ export function kueueWorld(state = "none", { optIn = false, samples = false, pro
       : { profile: { kind: "HardwareProfile", name: "nightly-kueue-cpu", namespace: "redhat-ods-applications", present: false } },
     defaultRayImage: KUEUE_IMAGE,
     dashboardUrl: DASHBOARD_URL,
+    // Every queue on the cluster (pkg/cluster/internal/kueue Users): the tool's while it is set up.
+    queues: set ? ["ClusterQueue nightly-kueue", `LocalQueue ${project}/nightly-kueue`] : [],
   };
 }
 
@@ -1924,7 +1926,17 @@ function playgroundWarnings(rcp) {
   if (!f.playground?.enabled || !maas) return [];
   const how = f.models.exposure === "maas" ? "it is reached through Models as a Service" : "the run publishes it there";
   const entry = MODEL_CATALOG.find((c) => c.name === (f.models.model || "qwen25-05b-instruct"));
-  return [{ kind: "advice", message: `Model ${entry?.displayName ?? f.models.model} is offered to the playground only through Models as a Service (${how}), so the playground uses it from there: the dashboard sets the playground up with your sign-in, as when you choose a Models as a Service model in its Gen AI studio. Chatting with it needs a Models as a Service subscription to it. SECURITY.md (Which token is used where) says where your sign-in goes.` }];
+  return [{ kind: "advice", message: `Model ${entry?.displayName ?? f.models.model} is offered to the playground only through Models as a Service (${how}), so the playground uses it from there: the dashboard sets the playground up with your sign-in, as when you choose a Models as a Service model in its Gen AI studio. Chatting with it needs a Models as a Service subscription to it.` }];
+}
+
+/**
+ * The dashboard's mark on the recipe's workbench (pkg/cluster internal/recipe kueueWorkbenchNote), for the mock's
+ * cluster: the dashboard's Kueue setting off and the project not Kueue's before the run.
+ */
+function kueueWorkbenchNote(rcp) {
+  const f = rcp.spec.features;
+  if (!f.kueue?.enabled || !f.workbench?.enabled || !f.kueue.dashboardOptIn) return "";
+  return "The dashboard will mark this recipe's workbench 'Workbench bypasses Kueue queue management': it is created before the Kueue setting is on. Choosing the hardware profile Kueue CPU (RHOAI Nightly Updater) for it in the dashboard (Edit workbench) removes the mark and restarts the workbench.";
 }
 
 /** The plan's warnings for distributed workloads (pkg/cluster internal/recipe kueueWarnings). */
@@ -1938,6 +1950,7 @@ function kueueWarnings(rcp) {
     const list = others.length === 1 ? others[0] : `${others.slice(0, -1).join(", ")} and ${others[others.length - 1]}`;
     out.push({ kind: "advice", message: `Project ${rcp.spec.project?.name ?? "recipe-dev"} also gets ${list}. Kueue manages only what is sent to a queue, so they keep running. A project of its own is still safer.` });
   }
+  if (kueueWorkbenchNote(rcp)) out.push({ kind: "advice", message: kueueWorkbenchNote(rcp) });
   if (f.kueue.dashboardOptIn) out.push({ kind: "cluster", message: "The dashboard's Kueue setting is turned on: in every new project on this cluster, workbenches and model deployments can only use the queue hardware profile, and a project without its own LocalQueue cannot create workbenches or deploy models until an admin adds one." });
   return out;
 }
@@ -1956,7 +1969,7 @@ export function recipeRun({ done = 0, current = "running", message = "", state =
     if (i < done) {
       return id === "rhoai"
         ? { id, title, ...times, status: "skipped", message: "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it.", startedAt: ago(start), finishedAt: ago(start) }
-        : { id, title, ...times, status: "success", ...(RECIPE_OWNS.has(id) ? { created: true } : {}), message: (id === "prerequisites" ? prerequisitesDone(rcp) : RECIPE_DONE[id] ?? `${title} is set up.`).replaceAll("recipe-dev", project), startedAt: ago(start - i * 2.5), finishedAt: ago(start - (i + 1) * 2.5) };
+        : { id, title, ...times, status: "success", ...(RECIPE_OWNS.has(id) ? { created: true } : {}), message: (id === "prerequisites" ? prerequisitesDone(rcp) : id === "kueue" && kueueWorkbenchNote(rcp) ? `${RECIPE_DONE.kueue} ${kueueWorkbenchNote(rcp)}` : RECIPE_DONE[id] ?? `${title} is set up.`).replaceAll("recipe-dev", project), startedAt: ago(start - i * 2.5), finishedAt: ago(start - (i + 1) * 2.5) };
     }
     if (i === done && current) {
       return { id, title, ...times, status: current, ...(message ? { message } : {}), ...(current === "failed" ? { errorCode: "timeout", ...(RECIPE_OWNS.has(id) ? { created: true } : {}), finishedAt: ago(0.5) } : {}), startedAt: ago(1.2) };

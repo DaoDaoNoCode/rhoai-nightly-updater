@@ -430,6 +430,55 @@ export function leftInPlace(status: ResourcesStatus, run: RecipeRun, req: Cleanu
   }
   if (up(status.minio)) out.push("The S3 storage");
   if (up(status.mlflow)) out.push("MLflow");
+  // The inference gateway the run's model routes through (cluster-wide, in openshift-ingress): a project's Clean up
+  // leaves it; Clean up everything deletes it once no model uses it.
+  if (runUsed(run).inferenceGateway && up(status.inferenceGateway) && status.inferenceGateway?.managedByTool) out.push("The inference gateway");
+  return out;
+}
+
+/**
+ * The run's step id is done: success (it set its part up), or skipped, which a run records only for a step whose part
+ * is already set up ("Already set up: ...", by this run before a Stop and Resume, or before it). Either way what it
+ * set up stays after Clean up.
+ */
+const stepDone = (run: RecipeRun, id: string) => run.steps.some((s) => s.id === id && (s.status === "success" || s.status === "skipped"));
+
+/**
+ * What the run's steps set up or used that needs shared cluster pieces. The operators come from the prerequisites
+ * steps (pkg/cluster/internal/recipe prereqItems: "prerequisites" installs cert-manager for models and cert-manager and
+ * the Kueue operator for distributed workloads, and Connectivity Link for a model reached through a gateway; the
+ * per-feature "models-prereq" and "kueue-prereq" steps do it too), even when a later step failed; MaaS's pieces come
+ * from its own step, and the inference gateway from the model's.
+ */
+function runUsed(run: RecipeRun) {
+  const f = run.recipe.spec.features;
+  const exposure = run.exposure ?? f.models.exposure ?? "";
+  const prereq = stepDone(run, "prerequisites");
+  const modelOperators = f.models.enabled && (prereq || stepDone(run, "models-prereq"));
+  const maas = f.maas.enabled && stepDone(run, "maas");
+  return {
+    maas, modelOperators, cnpg: maas && f.maas.database === "cnpg",
+    kueueOperators: !!f.kueue?.enabled && (prereq || stepDone(run, "kueue-prereq")),
+    // A model reached through a gateway needs Connectivity Link (pkg/cluster/internal/features featureSetupFor).
+    gatewayModel: modelOperators && (exposure === "default-gateway" || exposure === "gateway"),
+    inferenceGateway: f.models.enabled && stepDone(run, "model") && exposure === "default-gateway",
+  };
+}
+
+/**
+ * The shared cluster pieces the run installed or used that no Clean up of this tool removes, as each feature's own
+ * Clean up says (pkg/cluster/internal/serving MaaS remove; the prerequisites' operators "stay after Clean up"):
+ * only those the run's steps installed or used (runUsed).
+ */
+export function sharedLeft(run: RecipeRun): string[] {
+  const u = runUsed(run);
+  const out: string[] = [];
+  if (u.maas) out.push("Red Hat Connectivity Link, with its Kuadrant instance and Authorino TLS");
+  else if (u.gatewayModel) out.push("Red Hat Connectivity Link, with its Kuadrant instance");
+  if (u.cnpg) out.push("The CloudNativePG operator");
+  if (u.modelOperators || u.kueueOperators) out.push("The cert-manager Operator for Red Hat OpenShift");
+  if (u.kueueOperators) out.push("The Red Hat build of Kueue");
+  if (u.maas) out.push("GatewayClass openshift-default (OpenShift's shared class for gateways)");
   return out;
 }
 

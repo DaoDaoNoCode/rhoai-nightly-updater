@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 // In the gitops profile the admission policy of deploy/rbac-gitops.yaml is
@@ -47,7 +48,7 @@ func gitOpsPolicyStatus() string {
 // returns the problem, or "".
 func runGitOpsPolicyCheck(c *cluster.Client) string {
 	if err := checkGitOpsPolicy(c); err != nil {
-		problem := "The gitops profile's admission policy is not in place (" + err.Error() + "), so Update is off until Argo CD syncs it again (docs/GITOPS.md, section 11)."
+		problem := "The gitops profile's admission policy is not in place (" + err.Error() + "), so Update is off until Argo CD syncs it again (" + types.DocURL("docs/GITOPS.md", "the-admission-policy") + ")."
 		setGitOpsPolicyState(problem)
 		return problem
 	}

@@ -246,7 +246,19 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 	}
 	r.step("workbench", "success", fmt.Sprintf("Created workbench %s; it is starting (usually 1 to 3 minutes while the image is pulled).", Name))
 	slog.Info("workbench setup", "project", project, "user", kube.GetUser(c))
-	return r.done(fmt.Sprintf("Workbench %s is starting in %s with %s (%s) on hardware profile %s.", Name, project, plan.Image.DisplayName, plan.Image.Tag, plan.Profile.DisplayName))
+	return r.done(fmt.Sprintf("Workbench %s is starting in %s with %s (%s) on hardware profile %s.%s", Name, project, plan.Image.DisplayName, plan.Image.Tag, plan.Profile.DisplayName, deprecatedNote(plan.Image)))
+}
+
+// DeprecatedImageNote says that the image is deprecated, as the dashboard
+// labels it, and why this tool chose it anyway.
+const DeprecatedImageNote = "The dashboard labels this image Deprecated (it gets no new versions): no current workbench image is ready on this cluster."
+
+// deprecatedNote is " "+DeprecatedImageNote for a deprecated image, else "".
+func deprecatedNote(img ImageChoice) string {
+	if !img.Deprecated {
+		return ""
+	}
+	return " " + DeprecatedImageNote
 }
 
 // describe builds the check-step summary of what setup will provision.
@@ -255,7 +267,7 @@ func describe(p Plan) string {
 	if p.Connection {
 		parts = append(parts, "connection "+ConnectionSecret)
 	}
-	return strings.Join(parts, ", ") + "."
+	return strings.Join(parts, ", ") + "." + deprecatedNote(p.Image)
 }
 
 // create issues a POST for obj—optionally as a server-side dry run when

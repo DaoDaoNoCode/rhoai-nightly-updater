@@ -37,7 +37,7 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   samples (image editable, default `quay.io/modh/ray:2.47.1-py311-cu121`;
   sized as the CodeFlare SDK's defaults: head 1 CPU / 5 GiB requested, up to
   2 CPUs / 8 GiB, one worker 1 CPU / 3 GiB, up to 6 GiB) for the dashboard's
-  Distributed workloads and Infrastructure pages. An
+  Workload metrics and Infrastructure pages (Observe & monitor). An
   opt-in, with its own confirmation, sets the dashboard's `disableKueue` to
   false and adds a Queue hardware profile. Refused when Kueue does not
   serve `v1beta2`, runs outside OLM, or has `labelPolicy: None`. Clean up
@@ -314,6 +314,59 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **A recipe says when the dashboard will mark its workbench as bypassing
+  Kueue.** A recipe that sets up a workbench and turns the dashboard's Kueue
+  setting on creates the workbench first, so the dashboard marks it
+  "Workbench bypasses Kueue queue management" (seen live on RHOAI 3.7). The
+  review and the Kueue step's result now say so, and that choosing the
+  hardware profile Kueue CPU (RHOAI Nightly Updater) (or a Queue profile)
+  in the dashboard's Edit workbench removes the mark and restarts it. They
+  do not claim Kueue then admits the workbench: RHOAI's notebook controller
+  does not pass the queue label to its pod.
+- **The Distributed workloads tab can turn Kueue back.** Once its setup
+  was cleaned up, the prerequisites still read "kueue Unmanaged (turned on
+  by this tool)", but only Clean up everything could turn it back. The
+  Kueue part now offers **Turn back...** while this tool still owns the
+  setting, with Clean up's confirmation words and Clean up's own request and
+  checks. While a ClusterQueue or LocalQueue is on the cluster (the status
+  now lists them), or they cannot be read, it is off and says why.
+- **A recipe's Clean up says everything it leaves in place.** "Left in
+  place" named only the S3 storage and MLflow. It now also lists the
+  inference gateway the run's model used (Clean up everything deletes it),
+  and the shared pieces the run's features installed or used, which no
+  Clean up removes: Connectivity Link with its Kuadrant instance (and
+  Authorino TLS with MaaS), the CloudNativePG operator (a MaaS CloudNativePG
+  database), cert-manager (models, distributed workloads), the Red Hat
+  build of Kueue, and GatewayClass `openshift-default` (MaaS). Only what the
+  run's steps installed or used is listed: the operators once its
+  prerequisites step is done (set up, or already set up, as after a Stop
+  and Resume; also when a later step failed), MaaS's pieces once its MaaS
+  step is, the inference gateway once its model step is.
+- **The app no longer sends you to files of its repository.** The recipe
+  review's playground warning ended "SECURITY.md (Which token is used where)
+  says where your sign-in goes" (dropped), and the gitops profile's
+  messages, banners and Diagnostics fix named `docs/GITOPS.md`, the upgrade
+  banners `docs/UPGRADING.md`, and the gitops profile's missing image mirror
+  `docs/QUICKSTART.md`: they now link those guides on the public GitHub
+  mirror, at the section they mean, of the running release (its tag; `main`
+  for a development build).
+- **The Distributed workloads tab names the dashboard's pages as the
+  dashboard does.** Its texts sent you to the dashboard's "Distributed
+  workloads" page; on RHOAI 3.6 and 3.7 that page is **Workload metrics**
+  under **Observe & monitor** (RayJobs also show on **Infrastructure**,
+  Workloads tab). The tab, its link, the Overview, the recipe form and Clean
+  up now say so.
+- **A new workbench no longer gets a deprecated image.** RHOAI 3.7 marks
+  most workbench images deprecated (the dashboard labels them Deprecated:
+  they get no new versions), including Jupyter Minimal, whose tag still
+  carries RHOAI's `default-image` mark, so the Workbench tab and a recipe
+  set workbenches up on it. Set up now picks RHOAI's own images that are not
+  deprecated first (on 3.7 Jupyter | CPU, the first in the dashboard's image
+  list), then custom images (an admin's custom image is not known to work as
+  a workbench), and a deprecated one only when no current image is ready:
+  the Workbench tab labels it Deprecated, and the result says why. RHOAI 3.6
+  keeps Jupyter Minimal. A workbench already set up keeps its image; the tab
+  labels it Deprecated when its image is, as the dashboard's table does.
 - **A recipe's Clean up offers to turn the DataScienceCluster's `kueue`
   back.** Clean up what the recipe set up kept a component only while it
   read `Managed`, so `kueue`, which a run turns on as `Unmanaged`, was never

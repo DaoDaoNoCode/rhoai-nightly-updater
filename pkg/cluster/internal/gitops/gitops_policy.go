@@ -13,6 +13,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 	"gopkg.in/yaml.v3"
 )
 
@@ -141,17 +142,19 @@ func subscriptionSpec(obj map[string]any) map[string]any {
 func gitOpsSubscriptionsProblem(newSub, restoreSub map[string]any) string {
 	allowed := SubscriptionEnvAllowlist()
 	if why := SubscriptionProblem(rhoai.SubNS, rhoai.SubName, subscriptionSpec(newSub), allowed); why != "" {
-		return "The Subscription Update would create could not be written in the gitops profile: " + why + ". " + gitOpsPolicyFix
+		return "The Subscription Update would create could not be written in the gitops profile: " + why + ". " + gitOpsPolicyFix()
 	}
 	if restoreSub != nil {
 		if why := SubscriptionProblem(rhoai.SubNS, rhoai.SubName, subscriptionSpec(restoreSub), allowed); why != "" {
-			return "The current Subscription could not be restored after a failure in the gitops profile: " + why + ". " + gitOpsPolicyFix
+			return "The current Subscription could not be restored after a failure in the gitops profile: " + why + ". " + gitOpsPolicyFix()
 		}
 	}
 	return ""
 }
 
-const gitOpsPolicyFix = "Change the Subscription in Git, or add the variable to the chart's gitops.subscriptionEnvAllowlist (docs/GITOPS.md, section 11)."
+func gitOpsPolicyFix() string {
+	return "Change the Subscription in Git, or add the variable to the chart's gitops.subscriptionEnvAllowlist (" + types.DocURL("docs/GITOPS.md", "the-admission-policy") + ")."
+}
 
 // GitOpsAdmissionPolicyEnv is the environment variable with the name of the
 // gitops profile's ValidatingAdmissionPolicy and of its binding

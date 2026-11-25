@@ -24,6 +24,7 @@ const (
 	imageOrderAnnotation   = "opendatahub.io/notebook-image-order"
 	imageTierAnnotation    = "opendatahub.io/notebook-tier"
 	imageHiddenAnnotation  = "opendatahub.io/notebook-image-hidden"
+	imageDeprecated        = "opendatahub.io/deprecated"
 	tagOutdatedAnnotation  = "opendatahub.io/image-tag-outdated"
 	tagRecommended         = "opendatahub.io/workbench-image-recommended"
 	tagDefaultImage        = "opendatahub.io/default-image"
@@ -62,6 +63,13 @@ type ImageStream struct {
 }
 
 func (s ImageStream) byon() bool { return s.Metadata.Labels[byonCreatedByLabel] == "byon" }
+
+// deprecated is the dashboard's isImageStreamDeprecated (odh-dashboard
+// rhoai-3.7-ea.1 utilities/imageStreamUtils.ts L98-99): the stream's
+// opendatahub.io/deprecated is "true". The dashboard labels such a stream
+// Deprecated (ImageStreamSelector.tsx, NotebookImageDisplayName.tsx
+// L99-101, L155-166): it gets no new versions.
+func (s ImageStream) deprecated() bool { return s.Metadata.Annotations[imageDeprecated] == "true" }
 
 // selectable applies the same rules as the dashboard image selector (ImageSelectorField.tsx
 // L89-92, spawnerUtils.ts isInvalidBYONImageStream, isHiddenOOTBImageStream).
@@ -191,11 +199,28 @@ func lessForSelector(a, b ImageStream) bool {
 	return a.order() < b.order()
 }
 
-// ChooseImage decides the workbench image: use the stream with a usable tag carrying
-// opendatahub.io/default-image (RHOAI's default, e.g. "Jupyter | Minimal | CPU" on 3.6),
-// otherwise the earliest selectable stream in selector order; the tag follows dashboard
-// default-version logic (recommended when set, else newest). ok is false if every stream
+// ChooseImage decides the workbench image. The dashboard's Create workbench
+// form preselects none (odh-dashboard rhoai-3.7-ea.1 SpawnerPage.tsx
+// L111-114: it starts with no image; the user picks one), and it never reads
+// opendatahub.io/default-image, so this tool decides, preferring what the
+// dashboard treats as current. It chooses in passes, each over the selectable
+// streams with a usable tag: (1) RHOAI's own (out-of-the-box) streams that
+// are not deprecated, (2) custom (BYON) streams that are not deprecated,
+// (3) deprecated streams (Deprecated is then set). Within a pass, a usable
+// tag marked opendatahub.io/default-image wins (RHOAI marks its default
+// image so, e.g. "Jupyter | Minimal | CPU" on 3.6), else the first stream in
+// the selector's order (tier, then order) with the dashboard's default
+// version (recommended when set, else newest). ok is false if every stream
 // lacks a usable tag.
+//
+// Decision (2026-11-24, two advisors): pass 1 before pass 2 differs from the
+// dashboard's selector order on purpose. The selector ranks a custom stream
+// without a tier as "custom", before RHOAI's "Red Hat-provided" tier, which
+// it does not rank; but an image a cluster-admin imported is not known to
+// work as a workbench (kube-rbac-proxy, Elyra, the notebook server this tool
+// relies on), while RHOAI's are built for it, and the dashboard itself
+// preselects nothing. So a current RHOAI image is chosen before a current
+// custom one (recipes-handoff env-features/f6-f7-evidence.md, "Decision").
 func ChooseImage(streams []ImageStream) (ImageChoice, bool) {
 	var candidates []ImageStream
 	for _, s := range streams {
@@ -211,19 +236,33 @@ func ChooseImage(streams []ImageStream) (ImageChoice, bool) {
 			Repository:  s.Status.DockerImageRepository,
 			DisplayName: kube.FirstNonEmpty(s.Metadata.Annotations[imageNameAnnotation], s.Metadata.Name),
 			BuildCommit: t.Annotations[tagBuildCommit],
+			Deprecated:  s.deprecated(),
 		}
 	}
-	for _, s := range candidates {
-		for _, i := range s.usableTags() {
-			if s.Spec.Tags[i].Annotations[tagDefaultImage] == "true" {
-				return choose(s, i), true
+	passes := []func(ImageStream) bool{
+		func(s ImageStream) bool { return !s.byon() && !s.deprecated() },
+		func(s ImageStream) bool { return s.byon() && !s.deprecated() },
+		ImageStream.deprecated,
+	}
+	for _, in := range passes {
+		var pass []ImageStream
+		for _, s := range candidates {
+			if in(s) {
+				pass = append(pass, s)
 			}
 		}
+		for _, s := range pass {
+			for _, i := range s.usableTags() {
+				if s.Spec.Tags[i].Annotations[tagDefaultImage] == "true" {
+					return choose(s, i), true
+				}
+			}
+		}
+		if len(pass) > 0 {
+			return choose(pass[0], pass[0].usableTags()[0]), true
+		}
 	}
-	if len(candidates) == 0 {
-		return ImageChoice{}, false
-	}
-	return choose(candidates[0], candidates[0].usableTags()[0]), true
+	return ImageChoice{}, false
 }
 
 // HardwareProfile is the infrastructure.opendatahub.io/v1 HardwareProfile

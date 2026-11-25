@@ -433,7 +433,7 @@ function workbenchOf(project) {
   if (items.some((i) => i.namespace === project && i.deployed)) return { project, items };
   return noProfile
     ? { project, items, planProblem: F.WORKBENCH_NO_PROFILE, planProblemCode: "no_profile" }
-    : { project, items, plan: F.workbenchPlan };
+    : { project, items, plan: world.workbench.plan ?? F.workbenchPlan };
 }
 
 /** POST /api/resources/workbench/stream (pkg/cluster RunWorkbench). */
@@ -861,7 +861,7 @@ async function api(req, res, u) {
   }
   if (world.profile === "gitops") {
     if (!GITOPS_PROFILE_ROUTES.has(key)) {
-      return json(res, 403, { error: "This feature is off: this updater runs the gitops profile, where Argo CD or an ACM policy manages RHOAI from Git and the updater only installs the build the managed catalog serves (docs/GITOPS.md).", errorCode: "profile_gitops" });
+      return json(res, 403, { error: "This feature is off: this updater runs the gitops profile, where Argo CD or an ACM policy manages RHOAI from Git and the updater only installs the build the managed catalog serves (https://github.com/DaoDaoNoCode/rhoai-nightly-updater/blob/main/docs/GITOPS.md#11-profiles).", errorCode: "profile_gitops" });
     }
     if (world.canMutate === false && req.method === "GET" && !["/api/user/permissions", "/api/version"].includes(u.pathname)) {
       return json(res, 403, { error: "This updater runs the gitops profile, where only cluster-admins can see what it reads from the cluster.", errorCode: "forbidden" });
