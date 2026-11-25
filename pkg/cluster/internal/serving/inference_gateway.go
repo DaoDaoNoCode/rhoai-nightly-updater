@@ -968,6 +968,13 @@ func InferenceGatewayStatus(c *kube.Client, models []LLMISvcObject, modelsErr er
 		what := map[string]string{"missing": "is missing", "not-enforced": "is not enforced"}[state.AuthPolicy]
 		warnings = append(warnings, fmt.Sprintf("The gateway's authentication %s (AuthPolicy %s/%s, which odh-model-controller adds once a model uses the gateway). Check that odh-model-controller and Connectivity Link (Kuadrant) run; until then models behind it may answer without checking who calls.", what, inferenceGatewayNamespace, inferenceGatewayAuthPolicy))
 	}
+	if state.AuthPolicy == "enforced" {
+		if ns, secret, plaintext, known := authorinoListenerTLS(c); known && plaintext {
+			cmds, why := gatewayAuthorinoTLSCommands(ns, secret, rhoai.ApplicationsNamespace(c))
+			state.AuthorinoTLSOff, state.AuthorinoTLSCommands = true, cmds
+			warnings = append(warnings, gatewayAuthorinoTLSWarning(ns, cmds, why))
+		}
+	}
 	if state.Ready && state.ManagedByTool {
 		if msg := gatewayServiceWarning(c); msg != "" {
 			warnings = append(warnings, msg)

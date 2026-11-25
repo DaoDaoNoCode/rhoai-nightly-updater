@@ -14,6 +14,7 @@ import {
 } from "@patternfly/react-core";
 import type { InferenceGatewayState } from "../../types";
 import { ImageRef } from "../ImageRef";
+import { CopyableCode } from "./UseIt";
 import { type Pending, ProblemAlerts, StartingNote, isTerminating, terminalReason } from "./resourceRow";
 import { PartItem, type PartMenuItem } from "./FeatureLayout";
 import { notManaged } from "./resourceStatus";
@@ -32,6 +33,12 @@ export const AUTH_WORDS: Record<string, string> = {
   "not-enforced": "Not enforced yet",
   missing: "Added by RHOAI when the first model uses the gateway",
 };
+
+/** The gateway's authentication in words: Authorino without TLS keeps an enforced AuthPolicy from working as RHOAI sets it up. */
+export function gatewayAuthWords(gw: InferenceGatewayState): string {
+  if (gw.authPolicy === "enforced" && gw.authorinoTlsOff) return "Not working as RHOAI sets it up: Authorino doesn't serve TLS, so calls through the gateway can fail with HTTP 500 (see the warning above)";
+  return gw.authPolicy ? AUTH_WORDS[gw.authPolicy] : "Unknown";
+}
 
 /**
  * Models (anyone's, such as one deployed from the dashboard) that route
@@ -161,6 +168,7 @@ export const GatewayPart: React.FC<ModelsTabProps> = ({ status, busy, baseReason
           </>}
       </Content>
       {gw && <ProblemAlerts kind="gateway" state={gw} />}
+      {gw?.authorinoTlsCommands && <CopyableCode id="gateway-authorino-tls-commands" label="the commands for a cluster-admin" code={gw.authorinoTlsCommands} />}
       {gw?.deployed && gatewayManaged(gw) && !isTerminating(gw) && <UnusedProjectsAlert gw={gw} reason={readOnly ? READ_ONLY_SETUP : baseReason} setPending={setPending} />}
       {gw?.deployed && gatewayManaged(gw) && !isTerminating(gw) && (
         <GoneProjects gw={gw} reason={baseReason} readOnly={readOnly}
@@ -193,7 +201,7 @@ export const GatewayPart: React.FC<ModelsTabProps> = ({ status, busy, baseReason
           {gw?.ready && (
             <DescriptionListGroup>
               <DescriptionListTerm>Authentication</DescriptionListTerm>
-              <DescriptionListDescription>{gw.authPolicy ? AUTH_WORDS[gw.authPolicy] : "Unknown"}</DescriptionListDescription>
+              <DescriptionListDescription>{gatewayAuthWords(gw)}</DescriptionListDescription>
             </DescriptionListGroup>
           )}
           {gw && (

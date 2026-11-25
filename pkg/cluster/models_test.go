@@ -658,6 +658,84 @@ func TestInferenceGatewayStatus_WarnsWithoutItsAuthPolicy(t *testing.T) {
 	}
 }
 
+// With the AuthPolicy enforced, Kuadrant's Authorino without TLS on its
+// listener (as Kuadrant makes it) is reported with RHOAI's steps for a
+// cluster-admin, found through the Kuadrant CR's namespace (not assumed
+// kuadrant-system), and nothing is changed; TLS on, or an Authorino that
+// cannot be read, is not reported.
+func TestInferenceGatewayStatus_AuthorinoWithoutTLS(t *testing.T) {
+	mc := newModelsCluster(t)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	mc.f.putJSON("/apis/kuadrant.io/v1/namespaces/openshift-ingress/authpolicies/openshift-ai-inference-authn", `{"status":{"conditions":[{"type":"Enforced","status":"True"}]}}`)
+	mc.f.putJSON("/api/v1/namespaces/openshift-ingress/services/openshift-ai-inference-openshift-ai-inference", `{"metadata":{"labels":{"gateway.networking.k8s.io/gateway-name":"openshift-ai-inference"}}}`)
+	// Connectivity Link installed for all namespaces: its Kuadrant CR in
+	// openshift-operators.
+	mc.f.deleteObject("/apis/kuadrant.io/v1beta1/namespaces/kuadrant-system/kuadrants/kuadrant")
+	mc.f.putJSON("/apis/kuadrant.io/v1beta1/namespaces/openshift-operators/kuadrants/kuadrant", `{"status":{"conditions":[{"type":"Ready","status":"True"}]}}`)
+	const authorino = "/apis/operator.authorino.kuadrant.io/v1beta1/namespaces/openshift-operators/authorinos/authorino"
+
+	// No Authorino to read: unknown, not reported.
+	st, _ := GetResourcesStatus(mc.c)
+	if gw := st.InferenceGateway; gw.AuthPolicy != "enforced" || gw.AuthorinoTLSOff || gw.Warning != "" {
+		t.Fatalf("no Authorino: %+v", gw)
+	}
+
+	before := len(mc.f.mutations())
+	for _, spec := range []string{`{"listener":{"tls":{"enabled":false}}}`, `{}`} {
+		mc.f.putJSON(authorino, `{"spec":`+spec+`}`)
+		st, _ = GetResourcesStatus(mc.c)
+		gw := st.InferenceGateway
+		if !gw.AuthorinoTLSOff || !strings.HasPrefix(gw.Warning, "Calls through the gateway can fail with HTTP 500: Authorino in openshift-operators doesn't serve TLS.") ||
+			!strings.Contains(gw.Warning, "Configuring authentication for llm-d using Red Hat Connectivity Link") || !strings.Contains(gw.Warning, "A cluster-admin runs RHOAI's steps below.") {
+			t.Fatalf("%s: %+v", spec, gw)
+		}
+		for _, want := range []string{
+			"oc annotate service authorino-authorino-authorization -n openshift-operators \\\n  service.beta.openshift.io/serving-cert-secret-name=authorino-server-cert --overwrite",
+			`oc patch authorino authorino -n openshift-operators --type=merge \` + "\n" + `  -p '{"spec":{"listener":{"tls":{"certSecretRef":{"name":"authorino-server-cert"},"enabled":true}}}}'`,
+			"oc wait --for=condition=ready pod -l authorino-resource=authorino -n openshift-operators --timeout=150s",
+			"oc delete pod -n redhat-ods-applications -l app=odh-model-controller",
+			"oc delete pod -n redhat-ods-applications -l control-plane=kserve-controller-manager",
+		} {
+			if !strings.Contains(gw.AuthorinoTLSCommands, want) {
+				t.Errorf("%s: commands lack %q:\n%s", spec, want, gw.AuthorinoTLSCommands)
+			}
+		}
+	}
+	if m := mc.f.mutations()[before:]; len(m) != 0 {
+		t.Errorf("the status wrote %v", m)
+	}
+
+	// The CR's own certificate Secret is the one the commands name.
+	mc.f.putJSON(authorino, `{"spec":{"listener":{"tls":{"enabled":false,"certSecretRef":{"name":"their-cert"}}}}}`)
+	st, _ = GetResourcesStatus(mc.c)
+	if c := st.InferenceGateway.AuthorinoTLSCommands; !strings.Contains(c, "serving-cert-secret-name=their-cert") || !strings.Contains(c, `"certSecretRef":{"name":"their-cert"}`) {
+		t.Errorf("their Secret: %s", c)
+	}
+
+	// A name no command may carry: no commands, and the warning says why.
+	mc.f.putJSON(authorino, `{"spec":{"listener":{"tls":{"enabled":false,"certSecretRef":{"name":"a b"}}}}}`)
+	st, _ = GetResourcesStatus(mc.c)
+	if gw := st.InferenceGateway; !gw.AuthorinoTLSOff || gw.AuthorinoTLSCommands != "" || !strings.Contains(gw.Warning, "which is not a valid Kubernetes name, so no commands are shown.") {
+		t.Errorf("invalid Secret: %+v", gw)
+	}
+
+	mc.f.putJSON(authorino, `{"spec":{"listener":{"tls":{"enabled":true,"certSecretRef":{"name":"authorino-server-cert"}}}}}`)
+	st, _ = GetResourcesStatus(mc.c)
+	if gw := st.InferenceGateway; gw.AuthorinoTLSOff || gw.AuthorinoTLSCommands != "" || gw.Warning != "" {
+		t.Errorf("TLS on: %+v", gw)
+	}
+
+	// The AuthPolicy not enforced: its own warning, not Authorino's.
+	mc.f.putJSON(authorino, `{"spec":{"listener":{"tls":{"enabled":false}}}}`)
+	mc.f.putJSON("/apis/kuadrant.io/v1/namespaces/openshift-ingress/authpolicies/openshift-ai-inference-authn", `{"status":{"conditions":[{"type":"Enforced","status":"False"}]}}`)
+	st, _ = GetResourcesStatus(mc.c)
+	if gw := st.InferenceGateway; gw.AuthorinoTLSOff || strings.Contains(gw.Warning, "Authorino") {
+		t.Errorf("not enforced: %+v", gw)
+	}
+}
+
 func TestValidateModelsRequest(t *testing.T) {
 	cases := map[string]types.ModelsRequest{
 		"action must be setup, teardown, allow, disallow or check": {Action: "delete", Gateway: true},

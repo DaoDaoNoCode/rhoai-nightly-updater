@@ -1315,6 +1315,10 @@ export interface InferenceGatewayState extends ResourceState {
   dns?: "published" | "pending";
   /** The gateway's authentication (odh-model-controller adds it once a model uses the gateway); absent: unknown. */
   authPolicy?: "enforced" | "not-enforced" | "missing";
+  /** The AuthPolicy is enforced but Connectivity Link's Authorino serves no TLS, which RHOAI's setup turns on: calls can fail with HTTP 500 (warning says so). */
+  authorinoTlsOff?: boolean;
+  /** RHOAI's steps that turn Authorino's TLS on, for a cluster-admin; absent when they cannot be shown. */
+  authorinoTlsCommands?: string;
   /**
    * The projects the gateway's listeners list by name (RHOAI's documented
    * allowedRoutes values array). Absent: they choose otherwise (every
@@ -1984,7 +1988,7 @@ export interface ModelExposures {
 
 /** One "Can it be called?" check (pkg/types ModelCallCheck). */
 export interface ModelCallCheck {
-  result: "ok" | "model-name" | "route" | "auth" | "forbidden" | "server-error" | "unreachable" | "unauthenticated" | "maas" | "not-checked" | "unexpected";
+  result: "ok" | "model-name" | "route" | "auth" | "forbidden" | "gateway-error" | "server-error" | "unreachable" | "unauthenticated" | "maas" | "not-checked" | "unexpected";
   ok: boolean;
   status?: number;
   message: string;

@@ -161,6 +161,21 @@ func bodyExcerpt(body []byte) string {
 	return s
 }
 
+// kuadrantFailBody is what Kuadrant's wasm-shim answers, with 500, when a
+// call to a service it fails closed on, Authorino among them, fails
+// (wasm-shim v0.14.1, which kuadrant-operator v1.5.0 ships,
+// src/kuadrant/pipeline/tasks/send_reply.rs SendReplyTask::default:
+// "Internal Server Error.\n"). vLLM's own 500s say otherwise: a JSON error,
+// or Starlette's "Internal Server Error" without the period.
+const kuadrantFailBody = "Internal Server Error."
+
+// gatewayDenyBody: a 500's body is empty or Kuadrant's, so the gateway
+// answered it, not the model's server.
+func gatewayDenyBody(body []byte) bool {
+	b := string(bytes.TrimSpace(body))
+	return b == "" || b == kuadrantFailBody
+}
+
 // ClassifyModelCall turns one answer (or the error of a request without
 // one) into a check. transient: it may change on its own soon.
 func ClassifyModelCall(status int, body []byte, err error, target, served string, internal bool) (types.ModelCallCheck, bool) {
@@ -210,6 +225,14 @@ func ClassifyModelCall(status int, body []byte, err error, target, served string
 	case status == http.StatusForbidden:
 		out.Result = "forbidden"
 		out.Message = "The gateway accepted the model's token, but its ServiceAccount may not call the model (403). It needs get on this LLMInferenceService (Role <model>-view-role); setting the model up again restores it."
+		return out, false
+	case !internal && status == http.StatusInternalServerError && gatewayDenyBody(body):
+		out.Result = "gateway-error"
+		what := "500 with an empty body"
+		if len(bytes.TrimSpace(body)) > 0 {
+			what = fmt.Sprintf("500 %q, Red Hat Connectivity Link's answer when it cannot authorize a call", kuadrantFailBody)
+		}
+		out.Message = fmt.Sprintf("The gateway failed the call (%s), so it did not reach the model. The likely cause is the gateway's authorization: Connectivity Link's Authorino, which checks each call's token, is not reached as the gateway expects.", what)
 		return out, false
 	case status >= 500:
 		out.Result = "server-error"
@@ -350,6 +373,9 @@ func callModelDirectly(c *kube.Client, model LLMISvcObject, project, name, serve
 			check = runModelCall(c, model.Status.URL, served, typ, token, false, progress)
 			if check.Result == "server-error" && gw != "" && exposure == ExposureGateway {
 				check.Message += " (through gateway " + gw + ")"
+			}
+			if check.Result == "gateway-error" {
+				check.Message += gatewayErrorCause(c)
 			}
 			if check.OK {
 				check = probeWithoutToken(c, check, model.Status.URL, served, typ, gw)

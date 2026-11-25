@@ -426,6 +426,19 @@ describe("Models tab", () => {
     expect(await screen.findByRole("menuitem", { name: /Delete inference gateway/ })).toHaveAttribute("aria-disabled", "true");
   });
 
+  it("Authorino without TLS: the gateway's authentication is not working, with RHOAI's commands for a cluster-admin", async () => {
+    const cmds = "oc annotate service authorino-authorino-authorization -n openshift-operators \\\n  service.beta.openshift.io/serving-cert-secret-name=authorino-server-cert --overwrite";
+    const warning = "Calls through the gateway can fail with HTTP 500: Authorino in openshift-operators doesn't serve TLS. A cluster-admin runs RHOAI's steps below.";
+    stubApi({ "/api/resources/status": status({ inferenceGateway: { ...gateway, usedBy: ["dev/qwen25-05b-instruct"], warning, authorinoTlsOff: true, authorinoTlsCommands: cmds }, models: modelsStatus({ items: [model("dev")] }) }), "/api/resources/projects": { projects: ["dev"] } });
+    renderAt("/test-resources?tab=models&project=dev");
+    const gw = await screen.findByRole("listitem", { name: "Inference gateway" });
+    expect(within(gw).getByText(/Not working as RHOAI sets it up: Authorino doesn't serve TLS/)).toBeInTheDocument();
+    expect(within(gw).queryByText(/On: every call needs an OpenShift token/)).toBeNull();
+    expect(within(gw).getByText("Calls through the gateway can fail with HTTP 500: Authorino in openshift-operators doesn't serve TLS.")).toBeInTheDocument();
+    expect(within(gw).getByRole("button", { name: "Copy the commands for a cluster-admin" })).toBeInTheDocument();
+    expect(gw.querySelector("#gateway-authorino-tls-commands-code")?.textContent).toBe(cmds);
+  });
+
   it("a model published to MaaS: Use it points at the MaaS tab's commands, not the direct address, and says why", async () => {
     stubApi({
       "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("dev", { maasPublished: true })] }) }),
