@@ -567,6 +567,39 @@ func TestObservability_MaaSRecordsUserIDsAndPutsThemBack(t *testing.T) {
 	}
 }
 
+// While Dashboard Dev keeps the dashboard operator at 0 replicas, the
+// operator that deploys the portal does not run: turning the portal on is
+// still allowed (nothing is left stuck), and both its success message and
+// the portal row say it comes up once Dashboard Dev is reverted.
+func TestObservability_MaaSPortalNotesAPausedDashboardOperator(t *testing.T) {
+	oc := newObsCluster(t, true)
+	t.Cleanup(observability.SetDashDevActiveForTest("redhat-ods-applications/rhods-dashboard-operator"))
+	oc.f.putJSON(tDSC, `{"metadata":{"name":"default-dsc","resourceVersion":"5"},"spec":{"components":{"dashboard":{"managementState":"Managed","maasPortal":{"managementState":"Removed"}}}}}`)
+	oc.f.putJSON("/apis/components.platform.opendatahub.io/v1alpha1/dashboards/default-dashboard", `{"metadata":{"name":"default-dashboard"},"spec":{"gateway":{"domain":"rh-ai.apps.example.com"}}}`)
+	const note = "Dashboard Dev keeps the dashboard operator redhat-ods-applications/rhods-dashboard-operator at 0 replicas, and that operator deploys the portal: it comes up once Dashboard Dev is reverted (Dashboard Dev page)."
+	var events []UpdateStepEvent
+	res, err := RunMaaS(oc.c, types.MaaSRequest{Action: "portal-on"}, func(e UpdateStepEvent) { events = append(events, e) })
+	if err != nil || !res.Success {
+		t.Fatalf("on: %+v %v", res, err)
+	}
+	said := false
+	for _, e := range events {
+		said = said || e.Status == "success" && strings.Contains(e.Message, "The MaaS portal is turned on. "+note)
+	}
+	if !said {
+		t.Errorf("no note in the portal step: %+v", events)
+	}
+	st, _ := GetMaaSStatus(oc.sa)
+	if st.Portal == nil || !st.Portal.On || !strings.Contains(st.Portal.Message, note) {
+		t.Fatalf("portal row = %+v", st.Portal)
+	}
+	// Without a session the row says nothing of it.
+	t.Cleanup(observability.SetDashDevActiveForTest(""))
+	if st, _ = GetMaaSStatus(oc.sa); strings.Contains(st.Portal.Message, "Dashboard Dev") {
+		t.Errorf("note without a session: %q", st.Portal.Message)
+	}
+}
+
 func TestObservability_MaaSPortalTurnsOnAndBack(t *testing.T) {
 	oc := newObsCluster(t, true)
 	oc.f.putJSON(tDSC, `{"metadata":{"name":"default-dsc","resourceVersion":"5","managedFields":[{"manager":"someone","operation":"Update","fieldsV1":{"f:spec":{"f:components":{"f:dashboard":{"f:maasPortal":{"f:managementState":{}}}}}}}]},"spec":{"components":{"dashboard":{"managementState":"Managed","maasPortal":{"managementState":"Removed"}}}},

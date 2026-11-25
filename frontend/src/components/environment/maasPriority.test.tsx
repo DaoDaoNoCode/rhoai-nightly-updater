@@ -138,3 +138,13 @@ describe("Use it: what to try next", () => {
     expect(next.textContent).not.toContain("only when the model server runs with");
   });
 });
+
+describe("The MaaS portal row", () => {
+  it("says the portal comes up once Dashboard Dev is reverted, when RHOAI reports nothing yet", async () => {
+    const note = "Dashboard Dev keeps the dashboard operator redhat-ods-applications/rhods-dashboard-operator at 0 replicas, and that operator deploys the portal: it comes up once Dashboard Dev is reverted (Dashboard Dev page).";
+    stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/maas": { ...published({ value: 0 }), portal: { managementState: "Managed", on: true, available: "", message: note } } });
+    render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
+    expect(await screen.findByText(/RHOAI reports nothing about it yet\. Dashboard Dev keeps the dashboard operator/)).toHaveTextContent("it comes up once Dashboard Dev is reverted (Dashboard Dev page).");
+  });
+});

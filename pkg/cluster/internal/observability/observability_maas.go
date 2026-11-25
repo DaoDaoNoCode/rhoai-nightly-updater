@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
@@ -180,6 +181,26 @@ func usageLogsState(c *kube.Client) *types.MaaSUsageLogs {
 	return out
 }
 
+// dashDevActiveOperator is dashdev.ActiveOperator; tests replace it
+// (SetDashDevActiveForTest).
+var dashDevActiveOperator = dashdev.ActiveOperator
+
+// portalPausedNote says that the portal waits for Dashboard Dev, or "".
+// The dashboard operator deploys the portal's operand when the Dashboard's
+// spec.maasPortal is Managed (odh-dashboard rhoai-3.6
+// docs/dashboard-operator.md L161-165), and a Dashboard Dev session keeps
+// that operator at 0 replicas (dashdev; operator.OperationOptions), so the
+// portal comes up only once the session is reverted. Turning the portal on
+// is still allowed: nothing is left stuck. The legacy flow (no module
+// operator) has no such operator to pause.
+func portalPausedNote(c *kube.Client) string {
+	active, operator, err := dashDevActiveOperator(c)
+	if err != nil || !active || operator == "" {
+		return ""
+	}
+	return fmt.Sprintf("Dashboard Dev keeps the dashboard operator %s at 0 replicas, and that operator deploys the portal: it comes up once Dashboard Dev is reverted (Dashboard Dev page).", operator)
+}
+
 func portalState(c *kube.Client) *types.MaaSPortal {
 	p, _ := portalRead(c)
 	return p
@@ -217,6 +238,9 @@ func portalRead(c *kube.Client) (*types.MaaSPortal, error) {
 		p.URL, published = portalURL(c)
 		if p.URL != "" && !published {
 			p.Message = strings.TrimSpace(p.Message + " The dashboard operator has not published the portal's address yet; this is where it will be.")
+		}
+		if note := portalPausedNote(c); note != "" {
+			p.Message = strings.TrimSpace(p.Message + " " + note)
 		}
 	}
 	return p, nil
@@ -413,7 +437,7 @@ func setPortal(m *serving.Run, on bool) (*types.OperationResponse, error) {
 	var body map[string]any
 	switch {
 	case on && state == "Managed":
-		m.Step(StepPortal, "success", "The MaaS portal is on already.")
+		m.Step(StepPortal, "success", strings.TrimSpace("The MaaS portal is on already. "+portalPausedNote(c)))
 		return nil, nil
 	case on:
 		was := unsetValue
@@ -447,7 +471,11 @@ func setPortal(m *serving.Run, on bool) (*types.OperationResponse, error) {
 		return m.Fail(StepPortal, msg, serving.MaaSWriteCode(err), "dsc patch failed")
 	}
 	m.Logs = append(m.Logs, "OK: DataScienceCluster dashboard."+key+" changed")
-	m.Step(StepPortal, "success", map[bool]string{true: "The MaaS portal is turned on.", false: "The MaaS portal is as before."}[on])
+	done := map[bool]string{true: "The MaaS portal is turned on.", false: "The MaaS portal is as before."}[on]
+	if on {
+		done = strings.TrimSpace(done + " " + portalPausedNote(c))
+	}
+	m.Step(StepPortal, "success", done)
 	return nil, nil
 }
 

@@ -362,6 +362,12 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **The MaaS portal says when it waits for Dashboard Dev.** RHOAI's
+  dashboard operator deploys the portal, and a Dashboard Dev session keeps
+  that operator at 0 replicas, so a portal turned on during a session
+  stayed "not yet" with no reason. Turning it on is still allowed; its
+  result and the MaaS tab's portal row now say that it comes up once
+  Dashboard Dev is reverted.
 - **Update waits until the catalog serves the verified build.** After
   replacing the nightly catalog, Update waited for READY and up to 30
   seconds for its channels, then detected the channel again. It now waits,
