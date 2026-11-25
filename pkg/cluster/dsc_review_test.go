@@ -231,7 +231,7 @@ func TestHardResetValidatesTheNewSpecBeforeTheDelete(t *testing.T) {
 		t.Fatalf("result = %+v", res)
 	}
 	for _, d := range f.callsTo(http.MethodDelete, dscV3Path) {
-		if d.Query.Get("dryRun") == "" {
+		if !d.dryRun() {
 			t.Fatal("deleted the DSC")
 		}
 	}

@@ -444,7 +444,12 @@ func (c *Client) doOnce(method, path, contentType string, body []byte, query url
 		req.URL.RawQuery = q.Encode()
 	}
 
-	answered := startAPIRequest(c.ctx, method, req.URL)
+	// The API server ignores the query's options of a DELETE with a body
+	// (IsDryRun): a dry run asked for in the query would delete.
+	if method == http.MethodDelete && len(body) > 0 && req.URL.Query().Has("dryRun") {
+		return nil, nil, 0, errors.New("refused to send a DELETE with DeleteOptions and dryRun in its query: the API server reads only the body's options, so it would not be a dry run; put dryRun in the DeleteOptions")
+	}
+	answered := startAPIRequest(c.ctx, method, req.URL, body)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		answered(0)

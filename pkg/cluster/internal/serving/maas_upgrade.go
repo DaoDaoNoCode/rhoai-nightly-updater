@@ -1,10 +1,7 @@
 package serving
 
 import (
-	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -342,8 +339,7 @@ func (m *Run) removeTierPolicies() (*types.OperationResponse, error) {
 	}
 	for _, p := range legacy {
 		path := legacyTierPolicyPath(p.Kind, p.Version)
-		opts, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": map[string]any{"uid": p.UID}})
-		if _, _, err := c.Do(http.MethodDelete, path, "application/json", opts, url.Values{"dryRun": {"All"}}); err != nil && !kube.IsK8sNotFound(err) {
+		if _, _, err := kube.DeleteWithOptions(c, path, map[string]any{"preconditions": map[string]any{"uid": p.UID}}, true); err != nil && !kube.IsK8sNotFound(err) {
 			return m.Fail("check", fmt.Sprintf("The API server rejects deleting %s %s: %v. Nothing was deleted.%s", p.Kind, p.Name, err, kube.TemplateHint(err)), MaaSWriteCode(err), "dry run failed")
 		}
 	}

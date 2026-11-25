@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"slices"
@@ -33,8 +34,20 @@ func TrackChanges(ctx context.Context) (context.Context, *Changes) {
 // Made reports whether a recorded request may have changed something: one
 // that did, or one still waiting for its answer.
 func (ch *Changes) Made() bool {
-	return ch != nil && (ch.made.Load() || ch.pending.Load() > 0)
+	if ch == nil {
+		return false
+	}
+	// pending first: a request that ends between the two loads stored made
+	// before it left pending (startAPIRequest), so it is seen either way.
+	pending := ch.pending.Load()
+	if afterPendingLoad != nil {
+		afterPendingLoad()
+	}
+	return pending > 0 || ch.made.Load()
 }
+
+// afterPendingLoad, when set by a test, runs between Made's two loads.
+var afterPendingLoad func()
 
 // withoutChanges hides ctx's Changes from the requests made with the
 // returned context: the updater's own records (Bookkeeping) are not changes
@@ -68,23 +81,90 @@ func NoteRequest(req *http.Request) {
 // startAPIRequest records an API server request about to be sent with ctx
 // and returns the function that takes its answer (the status, 0 when none
 // came). It is not a change when its method only reads, it is a server-side
-// dry run (dryRun=All: nothing is persisted), or it creates one of the review
-// objects the API server answers without storing. Otherwise it is a change
-// unless the API server answered 4xx: such a request was refused before it
-// was applied, as retryWait also assumes for a 429. A 5xx, or no answer at
-// all, may have been applied.
-func startAPIRequest(ctx context.Context, method string, u *url.URL) func(status int) {
+// dry run (IsDryRun), or it creates one of the review objects the API
+// server answers without storing. Otherwise it is a change unless the API
+// server refused it before it was applied (refusedBeforeApplied); a 5xx, or
+// no answer at all, may have been applied.
+func startAPIRequest(ctx context.Context, method string, u *url.URL, body []byte) func(status int) {
 	ch := changesOf(ctx)
-	if ch == nil || readOnlyMethod(method) || u.Query().Get("dryRun") == "All" || reviewPath(u.Path) {
+	if ch == nil || readOnlyMethod(method) || IsDryRun(method, u, body) || reviewPath(u.Path) {
 		return func(int) {}
 	}
 	ch.pending.Add(1)
 	return func(status int) {
-		if status < 400 || status >= 500 {
+		if !refusedBeforeApplied(method, u.Path, status) {
 			ch.made.Store(true)
 		}
 		ch.pending.Add(-1)
 	}
+}
+
+// IsDryRun reports whether the API server runs the request as a
+// server-side dry run, reading its options where the API server does. A
+// DELETE with a body takes all its DeleteOptions, dryRun included, from the
+// body and ignores the query (k8s.io/apiserver v0.33.0 to v0.37.0,
+// pkg/endpoints/handlers/delete.go:95-126, DeleteResource: the query is
+// decoded only when the body is empty; the same for DeleteCollection at
+// :270-300). Every other request takes dryRun from the query (create,
+// update and patch options are query parameters).
+func IsDryRun(method string, u *url.URL, body []byte) bool {
+	if method == http.MethodDelete && len(body) > 0 {
+		var opts struct {
+			DryRun []string `json:"dryRun"`
+		}
+		return json.Unmarshal(body, &opts) == nil && slices.Contains(opts.DryRun, "All")
+	}
+	return u.Query().Get("dryRun") == "All"
+}
+
+// refusedBeforeApplied reports whether a write the API server answered
+// with status changed nothing. Only the answers of a refusal before
+// storage count: 400 (undecodable), 401 and 403 (authentication,
+// authorization, an admission denial), 404, 405, 409 (a conflict, an
+// existing name or a failed precondition), 413, 415, 422 (validation, a
+// failed json-patch test) and 429 (throttled before the handler). A
+// request on one object is applied in one storage write, so such an answer
+// means it was not. A DELETE of a collection is not: the registry deletes
+// its items one by one, each through admission, and returns the first
+// error after others were deleted (k8s.io/apiserver v0.35.8,
+// pkg/registry/generic/registry/store.go:1237-1360, DeleteCollection), so
+// only 401 and 429, which refuse the whole request before the handler,
+// count for it. Any other status (a 5xx, a timeout, none) may have been
+// applied.
+func refusedBeforeApplied(method, path string, status int) bool {
+	switch status {
+	case 401, 429:
+		return true
+	case 400, 403, 404, 405, 409, 413, 415, 422:
+		return method != http.MethodDelete || !collectionPath(path)
+	}
+	return false
+}
+
+// collectionPath reports whether path names a collection of resources
+// rather than one object (or one object's subresource): what follows
+// /api/v1 or /apis/<group>/<version>, and namespaces/<name> when it is
+// namespaced, is a single segment. A path of another shape counts as a
+// collection.
+func collectionPath(path string) bool {
+	var rest string
+	switch {
+	case strings.HasPrefix(path, "/api/v1/"):
+		rest = strings.TrimPrefix(path, "/api/v1/")
+	case strings.HasPrefix(path, "/apis/"):
+		parts := strings.SplitN(strings.TrimPrefix(path, "/apis/"), "/", 3)
+		if len(parts) < 3 {
+			return true
+		}
+		rest = parts[2]
+	default:
+		return true
+	}
+	segs := strings.Split(strings.Trim(rest, "/"), "/")
+	if len(segs) >= 3 && segs[0] == "namespaces" {
+		segs = segs[2:]
+	}
+	return len(segs) < 2
 }
 
 func readOnlyMethod(method string) bool {

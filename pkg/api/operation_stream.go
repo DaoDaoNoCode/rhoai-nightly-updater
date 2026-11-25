@@ -60,8 +60,10 @@ func recoverOperation(w http.ResponseWriter, label string) {
 // reportOperationPanic handles a recovered panic of an accepted change:
 // it logs the panic with its stack (which the recover would otherwise
 // lose), tells the client (the stream's final event, or a 500 "internal"
-// answer when nothing was written), and marks the request so mutationAuth
-// gives the user's rate-limit slot back. The cluster lock is released by
+// answer when nothing was written), and marks the request as one that did
+// not go through: mutationAuth gives the user's rate-limit slot back only
+// when the operation sent nothing that may have changed the cluster
+// (cluster.TrackChanges). The cluster lock is released by
 // the handler's deferred releaseClusterMutationLock as on any return.
 func reportOperationPanic(w http.ResponseWriter, label string, rec any, sse *SSEWriter) {
 	slog.Error("panic in operation handler", "op", label, "panic", rec, "stack", string(debug.Stack()))

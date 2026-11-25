@@ -166,7 +166,10 @@ func parseServiceError(status int, body []byte) *IAMError {
 
 // send signs and dispatches a single HTTP call, returning status and body. Response
 // bodies are capped at 1 MiB because IAM and probe payloads stay small.
-func (s *seaweedClient) send(method, path string, query url.Values, contentType string, body []byte, service string) (int, []byte, error) {
+// reads marks a request that changes nothing although its method may write
+// (an IAM read action, sent as a POST); every other write is recorded in
+// the operation's changes (kube.NoteRequest).
+func (s *seaweedClient) send(method, path string, query url.Values, contentType string, body []byte, service string, reads bool) (int, []byte, error) {
 	u := s.endpoint + path
 	if len(query) > 0 {
 		u += "?" + canonicalQuery(query)
@@ -183,7 +186,9 @@ func (s *seaweedClient) send(method, path string, query url.Values, contentType 
 		req.Header.Set("Content-Type", contentType)
 	}
 	signV4(req, body, s.keys.AccessKey, s.keys.SecretKey, service, time.Now())
-	kube.NoteRequest(req)
+	if !reads {
+		kube.NoteRequest(req)
+	}
 	resp, err := s.http.Do(req)
 	if err != nil {
 		return 0, nil, fmt.Errorf("%s %s: %w", method, s.endpoint, err)
@@ -193,6 +198,11 @@ func (s *seaweedClient) send(method, path string, query url.Values, contentType 
 	return resp.StatusCode, respBody, err
 }
 
+// iamReadActions are the IAM actions this package sends that only read:
+// the List and Get actions, access level List and Read in the AWS IAM
+// actions reference. Every IAM action is a POST; the others write.
+var iamReadActions = map[string]bool{"ListUsers": true, "ListAccessKeys": true, "ListUserTags": true, "GetUser": true}
+
 // iam executes one IAM action and yields the raw XML response.
 func (s *seaweedClient) iam(action string, params url.Values) ([]byte, error) {
 	form := url.Values{"Action": {action}, "Version": {"2010-05-08"}}
@@ -200,7 +210,7 @@ func (s *seaweedClient) iam(action string, params url.Values) ([]byte, error) {
 		form[k] = vs
 	}
 	body := []byte(canonicalQuery(form))
-	status, resp, err := s.send(http.MethodPost, "/", nil, "application/x-www-form-urlencoded; charset=utf-8", body, "iam")
+	status, resp, err := s.send(http.MethodPost, "/", nil, "application/x-www-form-urlencoded; charset=utf-8", body, "iam", iamReadActions[action])
 	if err != nil {
 		return nil, fmt.Errorf("IAM %s: %w", action, err)
 	}
@@ -332,5 +342,5 @@ func (s *seaweedClient) object(method, bucket, key string, query url.Values, bod
 	if key != "" {
 		path += "/" + awsEscape(key, true)
 	}
-	return s.send(method, path, query, "", body, "s3")
+	return s.send(method, path, query, "", body, "s3", false)
 }

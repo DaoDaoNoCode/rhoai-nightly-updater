@@ -434,10 +434,10 @@ func prepareMirrorRemove(c *kube.Client, w *nodeSetupWork) {
 		w.refuse("foreign", fmt.Sprintf("ImageDigestMirrorSet %s holds more than this setup's mirror (%s to %s), so it is someone's own mirror configuration and is not deleted. Look at it with oc get imagedigestmirrorset %s -o yaml.", MirrorName, rhoai.IDMSSource, mirrorTarget, MirrorName))
 		return
 	}
-	opts, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "DeleteOptions",
-		"preconditions": map[string]any{"uid": ours.Metadata.UID, "resourceVersion": ours.Metadata.ResourceVersion}})
+	opts := map[string]any{"preconditions": map[string]any{"uid": ours.Metadata.UID, "resourceVersion": ours.Metadata.ResourceVersion}}
 	w.write = func(c *kube.Client, query url.Values) error {
-		_, _, err := c.Do(http.MethodDelete, rhoai.ClusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName), "application/json", opts, query)
+		// The dry run's dryRun goes in the DeleteOptions (DeleteWithOptions).
+		_, _, err := kube.DeleteWithOptions(c, rhoai.ClusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName), opts, query.Get("dryRun") == "All")
 		return err
 	}
 	w.plan.Ready = true

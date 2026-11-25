@@ -330,15 +330,10 @@ func readWorkloadAsUser(c *kube.Client, kind, namespace, name string) (workloadO
 // deleteWorkload deletes with UID and resourceVersion preconditions and
 // background propagation, as a server-side dry run when dryRun is set.
 func deleteWorkload(c *kube.Client, path, uid, resourceVersion string, dryRun bool) error {
-	opts, _ := json.Marshal(map[string]any{
-		"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Background",
-		"preconditions": map[string]string{"uid": uid, "resourceVersion": resourceVersion},
-	})
-	var q url.Values
-	if dryRun {
-		q = url.Values{"dryRun": {"All"}}
-	}
-	_, _, err := c.Do(http.MethodDelete, path, "application/json", opts, q)
+	_, _, err := kube.DeleteWithOptions(c, path, map[string]any{
+		"propagationPolicy": "Background",
+		"preconditions":     map[string]string{"uid": uid, "resourceVersion": resourceVersion},
+	}, dryRun)
 	return err
 }
 

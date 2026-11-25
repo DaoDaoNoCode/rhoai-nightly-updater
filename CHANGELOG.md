@@ -323,6 +323,18 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **Dry runs of a delete no longer delete.** Five deletes asked for a
+  server-side dry run in the URL (`?dryRun=All`) while sending
+  DeleteOptions (UID preconditions) in the body, and the API server then
+  reads only the body's options (k8s.io/apiserver
+  `pkg/endpoints/handlers/delete.go:95-126`), so each "dry run" was a real
+  delete: the hard reset's check deleted the DataScienceCluster before its
+  other checks, the cluster setup's review of removing the mirror deleted
+  ImageDigestMirrorSet `rhoai-quay-mirror`, a model's token check deleted
+  the token Secret it found, and Remove the old tier policies and the
+  Diagnostics fix that recreates a leftover Deployment deleted in their
+  check. The dry run is now in the DeleteOptions, and the client refuses
+  to send a delete with options and a `dryRun` query.
 - **Answering a refusal at once is no longer rate limited.** A streamed
   change the server refused without changing anything (Clean up asking to
   confirm a project's contents or a pipeline server's workbenches, a failed
@@ -331,6 +343,9 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   through now gives the slot back only when it sent nothing that may have
   changed the cluster; one that changed something first, then failed or
   crashed, keeps it (a failed change that is not streamed gave it back).
+  Reads sent as writes (IAM List actions, dry runs, access reviews) and
+  writes the API server refused before applying them do not count; a
+  delete of a collection, whose items go one by one, does.
 - **A recipe's Clean up no longer asks about its own playground and Ray
   samples.** Before it deletes the recipe's project, Clean up lists what
   the project holds that this tool did not create, and that list named
