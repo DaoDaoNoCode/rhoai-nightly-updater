@@ -113,7 +113,7 @@ export const RecipeReviewModal: React.FC<{
             <Content component="p">
               {runs.length === 0
                 ? "Everything in this recipe is set up already: the run checks each step and changes nothing."
-                : <>{runTakes(shownPlan.typicalSeconds, shownPlan.maxSeconds)}
+                : <>{runTakes(shownPlan.typicalSeconds, shownPlan.maxSeconds)} Steps that do not depend on each other run at the same time.
                   {installs && <> It installs {installs.tag ? `${installs.tag} ` : ""}build <code>{shortDigest(installs.digest)}</code>, and keeps it if you resume.</>}</>}
             </Content>
           </StackItem>

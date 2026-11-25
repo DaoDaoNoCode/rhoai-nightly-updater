@@ -274,6 +274,45 @@ describe("Recipes page", () => {
     expect(screen.getByRole("button", { name: "Stop after this step" })).toHaveAttribute("aria-disabled", "true");
   });
 
+  it("several steps at once: how many are done, each running step with its own progress, and Stop after the running steps", async () => {
+    const parallel = steps(4, "running").map((s) => (s.id === "mlflow" ? { ...s, status: "running" as const, startedAt: new Date(Date.now() - 30_000).toISOString() } : s));
+    let status = runStatus({ steps: parallel }, {
+      running: true, step: { step: "mlflow", status: "running", message: "Waiting for MLflow" },
+      progress: { s3: { step: "s3", status: "running", message: "Waiting for SeaweedFS" }, mlflow: { step: "mlflow", status: "running", message: "Waiting for MLflow" } },
+    });
+    stubApi({
+      "GET /api/recipes/run": () => jsonResponse(status),
+      "POST /api/recipes/stop": () => { status = { ...status, stopRequested: true }; return jsonResponse({ stopRequested: true }); },
+    });
+    renderPage(<RecipesPage />, "/recipes", { operation: async () => RECIPE_OPERATION });
+    await settleApps();
+    await settle();
+    expect(screen.getByText(/The steps run on the updater/)).toHaveTextContent(/: 4 of 8 steps done; running: S3 storage, MLflow\. Steps that do not depend on each other run at the same time\./);
+    const list = screen.getByRole("list", { name: "Recipe dev: steps" });
+    expect(list).toHaveTextContent(/S3 storageWaiting for SeaweedFS\. 1:0\d so far/);
+    expect(list).toHaveTextContent(/MLflowWaiting for MLflow\. 0:3\d so far/);
+    fireEvent.click(screen.getByRole("button", { name: "Stop after the running steps" }));
+    const dialog = screen.getByRole("dialog", { name: "Stop after the running steps?" });
+    expect(dialog).toHaveTextContent("The running steps, S3 storage and MLflow, finish, then the run stops and the cluster is free for others. No other step starts.");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Stop after the running steps" }));
+    await settle();
+    expect(screen.getByText("Stopping after the running steps", { selector: ".pf-v6-c-label__text" })).toBeInTheDocument();
+    await dialogClosed();
+  });
+
+  it("several failed steps: the alert names each, with the backend's reason", async () => {
+    const why = "Step 5 of 8 (S3 storage) failed: SeaweedFS did not start. Also failed: step 8 of 8 (MLflow).";
+    const failedSteps = steps(4, "failed", "SeaweedFS did not start.").map((s) => (s.id === "mlflow" ? { ...s, status: "failed" as const, message: "MLflow did not start." } : s));
+    stubApi({ ...editorReads, "GET /api/recipes/run": runStatus({ state: "failed", errorCode: "timeout", finishedAt: new Date().toISOString(), stopReason: why, steps: failedSteps }) });
+    renderPage(<RecipesPage />, "/recipes");
+    await settleApps();
+    await settle();
+    expect(screen.getByText("2 steps failed: S3 storage and MLflow")).toBeInTheDocument();
+    expect(screen.getByText(why)).toBeInTheDocument();
+    const list = screen.getByRole("list", { name: "Recipe dev: steps" });
+    expect(list).toHaveTextContent("MLflowMLflow did not start.");
+  });
+
   it("failed: the step's message and Resume, which continues where it stopped", async () => {
     let status = runStatus({
       state: "failed", errorCode: "timeout", finishedAt: new Date().toISOString(),

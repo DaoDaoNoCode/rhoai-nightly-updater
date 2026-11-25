@@ -26,7 +26,7 @@ import { StatusLabel, type StatusKind } from "../StatusLabel";
 import { TooltipButton } from "../TooltipButton";
 import { StepProgress, type StepState } from "../environment/StepProgress";
 import { shortDigest } from "../../build";
-import { formatClock, resumeStep, usually, usuallySentence } from "./recipeForm";
+import { formatClock, listOf, resumeStep, usually, usuallySentence } from "./recipeForm";
 import { RecipeProblems, refusalOf } from "./RecipeReviewModal";
 
 /** Ticks once a second while `active`, so elapsed times stay current. */
@@ -71,6 +71,11 @@ function stepNumber(run: RecipeRun, step: RecipeRunStep): string {
   return `${run.steps.indexOf(step) + 1} of ${run.steps.length}`;
 }
 
+/** "step 4 of 8, S3 storage" for one step; "S3 storage and MLflow" for several. */
+function stepsText(run: RecipeRun, steps: RecipeRunStep[]): string {
+  return steps.length === 1 ? `step ${stepNumber(run, steps[0])}, ${steps[0].title}` : listOf(steps.map((s) => s.title));
+}
+
 /**
  * The last recipe run: its steps as they ran, the running step's latest
  * progress and elapsed time, and what to do next. Running: Stop after this
@@ -100,8 +105,14 @@ export const RecipeRunCard: React.FC<{
   const [resumeError, setResumeError] = useState<ApiError | null>(null);
   const [reresolve, setReresolve] = useState(false);
 
-  const current = run.steps.find((s) => s.status === "running") ?? null;
-  const failed = run.steps.find((s) => s.status === "failed") ?? null;
+  // Steps that do not depend on each other run at the same time (up to three).
+  const runningSteps = run.steps.filter((s) => s.status === "running");
+  const current = runningSteps[0] ?? null;
+  const several = runningSteps.length > 1;
+  const failedSteps = run.steps.filter((s) => s.status === "failed");
+  const failed = failedSteps[0] ?? null;
+  const doneCount = run.steps.filter((s) => s.status === "success" || s.status === "skipped").length;
+  const stopLabel = several ? "Stop after the running steps" : "Stop after this step";
   const next = resumeStep(run);
   const name = run.recipe.metadata.name;
 
@@ -113,7 +124,9 @@ export const RecipeRunCard: React.FC<{
       const started = s.startedAt ? Date.parse(s.startedAt) : NaN;
       // One line: the current phase, the time so far, one estimate. A clock the
       // phase's own message carries ("(3:10 so far, ...)") is dropped: the line has its own.
-      const progress = (status.step?.message || "Starting...").replace(/\s*\([^)]*\d+:\d\d[^)]*\)/g, "").trim();
+      // Each running step's own progress; the run's latest when only one runs (another pod's run has no per-step progress).
+      const own = status.progress?.[s.id]?.message || (runningSteps.length === 1 ? status.step?.message : "");
+      const progress = (own || "Starting...").replace(/\s*\([^)]*\d+:\d\d[^)]*\)/g, "").trim();
       const phaseText = /[.!?]$/.test(progress) ? progress : `${progress}.`;
       message = Number.isFinite(started)
         ? `${phaseText} ${formatClock(now - started)} so far; ${usually(s.typicalSeconds, s.maxSeconds)}.`
@@ -156,9 +169,10 @@ export const RecipeRunCard: React.FC<{
     }
   };
 
-  const [labelKind, labelText] = LABELS[phase];
+  const [labelKind, phaseLabel] = LABELS[phase];
+  const labelText = phase === "stopping" && several ? "Stopping after the running steps" : phaseLabel;
   const runStarted = Date.parse(run.resumedAt || run.startedAt);
-  const stopReason = phase === "stopping" ? "Stop was asked for: the run stops after the current step." : status.remote
+  const stopReason = phase === "stopping" ? `Stop was asked for: the run stops after ${several ? "the running steps" : "the current step"}.` : status.remote
     ? `Updater pod ${status.pod || "(unknown)"} runs it; only that pod can stop it, and it does when it shuts down.`
     : permissionReason;
   const resumeButton = next && (
@@ -186,8 +200,9 @@ export const RecipeRunCard: React.FC<{
     case "failed":
       // The failed step's own message: the title already names the step.
       outcome = (
-        <OutcomeAlert result={{ success: false, message: failed?.message || run.stopReason || "The run failed.", errorCode: run.errorCode, logs: null }}
-          failedTitle={failed ? `Step ${stepNumber(run, failed)} failed: ${failed.title}` : "The run failed"} />
+        <OutcomeAlert result={{ success: false, message: (failedSteps.length > 1 ? run.stopReason : failed?.message) || run.stopReason || "The run failed.", errorCode: run.errorCode, logs: null }}
+          failedTitle={failedSteps.length > 1 ? `${failedSteps.length} steps failed: ${listOf(failedSteps.map((s) => s.title))}`
+            : failed ? `Step ${stepNumber(run, failed)} failed: ${failed.title}` : "The run failed"} />
       );
       break;
     case "sign-in":
@@ -211,7 +226,7 @@ export const RecipeRunCard: React.FC<{
     case "interrupted":
       outcome = (
         <Alert variant="warning" isInline component="p" isLiveRegion title="The run was interrupted">
-          {run.pod ? `The updater pod ${run.pod}` : "The updater"} stopped{current ? ` during step ${stepNumber(run, current)}, ${current.title}` : ""}, before the run ended
+          {run.pod ? `The updater pod ${run.pod}` : "The updater"} stopped{current ? ` during ${stepsText(run, runningSteps)}` : ""}, before the run ended
           (a crash, a forced restart or a lost node). Nothing resumes by itself. Resume runs the steps again: each checks the cluster
           first, so what is set up stays.
         </Alert>
@@ -245,9 +260,10 @@ export const RecipeRunCard: React.FC<{
           {live && (
             <StackItem>
               <Content component="p">
-                {status.remote ? `Running on updater pod ${status.pod || "(unknown)"}` : "Running"} for {Number.isFinite(runStarted) ? formatClock(now - runStarted) : "a while"}
-                {current ? `, step ${stepNumber(run, current)}` : ""}. The steps run on the updater: you can leave this page or close the browser and
-                come back. Logging out does not stop the run; Stop after this step does. Teammates cannot change this cluster until it ends.
+                {status.remote ? `Running on updater pod ${status.pod || "(unknown)"}` : "Running"} for {Number.isFinite(runStarted) ? formatClock(now - runStarted) : "a while"}:
+                {` ${doneCount} of ${run.steps.length} steps done`}{runningSteps.length > 0 ? `; running: ${runningSteps.map((s) => s.title).join(", ")}` : ""}.
+                Steps that do not depend on each other run at the same time. The steps run on the updater: you can leave this page or close the
+                browser and come back. Logging out does not stop the run; {stopLabel} does. Teammates cannot change this cluster until it ends.
               </Content>
             </StackItem>
           )}
@@ -264,7 +280,7 @@ export const RecipeRunCard: React.FC<{
                 {live && (
                   <ActionListItem>
                     <TooltipButton variant="secondary" onClick={() => { setStopError(null); setStopOpen(true); }} disabledReason={stopReason}>
-                      Stop after this step
+                      {stopLabel}
                     </TooltipButton>
                   </ActionListItem>
                 )}
@@ -283,15 +299,15 @@ export const RecipeRunCard: React.FC<{
       </CardBody>
       <ConfirmActionModal
         isOpen={stopOpen}
-        title="Stop after this step?"
+        title={`${stopLabel}?`}
         changes={[]}
         summary={
           <Content component="p">
-            {current ? `Step ${stepNumber(run, current)}, ${current.title}, finishes` : "The running step finishes"}, then the run stops and the cluster
-            is free for others. What is set up stays; Resume continues from there.
+            {several ? `The running steps, ${listOf(runningSteps.map((s) => s.title))}, finish` : current ? `Step ${stepNumber(run, current)}, ${current.title}, finishes` : "The running step finishes"}
+            , then the run stops and the cluster is free for others. No other step starts. What is set up stays; Resume continues from there.
           </Content>
         }
-        confirmLabel="Stop after this step"
+        confirmLabel={stopLabel}
         isLoading={stopping}
         onConfirm={() => void stop()}
         onCancel={() => setStopOpen(false)}

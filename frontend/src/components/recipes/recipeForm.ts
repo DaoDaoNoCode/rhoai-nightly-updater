@@ -321,6 +321,9 @@ export function formatClock(ms: number): string {
   return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
 }
 
+/** "a", "a and b", "a, b and c". */
+export const listOf = (items: string[]): string => (items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`);
+
 /** Resume target: earliest step neither successful nor skipped; null if the run finished cleanly. */
 export function resumeStep(run: RecipeRun): RecipeRunStep | null {
   return run.steps.find((s) => s.status !== "success" && s.status !== "skipped") ?? null;

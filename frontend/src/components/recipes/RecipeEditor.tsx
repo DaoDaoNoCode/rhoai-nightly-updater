@@ -23,7 +23,7 @@ import { SingleSelect } from "../SingleSelect";
 import { TooltipButton } from "../TooltipButton";
 import { FieldHelperText, NestedFields } from "../FormFields";
 import {
-  RECIPE_IMAGE_PREFIX, formProblems, maasPublishReason, needsProjectReason, noProjectReason, pipelinesReason, playgroundReason, playgroundThroughMaaS,
+  RECIPE_IMAGE_PREFIX, formProblems, listOf, maasPublishReason, needsProjectReason, noProjectReason, pipelinesReason, playgroundReason, playgroundThroughMaaS,
   type DashboardDevChoice, type ExposureChoice, type RecipeForm,
 } from "./recipeForm";
 
@@ -60,9 +60,6 @@ function useCatalog(wanted: boolean) {
   }, [wanted, catalog]);
   return { catalog, error };
 }
-
-/** "a, b and c". */
-const listOf = (items: string[]): string => (items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`);
 
 /** What else the recipe sets up in the project Kueue labels (the tab's own warning). */
 function kueueOthers(f: RecipeForm): string[] {
