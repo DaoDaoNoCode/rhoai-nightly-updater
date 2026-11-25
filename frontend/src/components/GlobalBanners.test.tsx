@@ -123,6 +123,18 @@ describe("notices only a cluster-admin can act on", () => {
     await settleApps();
   });
 
+  it("an install from the Helm chart links the published GitOps guide's upgrade section", async () => {
+    renderWithApp(<GlobalBanners />, { version: async () => ({ ...(await outdated()), installMethod: "gitops" }), update: newer }, "/");
+    await settleApps();
+    await screen.findByText("For admins: this updater's deployment is out of date", { exact: false });
+    for (const link of screen.getAllByRole("link", { name: /the GitOps guide: Upgrading and rolling back/ })) {
+      expect(link).toHaveAttribute("href", "https://github.com/DaoDaoNoCode/rhoai-nightly-updater/blob/main/docs/GITOPS.md#6-upgrading-and-rolling-back");
+      expect(link).toHaveAttribute("target", "_blank");
+    }
+    expect(screen.queryByText(/docs\/GITOPS\.md/)).not.toBeInTheDocument();
+    await settleApps();
+  });
+
   it("does not show them to a user who is not a cluster-admin", async () => {
     const update = vi.fn(newer);
     renderWithApp(<><GlobalBanners /><p>loaded</p></>, { permissions: async () => USER_PERMISSIONS, version: outdated, update }, "/");

@@ -332,10 +332,11 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   pieces of features whose steps finished are listed.
 - **The app no longer sends you to files of its repository.** The recipe
   review's playground warning ended "SECURITY.md (Which token is used where)
-  says where your sign-in goes", and the gitops profile's messages, banners
-  and Diagnostics fix named `docs/GITOPS.md` or `docs/QUICKSTART.md`: files
-  a user of the running app cannot open. They are dropped; the missing image
-  mirror points to the Status page's One-time cluster setup instead.
+  says where your sign-in goes" (dropped), and the gitops profile's
+  messages, banners and Diagnostics fix named `docs/GITOPS.md`: they now link
+  that guide on the public GitHub mirror, at the section they mean. The
+  missing image mirror points to the Status page's One-time cluster setup
+  instead of `docs/QUICKSTART.md`.
 - **The Distributed workloads tab names the dashboard's pages as the
   dashboard does.** Its texts sent you to the dashboard's "Distributed
   workloads" page; on RHOAI 3.6 and 3.7 that page is **Workload metrics**

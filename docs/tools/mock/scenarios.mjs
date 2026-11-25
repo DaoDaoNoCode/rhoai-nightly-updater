@@ -153,6 +153,11 @@ export const scenarios = {
     };
   },
   "template-outdated": (w) => { w.version = F.versionInfo({ templateRevision: "3", templateOutdated: true }); },
+  // Installed from the Helm chart (Argo CD): an outdated template and a newer release say to upgrade in Git, linking the GitOps guide.
+  "chart-outdated": (w) => {
+    scenarios["major-update"](w);
+    w.version = F.versionInfo({ version: "v1.0.0", templateRevision: "2", expectedTemplateRevision: "3", templateOutdated: true, installMethod: "gitops" });
+  },
   // The user's OpenShift token expired or was revoked: the identity check
   // (GET /api/user/permissions) and every change answer 401 session_expired
   // (pkg/api writeAuthError, sessionProblem).
@@ -275,7 +280,7 @@ export const scenarios = {
   // The profile's admission policy is gone (Update is off until Argo CD syncs it).
   "gitops-profile-no-policy": (w) => {
     scenarios.gitops(w); w.profile = "gitops";
-    w.admissionPolicy = "The gitops profile's admission policy is not in place (read ValidatingAdmissionPolicy rhoai-nightly-updater-rhoai-nightly-updater-gitops: k8s API error 404 (NotFound)), so Update is off until Argo CD syncs it again.";
+    w.admissionPolicy = "The gitops profile's admission policy is not in place (read ValidatingAdmissionPolicy rhoai-nightly-updater-rhoai-nightly-updater-gitops: k8s API error 404 (NotFound)), so Update is off until Argo CD syncs it again (https://github.com/DaoDaoNoCode/rhoai-nightly-updater/blob/main/docs/GITOPS.md#the-admission-policy).";
   },
   // A signed-in user who is not a cluster-admin.
   "gitops-profile-reader": (w) => { scenarios.gitops(w); w.profile = "gitops"; w.canMutate = false; },

@@ -13,6 +13,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 	"gopkg.in/yaml.v3"
 )
 
@@ -151,7 +152,7 @@ func gitOpsSubscriptionsProblem(newSub, restoreSub map[string]any) string {
 	return ""
 }
 
-const gitOpsPolicyFix = "Change the Subscription in Git, or add the variable to the chart's gitops.subscriptionEnvAllowlist."
+const gitOpsPolicyFix = "Change the Subscription in Git, or add the variable to the chart's gitops.subscriptionEnvAllowlist (" + types.GitOpsDocURL + "#the-admission-policy)."
 
 // GitOpsAdmissionPolicyEnv is the environment variable with the name of the
 // gitops profile's ValidatingAdmissionPolicy and of its binding

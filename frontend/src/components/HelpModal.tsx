@@ -21,6 +21,7 @@ import { useUpdateCheck, useVersion } from "../state/AppInfo";
 import { GITOPS_PROFILE_UPDATER_RELEASES, isGitOpsProfile } from "../profile";
 import { useClusterStatus } from "../state/AppState";
 import { useRole, useSignedInUser } from "../state/Permissions";
+import { GitOpsDocLink } from "./GitOpsDocLink";
 
 const FBC_IMAGE: [string, React.ReactNode] = ["FBC image", <>File-Based Catalog: a container image that lists operator bundles. Nightly RHOAI builds are published as <code>quay.io/rhoai/rhoai-fbc-fragment:&lt;tag&gt;@sha256:&lt;digest&gt;</code>; the digest identifies one exact build.</>];
 const CSV: [string, React.ReactNode] = ["CSV", <>ClusterServiceVersion: one installed operator version, e.g. <code>rhods-operator.3.6.0</code>. Its phase (Installing, Succeeded, Failed) is the operator&apos;s health. Every nightly of a release line has the same CSV version, which is why builds are told apart by digest.</>];
@@ -225,7 +226,7 @@ export const HelpButton: React.FC = () => {
                 <DescriptionListTerm>Deployment</DescriptionListTerm>
                 <DescriptionListDescription>
                   {version.installMethod === "gitops"
-                    ? <>The deployment template is out of date; an admin should set the chart&apos;s <code>targetRevision</code> in the GitOps repository to the release of the image.</>
+                    ? <>The deployment template is out of date; an admin should set the chart&apos;s <code>targetRevision</code> in the GitOps repository to the release of the image (<GitOpsDocLink anchor="6-upgrading-and-rolling-back">the GitOps guide: Upgrading and rolling back</GitOpsDocLink>).</>
                     : <>The deployment template is out of date; an admin should run <code>make upgrade</code>.</>}
                 </DescriptionListDescription>
               </DescriptionListGroup>

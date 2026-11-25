@@ -99,3 +99,9 @@ export const RECIPE_RUN_IDLE_POLL_MS = 15_000;
 
 /** How often a user's Status page reads the cluster summary (GET /api/summary), in ms. */
 export const SUMMARY_POLL_MS = 60_000;
+
+/**
+ * docs/GITOPS.md on this project's public GitHub mirror (pkg/types GitOpsDocURL): what an operator of the Helm chart
+ * follows. Its main branch moves only at releases; section anchors are GitHub's ("#6-upgrading-and-rolling-back").
+ */
+export const GITOPS_DOC_URL = "https://github.com/DaoDaoNoCode/rhoai-nightly-updater/blob/main/docs/GITOPS.md";

@@ -214,6 +214,8 @@ describe("update available notice", () => {
       for (const text of ["targetRevision", "parameters.IMAGE"]) {
         expect(screen.getByText(text)).toBeInTheDocument();
       }
+      // The published GitOps guide, not a repository path.
+      expect(screen.getByRole("link", { name: /the GitOps guide: Upgrading and rolling back/ })).toHaveAttribute("href", "https://github.com/DaoDaoNoCode/rhoai-nightly-updater/blob/main/docs/GITOPS.md#6-upgrading-and-rolling-back");
       expect(screen.getByText(/Do not run/)).toBeInTheDocument();
       expect(screen.queryByText(/curl -fsSLO/)).not.toBeInTheDocument();
       expect(screen.queryByText("git checkout v2.0.1 && make upgrade")).not.toBeInTheDocument();
