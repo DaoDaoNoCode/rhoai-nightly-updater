@@ -148,6 +148,24 @@ func TestRecipePrereqSteps_RecordTheComponentsTheyTurnedOn(t *testing.T) {
 		t.Errorf("components %v", st.Components)
 	}
 	// With the enablement it turned on, as the record has it.
+	defer func() {
+		// Set up again over an entry that survived a turn off (written
+		// again with a new ID): the run claims it with the new ID.
+		pc.f.mu.Lock()
+		k, _ := parseFakePath(tDSC)
+		ensureMap(ensureMap(ensureMap(pc.f.objects[k], "spec"), "components"), "aipipelines")["managementState"] = "Removed"
+		pc.f.mu.Unlock()
+		old := prereqRecordID(t, pc.c, "aipipelines")
+		again := &recipe.State{Recipe: r}
+		res, err := recipeStep(t, r, recipe.StepPipelinesPrereq).Run(pc.c, again, func(types.UpdateStepEvent) {})
+		if err != nil || !res.Success {
+			t.Fatalf("again: %+v %v", res, err)
+		}
+		id := prereqRecordID(t, pc.c, "aipipelines")
+		if id == old || !reflect.DeepEqual(again.ComponentIDs, map[string]string{"aipipelines": id}) || componentState(pc.f, "aipipelines") != "Managed" {
+			t.Errorf("again: component IDs %v, record %q (was %q)", again.ComponentIDs, id, old)
+		}
+	}()
 	if id := prereqRecordID(t, pc.c, "aipipelines"); id == "" || !reflect.DeepEqual(st.ComponentIDs, map[string]string{"aipipelines": id}) {
 		t.Errorf("component IDs %v, record %q", st.ComponentIDs, id)
 	}
@@ -199,7 +217,7 @@ func TestRecipeOwnership_FromTheCluster(t *testing.T) {
 		offered := func(when string) {
 			t.Helper()
 			created, req := recipe.Ownership(pc.c, nil, run)
-			if req == nil || !reflect.DeepEqual(*req, types.CleanupRequest{Components: []string{"kueue"}}) || !reflect.DeepEqual(created, map[string]bool{recipe.StepKueuePrereq: true}) {
+			if req == nil || !reflect.DeepEqual(*req, types.CleanupRequest{Components: []string{"kueue"}, ComponentIDs: map[string]string{"kueue": types.ComponentNotIdentified}}) || !reflect.DeepEqual(created, map[string]bool{recipe.StepKueuePrereq: true}) {
 				t.Fatalf("%s: created %v, cleanup %+v", when, created, req)
 			}
 		}

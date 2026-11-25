@@ -281,7 +281,10 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   component turned back and turned on again (from the Environment tab, by
   another run, even in the same second, or while the dialog was open) is not
   turned back for an old run ("turned on again since you reviewed this Clean
-  up"). Runs and records from before the ID match as before. The dialog says
+  up"). Runs and records from before the ID match as before; such a
+  component is named `none` in the request and is not turned back once its
+  record entry has an ID, and a recipe's Clean up turns back no component it
+  does not name. The dialog says
   that Kueue goes back last, only once no ClusterQueue or LocalQueue is left
   on the cluster, and sends only the components it says go back: one it
   lists as staying on is not turned back by the server either. KServe is

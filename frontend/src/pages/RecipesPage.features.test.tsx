@@ -234,7 +234,9 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
   it("Clean up on RHOAI 3.6: AI hub and OGX by name, AI hub kept while the registry stays and its Model Catalog said", async () => {
     const ended = contract.recipeRunFeatures();
     // The run's distributed workloads setup is not offered (gone, or not the run's): Kueue stays, and is not sent.
-    const cleanup = { ...ended.cleanup!, kueue: false, kueueUid: undefined, components: ["aiHub", "kserve", "kueue", "ogx"] };
+    // ogx's record entry predates enablement IDs: it is named as such ("none").
+    const cleanup = { ...ended.cleanup!, kueue: false, kueueUid: undefined, components: ["aiHub", "kserve", "kueue", "ogx"],
+      componentIds: { ...ended.cleanup!.componentIds, aiHub: "9b1d0e7c4a2f5836", ogx: "none" } };
     const streams: ReturnType<typeof sseResponse>[] = [];
     const api = stubApi({
       ...editorReads,
@@ -262,7 +264,7 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     expect(streams).toHaveLength(1);
     expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([
       { recipeProjects: ["recipe-full"], recipeProjectUIDs: { "recipe-full": "1a2b3c4d-uid" }, modelRegistry: true, modelRegistryUid: "registry-uid", recipeRunId: "run2", components: ["aiHub", "kserve", "ogx"],
-        componentIds: { kserve: ended.cleanup!.componentIds!.kserve } },
+        componentIds: { aiHub: "9b1d0e7c4a2f5836", kserve: ended.cleanup!.componentIds!.kserve, ogx: "none" } },
     ]);
     await act(async () => { streams[0].close(); });
     await settle();

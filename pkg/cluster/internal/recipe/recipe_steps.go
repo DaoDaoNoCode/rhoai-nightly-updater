@@ -140,12 +140,12 @@ func Ownership(c, u *kube.Client, run *types.RecipeRun) (map[string]bool, *types
 	}
 	for key, live := range liveComponents(c, run) {
 		req.Components = append(req.Components, key)
-		if live.id != "" {
-			if req.ComponentIDs == nil {
-				req.ComponentIDs = map[string]string{}
-			}
-			req.ComponentIDs[key] = live.id
+		// Every reviewed component is named, one recorded before IDs as
+		// such: Clean up refuses it once the record has an ID for it.
+		if req.ComponentIDs == nil {
+			req.ComponentIDs = map[string]string{}
 		}
+		req.ComponentIDs[key] = kube.FirstNonEmpty(live.id, types.ComponentNotIdentified)
 		created[prereqStepOf[live.feature]] = true
 	}
 	for part, uid := range liveCreated(c, u, run) {
@@ -629,7 +629,11 @@ func runPrereqFor(c *kube.Client, s *State, step, feature, exposure string, emit
 		var after prereqRecordKeys
 		if after, readErr = readPrereqKeys(c.WithContext(ctx)); readErr == nil {
 			for key, e := range after {
-				if _, had := before.Components[key]; !had && e.feature == feature {
+				// Turned on by this setup: the key is new in the record, or
+				// it got a new enablement ID (an entry that survived a turn
+				// off is written again when setup turns it on).
+				prev, had := before.Components[key]
+				if e.feature == feature && (!had || (e.id != "" && e.id != prev.ID)) {
 					s.AddComponentID(key, e.id)
 				}
 			}

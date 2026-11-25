@@ -1122,7 +1122,7 @@ func StillAsSetUp(rec prereqRecord, dsc map[string]any, key string) (feature, id
 // reviewed when the request names one (reviewed, the record's ID; a
 // recipe's Clean up), Argo CD does not manage the DataScienceCluster, and
 // nothing on the cluster uses it (a list that fails refuses).
-func restoreCheck(c *kube.Client, rec prereqRecord, dscRead rhoai.DSCRead, key, reviewed string) restoreVerdict {
+func restoreCheck(c *kube.Client, rec prereqRecord, dscRead rhoai.DSCRead, key string, reviewed reviewedEnablement) restoreVerdict {
 	rc, state, chk := checkSetUp(rec, dscRead.Object, key)
 	switch chk {
 	case notRecorded:
@@ -1132,10 +1132,14 @@ func restoreCheck(c *kube.Client, rec prereqRecord, dscRead rhoai.DSCRead, key, 
 	case changedSince:
 		return restoreVerdict{drop: true, kept: key + " (changed by someone since this tool's setup)"}
 	}
-	if reviewed != "" && rc.ID != reviewed {
+	if reviewed.checked && rc.ID != reviewed.id {
 		// Turned back and turned on again since the review (by the
 		// Environment page or another run): that enablement is not the
-		// one reviewed, and stays recorded for its own Clean up.
+		// one reviewed, and stays recorded for its own Clean up. A
+		// request that names no enablement for key was not reviewed.
+		if !reviewed.named {
+			return restoreVerdict{kept: key + " (this Clean up did not review it)"}
+		}
 		return restoreVerdict{kept: key + " (turned on again since you reviewed this Clean up; it is not turned back for this run)"}
 	}
 	prev := kube.FirstNonEmpty(rc.Previous, "Removed")
@@ -1191,10 +1195,31 @@ func RestoreComponents(c *kube.Client, keys []string) (*types.OperationResponse,
 	return RestoreReviewedComponents(c, keys, nil)
 }
 
+// reviewedEnablement is the enablement a Clean up reviewed of a component:
+// checked when the request names enablements at all (a recipe's), named
+// when it names one for this component, id the record's ID it had (""
+// for types.ComponentNotIdentified, an entry written before IDs).
+type reviewedEnablement struct {
+	checked, named bool
+	id             string
+}
+
+func reviewedOf(reviewed map[string]string, key string) reviewedEnablement {
+	if reviewed == nil {
+		return reviewedEnablement{}
+	}
+	id, named := reviewed[key]
+	if id == types.ComponentNotIdentified {
+		id = ""
+	}
+	return reviewedEnablement{checked: true, named: named && (id != "" || reviewed[key] == types.ComponentNotIdentified), id: id}
+}
+
 // RestoreReviewedComponents is RestoreComponents for a Clean up that names
 // the enablement it reviewed of each component (reviewed: key to the
-// prerequisites record's ID; a recipe's Clean up): a component turned on
-// again since is not turned back (restoreCheck). A key without an ID is
+// prerequisites record's ID, or types.ComponentNotIdentified; a recipe's
+// Clean up): a component turned on again since is not turned back, nor is
+// one the request does not name (restoreCheck). Without reviewed each is
 // checked as RestoreComponents checks it.
 func RestoreReviewedComponents(c *kube.Client, keys []string, reviewed map[string]string) (*types.OperationResponse, error) {
 	rec, err := ReadPrereqRecord(c)
@@ -1221,7 +1246,7 @@ func RestoreReviewedComponents(c *kube.Client, keys []string, reviewed map[strin
 		}
 	}
 	for _, key := range keys {
-		v := restoreCheck(c, rec, dsc, key, reviewed[key])
+		v := restoreCheck(c, rec, dsc, key, reviewedOf(reviewed, key))
 		if v.refusal != "" {
 			return &types.OperationResponse{Success: false, Message: v.refusal + " Nothing was changed.", ErrorCode: v.code}, nil
 		}
@@ -1251,7 +1276,7 @@ func RestoreReviewedComponents(c *kube.Client, keys []string, reviewed map[strin
 		for attempt := 1; ; attempt++ {
 			v := restoreVerdict{restore: true, prev: kube.FirstNonEmpty(rec.Components[key].Previous, "Removed")}
 			if checkedOn[key] != reads {
-				if v = restoreCheck(c, rec, dsc, key, reviewed[key]); v.refusal != "" {
+				if v = restoreCheck(c, rec, dsc, key, reviewedOf(reviewed, key)); v.refusal != "" {
 					return stop(v.refusal, v.code)
 				}
 				checkedOn[key] = reads

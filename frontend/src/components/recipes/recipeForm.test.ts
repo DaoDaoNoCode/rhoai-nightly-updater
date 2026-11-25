@@ -65,6 +65,15 @@ describe("recipe Clean up and plan words", () => {
     expect(componentsSplit(model(true, "team-a"), run, { recipeProjects: ["recipe-full"] }, offered).stay).toEqual(["KServe (the model in team-a stays)"]);
     // Deleted with its project: it goes back.
     expect(componentsSplit(model(true), run, { recipeProjects: ["recipe-full"] }, offered).backKeys).toEqual(["kserve"]);
+    // Only in a project that is no longer a data science project (models.outside): it still counts.
+    const outside = { models: { catalog: null, items: [], outside: [{ name: "m", namespace: "old-proj", deployed: true }] } } as unknown as ResourcesStatus;
+    expect(componentsSplit(outside, run, kept, offered).stay).toEqual(["KServe (the model in old-proj stays)"]);
+    // Being deleted: it keeps nothing on.
+    const going = { models: { catalog: null, items: [{ name: "m", namespace: "recipe-full", deployed: true, terminating: true }] } } as unknown as ResourcesStatus;
+    expect(componentsSplit(going, run, kept, offered).backKeys).toEqual(["kserve"]);
+    // Deployed but still starting (not ready): readiness does not decide, it keeps KServe on.
+    const starting = { models: { catalog: null, items: [{ name: "m", namespace: "recipe-full", deployed: true, ready: false }] } } as unknown as ResourcesStatus;
+    expect(componentsSplit(starting, run, kept, offered).stay).toEqual(["KServe (the model in recipe-full stays)"]);
     // No status: the recipe's own model counts while its project stays.
     expect(componentsSplit(null, run, kept, offered).stay).toEqual(["KServe (the model in recipe-full stays)"]);
   });
@@ -77,6 +86,8 @@ describe("recipe Clean up and plan words", () => {
     // The reviewed enablement goes only with a component that is sent.
     expect(withComponentsBack({ ...req, componentIds: { kserve: "a", kueue: "b" } }, ["kserve", "aiHub"])).toEqual({ recipeProjects: ["recipe-full"], components: ["kserve", "aiHub"], componentIds: { kserve: "a" } });
     expect(withComponentsBack({ ...req, componentIds: { kueue: "b" } }, [])).toEqual({ recipeProjects: ["recipe-full"] });
+    // A component reviewed without an ID goes with the backend's "none".
+    expect(withComponentsBack({ ...req, componentIds: { kserve: "none" } }, ["kserve"]).componentIds).toEqual({ kserve: "none" });
     // The components part unticked stays unticked.
     expect(withComponentsBack({ recipeProjects: ["recipe-full"] }, ["kserve"])).toEqual({ recipeProjects: ["recipe-full"] });
   });

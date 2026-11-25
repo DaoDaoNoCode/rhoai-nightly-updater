@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kueue"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/recipe"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -61,9 +62,16 @@ func TestRecipeOwnership_EveryComponentInItsOnState(t *testing.T) {
 // on the cluster putKueueCluster made.
 func recipeKueueRun(t *testing.T, f *resourceFake, u *Client) *types.RecipeRun {
 	t.Helper()
+	return recipeKueueRunAs(t, f, u, "en-1")
+}
+
+// recipeKueueRunAs is recipeKueueRun with the record's enablement ID (""
+// a record and a run from before IDs).
+func recipeKueueRunAs(t *testing.T, f *resourceFake, u *Client, id string) *types.RecipeRun {
+	t.Helper()
 	f.putJSON(tDSC, `{"metadata":{"name":"default-dsc","resourceVersion":"1"},"spec":{"components":{"kueue":{"managementState":"Removed"},"ray":{"managementState":"Managed"}}},
 		"status":{"components":{"ray":{"managementState":"Managed"}},"conditions":[{"type":"KueueReady","status":"True"}]}}`)
-	kueueTurnedOnByToolAs(t, u, "en-1")
+	kueueTurnedOnByToolAs(t, u, id)
 	res, err := kueue.RunAnnotated(u, types.KueueRequest{Action: "setup", Project: "proj"}, map[string]string{recipe.RecipeRunAnnotation: "run-1"}, nil)
 	if err != nil || !res.Success {
 		t.Fatalf("kueue setup: %+v %v", res, err)
@@ -72,8 +80,12 @@ func recipeKueueRun(t *testing.T, f *resourceFake, u *Client) *types.RecipeRun {
 	if uid == "" {
 		t.Fatal("no ClusterQueue")
 	}
+	var ids map[string]string
+	if id != "" {
+		ids = map[string]string{"kueue": id}
+	}
 	return &types.RecipeRun{ID: "run-1", Steps: []types.RecipeRunStep{{ID: recipe.StepKueuePrereq}, {ID: recipe.StepKueue}},
-		Components: []string{"kueue"}, ComponentIDs: map[string]string{"kueue": "en-1"}, CreatedParts: []types.RecipeCreatedPart{{Part: types.RecipePartKueue, UID: uid}}}
+		Components: []string{"kueue"}, ComponentIDs: ids, CreatedParts: []types.RecipeCreatedPart{{Part: types.RecipePartKueue, UID: uid}}}
 }
 
 // recipeKueueCleanUp runs the recipe's Clean up of run with the request
@@ -85,7 +97,7 @@ func recipeKueueCleanUp(t *testing.T, u *Client, run *types.RecipeRun, at func(U
 	t.Helper()
 	created, req := recipe.Ownership(u, u, run)
 	if req == nil || !req.Kueue || req.KueueUID != run.CreatedParts[0].UID || req.RecipeRunID != "run-1" || !reflect.DeepEqual(req.Components, []string{"kueue"}) ||
-		!reflect.DeepEqual(req.ComponentIDs, map[string]string{"kueue": "en-1"}) || !created[recipe.StepKueuePrereq] || !created[recipe.StepKueue] {
+		!reflect.DeepEqual(req.ComponentIDs, map[string]string{"kueue": kube.FirstNonEmpty(run.ComponentIDs["kueue"], types.ComponentNotIdentified)}) || !created[recipe.StepKueuePrereq] || !created[recipe.StepKueue] {
 		t.Fatalf("offer: created %v, cleanup %+v", created, req)
 	}
 	steps := map[string]string{}
@@ -146,29 +158,32 @@ func TestRecipeCleanUp_TurnsKueueBackFromItsOffer(t *testing.T) {
 	// Turned back and turned on again (another enablement) between the
 	// review and the click: refused for this run, left as it is, and kept
 	// in the record for its own Clean up.
-	t.Run("turned on again since the review", func(t *testing.T) {
-		f, u := putKueueCluster(t)
-		run := recipeKueueRun(t, f, u)
-		res, steps, _ := recipeKueueCleanUp(t, u, run, func(e UpdateStepEvent) {
-			if e.Step == "kueue" && e.Status == "running" {
-				for _, state := range []string{"Removed", "Unmanaged"} {
-					if _, _, err := u.Do(http.MethodPatch, tDSC, "application/merge-patch+json", []byte(`{"spec":{"components":{"kueue":{"managementState":"`+state+`"}}}}`),
-						map[string][]string{"fieldManager": {"rhoai-nightly-updater-dsc-kueue"}}); err != nil {
+	for _, reviewed := range []string{"en-1", ""} {
+		// "": a record entry from before IDs, reviewed as such.
+		t.Run("turned on again since the review/"+kube.FirstNonEmpty(reviewed, "no ID"), func(t *testing.T) {
+			f, u := putKueueCluster(t)
+			run := recipeKueueRunAs(t, f, u, reviewed)
+			res, steps, _ := recipeKueueCleanUp(t, u, run, func(e UpdateStepEvent) {
+				if e.Step == "kueue" && e.Status == "running" {
+					for _, state := range []string{"Removed", "Unmanaged"} {
+						if _, _, err := u.Do(http.MethodPatch, tDSC, "application/merge-patch+json", []byte(`{"spec":{"components":{"kueue":{"managementState":"`+state+`"}}}}`),
+							map[string][]string{"fieldManager": {"rhoai-nightly-updater-dsc-kueue"}}); err != nil {
+							t.Error(err)
+						}
+					}
+					if err := writeTestPrereqRecord(u, `{"components":{"kueue":{"previous":"Removed","feature":"kueue","id":"en-2"}}}`); err != nil {
 						t.Error(err)
 					}
 				}
-				if err := writeTestPrereqRecord(u, `{"components":{"kueue":{"previous":"Removed","feature":"kueue","id":"en-2"}}}`); err != nil {
-					t.Error(err)
-				}
+			})
+			if !res.Success || steps["components"] != "success" || !strings.Contains(res.Message, "Not turned back: kueue (turned on again since you reviewed this Clean up") {
+				t.Fatalf("clean-up %+v, steps %v", res, steps)
+			}
+			if componentState(f, "kueue") != "Unmanaged" || prereqRecordID(t, u, "kueue") != "en-2" {
+				t.Fatalf("kueue %s, record %q", componentState(f, "kueue"), prereqRecordID(t, u, "kueue"))
 			}
 		})
-		if !res.Success || steps["components"] != "success" || !strings.Contains(res.Message, "Not turned back: kueue (turned on again since you reviewed this Clean up") {
-			t.Fatalf("clean-up %+v, steps %v", res, steps)
-		}
-		if componentState(f, "kueue") != "Unmanaged" || prereqRecordID(t, u, "kueue") != "en-2" {
-			t.Fatalf("kueue %s, record %q", componentState(f, "kueue"), prereqRecordID(t, u, "kueue"))
-		}
-	})
+	}
 	t.Run("the queue list is refused", func(t *testing.T) {
 		f, u := putKueueCluster(t)
 		run := recipeKueueRun(t, f, u)
@@ -245,5 +260,36 @@ func TestRecipeOwnership_ClaimsOnlyItsEnablement(t *testing.T) {
 	}
 	if offered(map[string]string{"aipipelines": second}) {
 		t.Error("a run with an ID claims a record entry without one")
+	}
+}
+
+// A recipe's Clean up names each component it reviewed: one it does not
+// name is not turned back, nor is an empty ID (only an ID or
+// ComponentNotIdentified counts). The Environment page's Clean up names
+// none and is checked as before.
+func TestRestoreReviewedComponents_OnlyWhatWasReviewed(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		reviewed map[string]string
+		back     bool
+	}{
+		{"its ID", map[string]string{"kueue": "en-1"}, true},
+		{"another ID", map[string]string{"kueue": "en-0"}, false},
+		{"not named", map[string]string{"kserve": "en-1"}, false},
+		{"an empty ID", map[string]string{"kueue": ""}, false},
+		{"none, but the entry has an ID", map[string]string{"kueue": types.ComponentNotIdentified}, false},
+		{"the Environment page's", nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pc := newPrereqCluster(t)
+			pc.f.putJSON(tDSC, `{"metadata":{"name":"default-dsc","resourceVersion":"1"},"spec":{"components":{"kueue":{"managementState":"Removed"}}}}`)
+			u := userClientOf(pc.c, fakeUserToken)
+			kueueTurnedOnByToolAs(t, u, "en-1")
+			pc.f.groups = map[string]string{kqGroup: kqV1beta2}
+			res, err := features.RestoreReviewedComponents(u, []string{"kueue"}, tc.reviewed)
+			if err != nil || !res.Success || (componentState(pc.f, "kueue") == "Removed") != tc.back {
+				t.Fatalf("%+v %v: kueue %s", res, err, componentState(pc.f, "kueue"))
+			}
+		})
 	}
 }
