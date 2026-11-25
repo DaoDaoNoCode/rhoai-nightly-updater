@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -312,18 +313,25 @@ func WaitForInstall(c *kube.Client, emit func(types.UpdateStepEvent), logs *[]st
 	if opDeadline, ok := c.Context().Deadline(); ok {
 		deadline, budgetLimited = opDeadline.Add(-InstallDeadlineReserve), true
 	}
-	w := &installWait{c: c, emit: emit, logs: logs}
+	// Every sleep and read of the wait, the diagnostic ones included, ends
+	// at the cutoff: a slow API server cannot eat InstallDeadlineReserve.
+	waitCtx, cancel := kube.Clock().WithDeadline(c.Context(), deadline)
+	defer cancel()
+	operation := c
+	c = c.WithContext(waitCtx)
+	w := &installWait{c: c, operation: operation, emit: emit, logs: logs}
 	approved := map[string]bool{}
 	progress, failed, stopped := w.progress, w.failed, w.stopped
 
 	for {
-		if err := kube.Clock().Sleep(c.Context(), InstallPlanPollInterval); err != nil {
+		sleepErr := kube.Clock().Sleep(c.Context(), InstallPlanPollInterval)
+		if err := operation.Context().Err(); err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
 				return stopped("timeout", "The operation deadline passed before OLM finished installing the operator")
 			}
 			return stopped("cancelled", "The operation was cancelled before OLM finished installing the operator")
 		}
-		if kube.Clock().Now().After(deadline) {
+		if sleepErr != nil || !kube.Clock().Now().Before(deadline) {
 			if budgetLimited {
 				return stopped("install_timeout", "OLM did not finish installing the operator within the operation's time budget")
 			}
@@ -367,7 +375,9 @@ func WaitForInstall(c *kube.Client, emit func(types.UpdateStepEvent), logs *[]st
 		}
 		if name == "" {
 			if w.ipName == "" && !resolutionFailing {
-				progress(w.resolveState(sub))
+				if state := w.resolveState(sub); c.Context().Err() == nil {
+					progress(state) // not a state cut short by the cutoff
+				}
 			}
 			continue
 		}
@@ -382,9 +392,12 @@ func WaitForInstall(c *kube.Client, emit func(types.UpdateStepEvent), logs *[]st
 // installWait is the state of one WaitForInstall, kept across its
 // polls.
 type installWait struct {
-	c    *kube.Client
-	emit func(types.UpdateStepEvent)
-	logs *[]string
+	// c ends at the wait's cutoff; operation is the operation's own client,
+	// for the upgrade-gate note after a successful install, which has its
+	// own bound (AdminAckNote).
+	c, operation *kube.Client
+	emit         func(types.UpdateStepEvent)
+	logs         *[]string
 	// When each failing condition was first seen in a row (zero: not
 	// failing).
 	resolutionSince, csvFailedSince, succeededSince time.Time
@@ -475,8 +488,8 @@ func (w *installWait) subscriptionConditions(sub installWaitSubscription) (resol
 		case "InstallPlanFailed":
 			return false, failed("installplan_failed", "OLM reports that the InstallPlan failed: "+describeCondition(cond)), true
 		case "BundleUnpackFailed":
-			return false, failed("bundle_unpack_failed", "OLM could not unpack the operator bundle: "+describeCondition(cond)+
-				". If this repeats, follow the OpenShift procedure for failing subscriptions: delete the failed bundle-unpack Job and its ConfigMap in openshift-marketplace (label operatorframework.io/bundle-unpack-ref), then run the operation again."), true
+			return false, failed("bundle_unpack_failed", "OLM could not unpack the operator bundle ("+bundleConditionDetail(cond)+
+				"). If this repeats, follow the OpenShift procedure for failing subscriptions: delete the failed bundle-unpack Job and its ConfigMap in "+kube.NonEmpty(w.sourceNS, "the catalog's namespace")+" (label "+catalog.BundleUnpackRefLabel+"), then run the operation again."), true
 		case "ResolutionFailed":
 			resolutionFailing = true
 			if w.resolutionSince.IsZero() {
@@ -523,7 +536,11 @@ func (w *installWait) resolveState(sub installWaitSubscription) string {
 			continue
 		}
 		detail := cond.Reason
-		if cond.Status == "True" && cond.Message != "" {
+		switch {
+		case cond.Status != "True" || cond.Message == "":
+		case cond.Type == "BundleUnpacking" || cond.Type == "BundleUnpackFailed":
+			detail = bundleConditionDetail(cond)
+		default:
 			detail = describeCondition(olmCondition{Reason: cond.Reason, Message: kube.TruncateText(cond.Message, 300)})
 		}
 		conds = append(conds, strings.TrimSpace(cond.Type+"="+cond.Status+" "+parenthesize(detail)))
@@ -566,10 +583,36 @@ func (w *installWait) readUnpackTimeoutNote() string {
 	if problem != "" || len(groups) != 1 {
 		return ""
 	}
+	// Shown as the annotation's content, not as the timeout in effect: a
+	// value time.ParseDuration rejects makes OLM's sync of the namespace
+	// fail instead (bundle_unpacker.go:981-984, catalog/operator.go:1270-1273),
+	// and 0 means no timeout (bundle_unpacker.go:312-316).
 	if v, ok := groups[0].Metadata.Annotations[catalog.BundleUnpackTimeoutAnnotation]; ok {
-		w.unpackTimeoutNote = fmt.Sprintf("OperatorGroup %s sets OLM's bundle unpack timeout to %q (%s)", groups[0].Metadata.Name, v, catalog.BundleUnpackTimeoutAnnotation)
+		w.unpackTimeoutNote = fmt.Sprintf("OperatorGroup %s has the annotation %s: %q", groups[0].Metadata.Name, catalog.BundleUnpackTimeoutAnnotation, kube.TruncateText(v, 100))
 	}
 	return w.unpackTimeoutNote
+}
+
+// bundleUnpackJobReason finds the Job's failure reason in OLM's
+// BundleUnpackFailed message, "bundle unpacking failed. Reason: <reason>,
+// and Message: <message>" (catalog/operator.go:1399-1401): a Kubernetes
+// reason word such as DeadlineExceeded or BackoffLimitExceeded.
+var bundleUnpackJobReason = regexp.MustCompile(`Reason: ([A-Za-z]+)`)
+
+// bundleConditionDetail words a BundleUnpacking or BundleUnpackFailed
+// condition without its message: OLM 4.23 and later put the unpack pod's
+// pull failure into it, and registry error text can carry a signed URL.
+// It gives the reason, the Job's failure reason when OLM quotes one, and,
+// when the message is about a pull, the same loose hint the pods get.
+func bundleConditionDetail(cond olmCondition) string {
+	parts := []string{cond.Reason}
+	if m := bundleUnpackJobReason.FindStringSubmatch(cond.Message); m != nil {
+		parts = append(parts, "Job "+m[1])
+	}
+	if strings.Contains(strings.ToLower(cond.Message), "pull") {
+		parts = append(parts, catalog.PullErrorKind(cond.Message))
+	}
+	return strings.Join(slices.DeleteFunc(parts, func(p string) bool { return p == "" }), ", ")
 }
 
 // checkCSV reads CSV name, the Subscription's current one: the outcome when
@@ -631,7 +674,7 @@ func (w *installWait) checkCSV(name, installedCSV string, deadline, waitStart ti
 			return installOutcome{}, false
 		}
 		*logs = append(*logs, fmt.Sprintf("OK: CSV %s is Succeeded", name))
-		outcome := installOutcome{Succeeded: true, csv: name, note: AdminAckNote(c, name, waitStart)}
+		outcome := installOutcome{Succeeded: true, csv: name, note: AdminAckNote(w.operation, name, waitStart)}
 		if outcome.note != "" {
 			*logs = append(*logs, "Warning: "+outcome.note)
 		}

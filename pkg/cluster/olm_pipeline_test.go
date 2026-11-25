@@ -51,7 +51,7 @@ func TestUpdateStream_WaitsForOLMOutcome(t *testing.T) {
 		// A failing pull is not a verdict: OLM keeps retrying it until its
 		// own unpack timeout, so the wait shows it until it ends; unhealthy
 		// catalogs are only noted, a condition that is not True is not read.
-		{name: "bundle image pull failing", wantCode: "install_timeout", wantRestore: true, wantInMsg: "BundleUnpacking=True (JobIncomplete: unpack job: image pull failed)",
+		{name: "bundle image pull failing", wantCode: "install_timeout", wantRestore: true, wantInMsg: "BundleUnpacking=True (JobIncomplete, pull error)",
 			onSubscribe: func(f *fakeOLM, _ map[string]any) {
 				f.sub["status"] = map[string]any{"conditions": []any{
 					map[string]any{"type": "InstallPlanFailed", "status": "False"},

@@ -78,7 +78,7 @@ func BundleUnpackPullFailures(c *kube.Client, namespace string) ([]string, error
 			}
 			detail := waiting.Reason
 			if waiting.Message != "" {
-				detail += " (" + pullErrorKind(waiting.Message) + ")"
+				detail += " (" + PullErrorKind(waiting.Message) + ")"
 			}
 			msg := fmt.Sprintf("an OLM bundle unpack in %s cannot pull %s: %s", namespace, kube.NonEmpty(cs.Image, "(image not reported)"), detail)
 			if !slices.Contains(failures, msg) {
@@ -94,13 +94,13 @@ func BundleUnpackPullFailures(c *kube.Client, namespace string) ([]string, error
 // images.
 const bundlePullContainer = "pull"
 
-// pullErrorKind is a display hint only: it names the kind of error a
+// PullErrorKind is a display hint only: it names the kind of error a
 // kubelet image pull message seems to describe, so the message itself is
 // never shown. The kubelet's and the container runtime's wording is not an
 // API and differs between versions and registries, so it is matched
 // loosely, anything else is the neutral "pull error", and nothing is
 // decided on it.
-func pullErrorKind(message string) string {
+func PullErrorKind(message string) string {
 	m := strings.ToLower(message)
 	switch {
 	case strings.Contains(m, "manifest unknown"):

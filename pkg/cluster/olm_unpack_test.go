@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/clock/clocktest"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
@@ -168,13 +169,27 @@ func TestWaitForInstall_SaysWhenUnpackPodsCannotBeRead(t *testing.T) {
 	}
 }
 
-// The kubelet's pull message is never quoted: a registry error can carry a
-// signed URL. Only the reason and a recognised kind of error reach the
-// progress, the logs and the result.
-func TestWaitForInstall_NeverQuotesThePullMessage(t *testing.T) {
+// Registry error text is never quoted, from the unpack pod or from the
+// Subscription's bundle conditions (OLM 4.23 and later put the pod's pull
+// failure into BundleUnpacking): it can carry a signed URL. Only reasons
+// and a loose hint at the kind of error reach the progress, the logs and
+// the result.
+func TestWaitForInstall_NeverQuotesRegistryErrors(t *testing.T) {
 	// A signed download URL as a registry error can quote it (fake values).
 	signature := "X-Amz-Signature=" + strings.Repeat("0", 8)
 	signedURL := "https://cdn.registry.example/blobs/sha256:1?X-Amz-Credential=example&" + signature
+	leaked := func(t *testing.T, out string, logs []string, events []UpdateStepEvent) {
+		t.Helper()
+		texts := append([]string{out}, logs...)
+		for _, e := range events {
+			texts = append(texts, e.Message, e.Detail)
+		}
+		for _, text := range texts {
+			if strings.Contains(text, "https://") || strings.Contains(text, signature) || strings.Contains(text, "X-Amz-Credential") || strings.Contains(text, "cdn.registry.example") {
+				t.Fatalf("registry error text leaked: %q", text)
+			}
+		}
+	}
 	for _, tc := range []struct{ message, kind string }{
 		{"reading manifest sha256:1 in " + signedURL + ": manifest unknown", "manifest unknown"},
 		{"fetching blob " + signedURL + ": unauthorized: authentication required", "unauthorized"},
@@ -184,27 +199,78 @@ func TestWaitForInstall_NeverQuotesThePullMessage(t *testing.T) {
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			f := newFakeOLM(t)
-			f.sub = map[string]any{"metadata": map[string]any{"name": rhoai.SubName}, "spec": map[string]any{"sourceNamespace": rhoai.CatalogNS}, "status": map[string]any{}}
-			unpackingSubscription(f)
+			f.sub = map[string]any{"metadata": map[string]any{"name": rhoai.SubName}, "spec": map[string]any{"sourceNamespace": rhoai.CatalogNS}, "status": map[string]any{"conditions": []any{
+				cond("BundleUnpacking", "UnpackingInProgress", "Bundle image pull failed: "+tc.message),
+			}}}
 			f.unpackPods = `{"items":[{"metadata":{"name":"a1"},"status":{"phase":"Pending","initContainerStatuses":[
 			  {"name":"pull","image":"` + testBundleImage + `","ready":false,"state":{"waiting":{"reason":"ErrImagePull","message":` + jsonString(tc.message) + `}}}]}}]}`
 			emit, events := eventsRecorder()
 			var logs []string
 			out := operator.WaitForInstall(f.client(context.Background()), emit, &logs, &operator.Recovery{}, "")
-			want := "cannot pull " + testBundleImage + ": ErrImagePull (" + tc.kind + ")"
-			if !strings.Contains(out.Message, want) {
-				t.Fatalf("message lacks %q:\n%s", want, out.Message)
-			}
-			texts := append([]string{out.Message}, logs...)
-			for _, e := range events() {
-				texts = append(texts, e.Message, e.Detail)
-			}
-			for _, text := range texts {
-				if strings.Contains(text, "https://") || strings.Contains(text, signature) || strings.Contains(text, "X-Amz-Credential") || strings.Contains(text, "cdn.registry.example") {
-					t.Fatalf("the pull message leaked: %q", text)
+			for _, want := range []string{
+				"cannot pull " + testBundleImage + ": ErrImagePull (" + tc.kind + ")",
+				"BundleUnpacking=True (UnpackingInProgress, " + tc.kind + ")",
+			} {
+				if !strings.Contains(out.Message, want) {
+					t.Fatalf("message lacks %q:\n%s", want, out.Message)
 				}
 			}
+			leaked(t, out.Message, logs, events())
 		})
+	}
+	t.Run("BundleUnpackFailed", func(t *testing.T) {
+		f := newFakeOLM(t)
+		f.sub = map[string]any{"metadata": map[string]any{"name": rhoai.SubName}, "spec": map[string]any{"sourceNamespace": rhoai.CatalogNS}, "status": map[string]any{"conditions": []any{
+			cond("BundleUnpackFailed", "BundleUnpackFailed", "bundle unpacking failed. Reason: DeadlineExceeded, and Message: pull of "+signedURL+" failed: unauthorized"),
+		}}}
+		emit, events := eventsRecorder()
+		var logs []string
+		out := operator.WaitForInstall(f.client(context.Background()), emit, &logs, &operator.Recovery{}, "")
+		if want := "OLM could not unpack the operator bundle (BundleUnpackFailed, Job DeadlineExceeded, unauthorized)"; out.ErrorCode != "bundle_unpack_failed" || !strings.Contains(out.Message, want) {
+			t.Fatalf("outcome %+v lacks %q", out, want)
+		}
+		leaked(t, out.Message, logs, events())
+	})
+}
+
+// A diagnostic read that stalls near the cutoff ends with it: the wait
+// reports install_timeout before the operation's deadline, with the last
+// state it had, not an error of the cut read.
+func TestWaitForInstall_StalledDiagnosticReadEndsAtTheCutoff(t *testing.T) {
+	fake, ok := kube.Clock().(*clocktest.Fake)
+	if !ok {
+		t.Fatal("the tests' clock is not a clocktest.Fake")
+	}
+	f := newFakeOLM(t)
+	f.sub = map[string]any{"metadata": map[string]any{"name": rhoai.SubName}, "spec": map[string]any{"sourceNamespace": rhoai.CatalogNS}, "status": map[string]any{}}
+	unpackingSubscription(f)
+	f.unpackPods = unpackPodsPullFailing
+	ctx, cancel := kube.Clock().WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	opDeadline, _ := ctx.Deadline()
+	cutoff := opDeadline.Add(-operator.InstallDeadlineReserve)
+	stalled := false
+	f.intercept = func(f *fakeOLM, _ http.ResponseWriter, r *http.Request) bool {
+		if stalled || r.URL.Query().Get("labelSelector") != catalog.BundleUnpackRefLabel || kube.Clock().Until(cutoff) > time.Second {
+			return false
+		}
+		// The API server stalls on the pod list until the client gives up;
+		// meanwhile the time passes the cutoff, not the operation's deadline.
+		stalled = true
+		fake.Advance(kube.Clock().Until(cutoff) + time.Second)
+		<-r.Context().Done()
+		return true
+	}
+	var logs []string
+	out := operator.WaitForInstall(f.client(ctx), func(UpdateStepEvent) {}, &logs, &operator.Recovery{}, "")
+	if !stalled {
+		t.Fatal("the pod list never stalled")
+	}
+	if out.ErrorCode != "install_timeout" || !strings.Contains(out.Message, "operation's time budget") || ctx.Err() != nil {
+		t.Fatalf("outcome %+v, operation context %v", out, ctx.Err())
+	}
+	if !strings.Contains(out.Message, "cannot pull "+testBundleImage) || strings.Contains(out.Message, "could not be read") {
+		t.Fatalf("the last state is not the one before the cut read: %s", out.Message)
 	}
 }
 
@@ -312,7 +378,7 @@ func TestWaitForInstall_ReadsUnpackPodsInTheCatalogsNamespace(t *testing.T) {
 	out := operator.WaitForInstall(f.client(context.Background()), func(UpdateStepEvent) {}, &logs, &operator.Recovery{}, "")
 	for _, want := range []string{
 		"an OLM bundle unpack in " + ns + " cannot pull " + testBundleImage + ": ImagePullBackOff (manifest unknown)",
-		`OperatorGroup rhods-operator sets OLM's bundle unpack timeout to "30m"`,
+		`OperatorGroup rhods-operator has the annotation ` + catalog.BundleUnpackTimeoutAnnotation + `: "30m"`,
 		"oc get pods -n " + ns + " -l " + catalog.BundleUnpackRefLabel,
 	} {
 		if !strings.Contains(out.Message, want) {
