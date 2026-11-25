@@ -201,9 +201,14 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     expect(within(dialog).getAllByRole("checkbox").map((c) => [c.getAttribute("id"), (c as HTMLInputElement).checked])).toEqual([
       ["recipe-cleanup-recipe-project:recipe-full", true], ["recipe-cleanup-model-registry", false], ["recipe-cleanup-maas-platform", false], ["recipe-cleanup-kueue", false], ["recipe-cleanup-components", true],
     ]);
-    const left = within(within(dialog).getByText("Left in place").closest(".pf-v6-c-alert") as HTMLElement).getAllByRole("listitem").map((li) => li.textContent);
+    const items = (name: string) => within(within(dialog).getByRole("list", { name })).getAllByRole("listitem").map((li) => li.textContent);
     // What the checkboxes offer is not listed again; Dashboard Dev has its own page, not the Environment page's Clean up.
-    expect(left).toEqual(["The S3 storage", "MLflow"]);
+    expect(items("Not deleted by this Clean up")).toEqual(["The S3 storage", "MLflow"]);
+    // The shared pieces the run's features installed or used: they stay after any Clean up.
+    expect(items("Shared cluster pieces that stay")).toEqual([
+      "Red Hat Connectivity Link, with its Kuadrant instance and Authorino TLS", "The cert-manager Operator for Red Hat OpenShift",
+      "The Red Hat build of Kueue", "GatewayClass openshift-default (OpenShift's shared class for gateways)",
+    ]);
     expect(dialog).toHaveTextContent("The Dashboard Dev build stays: revert it on the Dashboard Dev page.");
     expect(within(dialog).getByRole("link", { name: "Dashboard Dev page" })).toHaveAttribute("href", "/dashboard-dev");
     // The run turned kueue on (Unmanaged): offered, and kept on while its distributed workloads setup stays.

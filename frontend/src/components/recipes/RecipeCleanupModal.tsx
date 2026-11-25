@@ -22,7 +22,7 @@ import type { RecipeRun, ResourcesStatus } from "../../types";
 import { StepProgress, type StepState } from "../environment/StepProgress";
 import { cleanupSteps } from "../environment/CleanupModal";
 import { TooltipButton } from "../TooltipButton";
-import { cleanupParts, cleanupRequest, componentName, componentsSplit, dashboardDevLeft, leftInPlace, listText, withComponentsBack } from "./recipeForm";
+import { cleanupParts, cleanupRequest, componentName, componentsSplit, dashboardDevLeft, leftInPlace, listText, sharedLeft, withComponentsBack } from "./recipeForm";
 
 /** The clean-up's refusal of a recipe project that still holds what the tool did not create (pkg/cluster recipe.ErrorCodeConfirmContents). */
 const CONFIRM_CONTENTS = "confirm_project_contents";
@@ -99,6 +99,7 @@ export const RecipeCleanupModal: React.FC<{
   const req = withComponentsBack(draft, split.backKeys);
   const stays = run && resources ? leftInPlace(resources, run, req) : [];
   const devLeft = !!run && dashboardDevLeft(run);
+  const shared = run ? sharedLeft(run) : [];
   const partLabel = (p: { id: string; title: string; description?: string }): [string, string] => {
     if (p.id !== "components") return [p.title, p.description ?? "Removes everything in the project: its models, playground, workbench and pipeline server."];
     const title = split.back.length > 0 ? `Turn back the DataScienceCluster components the run turned on: ${listText(split.back)}` : "Turn back the DataScienceCluster components the run turned on";
@@ -194,7 +195,7 @@ export const RecipeCleanupModal: React.FC<{
                   </Alert>
                 </StackItem>
               ))}
-              {run && (stays.length > 0 || resources === false || devLeft) && (
+              {run && (stays.length > 0 || resources === false || devLeft || shared.length > 0) && (
                 <StackItem>
                   <Alert variant="info" isInline title="Left in place">
                     <Stack hasGutter>
@@ -202,7 +203,7 @@ export const RecipeCleanupModal: React.FC<{
                         <>
                           <StackItem>This Clean up does not delete these:</StackItem>
                           <StackItem>
-                            <List>{stays.map((s) => <ListItem key={s}>{s}</ListItem>)}</List>
+                            <List aria-label="Not deleted by this Clean up">{stays.map((s) => <ListItem key={s}>{s}</ListItem>)}</List>
                           </StackItem>
                         </>
                       )}
@@ -216,6 +217,14 @@ export const RecipeCleanupModal: React.FC<{
                         <StackItem>
                           To delete them, use Clean up everything on the <Link to="/environment">Environment page</Link>.
                         </StackItem>
+                      )}
+                      {shared.length > 0 && (
+                        <>
+                          <StackItem>These shared cluster pieces the run installed or used stay after any Clean up, because other setups use them:</StackItem>
+                          <StackItem>
+                            <List aria-label="Shared cluster pieces that stay">{shared.map((s) => <ListItem key={s}>{s}</ListItem>)}</List>
+                          </StackItem>
+                        </>
                       )}
                       {devLeft && (
                         <StackItem>

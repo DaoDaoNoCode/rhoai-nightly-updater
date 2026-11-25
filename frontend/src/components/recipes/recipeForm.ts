@@ -430,6 +430,44 @@ export function leftInPlace(status: ResourcesStatus, run: RecipeRun, req: Cleanu
   }
   if (up(status.minio)) out.push("The S3 storage");
   if (up(status.mlflow)) out.push("MLflow");
+  // The inference gateway the run's model routes through (cluster-wide, in openshift-ingress): a project's Clean up
+  // leaves it; Clean up everything deletes it once no model uses it.
+  if (runUsed(run).inferenceGateway && up(status.inferenceGateway) && status.inferenceGateway?.managedByTool) out.push("The inference gateway");
+  return out;
+}
+
+/** The run's step id reached success (it set its part up, or found it there and used it). */
+const stepDone = (run: RecipeRun, id: string) => run.steps.some((s) => s.id === id && s.status === "success");
+
+/** What the run's steps set up or used that needs shared cluster pieces. */
+function runUsed(run: RecipeRun) {
+  const f = run.recipe.spec.features;
+  const exposure = run.exposure ?? f.models.exposure ?? "";
+  const model = f.models.enabled && stepDone(run, "model");
+  const maas = f.maas.enabled && stepDone(run, "maas");
+  return {
+    maas, model, cnpg: maas && f.maas.database === "cnpg",
+    kueue: !!f.kueue?.enabled && stepDone(run, "kueue"),
+    // A model reached through a gateway needs Connectivity Link (pkg/cluster/internal/features featureSetupFor).
+    gatewayModel: model && (exposure === "default-gateway" || exposure === "gateway"),
+    inferenceGateway: model && exposure === "default-gateway",
+  };
+}
+
+/**
+ * The shared cluster pieces the run installed or used that no Clean up of this tool removes, as each feature's own
+ * Clean up says (pkg/cluster/internal/serving MaaS remove; the prerequisites' operators "stay after Clean up"):
+ * only those of the features the run's steps set up.
+ */
+export function sharedLeft(run: RecipeRun): string[] {
+  const u = runUsed(run);
+  const out: string[] = [];
+  if (u.maas) out.push("Red Hat Connectivity Link, with its Kuadrant instance and Authorino TLS");
+  else if (u.gatewayModel) out.push("Red Hat Connectivity Link, with its Kuadrant instance");
+  if (u.cnpg) out.push("The CloudNativePG operator");
+  if (u.model || u.kueue) out.push("The cert-manager Operator for Red Hat OpenShift");
+  if (u.kueue) out.push("The Red Hat build of Kueue");
+  if (u.maas) out.push("GatewayClass openshift-default (OpenShift's shared class for gateways)");
   return out;
 }
 

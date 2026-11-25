@@ -314,6 +314,15 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **A recipe's Clean up says everything it leaves in place.** "Left in
+  place" named only the S3 storage and MLflow. It now also lists the
+  inference gateway the run's model used (Clean up everything deletes it),
+  and the shared pieces the run's features installed or used, which no
+  Clean up removes: Connectivity Link with its Kuadrant instance (and
+  Authorino TLS with MaaS), the CloudNativePG operator (a MaaS CloudNativePG
+  database), cert-manager (models, distributed workloads), the Red Hat
+  build of Kueue, and GatewayClass `openshift-default` (MaaS). Only the
+  pieces of features whose steps finished are listed.
 - **The app no longer sends you to files of its repository.** The recipe
   review's playground warning ended "SECURITY.md (Which token is used where)
   says where your sign-in goes", and the gitops profile's messages, banners

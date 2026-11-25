@@ -95,7 +95,7 @@ const environmentUp = (...servers: string[]): ResourcesStatus => ({
 
 /** The texts of the dialog's "Left in place" list. */
 const leftInPlaceItems = (dialog: HTMLElement) =>
-  within(within(dialog).getByText("Left in place").closest(".pf-v6-c-alert") as HTMLElement).getAllByRole("listitem").map((li) => li.textContent);
+  within(within(dialog).getByRole("list", { name: "Not deleted by this Clean up" })).getAllByRole("listitem").map((li) => li.textContent);
 
 describe("Recipes page", () => {
   it("new: the editor's defaults, Review and run plans the recipe, and Run recipe starts it", async () => {
