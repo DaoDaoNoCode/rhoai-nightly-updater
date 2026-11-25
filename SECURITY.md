@@ -349,6 +349,7 @@ The app's ServiceAccount has no right on OAuthClients or OAuth tokens (`TestServ
 | Deployments | `get list` | no |
 | Services | `get` | no |
 | Pods, ReplicaSets, Events, EndpointSlices, Nodes, PVCs | `list` | read-only |
+| LokiStacks (`loki.grafana.com`), PersesDatasources and PersesDashboards (`perses.dev`) | `list` | read-only; the Observability tab's status ([Observability](#observability-usage-logs-and-dashboards)) |
 | Routes | `get` | `rhods-dashboard`, `mlflow`, `seaweedfs-admin`, `minio-api`, `minio-ui` |
 | NetworkPolicies | `get` | `seaweedfs-ingress`, `minio-ingress` |
 | Subscriptions | `get`; `list` | `get` only `rhods-operator`, `kuadrant-operator`, `rhcl-operator`, `cloudnative-pg` |
@@ -688,6 +689,25 @@ The Distributed workloads tab installs the Red Hat build of Kueue through its pr
 *Ownership.* Every object carries the tool label, and its UID is recorded (snapshot ConfigMap, key `kueue`); deletes carry a UID precondition, and nothing of another UID is deleted. Each queue goes only while nothing else uses it (another LocalQueue, ClusterQueue or Workload), checked with a list that refuses when it fails. The project label is added with a JSON patch that tests the namespace's UID and removed only when the tool added it, the namespace is the recorded one and no Workload is left. The opt-in records `disableKueue`'s value before; it is restored only while the tool's field manager still owns the field at `false`, and the profile is deleted only with its recorded UID and resourceVersion (unchanged since).
 
 *Effects beyond the project.* The ClusterQueue admits only the chosen namespace (`namespaceSelector` on `kubernetes.io/metadata.name`) and does not preempt. The LocalQueue is never named `default`, so Kueue's defaulting does not queue the project's other workloads. The opt-in changes every new dashboard project (they get `kueue.openshift.io/managed=true`), which its confirmation says.
+
+### Observability (usage logs and dashboards)
+
+The Observability tab installs the Cluster Observability Operator, the Red Hat build of OpenTelemetry and the Loki Operator (after cert-manager) through the same prerequisites code as Kueue (a Namespace, an OperatorGroup when it has none, a Subscription; they stay after Clean up), makes a bucket and a SeaweedFS user on the tool's own S3 storage, writes one Secret in RHOAI's monitoring namespace, and adds two fields to the DSCInitialization's `spec.monitoring`. Every write carries the signed-in cluster-admin's own token (`POST /api/resources/observability/stream`, behind the cluster-admin gate, the lock, the rate limit and the activity log).
+
+*New ServiceAccount rows (5.0.0; status only, list only, no write).* Audited one by one:
+
+| Row | Why | Narrowest scope | What a misuse could do |
+|---|---|---|---|
+| `loki.grafana.com` `lokistacks`: `list` | The Usage logs part says why the LokiStack is not Ready (its conditions) | Cluster-wide: the monitoring namespace is read from the DSCInitialization at run time, and a Role cannot follow it; the tool lists one namespace | Read LokiStack specs: size, storage Secret name and schema, no credential |
+| `perses.dev` `persesdatasources`, `persesdashboards`: `list` | The Dashboards part lists those Perses has not taken yet (problem B) | Same | Read dashboard definitions and datasource addresses (in-cluster service URLs); credentials live in Secrets, not read |
+
+Nothing else is new for the ServiceAccount: `monitorings` (`services.platform.opendatahub.io`) are covered by the existing list rule on the module groups, the DSCInitialization, PVCs, pods and events by existing list rules, and the operators' status by the prerequisites' existing reads. The status reads no Secret and no OpenTelemetryCollector or Perses CR on purpose: a collector's configuration can hold exporter credentials, and the Monitoring CR's conditions say what they would. Problem A (the collector waiting for certificate Secrets that were never made) is told from pods and the kubelet's `FailedMount` events only.
+
+*User-token requests it uses (owner-approved in principle, 2026-11-25).* `create` Namespaces (`openshift-cluster-observability-operator`, `openshift-opentelemetry-operator`, `openshift-operators-redhat` when missing), OperatorGroups and Subscriptions in them; `list` StorageClasses (the default one); `get`, `create`, server-side `apply`, `delete` Secret `rhoai-nightly-updater-usage-logs` in the monitoring namespace (only one with the tool's label and field manager; delete with a UID precondition); `patch` the DSCInitialization (merge patch, field manager `rhoai-nightly-updater-monitoring`, `fieldValidation=Strict`, resourceVersion precondition; Set up only adds absent fields, Clean up only puts back what the annotation records and refuses when the fields changed); `list` PVCs and Secrets of the monitoring namespace as metadata only (`PartialObjectMetadataList`: no Secret data reaches the tool); `delete` the PVCs and Secrets the annotation records, each with a UID precondition, only when it still has the recorded UID, no owner and was created after the record. The golden lists them.
+
+*SeaweedFS (HTTP to the tool's own storage, no RBAC).* With the storage's admin key, as for pipeline servers: create bucket `rhoai-usage-logs`; IAM `CreateUser`, `PutUserPolicy` (List/Get/Put/DeleteObject on that bucket only), `TagUser` (`rnu-purpose=usage-logs`), `CreateAccessKey`; Set up checks the new key writes and reads its bucket and is refused on bucket `pipelines`. Its name starts with `rnu-` but not `rnu-dspa-`, so the leftover-key sweep and the storage teardown's sweep of pipeline users never delete it; Clean up deletes it only with that tag. The S3 storage cannot be deleted while the DSCInitialization's usage logs name the tool's Secret.
+
+*Effects beyond the tool's objects.* RHOAI's operator then runs the monitoring stack for the whole cluster (the platform's metrics and MaaS's usage logs); every MaaS call is logged with its model, subscription, organisation and, only when MaaS's `captureUser` is on (not set by this tab), the user ID. The usage logs are readable by whoever may read the LokiStack's `application` tenant: cluster-admins through the dashboard's admin view.
 
 ### Models as a Service
 
