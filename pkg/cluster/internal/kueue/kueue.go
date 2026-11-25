@@ -165,10 +165,29 @@ func catalogModelSize() modelSize {
 // one worker each, and the RayJob's submitter), one workbench on the
 // opt-in profile (its container and the kube-rbac-proxy sidecar) and the
 // largest catalog model on that profile (catalogModelSize: 4 CPUs, 12Gi
-// requested, 6.2G of ephemeral storage). With the catalog of this version
-// that is 9.6 CPUs and 31808Mi requested, rounded up to whole CPUs and
-// GiB: 10 CPUs, 32Gi, and 6Gi of ephemeral storage. The documented
-// example ClusterQueue has 9 CPUs and 36Gi (opendatahub-documentation
+// requested, 6.2G of ephemeral storage) twice: the pod that serves and
+// the one its rolling update adds. KServe sets the model Deployment's
+// strategy only from spec.rolloutStrategy, which neither this tool nor
+// the dashboard sets, or Recreate for confidential bare metal (kserve
+// rhoai-3.7-ea.1 pkg/controller/v1alpha2/llmisvc workload_single_node.go
+// L118-119 and L656-671, the same in rhoai-3.6;
+// workload_confidential_odh.go L119-123), so the API server defaults it
+// to RollingUpdate with maxSurge 25% (kubernetes release-1.33
+// pkg/apis/apps/v1/defaults.go L44-64), rounded up to one extra pod at
+// one replica (pkg/controller/deployment/util/deployment_util.go
+// ResolveFenceposts L887-888). Kueue admits every pod of a Deployment as
+// a Workload of its own (kubernetes-sigs/kueue release-0.19
+// site/content/en/docs/tasks/run/deployment.md L15-17;
+// pkg/controller/jobs/pod/pod_webhook.go L174-179 gates each pod), so the
+// new pod needs quota while the old one still holds its share: without
+// it, a changed model setup stayed SchedulingGated while the samples ran
+// (live, RHOAI 3.7.0-ea.1). The workbench needs no such room: its
+// StatefulSet deletes the old pod before it makes the new one
+// (pkg/controller/statefulset/stateful_set_control.go L680-692). With
+// the catalog of this version that is 13.6 CPUs and 44096Mi requested,
+// rounded up to whole CPUs and GiB: 14 CPUs, 44Gi, and 12Gi of ephemeral
+// storage. The documented example ClusterQueue has 9 CPUs and 36Gi
+// (opendatahub-documentation
 // modules/configuring-quota-management-for-distributed-workloads.adoc
 // L157-174). Ephemeral storage is a covered resource because the model
 // requests it, and Kueue refuses a workload that requests a resource its
@@ -183,9 +202,9 @@ func catalogModelSize() modelSize {
 // quota as made by an earlier version.
 func Quota() (cpu, memory, ephemeral string) {
 	m := catalogModelSize()
-	milli := 2*(headSize.CPUMilli+workerSize.CPUMilli) + submitterSize.CPUMilli + profileCPUMilli + sidecarCPUMilli + m.CPUMilli
-	mi := 2*(headSize.MemoryMi+workerSize.MemoryMi) + submitterSize.MemoryMi + profileMemoryMi + sidecarMemoryMi + m.MemoryMi
-	return fmt.Sprint((milli + 999) / 1000), fmt.Sprintf("%dGi", (mi+1023)/1024), fmt.Sprintf("%dGi", (m.EphemeralMi+1023)/1024)
+	milli := 2*(headSize.CPUMilli+workerSize.CPUMilli) + submitterSize.CPUMilli + profileCPUMilli + sidecarCPUMilli + 2*m.CPUMilli
+	mi := 2*(headSize.MemoryMi+workerSize.MemoryMi) + submitterSize.MemoryMi + profileMemoryMi + sidecarMemoryMi + 2*m.MemoryMi
+	return fmt.Sprint((milli + 999) / 1000), fmt.Sprintf("%dGi", (mi+1023)/1024), fmt.Sprintf("%dGi", (2*m.EphemeralMi+1023)/1024)
 }
 
 func milliText(m int) string {
@@ -467,7 +486,7 @@ func describeQuota() string {
 	return quotaText(Quota())
 }
 
-// quotaText is "10 CPUs, 32Gi of memory and 6Gi of ephemeral storage";
+// quotaText is "14 CPUs, 44Gi of memory and 12Gi of ephemeral storage";
 // a quota not set reads "no" ("no ephemeral storage").
 func quotaText(cpu, memory, ephemeral string) string {
 	eph := "no ephemeral storage"

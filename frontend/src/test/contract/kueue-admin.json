@@ -52,7 +52,7 @@
   },
   "project": "team-a",
   "queues": null,
-  "quota": "10 CPUs, 32Gi of memory and 6Gi of ephemeral storage",
+  "quota": "14 CPUs, 44Gi of memory and 12Gi of ephemeral storage",
   "samples": [
     {
       "image": "quay.io/modh/ray:2.47.1-py311-cu121",

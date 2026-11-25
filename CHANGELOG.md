@@ -607,15 +607,21 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   when the queue's name is `nightly-kueue`, the tool's own.
 - **The Kueue quota holds a workbench and a model on the Queue profile.**
   The ClusterQueue's 19 GiB did not count the workbench's kube-rbac-proxy
-  sidecar (100m CPU, 64 MiB requested) nor a model. New setups get 10 CPUs,
-  32 GiB and 6 GiB of ephemeral storage: both samples, a workbench and the
-  largest catalog model at once (the documented example ClusterQueue has 9
-  CPUs and 36 GiB). Ephemeral storage is covered because the model requests
-  it for its download, and Kueue does not admit a workload that requests a
-  resource its ClusterQueue does not cover. Set up keeps a ClusterQueue that
-  is there: an earlier one reads "Made by an earlier version of this tool",
-  and a recipe's Distributed workloads step stops on it; Clean up, then Set
-  up.
+  sidecar (100m CPU, 64 MiB requested) nor a model. New setups get 14 CPUs,
+  44 GiB and 12 GiB of ephemeral storage: both samples, a workbench and the
+  largest catalog model twice (the documented example ClusterQueue has 9
+  CPUs and 36 GiB). The model counts twice because a changed model setup
+  rolls out a second pod (the Deployment's default `maxSurge`) that Kueue
+  admits on its own while the first still serves; with room for one model
+  only, it stayed `SchedulingGated` while the samples ran. The workbench's
+  StatefulSet replaces its pod in place and needs no such room. Ephemeral
+  storage is covered because the model requests it for its download, and
+  Kueue does not admit a workload that requests a resource its ClusterQueue
+  does not cover. Set up keeps a ClusterQueue that is there: an earlier one,
+  also the 10 CPUs, 32 GiB and 6 GiB of builds after 5.0.0-alpha.2, reads
+  "Made by an earlier version of this tool", and a recipe's Distributed
+  workloads step stops on it; Clean up, then Set up, or give it the new
+  quota in place ([RUNBOOK](RUNBOOK.md#107-distributed-workloads-kueue)).
 - **Distributed workloads set up and clean up again in a project deleted
   and made again.** After a recipe's Clean up of its project only, the next
   Set up refused with "Clean up first", and Clean up stopped at a LocalQueue
