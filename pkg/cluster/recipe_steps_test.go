@@ -210,16 +210,34 @@ func TestRecipePrereqSteps_ClaimOnlyWhatWasTurnedOn(t *testing.T) {
 	pc.f.mu.Lock()
 	pc.f.intercept = nil
 	pc.f.mu.Unlock()
-	resumed := &recipe.State{Recipe: r, Components: st.Components}
+	first := prereqRecordID(t, pc.c, "aipipelines")
+	if !reflect.DeepEqual(st.ComponentIDs, map[string]string{"aipipelines": first}) {
+		t.Errorf("component IDs %v", st.ComponentIDs)
+	}
+	resumed := &recipe.State{Recipe: r, Components: st.Components, ComponentIDs: st.ComponentIDs}
 	if res, err := recipeStep(t, r, recipe.StepPrerequisites).Run(pc.c, resumed, func(types.UpdateStepEvent) {}); err != nil || !res.Success {
 		t.Fatalf("resume: %+v %v", res, err)
 	}
-	if strings.Join(resumed.Components, ",") != "aipipelines,mlflowoperator" {
-		t.Errorf("resumed components %v", resumed.Components)
+	ids := map[string]string{"aipipelines": first, "mlflowoperator": prereqRecordID(t, pc.c, "mlflowoperator")}
+	if strings.Join(resumed.Components, ",") != "aipipelines,mlflowoperator" || ids["mlflowoperator"] == "" || !reflect.DeepEqual(resumed.ComponentIDs, ids) {
+		t.Errorf("resumed components %v, IDs %v, record %v", resumed.Components, resumed.ComponentIDs, ids)
 	}
-	run := &types.RecipeRun{Steps: []types.RecipeRunStep{{ID: recipe.StepPrerequisites}}, Components: resumed.Components}
-	if _, req := recipe.Ownership(pc.c, nil, run); req == nil || strings.Join(req.Components, ",") != "aipipelines,mlflowoperator" {
-		t.Errorf("clean up %+v", req)
+	// The run's Clean up offers both, bound to those enablements, and
+	// turns them back from that offer.
+	u := userClientOf(pc.c, fakeUserToken)
+	run := &types.RecipeRun{ID: "run-1", Steps: []types.RecipeRunStep{{ID: recipe.StepPrerequisites}}, Components: resumed.Components, ComponentIDs: resumed.ComponentIDs}
+	created, req := recipe.Ownership(u, u, run)
+	if req == nil || strings.Join(req.Components, ",") != "aipipelines,mlflowoperator" || !reflect.DeepEqual(req.ComponentIDs, ids) || !created[recipe.StepPrerequisites] {
+		t.Fatalf("offer: created %v, cleanup %+v", created, req)
+	}
+	res, err = CleanUp(u, *req, func(UpdateStepEvent) {})
+	if err != nil || !res.Success {
+		t.Fatalf("clean up: %+v %v", res, err)
+	}
+	for _, key := range []string{"aipipelines", "mlflowoperator"} {
+		if componentState(pc.f, key) != "Removed" {
+			t.Errorf("%s is %s after Clean up", key, componentState(pc.f, key))
+		}
 	}
 }
 
