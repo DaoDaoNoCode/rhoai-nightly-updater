@@ -300,6 +300,27 @@ describe("Recipes page", () => {
     await dialogClosed();
   });
 
+  it("progress only where it is the row's: another step's end is not shown on a running row; another pod's run shows its pod", async () => {
+    // One step runs here; the run's latest progress is the end of the step before it.
+    let status = runStatus({ steps: steps(4, "running") }, { running: true, step: { step: "pipelines-prereq", status: "success", message: "What Pipelines needs is set up." } });
+    stubApi({ "GET /api/recipes/run": () => jsonResponse(status) });
+    const { unmount } = renderPage(<RecipesPage />, "/recipes", { operation: async () => RECIPE_OPERATION });
+    await settleApps();
+    await settle();
+    expect(screen.getByRole("list", { name: "Recipe dev: steps" })).toHaveTextContent(/S3 storageStarting\.\.\. 1:0\d so far/);
+    unmount();
+    // Another pod runs two steps: no per-step progress there, so each running row names the pod.
+    const two = steps(4, "running").map((s) => (s.id === "mlflow" ? { ...s, status: "running" as const, startedAt: new Date(Date.now() - 30_000).toISOString() } : s));
+    status = runStatus({ steps: two }, { running: true, remote: true, pod: "pod-2", step: { step: "mlflow-inner", status: "running", message: "Waiting for MLflow" } });
+    renderPage(<RecipesPage />, "/recipes", { operation: async () => RECIPE_OPERATION });
+    await settleApps();
+    await settle();
+    const list = screen.getByRole("list", { name: "Recipe dev: steps" });
+    expect(list).toHaveTextContent(/S3 storageRunning on updater pod pod-2\. /);
+    expect(list).toHaveTextContent(/MLflowRunning on updater pod pod-2\. /);
+    expect(list).not.toHaveTextContent("Waiting for MLflow");
+  });
+
   it("several failed steps: the alert names each, with the backend's reason", async () => {
     const why = "Step 5 of 8 (S3 storage) failed: SeaweedFS did not start. Also failed: step 8 of 8 (MLflow).";
     const failedSteps = steps(4, "failed", "SeaweedFS did not start.").map((s) => (s.id === "mlflow" ? { ...s, status: "failed" as const, message: "MLflow did not start." } : s));
@@ -330,12 +351,12 @@ describe("Recipes page", () => {
     expect(screen.getByText("Step 6 of 8 failed: Pipeline server")).toBeInTheDocument();
     // The step's message once, in the alert under the steps.
     expect(screen.getAllByText("The pipeline server did not become ready in 10 minutes.")).toHaveLength(1);
-    expect(screen.getByText("Resume continues at step 6 of 8, Pipeline server; what is set up stays.")).toBeInTheDocument();
+    expect(screen.getByText("Resume runs the steps that are not set up: Pipeline server, What MLflow needs and MLflow; what is set up stays.")).toBeInTheDocument();
     // The editor starts from the run's recipe.
     expect(screen.getByRole("heading", { level: 2, name: "Run a recipe again" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Resume" }));
     const dialog = screen.getByRole("dialog", { name: "Resume recipe dev?" });
-    expect(dialog).toHaveTextContent("It continues at step 6 of 8, Pipeline server. Each step checks the cluster first");
+    expect(dialog).toHaveTextContent("It runs the steps that are not set up: Pipeline server, What MLflow needs and MLflow. Each step checks the cluster first");
     expect(within(dialog).getByRole("checkbox", { name: "Look up the newest build again" })).not.toBeChecked();
     fireEvent.click(within(dialog).getByRole("button", { name: "Resume" }));
     await settle();

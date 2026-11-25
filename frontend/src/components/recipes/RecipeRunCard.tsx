@@ -26,7 +26,7 @@ import { StatusLabel, type StatusKind } from "../StatusLabel";
 import { TooltipButton } from "../TooltipButton";
 import { StepProgress, type StepState } from "../environment/StepProgress";
 import { shortDigest } from "../../build";
-import { formatClock, listOf, resumeStep, usually, usuallySentence } from "./recipeForm";
+import { formatClock, listText, resumeStep, usually, usuallySentence } from "./recipeForm";
 import { RecipeProblems, refusalOf } from "./RecipeReviewModal";
 
 /** Ticks once a second while `active`, so elapsed times stay current. */
@@ -73,7 +73,7 @@ function stepNumber(run: RecipeRun, step: RecipeRunStep): string {
 
 /** "step 4 of 8, S3 storage" for one step; "S3 storage and MLflow" for several. */
 function stepsText(run: RecipeRun, steps: RecipeRunStep[]): string {
-  return steps.length === 1 ? `step ${stepNumber(run, steps[0])}, ${steps[0].title}` : listOf(steps.map((s) => s.title));
+  return steps.length === 1 ? `step ${stepNumber(run, steps[0])}, ${steps[0].title}` : listText(steps.map((s) => s.title));
 }
 
 /**
@@ -124,9 +124,13 @@ export const RecipeRunCard: React.FC<{
       const started = s.startedAt ? Date.parse(s.startedAt) : NaN;
       // One line: the current phase, the time so far, one estimate. A clock the
       // phase's own message carries ("(3:10 so far, ...)") is dropped: the line has its own.
-      // Each running step's own progress; the run's latest when only one runs (another pod's run has no per-step progress).
-      const own = status.progress?.[s.id]?.message || (runningSteps.length === 1 ? status.step?.message : "");
-      const progress = (own || "Starting...").replace(/\s*\([^)]*\d+:\d\d[^)]*\)/g, "").trim();
+      // Each running step's own progress. Without it (another pod's run), the run's latest when it is this row's: only one step
+      // runs, and the latest is not another step's end (the runner reports a step's end under that step's ID).
+      const latest = status.step;
+      const attributable = runningSteps.length === 1 && !!latest && !run.steps.some((o) => o.id === latest.step && o.id !== s.id);
+      const own = status.progress?.[s.id]?.message || (attributable ? latest.message : "");
+      const fallback = status.remote ? `Running on updater pod ${status.pod || "(unknown)"}` : "Starting...";
+      const progress = (own || fallback).replace(/\s*\([^)]*\d+:\d\d[^)]*\)/g, "").trim();
       const phaseText = /[.!?]$/.test(progress) ? progress : `${progress}.`;
       message = Number.isFinite(started)
         ? `${phaseText} ${formatClock(now - started)} so far; ${usually(s.typicalSeconds, s.maxSeconds)}.`
@@ -180,7 +184,9 @@ export const RecipeRunCard: React.FC<{
       Resume
     </TooltipButton>
   );
-  const continuesAt = next ? `Resume continues at step ${stepNumber(run, next)}, ${next.title}; what is set up stays.` : "";
+  // Resume runs every step that is not set up (the steps of independent lanes side by side).
+  const notSetUp = listText(run.steps.filter((s) => s.status !== "success" && s.status !== "skipped").map((s) => s.title));
+  const continuesAt = next ? `Resume runs the steps that are not set up: ${notSetUp}; what is set up stays.` : "";
 
   let outcome: React.ReactNode = null;
   switch (phase) {
@@ -201,7 +207,7 @@ export const RecipeRunCard: React.FC<{
       // The failed step's own message: the title already names the step.
       outcome = (
         <OutcomeAlert result={{ success: false, message: (failedSteps.length > 1 ? run.stopReason : failed?.message) || run.stopReason || "The run failed.", errorCode: run.errorCode, logs: null }}
-          failedTitle={failedSteps.length > 1 ? `${failedSteps.length} steps failed: ${listOf(failedSteps.map((s) => s.title))}`
+          failedTitle={failedSteps.length > 1 ? `${failedSteps.length} steps failed: ${listText(failedSteps.map((s) => s.title))}`
             : failed ? `Step ${stepNumber(run, failed)} failed: ${failed.title}` : "The run failed"} />
       );
       break;
@@ -211,8 +217,7 @@ export const RecipeRunCard: React.FC<{
           // The user menu's Log out: oauth-proxy's sign_out clears its session cookie (App).
           actionLinks={<AlertActionLink component="a" href="/oauth/sign_out">Log out</AlertActionLink>}>
           {/* The backend's reason names the step and says what to do ("Stopped before S3 storage: Your sign-in expires ..., then Resume."). */}
-          {run.stopReason || <>{next ? `The run stopped before step ${stepNumber(run, next)}, ${next.title}: ` : "The run stopped: "}
-            your sign-in ended or expires before that step could finish. Nothing of that step started. Log out and log in again, then Resume.</>}
+          {run.stopReason || <>The run stopped: your sign-in ended or expires before the next steps could finish. None of them started. Log out and log in again, then Resume.</>}
         </Alert>
       );
       break;
@@ -303,7 +308,7 @@ export const RecipeRunCard: React.FC<{
         changes={[]}
         summary={
           <Content component="p">
-            {several ? `The running steps, ${listOf(runningSteps.map((s) => s.title))}, finish` : current ? `Step ${stepNumber(run, current)}, ${current.title}, finishes` : "The running step finishes"}
+            {several ? `The running steps, ${listText(runningSteps.map((s) => s.title))}, finish` : current ? `Step ${stepNumber(run, current)}, ${current.title}, finishes` : "The running step finishes"}
             , then the run stops and the cluster is free for others. No other step starts. What is set up stays; Resume continues from there.
           </Content>
         }
@@ -327,7 +332,7 @@ export const RecipeRunCard: React.FC<{
           <Stack hasGutter>
             <StackItem>
               <Content component="p">
-                {next ? `It continues at step ${stepNumber(run, next)}, ${next.title}. ` : ""}Each step checks the cluster first, so what is set
+                {next ? `It runs the steps that are not set up: ${notSetUp}. ` : ""}Each step checks the cluster first, so what is set
                 up stays and is not done again.
               </Content>
             </StackItem>
