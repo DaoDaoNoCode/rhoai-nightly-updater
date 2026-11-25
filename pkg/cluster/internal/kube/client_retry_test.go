@@ -1,9 +1,11 @@
 package kube
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -94,8 +96,8 @@ func TestDoRetries429AfterRetryAfter(t *testing.T) {
 	}
 }
 
-// Mirrors client-go checkWait: 5xx retries need Retry-After; bare 429 does not;
-// other 4xx codes (429 excluded) are never retried.
+// As client-go's checkWait: a 429 and a 5xx are retried only with
+// Retry-After in seconds; any other 4xx is never retried.
 func TestDoRetriesOnlyWhatClientGoRetries(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -194,7 +196,7 @@ func TestDoDoesNotWaitPastTheContextDeadline(t *testing.T) {
 }
 
 // Canceling the context mid-wait ends the call immediately with the context
-// error while preserving the last response body in the message.
+// error, the last answer's error in its text.
 func TestDoReturnsWhenTheContextEndsDuringTheWait(t *testing.T) {
 	clk := clocktest.NewFake() // manual clock: time advances only when the test steps it
 	ctx, cancel := context.WithCancel(context.Background())
@@ -226,7 +228,53 @@ func TestDoReturnsWhenTheContextEndsDuringTheWait(t *testing.T) {
 	}
 }
 
-// On retry, POST bodies and Content-Type headers are resent identically.
+// A 5xx with Retry-After is retried for a read only: a write the server
+// answered 5xx may have been applied. A 429 is refused before the request
+// is processed, so a write is retried too (TestDoReplaysTheBody).
+func TestDoRetries5xxOnlyForReads(t *testing.T) {
+	for _, tc := range []struct {
+		method string
+		calls  int
+	}{
+		{http.MethodGet, 2}, {http.MethodHead, 2},
+		{http.MethodPost, 1}, {http.MethodPut, 1}, {http.MethodPatch, 1}, {http.MethodDelete, 1},
+	} {
+		t.Run(tc.method, func(t *testing.T) {
+			s, c := newRetryClient(t, context.Background(), clocktest.NewAutoFake(),
+				retryAnswer{http.StatusServiceUnavailable, "1", status(503, "ServiceUnavailable")}, ok200)
+			_, _, _ = c.Do(tc.method, "/api/v1/namespaces/ns/configmaps/x", "application/json", []byte(`{}`), nil)
+			if n := s.calls(); n != tc.calls {
+				t.Fatalf("%d calls, want %d", n, tc.calls)
+			}
+		})
+	}
+}
+
+// The retry's log names no path: an object name can be secret (the
+// digest of the user's OAuth access token in ReadSessionToken).
+func TestDoRetryLogNamesNoPath(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	_, c := newRetryClient(t, context.Background(), clocktest.NewAutoFake(),
+		retryAnswer{http.StatusTooManyRequests, "1", status(429, "TooManyRequests")}, ok200)
+	const name = "sha256~secretdigest"
+	if _, _, err := c.Get("/apis/oauth.openshift.io/v1/useroauthaccesstokens/" + name); err != nil {
+		t.Fatal(err)
+	}
+	logged := buf.String()
+	if !strings.Contains(logged, "asked to retry") {
+		t.Fatalf("no retry logged: %q", logged)
+	}
+	for _, secret := range []string{name, "useroauthaccesstokens", "/apis/"} {
+		if strings.Contains(logged, secret) {
+			t.Fatalf("the log names %q: %q", secret, logged)
+		}
+	}
+}
+
+// A retried write sends the same body and content type again.
 func TestDoReplaysTheBody(t *testing.T) {
 	s, c := newRetryClient(t, context.Background(), clocktest.NewAutoFake(),
 		retryAnswer{http.StatusTooManyRequests, "1", status(429, "TooManyRequests")},

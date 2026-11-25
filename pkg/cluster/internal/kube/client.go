@@ -321,8 +321,9 @@ const (
 	maxRetries = 10
 	// retryWaitBudget bounds the summed Retry-After waits of one request.
 	// client-go has none (rest/urlbackoff.go:86 sleeps the full value each
-	// time). 32 s is the largest Retry-After the kube-apiserver sends: an
-	// unready watch cache asks for 1 to 30 s (apiserver
+	// time). 32 s is the largest Retry-After the kube-apiserver sends
+	// (k8s.io/apiserver v0.33.4): an unready watch cache asks for up to
+	// 30 s (30 once the cache has been down about a minute;
 	// pkg/storage/cacher/util.go:51-56), priority and fairness for up to
 	// 32 s (pkg/util/flowcontrol/dropped_requests_tracker.go:29). A wait
 	// over the budget is not shortened: the answer is returned instead.
@@ -331,11 +332,12 @@ const (
 
 // NoRetryWhen returns a copy of c whose requests are not retried when skip
 // reports true for the error of an answer the API server asks to repeat
-// (retryWait). For a read whose caller handles that answer at once: a
-// versioned RHOAI read gets "429 storage is (re)initializing: ... conversion
-// webhook ... failed" with Retry-After 30 while the watch cache cannot
-// convert the stored objects, which never clears by itself, and reads the
-// next served version instead (rhoai.readServed).
+// (retryWait); skip replaces any predicate set on c before. For a read
+// whose caller handles that answer at once: a versioned RHOAI read gets
+// "429 storage is (re)initializing: ... conversion webhook ... failed" with
+// Retry-After 30 while the watch cache cannot convert the stored objects,
+// which never clears by itself, and reads the next served version instead
+// (rhoai.readServed).
 func (c *Client) NoRetryWhen(skip func(error) bool) *Client {
 	cp := *c
 	cp.noRetry = skip
@@ -353,11 +355,13 @@ func (c *Client) doWithHeader(method, path, contentType string, body []byte, que
 	var waited time.Duration
 	for retries := 0; ; retries++ {
 		respBody, header, code, err := c.doOnce(method, path, contentType, body, query)
-		wait, retry := c.retryWait(header, code, err, retries, waited)
+		wait, retry := c.retryWait(method, header, code, err, retries, waited)
 		if !retry {
 			return respBody, header, code, err
 		}
-		slog.Debug("the API server asked to retry the request", "method", method, "path", path, "status", code, "retryAfter", wait, "retry", retries+1)
+		// No path: an object name can be secret (ReadSessionToken's path
+		// names the user's OAuth access token by its digest).
+		slog.Debug("the API server asked to retry the request", "method", method, "status", code, "retryAfter", wait, "retry", retries+1)
 		if sleepErr := clk.Sleep(c.ctx, wait); sleepErr != nil {
 			return nil, nil, 0, &retryStoppedError{ctxErr: sleepErr, last: err}
 		}
@@ -381,13 +385,19 @@ func (e *retryStoppedError) Unwrap() error { return e.ctxErr }
 // As in client-go (rest/with_retry.go:148-193, checkWait :309-318,
 // retryAfterSeconds rest/request.go:1542-1549): an error status 429, or 500
 // and above, with Retry-After in whole seconds, at most maxRetries times. A
-// 429 or 5xx without that header is returned at once. Unlike client-go, the
-// waits of one request are bounded by retryWaitBudget, a wait longer than
-// what is left of the client's context deadline is not begun (the answer
-// is returned rather than the deadline's error), and NoRetryWhen's skip
-// applies.
-func (c *Client) retryWait(header http.Header, code int, err error, retries int, waited time.Duration) (time.Duration, bool) {
-	if _, ok := errors.AsType[*K8sError](err); !ok || (code != http.StatusTooManyRequests && code < http.StatusInternalServerError) {
+// 429 or 5xx without that header is returned at once, and so is any other
+// 4xx. Unlike client-go, a 5xx is retried only for a read (GET, HEAD): a
+// write the server answered 5xx may have been applied, while a 429 is
+// refused before the request is processed. The waits of one request are
+// bounded by retryWaitBudget, a wait longer than what is left of the
+// client's context deadline is not begun (the answer is returned rather
+// than the deadline's error), and NoRetryWhen's skip applies.
+func (c *Client) retryWait(method string, header http.Header, code int, err error, retries int, waited time.Duration) (time.Duration, bool) {
+	if _, ok := errors.AsType[*K8sError](err); !ok {
+		return 0, false
+	}
+	read := method == http.MethodGet || method == http.MethodHead
+	if code != http.StatusTooManyRequests && (code < http.StatusInternalServerError || !read) {
 		return 0, false
 	}
 	secs, convErr := strconv.Atoi(header.Get("Retry-After"))
