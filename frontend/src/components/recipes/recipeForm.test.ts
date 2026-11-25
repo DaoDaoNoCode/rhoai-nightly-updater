@@ -86,21 +86,32 @@ describe("recipe Clean up and plan words", () => {
       steps: full.steps.map((s) => ({ ...s, status: ids.includes(s.id) ? "success" : "pending" })),
       recipe: { ...full.recipe, spec: { ...full.recipe.spec, features: { ...full.recipe.spec.features, ...features } } },
     });
-    expect(sharedLeft(only(["kueue"]))).toEqual(["The cert-manager Operator for Red Hat OpenShift", "The Red Hat build of Kueue"]);
-    // A step that did not finish set nothing up.
+    const noModel = { models: { ...full.recipe.spec.features.models, enabled: false }, maas: { enabled: false } };
+    // The prerequisites step installed cert-manager and the Kueue operator, whatever happened after it.
+    expect(sharedLeft(only(["prerequisites"], noModel))).toEqual(["The cert-manager Operator for Red Hat OpenShift", "The Red Hat build of Kueue"]);
+    expect(sharedLeft(only(["kueue-prereq"], noModel))).toEqual(["The cert-manager Operator for Red Hat OpenShift", "The Red Hat build of Kueue"]);
+    // A step that did not finish set nothing up; a feature step alone installed no operator.
     expect(sharedLeft(only([]))).toEqual([]);
-    // A model reached through the inference gateway: Connectivity Link without Authorino TLS (MaaS sets that), and cert-manager.
-    const gatewayModel = only(["model"], { models: { ...full.recipe.spec.features.models, exposure: "default-gateway" }, maas: { enabled: false } });
+    expect(sharedLeft(only(["kueue"], noModel))).toEqual([]);
+    // Prerequisites done, model failed: what the prerequisites installed for a model reached through the inference
+    // gateway stays (Connectivity Link without Authorino TLS, which MaaS sets, and cert-manager).
+    const gatewayModel = only(["prerequisites"], { models: { ...full.recipe.spec.features.models, exposure: "default-gateway" }, maas: { enabled: false }, kueue: { enabled: false } });
+    expect(gatewayModel.steps.find((s) => s.id === "model")?.status).not.toBe("success");
     expect(sharedLeft(gatewayModel)).toEqual(["Red Hat Connectivity Link, with its Kuadrant instance", "The cert-manager Operator for Red Hat OpenShift"]);
+    expect(sharedLeft(only(["models-prereq"], { models: { ...full.recipe.spec.features.models, exposure: "gateway" }, maas: { enabled: false }, kueue: { enabled: false } })))
+      .toEqual(["Red Hat Connectivity Link, with its Kuadrant instance", "The cert-manager Operator for Red Hat OpenShift"]);
     // A model reached only inside the cluster needs no Connectivity Link.
-    expect(sharedLeft(only(["model"], { models: { ...full.recipe.spec.features.models, exposure: "internal" }, maas: { enabled: false } }))).toEqual(["The cert-manager Operator for Red Hat OpenShift"]);
+    expect(sharedLeft(only(["prerequisites"], { models: { ...full.recipe.spec.features.models, exposure: "internal" }, maas: { enabled: false }, kueue: { enabled: false } }))).toEqual(["The cert-manager Operator for Red Hat OpenShift"]);
     // MaaS with a CloudNativePG database: its operator too.
-    expect(sharedLeft(only(["maas"], { maas: { enabled: true, database: "cnpg" } }))).toEqual([
+    expect(sharedLeft(only(["maas"], { ...noModel, maas: { enabled: true, database: "cnpg" }, kueue: { enabled: false } }))).toEqual([
       "Red Hat Connectivity Link, with its Kuadrant instance and Authorino TLS", "The CloudNativePG operator", "GatewayClass openshift-default (OpenShift's shared class for gateways)",
     ]);
     // The tool's inference gateway the run's model used stays (Clean up everything deletes it); not for another way in.
     const status = { minio: null, mlflow: null, pipelineServers: [], inferenceGateway: { deployed: true, ready: true, managedByTool: true } } as unknown as ResourcesStatus;
-    expect(leftInPlace(status, gatewayModel, { recipeProjects: ["recipe-full"] })).toEqual(["The inference gateway"]);
+    const gatewayModelRan = only(["prerequisites", "model"], { models: { ...full.recipe.spec.features.models, exposure: "default-gateway" } });
+    expect(leftInPlace(status, gatewayModelRan, { recipeProjects: ["recipe-full"] })).toEqual(["The inference gateway"]);
+    // The model failed: it never used the gateway.
+    expect(leftInPlace(status, gatewayModel, { recipeProjects: ["recipe-full"] })).toEqual([]);
     expect(leftInPlace(status, only(["model"], { models: { ...full.recipe.spec.features.models, exposure: "internal" } }), { recipeProjects: ["recipe-full"] })).toEqual([]);
   });
 

@@ -439,25 +439,32 @@ export function leftInPlace(status: ResourcesStatus, run: RecipeRun, req: Cleanu
 /** The run's step id reached success (it set its part up, or found it there and used it). */
 const stepDone = (run: RecipeRun, id: string) => run.steps.some((s) => s.id === id && s.status === "success");
 
-/** What the run's steps set up or used that needs shared cluster pieces. */
+/**
+ * What the run's steps set up or used that needs shared cluster pieces. The operators come from the prerequisites
+ * steps (pkg/cluster/internal/recipe prereqItems: "prerequisites" installs cert-manager for models and cert-manager and
+ * the Kueue operator for distributed workloads, and Connectivity Link for a model reached through a gateway; the
+ * per-feature "models-prereq" and "kueue-prereq" steps do it too), even when a later step failed; MaaS's pieces come
+ * from its own step, and the inference gateway from the model's.
+ */
 function runUsed(run: RecipeRun) {
   const f = run.recipe.spec.features;
   const exposure = run.exposure ?? f.models.exposure ?? "";
-  const model = f.models.enabled && stepDone(run, "model");
+  const prereq = stepDone(run, "prerequisites");
+  const modelOperators = f.models.enabled && (prereq || stepDone(run, "models-prereq"));
   const maas = f.maas.enabled && stepDone(run, "maas");
   return {
-    maas, model, cnpg: maas && f.maas.database === "cnpg",
-    kueue: !!f.kueue?.enabled && stepDone(run, "kueue"),
+    maas, modelOperators, cnpg: maas && f.maas.database === "cnpg",
+    kueueOperators: !!f.kueue?.enabled && (prereq || stepDone(run, "kueue-prereq")),
     // A model reached through a gateway needs Connectivity Link (pkg/cluster/internal/features featureSetupFor).
-    gatewayModel: model && (exposure === "default-gateway" || exposure === "gateway"),
-    inferenceGateway: model && exposure === "default-gateway",
+    gatewayModel: modelOperators && (exposure === "default-gateway" || exposure === "gateway"),
+    inferenceGateway: f.models.enabled && stepDone(run, "model") && exposure === "default-gateway",
   };
 }
 
 /**
  * The shared cluster pieces the run installed or used that no Clean up of this tool removes, as each feature's own
  * Clean up says (pkg/cluster/internal/serving MaaS remove; the prerequisites' operators "stay after Clean up"):
- * only those of the features the run's steps set up.
+ * only those the run's steps installed or used (runUsed).
  */
 export function sharedLeft(run: RecipeRun): string[] {
   const u = runUsed(run);
@@ -465,8 +472,8 @@ export function sharedLeft(run: RecipeRun): string[] {
   if (u.maas) out.push("Red Hat Connectivity Link, with its Kuadrant instance and Authorino TLS");
   else if (u.gatewayModel) out.push("Red Hat Connectivity Link, with its Kuadrant instance");
   if (u.cnpg) out.push("The CloudNativePG operator");
-  if (u.model || u.kueue) out.push("The cert-manager Operator for Red Hat OpenShift");
-  if (u.kueue) out.push("The Red Hat build of Kueue");
+  if (u.modelOperators || u.kueueOperators) out.push("The cert-manager Operator for Red Hat OpenShift");
+  if (u.kueueOperators) out.push("The Red Hat build of Kueue");
   if (u.maas) out.push("GatewayClass openshift-default (OpenShift's shared class for gateways)");
   return out;
 }
