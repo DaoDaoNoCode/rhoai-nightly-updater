@@ -22,6 +22,10 @@ import (
 const (
 	ToolFieldManager  = "rhoai-nightly-updater"
 	LegacyPostManager = "Go-http-client"
+	// ClientManager is the manager of this tool's writes without a
+	// fieldManager since it sends its own User-Agent
+	// (kube.UserAgentProduct): plain patches and updates.
+	ClientManager = kube.UserAgentProduct
 )
 
 // ToolLabels returns the ownership labels set on every object the tool creates.
@@ -29,16 +33,26 @@ func ToolLabels() map[string]any {
 	return map[string]any{kube.ManagedByLabelKey: kube.ManagedByLabelValue}
 }
 
-// ToolManagers are the field managers this tool's versions wrote with:
-// "rhoai-nightly-updater" (server-side apply and POSTs with fieldManager),
-// and "Go-http-client", which the API server derives from the User-Agent of
-// the earliest versions' plain POSTs and patches (Go's default; the first
+// ToolManagers are the field managers of this tool's writes:
+// "rhoai-nightly-updater" (server-side apply, which always names its
+// fieldManager, and POSTs with fieldManager) and ClientManager (writes
+// without one, named after the User-Agent).
+var ToolManagers = []string{ToolFieldManager, ClientManager}
+
+// LegacyToolManagers are ToolManagers and "Go-http-client", which the API
+// server derives from Go's default User-Agent (net/http defaultUserAgent
+// "Go-http-client/1.1"). Versions before the tool sent its own User-Agent
+// wrote with it: the earliest versions' plain POSTs and patches (the first
 // version applied with fieldManager rhoai-nightly-updater and fell back to
 // such a POST, pkg/cluster/client.go:193 and pipeline_server.go:262-266 at
-// 5051672). odh-dashboard never writes as Go-http-client: its Node backend
-// sends no User-Agent (backend/src/utils/directCallUtils.ts), its Go BFF
-// forwards the browser's (distributions/core-bff, httputil.ReverseProxy).
-var ToolManagers = []string{ToolFieldManager, LegacyPostManager}
+// 5051672), and every later plain patch. Use it only to recognise objects
+// those versions made under names no current version writes: namespace
+// minio, the pipeline server "dspa" on that storage and its Secret
+// dashboard-dspa-secret. odh-dashboard never writes as Go-http-client: its
+// Node backend sends no User-Agent (backend/src/utils/directCallUtils.ts),
+// its Go BFF forwards the browser's (distributions/core-bff,
+// httputil.ReverseProxy); any other Go client without a User-Agent does.
+var LegacyToolManagers = []string{ToolFieldManager, ClientManager, LegacyPostManager}
 
 // WithToolFieldManager adds fieldManager to a POST path so created objects
 // record this tool as their manager.

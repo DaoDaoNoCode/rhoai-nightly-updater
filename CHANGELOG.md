@@ -362,6 +362,15 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **The tool names itself to the API server.** Every request now sends
+  `User-Agent: rhoai-nightly-updater-client/<version>`, so audit logs name
+  the tool, and writes without a field manager are recorded as
+  `rhoai-nightly-updater-client` instead of Go's default `Go-http-client`.
+  That default now counts as the tool's only for objects that only earlier
+  versions wrote: namespace `minio`, its pipeline server `dspa` and Secret
+  `dashboard-dspa-secret`. A Secret of a current name without the tool's
+  label that only `Go-http-client` wrote is no longer deleted with a
+  pipeline server.
 - **The MaaS portal says when it waits for Dashboard Dev.** RHOAI's
   dashboard operator deploys the portal, and a Dashboard Dev session keeps
   that operator at 0 replicas, so a portal turned on during a session

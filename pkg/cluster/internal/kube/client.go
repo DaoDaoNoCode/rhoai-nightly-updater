@@ -19,6 +19,8 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -452,6 +454,33 @@ func (c *Client) retryWait(method string, header http.Header, code int, err erro
 	return wait, true
 }
 
+// UserAgentProduct is the product part of the User-Agent every request
+// sends. The API server names a write's field manager after the User-Agent
+// up to its first "/" when the request sets no fieldManager
+// (k8s.io/apiserver pkg/endpoints/handlers create.go, patch.go
+// managerOrUserAgent), so such writes are recorded as this manager. It
+// differs from the server-side apply field manager "rhoai-nightly-updater"
+// (envkit.ToolFieldManager) on purpose: envkit.UpgradeToolFieldOwnership
+// turns that manager's Update entries into Apply ones, and plain patches
+// must not become owned by the apply (a later apply would prune them).
+// Without the header Go sends "Go-http-client/1.1" (net/http request.go
+// defaultUserAgent), the manager earlier versions' writes carry.
+const UserAgentProduct = "rhoai-nightly-updater-client"
+
+var userAgentVersion atomic.Value // string
+
+// SetUserAgentVersion sets the version the User-Agent names (the build's,
+// at startup); "dev" until then.
+func SetUserAgentVersion(v string) {
+	userAgentVersion.Store(FirstNonEmpty(strings.TrimSpace(v), "dev"))
+}
+
+// UserAgent is "rhoai-nightly-updater-client/<version>".
+func UserAgent() string {
+	v, _ := userAgentVersion.Load().(string)
+	return UserAgentProduct + "/" + FirstNonEmpty(v, "dev")
+}
+
 // doOnce sends the request once. A read-only client (Facts) sends only
 // GET and HEAD: every request goes through here, so nothing else leaves it.
 func (c *Client) doOnce(method, path, contentType string, body []byte, query url.Values) ([]byte, http.Header, int, error) {
@@ -468,6 +497,7 @@ func (c *Client) doOnce(method, path, contentType string, body []byte, query url
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", FirstNonEmpty(c.accept, "application/json"))
+	req.Header.Set("User-Agent", UserAgent())
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
