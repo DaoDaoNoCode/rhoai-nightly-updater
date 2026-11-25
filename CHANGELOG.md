@@ -362,6 +362,16 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **The installer refuses clusters with external OIDC sign-in.** On a
+  cluster set up for direct authentication with an external OIDC provider
+  (`authentications.config.openshift.io/cluster` `spec.type: OIDC`),
+  OpenShift turns off its OAuth server and the OAuth and user APIs
+  (openshift-docs `external-auth-disabled-resources.adoc`), which the app's
+  sign-in, OAuthClient, `users/~` and `useroauthaccesstokens` need.
+  `install.sh` (deploy, upgrade, rollback) now reads that type with your
+  `oc` and stops with that reason before changing anything, instead of
+  failing part-way or leaving an app nobody can sign in to. Documented in
+  the README, SECURITY.md and GITOPS.md (the chart cannot check).
 - **Gateway setup fails when the gateway cannot be reached.** Setting up
   the inference gateway or MaaS reported success when the cluster gave the
   gateway no load balancer address ("may still come up"), or when OpenShift

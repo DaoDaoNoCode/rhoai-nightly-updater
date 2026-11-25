@@ -24,6 +24,8 @@ curl -fsSLO https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/lates
 bash install.sh --dry-run && bash install.sh
 ```
 
+Clusters that sign users in directly through an external OIDC provider (OpenShift's direct authentication: `authentications.config.openshift.io/cluster` has `spec.type: OIDC`) are not supported: the app signs in through OpenShift's built-in OAuth server, which such clusters turn off, and the installer refuses them ([SECURITY.md](SECURITY.md#residual-risk)).
+
 The installer prints the app URL when it is done. To check the download, compare `sha256sum install.sh` (macOS: `shasum -a 256 install.sh`) with the SHA-256 in the [release notes](https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/latest). For a specific version, download `https://github.com/DaoDaoNoCode/rhoai-nightly-updater/releases/download/vX.Y.Z/install.sh` instead.
 
 **New here? Follow the [Quick Start](docs/QUICKSTART.md)**: install, one-time setup, your first update and the Environment page, step by step. Upgrading from 2.x to 3.0.0? Read [UPGRADING §5](docs/UPGRADING.md#5-upgrade-to-v300): the S3 storage moves, and a pipeline server needs the standard name `dspa` for workbench pipelines. Installed before releases existed (your Deployment uses `:latest`)? Read [UPGRADING.md](docs/UPGRADING.md) first. Cluster configured from Git by Argo CD? Deploy the Helm chart `deploy/chart` instead: [GITOPS.md](docs/GITOPS.md).
