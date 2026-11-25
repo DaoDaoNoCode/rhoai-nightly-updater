@@ -173,12 +173,15 @@ preflight() {
 # them: "OpenShift OAuth server and OpenShift OAuth API server", the
 # *.user.openshift.io and *.oauth.openshift.io APIs and OAuth client
 # configurations are unavailable (openshift-docs
-# modules/external-auth-disabled-resources.adoc). Fails closed when the
-# type cannot be read.
+# modules/external-auth-disabled-resources.adoc). Only oc's output (stdout)
+# is the type: its diagnostics (stderr, such as API warnings) are shown, not
+# compared. Fails closed when the type cannot be read: nothing is changed.
 refuse_external_oidc() {
 	local type
-	type=$(oc get authentications.config.openshift.io cluster -o jsonpath='{.spec.type}' 2>&1) ||
-		die "Cannot read authentications.config.openshift.io/cluster to check how the cluster signs users in: $type"
+	if ! type=$(oc get authentications.config.openshift.io cluster -o jsonpath='{.spec.type}' 2>"$TMP/auth-err"); then
+		die "Cannot read authentications.config.openshift.io/cluster to check how the cluster signs users in, so nothing was changed: $(cat "$TMP/auth-err")"
+	fi
+	[ ! -s "$TMP/auth-err" ] || err "$(cat "$TMP/auth-err")"
 	[ "$type" != OIDC ] ||
 		die "This cluster signs users in directly through an external OIDC provider (authentications.config.openshift.io/cluster spec.type is OIDC), so OpenShift's built-in OAuth server and its OAuth and user APIs are turned off. $APP_NAME needs them (its sign-in through an OAuthClient, users/~ and useroauthaccesstokens) and does not support such clusters; nothing was changed."
 }

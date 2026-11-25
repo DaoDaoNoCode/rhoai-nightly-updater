@@ -94,6 +94,8 @@ case "$1 $2" in
 	# FAKE_AUTH_TYPE: spec.type (unset: empty, IntegratedOAuth's default);
 	# FAKE_AUTH_READ_FAIL: the read fails.
 	[ -z "${FAKE_AUTH_READ_FAIL:-}" ] || { echo "error: the server doesn't have a resource type \"authentications\"" >&2; exit 1; }
+	# FAKE_AUTH_WARN: a warning on stderr with a successful read.
+	[ -z "${FAKE_AUTH_WARN:-}" ] || echo "Warning: $FAKE_AUTH_WARN" >&2
 	printf '%s' "${FAKE_AUTH_TYPE:-}" ;;
 "image info")
 	# FAKE_OC_ERROR: oc cannot read the image (a broken credential helper).
@@ -401,7 +403,9 @@ FAKE_AUTH_TYPE=OIDC expect_fail "external OIDC refused" "signs users in directly
 grep -q "^oc get authentications.config.openshift.io cluster -o jsonpath={.spec.type}$" "$LOG" && pass || fail "the authentication type was not read: $(cat "$LOG")"
 expect_eq "external OIDC: nothing processed or applied" "" "$(grep -E '^oc (process|apply|create|patch|delete)' "$LOG" || true)"
 FAKE_AUTH_TYPE=OIDC FAKE_INSTALLED=1 FAKE_NS=1 expect_fail "external OIDC refused on upgrade" "does not support such clusters; nothing was changed" run bash "$ASSET" upgrade --dry-run
-FAKE_AUTH_READ_FAIL=1 expect_fail "authentication type unreadable: fails closed" "Cannot read authentications.config.openshift.io/cluster" run bash "$ASSET" --dry-run
+FAKE_AUTH_TYPE=OIDC FAKE_AUTH_WARN="config.openshift.io/v1 Authentication is deprecated" \
+	expect_fail "external OIDC refused although oc warns on stderr" "signs users in directly through an external OIDC provider" run bash "$ASSET" --dry-run
+FAKE_AUTH_READ_FAIL=1 expect_fail "authentication type unreadable: fails closed" "Cannot read authentications.config.openshift.io/cluster to check how the cluster signs users in, so nothing was changed" run bash "$ASSET" --dry-run
 FAKE_AUTH_TYPE=IntegratedOAuth expect_ok "IntegratedOAuth installs" run bash "$ASSET" --dry-run
 FAKE_DIGEST="" FAKE_REVISION="" expect_fail "no such tag" "cannot resolve quay.io/example/app:v9.8.7" run bash "$ASSET" --dry-run
 expect_fail "upgrade needs an install" "No deployment rhoai-nightly-updater" run bash "$ASSET" upgrade --dry-run
@@ -459,6 +463,8 @@ FAKE_INSTALLED=1 FAKE_REVISION="$(git -C "$REPO" rev-parse HEAD)" TAG=v9.8.7 \
 FAKE_INSTALLED=1 FAKE_REVISION="" FAKE_NS=1 TAG=main \
 	expect_fail "clone: no revision label on a moving tag" "cannot tell which commit" run bash "$CLONE" upgrade --dry-run
 FAKE_INSTALLED=1 expect_fail "clone: rollback needs a TAG" "Usage: make rollback TAG=" run bash "$CLONE" rollback --dry-run
+FAKE_AUTH_TYPE=OIDC FAKE_AUTH_WARN="a warning" FAKE_INSTALLED=1 FAKE_NS=1 TAG=v9.8.7 \
+	expect_fail "clone: rollback refuses external OIDC" "does not support such clusters; nothing was changed" run bash "$CLONE" rollback --dry-run
 FAKE_INSTALLED=1 FAKE_NS=1 TAG=v9.8.7 expect_ok "clone: rollback dry run" run bash "$CLONE" rollback --dry-run
 grep -qx "IMAGE=quay.io/juntao_wang/rhoai-nightly-updater@$DIGEST" "$LOG.params" && pass || fail "rollback: not applied by digest: $(grep '^IMAGE=' "$LOG.params")"
 FAKE_INSTALLED=1 FAKE_NS=1 TAG=v9.8.7 FAKE_DIGEST="" FAKE_NO_OC_DIGEST=1 \
