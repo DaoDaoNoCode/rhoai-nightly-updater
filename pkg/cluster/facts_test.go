@@ -473,3 +473,14 @@ func TestMLflowSamplesCallMLflowAsTheCheckedUser(t *testing.T) {
 		t.Fatalf("add: %+v; MLflow asked as the user %v, as the ServiceAccount %v", res, asUser, asSA)
 	}
 }
+
+// The activity log names a component check's refusal by its code: an
+// unreadable DataScienceCluster is not "component not managed".
+func TestSetupBlockActivityFollowsTheCode(t *testing.T) {
+	if got := envkit.SetupBlockActivity(envkit.ErrorCodePrerequisitesUnknown); got != "component state unknown" {
+		t.Errorf("prerequisites_unknown: %q", got)
+	}
+	if got := envkit.SetupBlockActivity("prerequisites"); got != "component not managed" {
+		t.Errorf("prerequisites: %q", got)
+	}
+}
