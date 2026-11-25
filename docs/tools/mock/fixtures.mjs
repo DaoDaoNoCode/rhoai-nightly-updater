@@ -1396,7 +1396,17 @@ export function maasWorld(state = "none", { tls = true, items = [], blocked = nu
       .map((i) => (i.published && !i.partly && !i.limit ? { ...i, limit: maasLimit("free") } : i)),
     database: maasDatabase(state, { fresh: rhcl === "missing" || noCNPG, current: dbCurrent }),
     ...(noUnlimited ? { noUnlimited: true } : {}),
-    ...(items.some((i) => i.published) ? { access } : {}),
+    ...(items.some((i) => i.published) ? { access, subscriptionPriority: { value: 0 } } : {}),
+  };
+}
+
+/** This tool's subscription at priority 10, as an earlier version left it, with the fix and two admin subscriptions at 0 (pkg/cluster maasPriorityState). */
+export function maasOldPriority(value = 10) {
+  return {
+    value, ties: ["org-49315", "no-org-oidc-49315"],
+    fix: { id: "subscription-priority", label: "Set to the lowest priority (0)",
+      summary: `Sets the priority of this tool's subscription from ${value} to 0, the lowest MaaS honours, so that a key minted without naming a subscription goes to the caller's own subscription when it has a priority of 1 or more, and, at 0 too, to the one with the larger token limit, then by name. Keys made before keep the subscription they were bound to: revoke them and make them again.`,
+      changes: [`MaaSSubscription models-as-a-service/rhoai-nightly-updater-subscription: spec.priority ${value} to 0 (a merge patch with the read resourceVersion, after a server-side dry run); nothing else of it changes.`] },
   };
 }
 

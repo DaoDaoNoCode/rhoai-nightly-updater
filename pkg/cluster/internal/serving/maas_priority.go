@@ -1,8 +1,8 @@
 package serving
 
 import (
-	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
@@ -10,73 +10,121 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// maasDocsSamplePriority is the priority of the docs' free sample
-// subscription (docs/samples/maas-system/free), which this tool's
-// subscription uses while it is the only one.
-const maasDocsSamplePriority = 10
+// maasSubscriptionPriority is the spec.priority every write of this tool's
+// MaaSSubscription sets: Publish, Change limit, Change who can use them,
+// Unpublish of one of several models, the background prune, and Set to the
+// lowest priority. It is never computed from the other subscriptions.
+//
+// maas-api binds a key minted without naming a subscription to the
+// caller's subscription with the highest spec.priority; on equal
+// priorities, to the one with the largest single token limit (unlimited
+// counts as the largest), then the first name (models-as-a-service
+// rhoai-3.7-ea.1 dd6be8b and main 7e56355,
+// maas-api/internal/subscription/selector.go sortSubscriptionsByPriority;
+// docs concepts/api-key-authentication.md "Subscription Binding and
+// Priority"). It reads a negative spec.priority as 0 (selector.go, "priority
+// >= 0"), although the CRD has no minimum. 0 is the CRD's default
+// (maas-controller/api/maas/v1alpha1/maassubscription_types.go
+// "+kubebuilder:default=0") and so the lowest value maas-api honours: a
+// subscription someone creates later without a priority ties with this
+// tool's, which every signed-in user is in, instead of losing to it, and one
+// with priority 1 or more wins. On a tie, maas-api takes the larger token
+// limit, then the name; naming the subscription when minting the key avoids
+// the choice.
+const maasSubscriptionPriority = 0
 
-// maasSubscriptionPriority is the priority this tool's MaaSSubscription
-// takes: the docs' sample's while no other subscription exists, else
-// strictly below the lowest of the others'. A key minted without naming a
-// subscription goes to the caller's highest-priority one, and equal
-// priorities are a tie the controller flags (SpecPriorityDuplicate)
-// (concepts/api-key-authentication.md, "Subscription Binding and
-// Priority"): this tool's subscription, which every signed-in user is in,
-// must never take a key meant for someone else's. It also returns the
-// others' names. The API server validates the value (the publish dry run).
-func maasSubscriptionPriority(c *kube.Client) (int, []string, error) {
+// maasSubscriptionListed is a MaaSSubscription in models-as-a-service as
+// listed: its spec.priority as written (unset reads as 0, the CRD's
+// default).
+type maasSubscriptionListed struct {
+	Name     string
+	Priority int64
+	Deleting bool
+}
+
+// maasOtherSubscriptions lists the MaaSSubscriptions in models-as-a-service
+// that are not this tool's, by name.
+func maasOtherSubscriptions(c *kube.Client) ([]maasSubscriptionListed, error) {
 	var list struct {
 		Items []struct {
 			Metadata kube.ObjectMeta `json:"metadata"`
 			Spec     struct {
-				Priority int `json:"priority"`
+				Priority *int64 `json:"priority"`
 			} `json:"spec"`
 		} `json:"items"`
 	}
 	found, err := c.GetIntoOptional(rhoai.NamespacedPath(MaaSAPI(c), "maassubscriptions", MaaSTenantNamespace, ""), &list)
 	if err != nil {
 		if kube.IsDecodeError(err) {
-			return 0, nil, fmt.Errorf("parse the MaaSSubscription list: %w", err)
+			return nil, fmt.Errorf("parse the MaaSSubscription list: %w", err)
 		}
-		return 0, nil, err
+		return nil, err
 	}
 	if !found {
-		return maasDocsSamplePriority, nil, nil
+		return nil, nil
 	}
-	var others []string
-	lowest := 0
+	var out []maasSubscriptionListed
 	for _, it := range list.Items {
 		if ToolOwned(it.Metadata) {
 			continue
 		}
-		if len(others) == 0 || it.Spec.Priority < lowest {
-			lowest = it.Spec.Priority
+		var priority int64
+		if it.Spec.Priority != nil {
+			priority = *it.Spec.Priority
 		}
-		others = append(others, it.Metadata.Name)
+		out = append(out, maasSubscriptionListed{Name: it.Metadata.Name, Priority: priority, Deleting: it.Metadata.Terminating()})
 	}
-	sort.Strings(others)
-	if len(others) == 0 {
-		return maasDocsSamplePriority, nil, nil
-	}
-	return lowest - 1, others, nil
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
 }
 
-// maasOwnSubscriptionPriority is the priority of this tool's subscription
-// as it is (Unpublish keeps it), or the docs' sample's.
-func maasOwnSubscriptionPriority(c *kube.Client) int {
-	body, _, err := c.Get(maasAccessPath(c, "MaaSSubscription"))
+// maasSubscriptionNames are the subscriptions' names.
+func maasSubscriptionNames(subs []maasSubscriptionListed) []string {
+	var out []string
+	for _, s := range subs {
+		out = append(out, s.Name)
+	}
+	return out
+}
+
+// maasPriorityTies are the subscriptions maas-api ranks level with this
+// tool's at priority 0: spec.priority 0, unset or negative (read as 0), not
+// being deleted (maas-api leaves those out).
+func maasPriorityTies(subs []maasSubscriptionListed) []string {
+	var out []string
+	for _, s := range subs {
+		if s.Priority <= maasSubscriptionPriority && !s.Deleting {
+			out = append(out, s.Name)
+		}
+	}
+	return out
+}
+
+// maasPriorityState is what the MaaS tab shows about the priority of this
+// tool's subscription sub (found and this tool's): its value, the fix while
+// it is not 0 (an earlier version wrote 10, or a value below the other
+// subscriptions'), and the other subscriptions it ties with.
+func maasPriorityState(c *kube.Client, sub maasToolSub) *types.MaaSSubscriptionPriority {
+	out := &types.MaaSSubscriptionPriority{Value: sub.priority}
+	if sub.priority != maasSubscriptionPriority {
+		out.Fix = maasPriorityAction(sub.priority)
+	}
+	others, err := maasOtherSubscriptions(c)
 	if err != nil {
-		return maasDocsSamplePriority
+		slog.Debug("cannot list the MaaSSubscriptions for the priority note", "error", err)
+		return out
 	}
-	var sub struct {
-		Spec struct {
-			Priority *int `json:"priority"`
-		} `json:"spec"`
+	out.Ties = maasPriorityTies(others)
+	return out
+}
+
+// maasPriorityAction is the Set to the lowest priority action.
+func maasPriorityAction(from int64) *types.MaaSAction {
+	return &types.MaaSAction{
+		ID: "subscription-priority", Label: "Set to the lowest priority (0)",
+		Summary: fmt.Sprintf("Sets the priority of this tool's subscription from %d to 0, the lowest MaaS honours, so that a key minted without naming a subscription goes to the caller's own subscription when it has a priority of 1 or more, and, at 0 too, to the one with the larger token limit, then by name. Keys made before keep the subscription they were bound to: revoke them and make them again.", from),
+		Changes: []string{fmt.Sprintf("MaaSSubscription %s/%s: spec.priority %d to 0 (a merge patch with the read resourceVersion, after a server-side dry run); nothing else of it changes.", MaaSTenantNamespace, MaaSSubscriptionName, from)},
 	}
-	if json.Unmarshal(body, &sub) != nil || sub.Spec.Priority == nil {
-		return maasDocsSamplePriority
-	}
-	return *sub.Spec.Priority
 }
 
 // maasNotReadyRowReason is why a model row cannot be published while the

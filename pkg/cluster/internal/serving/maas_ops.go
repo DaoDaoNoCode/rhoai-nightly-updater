@@ -79,7 +79,7 @@ func ValidateMaaSRequest(req types.MaaSRequest) string {
 	// Which of the optional fields each action takes.
 	var takesDB, takesAccess, takesLimit bool
 	switch req.Action {
-	case "setup", "teardown", "upgrade-rhcl", "rhcl-memory", "rhcl-deny-on-failure", "authorino-tls", "remove-tier-policies", "change-access", "change-database":
+	case "setup", "teardown", "upgrade-rhcl", "rhcl-memory", "rhcl-deny-on-failure", "authorino-tls", "remove-tier-policies", "change-access", "change-database", "subscription-priority":
 		if req.Project != "" {
 			return "the platform takes no project"
 		}
@@ -102,7 +102,7 @@ func ValidateMaaSRequest(req types.MaaSRequest) string {
 		takesAccess = req.Action == "publish"
 		takesLimit = req.Action == "publish" || req.Action == "change-limit"
 	default:
-		return "action must be setup, teardown, publish, unpublish, restore-routing, change-limit, change-access, change-database, upgrade-rhcl, rhcl-memory, rhcl-deny-on-failure, authorino-tls or remove-tier-policies"
+		return "action must be setup, teardown, publish, unpublish, restore-routing, change-limit, change-access, change-database, subscription-priority, upgrade-rhcl, rhcl-memory, rhcl-deny-on-failure, authorino-tls or remove-tier-policies"
 	}
 	switch {
 	case req.Database != nil && !takesDB:
@@ -201,6 +201,9 @@ func RunMaaSAnnotated(c *kube.Client, req types.MaaSRequest, annotations map[str
 	case "change-database":
 		m.Target = "the MaaS database"
 		return m.changeDatabase(req.Database)
+	case "subscription-priority":
+		m.Target = "the priority of this tool's MaaS subscription"
+		return m.setSubscriptionPriority()
 	}
 	return m.unpublish(req.Project, entry.Name, true)
 }
@@ -918,7 +921,6 @@ func pubProjects(pubs []MaaSPub) []string {
 type maasPublish struct {
 	project, name string
 	limit         MaaSLimit
-	priority      int
 	refPath       string
 	model         LLMISvcObject
 	expect        ModelSpecExpectation
@@ -968,8 +970,9 @@ func (m *Run) publish(project, name string, access *types.MaaSAudience, limitReq
 	return m.publishWaitReady(pl)
 }
 
-// publishCheckPlatform checks the limit, the platform, Connectivity Link's
-// version and the other subscriptions' priorities.
+// publishCheckPlatform checks the limit, the platform, and Connectivity
+// Link's version (below the docs' minimum, also that MaaS has no other
+// subscription).
 func (m *Run) publishCheckPlatform(pl *maasPublish, limitReq *types.MaaSLimit) (*types.OperationResponse, error) {
 	c := m.Client
 	m.Step("check", "running", "Checking the platform and the model")
@@ -992,12 +995,16 @@ func (m *Run) publishCheckPlatform(pl *maasPublish, limitReq *types.MaaSLimit) (
 	if envkit.VersionCore(rhcl.Version) == rhclAuthBypassVersion {
 		return m.Fail("check", RHCLWarning(rhcl.Version)+" Nothing was changed.", "prerequisites", "rhcl auth bypass")
 	}
-	priority, others, err := maasSubscriptionPriority(c)
-	if err != nil {
-		return m.Fail("check", fmt.Sprintf("Cannot list the MaaSSubscriptions, so this tool cannot pick a priority below the others'; nothing was changed: %v.", err), kube.ErrorCodeFromK8sErr(err), "subscription list failed")
-	}
-	if len(others) > 0 && rhclBelowMinimum(rhcl.Version) {
-		return m.Fail("check", fmt.Sprintf("MaaS already has other subscriptions (%s), and with this tool's a signed-in user would have two or more. On Connectivity Link %s such a caller can hang (the MaaS docs ask for %s or later), so this tool does not publish until it is upgraded: Upgrade Connectivity Link on the MaaS tab does it. Nothing was changed.", strings.Join(others, ", "), rhcl.Version, rhclDocsMinimum), "prerequisites", "rhcl too old for several subscriptions")
+	// Below the docs' minimum, a caller in two or more subscriptions can
+	// hang: only then do the other subscriptions matter here.
+	if rhclBelowMinimum(rhcl.Version) {
+		others, err := maasOtherSubscriptions(c)
+		if err != nil {
+			return m.Fail("check", fmt.Sprintf("Cannot list the MaaSSubscriptions, so this tool cannot tell whether a signed-in user would have two or more on Connectivity Link %s; nothing was changed: %v.", rhcl.Version, err), kube.ErrorCodeFromK8sErr(err), "subscription list failed")
+		}
+		if len(others) > 0 {
+			return m.Fail("check", fmt.Sprintf("MaaS already has other subscriptions (%s), and with this tool's a signed-in user would have two or more. On Connectivity Link %s such a caller can hang (the MaaS docs ask for %s or later), so this tool does not publish until it is upgraded: Upgrade Connectivity Link on the MaaS tab does it. Nothing was changed.", strings.Join(maasSubscriptionNames(others), ", "), rhcl.Version, rhclDocsMinimum), "prerequisites", "rhcl too old for several subscriptions")
+		}
 	}
 	infra, err := MaaSInfraNamespace(c)
 	if err != nil {
@@ -1006,7 +1013,7 @@ func (m *Run) publishCheckPlatform(pl *maasPublish, limitReq *types.MaaSLimit) (
 	if msg, code := MaaSNamespaceRefusal(c, infra); msg != "" {
 		return m.Fail("check", msg, code, "namespace not rhoai's")
 	}
-	pl.limit, pl.priority = limit, priority
+	pl.limit = limit
 	return nil, nil
 }
 
@@ -1144,7 +1151,7 @@ func (m *Run) publishCheckGateway(pl *maasPublish) (*types.OperationResponse, er
 // model added: the other models keep their limits, and access sets the
 // audience only for the first model.
 func (m *Run) publishAccess(pl *maasPublish, access *types.MaaSAudience) (*types.OperationResponse, error) {
-	c, project, name, rec, limit, priority := m.Client, pl.project, pl.name, pl.rec, pl.limit, pl.priority
+	c, project, name, rec, limit := m.Client, pl.project, pl.name, pl.rec, pl.limit
 	live, err := maasLivePubs(c, rec, MaaSPub{project, name}, MaaSPub{})
 	if err != nil {
 		return m.Fail("check", fmt.Sprintf("Cannot check the other publications: %v. Nothing was changed.", err), kube.ErrorCodeFromK8sErr(err), "ref read failed")
@@ -1174,7 +1181,7 @@ func (m *Run) publishAccess(pl *maasPublish, access *types.MaaSAudience) (*types
 		limits[p.Key()] = cur.limitOf(p)
 	}
 	limits[MaaSPub{project, name}.Key()] = limit
-	sub, auth := maasAccessObjects(c, live, limits, aud, priority)
+	sub, auth := maasAccessObjects(c, live, limits, aud)
 	if !aud.Everyone {
 		for _, p := range MaaSGroupProblems(c, aud.Groups) {
 			m.Step("check", "running", p.Message)
@@ -1530,7 +1537,7 @@ func (m *Run) unpublishAccess(u *maasUnpublish) (*types.OperationResponse, error
 	for _, p := range live {
 		limits[p.Key()] = cur.limitOf(p)
 	}
-	sub, auth := maasAccessObjects(c, live, limits, cur.audience, maasOwnSubscriptionPriority(c))
+	sub, auth := maasAccessObjects(c, live, limits, cur.audience)
 	for _, w := range []struct {
 		kind, desc string
 		obj        map[string]any

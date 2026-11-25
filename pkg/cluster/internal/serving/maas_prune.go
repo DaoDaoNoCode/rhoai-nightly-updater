@@ -294,7 +294,7 @@ func PruneGoneMaaSPublications(c *kube.Client) (changed bool, logs []string, err
 		for _, p := range live {
 			limits[p.Key()] = cur.limitOf(p)
 		}
-		sub, auth := maasAccessObjects(c, live, limits, aud, maasOwnSubscriptionPriority(c))
+		sub, auth := maasAccessObjects(c, live, limits, aud)
 		for _, w := range []struct {
 			kind string
 			obj  map[string]any

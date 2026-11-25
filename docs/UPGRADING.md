@@ -433,8 +433,9 @@ a commit build):
   Connectivity Link**; Publish refuses on 1.4.0, and below 1.5 while other
   MaaSSubscriptions exist), tier-era gateway policies (**Remove the old
   tier policies**), or a foreign gateway that admits every namespace.
-  Publishing again moves this tool's subscription below every other
-  subscription's priority. Remove keeps the shared pieces it installed.
+  From 5.0.0 every write of this tool's subscription sets its priority to
+  0, the lowest MaaS honours (see [Upgrade to v5.0.0](#upgrade-to-v500)).
+  Remove keeps the shared pieces it installed.
 
 ### Rolling back from 3.0.0 to 2.3.x
 
@@ -592,6 +593,16 @@ What users notice:
   <source media="(prefers-color-scheme: dark)" srcset="images/page-user-admin-only-dark.png">
   <img src="images/page-user-admin-only-light.png" alt="A page only cluster-admins see, opened by a user who is not one: the navigation has Status, Build Explorer and Environment; Only cluster-admins can see this page, with Go to Status" width="640">
 </picture>
+
+**MaaS subscription priority.** Earlier versions gave this tool's
+MaaSSubscription priority 10 (or a negative value), so API keys minted
+without naming a subscription could be bound to it instead of an admin's
+subscription at priority 0. From 5.0.0 every write sets 0. Until the next
+Publish, Change limit or Change who can use them, the MaaS tab's
+Subscription row shows the old priority with **Set to the lowest priority
+(0)**. Keys already bound to this tool's subscription keep it (maas-api
+stores the subscription when the key is minted): revoke them and make
+them again.
 
 **With Argo CD (the Helm chart).** The usual commit (`targetRevision:
 v5.0.0` and the v5.0.0 image by digest). Both profiles get the new sign-in

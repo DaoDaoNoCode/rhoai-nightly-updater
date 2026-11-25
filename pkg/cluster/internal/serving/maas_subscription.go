@@ -44,9 +44,9 @@ import (
 // One subscription for every model this tool publishes, not one per
 // audience: an API key is bound to one subscription when it is minted, a
 // caller in two of them can hang on Connectivity Link 1.4.x (RHCLWarning),
-// and two of the tool's own would need priorities of their own below
-// everyone else's (maas_priority.go). Limits are per model; the audience is
-// the subscription's.
+// and two of the tool's own, both at priority 0 (maas_priority.go), would
+// tie for every caller in both. Limits are per model; the audience is the
+// subscription's.
 
 const (
 	maasMaxRates     = 5
@@ -483,11 +483,14 @@ func shellQuoteArg(s string) string {
 // --- the tool's subscription as read --------------------------------------------------
 
 // maasToolSub is this tool's MaaSSubscription as the cluster has it: its
-// audience, and the limit of each model it lists ("<project>/<model>").
+// audience, the limit of each model it lists ("<project>/<model>"), its
+// spec.priority (unset reads as 0, the CRD's default) and its metadata.
 type maasToolSub struct {
 	found, owned bool
 	audience     MaaSAudience
 	limits       map[string]MaaSLimit
+	priority     int64
+	meta         kube.ObjectMeta
 }
 
 func readMaaSToolSubscription(c *kube.Client) (maasToolSub, error) {
@@ -496,6 +499,7 @@ func readMaaSToolSubscription(c *kube.Client) (maasToolSub, error) {
 		Spec     struct {
 			Owner     map[string]any   `json:"owner"`
 			ModelRefs []map[string]any `json:"modelRefs"`
+			Priority  *int64           `json:"priority"`
 		} `json:"spec"`
 	}
 	exists, err := c.GetIntoOptional(maasAccessPath(c, "MaaSSubscription"), &sub)
@@ -508,7 +512,10 @@ func readMaaSToolSubscription(c *kube.Client) (maasToolSub, error) {
 	if !exists {
 		return maasToolSub{audience: MaaSAudience{Everyone: true}, limits: map[string]MaaSLimit{}}, nil
 	}
-	out := maasToolSub{found: true, owned: ToolOwned(sub.Metadata), audience: MaaSAudienceFromOwner(sub.Spec.Owner), limits: map[string]MaaSLimit{}}
+	out := maasToolSub{found: true, owned: ToolOwned(sub.Metadata), audience: MaaSAudienceFromOwner(sub.Spec.Owner), limits: map[string]MaaSLimit{}, meta: sub.Metadata}
+	if sub.Spec.Priority != nil {
+		out.priority = *sub.Spec.Priority
+	}
 	for _, ref := range sub.Spec.ModelRefs {
 		ns, _ := ref["namespace"].(string)
 		name, _ := ref["name"].(string)
@@ -565,8 +572,10 @@ func limitFor(limits map[string]MaaSLimit, p MaaSPub) MaaSLimit {
 }
 
 // maasAccessObjects are this tool's MaaSSubscription and MaaSAuthPolicy for
-// the published models: each model with its limit, both for the audience.
-func maasAccessObjects(c *kube.Client, pubs []MaaSPub, limits map[string]MaaSLimit, aud MaaSAudience, priority int) (map[string]any, map[string]any) {
+// the published models: each model with its limit, both for the audience,
+// the subscription always at priority 0 (maasSubscriptionPriority), written
+// out so that a write also lowers a priority an earlier version set.
+func maasAccessObjects(c *kube.Client, pubs []MaaSPub, limits map[string]MaaSLimit, aud MaaSAudience) (map[string]any, map[string]any) {
 	sort.Slice(pubs, func(i, j int) bool { return pubs[i].Key() < pubs[j].Key() })
 	var subRefs, authRefs []any
 	for _, p := range pubs {
@@ -584,7 +593,7 @@ func maasAccessObjects(c *kube.Client, pubs []MaaSPub, limits map[string]MaaSLim
 		"kind":       "MaaSSubscription",
 		"metadata": map[string]any{"name": "rhoai-nightly-updater-subscription", "namespace": MaaSTenantNamespace, "labels": envkit.ToolLabels(),
 			"annotations": map[string]any{"openshift.io/display-name": "rhoai-nightly-updater models", "openshift.io/description": MaaSSubscriptionDescription(pubs, limits, aud)}},
-		"spec": map[string]any{"owner": aud.Owner(), "modelRefs": subRefs, "priority": priority},
+		"spec": map[string]any{"owner": aud.Owner(), "modelRefs": subRefs, "priority": maasSubscriptionPriority},
 	}
 	auth := map[string]any{
 		"apiVersion": MaaSAPI(c),

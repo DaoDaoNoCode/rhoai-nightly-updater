@@ -1737,8 +1737,8 @@ export interface MaaSPart {
   docUrl?: string;
 }
 
-/** The fixes a part offers besides Set up. */
-export type MaaSActionId = "upgrade-rhcl" | "rhcl-memory" | "rhcl-deny-on-failure" | "authorino-tls" | "remove-tier-policies" | "change-database";
+/** The fixes a part offers besides Set up, and the subscription's own (subscription-priority). */
+export type MaaSActionId = "upgrade-rhcl" | "rhcl-memory" | "rhcl-deny-on-failure" | "authorino-tls" | "remove-tier-policies" | "change-database" | "subscription-priority";
 
 /** A part's own fix (pkg/types MaaSAction): its confirmation lists changes. */
 export interface MaaSAction {
@@ -1835,10 +1835,24 @@ export interface MaaSStatus {
   access?: MaaSAudience & { groupProblems?: MaaSGroupProblem[] };
   /** The cluster's MaaSSubscription API has no unlimited model reference (read from its CRD). */
   noUnlimited?: boolean;
+  /** The priority of this tool's subscription; absent while it does not exist or is not this tool's. */
+  subscriptionPriority?: MaaSSubscriptionPriority;
   /** This tool's publications whose project or model is gone: the background check removes what is left. */
   removing?: MaaSRemoval[];
   /** The error of the last automatic removal, when it failed. */
   removalProblem?: string;
+}
+
+/**
+ * The spec.priority of this tool's subscription (pkg/types MaaSSubscriptionPriority): every write sets 0, the lowest MaaS
+ * honours; an earlier version wrote 10, or a value below the other subscriptions'.
+ */
+export interface MaaSSubscriptionPriority {
+  value: number;
+  /** Sets it to 0 ("subscription-priority"); absent while it is 0. */
+  fix?: MaaSAction;
+  /** Other subscriptions MaaS ranks level with it (priority 0, unset or negative): a key goes to the larger token limit, then by name. */
+  ties?: string[];
 }
 
 /** A publication of this tool that is gone, and why (pkg/types MaaSRemoval). */
