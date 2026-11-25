@@ -19,37 +19,40 @@ import (
 // staging/operator-lifecycle-manager/pkg/controller/bundle/bundle_unpacker.go:
 // the label at 51-52, the Job and pod labels at 96-112, the "pull" init
 // container that runs the bundle image at 192-195, the Job's namespace and
-// owner at 285-287, the ConfigMap at 672-677). The tool's Subscription
-// always uses a catalog in rhoai.CatalogNS (BuildSubscription).
+// owner at 285-287, the ConfigMap at 672-677).
 const BundleUnpackRefLabel = "operatorframework.io/bundle-unpack-ref"
 
-// BundleUnpackPullFailures reads OLM's bundle-unpack pods in the catalog
-// namespace and words each one whose "pull" init container (the one that
-// runs the bundle image) cannot pull it, for example "an OLM bundle unpack
-// in openshift-marketplace cannot pull registry.redhat.io/...:
-// ImagePullBackOff (manifest unknown)". Like OLM, which surfaces the waiting
-// reasons of a pending unpack pod's init containers on the bundle lookup
-// (bundle_unpacker.go:582-608 and 633-669), it reads only Pending pods.
+// BundleUnpackTimeoutAnnotation on a namespace's only OperatorGroup sets
+// OLM's bundle unpack timeout for the Subscriptions in that namespace, in
+// place of the catalog operator's --bundle-unpack-timeout
+// (bundle_unpacker.go:40-44, 307-319 and 962-987).
+const BundleUnpackTimeoutAnnotation = "operatorframework.io/bundle-unpack-timeout"
+
+// BundleUnpackPullFailures reads OLM's bundle-unpack pods in namespace, the
+// namespace of the Subscription's CatalogSource, and words each one whose
+// "pull" init container (the one that runs the bundle image) cannot pull
+// it, for example "an OLM bundle unpack in openshift-marketplace cannot
+// pull registry.redhat.io/...: ImagePullBackOff (manifest unknown)". Like
+// OLM, which surfaces the waiting reasons of a pending unpack pod's init
+// containers on the bundle lookup (bundle_unpacker.go:582-608 and 633-669),
+// it reads only Pending pods.
 //
 // OLM 4.22 and older do not copy that reason to the Subscription: while
 // the unpack Job runs, its BundleUnpacking condition reads only
 // UnpackingInProgress, with no message (operator-framework-olm release-4.22,
 // staging/operator-lifecycle-manager/pkg/controller/operators/catalog/operator.go:1423-1440),
-// until the Job's activeDeadlineSeconds (the catalog operator's
-// --bundle-unpack-timeout, 10 minutes by default: cmd/catalog/start.go:82)
-// fails it and OLM sets BundleUnpackFailed (operator.go:1396-1421). The
-// pods are the only place that says why the unpack waits.
+// until the Job's activeDeadlineSeconds (the cluster's bundle unpack
+// timeout) fails it and OLM sets BundleUnpackFailed (operator.go:1396-1421).
+// The pods are the only place that says why the unpack waits.
 //
 // The pods are not tied to one bundle: the Update path does not know the
 // bundle image the catalog resolves to (it knows the head CSV's name from
 // the PackageManifest), and the Job's ConfigMap owner cannot be read with
 // the existing permissions. So the result is worded as what is seen in the
 // namespace, with the image, never as RHOAI's own unpack. The kubelet's
-// message is never quoted: a registry error can carry a signed URL. Only
-// the waiting reason and a recognised kind of error (pullErrorKind) are.
-// The list is the existing pod read in rhoai.CatalogNS (catalogPodPullFailure).
-func BundleUnpackPullFailures(c *kube.Client) ([]string, error) {
-	path := rhoai.NamespacedPath("v1", "pods", rhoai.CatalogNS, "") + "?labelSelector=" + url.QueryEscape(BundleUnpackRefLabel)
+// message is never quoted: a registry error can carry a signed URL.
+func BundleUnpackPullFailures(c *kube.Client, namespace string) ([]string, error) {
+	path := rhoai.NamespacedPath("v1", "pods", namespace, "") + "?labelSelector=" + url.QueryEscape(BundleUnpackRefLabel)
 	var items []struct {
 		Status struct {
 			Phase                 string `json:"phase"`
@@ -77,7 +80,7 @@ func BundleUnpackPullFailures(c *kube.Client) ([]string, error) {
 			if waiting.Message != "" {
 				detail += " (" + pullErrorKind(waiting.Message) + ")"
 			}
-			msg := fmt.Sprintf("an OLM bundle unpack in %s cannot pull %s: %s", rhoai.CatalogNS, kube.NonEmpty(cs.Image, "(image not reported)"), detail)
+			msg := fmt.Sprintf("an OLM bundle unpack in %s cannot pull %s: %s", namespace, kube.NonEmpty(cs.Image, "(image not reported)"), detail)
 			if !slices.Contains(failures, msg) {
 				failures = append(failures, msg)
 			}
@@ -91,8 +94,12 @@ func BundleUnpackPullFailures(c *kube.Client) ([]string, error) {
 // images.
 const bundlePullContainer = "pull"
 
-// pullErrorKind names the kind of error in a kubelet image pull message,
-// without quoting it.
+// pullErrorKind is a display hint only: it names the kind of error a
+// kubelet image pull message seems to describe, so the message itself is
+// never shown. The kubelet's and the container runtime's wording is not an
+// API and differs between versions and registries, so it is matched
+// loosely, anything else is the neutral "pull error", and nothing is
+// decided on it.
 func pullErrorKind(message string) string {
 	m := strings.ToLower(message)
 	switch {

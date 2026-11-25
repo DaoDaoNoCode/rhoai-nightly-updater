@@ -372,34 +372,37 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
-- **Update waits longer for OLM to unpack a bundle, and says why OLM has
-  not resolved yet.** On a ROSA HCP cluster an Update failed after 8
-  minutes with "last state: Waiting for OLM to resolve the Subscription":
+- **Update waits for OLM's result instead of a fixed time, and says why
+  OLM has not resolved yet.** On a ROSA HCP cluster an Update failed after
+  8 minutes with "last state: Waiting for OLM to resolve the Subscription":
   OLM's bundle unpack pod could not pull the operator bundle
   (`ImagePullBackOff`, `manifest unknown`) on a node that did not have the
   `quay.io/rhoai` credentials yet, and the Job's next pod, on a new node,
   started 16 seconds after the tool gave up and restored the previous
   operator. OLM on OpenShift 4.22 and older reports no failure on the
-  Subscription before its bundle unpack timeout (10 minutes by default,
-  counted from when it creates the unpack Job; until then
-  `BundleUnpacking` reads only `UnpackingInProgress`). The install wait of
-  Update, Update under Argo CD, Re-deploy and Install a different build
-  now lasts at most 11 minutes instead of 8 (less when the steps before it
-  took long: it still ends before the 15-minute operation deadline; a
-  maximum, not a promise of OLM's verdict). While OLM resolves, the
-  progress shows the Subscription's conditions; while OLM unpacks, every
-  OLM bundle unpack pod in `openshift-marketplace` that cannot pull, with
-  its image, the kubelet's reason and the kind of error (for example "an
-  OLM bundle unpack in openshift-marketplace cannot pull
+  Subscription before its bundle unpack timeout, which each cluster sets
+  (the catalog operator's flag, not visible on a hosted control plane, or
+  an OperatorGroup annotation); until then `BundleUnpacking` reads only
+  `UnpackingInProgress`. The install wait of Update, Update under Argo CD,
+  Re-deploy and Install a different build now assumes no OLM timeout: it
+  ends on OLM's result (the CSV `Succeeded`, `ResolutionFailed`,
+  `BundleUnpackFailed`, a failed InstallPlan or CSV) or when the
+  operation's time runs out (10 seconds before its 15-minute deadline). A
+  failing bundle pull no longer fails the operation after 3 minutes (the
+  OpenShift 4.23 message on `BundleUnpacking`): OLM keeps retrying, and the
+  pull can recover. While OLM resolves, the progress shows the
+  Subscription's conditions; while OLM unpacks, every OLM bundle unpack pod
+  in the namespace of the Subscription's CatalogSource that cannot pull,
+  with its image, the kubelet's reason and a hint at the kind of error (for
+  example "an OLM bundle unpack in openshift-marketplace cannot pull
   registry.redhat.io/rhoai/...: ImagePullBackOff (manifest unknown)"; the
-  registry's own message is never quoted, as it can carry a signed URL).
-  A wait that ends while OLM still unpacks says so and how to check. The
-  Update confirmation now says when the new state is kept (OLM created an
+  registry's own message is never quoted, as it can carry a signed URL),
+  and the unpack timeout the OperatorGroup's annotation sets, if any. A
+  wait that ends while OLM still unpacks says so and how to check. The
+  Update confirmation says when the new state is kept (OLM created an
   InstallPlan and no CSV failed) and that the previous one is restored
-  otherwise. On OpenShift 4.23 and later, where OLM puts the pull failure
-  on the Subscription's `BundleUnpacking` condition, the wait still stops
-  after 3 minutes of it, as before. No new permission: the pod list in
-  `openshift-marketplace` was already read for the catalog pod.
+  otherwise. No new permission: the pod list was already read for the
+  catalog pod, the OperatorGroup list for the install's checks.
 
 - **Models: the inference gateway says when Authorino serves no TLS, and
   the call check names the gateway's authorization on a gateway 500.** With

@@ -10,6 +10,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -82,7 +83,8 @@ func TestUpdateStream_ReportsTheBundleUnpackPullFailure(t *testing.T) {
 	for _, want := range []string{
 		"last state: " + wantState,
 		"OLM was still unpacking the operator bundle",
-		"10m0s unless the OperatorGroup in " + rhoai.SubNS + " sets operatorframework.io/bundle-unpack-timeout",
+		"had reported no verdict: it reports BundleUnpackFailed only after its bundle unpack timeout, which the cluster sets",
+		"the annotation " + catalog.BundleUnpackTimeoutAnnotation + " on the OperatorGroup in " + rhoai.SubNS,
 		"oc get pods -n " + rhoai.CatalogNS + " -l " + catalog.BundleUnpackRefLabel,
 	} {
 		if !strings.Contains(result.Message, want) {
@@ -128,7 +130,7 @@ func TestUpdateUnderGitOps_ReportsTheBundleUnpackPullFailure(t *testing.T) {
 func TestWaitForInstall_ReportsConditionsWhileResolving(t *testing.T) {
 	f := newFakeOLM(t)
 	f.unpackPods = unpackPodsPullFailing
-	f.sub = map[string]any{"metadata": map[string]any{"name": rhoai.SubName}, "spec": map[string]any{}, "status": map[string]any{"conditions": []any{
+	f.sub = map[string]any{"metadata": map[string]any{"name": rhoai.SubName}, "spec": map[string]any{"sourceNamespace": rhoai.CatalogNS}, "status": map[string]any{"conditions": []any{
 		cond("CatalogSourcesUnhealthy", "UnhealthyCatalogSourceFound", "targeted catalogsource openshift-marketplace/rhoai-catalog-dev unhealthy"),
 	}}}
 	var logs []string
@@ -145,7 +147,7 @@ func TestWaitForInstall_ReportsConditionsWhileResolving(t *testing.T) {
 // Unreadable unpack pods are said, not hidden.
 func TestWaitForInstall_SaysWhenUnpackPodsCannotBeRead(t *testing.T) {
 	f := newFakeOLM(t)
-	f.sub = map[string]any{"metadata": map[string]any{"name": rhoai.SubName}, "spec": map[string]any{}, "status": map[string]any{}}
+	f.sub = map[string]any{"metadata": map[string]any{"name": rhoai.SubName}, "spec": map[string]any{"sourceNamespace": rhoai.CatalogNS}, "status": map[string]any{}}
 	unpackingSubscription(f)
 	f.intercept = func(_ *fakeOLM, w http.ResponseWriter, r *http.Request) bool {
 		if r.URL.Query().Get("labelSelector") != catalog.BundleUnpackRefLabel {
@@ -182,7 +184,7 @@ func TestWaitForInstall_NeverQuotesThePullMessage(t *testing.T) {
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			f := newFakeOLM(t)
-			f.sub = map[string]any{"metadata": map[string]any{"name": rhoai.SubName}, "spec": map[string]any{}, "status": map[string]any{}}
+			f.sub = map[string]any{"metadata": map[string]any{"name": rhoai.SubName}, "spec": map[string]any{"sourceNamespace": rhoai.CatalogNS}, "status": map[string]any{}}
 			unpackingSubscription(f)
 			f.unpackPods = `{"items":[{"metadata":{"name":"a1"},"status":{"phase":"Pending","initContainerStatuses":[
 			  {"name":"pull","image":"` + testBundleImage + `","ready":false,"state":{"waiting":{"reason":"ErrImagePull","message":` + jsonString(tc.message) + `}}}]}}]}`
@@ -206,24 +208,27 @@ func TestWaitForInstall_NeverQuotesThePullMessage(t *testing.T) {
 	}
 }
 
-// The field case: the unpack pod cannot pull the bundle until 8 minutes 16
-// seconds after the Subscription was created, then the Job's next pod
-// pulls it and OLM installs the CSV, which stays Succeeded for the settle
-// period. With the 11-minute wait Update succeeds; with the former 8 it
-// gave up and restored the previous operator. Production poll interval and
-// settle period, on the tests' fake clock.
-func TestUpdateStream_SurvivesABundlePullThatRecoversAfterEightMinutes(t *testing.T) {
+// The wait assumes no OLM unpack timeout: it ends on OLM's verdict or at
+// the operation's deadline. On the tests' fake clock, with the production
+// poll interval and settle period and the 15-minute operation deadline,
+// the unpack pod cannot pull the bundle until recoverAt (OLM then installs
+// the CSV) or OLM reports BundleUnpackFailed at failAt.
+func TestUpdateStream_WaitsForOLMsVerdictOrTheOperationDeadline(t *testing.T) {
 	const newCSV = "rhods-operator.3.6.1"
 	for _, tc := range []struct {
-		name    string
-		timeout time.Duration
-		success bool
+		name                  string
+		recoverAt, failAt     time.Duration
+		wantCode              string
+		endsAfter, endsBefore time.Duration // the wait's end, after the Subscription was created
 	}{
-		{"11-minute wait", 11 * time.Minute, true},
-		{"former 8-minute wait", 8 * time.Minute, false},
+		// The field case: the Job's next pod pulled the bundle 8m16s in.
+		{name: "pull recovers after 8m16s", recoverAt: 8*time.Minute + 16*time.Second, endsAfter: 8 * time.Minute, endsBefore: 9 * time.Minute},
+		// A cluster whose OLM unpack timeout is longer than 10 minutes.
+		{name: "pull recovers after 13 minutes", recoverAt: 13 * time.Minute, endsAfter: 13 * time.Minute, endsBefore: 14 * time.Minute},
+		{name: "OLM's verdict ends the wait early", failAt: 2 * time.Minute, wantCode: "bundle_unpack_failed", endsAfter: 2 * time.Minute, endsBefore: 3 * time.Minute},
+		{name: "the operation's time runs out", wantCode: "install_timeout", endsAfter: 14 * time.Minute, endsBefore: record.OperationDeadline},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Cleanup(operator.SetInstallTimeoutForTest(tc.timeout))
 			prevPoll, prevSettle := operator.InstallPlanPollInterval, operator.CSVSucceededSettle
 			operator.InstallPlanPollInterval, operator.CSVSucceededSettle = 5*time.Second, 20*time.Second
 			t.Cleanup(func() { operator.InstallPlanPollInterval, operator.CSVSucceededSettle = prevPoll, prevSettle })
@@ -231,27 +236,44 @@ func TestUpdateStream_SurvivesABundlePullThatRecoversAfterEightMinutes(t *testin
 			f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"channel": "fast"})
 			f.channels = `[{"name":"stable-3.x","currentCSV":"` + newCSV + `"}]`
 			f.unpackPods = unpackPodsPullFailing
-			var subscribed time.Time
+			var subscribed, ended time.Time
 			f.onSubscribe = func(f *fakeOLM, spec map[string]any) {
 				if spec["channel"] != "fast" { // the restored Subscription is not the attempt
 					subscribed = kube.Clock().Now()
 					unpackingSubscription(f)
 				}
 			}
-			recovered := false
+			decided := false
 			f.intercept = func(f *fakeOLM, _ http.ResponseWriter, r *http.Request) bool {
-				if !recovered && !subscribed.IsZero() && r.Method == http.MethodGet && r.URL.Path == rhoai.SubscriptionPath() &&
-					kube.Clock().Since(subscribed) >= 8*time.Minute+16*time.Second {
-					recovered = true
+				if decided || subscribed.IsZero() || r.Method != http.MethodGet || r.URL.Path != rhoai.SubscriptionPath() {
+					return false
+				}
+				switch since := kube.Clock().Since(subscribed); {
+				case tc.recoverAt > 0 && since >= tc.recoverAt:
+					decided = true
 					f.unpackPods = ""
 					olmInstalls(newCSV)(f, nil)
+				case tc.failAt > 0 && since >= tc.failAt:
+					decided = true
+					f.sub["status"] = map[string]any{"conditions": []any{cond("BundleUnpackFailed", "BundleUnpackFailed", "bundle unpacking failed. Reason: DeadlineExceeded")}}
 				}
 				return false
 			}
-			emit, events := eventsRecorder()
-			result, err := operator.UpdateStream(f.client(context.Background()), testNightlyImage, emit)
-			if err != nil || result == nil || result.Success != tc.success {
+			rec, events := eventsRecorder()
+			emit := func(e UpdateStepEvent) {
+				if e.Step == "verify_installplan" && e.Status != "running" && ended.IsZero() {
+					ended = kube.Clock().Now()
+				}
+				rec(e)
+			}
+			ctx, cancel := kube.Clock().WithTimeout(context.Background(), record.OperationDeadline)
+			defer cancel()
+			result, err := operator.UpdateStream(f.client(ctx), testNightlyImage, emit)
+			if err != nil || result == nil || result.Success != (tc.wantCode == "") || result.ErrorCode != tc.wantCode {
 				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			if took := ended.Sub(subscribed); took < tc.endsAfter || took >= tc.endsBefore {
+				t.Fatalf("the wait ended %s after the Subscription was created, want between %s and %s", took, tc.endsAfter, tc.endsBefore)
 			}
 			sawPullFailure := false
 			for _, e := range events() {
@@ -260,12 +282,44 @@ func TestUpdateStream_SurvivesABundlePullThatRecoversAfterEightMinutes(t *testin
 			if !sawPullFailure {
 				t.Fatalf("the pull failure was not shown while it lasted: %v", events())
 			}
-			if tc.success && (!strings.Contains(result.Message, newCSV+" is installed") || lastStatus(events(), operator.RestoreStepName) != "") {
-				t.Fatalf("result=%+v events=%v", result, events())
+			if restored := lastStatus(events(), operator.RestoreStepName) == "success"; restored != (tc.wantCode != "") {
+				t.Fatalf("restore ran=%v: %v", restored, events())
 			}
-			if !tc.success && (result.ErrorCode != "install_timeout" || lastStatus(events(), operator.RestoreStepName) != "success") {
-				t.Fatalf("result=%+v events=%v", result, events())
+			if tc.wantCode == "install_timeout" && !strings.Contains(result.Message, "operation's time budget") {
+				t.Fatalf("message: %s", result.Message)
 			}
 		})
+	}
+}
+
+// The unpack pods are read in the namespace of the Subscription's
+// CatalogSource, and the OperatorGroup's unpack-timeout annotation is
+// shown when it sets one.
+func TestWaitForInstall_ReadsUnpackPodsInTheCatalogsNamespace(t *testing.T) {
+	const ns = "team-catalogs"
+	f := newFakeOLM(t)
+	f.operatorGrps = []any{map[string]any{"metadata": map[string]any{"name": "rhods-operator", "annotations": map[string]any{catalog.BundleUnpackTimeoutAnnotation: "30m"}}, "spec": map[string]any{}}}
+	f.sub = map[string]any{"metadata": map[string]any{"name": rhoai.SubName}, "spec": map[string]any{"source": "team-catalog", "sourceNamespace": ns}, "status": map[string]any{}}
+	unpackingSubscription(f)
+	f.intercept = func(_ *fakeOLM, w http.ResponseWriter, r *http.Request) bool {
+		if r.URL.Path != "/api/v1/namespaces/"+ns+"/pods" || r.URL.Query().Get("labelSelector") != catalog.BundleUnpackRefLabel {
+			return false
+		}
+		_, _ = w.Write([]byte(unpackPodsPullFailing))
+		return true
+	}
+	var logs []string
+	out := operator.WaitForInstall(f.client(context.Background()), func(UpdateStepEvent) {}, &logs, &operator.Recovery{}, "")
+	for _, want := range []string{
+		"an OLM bundle unpack in " + ns + " cannot pull " + testBundleImage + ": ImagePullBackOff (manifest unknown)",
+		`OperatorGroup rhods-operator sets OLM's bundle unpack timeout to "30m"`,
+		"oc get pods -n " + ns + " -l " + catalog.BundleUnpackRefLabel,
+	} {
+		if !strings.Contains(out.Message, want) {
+			t.Fatalf("message lacks %q:\n%s", want, out.Message)
+		}
+	}
+	if n := unpackPodLists(f); n != 0 {
+		t.Fatalf("the pods of %s were read %d times", rhoai.CatalogNS, n)
 	}
 }

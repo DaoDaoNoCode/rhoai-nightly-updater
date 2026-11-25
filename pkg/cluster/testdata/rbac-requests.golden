@@ -378,8 +378,8 @@
 3 list /persistentvolumeclaims ns=minio name=
 3 list /persistentvolumeclaims ns=seaweedfs name=
 1 list /pods ns= name=
-24 list /pods ns=* name=
-6 list /pods ns=openshift-marketplace name=
+25 list /pods ns=* name=
+5 list /pods ns=openshift-marketplace name=
 3 list /pods ns=redhat-ods-operator name=
 4 list /pods ns=seaweedfs name=
 1 list /resourcequotas ns=* name=
