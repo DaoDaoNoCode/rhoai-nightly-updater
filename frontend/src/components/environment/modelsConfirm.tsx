@@ -1,7 +1,8 @@
 import { Alert, Content, Stack, StackItem } from "@patternfly/react-core";
 import type { ModelExposureKind, ResourcesStatus } from "../../types";
 import { type ConfirmSpec, type ModelsPending, type Pending } from "./resourceRow";
-import { catalogModel, modelTypeWords, shortModelName } from "./featureState";
+import { catalogModel, modelIn, modelTypeWords, shortModelName } from "./featureState";
+import { exposureWords } from "./ExposureChooser";
 import { GATEWAY, GATEWAY_NS } from "./GatewayPart";
 import { modelNeeds } from "./ModelPicker";
 import { tokenSA } from "./modelCommands";
@@ -13,7 +14,7 @@ export function modelsSteps(p: ModelsPending): { id: string; title: string }[] {
       return [
         { id: "check", title: "Check what every part needs" },
         ...(p.gateway ? [{ id: "gateway", title: "Create the inference gateway" }, { id: "gateway-ready", title: "Wait for the gateway and its load balancer" }] : []),
-        ...(p.project ? [{ id: "model", title: p.releasedImage ? `Switch ${p.model} in ${p.project} to the released image` : `Create ${p.model} in ${p.project}` }, { id: "model-ready", title: "Wait until the model runs" }] : []),
+        ...(p.project ? [{ id: "model", title: p.releasedImage ? `Switch ${p.model} in ${p.project} to the released image` : p.again ? `Set up ${p.model} in ${p.project} again` : `Create ${p.model} in ${p.project}` }, { id: "model-ready", title: "Wait until the model runs" }] : []),
         ...(p.project && p.exposure === "maas" ? [{ id: "publish", title: "Publish it to MaaS" }] : []),
         ...(p.project ? [{ id: "callable", title: "Check that it can be called" }] : []),
       ];
@@ -72,6 +73,25 @@ export function modelsConfirm(pending: Pending, status: ResourcesStatus | null):
           title: `Use the newest released Red Hat image for ${short} in ${project}?`, confirm: "Use the released image", runTitle: `Use the released image for ${short} in ${project}`,
           summary: <Content component="p">The model restarts on the newest released Red Hat vLLM CPU image, looked up in Red Hat&apos;s container catalog and pinned by digest. It takes 3 to 5 minutes.</Content>,
           changes: [<>LLMInferenceService <code>{name}</code> in <code>{project}</code>: the main container&apos;s image is set to that image, and its version is recorded on the model. Nothing else changes.</>],
+        };
+      }
+      const existing = project ? modelIn(status, project, name) : undefined;
+      if (pending.again && project && existing) {
+        // The live options against the catalog's: the one difference the status reports.
+        const live = existing.vllmArgs;
+        const argsChange = !!c && live !== undefined && live !== c.args;
+        return {
+          title: `Set up ${short} in ${project} again?`, confirm: "Set up again", runTitle: `Set up ${short} in ${project} again`,
+          summary: (
+            <Stack hasGutter>
+              <StackItem><Content component="p">Sets the model up as this tool does now, in place: the same model in {project}, reached the same way ({exposureWords(existing).charAt(0).toLowerCase() + exposureWords(existing).slice(1)}). It is not deleted.</Content></StackItem>
+              <StackItem><Content component="p">When its spec changes{argsChange ? " (its vLLM options do)" : ""}, KServe restarts the model: a new server starts, which takes 3 to 5 minutes, and the model answers again once it runs. A model reached through MaaS stays published, and is published again when its publication is missing.</Content></StackItem>
+            </Stack>
+          ),
+          changes: [
+            <>LLMInferenceService <code>{name}</code> in <code>{project}</code>: updated to the spec this tool writes for {c?.displayName ?? name}.{argsChange ? <> vLLM options: {live ? <code>{live}</code> : "none"} become <code>{c!.args}</code>.</> : null}</>,
+            <>Token authentication (ServiceAccount {tokenSA(name)}, Role {name}-view-role, RoleBinding {name}-view, token Secret default-name-{tokenSA(name)}): missing objects are made; the ones there are kept.</>,
+          ],
         };
       }
       const title = gateway && project ? `Set up Models in ${project}` : gateway ? "Set up the inference gateway" : `Set up ${short} in ${project}`;

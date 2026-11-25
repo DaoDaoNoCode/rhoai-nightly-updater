@@ -274,8 +274,14 @@ const usageFlag = "--enable-force-include-usage"
 // lacksUsageFlag: the main container's VLLM_ADDITIONAL_ARGS does not carry
 // usageFlag (a chat model set up before every chat model had it).
 func (m LLMISvcObject) lacksUsageFlag() bool {
+	return !slices.Contains(strings.Fields(m.vllmArgs()), usageFlag)
+}
+
+// vllmArgs is the main container's VLLM_ADDITIONAL_ARGS: the vLLM options
+// the model runs with ("" when it has none).
+func (m LLMISvcObject) vllmArgs() string {
 	if m.Spec.Template == nil {
-		return true
+		return ""
 	}
 	for _, c := range m.Spec.Template.Containers {
 		if c.Name != "main" {
@@ -283,11 +289,11 @@ func (m LLMISvcObject) lacksUsageFlag() bool {
 		}
 		for _, e := range c.Env {
 			if e.Name == "VLLM_ADDITIONAL_ARGS" {
-				return !slices.Contains(strings.Fields(e.Value), usageFlag)
+				return e.Value
 			}
 		}
 	}
-	return true
+	return ""
 }
 
 func (m LLMISvcObject) mainImage() string {
@@ -387,6 +393,10 @@ func olderThan(meta kube.ObjectMeta, d time.Duration) bool {
 func ModelState(c *kube.Client, m LLMISvcObject, inspect bool, rec ModelsRecord) types.ModelState {
 	s := types.ModelState{Deployed: true, Namespace: m.Metadata.Namespace, Name: m.Metadata.Name}
 	s.ManagedByTool = rec.Owns(m.Metadata)
+	if s.ManagedByTool {
+		args := m.vllmArgs()
+		s.VLLMArgs = &args
+	}
 	if s.ManagedByTool && rec[ModelRecordKey(m.Metadata.Namespace, m.Metadata.Name)].TokenSecretUID != "" {
 		s.TokenSecret, s.TokenServiceAccount = tokenSecretName(m.Metadata.Name), tokenSAName(m.Metadata.Name)
 	}
@@ -1277,20 +1287,35 @@ func (m *modelsRun) setupModelApply(s *modelsSetup) (*types.OperationResponse, e
 func (m *modelsRun) setupModelReady(s *modelsSetup) (*types.OperationResponse, error) {
 	c, mp := m.c, s.mp
 	m.step("model-ready", "running", "Waiting for the model to start (typically 3 to 5 minutes the first time)")
+	// The wait ends 30 s before the operation's deadline; for a model
+	// published next, also the publication's route wait and 30 s for its
+	// writes before it, so a deadline never cuts a publication in half.
+	reserve := 30 * time.Second
+	if mp.publish {
+		reserve += maasRouteTimeout + 30*time.Second
+	}
 	timeout := modelReadyTimeout
 	if dl, ok := c.Context().Deadline(); ok {
-		if left := kube.Clock().Until(dl) - 30*time.Second; left < timeout {
+		if left := kube.Clock().Until(dl) - reserve; left < timeout {
 			timeout = left
 		}
 	}
 	// A model reached through MaaS is Ready only once published (its
 	// route needs the MaaS gateway to admit the project): its workload
-	// is waited on, then it is published.
+	// is waited on, then it is published. A server still starting when
+	// the wait ends is published too (the MaaS docs order: deploy, admit
+	// the namespace, add the MaaSModelRef; Ready is not asked first), or
+	// it could never become Ready; a failed start or a failing image pull
+	// is not.
 	publish := mp.publish
 	res := waitModelReady(c, mp.project, mp.entry.Name, mp.image.Kind == "preset", publish, timeout, func(line string) { m.step("model-ready", "running", line) })
-	if res.err == nil && res.problem == "" && res.ready && publish {
-		m.step("model-ready", "success", "The model's server runs; publishing it to MaaS gives it its route.")
-		if r, err := m.publishToMaaS(mp.project, mp.entry.Name); r != nil || err != nil {
+	if res.err == nil && res.problem == "" && res.pulling == "" && publish {
+		if res.ready {
+			m.step("model-ready", "success", "The model's server runs; publishing it to MaaS gives it its route.")
+		} else {
+			m.step("model-ready", "success", fmt.Sprintf("Created; its server is still starting after %s. Publishing it to MaaS now gives it its route, so it becomes Ready once its server runs; the Models tab shows its state and the reason if it cannot start.", ClockText(timeout)))
+		}
+		if r, err := m.publishToMaaS(mp.project, mp.entry.Name, !res.ready); r != nil || err != nil {
 			return r, err
 		}
 		res.url = ""
@@ -1307,11 +1332,22 @@ func (m *modelsRun) setupModelReady(s *modelsSetup) (*types.OperationResponse, e
 	case !res.ready && res.pulling != "":
 		// The wait ended while a failing pull was still in its grace
 		// window: what to check is not lost.
-		return m.fail("model-ready", fmt.Sprintf("Created, but not ready after %s: its image pull is still failing. %s It stays set up; it starts once the pull succeeds.", ClockText(timeout), res.pulling), "not_ready", "image pull failing")
+		then := "it starts once the pull succeeds."
+		if publish {
+			// Not published while its image cannot be pulled: Set up
+			// again publishes it once the pull succeeds.
+			then = "it is not published to MaaS while its image cannot be pulled, so it has no route yet: once the pull succeeds, Set up again on the Models tab (or Resume, in an environment recipe run) publishes it."
+		}
+		return m.fail("model-ready", fmt.Sprintf("Created, but not ready after %s: its image pull is still failing. %s It stays set up; %s", ClockText(timeout), res.pulling, then), "not_ready", "image pull failing")
 	case !res.ready:
-		m.step("model-ready", "success", fmt.Sprintf("Created, but not ready after %s. It may still start; the Models tab shows its state and the reason if it cannot.", ClockText(timeout)))
+		if publish {
+			// Published above: the step said so before the publish.
+			s.summary = append(s.summary, fmt.Sprintf("The model in %s is published to MaaS and still starting.", mp.project))
+		} else {
+			m.step("model-ready", "success", fmt.Sprintf("Created, but not ready after %s. It may still start; the Models tab shows its state and the reason if it cannot.", ClockText(timeout)))
+			s.summary = append(s.summary, fmt.Sprintf("The model in %s is still starting.", mp.project))
+		}
 		m.step("callable", "success", "Not checked: the model is not ready yet. Check again on the Models tab once it is.")
-		s.summary = append(s.summary, fmt.Sprintf("The model in %s is still starting.", mp.project))
 	default:
 		if !publish {
 			m.step("model-ready", "success", fmt.Sprintf("Ready at %s.", kube.FirstNonEmpty(res.url, "its address")))

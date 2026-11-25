@@ -546,9 +546,11 @@ var stepPoll = 10 * time.Second
 
 // runModel is the Models tab's Set up of the model in the project, reached
 // the way the run resolved (with exposure maas it is published through
-// MaaS as part of it, as the Models tab does). It succeeds only once the
-// model serves (and is published, through MaaS), within the step's own
-// deadline; otherwise it fails, and Resume waits again.
+// MaaS as part of it, as the Models tab does, also while its server still
+// starts). It succeeds only once the model serves (and is published,
+// through MaaS), within the step's own deadline; otherwise it fails, and
+// Resume checks again, setting it up again (publishing it if it is not)
+// when it is still not done.
 func runModel(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	if problem, code := pinExposure(c, s); problem != "" {
 		return fail(problem+" Nothing was changed.", code)
@@ -571,7 +573,7 @@ func runModel(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*type
 			if s.Exposure == serving.ExposureMaaS {
 				what = "serving and published through MaaS"
 			}
-			return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Model %s in %s was set up but is not %s within the step's time. Resume waits again.", modelName(s.Recipe), projectOf(s), what), Logs: res.Logs, ErrorCode: "timeout"}, nil
+			return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Model %s in %s was set up but is not %s within the step's time. Resume checks again and, if it is still not done, sets it up again and waits.", modelName(s.Recipe), projectOf(s), what), Logs: res.Logs, ErrorCode: "timeout"}, nil
 		}
 	}
 }

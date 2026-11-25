@@ -1318,6 +1318,11 @@ type ModelState struct {
 	// HardwareProfile is the dashboard hardware profile the model is
 	// recorded under ("<namespace>/<name>"), or "" when none fits it.
 	HardwareProfile string `json:"hardwareProfile,omitempty"`
+	// VLLMArgs is the vLLM options the tool's model runs with (its main
+	// container's VLLM_ADDITIONAL_ARGS; "" for none), which can differ from
+	// the catalog's after a catalog change until it is set up again; nil
+	// for a model the tool did not create.
+	VLLMArgs *string `json:"vllmArgs,omitempty"`
 	// PresetImageMissing: the preset's image cannot be pulled because the
 	// registry does not have it (a nightly build's image is not published
 	// yet); setting the model up again with the newest released image

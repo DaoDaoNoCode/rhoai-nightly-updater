@@ -234,7 +234,8 @@ export type Pending =
   /** Models: the inference gateway and/or the model in a project, as one streamed operation. */
   /** model: the catalog name of the model in project. */
   /** exposure / gatewayRef: how the model is reached (absent: the recommended way); option: the chosen option, for the confirmation. */
-  | { kind: "setup-models"; gateway: boolean; project: string | null; model: string; releasedImage?: boolean; exposure?: ModelExposureKind; gatewayRef?: string; option?: ModelExposureOption }
+  /** again: Set up again of a model this tool set up (the same setup, in place; the request is the same). */
+  | { kind: "setup-models"; gateway: boolean; project: string | null; model: string; releasedImage?: boolean; exposure?: ModelExposureKind; gatewayRef?: string; option?: ModelExposureOption; again?: boolean }
   /** unpublish: the model was set up through MaaS only, so the teardown unpublishes it first (ModelState.maasOnlySetup). */
   | { kind: "teardown-model"; project: string; model: string; unpublish?: boolean }
   | { kind: "teardown-gateway" }

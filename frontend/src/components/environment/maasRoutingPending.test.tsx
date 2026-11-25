@@ -49,6 +49,9 @@ describe("A model whose MaaS reference was deleted outside the tool", () => {
     fireEvent.click(within(row).getByRole("button", { name: "Restore direct routing" }));
     const confirm = await screen.findByRole("dialog", { name: /Restore direct routing of Qwen2.5 0.5B Instruct in dev\?/ });
     expect(within(confirm).getByText(/its direct address answers again/)).toBeInTheDocument();
+    // Published from the MaaS tab: restore, then Publish.
+    expect(within(confirm).getByText(/To publish it again, restore it, then Publish it here/)).toBeInTheDocument();
+    expect(within(confirm).queryByText(/set it up again on the Models tab/)).toBeNull();
     fireEvent.click(within(confirm).getByRole("button", { name: "Restore direct routing" }));
     await screen.findByRole("dialog", { name: "Restore direct routing of Qwen2.5 0.5B Instruct in dev" });
     expect(api.bodies["POST /api/resources/maas/stream"]).toEqual([{ action: "restore-routing", project: "dev", model: "qwen25-05b-instruct" }]);
@@ -61,6 +64,8 @@ describe("A model whose MaaS reference was deleted outside the tool", () => {
     const confirm = await screen.findByRole("dialog", { name: /Restore direct routing/ });
     expect(within(confirm).getByText(/it then answers only at its in-cluster address/)).toBeInTheDocument();
     expect(within(confirm).queryByText(/its direct address answers again/)).toBeNull();
+    // Set up through MaaS on the Models tab: a setup there publishes it.
+    expect(within(confirm).getByText(/To publish it instead, set it up again on the Models tab, or restore it, then Publish it here/)).toBeInTheDocument();
   });
 });
 

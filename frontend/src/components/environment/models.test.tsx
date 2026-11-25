@@ -226,6 +226,86 @@ describe("Models runs and clean-up", () => {
   });
 });
 
+describe("Models tab: Set up again", () => {
+  // Live (2026-11-25): the messages said "Set it up again on the Models
+  // tab", but an existing model's card offered only Delete model.
+  it("the model's menu sets it up again in place, the same request as its setup, and says what changes", async () => {
+    const api = stubApi({
+      "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("dev", { exposure: "maas", maasOnlySetup: true, vllmArgs: "--max-model-len 2048" })] }) }),
+      "/api/resources/projects": { projects: ["dev"] },
+      "POST /api/resources/models/stream": sse({ step: "operation_complete", status: "success", message: "done", elapsedMs: 1 }),
+    });
+    renderAt("/test-resources?tab=models&project=dev");
+    const part = await screen.findByRole("listitem", { name: "Qwen2.5 0.5B Instruct (CPU)" });
+    fireEvent.click(within(part).getByRole("button", { name: "Qwen2.5 0.5B Instruct (CPU) actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Set up again" }));
+    const dialog = await screen.findByRole("dialog", { name: "Set up Qwen2.5 0.5B Instruct in dev again?" });
+    expect(within(dialog).getByText(/in place: the same model in dev, reached the same way \(through MaaS only\)\. It is not deleted\./)).toBeInTheDocument();
+    expect(within(dialog).getByText(/When its spec changes \(its vLLM options do\), KServe restarts the model/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/published again when its publication is missing/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: /Details/ }));
+    expect(within(dialog).getByText("--max-model-len 2048")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Set up again" }));
+    await screen.findByRole("dialog", { name: "Set up Qwen2.5 0.5B Instruct in dev again" });
+    expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "setup", project: "dev", model: "qwen25-05b-instruct" }]);
+  });
+
+  it("is disabled with the reason while another operation runs, and not offered read-only or for a model the tool did not create", async () => {
+    stubApi({
+      "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("dev")] }) }),
+      "/api/resources/projects": { projects: ["dev"] },
+    });
+    const view = render(<MemoryRouter initialEntries={["/test-resources?tab=models&project=dev"]}><QuickResourceCreator mutateBlocker="Another operation is running." /></MemoryRouter>);
+    const part = await screen.findByRole("listitem", { name: "Qwen2.5 0.5B Instruct (CPU)" });
+    fireEvent.click(within(part).getByRole("button", { name: "Qwen2.5 0.5B Instruct (CPU) actions" }));
+    const item = await screen.findByRole("menuitem", { name: /Set up again/ });
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    expect(item).toHaveTextContent("Another operation is running.");
+    view.unmount();
+
+    const ro = render(<MemoryRouter initialEntries={["/test-resources?tab=models&project=dev"]}><QuickResourceCreator mutateBlocker={null} readBlocker="Read-only access" /></MemoryRouter>);
+    await screen.findByRole("listitem", { name: "Qwen2.5 0.5B Instruct (CPU)" });
+    expect(screen.queryByRole("button", { name: "Qwen2.5 0.5B Instruct (CPU) actions" })).toBeNull();
+    ro.unmount();
+
+    stubApi({
+      "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("dev", { managedByTool: false })] }) }),
+      "/api/resources/projects": { projects: ["dev"] },
+    });
+    renderAt("/test-resources?tab=models&project=dev");
+    const foreign = await screen.findByRole("listitem", { name: /Qwen2.5 0.5B Instruct/ });
+    expect(within(foreign).queryByRole("button", { name: /actions$/ })).toBeNull();
+  });
+
+  it("vLLM options: the model's own, with the catalog's when they differ; the catalog's before it is set up", async () => {
+    stubApi({
+      "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("dev", { vllmArgs: "--max-model-len 2048" })] }) }),
+      "/api/resources/projects": { projects: ["dev"] },
+    });
+    const view = renderAt("/test-resources?tab=models&project=dev");
+    const part = await screen.findByRole("listitem", { name: "Qwen2.5 0.5B Instruct (CPU)" });
+    expect(within(part).getByText("--max-model-len 2048")).toBeInTheDocument();
+    expect(within(part).getByText(/This tool now sets up Qwen2.5 0.5B Instruct \(CPU\) with/)).toBeInTheDocument();
+    expect(within(part).getByText("--max-model-len 4096")).toBeInTheDocument();
+    view.unmount();
+
+    stubApi({
+      "/api/resources/status": status({ inferenceGateway: gateway, models: modelsStatus({ items: [model("dev", { vllmArgs: "--max-model-len 4096" })] }) }),
+      "/api/resources/projects": { projects: ["dev"] },
+    });
+    const same = renderAt("/test-resources?tab=models&project=dev");
+    const part2 = await screen.findByRole("listitem", { name: "Qwen2.5 0.5B Instruct (CPU)" });
+    expect(within(part2).getByText("--max-model-len 4096")).toBeInTheDocument();
+    expect(within(part2).queryByText(/This tool now sets up/)).toBeNull();
+    same.unmount();
+
+    stubApi({ "/api/resources/status": status({ inferenceGateway: gateway }), "/api/resources/projects": { projects: ["dev"] }, ...routing });
+    renderAt("/test-resources?tab=models&project=dev");
+    const fresh = await screen.findByRole("listitem", { name: "Qwen2.5 0.5B Instruct (CPU)" });
+    expect(within(fresh).getByText("--max-model-len 4096")).toBeInTheDocument();
+  });
+});
+
 describe("Models tab: token authentication", () => {
   it("Use it reads the model's token, says what it can do, and the details name its objects", async () => {
     stubApi({
@@ -258,9 +338,9 @@ describe("Models tab: token authentication", () => {
     expect(screen.queryByText(/whoami/)).toBeNull();
     expect(screen.queryByText(/"model":"qwen25-05b-instruct"/)).toBeNull();
     fireEvent.click(within(use).getByRole("button", { name: "Set up again to create its token" }));
-    const dialog = await screen.findByRole("dialog", { name: /Set up Qwen2.5 0.5B Instruct in dev\?/ });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Set up" }));
-    await screen.findByRole("dialog", { name: "Set up Qwen2.5 0.5B Instruct in dev" });
+    const dialog = await screen.findByRole("dialog", { name: /Set up Qwen2.5 0.5B Instruct in dev again\?/ });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Set up again" }));
+    await screen.findByRole("dialog", { name: "Set up Qwen2.5 0.5B Instruct in dev again" });
     expect(api.bodies["POST /api/resources/models/stream"]).toEqual([{ action: "setup", project: "dev", model: "qwen25-05b-instruct" }]);
   });
 

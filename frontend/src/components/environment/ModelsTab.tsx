@@ -176,7 +176,7 @@ export const ModelsTab: React.FC<ModelsTabProps> = (props) => {
       {project && model?.ready && (model.url || model.internalUrl) && !isTerminating(model) && (
         <StackItem>
           <UseModel model={model} catalog={c} project={project} dashboardUrl={status.dashboardUrl} onMaaS={onMaaS} readOnly={readOnly} baseReason={baseReason}
-            onSetUpAgain={() => props.setPending({ kind: "setup-models", gateway: false, project, model: name })} />
+            onSetUpAgain={() => props.setPending({ kind: "setup-models", gateway: false, project, model: name, again: true })} />
         </StackItem>
       )}
       <StackItem>

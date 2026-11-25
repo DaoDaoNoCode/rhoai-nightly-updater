@@ -887,7 +887,9 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
       const name = maasModelName(m, pending.project, pending.model);
       return {
         title: `Restore direct routing of ${name} in ${pending.project}?`, confirm: "Restore direct routing", runTitle: `Restore direct routing of ${name} in ${pending.project}`,
-        summary: <Content component="p">Its MaaS reference was deleted outside this tool, so MaaS no longer offers the model, but the model still routes through the MaaS gateway. This puts back how it was reached before it was published, as Unpublish does. The model keeps running in {pending.project}.</Content>,
+        summary: item.maasOnlySetup
+          ? <Content component="p">Its MaaS reference was deleted outside this tool, or the publish that is part of its setup through MaaS on the Models tab did not finish, so MaaS does not offer the model, but the model still routes through the MaaS gateway. This puts back how it was reached before it was published, as Unpublish does. To publish it instead, set it up again on the Models tab, or restore it, then Publish it here. The model keeps running in {pending.project}.</Content>
+          : <Content component="p">Its MaaS reference was deleted outside this tool, so MaaS no longer offers the model, but the model still routes through the MaaS gateway. This puts back how it was reached before it was published, as Unpublish does. To publish it again, restore it, then Publish it here. The model keeps running in {pending.project}.</Content>,
         changes: [
           item.maasOnlySetup
             ? <>LLMInferenceService <code>{pending.model}</code> in {pending.project}: it had no route of its own before it was published, so its route is removed: it then answers only at its in-cluster address, as a model set up &quot;Only inside the cluster&quot;.</>
