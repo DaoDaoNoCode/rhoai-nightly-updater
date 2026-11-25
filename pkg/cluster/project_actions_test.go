@@ -366,3 +366,34 @@ func TestAccessReviewDecisionAndErrorText(t *testing.T) {
 		t.Fatalf("a refused review: %v", err)
 	}
 }
+
+// The hard ceiling on users' persisted entries counts stale ones too (of
+// projects that are gone, which the project caps skip): an entry that
+// would exceed it is refused with the Clean up wording; an entry the same
+// user already has in the project is not a new one.
+func TestUserRecordEntriesHardCeiling(t *testing.T) {
+	if record.MaxUserRecordEntries*record.MaxUserRecordEntryBytes > 512<<10 {
+		t.Fatalf("users' entries may take %d bytes of the 1 MiB ConfigMap", record.MaxUserRecordEntries*record.MaxUserRecordEntryBytes)
+	}
+	f, c := newResourceFake(t)
+	stale := map[string]workbench.Recorded{}
+	for i := range record.MaxUserRecordEntries {
+		// Projects that are gone: no namespace in the fake.
+		stale[fmt.Sprintf("gone-%d/%s", i, workbench.Name)] = workbench.Recorded{UID: "u", By: fmt.Sprintf("u-%d", i), ActorRole: record.ActorRoleUser, ProjectUID: fmt.Sprintf("uid-gone-%d", i)}
+	}
+	putOwnerRecords(t, f, stale)
+	u := userClientOf(c, fakeUserToken)
+	u.SetUsername("alice")
+	u.SetProjectUser("uid-proj")
+	var full *record.RecordsFullError
+	if err := record.AdmitUserEntry(u, "proj", nil, []byte(`{}`)); !errors.As(err, &full) || !strings.Contains(full.Msg, "full (200 entries)") || !strings.Contains(full.Msg, "Clean up") {
+		t.Fatalf("a new entry past the ceiling: %v", err)
+	}
+	u0 := userClientOf(c, fakeUserToken)
+	u0.SetUsername("u-0")
+	u0.SetProjectUser("uid-gone-0")
+	prior := &record.RecordOwner{Project: "gone-0", ProjectUID: "uid-gone-0", By: "u-0", ActorRole: record.ActorRoleUser}
+	if err := record.AdmitUserEntry(u0, "gone-0", prior, []byte(`{}`)); err != nil {
+		t.Fatalf("the same user's entry: %v", err)
+	}
+}

@@ -111,9 +111,17 @@ func ReadRecordOwners(c *kube.Client) ([]RecordOwner, error) {
 // ErrorCodeRecordsFull is the errorCode of a setup refused by a cap.
 const ErrorCodeRecordsFull = "records_full"
 
-// MaxUserRecordEntryBytes bounds one user's entry as written (its JSON):
-// with the caps it bounds what users' entries take of the ConfigMap.
-const MaxUserRecordEntryBytes = 2048
+// MaxUserRecordEntryBytes bounds one user's entry as written (its JSON).
+// MaxUserRecordEntries bounds every user's entry persisted, those of
+// projects that are gone included (which the project caps do not count):
+// 200 x 2 KiB = 400 KiB of the snapshot ConfigMap's 1 MiB, so users'
+// entries leave at least 600 KiB to the cluster-admins' records. 200 is
+// every key of UserRecordKeys (2) in each of the MaxUserRecordProjects
+// (100), so live entries alone never reach it.
+const (
+	MaxUserRecordEntryBytes = 2048
+	MaxUserRecordEntries    = 200
+)
 
 // RecordsFullError is a refusal by the caps of users' records.
 type RecordsFullError struct{ Msg string }
@@ -235,6 +243,19 @@ func AdmitUserEntry(c *kube.Client, project string, prior *RecordOwner, entryJSO
 	if err != nil {
 		kube.LogFactReadFailure("cannot read this tool's records for the users' caps", "snapshot", err)
 		return fmt.Errorf("cannot read this tool's records (%s)", kube.FactReadProblem(err))
+	}
+	// The hard ceiling: every user's entry counts, stale ones included,
+	// when this write adds one.
+	if prior == nil || prior.ActorRole != ActorRoleUser {
+		n := 0
+		for _, o := range owners {
+			if o.ActorRole == ActorRoleUser {
+				n++
+			}
+		}
+		if n >= MaxUserRecordEntries {
+			return &RecordsFullError{Msg: fmt.Sprintf("The updater's records of users' objects are full (%d entries). A cluster-admin runs Clean up on the Environment page to remove what is no longer needed.", n)}
+		}
 	}
 	msg, err := UserRecordCapRefusal(owners, entry, func(o RecordOwner) (bool, error) { return ProjectExists(c, o) })
 	if err != nil {
