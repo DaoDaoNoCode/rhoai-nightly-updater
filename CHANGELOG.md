@@ -323,6 +323,19 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **A recipe's Clean up no longer asks about its own playground.** Before
+  it deletes the recipe's project, Clean up lists what the project holds
+  that this tool did not create, and that list named the playground the
+  recipe set up: its database volume (`genai-pgvector-storage`) and the
+  pods of `genai-pgvector` and `lsd-genai-playground` (seen live on RHOAI
+  3.7). Those are now left out when the playground's OGXServer is the one
+  this tool recorded for the project (same UID): the volume and the
+  Deployments belong to that OGXServer, and their pods to the Deployments'
+  ReplicaSets, as Kubernetes relates owners. The pods of the tool's
+  pipeline server's Deployments are left out the same way. A playground
+  whose server is not the recorded one, and the pods of a Ray cluster,
+  are still listed. A read that fails still refuses the Clean up. No
+  permission changed.
 - **A recipe says when the dashboard will mark its workbench as bypassing
   Kueue.** A recipe that sets up a workbench and turns the dashboard's Kueue
   setting on creates the workbench first, so the dashboard marks it

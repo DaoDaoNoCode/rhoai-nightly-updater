@@ -13,6 +13,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/authz"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -594,24 +595,31 @@ func ProjectLeftovers(c *kube.Client, name string) ([]string, error) {
 
 // projectLeftovers names what is in project ns that this tool did not
 // create, as far as it can list: workbenches (Notebooks), InferenceServices
-// and LLMInferenceServices, PersistentVolumeClaims and pods. Objects with
-// the tool's label, objects being deleted, the pods and claims of the
-// tool's pipeline server (DSPO labels its pods dspa=<name>, and sets the
-// DSPA as owner of what it creates) and the pods of the tool's models
-// (KServe's part-of and name labels) are left out. A kind whose API is not
-// served has none. A read that fails is returned (fail closed).
+// and LLMInferenceServices, PersistentVolumeClaims and pods. Left out are
+// objects with the tool's label, objects being deleted, the pods of the
+// tool's pipeline server (DSPO labels them dspa=<name>), the pods of the
+// tool's models (KServe's part-of and name labels), and what an owner of
+// the tool's owns (ownedByToolRoot): the tool's pipeline servers (DSPO
+// makes the DSPA the owner of what it creates) and the playground's
+// OGXServer when this tool requested it, by the recorded UID
+// (features.ToolPlaygroundServerUID; its operator owns the pgvector claim
+// and the two Deployments whose pods run the playground). Pods of a Ray
+// cluster (KubeRay's) stay listed: the ServiceAccount does not read Ray
+// objects. A kind whose API is not served has none. A read that fails is
+// returned (fail closed); an owner that is not there leaves the object
+// listed.
 //
 // The trust model: what leaves an object out is a label or field that an
 // editor of the project can set (the tool's label, dspa=<name>, KServe's
-// part-of and name labels on a pod of the tool's model). These are
-// trusted: whoever forges one on an object can already delete that
-// object, so the forgery only lets this tool delete, with the project,
-// the forger's own object without asking. Nothing else in the project is
-// listed either (Secrets, ConfigMaps, Deployments, ...): it goes with the
-// project unlisted.
+// part-of and name labels on a pod of the tool's model, an
+// ownerReference). These are trusted: whoever forges one on an object can
+// already delete that object, so the forgery only lets this tool delete,
+// with the project, the forger's own object without asking. Nothing else
+// in the project is listed either (Secrets, ConfigMaps, Deployments, ...):
+// it goes with the project unlisted.
 func projectLeftovers(c *kube.Client, ns string) ([]string, error) {
 	toolDSPAs := map[string]bool{}
-	toolUIDs := map[string]bool{}
+	roots := map[string]bool{}
 	dspas, err := storage.ListDSPAs(c, ns)
 	if err != nil && !errors.Is(err, storage.ErrDSPACRDMissing) {
 		return nil, fmt.Errorf("list the pipeline servers in %s: %w", ns, err)
@@ -619,16 +627,22 @@ func projectLeftovers(c *kube.Client, ns string) ([]string, error) {
 	for _, d := range dspas {
 		if d.ManagedByTool() {
 			toolDSPAs[d.Meta.Name] = true
-			toolUIDs[d.Meta.UID] = true
+			roots[d.Meta.UID] = true
 		}
 	}
+	playground, err := features.ToolPlaygroundServerUID(c, ns)
+	if err != nil {
+		return nil, fmt.Errorf("tell whether the playground in %s is this tool's: %w", ns, err)
+	}
+	if playground != "" {
+		roots[playground] = true
+	}
+	links, err := listOwnerChainLinks(c, ns, len(roots) > 0)
+	if err != nil {
+		return nil, err
+	}
 	ownedByTool := func(m kube.ObjectMeta) bool {
-		for _, o := range m.OwnerReferences {
-			if toolUIDs[o.UID] {
-				return true
-			}
-		}
-		return false
+		return ownedByToolRoot(m, roots, links)
 	}
 	// The tool's models (LLMInferenceServices with its label), filled in as
 	// they are listed, before the pods. KServe runs a model in pods of a
@@ -674,6 +688,89 @@ func projectLeftovers(c *kube.Client, ns string) ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// maxOwnerLinks bounds the walk of ownedByToolRoot: a pod reaches a root
+// that owns its Deployment by its third reference (Pod to ReplicaSet,
+// ReplicaSet to Deployment, Deployment to the root; the Deployment
+// controller owns the ReplicaSets it makes, the ReplicaSet controller the
+// pods).
+const maxOwnerLinks = 3
+
+// ownerLink is an owner ownedByToolRoot may pass through on the way to a
+// root: a ReplicaSet or a Deployment of the project.
+type ownerLink struct {
+	kind string
+	meta kube.ObjectMeta
+}
+
+// listOwnerChainLinks lists the ReplicaSets and Deployments in ns by UID,
+// or nothing when needed is false (no root to reach). A read that fails is
+// returned (fail closed).
+func listOwnerChainLinks(c *kube.Client, ns string, needed bool) (map[string]ownerLink, error) {
+	out := map[string]ownerLink{}
+	if !needed {
+		return out, nil
+	}
+	for _, l := range []struct{ kind, path string }{
+		{"ReplicaSet", rhoai.NamespacedPath("apps/v1", "replicasets", ns, "")},
+		{"Deployment", rhoai.NamespacedPath("apps/v1", "deployments", ns, "")},
+	} {
+		var items []struct {
+			Metadata kube.ObjectMeta `json:"metadata"`
+		}
+		if err := c.ListInto(l.path, &items); err != nil {
+			if kube.IsDecodeError(err) {
+				return nil, fmt.Errorf("parse the %s list: %w", l.kind, err)
+			}
+			return nil, fmt.Errorf("list the %ss in %s: %w", l.kind, ns, err)
+		}
+		for _, it := range items {
+			if it.Metadata.UID != "" {
+				out[it.Metadata.UID] = ownerLink{kind: l.kind, meta: it.Metadata}
+			}
+		}
+	}
+	return out, nil
+}
+
+// ownedByToolRoot says whether m's ownerReferences reach one of roots (the
+// UIDs of the tool's owners), directly or through links (the project's
+// ReplicaSets and Deployments), at most maxOwnerLinks references away.
+// It relates owners as the Kubernetes garbage collector does ("Owners and
+// dependents" in the Kubernetes docs; k8s.io/kubernetes
+// pkg/controller/garbagecollector): a reference names its owner by UID; a
+// namespaced object's owner is in its own namespace, and a reference to
+// one that is not there (no listed object with that UID and kind) is
+// treated as absent, so the chain breaks there and the object stays
+// listed; and every reference counts, whether or not it sets controller
+// (which only marks the managing controller) or blockOwnerDeletion. Each
+// owner is visited once, so a cycle of references ends.
+func ownedByToolRoot(m kube.ObjectMeta, roots map[string]bool, links map[string]ownerLink) bool {
+	seen := map[string]bool{}
+	var reaches func(m kube.ObjectMeta, depth int) bool
+	reaches = func(m kube.ObjectMeta, depth int) bool {
+		for _, o := range m.OwnerReferences {
+			if roots[o.UID] {
+				return true
+			}
+		}
+		if depth == maxOwnerLinks {
+			return false
+		}
+		for _, o := range m.OwnerReferences {
+			next, ok := links[o.UID]
+			if !ok || next.kind != o.Kind || seen[o.UID] {
+				continue
+			}
+			seen[o.UID] = true
+			if reaches(next.meta, depth+1) {
+				return true
+			}
+		}
+		return false
+	}
+	return reaches(m, 1)
 }
 
 // DeleteProject is Clean up's part for a recipe project: it deletes the
