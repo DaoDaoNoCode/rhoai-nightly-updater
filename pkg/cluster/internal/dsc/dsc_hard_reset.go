@@ -192,7 +192,7 @@ func (r *hardResetRun) fail(step, msg, code string) *types.OperationResponse {
 	return &types.OperationResponse{Success: false, Message: msg, Logs: r.logs, ErrorCode: code}
 }
 
-// dscDeleteBody is the DeleteOptions of the hard reset: the DSC is deleted
+// dscDeleteOptions is the DeleteOptions of the hard reset: the DSC is deleted
 // only if it is still the one the user reviewed (its UID), in the
 // background: the garbage collector then deletes what it owns as owner-less
 // objects, each module CR keeping its finalizer until its operator cleaned
@@ -200,9 +200,8 @@ func (r *hardResetRun) fail(step, msg, code string) *types.OperationResponse {
 // module CR owns while its operator may still need them (kubernetes v1.34
 // garbagecollector.go:591-623; dsc_hard_reset_teardown.go). The reset waits
 // for that cleanup itself (waitTeardown).
-func dscDeleteBody(uid string) []byte {
-	body, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Background", "preconditions": map[string]any{"uid": uid}})
-	return body
+func dscDeleteOptions(uid string) map[string]any {
+	return map[string]any{"propagationPolicy": "Background", "preconditions": map[string]any{"uid": uid}}
 }
 
 // finishHelp is said after every failure once the DSC was deleted: how to
@@ -242,8 +241,8 @@ func HardReset(c *kube.Client, req types.DSCPlanRequest, emit func(types.UpdateS
 		return r.fail("check", "The DataScienceCluster or the release default changed since you reviewed the hard reset, so nothing was changed. Review it again.", "conflict"), nil
 	}
 	path := dscObjectPath(v.version, v.name)
-	if _, _, err := c.Do(http.MethodDelete, path, "application/json", dscDeleteBody(v.uid), url.Values{"dryRun": {"All"}}); err != nil {
-		return r.fail("check", "The API server refused deleting the DataScienceCluster in its dry run: "+rhoai.ConversionMessage(err)+". Nothing was changed.", kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "validation")), nil
+	if _, _, err := kube.DeleteWithOptions(c, path, dscDeleteOptions(v.uid), true); err != nil {
+		return r.fail("check", kube.RefusedBy(err)+" refused deleting the DataScienceCluster in its dry run: "+rhoai.ConversionMessage(err)+". Nothing was changed.", kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "validation")), nil
 	}
 	obj := v.NewDefaultObject(v.ResetTarget(&types.DSCPlan{}, *req.KeepEnabled))
 	// The new spec in a dry run against the live DSC: the schema
@@ -290,7 +289,7 @@ func HardReset(c *kube.Client, req types.DSCPlanRequest, emit func(types.UpdateS
 	r.step("check", "success", fmt.Sprintf("DataScienceCluster %s can be reset: %d components are torn down and the release default of operator %s is created%s", v.name, len(p.plan.TornDown), v.op.Version, kept))
 
 	r.step("delete", "running", "Deleting DataScienceCluster "+v.name)
-	if _, _, err := c.Do(http.MethodDelete, path, "application/json", dscDeleteBody(v.uid), nil); err != nil {
+	if _, _, err := kube.DeleteWithOptions(c, path, dscDeleteOptions(v.uid), false); err != nil {
 		record.ClearDSCHardResetRecord(c)
 		if kube.IsK8sNotFound(err) || kube.IsK8sConflict(err) {
 			return r.fail("delete", "DataScienceCluster "+v.name+" was deleted or replaced by someone else since the check, so nothing was changed by this reset. Reload the page.", "conflict"), nil

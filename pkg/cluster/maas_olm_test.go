@@ -772,9 +772,37 @@ func TestMaaSTierPolicies(t *testing.T) {
 	if res.Success || !strings.Contains(res.Message, "Old gateway policies") {
 		t.Fatalf("publish = %+v", res)
 	}
+	const authPath = "/apis/kuadrant.io/v1/namespaces/openshift-ingress/authpolicies/gateway-auth-policy"
+	const limitPath = "/apis/kuadrant.io/v1alpha1/namespaces/openshift-ingress/tokenratelimitpolicies/gateway-tier-rate-limits"
+	// One policy's dry run refused: the check deleted nothing, the other
+	// policy's dry run included.
+	mc.f.mu.Lock()
+	mc.f.failDryRun["DELETE "+limitPath] = http.StatusForbidden
+	mc.f.mu.Unlock()
+	res, _ = runMaaSOp(t, mc.c, types.MaaSRequest{Action: "remove-tier-policies"})
+	if res.Success || !strings.Contains(res.Message, "Nothing was deleted") || !mc.f.has(authPath) || !mc.f.has(limitPath) {
+		t.Fatalf("a refused dry run: %+v", res)
+	}
+	mc.f.mu.Lock()
+	delete(mc.f.failDryRun, "DELETE "+limitPath)
+	first := len(mc.f.calls)
+	mc.f.mu.Unlock()
 	res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "remove-tier-policies"})
 	if !res.Success || finalSteps(events) != "check=success delete=success" {
 		t.Fatalf("res = %+v", res)
+	}
+	// The check step's deletes are dry runs, all of them before the first
+	// real one.
+	var deletes []fakeCall
+	mc.f.mu.Lock()
+	for _, c := range mc.f.calls[first:] {
+		if c.Method == http.MethodDelete && (c.Path == authPath || c.Path == limitPath) {
+			deletes = append(deletes, c)
+		}
+	}
+	mc.f.mu.Unlock()
+	if len(deletes) != 4 || !deletes[0].dryRun() || !deletes[1].dryRun() || deletes[2].dryRun() || deletes[3].dryRun() {
+		t.Fatalf("deletes = %+v", deletes)
 	}
 	if mc.f.has("/apis/kuadrant.io/v1/namespaces/openshift-ingress/authpolicies/gateway-auth-policy") || mc.f.has("/apis/kuadrant.io/v1alpha1/namespaces/openshift-ingress/tokenratelimitpolicies/gateway-tier-rate-limits") {
 		t.Fatal("the old policies stay")

@@ -110,6 +110,7 @@ func callModelOnce(ctx context.Context, target string, body []byte, token string
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
+	kube.NoteRequest(req)
 	resp, err := modelCallHTTPClient.Do(req)
 	if err != nil {
 		return 0, nil, err

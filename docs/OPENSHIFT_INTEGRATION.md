@@ -116,7 +116,7 @@ The exact sequences are in [CLUSTER_CHANGES.md](CLUSTER_CHANGES.md#4-operator-li
 
 **What:** The rate limiter uses `username:path` as the key. If dry run and real update use the same endpoint path, the dry run consumes the rate limit slot.
 
-**Fix:** The dry-run handler sets the **response** header `X-Skip-Rate-Limit: true`, and `withMutationAuth` then gives the slot back. Rejected requests (4xx/5xx, including 409 busy) also give it back.
+**Fix:** The dry-run handler sets the **response** header `X-Skip-Rate-Limit: true`, and `withMutationAuth` then gives the slot back. A request that did not go through (4xx/5xx, including 409 busy, a stream whose final event failed, or a panic) also gives it back, but only when the operation's client sent nothing that may have changed the cluster: the client's context records every write (`cluster.TrackChanges`) except server-side dry runs (for a DELETE with DeleteOptions, the `dryRun` in the options: the API server then ignores the query), review objects (access and token reviews), IAM read actions, and writes to one object the API server refused before applying them (400, 401, 403, 404, 405, 409, 413, 415, 422, 429; for a collection delete only 401 and 429), and the updater's own records (`Client.Bookkeeping`) do not count. So a refusal such as Clean up's `confirm_project_contents` can be answered at once, while a change that failed part of the way keeps the slot.
 
 A refused request gets HTTP 429 with errorCode `user_rate_limited` (not `rate_limited`, which means the OpenShift API is throttling) and `Retry-After` set to the seconds left in the window; the message names the tool's limit and that wait.
 

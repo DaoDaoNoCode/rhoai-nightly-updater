@@ -96,7 +96,7 @@ func TestHardResetDeletesWaitsAndCreatesTheReleaseDefault(t *testing.T) {
 		t.Fatalf("result = %+v", res)
 	}
 	deletes := f.callsTo(http.MethodDelete, dscV3Path)
-	if len(deletes) != 2 || deletes[0].Query.Get("dryRun") != "All" || deletes[1].Query.Get("dryRun") != "" {
+	if len(deletes) != 2 || !deletes[0].dryRun() || deletes[1].dryRun() || deletes[0].Query.Has("dryRun") {
 		t.Fatalf("deletes = %+v", deletes)
 	}
 	for _, d := range deletes {
@@ -174,7 +174,7 @@ func TestHardResetStopsWhenTheDSCWasRecreated(t *testing.T) {
 		t.Fatalf("result = %+v", res)
 	}
 	for _, call := range f.callsTo(http.MethodDelete, dscV3Path) {
-		if call.Query.Get("dryRun") != "All" {
+		if !call.dryRun() {
 			t.Fatalf("deleted the DSC: %+v", call)
 		}
 	}

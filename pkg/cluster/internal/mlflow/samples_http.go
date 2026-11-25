@@ -281,6 +281,7 @@ func (a *SampleAPI) Send(method, path string, query url.Values, contentType stri
 	for k, v := range a.headers {
 		req.Header.Set(k, v)
 	}
+	kube.NoteRequest(req)
 	resp, err := SamplesHTTPClient.Do(req)
 	if err != nil {
 		// url.Error repeats the URL, which holds no secret.

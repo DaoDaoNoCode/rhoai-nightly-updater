@@ -110,6 +110,19 @@ type statusWriter struct {
 	// panicked: the handler recovered a panic of its operation
 	// (reportOperationPanic), whatever status it had written.
 	panicked bool
+	// streamSucceeded: the stream's final event (streamOperation)
+	// reported success.
+	streamSucceeded bool
+}
+
+// succeeded reports whether the request was answered as a change that
+// went through: a status below 400 and, for a stream, a final event that
+// reported success. A handler that panicked or wrote nothing did not.
+func (sw *statusWriter) succeeded() bool {
+	if sw.panicked || sw.status == 0 || sw.status >= http.StatusBadRequest {
+		return false
+	}
+	return !sw.streaming || sw.streamSucceeded
 }
 
 // maxCapturedResponse bounds the response bytes kept for the outcome.

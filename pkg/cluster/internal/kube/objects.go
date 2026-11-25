@@ -97,6 +97,26 @@ func DeleteWithUIDPropagation(c *Client, path, uid, policy string) (int, error) 
 	return status, err
 }
 
+// DeleteWithOptions deletes path with opts as its DeleteOptions (the body;
+// apiVersion and kind are added), as a server-side dry run when dryRun is
+// set. The dry run is asked for in the body, as the API server reads a
+// DELETE's options only from its body when it has one (IsDryRun); doOnce
+// refuses a dryRun query on a DELETE with a body.
+func DeleteWithOptions(c *Client, path string, opts map[string]any, dryRun bool) ([]byte, int, error) {
+	body := map[string]any{"apiVersion": "v1", "kind": "DeleteOptions"}
+	for k, v := range opts {
+		body[k] = v
+	}
+	if dryRun {
+		body["dryRun"] = []string{"All"}
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, 0, err
+	}
+	return c.Do(http.MethodDelete, path, "application/json", data, nil)
+}
+
 // DeleteWithPreconditions is DeleteWithUID that also requires the object's
 // resourceVersion: the delete fails with 409 when the object changed in
 // any way since it was read (Kubernetes DeleteOptions.preconditions).

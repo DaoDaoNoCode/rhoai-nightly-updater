@@ -266,7 +266,9 @@ func (c *Client) Bookkeeping() *Client {
 		return c
 	}
 	b := *c.bookkeeper
-	b.ctx, b.bookkeeper, b.asUser = c.ctx, nil, false
+	// The records are the updater's, not a change the user made: they do
+	// not count in the operation's Changes.
+	b.ctx, b.bookkeeper, b.asUser = withoutChanges(c.ctx), nil, false
 	if b.username == "" {
 		b.username = c.username
 	}
@@ -442,10 +444,18 @@ func (c *Client) doOnce(method, path, contentType string, body []byte, query url
 		req.URL.RawQuery = q.Encode()
 	}
 
+	// The API server ignores the query's DeleteOptions of a DELETE with a
+	// body (IsDryRun): a dry run asked for in the query would delete.
+	if key := deleteOptionInQuery(method, req.URL, body); key != "" {
+		return nil, nil, 0, &UnsentRequestError{Reason: "a DELETE with DeleteOptions in its body and " + key + " in its query, which the API server would ignore"}
+	}
+	answered := startAPIRequest(c.ctx, method, req.URL, body)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		answered(0)
 		return nil, nil, 0, wrapNetworkError(err)
 	}
+	answered(resp.StatusCode)
 	defer resp.Body.Close()
 
 	// One byte more than the limit tells a response over it from one that

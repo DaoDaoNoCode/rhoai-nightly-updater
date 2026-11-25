@@ -2,11 +2,13 @@ package cluster
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -46,7 +48,8 @@ func serveModules(f *resourceFake) {
 // of the DSC.
 func serveModulesOnceDeleted(f *resourceFake) {
 	f.beforeRequest = func(r *http.Request) {
-		if r.Method == http.MethodDelete && r.URL.Query().Get("dryRun") == "" {
+		body, _ := io.ReadAll(r.Body)
+		if r.Method == http.MethodDelete && !kube.IsDryRun(r.Method, r.URL, body) {
 			serveModules(f)
 		}
 	}

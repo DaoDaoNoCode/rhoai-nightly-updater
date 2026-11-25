@@ -323,6 +323,53 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **Dry runs of a delete no longer delete.** Five deletes asked for a
+  server-side dry run in the URL (`?dryRun=All`) while sending
+  DeleteOptions (UID preconditions) in the body, and the API server then
+  reads only the body's options (k8s.io/apiserver
+  `pkg/endpoints/handlers/delete.go:95-128`, v0.35+), so each "dry run" was
+  a real delete. What that did in released versions:
+  - **Removing the image mirror (v4.0.0 to v5.0.0-alpha.2):** opening the
+    review of **Remove the image mirror** (Status page; self-managed, ROSA
+    Classic and OSD clusters only) deleted ImageDigestMirrorSet
+    `rhoai-quay-mirror` at once, also when you then clicked Cancel, and
+    every node rolled out and drained. Confirming then said "Nothing to
+    change". If you opened that review and still want the mirror, set it up
+    again; nightly installs and updates need it.
+  - **Model setup run again (v3.0.0 to v5.0.0-alpha.2):** setting up a
+    model that already existed deleted its token Secret in the check step
+    and still reported success, which invalidated the model's token (the
+    next setup made a new one). If you set up an existing model again, run
+    its setup once more and use the new token; tokens copied before no
+    longer work.
+  - **Hard reset (v4.0.0 to v5.0.0-alpha.2):** the DataScienceCluster was
+    deleted in the first check, before the new spec's dry run, the module
+    operator check and the record **Finish the hard reset** needs. A later
+    refusal, or the DSC gone before the real delete, left the cluster with
+    no DataScienceCluster and a message saying nothing was changed; create
+    it again with Create DataScienceCluster or `oc create`.
+  - **Remove the old tier policies (v3.0.0 to v5.0.0-alpha.2) and the
+    Diagnostics fix that recreates a leftover workload (v4.0.0 to
+    v5.0.0-alpha.2):** the outcome was the one asked for, but the check
+    deleted already, so a later refusal said "Nothing was deleted" after a
+    delete, and the fix said the workload "no longer exists" and wrote no
+    activity entry.
+
+  The dry run is now in the DeleteOptions, and the client does not send a
+  delete with DeleteOptions in its body and any of them (`dryRun`,
+  `propagationPolicy`, `gracePeriodSeconds`, `orphanDependents`) in its
+  query; its message says the updater refused to send it.
+- **Answering a refusal at once is no longer rate limited.** A streamed
+  change the server refused without changing anything (Clean up asking to
+  confirm a project's contents or a pipeline server's workbenches, a failed
+  check) used the user's 30-second slot, so confirming within 30 seconds got
+  "Not started: wait before repeating this change". A change that did not go
+  through now gives the slot back only when it sent nothing that may have
+  changed the cluster; one that changed something first, then failed or
+  crashed, keeps it (a failed change that is not streamed gave it back).
+  Reads sent as writes (IAM List actions, dry runs, access reviews) and
+  writes the API server refused before applying them do not count; a
+  delete of a collection, whose items go one by one, does.
 - **A recipe's Clean up no longer asks about its own playground and Ray
   samples.** Before it deletes the recipe's project, Clean up lists what
   the project holds that this tool did not create, and that list named

@@ -164,8 +164,8 @@ var SetupActivity = map[string]string{
 // write that does it.
 type nodeSetupWork struct {
 	plan types.NodeSetupPlan
-	// write sends the change; query is ?dryRun=All for the dry run.
-	write func(c *kube.Client, query url.Values) error
+	// write sends the change, as a server-side dry run when dryRun is set.
+	write func(c *kube.Client, dryRun bool) error
 	// verify reads the object back after the write.
 	verify func(c *kube.Client) error
 	// done says what was done, for the outcome and the activity log.
@@ -368,8 +368,8 @@ func prepareMirrorCreate(c *kube.Client, w *nodeSetupWork) {
 		}
 	}
 	body, _ := json.Marshal(mirrorObject())
-	w.write = func(c *kube.Client, query url.Values) error {
-		_, _, err := c.Do(http.MethodPost, rhoai.ClusterPath("config.openshift.io/v1", "imagedigestmirrorsets", ""), "application/json", body, query)
+	w.write = func(c *kube.Client, dryRun bool) error {
+		_, _, err := c.Do(http.MethodPost, rhoai.ClusterPath("config.openshift.io/v1", "imagedigestmirrorsets", ""), "application/json", body, dryRunQuery(dryRun))
 		return err
 	}
 	w.plan.Ready = true
@@ -434,10 +434,10 @@ func prepareMirrorRemove(c *kube.Client, w *nodeSetupWork) {
 		w.refuse("foreign", fmt.Sprintf("ImageDigestMirrorSet %s holds more than this setup's mirror (%s to %s), so it is someone's own mirror configuration and is not deleted. Look at it with oc get imagedigestmirrorset %s -o yaml.", MirrorName, rhoai.IDMSSource, mirrorTarget, MirrorName))
 		return
 	}
-	opts, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "DeleteOptions",
-		"preconditions": map[string]any{"uid": ours.Metadata.UID, "resourceVersion": ours.Metadata.ResourceVersion}})
-	w.write = func(c *kube.Client, query url.Values) error {
-		_, _, err := c.Do(http.MethodDelete, rhoai.ClusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName), "application/json", opts, query)
+	opts := map[string]any{"preconditions": map[string]any{"uid": ours.Metadata.UID, "resourceVersion": ours.Metadata.ResourceVersion}}
+	w.write = func(c *kube.Client, dryRun bool) error {
+		// A DELETE's dry run is in its DeleteOptions (DeleteWithOptions).
+		_, _, err := kube.DeleteWithOptions(c, rhoai.ClusterPath("config.openshift.io/v1", "imagedigestmirrorsets", MirrorName), opts, dryRun)
 		return err
 	}
 	w.plan.Ready = true
@@ -656,8 +656,8 @@ func preparePullSecret(c *kube.Client, w *nodeSetupWork, add, replaceExisting bo
 		"metadata": map[string]any{"resourceVersion": ps.resourceVersion},
 		"data":     map[string]any{".dockerconfigjson": encoded},
 	})
-	w.write = func(c *kube.Client, query url.Values) error {
-		_, _, err := c.Do(http.MethodPatch, rhoai.NamespacedPath("v1", "secrets", clusterPullSecretNS, clusterPullSecretName), "application/merge-patch+json", patch, query)
+	w.write = func(c *kube.Client, dryRun bool) error {
+		_, _, err := c.Do(http.MethodPatch, rhoai.NamespacedPath("v1", "secrets", clusterPullSecretNS, clusterPullSecretName), "application/merge-patch+json", patch, dryRunQuery(dryRun))
 		return err
 	}
 	w.plan.Ready = true
@@ -827,11 +827,16 @@ func refusalCodeFor(err error) string {
 // writeNodeSetup sends the work's write, as a server-side dry run or for
 // real.
 func writeNodeSetup(c *kube.Client, w *nodeSetupWork, dryRun bool) error {
-	var q url.Values
-	if dryRun {
-		q = url.Values{"dryRun": {"All"}}
+	return w.write(c, dryRun)
+}
+
+// dryRunQuery is the query of a create or patch: ?dryRun=All for its
+// server-side dry run.
+func dryRunQuery(dryRun bool) url.Values {
+	if !dryRun {
+		return nil
 	}
-	return w.write(c, q)
+	return url.Values{"dryRun": {"All"}}
 }
 
 // dryRunNodeSetup runs the server-side dry run and turns its refusal into
@@ -862,9 +867,9 @@ func writeRefusalCode(err error) string {
 }
 
 func writeRefusal(w *nodeSetupWork, err error, dryRun bool) string {
-	what := "The cluster refused it"
+	what := kube.RefusedBy(err) + " refused it"
 	if dryRun {
-		what = "The cluster refused it in a dry run"
+		what += " in a dry run"
 	}
 	switch writeRefusalCode(err) {
 	case "forbidden":

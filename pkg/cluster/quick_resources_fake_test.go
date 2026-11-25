@@ -107,6 +107,12 @@ type fakeCall struct {
 	Token string
 }
 
+// dryRun reports whether the API server runs the call as a server-side dry
+// run (kube.IsDryRun: a DELETE with a body takes it from the body).
+func (c fakeCall) dryRun() bool {
+	return kube.IsDryRun(c.Method, &url.URL{RawQuery: c.Query.Encode()}, []byte(c.Body))
+}
+
 // callsTo returns the calls of method to path, in order.
 func (f *resourceFake) callsTo(method, path string) []fakeCall {
 	f.mu.Lock()
@@ -354,7 +360,8 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	dryRun := r.URL.Query().Get("dryRun") == "All"
+	// As the API server reads it: a DELETE with a body from its body.
+	dryRun := kube.IsDryRun(r.Method, r.URL, body)
 	echoKey := r.Method + " " + r.URL.Path
 	if dryRun {
 		echoKey = "DRYRUN " + echoKey

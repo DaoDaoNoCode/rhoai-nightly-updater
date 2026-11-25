@@ -12,6 +12,7 @@ type (
 	Client       = kube.Client
 	K8sError     = kube.K8sError
 	NetworkError = kube.NetworkError
+	Changes      = kube.Changes
 )
 
 // Error codes a handler returns (see kube).
@@ -31,6 +32,12 @@ func NewClientWithContext(ctx context.Context, token string) *Client {
 // own token.
 func NewUserClient(ctx context.Context, token string) *Client {
 	return kube.NewUserClient(ctx, token)
+}
+
+// TrackChanges is kube.TrackChanges: a context whose requests record
+// whether they may have changed something.
+func TrackChanges(ctx context.Context) (context.Context, *Changes) {
+	return kube.TrackChanges(ctx)
 }
 
 // IsK8sError is kube.IsK8sError.

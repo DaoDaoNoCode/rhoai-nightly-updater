@@ -47,12 +47,12 @@ func captureLog(t *testing.T) *bytes.Buffer {
 }
 
 // serveUpdateStream runs POST /api/update/stream with run as the update.
-func serveUpdateStream(t *testing.T, run func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error)) *httptest.ResponseRecorder {
+func serveUpdateStream(t *testing.T, run func(c *cluster.Client, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error)) *httptest.ResponseRecorder {
 	t.Helper()
 	setupDevMode(t)
 	allowMutations(t)
-	runUpdateStream = func(_ *cluster.Client, _ string, _ cluster.OperationOptions, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
-		return run(emit)
+	runUpdateStream = func(c *cluster.Client, _ string, _ cluster.OperationOptions, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		return run(c, emit)
 	}
 	mux := http.NewServeMux()
 	Register(mux)
@@ -62,24 +62,34 @@ func serveUpdateStream(t *testing.T, run func(emit func(cluster.UpdateStepEvent)
 }
 
 // What a stream does today and must keep doing: its steps, then exactly
-// one operation_complete with the outcome; the user's slot is used (the
-// change was accepted, whatever its outcome) and the cluster lock is free.
+// one operation_complete with the outcome, and the cluster lock is free.
+// The user's slot is used by a change that went through, and by one that
+// failed after it sent a write; a refusal or error before any write gives
+// it back.
 func TestStreamOutcomesArePinned(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
+		write   bool
 		result  *types.OperationResponse
 		err     error
 		status  string
 		message string
 		code    string
+		limited bool
 	}{
-		{"success", &types.OperationResponse{Success: true, Message: "Updated"}, nil, "success", "Updated", ""},
-		{"refused", &types.OperationResponse{Success: false, Message: "Blocked", ErrorCode: "prerequisites"}, nil, "failed", "Blocked", "prerequisites"},
-		{"error", nil, errors.New("context deadline exceeded"), "failed", "context deadline exceeded", ""},
+		{"success", false, &types.OperationResponse{Success: true, Message: "Updated"}, nil, "success", "Updated", "", true},
+		{"refused", false, &types.OperationResponse{Success: false, Message: "Blocked", ErrorCode: "prerequisites"}, nil, "failed", "Blocked", "prerequisites", false},
+		{"error", false, nil, errors.New("context deadline exceeded"), "failed", "context deadline exceeded", "", false},
+		{"refused after a write", true, &types.OperationResponse{Success: false, Message: "Blocked", ErrorCode: "prerequisites"}, nil, "failed", "Blocked", "prerequisites", true},
+		{"error after a write", true, nil, errors.New("context deadline exceeded"), "failed", "context deadline exceeded", "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			w := serveUpdateStream(t, func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+			closedAPIServer(t)
+			w := serveUpdateStream(t, func(c *cluster.Client, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 				emit(cluster.UpdateStepEvent{Step: "validate", Status: "success", Message: "ok"})
+				if tc.write {
+					sendWrite(c)
+				}
 				return tc.result, tc.err
 			})
 			steps := sseSteps(t, w.Body.String())
@@ -90,8 +100,8 @@ func TestStreamOutcomesArePinned(t *testing.T) {
 			if last.Step != "operation_complete" || last.Status != tc.status || last.Message != tc.message || last.ErrorCode != tc.code {
 				t.Fatalf("final event %+v", last)
 			}
-			if !mutationLimiter.isRateLimited("admin:/api/update/stream") {
-				t.Fatal("an accepted change did not use the slot")
+			if limited := mutationLimiter.isRateLimited("admin:/api/update/stream"); limited != tc.limited {
+				t.Fatalf("rate limited = %v, want %v", limited, tc.limited)
 			}
 			if clusterMutationInProgress.Load() {
 				t.Fatal("the cluster lock is still held")
@@ -102,11 +112,11 @@ func TestStreamOutcomesArePinned(t *testing.T) {
 
 // A panic in a stream's operation is logged with its stack, ends the
 // stream with a failed operation_complete (errorCode internal), frees the
-// cluster lock and gives the user's slot back (mutationAuth: "handlers
-// that panicked do not use up the user's slot").
+// cluster lock and, as it sent no write, gives the user's slot back
+// (TestStreamPanicAfterAWriteKeepsTheSlot: one that did keeps it).
 func TestStreamPanicEndsTheStreamAndFreesTheSlot(t *testing.T) {
 	logs := captureLog(t)
-	w := serveUpdateStream(t, func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+	w := serveUpdateStream(t, func(_ *cluster.Client, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 		emit(cluster.UpdateStepEvent{Step: "validate", Status: "success", Message: "ok"})
 		panic(errors.New("models: index out of range [3] with length 3"))
 	})
