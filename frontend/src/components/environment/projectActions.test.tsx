@@ -88,4 +88,43 @@ describe("a user's project view", () => {
     await waitFor(() => expect(stop).toHaveAttribute("aria-disabled", "true"));
     expect(contract.capabilitiesUser("team-a").actions["workbench.stop"].allowed).toBe(true);
   });
+
+  it("keeps the storage on Delete unless the user ticks it, and deletes kept storage on its own", async () => {
+    const api = stubUserApi();
+    const view = render(<UserProjectView project="team-a" refreshKey={0} />);
+    let workbench = await screen.findByRole("region", { name: "Workbench" });
+    const del = within(workbench).getByRole("button", { name: "Delete" });
+    await waitFor(() => expect(del).not.toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(del);
+    let dialog = await screen.findByRole("dialog", { name: /Delete the workbench in team-a/ });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(api.bodies["POST /api/resources/workbench/stream"]).toEqual([{ action: "teardown", project: "team-a" }]));
+    view.unmount();
+
+    const api2 = stubUserApi();
+    render(<UserProjectView project="team-a" refreshKey={0} />);
+    workbench = await screen.findByRole("region", { name: "Workbench" });
+    const del2 = within(workbench).getByRole("button", { name: "Delete" });
+    await waitFor(() => expect(del2).not.toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(del2);
+    dialog = await screen.findByRole("dialog", { name: /Delete the workbench in team-a/ });
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: /Also delete its storage nightly-workbench-storage/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(api2.bodies["POST /api/resources/workbench/stream"]).toEqual([{ action: "teardown", project: "team-a", deleteStorage: true }]));
+  });
+
+  it("offers Delete storage for storage kept from a deleted workbench", async () => {
+    const kept = contract.workbenchUser("team-a");
+    kept.items = (kept.items ?? []).map((i) => ({ ...i, deployed: false, ready: false, state: undefined }));
+    const api = stubUserApi({ "/api/resources/workbench": () => jsonResponse(kept) });
+    render(<UserProjectView project="team-a" refreshKey={0} />);
+    const workbench = await screen.findByRole("region", { name: "Workbench" });
+    const del = await within(workbench).findByRole("button", { name: "Delete storage" });
+    await waitFor(() => expect(del).not.toHaveAttribute("aria-disabled", "true"));
+    expect(within(workbench).getByText(/the kept storage nightly-workbench-storage with its files/)).toBeInTheDocument();
+    fireEvent.click(del);
+    const dialog = await screen.findByRole("dialog", { name: /Delete the kept storage in team-a/ });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete storage" }));
+    await waitFor(() => expect(api.bodies["POST /api/resources/workbench/stream"]).toEqual([{ action: "delete-storage", project: "team-a" }]));
+  });
 });

@@ -18,7 +18,9 @@ import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
 import type { MLflowSampleId, MLflowSamplesStatus, PlaygroundStatus, ProjectProblemCode, ProjectStatus, ResourceState, WorkbenchStatus } from "../../types";
 import { getMLflowSamples, getPlayground, getProjectStatus, getWorkbench, toApiError, type ApiError } from "../../services/api";
+import { Checkbox } from "@patternfly/react-core";
 import { ConfirmActionModal } from "../ConfirmActionModal";
+import { keptStorage } from "./workbenchState";
 import { ProjectActionButton, ProjectCapabilitiesProvider, ProjectRunPanel, useProjectRun, type ProjectRunRequest } from "./projectActions";
 import { FORBIDDEN_FOR_USER_BODY, FORBIDDEN_FOR_USER_TITLE, describeError, isNotForUser } from "../../errors";
 import { EnvStatusLabel, envStatus } from "./resourceStatus";
@@ -32,16 +34,25 @@ export const ADMIN_SETS_UP = "A cluster-admin sets this up.";
 // What a project's own admin can add themselves (a pipeline server, a model).
 export const IN_PROJECT_HINT = "Add one in the RHOAI dashboard, or ask a cluster-admin to set one up here.";
 
+/** A choice a delete's confirmation offers (a checkbox), and the request for each answer. */
+interface ConfirmChoice {
+  label: string;
+  run: (checked: boolean) => ProjectRunRequest;
+  /** What the checked choice adds to the changes. */
+  changes: string[];
+}
+
 /** A project action the user asked for and confirms first (deletes). */
 interface PendingAction {
   title: string;
   changes: string[];
   confirm: string;
   run: ProjectRunRequest;
+  choice?: ConfirmChoice;
 }
 
 /** Starts a project action (after confirming a delete). */
-type StartAction = (title: string, run: ProjectRunRequest, confirm?: { changes: string[]; label: string }) => void;
+type StartAction = (title: string, run: ProjectRunRequest, confirm?: { changes: string[]; label: string; choice?: ConfirmChoice }) => void;
 
 interface ProjectRead<T> {
   data: T | null;
@@ -343,23 +354,42 @@ const loadWorkbench = (project: string) => getWorkbench(project);
 const WorkbenchPart: React.FC<{ project: string; read: ProjectRead<WorkbenchStatus>; busy: boolean; start: StartAction }> = ({ project, read, busy, start }) => {
   const data = read.data;
   const item = data?.items?.find((i) => !i.namespace || i.namespace === project);
-  const wbRun = (action: "setup" | "start" | "stop" | "teardown", deleteStorage = false): ProjectRunRequest => ({ kind: "workbench", req: { action, project, ...(deleteStorage ? { deleteStorage } : {}) } });
+  const kept = keptStorage(data, project);
+  const exists = !!item?.deployed || !!item?.terminating;
+  const wbRun = (action: "setup" | "start" | "stop" | "teardown" | "delete-storage", deleteStorage = false): ProjectRunRequest => ({ kind: "workbench", req: { action, project, ...(deleteStorage ? { deleteStorage } : {}) } });
+  const storageName = item?.storage?.name ?? "nightly-workbench-storage";
   let body: React.ReactNode;
   if (read.error && !data) body = <ReadProblem what="the workbench" error={read.error} onRetry={read.reload} />;
   else if (!data) body = <LinesSkeleton what="the workbench" lines={1} />;
   else if (data.blocked) body = <Note>{data.blocked.reason}</Note>;
   else if (data.unsupported) body = <Note>{data.unsupported}</Note>;
-  else if (!item) {
+  else if (!item || !exists) {
+    const setupText = data.plan
+      ? `No workbench of this tool in ${project}. Set up creates nightly-workbench with ${data.plan.image} on hardware profile ${data.plan.hardwareProfile} and ${kept ? `the kept storage ${kept.name} with its files` : `${data.plan.storageSize} of storage`}.`
+      : `No workbench of this tool in ${project}. ${data.planProblem ?? ""}`;
     body = (
       <Stack hasGutter>
-        <StackItem><Note>{data.plan
-          ? `No workbench of this tool in ${project}. Set up creates nightly-workbench with ${data.plan.image} on hardware profile ${data.plan.hardwareProfile} and ${data.plan.storageSize} of storage.`
-          : `No workbench of this tool in ${project}. ${data.planProblem ?? ""}`}</Note></StackItem>
-        {data.plan && (
+        <StackItem><Note>{setupText}</Note></StackItem>
+        {(data.plan || kept) && (
           <StackItem>
-            <ProjectActionButton project={project} action="workbench.setup" busy={busy} variant="primary" onClick={() => start(`Set up the workbench in ${project}`, wbRun("setup"))}>
-              Set up workbench
-            </ProjectActionButton>
+            <Flex gap={{ default: "gapSm" }}>
+              {data.plan && (
+                <FlexItem>
+                  <ProjectActionButton project={project} action="workbench.setup" busy={busy} variant="primary" onClick={() => start(`Set up the workbench in ${project}`, wbRun("setup"))}>
+                    Set up workbench
+                  </ProjectActionButton>
+                </FlexItem>
+              )}
+              {kept && (
+                <FlexItem>
+                  <ProjectActionButton project={project} action="workbench.delete-storage" busy={busy} variant="danger"
+                    onClick={() => start(`Delete the kept storage in ${project}`, wbRun("delete-storage"),
+                      { changes: [`Storage ${kept.name} in ${project} and the files on it`], label: "Delete storage" })}>
+                    Delete storage
+                  </ProjectActionButton>
+                </FlexItem>
+              )}
+            </Flex>
           </StackItem>
         )}
       </Stack>
@@ -390,8 +420,10 @@ const WorkbenchPart: React.FC<{ project: string; read: ProjectRead<WorkbenchStat
               )}
               <FlexItem>
                 <ProjectActionButton project={project} action="workbench.teardown" busy={busy} variant="danger"
-                  onClick={() => start(`Delete the workbench in ${project}`, wbRun("teardown", true),
-                    { changes: [`Workbench ${item.name} in ${project}`, `Its storage ${item.storage?.name ?? "nightly-workbench-storage"} and the files on it`], label: "Delete" })}>
+                  onClick={() => start(`Delete the workbench in ${project}`, wbRun("teardown"), {
+                    changes: [`Workbench ${item.name} in ${project}; its storage ${storageName} is kept for the next Set up`], label: "Delete",
+                    choice: { label: `Also delete its storage ${storageName} and the files on it`, run: (checked) => wbRun("teardown", checked), changes: [`Storage ${storageName} and the files on it`] },
+                  })}>
                   Delete
                 </ProjectActionButton>
               </FlexItem>
@@ -432,9 +464,12 @@ const UserProjectParts: React.FC<{ project: string; refreshKey: number; onRunEnd
   const server = projectServer(status.data, project);
   const { run, start: startRun, running } = useProjectRun(onRunEnd);
   const [pending, setPending] = useState<PendingAction | null>(null);
+  const [choiceChecked, setChoiceChecked] = useState(false);
   const start: StartAction = (title, r, confirm) => {
-    if (confirm) setPending({ title, changes: confirm.changes, confirm: confirm.label, run: r });
-    else startRun(title, r);
+    if (confirm) {
+      setChoiceChecked(false);
+      setPending({ title, changes: confirm.changes, confirm: confirm.label, run: r, choice: confirm.choice });
+    } else startRun(title, r);
   };
   return (
     <Stack hasGutter>
@@ -451,8 +486,17 @@ const UserProjectParts: React.FC<{ project: string; refreshKey: number; onRunEnd
         </StackItem>
       )}
       {pending && (
-        <ConfirmActionModal isOpen title={`${pending.title}?`} changes={pending.changes} confirmLabel={pending.confirm} confirmVariant="danger"
-          onConfirm={() => { const p = pending; setPending(null); startRun(p.title, p.run); }} onCancel={() => setPending(null)} />
+        <ConfirmActionModal isOpen title={`${pending.title}?`} confirmLabel={pending.confirm} confirmVariant="danger"
+          changes={pending.choice && choiceChecked ? [...pending.changes, ...pending.choice.changes] : pending.changes}
+          choice={pending.choice && (
+            <Checkbox id="user-env-confirm-choice" label={pending.choice.label} isChecked={choiceChecked} onChange={(_e, checked) => setChoiceChecked(checked)} />
+          )}
+          onConfirm={() => {
+            const p = pending;
+            setPending(null);
+            startRun(p.title, p.choice ? p.choice.run(choiceChecked) : p.run);
+          }}
+          onCancel={() => setPending(null)} />
       )}
     </Stack>
   );
