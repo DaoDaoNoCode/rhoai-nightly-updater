@@ -23,8 +23,11 @@ import { UserProjectView } from "../components/environment/UserProjectView";
 /**
  * Environment for a user who is not a cluster-admin: their own data
  * science projects (the projects API with their token) and, per project,
- * what runs there, read-only. The shared parts (S3 storage, the inference
- * gateway, MaaS, prerequisites) and every change are a cluster-admin's.
+ * what runs there. The workbench, the playground and the MLflow sample
+ * data can be set up and removed there when the user's role in the project
+ * allows it (UserProjectView, the non-admin design B3); the shared parts
+ * (S3 storage, the inference gateway, MaaS, prerequisites), pipeline
+ * servers and models are a cluster-admin's.
  */
 export const UserEnvironmentPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -83,8 +86,9 @@ export const UserEnvironmentPage: React.FC = () => {
           <StackItem>
             <Alert variant="info" isInline isPlain component="div" title="A cluster-admin sets up the shared parts">
               <Content component="p">
-                S3 storage, the inference gateway, Models as a Service and the operators these features need. Setting up or
-                removing anything on this page is also done by a cluster-admin.
+                S3 storage, the inference gateway, Models as a Service and the operators these features need, and the
+                project's pipeline server and models. You can set up and remove the workbench, the playground and the
+                MLflow sample data here when your role in the project allows it.
               </Content>
             </Alert>
           </StackItem>
@@ -114,7 +118,7 @@ export const UserEnvironmentPage: React.FC = () => {
     <>
       <PageHeader
         title="Environment"
-        description="What runs in your data science projects. Only cluster-admins set things up or remove them."
+        description="What runs in your data science projects, and the parts you may set up there."
         lastRefreshed={lastRefreshed}
         loading={loading}
         onRefresh={refresh}

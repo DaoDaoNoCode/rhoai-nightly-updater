@@ -18,7 +18,7 @@ const render = (route = "/test-resources") => renderPage(<><UserEnvironmentPage 
 const part = (title: string) => screen.getByRole("region", { name: title });
 
 describe("Environment for a user who is not a cluster-admin", () => {
-  it("shows the first of their projects, read-only, with the cluster-admin note", async () => {
+  it("shows the first of their projects, with the cluster-admin note and only the project actions", async () => {
     const api = stubUserApi();
     render();
     await settleApps();
@@ -43,10 +43,16 @@ describe("Environment for a user who is not a cluster-admin", () => {
     expect(within(samples).getByText("Not added")).toBeInTheDocument();
     expect(within(samples).getByRole("link", { name: "Open in MLflow" })).toBeInTheDocument();
 
-    // Nothing to change: no Set up, Delete, Add, Remove or Clean up.
+    // Only the project actions (B3): the workbench's, the playground's and
+    // the samples'; no pipeline server, model or Clean up control.
     expect(screen.queryAllByRole("button").map((b) => b.textContent ?? "")).toEqual(expect.not.arrayContaining([
-      expect.stringMatching(/^(Set up|Delete|Remove|Add|Add all|Remove all|Clean up|Publish)/),
+      expect.stringMatching(/^(Add all|Remove all|Clean up|Publish|Set up pipeline|Set up model)/),
     ]));
+    for (const name of ["Pipelines", "Models"]) {
+      expect(within(part(name)).queryAllByRole("button").map((b) => b.textContent ?? "")).toEqual(expect.not.arrayContaining([
+        expect.stringMatching(/^(Set up|Delete|Remove|Add)/),
+      ]));
+    }
     // Every read is the project's, with the user's token; none only cluster-admins may make.
     expect(api.calls).toEqual(expect.arrayContaining([
       "GET /api/resources/status?project=dev-project",
@@ -107,7 +113,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
     await settleApps();
     expect(await within(await screen.findByRole("region", { name: "Pipelines" })).findByText("No pipeline server in dev-project. Add one in the RHOAI dashboard, or ask a cluster-admin to set one up here.")).toBeInTheDocument();
     expect(within(part("Models")).getByText("No models in dev-project. Add one in the RHOAI dashboard, or ask a cluster-admin to set one up here.")).toBeInTheDocument();
-    expect(await within(part("Playground")).findByText("No playground in dev-project. Add one in the RHOAI dashboard, or ask a cluster-admin to set one up here.")).toBeInTheDocument();
+    expect(await within(part("Playground")).findByText("No playground in dev-project. It needs a ready chat model in the project; add one in the RHOAI dashboard.")).toBeInTheDocument();
     expect(await within(part("MLflow sample data")).findByText("MLflow is not set up on this cluster. A cluster-admin sets this up.")).toBeInTheDocument();
     await settleApps();
   });

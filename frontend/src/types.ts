@@ -2407,3 +2407,26 @@ export interface ObservabilityStatus {
 export interface ObservabilityRequest {
   action: "setup" | "teardown";
 }
+
+/** One project action's answer (pkg/types ProjectCapability). */
+export interface ProjectCapability {
+  label: string;
+  /** The user may run it now: their RBAC allows every request, and nothing on the cluster blocks it. */
+  allowed: boolean;
+  /** The requests their RBAC does not allow, each with who can grant it. */
+  missing: string[];
+  /** Prerequisite codes that block it on this cluster ("prerequisites", "prerequisites_unknown"). */
+  blockedBy: string[];
+  /** Why it is not allowed, for people. */
+  reason?: string;
+  /** The reason's code: "admin_only", "missing_permissions", or a blockedBy code. */
+  code?: string;
+}
+
+/** GET /api/resources/projects/capabilities?project= (pkg/types ProjectCapabilities). */
+export interface ProjectCapabilities {
+  project: string;
+  role: "admin" | "user";
+  /** By action ID: "workbench.setup", "playground.teardown", "mlflow-samples.add", ... */
+  actions: Record<string, ProjectCapability>;
+}

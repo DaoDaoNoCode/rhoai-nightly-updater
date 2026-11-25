@@ -1,6 +1,6 @@
 /** Environment page coverage: S3 storage, pipeline servers, MLflow, models, playground, MaaS, samples, prerequisites, and clean-up. */
 
-import { OperationResponse, ProjectStatus, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, ModelsRequest, PlaygroundRequest, PlaygroundStatus, WorkbenchRequest, WorkbenchStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelRegistryRequest, ModelRegistryStatus, KueueRequest, KueueStatus, ObservabilityRequest, ObservabilityStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest } from '../../types';
+import { OperationResponse, ProjectStatus, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, ModelsRequest, PlaygroundRequest, PlaygroundStatus, WorkbenchRequest, WorkbenchStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelRegistryRequest, ModelRegistryStatus, KueueRequest, KueueStatus, ObservabilityRequest, ObservabilityStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest, ProjectCapabilities } from '../../types';
 import { request } from './client';
 import { StreamDoneHandler, StreamDetachHandler, streamSSE } from './stream';
 
@@ -264,7 +264,7 @@ export function streamPlayground(
   return streamSSE('/api/resources/playground/stream', req, onStep, onDone, onConnectionDrop);
 }
 
-/** The Workbench feature: this tool's workbenches, and a project's with what Set up would create (admin only). */
+/** The Workbench feature: this tool's workbenches, and a project's with what Set up would create (a user gets one of their projects only). */
 export function getWorkbench(project: string | null, signal?: AbortSignal): Promise<WorkbenchStatus> {
   return request(`/api/resources/workbench${project ? `?project=${encodeURIComponent(project)}` : ''}`, { signal });
 }
@@ -395,4 +395,13 @@ export function streamObservability(
   onConnectionDrop?: StreamDetachHandler,
 ): AbortController {
   return streamSSE('/api/resources/observability/stream', req, onStep, onDone, onConnectionDrop);
+}
+
+/**
+ * What the signed-in user may do in one of their projects: per project
+ * action, allowed or why not (their RBAC, read with their token, and the
+ * cluster's prerequisites). Advisory: each action checks again.
+ */
+export function getProjectCapabilities(project: string, signal?: AbortSignal): Promise<ProjectCapabilities> {
+  return request(`/api/resources/projects/capabilities?project=${encodeURIComponent(project)}`, { signal });
 }
