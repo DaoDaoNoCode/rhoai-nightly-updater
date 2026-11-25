@@ -268,6 +268,16 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **A recipe's Clean up offers to turn the DataScienceCluster's `kueue`
+  back.** Clean up what the recipe set up kept a component only while it
+  read `Managed`, so `kueue`, which a run turns on as `Unmanaged`, was never
+  offered (its Distributed workloads prerequisites step did not read as
+  created either). The recipe's offer, the Environment tabs' offer and Clean
+  up itself now make one check: the component is in its own on state and
+  this tool's field manager still owns it. The dialog says that Kueue goes
+  back last, only once no ClusterQueue or LocalQueue is left on the cluster,
+  and Clean up's messages about a component that stays on name its on state
+  (`Unmanaged` for `kueue`) instead of `Managed`.
 - **A fresh Connectivity Link install no longer leaves Kuadrant stuck
   without Authorino and Limitador.** Set up (the MaaS tab, and models'
   prerequisites through a gateway) created the Kuadrant CR as soon as its API
