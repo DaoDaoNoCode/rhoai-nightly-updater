@@ -278,12 +278,17 @@ func (m *Run) setupKuadrant(rec *MaaSRecord, kq *kuadrantState, kVersion, kuadra
 	} else {
 		m.Step("kuadrant", "running", "Waiting for Connectivity Link's Kuadrant API...")
 		version := kVersion
-		if _, err := kube.WaitForGone(c, envkit.OperatorTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
+		start := kube.Clock().Now()
+		_, err := kube.WaitForGone(c, envkit.OperatorTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 			v, err := KuadrantServedVersion(cc)
 			version = v
 			return v != "", err
-		}); err != nil || version == "" {
-			return m.Fail("kuadrant", fmt.Sprintf("Connectivity Link's Kuadrant API is not served after %s%s. Set up again to continue; the MaaS tab shows Connectivity Link's state.", ClockText(envkit.OperatorTimeout), ErrSuffix(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "not_ready"), "kuadrant api missing")
+		})
+		switch {
+		case err != nil:
+			return m.Fail("kuadrant", StoppedWaitingText("Connectivity Link's Kuadrant API", kube.Clock().Since(start), err)+" Set up again to continue; the MaaS tab shows Connectivity Link's state.", kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "not_ready"), "kuadrant api missing")
+		case version == "":
+			return m.Fail("kuadrant", fmt.Sprintf("Connectivity Link's Kuadrant API is not served after %s. Set up again to continue; the MaaS tab shows Connectivity Link's state.", ClockText(envkit.OperatorTimeout)), "not_ready", "kuadrant api missing")
 		}
 		rec.setShared("kuadrant", "Kuadrant "+kuadrantNS+"/kuadrant")
 		if err := WriteMaaSRecord(c, *rec); err != nil {
@@ -396,6 +401,14 @@ func ByWhom(tool bool) string {
 		return " (by this tool)"
 	}
 	return " (not by this tool)"
+}
+
+// StoppedWaitingText is the message of a wait that a read error, not its
+// timeout, ended (kube.WaitForGone returns at the first error), so it does
+// not claim the whole timeout: "Stopped waiting for <what> after <elapsed>:
+// <err>."
+func StoppedWaitingText(what string, elapsed time.Duration, err error) string {
+	return fmt.Sprintf("Stopped waiting for %s after %s: %v.", what, ClockText(elapsed), err)
 }
 
 func ErrSuffix(err error) string {
