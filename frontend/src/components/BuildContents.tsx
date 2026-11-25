@@ -143,7 +143,7 @@ export const BuildContents: React.FC<{ image: string; title: string; defaultCate
   if (loading) {
     return (
       <Stack hasGutter aria-busy="true">
-        <StackItem><Content component="p" className="pf-v6-u-text-color-subtle">Downloading and parsing the catalog image...</Content></StackItem>
+        <StackItem><Content component="p" className="pf-v6-u-text-color-subtle">Downloading and parsing the catalog image</Content></StackItem>
         <StackItem><Skeleton height="1.5rem" screenreaderText="Loading catalog content" /></StackItem>
         <StackItem><Skeleton height="1.5rem" /></StackItem>
       </Stack>
@@ -177,7 +177,7 @@ export const BuildContents: React.FC<{ image: string; title: string; defaultCate
           <FlexItem>
             <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}>
               {labelsLoading && (
-                <FlexItem className="pf-v6-u-text-color-subtle pf-v6-u-font-size-sm" aria-live="polite">Resolving git commits for {all.length} images...</FlexItem>
+                <FlexItem className="pf-v6-u-text-color-subtle pf-v6-u-font-size-sm" aria-live="polite">Resolving git commits for {all.length} images</FlexItem>
               )}
               <FlexItem>
                 <CategorySelect label={`Category for ${title}`} categories={cats} total={all.length} active={active} onSelect={setCategory} />

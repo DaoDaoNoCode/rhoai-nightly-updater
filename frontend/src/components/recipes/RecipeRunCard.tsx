@@ -129,7 +129,7 @@ export const RecipeRunCard: React.FC<{
       const latest = status.step;
       const attributable = runningSteps.length === 1 && !!latest && !run.steps.some((o) => o.id === latest.step && o.id !== s.id);
       const own = status.progress?.[s.id]?.message || (attributable ? latest.message : "");
-      const fallback = status.remote ? `Running on updater pod ${status.pod || "(unknown)"}` : "Starting...";
+      const fallback = status.remote ? `Running on updater pod ${status.pod || "(unknown)"}` : "The step is starting";
       const progress = (own || fallback).replace(/\s*\([^)]*\d+:\d\d[^)]*\)/g, "").trim();
       const phaseText = /[.!?]$/.test(progress) ? progress : `${progress}.`;
       message = Number.isFinite(started)
@@ -326,7 +326,7 @@ export const RecipeRunCard: React.FC<{
                 {!live && onCleanup && (
                   <ActionListItem>
                     <TooltipButton variant={phase === "succeeded" ? "secondary" : "link"} onClick={onCleanup} disabledReason={blocker}>
-                      Clean up what the recipe set up...
+                      Clean up what the recipe set up
                     </TooltipButton>
                   </ActionListItem>
                 )}

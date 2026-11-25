@@ -178,7 +178,7 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
       <TooltipButton
         variant="primary"
         onClick={() => target && onUpdate(target)}
-        disabledReason={actionReason ?? (target ? null : latestLoading ? "Looking up the latest nightly..." : "The latest nightly could not be read from Quay; choose a build below.")}
+        disabledReason={actionReason ?? (target ? null : latestLoading ? "Looking up the latest nightly." : "The latest nightly could not be read from Quay; choose a build below.")}
       >
         Install latest nightly{target?.tag ? ` (${target.tag})` : ""}
       </TooltipButton>
@@ -210,7 +210,7 @@ export const InstalledBuildCard: React.FC<InstalledBuildCardProps> = ({
     if (onNightly && updateAvailable === false) return subtle(`Same as ${gitOpsApp ? "in Git" : "installed"}. You have the newest ${nightly?.installed?.tag ?? ""} build.`);
     if (target) return <BuildSummary build={target} />;
     if (nightly?.error) return subtle(nightly.error);
-    if (latestLoading) return <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}><Spinner size="sm" aria-label="Checking Quay" />{subtle("Checking Quay...")}</Flex>;
+    if (latestLoading) return <Flex gap={{ default: "gapSm" }} alignItems={{ default: "alignItemsCenter" }}><Spinner size="sm" aria-label="Checking Quay" />{subtle("Checking Quay")}</Flex>;
     if (latest?.error) return subtle(`Could not check Quay: ${latest.error}`);
     if (!prerequisitesMet) return subtle("Available after the cluster setup");
     return subtle("Unknown");

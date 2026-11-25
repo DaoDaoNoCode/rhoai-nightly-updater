@@ -322,7 +322,7 @@ export const DeploymentsTable: React.FC<DeploymentsTableProps> = ({
           if (health.kind === "problem") actions.push({ title: "Find the cause in Diagnostics", onClick: () => navigate("/diagnostics") });
           if (canUnblock) {
             actions.push({
-              title: unblocking === key ? "Unblocking rollout..." : "Unblock rollout",
+              title: unblocking === key ? "Unblocking rollout" : "Unblock rollout",
               onClick: () => setUnblockTarget(dep),
               isAriaDisabled: !!mutateReason,
               tooltipProps: mutateReason ? { content: mutateReason } : undefined,

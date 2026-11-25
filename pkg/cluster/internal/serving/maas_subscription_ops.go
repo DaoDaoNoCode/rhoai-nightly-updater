@@ -46,7 +46,7 @@ func maasPublished(c *kube.Client) (maasToolSub, []MaaSPub, string, string) {
 // Steps: "check", "limit", "ready".
 func (m *Run) changeLimit(project, name string, req *types.MaaSLimit) (*types.OperationResponse, error) {
 	c := m.Client
-	m.Step("check", "running", "Checking the publication and the subscription...")
+	m.Step("check", "running", "Checking the publication and the subscription")
 	limit, problem := ParseMaaSLimit(req)
 	if problem != "" {
 		return m.Fail("check", "Invalid limit: "+problem+". Nothing was changed.", "validation", "invalid limit")
@@ -82,7 +82,7 @@ func (m *Run) changeLimit(project, name string, req *types.MaaSLimit) (*types.Op
 		return m.Fail("check", fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.", desc, err), MaaSWriteCode(err), "dry run failed")
 	}
 	m.Step("check", "success", fmt.Sprintf("%s in %s can change from %s to %s.", name, project, before.Text(), limit.Text()))
-	m.Step("limit", "running", "Changing the model's entry in the subscription...")
+	m.Step("limit", "running", "Changing the model's entry in the subscription")
 	if err := applyMaaSObject(c, desc, maasAccessPath(c, "MaaSSubscription"), maasAccessCreatePath(c, "MaaSSubscription"), sub, false); err != nil {
 		return m.Fail("limit", fmt.Sprintf("Failed to update %s: %v. The limit is unchanged; run it again to retry.", desc, err), MaaSWriteCode(err), "apply failed")
 	}
@@ -95,7 +95,7 @@ func (m *Run) changeLimit(project, name string, req *types.MaaSLimit) (*types.Op
 // "ready".
 func (m *Run) changeAccess(req *types.MaaSAudience) (*types.OperationResponse, error) {
 	c := m.Client
-	m.Step("check", "running", "Checking the subscription and the authorization policy...")
+	m.Step("check", "running", "Checking the subscription and the authorization policy")
 	aud, problem := ParseMaaSAudience(req)
 	if problem != "" {
 		return m.Fail("check", "Invalid audience: "+problem+". Nothing was changed.", "validation", "invalid audience")
@@ -133,7 +133,7 @@ func (m *Run) changeAccess(req *types.MaaSAudience) (*types.OperationResponse, e
 		return m.Fail("check", fmt.Sprintf("The API server rejects %s: %v. Nothing was changed.", authDesc, err), MaaSWriteCode(err), "dry run failed")
 	}
 	m.Step("check", "success", fmt.Sprintf("Who can use the published models can change from %s to %s.", cur.audience.Text(), aud.Text()))
-	m.Step("access", "running", "Changing the subscription's owners and the authorization policy's subjects...")
+	m.Step("access", "running", "Changing the subscription's owners and the authorization policy's subjects")
 	if err := applyMaaSObject(c, subDesc, maasAccessPath(c, "MaaSSubscription"), maasAccessCreatePath(c, "MaaSSubscription"), sub, false); err != nil {
 		return m.Fail("access", fmt.Sprintf("Failed to update %s: %v. Nothing was changed.", subDesc, err), MaaSWriteCode(err), "apply failed")
 	}
@@ -149,7 +149,7 @@ func (m *Run) changeAccess(req *types.MaaSAudience) (*types.OperationResponse, e
 // subscription (and the authorization policy) Active again.
 func (m *Run) waitAccessActive(doneMsg string, withAuth bool) (*types.OperationResponse, error) {
 	c := m.Client
-	m.Step("ready", "running", "Waiting for MaaS to apply it...")
+	m.Step("ready", "running", "Waiting for MaaS to apply it")
 	last := ""
 	ready, err := kube.WaitForGone(c, maasPublishTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 		s := maasPhase(cc, maasAccessPath(c, "MaaSSubscription"))

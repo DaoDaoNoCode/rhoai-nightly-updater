@@ -140,7 +140,7 @@ export const GatewayPart: React.FC<ModelsTabProps> = ({ status, busy, baseReason
   const unmanaged = notManaged(gw);
   const deployed = !!gw?.deployed;
   const menu: PartMenuItem[] = !readOnly && gatewayManaged(gw) && !isTerminating(gw)
-    ? [{ key: "delete", label: "Delete inference gateway...", onClick: () => setPending({ kind: "teardown-gateway" }), disabledReason: baseReason ?? gw?.teardownBlockedReason ?? null, isDanger: true }]
+    ? [{ key: "delete", label: "Delete inference gateway", onClick: () => setPending({ kind: "teardown-gateway" }), disabledReason: baseReason ?? gw?.teardownBlockedReason ?? null, isDanger: true }]
     : [];
   const s = gatewayStatus(status, busy);
   const setUpReason = readOnly ? READ_ONLY_SETUP : baseReason ?? gw?.setupBlockedReason ?? null;

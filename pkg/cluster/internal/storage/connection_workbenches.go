@@ -277,7 +277,7 @@ func detachConnection(c *kube.Client, project string, users *connectionUsers, lo
 		}
 	}
 	for _, w := range users.wbs {
-		*logs = append(*logs, fmt.Sprintf("Removing connection %s from workbench %s...", ConnectionSecretName, w.Name))
+		*logs = append(*logs, fmt.Sprintf("Removing connection %s from workbench %s", ConnectionSecretName, w.Name))
 		if err := patchOutConnection(c, project, w, false); err != nil {
 			*logs = append(*logs, fmt.Sprintf("Warning: workbench %s was not changed: %v", w.Name, err))
 			return detachFailure(project, w, err, "Nothing was deleted; the workbenches before it no longer use the connection. Run the deletion again to retry.")

@@ -118,9 +118,9 @@ const WorkbenchPart: React.FC<WorkbenchTabProps & { project: string }> = ({ work
   const canStart = mine && item?.state === "stopped";
   const canOpen = item?.state === "running" && !!item.url;
   const menu: PartMenuItem[] = mine
-    ? [{ key: "delete", label: "Delete workbench...", onClick: () => setPending({ kind: "teardown-workbench", project }), disabledReason: baseReason, isDanger: true }]
+    ? [{ key: "delete", label: "Delete workbench", onClick: () => setPending({ kind: "teardown-workbench", project }), disabledReason: baseReason, isDanger: true }]
     : kept && !readOnly
-      ? [{ key: "delete-storage", label: "Delete storage...", onClick: () => setPending({ kind: "delete-workbench-storage", project }), disabledReason: baseReason, isDanger: true }]
+      ? [{ key: "delete-storage", label: "Delete storage", onClick: () => setPending({ kind: "delete-workbench-storage", project }), disabledReason: baseReason, isDanger: true }]
       : [];
   const actions = (
     <>
@@ -257,7 +257,7 @@ export const WorkbenchTab: React.FC<WorkbenchTabProps> = (props) => {
       </StackItem>
       {!readOnly && offered.length > 0 && (
         <StackItem>
-          <CleanupSection id="workbench-cleanup" label="Clean up Workbench..." onClick={onCleanup} reason={baseReason}
+          <CleanupSection id="workbench-cleanup" label="Clean up Workbench" onClick={onCleanup} reason={baseReason}
             text="Deletes the workbenches this tool set up, in every project (Delete workbench in a workbench's menu deletes only that project's). Each workbench's storage is kept unless you tick Also delete its storage. You pick the workbenches; they are deleted in one operation." />
         </StackItem>
       )}

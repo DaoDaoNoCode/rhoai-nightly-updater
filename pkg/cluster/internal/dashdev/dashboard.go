@@ -335,7 +335,7 @@ func DeployPR(c *kube.Client, prNumber int, flavor string) (*types.OperationResp
 	}
 
 	tag := fmt.Sprintf("pr-%d", prNumber)
-	logs = append(logs, fmt.Sprintf("Checking Quay for PR #%d images...", prNumber))
+	logs = append(logs, fmt.Sprintf("Checking Quay for PR #%d images", prNumber))
 
 	// Check all repos in parallel
 	type checkResult struct {
@@ -586,7 +586,7 @@ func Revert(c *kube.Client) (*types.OperationResponse, error) {
 	}
 	logs := []string{"This cluster has no dashboard module (" + target.Legacy + "); reverting the legacy flow's changes to " + DeploymentName + " in " + ns + "."}
 
-	logs = append(logs, "Looking up original images from operator env vars...")
+	logs = append(logs, "Looking up original images from operator env vars")
 	originalImages, imgErr := getOriginalImages(c)
 	if imgErr != nil {
 		return &types.OperationResponse{

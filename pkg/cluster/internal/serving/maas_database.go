@@ -1038,7 +1038,7 @@ func (m *Run) ensureCNPG(rec *MaaSRecord, p *MaaSDBPlan) (*types.OperationRespon
 	}
 	ns, name := cnpgOperator.Namespace, cnpgOperator.SubName
 	if p.cnpgPlan != nil {
-		m.Step("cnpg", "running", fmt.Sprintf("Installing CloudNativePG %s (channel %s) from certified-operators...", p.cnpgPlan.Head, p.cnpgPlan.Channel))
+		m.Step("cnpg", "running", fmt.Sprintf("Installing CloudNativePG %s (channel %s) from certified-operators", p.cnpgPlan.Head, p.cnpgPlan.Channel))
 		rec.setShared("cnpg", fmt.Sprintf("Subscription %s/%s, channel %s", cnpgOperator.Namespace, cnpgOperator.SubName, p.cnpgPlan.Channel))
 		if err := WriteMaaSRecord(c, *rec); err != nil {
 			return m.Fail("cnpg", err.Error(), kube.ErrorCodeFromK8sErr(err), "record write failed")
@@ -1106,7 +1106,7 @@ func (m *Run) makeDatabase(rec *MaaSRecord, p *MaaSDBPlan, maasOn, switching boo
 		if foreign := st.foreignPOC(); foreign != "" {
 			return m.Fail("database", foreign+" exists and was not created by this tool, so it is left alone.", "not_managed", "db foreign")
 		}
-		m.Step("database", "running", fmt.Sprintf("Creating the MaaS docs' development database in %s (scripts/setup-database.sh; image %s, %s)...", ns, p.image, p.imageFrom))
+		m.Step("database", "running", fmt.Sprintf("Creating the MaaS docs' development database in %s (scripts/setup-database.sh; image %s, %s)", ns, p.image, p.imageFrom))
 		credsUID := st.credsUID
 		if !p.keepCreds || credsUID == "" {
 			// A new password: the recorded postgres-creds goes (by its UID
@@ -1143,7 +1143,7 @@ func (m *Run) makeDatabase(rec *MaaSRecord, p *MaaSDBPlan, maasOn, switching boo
 			}
 			m.Logs = append(m.Logs, "OK: "+maasDesc(k, ns))
 		}
-		m.Step("database", "running", "Waiting for the development database to be available (up to "+ClockText(MaaSDevDatabaseTimeout)+", as the script waits)...")
+		m.Step("database", "running", "Waiting for the development database to be available (up to "+ClockText(MaaSDevDatabaseTimeout)+", as the script waits)")
 		ready, err := kube.WaitForGone(c, MaaSDevDatabaseTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 			return deploymentAvailable(cc, ns, maasPOCName) == "True", nil
 		})
@@ -1157,11 +1157,11 @@ func (m *Run) makeDatabase(rec *MaaSRecord, p *MaaSDBPlan, maasOn, switching boo
 		if st.clusterFound && !ToolOwned(st.cluster) {
 			return m.Fail("database", fmt.Sprintf("%s exists and was not created by this tool, so it is left alone. Create Secret %s/%s for it yourself, or remove it.", maasDesc("Cluster", ns), ns, maasDBConfigSecret), "not_managed", "db foreign")
 		}
-		m.Step("database", "running", fmt.Sprintf("Creating a one-instance CloudNativePG database %s/%s (for development and test)...", ns, maasDBCluster))
+		m.Step("database", "running", fmt.Sprintf("Creating a one-instance CloudNativePG database %s/%s (for development and test)", ns, maasDBCluster))
 		if _, err := ensureMaaSDBObject(c, "Cluster", ns, maasDBClusterObject(ns), st.cluster, st.clusterFound, false); err != nil {
 			return m.Fail("database", fmt.Sprintf("Failed to apply %s: %v.", maasDesc("Cluster", ns), err), MaaSWriteCode(err), "db apply failed")
 		}
-		m.Step("database", "running", "Waiting for the database to start (usually 1 to 2 minutes)...")
+		m.Step("database", "running", "Waiting for the database to start (usually 1 to 2 minutes)")
 		ready, err := kube.WaitForGone(c, maasDatabaseTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 			_, _, ok, _, err := readMaaSDBCluster(cc, ns)
 			return ok, err
@@ -1247,7 +1247,7 @@ func (m *Run) deleteDBObjects(step, ns, dbKind string, rec *MaaSRecord) ([]strin
 			m.Logs = append(m.Logs, "Kept "+maasDesc(k, ns)+": not created by this tool")
 			continue
 		}
-		m.Step(step, "running", "Deleting "+maasDesc(k, ns)+"...")
+		m.Step(step, "running", "Deleting "+maasDesc(k, ns))
 		if _, err := kube.DeleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 			res, _ := m.Fail(step, fmt.Sprintf("Failed to delete %s: %v. Run it again to retry.", maasDesc(k, ns), err), MaaSWriteCode(err), "delete failed")
 			return deleted, res
@@ -1276,7 +1276,7 @@ func (m *Run) deleteDBObjects(step, ns, dbKind string, rec *MaaSRecord) ([]strin
 func (m *Run) deletePOCCreds(step, ns string, rec *MaaSRecord) (bool, *types.OperationResponse) {
 	uid := rec.POCCredsUID
 	if uid != "" {
-		m.Step(step, "running", "Deleting "+maasDesc("PostgresSecret", ns)+" (the one this tool created)...")
+		m.Step(step, "running", "Deleting "+maasDesc("PostgresSecret", ns)+" (the one this tool created)")
 	}
 	gone, why, err := deleteMaaSPOCCreds(m.Client, ns, uid)
 	if err != nil {
@@ -1329,7 +1329,7 @@ func maasDBNotReady(c *kube.Client, st maasDBState) string {
 // while others use MaaS. Steps: "check", "cnpg", "database", "cleanup".
 func (m *Run) changeDatabase(req *types.MaaSDatabaseRequest) (*types.OperationResponse, error) {
 	c := m.Client
-	m.Step("check", "running", "Checking the database and who uses MaaS...")
+	m.Step("check", "running", "Checking the database and who uses MaaS")
 	rec, err := ReadMaaSRecord(c)
 	if err != nil {
 		return m.Fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")

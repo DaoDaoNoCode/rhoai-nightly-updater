@@ -75,7 +75,7 @@ describe("Model registry tab", () => {
     const sample = screen.getByRole("listitem", { name: /^Sample model/ });
     expect(within(sample).getByText("Ready")).toBeInTheDocument();
     expect(sample).toHaveTextContent("qwen25-05b-instruct");
-    expect(screen.getByRole("button", { name: "Clean up the model registry..." })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Clean up the model registry" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "What this creates" }));
     expect(screen.getByRole("link", { name: /Managing model registries/ })).toHaveAttribute("href", expect.stringContaining("managing_model_registries"));
   });
@@ -128,7 +128,7 @@ describe("Model registry tab", () => {
       "/api/resources/prerequisites": { features: { "model-registry": { ...prereqReady.features["model-registry"], restorable: [{ component: "aiHub", previous: "Removed", feature: "model-registry" }] } } },
     });
     renderAt("/test-resources?tab=model-registry");
-    fireEvent.click(await screen.findByRole("button", { name: "Clean up the model registry..." }));
+    fireEvent.click(await screen.findByRole("button", { name: "Clean up the model registry" }));
     const dialog = await screen.findByRole("dialog", { name: /Clean up the model registry\?/ });
     expect(within(dialog).getByRole("checkbox", { name: "nightly-registry" })).toBeChecked();
     expect(dialog).toHaveTextContent("Its registered models and its database are deleted with it. The DataScienceCluster component that runs it stays on unless you also tick it below.");
@@ -149,7 +149,7 @@ describe("Model registry tab", () => {
   it("the component line is shown only for a component this tool turned on (restorable)", async () => {
     stub(ready());
     renderAt("/test-resources?tab=model-registry");
-    fireEvent.click(await screen.findByRole("button", { name: "Clean up the model registry..." }));
+    fireEvent.click(await screen.findByRole("button", { name: "Clean up the model registry" }));
     const dialog = await screen.findByRole("dialog", { name: /Clean up the model registry\?/ });
     expect(within(dialog).queryByRole("checkbox", { name: /aiHub/ })).toBeNull();
     expect(dialog).not.toHaveTextContent("Model Catalog");

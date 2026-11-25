@@ -27,7 +27,7 @@ import (
 // "dsc", "ready". Running it again continues where a failed run stopped.
 func (m *Run) setup(db *types.MaaSDatabaseRequest) (*types.OperationResponse, error) {
 	c := m.Client
-	m.Step("check", "running", "Checking what the MaaS platform needs...")
+	m.Step("check", "running", "Checking what the MaaS platform needs")
 	rec, err := ReadMaaSRecord(c)
 	if err != nil {
 		return m.Fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
@@ -240,7 +240,7 @@ func (m *Run) setupRHCL(rec *MaaSRecord, rhcl envkit.OperatorState, rhclPlan *en
 	c := m.Client
 	switch {
 	case rhclPlan != nil:
-		m.Step("rhcl", "running", fmt.Sprintf("Installing Red Hat Connectivity Link %s (channel %s) from redhat-operators...", rhclPlan.Head, rhclPlan.Channel))
+		m.Step("rhcl", "running", fmt.Sprintf("Installing Red Hat Connectivity Link %s (channel %s) from redhat-operators", rhclPlan.Head, rhclPlan.Channel))
 		rec.setShared("rhcl", fmt.Sprintf("Subscription %s/%s, channel %s", RHCLOperator.Namespace, RHCLOperator.SubName, rhclPlan.Channel))
 		if err := WriteMaaSRecord(c, *rec); err != nil {
 			return m.Fail("rhcl", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
@@ -276,7 +276,7 @@ func (m *Run) setupKuadrant(rec *MaaSRecord, kq *kuadrantState, kVersion, kuadra
 	if kq.Found {
 		m.Step("kuadrant", "success", fmt.Sprintf("Kuadrant %s/kuadrant exists%s.", kq.Namespace, ByWhom(rec.Shared["kuadrant"] != "" && ToolOwned(kq.Meta))))
 	} else {
-		m.Step("kuadrant", "running", "Waiting for Connectivity Link's Kuadrant API...")
+		m.Step("kuadrant", "running", "Waiting for Connectivity Link's Kuadrant API")
 		version := kVersion
 		start := kube.Clock().Now()
 		var throttled error
@@ -298,13 +298,13 @@ func (m *Run) setupKuadrant(rec *MaaSRecord, kq *kuadrantState, kVersion, kuadra
 		if r, err := m.WaitKuadrantKindAdmissible("kuadrant"); r != nil || err != nil {
 			return r, err
 		}
-		m.Step("kuadrant", "running", fmt.Sprintf("Creating the Kuadrant CR %s/kuadrant...", kuadrantNS))
+		m.Step("kuadrant", "running", fmt.Sprintf("Creating the Kuadrant CR %s/kuadrant", kuadrantNS))
 		if err := CreateKuadrant(c, version, kuadrantNS, false); err != nil {
 			return m.Fail("kuadrant", fmt.Sprintf("Failed to create the Kuadrant CR %s/kuadrant: %v. Set up again to retry.", kuadrantNS, err), MaaSWriteCode(err), "kuadrant create failed")
 		}
 		m.Logs = append(m.Logs, "OK: Kuadrant "+kuadrantNS+"/kuadrant created")
 	}
-	m.Step("kuadrant", "running", "Waiting for Kuadrant to be Ready (it starts Authorino and Limitador)...")
+	m.Step("kuadrant", "running", "Waiting for Kuadrant to be Ready (it starts Authorino and Limitador)")
 	ready, err := kube.WaitForGone(c, maasKuadrantTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 		k, err := ReadKuadrant(cc)
 		if err == nil && k.Found {
@@ -340,7 +340,7 @@ func (m *Run) setupKuadrant(rec *MaaSRecord, kq *kuadrantState, kVersion, kuadra
 // made it meanwhile. Nil, nil: go on.
 func (m *Run) CreateMaaSInfraNamespace(rec *MaaSRecord, infra string) (*types.OperationResponse, error) {
 	c := m.Client
-	m.Step("database", "running", fmt.Sprintf("Creating namespace %s, the AI gateway's infrastructure namespace, as the docs' setup-database.sh does...", infra))
+	m.Step("database", "running", fmt.Sprintf("Creating namespace %s, the AI gateway's infrastructure namespace, as the docs' setup-database.sh does", infra))
 	rec.InfraNamespace = infra
 	if err := WriteMaaSRecord(c, *rec); err != nil {
 		return m.Fail("database", err.Error(), kube.ErrorCodeFromK8sErr(err), "record write failed")
@@ -378,7 +378,7 @@ func (m *Run) setupDSC(rec *MaaSRecord, dsc maasDSC, needDSC bool) (*types.Opera
 			fields = append(fields, "modelsAsAService "+kube.FirstNonEmpty(dsc.maas, "not set"))
 			rec.DSCChanged, rec.PreviousModelsAsAService = true, dsc.maas
 		}
-		m.Step("dsc", "running", fmt.Sprintf("Setting aigateway and its modelsAsAService to Managed in DataScienceCluster %s (it was %s; removal restores that)...", dsc.name, strings.Join(fields, ", ")))
+		m.Step("dsc", "running", fmt.Sprintf("Setting aigateway and its modelsAsAService to Managed in DataScienceCluster %s (it was %s; removal restores that)", dsc.name, strings.Join(fields, ", ")))
 		if err := WriteMaaSRecord(c, *rec); err != nil {
 			return m.Fail("dsc", err.Error()+" The DataScienceCluster was not changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
 		}
@@ -468,7 +468,7 @@ type OperatorWaitFailure struct{ Message, Code, Activity string }
 // that several can wait at once (each say must be safe to call from its
 // own goroutine). It returns nil once OLM installed the operator.
 func AwaitOperator(c *kube.Client, step, ns, name, title string, timeout time.Duration, prefix string, say func(id, status, msg string)) *OperatorWaitFailure {
-	say(step, "running", fmt.Sprintf("Waiting for OLM to install %s (usually 1 to 3 minutes)...", title))
+	say(step, "running", fmt.Sprintf("Waiting for OLM to install %s (usually 1 to 3 minutes)", title))
 	p, err := envkit.WaitForSubscriptionWithin(c, ns, name, timeout, func(s string) { say(step, "running", prefix+s) })
 	switch {
 	case err != nil:
@@ -489,11 +489,11 @@ func (m *Run) setupGateway(gwPlan *maasGatewayPlan, foreign bool) (*types.Operat
 		m.Step("gateway", "success", fmt.Sprintf("Gateway %s/%s already exists and was not created by this tool: MaaS uses it as it is.", inferenceGatewayNamespace, MaaSGatewayName))
 		return nil, nil
 	}
-	m.Step("gateway", "running", "Creating Gateway "+MaaSGatewayName+" with an external load balancer...")
+	m.Step("gateway", "running", "Creating Gateway "+MaaSGatewayName+" with an external load balancer")
 	if msg, code := m.applyGateway(gwPlan, false); msg != "" {
 		return m.Fail("gateway", msg, code, "gateway apply failed")
 	}
-	m.Step("gateway", "running", "Waiting for the gateway to be programmed (up to "+ClockText(maasGatewayTimeout)+")...")
+	m.Step("gateway", "running", "Waiting for the gateway to be programmed (up to "+ClockText(maasGatewayTimeout)+")")
 	programmed, err := kube.WaitForGone(c, maasGatewayTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 		gw, err := readMaaSGateway(cc)
 		return gw.programmed && gw.address != "", err
@@ -534,7 +534,7 @@ func (m *Run) applyAuthorinoTLS(rec *MaaSRecord, ns, step, again string) (*types
 		m.Step(step, "success", "Authorino in "+ns+" serves TLS and trusts the service CA"+ByWhom(rec.Shared["authorino-tls"] != "")+".")
 		return nil, nil
 	}
-	m.Step(step, "running", "Configuring Authorino TLS in "+ns+" as the docs' setup-authorino-tls.sh does...")
+	m.Step(step, "running", "Configuring Authorino TLS in "+ns+" as the docs' setup-authorino-tls.sh does")
 	var changes []string
 	var lastErr error
 	done, err := kube.WaitForGone(c, maasKuadrantTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
@@ -656,7 +656,7 @@ func errText(err error) string {
 // gateway's authentication.
 func (m *Run) waitPlatformReady(infra string) (*types.OperationResponse, error) {
 	c := m.Client
-	m.Step("ready", "running", "Waiting for the operator: maas-api, the default tenant, and the gateway's authentication (usually 2 to 3 minutes)...")
+	m.Step("ready", "running", "Waiting for the operator: maas-api, the default tenant, and the gateway's authentication (usually 2 to 3 minutes)")
 	last := ""
 	ready, err := kube.WaitForGone(c, maasPlatformTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 		api := deploymentAvailable(cc, infra, "maas-api")

@@ -120,7 +120,7 @@ export const MLflowSamples: React.FC<MLflowSamplesProps> = ({ state, ready, proj
       <TabSection title="Sample data" id={MLFLOW_SAMPLES_ID}>
         {intro}
         <Alert variant="info" isInline component="div" title="Sample data needs a working MLflow"
-          actionLinks={setUp ? <AlertActionLink onClick={() => onSetUp(setUp.setup)}>{setUp.label}...</AlertActionLink> : undefined}>
+          actionLinks={setUp ? <AlertActionLink onClick={() => onSetUp(setUp.setup)}>{setUp.label}</AlertActionLink> : undefined}>
           <Content component="p">{why}{next?.kind === "set-up" && !setUp ? ` ${readOnly ? READ_ONLY_SAMPLES : baseReason ?? next.reason ?? ""}` : ""}</Content>
         </Alert>
       </TabSection>

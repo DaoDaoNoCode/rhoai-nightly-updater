@@ -235,7 +235,7 @@ describe("MLflow tab: Sample data", () => {
     await tick();
     fireEvent.click(within(screen.getByRole("dialog", { name: /Add the agent skill to dev\?/ })).getByRole("button", { name: "Add" }));
     await tick();
-    stream.push(sseEvent("skill", "running", "Agent skill: add..."));
+    stream.push(sseEvent("skill", "running", "Agent skill: add"));
     await tick();
     fireEvent.click(within(screen.getByRole("dialog", { name: "Add the agent skill to dev" })).getAllByRole("button", { name: "Close" }).find((b) => b.textContent === "Close")!);
     await tick();
@@ -297,7 +297,7 @@ describe("MLflow tab: Sample data", () => {
     await tick();
     const alert = within(samplesSection()).getByText("Sample data needs a working MLflow").closest(".pf-v6-c-alert") as HTMLElement;
     expect(alert).toHaveTextContent("MLflow, which is not set up yet");
-    fireEvent.click(within(alert).getByRole("button", { name: "Set up MLflow..." }));
+    fireEvent.click(within(alert).getByRole("button", { name: "Set up MLflow" }));
     await tick();
     expect(screen.getByRole("dialog", { name: /Set up MLflow\?/ })).toBeInTheDocument();
     expect(calls(api, "GET /api/resources/samples/mlflow")).toBe(0);

@@ -226,7 +226,7 @@ func TestModels_InnerMaaSRunsKeepTheirLogs(t *testing.T) {
 	if !strings.Contains(logs, "OK: MaaSModelRef proj/qwen25-05b-instruct") {
 		t.Fatalf("setup logs lack the publish's lines:\n%s", logs)
 	}
-	if n := strings.Count(logs, "Checking the platform and the model..."); n != 1 {
+	if n := strings.Count(logs, "Checking the platform and the model"); n != 1 {
 		t.Fatalf("publish check line %d times:\n%s", n, logs)
 	}
 	res, _ = runModels(t, mc.c, types.ModelsRequest{Action: "teardown", Project: "proj", Model: "qwen25-05b-instruct"})
@@ -234,7 +234,7 @@ func TestModels_InnerMaaSRunsKeepTheirLogs(t *testing.T) {
 		t.Fatalf("teardown: %+v", res)
 	}
 	logs = strings.Join(res.Logs, "\n")
-	if !strings.Contains(logs, "OK: MaaSAuthPolicy") || strings.Count(logs, "Checking the publication...") != 1 {
+	if !strings.Contains(logs, "OK: MaaSAuthPolicy") || strings.Count(logs, "Checking the publication") != 1 {
 		t.Fatalf("teardown logs:\n%s", logs)
 	}
 }

@@ -129,7 +129,7 @@ export const RecipeEditor: React.FC<{
   const { catalog, error: catalogError } = useCatalog(form.models);
   const defaultModel = catalog?.find((m) => m.default);
   const modelText = form.model ? catalog?.find((m) => m.name === form.model)?.displayName ?? form.model
-    : defaultModel ? `${defaultModel.displayName} (the default)` : catalog === null && !catalogError ? "Loading the models..." : "The catalog's default";
+    : defaultModel ? `${defaultModel.displayName} (the default)` : catalog === null && !catalogError ? "Loading the models" : "The catalog's default";
 
   const review = () => {
     setSubmitted(true);
@@ -157,7 +157,7 @@ export const RecipeEditor: React.FC<{
                   body={form.build === "tag" && (
                     <NestedFields>
                       <SingleSelect id="recipe-tag" label="Nightly line" selected={form.tag || undefined}
-                        text={form.tag || (tags === null && !tagsError ? "Loading the nightly lines..." : "Choose a nightly line")}
+                        text={form.tag || (tags === null && !tagsError ? "Loading the nightly lines" : "Choose a nightly line")}
                         isPlaceholder={!form.tag} invalid={!!shown("tag")} isDisabled={tags === null || lines.length === 0}
                         options={lines.map((l) => ({ value: l, label: l }))} onSelect={(v) => set("tag", v)} />
                       {(shown("tag") || tagsError || (tags && lines.length === 0)) && (
@@ -171,6 +171,7 @@ export const RecipeEditor: React.FC<{
                   onChange={() => set("build", "image")}
                   body={form.build === "image" && (
                     <NestedFields>
+                      {/* eslint-disable-next-line no-restricted-syntax -- omitted text: the dots stand for the digest */}
                       <TextInput id="recipe-image" aria-label="Catalog image" value={form.image} placeholder={`${RECIPE_IMAGE_PREFIX}@sha256:...`}
                         onChange={(_e, v) => set("image", v)} onBlur={() => touch("image")} validated={shown("image") ? "error" : "default"} />
                       <FieldHelperText variant={shown("image") ? "error" : "default"}>
@@ -227,7 +228,7 @@ export const RecipeEditor: React.FC<{
                 body={form.project === "existing" && (
                   <NestedFields>
                     <SingleSelect id="recipe-existing-project" label="Project" selected={form.existingProject || undefined}
-                      text={form.existingProject || (projects === null && !projectsError ? "Loading the projects..." : "Choose a project")}
+                      text={form.existingProject || (projects === null && !projectsError ? "Loading the projects" : "Choose a project")}
                       isPlaceholder={!form.existingProject} invalid={!!shown("existingProject")} isDisabled={!projects || projects.length === 0}
                       options={(projects ?? []).map((p) => ({ value: p, label: p }))} onSelect={(v) => set("existingProject", v)} />
                     {(shown("existingProject") || projectsError || (projects && projects.length === 0)) && (

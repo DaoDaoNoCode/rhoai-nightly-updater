@@ -152,15 +152,15 @@ describe("Reinstall downgrades", () => {
     await renderPanel();
     for (const radio of screen.getAllByRole("radio")) expect(radio).not.toBeChecked();
     expect(screen.getByText("Downgrade")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^Install\.\.\./ })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("button", { name: /^Install$/ })).toHaveAttribute("aria-disabled", "true");
   });
 
   it("requires the typed confirmation and an explicit downgrade acknowledgement before sending allowDowngrade", async () => {
     const runOperator = await renderPanel();
-    await waitFor(() => expect(screen.getByRole("button", { name: /^Install\.\.\./ })).toHaveAttribute("aria-disabled", "true"));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Install$/ })).toHaveAttribute("aria-disabled", "true"));
     fireEvent.click(screen.getByLabelText(/Latest stable \(GA\)/));
-    await waitFor(() => expect(screen.getByRole("button", { name: /^Install\.\.\./ })).not.toHaveAttribute("aria-disabled", "true"));
-    fireEvent.click(screen.getByRole("button", { name: /^Install\.\.\./ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Install$/ })).not.toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(screen.getByRole("button", { name: /^Install$/ }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Install RHOAI 3.5.1 (downgrade from 3.6.0)?")).toBeInTheDocument();
     const confirm = within(dialog).getByRole("button", { name: "Install older version" });

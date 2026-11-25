@@ -118,7 +118,7 @@ export const BuildCompare: React.FC<{ from: BuildSide; to: BuildSide; onClose: (
           <Stack hasGutter aria-busy="true">
             <StackItem>
               <Content component="p" className="pf-v6-u-text-color-subtle" aria-live="polite">
-                {a.loading || b.loading ? "Reading both catalogs..." : "Resolving git commits of both builds..."}
+                {a.loading || b.loading ? "Reading both catalogs" : "Resolving git commits of both builds"}
               </Content>
             </StackItem>
             <StackItem><Skeleton height="1.5rem" screenreaderText="Comparing builds" /></StackItem>

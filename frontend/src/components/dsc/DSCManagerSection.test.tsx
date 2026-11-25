@@ -141,7 +141,7 @@ describe("DSCManagerSection", () => {
       expect(summaryRow("Changed from the default")).toBe("Not checked: no release default");
       expect(summaryRow("Not in the installed CRD")).toBe("None");
       expect(screen.queryByRole("button", { name: "Fix" })).not.toBeInTheDocument();
-      expect(isOff(screen.getByRole("button", { name: "Reset to the release default…" }))).toBe(true);
+      expect(isOff(screen.getByRole("button", { name: "Reset to the release default" }))).toBe(true);
     });
 
     it("explains the comparison and deprecated fields in a popover", async () => {
@@ -380,7 +380,7 @@ describe("DSCManagerSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Set ray" }));
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
     expect(isOff(screen.getByRole("button", { name: "Fix" }))).toBe(true);
-    expect(isOff(screen.getByRole("button", { name: "Reset to the release default…" }))).toBe(true);
+    expect(isOff(screen.getByRole("button", { name: "Reset to the release default" }))).toBe(true);
   });
 
   it("hard reset needs the typed name and streams its steps", async () => {
@@ -392,7 +392,7 @@ describe("DSCManagerSection", () => {
       "POST /api/components/dsc/hard-reset/stream": () => stream.response,
     });
     renderSection();
-    fireEvent.click(await screen.findByRole("button", { name: "Reset to the release default…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Reset to the release default" }));
     const dialog = await screen.findByRole("dialog", { name: "Reset to the release default" });
     fireEvent.click(within(dialog).getByLabelText("Hard reset"));
     expect(await within(dialog).findByText(/tears down every enabled component/)).toBeInTheDocument();
@@ -422,7 +422,7 @@ describe("DSCManagerSection", () => {
     });
     renderSection();
     await screen.findByRole("treegrid");
-    fireEvent.click(screen.getByRole("button", { name: "Reset to the release default…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset to the release default" }));
     const dialog = await screen.findByRole("dialog", { name: "Reset to the release default" });
     fireEvent.click(within(dialog).getByLabelText("Hard reset"));
     fireEvent.click(await within(dialog).findByRole("button", { name: "Changes in the new DataScienceCluster (2)" }));
@@ -448,7 +448,7 @@ describe("DSCManagerSection", () => {
     const onChanged = renderSection();
     expect(await screen.findByText("A hard reset did not finish")).toBeInTheDocument();
     expect(screen.getByText(/without the old name and namespaces/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Finish the hard reset…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Finish the hard reset" }));
     const dialog = await screen.findByRole("dialog", { name: "Finish the hard reset?" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Create my-dsc" }));
     await waitFor(() => expect(api.bodies["POST /api/components/dsc/hard-reset/finish"]).toEqual([{ name: "my-dsc", token: pending.token }]));
@@ -484,7 +484,7 @@ describe("DSCManagerSection", () => {
         "POST /api/components/dsc/reset": { success: true, message: "Changed 1 field. Kept: aigateway, aigateway.modelsAsAService (you turned these on).", logs: [] },
       });
       renderSection();
-      fireEvent.click(await screen.findByRole("button", { name: "Reset to the release default…" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Reset to the release default" }));
       const dialog = await screen.findByRole("dialog", { name: "Reset to the release default" });
       const keep = await within(dialog).findByRole("checkbox", { name: /Keep the components you turned on \(2\): aigateway, aigateway\.modelsAsAService/ });
       expect(keep).toBeChecked();
@@ -499,7 +499,7 @@ describe("DSCManagerSection", () => {
     it("unchecked, plans the pure release default again and shows why it is blocked", async () => {
       const api = stubApi({ "GET /api/components/dsc": manager, "GET /api/components/dsc/plan": resetPlans });
       renderSection();
-      fireEvent.click(await screen.findByRole("button", { name: "Reset to the release default…" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Reset to the release default" }));
       const dialog = await screen.findByRole("dialog", { name: "Reset to the release default" });
       await within(dialog).findByText(/\(you turned these on\)/);
       fireEvent.click(within(dialog).getByRole("checkbox", { name: /Keep the components you turned on/ }));
@@ -527,7 +527,7 @@ describe("DSCManagerSection", () => {
         "GET /api/components/dsc/plan": (url: string) => new Response(JSON.stringify(!url.includes("hard-reset") ? keepPlan : url.includes("keepEnabled=true") ? hardKeep : hardPure), { headers: { "Content-Type": "application/json" } }),
       });
       renderSection();
-      fireEvent.click(await screen.findByRole("button", { name: "Reset to the release default…" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Reset to the release default" }));
       const dialog = await screen.findByRole("dialog", { name: "Reset to the release default" });
       fireEvent.click(within(dialog).getByLabelText("Hard reset"));
       expect(await within(dialog).findByText(/They come back as they are now/)).toBeInTheDocument();
@@ -543,7 +543,7 @@ describe("DSCManagerSection", () => {
     it("has no option when nothing was turned on", async () => {
       stubApi({ "GET /api/components/dsc": manager, "GET /api/components/dsc/plan": plan({ action: "soft-reset", keepEnabled: true, changes: [] }) });
       renderSection();
-      fireEvent.click(await screen.findByRole("button", { name: "Reset to the release default…" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Reset to the release default" }));
       const dialog = await screen.findByRole("dialog", { name: "Reset to the release default" });
       await within(dialog).findByText("This changes the shared cluster:");
       expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();

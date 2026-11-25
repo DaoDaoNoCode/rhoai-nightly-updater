@@ -169,6 +169,15 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Changed
 
+- **No "..." after button labels and progress text.** Buttons and menu
+  items that open a dialog read as their action (**Clean up everything**,
+  **Turn back**, **Install**, **Delete workbench**), progress and loading
+  text is a plain phrase beside its spinner ("Loading builds"), and a
+  reason shown among sentences is one ("Checking your permissions."), as
+  PatternFly writes them: an ellipsis there marks only omitted or
+  truncated text. The step messages of every Environment, Recipes and
+  Status operation lost theirs too. ESLint now fails on a frontend string
+  that ends with one.
 - **Recipes set up what every feature needs in one step.** A recipe run
   had a prerequisites step per feature (What Pipelines needs, What MLflow
   needs, What Models needs, ...), each with its own operator installs and
@@ -326,7 +335,7 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 - **The Distributed workloads tab can turn Kueue back.** Once its setup
   was cleaned up, the prerequisites still read "kueue Unmanaged (turned on
   by this tool)", but only Clean up everything could turn it back. The
-  Kueue part now offers **Turn back...** while this tool still owns the
+  Kueue part now offers **Turn back** while this tool still owns the
   setting, with Clean up's confirmation words and Clean up's own request and
   checks. While a ClusterQueue or LocalQueue is on the cluster (the status
   now lists them), or they cannot be read, it is off and says why.
@@ -855,14 +864,14 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   first, goes into `nightly-dspa-s3` and the dashboard Connection. Deleting
   the pipeline server deletes the user. Migrate storage ends in the same
   state. Storage an earlier version set up shows **Not secured** (S3
-  storage tab, Pipelines tab, Overview) with **Secure S3 storage...**: a new
+  storage tab, Pipelines tab, Overview) with **Secure S3 storage**: a new
   admin key and a key per recorded pipeline server, never run on its own;
   until then a new pipeline server is not set up. Restart workbenches and
   model deployments that use the Connection afterwards. Any project's key
   still reaches every project's artifacts in the bucket (SECURITY.md).
   `make test-seaweedfs-podman` checks it against the pinned SeaweedFS image.
   Keys of pipeline servers that no longer exist show as **Leftover keys**,
-  removed with **Remove leftover keys...** after a confirmation that lists
+  removed with **Remove leftover keys** after a confirmation that lists
   them. The first Set up or Repair with this version restarts SeaweedFS once
   (its pod template gets a checksum of the admin keys). No RBAC change.
 

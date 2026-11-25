@@ -110,6 +110,6 @@ describe("one-click prerequisites", () => {
     render(<MemoryRouter initialEntries={["/test-resources?tab=models&project=dev"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
     expect(await screen.findByRole("radio", { name: /Only inside the cluster/ })).toBeChecked();
     await vi.waitFor(() => expect(screen.queryByText("Needed on the cluster first")).not.toBeInTheDocument());
-    expect(screen.getByText("Checking what this way to reach the model needs on the cluster...")).toBeInTheDocument();
+    expect(screen.getByText("Checking what this way to reach the model needs on the cluster.")).toBeInTheDocument();
   });
 });

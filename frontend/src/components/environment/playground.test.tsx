@@ -231,7 +231,7 @@ describe("Playground tab", () => {
     expect(within(part).queryByRole("button", { name: /actions/i })).toBeNull();
     // Ready is its label; no "State: Ready" row repeats it.
     expect(within(part).queryByText("State")).toBeNull();
-    expect(screen.queryByText("Clean up Playground...")).toBeNull();
+    expect(screen.queryByText("Clean up Playground")).toBeNull();
   });
 
   it("the Overview row matches the tab", async () => {

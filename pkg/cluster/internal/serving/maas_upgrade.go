@@ -30,7 +30,7 @@ const maasRHCLHops = 4
 // Steps: "check", "upgrade", "authorino-tls", "ready".
 func (m *Run) upgradeRHCL() (*types.OperationResponse, error) {
 	c := m.Client
-	m.Step("check", "running", "Checking Connectivity Link and the upgrade path its catalog offers...")
+	m.Step("check", "running", "Checking Connectivity Link and the upgrade path its catalog offers")
 	rec, err := ReadMaaSRecord(c)
 	if err != nil {
 		return m.Fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
@@ -76,7 +76,7 @@ func (m *Run) upgradeRHCL() (*types.OperationResponse, error) {
 			return m.Fail("upgrade", fmt.Sprintf("Cannot read Subscription %s/%s: %v.", ns, name, err), kube.ErrorCodeFromK8sErr(err), "subscription read failed")
 		}
 		if sub.Spec.Channel != want {
-			m.Step("upgrade", "running", fmt.Sprintf("Switching Subscription %s/%s to channel %s...", ns, name, want))
+			m.Step("upgrade", "running", fmt.Sprintf("Switching Subscription %s/%s to channel %s", ns, name, want))
 			if err := envkit.PatchSubscription(c, sub, map[string]any{"channel": want}, false); err != nil {
 				return m.Fail("upgrade", fmt.Sprintf("Failed to switch Subscription %s/%s to channel %s: %v. Run the upgrade again to retry.", ns, name, want, err), MaaSWriteCode(err), "channel patch failed")
 			}
@@ -119,7 +119,7 @@ func (m *Run) upgradeRHCL() (*types.OperationResponse, error) {
 		return r, err
 	}
 
-	m.Step("ready", "running", "Checking the operator's pods...")
+	m.Step("ready", "running", "Checking the operator's pods")
 	st, err = envkit.ReadOperator(c, RHCLOperator)
 	if err != nil {
 		return m.Fail("ready", fmt.Sprintf("Cannot read the installed operators: %v. The upgrade itself is done.", err), kube.ErrorCodeFromK8sErr(err), "csv read failed")
@@ -194,7 +194,7 @@ func (m *Run) waitForChannelHead(ns, name, head string) (bool, envkit.Subscripti
 // "ready".
 func (m *Run) rhclMemory() (*types.OperationResponse, error) {
 	c := m.Client
-	m.Step("check", "running", "Checking the operator's memory...")
+	m.Step("check", "running", "Checking the operator's memory")
 	rec, err := ReadMaaSRecord(c)
 	if err != nil {
 		return m.Fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
@@ -227,7 +227,7 @@ func (m *Run) rhclMemory() (*types.OperationResponse, error) {
 	}
 	m.Step("check", "success", "OOMKilled: "+strings.Join(killed, ", ")+".")
 
-	m.Step("memory", "running", fmt.Sprintf("Setting spec.config.resources on Subscription %s/%s (%s)...", st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, resourcesText(resources)))
+	m.Step("memory", "running", fmt.Sprintf("Setting spec.config.resources on Subscription %s/%s (%s)", st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, resourcesText(resources)))
 	rec.setShared("rhcl-memory", fmt.Sprintf("Subscription %s/%s spec.config.resources (memory limit %s)", st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, rhclMemoryLimit))
 	if err := WriteMaaSRecord(c, rec); err != nil {
 		return m.Fail("memory", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
@@ -236,7 +236,7 @@ func (m *Run) rhclMemory() (*types.OperationResponse, error) {
 		return m.Fail("memory", fmt.Sprintf("Failed to change Subscription %s/%s: %v.", st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, err), MaaSWriteCode(err), "subscription patch failed")
 	}
 	m.Step("memory", "success", "OLM rolls the operator out with a memory limit of "+rhclMemoryLimit+".")
-	m.Step("ready", "running", "Waiting for OLM...")
+	m.Step("ready", "running", "Waiting for OLM")
 	p, err := envkit.WaitForSubscription(c, st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, func(s string) { m.Step("ready", "running", s) })
 	if err != nil || !p.Done {
 		m.Step("ready", "success", "OLM has not reported the operator ready yet; the MaaS tab shows its state.")
@@ -252,7 +252,7 @@ func (m *Run) rhclMemory() (*types.OperationResponse, error) {
 // resourceVersion. Steps: "check", "env", "ready".
 func (m *Run) rhclDenyOnFailure() (*types.OperationResponse, error) {
 	c := m.Client
-	m.Step("check", "running", "Checking Connectivity Link's Subscription...")
+	m.Step("check", "running", "Checking Connectivity Link's Subscription")
 	rec, err := ReadMaaSRecord(c)
 	if err != nil {
 		return m.Fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
@@ -273,7 +273,7 @@ func (m *Run) rhclDenyOnFailure() (*types.OperationResponse, error) {
 		return m.Fail("check", fmt.Sprintf("The API server rejects the change of Subscription %s/%s: %v. Nothing was changed.", st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, err), MaaSWriteCode(err), "dry run failed")
 	}
 	m.Step("check", "success", fmt.Sprintf("Subscription %s/%s can be changed.", st.Sub.Metadata.Namespace, st.Sub.Metadata.Name))
-	m.Step("env", "running", "Setting RATELIMIT_CHECK_SERVICE_FAILURE_MODE and RATELIMIT_REPORT_SERVICE_FAILURE_MODE to deny...")
+	m.Step("env", "running", "Setting RATELIMIT_CHECK_SERVICE_FAILURE_MODE and RATELIMIT_REPORT_SERVICE_FAILURE_MODE to deny")
 	rec.setShared("rhcl-deny-on-failure", fmt.Sprintf("Subscription %s/%s spec.config.env deny on failure", st.Sub.Metadata.Namespace, st.Sub.Metadata.Name))
 	if err := WriteMaaSRecord(c, rec); err != nil {
 		return m.Fail("env", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record write failed")
@@ -282,7 +282,7 @@ func (m *Run) rhclDenyOnFailure() (*types.OperationResponse, error) {
 		return m.Fail("env", fmt.Sprintf("Failed to change Subscription %s/%s: %v.", st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, err), MaaSWriteCode(err), "subscription patch failed")
 	}
 	m.Step("env", "success", "The Subscription denies traffic when rate limiting fails.")
-	m.Step("ready", "running", "Waiting for OLM...")
+	m.Step("ready", "running", "Waiting for OLM")
 	p, err := envkit.WaitForSubscription(c, st.Sub.Metadata.Namespace, st.Sub.Metadata.Name, func(s string) { m.Step("ready", "running", s) })
 	if err != nil || !p.Done {
 		m.Step("ready", "success", "OLM has not reported the operator ready yet; the MaaS tab shows its state.")
@@ -297,7 +297,7 @@ func (m *Run) rhclDenyOnFailure() (*types.OperationResponse, error) {
 // "authorino-tls".
 func (m *Run) authorinoTLSOnly() (*types.OperationResponse, error) {
 	c := m.Client
-	m.Step("check", "running", "Checking Kuadrant's Authorino...")
+	m.Step("check", "running", "Checking Kuadrant's Authorino")
 	rec, err := ReadMaaSRecord(c)
 	if err != nil {
 		return m.Fail("check", err.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(err), "record read failed")
@@ -325,7 +325,7 @@ func (m *Run) authorinoTLSOnly() (*types.OperationResponse, error) {
 // maas-controller manages, and any other, stay. Steps: "check", "delete".
 func (m *Run) removeTierPolicies() (*types.OperationResponse, error) {
 	c := m.Client
-	m.Step("check", "running", "Listing the policies on the MaaS gateway...")
+	m.Step("check", "running", "Listing the policies on the MaaS gateway")
 	policies, err := maasGatewayPolicies(c)
 	if err != nil {
 		return m.Fail("check", fmt.Sprintf("Cannot list the policies on %s; nothing was deleted: %v.%s", MaaSGatewayName, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "policy list failed")
@@ -348,7 +348,7 @@ func (m *Run) removeTierPolicies() (*types.OperationResponse, error) {
 		}
 	}
 	m.Step("check", "success", "To delete: "+strings.Join(policyNames(legacy), ", ")+".")
-	m.Step("delete", "running", "Deleting the old tier policies...")
+	m.Step("delete", "running", "Deleting the old tier policies")
 	for _, p := range legacy {
 		path := legacyTierPolicyPath(p.Kind, p.Version)
 		if _, err := kube.DeleteWithUID(c, path, p.UID); err != nil && !kube.IsK8sNotFound(err) {

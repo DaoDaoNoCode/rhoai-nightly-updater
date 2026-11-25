@@ -76,7 +76,7 @@ func (t *Target) resetDemoVersions(e *mlflowExperiment, log func(string)) error 
 var errNoDemoGenerator = errors.New("this MLflow has no demo generator (demo/generate is not available)")
 
 func (t *Target) GenerateDemo(log func(string)) (demoGenerateResult, string, error) {
-	log("Generating the demo (this takes about 30 seconds)...")
+	log("Generating the demo (this takes about 30 seconds)")
 	var out demoGenerateResult
 	if err := t.api.sendJSON("POST", "/ajax-api/3.0/mlflow/demo/generate", nil, map[string]any{}, &out); err != nil {
 		if IsEndpointMissing(err) {

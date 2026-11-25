@@ -195,7 +195,7 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     expect(switchNamed("Models")).toBeChecked();
     expect(screen.getByRole("textbox", { name: "Pull request number" })).toHaveValue("4321");
 
-    fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up..." }));
+    fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up" }));
     const dialog = screen.getByRole("dialog", { name: /Clean up what recipe full set up\?/ });
     await settle();
     expect(within(dialog).getAllByRole("checkbox").map((c) => [c.getAttribute("id"), (c as HTMLInputElement).checked])).toEqual([
@@ -254,7 +254,7 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     renderPage(<RecipesPage />, "/recipes");
     await settleApps();
     await settle();
-    fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up..." }));
+    fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up" }));
     const dialog = screen.getByRole("dialog", { name: /Clean up what recipe full set up\?/ });
     await settle();
     expect(within(dialog).getByRole("checkbox", { name: "Turn back the DataScienceCluster components the run turned on: KServe and OGX" })).toBeChecked();
@@ -289,7 +289,7 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     renderPage(<RecipesPage />, "/recipes");
     await settleApps();
     await settle();
-    fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up..." }));
+    fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up" }));
     const dialog = screen.getByRole("dialog", { name: /Clean up what recipe full set up\?/ });
     await settle();
     // The distributed workloads setup stays (unticked), so Kueue stays on and is not sent.

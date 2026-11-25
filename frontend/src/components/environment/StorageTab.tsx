@@ -250,20 +250,20 @@ const StoragePart: React.FC<StorageTabProps> = ({ status, busy, baseReason, read
   const leftover = keys?.secured ? keys.leftovers ?? [] : [];
   if (leftover.length > 0 && !needsSecuring && !readOnly) {
     actions.push(<ActionListItem key="leftover"><TooltipButton variant="primary" onClick={() => setPending({ kind: "remove-leftover-keys", leftovers: leftover })}
-      disabledReason={baseReason}>Remove leftover keys...</TooltipButton></ActionListItem>);
+      disabledReason={baseReason}>Remove leftover keys</TooltipButton></ActionListItem>);
   }
   if (needsSecuring && !readOnly) {
     actions.push(<ActionListItem key="secure"><TooltipButton variant="primary" onClick={onSecure} isLoading={busy.resAction === "secure-minio"}
-      disabledReason={busy.resAction === "secure-minio" ? null : baseReason ?? keys?.secureBlockedReason ?? null}>Secure S3 storage...</TooltipButton></ActionListItem>);
+      disabledReason={busy.resAction === "secure-minio" ? null : baseReason ?? keys?.secureBlockedReason ?? null}>Secure S3 storage</TooltipButton></ActionListItem>);
   }
   const canRepair = deployed && !unmanaged && !legacy && (!!terminalReason(minio) || !!minio?.repairNeeded) && !isTerminating(minio);
   const repairReason = baseReason ?? minio?.setupBlockedReason ?? null;
   if (minio?.ready && minio.uiRoute) actions.push(<ActionListItem key="open"><ExternalLink href={minio.uiRoute}>Open admin UI</ExternalLink></ActionListItem>);
   if (!readOnly) {
     if (canRepair) menu.push({ key: "repair", label: "Repair", onClick: () => setPending({ kind: "repair-minio" }), disabledReason: repairReason });
-    if (legacy?.stage === "remove") menu.push({ key: "remove-old", label: "Delete old storage...", onClick: onRemoveOldStorage, disabledReason: legacyReason || legacy.removeBlockedReason || null, isDanger: true });
+    if (legacy?.stage === "remove") menu.push({ key: "remove-old", label: "Delete old storage", onClick: onRemoveOldStorage, disabledReason: legacyReason || legacy.removeBlockedReason || null, isDanger: true });
     if (storageTeardownOffered(minio, legacy, minioLeftovers)) {
-      menu.push({ key: "delete", label: "Delete S3 storage...", onClick: () => setPending({ kind: "teardown-minio" }), disabledReason: baseReason ?? minio!.teardownBlockedReason ?? null, isDanger: true });
+      menu.push({ key: "delete", label: "Delete S3 storage", onClick: () => setPending({ kind: "teardown-minio" }), disabledReason: baseReason ?? minio!.teardownBlockedReason ?? null, isDanger: true });
     }
   }
   const blocked = !deployed && minio?.setupBlockedReason;

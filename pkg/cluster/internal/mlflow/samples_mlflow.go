@@ -362,7 +362,7 @@ func RunSamples(c *kube.Client, req types.MLflowSamplesRequest, onStep func(type
 		return fail("check", problem, "validation")
 	}
 
-	emit(types.UpdateStepEvent{Step: "check", Status: "running", Message: fmt.Sprintf("Checking MLflow for project '%s'...", req.Project)})
+	emit(types.UpdateStepEvent{Step: "check", Status: "running", Message: fmt.Sprintf("Checking MLflow for project '%s'", req.Project)})
 	ok, err := envkit.IsDSProject(c, req.Project)
 	if err != nil {
 		return fail("check", fmt.Sprintf("Cannot list the projects: %v", err), kube.ErrorCodeFromK8sErr(err))
@@ -405,7 +405,7 @@ func RunSamples(c *kube.Client, req types.MLflowSamplesRequest, onStep func(type
 			emit(types.UpdateStepEvent{Step: id, Status: "failed", Message: fmt.Sprintf("%s: %s is not available for this sample.", name, req.Action), ErrorCode: "validation"})
 			continue
 		}
-		emit(types.UpdateStepEvent{Step: id, Status: "running", Message: fmt.Sprintf("%s: %s...", name, req.Action)})
+		emit(types.UpdateStepEvent{Step: id, Status: "running", Message: fmt.Sprintf("%s: %s", name, req.Action)})
 		msg, err := fn(t, func(line string) { emit(types.UpdateStepEvent{Step: id, Status: "running", Message: line}) })
 		if err != nil {
 			failed = append(failed, name)

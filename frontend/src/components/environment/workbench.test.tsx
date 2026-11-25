@@ -170,7 +170,7 @@ describe("Workbench tab", () => {
     expect(within(part).getByText(/Storage kept from a deleted workbench/)).toBeInTheDocument();
     expect(within(part).getByText(/reused by the next Set up/)).toBeInTheDocument();
     fireEvent.click(within(part).getByRole("button", { name: "Workbench actions" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete storage..." }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete storage" }));
     const dialog = await screen.findByRole("dialog", { name: /Delete the kept storage in dev\?/ });
     expect(within(dialog).getByText(/nightly-workbench-storage, 20Gi, storage class gp3-csi/)).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));

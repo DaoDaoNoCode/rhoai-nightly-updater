@@ -311,7 +311,7 @@ func waitUserSeesProject(c *kube.Client, name string, emit func(types.UpdateStep
 		case !kube.Clock().Now().Before(deadline):
 			return fmt.Sprintf("Project %s is set up, but OpenShift still does not list it among your data science projects after %s (a new project usually appears there within seconds). The steps that use it need it there. Check that you can open it in the RHOAI dashboard, then Resume.", name, projectVisibleWait), "timeout", nil
 		case !waited:
-			emit(types.UpdateStepEvent{Step: StepProject, Status: "running", Message: fmt.Sprintf("Waiting for project %s to appear among your data science projects...", name)})
+			emit(types.UpdateStepEvent{Step: StepProject, Status: "running", Message: fmt.Sprintf("Waiting for project %s to appear among your data science projects", name)})
 		}
 		if err := kube.Clock().Sleep(c.Context(), projectVisiblePoll); err != nil {
 			return "", "", err
@@ -351,7 +351,7 @@ func EnsureProject(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (
 	if s.Project != nil && s.Project.Owned && s.Project.UID != "" {
 		uid = s.Project.UID // already created and recorded; labels may be incomplete
 	} else {
-		emit(types.UpdateStepEvent{Step: StepProject, Status: "running", Message: fmt.Sprintf("Creating project %s...", name)})
+		emit(types.UpdateStepEvent{Step: StepProject, Status: "running", Message: fmt.Sprintf("Creating project %s", name)})
 		created, err := requestProject(c, name, p.DisplayName, s.Recipe.Metadata.Description)
 		if kube.IsK8sConflict(err) {
 			return fail(foreignProjectMessage(name), "prerequisites")

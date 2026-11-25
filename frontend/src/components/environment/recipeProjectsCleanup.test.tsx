@@ -45,7 +45,7 @@ describe("Clean up everything with recipe projects", () => {
         )),
     });
     renderAt("/test-resources");
-    fireEvent.click(await screen.findByRole("button", { name: "Clean up everything…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Clean up everything" }));
     let dialog = await screen.findByRole("dialog", { name: /Clean up everything\?/ });
     for (const name of ["Project recipe-dev", "Project recipe-old"]) {
       expect(within(dialog).getByRole("checkbox", { name })).toBeChecked();
@@ -88,7 +88,7 @@ describe("Clean up everything with recipe projects", () => {
       "POST /api/resources/cleanup/stream": () => answers.shift()!,
     });
     renderAt("/test-resources");
-    fireEvent.click(await screen.findByRole("button", { name: "Clean up everything…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Clean up everything" }));
     let dialog = await screen.findByRole("dialog", { name: /Clean up everything\?/ });
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     dialog = await screen.findByRole("dialog", { name: /Clean up everything\?/ });
@@ -121,7 +121,7 @@ describe("Clean up everything with recipe projects", () => {
       "POST /api/resources/cleanup/stream": () => answers.shift()!,
     });
     renderAt("/test-resources");
-    fireEvent.click(await screen.findByRole("button", { name: "Clean up everything…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Clean up everything" }));
     let dialog = await screen.findByRole("dialog", { name: /Clean up everything\?/ });
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     dialog = await screen.findByRole("dialog", { name: /Clean up everything\?/ });
@@ -147,7 +147,7 @@ describe("Clean up everything with recipe projects", () => {
       "/api/resources/projects": { projects: ["a"] },
     });
     renderAt("/test-resources");
-    fireEvent.click(await screen.findByRole("button", { name: "Clean up everything…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Clean up everything" }));
     const dialog = await screen.findByRole("dialog", { name: /Clean up everything\?/ });
     expect(within(dialog).getByRole("checkbox", { name: "Project recipe-old" })).toBeChecked();
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
@@ -160,7 +160,7 @@ describe("Clean up everything with recipe projects", () => {
       "/api/resources/projects": { projects: ["a"] },
     });
     renderAt("/test-resources");
-    fireEvent.click(await screen.findByRole("button", { name: "Clean up everything…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Clean up everything" }));
     const dialog = await screen.findByRole("dialog", { name: /Clean up everything\?/ });
     expect(dialog).toHaveTextContent("Cannot read the projects recipes created: read namespace recipe-dev: 500");
     expect(within(dialog).queryByRole("checkbox", { name: /^Project / })).not.toBeInTheDocument();

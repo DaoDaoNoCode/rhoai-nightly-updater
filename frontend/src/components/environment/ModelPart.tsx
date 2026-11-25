@@ -93,14 +93,14 @@ export const ModelPart: React.FC<ModelsTabProps> = ({ status, project, model: na
   const managed = !!model && model.managedByTool !== false;
   const href = dashboardProjectHref(status.dashboardUrl, project);
   const menu: PartMenuItem[] = managed && !readOnly && !isTerminating(model)
-    ? [{ key: "delete", label: "Delete model...", onClick: () => setPending({ kind: "teardown-model", project, model: name, ...(model?.maasOnlySetup ? { unpublish: true } : {}) }), disabledReason: baseReason ?? null, isDanger: true }]
+    ? [{ key: "delete", label: "Delete model", onClick: () => setPending({ kind: "teardown-model", project, model: name, ...(model?.maasOnlySetup ? { unpublish: true } : {}) }), disabledReason: baseReason ?? null, isDanger: true }]
     : [];
   const useReleased = () => setPending({ kind: "setup-models", gateway: false, project, model: name, releasedImage: true });
   const s = modelStatus(status, project, busy, name);
   const isChecking = !!checking && checking.project === project && checking.model === name;
   const checkAgain = () => (onCheckModel ? onCheckModel(project, name) : setPending({ kind: "check-model", project, model: name }));
   const checkButton = (
-    <Button variant="secondary" size="sm" isLoading={isChecking} isAriaDisabled={isChecking || !!baseReason} onClick={checkAgain}>{isChecking ? "Checking..." : "Check again"}</Button>
+    <Button variant="secondary" size="sm" isLoading={isChecking} isAriaDisabled={isChecking || !!baseReason} onClick={checkAgain}>{isChecking ? "Checking" : "Check again"}</Button>
   );
   const shortName = shortModelName(status, name);
   return (

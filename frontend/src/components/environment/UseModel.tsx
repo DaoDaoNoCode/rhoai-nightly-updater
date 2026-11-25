@@ -20,6 +20,7 @@ import { embeddingCurl, internalCurl, modelCurl, modelTokenLine, thinkingCurl, t
 /** The two 404s a caller can get, and what each means. */
 export const NotFoundNote: React.FC<{ name: string }> = ({ name }) => (
   <Content component="p">
+    {/* eslint-disable-next-line no-restricted-syntax -- omitted text: the path goes on after /v1/ */}
     A 404 means one of two things. With <code>{`{"error":{..."type":"NotFoundError"}}`}</code> the request reached the model but its <code>&quot;model&quot;</code> is not <code>{name}</code> (the display name or the Hugging Face id are not it); with an empty body the request did not reach the model at all (on a gateway the path is <code>/&lt;project&gt;/&lt;model&gt;/v1/...</code>).
   </Content>
 );

@@ -246,7 +246,7 @@ func checkCatalogHealth(c *kube.Client) CheckOutput {
 		}
 	case "CONNECTING":
 		return CheckOutput{
-			Check: report.CheckResult{Name: "Catalog health", Status: "warn", Detail: "CatalogSource is connecting..."},
+			Check: report.CheckResult{Name: "Catalog health", Status: "warn", Detail: "CatalogSource is connecting"},
 			Problems: []report.Problem{{
 				ID:          "catalog-connecting",
 				Severity:    "info",

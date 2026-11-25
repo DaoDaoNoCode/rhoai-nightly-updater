@@ -434,7 +434,7 @@ func (m *migrateRun) secureNewStorage(dspas []DSPA, rec PipelineRecord) *types.O
 		return resp
 	}
 	if !ep.Secured {
-		m.step("storage", "running", "Securing the new storage: a new admin key, and keys of their own for its pipeline servers...")
+		m.step("storage", "running", "Securing the new storage: a new admin key, and keys of their own for its pipeline servers")
 		keys, err := newAdminKeys(m.c)
 		if err != nil {
 			resp, _ := m.fail("storage", fmt.Sprintf("Cannot make the new storage's admin key; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "keys")
@@ -505,7 +505,7 @@ func Migrate(c *kube.Client, opts MigrateOptions, onStep func(types.UpdateStepEv
 	if opts.RemoveOldStorage {
 		m.op, m.kept = "Remove old storage", "nothing was deleted"
 	}
-	m.step("check", "running", fmt.Sprintf("Checking the storage in namespace %s...", LegacyNamespace))
+	m.step("check", "running", fmt.Sprintf("Checking the storage in namespace %s", LegacyNamespace))
 	legacy, err := ReadLegacy(c)
 	if err != nil {
 		return m.fail("check", fmt.Sprintf("Cannot read the storage in namespace %s; nothing was changed: %v.%s", LegacyNamespace, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "read failed")
@@ -584,7 +584,7 @@ func (m *migrateRun) migrate(legacy *Legacy, dspas []DSPA, confirmed []string) (
 
 	// Step 1: the new storage, with keys of its own: the ones it has when
 	// it is set up already, else new random ones (s3Credentials).
-	m.step("storage", "running", fmt.Sprintf("Setting up the storage in namespace %s with new keys...", S3Namespace))
+	m.step("storage", "running", fmt.Sprintf("Setting up the storage in namespace %s with new keys", S3Namespace))
 	ready, resp := m.newStorageReady("storage")
 	if resp != nil {
 		return resp, nil
@@ -663,7 +663,7 @@ func (m *migrateRun) copyAndVerify(legacy *Legacy, dspas []DSPA, oldKeys S3Keys,
 		resp, _ := m.fail(step, msg, code, activity)
 		return CopyResult{}, resp
 	}
-	m.step(step, "running", fmt.Sprintf("Copying every bucket and object from %s to %s (Job %s)...", LegacyNamespace, S3Namespace, MigrateJobName))
+	m.step(step, "running", fmt.Sprintf("Copying every bucket and object from %s to %s (Job %s)", LegacyNamespace, S3Namespace, MigrateJobName))
 
 	// Whether a pipeline server uses the new storage yet decides whether
 	// the copy may overwrite objects there (copyMode). Data connections and
@@ -1089,7 +1089,7 @@ func (m *migrateRun) repoint(legacy *Legacy, dspas []DSPA, sw *seaweedClient, ow
 		r, _ := m.fail("repoint", msg, code, activity)
 		return moved, listed, r
 	}
-	m.step("repoint", "running", "Moving the pipeline servers this tool created to the new storage...")
+	m.step("repoint", "running", "Moving the pipeline servers this tool created to the new storage")
 	endpoints, err := readS3Endpoints(c)
 	if err != nil {
 		return failed(fmt.Sprintf("Cannot read the new storage's Service: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "endpoints unreadable")
@@ -1187,7 +1187,7 @@ func (m *migrateRun) repoint(legacy *Legacy, dspas []DSPA, sw *seaweedClient, ow
 		return body, err
 	}
 
-	m.step("repoint", "running", "Checking every change with the API server (dry run)...")
+	m.step("repoint", "running", "Checking every change with the API server (dry run)")
 	for _, p := range plans {
 		name := p.d.Meta.Namespace + "/" + p.d.Meta.Name
 		if msg, code, err := writeSecrets(p, true); err != nil {
@@ -1217,7 +1217,7 @@ func (m *migrateRun) repoint(legacy *Legacy, dspas []DSPA, sw *seaweedClient, ow
 		if deadline, ok := c.Context().Deadline(); ok && kube.Clock().Until(deadline) < migrateRepointTimeout {
 			return failed(fmt.Sprintf("Not enough time is left in this run to move pipeline server %s and wait until it reaches the new storage (up to %s). Already moved: %s. The old storage is kept; run Migrate storage again to continue.", name, migrateRepointTimeout, done), "in_progress", "out of time")
 		}
-		m.step("repoint", "running", fmt.Sprintf("Moving pipeline server %s...", name))
+		m.step("repoint", "running", fmt.Sprintf("Moving pipeline server %s", name))
 		project := p.d.Meta.Namespace
 		keys, _, err := provisionScopedKey(sw, project, S3Keys{})
 		if err == nil {
@@ -1498,7 +1498,7 @@ func (m *migrateRun) removeOldStorage(legacy *Legacy, dspas []DSPA, deleteNamesp
 		result = r
 	}
 
-	m.step("remove", "running", fmt.Sprintf("Deleting the old storage in namespace %s...", LegacyNamespace))
+	m.step("remove", "running", fmt.Sprintf("Deleting the old storage in namespace %s", LegacyNamespace))
 	var d storageDeletion
 	stopped := func(stage string) (*types.OperationResponse, error) {
 		code := "delete_failed"
@@ -1640,7 +1640,7 @@ func (m *migrateRun) removeNamespace(requested bool) string {
 	case meta.Terminating():
 		return fmt.Sprintf("Namespace %s is already being deleted.", LegacyNamespace)
 	}
-	m.step("namespace", "running", fmt.Sprintf("Deleting namespace %s...", LegacyNamespace))
+	m.step("namespace", "running", fmt.Sprintf("Deleting namespace %s", LegacyNamespace))
 	if _, err := kube.DeleteWithUID(c, "/api/v1/namespaces/"+LegacyNamespace, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 		// Nothing of the old storage is left, so a retry finds nothing to
 		// remove and is not offered (readLegacyStorage returns nil).

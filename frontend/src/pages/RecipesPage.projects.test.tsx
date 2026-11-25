@@ -47,7 +47,7 @@ describe("Recipes page follow-ups", () => {
     const section = screen.getByRole("region", { name: "Projects created by recipes" });
     expect(within(section).getAllByRole("row").slice(1).map((r) => within(r).getAllByRole("cell")[0].textContent)).toEqual(["recipe-dev", "recipe-old"]);
     expect(within(section).getAllByRole("row")[2]).toHaveTextContent("old");
-    fireEvent.click(within(section).getByRole("button", { name: "Delete project recipe-old..." }));
+    fireEvent.click(within(section).getByRole("button", { name: "Delete project recipe-old" }));
     const dialog = screen.getByRole("dialog", { name: /Delete project recipe-old\?/ });
     await settle();
     expect(within(dialog).getByRole("checkbox", { name: "Project recipe-old, which the recipe created" })).toBeChecked();
@@ -95,7 +95,7 @@ describe("Recipes page follow-ups", () => {
     renderPage(<RecipesPage />, "/recipes");
     await settleApps();
     await settle();
-    fireEvent.click(within(screen.getByRole("region", { name: "Projects created by recipes" })).getByRole("button", { name: "Delete project recipe-old..." }));
+    fireEvent.click(within(screen.getByRole("region", { name: "Projects created by recipes" })).getByRole("button", { name: "Delete project recipe-old" }));
     const dialog = screen.getByRole("dialog", { name: /Delete project recipe-old\?/ });
     await settle();
     fireEvent.click(within(dialog).getByRole("button", { name: "Clean up" }));
@@ -130,7 +130,7 @@ describe("Recipes page follow-ups", () => {
     renderPage(<RecipesPage />, "/recipes");
     await settleApps();
     await settle();
-    fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up..." }));
+    fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up" }));
     const dialog = screen.getByRole("dialog", { name: /Clean up what recipe dev set up\?/ });
     await settle();
     fireEvent.click(within(dialog).getByRole("button", { name: "Clean up" }));
@@ -174,7 +174,7 @@ describe("Recipes page follow-ups", () => {
     renderPage(<RecipesPage />, "/recipes");
     await settleApps();
     await settle();
-    fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up..." }));
+    fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up" }));
     const dialog = screen.getByRole("dialog", { name: /Clean up what recipe dev set up\?/ });
     await settle();
     fireEvent.click(within(dialog).getByRole("button", { name: "Clean up" }));

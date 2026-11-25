@@ -30,7 +30,7 @@ describe("View progress: a run of this page whose dialog was closed", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: /Delete MLflow/ }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
     const run = await screen.findByRole("dialog", { name: "Delete MLflow" });
-    expect(within(run).getByText("Working...")).toBeInTheDocument();
+    expect(within(run).getByText("Working")).toBeInTheDocument();
     fireEvent.click(footerClose(run));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
@@ -41,7 +41,7 @@ describe("View progress: a run of this page whose dialog was closed", () => {
     fireEvent.click(view);
     const again = await screen.findByRole("dialog", { name: "Delete MLflow" });
     // The same run: its step state was kept while the dialog was closed.
-    expect(within(again).getByText("Working...")).toBeInTheDocument();
+    expect(within(again).getByText("Working")).toBeInTheDocument();
     await waitFor(() => expect(again).toContainElement(document.activeElement as HTMLElement));
 
     fireEvent.click(footerClose(again));
@@ -70,7 +70,7 @@ describe("View progress: a run of this page whose dialog was closed", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Set up Pipelines in dev" }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Set up" }));
     const run = await screen.findByRole("dialog", { name: "Set up Pipelines in dev" });
-    await within(run).findByText("Creating...");
+    await within(run).findByText("Creating");
     fireEvent.click(footerClose(run));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(screen.getByText(/^Set up Pipelines in dev is running: step 2 of 3, set up the S3 storage \(\d+s\)$/)).toBeInTheDocument();

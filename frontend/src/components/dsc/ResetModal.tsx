@@ -245,7 +245,7 @@ export const FinishHardReset: React.FC<{
         <CardHeader actions={pending ? {
           actions: (
             <TooltipButton variant="primary" onClick={() => setConfirming(true)} isDisabled={!!disabledReason || busy} disabledReason={disabledReason}>
-              Finish the hard reset…
+              Finish the hard reset
             </TooltipButton>
           ),
           hasNoOffset: false,

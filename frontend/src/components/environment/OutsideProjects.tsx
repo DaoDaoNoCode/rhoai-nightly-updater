@@ -24,7 +24,7 @@ export const OutsideProjectsAlert: React.FC<{ items: OutsideItem[]; readOnly: bo
         {items.map((i) => (
           <ListItem key={i.key}>
             {i.text}
-            {!readOnly && <>{" "}<Button variant="link" isInline isDanger isAriaDisabled={!!reason} onClick={i.onDelete}>Delete...</Button></>}
+            {!readOnly && <>{" "}<Button variant="link" isInline isDanger isAriaDisabled={!!reason} onClick={i.onDelete}>Delete</Button></>}
           </ListItem>
         ))}
       </List>

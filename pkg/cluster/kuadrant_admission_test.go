@@ -372,7 +372,7 @@ func TestMaaSSetup_KuadrantCRWaitsForItsCRDToBeEstablished(t *testing.T) {
 	if !res.Success || !hasPrefixIn(mc.f.mutations(), kuadrantCRCreate) {
 		t.Fatalf("setup: %+v", res)
 	}
-	if !hasPrefixIn(kuadrantMessages(events), "Waiting for CRD kuadrants.kuadrant.io to be Established (up to 0:30)...") || !hasPrefixIn(kuadrantMessages(events), kuadrantCRDWaitUp) {
+	if !hasPrefixIn(kuadrantMessages(events), "Waiting for CRD kuadrants.kuadrant.io to be Established (up to 0:30)") || !hasPrefixIn(kuadrantMessages(events), kuadrantCRDWaitUp) {
 		t.Fatalf("kuadrant step: %q", kuadrantMessages(events))
 	}
 }

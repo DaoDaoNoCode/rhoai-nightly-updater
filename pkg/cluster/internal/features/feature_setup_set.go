@@ -206,7 +206,7 @@ func RunPrerequisitesSet(c *kube.Client, items []SetItem, onStep func(types.Upda
 	}
 	what, need := kube.JoinTitles(titles), kube.Verb(len(items), "needs", "need")
 	m.Target = what + " prerequisites"
-	m.Step("prerequisites", "running", fmt.Sprintf("Checking what %s %s on the cluster...", what, need))
+	m.Step("prerequisites", "running", fmt.Sprintf("Checking what %s %s on the cluster", what, need))
 	r := readClusterForPrerequisites(c)
 	plans := make([]*featurePlan, 0, len(items))
 	for _, it := range items {

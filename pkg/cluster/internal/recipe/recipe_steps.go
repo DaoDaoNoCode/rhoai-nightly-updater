@@ -524,7 +524,7 @@ func dscName(obj map[string]any) string {
 // (dsc.CreateDefault: the Components page's Create), trying a transient
 // failure again, then waits until the operator reports its conditions.
 func runDSC(c *kube.Client, _ *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
-	emit(types.UpdateStepEvent{Step: StepDSC, Status: "running", Message: "Creating the release's default DataScienceCluster..."})
+	emit(types.UpdateStepEvent{Step: StepDSC, Status: "running", Message: "Creating the release's default DataScienceCluster"})
 	retryCtx, cancel := kube.Clock().WithTimeout(c.Context(), dscCreateRetry)
 	defer cancel()
 	var res *types.OperationResponse
@@ -537,7 +537,7 @@ func runDSC(c *kube.Client, _ *State, emit func(types.UpdateStepEvent)) (*types.
 		if res.Success || !transientCreateFailure(res) {
 			break
 		}
-		emit(types.UpdateStepEvent{Step: StepDSC, Status: "running", Message: "The operator is not ready to take the DataScienceCluster yet; trying again...", Detail: res.Message})
+		emit(types.UpdateStepEvent{Step: StepDSC, Status: "running", Message: "The operator is not ready to take the DataScienceCluster yet; trying again", Detail: res.Message})
 		if kube.Clock().Sleep(retryCtx, dscCreateRetryDelay) != nil {
 			if err := c.Context().Err(); err != nil {
 				return res, err
@@ -548,7 +548,7 @@ func runDSC(c *kube.Client, _ *State, emit func(types.UpdateStepEvent)) (*types.
 	if !res.Success {
 		return res, nil
 	}
-	emit(types.UpdateStepEvent{Step: StepDSC, Status: "running", Message: "Waiting for the operator to report the DataScienceCluster's conditions..."})
+	emit(types.UpdateStepEvent{Step: StepDSC, Status: "running", Message: "Waiting for the operator to report the DataScienceCluster's conditions"})
 	if err := waitDSCConditions(c); err != nil {
 		if ctxErr := c.Context().Err(); ctxErr != nil {
 			return &types.OperationResponse{Success: false, Message: "Stopped while waiting for the DataScienceCluster.", Logs: res.Logs}, ctxErr
@@ -783,7 +783,7 @@ func checkS3(c *kube.Client, _ *State) (Check, error) {
 
 // runS3 is the Pipelines tab's Set up of the S3 storage, which waits for it.
 func runS3(c *kube.Client, _ *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
-	emit(types.UpdateStepEvent{Step: StepS3, Status: "running", Message: "Setting up the S3 storage..."})
+	emit(types.UpdateStepEvent{Step: StepS3, Status: "running", Message: "Setting up the S3 storage"})
 	return storage.SetupS3(c)
 }
 
@@ -821,12 +821,12 @@ func checkPipelineServer(c *kube.Client, s *State) (Check, error) {
 // makes in the browser, made here.
 func runPipelineServer(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	project := projectOf(s)
-	emit(types.UpdateStepEvent{Step: StepPipelineServer, Status: "running", Message: fmt.Sprintf("Setting up the pipeline server in %s...", project)})
+	emit(types.UpdateStepEvent{Step: StepPipelineServer, Status: "running", Message: fmt.Sprintf("Setting up the pipeline server in %s", project)})
 	res, err := storage.SetupPipelineServer(c, project)
 	if err != nil || !res.Success {
 		return res, err
 	}
-	emit(types.UpdateStepEvent{Step: StepPipelineServer, Status: "running", Message: fmt.Sprintf("Waiting for the pipeline server in %s to be ready (usually 1 to 3 minutes)...", project)})
+	emit(types.UpdateStepEvent{Step: StepPipelineServer, Status: "running", Message: fmt.Sprintf("Waiting for the pipeline server in %s to be ready (usually 1 to 3 minutes)", project)})
 	if _, err := storage.WaitPipelineServerReady(c, project); err != nil {
 		if ctxErr := c.Context().Err(); ctxErr != nil {
 			return &types.OperationResponse{Success: false, Message: "Stopped while waiting for the pipeline server.", Logs: res.Logs}, ctxErr
@@ -868,14 +868,14 @@ func runMLflow(c *kube.Client, _ *State, emit func(types.UpdateStepEvent)) (*typ
 		return fail(fmt.Sprintf("Cannot read MLflow: %v. Nothing was changed.", err), kube.ErrorCodeOr(err, "prerequisites"))
 	}
 	if !st.Deployed {
-		emit(types.UpdateStepEvent{Step: StepMLflow, Status: "running", Message: "Setting up MLflow..."})
+		emit(types.UpdateStepEvent{Step: StepMLflow, Status: "running", Message: "Setting up MLflow"})
 		res, err := mlflow.Setup(c)
 		if err != nil || !res.Success {
 			return res, err
 		}
 		logs = res.Logs
 	}
-	emit(types.UpdateStepEvent{Step: StepMLflow, Status: "running", Message: "Waiting for MLflow to be ready (usually 1 to 3 minutes)..."})
+	emit(types.UpdateStepEvent{Step: StepMLflow, Status: "running", Message: "Waiting for MLflow to be ready (usually 1 to 3 minutes)"})
 	if _, err := mlflow.WaitReady(c); err != nil {
 		if ctxErr := c.Context().Err(); ctxErr != nil {
 			return &types.OperationResponse{Success: false, Message: "Stopped while waiting for MLflow.", Logs: logs}, ctxErr

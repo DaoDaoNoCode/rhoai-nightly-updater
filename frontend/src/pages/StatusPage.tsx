@@ -102,7 +102,7 @@ export const StatusPage: React.FC = () => {
     ? undefined
     : latest?.error
       ? `The newest nightly build could not be looked up: ${latest.error}`
-      : "Looking up the newest nightly build...";
+      : "Looking up the newest nightly build.";
   const setupCard = (collapsible: boolean) => status && (
     <ClusterSetupCard
       status={status}
@@ -329,7 +329,7 @@ export const StatusPage: React.FC = () => {
                 </StackItem>
                 <StackItem>
                   <TooltipButton variant="primary" onClick={() => void openDscPreview()} isLoading={dscLoading} isDisabled={dscLoading} disabledReason={blocker}>
-                    Create DataScienceCluster...
+                    Create DataScienceCluster
                   </TooltipButton>
                 </StackItem>
                 {dscResult && (
@@ -428,7 +428,7 @@ export const StatusPage: React.FC = () => {
                       isLoading={!!refreshRun && !refreshRun.outcome}
                       disabledReason={blocker ?? gitOpsOperatorReason(status, "Re-deploy")}
                     >
-                      Re-deploy operator...
+                      Re-deploy operator
                     </TooltipButton>
                   }
                 >
@@ -448,7 +448,7 @@ export const StatusPage: React.FC = () => {
                       aria-controls="recovery-reinstall-content"
                       disabledReason={gitOpsOperatorReason(status, "Install a different build")}
                     >
-                      {reinstallExpanded ? "Hide build options" : "Choose a build..."}
+                      {reinstallExpanded ? "Hide build options" : "Choose a build"}
                     </TooltipButton>
                   }
                   expanded={

@@ -126,7 +126,7 @@ describe("Distributed workloads tab", () => {
     // Absent (null) is not empty: the queues could not be read.
     expect(kueueTurnBack(restorable, notSetUp({ queues: null, queuesUnknown: true }))?.reason).toBe("The queues on the cluster could not be read, so this tool cannot tell whether anything uses Kueue.");
     expect(kueueTurnBack(restorable, notSetUp({ queues: undefined }))?.reason).toContain("could not be read");
-    expect(kueueTurnBack(restorable, null)?.reason).toBe("Reading which queues are on the cluster...");
+    expect(kueueTurnBack(restorable, null)?.reason).toBe("Reading which queues are on the cluster.");
     // A distributed workloads change running, or the page's own reason.
     expect(kueueTurnBack(restorable, notSetUp({ queues: [] }), { running: true })?.reason).toBe("Wait until the distributed workloads change finishes.");
     expect(kueueTurnBack(restorable, notSetUp({ queues: [] }), { baseReason: "Another operation is running." })?.reason).toBe("Another operation is running.");
@@ -143,7 +143,7 @@ describe("Distributed workloads tab", () => {
         .map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""), { status: 200, headers: { "Content-Type": "text/event-stream" } }),
     });
     renderAt("/test-resources?tab=kueue&project=dev");
-    fireEvent.click(await screen.findByRole("button", { name: "Turn back..." }));
+    fireEvent.click(await screen.findByRole("button", { name: "Turn back" }));
     const dialog = await screen.findByRole("dialog", { name: "Turn Kueue back?" });
     expect(dialog).toHaveTextContent("back from Unmanaged to Removed, only once no ClusterQueue or LocalQueue is left on the cluster");
     const reads = () => api.calls.filter((c) => c.startsWith("GET /api/resources/prerequisites")).length;
@@ -160,7 +160,7 @@ describe("Distributed workloads tab", () => {
       "/api/resources/kueue": notSetUp({ queues: ["ClusterQueue team"] }), "/api/resources/prerequisites": turnedOn,
     });
     renderAt("/test-resources?tab=kueue&project=dev");
-    const button = await screen.findByRole("button", { name: "Turn back..." });
+    const button = await screen.findByRole("button", { name: "Turn back" });
     expect(button).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByText(/In use: ClusterQueue team\. Kueue goes back only once/)).toBeInTheDocument();
   });
@@ -171,9 +171,9 @@ describe("Distributed workloads tab", () => {
     expect(await screen.findByRole("heading", { name: "RayCluster sample", level: 3 })).toBeInTheDocument();
     expect(screen.getByText(/added by this tool/)).toBeInTheDocument();
     expect(screen.getByText("Admitted")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Turn off..." })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Turn off" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Open Workload metrics in the dashboard/ })).toHaveAttribute("href", "https://rh-ai.apps.example.com/observe-monitor/workload-metrics/workload-status/dev");
-    fireEvent.click(screen.getByRole("button", { name: "Clean up distributed workloads..." }));
+    fireEvent.click(screen.getByRole("button", { name: "Clean up distributed workloads" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByRole("checkbox", { name: "Distributed workloads setup" })).toBeChecked();
     // RayJob sample can be enabled without turning on RayCluster.
@@ -258,7 +258,7 @@ describe("review round: the component rule once", () => {
     stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] }, "/api/resources/kueue": ready(),
       "/api/resources/prerequisites": { features: { kueue: { ready: true, parts: [], restorable: [{ component: "kueue", previous: "Removed", feature: "kueue" }] } } } });
     renderAt("/test-resources?tab=kueue&project=dev");
-    fireEvent.click(await screen.findByRole("button", { name: "Clean up distributed workloads..." }));
+    fireEvent.click(await screen.findByRole("button", { name: "Clean up distributed workloads" }));
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getAllByText(/no ClusterQueue or LocalQueue is left/)).toHaveLength(1);
     expect(within(dialog).queryByText(/still uses it/)).toBeNull();

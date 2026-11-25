@@ -14,8 +14,8 @@ describe("StepProgress", () => {
   });
 
   it("keeps a running step's message even when it matches", () => {
-    render(<StepProgress idPrefix="t" aria-label="progress" running shownElsewhere="Deleting..."
-      steps={steps} states={{ model: { status: "running", message: "Deleting..." } }} />);
-    expect(screen.getByText("Deleting...")).toBeInTheDocument();
+    render(<StepProgress idPrefix="t" aria-label="progress" running shownElsewhere="Deleting"
+      steps={steps} states={{ model: { status: "running", message: "Deleting" } }} />);
+    expect(screen.getByText("Deleting")).toBeInTheDocument();
   });
 });

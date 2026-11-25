@@ -55,7 +55,7 @@ describe("S3 storage that is not secured", () => {
     await waitFor(() => expect(s3).toHaveTextContent(NOT_SECURED));
   });
 
-  it("Secure S3 storage... shows the plan, then streams its steps: checks, rollout, one per pipeline server", async () => {
+  it("Secure S3 storage shows the plan, then streams its steps: checks, rollout, one per pipeline server", async () => {
     let status = statusOf({ minio: readyMinio, pipelineServers: [dspa], s3Keys: notSecured });
     const run = sseResponse();
     const api = stubApi({
@@ -64,7 +64,7 @@ describe("S3 storage that is not secured", () => {
       "POST /api/resources/s3/secure/stream": () => run.response,
     });
     renderAt("/test-resources?tab=storage");
-    fireEvent.click(within(await part("SeaweedFS")).getByRole("button", { name: "Secure S3 storage..." }));
+    fireEvent.click(within(await part("SeaweedFS")).getByRole("button", { name: "Secure S3 storage" }));
     const dialog = await screen.findByRole("dialog", { name: "Secure the S3 storage?" });
     expect(dialog).toHaveTextContent("The old admin key, which every pipeline project holds, stops working.");
     // One bullet per server, each starting with the server.
@@ -83,11 +83,11 @@ describe("S3 storage that is not secured", () => {
       expect(progress).toHaveTextContent(title);
     }
     run.push(sseEvent("check", "success", "OK: 2 pipeline servers to give a key of its own"));
-    run.push(sseEvent("rollout", "running", "Waiting up to 1m30s for SeaweedFS to become ready..."));
-    expect(await within(dialog).findByText("Waiting up to 1m30s for SeaweedFS to become ready...")).toBeInTheDocument();
+    run.push(sseEvent("rollout", "running", "Waiting up to 1m30s for SeaweedFS to become ready"));
+    expect(await within(dialog).findByText("Waiting up to 1m30s for SeaweedFS to become ready")).toBeInTheDocument();
     run.push(sseEvent("rollout", "success", "OK: The S3 storage runs with the new admin key; the old key no longer works"));
-    run.push(sseEvent("server:dev/dspa", "running", "Checking the new key against the storage..."));
-    expect(await within(dialog).findByText("Checking the new key against the storage...")).toBeInTheDocument();
+    run.push(sseEvent("server:dev/dspa", "running", "Checking the new key against the storage"));
+    expect(await within(dialog).findByText("Checking the new key against the storage")).toBeInTheDocument();
     run.push(sseEvent("server:dev/dspa", "success", "OK: dev/dspa uses SeaweedFS user rnu-dspa-dev"));
     run.push(sseEvent("server:team-b/dspa", "success", "OK: team-b/dspa uses SeaweedFS user rnu-dspa-team-b"));
     status = { ...status, s3Keys: secured };
@@ -124,7 +124,7 @@ describe("S3 storage that is not secured", () => {
       },
     });
     renderAt("/test-resources?tab=storage");
-    fireEvent.click(within(await part("SeaweedFS")).getByRole("button", { name: "Secure S3 storage..." }));
+    fireEvent.click(within(await part("SeaweedFS")).getByRole("button", { name: "Secure S3 storage" }));
     const dialog = await screen.findByRole("dialog", { name: "Secure the S3 storage?" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Secure S3 storage" }));
     const outcome = (await within(dialog).findByText("Stopped")).closest(".pf-v6-c-alert") as HTMLElement;
@@ -147,12 +147,12 @@ describe("S3 storage that is not secured", () => {
       "POST /api/resources/s3/secure/stream": () => run.response,
     });
     renderAt("/test-resources?tab=storage");
-    fireEvent.click(within(await part("SeaweedFS")).getByRole("button", { name: "Secure S3 storage..." }));
+    fireEvent.click(within(await part("SeaweedFS")).getByRole("button", { name: "Secure S3 storage" }));
     const dialog = await screen.findByRole("dialog", { name: "Secure the S3 storage?" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Secure S3 storage" }));
     run.push(sseEvent("check", "success", "OK"));
-    run.push(sseEvent("rollout", "running", "Rolling out a new admin key and turning on per-server keys..."));
-    expect(await within(dialog).findByText("Rolling out a new admin key and turning on per-server keys...")).toBeInTheDocument();
+    run.push(sseEvent("rollout", "running", "Rolling out a new admin key and turning on per-server keys"));
+    expect(await within(dialog).findByText("Rolling out a new admin key and turning on per-server keys")).toBeInTheDocument();
     run.fail();
     const outcome = (await within(dialog).findByText("Still running", {}, { timeout: 5000 })).closest(".pf-v6-c-alert") as HTMLElement;
     expect(outcome).toHaveTextContent("The operation continues on the server; the S3 storage tab shows the outcome when it ends.");
@@ -189,8 +189,8 @@ describe("S3 storage that is not secured", () => {
     expect(alert).toHaveTextContent("Project gone has no pipeline server any more (deleted while SeaweedFS did not answer, or outside this tool), but its S3 key still works. Remove leftover keys deletes it.");
     expect(alert).toHaveTextContent("The Connection rhoai-nightly-updater-s3 in gone still holds this key: workbenches and model deployments using it lose S3 access when it is removed.");
     expect(headerLabel("S3 storage")).toHaveTextContent(/^Leftover keys$/);
-    expect(screen.queryByRole("button", { name: "Secure S3 storage..." })).not.toBeInTheDocument();
-    fireEvent.click(await screen.findByRole("button", { name: "Remove leftover keys..." }));
+    expect(screen.queryByRole("button", { name: "Secure S3 storage" })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Remove leftover keys" }));
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("Remove the leftover key?");
     expect(dialog).toHaveTextContent("(a SeaweedFS user,");
@@ -209,7 +209,7 @@ describe("S3 storage that is not secured", () => {
     stubApi({ "/api/resources/status": statusOf({ minio: readyMinio, pipelineServers: [dspa], s3Keys: notSecured }), "/api/resources/projects": { projects: ["dev"] } });
     renderAt("/test-resources?tab=storage", "Read-only access: changing the cluster through this tool requires the cluster-admin role.");
     await waitFor(() => expect(headerLabel("S3 storage")).toHaveTextContent(/^Not secured$/));
-    expect(screen.queryByRole("button", { name: "Secure S3 storage..." })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Secure S3 storage" })).not.toBeInTheDocument();
     expect(screen.getByText("A cluster-admin runs it.")).toBeInTheDocument();
   });
 

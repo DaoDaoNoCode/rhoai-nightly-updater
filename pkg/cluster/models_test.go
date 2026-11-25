@@ -459,12 +459,12 @@ func TestDescribeModelPods(t *testing.T) {
 		message string
 		problem string
 	}{
-		{"no pod", nil, nil, "Waiting for KServe to create the model's pod...", ""},
+		{"no pod", nil, nil, "Waiting for KServe to create the model's pod", ""},
 		{"unschedulable", []serving.ModelPod{pod(`{"conditions":[{"type":"PodScheduled","status":"False","reason":"Unschedulable","message":"0/3 nodes are available: 3 Insufficient cpu."}]}`)}, nil, "Waiting for a worker with room for the model: 0/3 nodes are available: 3 Insufficient cpu.", ""},
-		{"downloading", []serving.ModelPod{pod(`{"initContainerStatuses":[{"name":"storage-initializer","state":{"running":{}}}]}`)}, nil, "Downloading the model from Hugging Face (storage-initializer)...", ""},
-		{"pulling", []serving.ModelPod{pod(`{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ContainerCreating"}}}]}`)}, ev, `Pulling the runtime image (several GB; a few minutes the first time on a node)... (Pulling: Pulling image "registry.redhat.io/rhaii/vllm-cpu-rhel9")`, ""},
-		{"starting", []serving.ModelPod{pod(`{"containerStatuses":[{"name":"main","ready":false,"state":{"running":{}}}]}`)}, nil, "Starting vLLM and loading the model...", ""},
-		{"oom restart", []serving.ModelPod{pod(`{"containerStatuses":[{"name":"main","ready":false,"state":{"running":{}},"lastState":{"terminated":{"reason":"OOMKilled","exitCode":137}}}]}`)}, nil, "Restarted after running out of memory (OOMKilled); starting vLLM again...", ""},
+		{"downloading", []serving.ModelPod{pod(`{"initContainerStatuses":[{"name":"storage-initializer","state":{"running":{}}}]}`)}, nil, "Downloading the model from Hugging Face (storage-initializer)", ""},
+		{"pulling", []serving.ModelPod{pod(`{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ContainerCreating"}}}]}`)}, ev, `Pulling the runtime image (several GB; a few minutes the first time on a node) (Pulling: Pulling image "registry.redhat.io/rhaii/vllm-cpu-rhel9")`, ""},
+		{"starting", []serving.ModelPod{pod(`{"containerStatuses":[{"name":"main","ready":false,"state":{"running":{}}}]}`)}, nil, "Starting vLLM and loading the model", ""},
+		{"oom restart", []serving.ModelPod{pod(`{"containerStatuses":[{"name":"main","ready":false,"state":{"running":{}},"lastState":{"terminated":{"reason":"OOMKilled","exitCode":137}}}]}`)}, nil, "Restarted after running out of memory (OOMKilled); starting vLLM again", ""},
 		{"crash loop", []serving.ModelPod{pod(`{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"CrashLoopBackOff"}},"lastState":{"terminated":{"reason":"OOMKilled","exitCode":137}}}]}`)}, nil, "", "container main keeps crashing. Last exit: OOMKilled, code 137. It ran out of memory. Its logs say why."},
 		// A failing pull is waited on (modelPullGrace); the wait fails it.
 		{"pull back-off", []serving.ModelPod{pod(`{"containerStatuses":[{"name":"main","state":{"waiting":{"reason":"ImagePullBackOff","message":"unauthorized"}}}]}`)}, nil, "Pulling the image of main failed (ImagePullBackOff: unauthorized); the node keeps retrying.", ""},

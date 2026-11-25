@@ -335,7 +335,7 @@ const maasUseWords = "While it is published, the model is used through MaaS (wit
 // model. It returns a failure message and code, or "".
 func (m *Run) routeModelThroughMaaS(project, name string, original MaaSModelRefs, expect ModelSpecExpectation) (string, string) {
 	c := m.Client
-	m.Step("model", "running", "Routing the model through the MaaS gateway alone...")
+	m.Step("model", "running", "Routing the model through the MaaS gateway alone")
 	// Checked on the read whose resourceVersion guards the write: a spec
 	// someone else writes after it makes the write fail (409).
 	refs, meta, spec, err := readModelGatewayRefsSpec(c, project, name)
@@ -347,7 +347,7 @@ func (m *Run) routeModelThroughMaaS(project, name string, original MaaSModelRefs
 	}
 	rv := meta.ResourceVersion
 	if refs.hasMaaS() && !refs.maasOnly() {
-		m.Step("model", "running", fmt.Sprintf("The model routes through %s, as an earlier build of this tool published it. KServe does not take a gateway off the end of a model's route, so the model first goes back to %s...", refs, original.Refs))
+		m.Step("model", "running", fmt.Sprintf("The model routes through %s, as an earlier build of this tool published it. KServe does not take a gateway off the end of a model's route, so the model first goes back to %s", refs, original.Refs))
 		if err := writeModelGatewayRefs(c, project, name, rv, original.Refs); err != nil {
 			return fmt.Sprintf("Failed to set the model's gateways back to %s: %v. Unpublish to undo.", original.Refs, err), MaaSWriteCode(err)
 		}
@@ -380,7 +380,7 @@ func (m *Run) routeModelThroughMaaS(project, name string, original MaaSModelRefs
 			return fmt.Sprintf("Failed to route the model through the MaaS gateway: %v. Unpublish to undo.", err), MaaSWriteCode(err)
 		}
 	}
-	m.Step("model", "running", "Waiting for KServe to move the model's route to the MaaS gateway...")
+	m.Step("model", "running", "Waiting for KServe to move the model's route to the MaaS gateway")
 	why, err := waitForModelRoute(c, project, name, true)
 	if err != nil {
 		return fmt.Sprintf("Stopped waiting for the model's route: %v. Unpublish to undo.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled")
@@ -429,7 +429,7 @@ func (m *Run) RestoreModelRoute(project, name string, recorded MaaSModelRefs, ha
 			return fmt.Sprintf("Failed to set the model's gateways back to %s: %v. Unpublish again to retry.", target, err), MaaSWriteCode(err)
 		}
 	}
-	say("model", "running", "Waiting for KServe to move the model's route off the MaaS gateway...")
+	say("model", "running", "Waiting for KServe to move the model's route off the MaaS gateway")
 	why, err := waitForModelRoute(c, project, name, false)
 	if err != nil {
 		return fmt.Sprintf("Stopped waiting for the model's route: %v. Unpublish again to check.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled")
@@ -460,7 +460,7 @@ func (m *Run) removeModelRoute(project, name, rv string, say func(id, status, ms
 			return fmt.Sprintf("Failed to remove the model's route: %v. Unpublish again to retry.", err), MaaSWriteCode(err)
 		}
 	}
-	say("model", "running", "Waiting for KServe to remove the model's route...")
+	say("model", "running", "Waiting for KServe to remove the model's route")
 	why, err := waitForModelRoute(c, project, name, false)
 	if err != nil {
 		return fmt.Sprintf("Stopped waiting for the model's route: %v. Unpublish again to check.", err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled")

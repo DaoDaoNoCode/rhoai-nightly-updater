@@ -376,15 +376,15 @@ describe("Dashboard Dev build commits (GET /api/dashboard/builds)", () => {
     await settleApps();
   });
 
-  it("shows Checking... until the builds arrive", async () => {
+  it("shows Checking until the builds arrive", async () => {
     const pending = deferred<Response>();
     stubApi({ "/api/dashboard/state": mainSession(), "/api/dashboard/builds": () => pending.promise });
     renderPage();
     await settleApps();
-    expect(await screen.findAllByText("Checking...")).toHaveLength(2);
+    expect(await screen.findAllByText("Checking")).toHaveLength(2);
     pending.resolve(jsonResponse(mainBuilds()));
     expect(await screen.findByText("Up to date with main")).toBeInTheDocument();
-    expect(screen.queryByText("Checking...")).not.toBeInTheDocument();
+    expect(screen.queryByText("Checking")).not.toBeInTheDocument();
     await settleApps();
   });
 
@@ -394,7 +394,7 @@ describe("Dashboard Dev build commits (GET /api/dashboard/builds)", () => {
     await settleApps();
     expect(await screen.findByText("odh-pr-222")).toBeInTheDocument();
     await waitFor(() => expect(api.calls.filter((c) => c === "GET /api/dashboard/builds")).toHaveLength(1));
-    expect(screen.queryByText("Checking...")).not.toBeInTheDocument();
+    expect(screen.queryByText("Checking")).not.toBeInTheDocument();
     expect(screen.queryByText(/Build details could not be loaded/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Distance from/)).not.toBeInTheDocument();
     await settleApps();

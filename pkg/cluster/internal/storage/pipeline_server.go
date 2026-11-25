@@ -447,7 +447,7 @@ func setupPipelineServer(c *kube.Client, project string, recreate bool, confirme
 
 	// Step 1: Read the storage's admin key, which makes the project's own
 	// key (it never goes into the project).
-	logs = append(logs, "Reading S3 storage credentials...")
+	logs = append(logs, "Reading S3 storage credentials")
 	adminKeys, found, err := ReadS3Keys(c)
 	if err != nil {
 		return fail(fmt.Sprintf("Failed to read the S3 storage credentials: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "S3 secret read failed")
@@ -459,7 +459,7 @@ func setupPipelineServer(c *kube.Client, project string, recreate bool, confirme
 
 	// Step 2: The DSPA credentials secret and the dashboard Connection,
 	// without taking over a secret of the same name someone else created.
-	logs = append(logs, "Creating pipeline server secret and dashboard connection...")
+	logs = append(logs, "Creating pipeline server secret and dashboard connection")
 	// Checked and dry-run without keys; the project's own key is made once
 	// every check passed (step 3).
 	secrets := []*projectSecret{
@@ -546,7 +546,7 @@ func setupPipelineServer(c *kube.Client, project string, recreate bool, confirme
 		dspaMeta, dspaFound = meta, found
 		return action, err
 	}
-	logs = append(logs, "Checking the secrets and the pipeline server with the API server (dry run)...")
+	logs = append(logs, "Checking the secrets and the pipeline server with the API server (dry run)")
 	for _, s := range secrets {
 		if _, err := writeProjectSecret(s, projectSecretPath(project, s.name), envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "secrets", project, "")), true); err != nil {
 			msg, code := pipelineWriteFailure(fmt.Sprintf("secret %s", s.name), project, err)
@@ -564,7 +564,7 @@ func setupPipelineServer(c *kube.Client, project string, recreate bool, confirme
 	// Step 3: the project's own key: its SeaweedFS user (rnu-dspa-<project>)
 	// and a key that works (checked against the storage), or on a re-run
 	// the key its Secret holds when that is still the user's.
-	logs = append(logs, fmt.Sprintf("Making the project's S3 key (SeaweedFS user %s)...", ScopedUserName(project)))
+	logs = append(logs, fmt.Sprintf("Making the project's S3 key (SeaweedFS user %s)", ScopedUserName(project)))
 	var current S3Keys
 	if secrets[0].found {
 		cur, err := readProjectS3Secret(c, project, DSPASecretName)
@@ -600,7 +600,7 @@ func setupPipelineServer(c *kube.Client, project string, recreate bool, confirme
 		logs = append(logs, fmt.Sprintf("OK: Secret %s %s", s.name, action))
 	}
 
-	logs = append(logs, "Creating pipeline server (DSPA)...")
+	logs = append(logs, "Creating pipeline server (DSPA)")
 	dspaAction, err := writeDSPA(false)
 	if err != nil {
 		msg, code := pipelineWriteFailure(fmt.Sprintf("pipeline server %s", DSPAName), project, err)
@@ -622,7 +622,7 @@ func setupPipelineServer(c *kube.Client, project string, recreate bool, confirme
 	// deletes them with the DSPA, also when the dashboard deletes it.
 	if !secretsOwned {
 		for _, s := range secrets {
-			logs = append(logs, fmt.Sprintf("Making pipeline server %s the owner of secret %s...", DSPAName, s.name))
+			logs = append(logs, fmt.Sprintf("Making pipeline server %s the owner of secret %s", DSPAName, s.name))
 			setDSPAOwner(s.obj, DSPAName, dspaMeta.UID)
 			if _, err := writeProjectSecret(s, projectSecretPath(project, s.name), envkit.WithToolFieldManager(rhoai.NamespacedPath("v1", "secrets", project, "")), false); err != nil {
 				record.Action(c, "setup-pipeline-server", fmt.Sprintf("project=%s (%s owner not set: %v)", project, s.what, err), false)
@@ -651,7 +651,7 @@ func setupPipelineServer(c *kube.Client, project string, recreate bool, confirme
 // sets up the new one from scratch, so every check runs again on what is
 // there now.
 func replacePipelineServer(c *kube.Client, project string, old *DSPA, logs []string, confirmedUID string, confirmedWorkbenches map[string]string) (*types.OperationResponse, error) {
-	logs = append(logs, "OK: The API server accepts the new pipeline server", fmt.Sprintf("Deleting pipeline server %s...", old.Meta.Name))
+	logs = append(logs, "OK: The API server accepts the new pipeline server", fmt.Sprintf("Deleting pipeline server %s", old.Meta.Name))
 	down, err := TeardownPipelineServer(c, project, confirmedUID, confirmedWorkbenches)
 	if err != nil {
 		return nil, err
@@ -808,7 +808,7 @@ func TeardownPipelineServer(c *kube.Client, project, confirmedUID string, confir
 		if msg, code := detachConnection(c, project, wbs, &logs); msg != "" {
 			return fail(msg, code, "workbench change failed")
 		}
-		logs = append(logs, fmt.Sprintf("Deleting pipeline server %s...", target.Meta.Name))
+		logs = append(logs, fmt.Sprintf("Deleting pipeline server %s", target.Meta.Name))
 		if _, delErr := kube.DeleteWithUID(c, dspaPath, target.Meta.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
 			code := kube.ErrorCodeFromK8sErr(delErr)
 			if kube.IsK8sConflict(delErr) {
@@ -899,7 +899,7 @@ func deleteDSPASecret(c *kube.Client, project string, target *DSPA, all []DSPA, 
 		*logs = append(*logs, fmt.Sprintf("Kept secret %s: it was not created by this tool", name))
 		return ""
 	}
-	*logs = append(*logs, fmt.Sprintf("Deleting secret %s...", name))
+	*logs = append(*logs, fmt.Sprintf("Deleting secret %s", name))
 	if _, err := kube.DeleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 		*logs = append(*logs, fmt.Sprintf("Warning: failed to delete secret: %v", err))
 		return fmt.Sprintf(" The credentials secret %s could not be deleted: %v. Re-run teardown or delete it manually.", name, err)
@@ -1151,7 +1151,7 @@ func deleteConnection(c *kube.Client, project string, logs *[]string) string {
 		*logs = append(*logs, fmt.Sprintf("Kept secret %s: it was not created by this tool", ConnectionSecretName))
 		return ""
 	}
-	*logs = append(*logs, fmt.Sprintf("Deleting dashboard connection %s...", ConnectionSecretName))
+	*logs = append(*logs, fmt.Sprintf("Deleting dashboard connection %s", ConnectionSecretName))
 	if _, err := kube.DeleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 		*logs = append(*logs, fmt.Sprintf("Warning: failed to delete connection: %v", err))
 		return fmt.Sprintf(" The dashboard connection %s could not be deleted: %v. Re-run teardown or delete it manually.", ConnectionSecretName, err)

@@ -46,7 +46,7 @@ func runKuadrantAPIWait(t *testing.T, answer func(poll int, w http.ResponseWrite
 		events = append(events, e)
 		if e.Step == "kuadrant" {
 			// The window is the wait: its reads, until the step's next message.
-			waiting.Store(e.Message == "Waiting for Connectivity Link's Kuadrant API...")
+			waiting.Store(e.Message == "Waiting for Connectivity Link's Kuadrant API")
 			waited = waited || waiting.Load()
 		}
 	})

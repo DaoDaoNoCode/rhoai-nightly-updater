@@ -457,7 +457,7 @@ export const TroubleshootingPage: React.FC = () => {
                                       isLoading={fixingId === problem.autoFixAction}
                                       disabledReason={fixReason ?? gitOpsFixReason(status, problem.autoFixAction ?? "")}
                                     >
-                                      {fixingId === problem.autoFixAction ? "Fixing..." : "Fix"}
+                                      {fixingId === problem.autoFixAction ? "Fixing" : "Fix"}
                                     </TooltipButton>
                                   </StackItem>
                                 )}

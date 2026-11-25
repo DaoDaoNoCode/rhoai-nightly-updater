@@ -167,7 +167,7 @@ export const MLflowTab: React.FC<MLflowTabProps> = (props) => {
   }
   if (mlflow?.ready && mlflow.uiRoute) actions.push(<ActionListItem key="open"><ExternalLink href={mlflowOpenHref(status?.dashboardUrl, mlflow.uiRoute, null)}>{MLFLOW_WORKSPACES}</ExternalLink></ActionListItem>);
   const menu: PartMenuItem[] = managed && !readOnly && !isTerminating(mlflow)
-    ? [{ key: "delete", label: "Delete MLflow…", onClick: () => setPending({ kind: "teardown-mlflow" }), disabledReason: baseReason ?? mlflow?.teardownBlockedReason ?? null, isDanger: true }]
+    ? [{ key: "delete", label: "Delete MLflow", onClick: () => setPending({ kind: "teardown-mlflow" }), disabledReason: baseReason ?? mlflow?.teardownBlockedReason ?? null, isDanger: true }]
     : [];
   return (
     <Stack hasGutter>
@@ -225,7 +225,7 @@ export const MLflowTab: React.FC<MLflowTabProps> = (props) => {
       </StackItem>
       {!readOnly && managed && !isTerminating(mlflow) && (
         <StackItem>
-          <CleanupSection id="mlflow-cleanup" label="Clean up MLflow…" onClick={onCleanup} reason={baseReason ?? mlflow?.teardownBlockedReason ?? null}
+          <CleanupSection id="mlflow-cleanup" label="Clean up MLflow" onClick={onCleanup} reason={baseReason ?? mlflow?.teardownBlockedReason ?? null}
             text="Deletes the MLflow server this tool created, with every experiment, run and model in it." />
         </StackItem>
       )}

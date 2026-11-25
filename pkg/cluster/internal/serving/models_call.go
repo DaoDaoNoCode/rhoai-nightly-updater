@@ -405,7 +405,7 @@ func runModelCall(c *kube.Client, base, served, typ, token string, internal bool
 		check, transient := ClassifyModelCall(status, data, err, target, served, internal)
 		last = check
 		if transient && progress != nil {
-			progress(fmt.Sprintf("Not answering yet (attempt %d): %s Retrying...", attempt, check.Message))
+			progress(fmt.Sprintf("Not answering yet (attempt %d): %s Retrying", attempt, check.Message))
 		}
 		return !transient, nil
 	})

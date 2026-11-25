@@ -520,6 +520,7 @@ import {
 - Use PatternFly's form components (`Form`, `FormGroup`, `TextInput`, `Select`)
 - Use PatternFly's data display (`Table`, `Card`, `Label`, `EmptyState`)
 - Import icons from `@patternfly/react-icons`
+- No ellipsis (`...` or `…`) at the end of a label or progress text: a button that opens a dialog reads **Delete workbench**, and loading shows a `Spinner` with a plain phrase. PatternFly uses an ellipsis only for omitted or truncated text. ESLint enforces it (`no-restricted-syntax` in `frontend/eslint.config.mjs`); for omitted text, such as `@sha256:...` in a placeholder, disable the rule on that line and say why.
 
 #### 2. State Management
 

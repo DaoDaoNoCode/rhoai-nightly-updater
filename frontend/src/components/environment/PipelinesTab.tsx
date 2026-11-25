@@ -181,7 +181,7 @@ const PipelineServerPart: React.FC<PipelinesTabProps> = ({ status, project, busy
   const storageReady = !!status.minio?.ready || (old && !!legacy?.ready);
   const managed = !!server && server.managedByTool !== false;
   const menu: PartMenuItem[] = managed && !readOnly && !isTerminating(server)
-    ? [{ key: "delete", label: "Delete pipeline server…", onClick: () => setPending({ kind: "teardown-pipeline-server", project, name: server!.name, ...(server!.unrecorded ? { unrecorded: true, uid: server!.uid } : {}), ...connectionWorkbenchesOf(server!) }), disabledReason: baseReason ?? server!.teardownBlockedReason ?? null, isDanger: true }]
+    ? [{ key: "delete", label: "Delete pipeline server", onClick: () => setPending({ kind: "teardown-pipeline-server", project, name: server!.name, ...(server!.unrecorded ? { unrecorded: true, uid: server!.uid } : {}), ...connectionWorkbenchesOf(server!) }), disabledReason: baseReason ?? server!.teardownBlockedReason ?? null, isDanger: true }]
     : [];
   return (
     <PartItem id="pipeline-server" title="Pipeline server" scope={`In project ${project}`} status={pipelineServerStatus(status, project, busy)} unmanaged={unmanaged}
@@ -356,7 +356,7 @@ export const PipelinesTab: React.FC<PipelinesTabProps> = (props) => {
       </StackItem>
       {!readOnly && anythingToClean && (
         <StackItem>
-          <CleanupSection id="pipelines-cleanup" label="Clean up Pipelines…" onClick={onCleanup} reason={baseReason}
+          <CleanupSection id="pipelines-cleanup" label="Clean up Pipelines" onClick={onCleanup} reason={baseReason}
             text={migrating
               ? "Deletes the pipeline servers this tool set up, in every project. You choose which, then it runs as one operation. The storage they use, from an earlier version, stays; delete it on the S3 storage tab."
               : "Deletes the pipeline servers this tool set up, in every project. You choose which, then it runs as one operation. The S3 storage stays: other features can use it. Delete it on the S3 storage tab, or with Clean up everything."} />

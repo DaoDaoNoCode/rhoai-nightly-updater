@@ -127,7 +127,7 @@ func notOurs(project string) string {
 
 func (r *run) setup(project string) (*types.OperationResponse, error) {
 	c := r.c
-	r.step("check", "running", fmt.Sprintf("Checking what a workbench in %s needs...", project))
+	r.step("check", "running", fmt.Sprintf("Checking what a workbench in %s needs", project))
 	dsc, err := rhoai.ReadFirstDSC(c)
 	if err != nil {
 		return r.fail("check", fmt.Sprintf("Cannot read the DataScienceCluster: %v. Nothing was changed.", err), kube.ErrorCodeFromK8sErr(err), "dsc read failed")
@@ -205,7 +205,7 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 	if pvcFound {
 		r.step("storage", "success", fmt.Sprintf("Using the storage this tool kept: %s.", StorageName))
 	} else {
-		r.step("storage", "running", fmt.Sprintf("Creating storage %s (%s)...", StorageName, plan.StorageSize))
+		r.step("storage", "running", fmt.Sprintf("Creating storage %s (%s)", StorageName, plan.StorageSize))
 		body, err := create(c, rhoai.NamespacedPath("v1", "persistentvolumeclaims", project, ""), pvcObj, false)
 		if err != nil {
 			return r.fail("storage", fmt.Sprintf("Cannot create PersistentVolumeClaim %s in %s: %v. Nothing was changed.", StorageName, project, err), kube.ErrorCodeFromK8sErr(err), "storage create failed")
@@ -232,7 +232,7 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 	// (registry.EnsureRegistryPullCopyFromPullSecret); a problem with it is
 	// a warning in the logs, the workbench is created anyway.
 	r.logs = append(r.logs, registry.EnsureRegistryPullCopyFromPullSecret(c)...)
-	r.step("workbench", "running", fmt.Sprintf("Creating workbench %s...", Name))
+	r.step("workbench", "running", fmt.Sprintf("Creating workbench %s", Name))
 	body, err := create(c, rhoai.NamespacedPath(notebookAPI, "notebooks", project, ""), nbObj, false)
 	if err != nil {
 		return r.fail("workbench", fmt.Sprintf("Cannot create workbench %s in %s: %v. Its storage %s stays; set up again to retry.", Name, project, err, StorageName), kube.ErrorCodeFromK8sErr(err), "create failed")
@@ -357,7 +357,7 @@ func StartOps(nb Notebook, pipelines, mlflow, profileGone bool) []kube.JSONPatch
 }
 
 func (r *run) stop(project string) (*types.OperationResponse, error) {
-	r.step("workbench", "running", fmt.Sprintf("Stopping workbench %s in %s...", Name, project))
+	r.step("workbench", "running", fmt.Sprintf("Stopping workbench %s in %s", Name, project))
 	nb, res := r.readOwned("workbench", project)
 	if res != nil {
 		return res, nil
@@ -374,7 +374,7 @@ func (r *run) stop(project string) (*types.OperationResponse, error) {
 }
 
 func (r *run) start(project string) (*types.OperationResponse, error) {
-	r.step("workbench", "running", fmt.Sprintf("Starting workbench %s in %s...", Name, project))
+	r.step("workbench", "running", fmt.Sprintf("Starting workbench %s in %s", Name, project))
 	nb, res := r.readOwned("workbench", project)
 	if res != nil {
 		return res, nil
@@ -407,7 +407,7 @@ func (r *run) start(project string) (*types.OperationResponse, error) {
 // only if that PVC is owned here. Objects another actor created are never deleted.
 func (r *run) teardown(project string, deleteStorage bool) (*types.OperationResponse, error) {
 	c := r.c
-	r.step("workbench", "running", fmt.Sprintf("Deleting workbench %s in %s...", Name, project))
+	r.step("workbench", "running", fmt.Sprintf("Deleting workbench %s in %s", Name, project))
 	rec, err := ReadRecord(c)
 	if err != nil {
 		return r.fail("workbench", err.Error()+" Nothing was deleted.", kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record read failed")
@@ -472,7 +472,7 @@ func (r *run) teardown(project string, deleteStorage bool) (*types.OperationResp
 		}
 		return r.done(msg)
 	}
-	r.step("storage", "running", fmt.Sprintf("Deleting storage %s...", StorageName))
+	r.step("storage", "running", fmt.Sprintf("Deleting storage %s", StorageName))
 	if !pvcFound {
 		r.step("storage", "success", fmt.Sprintf("Project %s has no storage %s.", project, StorageName))
 	} else {
@@ -499,7 +499,7 @@ func (r *run) teardown(project string, deleteStorage bool) (*types.OperationResp
 // carries the tool's label and the recorded UID.
 func (r *run) deleteKeptStorage(project string) (*types.OperationResponse, error) {
 	c := r.c
-	r.step("storage", "running", fmt.Sprintf("Deleting storage %s in %s...", StorageName, project))
+	r.step("storage", "running", fmt.Sprintf("Deleting storage %s in %s", StorageName, project))
 	_, nbFound, err := readNotebook(c, project)
 	if err != nil {
 		return r.fail("storage", fmt.Sprintf("Cannot read workbench %s in %s: %v. Nothing was deleted.", Name, project, err), kube.ErrorCodeFromK8sErr(err), "read failed")

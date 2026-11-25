@@ -177,7 +177,7 @@ export const NodeSetupDialog: React.FC<{
         <Stack hasGutter>
           {phase === "planning" && (
             <StackItem>
-              <Content component="p"><Spinner size="md" aria-hidden="true" /> Reading the cluster with your permissions and checking the change with a dry run...</Content>
+              <Content component="p"><Spinner size="md" aria-hidden="true" /> Reading the cluster with your permissions and checking the change with a dry run.</Content>
             </StackItem>
           )}
           {planError && (

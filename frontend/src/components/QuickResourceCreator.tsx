@@ -291,7 +291,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     <PrerequisitesSection feature={feature} prereq={prereq?.features?.[feature]} error={prereqRead.error} onRetry={() => void prereqRead.reload()}
       exposure={exposure ?? undefined} stale={feature === "models" && prereqRead.stale} readOnly={readOnly} baseReason={baseReason} setPending={setPending}
       partActions={feature === "kueue" && kueueBack ? {
-        "dsc-kueue": <ActionListItem><TooltipButton variant="secondary" disabledReason={kueueBack.reason} onClick={() => setPending({ kind: "turn-back-kueue", previous: kueueBack.restorable.previous })}>Turn back...</TooltipButton></ActionListItem>,
+        "dsc-kueue": <ActionListItem><TooltipButton variant="secondary" disabledReason={kueueBack.reason} onClick={() => setPending({ kind: "turn-back-kueue", previous: kueueBack.restorable.previous })}>Turn back</TooltipButton></ActionListItem>,
       } : undefined}
       partNotes={feature === "kueue" && kueueBack?.reason ? { "dsc-kueue": kueueBack.reason } : undefined} />
   );
@@ -403,7 +403,7 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
                   busy={busy} baseReason={baseReason} readOnly={readOnly} setPending={setPending} onSetUp={(setup) => setUp(TAB_TITLES["model-registry"], setup)} onCleanup={() => setCleanupScope("model-registry")} />
               )}
               {tab === "models" && resStatus && (
-                <ModelsTab prerequisites={prereqNode("models", modelsExposure)} prerequisitesReason={prereqRead.stale ? "Checking what this way to reach the model needs on the cluster..." : prerequisitesReason(prereq?.features?.models, "models")} onExposure={onModelsExposure} status={resStatus} project={modelsProject} projects={modelOptions} projectsLoaded={projectList !== null}
+                <ModelsTab prerequisites={prereqNode("models", modelsExposure)} prerequisitesReason={prereqRead.stale ? "Checking what this way to reach the model needs on the cluster." : prerequisitesReason(prereq?.features?.models, "models")} onExposure={onModelsExposure} status={resStatus} project={modelsProject} projects={modelOptions} projectsLoaded={projectList !== null}
                   onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
                   model={modelsModel} onModel={chooseModel}
                   state={headerWithPrerequisites(models, prereq?.features?.models)} busy={busy} baseReason={baseReason} readOnly={readOnly} consoleURL={consoleURL}

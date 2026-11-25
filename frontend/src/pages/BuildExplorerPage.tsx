@@ -606,7 +606,7 @@ const SearchResults: React.FC<{
       </StackItem>
       <StackItem>
         <Content component="p" aria-live="polite">
-          {running ? <><Spinner size="sm" aria-label="Searching builds" />{" "}Checked {checked} of {total} builds for commit <code>{short}</code>...</>
+          {running ? <><Spinner size="sm" aria-label="Searching builds" />{" "}Checked {checked} of {total} builds for commit <code>{short}</code>.</>
             : <>Checked {total} builds: {matches.length === 0 ? "no build has a component built from" : `${matches.length} ${matches.length === 1 ? "build has" : "builds have"} a component built from`} commit <code>{short}</code>. Builds that are not listed have no component built from exactly this commit (a later build of the same branch is not listed).</>}
         </Content>
       </StackItem>
