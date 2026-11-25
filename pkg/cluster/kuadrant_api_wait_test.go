@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -158,5 +160,41 @@ func TestMaaSSetup_KuadrantAPIWaitThrottledUntilTheTimeout(t *testing.T) {
 	want := "Connectivity Link's Kuadrant API is not served after 10:00; the API server last answered: k8s API error 429 (TooManyRequests): storage is (re)initializing. Set up again to continue; the MaaS tab shows Connectivity Link's state."
 	if res.Success || res.Message != want || res.ErrorCode != "not_ready" {
 		t.Fatalf("setup: %+v\nwant message %q", res, want)
+	}
+}
+
+// A set of prerequisites (models through a gateway) waits for Kuadrant's
+// API with the same handling: Connectivity Link just installed, the list
+// answers 429 with Retry-After for more than one request's retries, and
+// the set goes on to create the Kuadrant CR.
+func TestPrerequisitesSet_KuadrantAPIWaitPollsThroughThrottling(t *testing.T) {
+	pc := newPrereqCluster(t)
+	pc.sim.packages["rhcl-operator"] = rhclFakePackage()
+	pc.putPackage("rhcl-operator")
+	installed := false
+	prev := pc.sim.onInstalled
+	pc.sim.onInstalled = func(pkg, ns, from, to string) {
+		prev(pkg, ns, from, to)
+		if pkg == "rhcl-operator" {
+			pc.f.groups = map[string]string{"/apis/kuadrant.io": kuadrantGroupDoc}
+			installKuadrantCRDLocked(pc.f)
+			installed = true
+		}
+	}
+	pc.f.fail["GET /apis/kuadrant.io/v1/kuadrants"] = 404
+	throttled := 0
+	pc.f.intercept = func(w http.ResponseWriter, r *http.Request, _ []byte) bool {
+		if !installed || r.Method != http.MethodGet || r.URL.Path != kuadrantListV1beta1 || r.URL.Query().Get("limit") != "1" || throttled >= 15 {
+			return false
+		}
+		throttled++
+		return initializing429(w, "1")
+	}
+	res, events := runPrereqSet(t, pc.c, []features.SetItem{{Feature: "pipelines"}, {Feature: "models", Exposure: serving.ExposureDefault}})
+	if !res.Success || throttled != 15 {
+		t.Fatalf("setup: %+v (%s), %d throttled reads", res, finalSteps(events), throttled)
+	}
+	if !pc.f.has("/apis/kuadrant.io/v1beta1/namespaces/kuadrant-system/kuadrants/kuadrant") {
+		t.Fatal("no Kuadrant CR")
 	}
 }
