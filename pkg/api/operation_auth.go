@@ -105,7 +105,7 @@ func stepSessionProblem(ctx context.Context, token string) (string, string) {
 }
 
 func checkSession(ctx context.Context, token string, step bool) (string, string, int) {
-	if devModeWithoutServiceAccount() {
+	if devAdminBypass() {
 		return "", "", 0
 	}
 	then := "."
@@ -145,9 +145,13 @@ const scopeRefusal = "Your sign-in cannot make changes: it was made before this 
 
 // mutationPermission evaluates the gate for each request with the user's
 // own token.
-var mutationPermission = func(ctx context.Context, token string) (bool, error) {
-	// Explicit local development bypass; never bypass with a mounted SA token.
-	if devModeWithoutServiceAccount() {
+var mutationPermission = checkMutationPermission
+
+// checkMutationPermission is the mutation gate's check (mutationPermission).
+func checkMutationPermission(ctx context.Context, token string) (bool, error) {
+	// Explicit local development bypass; never bypass with a mounted SA
+	// token, nor with DEV_ROLE=user (devAdminBypass).
+	if devAdminBypass() {
 		return true, nil
 	}
 	return checkPermission(ctx, token,

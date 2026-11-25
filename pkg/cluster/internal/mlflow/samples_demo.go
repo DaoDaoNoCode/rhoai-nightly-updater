@@ -129,6 +129,11 @@ func demoLowMemoryMessage(managed bool) string {
 	return "MLflow still has the 2Gi memory limit an earlier version of this tool set, and generating the demo runs MLflow out of memory. Add or Regenerate first removes that limit (spec.resources of MLflow CR " + CRName + ", so the operator's defaults of 4 CPU / 3Gi apply) and MLflow restarts; then add the demo again once MLflow is ready."
 }
 
+// demoLowMemoryForUserMessage refuses the demo to a user who is not a
+// cluster-admin while MLflow has the old limit: removing it changes MLflow
+// CR mlflow, which is cluster-wide.
+const demoLowMemoryForUserMessage = "MLflow still has the 2Gi memory limit an earlier version of this tool set, and generating the demo runs MLflow out of memory. Removing the limit changes MLflow CR " + CRName + ", which a cluster-admin does: when a cluster-admin adds this demo on the Environment page, the limit is removed first. Then add the demo again once MLflow is ready."
+
 func demoStatusOfExperiment(t *Target) types.SampleStatus {
 	s := types.SampleStatus{}
 	exp, err := t.experimentByName(DemoExperiment)

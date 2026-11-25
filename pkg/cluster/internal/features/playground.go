@@ -677,10 +677,13 @@ type PlaygroundRecord struct {
 	// Models are the models the request asked the dashboard to set the
 	// playground up with (none in a record from before they were kept).
 	Models []types.PlaygroundModelRef `json:"models,omitempty"`
+	// ActorRole is record.ActorRoleUser when a user who is not a
+	// cluster-admin asked for it (record.UserRecordCapRefusal counts it).
+	ActorRole string `json:"actorRole,omitempty"`
 }
 
 func (r PlaygroundRecord) equal(o PlaygroundRecord) bool {
-	return r.RequestedAt == o.RequestedAt && r.By == o.By && r.UID == o.UID && slices.Equal(r.Models, o.Models)
+	return r.RequestedAt == o.RequestedAt && r.By == o.By && r.UID == o.UID && r.ActorRole == o.ActorRole && slices.Equal(r.Models, o.Models)
 }
 
 // playgroundServerName is the OGXServer the dashboard's install makes
@@ -814,29 +817,33 @@ func WritePlaygroundRecords(c *kube.Client, records map[string]PlaygroundRecord)
 	return nil
 }
 
-// setPlaygroundRecord records project's entry (nil drops it).
+// setPlaygroundRecord records project's entry (nil drops it), through
+// record.UpdateSnapshot: project actions in other projects of this process
+// write the same key.
 func setPlaygroundRecord(c *kube.Client, project string, rec *PlaygroundRecord) error {
-	records, err := ReadPlaygroundRecords(c)
-	if err != nil {
-		return err
-	}
-	old, has := records[project]
-	switch {
-	case rec == nil && !has, rec != nil && has && old.equal(*rec):
-		return nil
-	case rec == nil:
-		delete(records, project)
-	default:
-		records[project] = *rec
-	}
-	return WritePlaygroundRecords(c, records)
+	return record.UpdateSnapshot(c, func() error {
+		records, err := ReadPlaygroundRecords(c)
+		if err != nil {
+			return err
+		}
+		old, has := records[project]
+		switch {
+		case rec == nil && !has, rec != nil && has && old.equal(*rec):
+			return nil
+		case rec == nil:
+			delete(records, project)
+		default:
+			records[project] = *rec
+		}
+		return WritePlaygroundRecords(c, records)
+	})
 }
 
 // newPlaygroundRecord is the entry of a request made now.
 func newPlaygroundRecord(c *kube.Client) *PlaygroundRecord {
 	// Seconds, as creationTimestamp: a server made in the same second as
 	// the request counts as made after it.
-	return &PlaygroundRecord{RequestedAt: kube.Clock().Now().UTC().Format(time.RFC3339), By: kube.GetUser(c)}
+	return &PlaygroundRecord{RequestedAt: kube.Clock().Now().UTC().Format(time.RFC3339), By: kube.GetUser(c), ActorRole: record.ActorRole(c)}
 }
 
 // --- cluster parts (ServiceAccount reads) -------------------------------------------
@@ -1511,6 +1518,9 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 		return stopped, nil
 	}
 	if existing == nil {
+		if msg, code := p.recordCapRefusal(); msg != "" {
+			return p.fail("install", msg+" Nothing was set up.", code, "records full")
+		}
 		// Recorded before the install, so a playground whose install
 		// outlives this process is still known as this tool's.
 		rec := newPlaygroundRecord(p.c)
@@ -1622,6 +1632,28 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 	p.step("ready", "success", fmt.Sprintf("The playground in %s is ready.", p.project))
 	p.record("project="+p.project, true)
 	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("The playground in %s is ready. Open it in the dashboard's Gen AI studio.", p.project), Logs: p.logs}, nil
+}
+
+// recordCapRefusal is why a setup by a user who is not a cluster-admin
+// must not add a playground entry to the records
+// (record.UserRecordCapRefusal), with its errorCode; "" for a
+// cluster-admin.
+func (p *playgroundRun) recordCapRefusal() (string, string) {
+	if !p.c.ProjectUser() {
+		return "", ""
+	}
+	owners, err := record.ReadRecordOwners(p.c)
+	if err != nil {
+		return err.Error(), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
+	}
+	msg, err := record.UserRecordCapRefusal(owners, p.project, kube.GetUser(p.c), func(project string) (bool, error) { return record.ProjectExists(p.c, project) })
+	if err != nil {
+		return err.Error(), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
+	}
+	if msg != "" {
+		return msg, record.ErrorCodeRecordsFull
+	}
+	return "", ""
 }
 
 func srvPhase(s *GenAIServer) string {

@@ -129,6 +129,7 @@ var wantFactsRoots = []string{
 	clusterPkg + "/internal/dashdev.readComponentURL",
 	clusterPkg + "/internal/features.playgroundClusterParts",
 	"var " + clusterPkg + "/internal/features.genAIBaseURL",
+	recordPkg + ".namespaceExists",
 }
 
 // TestFactsClientOnlyReads: the facts client sends nothing but GET and
@@ -260,6 +261,9 @@ func TestFactsReachIsInTheServiceAccountScan(t *testing.T) {
 // cluster fact the ServiceAccount reads for a change is a reviewed change
 // of this list (non-admin design 3.1), not only a verb the scan allows.
 var wantFactsRequests = []string{
+	// Whether a project with users' records still exists, for the records
+	// caps (record.ProjectExists): never shown, never a list.
+	"get /namespaces name=*",
 	"get apps/deployments name=gen-ai-ui",
 	"get config.openshift.io/infrastructures name=cluster",
 	"get mlflow.opendatahub.io/mlflows name=mlflow",

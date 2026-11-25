@@ -174,6 +174,11 @@ func demoAddOrRegenerate(t *Target, log func(string), always bool) (string, erro
 		if !t.cr.managedByTool() {
 			return "", &sampleRefusal{demoLowMemoryMessage(false)}
 		}
+		// Removing the limit patches the MLflow CR, which is cluster-wide
+		// and a cluster-admin's (the non-admin design, section 3.4).
+		if t.c.ProjectUser() {
+			return "", &sampleRefusal{demoLowMemoryForUserMessage}
+		}
 		return "", t.raiseOldMemoryLimit(log)
 	}
 	exp, err := t.experimentByName(DemoExperiment)

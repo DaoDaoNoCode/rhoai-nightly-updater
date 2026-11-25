@@ -156,12 +156,15 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 		r.step("check", "success", "The workbench is already set up.")
 		// The internal registry's copy of the token, which an existing
 		// workbench needs to pull its image again (ROSA HCP).
-		copyLogs := registry.EnsureRegistryPullCopyFromPullSecret(c)
+		copyLogs := r.registryPullCopy()
 		r.logs = append(r.logs, copyLogs...)
 		if registry.CopyChanged(copyLogs) {
 			return r.done(fmt.Sprintf("Workbench %s in %s is already set up; the token was copied for the internal registry, which pulls its image.", Name, project))
 		}
 		return r.done(fmt.Sprintf("Workbench %s in %s is already set up; nothing was changed.", Name, project))
+	}
+	if msg, code := recordCapRefusal(c, rec, project); msg != "" {
+		return r.fail("check", msg+" Nothing was changed.", code, "records full")
 	}
 	pvc, pvcFound, err := readStorage(c, project)
 	if err != nil {
@@ -214,7 +217,9 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 			return r.fail("storage", fmt.Sprintf("Cannot create PersistentVolumeClaim %s in %s: %v. Nothing was changed.", StorageName, project, err), kube.ErrorCodeFromK8sErr(err), "storage create failed")
 		}
 		meta, _ := kube.ParseObjectMeta(body)
-		if err := updateRecord(c, project, func(e *Recorded) { e.StorageUID, e.At, e.By = meta.UID, kube.NowRFC3339(), kube.GetUser(c) }); err != nil {
+		if err := updateRecord(c, project, func(e *Recorded) {
+			e.StorageUID, e.At, e.By, e.ActorRole = meta.UID, kube.NowRFC3339(), kube.GetUser(c), record.ActorRole(c)
+		}); err != nil {
 			if _, delErr := kube.DeleteWithUID(c, storagePath(project), meta.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
 				return r.fail("storage", fmt.Sprintf("PersistentVolumeClaim %s was created, but this tool could not record it (%v) nor delete it again (%v). Delete it yourself (oc delete pvc %s -n %s), then set up again.", StorageName, err, delErr, StorageName, project), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record failed")
 			}
@@ -234,14 +239,16 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 	// registry, which needs its own copy of the quay.io/rhoai token
 	// (registry.EnsureRegistryPullCopyFromPullSecret); a problem with it is
 	// a warning in the logs, the workbench is created anyway.
-	r.logs = append(r.logs, registry.EnsureRegistryPullCopyFromPullSecret(c)...)
+	r.logs = append(r.logs, r.registryPullCopy()...)
 	r.step("workbench", "running", fmt.Sprintf("Creating workbench %s", Name))
 	body, err := create(c, rhoai.NamespacedPath(notebookAPI, "notebooks", project, ""), nbObj, false)
 	if err != nil {
 		return r.fail("workbench", fmt.Sprintf("Cannot create workbench %s in %s: %v. Its storage %s stays; set up again to retry.", Name, project, err, StorageName), kube.ErrorCodeFromK8sErr(err), "create failed")
 	}
 	meta, _ := kube.ParseObjectMeta(body)
-	if err := updateRecord(c, project, func(e *Recorded) { e.UID, e.At, e.By = meta.UID, kube.NowRFC3339(), kube.GetUser(c) }); err != nil {
+	if err := updateRecord(c, project, func(e *Recorded) {
+		e.UID, e.At, e.By, e.ActorRole = meta.UID, kube.NowRFC3339(), kube.GetUser(c), record.ActorRole(c)
+	}); err != nil {
 		if _, delErr := kube.DeleteWithUID(c, notebookPath(project), meta.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
 			return r.fail("workbench", fmt.Sprintf("Workbench %s was created, but this tool could not record it (%v) nor delete it again (%v). Delete it in the dashboard, then set up again.", Name, err, delErr), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record failed")
 		}
@@ -250,6 +257,54 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 	r.step("workbench", "success", fmt.Sprintf("Created workbench %s; it is starting (usually 1 to 3 minutes while the image is pulled).", Name))
 	slog.Info("workbench setup", "project", project, "user", kube.GetUser(c))
 	return r.done(fmt.Sprintf("Workbench %s is starting in %s with %s (%s) on hardware profile %s.%s", Name, project, plan.Image.DisplayName, plan.Image.Tag, plan.Profile.DisplayName, deprecatedNote(plan.Image)))
+}
+
+// HostedPullCopyNote is what a workbench setup by a user who is not a
+// cluster-admin says on a hosted control plane (ROSA HCP), where the
+// internal registry pulls the workbench image with its own copy of the
+// pull secret: writing that copy (in RHOAI's applications namespace, from
+// the cluster's pull secret) is a cluster-admin's, so the setup does not.
+const HostedPullCopyNote = "On this cluster (hosted control plane) a cluster-admin must have copied the pull secret for the internal registry (Copy for the internal registry, in the pull secret's part of the Status page); if the workbench image does not pull, ask them."
+
+// registryPullCopy makes sure the internal registry has its copy of the
+// pull secret and returns what it did, for a cluster-admin's setup
+// (registry.EnsureRegistryPullCopyFromPullSecret). A setup by a user who
+// is not a cluster-admin writes nothing outside their project: on a
+// hosted control plane (the facts client's read) it notes that a
+// cluster-admin makes the copy, elsewhere it says nothing.
+func (r *run) registryPullCopy() []string {
+	if !r.c.ProjectUser() {
+		return registry.EnsureRegistryPullCopyFromPullSecret(r.c)
+	}
+	if rhoai.CachedControlPlane(r.c) == rhoai.ControlPlaneHosted {
+		r.step("check", "running", HostedPullCopyNote)
+		return []string{HostedPullCopyNote}
+	}
+	return nil
+}
+
+// recordCapRefusal is why a setup by a user who is not a cluster-admin
+// must not add an entry to the records (record.UserRecordCapRefusal), with
+// its errorCode; "" for a cluster-admin, or when project has an entry.
+func recordCapRefusal(c *kube.Client, rec Record, project string) (string, string) {
+	if !c.ProjectUser() {
+		return "", ""
+	}
+	if _, has := rec.Get(project); has {
+		return "", ""
+	}
+	owners, err := record.ReadRecordOwners(c)
+	if err != nil {
+		return err.Error(), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
+	}
+	msg, err := record.UserRecordCapRefusal(owners, project, kube.GetUser(c), func(p string) (bool, error) { return record.ProjectExists(c, p) })
+	if err != nil {
+		return err.Error(), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
+	}
+	if msg != "" {
+		return msg, record.ErrorCodeRecordsFull
+	}
+	return "", ""
 }
 
 // DeprecatedImageNote says that the image is deprecated, as the dashboard

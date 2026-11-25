@@ -50,11 +50,7 @@ var HandlePlaygroundStatus = withUserRead(func(sa, u *cluster.Client, w http.Res
 // project through the RHOAI dashboard's own gen-ai API, as one operation
 // streaming its steps: setup "check", "install", "ready"; teardown
 // "delete", "gone".
-var HandlePlaygroundStream = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	if !lockCluster(w) {
-		return
-	}
-	defer releaseClusterMutationLock()
+var HandlePlaygroundStream = withProjectMutationAuth(projectActionRoutes["/api/resources/playground/stream"], func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	var req types.PlaygroundRequest
 	if !decodeBody(w, r, 16384, &req, false) {
 		return
@@ -63,7 +59,9 @@ var HandlePlaygroundStream = withMutationAuth(func(c *cluster.Client, w http.Res
 		writeError(w, problem, http.StatusBadRequest, "validation")
 		return
 	}
-	beginOperation(w, req.Action+" playground in "+req.Project)
+	if !beginProject(w, req.Action+" playground in "+req.Project) {
+		return
+	}
 	slog.Info("mutation", "op", "playground", "action", req.Action, "project", req.Project, "models", len(req.Models))
 	_, runErr := streamOperation(w, "playground", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 		return runPlayground(c, req, emit)

@@ -47,7 +47,6 @@ const (
 // getRouteTiers is the tier of every GET route of routes.
 var getRouteTiers = map[string]readTier{
 	"GET /api/status":                      tierAdmin,
-	"GET /api/activity":                    tierAdmin,
 	"GET /api/components":                  tierAdmin,
 	"GET /api/components/dsc":              tierAdmin,
 	"GET /api/components/dsc/plan":         tierAdmin,
@@ -64,7 +63,6 @@ var getRouteTiers = map[string]readTier{
 	"GET /api/resources/maas/groups":       tierAdmin,
 	"GET /api/resources/prerequisites":     tierAdmin,
 	"GET /api/resources/models/exposures":  tierAdmin,
-	"GET /api/resources/workbench":         tierAdmin,
 	"GET /api/resources/kueue":             tierAdmin,
 	"GET /api/resources/observability":     tierAdmin,
 	"GET /api/resources/s3/admin-password": tierAdmin,
@@ -90,6 +88,12 @@ var getRouteTiers = map[string]readTier{
 	// projects, read with their token (HandleResourcesStatus).
 	"GET /api/operation":        tierPerRole,
 	"GET /api/resources/status": tierPerRole,
+	// The activity log: a user gets their own entries only, filtered on
+	// the server (HandleActivity).
+	"GET /api/activity": tierPerRole,
+	// The workbench of one of the user's projects, read with their token
+	// (HandleWorkbenchStatus); the project check comes first.
+	"GET /api/resources/workbench": tierPerRole,
 }
 
 // tierOf is the tier of a route pattern: admin-only unless getRouteTiers

@@ -3,36 +3,29 @@ package cluster
 import (
 	"os"
 	"regexp"
+	"slices"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 )
 
-// genAIDashboardRequests are the Kubernetes requests the RHOAI dashboard's
-// gen-ai API makes with the caller's token for the Playground status's
-// calls (aaa/models, lsd/status), in any data science project
-// (odh-dashboard rhoai-3.6 packages/gen-ai/bff: api/middleware.go
-// RequireAccessToService, integrations/kubernetes/token_k8s_client.go
-// GetAAModels; validated live on RHOAI 3.6 as the minimum, DESIGN.md §6).
-// Since 5.0.0 the status, like Set up, delete and Clean up, calls it with
-// the signed-in user's own token, so the API server checks what the
-// dashboard does against that user's RBAC, and the template grants none of
-// it on the status's account (TestUserTokenReviewsAreNotTheServiceAccounts).
-var genAIDashboardRequests = []struct {
-	verb, group, resource, name string
-	why                         string
-}{
-	{"list", "ogx.io", "ogxservers", "", "the API's access review on every call"},
-	{"get", "ogx.io", "ogxservers", "lsd-genai-playground", "lsd/status"},
-	{"get", "", "configmaps", "gen-ai-aa-custom-model-endpoints", "aaa/models: the optional custom endpoints"},
-	{"get", "serving.kserve.io", "inferenceservices", "", "aaa/models: each model's endpoint"},
-	{"list", "serving.kserve.io", "inferenceservices", "", "aaa/models"},
-	{"get", "serving.kserve.io", "llminferenceservices", "", "aaa/models: each model's endpoint"},
-	{"list", "serving.kserve.io", "llminferenceservices", "", "aaa/models"},
-}
-
+// playgroundServerRequests are the Kubernetes requests the RHOAI
+// dashboard's gen-ai API makes with the caller's token for the Playground
+// status's calls (aaa/models, lsd/status), in any data science project:
+// the "status" rows of features.GenAIRequests (odh-dashboard rhoai-3.6
+// packages/gen-ai/bff: api/middleware.go RequireAccessToService,
+// integrations/kubernetes/token_k8s_client.go GetAAModels; validated live
+// on RHOAI 3.6 as the minimum, DESIGN.md section 6). Since 5.0.0 the
+// status, like Set up, delete and Clean up, calls it with the signed-in
+// user's own token, so the API server checks what the dashboard does
+// against that user's RBAC, and the template grants none of it on the
+// status's account (TestUserTokenReviewsAreNotTheServiceAccounts).
 func playgroundServerRequests() []rbacRequest {
 	var out []rbacRequest
-	for _, r := range genAIDashboardRequests {
-		out = append(out, rbacRequest{Verb: r.verb, Group: r.group, Resource: r.resource, Namespace: anyNS, Name: r.name, Site: "dashboard gen-ai API: " + r.why})
+	for _, r := range features.GenAIRequests {
+		if slices.Contains(r.Calls, "status") {
+			out = append(out, rbacRequest{Verb: r.Verb, Group: r.Group, Resource: r.Resource, Namespace: anyNS, Name: r.Name, Site: "dashboard gen-ai API: " + r.Cite})
+		}
 	}
 	return out
 }

@@ -29,6 +29,9 @@ type Recorded struct {
 	StorageUID string `json:"storageUID,omitempty"`
 	At         string `json:"at,omitempty"`
 	By         string `json:"by,omitempty"`
+	// ActorRole is record.ActorRoleUser when a user who is not a
+	// cluster-admin set it up (record.UserRecordCapRefusal counts it).
+	ActorRole string `json:"actorRole,omitempty"`
 }
 
 // Record maps each project to its stored workbench metadata.
@@ -81,8 +84,10 @@ func ReadRecord(c *kube.Client) (Record, error) {
 	return rec, nil
 }
 
-// writeRecord server-side-applies the full record. Callers already hold the
-// cluster lock, so read-modify-write cannot race another writer.
+// writeRecord server-side-applies the full record. Callers hold a lock
+// (the cluster lock, or the project's lock of a project action), and
+// updateRecord runs its read-modify-write through record.UpdateSnapshot, so
+// project actions in other projects of this process do not race it.
 func writeRecord(c *kube.Client, rec Record) error {
 	data, err := json.Marshal(rec)
 	if err != nil {
@@ -97,20 +102,22 @@ func writeRecord(c *kube.Client, rec Record) error {
 // updateRecord loads the record, mutates the project entry via change, removes
 // the entry when both UIDs are cleared, then persists the result.
 func updateRecord(c *kube.Client, project string, change func(e *Recorded)) error {
-	rec, err := ReadRecord(c)
-	if err != nil {
-		return err
-	}
-	e := rec[recordKey(project)]
-	before := e
-	change(&e)
-	if e == before {
-		return nil
-	}
-	if e.UID == "" && e.StorageUID == "" {
-		delete(rec, recordKey(project))
-	} else {
-		rec[recordKey(project)] = e
-	}
-	return writeRecord(c, rec)
+	return record.UpdateSnapshot(c, func() error {
+		rec, err := ReadRecord(c)
+		if err != nil {
+			return err
+		}
+		e := rec[recordKey(project)]
+		before := e
+		change(&e)
+		if e == before {
+			return nil
+		}
+		if e.UID == "" && e.StorageUID == "" {
+			delete(rec, recordKey(project))
+		} else {
+			rec[recordKey(project)] = e
+		}
+		return writeRecord(c, rec)
+	})
 }

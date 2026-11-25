@@ -139,3 +139,11 @@ func devModeWithoutServiceAccount() bool {
 	_, err := os.Stat(serviceAccountTokenPath)
 	return os.IsNotExist(err)
 }
+
+// devAdminBypass is devModeWithoutServiceAccount unless DEV_ROLE=user: the
+// local setup where the developer counts as a cluster-admin (the mutation
+// gate answers yes, the sign-in check is skipped). With DEV_ROLE=user both
+// gates ask the API server with the request's token.
+func devAdminBypass() bool {
+	return devModeWithoutServiceAccount() && Dev().Role != DevRoleUser
+}
