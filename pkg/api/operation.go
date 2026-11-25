@@ -725,9 +725,18 @@ const (
 // process runs a cluster operation it makes no cluster call; a
 // cluster-admin (admin) then gets the interrupted project actions of the
 // record as this process last read it (seenProjectLocks).
+//
+// The cluster fields describe this process's cluster operation only once
+// its lock is held (confirmed): a pending acquisition, whose slot is
+// taken while its entry is not written yet, is not one (the record may
+// show another pod's holder meanwhile).
 func operationStatus(c *cluster.Client, admin bool) (status OperationStatus) {
-	local := locks.clusterHeld()
-	status = OperationStatus{InProgress: local, Operation: inflight.snapshot()}
+	clusterOp := inflight.snapshot()
+	local := clusterOp != nil && clusterOp.confirmed
+	if !local {
+		clusterOp = nil
+	}
+	status = OperationStatus{InProgress: local, Operation: clusterOp}
 	running := inflight.list()
 	last := inflight.lastCompleted()
 	if local && last != nil {
@@ -795,13 +804,14 @@ func operationList(running []*Operation, rec *cluster.OperationRecord, interrupt
 			op.Scope = scopeCluster
 			out = append(out, op)
 		}
-		for _, l := range rec.ProjectLocks {
+		kept := interruptedProjectLocks(rec.ProjectLocks)
+		for uid, l := range rec.ProjectLocks {
 			switch {
 			case leaseHeldElsewhere(l):
 				op := remoteOperation(l)
 				op.Scope = scopeProject
 				out = append(out, op)
-			case projectLockInterrupted(l):
+			case kept[uid] != nil:
 				op := remoteOperation(l)
 				op.Scope, op.Interrupted, op.Remote = scopeProject, true, false
 				out = append(out, op)
@@ -839,11 +849,37 @@ func (p *projectLockCache) remember(rec *cluster.OperationRecord) {
 func (p *projectLockCache) interrupted() map[string]*types.OperationLease {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	out := map[string]*types.OperationLease{}
-	for uid, l := range p.locks {
+	return interruptedProjectLocks(p.locks)
+}
+
+// interruptedProjectLocks is the locks of interrupted project actions
+// (projectLockInterrupted) among locks, the cluster.MaxInterruptedLocks
+// newest by start: what the record keeps of them once it is written
+// again, so a record read before that write lists the same.
+func interruptedProjectLocks(locks map[string]*types.OperationLease) map[string]*types.OperationLease {
+	type entry struct {
+		uid     string
+		started time.Time
+	}
+	var all []entry
+	for uid, l := range locks {
 		if projectLockInterrupted(l) {
-			out[uid] = l
+			started, _ := time.Parse(time.RFC3339, l.StartedAt)
+			all = append(all, entry{uid, started})
 		}
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if !all[i].started.Equal(all[j].started) {
+			return all[i].started.After(all[j].started)
+		}
+		return all[i].uid < all[j].uid
+	})
+	out := map[string]*types.OperationLease{}
+	for i, e := range all {
+		if i == cluster.MaxInterruptedLocks {
+			break
+		}
+		out[e.uid] = locks[e.uid]
 	}
 	return out
 }

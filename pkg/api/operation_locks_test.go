@@ -439,19 +439,161 @@ func TestRecoveryAfterASuccessfulRenewalHasItsOwnContext(t *testing.T) {
 }
 
 // A pending acquisition (this process's slot taken, its entry not written
-// yet) is not listed: the other pod's cluster operation that holds the
-// lock is the only running one.
+// yet) is not a holder: with a completion remembered (which used to make
+// the status answer from memory), both the cluster fields and the list
+// name the other pod's cluster operation that holds the lock. Once the
+// local operation holds its lock, both name it.
 func TestOperationListShowsConfirmedHoldersOnly(t *testing.T) {
 	setupDevMode(t)
 	setAdmin(t)
 	f := installFakeRecord(t)
 	f.setLease(otherPodLease(clk.Now()))
 	locks.setCluster(true)
-	inflight.startBackground("update", "Update to nightly", "bob", nil)
-	status := getOperationAs(t, "user:admin")
+	pending := inflight.startBackground("update", "Update to nightly", "bob", nil)
+	inflight.rememberLast(&types.CompletedOperation{ID: "earlier", FinishedAt: time.Now().UTC().Format(time.RFC3339)})
+	status := getAdminOperation(t)
+	if !status.InProgress || status.Operation == nil || !status.Operation.Remote || status.Operation.ID != "remote-op" {
+		t.Fatalf("operation %+v", status.Operation)
+	}
 	if len(status.Operations) != 1 || !status.Operations[0].Remote || status.Operations[0].ID != "remote-op" {
 		t.Fatalf("operations %+v", status.Operations)
 	}
+
+	f.setLease(nil)
+	confirmLock(pending.ID)
+	status = getAdminOperation(t)
+	if !status.InProgress || status.Operation == nil || status.Operation.ID != pending.ID || status.Operation.Remote {
+		t.Fatalf("confirmed: operation %+v", status.Operation)
+	}
+	if len(status.Operations) != 1 || status.Operations[0].ID != pending.ID {
+		t.Fatalf("confirmed: operations %+v", status.Operations)
+	}
+}
+
+// More interrupted project actions than the record keeps: the status
+// read from the record and the one answered from memory during a cluster
+// operation list the same MaxInterruptedLocks newest, the ones the next
+// write of the record keeps.
+func TestInterruptedListMatchesThePrunedRecord(t *testing.T) {
+	setupDevMode(t)
+	setAdmin(t)
+	f := installFakeRecord(t)
+	n := cluster.MaxInterruptedLocks + 5
+	want := map[string]bool{}
+	for i := range n {
+		uid := "uid-" + strconv.Itoa(i)
+		l := otherPodProjectLease(uid, "user"+strconv.Itoa(i), clk.Now().Add(-2*leaseTTL))
+		l.Begun = true
+		l.StartedAt = time.Now().Add(-time.Duration(i+1) * time.Minute).UTC().Format(time.RFC3339) // uid-0 newest
+		f.setProject(uid, l)
+		if i < cluster.MaxInterruptedLocks {
+			want[uid] = true
+		}
+	}
+	interruptedOf := func(status OperationStatus) map[string]bool {
+		got := map[string]bool{}
+		for _, op := range status.Operations {
+			if op.Interrupted && op.Scope == scopeProject {
+				got[op.ProjectUID] = true
+			}
+		}
+		return got
+	}
+	fromRecord := interruptedOf(getAdminOperation(t))
+	if len(fromRecord) != len(want) {
+		t.Fatalf("from the record: %d listed, want %d", len(fromRecord), len(want))
+	}
+	if refusal := takeCluster(t); refusal != nil {
+		t.Fatal(refusal)
+	}
+	defer releaseClusterMutationLock()
+	inflight.rememberLast(&types.CompletedOperation{ID: "earlier", FinishedAt: time.Now().UTC().Format(time.RFC3339)})
+	fromMemory := interruptedOf(getAdminOperation(t))
+	for uid := range want {
+		if !fromRecord[uid] || !fromMemory[uid] {
+			t.Errorf("%s: from the record %t, from memory %t", uid, fromRecord[uid], fromMemory[uid])
+		}
+	}
+	if len(fromMemory) != len(want) {
+		t.Fatalf("from memory: %d listed, want %d", len(fromMemory), len(want))
+	}
+}
+
+// Recoveries run outside the round, one per round: while one recovery's
+// write is under way, an immediate renewal of another project (its
+// begin) goes through, and the second entry to recover is recovered in
+// the next round.
+func TestRecoveryRunsOutsideTheRoundOnePerRound(t *testing.T) {
+	setupDevMode(t)
+	f := installFakeRecord(t)
+	for _, p := range []struct{ uid, user string }{{"uid-a", "alice"}, {"uid-b", "bob"}, {"uid-c", "carol"}} {
+		if h := takeProject(t, p.uid, p.user); h.refusal != nil {
+			t.Fatal(h.refusal)
+		}
+	}
+	ownNewerValue(f, "uid-a")
+	ownNewerValue(f, "uid-b")
+	inner := acquireOperationLock
+	var recovered []string
+	entered, beginDone := make(chan struct{}), make(chan struct{})
+	beganMeanwhile := false
+	acquireOperationLock = func(c *cluster.Client, key, value string, check func(*cluster.OperationRecord) error) error {
+		recovered = append(recovered, key)
+		if len(recovered) == 1 {
+			close(entered)
+			select {
+			case <-beginDone:
+				beganMeanwhile = true
+			case <-time.After(10 * time.Second): // only when the begin is blocked behind this recovery
+			}
+		}
+		return inner(c, key, value, check)
+	}
+	testClock.Advance(leaseHeartbeatInterval)
+	<-entered
+	if err := beginProjectAction(locks.projectOp("uid-c"), "x"); err != nil {
+		t.Fatal(err)
+	}
+	close(beginDone)
+	testClock.WaitForTicksHandled()
+	if !beganMeanwhile || len(recovered) != 1 || recovered[0] != cluster.ProjectLockKey("uid-a") {
+		t.Fatalf("began during the recovery %t, recoveries %v", beganMeanwhile, recovered)
+	}
+	tick()
+	if len(recovered) != 2 || recovered[1] != cluster.ProjectLockKey("uid-b") {
+		t.Fatalf("recoveries %v", recovered)
+	}
+	now := clk.Now().UTC().Format(time.RFC3339)
+	for _, uid := range []string{"uid-a", "uid-b", "uid-c"} {
+		if l := f.project(uid); l == nil || l.HeartbeatAt != now {
+			t.Errorf("%s: %+v", uid, l)
+		}
+	}
+	for _, uid := range []string{"uid-a", "uid-b", "uid-c"} {
+		releaseProjectLock(uid)
+	}
+}
+
+// A begin whose write went through only after its entry's deadline passed
+// does not count: the action may not begin.
+func TestBeginFailsWhenTheDeadlinePassesDuringItsWrite(t *testing.T) {
+	setupDevMode(t)
+	installFakeRecord(t)
+	h := takeProject(t, "uid-1", "alice")
+	if h.refusal != nil {
+		t.Fatal(h.refusal)
+	}
+	inner := renewOperationLocks
+	renewOperationLocks = func(c *cluster.Client, renewals []cluster.LockRenewal) (map[string]*types.OperationLease, error) {
+		lost, err := inner(c, renewals)
+		testClock.Advance(leaseLossAfter()) // the write answers after the deadline
+		return lost, err
+	}
+	if err := beginProjectAction(locks.projectOp("uid-1"), "x"); err == nil {
+		t.Fatal("began after the deadline passed")
+	}
+	<-h.ctx.Done()
+	releaseProjectLock("uid-1")
 }
 
 // While this process runs a cluster operation it answers from memory (no
@@ -474,7 +616,7 @@ func TestOperationListKeepsInterruptionsDuringAClusterOperation(t *testing.T) {
 		reads++
 		return &cluster.OperationRecord{}, nil
 	}
-	status := getOperationAs(t, "user:admin")
+	status := getAdminOperation(t)
 	if reads != 0 || len(status.Operations) != 2 {
 		t.Fatalf("reads %d operations %+v", reads, status.Operations)
 	}
@@ -560,10 +702,11 @@ func TestBusyRefusalNamesNobodyForUsers(t *testing.T) {
 	}
 }
 
-func getOperationAs(t *testing.T, token string) OperationStatus {
+// getAdminOperation is GET /api/operation as a cluster-admin.
+func getAdminOperation(t *testing.T) OperationStatus {
 	t.Helper()
 	w := httptest.NewRecorder()
-	HandleOperation(w, getAs(t, "/api/operation", token))
+	HandleOperation(w, getAs(t, "/api/operation", "user:admin"))
 	var status OperationStatus
 	if err := json.Unmarshal(w.Body.Bytes(), &status); err != nil {
 		t.Fatal(err)

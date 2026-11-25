@@ -24,6 +24,7 @@ const (
 	ClusterLockKey        = record.LeaseKey
 	LockTTL               = record.LockTTL
 	InterruptedLockMaxAge = record.InterruptedLockMaxAge
+	MaxInterruptedLocks   = record.MaxInterruptedLocks
 )
 
 // The operation time budget (see record).

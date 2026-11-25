@@ -505,7 +505,7 @@ func TestRenewalDoesNotWaitForTheWriter(t *testing.T) {
 	mine := testLease("op-a", "boot-a", now)
 	f.set(ClusterLockKey, mine)
 	entered, release := make(chan struct{}), make(chan struct{})
-	var once sync.Once
+	var once, released sync.Once
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPatch && r.Header.Get("Content-Type") != "application/json-patch+json" {
 			once.Do(func() { close(entered); <-release })
@@ -513,16 +513,25 @@ func TestRenewalDoesNotWaitForTheWriter(t *testing.T) {
 		f.ServeHTTP(w, r)
 	}))
 	t.Cleanup(srv.Close)
+	// Registered after srv.Close, so it runs first: a test that ends early
+	// (t.Fatal) lets the held write go, and the server closes.
+	free := func() { released.Do(func() { close(release) }) }
+	t.Cleanup(free)
 	c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: t.Context()})
 	saved := make(chan error, 1)
 	go func() { saved <- SaveRecipeRun(c, &types.RecipeRun{ID: "run"}, true) }()
 	<-entered // the recipe run write holds this process's writer
 	renewed := *mine
 	renewed.HeartbeatAt = now.Add(10 * time.Second).UTC().Format(time.RFC3339)
-	if lost, err := RenewOperationLocks(c, []LockRenewal{{Key: ClusterLockKey, Old: leaseValue(t, mine), New: leaseValue(t, &renewed)}}); err != nil || lost != nil {
+	// A renewal that waited for the writer would wait for the held write:
+	// its own bound ends it then (a failure, not a hang).
+	rctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	rc := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: rctx})
+	if lost, err := RenewOperationLocks(rc, []LockRenewal{{Key: ClusterLockKey, Old: leaseValue(t, mine), New: leaseValue(t, &renewed)}}); err != nil || lost != nil {
 		t.Fatalf("lost %v err %v", lost, err)
 	}
-	close(release)
+	free()
 	// The recipe run write read the record before the renewal: it
 	// conflicts once and is written from a fresh read.
 	if err := <-saved; err != nil {
@@ -535,14 +544,21 @@ func TestRenewalDoesNotWaitForTheWriter(t *testing.T) {
 
 // An activity entry's write budget starts once this process's previous
 // entry is written, not while it waits for it: an entry queued behind a
-// slow one is still written.
+// slow one is still written. The second entry starts once the first is
+// writing; the first write then takes longer than a whole budget, after
+// the second began to wait.
 func TestActivityBudgetStartsAfterTheWait(t *testing.T) {
 	t.Setenv("NAMESPACE", "test-ns")
 	t.Cleanup(record.SetActivityWriteTimeoutForTest(time.Second))
-	// Both entries report reaching the wait; the first one to write holds
-	// its write until the other one waits behind it.
-	waiting := make(chan struct{}, 2)
-	t.Cleanup(record.SetBeforeActivityWaitForTest(func() { waiting <- struct{}{} }))
+	firstWriting := make(chan struct{})
+	secondWaiting := make(chan struct{}, 1)
+	t.Cleanup(record.SetBeforeActivityWaitForTest(func() {
+		select {
+		case <-firstWriting: // only the second entry: the first is writing
+			secondWaiting <- struct{}{}
+		default:
+		}
+	}))
 	var mu sync.Mutex
 	var details []string
 	rv := 0
@@ -550,8 +566,8 @@ func TestActivityBudgetStartsAfterTheWait(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost || r.Method == http.MethodPut {
 			first.Do(func() {
-				<-waiting
-				<-waiting // the other entry waits for this one now
+				close(firstWriting)
+				<-secondWaiting // the second entry waits for this one now
 				// This write takes longer than an entry's whole budget.
 				kube.Clock().Sleep(context.Background(), 2*time.Second)
 			})
@@ -594,6 +610,7 @@ func TestActivityBudgetStartsAfterTheWait(t *testing.T) {
 		defer close(done)
 		record.Activity(c, types.ActivityEntry{Timestamp: "2026-11-25T10:00:00Z", User: "u", Action: "update", Detail: "first", Success: true})
 	}()
+	<-firstWriting
 	record.Activity(c, types.ActivityEntry{Timestamp: "2026-11-25T10:00:01Z", User: "u", Action: "update", Detail: "second", Success: true})
 	<-done
 	mu.Lock()

@@ -360,7 +360,27 @@ type renewal struct {
 // patches: it is lost only when that is refused. The results that need no
 // write are applied first; each recovery then writes with a context of its
 // own, bounded by its own deadline (a successful renewal ends the batch's).
+//
+// At most one recovery runs per round, after the round's write and
+// outside k.round: a recovery is a write of its own (up to
+// leaseWriteTimeout), and it must not hold up the next tick's renewals of
+// healthy entries nor an immediate renewal (renewNow) of another entry.
+// The other entries to recover are recovered in the next rounds (their
+// renewals fail their tests again; their deadlines still apply).
 func (k *leaseKeeper) renewOnce(ctx context.Context) {
+	recoveries := k.renewBatch(ctx)
+	if len(recoveries) == 0 || ctx.Err() != nil {
+		return
+	}
+	if len(recoveries) > 1 {
+		slog.Info("operation locks to take again; one per heartbeat round", "now", recoveries[0].h.key, "later", len(recoveries)-1)
+	}
+	k.recover(ctx, recoveries[0])
+}
+
+// renewBatch is renewOnce's renewal of every held entry in one write,
+// under k.round; it returns the entries to recover (in key order).
+func (k *leaseKeeper) renewBatch(ctx context.Context) []renewal {
 	k.round.Lock()
 	defer k.round.Unlock()
 	k.mu.Lock()
@@ -392,7 +412,7 @@ func (k *leaseKeeper) renewOnce(ctx context.Context) {
 		}
 	}
 	if len(batch) == 0 {
-		return
+		return nil
 	}
 	k.mu.Lock()
 	writeDeadline := first.lost
@@ -413,7 +433,7 @@ func (k *leaseKeeper) renewOnce(ctx context.Context) {
 	var recoveries []renewal
 	for _, r := range batch {
 		if ctx.Err() != nil {
-			return
+			return nil
 		}
 		k.mu.Lock()
 		current := k.held[r.h.key] == r.h && !r.h.gone
@@ -432,13 +452,7 @@ func (k *leaseKeeper) renewOnce(ctx context.Context) {
 		}
 		k.settle(r, lost, err)
 	}
-	wcancel()
-	for _, r := range recoveries {
-		if ctx.Err() != nil {
-			return
-		}
-		k.recover(ctx, r)
-	}
+	return recoveries
 }
 
 // settle applies the outcome err of r's write.
@@ -552,25 +566,26 @@ func (k *leaseKeeper) renewNow(key string) error {
 	if err != nil {
 		return err
 	}
-	if lost.Err() != nil {
+	if lost.Err() != nil || !k.renewed(r) {
 		return fmt.Errorf("the operation lock %s may have expired", key)
 	}
-	k.renewed(r)
 	return nil
 }
 
 // renewed records r's successful write: its value and heartbeat, and a
-// new deadline. When the deadline passed just now, its watcher stops the
-// operation instead.
-func (k *leaseKeeper) renewed(r renewal) {
+// new deadline, and reports true. When the deadline passed just now (its
+// watcher stops the operation instead) it changes nothing and reports
+// false.
+func (k *leaseKeeper) renewed(r renewal) bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	if !r.h.cancelLost() {
-		return
+		return false
 	}
 	r.h.value = r.value
 	r.h.renewed, _ = cluster.LeaseHeartbeat(r.lease)
 	k.watchLocked(r.h)
+	return true
 }
 
 // stop ends the renewals of the entry key and returns its owner, nil when
