@@ -27,7 +27,7 @@ func TestMutationKeepsItsLeaseAndMarkerOnTheBookkeepingClient(t *testing.T) {
 		bookkeeper = w.(*statusWriter).bookkeeper
 		beginOperation(w, "target")
 		inflight.mu.Lock()
-		tracked = inflight.current.bookkeeper
+		tracked = inflight.ops[inflight.cluster].bookkeeper
 		inflight.mu.Unlock()
 		writeJSON(w, types.OperationResponse{Success: true}, "t")
 	})

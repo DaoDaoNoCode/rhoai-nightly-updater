@@ -86,6 +86,17 @@ type OperationSummary struct {
 	Running   bool   `json:"running"`
 	Label     string `json:"label"`
 	StartedAt string `json:"startedAt"`
+	// Operations lists what runs, as far as this user may see it: the
+	// running cluster operation (the fields above, as a list entry).
+	Operations []OperationSummaryEntry `json:"operations"`
+}
+
+// OperationSummaryEntry is one entry of OperationSummary.Operations: its
+// scope ("cluster"), its kind's label and when it started (RFC 3339).
+type OperationSummaryEntry struct {
+	Scope     string `json:"scope"`
+	Label     string `json:"label"`
+	StartedAt string `json:"startedAt"`
 }
 
 // ProjectStatus is GET /api/resources/status?project= for a user who is

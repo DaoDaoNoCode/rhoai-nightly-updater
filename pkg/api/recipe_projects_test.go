@@ -66,10 +66,10 @@ func TestMaaSPruneJob_ForgetsGoneRecipeProjects(t *testing.T) {
 	var locked []bool
 	forgetGoneRecipeProjects = func(*cluster.Client) ([]string, error) {
 		op := inflight.snapshot()
-		locked = append(locked, clusterMutationInProgress.Load() && op != nil && op.Type == "prune-maas-publications")
+		locked = append(locked, locks.clusterHeld() && op != nil && op.Type == "prune-maas-publications")
 		return []string{"recipe-dev2"}, nil
 	}
-	releaseOperationLease = func(*cluster.Client, cluster.LeaseOwner) error { return nil }
+	releaseOperationLock = func(*cluster.Client, string, cluster.LeaseOwner) error { return nil }
 	if !runMaaSPruneOnce(context.Background()) {
 		t.Fatal("did not run")
 	}
@@ -79,7 +79,7 @@ func TestMaaSPruneJob_ForgetsGoneRecipeProjects(t *testing.T) {
 	}
 	// Forget errors are logged only; the prune run still releases the lock.
 	forgetGoneRecipeProjects = func(*cluster.Client) ([]string, error) { return nil, errors.New("boom") }
-	if !runMaaSPruneOnce(context.Background()) || clusterMutationInProgress.Load() {
+	if !runMaaSPruneOnce(context.Background()) || locks.clusterHeld() {
 		t.Fatal("did not run or kept the lock")
 	}
 	<-runs

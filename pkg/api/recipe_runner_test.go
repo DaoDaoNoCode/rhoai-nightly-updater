@@ -263,7 +263,7 @@ func stepStatuses(run *types.RecipeRun) string {
 // slot, and its marker became the last completed operation.
 func assertReleased(t *testing.T, rec *fakeRecord) {
 	t.Helper()
-	if clusterMutationInProgress.Load() || inflight.snapshot() != nil {
+	if locks.clusterHeld() || inflight.snapshot() != nil {
 		t.Error("the lock or the operation was left behind")
 	}
 	mutations.mu.Lock()
@@ -420,7 +420,7 @@ func TestRecipeStopTakesNoLockAndMakesNoClusterCall(t *testing.T) {
 	if !acquireClusterMutationLock() {
 		t.Fatal("lock unexpectedly held")
 	}
-	defer clusterMutationInProgress.Store(false)
+	defer locks.setCluster(false)
 	mux := http.NewServeMux()
 	Register(mux)
 	for range 2 {
@@ -430,7 +430,7 @@ func TestRecipeStopTakesNoLockAndMakesNoClusterCall(t *testing.T) {
 			t.Fatalf("stop: %d %s", w.Code, w.Body.String())
 		}
 	}
-	if !clusterMutationInProgress.Load() || inflight.snapshot() != nil {
+	if !locks.clusterHeld() || inflight.snapshot() != nil {
 		t.Error("stop touched the lock")
 	}
 	rec.mu.Lock()
@@ -477,7 +477,7 @@ func TestRecipeRun_DrainStopsBeforeTheNextStep(t *testing.T) {
 	if marker != nil {
 		t.Errorf("marker left: %+v", marker)
 	}
-	if st := operationStatus(nil); st.Interrupted != nil {
+	if st := operationStatus(nil, true); st.Interrupted != nil {
 		t.Errorf("reported interrupted: %+v", st.Interrupted)
 	}
 	if st := recipeRunStatus(nil, nil); st.Interrupted || st.Running {
@@ -606,7 +606,7 @@ func TestRecipeResume_SkipsDoneStepsAndKeepsThePinnedBuild(t *testing.T) {
 	mutationLimiter = newRateLimiter()
 	w = httptest.NewRecorder()
 	HandleRecipeResume(w, postJSON(t, "/api/recipes/resume", "user:admin", `{"runId":"stale"}`))
-	if w.Code != http.StatusConflict || clusterMutationInProgress.Load() {
+	if w.Code != http.StatusConflict || locks.clusterHeld() {
 		t.Errorf("resume of another run: %d %s", w.Code, w.Body.String())
 	}
 	mutationLimiter = newRateLimiter()
@@ -766,7 +766,9 @@ func TestRecipeRun_UsersSeeOnlyTheLabel(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 3 || got["running"] != true || got["label"] != "Environment recipe" || got["startedAt"] == nil {
+	ops, _ := got["operations"].([]any)
+	if len(got) != 4 || got["running"] != true || got["label"] != "Environment recipe" || got["startedAt"] == nil ||
+		len(ops) != 1 || len(ops[0].(map[string]any)) != 3 || ops[0].(map[string]any)["label"] != "Environment recipe" {
 		t.Errorf("user's operation status: %s", w.Body.String())
 	}
 	allowMutations(t)
@@ -920,13 +922,12 @@ func TestRecipeRun_LeaseRenewalsUseAFreshToken(t *testing.T) {
 	s1 := f.addStep("one")
 	var mu sync.Mutex
 	var tokens []string
-	orig := writeOperationLease
-	writeOperationLease = func(c *cluster.Client, l *types.OperationLease, held func(*types.OperationLease) bool) (*types.OperationLease, error) {
+	wrapLockWrites(func(c *cluster.Client, err error) error {
 		mu.Lock()
 		tokens = append(tokens, c.TestOptions().Token)
 		mu.Unlock()
-		return orig(c, l, held)
-	}
+		return err
+	})
 	_, done := startRun(t)
 	waitStarted(t, s1)
 	cachedTokenMu.Lock()

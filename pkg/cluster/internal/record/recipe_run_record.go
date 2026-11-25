@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
-	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -40,26 +39,25 @@ func SaveRecipeRun(c *kube.Client, run *types.RecipeRun, replace bool) error {
 	if err != nil {
 		return err
 	}
-	for range maxLeaseWriteAttempts {
-		rec, current, err := readRecipeRunRecord(c)
-		// A record that cannot be parsed is replaced by a run that starts,
-		// and kept otherwise.
-		if err != nil && (rec == nil || !replace) {
-			return fmt.Errorf("save the recipe run: %w", err)
-		}
-		if !replace && current != nil && (current.ID != run.ID || current.OperationID != run.OperationID || current.BootID != run.BootID) {
-			return ErrRecipeRunReplaced
-		}
-		err = writeOperationRecord(c, rec, map[string]string{RecipeRunKey: value})
-		if kube.IsK8sConflict(err) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("save the recipe run: %w", err)
-		}
-		return nil
+	err = operationWriter.do(c.Context(), func() error {
+		return updateOperationRecord(c, func(rec *OperationRecord) (map[string]any, error) {
+			current, err := recipeRunOf(rec)
+			// A record that cannot be parsed is replaced by a run that
+			// starts, and kept otherwise.
+			if err != nil && !replace {
+				return nil, err
+			}
+			if !replace && current != nil && (current.ID != run.ID || current.OperationID != run.OperationID || current.BootID != run.BootID) {
+				return nil, ErrRecipeRunReplaced
+			}
+			return map[string]any{RecipeRunKey: value}, nil
+		})
+	})
+	switch {
+	case err == nil, errors.Is(err, ErrRecipeRunReplaced):
+		return err
 	}
-	return fmt.Errorf("save the recipe run: %w", ErrOperationRecordContended)
+	return fmt.Errorf("save the recipe run: %w", err)
 }
 
 // encodeRecipeRun is run as JSON of at most MaxRecipeRunBytes: step
@@ -87,37 +85,23 @@ func encodeRecipeRun(run *types.RecipeRun) (string, error) {
 // ReadRecipeRun returns the recorded run, nil when none is recorded. A
 // record that cannot be parsed is an error.
 func ReadRecipeRun(c *kube.Client) (*types.RecipeRun, error) {
-	_, run, err := readRecipeRunRecord(c)
-	return run, err
+	rec, err := ReadOperationRecord(c)
+	if err != nil {
+		return nil, err
+	}
+	return recipeRunOf(rec)
 }
 
-// readRecipeRunRecord reads the operation ConfigMap (for a conditional
-// write) and its recipe run.
-func readRecipeRunRecord(c *kube.Client) (*OperationRecord, *types.RecipeRun, error) {
-	var cm struct {
-		Metadata struct {
-			ResourceVersion string `json:"resourceVersion"`
-		} `json:"metadata"`
-		Data map[string]string `json:"data"`
-	}
-	found, err := c.Bookkeeping().GetIntoOptional(rhoai.NamespacedPath("v1", "configmaps", GetActivityNamespace(), OperationConfigMapName), &cm)
-	if err != nil {
-		if kube.IsDecodeError(err) {
-			return nil, nil, fmt.Errorf("parse operation record: %w", err)
-		}
-		return nil, nil, fmt.Errorf("get operation record: %w", err)
-	}
-	if !found {
-		return &OperationRecord{}, nil, nil
-	}
-	rec := &OperationRecord{resourceVersion: cm.Metadata.ResourceVersion}
-	raw := cm.Data[RecipeRunKey]
+// recipeRunOf is the recipe run of the operation record as read, nil when
+// none is recorded.
+func recipeRunOf(rec *OperationRecord) (*types.RecipeRun, error) {
+	raw := rec.Value(RecipeRunKey)
 	if raw == "" {
-		return rec, nil, nil
+		return nil, nil
 	}
 	var run types.RecipeRun
 	if err := json.Unmarshal([]byte(raw), &run); err != nil {
-		return rec, nil, fmt.Errorf("parse the recipe run record: %w", err)
+		return nil, fmt.Errorf("parse the recipe run record: %w", err)
 	}
-	return rec, &run, nil
+	return &run, nil
 }

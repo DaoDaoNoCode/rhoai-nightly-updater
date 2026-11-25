@@ -56,7 +56,7 @@ func TestMaaSStatus_GonePublicationsStartOneBackgroundCheck(t *testing.T) {
 	locked, release := make(chan bool, 4), make(chan struct{})
 	pruneGoneMaaS = func(*cluster.Client) {
 		op := inflight.snapshot()
-		locked <- clusterMutationInProgress.Load() && op != nil && op.Type == "prune-maas-publications"
+		locked <- locks.clusterHeld() && op != nil && op.Type == "prune-maas-publications"
 		<-release
 	}
 	// The status response must return before the prune goroutine completes.

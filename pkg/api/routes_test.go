@@ -45,7 +45,7 @@ func TestEveryNonGetRouteIsGated(t *testing.T) {
 		if w.Code != http.StatusForbidden || decodeError(t, w)["errorCode"] != "forbidden" {
 			t.Errorf("%s without cluster-admin: %d %s", rt.Pattern, w.Code, w.Body.String())
 		}
-		if clusterMutationInProgress.Load() {
+		if locks.clusterHeld() {
 			t.Fatalf("%s took the lock for a refused request", rt.Pattern)
 		}
 

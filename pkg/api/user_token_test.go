@@ -48,13 +48,12 @@ func TestMutationClientActsAsTheUser(t *testing.T) {
 	f := installFakeRecord(t)
 	var mu sync.Mutex
 	var leaseClients []*cluster.Client
-	orig := writeOperationLease
-	writeOperationLease = func(c *cluster.Client, l *types.OperationLease, held func(*types.OperationLease) bool) (*types.OperationLease, error) {
+	wrapLockWrites(func(c *cluster.Client, err error) error {
 		mu.Lock()
 		leaseClients = append(leaseClients, c)
 		mu.Unlock()
-		return orig(c, l, held)
-	}
+		return err
+	})
 	saveOperationMarker = func(c *cluster.Client, m *types.OperationMarker) error {
 		mu.Lock()
 		leaseClients = append(leaseClients, c)
@@ -156,7 +155,7 @@ func TestMutationRefusedWhenTheSignInCannotCarryIt(t *testing.T) {
 				if body["errorCode"] != tc.code || !strings.Contains(body["error"].(string), tc.contains) || !strings.Contains(body["error"].(string), "Nothing was changed") {
 					t.Fatalf("body %v", body)
 				}
-				if clusterMutationInProgress.Load() || mutationLimiter.isRateLimited("alice:/api/update") {
+				if locks.clusterHeld() || mutationLimiter.isRateLimited("alice:/api/update") {
 					t.Fatal("a refused change took the lock or the rate-limit slot")
 				}
 			}

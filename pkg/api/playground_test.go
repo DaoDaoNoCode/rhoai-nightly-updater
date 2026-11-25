@@ -36,7 +36,7 @@ func TestPlaygroundStream(t *testing.T) {
 	} {
 		w := httptest.NewRecorder()
 		HandlePlaygroundStream(w, postJSON(t, "/api/resources/playground/stream", "user-token", body))
-		if w.Code != http.StatusBadRequest || clusterMutationInProgress.Load() {
+		if w.Code != http.StatusBadRequest || locks.clusterHeld() {
 			t.Errorf("%s: %d %s", body, w.Code, w.Body.String())
 		}
 	}
@@ -54,7 +54,7 @@ func TestPlaygroundStream(t *testing.T) {
 	if strings.Contains(out, "user-token") || strings.Contains(out, "test-cluster-token") {
 		t.Error("the stream shows the token")
 	}
-	if clusterMutationInProgress.Load() {
+	if locks.clusterHeld() {
 		t.Error("lock held after the operation")
 	}
 }

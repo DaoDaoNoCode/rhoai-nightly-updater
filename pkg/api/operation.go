@@ -9,9 +9,9 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -19,43 +19,28 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// clusterMutationInProgress is a non-blocking mutex that prevents concurrent
-// cluster-level mutation operations. When true, a cluster mutation is in
-// progress and new mutation requests receive HTTP 409 Conflict instead of
-// proceeding. The lock is per process and is the first gate; lockCluster
-// then takes the cross-pod lease (operation_lease.go), because a replaced
-// pod can still drain an operation while its replacement serves requests.
-var clusterMutationInProgress atomic.Bool
-
-// acquireClusterMutationLock tries to acquire the cluster mutation lock.
-// Returns true if the lock was acquired (caller must defer releaseClusterMutationLock).
-// Returns false if another operation is already in progress; the caller should
-// return HTTP 409.
-func acquireClusterMutationLock() bool {
-	return clusterMutationInProgress.CompareAndSwap(false, true)
-}
-
-// releaseClusterMutationLock releases the cluster mutation lock and forgets
-// the in-flight operation. An operation that began (see beginOperation)
-// becomes the last completed operation, and its marker is cleared in the
-// same write that releases its lease; the lease of an operation that never
-// began is released on its own.
+// releaseClusterMutationLock releases the cluster lock and forgets the
+// in-flight cluster operation. An operation that began (see
+// beginOperation) becomes the last completed operation, and its marker is
+// cleared in the same write that releases its lease; the lease of an
+// operation that never began is released on its own.
 func releaseClusterMutationLock() {
-	owner := leases.stop()
+	owner := leases.stop(cluster.ClusterLockKey)
 	done, bookkeeper := inflight.finish()
 	switch {
 	case done != nil:
 		markers.complete(bookkeeper, done, owner)
 	case owner != nil && bookkeeper != nil:
-		leases.release(bookkeeper, *owner)
+		leases.release(bookkeeper, cluster.ClusterLockKey, *owner)
 	}
-	clusterMutationInProgress.Store(false)
+	locks.release(lockWant{})
 }
 
-// lockCluster acquires the cluster mutation lock, then the cross-pod lease,
-// or answers 409 Conflict with errorCode "cluster_busy" and the running
-// operation (also one that runs in another updater pod). When it returns
-// true the caller must defer releaseClusterMutationLock.
+// lockCluster acquires the cluster lock, this process's slot and then the
+// cross-pod lease, or answers 409 Conflict with errorCode "cluster_busy"
+// and the operation that holds it (also one that runs in another updater
+// pod). When it returns true the caller must defer
+// releaseClusterMutationLock.
 func lockCluster(w http.ResponseWriter) bool {
 	sw, ok := w.(*statusWriter)
 	var cancelOp context.CancelCauseFunc
@@ -79,17 +64,26 @@ func lockCluster(w http.ResponseWriter) bool {
 
 // writeLockRefusal answers a refusal of acquireRunnerLock: 409
 // cluster_busy naming the operation that holds the lock (in this pod or
-// another), or 503 lock_unavailable when the lease could not be read or
-// written.
+// another) to a cluster-admin, and nobody else's to anyone else (see
+// writeClusterBusy), or 503 lock_unavailable when the lease could not be
+// read or written.
 func writeLockRefusal(w http.ResponseWriter, refusal *lockRefusal) {
+	var viewer busyViewer
+	if sw, ok := w.(*statusWriter); ok {
+		viewer = busyViewer{admin: sw.admin, user: sw.user}
+	}
 	switch {
 	case refusal.busy:
-		writeClusterBusy(w, inflight.snapshot(), "")
+		op := inflight.get(refusal.opID)
+		if op == nil {
+			op = inflight.snapshot()
+		}
+		writeClusterBusy(w, op, refusal.reason, viewer)
 		return
 	case refusal.holder != nil:
 		holder := refusal.holder
-		slog.Info("operation refused: another updater pod runs one", "holder", holder.ID, "holderPod", holder.Pod, "type", holder.Type)
-		writeClusterBusy(w, remoteOperation(holder), "")
+		slog.Info("operation refused: another updater pod runs one", "holder", holder.ID, "holderPod", holder.Pod, "type", holder.Type, "project", holder.Project)
+		writeClusterBusy(w, remoteOperation(holder), refusal.reason, viewer)
 		return
 	}
 	slog.Warn("operation refused: the cross-pod operation lock could not be read or written", "error", refusal.err)
@@ -97,31 +91,37 @@ func writeLockRefusal(w http.ResponseWriter, refusal *lockRefusal) {
 	writeError(w, lockUnavailableMessage, http.StatusServiceUnavailable, "lock_unavailable")
 }
 
-// lockRefusal is why acquireRunnerLock did not take the lock. Exactly one
-// of these is set.
+// lockRefusal is why a lock was not taken. Exactly one of busy, holder and
+// err is set.
 type lockRefusal struct {
-	// busy: another operation of this process holds the local lock.
+	// busy: another operation of this process holds a conflicting slot:
+	// opID ("" when it is not recorded yet).
 	busy bool
-	// holder is the live lease of another updater process that holds the
-	// cross-pod lock.
+	opID string
+	// holder is the live lease of another updater process that holds a
+	// conflicting lock.
 	holder *types.OperationLease
+	// reason is the rule that refused it (conflictCluster, ...) for busy
+	// and holder.
+	reason string
 	// err kept the lease from being read or written (fail closed: without
 	// the lease the updater cannot tell whether another pod changes the
 	// cluster).
 	err error
 }
 
-// acquireRunnerLock takes the local lock, then records the operation start
-// returns as the one holding it, then takes the cross-pod lease for that
-// operation with its bookkeeper (the ServiceAccount's client). It is the
-// one way to take the lock: lockCluster for a request, and a holder that
-// runs without one or outlives it (the background MaaS check).
+// acquireRunnerLock takes the cluster lock: this process's slot, then
+// records the operation start returns as the one holding it, then takes
+// the cross-pod lease for that operation with its bookkeeper (the
+// ServiceAccount's client) (acquireLock). It is the one way to take the
+// cluster lock: lockCluster for a request, and a holder that runs without
+// one or outlives it (the background MaaS check, a recipe run).
 //
 // cancelOp is what the lease heartbeat calls with
 // cluster.ErrOperationLockLost when the lease is lost: the request's cancel
 // for a handler, the holder's own for a holder that outlives the handler.
 //
-// start runs only once the local lock is held. It may return nil (nothing
+// start runs only once the slot is held. It may return nil (nothing
 // to track, as for a response that is not a statusWriter in tests), and the
 // operation may have no bookkeeper (no ServiceAccount token): then no lease
 // is taken, as before.
@@ -129,22 +129,9 @@ type lockRefusal struct {
 // It returns nil when the lock is held; the caller must then call
 // releaseClusterMutationLock when it ends, which completes the marker of a
 // begun operation and releases the lease. On a refusal nothing is held: the
-// operation is forgotten (it never began) and the local lock is free again.
+// operation is forgotten (it never began) and the slot is free again.
 func acquireRunnerLock(start func() *Operation, cancelOp context.CancelCauseFunc) *lockRefusal {
-	if !acquireClusterMutationLock() {
-		return &lockRefusal{busy: true}
-	}
-	op := start()
-	if op == nil || op.bookkeeper == nil {
-		return nil
-	}
-	holder, err := leases.acquire(op.bookkeeper, op, cancelOp)
-	if holder == nil && err == nil {
-		return nil
-	}
-	inflight.finish()
-	clusterMutationInProgress.Store(false)
-	return &lockRefusal{holder: holder, err: err}
+	return acquireLock(lockWant{}, start, cancelOp)
 }
 
 // The refusal when the lease cannot be read or written (fail closed).
@@ -153,25 +140,57 @@ const (
 	lockUnavailableRetryAfter = 10 * time.Second
 )
 
-// writeClusterBusy answers 409 cluster_busy, naming op when it is known.
-func writeClusterBusy(w http.ResponseWriter, op *Operation, message string) {
+// busyViewer is who is refused: a cluster-admin (withMutationAuth checked
+// it) or not, and their user name.
+type busyViewer struct {
+	admin bool
+	user  string
+}
+
+// writeClusterBusy answers 409 cluster_busy. A cluster-admin learns op
+// when it is known: who runs it, where, and the operation itself. Anyone
+// else learns no other user's name and no project but their own action's
+// (per-user views decision 4): see busyMessageForUser.
+func writeClusterBusy(w http.ResponseWriter, op *Operation, reason string, viewer busyViewer) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusConflict)
-	if message == "" {
-		message = "Another cluster operation is in progress. Please wait."
-	}
-	body := map[string]any{"error": message, "errorCode": "cluster_busy"}
-	if op != nil {
+	body := map[string]any{"error": "Another cluster operation is in progress. Please wait.", "errorCode": "cluster_busy"}
+	if !viewer.admin {
+		body["error"] = busyMessageForUser(op, reason, viewer.user)
+	} else if op != nil {
 		body["operation"] = op
 		where := ""
+		if op.Project != "" {
+			where = " in project " + op.Project
+		}
 		if op.Remote && op.Pod != "" {
-			where = " on updater pod " + op.Pod
+			where += " on updater pod " + op.Pod
 		}
 		body["error"] = op.User + " is running \"" + op.Label + "\"" + where + ". Wait for it to finish."
 	}
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		slog.Error("response encode error", "label", "cluster-busy", "error", err)
 	}
+}
+
+// busyMessageForUser is the refusal a user who is not a cluster-admin
+// reads: a cluster operation by its start only, their own action by its
+// label and project, another action in the project they asked for by its
+// label and start; never another user's name or another project.
+func busyMessageForUser(op *Operation, reason, user string) string {
+	switch {
+	case reason == conflictCap:
+		return "Too many project actions are running at once. Try again in a few minutes."
+	case op == nil:
+		return "Another operation is in progress. Please wait."
+	case op.ProjectUID == "":
+		return "A cluster operation is running since " + op.StartedAt.UTC().Format("15:04") + " UTC. Project actions can start when it ends."
+	case op.User == user:
+		return "You already have an action running (" + op.Label + " in project " + op.Project + "). Wait for it to finish."
+	case reason == conflictProject:
+		return "An action (" + op.Label + ") is running in this project since " + op.StartedAt.UTC().Format("15:04") + " UTC. Wait for it to finish."
+	}
+	return "Another operation is in progress. Please wait."
 }
 
 // beginOperation marks a validated request as a running cluster operation:
@@ -244,6 +263,14 @@ type Operation struct {
 	// from its lease; Step, StepStatus and Message are its latest progress
 	// as of its last heartbeat (UpdatedAt).
 	Remote bool `json:"remote,omitempty"`
+	// Project and ProjectUID: the project a project action runs in (the
+	// namespace and its UID); a cluster operation has neither.
+	Project    string `json:"project,omitempty"`
+	ProjectUID string `json:"projectUid,omitempty"`
+	// Scope ("cluster" or "project") and Interrupted are set on the
+	// entries of OperationStatus.Operations only.
+	Scope       string `json:"scope,omitempty"`
+	Interrupted bool   `json:"interrupted,omitempty"`
 
 	// bookkeeper writes the operation's lease and marker: always the
 	// ServiceAccount's client, which may outlive the request.
@@ -256,6 +283,9 @@ type Operation struct {
 	freshBookkeeper func(ctx context.Context) *cluster.Client
 	sw              *statusWriter // the response, for the outcome of non-streaming operations
 	begun           bool          // set by beginOperation
+	// confirmed: its lock is held (confirmLock); a pending acquisition
+	// is not listed in OperationStatus.Operations.
+	confirmed bool
 	// lockLost: the lease heartbeat stopped the operation because its lease
 	// was lost; its outcome is cluster.LockLostMessage.
 	lockLost bool
@@ -322,10 +352,14 @@ const (
 	maxOperationMessageBytes = 1024
 )
 
+// operationTracker is this process's running operations: the one that
+// holds the cluster lock, and (in time) project actions, each holding its
+// project's lock.
 type operationTracker struct {
 	mu      sync.Mutex
-	current *Operation
-	last    *types.CompletedOperation // the most recent begun operation that finished
+	ops     map[string]*Operation     // by ID
+	cluster string                    // the ID of the one holding the cluster lock ("" none)
+	last    *types.CompletedOperation // the most recent begun cluster operation that finished
 }
 
 var inflight = &operationTracker{}
@@ -342,6 +376,8 @@ func newOperationID() string {
 // liveness probe, crash), which keeps the pod name in HOSTNAME.
 var bootID = newOperationID()
 
+// start records the cluster operation of a request that took the
+// cluster lock.
 func (t *operationTracker) start(sw *statusWriter) *Operation {
 	kind := operationTypes[sw.path]
 	if kind[0] == "" {
@@ -352,26 +388,47 @@ func (t *operationTracker) start(sw *statusWriter) *Operation {
 		ID: newOperationID(), Type: kind[0], Label: kind[1], User: sw.user,
 		StartedAt: now, UpdatedAt: now, Pod: os.Getenv("HOSTNAME"), bookkeeper: sw.bookkeeper, sw: sw, freshBookkeeper: sw.newBookkeeper,
 	}
-	t.mu.Lock()
-	t.current = op
-	t.mu.Unlock()
+	t.add(op)
 	return op
 }
 
 // startBackground records an operation the updater runs on its own (no
-// request) as the one holding the lock, so the status shows it and the
-// lease heartbeat renews it. The caller holds the local lock; c is the
-// ServiceAccount's client.
+// request) as the cluster operation holding the lock, so the status shows
+// it and the lease heartbeat renews it. The caller holds the cluster slot;
+// c is the ServiceAccount's client.
 func (t *operationTracker) startBackground(typ, label, user string, c *cluster.Client) *Operation {
 	now := time.Now().UTC()
 	op := &Operation{
 		ID: newOperationID(), Type: typ, Label: label, User: user,
 		StartedAt: now, UpdatedAt: now, Pod: os.Getenv("HOSTNAME"), bookkeeper: c,
 	}
-	t.mu.Lock()
-	t.current = op
-	t.mu.Unlock()
+	t.add(op)
 	return op
+}
+
+// startProject records a project action in project (namespace UID uid)
+// that holds that project's slot; c is the ServiceAccount's client.
+func (t *operationTracker) startProject(typ, label, user, project, uid string, c *cluster.Client) *Operation {
+	now := time.Now().UTC()
+	op := &Operation{
+		ID: newOperationID(), Type: typ, Label: label, User: user, Project: project, ProjectUID: uid,
+		StartedAt: now, UpdatedAt: now, Pod: os.Getenv("HOSTNAME"), bookkeeper: c,
+	}
+	t.add(op)
+	return op
+}
+
+// add records op, as the cluster operation unless it is a project action.
+func (t *operationTracker) add(op *Operation) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.ops == nil {
+		t.ops = map[string]*Operation{}
+	}
+	t.ops[op.ID] = op
+	if op.ProjectUID == "" {
+		t.cluster = op.ID
+	}
 }
 
 func (t *operationTracker) update(id string, fn func(*Operation)) {
@@ -380,9 +437,9 @@ func (t *operationTracker) update(id string, fn func(*Operation)) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.current != nil && t.current.ID == id {
-		fn(t.current)
-		t.current.UpdatedAt = time.Now().UTC()
+	if op := t.ops[id]; op != nil {
+		fn(op)
+		op.UpdatedAt = time.Now().UTC()
 	}
 }
 
@@ -393,17 +450,28 @@ func (t *operationTracker) recordStep(id string, step UpdateStep) {
 	})
 }
 
-// finish forgets the current operation and returns its bookkeeping client.
-// When it had begun, it becomes the last completed operation, which is
-// returned too.
-// It runs on the handler's goroutine after the response is written.
+// finish forgets the cluster operation (finishID).
 func (t *operationTracker) finish() (*types.CompletedOperation, *cluster.Client) {
 	t.mu.Lock()
+	id := t.cluster
+	t.mu.Unlock()
+	return t.finishID(id)
+}
+
+// finishID forgets the operation with this ID and returns its bookkeeping
+// client. When it had begun, its outcome is returned too; a cluster
+// operation's becomes the last completed operation.
+// It runs on the handler's goroutine after the response is written.
+func (t *operationTracker) finishID(id string) (*types.CompletedOperation, *cluster.Client) {
+	t.mu.Lock()
 	defer t.mu.Unlock()
-	op := t.current
-	t.current = nil
+	op := t.ops[id]
 	if op == nil {
 		return nil, nil
+	}
+	delete(t.ops, id)
+	if t.cluster == id {
+		t.cluster = ""
 	}
 	bookkeeper := op.bookkeeper
 	if op.freshBookkeeper != nil {
@@ -413,15 +481,18 @@ func (t *operationTracker) finish() (*types.CompletedOperation, *cluster.Client)
 		return nil, bookkeeper
 	}
 	success, message := operationOutcome(op)
-	t.last = &types.CompletedOperation{
+	done := &types.CompletedOperation{
 		ID: op.ID, Type: op.Type, Label: op.Label, User: op.User, Target: op.Target,
 		StartedAt:  op.StartedAt.Format(time.RFC3339),
 		FinishedAt: time.Now().UTC().Format(time.RFC3339),
 		Success:    success,
 		Message:    truncateText(message, maxOperationMessageBytes),
 	}
-	done := *t.last
-	return &done, bookkeeper
+	if op.ProjectUID == "" {
+		cp := *done
+		t.last = &cp
+	}
+	return done, bookkeeper
 }
 
 // lastCompleted returns a copy of the last completed operation, or nil.
@@ -468,16 +539,58 @@ func finishedBefore(a, b *types.CompletedOperation) bool {
 	return ta.Before(tb)
 }
 
-// snapshot returns a copy of the current operation, or nil.
+// snapshot returns a copy of the cluster operation, or nil.
 func (t *operationTracker) snapshot() *Operation {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.current == nil {
+	return copyOperation(t.ops[t.cluster])
+}
+
+// get returns a copy of the operation with this ID, or nil.
+func (t *operationTracker) get(id string) *Operation {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return copyOperation(t.ops[id])
+}
+
+// clusterID is the ID of the cluster operation, "" when none runs.
+func (t *operationTracker) clusterID() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.cluster
+}
+
+// list returns copies of the running operations, oldest first.
+func (t *operationTracker) list() []*Operation {
+	t.mu.Lock()
+	out := make([]*Operation, 0, len(t.ops))
+	for _, op := range t.ops {
+		out = append(out, copyOperation(op))
+	}
+	t.mu.Unlock()
+	sortOperations(out)
+	return out
+}
+
+// copyOperation is a copy of op without what only this process uses, nil
+// for nil.
+func copyOperation(op *Operation) *Operation {
+	if op == nil {
 		return nil
 	}
-	cp := *t.current
+	cp := *op
 	cp.bookkeeper, cp.sw, cp.freshBookkeeper = nil, nil, nil
 	return &cp
+}
+
+// sortOperations orders ops by start, then ID.
+func sortOperations(ops []*Operation) {
+	sort.SliceStable(ops, func(i, j int) bool {
+		if !ops[i].StartedAt.Equal(ops[j].StartedAt) {
+			return ops[i].StartedAt.Before(ops[j].StartedAt)
+		}
+		return ops[i].ID < ops[j].ID
+	})
 }
 
 // operationOutcome reports whether an operation succeeded, and its message:
@@ -539,36 +652,46 @@ const interruptedMarkerMaxAge = 24 * time.Hour
 
 // OperationStatus is the GET /api/operation response.
 type OperationStatus struct {
+	// InProgress: a cluster operation runs.
 	InProgress bool `json:"inProgress"`
-	// Operation is the running operation: this process's own, or one that
-	// another updater pod runs (Operation.Remote, from its lease).
+	// Operation is the running cluster operation: this process's own, or
+	// one that another updater pod runs (Operation.Remote, from its lease).
 	Operation *Operation `json:"operation"`
-	// Interrupted is an operation that an updater process started and
-	// never finished: its marker is still recorded and its process holds
-	// no live lease (the pod or its container crashed or was killed, or a
-	// version without leases left it). Its cluster changes may be
+	// Interrupted is a cluster operation that an updater process started
+	// and never finished: its marker is still recorded and its process
+	// holds no live lease (the pod or its container crashed or was killed,
+	// or a version without leases left it). Its cluster changes may be
 	// half-done.
 	Interrupted *types.OperationMarker `json:"interrupted,omitempty"`
-	// LastCompleted is the most recent finished operation, also one that
-	// finished before this process started or in another updater pod.
+	// LastCompleted is the most recent finished cluster operation, also one
+	// that finished before this process started or in another updater pod.
 	LastCompleted *types.CompletedOperation `json:"lastCompleted,omitempty"`
+	// Operations is every operation the locks know, oldest first: the
+	// running ones (this process's and other pods', the cluster operation
+	// and project actions; Scope says which) and the interrupted ones (the
+	// cluster operation's marker; a project action whose lock expired after
+	// it began, for interruptedMarkerMaxAge). The fields above are the
+	// cluster operation's part of it, as earlier versions answered.
+	Operations []*Operation `json:"operations"`
 }
 
-// HandleOperation reports the cluster operation in progress, the last
-// completed one, and an interrupted one, if any. While this process runs
-// an operation it answers from memory; otherwise it reads the operation
-// record, which also tells about another pod's operation.
+// HandleOperation reports the operations in progress, the last completed
+// cluster operation, and interrupted ones, if any. While this process runs
+// a cluster operation it answers from memory; otherwise it reads the
+// operation record, which also tells about other pods' operations.
 //
 // A user who is not a cluster-admin gets types.OperationSummary only:
-// whether one runs, its label and when it started; not who started it,
-// its target, its pod, or an interrupted one (tier per-role). The record
-// is read, and its marker retried, with the ServiceAccount for both.
+// whether a cluster operation runs, its label and when it started; not who
+// started it, its target, its pod, or an interrupted one (tier per-role);
+// of the list, the running cluster operation only (project actions are
+// left out until their per-project view exists). The record is read, and
+// its marker retried, with the ServiceAccount for both.
 var HandleOperation = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	admin, ok := requestRole(w, r)
 	if !ok {
 		return
 	}
-	status := operationStatus(c)
+	status := operationStatus(c, admin)
 	if !admin {
 		writeJSON(w, operationSummary(status), "operation")
 		return
@@ -579,28 +702,64 @@ var HandleOperation = withAuth(func(c *cluster.Client, w http.ResponseWriter, r 
 // operationSummary is what a user who is not a cluster-admin sees of the
 // operation status.
 func operationSummary(status OperationStatus) types.OperationSummary {
-	if !status.InProgress || status.Operation == nil {
-		return types.OperationSummary{Running: status.InProgress}
+	sum := types.OperationSummary{Running: status.InProgress, Operations: []types.OperationSummaryEntry{}}
+	for _, op := range status.Operations {
+		if op.Scope == scopeCluster && !op.Interrupted {
+			sum.Operations = append(sum.Operations, types.OperationSummaryEntry{Scope: scopeCluster, Label: op.Label, StartedAt: op.StartedAt.UTC().Format(time.RFC3339)})
+		}
 	}
-	return types.OperationSummary{Running: true, Label: status.Operation.Label, StartedAt: status.Operation.StartedAt.UTC().Format(time.RFC3339)}
+	if !status.InProgress || status.Operation == nil {
+		return sum
+	}
+	sum.Label, sum.StartedAt = status.Operation.Label, status.Operation.StartedAt.UTC().Format(time.RFC3339)
+	return sum
 }
 
-// operationStatus is the operation status (HandleOperation).
-func operationStatus(c *cluster.Client) OperationStatus {
-	local := clusterMutationInProgress.Load()
-	status := OperationStatus{InProgress: local, Operation: inflight.snapshot()}
+// The scopes of OperationStatus.Operations.
+const (
+	scopeCluster = "cluster"
+	scopeProject = "project"
+)
+
+// operationStatus is the operation status (HandleOperation). While this
+// process runs a cluster operation it makes no cluster call; a
+// cluster-admin (admin) then gets the interrupted project actions of the
+// record as this process last read it (seenProjectLocks).
+//
+// The cluster fields describe this process's cluster operation only once
+// its lock is held (confirmed): a pending acquisition, whose slot is
+// taken while its entry is not written yet, is not one (the record may
+// show another pod's holder meanwhile).
+func operationStatus(c *cluster.Client, admin bool) (status OperationStatus) {
+	clusterOp := inflight.snapshot()
+	local := clusterOp != nil && clusterOp.confirmed
+	if !local {
+		clusterOp = nil
+	}
+	status = OperationStatus{InProgress: local, Operation: clusterOp}
+	running := inflight.list()
 	last := inflight.lastCompleted()
 	if local && last != nil {
+		// No other operation runs anywhere while this one holds the
+		// cluster lock.
 		status.LastCompleted = last
+		var rec *cluster.OperationRecord
+		if admin {
+			rec = &cluster.OperationRecord{ProjectLocks: seenProjectLocks.interrupted()}
+		}
+		status.Operations = operationList(running, rec, nil)
 		return status
 	}
 	rec, err := readOperationState(c)
 	if err != nil || rec == nil {
 		slog.Debug("could not read the operation record", "error", err)
 		status.LastCompleted = last
+		status.Operations = operationList(running, nil, nil)
 		return status
 	}
+	seenProjectLocks.remember(rec)
 	status.LastCompleted = inflight.rememberLast(rec.LastCompleted)
+	defer func() { status.Operations = operationList(running, rec, status.Interrupted) }()
 	if local {
 		return status
 	}
@@ -624,6 +783,125 @@ func operationStatus(c *cluster.Client) OperationStatus {
 		}
 	}
 	return status
+}
+
+// operationList is OperationStatus.Operations: running (this process's
+// operations whose lock is held: confirmed), and, from rec when it was
+// read, the live locks of other processes and the interrupted operations
+// (interrupted: the cluster operation's).
+func operationList(running []*Operation, rec *cluster.OperationRecord, interrupted *types.OperationMarker) []*Operation {
+	out := make([]*Operation, 0, len(running))
+	for _, op := range running {
+		if !op.confirmed {
+			continue
+		}
+		op.Scope = scopeOf(op)
+		out = append(out, op)
+	}
+	if rec != nil {
+		if leaseHeldElsewhere(rec.Lease) {
+			op := remoteOperation(rec.Lease)
+			op.Scope = scopeCluster
+			out = append(out, op)
+		}
+		kept := interruptedProjectLocks(rec.ProjectLocks)
+		for uid, l := range rec.ProjectLocks {
+			switch {
+			case leaseHeldElsewhere(l):
+				op := remoteOperation(l)
+				op.Scope = scopeProject
+				out = append(out, op)
+			case kept[uid] != nil:
+				op := remoteOperation(l)
+				op.Scope, op.Interrupted, op.Remote = scopeProject, true, false
+				out = append(out, op)
+			}
+		}
+	}
+	if interrupted != nil {
+		started, _ := time.Parse(time.RFC3339, interrupted.StartedAt)
+		out = append(out, &Operation{ID: interrupted.ID, Type: interrupted.Type, Label: interrupted.Label, User: interrupted.User,
+			Target: interrupted.Target, StartedAt: started, Pod: interrupted.Pod, Scope: scopeCluster, Interrupted: true})
+	}
+	sortOperations(out)
+	return out
+}
+
+// projectLockCache is the project locks of the operation record as this
+// process read it last (GET /api/operation, a lock's check). While a
+// cluster operation runs here no project action can start anywhere, so
+// the interrupted ones it lists change only by age (projectLockInterrupted
+// is applied when they are listed).
+type projectLockCache struct {
+	mu    sync.Mutex
+	locks map[string]*types.OperationLease
+}
+
+var seenProjectLocks = &projectLockCache{}
+
+func (p *projectLockCache) remember(rec *cluster.OperationRecord) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.locks = rec.ProjectLocks
+}
+
+// interrupted is the remembered locks of interrupted project actions.
+func (p *projectLockCache) interrupted() map[string]*types.OperationLease {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return interruptedProjectLocks(p.locks)
+}
+
+// interruptedProjectLocks is the locks of interrupted project actions
+// (projectLockInterrupted) among locks, the cluster.MaxInterruptedLocks
+// newest by start: what the record keeps of them once it is written
+// again, so a record read before that write lists the same.
+func interruptedProjectLocks(locks map[string]*types.OperationLease) map[string]*types.OperationLease {
+	type entry struct {
+		uid     string
+		started time.Time
+	}
+	var all []entry
+	for uid, l := range locks {
+		if projectLockInterrupted(l) {
+			started, _ := time.Parse(time.RFC3339, l.StartedAt)
+			all = append(all, entry{uid, started})
+		}
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if !all[i].started.Equal(all[j].started) {
+			return all[i].started.After(all[j].started)
+		}
+		return all[i].uid < all[j].uid
+	})
+	out := map[string]*types.OperationLease{}
+	for i, e := range all {
+		if i == cluster.MaxInterruptedLocks {
+			break
+		}
+		out[e.uid] = locks[e.uid]
+	}
+	return out
+}
+
+func scopeOf(op *Operation) string {
+	if op.ProjectUID != "" {
+		return scopeProject
+	}
+	return scopeCluster
+}
+
+// projectLockInterrupted reports whether l is the lock of a project action
+// that was interrupted: it began, its lease expired (its process stopped
+// renewing it: the pod or container is gone), it was not this process's,
+// and it started less than interruptedMarkerMaxAge ago. The next action in
+// that project supersedes it (the same key).
+func projectLockInterrupted(l *types.OperationLease) bool {
+	if l == nil || !l.Begun || l.BootID == bootID || cluster.LeaseLive(l, clk.Now(), leaseTTL) {
+		return false
+	}
+	started, err := time.Parse(time.RFC3339, l.StartedAt)
+	return err == nil && time.Since(started) < interruptedMarkerMaxAge
 }
 
 // Cluster operations used by the handlers; tests replace them.

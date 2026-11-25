@@ -508,6 +508,8 @@ export interface UserOperationStatus {
   running: boolean;
   label?: string;
   startedAt?: string;
+  /** The running cluster operation as a list entry (pkg/types OperationSummaryEntry); older backends do not send it. */
+  operations?: { scope: 'cluster'; label: string; startedAt: string }[];
 }
 
 export interface DashboardState {
@@ -1468,6 +1470,12 @@ export interface ServerOperation {
    * and there is no stream to attach to.
    */
   remote?: boolean;
+  /** The project a project action runs in (namespace and UID); a cluster operation has neither. */
+  project?: string;
+  projectUid?: string;
+  /** Set on the entries of OperationStatusResponse.operations only. */
+  scope?: 'cluster' | 'project';
+  interrupted?: boolean;
 }
 
 /** An operation an updater pod started and never finished (its pod stopped). */
@@ -1506,6 +1514,8 @@ export interface OperationStatusResponse {
   operation: ServerOperation | null;
   interrupted?: InterruptedOperation;
   lastCompleted?: CompletedOperation | null;
+  /** Every running and interrupted operation, oldest first; older backends do not send it. */
+  operations?: ServerOperation[];
 }
 
 /** GET /api/version */

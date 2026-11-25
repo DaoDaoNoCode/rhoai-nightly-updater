@@ -15,19 +15,24 @@ import (
 )
 
 // fakeRecord is the operation ConfigMap shared by "pods": it backs the
-// record and lease seams the way pkg/cluster writes the ConfigMap (a write
-// of the lease never replaces a live lease of another process).
+// record and lock seams the way pkg/cluster writes the ConfigMap (an
+// acquire runs its check on the record and writes only when it allows it;
+// a renewal replaces an entry only while it holds the value it tests, and
+// reports the others lost).
 type fakeRecord struct {
-	mu        sync.Mutex
-	marker    *types.OperationMarker
-	last      *types.CompletedOperation
-	lease     *types.OperationLease
+	mu       sync.Mutex
+	marker   *types.OperationMarker
+	last     *types.CompletedOperation
+	lease    *types.OperationLease            // the cluster lock
+	projects map[string]*types.OperationLease // project locks, by namespace UID
+	// writes are the successful lock writes (acquires and renewals), in
+	// order.
 	writes    []types.OperationLease
 	releases  []cluster.LeaseOwner
 	completed []*cluster.LeaseOwner
 	writeErr  error
-	failNext  int // the next lease writes that fail
-	attempts  int // lease writes asked for, failed ones included
+	failNext  int // the next lock writes that fail
+	attempts  int // lock writes asked for (an acquire, a renewal of all entries), failed ones included
 }
 
 func installFakeRecord(t *testing.T) *fakeRecord {
@@ -36,34 +41,52 @@ func installFakeRecord(t *testing.T) *fakeRecord {
 	readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		return &cluster.OperationRecord{Marker: f.marker, LastCompleted: f.last, Lease: f.lease}, nil
+		return f.recordLocked(), nil
 	}
-	writeOperationLease = func(_ *cluster.Client, l *types.OperationLease, heldElsewhere func(*types.OperationLease) bool) (*types.OperationLease, error) {
+	acquireOperationLock = func(c *cluster.Client, key, value string, check func(*cluster.OperationRecord) error) error {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		f.attempts++
-		if f.writeErr != nil {
-			return nil, f.writeErr
+		if err := f.failLocked(); err != nil {
+			return err
 		}
-		if f.failNext > 0 {
-			f.failNext--
-			return nil, errors.New("etcdserver: request timed out")
+		if c != nil && c.Context() != nil && c.Context().Err() != nil {
+			return c.Context().Err() // the request never leaves
 		}
-		if f.lease != nil && heldElsewhere(f.lease) {
-			cp := *f.lease
-			return &cp, nil
+		if err := check(f.recordLocked()); err != nil {
+			return err
 		}
-		cp := *l
-		f.lease = &cp
-		f.writes = append(f.writes, cp)
-		return nil, nil
+		f.putLocked(key, value)
+		return nil
 	}
-	releaseOperationLease = func(_ *cluster.Client, owner cluster.LeaseOwner) error {
+	renewOperationLocks = func(_ *cluster.Client, renewals []cluster.LockRenewal) (map[string]*types.OperationLease, error) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if err := f.failLocked(); err != nil {
+			return nil, err
+		}
+		var lost map[string]*types.OperationLease
+		var keep []cluster.LockRenewal
+		for _, r := range renewals {
+			if cur := f.getLocked(r.Key); cur == nil || lockValue(cur) != r.Old {
+				if lost == nil {
+					lost = map[string]*types.OperationLease{}
+				}
+				lost[r.Key] = cur
+				continue
+			}
+			keep = append(keep, r)
+		}
+		for _, r := range keep {
+			f.putLocked(r.Key, r.New)
+		}
+		return lost, nil
+	}
+	releaseOperationLock = func(_ *cluster.Client, key string, owner cluster.LeaseOwner) error {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.releases = append(f.releases, owner)
-		if f.lease != nil && f.lease.BootID == owner.BootID && f.lease.ID == owner.ID {
-			f.lease = nil
+		if l := f.getLocked(key); l != nil && l.BootID == owner.BootID && l.ID == owner.ID {
+			f.putLocked(key, "")
 		}
 		return nil
 	}
@@ -84,6 +107,106 @@ func installFakeRecord(t *testing.T) *fakeRecord {
 		return nil
 	}
 	return f
+}
+
+// failLocked counts a lock write and returns the error it fails with, if
+// any. f.mu must be held.
+func (f *fakeRecord) failLocked() error {
+	f.attempts++
+	if f.writeErr != nil {
+		return f.writeErr
+	}
+	if f.failNext > 0 {
+		f.failNext--
+		return errors.New("etcdserver: request timed out")
+	}
+	return nil
+}
+
+// recordLocked is the record as read. f.mu must be held.
+func (f *fakeRecord) recordLocked() *cluster.OperationRecord {
+	rec := &cluster.OperationRecord{Marker: f.marker, LastCompleted: f.last, Lease: f.lease}
+	if len(f.projects) > 0 {
+		rec.ProjectLocks = map[string]*types.OperationLease{}
+		for uid, l := range f.projects {
+			rec.ProjectLocks[uid] = l
+		}
+	}
+	return rec
+}
+
+// getLocked is the entry key, nil when there is none. f.mu must be held.
+func (f *fakeRecord) getLocked(key string) *types.OperationLease {
+	if key == cluster.ClusterLockKey {
+		return f.lease
+	}
+	uid, _ := strings.CutPrefix(key, cluster.ProjectLockKey(""))
+	return f.projects[uid]
+}
+
+// putLocked writes value to the entry key ("" removes it). f.mu must be
+// held.
+func (f *fakeRecord) putLocked(key, value string) {
+	var l *types.OperationLease
+	if value != "" {
+		l = &types.OperationLease{}
+		if err := json.Unmarshal([]byte(value), l); err != nil {
+			panic(err)
+		}
+		f.writes = append(f.writes, *l)
+	}
+	if key == cluster.ClusterLockKey {
+		f.lease = l
+		return
+	}
+	uid, _ := strings.CutPrefix(key, cluster.ProjectLockKey(""))
+	if f.projects == nil {
+		f.projects = map[string]*types.OperationLease{}
+	}
+	if l == nil {
+		delete(f.projects, uid)
+		return
+	}
+	f.projects[uid] = l
+}
+
+// project is a copy of the project lock of uid, nil when there is none.
+func (f *fakeRecord) project(uid string) *types.OperationLease {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if l := f.projects[uid]; l != nil {
+		cp := *l
+		return &cp
+	}
+	return nil
+}
+
+// setProject records l as the lock of project uid (nil removes it).
+func (f *fakeRecord) setProject(uid string, l *types.OperationLease) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.projects == nil {
+		f.projects = map[string]*types.OperationLease{}
+	}
+	if l == nil {
+		delete(f.projects, uid)
+		return
+	}
+	f.projects[uid] = l
+}
+
+// wrapLockWrites makes every lock write (an acquire, a renewal) call then
+// after the write it wraps: then gets the write's client and error, and
+// returns the error the caller sees.
+func wrapLockWrites(then func(c *cluster.Client, err error) error) {
+	acquire, renew := acquireOperationLock, renewOperationLocks
+	acquireOperationLock = func(c *cluster.Client, key, value string, check func(*cluster.OperationRecord) error) error {
+		return then(c, acquire(c, key, value, check))
+	}
+	renewOperationLocks = func(c *cluster.Client, renewals []cluster.LockRenewal) (map[string]*types.OperationLease, error) {
+		lost, err := renew(c, renewals)
+		return lost, then(c, err)
+	}
 }
 
 // beat moves the fake clock one heartbeat interval on and waits until the
@@ -172,7 +295,7 @@ func TestLiveForeignLeaseRefusesWithTheRemoteOperation(t *testing.T) {
 		body.Operation.Step != "verify_installplan" || !strings.Contains(body.Error, "on updater pod updater-old-pod") {
 		t.Fatalf("body %s", w.Body.String())
 	}
-	if clusterMutationInProgress.Load() || inflight.snapshot() != nil {
+	if locks.clusterHeld() || inflight.snapshot() != nil {
 		t.Fatal("the local lock is still held after the refusal")
 	}
 	if f.currentLease().ID != "remote-op" || len(f.releases) != 0 {
@@ -375,7 +498,7 @@ func TestLeaseErrorPolicy(t *testing.T) {
 			!strings.Contains(body.Error, "Cannot verify that no other updater pod is running an operation") {
 			t.Fatalf("%v: %d ran=%v %s", leaseErr, w.Code, ran, w.Body.String())
 		}
-		if clusterMutationInProgress.Load() || inflight.snapshot() != nil || inflight.lastCompleted() != nil {
+		if locks.clusterHeld() || inflight.snapshot() != nil || inflight.lastCompleted() != nil {
 			t.Fatalf("%v: local lock or operation kept after the refusal", leaseErr)
 		}
 		// The refusal does not use up the rate-limit slot: a retry runs.

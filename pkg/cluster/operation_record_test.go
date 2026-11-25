@@ -3,7 +3,6 @@ package cluster
 import (
 	"encoding/json"
 	"errors"
-	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -29,6 +28,8 @@ type fakeOperationConfigMap struct {
 	// beforeWrite runs before each PATCH or POST is applied, so a test can
 	// change the object in between (another writer).
 	beforeWrite func(f *fakeOperationConfigMap)
+	// conflicts counts the writes refused with 409.
+	conflicts int
 }
 
 const fakeOperationCMPath = "/api/v1/namespaces/test-ns/configmaps/rhoai-nightly-updater-operation"
@@ -68,6 +69,8 @@ func (f *fakeOperationConfigMap) ServeHTTP(w http.ResponseWriter, r *http.Reques
 			"data":     f.data,
 		})
 		w.Write(out)
+	case r.Method == http.MethodPatch && r.URL.Path == fakeOperationCMPath && r.Header.Get("Content-Type") == "application/json-patch+json":
+		f.jsonPatch(w, r)
 	case r.Method == http.MethodPatch && r.URL.Path == fakeOperationCMPath:
 		if f.beforeWrite != nil {
 			f.beforeWrite(f)
@@ -76,12 +79,26 @@ func (f *fakeOperationConfigMap) ServeHTTP(w http.ResponseWriter, r *http.Reques
 			f.status(w, 404, "NotFound")
 			return
 		}
-		json.NewDecoder(r.Body).Decode(&body)
-		if body.Metadata.ResourceVersion != "" && body.Metadata.ResourceVersion != strconv.Itoa(f.rv) {
+		var patch struct {
+			Metadata struct {
+				ResourceVersion string `json:"resourceVersion"`
+			} `json:"metadata"`
+			Data map[string]*string `json:"data"`
+		}
+		json.NewDecoder(r.Body).Decode(&patch)
+		if patch.Metadata.ResourceVersion != "" && patch.Metadata.ResourceVersion != strconv.Itoa(f.rv) {
+			f.conflicts++
 			f.status(w, 409, "Conflict")
 			return
 		}
-		maps.Copy(f.data, body.Data)
+		// A JSON merge patch (RFC 7386): null removes the key.
+		for k, v := range patch.Data {
+			if v == nil {
+				delete(f.data, k)
+				continue
+			}
+			f.data[k] = *v
+		}
 		f.rv++
 		w.Write([]byte(`{}`))
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/namespaces/test-ns/configmaps":
@@ -89,6 +106,7 @@ func (f *fakeOperationConfigMap) ServeHTTP(w http.ResponseWriter, r *http.Reques
 			f.beforeWrite(f)
 		}
 		if f.data != nil {
+			f.conflicts++
 			f.status(w, 409, "AlreadyExists")
 			return
 		}
@@ -137,20 +155,41 @@ func testLease(id, boot string, beat time.Time) *types.OperationLease {
 		StartedAt: beat.Add(-time.Minute).UTC().Format(time.RFC3339), HeartbeatAt: beat.UTC().Format(time.RFC3339)}
 }
 
-// heldBy treats a lease of any boot ID in alive as held by a live process.
-func heldBy(alive ...string) func(*types.OperationLease) bool {
-	return func(l *types.OperationLease) bool {
-		return slices.Contains(alive, l.BootID)
+// heldBy refuses the cluster lock while the recorded one has a boot ID in
+// alive (a live process), returning it as a lockHeld refusal.
+func heldBy(alive ...string) func(*OperationRecord) error {
+	return func(rec *OperationRecord) error {
+		if rec.Lease != nil && slices.Contains(alive, rec.Lease.BootID) {
+			return &lockHeld{rec.Lease}
+		}
+		return nil
 	}
 }
 
-func TestWriteOperationLease(t *testing.T) {
+// lockHeld is heldBy's refusal: the live lease of another process.
+type lockHeld struct{ holder *types.OperationLease }
+
+func (e *lockHeld) Error() string { return "held by " + e.holder.ID }
+
+// acquireLease takes the cluster lock for l the way WriteOperationLease
+// did: the lease of a live process is returned, not overwritten.
+func acquireLease(c *Client, l *types.OperationLease, check func(*OperationRecord) error) (*types.OperationLease, error) {
+	value, _ := json.Marshal(l)
+	err := AcquireOperationLock(c, ClusterLockKey, string(value), check)
+	var held *lockHeld
+	if errors.As(err, &held) {
+		return held.holder, nil
+	}
+	return nil, err
+}
+
+func TestAcquireOperationLock(t *testing.T) {
 	now := time.Now()
 
 	t.Run("creates the ConfigMap when it is missing", func(t *testing.T) {
 		f, c := newFakeOperationConfigMap(t)
 		mine := testLease("op1", "boot-a", now)
-		if holder, err := WriteOperationLease(c, mine, heldBy("boot-b")); holder != nil || err != nil {
+		if holder, err := acquireLease(c, mine, heldBy("boot-b")); holder != nil || err != nil {
 			t.Fatalf("holder %+v err %v", holder, err)
 		}
 		if got := f.lease(); got == nil || *got != *mine {
@@ -162,7 +201,7 @@ func TestWriteOperationLease(t *testing.T) {
 		f, c := newFakeOperationConfigMap(t)
 		theirs := testLease("op0", "boot-b", now)
 		f.set(record.LeaseKey, theirs)
-		holder, err := WriteOperationLease(c, testLease("op1", "boot-a", now), heldBy("boot-b"))
+		holder, err := acquireLease(c, testLease("op1", "boot-a", now), heldBy("boot-b"))
 		if err != nil || holder == nil || *holder != *theirs {
 			t.Fatalf("holder %+v err %v", holder, err)
 		}
@@ -176,7 +215,7 @@ func TestWriteOperationLease(t *testing.T) {
 		f.set(record.LeaseKey, testLease("op0", "boot-dead", now.Add(-time.Hour)))
 		f.set(record.LastCompletedKey, &types.CompletedOperation{ID: "op0"})
 		mine := testLease("op1", "boot-a", now)
-		if holder, err := WriteOperationLease(c, mine, heldBy()); holder != nil || err != nil {
+		if holder, err := acquireLease(c, mine, heldBy()); holder != nil || err != nil {
 			t.Fatalf("holder %+v err %v", holder, err)
 		}
 		if got := f.lease(); *got != *mine {
@@ -198,7 +237,7 @@ func TestWriteOperationLease(t *testing.T) {
 			}
 		}
 		mine := testLease("op1", "boot-a", now)
-		if holder, err := WriteOperationLease(c, mine, heldBy()); holder != nil || err != nil {
+		if holder, err := acquireLease(c, mine, heldBy()); holder != nil || err != nil {
 			t.Fatalf("holder %+v err %v", holder, err)
 		}
 		if got := f.lease(); got == nil || *got != *mine {
@@ -219,7 +258,7 @@ func TestWriteOperationLease(t *testing.T) {
 				f.rv++
 			}
 		}
-		holder, err := WriteOperationLease(c, testLease("op1", "boot-a", now), heldBy("boot-b"))
+		holder, err := acquireLease(c, testLease("op1", "boot-a", now), heldBy("boot-b"))
 		if err != nil || holder == nil || holder.ID != "op0" {
 			t.Fatalf("holder %+v err %v (requests %v)", holder, err, f.reqs())
 		}
@@ -229,7 +268,7 @@ func TestWriteOperationLease(t *testing.T) {
 		f, c := newFakeOperationConfigMap(t)
 		f.set(record.OperationKey, &types.OperationMarker{ID: "op0"})
 		f.beforeWrite = func(f *fakeOperationConfigMap) { f.rv++ }
-		holder, err := WriteOperationLease(c, testLease("op1", "boot-a", now), heldBy())
+		holder, err := acquireLease(c, testLease("op1", "boot-a", now), heldBy())
 		if holder != nil || !errors.Is(err, ErrOperationRecordContended) {
 			t.Fatalf("holder %+v err %v", holder, err)
 		}
@@ -240,33 +279,33 @@ func TestWriteOperationLease(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) }))
 		defer srv.Close()
 		c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: t.Context()})
-		if holder, err := WriteOperationLease(c, testLease("op1", "boot-a", now), heldBy()); holder != nil || err == nil || errors.Is(err, ErrOperationRecordContended) {
+		if holder, err := acquireLease(c, testLease("op1", "boot-a", now), heldBy()); holder != nil || err == nil || errors.Is(err, ErrOperationRecordContended) {
 			t.Fatalf("holder %+v err %v", holder, err)
 		}
 	})
 }
 
-func TestReleaseOperationLeaseOnlyClearsItsOwn(t *testing.T) {
+func TestReleaseOperationLockOnlyClearsItsOwn(t *testing.T) {
 	now := time.Now()
 	f, c := newFakeOperationConfigMap(t)
 	theirs := testLease("op0", "boot-b", now)
 	f.set(record.LeaseKey, theirs)
-	if err := ReleaseOperationLease(c, LeaseOwner{BootID: "boot-a", ID: "op1"}); err != nil {
+	if err := ReleaseOperationLock(c, ClusterLockKey, LeaseOwner{BootID: "boot-a", ID: "op1"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.lease(); got == nil || *got != *theirs {
 		t.Fatalf("another process's lease was cleared: %+v", got)
 	}
 	// Same process, another operation: not this one's either.
-	if err := ReleaseOperationLease(c, LeaseOwner{BootID: "boot-b", ID: "op9"}); err != nil || f.lease() == nil {
+	if err := ReleaseOperationLock(c, ClusterLockKey, LeaseOwner{BootID: "boot-b", ID: "op9"}); err != nil || f.lease() == nil {
 		t.Fatalf("err %v lease %+v", err, f.lease())
 	}
-	if err := ReleaseOperationLease(c, LeaseOwner{BootID: "boot-b", ID: "op0"}); err != nil || f.lease() != nil {
+	if err := ReleaseOperationLock(c, ClusterLockKey, LeaseOwner{BootID: "boot-b", ID: "op0"}); err != nil || f.lease() != nil {
 		t.Fatalf("own lease not cleared: err %v lease %+v", err, f.lease())
 	}
 	// Nothing recorded: nothing to do.
 	f2, c2 := newFakeOperationConfigMap(t)
-	if err := ReleaseOperationLease(c2, LeaseOwner{BootID: "boot-a", ID: "op1"}); err != nil || len(f2.reqs()) != 1 {
+	if err := ReleaseOperationLock(c2, ClusterLockKey, LeaseOwner{BootID: "boot-a", ID: "op1"}); err != nil || len(f2.reqs()) != 1 {
 		t.Fatalf("err %v requests %v", err, f2.reqs())
 	}
 }

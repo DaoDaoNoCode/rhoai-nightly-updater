@@ -55,7 +55,7 @@ func resetPackageState(t *testing.T) {
 	t.Helper()
 	origLimiter, origLookup, origPermission := mutationLimiter, lookupUser, mutationPermission
 	origSave, origComplete, origRead := saveOperationMarker, saveCompletedOperation, readOperationState
-	origWriteLease, origReleaseLease := writeOperationLease, releaseOperationLease
+	origAcquireLock, origRenewLocks, origReleaseLock := acquireOperationLock, renewOperationLocks, releaseOperationLock
 	origInterval, origTTL := leaseHeartbeatInterval, leaseTTL
 	origCheck, origPerm := checkAPIVersion, checkPermission
 	origU, origD, origR, origF := runUpdateStream, runUpdateDryRun, runReinstallStream, runRefreshStream
@@ -74,23 +74,24 @@ func resetPackageState(t *testing.T) {
 	apiReady.reset()
 	inflight.reset()
 	markers.reset()
-	leases.stop()
-	clusterMutationInProgress.Store(false)
+	leases.stopAll()
+	locks.reset()
 	saveOperationMarker = func(*cluster.Client, *types.OperationMarker) error { return nil }
 	saveCompletedOperation = func(*cluster.Client, *types.CompletedOperation, *cluster.LeaseOwner) error { return nil }
 	readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) { return &cluster.OperationRecord{}, nil }
-	writeOperationLease = func(*cluster.Client, *types.OperationLease, func(*types.OperationLease) bool) (*types.OperationLease, error) {
+	acquireOperationLock = func(*cluster.Client, string, string, func(*cluster.OperationRecord) error) error { return nil }
+	renewOperationLocks = func(*cluster.Client, []cluster.LockRenewal) (map[string]*types.OperationLease, error) {
 		return nil, nil
 	}
-	releaseOperationLease = func(*cluster.Client, cluster.LeaseOwner) error { return nil }
+	releaseOperationLock = func(*cluster.Client, string, cluster.LeaseOwner) error { return nil }
 	t.Cleanup(func() {
 		// Stop marker retries and the lease heartbeat before the seams they
 		// call are restored.
 		markers.reset()
-		leases.stop()
+		leases.stopAll()
 		mutationLimiter, lookupUser, mutationPermission = origLimiter, origLookup, origPermission
 		saveOperationMarker, saveCompletedOperation, readOperationState = origSave, origComplete, origRead
-		writeOperationLease, releaseOperationLease = origWriteLease, origReleaseLease
+		acquireOperationLock, renewOperationLocks, releaseOperationLock = origAcquireLock, origRenewLocks, origReleaseLock
 		leaseHeartbeatInterval, leaseTTL = origInterval, origTTL
 		checkAPIVersion, checkPermission = origCheck, origPerm
 		runUpdateStream, runUpdateDryRun, runReinstallStream, runRefreshStream = origU, origD, origR, origF
@@ -102,7 +103,7 @@ func resetPackageState(t *testing.T) {
 		identities.reset()
 		apiReady.reset()
 		inflight.reset()
-		clusterMutationInProgress.Store(false)
+		locks.reset()
 	})
 }
 

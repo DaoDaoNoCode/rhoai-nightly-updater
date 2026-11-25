@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
@@ -13,21 +14,28 @@ import (
 )
 
 // The operation ConfigMap (operationConfigMapName in the updater's own
-// namespace) records three independent values, one data key each:
+// namespace) records independent values, one data key each:
 //   - operationKey: the running-operation marker, written by server-side
 //     apply when an operation begins (SaveOperationMarker). A marker of a
 //     process that is gone reports an interrupted operation.
 //   - lastCompletedKey: the most recent finished operation.
-//   - leaseKey: the cross-pod operation lock (WriteOperationLease).
+//   - leaseKey: the cluster lock, the cross-pod lease of the running
+//     cluster operation (operation_locks.go). Its format is the one every
+//     earlier version writes and reads.
+//   - ProjectLockKey(uid): the lock of one project, by namespace UID
+//     (operation_locks.go).
 //   - dscHardResetKey: the DataScienceCluster a hard reset creates,
 //     recorded before it deletes the old one (SaveDSCHardResetRecord), and
 //     cleared once it is created.
+//   - RecipeRunKey: the last environment recipe run (recipe_run_record.go).
 //
 // The marker's field manager never owns the other keys, so a marker
 // write keeps them (an applier only removes fields it owned:
 // https://kubernetes.io/docs/reference/using-api/server-side-apply/#field-management).
-// The other writes are JSON merge patches of their own keys. The updater's
-// Role allows get, create and patch on this ConfigMap, nothing else.
+// The other writes are JSON merge patches of their own keys, but for the
+// lock renewals, which are JSON patches (RenewOperationLocks). The
+// updater's Role allows get, create and patch on this ConfigMap, nothing
+// else. This process writes it through one writer (operationWriter).
 const (
 	OperationKey     = "operation"
 	LastCompletedKey = "lastCompleted"
@@ -42,7 +50,10 @@ func SaveDSCHardResetRecord(c *kube.Client, rec *types.DSCHardResetRecord) error
 	if err != nil {
 		return err
 	}
-	if err := patchOperationRecord(c, "", map[string]string{DSCHardResetKey: string(value)}); err != nil {
+	err = operationWriter.do(c.Context(), func() error {
+		return patchOperationRecord(c, "", map[string]any{DSCHardResetKey: string(value)})
+	})
+	if err != nil {
 		return fmt.Errorf("save the hard reset record: %w", err)
 	}
 	return nil
@@ -53,7 +64,10 @@ func SaveDSCHardResetRecord(c *kube.Client, rec *types.DSCHardResetRecord) error
 // only offered while no DataScienceCluster exists, and the next hard reset
 // replaces it.
 func ClearDSCHardResetRecord(c *kube.Client) {
-	if err := patchOperationRecord(c, "", map[string]string{DSCHardResetKey: ""}); err != nil {
+	err := operationWriter.do(c.Context(), func() error {
+		return patchOperationRecord(c, "", map[string]any{DSCHardResetKey: ""})
+	})
+	if err != nil {
 		slog.Warn("could not clear the hard reset record", "error", err)
 	}
 }
@@ -93,10 +107,19 @@ func ReadDSCHardResetRecord(c *kube.Client) (*types.DSCHardResetRecord, error) {
 type OperationRecord struct {
 	Marker        *types.OperationMarker
 	LastCompleted *types.CompletedOperation
-	Lease         *types.OperationLease
+	// Lease is the cluster lock (LeaseKey).
+	Lease *types.OperationLease
+	// ProjectLocks are the project locks, by namespace UID
+	// (ProjectLockKey); an entry that cannot be parsed is left out.
+	ProjectLocks map[string]*types.OperationLease
 
-	resourceVersion string // "" when the ConfigMap does not exist
+	values          map[string]string // the ConfigMap's data as read
+	resourceVersion string            // "" when the ConfigMap does not exist
 }
+
+// Value is the value recorded under key, as read ("" when there is none):
+// what a lock renewal tests (RenewOperationLocks).
+func (r *OperationRecord) Value(key string) string { return r.values[key] }
 
 // ReadOperationRecord reads the operation ConfigMap. A missing ConfigMap is
 // an empty record. An unreadable value is logged and ignored rather than
@@ -118,12 +141,26 @@ func ReadOperationRecord(c *kube.Client) (*OperationRecord, error) {
 	if !found {
 		return &OperationRecord{}, nil
 	}
-	return &OperationRecord{
+	rec := &OperationRecord{
 		Marker:          DecodeValue[types.OperationMarker](cm.Data, OperationKey),
 		LastCompleted:   DecodeValue[types.CompletedOperation](cm.Data, LastCompletedKey),
 		Lease:           DecodeValue[types.OperationLease](cm.Data, LeaseKey),
+		values:          cm.Data,
 		resourceVersion: cm.Metadata.ResourceVersion,
-	}, nil
+	}
+	for key := range cm.Data {
+		uid, ok := projectLockUID(key)
+		if !ok {
+			continue
+		}
+		if l := DecodeValue[types.OperationLease](cm.Data, key); l != nil {
+			if rec.ProjectLocks == nil {
+				rec.ProjectLocks = map[string]*types.OperationLease{}
+			}
+			rec.ProjectLocks[uid] = l
+		}
+	}
+	return rec, nil
 }
 
 func DecodeValue[T any](data map[string]string, key string) *T {
@@ -157,7 +194,11 @@ func SaveOperationMarker(c *kube.Client, marker *types.OperationMarker) error {
 		"metadata":   map[string]any{"name": OperationConfigMapName, "namespace": ns},
 		"data":       map[string]any{OperationKey: value},
 	}
-	if _, _, err := c.Bookkeeping().Apply(rhoai.NamespacedPath("v1", "configmaps", ns, OperationConfigMapName), cm); err != nil {
+	err := operationWriter.do(c.Context(), func() error {
+		_, _, err := c.Bookkeeping().Apply(rhoai.NamespacedPath("v1", "configmaps", ns, OperationConfigMapName), cm)
+		return err
+	})
+	if err != nil {
 		return fmt.Errorf("save operation marker: %w", err)
 	}
 	return nil
@@ -194,43 +235,36 @@ func SaveCompletedOperation(c *kube.Client, done *types.CompletedOperation, owne
 		return err
 	}
 	if owner == nil {
-		data := map[string]string{OperationKey: "", LastCompletedKey: string(value)}
-		if err := patchOperationRecord(c, "", data); err != nil {
-			return fmt.Errorf("save completed operation: %w", err)
-		}
-		return nil
-	}
-	for range maxLeaseWriteAttempts {
-		rec, err := ReadOperationRecord(c)
-		if err != nil {
-			return fmt.Errorf("save completed operation: %w", err)
-		}
-		data := map[string]string{}
-		// A delayed retry (this pod's write failed and is repeated in the
-		// background) must not replace a completion another pod recorded
-		// since.
-		if rec.LastCompleted == nil || !finishedAfter(rec.LastCompleted, done) {
-			data[LastCompletedKey] = string(value)
-		}
-		if rec.Marker != nil && (rec.Marker.BootID == "" || rec.Marker.BootID == owner.BootID) {
-			data[OperationKey] = ""
-		}
-		if owner.owns(rec.Lease) {
-			data[LeaseKey] = ""
-		}
-		if len(data) == 0 {
-			return nil
-		}
-		err = writeOperationRecord(c, rec, data)
-		if kube.IsK8sConflict(err) {
-			continue
-		}
+		err := operationWriter.do(c.Context(), func() error {
+			return patchOperationRecord(c, "", map[string]any{OperationKey: "", LastCompletedKey: string(value)})
+		})
 		if err != nil {
 			return fmt.Errorf("save completed operation: %w", err)
 		}
 		return nil
 	}
-	return fmt.Errorf("save completed operation: %w", ErrOperationRecordContended)
+	err = operationWriter.do(c.Context(), func() error {
+		return updateOperationRecord(c, func(rec *OperationRecord) (map[string]any, error) {
+			data := map[string]any{}
+			// A delayed retry (this pod's write failed and is repeated in the
+			// background) must not replace a completion another pod recorded
+			// since.
+			if rec.LastCompleted == nil || !finishedAfter(rec.LastCompleted, done) {
+				data[LastCompletedKey] = string(value)
+			}
+			if rec.Marker != nil && (rec.Marker.BootID == "" || rec.Marker.BootID == owner.BootID) {
+				data[OperationKey] = ""
+			}
+			if owner.owns(rec.Lease) {
+				data[LeaseKey] = ""
+			}
+			return data, nil
+		})
+	})
+	if err != nil {
+		return fmt.Errorf("save completed operation: %w", err)
+	}
+	return nil
 }
 
 // finishedAfter reports whether a finished strictly after b (RFC 3339
@@ -241,28 +275,78 @@ func finishedAfter(a, b *types.CompletedOperation) bool {
 	return errA == nil && errB == nil && ta.After(tb)
 }
 
-// maxLeaseWriteAttempts bounds the read-modify-write cycles of one
-// conditional write of the operation record. Conflicts come from the
-// marker, completion and heartbeat writes of at most two processes, so a
-// few rounds settle them.
-const maxLeaseWriteAttempts = 4
+// maxLockWriteAttempts bounds the read-modify-write cycles of one
+// conditional write of the operation record. This process's own writes
+// never conflict with each other (operationWriter); conflicts come from
+// another updater pod's writes, and from up to that many project locks
+// taken, renewed and released there.
+const maxLockWriteAttempts = 8
+
+// lockBackoff is the wait before attempt (1 or more) after a conflict
+// (jitteredBackoff), so two pods that collided do not collide again in
+// step. Tests replace it.
+var lockBackoff = jitteredBackoff
 
 // ErrOperationRecordContended: every conditional write of the operation
 // record conflicted with another writer.
 var ErrOperationRecordContended = errors.New("the operation record kept changing (write conflicts); another updater process is writing it")
 
+// updateOperationRecord makes one conditional write of the operation
+// record: it reads the record, asks change for the keys to write (none:
+// nothing is written; a nil value removes its key), and writes them
+// conditional on the resourceVersion it read (writeOperationRecord, which
+// also removes expired project locks). A conflict is retried from a fresh
+// read after lockBackoff, at most maxLockWriteAttempts times; then it
+// returns ErrOperationRecordContended. Errors of the read and of change
+// are returned as they are. The caller holds operationWriter.
+func updateOperationRecord(c *kube.Client, change func(rec *OperationRecord) (map[string]any, error)) error {
+	for attempt := range maxLockWriteAttempts {
+		if attempt > 0 {
+			if err := kube.Clock().Sleep(contextOf(c), lockBackoff(attempt)); err != nil {
+				return fmt.Errorf("no time left to retry a conflicting write of the operation record: %w", err)
+			}
+		}
+		rec, err := ReadOperationRecord(c)
+		if err != nil {
+			return err
+		}
+		data, err := change(rec)
+		if err != nil {
+			return err
+		}
+		if len(data) == 0 {
+			return nil
+		}
+		err = writeOperationRecord(c, rec, data)
+		if kube.IsK8sConflict(err) {
+			slog.Debug("operation record write conflict, retrying", "attempt", attempt+1)
+			continue
+		}
+		return err
+	}
+	return ErrOperationRecordContended
+}
+
 // writeOperationRecord writes data into the record read as rec: a merge
 // patch conditional on rec's resourceVersion, or a create when the
 // ConfigMap did not exist. Both fail with 409 when another writer came
-// first (Conflict or AlreadyExists).
-func writeOperationRecord(c *kube.Client, rec *OperationRecord, data map[string]string) error {
+// first (Conflict or AlreadyExists). The patch also removes the project
+// locks of rec that have expired (prunableLockKeys), unless data writes
+// them.
+func writeOperationRecord(c *kube.Client, rec *OperationRecord, data map[string]any) error {
 	if rec.resourceVersion == "" {
 		ns := GetActivityNamespace()
+		values := map[string]any{}
+		for k, v := range data {
+			if v != nil {
+				values[k] = v
+			}
+		}
 		cm, err := json.Marshal(map[string]any{
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
 			"metadata":   map[string]any{"name": OperationConfigMapName, "namespace": ns},
-			"data":       data,
+			"data":       values,
 		})
 		if err != nil {
 			return err
@@ -270,15 +354,22 @@ func writeOperationRecord(c *kube.Client, rec *OperationRecord, data map[string]
 		_, _, err = c.Bookkeeping().Post(rhoai.NamespacedPath("v1", "configmaps", ns, ""), cm)
 		return err
 	}
-	return patchOperationRecord(c, rec.resourceVersion, data)
+	body := maps.Clone(data)
+	for _, key := range prunableLockKeys(rec, kube.Clock().Now()) {
+		if _, written := body[key]; !written {
+			body[key] = nil
+		}
+	}
+	return patchOperationRecord(c, rec.resourceVersion, body)
 }
 
-// patchOperationRecord merge-patches data into the operation ConfigMap. A
-// resourceVersion in the patch makes the API server refuse it with 409
+// patchOperationRecord merge-patches data into the operation ConfigMap (a
+// nil value removes its key). A resourceVersion in the patch makes the API
+// server refuse it with 409
 // Conflict when the object changed since it was read
 // (https://kubernetes.io/docs/reference/using-api/api-concepts/#resource-versions).
 // Without one, a missing ConfigMap is created.
-func patchOperationRecord(c *kube.Client, resourceVersion string, data map[string]string) error {
+func patchOperationRecord(c *kube.Client, resourceVersion string, data map[string]any) error {
 	body := map[string]any{"data": data}
 	if resourceVersion != "" {
 		body["metadata"] = map[string]any{"resourceVersion": resourceVersion}
@@ -310,63 +401,4 @@ func LeaseLive(l *types.OperationLease, now time.Time, ttl time.Duration) bool {
 // deadline from this same instant, not from when its write returned.
 func LeaseHeartbeat(l *types.OperationLease) (time.Time, error) {
 	return time.Parse(time.RFC3339, l.HeartbeatAt)
-}
-
-// WriteOperationLease records lease as the holder of the cross-pod
-// operation lock: it takes the lock or renews it. heldElsewhere decides
-// whether a recorded lease belongs to another process that is still alive;
-// such a lease is never overwritten and is returned instead. A lease that
-// is absent, expired, of a dead process or this process's own is replaced.
-// The write is conditional on the ConfigMap's resourceVersion, so two
-// processes that read a free lock at the same time cannot both take it: the
-// second write fails with 409 and is retried from a fresh read. When every
-// attempt conflicts it returns ErrOperationRecordContended.
-func WriteOperationLease(c *kube.Client, lease *types.OperationLease, heldElsewhere func(*types.OperationLease) bool) (*types.OperationLease, error) {
-	value, err := json.Marshal(lease)
-	if err != nil {
-		return nil, err
-	}
-	for attempt := range maxLeaseWriteAttempts {
-		rec, err := ReadOperationRecord(c)
-		if err != nil {
-			return nil, err
-		}
-		if rec.Lease != nil && heldElsewhere(rec.Lease) {
-			return rec.Lease, nil
-		}
-		err = writeOperationRecord(c, rec, map[string]string{LeaseKey: string(value)})
-		if kube.IsK8sConflict(err) {
-			slog.Debug("operation lease write conflict, retrying", "attempt", attempt+1)
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("write operation lease: %w", err)
-		}
-		return nil, nil
-	}
-	return nil, ErrOperationRecordContended
-}
-
-// ReleaseOperationLease clears owner's lease, and nothing when the record
-// holds another lease (or none). The clear is conditional like
-// WriteOperationLease.
-func ReleaseOperationLease(c *kube.Client, owner LeaseOwner) error {
-	for range maxLeaseWriteAttempts {
-		rec, err := ReadOperationRecord(c)
-		if err != nil {
-			return err
-		}
-		if !owner.owns(rec.Lease) {
-			return nil
-		}
-		err = writeOperationRecord(c, rec, map[string]string{LeaseKey: ""})
-		if kube.IsK8sConflict(err) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("release operation lease: %w", err)
-		}
-		return nil
-	}
-	return ErrOperationRecordContended
 }

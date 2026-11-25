@@ -232,7 +232,7 @@ func TestUpdateEndpointOnlyRunsDryRuns(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("dry run calls = %d", calls)
 	}
-	if clusterMutationInProgress.Load() {
+	if locks.clusterHeld() {
 		t.Fatal("lock still held after the dry run")
 	}
 }
@@ -308,7 +308,7 @@ func TestBusyClusterReturnsRunningOperation(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `"step":"operation_complete","status":"success"`) {
 		t.Fatalf("stream: %s", w.Body.String())
 	}
-	if clusterMutationInProgress.Load() || inflight.snapshot() != nil {
+	if locks.clusterHeld() || inflight.snapshot() != nil {
 		t.Fatal("lock or operation not released")
 	}
 	mu.Lock()
@@ -334,7 +334,7 @@ func TestLockReleasedWhenOperationPanics(t *testing.T) {
 	}
 	w := httptest.NewRecorder()
 	HandleRefreshStream(w, postJSON(t, "/api/refresh/stream", "tok", "{}"))
-	if clusterMutationInProgress.Load() || inflight.snapshot() != nil {
+	if locks.clusterHeld() || inflight.snapshot() != nil {
 		t.Fatal("lock held after a panic")
 	}
 }

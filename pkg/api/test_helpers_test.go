@@ -41,7 +41,32 @@ func (a *apiReachability) reset() {
 func (t *operationTracker) reset() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.current, t.last = nil, nil
+	t.ops, t.cluster, t.last = nil, "", nil
+}
+
+// reset frees every slot of the lock table.
+func (l *lockTable) reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.cluster, l.projects = false, nil
+	seenProjectLocks.mu.Lock()
+	seenProjectLocks.locks = nil
+	seenProjectLocks.mu.Unlock()
+}
+
+// setCluster takes or frees the cluster slot directly, standing for an
+// operation of this process that holds it (or none).
+func (l *lockTable) setCluster(held bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.cluster = held
+}
+
+// acquireClusterMutationLock takes this process's cluster slot only (no
+// cross-pod entry), standing for an operation that holds it; the test
+// frees it with releaseClusterMutationLock.
+func acquireClusterMutationLock() bool {
+	return locks.take(lockWant{}) == nil
 }
 
 // reset drops a pending completion, so a running retry loop stops at its

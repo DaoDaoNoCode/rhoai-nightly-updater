@@ -180,6 +180,17 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   (RHOAI's namespaces, component states, the control plane, the dashboard's
   and MLflow's addresses) are read with the ServiceAccount's read-only
   facts client; the ServiceAccount gains no permission.
+- **Operation locks prepared for project actions (no visible change).** The
+  cluster lock is one entry of a lock table now: project locks (by namespace
+  UID) are entries of the same operation ConfigMap, a cluster operation and a
+  project action refuse each other, one project action runs per user and at
+  most 20 at once (no route takes a project lock yet). Each updater pod writes
+  the operation and activity ConfigMaps through one writer, so it never
+  conflicts with itself; one heartbeat renews all of a pod's locks in one
+  tested JSON patch, and losing one stops only its operation. `GET
+  /api/operation` adds `operations`, the list of running and interrupted
+  operations; the earlier fields are unchanged. No new permission.
+
 - **No "..." after button labels and progress text.** Buttons and menu
   items that open a dialog read as their action (**Clean up everything**,
   **Turn back**, **Install**, **Delete workbench**), progress and loading

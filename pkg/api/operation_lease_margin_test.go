@@ -60,17 +60,15 @@ func TestLeaseLostOneIntervalBeforeExpiryAfterASlowRenewal(t *testing.T) {
 	allowMutations(t)
 	f := installFakeRecord(t)
 	leaseHeartbeatInterval, leaseTTL = 10*time.Second, 45*time.Second
-	inner := writeOperationLease
-	writeOperationLease = func(c *cluster.Client, l *types.OperationLease, held func(*types.OperationLease) bool) (*types.OperationLease, error) {
-		holder, err := inner(c, l, held)
+	wrapLockWrites(func(c *cluster.Client, err error) error {
 		f.mu.Lock()
 		n := f.attempts
 		f.mu.Unlock()
 		if n == 2 { // the first renewal succeeds after leaseWriteTimeout
 			testClock.Advance(leaseWriteTimeout)
 		}
-		return holder, err
-	}
+		return err
+	})
 	started, cause, finish := refreshUntilStoppedHeld()
 	done := runRefreshInBackground(t)
 	<-started
@@ -121,9 +119,7 @@ func TestLeaseLostOneIntervalBeforeExpiryDuringAHangingRenewal(t *testing.T) {
 	leaseHeartbeatInterval, leaseTTL = 10*time.Second, 45*time.Second
 	const acquireTakes = 3 * time.Second
 	entered := make(chan struct{}, 1)
-	inner := writeOperationLease
-	writeOperationLease = func(c *cluster.Client, l *types.OperationLease, held func(*types.OperationLease) bool) (*types.OperationLease, error) {
-		holder, err := inner(c, l, held)
+	wrapLockWrites(func(c *cluster.Client, err error) error {
 		f.mu.Lock()
 		n := f.attempts
 		f.mu.Unlock()
@@ -133,10 +129,10 @@ func TestLeaseLostOneIntervalBeforeExpiryDuringAHangingRenewal(t *testing.T) {
 		case 4: // the third renewal hangs until its context ends
 			entered <- struct{}{}
 			<-c.Context().Done()
-			return nil, c.Context().Err()
+			return c.Context().Err()
 		}
-		return holder, err
-	}
+		return err
+	})
 	stamped := testClock.Now()
 	started, cause, finish := refreshUntilStoppedHeld()
 	done := runRefreshInBackground(t)
@@ -207,9 +203,8 @@ func TestLeaseLostAtTheDeadlineWhileARenewalIgnoresItsContext(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(logs, nil)))
 	leaseHeartbeatInterval, leaseTTL = 10*time.Second, 45*time.Second
 	entered, release, returned := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	inner := writeOperationLease
-	writeOperationLease = func(c *cluster.Client, l *types.OperationLease, held func(*types.OperationLease) bool) (*types.OperationLease, error) {
-		holder, err := inner(c, l, held) // succeeds: the write goes through, but answers late
+	// The write goes through, but answers late.
+	wrapLockWrites(func(c *cluster.Client, err error) error {
 		f.mu.Lock()
 		n := f.attempts
 		f.mu.Unlock()
@@ -218,8 +213,8 @@ func TestLeaseLostAtTheDeadlineWhileARenewalIgnoresItsContext(t *testing.T) {
 			close(entered)
 			<-release
 		}
-		return holder, err
-	}
+		return err
+	})
 	// Refresh reports the stop, then waits to return until the test lets it,
 	// so the heartbeat is not stopped by the operation's end meanwhile.
 	started, cause, finish := make(chan struct{}), make(chan error, 1), make(chan struct{})
@@ -259,7 +254,7 @@ func TestLeaseLostAtTheDeadlineWhileARenewalIgnoresItsContext(t *testing.T) {
 	if last := inflight.lastCompleted(); last == nil || last.Success || last.Message != cluster.LockLostMessage {
 		t.Fatalf("lastCompleted %+v", last)
 	}
-	if leases.stop() != nil {
+	if leases.stopAll() != 0 {
 		t.Fatal("the heartbeat is still registered after the operation ended")
 	}
 }

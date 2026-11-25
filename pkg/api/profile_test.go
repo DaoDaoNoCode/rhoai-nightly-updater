@@ -136,7 +136,7 @@ func TestGitOpsProfileRefusesEveryOtherRoute(t *testing.T) {
 				t.Errorf("%s (token %q): %d %s", pattern, token, w.Code, w.Body.String())
 			}
 		}
-		if clusterMutationInProgress.Load() {
+		if locks.clusterHeld() {
 			t.Fatalf("%s took the lock", pattern)
 		}
 	}
@@ -336,7 +336,7 @@ func TestGitOpsProfileUpdateNeedsTheAdmissionPolicy(t *testing.T) {
 	if body := decodeError(t, w); w.Code != http.StatusServiceUnavailable || body["errorCode"] != "admission_policy_missing" || ran {
 		t.Fatalf("without the policy: %d %s ran=%v", w.Code, w.Body.String(), ran)
 	}
-	if clusterMutationInProgress.Load() {
+	if locks.clusterHeld() {
 		t.Fatal("the refused Update took the lock")
 	}
 	v := httptest.NewRecorder()

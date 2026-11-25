@@ -62,7 +62,7 @@ func TestMLflowSamplesStream(t *testing.T) {
 	for _, body := range []string{`{`, `{"project":"Bad","action":"add","samples":["training"]}`, `{"project":"p","action":"remove","samples":["genai-demo"]}`, `{"project":"p","action":"add","samples":[]}`} {
 		w := httptest.NewRecorder()
 		HandleMLflowSamplesStream(w, postJSON(t, "/api/resources/samples/mlflow/stream", "tok", body))
-		if w.Code != http.StatusBadRequest || clusterMutationInProgress.Load() {
+		if w.Code != http.StatusBadRequest || locks.clusterHeld() {
 			t.Errorf("%s: %d %s", body, w.Code, w.Body.String())
 		}
 	}
@@ -76,7 +76,7 @@ func TestMLflowSamplesStream(t *testing.T) {
 	if got.Project != "p" || got.Action != "add" || len(got.Samples) != 2 {
 		t.Errorf("request %+v", got)
 	}
-	if clusterMutationInProgress.Load() {
+	if locks.clusterHeld() {
 		t.Error("lock held after the operation")
 	}
 }
