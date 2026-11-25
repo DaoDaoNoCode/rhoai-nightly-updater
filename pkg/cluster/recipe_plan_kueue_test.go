@@ -124,3 +124,32 @@ func TestRecipePlan_KueueSettingUnreadableRefuses(t *testing.T) {
 		t.Fatalf("problems %s", problemText(plan))
 	}
 }
+
+// DataScienceCluster kueue.autoCreateQueues on (K4): RHOAI would create a
+// LocalQueue named default in the labelled project, which the Kueue step
+// refuses; the plan refuses it up front. Another defaultLocalQueueName
+// does not collide.
+func TestRecipePlan_KueueAutoCreateQueuesRefuses(t *testing.T) {
+	for _, tc := range []struct {
+		name, kueue string
+		refused     bool
+	}{
+		{"autoCreateQueues on", `"autoCreateQueues":true`, true},
+		{"another queue name", `"autoCreateQueues":true,"defaultLocalQueueName":"team"`, false},
+		{"off (the default)", `"autoCreateQueues":false`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, c := projectFake(t)
+			installedRHOAI(f)
+			f.putJSON(tRecipeDSC, `{"spec":{"components":{"kueue":{"managementState":"Unmanaged",`+tc.kueue+`}}},"status":{"conditions":[{"type":"Ready","status":"True"}]}}`)
+			plan, _ := planRecipeFor(t, c.SignedInUser(), `{"rhoai":{"build":"latest","ifInstalled":"keep"},"dataScienceCluster":{"create":true},"project":{"mode":"create","name":"recipe-dev"},"features":{"kueue":{"enabled":true}}}`)
+			got := planReason(plan, "kueue")
+			if refused := strings.HasPrefix(got, "blocked") && strings.Contains(got, "kueue.autoCreateQueues: true"); refused != tc.refused {
+				t.Fatalf("kueue step: %s", got)
+			}
+			if tc.refused && !strings.Contains(problemText(plan), "LocalQueue named default") {
+				t.Errorf("problems %s", problemText(plan))
+			}
+		})
+	}
+}

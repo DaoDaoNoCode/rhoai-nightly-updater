@@ -479,6 +479,12 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   profile, and says what to change in the recipe. The review and the Kueue
   step no longer say the dashboard will mark the workbench as bypassing
   Kueue: the recipe no longer creates such a workbench.
+- **Distributed workloads say up front when RHOAI makes its own LocalQueue.**
+  With the DataScienceCluster's `kueue.autoCreateQueues` on (off by
+  default), RHOAI creates a LocalQueue named `default` in every labelled
+  project, which Set up refuses: a recipe's Kueue step stopped halfway, and
+  every later Set up refused. The tab's Set up and the recipe's review now
+  refuse before anything is labelled, and say what to change.
 - **The Kueue quota holds a workbench and a model on the Queue profile.**
   The ClusterQueue's 19 GiB did not count the workbench's kube-rbac-proxy
   sidecar (100m CPU, 64 MiB requested) nor a model. New setups get 10 CPUs,

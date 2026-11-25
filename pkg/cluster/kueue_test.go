@@ -320,6 +320,10 @@ func TestKueueSetupRefusals(t *testing.T) {
 			f.putJSON(wbDSCv2+"/default-dsc", `{"metadata":{"name":"default-dsc"},"spec":{"components":{"kueue":{"managementState":"Unmanaged"},"ray":{"managementState":"Removed"}}},
 				"status":{"conditions":[{"type":"KueueReady","status":"True"}]}}`)
 		}},
+		{"DSC autoCreateQueues", "kueue.autoCreateQueues: true", "unsupported", func(f *resourceFake) {
+			f.putJSON(wbDSCv2+"/default-dsc", `{"metadata":{"name":"default-dsc"},"spec":{"components":{"kueue":{"managementState":"Unmanaged","autoCreateQueues":true},"ray":{"managementState":"Managed"}}},
+				"status":{"conditions":[{"type":"KueueReady","status":"True"}]}}`)
+		}},
 		{"not a ds project", "not a data science project", "validation", func(f *resourceFake) {
 			f.putJSON(wbProjectNS, `{"metadata":{"name":"proj","uid":"ns-uid"}}`)
 		}},

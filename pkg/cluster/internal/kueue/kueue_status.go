@@ -129,6 +129,9 @@ func checkCluster(u *kube.Client, dsc rhoai.DSCRead, block *types.ComponentBlock
 		}
 		refuse(msg, "prerequisites")
 	}
+	if AutoCreatedQueue(dsc) == "default" {
+		refuse(AutoQueuesRefusal, "unsupported")
+	}
 	ck.instance.KueueReady, ck.instance.Message = kueueReady(dsc)
 	served, group, err := v1beta2Served(u)
 	switch {

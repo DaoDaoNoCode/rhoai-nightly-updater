@@ -8,6 +8,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kueue"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/node"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
@@ -135,6 +136,15 @@ func Plan(c *kube.Client, r types.EnvironmentRecipe, pinned *types.RecipePinnedB
 			default:
 				ps.Action = types.RecipeStepRun
 				willRun[step.ID] = true
+			}
+		}
+		// RHOAI's auto-created LocalQueue default (K4): the Kueue step
+		// would refuse once the project is labelled.
+		if step.ID == StepKueue && (ps.Action == types.RecipeStepRun || ps.Action == types.RecipeStepLater) {
+			if dsc, err := rhoai.ReadFirstDSC(c); err != nil {
+				ps.Action, ps.Reason, ps.Fix = types.RecipeStepBlocked, fmt.Sprintf("Cannot check it: read the DataScienceCluster: %v.", err), checkFailed()
+			} else if kueue.AutoCreatedQueue(dsc) == "default" {
+				ps.Action, ps.Reason, ps.Fix = types.RecipeStepBlocked, kueue.AutoQueuesRefusal, fixAt(types.RecipeFixFeatureBlocked, pageComponents)
 			}
 		}
 		// A workbench or model the run creates where the dashboard will

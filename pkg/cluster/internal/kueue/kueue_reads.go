@@ -465,6 +465,14 @@ func olmInstalled(m kube.ObjectMeta) bool {
 	return false
 }
 
+// AutoQueuesRefusal is why Set up refuses while RHOAI creates a LocalQueue
+// named default in every labelled project (AutoCreatedQueue): labelling
+// the project makes it, Kueue then queues every new Deployment, StatefulSet
+// and Pod there in it (kubernetes-sigs/kueue v0.19.0
+// pkg/controller/jobframework/defaults.go), and Set up refuses a project
+// with that queue. The refusal itself is not changed; it is said up front.
+const AutoQueuesRefusal = "The DataScienceCluster sets kueue.autoCreateQueues: true, so RHOAI creates a LocalQueue named default in every project with the label kueue.openshift.io/managed=true, and Kueue then queues every new Deployment, StatefulSet and Pod of that project in it; this tool does not set up its queues in a project with that LocalQueue. Use RHOAI's queues (a Queue hardware profile for the LocalQueue default), or a cluster-admin sets autoCreateQueues to false (or defaultLocalQueueName to another name). Nothing was changed."
+
 // AutoCreatedQueue is the LocalQueue RHOAI creates in every project with
 // the label kueue.openshift.io/managed=true when the DataScienceCluster's
 // spec.components.kueue.autoCreateQueues is true (rhods-operator rhoai-3.6
