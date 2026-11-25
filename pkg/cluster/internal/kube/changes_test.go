@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -127,10 +128,11 @@ func TestChangesCollectionDeletes(t *testing.T) {
 	}
 }
 
-// A DELETE with DeleteOptions takes its dryRun from them: the API server
-// ignores the query then (k8s.io/apiserver handlers/delete.go). The client
-// refuses to send one with dryRun in its query, which would delete, and
-// DeleteWithOptions puts the dry run in the options.
+// A DELETE with DeleteOptions takes all of them from its body: the API
+// server ignores the query then (k8s.io/apiserver handlers/delete.go
+// :95-128, v0.35+). The client refuses to send one with a DeleteOptions key
+// in its query (a dryRun there would delete) with an error that says it
+// was not sent, and DeleteWithOptions puts the dry run in the options.
 func TestDeleteDryRunIsInTheOptions(t *testing.T) {
 	var got []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -147,9 +149,23 @@ func TestDeleteDryRunIsInTheOptions(t *testing.T) {
 	if _, _, err := c.Do(http.MethodDelete, "/api/v1/namespaces/a/configmaps/x?dryRun=All", "application/json", opts, nil); err == nil {
 		t.Fatal("a DELETE with options and a dryRun in its path was sent")
 	}
+	for _, key := range []string{"propagationPolicy", "gracePeriodSeconds", "orphanDependents"} {
+		_, _, err := c.Do(http.MethodDelete, "/api/v1/namespaces/a/configmaps/x", "application/json", opts, url.Values{key: {"0"}})
+		if _, ok := errors.AsType[*UnsentRequestError](err); !ok || !strings.Contains(err.Error(), key) || !strings.HasPrefix(RefusedBy(err), "This updater") {
+			t.Errorf("%s in the query: %v, refused by %q", key, err, RefusedBy(err))
+		}
+	}
 	if len(got) != 0 || ch.Made() {
 		t.Fatalf("sent %v, made %v", got, ch.Made())
 	}
+	if RefusedBy(errors.New("k8s API error 422")) != "The API server" {
+		t.Error("an API server's refusal is named as the updater's")
+	}
+	// A collection's ListOptions stay in the query.
+	if _, _, err := c.Do(http.MethodDelete, "/api/v1/namespaces/a/configmaps", "application/json", []byte(`{"dryRun":["All"]}`), url.Values{"labelSelector": {"a=b"}}); err != nil {
+		t.Fatalf("a collection delete with a labelSelector was refused: %v", err)
+	}
+	got = nil
 	if _, _, err := DeleteWithOptions(c, "/api/v1/namespaces/a/configmaps/x", map[string]any{"preconditions": map[string]any{"uid": "u"}}, true); err != nil {
 		t.Fatal(err)
 	}

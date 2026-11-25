@@ -88,9 +88,9 @@ func leftoverWriteError(err error, what string, dryRun bool) *types.OperationRes
 	if kube.IsK8sError(err, http.StatusConflict) {
 		return leftoverChanged(what, msg)
 	}
-	stage := "The API server refused the change"
+	stage := kube.RefusedBy(err) + " refused the change"
 	if dryRun {
-		stage = "The API server refused the change in its dry run"
+		stage += " in its dry run"
 	}
 	return leftoverRefused(fmt.Sprintf("%s: %s. Nothing was changed.", stage, msg), kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "validation"), []string{msg})
 }

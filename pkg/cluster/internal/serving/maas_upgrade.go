@@ -340,7 +340,7 @@ func (m *Run) removeTierPolicies() (*types.OperationResponse, error) {
 	for _, p := range legacy {
 		path := legacyTierPolicyPath(p.Kind, p.Version)
 		if _, _, err := kube.DeleteWithOptions(c, path, map[string]any{"preconditions": map[string]any{"uid": p.UID}}, true); err != nil && !kube.IsK8sNotFound(err) {
-			return m.Fail("check", fmt.Sprintf("The API server rejects deleting %s %s: %v. Nothing was deleted.%s", p.Kind, p.Name, err, kube.TemplateHint(err)), MaaSWriteCode(err), "dry run failed")
+			return m.Fail("check", fmt.Sprintf("%s refused deleting %s %s in its dry run: %v. Nothing was deleted.%s", kube.RefusedBy(err), p.Kind, p.Name, err, kube.TemplateHint(err)), MaaSWriteCode(err), "dry run failed")
 		}
 	}
 	m.Step("check", "success", "To delete: "+strings.Join(policyNames(legacy), ", ")+".")

@@ -242,7 +242,7 @@ func HardReset(c *kube.Client, req types.DSCPlanRequest, emit func(types.UpdateS
 	}
 	path := dscObjectPath(v.version, v.name)
 	if _, _, err := kube.DeleteWithOptions(c, path, dscDeleteOptions(v.uid), true); err != nil {
-		return r.fail("check", "The API server refused deleting the DataScienceCluster in its dry run: "+rhoai.ConversionMessage(err)+". Nothing was changed.", kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "validation")), nil
+		return r.fail("check", kube.RefusedBy(err)+" refused deleting the DataScienceCluster in its dry run: "+rhoai.ConversionMessage(err)+". Nothing was changed.", kube.NonEmpty(kube.ErrorCodeFromK8sErr(err), "validation")), nil
 	}
 	obj := v.NewDefaultObject(v.ResetTarget(&types.DSCPlan{}, *req.KeepEnabled))
 	// The new spec in a dry run against the live DSC: the schema

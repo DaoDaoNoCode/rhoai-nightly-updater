@@ -327,14 +327,38 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   server-side dry run in the URL (`?dryRun=All`) while sending
   DeleteOptions (UID preconditions) in the body, and the API server then
   reads only the body's options (k8s.io/apiserver
-  `pkg/endpoints/handlers/delete.go:95-126`), so each "dry run" was a real
-  delete: the hard reset's check deleted the DataScienceCluster before its
-  other checks, the cluster setup's review of removing the mirror deleted
-  ImageDigestMirrorSet `rhoai-quay-mirror`, a model's token check deleted
-  the token Secret it found, and Remove the old tier policies and the
-  Diagnostics fix that recreates a leftover Deployment deleted in their
-  check. The dry run is now in the DeleteOptions, and the client refuses
-  to send a delete with options and a `dryRun` query.
+  `pkg/endpoints/handlers/delete.go:95-128`, v0.35+), so each "dry run" was
+  a real delete. What that did in released versions:
+  - **Removing the image mirror (v4.0.0 to v5.0.0-alpha.2):** opening the
+    review of **Remove the image mirror** (Status page; self-managed, ROSA
+    Classic and OSD clusters only) deleted ImageDigestMirrorSet
+    `rhoai-quay-mirror` at once, also when you then clicked Cancel, and
+    every node rolled out and drained. Confirming then said "Nothing to
+    change". If you opened that review and still want the mirror, set it up
+    again; nightly installs and updates need it.
+  - **Model setup run again (v3.0.0 to v5.0.0-alpha.2):** setting up a
+    model that already existed deleted its token Secret in the check step
+    and still reported success, which invalidated the model's token (the
+    next setup made a new one). If you set up an existing model again, run
+    its setup once more and use the new token; tokens copied before no
+    longer work.
+  - **Hard reset (v4.0.0 to v5.0.0-alpha.2):** the DataScienceCluster was
+    deleted in the first check, before the new spec's dry run, the module
+    operator check and the record **Finish the hard reset** needs. A later
+    refusal, or the DSC gone before the real delete, left the cluster with
+    no DataScienceCluster and a message saying nothing was changed; create
+    it again with Create DataScienceCluster or `oc create`.
+  - **Remove the old tier policies (v3.0.0 to v5.0.0-alpha.2) and the
+    Diagnostics fix that recreates a leftover workload (v4.0.0 to
+    v5.0.0-alpha.2):** the outcome was the one asked for, but the check
+    deleted already, so a later refusal said "Nothing was deleted" after a
+    delete, and the fix said the workload "no longer exists" and wrote no
+    activity entry.
+
+  The dry run is now in the DeleteOptions, and the client does not send a
+  delete with DeleteOptions in its body and any of them (`dryRun`,
+  `propagationPolicy`, `gracePeriodSeconds`, `orphanDependents`) in its
+  query; its message says the updater refused to send it.
 - **Answering a refusal at once is no longer rate limited.** A streamed
   change the server refused without changing anything (Clean up asking to
   confirm a project's contents or a pipeline server's workbenches, a failed

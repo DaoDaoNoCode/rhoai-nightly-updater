@@ -3,6 +3,7 @@ package kube
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"slices"
@@ -99,13 +100,53 @@ func startAPIRequest(ctx context.Context, method string, u *url.URL, body []byte
 	}
 }
 
+// deleteOptionQueryKeys are the DeleteOptions a DELETE may also carry in its
+// query (metav1.DeleteOptions' query parameters). The ListOptions a DELETE
+// of a collection takes in its query (labelSelector, fieldSelector, ...)
+// are not among them.
+var deleteOptionQueryKeys = []string{"dryRun", "propagationPolicy", "gracePeriodSeconds", "orphanDependents", "ignoreStoreReadErrorWithClusterBreakingPotential"}
+
+// deleteOptionInQuery returns the DeleteOptions key in the query of a
+// DELETE with a body, "" when there is none: the API server reads only the
+// body's options then (IsDryRun), so that option would be ignored.
+func deleteOptionInQuery(method string, u *url.URL, body []byte) string {
+	if method != http.MethodDelete || len(body) == 0 {
+		return ""
+	}
+	q := u.Query()
+	for _, key := range deleteOptionQueryKeys {
+		if q.Has(key) {
+			return key
+		}
+	}
+	return ""
+}
+
+// UnsentRequestError is a request this updater refused to send, as the API
+// server would not do what it says. Nothing was sent, so nothing changed.
+type UnsentRequestError struct{ Reason string }
+
+func (e *UnsentRequestError) Error() string {
+	return "this updater did not send the request (" + e.Reason + "); nothing was changed. This is a bug in the updater"
+}
+
+// RefusedBy names who refused a request that failed with err: this
+// updater, which did not send it (UnsentRequestError), or the API server.
+func RefusedBy(err error) string {
+	if _, ok := errors.AsType[*UnsentRequestError](err); ok {
+		return "This updater, before sending it,"
+	}
+	return "The API server"
+}
+
 // IsDryRun reports whether the API server runs the request as a
 // server-side dry run, reading its options where the API server does. A
 // DELETE with a body takes all its DeleteOptions, dryRun included, from the
-// body and ignores the query (k8s.io/apiserver v0.33.0 to v0.37.0,
-// pkg/endpoints/handlers/delete.go:95-126, DeleteResource: the query is
-// decoded only when the body is empty; the same for DeleteCollection at
-// :270-300). Every other request takes dryRun from the query (create,
+// body and ignores the query: k8s.io/apiserver
+// pkg/endpoints/handlers/delete.go decodes the query only when the body is
+// empty, in DeleteResource at :95-128 and DeleteCollection at :272-302
+// (v0.35 to v0.37; :95-126 and :270-300 in v0.32 and v0.33).
+// Every other request takes dryRun from the query (create,
 // update and patch options are query parameters).
 func IsDryRun(method string, u *url.URL, body []byte) bool {
 	if method == http.MethodDelete && len(body) > 0 {
