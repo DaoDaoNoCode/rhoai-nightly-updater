@@ -573,7 +573,7 @@ func TestObservability_MaaSRecordsUserIDsAndPutsThemBack(t *testing.T) {
 // the portal row say it comes up once Dashboard Dev is reverted.
 func TestObservability_MaaSPortalNotesAPausedDashboardOperator(t *testing.T) {
 	oc := newObsCluster(t, true)
-	t.Cleanup(observability.SetDashDevActiveForTest("redhat-ods-applications/rhods-dashboard-operator"))
+	t.Cleanup(observability.SetDashDevPausedForTest("redhat-ods-applications/rhods-dashboard-operator"))
 	oc.f.putJSON(tDSC, `{"metadata":{"name":"default-dsc","resourceVersion":"5"},"spec":{"components":{"dashboard":{"managementState":"Managed","maasPortal":{"managementState":"Removed"}}}}}`)
 	oc.f.putJSON("/apis/components.platform.opendatahub.io/v1alpha1/dashboards/default-dashboard", `{"metadata":{"name":"default-dashboard"},"spec":{"gateway":{"domain":"rh-ai.apps.example.com"}}}`)
 	const note = "Dashboard Dev keeps the dashboard operator redhat-ods-applications/rhods-dashboard-operator at 0 replicas, and that operator deploys the portal: it comes up once Dashboard Dev is reverted (Dashboard Dev page)."
@@ -593,8 +593,17 @@ func TestObservability_MaaSPortalNotesAPausedDashboardOperator(t *testing.T) {
 	if st.Portal == nil || !st.Portal.On || !strings.Contains(st.Portal.Message, note) {
 		t.Fatalf("portal row = %+v", st.Portal)
 	}
+	// Once RHOAI reports the portal available, the row says nothing of it.
+	dsc := oc.f.get(tDSC)
+	dsc["status"] = map[string]any{"conditions": []any{map[string]any{"type": "MaaSPortalAvailable", "status": "True"}}}
+	oc.f.put(tDSC, dsc)
+	if st, _ = GetMaaSStatus(oc.sa); strings.Contains(st.Portal.Message, "Dashboard Dev") {
+		t.Errorf("note while available: %q", st.Portal.Message)
+	}
+	delete(dsc, "status")
+	oc.f.put(tDSC, dsc)
 	// Without a session the row says nothing of it.
-	t.Cleanup(observability.SetDashDevActiveForTest(""))
+	t.Cleanup(observability.SetDashDevPausedForTest(""))
 	if st, _ = GetMaaSStatus(oc.sa); strings.Contains(st.Portal.Message, "Dashboard Dev") {
 		t.Errorf("note without a session: %q", st.Portal.Message)
 	}
