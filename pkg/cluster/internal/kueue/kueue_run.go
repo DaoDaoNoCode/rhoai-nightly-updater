@@ -463,8 +463,8 @@ func addLabel(c *kube.Client, project, uid, resourceVersion string) (added bool,
 
 // --- teardown sequence -----------------------------------------------------------
 
-// deleteSample deletes an owned sample (label and stored UID) and waits until
-// it disappears; samples we do not own are ignored.
+// deleteSample removes a sample this tool owns (label and stored UID) and
+// waits until it is gone; unowned samples are skipped.
 func (r *run) deleteSample(rec Record, kind string) (string, string) {
 	c := r.c
 	s, found, err := readSample(c, kind, rec.Project)
@@ -476,7 +476,7 @@ func (r *run) deleteSample(rec Record, kind string) (string, string) {
 	}
 	if !owns(s.Metadata, rec.SampleUID(kind)) {
 		if rec.SampleUID(kind) == "" {
-			return "", "" // unowned sample and no UID recorded: leave it
+			return "", "" // sample not owned and no UID on record: skip it
 		}
 		return fmt.Sprintf("%s in %s is not the one this tool created (it was deleted and made again), so this tool does not delete it.", sampleText(kind), rec.Project), "not_managed"
 	}
@@ -507,8 +507,11 @@ func (r *run) deleteSampleOnly(kind string) (*types.OperationResponse, error) {
 		return r.fail("samples", msg+" Nothing was deleted.", code, "project check failed")
 	}
 	if replaced {
-		r.step("samples", "success", fmt.Sprintf("%s went with project %s, which was deleted or made again since this tool's setup.", sampleText(kind), rec.Project))
-		return r.done(fmt.Sprintf("%s in %s is gone already. Nothing was deleted.", sampleText(kind), rec.Project))
+		// Not "gone already": a project made again may hold an object of
+		// the same name, which is not this tool's.
+		msg := fmt.Sprintf("Project %s was deleted or made again since this tool's setup, so its %s is not this tool's to delete. Nothing was deleted.", rec.Project, sampleText(kind))
+		r.step("samples", "success", msg)
+		return r.done(msg)
 	}
 	if msg, code := r.deleteSample(rec, kind); msg != "" {
 		return r.fail("samples", msg, code, "sample delete failed")
@@ -520,8 +523,8 @@ func (r *run) deleteSampleOnly(kind string) (*types.OperationResponse, error) {
 	return r.done(fmt.Sprintf("Deleted %s in %s.", sampleText(kind), rec.Project))
 }
 
-// queueUsers names workloads or queues still referencing queue o; list errors
-// bubble up (fail closed).
+// queueUsers lists workloads or queues still bound to queue o; listing errors
+// propagate (fail closed).
 func queueUsers(c *kube.Client, o toolObject, rec Record) ([]string, error) {
 	var users []string
 	switch o.kind {
@@ -561,11 +564,11 @@ func queueUsers(c *kube.Client, o toolObject, rec Record) ([]string, error) {
 	return users, nil
 }
 
-// teardown tears down owned resources in order: samples, then LocalQueue,
-// ClusterQueue, and ResourceFlavor (only ours and unused), then the project
-// label when we added it and no Workloads remain, then dashboard opt-in
-// state. Operator installs and the Kueue CR stay; DSC kueue disable runs in
-// Clean up's components step.
+// teardown removes owned resources in sequence: samples, then LocalQueue,
+// ClusterQueue, and ResourceFlavor (ours alone and unreferenced), then the
+// project label if we added it and no Workloads remain, then dashboard opt-in
+// state. Operator installs and the Kueue CR remain; DSC kueue disable happens
+// in Clean up's components step.
 func (r *run) teardown() (*types.OperationResponse, error) {
 	c := r.c
 	r.step("samples", "running", "Deleting the samples")
@@ -585,10 +588,10 @@ func (r *run) teardown() (*types.OperationResponse, error) {
 		r.step("samples", "success", "This tool has set up nothing.")
 		return r.done("This tool has no distributed workloads set up; nothing was deleted.")
 	}
-	// A project deleted (and maybe made again) since setup took the
-	// recorded LocalQueue, samples and label with it: their entries are
-	// cleared first, so Clean up skips them and goes on to the cluster-wide
-	// queues and the opt-in.
+	// If the project was removed (perhaps recreated) after setup, the recorded
+	// LocalQueue, samples, and label left with it: those fields are cleared
+	// first so Clean up bypasses them and continues with cluster-scoped queues
+	// and opt-in.
 	rec, replaced, problem, code := r.forgetReplacedProject(rec)
 	if problem != "" {
 		return r.fail("samples", problem+" Nothing was deleted.", code, "project check failed")
@@ -635,9 +638,9 @@ func (r *run) teardown() (*types.OperationResponse, error) {
 			if _, err := kube.DeleteWithUID(c, queuePath(o.kind, o.project), uid); err != nil && !kube.IsK8sNotFound(err) {
 				return r.fail("queues", fmt.Sprintf("Cannot delete %s %s: %v.", o.kind, o.name, err), codeOf(err), "delete failed")
 			}
-			// Kueue may keep finalizer kueue.x-k8s.io/resource-in-use on
-			// ClusterQueue or ResourceFlavor while referenced; we block before
-			// deleting the next queue until it drops.
+			// While references remain, Kueue can retain finalizer
+			// kueue.x-k8s.io/resource-in-use on ClusterQueue or ResourceFlavor;
+			// we wait for clearance before removing the next queue.
 			gone, err := kube.WaitForGone(c, GoneWait, 2*time.Second, func(cc *kube.Client) (bool, error) {
 				now, found, err := o.read()
 				return !found || now.Metadata.UID != uid, err
@@ -682,7 +685,7 @@ func (r *run) teardown() (*types.OperationResponse, error) {
 	if strings.HasPrefix(msg, "Kept") {
 		kept = append(kept, msg)
 	}
-	// When no owned state remains, clear project fields from the record.
+	// With no owned state left, wipe project fields from the record.
 	if final, err := ReadRecord(c); err == nil && final.Empty() {
 		if err := writeRecord(c, Record{}); err != nil {
 			slog.Warn("cannot clear the Kueue record", "error", err)
@@ -696,9 +699,9 @@ func (r *run) teardown() (*types.OperationResponse, error) {
 	return r.done(done)
 }
 
-// removeLabel takes off the Kueue project label we added when the namespace
-// UID still matches the record and no active Workloads remain. A "Kept"
-// prefix in the return means the label remains on the cluster.
+// removeLabel strips the Kueue project label we applied when the namespace UID
+// still matches the record and no active Workloads are present. Return text
+// starting with "Kept" means the label stayed on the cluster.
 func (r *run) removeLabel(rec Record) (string, error) {
 	c := r.c
 	ns, found, err := readNamespace(c, rec.Project)
@@ -713,7 +716,7 @@ func (r *run) removeLabel(rec Record) (string, error) {
 		return fmt.Sprintf("Cannot tell whether Kueue still manages workloads in %s, so its label stays: %v.", rec.Project, err), err
 	}
 	var live []string
-	// A Workload being deleted still counts until it is gone.
+	// Workloads mid-deletion still count until they vanish.
 	for _, w := range ws {
 		live = append(live, w.Metadata.Name)
 	}
@@ -729,8 +732,7 @@ func (r *run) removeLabel(rec Record) (string, error) {
 		if !kube.IsK8sConflict(err) || attempt == labelAttempts {
 			return fmt.Sprintf("Cannot remove the label %s from %s: %v.", ProjectLabel, rec.Project, err), err
 		}
-		// Changed meanwhile: read again; a label no longer the tool's
-		// value stays.
+		// Concurrent change: re-read; if the label is no longer ours, leave it.
 		now, found, rerr := readNamespace(c, rec.Project)
 		if rerr != nil {
 			return fmt.Sprintf("Cannot read project %s: %v.", rec.Project, rerr), rerr
@@ -743,7 +745,7 @@ func (r *run) removeLabel(rec Record) (string, error) {
 	return fmt.Sprintf("Removed the label %s from %s.", ProjectLabel, rec.Project), nil
 }
 
-// --- dashboard opt-in ------------------------------------------------------------
+// --- dashboard opt-in -----------------------------------------------------------
 
 func configPath(apps string) string {
 	return rhoai.NamespacedPath("opendatahub.io/v1alpha", "odhdashboardconfigs", apps, dashboardConfig)

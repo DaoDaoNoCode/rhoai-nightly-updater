@@ -320,6 +320,10 @@ func GetStatus(sa, u *kube.Client, project string) (*types.KueueStatus, error) {
 		ns, nsFound, nsErr = readNamespace(u, st.Project)
 		if nsErr == nil && rec.Project != "" && rec.ProjectUID != "" && !rec.projectEntriesValid(ns, nsFound) {
 			rec.forgetProject()
+			st.ProjectGone = fmt.Sprintf("Project %s is gone; set up again.", rec.Project)
+			if nsFound {
+				st.ProjectGone = fmt.Sprintf("Project %s was deleted and made again since this tool's setup; set up again.", rec.Project)
+			}
 		}
 	}
 	// Queue objects are fetched only after Kueue's API is served.
@@ -379,6 +383,19 @@ func GetStatus(sa, u *kube.Client, project string) (*types.KueueStatus, error) {
 				note(sampleText(kind), err)
 			}
 			st.Samples = append(st.Samples, s)
+		}
+	}
+	// A project that cannot be read: the record's entries for it can be
+	// neither trusted nor forgotten, so nothing in it is shown as the
+	// tool's (nor as someone else's).
+	if nsErr != nil {
+		for i := range st.Objects {
+			if st.Objects[i].Namespace != "" {
+				st.Objects[i].ManagedByTool, st.Objects[i].Foreign, st.Objects[i].Outdated, st.Objects[i].Unknown = false, false, "", true
+			}
+		}
+		for i := range st.Samples {
+			st.Samples[i].ManagedByTool, st.Samples[i].Foreign, st.Samples[i].Outdated, st.Samples[i].Unknown = false, false, "", true
 		}
 	}
 	if apps, err := rhoai.AppsNamespace(u); err == nil {

@@ -68,7 +68,9 @@ export interface KueueTabProps {
   onCleanup: () => void;
 }
 
-const objectText = (o: KueueObject | undefined) => {
+const objectText = (o: KueueObject | undefined, projectGone?: string) => {
+  if (o?.unknown) return "Cannot tell whether this tool created it: the project cannot be read";
+  if (!o?.present && o?.namespace && projectGone) return "Went with the project";
   if (!o?.present) return "Not created yet";
   if (o.foreign) return "Exists, not created by this tool";
   if (o.terminating) return "Being deleted";
@@ -82,7 +84,7 @@ const Objects: React.FC<{ k: KueueStatus }> = ({ k }) => (
     {k.objects.map((o) => (
       <DescriptionListGroup key={o.kind}>
         <DescriptionListTerm>{o.kind}</DescriptionListTerm>
-        <DescriptionListDescription><code>{o.namespace ? `${o.namespace}/` : ""}{o.name}</code>: {objectText(o)}</DescriptionListDescription>
+        <DescriptionListDescription><code>{o.namespace ? `${o.namespace}/` : ""}{o.name}</code>: {objectText(o, k.projectGone)}</DescriptionListDescription>
       </DescriptionListGroup>
     ))}
     <DescriptionListGroup>
@@ -161,6 +163,7 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
             <Content component="p">
               A queue for the project with a CPU and memory quota, as the RHOAI docs set it up (the objects are listed below and under What this creates). Its LocalQueue is never named <code>default</code>, because Kueue would put every workload of the project that has no queue label into a LocalQueue named <code>default</code>.
             </Content>
+            {k?.projectGone && <Content component="p">{k.projectGone}</Content>}
             {k?.refusal && !setUp && !(next?.kind === "set-up" && reason === k.refusal) && <Content component="p">{k.refusal}</Content>}
             {k && k.instance.found && (
               <Content component="p">{k.instance.ready ? "Kueue is running." : `Kueue is not running yet${k.instance.message ? `: ${k.instance.message}` : ""}.`}</Content>
@@ -180,7 +183,7 @@ export const KueueTab: React.FC<KueueTabProps> = (props) => {
             const canAdd = setUp && !s?.present && !readOnly && !k?.rayBlocked && shownProject;
             return (
               <PartItem key={kind} id={`kueue-${kind}`} title={SAMPLE_TITLES[kind]} scope={shownProject ? `In project ${shownProject}` : "In the project"} status={sampleStatus(s)}
-                statusText={s?.present ? (s.outdated && !s.terminating ? "Outdated" : s.state ?? "Waiting for Kueue") : "Not added"} unmanaged={!!s?.foreign} loading={!k && !kueueError} menu={menu}
+                statusText={s?.unknown ? "Cannot tell: the project cannot be read" : s?.present ? (s.outdated && !s.terminating ? "Outdated" : s.state ?? "Waiting for Kueue") : "Not added"} unmanaged={!!s?.foreign} loading={!k && !kueueError} menu={menu}
                 actions={canAdd ? <ActionListItem><PrimaryAction variant="secondary" label="Add" reason={baseReason}
                   onClick={() => setPending({ ...kueueSetupPending(shownProject, k), rayCluster: kind === "raycluster", rayJob: kind === "rayjob" } as Pending)} /></ActionListItem> : undefined}>
                 <Content component="p">

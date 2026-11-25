@@ -468,9 +468,13 @@ func describeQuota() string {
 }
 
 // quotaText is "10 CPUs, 32Gi of memory and 6Gi of ephemeral storage";
-// a quota not set reads "no".
+// a quota not set reads "no" ("no ephemeral storage").
 func quotaText(cpu, memory, ephemeral string) string {
-	return fmt.Sprintf("%s CPUs, %s of memory and %s of ephemeral storage", kube.FirstNonEmpty(cpu, "no"), kube.FirstNonEmpty(memory, "no"), kube.FirstNonEmpty(ephemeral, "no"))
+	eph := "no ephemeral storage"
+	if ephemeral != "" {
+		eph = ephemeral + " of ephemeral storage"
+	}
+	return fmt.Sprintf("%s CPUs, %s of memory and %s", kube.FirstNonEmpty(cpu, "no"), kube.FirstNonEmpty(memory, "no"), eph)
 }
 
 // HasToolLabel reports whether the object carries the tool label (ownership half).

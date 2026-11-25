@@ -579,12 +579,12 @@ func TestKueueStatus(t *testing.T) {
 	// 6 CPUs and 19Gi or 20Gi from 5.0.0 pre-releases (no model, no
 	// ephemeral storage) also signal an older version.
 	setSizes("6", "19Gi", map[string]any{"requests": map[string]any{"cpu": "1", "memory": "5Gi"}, "limits": map[string]any{"cpu": "2", "memory": "8Gi"}})
-	if st, _ = GetKueueStatus(u, u, "proj"); st.Objects[1].Outdated != "its quota is 6 CPUs, 19Gi of memory and no of ephemeral storage; this version sets 10 CPUs, 32Gi of memory and 6Gi of ephemeral storage" {
+	if st, _ = GetKueueStatus(u, u, "proj"); st.Objects[1].Outdated != "its quota is 6 CPUs, 19Gi of memory and no ephemeral storage; this version sets 10 CPUs, 32Gi of memory and 6Gi of ephemeral storage" {
 		t.Fatalf("19Gi: queue %+v", st.Objects[1])
 	}
 	setSizes("6", "11Gi", map[string]any{"requests": map[string]any{"cpu": "1", "memory": "2Gi"}, "limits": map[string]any{"cpu": "1", "memory": "2Gi"}})
 	st, _ = GetKueueStatus(u, u, "proj")
-	if st.Quota != "6 CPUs, 11Gi of memory and no of ephemeral storage" || st.Objects[1].Outdated != "its quota is 6 CPUs, 11Gi of memory and no of ephemeral storage; this version sets 10 CPUs, 32Gi of memory and 6Gi of ephemeral storage" ||
+	if st.Quota != "6 CPUs, 11Gi of memory and no ephemeral storage" || st.Objects[1].Outdated != "its quota is 6 CPUs, 11Gi of memory and no ephemeral storage; this version sets 10 CPUs, 32Gi of memory and 6Gi of ephemeral storage" ||
 		st.Samples[0].Outdated != "its head and worker have other CPU and memory than this version sets (head 1 CPU and 5Gi requested, up to 2 CPUs and 8Gi; worker 1 CPU and 3Gi requested, up to 1 CPU and 6Gi)" {
 		t.Fatalf("outdated: quota %q, queue %+v, sample %+v", st.Quota, st.Objects[1], st.Samples[0])
 	}
@@ -1195,7 +1195,7 @@ func TestKueueDeleteSampleAfterProjectMadeAgain(t *testing.T) {
 	f.putJSON(kqRayJobs+"/"+kueue.RayJobName, kqForeignJob)
 	before := len(f.mutations())
 	res, _ := runKueueOp(t, u, types.KueueRequest{Action: "delete-sample", Sample: "rayjob"})
-	if !res.Success || res.Message != "RayJob nightly-rayjob in proj is gone already. Nothing was deleted." || len(f.mutations()) != before || !f.has(kqRayJobs+"/"+kueue.RayJobName) {
+	if !res.Success || res.Message != "Project proj was deleted or made again since this tool's setup, so its RayJob nightly-rayjob is not this tool's to delete. Nothing was deleted." || len(f.mutations()) != before || !f.has(kqRayJobs+"/"+kueue.RayJobName) {
 		t.Fatalf("got %+v, writes %v", res, f.mutations()[before:])
 	}
 	if rec := kueueRecord(t, u); rec.RayJobUID != "" || rec.ProjectUID != "" || rec.LabelAdded || rec.LocalQueueUID != "" || rec.ClusterQueueUID == "" {
@@ -1219,6 +1219,37 @@ func TestKueueStatusAfterProjectMadeAgain(t *testing.T) {
 		t.Fatalf("LocalQueue %+v", o)
 	}
 	if o := st.Objects[1]; o.Kind != "ClusterQueue" || !o.ManagedByTool {
+		t.Fatalf("ClusterQueue %+v", o)
+	}
+	if st.ProjectGone != "Project proj was deleted and made again since this tool's setup; set up again." {
+		t.Fatalf("project gone %q", st.ProjectGone)
+	}
+	// Deleted and not made again: the status says the project is gone.
+	f.deleteObject(wbProjectNS)
+	if st, err = GetKueueStatus(u, u, "proj"); err != nil || st.ProjectGone != "Project proj is gone; set up again." {
+		t.Fatalf("gone: %q %v", st.ProjectGone, err)
+	}
+}
+
+// A project that cannot be read: its LocalQueue and samples are shown
+// neither as the tool's nor as someone else's (Unknown), and the reason is
+// in ItemsProblem; the cluster-wide queues stay the tool's.
+func TestKueueStatusProjectUnreadable(t *testing.T) {
+	f, u, _ := kqSetUpBoth(t)
+	f.fail["GET "+wbProjectNS] = 500
+	st, err := GetKueueStatus(u, u, "proj")
+	if err != nil || !strings.Contains(st.ItemsProblem, "Cannot read project proj") || st.ProjectGone != "" {
+		t.Fatalf("status %+v %v", st, err)
+	}
+	if o := st.Objects[2]; !o.Present || o.ManagedByTool || o.Foreign || !o.Unknown {
+		t.Fatalf("LocalQueue %+v", o)
+	}
+	for _, s := range st.Samples {
+		if s.ManagedByTool || s.Foreign || !s.Unknown {
+			t.Fatalf("sample %+v", s)
+		}
+	}
+	if o := st.Objects[1]; !o.ManagedByTool || o.Unknown {
 		t.Fatalf("ClusterQueue %+v", o)
 	}
 }

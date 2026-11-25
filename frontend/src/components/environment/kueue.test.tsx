@@ -46,6 +46,14 @@ describe("kueueState", () => {
     expect(kueueState(notSetUp({ objects: [{ ...ready().objects[0] }, ...notSetUp().objects.slice(1)] }), "dev", IDLE)).toMatchObject({ status: "needs-attention" });
   });
 
+  it("a project gone since setup says so; a project that cannot be read is unknown, not the tool's", () => {
+    const gone = { ...ready(), projectGone: "Project dev is gone; set up again.", objects: ready().objects.map((o) => (o.kind === "LocalQueue" ? { ...o, present: false, managedByTool: false } : o)), label: undefined };
+    expect(kueueState(gone, "dev", IDLE)).toMatchObject({ status: "needs-attention", label: "Project dev is gone; set up again" });
+    const unreadable = { ...ready(), objects: ready().objects.map((o) => (o.kind === "LocalQueue" ? { ...o, managedByTool: false, unknown: true } : o)) };
+    expect(kueueState(unreadable, "dev", IDLE)).toMatchObject({ status: "unknown" });
+    expect(sampleStatus({ kind: "raycluster", name: "x", present: true, unknown: true })).toBe("unknown");
+  });
+
   it("maps the samples' Workload states", () => {
     expect(sampleStatus({ kind: "raycluster", name: "x", present: true, state: "Running" })).toBe("ready");
     expect(sampleStatus({ kind: "raycluster", name: "x", present: true, state: "Inadmissible" })).toBe("needs-attention");
@@ -186,16 +194,26 @@ describe("Distributed workloads tab", () => {
 
   it("a queue and a sample an earlier version made with other sizes say so", async () => {
     const old = ready();
-    old.objects = old.objects.map((o) => (o.kind === "ClusterQueue" ? { ...o, outdated: "its quota is 6 CPUs, 11Gi of memory and no of ephemeral storage; this version sets 10 CPUs, 32Gi of memory and 6Gi of ephemeral storage" } : o));
+    old.objects = old.objects.map((o) => (o.kind === "ClusterQueue" ? { ...o, outdated: "its quota is 6 CPUs, 11Gi of memory and no ephemeral storage; this version sets 10 CPUs, 32Gi of memory and 6Gi of ephemeral storage" } : o));
     old.samples = old.samples.map((x) => (x.kind === "raycluster" ? { ...x, outdated: "its head and worker have other CPU and memory than this version sets" } : x));
     stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] }, "/api/resources/kueue": old, "/api/resources/prerequisites": prereq(true) });
     renderAt("/test-resources?tab=kueue&project=dev");
-    expect(await screen.findByText("Its quota is 6 CPUs, 11Gi of memory and no of ephemeral storage; this version sets 10 CPUs, 32Gi of memory and 6Gi of ephemeral storage. Set up keeps it as it is: Clean up, then Set up again.")).toBeInTheDocument();
+    expect(await screen.findByText("Its quota is 6 CPUs, 11Gi of memory and no ephemeral storage; this version sets 10 CPUs, 32Gi of memory and 6Gi of ephemeral storage. Set up keeps it as it is: Clean up, then Set up again.")).toBeInTheDocument();
     expect(screen.getByText(/: Made by an earlier version of this tool$/)).toBeInTheDocument();
     expect(screen.getByText("Its head and worker have other CPU and memory than this version sets. Delete it and add it again, or Clean up, then Set up again.")).toBeInTheDocument();
     const queues = screen.getByRole("listitem", { name: "Queues" });
     expect(within(queues).getByText("Needs attention")).toBeInTheDocument();
     expect(within(screen.getByRole("listitem", { name: "RayCluster sample" })).getByText("Outdated")).toBeInTheDocument();
+  });
+
+  it("a project gone since setup: the LocalQueue went with it, and the queues say to set up again", async () => {
+    const gone = { ...ready(), projectGone: "Project dev is gone; set up again.", objects: ready().objects.map((o) => (o.kind === "LocalQueue" ? { ...o, present: false, managedByTool: false } : o)), label: undefined };
+    stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] }, "/api/resources/kueue": gone, "/api/resources/prerequisites": prereq(true) });
+    renderAt("/test-resources?tab=kueue&project=dev");
+    const queues = await screen.findByRole("listitem", { name: "Queues" });
+    expect(within(queues).getByText("Project dev is gone; set up again.")).toBeInTheDocument();
+    expect(within(queues).getByText(/: Went with the project$/)).toBeInTheDocument();
+    expect(within(queues).queryByText(/Not created yet/)).not.toBeInTheDocument();
   });
 
   it("a setup in another project says so", async () => {

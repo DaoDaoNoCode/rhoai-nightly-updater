@@ -507,6 +507,12 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   refuses them, Clean up leaves them, and one that uses the tool's
   ClusterQueue keeps it. A label someone else set is never claimed or
   removed. When the project cannot be read, Clean up deletes nothing.
+  Deleting a sample of a project deleted or made again since says so and
+  deletes nothing (it no longer claims the sample is gone). The tab's
+  status says "Project recipe-dev is gone; set up again" (or that it was
+  made again) instead of "Incomplete" and "Not created yet", and while the
+  project cannot be read it shows its LocalQueue and samples as unknown,
+  not as the tool's.
 - **The Distributed workloads tab can turn Kueue back.** Once its setup
   was cleaned up, the prerequisites still read "kueue Unmanaged (turned on
   by this tool)", but only Clean up everything could turn it back. The
