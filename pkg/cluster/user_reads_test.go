@@ -31,12 +31,12 @@ func (f *resourceFake) deleteObject(path string) {
 }
 
 // userClientOf is c acting with the signed-in user's own token, with c
-// (the ServiceAccount's) for the updater's own records, as pkg/api
-// withUserRead builds it.
+// (the ServiceAccount's) for the updater's own records and the cluster
+// facts, as pkg/api withUserRead and withMutationAuth build it.
 func userClientOf(c *Client, token string) *Client {
 	u := *c
 	editTestClient(&u, func(o *testClientOptions) {
-		o.Token, o.AsUser, o.Bookkeeper, o.SignedInUser, o.StatusRead = token, true, c, nil, false
+		o.Token, o.AsUser, o.Bookkeeper, o.Facts, o.SignedInUser, o.StatusRead = token, true, c, c, nil, false
 	})
 	return &u
 }

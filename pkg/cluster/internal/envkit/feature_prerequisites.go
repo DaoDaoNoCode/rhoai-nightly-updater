@@ -1,6 +1,7 @@
 package envkit
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -131,15 +132,41 @@ func ComponentBlock(r rhoai.DSCRead, fc FeatureComponent) *types.ComponentBlock 
 	return nil
 }
 
-// SetupComponentBlock reads the DataScienceCluster for a setup: the reason
-// the feature's component is not turned on, or nil. A DataScienceCluster
-// that cannot be read blocks nothing: the setup's own checks (the CRD)
-// still apply.
-func SetupComponentBlock(c *kube.Client, fc FeatureComponent) *types.ComponentBlock {
-	r, err := rhoai.ReadFirstDSC(c)
+// ErrorCodePrerequisitesUnknown: whether a setup's prerequisites are met
+// could not be read, so it was refused before any change (fail closed).
+const ErrorCodePrerequisitesUnknown = "prerequisites_unknown"
+
+// SetupComponentBlock reads the DataScienceCluster for a setup: why the
+// feature's component keeps it from running, with its errorCode
+// ("prerequisites"), or "" when it may run.
+//
+// The DataScienceCluster is a cluster fact, read with the facts client
+// (c.Facts(), the ServiceAccount's) through ReadFirstDSC, which tries each
+// served version in turn and skips one whose objects the conversion
+// webhook cannot convert (RHOAI 3.6's v3 next to an older operator), so
+// such a version alone blocks nothing. A read that still fails (every
+// served version refused, an API error) blocks the setup with
+// ErrorCodePrerequisitesUnknown: whether the component is on is unknown,
+// and a CR of a component that is off is created and never starts. The
+// reason gives the read's HTTP status, not its text (the ServiceAccount's
+// error may name what a user does not see); the log has the error.
+func SetupComponentBlock(c *kube.Client, fc FeatureComponent) (reason, errorCode string) {
+	r, err := rhoai.ReadFirstDSC(c.Facts())
 	if err != nil {
-		slog.Debug("cannot read the DataScienceCluster for a setup check", "feature", fc.Feature, "error", err)
-		return nil
+		slog.Warn("cannot read the DataScienceCluster for a setup check; the setup is refused", "feature", fc.Feature, "error", err)
+		return fmt.Sprintf("Cannot read whether %s is turned on: the DataScienceCluster could not be read (%s).", fc.Feature, factReadProblem(err)), ErrorCodePrerequisitesUnknown
 	}
-	return ComponentBlock(r, fc)
+	if b := ComponentBlock(r, fc); b != nil {
+		return b.Reason, "prerequisites"
+	}
+	return "", ""
+}
+
+// factReadProblem says how a read of a cluster fact failed without the
+// API server's text: its HTTP status, or that the log has the error.
+func factReadProblem(err error) string {
+	if k, ok := errors.AsType[*kube.K8sError](err); ok {
+		return fmt.Sprintf("HTTP %d", k.Status)
+	}
+	return "the updater's log has the error"
 }

@@ -25,12 +25,20 @@ var (
 )
 
 // CachedURL is readComponentURL's answer, cached per API server in
-// URLCache.
+// URLCache. The address is a cluster fact: read with the facts client
+// (c.Facts(), the ServiceAccount's), so the cache all users share is
+// filled only by the ServiceAccount. A client that acts with the signed-in
+// user's token and has no facts client reads afresh and caches nothing (as
+// rhoai.ServedVersions).
 func CachedURL(c *kube.Client) string {
+	if c.Facts().ActsAsUser() {
+		u, _ := readComponentURL(c.Facts())
+		return u
+	}
 	if u, ok := URLCache.Get(c.BaseURL()); ok {
 		return u
 	}
-	u, err := readComponentURL(c)
+	u, err := readComponentURL(c.Facts())
 	ttl := dashboardURLTTL
 	if err != nil {
 		slog.Debug("cannot read the dashboard URL", "error", err)

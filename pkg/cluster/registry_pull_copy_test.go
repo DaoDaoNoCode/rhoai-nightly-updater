@@ -165,7 +165,10 @@ type copyCluster struct {
 func newCopyCluster(t *testing.T, topology string, withDSCI bool) *copyCluster {
 	t.Helper()
 	f, c := newFakeAPI(t)
-	editTestClient(c, func(o *testClientOptions) { o.AsUser = true })
+	// The ServiceAccount's client reads the cluster facts, as pkg/api sets
+	// it on a change's client.
+	sa := *c
+	editTestClient(c, func(o *testClientOptions) { o.AsUser, o.Facts = true, &sa })
 	t.Cleanup(registry.SetVerifyQuayCredentialsForTest(func(string) error { return nil }))
 	f.json("GET", "/apis/config.openshift.io/v1/infrastructures/cluster", http.StatusOK, fmt.Sprintf(`{"status":{"controlPlaneTopology":%q}}`, topology))
 	f.json("GET", "/apis/admissionregistration.k8s.io/v1/validatingwebhookconfigurations", http.StatusOK, `{"items":[]}`)

@@ -66,7 +66,9 @@ func (pg *profileGraph) mutationHandlerVars() []string {
 // saReach is what the full profile reaches with the ServiceAccount's
 // token: main's roots without the mutation handlers (their client is the
 // user's) and without the gitops profile's routes (that profile has its
-// own RBAC).
+// own RBAC), plus what the facts client reaches from any path, a change's
+// included: every function c.Facts() is passed to (factsRoots) reads with
+// the ServiceAccount's token.
 func (pg *profileGraph) saReach() map[string]bool {
 	pruned := map[string]bool{"var " + apiPkg + ".gitOpsRoutes": true}
 	for _, v := range pg.mutationHandlerVars() {
@@ -75,7 +77,7 @@ func (pg *profileGraph) saReach() map[string]bool {
 	for n := range saReachPruned {
 		pruned[n] = true
 	}
-	return pg.graph.reach(pg.roots(), pruned)
+	return pg.graph.reach(append(pg.roots(), pg.factsRoots...), pruned)
 }
 
 var saRequestsMemo []rbacRequest

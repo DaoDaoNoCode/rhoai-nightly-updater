@@ -11,7 +11,6 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/authz"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
-	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -104,9 +103,11 @@ func SampleTarget(c *kube.Client, project string) (*Target, string, error) {
 }
 
 // mlflowSampleTargetAs is mlflowSampleTarget whose MLflow calls carry
-// token: c finds MLflow, token is who asks it.
+// token: c finds MLflow, token is who asks it. The MLflow CR (cluster
+// scoped) is a cluster fact, read with the facts client (c.Facts(), the
+// ServiceAccount's): a project user's own token may not read it.
 func mlflowSampleTargetAs(c *kube.Client, project, token string) (*Target, string, error) {
-	cr, err := ReadCR(c)
+	cr, err := ReadCR(c.Facts())
 	switch {
 	case kube.IsK8sNotFound(err):
 		return nil, "MLflow is not deployed. Set it up first.", nil
@@ -363,12 +364,19 @@ func RunSamples(c *kube.Client, req types.MLflowSamplesRequest, onStep func(type
 	}
 
 	emit(types.UpdateStepEvent{Step: "check", Status: "running", Message: fmt.Sprintf("Checking MLflow for project '%s'", req.Project)})
-	ok, err := envkit.IsDSProject(c, req.Project)
+	// The project must be one of the signed-in user's data science
+	// projects (the projects API with their own token, as the samples
+	// status checks), before anything is read with the ServiceAccount.
+	u := c.SignedInUser()
+	if u == nil {
+		return fail("check", "There is no signed-in user's client to list your data science projects with. Nothing was changed.", "internal")
+	}
+	ok, err := authz.IsUserDSProject(u, req.Project)
 	if err != nil {
-		return fail("check", fmt.Sprintf("Cannot list the projects: %v", err), kube.ErrorCodeFromK8sErr(err))
+		return fail("check", fmt.Sprintf("Cannot list your data science projects: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
 	if !ok {
-		return fail("check", fmt.Sprintf("'%s' is not a Data Science project.", req.Project), "validation")
+		return fail("check", fmt.Sprintf("'%s' is not one of your data science projects.", req.Project), "validation")
 	}
 	t, reason, err := SampleTarget(c, req.Project)
 	if err != nil {

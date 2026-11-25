@@ -47,7 +47,19 @@ var NamespacesCache = kube.NewLRU[string, Namespaces](16)
 // DiscoverNamespaces returns the DSCInitialization's namespaces,
 // cached per cluster for rhoaiNamespacesTTL. err is errNoDSCInitialization
 // when none exists, or a read error; callers must not guess a name then.
+//
+// The DSCInitialization is read only with the cluster facts client
+// (c.Facts(): the ServiceAccount's, which deploy/template.yaml lets list
+// DSCInitializations), so the cache all users share is filled only by the
+// ServiceAccount, and a change answers the same whoever runs it. A client
+// that acts with the signed-in user's token and has no facts client is
+// refused (kube.ErrNoFactsClient): it neither reads the cache nor fills
+// it, so a project user's change never depends on whether an earlier read
+// filled it.
 func DiscoverNamespaces(c *kube.Client) (Namespaces, error) {
+	if c.Facts().ActsAsUser() {
+		return Namespaces{}, kube.ErrNoFactsClient
+	}
 	key := c.BaseURL()
 	if ns, ok := NamespacesCache.Get(key); ok {
 		return ns, nil
@@ -61,7 +73,7 @@ func DiscoverNamespaces(c *kube.Client) (Namespaces, error) {
 		if ns, ok := NamespacesCache.Get(key); ok {
 			return ns, nil
 		}
-		return readRHOAINamespaces(c, key)
+		return readRHOAINamespaces(c.Facts(), key)
 	})
 	return ns, err
 }

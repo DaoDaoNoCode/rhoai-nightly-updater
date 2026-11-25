@@ -331,7 +331,7 @@ func TestPlayground_SetupWithTheServiceAccountNeverAddsAMaaSModel(t *testing.T) 
 // own token, as a change's client does (NewUserClient).
 func (e *playgroundEnv) userPlaygroundClient(token string) *Client {
 	uc := *e.c
-	editTestClient(&uc, func(o *testClientOptions) { o.Token, o.AsUser = token, true })
+	editTestClient(&uc, func(o *testClientOptions) { o.Token, o.AsUser, o.Facts = token, true, e.c })
 	e.g.userToken = token
 	e.g.maasModels = `{"data":[{"id":"gpt-oss-20b","display_name":"GPT OSS 20B","ready":true,"capabilities":["text-generation"],"subscriptions":[{"name":"team-sub"}]}]}`
 	return &uc

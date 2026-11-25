@@ -35,6 +35,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -313,6 +314,11 @@ type profileGraph struct {
 	// funcPos ("file:line", file by base name, unique across the tree), the
 	// key serviceAccountRequestsIn uses.
 	funcPositions map[string]string
+	// factsRoots are the functions (and function variables) a facts
+	// client, c.Facts(), is passed to: what they reach reads with the
+	// ServiceAccount's token whatever path calls them (rbac_facts_test.go).
+	// factsProblems are the uses of c.Facts() the scan cannot follow.
+	factsRoots, factsProblems []string
 }
 
 var (
@@ -325,7 +331,11 @@ func loadProfileGraph(t *testing.T) *profileGraph {
 	profileGraphOnce.Do(func() {
 		g := refGraph{}
 		positions := map[string]string{}
-		var pkgs []string
+		var pkgs, factsRoots, factsProblems []string
+		addFacts := func(tp *typedPkg) {
+			roots, problems := factsCalls(tp)
+			factsRoots, factsProblems = append(factsRoots, roots...), append(factsProblems, problems...)
+		}
 		dirs := clusterSourceDirs(t)
 		names := make([]string, 0, len(dirs))
 		for dir := range dirs {
@@ -338,6 +348,7 @@ func loadProfileGraph(t *testing.T) *profileGraph {
 			path := clusterImportPath(dir)
 			tp := typeCheckWith(t, fset, imp, path, dir)
 			g.addPackage(tp)
+			addFacts(tp)
 			pkgs = append(pkgs, path)
 			// The positions of this directory's functions.
 			for name, f := range tp.files {
@@ -350,9 +361,13 @@ func loadProfileGraph(t *testing.T) *profileGraph {
 				}
 			}
 		}
-		g.addPackage(typeCheckWith(t, fset, imp, apiPkg, "../api"))
-		g.addPackage(typeCheckWith(t, fset, imp, "main", "../..", "main.go"))
-		profileGraphVal = &profileGraph{graph: g, clusterPkgs: pkgs, funcPositions: positions}
+		for _, tp := range []*typedPkg{typeCheckWith(t, fset, imp, apiPkg, "../api"), typeCheckWith(t, fset, imp, "main", "../..", "main.go")} {
+			g.addPackage(tp)
+			addFacts(tp)
+		}
+		sort.Strings(factsRoots)
+		profileGraphVal = &profileGraph{graph: g, clusterPkgs: pkgs, funcPositions: positions,
+			factsRoots: slices.Compact(factsRoots), factsProblems: factsProblems}
 	})
 	if profileGraphVal == nil {
 		t.Fatal("the reference graph could not be built")
