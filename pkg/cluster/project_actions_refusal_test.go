@@ -360,3 +360,40 @@ func TestUserAddRefusedOnCreateConflict(t *testing.T) {
 		}
 	}
 }
+
+// A Notebook's hardware-profile annotation is followed only into the
+// project or RHOAI's applications namespace: one naming another project
+// sends no request there (status and start alike), and start keeps it.
+func TestWorkbenchProfileAnnotationStaysInTheProject(t *testing.T) {
+	f, c := newResourceFake(t)
+	putWorkbenchCluster(t, f, true)
+	putToolWorkbench(t, f, c)
+	nb := func(ns string) string {
+		return `{"metadata":{"uid":"nb-1","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"},"annotations":{"kubeflow-resource-stopped":"2026-11-24T09:00:00Z",
+		"opendatahub.io/hardware-profile-name":"any","opendatahub.io/hardware-profile-namespace":"` + ns + `"}},"spec":{"template":{"spec":{"containers":[{"name":"nightly-workbench","volumeMounts":[]}],"volumes":[]}}}}`
+	}
+	const elsewhere = "/apis/infrastructure.opendatahub.io/v1/namespaces/team-b/hardwareprofiles"
+	f.putJSON(wbNotebook, nb("team-b"))
+	u := userClientOf(c, fakeUserToken)
+	if _, err := GetWorkbenchStatus(c, u, "proj"); err != nil {
+		t.Fatal(err)
+	}
+	if res := wbSteps(t, u, types.WorkbenchRequest{Action: "start", Project: "proj"}); !res.Success {
+		t.Fatalf("start: %+v", res)
+	}
+	if n := len(f.callsTo("GET", elsewhere)); n != 0 {
+		t.Fatalf("%d reads of another project's hardware profiles", n)
+	}
+	calls := f.callsTo("PATCH", wbNotebook)
+	if strings.Contains(calls[len(calls)-1].Body, "hardware-profile-name") {
+		t.Fatalf("start dropped an annotation it did not check: %s", calls[len(calls)-1].Body)
+	}
+	// The applications namespace is followed (the check above can fail).
+	f.putJSON(wbNotebook, nb(wbApps))
+	if _, err := GetWorkbenchStatus(c, u, "proj"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.callsTo("GET", "/apis/infrastructure.opendatahub.io/v1/namespaces/"+wbApps+"/hardwareprofiles")) == 0 {
+		t.Fatal("the applications namespace's profiles were not read")
+	}
+}

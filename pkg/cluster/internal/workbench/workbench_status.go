@@ -169,7 +169,7 @@ func itemState(c *kube.Client, project, dashboardURL string, rec Record) (types.
 		}
 		st.ImageDeprecated = runsDeprecatedImage(c, nb, sel)
 	}
-	st.HardwareProfile = profileLabel(c, nb.Metadata.Annotations[profileNamespaceAnnotation], nb.Metadata.Annotations[profileNameAnnotation])
+	st.HardwareProfile = profileLabel(c, profileNamespace(c, project, nb.Metadata.Annotations[profileNamespaceAnnotation]), nb.Metadata.Annotations[profileNameAnnotation])
 	for _, ct := range nb.Spec.Template.Spec.Containers {
 		if ct.Name == Name {
 			st.CPU, st.Memory = ResourceText(ct.Resources.Requests["cpu"]), ResourceText(ct.Resources.Requests["memory"])
@@ -394,6 +394,22 @@ func BuildPlan(c *kube.Client, project string, dsc rhoai.DSCRead) (Plan, string,
 // profileLabel is the hardware profile's display name as the
 // dashboard shows it, else its name ("" without one). A profile that
 // cannot be read or is gone shows by name.
+// profileNamespace is where the hardware profile a Notebook's annotation
+// names may be looked up: annotated (the project when it is empty) if that
+// is the project itself or RHOAI's applications namespace (where the
+// dashboard keeps its profiles, discovered with the facts client), else ""
+// (no lookup). Anyone who may edit the Notebook may write the annotation,
+// so a name of another project is never followed with the reader's token.
+func profileNamespace(c *kube.Client, project, annotated string) string {
+	if annotated == "" || annotated == project {
+		return project
+	}
+	if apps := rhoai.ApplicationsNamespace(c); apps != "" && annotated == apps {
+		return apps
+	}
+	return ""
+}
+
 func profileLabel(c *kube.Client, namespace, name string) string {
 	if name == "" || namespace == "" {
 		return name

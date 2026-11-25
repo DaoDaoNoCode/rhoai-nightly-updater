@@ -618,12 +618,15 @@ func withoutEntry(value, project string) (string, bool) {
 // profileGone: the hardware profile the workbench's annotations name no
 // longer exists (the dashboard's binding state Deleted).
 func profileGone(c *kube.Client, nb Notebook) (bool, error) {
-	name, ns := nb.Metadata.Annotations[profileNameAnnotation], nb.Metadata.Annotations[profileNamespaceAnnotation]
+	name := nb.Metadata.Annotations[profileNameAnnotation]
 	if name == "" {
 		return false, nil
 	}
+	// A namespace this tool does not look in (profileNamespace): not known
+	// to be gone, so the annotation stays.
+	ns := profileNamespace(c, nb.Metadata.Namespace, nb.Metadata.Annotations[profileNamespaceAnnotation])
 	if ns == "" {
-		ns = nb.Metadata.Namespace
+		return false, nil
 	}
 	profiles, err := listProfiles(c, ns)
 	if err != nil {
