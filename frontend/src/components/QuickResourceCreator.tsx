@@ -33,7 +33,8 @@ import { PipelinesTab, pipelineServerConfirm } from "./environment/PipelinesTab"
 import { StorageTab, storageConfirm } from "./environment/StorageTab";
 import { MLflowTab, mlflowConfirm } from "./environment/MLflowTab";
 import { Overview } from "./environment/Overview";
-import { FEATURE_PURPOSE, PrimaryAction, READ_ONLY_SETUP, partTitleId } from "./environment/FeatureLayout";
+import { FEATURE_PURPOSE, READ_ONLY_SETUP, partTitleId } from "./environment/FeatureLayout";
+import { TooltipButton } from "./TooltipButton";
 import { MigrateStorageModal } from "./environment/MigrateStorageModal";
 import { SecureStorageModal, secureExtraSteps } from "./environment/SecureStorageModal";
 import { MIGRATE_TITLES, migrateStepNow, useMigrateStorage, type MigrateKind } from "./environment/useMigrateStorage";
@@ -290,8 +291,9 @@ export const QuickResourceCreator: React.FC<QuickResourceCreatorProps> = ({ muta
     <PrerequisitesSection feature={feature} prereq={prereq?.features?.[feature]} error={prereqRead.error} onRetry={() => void prereqRead.reload()}
       exposure={exposure ?? undefined} stale={feature === "models" && prereqRead.stale} readOnly={readOnly} baseReason={baseReason} setPending={setPending}
       partActions={feature === "kueue" && kueueBack ? {
-        "dsc-kueue": <ActionListItem><PrimaryAction variant="secondary" label="Turn back..." reason={kueueBack.reason} onClick={() => setPending({ kind: "turn-back-kueue", previous: kueueBack.restorable.previous })} /></ActionListItem>,
-      } : undefined} />
+        "dsc-kueue": <ActionListItem><TooltipButton variant="secondary" disabledReason={kueueBack.reason} onClick={() => setPending({ kind: "turn-back-kueue", previous: kueueBack.restorable.previous })}>Turn back...</TooltipButton></ActionListItem>,
+      } : undefined}
+      partNotes={feature === "kueue" && kueueBack?.reason ? { "dsc-kueue": kueueBack.reason } : undefined} />
   );
   const onModelsExposure = useCallback((e: ModelExposureKind | null) => setModelsExposure(e), []);
 

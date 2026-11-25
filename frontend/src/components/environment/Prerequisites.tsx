@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Alert, AlertActionLink, Content, ExpandableSection, Skeleton, Stack, StackItem } from "@patternfly/react-core";
+import { Alert, AlertActionLink, Content, ExpandableSection, HelperText, HelperTextItem, Skeleton, Stack, StackItem } from "@patternfly/react-core";
 import type { FeaturePrerequisites, ModelExposureKind, PrerequisiteFeature, PrerequisitePart, PrerequisitesStatus } from "../../types";
 import { getPrerequisites, toApiError } from "../../services/api";
 import { usePolling } from "../../hooks/usePolling";
@@ -103,7 +103,7 @@ export function headerWithPrerequisites(state: FeatureState, p: FeaturePrerequis
   return { ...state, status: "needs-attention", label: `Needs attention${state.project ? ` in ${state.project}` : ""}` };
 }
 
-const PrerequisitePartItem: React.FC<{ part: PrerequisitePart; feature: PrerequisiteFeature; actions?: React.ReactNode }> = ({ part, feature, actions }) => {
+const PrerequisitePartItem: React.FC<{ part: PrerequisitePart; feature: PrerequisiteFeature; actions?: React.ReactNode; note?: string }> = ({ part, feature, actions, note }) => {
   // Waiting for something else (an operator, KServe's check) is not this
   // part setting itself up: a grey "Waiting", not the blue spinner.
   const waiting = part.state === "waiting";
@@ -111,6 +111,8 @@ const PrerequisitePartItem: React.FC<{ part: PrerequisitePart; feature: Prerequi
     <PartItem id={`prereq-${feature}-${part.id}`} title={part.title} scope="Shared by the cluster" status={waiting ? "not-set-up" : maasPartLabelStatus(part as MaaSPart)}
       statusText={waiting ? "Waiting" : undefined} unmanaged={!!part.notManaged} actions={actions}>
       {part.message && <Content component="p">{part.message}</Content>}
+      {/* Why the part's own action is off (Turn back while queues use Kueue). */}
+      {note && <HelperText><HelperTextItem>{note}</HelperTextItem></HelperText>}
       {part.warning && <WarningAlert text={part.warning} />}
       {part.commands && part.state === "manual" && (
         <CopyableCode id={`prereq-${feature}-${part.id}-commands`} label="the commands for a cluster-admin" code={part.commands} />
@@ -120,7 +122,7 @@ const PrerequisitePartItem: React.FC<{ part: PrerequisitePart; feature: Prerequi
 };
 
 /** Ready prerequisites, collapsed to one line; open from the start when a part offers an action (Turn back). */
-const ReadyPrerequisites: React.FC<{ feature: PrerequisiteFeature; parts: PrerequisitePart[]; partActions?: Partial<Record<string, React.ReactNode>> }> = ({ feature, parts, partActions }) => {
+const ReadyPrerequisites: React.FC<{ feature: PrerequisiteFeature; parts: PrerequisitePart[]; partActions?: Partial<Record<string, React.ReactNode>>; partNotes?: Partial<Record<string, string>> }> = ({ feature, parts, partActions, partNotes }) => {
   const offers = parts.some((p) => !!partActions?.[p.id]);
   const [open, setOpen] = useState(offers);
   // An action that appears once another status has loaded opens it too.
@@ -131,7 +133,7 @@ const ReadyPrerequisites: React.FC<{ feature: PrerequisiteFeature; parts: Prereq
     <ExpandableSection toggleText={`Cluster prerequisites for ${FEATURE_TITLES[feature]}: ${parts.length} of ${parts.length} ready`} isIndented
       isExpanded={open} onToggle={(_e, v) => setOpen(v)}>
       <PartList aria-label={`What ${FEATURE_TITLES[feature]} needs on the cluster`}>
-        {parts.map((p) => <PrerequisitePartItem key={p.id} part={p} feature={feature} actions={partActions?.[p.id]} />)}
+        {parts.map((p) => <PrerequisitePartItem key={p.id} part={p} feature={feature} actions={partActions?.[p.id]} note={partNotes?.[p.id]} />)}
       </PartList>
     </ExpandableSection>
   );
@@ -161,7 +163,8 @@ export const PrerequisitesSection: React.FC<{
   setPending: (p: Pending) => void;
   /** A part's own action, by part id (the Distributed workloads tab's Turn back for dsc-kueue). */
   partActions?: Partial<Record<string, React.ReactNode>>;
-}> = ({ feature, prereq, error, onRetry, exposure, stale, readOnly, baseReason, setPending, partActions }) => {
+  partNotes?: Partial<Record<string, string>>;
+}> = ({ feature, prereq, error, onRetry, exposure, stale, readOnly, baseReason, setPending, partActions, partNotes }) => {
   if (!prereq) {
     return error
       ? <Alert variant="warning" isInline component="div" title="Cannot read what this feature needs on the cluster" actionLinks={<AlertActionLink onClick={onRetry}>Try again</AlertActionLink>}><Content component="p">{error}</Content></Alert>
@@ -171,7 +174,7 @@ export const PrerequisitesSection: React.FC<{
     return <Skeleton height="2.5rem" screenreaderText={`Checking what ${FEATURE_TITLES[feature]} needs on the cluster for this choice`} />;
   }
   const parts = prereq.parts ?? [];
-  if (prereq.ready) return <ReadyPrerequisites feature={feature} parts={parts} partActions={partActions} />;
+  if (prereq.ready) return <ReadyPrerequisites feature={feature} parts={parts} partActions={partActions} partNotes={partNotes} />;
   const plan = prereq.setupPlan ?? [];
   const reason = readOnly ? READ_ONLY_SETUP : baseReason ?? prereq.setupBlockedReason ?? (plan.length === 0 ? "Nothing Set up can do now: the parts above say what they wait for or who does it." : null);
   const script = prerequisitesScript(parts);
@@ -183,7 +186,7 @@ export const PrerequisitesSection: React.FC<{
       </StackItem>
       <StackItem>
         <PartList aria-label={`What ${FEATURE_TITLES[feature]} needs on the cluster`}>
-          {parts.map((p) => <PrerequisitePartItem key={p.id} part={p} feature={feature} actions={partActions?.[p.id]} />)}
+          {parts.map((p) => <PrerequisitePartItem key={p.id} part={p} feature={feature} actions={partActions?.[p.id]} note={partNotes?.[p.id]} />)}
         </PartList>
       </StackItem>
       <StackItem>
