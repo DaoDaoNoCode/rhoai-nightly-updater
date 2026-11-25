@@ -9,6 +9,7 @@ import playgroundJson from "./contract/playground-user.json";
 import playgroundProblemJson from "./contract/playground-problem-user.json";
 import samplesJson from "./contract/samples-mlflow-user.json";
 import recipeRunJson from "./contract/recipe-run-admin.json";
+import recipeRunStoppingJson from "./contract/recipe-run-stopping-admin.json";
 import recipePlanJson from "./contract/recipe-plan-admin.json";
 import recipeRunEndedJson from "./contract/recipe-run-ended-admin.json";
 import recipeRunFeaturesJson from "./contract/recipe-run-features-admin.json";
@@ -55,6 +56,8 @@ export const contract = {
   // run another updater pod runs, of a failed run with its ready clean-up
   // request, and POST /api/recipes/plan with problems.
   recipeRun: (): RecipeRunStatus => clone<RecipeRunStatus>(recipeRunJson),
+  /** The same run without its failed step, with the ending stopped its pod recorded (Stop was asked for there). */
+  recipeRunStopping: (): RecipeRunStatus => clone<RecipeRunStatus>(recipeRunStoppingJson),
   recipeRunEnded: (): RecipeRunStatus => clone<RecipeRunStatus>(recipeRunEndedJson),
   /** A run of every feature that succeeded; its Clean up offers the project, the MaaS platform and the model registry it created. */
   recipeRunFeatures: (): RecipeRunStatus => clone<RecipeRunStatus>(recipeRunFeaturesJson),
@@ -83,6 +86,7 @@ const typed: {
   playgroundProblem: Widen<PlaygroundStatus>;
   samples: Widen<MLflowSamplesStatus>;
   recipeRun: Widen<RecipeRunStatus>;
+  recipeRunStopping: Widen<RecipeRunStatus>;
   recipeRunEnded: Widen<RecipeRunStatus>;
   recipeRunFeatures: Widen<RecipeRunStatus>;
   recipePlan: Widen<RecipePlan>;
@@ -99,6 +103,7 @@ const typed: {
   playgroundProblem: playgroundProblemJson,
   samples: samplesJson,
   recipeRun: recipeRunJson,
+  recipeRunStopping: recipeRunStoppingJson,
   recipeRunEnded: recipeRunEndedJson,
   recipeRunFeatures: recipeRunFeaturesJson,
   recipePlan: recipePlanJson,

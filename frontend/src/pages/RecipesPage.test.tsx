@@ -254,6 +254,17 @@ describe("Recipes page", () => {
     await settleApps();
   });
 
+  it("a run on another updater pod that was asked to stop: says so from the recorded ending", async () => {
+    stubApi({ "GET /api/recipes/run": contract.recipeRunStopping() });
+    renderPage(<RecipesPage />, "/recipes", { operation: async () => RECIPE_OPERATION });
+    await settleApps();
+    await settle();
+    expect(screen.getByText(/Running on updater pod pod-2 for/)).toBeInTheDocument();
+    expect(screen.getByText("Stopping as asked")).toBeInTheDocument();
+    expect(screen.getByText(/No other step starts; What the features need finishes first, then the run stops\./)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Stop after this step" })).toHaveAttribute("aria-disabled", "true");
+  });
+
   it("stop: asks first, then the run says it stops after this step", async () => {
     let status = runStatus({ steps: steps(4, "running") }, { running: true, step: { step: "s3", status: "running", message: "Waiting for SeaweedFS" } });
     const api = stubApi({
@@ -333,6 +344,32 @@ describe("Recipes page", () => {
     expect(screen.getAllByText(/SeaweedFS did not start/)).toHaveLength(1);
     expect(screen.getByText("Stopping: a step failed", { selector: ".pf-v6-c-label__text" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Stop after this step" })).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("a step failed and no step runs any more: the run stops now, also in Stop's reason", async () => {
+    stubApi({ "GET /api/recipes/run": runStatus({ steps: steps(4, "failed", "SeaweedFS did not start.") }, { running: true, ending: "failed" }) });
+    renderPage(<RecipesPage />, "/recipes", { operation: async () => RECIPE_OPERATION });
+    await settleApps();
+    await settle();
+    expect(screen.getByText("S3 storage failed")).toBeInTheDocument();
+    expect(screen.getByText("SeaweedFS did not start. No other step starts; the run stops now. Resume runs the steps that are not set up.")).toBeInTheDocument();
+    const stop = screen.getByRole("button", { name: "Stop after this step" });
+    expect(stop).toHaveAttribute("aria-disabled", "true");
+    fireEvent.mouseEnter(stop);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("No other step starts: the run stops now.");
+  });
+
+  it("the runner broke while a step runs: stopping on an internal error, no step-failed title", async () => {
+    stubApi({ "GET /api/recipes/run": runStatus({ steps: steps(4, "running") }, { running: true, ending: "internal" }) });
+    renderPage(<RecipesPage />, "/recipes", { operation: async () => RECIPE_OPERATION });
+    await settleApps();
+    await settle();
+    expect(screen.getByText("Stopping: an internal error in the updater")).toBeInTheDocument();
+    expect(screen.getByText(/No other step starts; S3 storage finishes first, then the run stops\./)).toBeInTheDocument();
+    expect(screen.queryByText(/failed$/)).not.toBeInTheDocument();
+    const stop = screen.getByRole("button", { name: "Stop after this step" });
+    fireEvent.mouseEnter(stop);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("No other step starts: the run stops once the running steps finish.");
   });
 
   it("stop with steps in flight: says which finish first", async () => {

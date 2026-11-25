@@ -727,6 +727,27 @@ func TestRecipeRunStatus_InterruptedAndRemote(t *testing.T) {
 	}
 }
 
+// A run in another pod shows the ending that pod recorded; a record from
+// a version that kept none still shows a failed step's ending.
+func TestRecipeRunStatus_RemoteEnding(t *testing.T) {
+	f, rec := installRecipeFake(t)
+	rec.setLease(otherPodLease(clk.Now()))
+	for _, tc := range []struct{ recorded, b, want string }{
+		{"stopped", types.RecipeStepSuccess, "stopped"},
+		{"", types.RecipeStepFailed, "failed"},
+		{"failed", types.RecipeStepFailed, "failed"},
+		{"", types.RecipeStepSuccess, ""},
+	} {
+		f.mu.Lock()
+		f.record = &types.RecipeRun{ID: "r1", OperationID: "remote-op", BootID: "other-boot", State: types.RecipeRunRunning, Ending: tc.recorded,
+			Steps: []types.RecipeRunStep{{ID: "a", Status: types.RecipeStepRunning}, {ID: "b", Status: tc.b}, {ID: "c", Status: types.RecipeStepPending}}}
+		f.mu.Unlock()
+		if st := recipeRunStatus(nil, nil); !st.Remote || !st.Running || st.Ending != tc.want {
+			t.Errorf("recorded %q, b %s: remote %v running %v ending %q, want %q", tc.recorded, tc.b, st.Remote, st.Running, st.Ending, tc.want)
+		}
+	}
+}
+
 // While a recipe runs, a user who is not a cluster-admin sees only that an
 // operation runs, its fixed label and its start: not the recipe, project,
 // build or step.

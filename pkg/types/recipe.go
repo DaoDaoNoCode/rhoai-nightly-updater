@@ -419,11 +419,15 @@ type RecipeRun struct {
 	// ErrorCode is the code of why the run stopped or failed:
 	// sign_in_again, session_expired, forbidden, lock_lost, internal, or
 	// the failed step's.
-	ErrorCode string             `json:"errorCode,omitempty"`
-	Recipe    EnvironmentRecipe  `json:"recipe"`
-	Pinned    *RecipePinnedBuild `json:"pinned,omitempty"`
-	Project   *RecipeProjectRef  `json:"project,omitempty"`
-	Steps     []RecipeRunStep    `json:"steps"`
+	ErrorCode string `json:"errorCode,omitempty"`
+	// Ending is, while the run runs, why it starts no other step
+	// (RecipeRunStatus.Ending), recorded so another updater pod reads it
+	// too; "" while it goes on and once it ended.
+	Ending  string             `json:"ending,omitempty"`
+	Recipe  EnvironmentRecipe  `json:"recipe"`
+	Pinned  *RecipePinnedBuild `json:"pinned,omitempty"`
+	Project *RecipeProjectRef  `json:"project,omitempty"`
+	Steps   []RecipeRunStep    `json:"steps"`
 	// Exposure is how the run's model is reached, as the Models
 	// prerequisites step resolved it ("default-gateway", "maas", "internal",
 	// or "gateway" with GatewayRef), kept so a resume sets the model up the
@@ -504,12 +508,16 @@ type RecipeRunStatus struct {
 	// while the run runs in this updater process (several steps run at
 	// once).
 	Progress map[string]UpdateStepEvent `json:"progress,omitempty"`
-	// Ending says, while the run runs in this updater process, that it
-	// starts no other step and ends once the running ones finished, and
-	// why: "failed" (a step failed; the steps show which), "stopped"
-	// (Stop), "restart" (the updater is restarting), "gate" (the sign-in
-	// or permission check before steps refused), "timeout" (the run's
-	// limit) or "lock_lost"; "" while it goes on.
+	// Ending says, while the run runs, that it starts no other step and
+	// ends once the running ones finished, and why: "failed" (a step
+	// failed; the steps show which), "stopped" (Stop), "restart" (the
+	// updater is restarting), "gate" (the sign-in or permission check
+	// before steps refused), "timeout" (the run's limit), "lock_lost" or
+	// "internal" (the runner broke; the run ends failed); "" while it goes
+	// on. For a run in another pod it is what that pod recorded (the run
+	// record's Ending): a Stop shows there once that pod decided to start
+	// nothing, with its next record write after a step ended, not when
+	// Stop was asked for.
 	Ending string `json:"ending,omitempty"`
 	// Cleanup is the clean-up request for what the run created (POST
 	// /api/resources/cleanup/stream), as the cluster shows it now, when

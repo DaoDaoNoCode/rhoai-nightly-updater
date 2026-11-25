@@ -3,10 +3,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -195,6 +198,204 @@ func TestRecipeRun_FailureLetsRunningStepsFinish(t *testing.T) {
 	}
 	if stepStatuses(run) != "head=success a=failed b=failed c=success a2=pending" || a2.ran || run.Steps[2].Message != "The model registry did not start." {
 		t.Errorf("steps %s, a2 ran %v", stepStatuses(run), a2.ran)
+	}
+	assertReleased(t, rec)
+}
+
+// statusAtWrites reads GET /api/recipes/run's status inside every write of
+// a running record, on the loop's goroutine while it writes, and returns
+// what each read showed: "<step statuses> ending=<ending>". Such a read
+// sees exactly what the loop made visible before the write; a read the
+// write does not wait for would race the loop.
+func statusAtWrites(t *testing.T) func() []string {
+	t.Helper()
+	var mu sync.Mutex
+	var reads []string
+	origSave := saveRecipeRun
+	saveRecipeRun = func(cl *cluster.Client, run *types.RecipeRun, replace bool) error {
+		if st := recipes.status(); run.State == types.RecipeRunRunning && st != nil && st.Running {
+			mu.Lock()
+			reads = append(reads, stepStatuses(st.Run)+" ending="+st.Ending)
+			mu.Unlock()
+		}
+		return origSave(cl, run, replace)
+	}
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(reads)
+	}
+}
+
+// A failed step and the run's ending show together: the write of the
+// failure, while another step still runs, is read with ending failed, and
+// no read shows a failed step without it.
+func TestRecipeRun_FailedStepShowsWithItsEnding(t *testing.T) {
+	f, rec := installRecipeFake(t)
+	watchRecords(f)
+	head := f.addStep("head")
+	a, b := parallel(f.addStep("a"), "head"), parallel(f.addStep("b"), "head")
+	b.result = &types.OperationResponse{Success: false, Message: "b broke", ErrorCode: "timeout"}
+	reads := statusAtWrites(t)
+	close(head.release)
+	_, done := startRun(t)
+	waitStarted(t, a)
+	waitStarted(t, b)
+	close(b.release)
+	if run := waitRecord(t, f, statusesAre("head=success a=running b=failed")); run.Ending != "failed" {
+		t.Errorf("the record of the failure has ending %q, want failed (another pod reads it)", run.Ending)
+	}
+	close(a.release)
+	waitDone(t, done)
+	if run := f.saved(); run.Ending != "" {
+		t.Errorf("the ended run's record keeps ending %q", run.Ending)
+	}
+	got := reads()
+	if !slices.Contains(got, "head=success a=running b=failed ending=failed") {
+		t.Errorf("no read of the failure with its ending: %q", got)
+	}
+	for _, r := range got {
+		if strings.Contains(r, "=failed") && !strings.HasSuffix(r, " ending=failed") {
+			t.Errorf("a read shows a failed step but not that the run ends: %q", r)
+		}
+	}
+	assertReleased(t, rec)
+}
+
+// The last running step fails: no write comes before the run ends, so
+// taking the step's end must show the ending with the failure (the card
+// says "The run stops now").
+func TestRecipeRun_LastRunningStepFailureShowsItsEnding(t *testing.T) {
+	installRecipeFake(t)
+	x := &recipeExec{opID: "op-last", steps: []cluster.RecipeStep{{ID: "a", Title: "Step a"}}}
+	recipes.mu.Lock()
+	recipes.run = &types.RecipeRun{ID: "run-last", State: types.RecipeRunRunning, Steps: []types.RecipeRunStep{{ID: "a", Title: "Step a", Status: types.RecipeStepRunning}}}
+	recipes.opID, recipes.running = x.opID, true
+	recipes.mu.Unlock()
+	l := newRecipeLoop(x.steps)
+	l.started[0], l.running = true, 1
+	x.takeEnd(l, stepResult{i: 0, status: types.RecipeStepFailed, msg: "a broke", code: "timeout"})
+	if st := recipes.status(); !st.Running || st.Ending != "failed" || stepStatuses(st.Run) != "a=failed" {
+		t.Errorf("status once the last running step failed: running %v, ending %q, %s", st.Running, st.Ending, stepStatuses(st.Run))
+	}
+}
+
+// Stop while two steps run: once one ended and the loop starts nothing,
+// the write of that end is read with ending stopped.
+func TestRecipeRun_StopShowsItsEndingWithTheNextWrite(t *testing.T) {
+	f, rec := installRecipeFake(t)
+	watchRecords(f)
+	head := f.addStep("head")
+	a, b := parallel(f.addStep("a"), "head"), parallel(f.addStep("b"), "head")
+	parallel(f.addStep("a2"), "a")
+	reads := statusAtWrites(t)
+	close(head.release)
+	_, done := startRun(t)
+	waitStarted(t, a)
+	waitStarted(t, b)
+	if !recipes.requestStop() {
+		t.Fatal("no run to stop")
+	}
+	close(a.release)
+	waitRecord(t, f, statusesAre("head=success a=success b=running a2=pending"))
+	close(b.release)
+	waitDone(t, done)
+	if got := reads(); !slices.Contains(got, "head=success a=success b=running a2=pending ending=stopped") {
+		t.Errorf("no read of a's end with the run's ending: %q", got)
+	}
+	assertReleased(t, rec)
+}
+
+// The run's end shows at once as not running: a status read during the
+// last record write (which runs after the outcome is set) never sees a
+// running run that ended.
+func TestRecipeRun_EndShowsNotRunningWithItsOutcome(t *testing.T) {
+	f, rec := installRecipeFake(t)
+	a := f.addStep("a")
+	a.result = &types.OperationResponse{Success: false, Message: "a broke", ErrorCode: "timeout"}
+	close(a.release)
+	origSave := saveRecipeRun
+	var ended []string
+	saveRecipeRun = func(cl *cluster.Client, run *types.RecipeRun, replace bool) error {
+		if run.State != types.RecipeRunRunning {
+			st := recipes.status()
+			ended = append(ended, fmt.Sprintf("running %v, state %s, ending %q", st.Running, st.Run.State, st.Ending))
+		}
+		return origSave(cl, run, replace)
+	}
+	_, done := startRun(t)
+	waitDone(t, done)
+	if want := []string{`running false, state failed, ending ""`}; !slices.Equal(ended, want) {
+		t.Errorf("status during the last write %q, want %q", ended, want)
+	}
+	assertReleased(t, rec)
+}
+
+// Stop while two steps run, and the only step left waits for the slower
+// one: when the faster ends nothing may start yet, but the write of its
+// end already shows ending stopped (also in the record), and the run
+// ends stopped once the slower ended.
+func TestRecipeRun_StopWhileTheNextStepWaitsShowsItsEnding(t *testing.T) {
+	f, rec := installRecipeFake(t)
+	watchRecords(f)
+	head := f.addStep("head")
+	a, b := parallel(f.addStep("a"), "head"), parallel(f.addStep("b"), "head")
+	c := parallel(f.addStep("c"), "b")
+	reads := statusAtWrites(t)
+	close(head.release)
+	_, done := startRun(t)
+	waitStarted(t, a)
+	waitStarted(t, b)
+	if !recipes.requestStop() {
+		t.Fatal("no run to stop")
+	}
+	close(a.release)
+	if run := waitRecord(t, f, statusesAre("head=success a=success b=running c=pending")); run.Ending != "stopped" {
+		t.Errorf("the record of a's end has ending %q, want stopped", run.Ending)
+	}
+	close(b.release)
+	waitDone(t, done)
+	if got := reads(); !slices.Contains(got, "head=success a=success b=running c=pending ending=stopped") {
+		t.Errorf("no read of a's end with the run's ending: %q", got)
+	}
+	run := f.saved()
+	if run.State != types.RecipeRunStopped || run.ErrorCode != "stopped" || c.ran || run.Ending != "" ||
+		run.StopReason != "Stopped after Step b, as asked. Resume continues with Step c." {
+		t.Errorf("record %s: %+v", stepStatuses(run), run)
+	}
+	assertReleased(t, rec)
+}
+
+// Stop accepted during the write that marks a batch running, while another
+// step runs: the batch goes back to pending, and the write that says so is
+// read with ending stopped.
+func TestRecipeRun_StopDuringTheStartWriteShowsItsEnding(t *testing.T) {
+	f, rec := installRecipeFake(t)
+	watchRecords(f)
+	head := f.addStep("head")
+	a, b := parallel(f.addStep("a"), "head"), parallel(f.addStep("b"), "head")
+	c := parallel(f.addStep("c"), "a")
+	reads := statusAtWrites(t)
+	withReads := saveRecipeRun
+	saveRecipeRun = func(cl *cluster.Client, run *types.RecipeRun, replace bool) error {
+		if stepStatuses(run) == "head=success a=success b=running c=running" {
+			recipes.requestStop()
+		}
+		return withReads(cl, run, replace)
+	}
+	close(head.release)
+	_, done := startRun(t)
+	waitStarted(t, a)
+	waitStarted(t, b)
+	close(a.release)
+	waitRecord(t, f, statusesAre("head=success a=success b=running c=pending"))
+	close(b.release)
+	waitDone(t, done)
+	if got := reads(); !slices.Contains(got, "head=success a=success b=running c=pending ending=stopped") {
+		t.Errorf("no read of the batch back to pending with the run's ending: %q", got)
+	}
+	if run := f.saved(); run.State != types.RecipeRunStopped || c.ran {
+		t.Errorf("record %s: %+v", stepStatuses(run), run)
 	}
 	assertReleased(t, rec)
 }
@@ -523,8 +724,10 @@ func TestRecipeRun_StopDuringTheStartWrite(t *testing.T) {
 
 // A panic of the loop while it starts a batch: the running step ends and
 // keeps its outcome and its State changes, the step marked running for the
-// start that never happened counts as failed, and no step is left running
-// in the record.
+// start that never happened is pending again, and no step is left running
+// in the record. While the running step ends, the status and the record
+// say the run ends (internal) and show only b running: the recovery's
+// write is read before b may end.
 func TestRecipeRun_LoopPanicDuringAStart(t *testing.T) {
 	captureLog(t)
 	f, rec := installRecipeFake(t)
@@ -534,12 +737,17 @@ func TestRecipeRun_LoopPanicDuringAStart(t *testing.T) {
 	c := parallel(f.addStep("c"), "a")
 	close(head.release)
 	origSave := saveRecipeRun
-	panicked := false
+	panicked, recovering := false, ""
 	saveRecipeRun = func(cl *cluster.Client, run *types.RecipeRun, replace bool) error {
 		if !panicked && stepStatuses(run) == "head=success a=success b=running c=running" {
 			panicked = true
-			close(b.release)
 			panic("record bug")
+		}
+		if panicked && recovering == "" && run.State == types.RecipeRunRunning {
+			// The recovery's write, before it waits for b.
+			st := recipes.status()
+			recovering = fmt.Sprintf("running %v, ending %q, %s; record ending %q, %s", st.Running, st.Ending, stepStatuses(st.Run), run.Ending, stepStatuses(run))
+			close(b.release)
 		}
 		return origSave(cl, run, replace)
 	}
@@ -549,11 +757,14 @@ func TestRecipeRun_LoopPanicDuringAStart(t *testing.T) {
 	close(a.release)
 	waitDone(t, done)
 	run := f.saved()
-	if run.State != types.RecipeRunFailed || run.ErrorCode != "internal" || stepStatuses(run) != "head=success a=success b=success c=failed" || c.ran {
+	if run.State != types.RecipeRunFailed || run.ErrorCode != "internal" || stepStatuses(run) != "head=success a=success b=success c=pending" || c.ran || run.Steps[3].StartedAt != "" || run.Steps[2].FinishedAt == "" {
 		t.Errorf("record %s: %+v", stepStatuses(run), run)
 	}
 	if strings.Join(run.Components, ",") != "aipipelines,mlflowoperator" {
 		t.Errorf("components %v", run.Components)
+	}
+	if want := `running true, ending "internal", head=success a=success b=running c=pending; record ending "internal", head=success a=success b=running c=pending`; recovering != want {
+		t.Errorf("while the running step ended: %s, want %s", recovering, want)
 	}
 	assertReleased(t, rec)
 }
