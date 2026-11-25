@@ -34,11 +34,15 @@ no full redeploy.
   - **Removing the image mirror (4.0.0):** opening the review of **Remove
     the image mirror** (Status page; self-managed, ROSA Classic and OSD
     clusters only) deleted ImageDigestMirrorSet `rhoai-quay-mirror` at
-    once, also when you then clicked Cancel, and every node rolled out and
-    drained. Confirming then said "Nothing to change" and wrote no activity
-    entry. If you opened that review and still want the mirror, set it up
-    again with **Create the image mirror**; nightly installs and updates
-    need it.
+    once, also when you then clicked Cancel. The Machine Config Operator
+    then took the mirror off the nodes, draining each node first, one at a
+    time by default (a single-node cluster is not drained). Where another
+    ImageDigestMirrorSet or ImageContentSourcePolicy still redirects
+    `registry.redhat.io/rhoai` to `quay.io/rhoai`, the nodes kept that
+    mirror and normally nothing rolled out. Confirming then said "Nothing
+    to change" and wrote no activity entry. If you opened that review and
+    still want the mirror, set it up again with **Create the image
+    mirror**; without a mirror, nightly installs and updates fail.
   - **Model setup run again (3.0.0 to 4.0.0):** setting up a model that
     already existed deleted its token Secret in the check step and still
     reported success, which invalidated the model's token (the next setup

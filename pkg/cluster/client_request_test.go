@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -115,12 +116,23 @@ func TestIsDryRun(t *testing.T) {
 // an error that says it was not sent, and deleteWithOptions puts the dry
 // run in the options.
 func TestDeleteDryRunIsInTheOptions(t *testing.T) {
-	var got []string
+	var mu sync.Mutex
+	var sent []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		got = append(got, r.URL.RawQuery+" "+string(body))
+		mu.Lock()
+		sent = append(sent, r.URL.RawQuery+" "+string(body))
+		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	}))
+	// got takes what the server received so far and clears it.
+	got := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		out := sent
+		sent = nil
+		return out
+	}
 	t.Cleanup(srv.Close)
 	c := &Client{baseURL: srv.URL, token: "tok", httpClient: srv.Client(), ctx: context.Background()}
 	opts := []byte(`{"kind":"DeleteOptions","apiVersion":"v1","preconditions":{"uid":"u"}}`)
@@ -130,7 +142,7 @@ func TestDeleteDryRunIsInTheOptions(t *testing.T) {
 	if _, _, err := c.do(http.MethodDelete, "/api/v1/namespaces/a/configmaps/x?dryRun=All", "application/json", opts, nil); err == nil {
 		t.Fatal("a DELETE with options and a dryRun in its path was sent")
 	}
-	for _, key := range []string{"dryRun", "propagationPolicy", "gracePeriodSeconds", "orphanDependents"} {
+	for _, key := range []string{"dryRun", "propagationPolicy", "gracePeriodSeconds", "orphanDependents", "ignoreStoreReadErrorWithClusterBreakingPotential"} {
 		_, _, err := c.do(http.MethodDelete, "/api/v1/namespaces/a/configmaps/x", "application/json", opts, url.Values{key: {"0"}})
 		if _, ok := errors.AsType[*UnsentRequestError](err); !ok || !strings.Contains(err.Error(), key) ||
 			!strings.Contains(err.Error(), "this updater did not send the request") || !strings.Contains(err.Error(), "nothing was changed") ||
@@ -138,8 +150,8 @@ func TestDeleteDryRunIsInTheOptions(t *testing.T) {
 			t.Errorf("%s in the query: %v, refused by %q", key, err, refusedBy(err))
 		}
 	}
-	if len(got) != 0 {
-		t.Fatalf("sent %v", got)
+	if s := got(); len(s) != 0 {
+		t.Fatalf("sent %v", s)
 	}
 	if refusedBy(&K8sError{Status: 422}) != "The API server" {
 		t.Error("an API server's refusal is named as the updater's")
@@ -152,18 +164,18 @@ func TestDeleteDryRunIsInTheOptions(t *testing.T) {
 	if _, _, err := c.do(http.MethodDelete, "/api/v1/namespaces/a/configmaps/x", "", nil, url.Values{"dryRun": {"All"}}); err != nil {
 		t.Fatalf("a DELETE without a body and with a dryRun query was refused: %v", err)
 	}
-	got = nil
+	got()
 	if err := deleteWithOptions(c, "/api/v1/namespaces/a/configmaps/x", map[string]any{"preconditions": map[string]any{"uid": "u"}}, true); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || !strings.HasPrefix(got[0], " ") || !strings.Contains(got[0], `"dryRun":["All"]`) || !strings.Contains(got[0], `"uid":"u"`) ||
-		!strings.Contains(got[0], `"kind":"DeleteOptions"`) || !strings.Contains(got[0], `"apiVersion":"v1"`) {
-		t.Fatalf("dry run sent %v", got)
+	if s := got(); len(s) != 1 || !strings.HasPrefix(s[0], " ") || !strings.Contains(s[0], `"dryRun":["All"]`) || !strings.Contains(s[0], `"uid":"u"`) ||
+		!strings.Contains(s[0], `"kind":"DeleteOptions"`) || !strings.Contains(s[0], `"apiVersion":"v1"`) {
+		t.Fatalf("dry run sent %v", s)
 	}
 	if err := deleteWithOptions(c, "/api/v1/namespaces/a/configmaps/x", map[string]any{"preconditions": map[string]any{"uid": "u"}}, false); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || strings.Contains(got[1], "dryRun") || !strings.Contains(got[1], `"uid":"u"`) {
-		t.Fatalf("delete sent %v", got)
+	if s := got(); len(s) != 1 || strings.Contains(s[0], "dryRun") || !strings.Contains(s[0], `"uid":"u"`) {
+		t.Fatalf("delete sent %v", s)
 	}
 }
