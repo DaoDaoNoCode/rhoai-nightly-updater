@@ -1512,7 +1512,7 @@ export function kueueWorld(state = "none", { optIn = false, samples = false, pro
     ...(missing ? { refusal: "Set up its prerequisites first (above): Kueue is turned off on this cluster.", refusalCode: "prerequisites",
       blocked: { component: "kueue", dsc: "default-dsc", state: "Removed", reason: "Kueue component is turned off on this cluster: component kueue is Removed in DataScienceCluster default-dsc, so nothing would run it. A cluster-admin turns it on by setting it to Unmanaged." } } : {}),
     objects: missing ? [] : [obj("ResourceFlavor", "nightly-kueue-cpu"), obj("ClusterQueue", "nightly-kueue"), obj("LocalQueue", "nightly-kueue", project)],
-    quota: "10 CPUs, 32Gi of memory and 6Gi of ephemeral storage",
+    quota: "14 CPUs, 44Gi of memory and 12Gi of ephemeral storage",
     ...(set ? { label: { present: true, addedByTool: true } } : {}),
     samples: [
       samples ? { kind: "raycluster", name: "nightly-raycluster", present: true, managedByTool: true, image: KUEUE_IMAGE, state: "Running", rayState: "ready" } : { kind: "raycluster", name: "nightly-raycluster", present: false },

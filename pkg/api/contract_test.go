@@ -172,7 +172,7 @@ func stubContractData(t *testing.T) {
 				{Kind: "ClusterQueue", Name: "nightly-kueue", Present: true, ManagedByTool: true, Active: true},
 				{Kind: "LocalQueue", Name: "nightly-kueue", Namespace: project, Present: true, ManagedByTool: true, Active: true},
 			},
-			Quota: "10 CPUs, 32Gi of memory and 6Gi of ephemeral storage",
+			Quota: "14 CPUs, 44Gi of memory and 12Gi of ephemeral storage",
 			Label: &types.KueueLabel{Present: true, AddedByTool: true},
 			Samples: []types.KueueSample{
 				{Kind: "raycluster", Name: "nightly-raycluster", Present: true, ManagedByTool: true, Image: "quay.io/modh/ray:2.47.1-py311-cu121", State: "Admitted", RayState: "ready"},

@@ -93,7 +93,7 @@ func TestKueueManifests(t *testing.T) {
 	assertJSONEqual(t, kueue.ClusterQueueManifest("proj"), `{"apiVersion":"kueue.x-k8s.io/v1beta2","kind":"ClusterQueue",
 		"metadata":{"name":"nightly-kueue","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}},
 		"spec":{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"proj"}},
-			"resourceGroups":[{"coveredResources":["cpu","memory","ephemeral-storage"],"flavors":[{"name":"nightly-kueue-cpu","resources":[{"name":"cpu","nominalQuota":"10"},{"name":"memory","nominalQuota":"32Gi"},{"name":"ephemeral-storage","nominalQuota":"6Gi"}]}]}]}}`)
+			"resourceGroups":[{"coveredResources":["cpu","memory","ephemeral-storage"],"flavors":[{"name":"nightly-kueue-cpu","resources":[{"name":"cpu","nominalQuota":"14"},{"name":"memory","nominalQuota":"44Gi"},{"name":"ephemeral-storage","nominalQuota":"12Gi"}]}]}]}}`)
 	assertJSONEqual(t, kueue.FlavorManifest(), `{"apiVersion":"kueue.x-k8s.io/v1beta2","kind":"ResourceFlavor","metadata":{"name":"nightly-kueue-cpu","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}},"spec":{}}`)
 	// Sample requests plus the profile default must remain within the quota ceiling.
 	sum := func(obj map[string]any) (cpu, memMi float64) {
@@ -126,7 +126,9 @@ func TestKueueManifests(t *testing.T) {
 	c2, m2 := sum(kueue.RayJobManifest("proj", kueue.DefaultRayImage))
 	// Opt-in-profile workbench uses 1 CPU and 2Gi, with kube-rbac-proxy at
 	// 100m CPU and 64Mi; the largest catalog model (Qwen3: 4 CPUs, 12Gi
-	// requested, 6.2G of ephemeral storage) on the same profile.
+	// requested, 6.2G of ephemeral storage) on the same profile, twice: its
+	// Deployment's rolling update adds a second pod, which Kueue admits on
+	// its own.
 	wbCPU, wbMi := 1.0+0.1, 2048.0+64
 	var modelCPU, modelMi, modelEph float64
 	for _, e := range serving.ModelCatalog {
@@ -141,8 +143,8 @@ func TestKueueManifests(t *testing.T) {
 	if modelCPU != 4 || modelMi != 12*1024 || modelEph != 6.2e9 {
 		t.Fatalf("largest model %v CPUs, %v Mi, %v bytes", modelCPU, modelMi, modelEph)
 	}
-	if c1+c2+wbCPU+modelCPU > 10 || m1+m2+wbMi+modelMi > 32*1024 || m1+m2+wbMi+modelMi <= 31*1024 || modelEph > 6*(1<<30) || c1 != 2 || c2 != 2.5 || m1 != 8*1024 || m2 != 9*1024 {
-		t.Fatalf("quota 10 CPUs / 32Gi / 6Gi does not hold the samples, the workbench and the model: %v+%v+%v+%v CPU, %v+%v+%v+%v Mi", c1, c2, wbCPU, modelCPU, m1, m2, wbMi, modelMi)
+	if c1+c2+wbCPU+2*modelCPU > 14 || c1+c2+wbCPU+2*modelCPU <= 13 || m1+m2+wbMi+2*modelMi > 44*1024 || m1+m2+wbMi+2*modelMi <= 43*1024 || 2*modelEph > 12*(1<<30) || 2*modelEph <= 11*(1<<30) || c1 != 2 || c2 != 2.5 || m1 != 8*1024 || m2 != 9*1024 {
+		t.Fatalf("quota 14 CPUs / 44Gi / 12Gi does not hold the samples, the workbench and the model twice: %v+%v+%v+2*%v CPU, %v+%v+%v+2*%v Mi", c1, c2, wbCPU, modelCPU, m1, m2, wbMi, modelMi)
 	}
 	// The Queue profile's ranges hold every catalog model, as the
 	// dashboard deploys one in a Kueue project only with such a profile.
@@ -163,8 +165,8 @@ func TestKueueManifests(t *testing.T) {
 	worker := spec["workerGroupSpecs"].([]any)[0].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)["resources"]
 	assertJSONEqual(t, head, `{"requests":{"cpu":"1","memory":"5Gi"},"limits":{"cpu":"2","memory":"8Gi"}}`)
 	assertJSONEqual(t, worker, `{"requests":{"cpu":"1","memory":"3Gi"},"limits":{"cpu":"1","memory":"6Gi"}}`)
-	if cpu, memory, eph := kueue.Quota(); cpu != "10" || memory != "32Gi" || eph != "6Gi" {
-		t.Fatalf("Quota() = %s, %s, %s; want 10, 32Gi, 6Gi", cpu, memory, eph)
+	if cpu, memory, eph := kueue.Quota(); cpu != "14" || memory != "44Gi" || eph != "12Gi" {
+		t.Fatalf("Quota() = %s, %s, %s; want 14, 44Gi, 12Gi", cpu, memory, eph)
 	}
 	rc, rj := kueue.RayClusterManifest("proj", "img:2.47.1-x"), kueue.RayJobManifest("proj", "img:2.47.1-x")
 	a, _ := json.Marshal(rc["spec"])
@@ -547,7 +549,7 @@ func TestKueueStatus(t *testing.T) {
 		t.Fatalf("samples %+v", st.Samples)
 	}
 	// Quota reflects the live ClusterQueue; artifacts from this version are not outdated.
-	if st.Quota != "10 CPUs, 32Gi of memory and 6Gi of ephemeral storage" || st.Objects[1].Outdated != "" || st.Samples[0].Outdated != "" {
+	if st.Quota != "14 CPUs, 44Gi of memory and 12Gi of ephemeral storage" || st.Objects[1].Outdated != "" || st.Samples[0].Outdated != "" {
 		t.Fatalf("quota %q, queue %+v, sample %+v", st.Quota, st.Objects[1], st.Samples[0])
 	}
 	// Equivalent quantities in other representations (numbers, 1000m, bytes as
@@ -570,25 +572,35 @@ func TestKueueStatus(t *testing.T) {
 			f.putJSON(path, string(raw))
 		}
 	}
-	setSizes(10, "32768Mi", map[string]any{"requests": map[string]any{"cpu": 1, "memory": "5368709120"}, "limits": map[string]any{"cpu": "2000m", "memory": "8Gi"}})
+	setSizes(14, "45056Mi", map[string]any{"requests": map[string]any{"cpu": 1, "memory": "5368709120"}, "limits": map[string]any{"cpu": "2000m", "memory": "8Gi"}})
 	st, err = GetKueueStatus(u, u, "proj")
-	if err != nil || st.Quota != "10 CPUs, 32768Mi of memory and 6Gi of ephemeral storage" || st.Objects[1].Outdated != "" || st.Samples[0].Outdated != "" || !st.Samples[0].Present {
+	if err != nil || st.Quota != "14 CPUs, 45056Mi of memory and 12Gi of ephemeral storage" || st.Objects[1].Outdated != "" || st.Samples[0].Outdated != "" || !st.Samples[0].Present {
 		t.Fatalf("equivalent forms: %v quota %q, queue %+v, sample %+v", err, st.Quota, st.Objects[1], st.Samples[0])
 	}
 	// Unreadable values are not labeled outdated.
-	setSizes("lots", "32Gi", map[string]any{"requests": map[string]any{"cpu": "one", "memory": "5Gi"}, "limits": map[string]any{"cpu": "2", "memory": "8Gi"}})
+	setSizes("lots", "44Gi", map[string]any{"requests": map[string]any{"cpu": "one", "memory": "5Gi"}, "limits": map[string]any{"cpu": "2", "memory": "8Gi"}})
 	if st, _ = GetKueueStatus(u, u, "proj"); st.Objects[1].Outdated != "" || st.Samples[0].Outdated != "" {
 		t.Fatalf("unreadable: queue %+v, sample %+v", st.Objects[1], st.Samples[0])
+	}
+	// 10 CPUs, 32Gi and 6Gi, before the model's rolling update was
+	// counted, is an earlier version's too.
+	setSizes(10, "32Gi", map[string]any{"requests": map[string]any{"cpu": "1", "memory": "5Gi"}, "limits": map[string]any{"cpu": "2", "memory": "8Gi"}})
+	cq := f.get(cqPath)
+	cq["spec"].(map[string]any)["resourceGroups"].([]any)[0].(map[string]any)["flavors"].([]any)[0].(map[string]any)["resources"].([]any)[2].(map[string]any)["nominalQuota"] = "6Gi"
+	raw, _ := json.Marshal(cq)
+	f.putJSON(cqPath, string(raw))
+	if st, _ = GetKueueStatus(u, u, "proj"); st.Objects[1].Outdated != "its quota is 10 CPUs, 32Gi of memory and 6Gi of ephemeral storage; this version sets 14 CPUs, 44Gi of memory and 12Gi of ephemeral storage" || st.Samples[0].Outdated != "" {
+		t.Fatalf("10 CPUs: queue %+v, sample %+v", st.Objects[1], st.Samples[0])
 	}
 	// 6 CPUs and 19Gi or 20Gi from 5.0.0 pre-releases (no model, no
 	// ephemeral storage) also signal an older version.
 	setSizes("6", "19Gi", map[string]any{"requests": map[string]any{"cpu": "1", "memory": "5Gi"}, "limits": map[string]any{"cpu": "2", "memory": "8Gi"}})
-	if st, _ = GetKueueStatus(u, u, "proj"); st.Objects[1].Outdated != "its quota is 6 CPUs, 19Gi of memory and no ephemeral storage; this version sets 10 CPUs, 32Gi of memory and 6Gi of ephemeral storage" {
+	if st, _ = GetKueueStatus(u, u, "proj"); st.Objects[1].Outdated != "its quota is 6 CPUs, 19Gi of memory and no ephemeral storage; this version sets 14 CPUs, 44Gi of memory and 12Gi of ephemeral storage" {
 		t.Fatalf("19Gi: queue %+v", st.Objects[1])
 	}
 	setSizes("6", "11Gi", map[string]any{"requests": map[string]any{"cpu": "1", "memory": "2Gi"}, "limits": map[string]any{"cpu": "1", "memory": "2Gi"}})
 	st, _ = GetKueueStatus(u, u, "proj")
-	if st.Quota != "6 CPUs, 11Gi of memory and no ephemeral storage" || st.Objects[1].Outdated != "its quota is 6 CPUs, 11Gi of memory and no ephemeral storage; this version sets 10 CPUs, 32Gi of memory and 6Gi of ephemeral storage" ||
+	if st.Quota != "6 CPUs, 11Gi of memory and no ephemeral storage" || st.Objects[1].Outdated != "its quota is 6 CPUs, 11Gi of memory and no ephemeral storage; this version sets 14 CPUs, 44Gi of memory and 12Gi of ephemeral storage" ||
 		st.Samples[0].Outdated != "its head and worker have other CPU and memory than this version sets (head 1 CPU and 5Gi requested, up to 2 CPUs and 8Gi; worker 1 CPU and 3Gi requested, up to 1 CPU and 6Gi)" {
 		t.Fatalf("outdated: quota %q, queue %+v, sample %+v", st.Quota, st.Objects[1], st.Samples[0])
 	}
