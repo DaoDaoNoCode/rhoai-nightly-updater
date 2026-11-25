@@ -5,17 +5,20 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kueue"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/recipe"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 // The playground's pieces in a recipe project, as RHOAI 3.7.0-ea.1 made
-// them live: the OGXServer owns the pgvector claim (blockOwnerDeletion
-// false) and the two Deployments; each Deployment owns a ReplicaSet, which
-// owns the pod. The rule reads neither controller nor blockOwnerDeletion,
-// so the claim's reference here has no controller field and the others
-// set it true.
+// them live: the OGX operator owns its Deployment lsd-genai-playground as
+// the OGXServer's controller; the dashboard's gen-ai BFF makes the
+// pgvector claim and Deployment and points them at the OGXServer
+// (pgvector.SetOwnerReferences: no controller, blockOwnerDeletion false).
+// Each Deployment owns a ReplicaSet, which owns the pod. The rule reads
+// neither controller nor blockOwnerDeletion.
 const (
 	tOGXServer      = "/apis/ogx.io/v1beta1/namespaces/recipe-dev/ogxservers/lsd-genai-playground"
 	tRecipeRSList   = "/apis/apps/v1/namespaces/recipe-dev/replicasets"
@@ -30,7 +33,7 @@ func putRecipePlayground(f *resourceFake, serverUID string) {
 	}
 	ogx := `{"apiVersion":"ogx.io/v1beta1","kind":"OGXServer","name":"lsd-genai-playground","uid":"ogx-uid"`
 	f.putJSON("/api/v1/namespaces/recipe-dev/persistentvolumeclaims/genai-pgvector-storage", `{"metadata":{"ownerReferences":[`+ogx+`,"blockOwnerDeletion":false}]}}`)
-	f.putJSON(tRecipeDepList+"/genai-pgvector", `{"metadata":{"uid":"dep-pg","ownerReferences":[`+ogx+`,"controller":true,"blockOwnerDeletion":true}]}}`)
+	f.putJSON(tRecipeDepList+"/genai-pgvector", `{"metadata":{"uid":"dep-pg","ownerReferences":[`+ogx+`,"blockOwnerDeletion":false}]}}`)
 	f.putJSON(tRecipeDepList+"/lsd-genai-playground", `{"metadata":{"uid":"dep-lsd","ownerReferences":[`+ogx+`,"controller":true,"blockOwnerDeletion":true}]}}`)
 	f.putJSON(tRecipeRSList+"/genai-pgvector-5d8c", `{"metadata":{"uid":"rs-pg","ownerReferences":[{"apiVersion":"apps/v1","kind":"Deployment","name":"genai-pgvector","uid":"dep-pg","controller":true}]}}`)
 	f.putJSON(tRecipeRSList+"/lsd-genai-playground-7f9b", `{"metadata":{"uid":"rs-lsd","ownerReferences":[{"apiVersion":"apps/v1","kind":"Deployment","name":"lsd-genai-playground","uid":"dep-lsd","controller":true}]}}`)
@@ -189,7 +192,7 @@ func TestRecipeProject_DeleteKeepsTheFirstCheckOwners(t *testing.T) {
 	if err != nil || problem != "" || strings.Join(left, ",") != "Pod mine" {
 		t.Fatalf("first check %q %v %v", problem, left, err)
 	}
-	if strings.Join(owners, ",") != "dep-lsd,dep-pg,ogx-uid,rs-lsd,rs-pg" {
+	if strings.Join(owners, ",") != "Deployment/dep-lsd,Deployment/dep-pg,OGXServer/ogx-uid,ReplicaSet/rs-lsd,ReplicaSet/rs-pg" {
 		t.Fatalf("owners %v", owners)
 	}
 	f.deleteObject(tOGXServer)
@@ -312,5 +315,160 @@ func TestCleanUp_RecipeProjectKeepsTheOwnersOfEarlierParts(t *testing.T) {
 				t.Fatalf("got %+v, project still there: %v", res, f.has(tRecipeNS))
 			}
 		})
+	}
+}
+
+// No owner is skipped for having been met on another path, whatever the
+// order of a pod's references: ReplicaSets a and b both lead through
+// Deployment x to the server, and each pod names them in another order.
+func TestRecipeProjectLeftovers_ReferenceOrderDoesNotMatter(t *testing.T) {
+	f, c := projectFake(t)
+	putRecipePlayground(f, "ogx-uid")
+	recordRecipePlayground(t, c, "ogx-uid", true)
+	f.putJSON(tRecipeRSList+"/a", `{"metadata":{"uid":"rs-a","ownerReferences":[{"kind":"Deployment","name":"x","uid":"dep-x"}]}}`)
+	f.putJSON(tRecipeRSList+"/b", `{"metadata":{"uid":"rs-b","ownerReferences":[{"kind":"Deployment","name":"x","uid":"dep-x"}]}}`)
+	f.putJSON(tRecipeDepList+"/x", `{"metadata":{"uid":"dep-x","ownerReferences":[{"kind":"OGXServer","name":"lsd-genai-playground","uid":"ogx-uid"}]}}`)
+	rsA := `{"kind":"ReplicaSet","name":"a","uid":"rs-a"}`
+	rsB := `{"kind":"ReplicaSet","name":"b","uid":"rs-b"}`
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/a-first", `{"metadata":{"ownerReferences":[`+rsA+`,`+rsB+`]}}`)
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/b-first", `{"metadata":{"ownerReferences":[`+rsB+`,`+rsA+`]}}`)
+	left, err := recipe.ProjectLeftovers(c, "recipe-dev")
+	if err != nil || strings.Join(left, ",") != "Pod mine" {
+		t.Fatalf("leftovers %v %v", left, err)
+	}
+}
+
+// An object is the tool's only when every one of its references leads to
+// a root, as the garbage collector keeps an object while any owner is
+// there: a claim owned by the server and a user's Notebook stays listed,
+// a claim owned by the server alone does not.
+func TestRecipeProjectLeftovers_EveryReferenceMustLeadToARoot(t *testing.T) {
+	f, c := projectFake(t)
+	putRecipePlayground(f, "ogx-uid")
+	recordRecipePlayground(t, c, "ogx-uid", true)
+	f.putJSON("/apis/kubeflow.org/v1/namespaces/recipe-dev/notebooks/my-wb", `{"metadata":{"uid":"nb-uid"}}`)
+	ogx := `{"kind":"OGXServer","name":"lsd-genai-playground","uid":"ogx-uid"}`
+	f.putJSON("/api/v1/namespaces/recipe-dev/persistentvolumeclaims/shared", `{"metadata":{"ownerReferences":[{"kind":"Notebook","name":"my-wb","uid":"nb-uid"},`+ogx+`]}}`)
+	f.putJSON("/api/v1/namespaces/recipe-dev/persistentvolumeclaims/servers", `{"metadata":{"ownerReferences":[`+ogx+`]}}`)
+	left, err := recipe.ProjectLeftovers(c, "recipe-dev")
+	if err != nil || strings.Join(left, ",") != "Notebook my-wb,PersistentVolumeClaim shared,Pod mine" {
+		t.Fatalf("leftovers %v %v", left, err)
+	}
+}
+
+// A reference counts only with the root's kind as well as its UID: the
+// server's UID named as a Deployment, or a RayCluster's as a RayJob, does
+// not reach the root.
+func TestRecipeProjectLeftovers_RootsMatchByKind(t *testing.T) {
+	f, c, uid := createdRecipeProject(t)
+	putRecipePlayground(f, "ogx-uid")
+	recordRecipePlayground(t, c, "ogx-uid", true)
+	recordRecipeRay(t, c, "recipe-dev", uid)
+	f.putJSON("/api/v1/namespaces/recipe-dev/persistentvolumeclaims/other-kind", `{"metadata":{"ownerReferences":[{"kind":"Deployment","name":"lsd-genai-playground","uid":"ogx-uid"}]}}`)
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/ray-other-kind", `{"metadata":{"ownerReferences":[{"kind":"RayJob","name":"nightly-raycluster","uid":"rc-uid"}]}}`)
+	left, err := recipe.ProjectLeftovers(c, "recipe-dev")
+	if err != nil || strings.Join(left, ",") != "PersistentVolumeClaim other-kind,Pod mine,Pod ray-other-kind" {
+		t.Fatalf("leftovers %v %v", left, err)
+	}
+}
+
+// recordRecipeRay records the distributed workloads setup's Ray samples
+// (RayCluster rc-uid, RayJob rj-uid) for project (with projectUID) as its
+// setup does, and puts their pods as KubeRay runs them (live RHOAI 3.7):
+// head and worker owned by the RayCluster, the submitter by Job
+// nightly-rayjob, which the RayJob owns.
+func recordRecipeRay(t *testing.T, c *Client, project, projectUID string) {
+	t.Helper()
+	if err := record.WriteSnapshotKey(c, kueue.RecordKey, "test", `{"project":"`+project+`","projectUID":"`+projectUID+`","rayClusterUID":"rc-uid","rayJobUID":"rj-uid"}`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const tRayJob = "/apis/batch/v1/namespaces/recipe-dev/jobs/nightly-rayjob"
+
+func putRecipeRayPods(f *resourceFake) {
+	rc := `{"metadata":{"ownerReferences":[{"apiVersion":"ray.io/v1","kind":"RayCluster","name":"nightly-raycluster","uid":"rc-uid","controller":true}]}}`
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/nightly-raycluster-head-7xk2p", rc)
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/nightly-raycluster-small-group-worker-q8w4m", rc)
+	f.putJSON(tRayJob, `{"metadata":{"uid":"job-uid","ownerReferences":[{"apiVersion":"ray.io/v1","kind":"RayJob","name":"nightly-rayjob","uid":"rj-uid","controller":true}]}}`)
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/nightly-rayjob-9z5kd", `{"metadata":{"ownerReferences":[{"apiVersion":"batch/v1","kind":"Job","name":"nightly-rayjob","uid":"job-uid","controller":true}]}}`)
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/mine", `{}`)
+}
+
+// The Ray samples of the tool's distributed workloads setup are roots by
+// the UIDs its record holds, only when the record is of this project (and
+// of this namespace, by UID, when it says): their head, worker and
+// submitter pods are left out. A Job that is not there leaves the
+// submitter listed; a Job read that fails refuses.
+func TestRecipeProjectLeftovers_RaySamples(t *testing.T) {
+	const rayPods = "Pod mine,Pod nightly-raycluster-head-7xk2p,Pod nightly-raycluster-small-group-worker-q8w4m,Pod nightly-rayjob-9z5kd"
+	for _, tc := range []struct {
+		name, project, projectUID, want string
+		noJob                           bool
+		jobFails                        bool
+	}{
+		{name: "the record of this project", project: "recipe-dev", projectUID: "<ns>", want: "Pod mine"},
+		{name: "a record without the project's UID", project: "recipe-dev", want: "Pod mine"},
+		{name: "a record of another project", project: "other", want: rayPods},
+		{name: "a record of the project before it was made again", project: "recipe-dev", projectUID: "old-ns-uid", want: rayPods},
+		{name: "the Job is gone", project: "recipe-dev", projectUID: "<ns>", noJob: true, want: "Pod mine,Pod nightly-rayjob-9z5kd"},
+		{name: "the Job cannot be read", project: "recipe-dev", projectUID: "<ns>", jobFails: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, c, uid := createdRecipeProject(t)
+			recordRecipePlayground(t, c, "", false)
+			putRecipeRayPods(f)
+			projectUID := tc.projectUID
+			if projectUID == "<ns>" {
+				projectUID = uid
+			}
+			recordRecipeRay(t, c, tc.project, projectUID)
+			if tc.noJob {
+				f.deleteObject(tRayJob)
+			}
+			if tc.jobFails {
+				f.fail["GET "+tRayJob] = 500
+			}
+			left, err := recipe.ProjectLeftovers(c, "recipe-dev")
+			if tc.jobFails {
+				if err == nil || !strings.Contains(err.Error(), "read Job recipe-dev/nightly-rayjob") {
+					t.Fatalf("leftovers %v %v", left, err)
+				}
+				return
+			}
+			if err != nil || strings.Join(left, ",") != tc.want {
+				t.Fatalf("leftovers %v %v", left, err)
+			}
+			if jobReads := len(f.callsTo("GET", tRayJob)); (jobReads > 0) != (tc.want == "Pod mine" || tc.noJob) {
+				t.Fatalf("read the Job %d times", jobReads)
+			}
+		})
+	}
+}
+
+// Clean up everything with the distributed workloads setup and the recipe
+// project: the setup's part deletes the Ray samples and clears its record
+// first, and the head, worker and submitter pods the garbage collector has
+// not removed yet do not stop the project's delete.
+func TestCleanUp_RecipeProjectAfterTheRaySamples(t *testing.T) {
+	f, c, uid := createdRecipeProject(t)
+	recordRecipePlayground(t, c, "", false)
+	putRecipeRayPods(f)
+	recordRecipeRay(t, c, "recipe-dev", uid)
+	kq := cleanupKueue
+	t.Cleanup(func() { cleanupKueue = kq })
+	ran := 0
+	cleanupKueue = func(c *Client) (*types.OperationResponse, error) {
+		ran++
+		f.deleteObject(tRayJob)
+		if err := record.WriteSnapshotKey(c, kueue.RecordKey, "test", `{}`); err != nil {
+			return nil, err
+		}
+		return &types.OperationResponse{Success: true, Message: "Distributed workloads setup deleted."}, nil
+	}
+	res, err := CleanUp(c, types.CleanupRequest{Kueue: true, RecipeProjects: []string{"recipe-dev"}, RecipeProjectUIDs: map[string]string{"recipe-dev": uid},
+		ConfirmProjectContents: map[string][]string{"recipe-dev": {"Pod mine"}}}, nil)
+	if err != nil || !res.Success || ran != 1 || f.has(tRecipeNS) {
+		t.Fatalf("got %+v, %v, kueue ran %d, project still there: %v", res, err, ran, f.has(tRecipeNS))
 	}
 }

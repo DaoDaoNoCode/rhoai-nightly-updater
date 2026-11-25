@@ -323,23 +323,27 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
-- **A recipe's Clean up no longer asks about its own playground.** Before
-  it deletes the recipe's project, Clean up lists what the project holds
-  that this tool did not create, and that list named the playground the
-  recipe set up: its database volume (`genai-pgvector-storage`) and the
-  pods of `genai-pgvector` and `lsd-genai-playground` (seen live on RHOAI
-  3.7). Those are now left out when the playground's OGXServer is the one
-  this tool recorded for the project (same UID): the volume and the
-  Deployments belong to that OGXServer, and their pods to the Deployments'
-  ReplicaSets, as Kubernetes relates owners. The pods of the tool's
-  pipeline server's and the tool's models' Deployments are left out the
-  same way. When Clean up everything deletes the playground, the pipeline
-  server or the model before the project, the check just before the
-  project's delete still counts their pieces as the tool's while
-  Kubernetes removes them: it uses the owners the first check found (by
-  UID). A playground whose server is not the
-  recorded one, and the pods of a Ray cluster, are still listed. A read
-  that fails still refuses the Clean up. No permission changed.
+- **A recipe's Clean up no longer asks about its own playground and Ray
+  samples.** Before it deletes the recipe's project, Clean up lists what
+  the project holds that this tool did not create, and that list named
+  what the recipe set up (seen live on RHOAI 3.7): the playground's
+  database volume (`genai-pgvector-storage`) and the pods of
+  `genai-pgvector` and `lsd-genai-playground`, and the head, worker and
+  submitter pods of the distributed workloads setup's Ray samples.
+  Those are now left out when every owner reference of the object leads,
+  through its ReplicaSet and Deployment (or the RayJob's Job), to
+  something this tool owns: the playground's OGXServer when it is the one
+  this tool recorded for the project (same UID), the tool's pipeline
+  server, the tool's models, and the RayCluster and RayJob in the record
+  of the distributed workloads setup for this project. A reference is
+  matched by kind and UID. When Clean up everything (or the recipe's
+  Clean up with the distributed workloads part ticked) deletes one of
+  these before the project, the check just before the project's delete
+  still counts their pieces as the tool's while Kubernetes removes them:
+  it uses the owners the first check found. A playground reconfigured in
+  Gen AI studio (a new OGXServer) is still listed, and so is an object
+  with any other owner. A read that fails still refuses the Clean
+  up. No permission changed.
 - **A recipe says when the dashboard will mark its workbench as bypassing
   Kueue.** A recipe that sets up a workbench and turns the dashboard's Kueue
   setting on creates the workbench first, so the dashboard marks it
