@@ -39,10 +39,25 @@ func TestMutationKeepsItsLeaseAndMarkerOnTheBookkeepingClient(t *testing.T) {
 	if opClient == nil || bookkeeper == nil || opClient == bookkeeper {
 		t.Fatalf("operation client %p, bookkeeping client %p: they must be two clients", opClient, bookkeeper)
 	}
+	// The cluster facts are read with the ServiceAccount, read-only.
+	if fc := opClient.Facts(); !opClient.ActsAsUser() || fc.ActsAsUser() || !fc.ReadOnly() || fc.TestOptions().Token != "test-cluster-token" {
+		t.Fatalf("facts client: as user %v, read-only %v, token %q; the change's client as user %v", fc.ActsAsUser(), fc.ReadOnly(), fc.TestOptions().Token, opClient.ActsAsUser())
+	}
 	if tracked != bookkeeper {
 		t.Fatal("the running operation must keep the bookkeeping client, not the one it acts with")
 	}
 	if snap := inflight.snapshot(); snap != nil {
 		t.Fatalf("operation still tracked: %+v", snap)
+	}
+}
+
+// A user read's client acts with the user's token and reads the cluster
+// facts with the ServiceAccount's, read-only.
+func TestUserReadClientReadsFactsWithTheServiceAccount(t *testing.T) {
+	sa := cluster.NewClientWithContext(t.Context(), "sa-token")
+	u := userReadClient(t.Context(), sa, "user-token", "alice")
+	fc := u.Facts()
+	if !u.ActsAsUser() || fc.ActsAsUser() || !fc.ReadOnly() || fc.TestOptions().Token != "sa-token" || u.Bookkeeping().TestOptions().Token != "sa-token" {
+		t.Fatalf("user %v; facts as user %v, read-only %v, token %q", u.ActsAsUser(), fc.ActsAsUser(), fc.ReadOnly(), fc.TestOptions().Token)
 	}
 }

@@ -179,10 +179,10 @@ func requestRole(w http.ResponseWriter, r *http.Request) (admin, ok bool) {
 // API it is sent to: the dashboard's gen-ai API, MLflow) checks every read
 // against the user's own RBAC. sa is the ServiceAccount's client, for what
 // the user's token cannot find but is no user data: where a platform API
-// is (the dashboard's and MLflow's addresses), and the updater's own
-// records (u's bookkeeping), which a handler filters to the user's
-// projects. A cache of what u reads is keyed by the token
-// (cluster.tokenKey).
+// is (the dashboard's and MLflow's addresses), the cluster facts (u's
+// read-only Facts client) and the updater's own records (u's
+// bookkeeping), which a handler filters to the user's projects. A cache of
+// what u reads is keyed by the token (cluster.tokenKey).
 func withUserRead(fn func(sa, u *cluster.Client, w http.ResponseWriter, r *http.Request)) http.HandlerFunc {
 	return withAuth(func(sa *cluster.Client, w http.ResponseWriter, r *http.Request) {
 		u := userReadClient(r.Context(), sa, extractUserToken(r), resolveUsername(r))
@@ -191,11 +191,13 @@ func withUserRead(fn func(sa, u *cluster.Client, w http.ResponseWriter, r *http.
 }
 
 // userReadClient is the signed-in user's client of a read: their token,
-// the ServiceAccount's client for the updater's own records.
+// the ServiceAccount's client for the updater's own records and, read-only,
+// for the cluster facts (Facts).
 func userReadClient(ctx context.Context, sa *cluster.Client, token, username string) *cluster.Client {
 	u := cluster.NewUserClient(ctx, token)
 	u.SetUsername(username)
 	u.SetBookkeeping(sa)
+	u.SetFacts(sa)
 	return u
 }
 

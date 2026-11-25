@@ -847,16 +847,19 @@ func andList(items []string) string {
 	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
 }
 
-// runStep runs the step on its own deadline, client and bookkeeper (points
-// 3 and 4), on st (the step's own copy of the run's State), and returns
-// its status, message and errorCode. It runs in a worker: of x it reads
+// runStep runs the step on its own deadline, client, bookkeeper and facts
+// client (points 3 and 4), on st (the step's own copy of the run's
+// State), and returns its status, message and errorCode. It runs in a
+// worker: of x it reads
 // only what stays the same during the run (never x.state), and it reports
 // progress to the operation and the runner, which lock.
 func (x *recipeExec) runStep(step cluster.RecipeStep, st *cluster.RecipeState) (string, string, string) {
 	stepCtx, cancel := context.WithTimeout(x.runCtx, cluster.OperationDeadline)
 	defer cancel()
 	c := x.client.WithContext(stepCtx)
-	c.SetBookkeeping(x.newBookkeeper(stepCtx))
+	sa := x.newBookkeeper(stepCtx)
+	c.SetBookkeeping(sa)
+	c.SetFacts(sa)
 	emit := func(e cluster.UpdateStepEvent) {
 		recipes.progress(x.opID, step.ID, e)
 		inflight.recordStep(x.opID, UpdateStep{Step: e.Step, Status: e.Status, Message: e.Message, Detail: e.Detail, ErrorCode: e.ErrorCode})

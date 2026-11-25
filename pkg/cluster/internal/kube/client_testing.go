@@ -8,7 +8,8 @@ import (
 
 // TestClientOptions are every field of a Client, for tests: the fake API
 // server's address and HTTP client, the context, the user, whose token it
-// carries, and the clients set with SetBookkeeping and SetSignedInUser.
+// carries, and the clients set with SetBookkeeping, SetSignedInUser and
+// SetFacts.
 // Unset fields stay zero, as in a struct literal.
 type TestClientOptions struct {
 	BaseURL    string
@@ -20,8 +21,11 @@ type TestClientOptions struct {
 	AsUser       bool
 	Bookkeeper   *Client
 	SignedInUser *Client
-	StatusRead   bool
-	NoRetry      func(error) bool
+	Facts        *Client
+	// ReadOnly: the client sends only GET and HEAD (a facts client).
+	ReadOnly   bool
+	StatusRead bool
+	NoRetry    func(error) bool
 }
 
 // NewTestClient is the Client a test talks to its fake cluster with. It
@@ -38,6 +42,8 @@ func NewTestClient(o TestClientOptions) *Client {
 		bookkeeper:   o.Bookkeeper,
 		asUser:       o.AsUser,
 		signedInUser: o.SignedInUser,
+		facts:        o.Facts,
+		readOnly:     o.ReadOnly,
 		statusRead:   o.StatusRead,
 		noRetry:      o.NoRetry,
 	}
@@ -57,6 +63,8 @@ func (c *Client) TestOptions() TestClientOptions {
 		AsUser:       c.asUser,
 		Bookkeeper:   c.bookkeeper,
 		SignedInUser: c.signedInUser,
+		Facts:        c.facts,
+		ReadOnly:     c.readOnly,
 		StatusRead:   c.statusRead,
 		NoRetry:      c.noRetry,
 	}
