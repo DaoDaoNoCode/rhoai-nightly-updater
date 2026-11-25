@@ -185,7 +185,9 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   version resumes with the new steps, keeping the components it turned on.
   A refusal for any feature (a GitOps-managed DataScienceCluster, an
   operator that cannot be installed, a dry run the API server rejects)
-  now stops the step for all of them, before any change. The MaaS tab
+  now stops the step for all of them, before any change (one exception:
+  the Kuadrant CR of a Connectivity Link the step installs itself can be
+  dry-run only after that install). The MaaS tab
   shows a Connectivity Link and Kuadrant CR the step installed as this
   tool's ([RUNBOOK §5.1](RUNBOOK.md#51-environment-recipe-runs-resume-interrupted-sign-in-again)).
 
