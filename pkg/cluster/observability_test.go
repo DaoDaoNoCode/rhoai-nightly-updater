@@ -478,18 +478,33 @@ func TestObservability_DashboardsNotInPersesYet(t *testing.T) {
 	if res, _ := obsRun(t, oc.c, "setup"); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
-	oc.f.putJSON("/apis/perses.dev/v1alpha1/namespaces/"+obsNS+"/persesdatasources/usage-logs-all", `{"metadata":{"name":"usage-logs-all"},"status":{"conditions":[{"type":"Available","status":"False","reason":"PersesBackendError","message":"connection refused"}]}}`)
+	oc.f.putJSON("/apis/perses.dev/v1alpha1/namespaces/"+obsNS+"/persesdashboards/dashboard-1-llm-d", `{"metadata":{"name":"dashboard-1-llm-d"},"status":{"conditions":[{"type":"Available","status":"False","reason":"PersesBackendError","message":"connection refused"}]}}`)
 	oc.f.putJSON("/apis/perses.dev/v1alpha1/namespaces/"+obsNS+"/persesdashboards/usage", `{"metadata":{"name":"usage"},"status":{"conditions":[{"type":"Available","status":"True"}]}}`)
+	// A failing datasource is not read: only the dashboards are.
+	oc.f.putJSON("/apis/perses.dev/v1alpha1/namespaces/"+obsNS+"/persesdatasources/usage-logs-all", `{"metadata":{"name":"usage-logs-all"},"status":{"conditions":[{"type":"Available","status":"False","reason":"PersesBackendError","message":"connection refused"}]}}`)
 	st, _ := GetObservabilityStatus(oc.sa)
 	for _, p := range st.Parts {
 		if p.ID == "dashboards" {
-			if p.State != "waiting" || !strings.Contains(p.Message, "datasource usage-logs-all (PersesBackendError: connection refused)") || !strings.Contains(p.Message, "retries them by itself") {
+			if p.State != "waiting" || !strings.Contains(p.Message, "dashboard dashboard-1-llm-d (PersesBackendError: connection refused)") || !strings.Contains(p.Message, "retries them by itself") || strings.Contains(p.Message, "datasource") {
 				t.Fatalf("dashboards = %+v", p)
 			}
+			noPersesDatasourceRequest(t, oc.f)
 			return
 		}
 	}
 	t.Fatal("no dashboards part")
+}
+
+// noPersesDatasourceRequest fails when any request reached PersesDatasources.
+func noPersesDatasourceRequest(t *testing.T, f *resourceFake) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.calls {
+		if strings.Contains(c.Path, "persesdatasources") {
+			t.Fatalf("request to PersesDatasources: %s %s", c.Method, c.Path)
+		}
+	}
 }
 
 func TestObservability_S3StorageStaysWhileUsageLogsUseIt(t *testing.T) {

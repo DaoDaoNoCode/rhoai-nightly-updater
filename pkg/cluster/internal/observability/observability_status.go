@@ -740,9 +740,11 @@ func stuckCollector(c *kube.Client, ns string) (pods, missing []string, err erro
 	return pods, missing, nil
 }
 
-// dashboardsPart is Perses and the dashboards and datasources MaaS and
-// KServe made for it (problem B: made before Perses ran, they fail until
-// the Perses operator retries them).
+// dashboardsPart is Perses and the dashboards MaaS and KServe made for it
+// (problem B: made before Perses ran, they fail until the Perses operator
+// retries them). It reads the PersesDashboards only: PersesDatasources may
+// carry headers or tokens other teams put in them, so the ServiceAccount
+// does not read them (owner sign-off 2026-11-25, SECURITY.md).
 func (v *view) dashboardsPart(c *kube.Client) types.MaaSPart {
 	pt := v.conditionPart(types.MaaSPart{ID: "dashboards", Title: "Dashboards (Perses)", DocURL: docsUsageLogs + "#configure-reads-and-verify-new-traffic"},
 		[]string{"PersesAvailable"}, "Perses, which serves the usage and metrics dashboards")
@@ -751,19 +753,15 @@ func (v *view) dashboardsPart(c *kube.Client) types.MaaSPart {
 	}
 	notSynced, total, err := persesNotSynced(c, v.ns)
 	if err != nil {
-		pt.Warning = "Cannot read the Perses dashboards and datasources: " + err.Error()
+		pt.Warning = "Cannot read the Perses dashboards: " + err.Error()
 		return pt
 	}
-	if repointed, err := repointedDatasources(c, v.ns); err == nil && len(repointed) > 0 {
-		which := "PersesDatasource " + repointed[0] + " now reads"
-		if len(repointed) > 1 {
-			which = "PersesDatasources " + strings.Join(repointed, " and ") + " now read"
-		}
-		pt.Warning = fmt.Sprintf("%s through maas-api (%s), not the local LokiStack: RHOAI's MaaS controller points them there while Secret usage-logs-loki exists in the MaaS namespace (odh-observability docs/usage-logs.md, \"Configure reads and verify new traffic\", meant for an AI Grid hub or OIDC sign-ins). With it, the Usage and My Usage views fail for every OpenShift sign-in: maas-api answers HTTP 500 AUTH_FAILURE, because Perses calls its Service directly, without the X-MaaS-Username header only the MaaS gateway sets (maas-api internal/token/handler.go L83-95; seen live on RHOAI 3.7 on 2026-11-25). This tool never creates that Secret; whoever made it deletes it to read the local store again.",
-			which, maasAPILogs)
+	if maasAPIReadsLoki(c) {
+		pt.Warning = fmt.Sprintf("maas-api runs its Loki read proxy (its container has the variable %s), so RHOAI's MaaS controller points the usage PersesDatasources (usage-logs-all, usage-logs-multi-tenancy) at maas-api's /v1/logs, not the local LokiStack. It does both while Secret usage-logs-loki exists in the MaaS namespace (odh-observability docs/usage-logs.md, \"Configure reads and verify new traffic\", meant for an AI Grid hub or OIDC sign-ins). With it, the Usage and My Usage views fail for every OpenShift sign-in: maas-api answers HTTP 500 AUTH_FAILURE, because Perses calls its Service directly, without the X-MaaS-Username header only the MaaS gateway sets (maas-api internal/token/handler.go L83-95; seen live on RHOAI 3.7 on 2026-11-25). This tool never creates that Secret; whoever made it deletes it to read the local store again.",
+			lokiReadEnv)
 	}
 	if len(notSynced) == 0 {
-		pt.Message = fmt.Sprintf("Perses runs, with the %d dashboards and datasources RHOAI and MaaS made for it: in the RHOAI dashboard, Observe & monitor, Dashboard.", total)
+		pt.Message = fmt.Sprintf("Perses runs, with the %d dashboards RHOAI and MaaS made for it: in the RHOAI dashboard, Observe & monitor, Dashboard.", total)
 		return pt
 	}
 	pt.State = "waiting"
@@ -771,81 +769,81 @@ func (v *view) dashboardsPart(c *kube.Client) types.MaaSPart {
 	return pt
 }
 
-// persesNotSynced lists the PersesDatasources and PersesDashboards of ns
-// whose conditions report a problem, and how many there are in all.
+// persesNotSynced lists the PersesDashboards of ns whose conditions report
+// a problem, and how many there are in all.
 func persesNotSynced(c *kube.Client, ns string) ([]string, int, error) {
-	datasources, err := listPerses(c, rhoai.NamespacedPath(persesAPI(c), "persesdatasources", ns, ""))
-	if err != nil {
-		return nil, 0, err
-	}
 	dashboards, err := listPerses(c, rhoai.NamespacedPath(persesAPI(c), "persesdashboards", ns, ""))
 	if err != nil {
 		return nil, 0, err
 	}
 	var out []string
-	for _, kind := range []struct {
-		title string
-		items []persesObject
-	}{{"datasource", datasources}, {"dashboard", dashboards}} {
-		for _, it := range kind.items {
-			for _, cond := range it.Status.Conditions {
-				if (cond.Type == "Available" && cond.Status == "False") || (cond.Type == "Degraded" && cond.Status == "True") || strings.Contains(cond.Reason, "Error") {
-					out = append(out, fmt.Sprintf("%s %s (%s)", kind.title, it.Metadata.Name, kube.TruncateText(strings.TrimSuffix(cond.Reason+": "+cond.Message, ": "), 200)))
-					break
-				}
+	for _, it := range dashboards {
+		for _, cond := range it.Status.Conditions {
+			if (cond.Type == "Available" && cond.Status == "False") || (cond.Type == "Degraded" && cond.Status == "True") || strings.Contains(cond.Reason, "Error") {
+				out = append(out, fmt.Sprintf("dashboard %s (%s)", it.Metadata.Name, kube.TruncateText(strings.TrimSuffix(cond.Reason+": "+cond.Message, ": "), 200)))
+				break
 			}
 		}
 	}
 	sort.Strings(out)
-	return out, len(datasources) + len(dashboards), nil
+	return out, len(dashboards), nil
 }
 
 type persesObject struct {
 	Metadata kube.ObjectMeta `json:"metadata"`
-	Spec     any             `json:"spec"`
 	Status   struct {
 		Conditions []kube.Condition `json:"conditions"`
 	} `json:"status"`
 }
 
-// maasAPILogs is the path maas-api serves the usage logs at, behind its
-// Service (maas-controller's repointed datasources, live 2026-11-25:
-// https://maas-api.<maas namespace>.svc.cluster.local:8443/v1/logs).
-const maasAPILogs = "maas-api .../v1/logs"
+// lokiReadEnv is the maas-api container variable that turns on its Loki
+// read proxy.
+const lokiReadEnv = "LOKI_READ_ENDPOINT"
 
-// repointedDatasources lists the PersesDatasources of ns whose spec points
-// at maas-api's /v1/logs (any URL in it: host maas-api, path /v1/logs).
-func repointedDatasources(c *kube.Client, ns string) ([]string, error) {
-	items, err := listPerses(c, rhoai.NamespacedPath(persesAPI(c), "persesdatasources", ns, ""))
+// maasAPIReadsLoki reports whether the maas-api Deployment in the MaaS
+// namespace has a container maas-api with a variable named
+// LOKI_READ_ENDPOINT. Only the variable names are decoded: the value (the
+// Loki address) is never read into memory, logged or returned.
+//
+// Source (red-hat-data-services/models-as-a-service rhoai-3.7-ea.1): the
+// tenant reconcile adds LOKI_READ_ENDPOINT to container maas-api when the
+// usage-logs-loki Secret holds a valid endpoint (maas-controller
+// pkg/platform/tenantreconcile/pipeline.go resolveLokiReadEndpoint L242-268,
+// params.go L1086-1088) and drops it again without one; the lifecycle
+// reconcile points the PersesDatasources usage-logs-all and
+// usage-logs-multi-tenancy at maas-api's /v1/logs while that Secret exists
+// (pkg/controller/maas/self_deployment_controller.go maasAPILokiEnabled
+// L852-868). The one case it misses is a Secret without a valid endpoint
+// key: the datasources move, the variable is not set. Any failure to read
+// (no MaaS, no Deployment, no namespace known) is no warning.
+func maasAPIReadsLoki(c *kube.Client) bool {
+	ns, err := serving.MaaSInfraNamespace(c)
 	if err != nil {
-		return nil, err
+		return false
 	}
-	var out []string
-	for _, it := range items {
-		if pointsAtMaaSAPI(it.Spec) {
-			out = append(out, it.Metadata.Name)
-		}
+	var d struct {
+		Spec struct {
+			Template struct {
+				Spec struct {
+					Containers []struct {
+						Name string `json:"name"`
+						Env  []struct {
+							Name string `json:"name"`
+						} `json:"env"`
+					} `json:"containers"`
+				} `json:"spec"`
+			} `json:"template"`
+		} `json:"spec"`
 	}
-	sort.Strings(out)
-	return out, nil
-}
-
-// pointsAtMaaSAPI: a string in v is a URL whose host is maas-api (of any
-// namespace) and whose path starts with /v1/logs.
-func pointsAtMaaSAPI(v any) bool {
-	switch t := v.(type) {
-	case string:
-		u, err := url.Parse(t)
-		return err == nil && strings.HasPrefix(u.Hostname(), "maas-api.") && strings.HasPrefix(u.Path, "/v1/logs")
-	case map[string]any:
-		for _, e := range t {
-			if pointsAtMaaSAPI(e) {
-				return true
-			}
+	if found, err := c.GetIntoOptional(fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments/%s", ns, "maas-api"), &d); err != nil || !found {
+		return false
+	}
+	for _, ct := range d.Spec.Template.Spec.Containers {
+		if ct.Name != "maas-api" {
+			continue
 		}
-	case []any:
-		for _, e := range t {
-			if pointsAtMaaSAPI(e) {
+		for _, e := range ct.Env {
+			if e.Name == lokiReadEnv {
 				return true
 			}
 		}

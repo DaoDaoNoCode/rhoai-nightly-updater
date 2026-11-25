@@ -2118,8 +2118,8 @@ export function observabilityWorld(state = "none") {
       : conditionPart("metrics-collector", "Metrics collector (OpenTelemetry)", "The metrics collector: RHOAI's operator reports OpenTelemetryCollectorAvailable True.", "observability-modes.md#metrics", "the metrics collector"),
     state === "dashboards-pending"
       ? { id: "dashboards", title: "Dashboards (Perses)", state: "waiting", docUrl: OBS_DOCS + "usage-logs.md#dashboards",
-        message: "Not in Perses yet: dashboard dashboard-1-llm-d (PersesBackendError: connection refused); datasource usage-logs-all (PersesBackendError: connection refused). They were made before Perses ran; the Perses operator retries them by itself, with growing pauses. This tool does not change them." }
-      : conditionPart("dashboards", "Dashboards (Perses)", "Perses runs, with the 7 dashboards and datasources RHOAI and MaaS made for it: in the RHOAI dashboard, Observe & monitor, Dashboard.", "usage-logs.md#dashboards", "Perses, which serves the usage and metrics dashboards"),
+        message: "Not in Perses yet: dashboard dashboard-1-llm-d (PersesBackendError: connection refused); dashboard usage (PersesBackendError: connection refused). They were made before Perses ran; the Perses operator retries them by itself, with growing pauses. This tool does not change them." }
+      : conditionPart("dashboards", "Dashboards (Perses)", "Perses runs, with the 5 dashboards RHOAI and MaaS made for it: in the RHOAI dashboard, Observe & monitor, Dashboard.", "usage-logs.md#dashboards", "Perses, which serves the usage and metrics dashboards"),
   ];
   const out = {
     namespace: OBS_NS, configured: set || state === "external", managedByTool: set, external: state === "external",

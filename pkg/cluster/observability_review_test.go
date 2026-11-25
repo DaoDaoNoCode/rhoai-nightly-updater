@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
@@ -443,32 +444,54 @@ func TestObservability_RecordWithoutNamesListsEveryStep(t *testing.T) {
 	}
 }
 
-// Datasources that maas-controller repointed at maas-api's /v1/logs (the
-// usage-logs-loki Secret) get a warning; the local ones do not.
-func TestObservability_WarnsAboutDatasourcesRepointedAtMaaSAPI(t *testing.T) {
-	ds := "/apis/perses.dev/v1alpha1/namespaces/" + obsNS + "/persesdatasources/"
+// maas-api's Loki read proxy (LOKI_READ_ENDPOINT on its container, which
+// maas-controller sets while Secret usage-logs-loki exists and then points
+// the usage PersesDatasources at maas-api) gets a warning, told from the
+// maas-api Deployment's variable names only: no value reaches the status,
+// and no PersesDatasource is read.
+func TestObservability_WarnsWhenMaaSAPIReadsLoki(t *testing.T) {
+	const secretURL = "https://hub-loki.example.internal:8080/api/logs/v1/application"
+	deployment := "/apis/apps/v1/namespaces/redhat-ai-gateway-infra/deployments/maas-api"
 	for _, tc := range []struct {
-		name, all, multi string
-		want             string
+		name       string
+		containers []any // nil: no maas-api Deployment
+		warn       bool
 	}{
-		{"local", "https://data-science-usage-logs-lokistack-gateway-http.redhat-ods-monitoring.svc:8080/api/logs/v1/application", "https://usage-logs-tenancy-proxy.redhat-ods-monitoring.svc:8443", ""},
-		{"repointed", "https://maas-api.redhat-ai-gateway-infra.svc.cluster.local:8443/v1/logs", "https://maas-api.redhat-ai-gateway-infra.svc.cluster.local:8443/v1/logs?only_user=true", "PersesDatasources usage-logs-all and usage-logs-multi-tenancy now read through maas-api"},
+		{"no maas-api", nil, false},
+		{"proxy off", []any{map[string]any{"name": "maas-api", "env": []any{map[string]any{"name": "API_KEY_MAX_EXPIRATION_DAYS", "value": "90"}}}}, false},
+		{"variable on another container", []any{
+			map[string]any{"name": "maas-api"},
+			map[string]any{"name": "sidecar", "env": []any{map[string]any{"name": "LOKI_READ_ENDPOINT", "value": secretURL}}},
+		}, false},
+		{"proxy on", []any{map[string]any{"name": "maas-api", "env": []any{
+			map[string]any{"name": "LOKI_READ_ENDPOINT", "value": secretURL},
+			map[string]any{"name": "LOKI_READ_TOKEN", "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": "usage-logs-loki", "key": "LOKI_READ_TOKEN"}}},
+		}}}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			oc := newObsCluster(t, true)
 			obsSetUp(t, oc)
-			for name, u := range map[string]string{"usage-logs-all": tc.all, "usage-logs-multi-tenancy": tc.multi} {
-				oc.f.put(ds+name, map[string]any{"metadata": map[string]any{"name": name}, "spec": map[string]any{"config": map[string]any{"plugin": map[string]any{"spec": map[string]any{"proxy": map[string]any{"spec": map[string]any{"url": u}}}}}}})
+			if tc.containers != nil {
+				oc.f.put(deployment, map[string]any{"metadata": map[string]any{"name": "maas-api", "namespace": "redhat-ai-gateway-infra"},
+					"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": tc.containers}}}})
 			}
-			st, _ := GetObservabilityStatus(oc.sa)
+			st, err := GetObservabilityStatus(oc.sa)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := json.Marshal(st)
+			if strings.Contains(string(raw), "hub-loki") {
+				t.Fatalf("the variable's value reached the status: %s", raw)
+			}
+			noPersesDatasourceRequest(t, oc.f)
 			for _, p := range st.Parts {
 				if p.ID != "dashboards" {
 					continue
 				}
-				if tc.want == "" && p.Warning != "" {
-					t.Fatalf("warning on local datasources: %s", p.Warning)
+				if !tc.warn && p.Warning != "" {
+					t.Fatalf("warning without the proxy: %s", p.Warning)
 				}
-				if tc.want != "" && (!strings.Contains(p.Warning, tc.want) || !strings.Contains(p.Warning, "500 AUTH_FAILURE") || !strings.Contains(p.Warning, "usage-logs-loki")) {
+				if tc.warn && (!strings.Contains(p.Warning, "LOKI_READ_ENDPOINT") || !strings.Contains(p.Warning, "500 AUTH_FAILURE") || !strings.Contains(p.Warning, "usage-logs-loki") || !strings.Contains(p.Warning, "usage-logs-all")) {
 					t.Fatalf("warning = %q", p.Warning)
 				}
 				return

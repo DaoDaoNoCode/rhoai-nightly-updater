@@ -38,8 +38,8 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   fix labelled as not in RHOAI's docs) and dashboards Perses has not taken
   yet. Clean up puts back only the recorded fields, then deletes the
   recorded disks and certificates, the Secret, the SeaweedFS user and the
-  bucket; the operators stay. The ServiceAccount gains `list` on LokiStacks,
-  PersesDatasources and PersesDashboards ([SECURITY.md](SECURITY.md#observability-usage-logs-and-dashboards)).
+  bucket; the operators stay. The ServiceAccount gains `list` on LokiStacks
+  and PersesDashboards, not PersesDatasources ([SECURITY.md](SECURITY.md#observability-usage-logs-and-dashboards)).
   The S3 storage cannot be deleted while usage logs use it.
 - **Distributed workloads (Kueue) on the Environment page.** A new
   **Distributed workloads** tab (and Overview row) sets Kueue up exactly as
