@@ -83,8 +83,11 @@ func newFakeOLM(t *testing.T) *fakeOLM {
 		operatorGrps: []any{map[string]any{"metadata": map[string]any{"name": "rhods-operator"}, "spec": map[string]any{}}},
 		channels:     `[{"name":"stable-3.x","currentCSV":"rhods-operator.3.6.0"}]`,
 		catalogPods:  `{"items":[]}`,
-		failDelete:   map[string]int{},
-		stuckCSVs:    map[string]bool{},
+		// OLM runs the registry pod of the catalog's current image: Update
+		// waits for it (waitForCatalogServing).
+		gitOpsPods: true,
+		failDelete: map[string]int{},
+		stuckCSVs:  map[string]bool{},
 	}
 }
 
@@ -366,8 +369,23 @@ func (f *fakeOLM) serveCatalog(w http.ResponseWriter, r *http.Request, name stri
 					meta["annotations"] = ann
 				}
 			}
-			f.catalog = body
+			// The API server's answer: a catalog made now gets a new UID,
+			// and every applied spec a new generation.
+			meta, _ := body["metadata"].(map[string]any)
+			if meta == nil {
+				meta = map[string]any{}
+				body["metadata"] = meta
+			}
 			f.catalogRV++
+			uid, _ := old["uid"].(string)
+			if f.catalog == nil || uid == "" {
+				uid = fmt.Sprintf("uid-catalog-%d", f.catalogRV)
+			}
+			meta["uid"], meta["generation"] = uid, f.catalogRV
+			f.catalog = body
+			out, _ := json.Marshal(body)
+			_, _ = w.Write(out)
+			return
 		}
 		_, _ = io.WriteString(w, `{}`)
 	default:

@@ -15,3 +15,16 @@ func RestoreMaaSExtrasForTest(c *kube.Client) (logs []string, problem string) {
 	}
 	return restoreMaaSExtras(c)
 }
+
+// SetDashDevPausedForTest makes a recorded Dashboard Dev session keep the
+// dashboard operator operator (namespace/name; "" for none) at 0 replicas
+// for the portal's note, and returns the function that puts the real check
+// back.
+func SetDashDevPausedForTest(operator string) (restore func()) {
+	if !testing.Testing() {
+		panic("SetDashDevPausedForTest is only for tests")
+	}
+	prev := dashDevPausedOperator
+	dashDevPausedOperator = func(*kube.Client) string { return operator }
+	return func() { dashDevPausedOperator = prev }
+}

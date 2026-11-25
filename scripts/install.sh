@@ -165,6 +165,27 @@ preflight() {
 	err "Cluster $(oc whoami --show-server 2>/dev/null || echo '?'), user $user, namespace $NAMESPACE, app $APP_NAME."
 }
 
+# The app needs OpenShift's built-in OAuth server: sign-in is oauth-proxy
+# with --provider=openshift through this install's OAuthClient, and the
+# backend reads users/~ and useroauthaccesstokens. A cluster set up for
+# direct authentication with an external OIDC provider
+# (authentications.config.openshift.io cluster spec.type OIDC) has none of
+# them: "OpenShift OAuth server and OpenShift OAuth API server", the
+# *.user.openshift.io and *.oauth.openshift.io APIs and OAuth client
+# configurations are unavailable (openshift-docs
+# modules/external-auth-disabled-resources.adoc). Only oc's output (stdout)
+# is the type: its diagnostics (stderr, such as API warnings) are shown, not
+# compared. Fails closed when the type cannot be read: nothing is changed.
+refuse_external_oidc() {
+	local type
+	if ! type=$(oc get authentications.config.openshift.io cluster -o jsonpath='{.spec.type}' 2>"$TMP/auth-err"); then
+		die "Cannot read authentications.config.openshift.io/cluster to check how the cluster signs users in, so nothing was changed: $(cat "$TMP/auth-err")"
+	fi
+	[ ! -s "$TMP/auth-err" ] || err "$(cat "$TMP/auth-err")"
+	[ "$type" != OIDC ] ||
+		die "This cluster signs users in directly through an external OIDC provider (authentications.config.openshift.io/cluster spec.type is OIDC), so OpenShift's built-in OAuth server and its OAuth and user APIs are turned off. $APP_NAME needs them (its sign-in through an OAuthClient, users/~ and useroauthaccesstokens) and does not support such clusters; nothing was changed."
+}
+
 # The oauth-proxy tag must match the cluster's OCP minor version, and the registry namespace
 # its major version: openshift4 for 4.x, openshift5 for 5.x. The openshift4 path has no 5.x tag,
 # so on an OpenShift 5 cluster that image never pulls (ImagePullBackOff, the proxy never starts).
@@ -953,6 +974,7 @@ deploy_or_upgrade() {
 	local action=$1
 	require_tag
 	preflight
+	refuse_external_oidc
 	detect_oauth_proxy_image
 	if [ "$action" = upgrade ] && ! installed; then
 		die "No deployment $APP_NAME in $NAMESPACE; install it first (make deploy, or install.sh deploy)."
@@ -1002,6 +1024,7 @@ rollback() {
 	case "$TAG" in latest | "") die "Usage: make rollback TAG=<release or commit> (for example TAG=v1.0.0, an image tag such as 4503bb7d, or any commit in this clone)" ;; esac
 	[ -n "$TAG_EXPLICIT" ] || die "Usage: make rollback TAG=<release or commit>"
 	preflight
+	refuse_external_oidc
 	detect_oauth_proxy_image
 	installed || die "No deployment $APP_NAME in $NAMESPACE; run 'make deploy' first."
 	local rev short8 short7 img_tag="" t label tried=""

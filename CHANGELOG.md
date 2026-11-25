@@ -362,6 +362,79 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **The tool names itself to the API server.** Every request now sends
+  `User-Agent: rhoai-nightly-updater-client/<version>`, so audit logs name
+  the tool, and writes without a field manager are recorded as
+  `rhoai-nightly-updater-client` instead of Go's default `Go-http-client`.
+  That default now counts as the tool's only for objects that only earlier
+  versions wrote: namespace `minio`, its pipeline server `dspa` and Secret
+  `dashboard-dspa-secret`. A Secret of a current name without the tool's
+  label that only `Go-http-client` wrote is no longer deleted with a
+  pipeline server.
+- **The MaaS portal says when it waits for Dashboard Dev.** RHOAI's
+  dashboard operator deploys the portal, and a Dashboard Dev session keeps
+  that operator at 0 replicas, so a portal turned on during a session
+  stayed "not yet" with no reason. Turning it on is still allowed; while a
+  recorded Dashboard Dev session keeps the operator at 0 replicas and the
+  portal is not available, its result and the MaaS tab's portal row now say
+  that it comes up once Dashboard Dev is reverted.
+- **Update waits until the catalog serves the verified build.** After
+  replacing the nightly catalog, Update waited for READY and up to 30
+  seconds for its channels, then detected the channel again. It now waits,
+  as on a cluster managed from Git, until OLM's registry pod runs the new
+  image, the catalog is READY and its PackageManifest lists the verified
+  head (same build) on the verified channel, and uses that channel. A
+  catalog that does not serve it in time stops Update before the old CSV is
+  deleted ("The catalog did not serve ... The operator was not changed"),
+  and the previous catalog and Subscription are restored.
+- **Update installs exactly the build it verified.** Like Update on a
+  cluster managed from Git, Update now pins the new Subscription's
+  `startingCSV` to the head CSV the verification catalog listed, so OLM
+  installs that CSV or reports that the catalog lacks it; a catalog that
+  changed after verification cannot put another build in its place.
+- **Secure S3 storage no longer says a pipeline server uses its new key
+  before it does.** The pipeline API server reads its S3 key from
+  environment variables only when it starts (DSPO `deployment.yaml.tmpl`
+  `secretKeyRef`; its config hash leaves credentials out), so a pipeline
+  server given its own key keeps the old, revoked one until its pods
+  restart. While a pipeline server's API server pod started before the
+  tool last wrote its key (pod start time against the Secret's
+  managedFields time), its step and the result say so, also on a later
+  run, and the dialog gives the restart command to copy
+  (`oc delete pod -n <project> -l app=ds-pipeline-<dspa>,dspa=<dspa>`).
+  The tool does not restart them itself: that would need a new permission.
+- **The installer refuses clusters with external OIDC sign-in.** On a
+  cluster set up for direct authentication with an external OIDC provider
+  (`authentications.config.openshift.io/cluster` `spec.type: OIDC`),
+  OpenShift turns off its OAuth server and the OAuth and user APIs
+  (openshift-docs `external-auth-disabled-resources.adoc`), which the app's
+  sign-in, OAuthClient, `users/~` and `useroauthaccesstokens` need.
+  `install.sh` (deploy, upgrade, rollback) now reads that type with your
+  `oc` and stops with that reason before changing anything, instead of
+  failing part-way or leaving an app nobody can sign in to. Documented in
+  the README, SECURITY.md and GITOPS.md (the chart cannot check).
+- **Gateway setup fails when the gateway gets no load balancer address.**
+  Setting up the inference gateway or MaaS reported success ("may still
+  come up") when the cluster gave the gateway no load balancer address,
+  although nothing outside the cluster could reach it (bare metal without
+  MetalLB, for example). Both now fail at the gateway step with the reason;
+  the inference gateway's setup then sets up no model, and MaaS stops
+  before the DataScienceCluster. A hostname OpenShift has not published in
+  DNS (no DNS zone, still pending, or unreadable) stays a success, now with
+  a warning that says what to check. An OpenShift Route in front of a
+  ClusterIP gateway (the MaaS docs' `INGRESS_MODE=ocproute`, odh-gitops'
+  `openshiftRoute`) is not supported by this tool yet.
+- **MaaS token limits count streamed chats.** The Models tab's chat models
+  now run with vLLM's `--enable-force-include-usage` (appended to
+  `VLLM_ADDITIONAL_ARGS`), as the MaaS docs require for token rate limits
+  (models-as-a-service `quota-and-access-configuration.md`, "Model server
+  must include usage data"). Without it a streamed chat reported no usage,
+  so MaaS counted 0 tokens, limits never returned 429 and usage logs read 0.
+  The embedding model is unchanged. A model set up by an earlier version
+  lacks the flag: Publish refuses it as changed until you set it up again
+  on the Models tab, which restarts it; one already published keeps
+  counting 0 for streams until it is set up again, and its row on the MaaS
+  tab warns about it until then (nothing is changed automatically).
 - **Dry runs of a delete no longer delete.** Five deletes asked for a
   server-side dry run in the URL (`?dryRun=All`) while sending
   DeleteOptions (UID preconditions) in the body, and the API server then

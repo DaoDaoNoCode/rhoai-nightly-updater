@@ -92,6 +92,7 @@ func TestCheckNodePull_PullFailsPerTopology(t *testing.T) {
 			f := newFakeOLM(t)
 			f.topology = tc.topology
 			f.verifyState = "TRANSIENT_FAILURE"
+			f.gitOpsPods = false // the pod list below, not one that follows the image
 			f.catalogPods = `{"items":[{"status":{"containerStatuses":[{"state":{"waiting":{"reason":"ErrImagePull","message":"unauthorized: access to the requested resource is not authorized"}}}]}}]}`
 			result, err := CheckNodePull(f.client(context.Background()), nodeCheckImage)
 			if err != nil || result.Success || result.ErrorCode != "catalog_image_pull" {

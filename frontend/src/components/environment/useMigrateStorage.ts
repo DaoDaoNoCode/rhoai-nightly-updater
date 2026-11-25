@@ -35,6 +35,8 @@ export const runSteps = (run: MigrateRun) => [...MIGRATE_STEPS[run.kind], ...run
 export interface MigrateStepState {
   status: UpdateStep["status"];
   message: string;
+  /** The step's machine-readable extra (Secure S3 storage: the command that restarts a rekeyed pipeline server's API server). */
+  detail?: string;
 }
 
 /** Each run's dialog title. */
@@ -116,7 +118,7 @@ export function useMigrateStorage(onFinished: () => void, onRefused?: (res: Oper
         // A step the run did not list (a pipeline server set up meanwhile) is added in the order it comes.
         const known = runSteps(r).some((s) => s.id === step.step);
         const extra = known ? r.extraSteps : [...r.extraSteps, step.step.startsWith("server:") ? secureServerStep(step.step.slice(7)) : { id: step.step, title: step.step }];
-        return { ...r, extraSteps: extra, steps: { ...r.steps, [step.step]: { status: step.status, message: step.message } } };
+        return { ...r, extraSteps: extra, steps: { ...r.steps, [step.step]: { status: step.status, message: step.message, ...(step.detail ? { detail: step.detail } : {}) } } };
       });
     };
     const onDone = (success: boolean, error?: string, apiError?: { errorCode?: string }) => {

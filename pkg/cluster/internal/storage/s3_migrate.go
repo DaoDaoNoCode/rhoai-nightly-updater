@@ -1336,10 +1336,20 @@ func toolNamespaceDeletable(name string, meta kube.ObjectMeta) (bool, string) {
 	switch {
 	case !meta.HasToolLabel():
 		return false, fmt.Sprintf("Namespace %s is kept: it does not carry this tool's label (%s=%s).", name, kube.ManagedByLabelKey, kube.ManagedByLabelValue)
-	case !meta.HasManager(envkit.ToolManagers):
+	case !meta.HasManager(namespaceManagers(name)):
 		return false, fmt.Sprintf("Namespace %s is kept: it carries this tool's label, but its managedFields show no write by this tool.", name)
 	}
 	return true, ""
+}
+
+// namespaceManagers are the managers whose write marks namespace name as
+// the tool's: namespace minio is an earlier version's, so their
+// Go-http-client counts there too (envkit.LegacyToolManagers).
+func namespaceManagers(name string) []string {
+	if name == LegacyNamespace {
+		return envkit.LegacyToolManagers
+	}
+	return envkit.ToolManagers
 }
 
 // LegacyNamespaceDeletable is toolNamespaceDeletable for namespace minio.

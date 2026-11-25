@@ -1797,6 +1797,9 @@ func (r *maasStatusRun) modelRow(m LLMISvcObject, entry CatalogModel, v maasMode
 		item.SetupBlockedReason = maasEmbeddingReason
 		return item
 	}
+	if m.lacksUsageFlag() {
+		item.UsageWarning = "Its vLLM runs without " + usageFlag + " (set up by an earlier version). The MaaS docs require it so that streamed chats report their tokens; where the gateway does not add them itself, MaaS counts such chats as 0 tokens and token limits do not apply to them. Set it up again on the Models tab to add it (the model restarts); Publish refuses it until then."
+	}
 	// Its publication is gone (the model was made again): what is left
 	// goes on its own, so the row offers nothing. One of which nothing,
 	// or only the model's routing, is left: the live rows below.

@@ -74,6 +74,7 @@ describe("S3 storage that is not secured", () => {
     expect(dialog).not.toHaveTextContent(/IAM/);
     expect(dialog).toHaveTextContent("Pipeline runs in progress may fail");
     expect(dialog).toHaveTextContent("restart them afterwards");
+    expect(dialog).toHaveTextContent("So does each pipeline server's API server, which reads its S3 key only when it starts");
     expect(dialog).toHaveTextContent("keep their old key, which no longer works until Secure S3 storage is run again");
     expect(api.calls.filter((c) => c.startsWith("POST "))).toEqual([]);
     fireEvent.click(within(dialog).getByRole("button", { name: "Secure S3 storage" }));
@@ -88,19 +89,24 @@ describe("S3 storage that is not secured", () => {
     run.push(sseEvent("rollout", "success", "OK: The S3 storage runs with the new admin key; the old key no longer works"));
     run.push(sseEvent("server:dev/dspa", "running", "Checking the new key against the storage"));
     expect(await within(dialog).findByText("Checking the new key against the storage")).toBeInTheDocument();
-    run.push(sseEvent("server:dev/dspa", "success", "OK: dev/dspa uses SeaweedFS user rnu-dspa-dev"));
-    run.push(sseEvent("server:team-b/dspa", "success", "OK: team-b/dspa uses SeaweedFS user rnu-dspa-team-b"));
+    run.push(sseEvent("server:dev/dspa", "success", "OK: Pipeline server dev/dspa has the key of SeaweedFS user rnu-dspa-dev in its Secrets; its API server started before the key was written, so it keeps the old key, which no longer works, until its pods restart", { detail: "oc delete pod -n dev -l app=ds-pipeline-dspa,dspa=dspa" }));
+    run.push(sseEvent("server:team-b/dspa", "success", "OK: Pipeline server team-b/dspa has the key of SeaweedFS user rnu-dspa-team-b in its Secrets; its API server started before the key was written, so it keeps the old key, which no longer works, until its pods restart", { detail: "oc delete pod -n team-b -l app=ds-pipeline-dspa,dspa=dspa; rm -rf /" }));
     status = { ...status, s3Keys: secured };
-    run.push(sseEvent("operation_complete", "success", "The S3 storage is secured: it has a new admin key, which is in no project. On a key of their own: dev/dspa, team-b/dspa."));
+    run.push(sseEvent("operation_complete", "success", "The S3 storage is secured: it has a new admin key, which is in no project. Given a key of their own: dev/dspa, team-b/dspa."));
     run.close();
     expect(await within(dialog).findByText("The S3 storage is secured")).toBeInTheDocument();
-    expect(dialog).toHaveTextContent("On a key of their own: dev/dspa, team-b/dspa.");
+    expect(dialog).toHaveTextContent("Given a key of their own: dev/dspa, team-b/dspa.");
+    // The restart command of each rekeyed server, to copy; a detail that is not exactly such a command is not shown.
+    expect(dialog).toHaveTextContent("These pipeline servers' API servers started before their key was written, so they still use the old key, which no longer works, until their pods restart.");
+    expect(within(dialog).getByRole("button", { name: "Copy the restart commands" })).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("oc delete pod -n dev -l app=ds-pipeline-dspa,dspa=dspa");
+    expect(dialog).not.toHaveTextContent("rm -rf");
     expect(api.bodies["POST /api/resources/s3/secure/stream"]).toEqual([{}]);
     expect(within(dialog).queryByRole("button", { name: /^(Run )?Secure S3 storage/ })).not.toBeInTheDocument();
   });
 
   it("a stop part-way says what is left and offers to run it again, which resumes", async () => {
-    const stopped = "Pipeline server team-b/dspa did not get its own key: connection refused. The storage is secured. On a key of their own: dev/dspa. Still on the old key: team-b/dspa; run Secure S3 storage again: it skips the servers already done.";
+    const stopped = "Pipeline server team-b/dspa did not get its own key: connection refused. The storage is secured. Given a key of their own: dev/dspa. Still on the old key: team-b/dspa; run Secure S3 storage again: it skips the servers already done.";
     let n = 0;
     const api = stubApi({
       "/api/resources/status": statusOf({ minio: readyMinio, pipelineServers: [dspa], s3Keys: notSecured }),
@@ -117,7 +123,7 @@ describe("S3 storage that is not secured", () => {
         } else {
           r.push(sseEvent("rollout", "skipped", "The S3 storage already runs with a new admin key and per-server keys"));
           r.push(sseEvent("server:dev/dspa", "success", "OK: dev/dspa already uses its own key"));
-          r.push(sseEvent("operation_complete", "success", "The S3 storage is secured: it has a new admin key, which is in no project. On a key of their own: dev/dspa, team-b/dspa."));
+          r.push(sseEvent("operation_complete", "success", "The S3 storage is secured: it has a new admin key, which is in no project. Given a key of their own: dev/dspa, team-b/dspa."));
         }
         r.close();
         return r.response;

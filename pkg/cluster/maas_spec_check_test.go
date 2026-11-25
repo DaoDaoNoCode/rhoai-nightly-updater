@@ -74,6 +74,16 @@ func TestMaaSPublish_RefusesAChangedModelSpec(t *testing.T) {
 			main := templateContainer(spec, "containers", "main")
 			main["env"] = append(main["env"].([]any), map[string]any{"name": "HF_ENDPOINT", "value": "https://evil.example.com"})
 		}},
+		// Set up by a version before every chat model had
+		// --enable-force-include-usage: MaaS would count its streamed
+		// tokens as 0, so it is set up again first.
+		{"no usage flag", "spec.template.containers[main].env", func(spec map[string]any) {
+			for _, e := range templateContainer(spec, "containers", "main")["env"].([]any) {
+				if ev := e.(map[string]any); ev["name"] == "VLLM_ADDITIONAL_ARGS" {
+					ev["value"] = strings.TrimSuffix(ev["value"].(string), " --enable-force-include-usage")
+				}
+			}
+		}},
 		{"command", "spec.template.containers[main].command", func(spec map[string]any) {
 			templateContainer(spec, "containers", "main")["command"] = []any{"sh", "-c", "curl evil"}
 		}},
@@ -122,5 +132,49 @@ func TestModelSpecExpectation_Images(t *testing.T) {
 		if got := e.ImageAllowed(img); got != want {
 			t.Errorf("imageAllowed(%q) = %v, want %v", img, got, want)
 		}
+	}
+}
+
+// A chat model set up before every chat model had
+// --enable-force-include-usage keeps running without it: its MaaS row warns
+// (read-only; nothing is migrated) that its streamed tokens are not
+// counted, and how to fix it. Set up again adds the flag and the warning
+// goes.
+func TestMaaSStatus_WarnsAboutAModelWithoutTheUsageFlag(t *testing.T) {
+	mc := modelReadyForMaaS(t)
+	row := func() types.MaaSModel {
+		st, err := GetMaaSStatus(mc.c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, i := range st.Items {
+			if i.Name == "qwen25-05b-instruct" {
+				return i
+			}
+		}
+		t.Fatalf("no row: %+v", st.Items)
+		return types.MaaSModel{}
+	}
+	if w := row().UsageWarning; w != "" {
+		t.Fatalf("warning on a model with the flag: %q", w)
+	}
+	editModel(mc, func(spec, _ map[string]any) {
+		for _, e := range templateContainer(spec, "containers", "main")["env"].([]any) {
+			if ev := e.(map[string]any); ev["name"] == "VLLM_ADDITIONAL_ARGS" {
+				ev["value"] = "--max-model-len 4096"
+			}
+		}
+	})
+	w := row().UsageWarning
+	for _, want := range []string{"without --enable-force-include-usage (set up by an earlier version)", "The MaaS docs require it so that streamed chats report their tokens", "Set it up again on the Models tab to add it (the model restarts)"} {
+		if !strings.Contains(w, want) {
+			t.Errorf("warning %q lacks %q", w, want)
+		}
+	}
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("set up again: %+v", res)
+	}
+	if w := row().UsageWarning; w != "" {
+		t.Errorf("warning after set up again: %q", w)
 	}
 }

@@ -198,10 +198,11 @@ func TestOperationsPreserveSubscriptionSettings(t *testing.T) {
 				t.Fatal("no Subscription applied")
 			}
 			spec := applies[len(applies)-1]
-			// Refresh pins the installed CSV (R5-F3); the others drop the
-			// old channel's startingCSV.
+			// Refresh pins the installed CSV (R5-F3); Update pins the head
+			// it verified (as the GitOps path does), here the same CSV;
+			// Reinstall drops the old channel's startingCSV.
 			wantStart := any(nil)
-			if op == "refresh" {
+			if op == "refresh" || op == "update" {
 				wantStart = "rhods-operator.3.6.0"
 			}
 			if spec["installPlanApproval"] != "Manual" || fmt.Sprint(spec["config"]) != fmt.Sprint(config) || spec["startingCSV"] != wantStart {
@@ -348,6 +349,7 @@ func TestUpdateDryRun(t *testing.T) {
 func TestUpdateStream_CatalogImagePullFailsFast(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
 	f.verifyState = "TRANSIENT_FAILURE"
+	f.gitOpsPods = false // the pod list below, not one that follows the image
 	f.catalogPods = `{"items":[{"status":{"containerStatuses":[{"state":{"waiting":{"reason":"ImagePullBackOff","message":"Back-off pulling image: unauthorized: access to the requested resource is not authorized"}}}]}}]}`
 	t.Cleanup(catalog.SetReadyTimeoutForTest(10 * time.Second))
 	start := kube.Clock().Now()
@@ -537,12 +539,14 @@ func TestFailuresMarkStepAndKeepLogs(t *testing.T) {
 
 // A01-9: when the swapped catalog has no matching channel, the catalog and
 // Subscription are restored and the message says the operator was kept.
-func TestUpdateStream_ChannelDetectionFailureRestores(t *testing.T) {
+func TestUpdateStream_CatalogNotServingTheHeadRestores(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"channel": "fast"})
 	empty := `[]`
 	f.mainChannels = &empty
 	result, err := operator.UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
-	if err != nil || result.Success || result.ErrorCode != "channel_detection" {
+	// The catalog never lists the verified head on the verified channel:
+	// Update fails closed before the old CSV is deleted.
+	if err != nil || result.Success || result.ErrorCode != "timeout" || !strings.Contains(result.Message, "The catalog did not serve rhods-operator.3.6.0 on channel stable-3.x within") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	if !strings.Contains(result.Message, "installed operator was not changed") {
@@ -1318,4 +1322,36 @@ func TestWaitRequiresTheCSVToStaySucceeded(t *testing.T) {
 			t.Fatalf("succeeded after %s, before the CSV had settled (%s)", kube.Clock().Since(start), min)
 		}
 	})
+}
+
+// Someone else changes the nightly catalog while Update waits for it to
+// serve the verified build: Update stops with a conflict, and its restore
+// leaves that catalog as it is (it is no longer the object and generation
+// Update wrote) and says so, instead of putting the old image back.
+func TestUpdateStream_CatalogChangedMeanwhileIsLeftAlone(t *testing.T) {
+	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+	const theirs = "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:theirs"
+	f.intercept = func(f *fakeOLM, _ http.ResponseWriter, r *http.Request) bool {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/catalogsources/"+rhoai.CatalogName) && f.catalog != nil {
+			spec := f.catalog["spec"].(map[string]any)
+			if spec["image"] == testNightlyImage {
+				spec["image"] = theirs
+				meta := f.catalog["metadata"].(map[string]any)
+				meta["generation"] = meta["generation"].(int) + 1
+			}
+		}
+		return false
+	}
+	result, err := operator.UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
+	if err != nil || result.Success || result.ErrorCode != "conflict" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if !strings.Contains(result.Message, "was changed, replaced or deleted by someone else after this operation wrote it, so it was left as it is") {
+		t.Errorf("message = %q", result.Message)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.catalog == nil || f.catalog["spec"].(map[string]any)["image"] != theirs {
+		t.Fatalf("catalog = %v, want the other writer's image kept", f.catalog)
+	}
 }

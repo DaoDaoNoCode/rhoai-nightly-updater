@@ -644,6 +644,28 @@ func authPolicyStateOf(c *kube.Client, ns, gateway string) string {
 // it cannot be read. The record for the in-cluster listener is never
 // published (UnmanagedDNS); it is not this host's.
 func dnsPublished(c *kube.Client, host string) string {
+	if state := dnsRecordState(c, host); state != dnsNoZones {
+		return state
+	}
+	return "pending"
+}
+
+// dnsNoZones: host's DNSRecord exists but lists no zone. The ingress
+// operator's DNS controller publishes a record to the zones of the cluster
+// DNS configuration (dns.config.openshift.io cluster spec.privateZone and
+// spec.publicZone) and writes one status entry per zone; with neither
+// zone set, status.zones stays empty and nothing is ever published
+// (openshift/cluster-ingress-operator release-4.20
+// pkg/operator/controller/dns/controller.go Reconcile, publishRecordToZones).
+// The gateway's record is made once its Service has a load balancer
+// address (pkg/resources/dnsrecord/dns.go desiredDNSRecord). An empty zone
+// list after the DNS wait is not proof that the hostname does not resolve:
+// DNS may be managed outside OpenShift, so setup warns and does not fail.
+const dnsNoZones = "no-zones"
+
+// dnsRecordState is dnsPublished, telling apart a record that lists no
+// zone (dnsNoZones) from one still being published ("pending").
+func dnsRecordState(c *kube.Client, host string) string {
 	var items []struct {
 		Spec struct {
 			DNSName string `json:"dnsName"`
@@ -662,7 +684,7 @@ func dnsPublished(c *kube.Client, host string) string {
 			continue
 		}
 		if len(rec.Status.Zones) == 0 {
-			return "pending"
+			return dnsNoZones
 		}
 		for _, z := range rec.Status.Zones {
 			if cond, ok := kube.FindCondition(z.Conditions, "Published"); !ok || cond.Status != "True" {
@@ -672,6 +694,45 @@ func dnsPublished(c *kube.Client, host string) string {
 		return "published"
 	}
 	return "pending"
+}
+
+// gatewayRouteModeUnsupported names the documented way to expose a gateway
+// without a load balancer, which this tool does not build: a ClusterIP
+// Service behind a re-encrypt OpenShift Route (models-as-a-service
+// rhoai-3.6 docs/content/install/maas-setup.md "Create Gateway",
+// INGRESS_MODE=ocproute; odh-gitops charts/rhai-on-openshift-chart
+// values.yaml modelsAsAService.gateway.openshiftRoute).
+const gatewayRouteModeUnsupported = "Exposing a gateway through an OpenShift Route instead (a ClusterIP Service behind a re-encrypt Route, as the MaaS docs' INGRESS_MODE=ocproute and odh-gitops' openshiftRoute do) is not supported by this tool yet."
+
+// gatewayNoAddressText says why setup fails when a Gateway this tool
+// created has no load balancer address after the wait: without one,
+// nothing outside the cluster reaches it. pending is the gateway
+// controller's Programmed message, when it gave one.
+func gatewayNoAddressText(gateway string, wait time.Duration, pending string) string {
+	why := ""
+	if pending != "" {
+		why = " The gateway controller says: " + kube.TruncateText(pending, 300) + "."
+	}
+	return fmt.Sprintf("Gateway %s/%s has no load balancer address after %s, so nothing outside the cluster can reach it.%s This tool's gateways need a LoadBalancer Service that the cluster gives an address (a cloud load balancer, or MetalLB on bare metal). %s",
+		inferenceGatewayNamespace, gateway, ClockText(wait), why, gatewayRouteModeUnsupported)
+}
+
+// gatewayDNSNote says what the DNS wait found for the gateway's hostname
+// (state: dnsRecordState at its end, "" when it could not be read) and,
+// unless it is published, what to check. DNS status is never a failure: it
+// cannot prove the hostname does not resolve (DNS managed outside
+// OpenShift, a record still being published).
+func gatewayDNSNote(gateway, host, state string) string {
+	check := fmt.Sprintf("Check that %s resolves to the gateway's address (oc get gateway %s -n %s -o jsonpath='{.status.addresses[0].value}')", host, gateway, inferenceGatewayNamespace)
+	switch state {
+	case "published":
+		return fmt.Sprintf("https://%s is published in DNS.", host)
+	case dnsNoZones:
+		return fmt.Sprintf("Warning: OpenShift has not published https://%s in DNS: its DNSRecord in %s lists no DNS zone (the cluster DNS configuration names none, or DNS is managed outside OpenShift). %s; if it does not, add that record where the cluster's DNS is managed.", host, inferenceGatewayNamespace, check)
+	case "":
+		return fmt.Sprintf("Warning: whether https://%s is published in DNS could not be read (DNSRecords in %s). %s.", host, inferenceGatewayNamespace, check)
+	}
+	return fmt.Sprintf("https://%s is not published in DNS yet (a new load balancer's name can take a few minutes to resolve). If it still does not resolve later, check its DNSRecord (oc get dnsrecords -n %s -o yaml).", host, inferenceGatewayNamespace)
 }
 
 // KServeGateway is KServe's default gateway for LLMInferenceServices, read
@@ -1237,9 +1298,11 @@ func applyInferenceGateway(c *kube.Client, plan *gatewayPlan, dryRun bool, logf 
 }
 
 // waitInferenceGateway waits (bounded) until the gateway is programmed
-// with an address, then until its hostname is published in DNS. A wait
-// that runs out is not a failure: the gateway may still come up, and the
-// status shows it. It returns a terminal problem, or "".
+// with an address, then until its hostname is published in DNS. ready is
+// false when the wait for the address ran out, which fails setup; dns is
+// the DNS record's state at the end of its wait (dnsRecordState: published,
+// pending, dnsNoZones, or "" when it could not be read), which setup only
+// reports (gatewayDNSNote). It returns a terminal problem, or "".
 // While the Gateway is not programmed, progress says so in plain words:
 // the controller's own condition ("Failed to assign to any requested
 // addresses: hostname ... not found") is normal while the load balancer is
@@ -1282,8 +1345,14 @@ func waitInferenceGateway(c *kube.Client, host string, progress func(string)) (r
 		return ready && problem == "", "", problem, pending, err
 	}
 	progress("Programmed; waiting for " + host + " to be published in DNS")
+	state := ""
 	published, werr := kube.WaitForGone(c, inferenceGatewayDNSTimeout, inferenceGatewayPoll, func(cc *kube.Client) (bool, error) {
-		return dnsPublished(cc, host) == "published", nil
+		// The poll after the deadline reads with an ended context
+		// (kube.WaitForGone): an unreadable list keeps the last state.
+		if st := dnsRecordState(cc, host); st != "" {
+			state = st
+		}
+		return state == "published", nil
 	})
 	if werr != nil {
 		return true, "", "", "", werr
@@ -1291,7 +1360,7 @@ func waitInferenceGateway(c *kube.Client, host string, progress func(string)) (r
 	if published {
 		return true, "published", "", "", nil
 	}
-	return true, "pending", "", "", nil
+	return true, state, "", "", nil
 }
 
 // TeardownInferenceGateway deletes the inference gateway's objects this

@@ -256,6 +256,7 @@ func TestUpdateStream_CatalogImagePullAdvicePerTopology(t *testing.T) {
 			f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
 			f.topology = tc.topology
 			f.verifyState = "TRANSIENT_FAILURE"
+			f.gitOpsPods = false // the pod list below, not one that follows the image
 			f.catalogPods = `{"items":[{"status":{"containerStatuses":[{"state":{"waiting":{"reason":"ErrImagePull","message":"unauthorized: access to the requested resource is not authorized"}}}]}}]}`
 			result, err := operator.UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
 			if err != nil || result.Success || result.ErrorCode != "catalog_image_pull" {
@@ -284,6 +285,7 @@ func TestUpdateStream_CatalogImagePullAdvicePerTopology(t *testing.T) {
 func TestLiveCatalogTarget_GitOpsProfilePullAdvice(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
 	f.catalog["spec"].(map[string]any)["image"] = testNightlyImage
+	f.gitOpsPods = false // the pod list below, not one that follows the image
 	f.catalogPods = `{"items":[{"status":{"containerStatuses":[{"state":{"waiting":{"reason":"ImagePullBackOff","message":"unauthorized"}}}]}}]}`
 	var logs []string
 	_, err := gitops.LiveCatalogTarget(f.client(context.Background()), testNightlyImage, "", "Argo CD application rhoai", func(UpdateStepEvent) {}, &logs)

@@ -498,7 +498,9 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 		meta["resourceVersion"] = "1"
 		now := time.Now().UTC().Format(time.RFC3339)
 		meta["creationTimestamp"] = now
-		manager := kube.FirstNonEmpty(r.URL.Query().Get("fieldManager"), envkit.LegacyPostManager)
+		// As the API server names a write's manager: its fieldManager, else
+		// its User-Agent up to the first "/" (Go's default without one).
+		manager := kube.FirstNonEmpty(r.URL.Query().Get("fieldManager"), strings.SplitN(r.UserAgent(), "/", 2)[0], envkit.LegacyPostManager)
 		entry := map[string]any{"manager": manager, "operation": "Update", "apiVersion": k.gv, "time": now, "fieldsType": "FieldsV1"}
 		setOwnedPorts(entry, containerPorts(obj))
 		meta["managedFields"] = []any{entry}

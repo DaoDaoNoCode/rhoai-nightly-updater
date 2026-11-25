@@ -45,3 +45,8 @@ func IsK8sError(err error, statusCode int) bool { return kube.IsK8sError(err, st
 
 // HTTPStatusForError is kube.HTTPStatusForError.
 func HTTPStatusForError(err error) (int, string) { return kube.HTTPStatusForError(err) }
+
+// SetUserAgentVersion is kube.SetUserAgentVersion.
+func SetUserAgentVersion(v string) {
+	kube.SetUserAgentVersion(v)
+}

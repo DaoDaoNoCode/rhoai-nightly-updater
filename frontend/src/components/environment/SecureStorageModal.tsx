@@ -15,6 +15,7 @@ import {
 } from "@patternfly/react-core";
 import type { S3KeysState } from "../../types";
 import { TooltipButton } from "../TooltipButton";
+import { CopyableCode } from "./UseIt";
 import { RunProgress } from "./MigrateStorageModal";
 import { secureServerStep, type MigrateRun } from "./useMigrateStorage";
 import { Id, KeptServer, withIds } from "./s3KeysText";
@@ -24,6 +25,13 @@ export const secureServers = (keys: S3KeysState | null | undefined) => [...(keys
 
 /** Extra stages appended once checks and rollout finish—one stage per pipeline server in the list above. */
 export const secureExtraSteps = (keys: S3KeysState | null | undefined) => secureServers(keys).map(secureServerStep);
+
+/** What a rekeyed server's step carries: the command that restarts its API server (pkg/cluster/internal/storage RestartAPIServerCommand); anything else is not shown. */
+const RESTART_COMMAND = /^oc delete pod -n [a-z0-9]([-a-z0-9]*[a-z0-9])? -l app=ds-pipeline-[a-z0-9]([-a-z0-9]*[a-z0-9])?,dspa=[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
+
+/** The restart commands of the pipeline servers whose API server started before their key was written, in step order. */
+export const restartCommands = (run: MigrateRun | null) =>
+  run ? Object.entries(run.steps).filter(([id, s]) => id.startsWith("server:") && s.status === "success" && RESTART_COMMAND.test(s.detail ?? "")).sort(([a], [b]) => a.localeCompare(b)).map(([, s]) => s.detail as string) : [];
 
 /** Static explanation of Secure S3 storage shown before the user starts a run. */
 const SecurePlan: React.FC<{ keys: S3KeysState }> = ({ keys }) => {
@@ -41,7 +49,7 @@ const SecurePlan: React.FC<{ keys: S3KeysState }> = ({ keys }) => {
       </StackItem>
       <StackItem>
         <Alert variant="warning" isInline component="div" title="Running pipelines and open workbenches">
-          <Content component="p">Pipeline runs in progress may fail while the storage restarts and the keys change. Workbenches and model deployments that use the Connection <Id>rhoai-nightly-updater-s3</Id>, and Elyra pipelines in workbenches, keep the old key until they restart: restart them afterwards. This tool restarts none of them.</Content>
+          <Content component="p">Pipeline runs in progress may fail while the storage restarts and the keys change. Workbenches and model deployments that use the Connection <Id>rhoai-nightly-updater-s3</Id>, and Elyra pipelines in workbenches, keep the old key until they restart: restart them afterwards. So does each pipeline server&apos;s API server, which reads its S3 key only when it starts: while it has not restarted since, the result gives the command that restarts it. This tool restarts none of them.</Content>
         </Alert>
       </StackItem>
       <StackItem>
@@ -101,6 +109,7 @@ export const SecureStorageModal: React.FC<{
     : "The S3 storage is secured";
   // Only a lost connection leaves the run going on the server; a run that stopped itself did stop.
   const waiting = ownRun?.result?.errorCode === "detached";
+  const restart = ownRun?.result ? restartCommands(ownRun) : [];
   return (
     <Modal aria-labelledby={titleId} variant={ModalVariant.medium} isOpen={isOpen} onClose={onClose}>
       <ModalHeader title={ownRun ? "Secure S3 storage" : "Secure the S3 storage?"} labelId={titleId} />
@@ -113,6 +122,12 @@ export const SecureStorageModal: React.FC<{
                 title={ownRun.result.success ? doneTitle : waiting ? "Still running" : outOfTime ? "Stopped: out of time; run Secure S3 storage again to continue" : "Stopped"}>
                 <Content component="p">{withIds(ownRun.result.message)}</Content>
               </Alert>
+            </StackItem>
+          )}
+          {restart.length > 0 && (
+            <StackItem>
+              <Content component="p">These pipeline servers&apos; API servers started before their key was written, so they still use the old key, which no longer works, until their pods restart. Delete the pods; their Deployment makes new ones, which read the new key:</Content>
+              <CopyableCode id="secure-restart" label="the restart commands" code={restart.join("\n")} />
             </StackItem>
           )}
           {showAction && !finished && keys && <StackItem><SecurePlan keys={keys} /></StackItem>}

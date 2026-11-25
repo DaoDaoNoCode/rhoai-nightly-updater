@@ -49,6 +49,7 @@ func main() {
 	api.SetProfile(profile)
 	cluster.SetGitOpsPolicyTemplate(gitOpsPolicy)
 	api.LogStartupVersion()
+	cluster.SetUserAgentVersion(api.Version)
 
 	port := os.Getenv("PORT")
 	if port == "" {

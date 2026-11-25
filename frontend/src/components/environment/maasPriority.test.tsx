@@ -127,3 +127,38 @@ describe("The Subscription row: priority", () => {
     expect(maasPlatformStatus(published({ value: 10, fix: FIX }), { ...IDLE, maas: { action: "subscription-priority", project: null } })).toBe("ready");
   });
 });
+
+describe("Use it: what to try next", () => {
+  it("says the tool's chat models report usage when streaming, so MaaS counts streamed tokens too", async () => {
+    stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] }, "/api/resources/maas": published({ value: 0 }) });
+    render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
+    const next = await screen.findByText(/MaaS counts the tokens each response reports/);
+    expect(next.textContent).toContain("this tool's chat models run with --enable-force-include-usage, so streaming responses report them too");
+    expect(next.textContent).toContain("A model set up by an earlier version lacks it: set it up again on the Models tab (it restarts).");
+    expect(next.textContent).not.toContain("only when the model server runs with");
+  });
+});
+
+describe("The MaaS portal row", () => {
+  it("says the portal comes up once Dashboard Dev is reverted, when RHOAI reports nothing yet", async () => {
+    const note = "Dashboard Dev keeps the dashboard operator redhat-ods-applications/rhods-dashboard-operator at 0 replicas, and that operator deploys the portal: it comes up once Dashboard Dev is reverted (Dashboard Dev page).";
+    stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/maas": { ...published({ value: 0 }), portal: { managementState: "Managed", on: true, available: "", message: note } } });
+    render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
+    expect(await screen.findByText(/RHOAI reports nothing about it yet\. Dashboard Dev keeps the dashboard operator/)).toHaveTextContent("it comes up once Dashboard Dev is reverted (Dashboard Dev page).");
+  });
+});
+
+describe("A published model without usage reporting", () => {
+  it("its row warns that streamed tokens are not counted and says how to fix it", async () => {
+    const warning = "Its vLLM runs without --enable-force-include-usage (set up by an earlier version). The MaaS docs require it so that streamed chats report their tokens; where the gateway does not add them itself, MaaS counts such chats as 0 tokens and token limits do not apply to them. Set it up again on the Models tab to add it (the model restarts); Publish refuses it until then.";
+    const m = published({ value: 0 });
+    stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] },
+      "/api/resources/maas": { ...m, items: m.items!.map((i) => ({ ...i, usageWarning: warning })) } });
+    render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
+    const title = await screen.findByText(/Set up without the usage option the MaaS docs require/);
+    const table = screen.getByRole("grid", { name: "This tool's models in MaaS" });
+    expect(table).toContainElement(title);
+    expect(table).toHaveTextContent(warning);
+  });
+});

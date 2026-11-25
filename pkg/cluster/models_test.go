@@ -355,15 +355,9 @@ func TestPlanModelImage_KeepsTheReleasedImageOnRepair(t *testing.T) {
 	mc := newModelsCluster(t)
 	var existing serving.LLMISvcObject
 	existing.Metadata.Annotations = map[string]string{serving.ModelImageSourceAnnotation: "released", serving.ModelImageVersionAnnotation: "3.5.3"}
-	existing.Spec.Template = &struct {
-		Containers []struct {
-			Name  string `json:"name"`
-			Image string `json:"image"`
-		} `json:"containers"`
-	}{Containers: []struct {
-		Name  string `json:"name"`
-		Image string `json:"image"`
-	}{{Name: "main", Image: "registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:5353"}}}
+	if err := json.Unmarshal([]byte(`{"spec":{"template":{"containers":[{"name":"main","image":"registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:5353"}]}}}`), &existing); err != nil {
+		t.Fatal(err)
+	}
 	plan, err := serving.PlanModelImage(mc.c, testPresetImage, false, &existing, true)
 	if err != nil || plan.Kind != "released" || plan.Image != "registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:5353" || plan.Version != "3.5.3" {
 		t.Fatalf("got %+v, %v", plan, err)
@@ -831,21 +825,84 @@ func TestModelsSetup_GatewayWaitSpeaksPlainly(t *testing.T) {
 	}
 }
 
-// When the gateway is still not programmed at the end of the wait, the step
-// names the controller's reason: then it is the clue.
-func TestModelsSetup_GatewayNotProgrammedNamesTheReason(t *testing.T) {
+// When the gateway is still not programmed at the end of the wait, setup
+// fails (a gateway without a load balancer address cannot be reached from
+// outside the cluster), names the controller's reason, which is then the
+// clue, and the documented Route alternative this tool does not build; no
+// model is set up behind it.
+func TestModelsSetup_GatewayWithoutAddressFails(t *testing.T) {
 	mc := newModelsCluster(t)
 	notProgrammedGateway(mc, 0)
-	_, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
-	for _, e := range events {
-		if e.Step == "gateway-ready" && e.Status != "running" {
-			if !strings.Contains(e.Message, "not programmed after") || !strings.Contains(e.Message, "The gateway controller says: Failed to assign to any requested addresses") {
-				t.Errorf("gateway-ready: %q", e.Message)
-			}
-			return
+	res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+	if res.Success || res.ErrorCode != "not_ready" {
+		t.Fatalf("setup = %+v", res)
+	}
+	for _, want := range []string{
+		"Gateway openshift-ingress/openshift-ai-inference has no load balancer address after 2:00",
+		"The gateway controller says: Failed to assign to any requested addresses",
+		"a cloud load balancer, or MetalLB on bare metal",
+		"INGRESS_MODE=ocproute and odh-gitops' openshiftRoute do) is not supported by this tool yet",
+		"no model was set up: delete the gateway to remove them",
+		"reached only inside the cluster",
+	} {
+		if !strings.Contains(res.Message, want) {
+			t.Errorf("message lacks %q: %s", want, res.Message)
 		}
 	}
-	t.Fatal("no final gateway-ready step")
+	final := ""
+	for _, e := range events {
+		if e.Step == "gateway-ready" && e.Status != "running" {
+			final = e.Status
+		}
+	}
+	if final != "failed" {
+		t.Errorf("gateway-ready ended %q", final)
+	}
+	if mc.f.has(testModelPath) {
+		t.Error("the model was created behind a gateway nobody can reach")
+	}
+}
+
+// What the DNS wait finds is reported, never a failure: a record with no
+// zone (no zone in the cluster DNS configuration, or DNS managed outside
+// OpenShift), one still being published, or DNSRecords that cannot be read
+// do not prove the hostname does not resolve. The step says what to check.
+func TestModelsSetup_GatewayDNS(t *testing.T) {
+	const check = "Check that inference.apps.example.com resolves to the gateway's address (oc get gateway openshift-ai-inference -n openshift-ingress -o jsonpath='{.status.addresses[0].value}')"
+	for _, tc := range []struct {
+		name, zones string
+		unreadable  bool
+		want        []string
+	}{
+		{"no zone", `[]`, false, []string{"Ready; Warning: OpenShift has not published https://inference.apps.example.com in DNS: its DNSRecord in openshift-ingress lists no DNS zone", check}},
+		{"not published yet", `[{"conditions":[{"type":"Published","status":"False"}]}]`, false, []string{"is not published in DNS yet", "oc get dnsrecords -n openshift-ingress -o yaml"}},
+		{"unreadable", `[]`, true, []string{"Ready; Warning: whether https://inference.apps.example.com is published in DNS could not be read", check}},
+		{"published", `[{"conditions":[{"type":"Published","status":"True"}]}]`, false, []string{"Ready: https://inference.apps.example.com is published in DNS."}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mc := newModelsCluster(t)
+			mc.f.putJSON("/apis/ingress.operator.openshift.io/v1/namespaces/openshift-ingress/dnsrecords/external",
+				`{"spec":{"dnsName":"inference.apps.example.com."},"status":{"zones":`+tc.zones+`}}`)
+			if tc.unreadable {
+				mc.f.fail["GET /apis/ingress.operator.openshift.io/v1/namespaces/openshift-ingress/dnsrecords"] = 500
+			}
+			res, events := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"})
+			if !res.Success {
+				t.Fatalf("setup = %+v", res)
+			}
+			msg := ""
+			for _, e := range events {
+				if e.Step == "gateway-ready" && e.Status != "running" {
+					msg = e.Status + " " + e.Message
+				}
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(msg, want) || !strings.HasPrefix(msg, "success ") {
+					t.Errorf("gateway-ready %q lacks %q", msg, want)
+				}
+			}
+		})
+	}
 }
 
 // Before set up, the status names the address set up would give the

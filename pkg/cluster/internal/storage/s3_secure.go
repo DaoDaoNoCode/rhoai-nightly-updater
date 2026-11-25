@@ -1,9 +1,11 @@
 package storage
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -39,6 +41,15 @@ import (
 // is now invalid; the success message names them. Workloads still using the
 // old credential in running pods (workbenches, model deployments, pipeline
 // API server) retain it until they recycle; this action does not restart them.
+// The pipeline API server reads its S3 key from environment variables
+// (secretKeyRef) only when it starts, and DSPO's config hash, which rolls it,
+// does not cover credentials, so a server given its key here keeps the old,
+// revoked one until its pods restart. For each recorded server on its own
+// key whose API server pod started before the tool last wrote its
+// credentials Secret (apiServerKeptOldKey), the success message and the
+// server's step (Detail) give the command that restarts it
+// (RestartAPIServerCommand), also on a later run; deleting pods would need
+// a new RBAC row.
 func SecureS3(c *kube.Client, removeLeftover []string, onStep func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
 	var logs []string
 	step := func(id, status, msg string) {
@@ -135,7 +146,7 @@ func SecureS3(c *kube.Client, removeLeftover []string, onStep func(types.UpdateS
 			}
 		}
 		if len(own) > 0 {
-			parts = append(parts, fmt.Sprintf("On a key of their own: %s.", strings.Join(own, ", ")))
+			parts = append(parts, fmt.Sprintf("Given a key of their own: %s.", strings.Join(own, ", ")))
 		}
 		for _, n := range names {
 			if why := failed[n]; why != "" {
@@ -181,8 +192,28 @@ func SecureS3(c *kube.Client, removeLeftover []string, onStep func(types.UpdateS
 	if err != nil {
 		return stop(SecureStepRollout, fmt.Sprintf("Cannot read the new admin key: %v.%s No pipeline server got its own key yet; run Secure S3 storage again.", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "admin key unreadable"), nil
 	}
-	var done, skipped []string
+	var done, skipped, restart, stale []string
 	failed := map[string]string{}
+	// restartStep ends a server's step with msg, and, when its API server
+	// pod started before its key was written, says so and carries the
+	// command that restarts it (Detail).
+	restartStep := func(id, msg string, d DSPA) {
+		old, err := apiServerKeptOldKey(c, d)
+		detail := ""
+		switch {
+		case err != nil:
+			msg += fmt.Sprintf("; whether its API server restarted since its key was written could not be checked (%v)", err)
+		case old:
+			detail = RestartAPIServerCommand(d)
+			restart = append(restart, detail)
+			stale = append(stale, d.Meta.Namespace+"/"+d.Meta.Name)
+			msg += "; its API server started before the key was written, so it keeps the old key, which no longer works, until its pods restart"
+		}
+		logs = append(logs, msg)
+		if onStep != nil {
+			onStep(types.UpdateStepEvent{Step: id, Status: "success", Message: msg, Detail: detail})
+		}
+	}
 	for _, d := range recorded {
 		name := d.Meta.Namespace + "/" + d.Meta.Name
 		id := SecureServerStep(name)
@@ -217,10 +248,10 @@ func SecureS3(c *kube.Client, removeLeftover []string, onStep func(types.UpdateS
 			step(id, "failed", failed[name])
 		case changed:
 			done = append(done, name)
-			step(id, "success", fmt.Sprintf("OK: Pipeline server %s uses SeaweedFS user %s", name, ScopedUserName(d.Meta.Namespace)))
+			restartStep(id, fmt.Sprintf("OK: Pipeline server %s has the key of SeaweedFS user %s in its Secrets", name, ScopedUserName(d.Meta.Namespace)), d)
 		default:
 			skipped = append(skipped, name)
-			step(id, "success", fmt.Sprintf("OK: Pipeline server %s already uses its own key", name))
+			restartStep(id, fmt.Sprintf("OK: Pipeline server %s already uses its own key", name), d)
 		}
 	}
 
@@ -240,6 +271,11 @@ func SecureS3(c *kube.Client, removeLeftover []string, onStep func(types.UpdateS
 	} else if len(left) > 0 {
 		msg += fmt.Sprintf(" Removed the keys of pipeline servers that no longer exist: %s.", strings.Join(left, ", "))
 	}
+	if len(restart) > 0 {
+		msg += fmt.Sprintf(" %s the old key, which no longer works, until %s pods restart: the pipeline API server reads its S3 key only when it starts. Delete the pods (the Deployment makes new ones): %s.",
+			kube.Verb(len(restart), "The API server of "+strings.Join(stale, ", ")+" keeps using", "The API servers of "+strings.Join(stale, ", ")+" keep using"),
+			kube.Verb(len(restart), "its", "their"), strings.Join(restart, "; "))
+	}
 	if len(done) > 0 {
 		msg += fmt.Sprintf(" Restart the workbenches and model deployments that use Connection %s, and Elyra pipelines in workbenches, so they pick up the new key.", ConnectionSecretName)
 	}
@@ -251,6 +287,67 @@ func SecureS3(c *kube.Client, removeLeftover []string, onStep func(types.UpdateS
 		return &types.OperationResponse{Success: true, Message: msg, Logs: logs, ErrorCode: "partial"}, nil
 	}
 	return &types.OperationResponse{Success: true, Message: msg, Logs: logs}, nil
+}
+
+// apiServerKeptOldKey reports whether a pod of d's pipeline API server
+// (labels as RestartAPIServerCommand) started no later than the tool's last
+// write of d's credentials Secret (the latest managedFields time of the
+// tool's managers): such a pod read the previous key at start. No pod, or
+// no such write, is false.
+func apiServerKeptOldKey(c *kube.Client, d DSPA) (bool, error) {
+	path, ok := toolDSPASecretPath(d.Meta.Namespace, d.SecretName)
+	if !ok {
+		return false, nil
+	}
+	meta, found, err := kube.ReadObjectMeta(c, path)
+	if err != nil || !found {
+		return false, err
+	}
+	var written time.Time
+	for _, e := range meta.ManagedFields {
+		t, perr := time.Parse(time.RFC3339, e.Time)
+		if perr == nil && e.Subresource == "" && slices.Contains(envkit.ToolManagers, e.Manager) && t.After(written) {
+			written = t
+		}
+	}
+	if written.IsZero() {
+		return false, nil
+	}
+	selector := fmt.Sprintf("app=ds-pipeline-%s,dspa=%s", d.Meta.Name, d.Meta.Name)
+	body, _, err := c.Get(rhoai.NamespacedPath("v1", "pods", d.Meta.Namespace, "") + "?labelSelector=" + url.QueryEscape(selector))
+	if err != nil {
+		return false, err
+	}
+	var pods struct {
+		Items []struct {
+			Metadata kube.ObjectMeta `json:"metadata"`
+			Status   struct {
+				StartTime string `json:"startTime"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &pods); err != nil {
+		return false, err
+	}
+	for _, p := range pods.Items {
+		start, perr := time.Parse(time.RFC3339, p.Status.StartTime)
+		if perr == nil && !p.Metadata.Terminating() && !start.After(written) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// RestartAPIServerCommand deletes the pods of d's pipeline API server, which
+// its Deployment then makes again, so they read the S3 key from its Secret
+// anew. DSPO names the Deployment ds-pipeline-<DSPA name> and labels its pods
+// app=ds-pipeline-<DSPA name>, dspa=<DSPA name> (red-hat-data-services
+// data-science-pipelines-operator rhoai-3.6
+// config/internal/apiserver/default/deployment.yaml.tmpl L20-23, with
+// controllers/apiserver.go L42 apiServerDefaultResourceNamePrefix). Both
+// names are Kubernetes names, so the command needs no quoting.
+func RestartAPIServerCommand(d DSPA) string {
+	return fmt.Sprintf("oc delete pod -n %s -l app=ds-pipeline-%s,dspa=%s", d.Meta.Namespace, d.Meta.Name, d.Meta.Name)
 }
 
 // usesOwnKey reports whether a recorded pipeline server uses a key of its

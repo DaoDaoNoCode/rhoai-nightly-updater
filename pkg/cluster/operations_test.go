@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -220,7 +221,68 @@ type requestRecord struct {
 // routes responses by "METHOD path" key. Falls back to GET-only path matching
 // for backward compatibility, then to 200 with empty JSON object for any
 // unmatched request (to keep side-effect calls like record.Activity happy).
+// appliedCatalog plays OLM for the nightly CatalogSource in the mock
+// servers below: once the operation applied it, the catalog's reads carry
+// that image (their state stays the mock's) and a Ready registry pod runs
+// it, as Update waits for (waitForCatalogServing). serve records the apply
+// and answers the registry pod list, reporting whether it answered;
+// rewrite puts the applied image into a catalog read.
+type appliedCatalog struct {
+	mu    sync.Mutex
+	image string
+}
+
+func (a *appliedCatalog) applied() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.image
+}
+
+func (a *appliedCatalog) serve(w http.ResponseWriter, r *http.Request) bool {
+	if strings.HasSuffix(r.URL.Path, "/catalogsources/"+rhoai.CatalogName) && (r.Method == http.MethodPatch || r.Method == http.MethodPut || r.Method == http.MethodPost) {
+		var obj struct {
+			Spec struct {
+				Image string `json:"image"`
+			} `json:"spec"`
+		}
+		body, err := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(strings.NewReader(string(body)))
+		if err == nil && json.Unmarshal(body, &obj) == nil && obj.Spec.Image != "" {
+			a.mu.Lock()
+			a.image = obj.Spec.Image
+			a.mu.Unlock()
+		}
+		return false
+	}
+	image := a.applied()
+	if image != "" && r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/namespaces/"+rhoai.CatalogNS+"/pods") && r.URL.Query().Get("labelSelector") == "olm.catalogSource="+rhoai.CatalogName {
+		fmt.Fprintf(w, `{"items":[{"metadata":{"name":"catalog-pod"},"spec":{"containers":[{"image":%q}]},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}`, image)
+		return true
+	}
+	return false
+}
+
+func (a *appliedCatalog) rewrite(r *http.Request, body string) string {
+	image := a.applied()
+	if image == "" || r.Method != http.MethodGet || !strings.HasSuffix(r.URL.Path, "/catalogsources/"+rhoai.CatalogName) {
+		return body
+	}
+	var obj map[string]any
+	if json.Unmarshal([]byte(body), &obj) != nil {
+		return body
+	}
+	spec, _ := obj["spec"].(map[string]any)
+	if spec == nil {
+		spec = map[string]any{}
+		obj["spec"] = spec
+	}
+	spec["image"] = image
+	out, _ := json.Marshal(obj)
+	return string(out)
+}
+
 func newRecordingMockClient(responses map[string]mockResponse) (*Client, *[]requestRecord, func()) {
+	catalogState := &appliedCatalog{}
 	var mu sync.Mutex
 	var records []requestRecord
 
@@ -238,6 +300,9 @@ func newRecordingMockClient(responses map[string]mockResponse) (*Client, *[]requ
 			} else {
 				fmt.Fprint(w, `{}`)
 			}
+			return
+		}
+		if catalogState.serve(w, r) {
 			return
 		}
 		key := r.Method + " " + r.URL.Path
@@ -261,7 +326,7 @@ func newRecordingMockClient(responses map[string]mockResponse) (*Client, *[]requ
 		if strings.HasSuffix(r.URL.Path, "/packagemanifests") && strings.Contains(r.URL.Query().Get("labelSelector"), "-verify-") {
 			resp.body = strings.ReplaceAll(resp.body, `"catalogSource":"`+rhoai.CatalogName+`"`, `"catalogSource":"`+strings.TrimPrefix(r.URL.Query().Get("labelSelector"), "catalog=")+`"`)
 		}
-		w.Write([]byte(resp.body))
+		w.Write([]byte(catalogState.rewrite(r, resp.body)))
 	}))
 
 	client := newTestClient(testClientOptions{
@@ -1238,6 +1303,7 @@ func TestRefreshOperator_RetriesSubscriptionCreation(t *testing.T) {
 	var records []requestRecord
 	patchAttempts := 0
 
+	catalogState := &appliedCatalog{}
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if dashboardOperatorAbsent(w, r) {
 			return
@@ -1265,6 +1331,9 @@ func TestRefreshOperator_RetriesSubscriptionCreation(t *testing.T) {
 		}
 
 		// Route other requests
+		if catalogState.serve(w, r) {
+			return
+		}
 		key := r.Method + " " + r.URL.Path
 		responses := map[string]mockResponse{
 			"GET " + csvListPath:       {body: string(csvJSON)},
@@ -1287,7 +1356,7 @@ func TestRefreshOperator_RetriesSubscriptionCreation(t *testing.T) {
 			resp.statusCode = 200
 		}
 		w.WriteHeader(resp.statusCode)
-		w.Write([]byte(resp.body))
+		w.Write([]byte(catalogState.rewrite(r, resp.body)))
 	}))
 	defer server.Close()
 
@@ -1355,6 +1424,7 @@ func TestRefreshOperator_ContextCancellation(t *testing.T) {
 	defer cancel()
 	var mu sync.Mutex
 	var recs []requestRecord
+	catalogState := &appliedCatalog{}
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if dashboardOperatorAbsent(w, r) {
 			return
@@ -1364,6 +1434,9 @@ func TestRefreshOperator_ContextCancellation(t *testing.T) {
 		mu.Unlock()
 		if r.Method == "DELETE" && r.URL.Path == paths["csvDelete"] {
 			cancel()
+		}
+		if catalogState.serve(w, r) {
+			return
 		}
 		key := r.Method + " " + r.URL.Path
 		resp, ok := responses[key]
@@ -1379,7 +1452,7 @@ func TestRefreshOperator_ContextCancellation(t *testing.T) {
 			resp.statusCode = 200
 		}
 		w.WriteHeader(resp.statusCode)
-		w.Write([]byte(resp.body))
+		w.Write([]byte(catalogState.rewrite(r, resp.body)))
 	}))
 	defer server.Close()
 
@@ -1766,6 +1839,7 @@ func TestUpdateStream_CatalogSourceTimeout(t *testing.T) {
 		ogPath:            {body: string(ogJSON)},
 	}
 
+	catalogState := &appliedCatalog{}
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if dashboardOperatorAbsent(w, r) {
 			return
@@ -1781,6 +1855,9 @@ func TestUpdateStream_CatalogSourceTimeout(t *testing.T) {
 		if strings.HasSuffix(r.URL.Path, "/packagemanifests") {
 			source := strings.TrimPrefix(r.URL.Query().Get("labelSelector"), "catalog=")
 			fmt.Fprint(w, strings.ReplaceAll(wrapPkgManifestList(`{"status":{"channels":[{"name":"fast","currentCSV":"rhods-operator.v3.5.0"}]}}`), `"catalogSource":"`+rhoai.CatalogName+`"`, `"catalogSource":"`+source+`"`))
+			return
+		}
+		if catalogState.serve(w, r) {
 			return
 		}
 		key := r.Method + " " + r.URL.Path
@@ -1799,7 +1876,7 @@ func TestUpdateStream_CatalogSourceTimeout(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.statusCode)
-		w.Write([]byte(resp.body))
+		w.Write([]byte(catalogState.rewrite(r, resp.body)))
 	}))
 	defer server.Close()
 

@@ -256,6 +256,7 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
                             {/* Why Publish is off, without hovering it. */}
                             {notOffered(i) && <StackItem><Content component="small">Chat models only</Content></StackItem>}
                           </>}
+                      {i.usageWarning && <StackItem><Alert variant="warning" isInline isPlain component="div" title="Set up without the usage option the MaaS docs require">{i.usageWarning}</Alert></StackItem>}
                     </Stack>
                   </Td>
                   <Td dataLabel="Actions" isActionCell>
@@ -386,7 +387,7 @@ const UseMaaS: React.FC<{ maas: MaaSStatus; readOnly: boolean; reason: string | 
         )}
       </DescriptionList>
       <WhatNext id="maas-next" items={[
-        <>Run the commands: the chat answers, and a request without a key gets 401. More than the model&apos;s limit gets 429 (an unlimited model never does; its usage is still metered) for calls whose response reports its token usage, as the non-streaming chat above does; streaming responses report it only when the model server runs with <code>--enable-force-include-usage</code> (the MaaS docs&apos; model setup).</>,
+        <>Run the commands: the chat answers, and a request without a key gets 401. More than the model&apos;s limit gets 429 (an unlimited model never does; its usage is still metered). MaaS counts the tokens each response reports; this tool&apos;s chat models run with <code>--enable-force-include-usage</code>, so streaming responses report them too (the MaaS docs&apos; model setup). A model set up by an earlier version lacks it: set it up again on the Models tab (it restarts).</>,
         <>Use the model in the dashboard&apos;s playground as a Models as a Service model.</>,
       ]} />
     </TabSection>
@@ -523,7 +524,7 @@ const PortalRow: React.FC<{ p: MaaSPortal; reason: string | null; readOnly: bool
       )}>
       <Content component="p">
         {p.on
-          ? <>The RHOAI dashboard&apos;s portal for MaaS users: their API keys, the models they may use, and their usage. RHOAI reports {p.available === "True" ? "it available" : p.available === "False" ? `it not available yet${p.message ? `: ${p.message}` : ""}` : "nothing about it yet"}.{p.setByTool ? ` Turned on by this tool (it was ${p.previous === "unset" ? "not set" : p.previous}); Turn off and Clean up MaaS put that back.` : ""}</>
+          ? <>The RHOAI dashboard&apos;s portal for MaaS users: their API keys, the models they may use, and their usage. RHOAI reports {p.available === "True" ? "it available" : p.available === "False" ? `it not available yet${p.message ? `: ${p.message}` : ""}` : `nothing about it yet${p.message ? `. ${p.message.replace(/\.$/, "")}` : ""}`}.{p.setByTool ? ` Turned on by this tool (it was ${p.previous === "unset" ? "not set" : p.previous}); Turn off and Clean up MaaS put that back.` : ""}</>
           : <>Off ({p.managementState || "not set"} in the DataScienceCluster). Turn on sets <code>spec.components.dashboard.maasPortal</code> to Managed; RHOAI&apos;s dashboard operator then deploys the portal at the dashboard&apos;s address under /maas-portal/.</>}
       </Content>
       {p.on && p.available === "True" && p.message && <Content component="p">{p.message}</Content>}

@@ -100,6 +100,20 @@ const (
 // (odh-dashboard rhoai-3.6 packages/llmd-serving/src/deployments/model.ts
 // extractRuntimeArgs L147-159), and would list a spaced JSON as two.
 //
+// Every chat model ends its arguments with --enable-force-include-usage,
+// so vLLM reports token usage in every response, streamed ones too. MaaS
+// counts tokens from that usage: without the flag a streamed chat counts 0
+// and token limits never trigger (models-as-a-service rhoai-3.6
+// docs/content/configuration-and-management/quota-and-access-configuration.md
+// "Model server must include usage data", which says to append it to
+// VLLM_ADDITIONAL_ARGS; install/model-setup.md). It is set at setup, not
+// at publish, because changing the env restarts the model. vLLM has it in
+// the CPU preset's 0.18 (kserve rhoai-3.6 config/overlays/odh/params.env
+// kserve-llm-d-cpu-upstream-version) and in the released 0.24
+// (vllm entrypoints/openai/cli_args.py FrontendArgs.enable_force_include_usage
+// at v0.18.0 and v0.24.0). The embedding model has none: an embeddings
+// response is never streamed and always holds its usage (the same doc).
+//
 // Memory (requests and limits below, in one place), measured live on
 // RHOAI 3.6 with vLLM CPU 0.24 on 2026-11-18: the main container's memory
 // (oc adm top pod --containers), idle after start with the KV cache
@@ -120,14 +134,14 @@ var ModelCatalog = []CatalogModel{
 		Name: "smollm2-135m-instruct", DisplayName: "SmolLM2 135M Instruct (CPU)", URI: "hf://HuggingFaceTB/SmolLM2-135M-Instruct:12fd25f77366fa6b3b4b768ec3050bf629380bac",
 		CPU: "2", MemoryRequest: "4Gi", Memory: "5Gi", Type: ModelTypeChat, UseCase: "Chat (smoke test)", DownloadSize: "270 MB",
 		Description: "A very small chat model, for checking that model serving works. From Hugging Face (HuggingFaceTB/SmolLM2-135M-Instruct), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
-		Args:        "--max-model-len 4096",
+		Args:        "--max-model-len 4096 --enable-force-include-usage",
 		Threads:     "2", KVCacheGiB: "1", EphemeralStorage: "400M",
 	},
 	{
 		Name: "qwen25-05b-instruct", DisplayName: "Qwen2.5 0.5B Instruct (CPU)", URI: "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775",
 		CPU: "4", MemoryRequest: "6Gi", Memory: "8Gi", Type: ModelTypeChat, UseCase: "Chat", DownloadSize: "1.0 GB", Default: true,
 		Description: "A small chat model. From Hugging Face (Qwen/Qwen2.5-0.5B-Instruct), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
-		Args:        "--max-model-len 4096",
+		Args:        "--max-model-len 4096 --enable-force-include-usage",
 		Threads:     "4", KVCacheGiB: "2", EphemeralStorage: "1.5G",
 	},
 	{
@@ -136,7 +150,7 @@ var ModelCatalog = []CatalogModel{
 		Name: "qwen3-1-7b", DisplayName: "Qwen3 1.7B (CPU, tool calling)", URI: "hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e",
 		CPU: "4", MemoryRequest: "12Gi", Memory: "14Gi", Type: ModelTypeChat, ToolCalling: true, UseCase: "Chat, Tool calling, Reasoning", DownloadSize: "4.1 GB",
 		Description: "A chat model that can call tools; its reasoning (thinking) is off unless a request turns it on. From Hugging Face (Qwen/Qwen3-1.7B), served by vLLM on CPU. Set up by rhoai-nightly-updater.",
-		Args:        `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}'`,
+		Args:        `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}' --enable-force-include-usage`,
 		Threads:     "4", KVCacheGiB: "2", EphemeralStorage: "6.2G",
 	},
 	{
@@ -216,6 +230,10 @@ type LLMISvcObject struct {
 			Containers []struct {
 				Name  string `json:"name"`
 				Image string `json:"image"`
+				Env   []struct {
+					Name  string `json:"name"`
+					Value string `json:"value"`
+				} `json:"env"`
 			} `json:"containers"`
 		} `json:"template"`
 	} `json:"spec"`
@@ -247,6 +265,29 @@ func (m LLMISvcObject) routesThroughInferenceGateway(def KServeGateway) bool {
 		}
 	}
 	return false
+}
+
+// usageFlag makes vLLM report token usage in streamed responses, which
+// MaaS counts (models.go, ModelCatalog).
+const usageFlag = "--enable-force-include-usage"
+
+// lacksUsageFlag: the main container's VLLM_ADDITIONAL_ARGS does not carry
+// usageFlag (a chat model set up before every chat model had it).
+func (m LLMISvcObject) lacksUsageFlag() bool {
+	if m.Spec.Template == nil {
+		return true
+	}
+	for _, c := range m.Spec.Template.Containers {
+		if c.Name != "main" {
+			continue
+		}
+		for _, e := range c.Env {
+			if e.Name == "VLLM_ADDITIONAL_ARGS" {
+				return !slices.Contains(strings.Fields(e.Value), usageFlag)
+			}
+		}
+	}
+	return true
 }
 
 func (m LLMISvcObject) mainImage() string {
@@ -1188,20 +1229,20 @@ func (m *modelsRun) setupGateway(req types.ModelsRequest, s *modelsSetup) (*type
 		case problem != "":
 			return m.fail("gateway-ready", problem+" Its objects were created; delete the gateway to remove them.", "not_ready", "gateway not accepted")
 		case !ready:
-			why := ""
-			if pending != "" {
-				why = " The gateway controller says: " + kube.TruncateText(pending, 300) + "."
-			}
-			m.step("gateway-ready", "success", fmt.Sprintf("Created, but not programmed after %s. It may still come up; the Models tab shows its state.%s", ClockText(inferenceGatewayReadyTimeout), why))
+			return m.fail("gateway-ready", gatewayNoAddressText(inferenceGatewayName, inferenceGatewayReadyTimeout, pending)+inferenceGatewayFailedAfter, "not_ready", "gateway has no address")
 		case dns == "published":
-			m.step("gateway-ready", "success", fmt.Sprintf("Ready: https://%s is published in DNS.", gw.host))
+			m.step("gateway-ready", "success", "Ready: "+gatewayDNSNote(inferenceGatewayName, gw.host, dns))
 		default:
-			m.step("gateway-ready", "success", fmt.Sprintf("Ready; https://%s is not published in DNS yet (a new load balancer's name can take a few minutes to resolve).", gw.host))
+			m.step("gateway-ready", "success", "Ready; "+gatewayDNSNote(inferenceGatewayName, gw.host, dns))
 		}
 		s.summary = append(s.summary, "The inference gateway is set up.")
 	}
 	return nil, nil
 }
+
+// inferenceGatewayFailedAfter ends setup's message when the inference
+// gateway it created cannot be reached from outside the cluster.
+const inferenceGatewayFailedAfter = " Its objects were created and no model was set up: delete the gateway to remove them. A model can still be set up reached only inside the cluster, which needs no gateway."
 
 // setupModelApply adds the model's project to this tool's gateway when it
 // needs it, then applies the model and its token objects.

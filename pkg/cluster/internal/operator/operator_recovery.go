@@ -26,6 +26,11 @@ type Recovery struct {
 	// catalogChanged: the nightly CatalogSource was replaced or deleted
 	// (NoteCatalogChanged, which also sets catalogRestore).
 	catalogChanged bool
+	// catalogWritten is the CatalogSource this operation applied (its UID
+	// and generation; NoteCatalogWritten). The restore changes the catalog
+	// only while it is still that object at that generation: one someone
+	// else changed or replaced meanwhile is left as it is and reported.
+	catalogWritten kube.ObjectMeta
 	// catalogRestore puts the previous nightly catalog back. It is a field,
 	// set only by the operations that change the catalog, so the gitops
 	// profile's Update, which never does, does not reach a CatalogSource
@@ -78,15 +83,46 @@ func (r *Recovery) NoteCatalogChanged() {
 	r.catalogRestore = (*Recovery).restoreNightlyCatalog
 }
 
+// NoteCatalogWritten records the CatalogSource the operation applied, from
+// the API server's answer (body), so the restore changes only that object.
+func (r *Recovery) NoteCatalogWritten(body []byte) {
+	if meta, err := kube.ParseObjectMeta(body); err == nil {
+		r.catalogWritten = meta
+	}
+}
+
 // restoreNightlyCatalog re-applies the catalog captured before the
-// operation, or deletes the one it created. It returns the failures.
+// operation, or deletes the one it created. When the operation applied a
+// catalog, it does so only while the catalog is still that object at that
+// generation (a spec change by anyone raises it; OLM's status writes do
+// not): the apply carries the resourceVersion just read and the delete its
+// UID, so a change made in between fails them instead of being undone. It
+// returns the failures.
 func (r *Recovery) restoreNightlyCatalog(c *kube.Client) []string {
 	catalogPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
+	metadata := map[string]any{"name": rhoai.CatalogName, "namespace": rhoai.CatalogNS}
+	uid := ""
+	if w := r.catalogWritten; w.UID != "" {
+		now, found, err := kube.ReadObjectMeta(c, catalogPath)
+		switch {
+		case err != nil:
+			return []string{"read the CatalogSource to restore it (it was left as it is): " + err.Error()}
+		case !found || now.UID != w.UID || now.Generation != w.Generation:
+			return []string{fmt.Sprintf("CatalogSource %s/%s was changed, replaced or deleted by someone else after this operation wrote it, so it was left as it is; check it (oc get catalogsource %s -n %s -o yaml)", rhoai.CatalogNS, rhoai.CatalogName, rhoai.CatalogName, rhoai.CatalogNS)}
+		}
+		metadata["resourceVersion"] = now.ResourceVersion
+		uid = now.UID
+	}
 	if r.catalog != nil {
-		obj := map[string]any{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource",
-			"metadata": map[string]any{"name": rhoai.CatalogName, "namespace": rhoai.CatalogNS}, "spec": r.catalog["spec"]}
+		obj := map[string]any{"apiVersion": "operators.coreos.com/v1alpha1", "kind": "CatalogSource", "metadata": metadata, "spec": r.catalog["spec"]}
 		if _, _, err := c.Apply(catalogPath, obj); err != nil {
 			return []string{"CatalogSource: " + err.Error()}
+		}
+		return nil
+	}
+	if uid != "" {
+		if _, err := kube.DeleteWithUID(c, catalogPath, uid); err != nil && !kube.IsK8sNotFound(err) {
+			return []string{"remove the new CatalogSource: " + err.Error()}
 		}
 		return nil
 	}

@@ -28,6 +28,14 @@ and the objects of a second copied file, `deploy/rbac-gitops.yaml`
 `make chart` writes both copies; `make check-chart`,
 `scripts/test-chart.sh`, CI and the release guard fail when it differs.
 
+The chart is not for clusters that sign users in directly through an
+external OIDC provider (`authentications.config.openshift.io/cluster`
+`spec.type: OIDC`): both profiles sign in through OpenShift's built-in OAuth
+server, which such clusters turn off. `install.sh` refuses them; the chart
+cannot check (Argo CD renders it without cluster lookups), so there the
+OAuthClient of the full profile does not sync and sign-in fails
+([SECURITY.md](../SECURITY.md#residual-risk)).
+
 The render fails, instead of applying something half-done, when:
 - a key of `parameters` is not a parameter of the Template, or any other
   values key is misspelled (`values.schema.json` allows only known keys);

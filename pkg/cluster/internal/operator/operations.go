@@ -3,6 +3,7 @@ package operator
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -60,7 +61,6 @@ var (
 	propagationWait         = 10 * time.Second
 	refreshCleanupWait      = 5 * time.Second
 	SubRetryBackoffs        = []time.Duration{2 * time.Second, 4 * time.Second}
-	channelRetryDelay       = 8 * time.Second
 )
 
 // WaitForNightlyCatalogReady polls the nightly CatalogSource until it reports
@@ -321,16 +321,11 @@ func UpdateStreamWithOptions(c *kube.Client, image string, opts OperationOptions
 		return r, err
 	}
 
-	// --- Step 4: wait_catalog_ready (wait before detecting the channel) ---
-	if r, err := updateWaitCatalog(c, image, &logs, emit, fail); r != nil || err != nil {
+	// --- Steps 4 and 5: wait_catalog_ready, detect_channel (the verified one) ---
+	if r, err := updateWaitServing(c, image, target, &logs, emit, fail); r != nil || err != nil {
 		return r, err
 	}
-
-	// --- Step 5: detect_channel ---
-	var nightlyChannel string
-	if r, err := updateDetectChannel(c, image, &nightlyChannel, &logs, emit, fail); r != nil || err != nil {
-		return r, err
-	}
+	nightlyChannel := target.Channel
 
 	// --- Step 6: delete_csv ---
 	if r, err := updateDeleteCSV(c, currentCSV, recovery, &logs, emit, fail); r != nil || err != nil {
@@ -340,6 +335,16 @@ func UpdateStreamWithOptions(c *kube.Client, image string, opts OperationOptions
 	// --- Step 7: apply_subscription ---
 	emit(types.UpdateStepEvent{Step: "apply_subscription", Status: "running", Message: "Creating Subscription"})
 	newSub := BuildSubscription(recovery.SubscriptionBase(), rhoai.CatalogName, nightlyChannel)
+	// As on the GitOps path (UpdateUnderGitOps): the new Subscription pins
+	// startingCSV to the head the verification catalog listed. With the old
+	// CSV deleted, OLM's resolver then installs exactly that CSV from the
+	// catalog and channel, or marks the Subscription unresolvable
+	// (operator-lifecycle-manager pkg/controller/registry/resolver/resolver.go
+	// getSubscriptionVariables), so a catalog that changed after it was
+	// verified cannot put another build in its place. Once installed the pin
+	// no longer matters (the resolver follows the installed CSV).
+	newSub["spec"].(map[string]any)["startingCSV"] = target.HeadCSV
+	logs = append(logs, fmt.Sprintf("The new Subscription pins startingCSV %s: OLM installs exactly that CSV, or reports that the catalog does not have it", target.HeadCSV))
 	recovery.SubscriptionChanged = true
 	if r, err := applyUpdateSubscription(c, newSub, nightlyChannel, recovery, &logs, emit, fail); r != nil || err != nil {
 		return r, err
@@ -528,65 +533,43 @@ func updateApplyCatalog(c *kube.Client, image string, recovery *Recovery, logs *
 	if _, deleteErr := c.DeleteIfExists(csPath); deleteErr != nil {
 		return fail("Cannot replace nightly catalog: "+deleteErr.Error(), kube.ErrorCodeFromK8sErr(deleteErr))
 	}
-	if _, _, err := c.Apply(csPath, catalog.SourceSpec(image)); err != nil {
+	body, _, err := c.Apply(csPath, catalog.SourceSpec(image))
+	if err != nil {
 		return fail(fmt.Sprintf("Failed to apply CatalogSource: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
+	recovery.NoteCatalogWritten(body)
 	*logs = append(*logs, "OK: CatalogSource applied")
 	emit(types.UpdateStepEvent{Step: "apply_catalog_source", Status: "success", Message: "CatalogSource applied", Detail: image})
 	return nil, nil
 }
 
-// updateWaitCatalog is Update's wait_catalog_ready step, then the wait for
-// the catalog's channels. It returns a nil response to go on.
-func updateWaitCatalog(c *kube.Client, image string, logs *[]string, emit func(types.UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error)) (*types.OperationResponse, error) {
-	emit(types.UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: "Waiting for CatalogSource to become READY"})
-	*logs = append(*logs, "Waiting for CatalogSource to become READY")
-	catalogReady, catalogErr := WaitForNightlyCatalogReady(c, image, emit, logs)
-	if msg, code, stopErr := catalogWaitFailure(catalogReady, catalogErr); msg != "" {
-		r, _ := fail(msg, code)
-		return r, stopErr
+// updateWaitServing is Update's wait_catalog_ready and detect_channel
+// steps: it waits, as the GitOps path does (waitForCatalogServing), until
+// the recreated catalog's registry pod runs image, the catalog is READY and
+// its PackageManifest lists target's head with the verified fingerprint on
+// target's channel, the channel the verification catalog found. READY
+// alone comes before OLM refreshes the PackageManifest, and the channel
+// is already verified, so it is not detected again. A catalog that does not
+// serve the verified head in time stops Update before the old CSV is
+// deleted (fails closed). It returns a nil response to go on.
+func updateWaitServing(c *kube.Client, image string, target catalog.Target, logs *[]string, emit func(types.UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error)) (*types.OperationResponse, error) {
+	emit(types.UpdateStepEvent{Step: "wait_catalog_ready", Status: "running", Message: "Waiting for the catalog to serve the build"})
+	*logs = append(*logs, "Waiting for the catalog to serve the build")
+	serving, err := waitForCatalogServing(c, image, target, "someone else (another Update, or Argo CD)", emit, logs, rhoai.NodePullAdvice)
+	var changed *CatalogImageChangedError
+	switch {
+	case errors.As(err, &changed):
+		return fail("Update stopped: "+changed.Error()+". The operator was not changed.", "conflict")
+	case err != nil && catalog.IsImagePullError(err):
+		return fail(err.Error(), "catalog_image_pull")
+	case err != nil:
+		return &types.OperationResponse{Success: false, Message: "Operation stopped while waiting for the CatalogSource", Logs: *logs}, err
+	case !serving:
+		return fail(fmt.Sprintf("The catalog did not serve %s on channel %s within %s. The operator was not changed.", target.HeadCSV, target.Channel, catalog.ReadyTimeout+catalog.PackageManifestPropagationWait), "timeout")
 	}
-	*logs = append(*logs, "OK: CatalogSource is READY")
-	emit(types.UpdateStepEvent{Step: "wait_catalog_ready", Status: "success", Message: "CatalogSource is READY"})
-
-	// Poll PackageManifest until the nightly catalog's channels appear.
-	// The CatalogSource reports READY before OLM refreshes the PackageManifest.
-	emit(types.UpdateStepEvent{Step: "detect_channel", Status: "running", Message: "Waiting for catalog channels to refresh"})
-	if err := waitForNightlyPackageManifest(c, image, logs); err != nil {
-		return &types.OperationResponse{Success: false, Message: "Operation stopped while waiting for the catalog channels", Logs: *logs}, err
-	}
-	return nil, nil
-}
-
-// updateDetectChannel is Update's detect_channel step: it sets channel to
-// the nightly catalog's channel for image. It returns a nil response to go
-// on.
-func updateDetectChannel(c *kube.Client, image string, channel *string, logs *[]string, emit func(types.UpdateStepEvent), fail func(msg, code string) (*types.OperationResponse, error)) (*types.OperationResponse, error) {
-	emit(types.UpdateStepEvent{Step: "detect_channel", Status: "running", Message: "Detecting target channel"})
-	*logs = append(*logs, "Detecting target channel")
-	var nightlyChannel string
-	var detectErr error
-	for attempt := 1; attempt <= 3; attempt++ {
-		nightlyChannel, detectErr = DetectNightlyChannel(c, image)
-		if detectErr == nil {
-			break
-		}
-		slog.Warn("detectNightlyChannel failed", "attempt", attempt, "error", detectErr)
-		if attempt < 3 {
-			if err := kube.Clock().Sleep(c.Context(), channelRetryDelay); err != nil {
-				return &types.OperationResponse{Success: false, Message: "Operation stopped while detecting the channel", Logs: *logs}, err
-			}
-		}
-	}
-	if detectErr != nil {
-		return fail(fmt.Sprintf("Failed to detect nightly channel after 3 attempts: %v. The operator was not changed.", detectErr), "channel_detection")
-	}
-	if nightlyChannel == "" {
-		return fail("No matching channel found in the selected nightly catalog. The operator was not changed.", "channel_detection")
-	}
-	*logs = append(*logs, fmt.Sprintf("Detected nightly channel: %s", nightlyChannel))
-	emit(types.UpdateStepEvent{Step: "detect_channel", Status: "success", Message: fmt.Sprintf("Detected channel: %s", nightlyChannel), Detail: nightlyChannel})
-	*channel = nightlyChannel
+	*logs = append(*logs, fmt.Sprintf("OK: The catalog serves %s on channel %s", target.HeadCSV, target.Channel))
+	emit(types.UpdateStepEvent{Step: "wait_catalog_ready", Status: "success", Message: "CatalogSource serves the build"})
+	emit(types.UpdateStepEvent{Step: "detect_channel", Status: "success", Message: fmt.Sprintf("Channel: %s", target.Channel), Detail: target.Channel})
 	return nil, nil
 }
 
@@ -1369,9 +1352,11 @@ func reinstallNightlySteps(c *kube.Client, image, channel, approveCSV string, re
 	emit(types.UpdateStepEvent{Step: "create_catalog_source", Status: "running", Message: "Creating CatalogSource with nightly image"})
 	csApplyPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 	recovery.NoteCatalogChanged()
-	if _, _, err := c.Apply(csApplyPath, catalog.SourceSpec(image)); err != nil {
+	csBody, _, err := c.Apply(csApplyPath, catalog.SourceSpec(image))
+	if err != nil {
 		return fail(fmt.Sprintf("Failed to create nightly CatalogSource: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
+	recovery.NoteCatalogWritten(csBody)
 	logs = append(logs, "OK: CatalogSource created with nightly image")
 	emit(types.UpdateStepEvent{Step: "create_catalog_source", Status: "success", Message: "CatalogSource created", Detail: image})
 

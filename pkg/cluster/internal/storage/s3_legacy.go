@@ -174,8 +174,10 @@ const ProjectRequesterAnnotation = "openshift.io/requester"
 //     patch namespaces (a cluster-admin, or this tool's ServiceAccount of
 //     those versions) can set it, never a project's own admin
 //     (SECURITY.md, inference gateway);
-//   - else the earliest versions' plain POST (manager Go-http-client), but
-//     never on a namespace a ProjectRequest made (openshift.io/requester).
+//   - else the earliest versions' plain POST (manager Go-http-client, which
+//     only versions before the tool's own User-Agent wrote with:
+//     envkit.LegacyPostManager), but never on a namespace a ProjectRequest
+//     made (openshift.io/requester).
 func legacyNamespaceOurs(meta kube.ObjectMeta) bool {
 	if meta.HasToolLabel() {
 		return true

@@ -3,8 +3,10 @@ package cluster
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -44,11 +46,11 @@ func TestModelCatalog_TheFourModels(t *testing.T) {
 		dim                                                         int
 	}{
 		{"smollm2-135m-instruct", "hf://HuggingFaceTB/SmolLM2-135M-Instruct:12fd25f77366fa6b3b4b768ec3050bf629380bac", "chat", "2", "4Gi", "5Gi", "2", "1",
-			"--max-model-len 4096", "Chat (smoke test)", false, 0},
+			"--max-model-len 4096 --enable-force-include-usage", "Chat (smoke test)", false, 0},
 		{"qwen25-05b-instruct", "hf://Qwen/Qwen2.5-0.5B-Instruct:7ae557604adf67be50417f59c2c2f167def9a775", "chat", "4", "6Gi", "8Gi", "4", "2",
-			"--max-model-len 4096", "Chat", false, 0},
+			"--max-model-len 4096 --enable-force-include-usage", "Chat", false, 0},
 		{"qwen3-1-7b", "hf://Qwen/Qwen3-1.7B:70d244cc86ccca08cf5af4e1e306ecf908b1ad5e", "chat", "4", "12Gi", "14Gi", "4", "2",
-			`--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}'`,
+			`--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}' --enable-force-include-usage`,
 			"Chat, Tool calling, Reasoning", true, 0},
 		{"granite-embedding-125m-english", "hf://ibm-granite/granite-embedding-125m-english:4ab61ffd423be45cd932b21a7c696063d82bf45f", "embedding", "2", "3Gi", "4Gi", "2", "1",
 			"--runner pooling --max-model-len 512", "Embeddings, Semantic search", false, 768},
@@ -79,6 +81,25 @@ func TestModelCatalog_TheFourModels(t *testing.T) {
 	}
 	if ValidModelName("llama") || !ValidModelName("qwen3-1-7b") || !ValidModelName("") {
 		t.Error("ValidModelName")
+	}
+}
+
+// MaaS counts a model's tokens from the usage in its responses, which vLLM
+// adds to a streamed chat only with --enable-force-include-usage
+// (models-as-a-service rhoai-3.6 quota-and-access-configuration.md "Model
+// server must include usage data"): every chat model has it, as its last
+// argument (the doc appends it to VLLM_ADDITIONAL_ARGS). An embeddings
+// response always holds its usage, so the embedding model has none.
+func TestModelCatalog_ChatModelsReportUsageWhenStreaming(t *testing.T) {
+	const flag = "--enable-force-include-usage"
+	for _, m := range serving.ModelCatalog {
+		has := slices.Contains(strings.Split(m.Args, " "), flag)
+		if want := m.Type == serving.ModelTypeChat; has != want {
+			t.Errorf("%s (%s): has %s = %v, want %v: %s", m.Name, m.Type, flag, has, want, m.Args)
+		}
+		if has && !strings.HasSuffix(m.Args, " "+flag) {
+			t.Errorf("%s: %s is not the last argument: %s", m.Name, flag, m.Args)
+		}
 	}
 }
 
@@ -193,7 +214,7 @@ func TestModelCatalog_Qwen3ArgumentsSurviveThePresetsEval(t *testing.T) {
 	}
 	entry, _ := serving.CatalogEntry("qwen3-1-7b")
 	want := []string{"serve", "--max-model-len", "4096", "--enable-auto-tool-choice", "--tool-call-parser", "hermes", "--reasoning-parser", "qwen3",
-		"--default-chat-template-kwargs", `{"enable_thinking":false}`, "--port", "8000"}
+		"--default-chat-template-kwargs", `{"enable_thinking":false}`, "--enable-force-include-usage", "--port", "8000"}
 	if got := eval(entry.Args); strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("arguments\n got %q\nwant %q", got, want)
 	}
@@ -330,4 +351,18 @@ func TestValidateModelsRequest_UnknownModel(t *testing.T) {
 func defaultEntry() serving.CatalogModel {
 	e, _ := serving.CatalogEntry("")
 	return e
+}
+
+// The README's catalog table shows each model's vLLM options exactly as the
+// catalog passes them.
+func TestModelCatalog_ReadmeShowsTheArguments(t *testing.T) {
+	readme, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range serving.ModelCatalog {
+		if !strings.Contains(string(readme), "| `"+m.Args+"` |") {
+			t.Errorf("README.md does not show %s's arguments as `%s`", m.Name, m.Args)
+		}
+	}
 }

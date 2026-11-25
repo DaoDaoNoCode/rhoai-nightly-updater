@@ -112,7 +112,8 @@ type DSPACondition struct {
 // in namespace minio (legacyS3Host) with secret "dashboard-dspa-secret", and
 // set no label (pipeline_server.go:235 at 5051672). odh-dashboard creates
 // its pipeline server with the same names, so the proof is who wrote the
-// object storage: the tool's managers (envkit.ToolManagers) must own both
+// object storage: the tool's managers, including those of earlier versions
+// (envkit.LegacyToolManagers, as this is their object), must own both
 // spec.objectStorage.externalStorage.host and its s3CredentialsSecret's
 // secretName. A DSPA the dashboard created, or whose storage someone else
 // changed since, is not the tool's.
@@ -124,8 +125,8 @@ func (d DSPA) ManagedByTool() bool {
 	return d.Meta.Name == LegacyDSPAName &&
 		d.Host == LegacyS3Host() &&
 		d.SecretName == LegacyDSPASecretName &&
-		d.Meta.OwnsFieldPath(envkit.ToolManagers, append(storage, "f:host")...) &&
-		d.Meta.OwnsFieldPath(envkit.ToolManagers, append(storage, "f:s3CredentialsSecret", "f:secretName")...)
+		d.Meta.OwnsFieldPath(envkit.LegacyToolManagers, append(storage, "f:host")...) &&
+		d.Meta.OwnsFieldPath(envkit.LegacyToolManagers, append(storage, "f:s3CredentialsSecret", "f:secretName")...)
 }
 
 func (d DSPA) hasFinalizer() bool {
@@ -894,8 +895,16 @@ func deleteDSPASecret(c *kube.Client, project string, target *DSPA, all []DSPA, 
 	if err != nil {
 		return fmt.Sprintf(" The credentials secret %s could not be parsed and was left in place.", name)
 	}
-	// The tool's label, or an earlier version's managers own its keys.
-	if !meta.HasToolLabel() && !meta.OwnsFieldPath(envkit.ToolManagers, "f:data") && !meta.OwnsFieldPath(envkit.ToolManagers, "f:stringData") {
+	// The tool's label, or the tool's managers own its keys. Only the legacy
+	// name dashboard-dspa-secret, which only earlier versions wrote, also
+	// accepts their manager Go-http-client (envkit.LegacyToolManagers): a
+	// Secret of a current name without the label was not written by this
+	// tool.
+	managers := envkit.ToolManagers
+	if name == LegacyDSPASecretName {
+		managers = envkit.LegacyToolManagers
+	}
+	if !meta.HasToolLabel() && !meta.OwnsFieldPath(managers, "f:data") && !meta.OwnsFieldPath(managers, "f:stringData") {
 		*logs = append(*logs, fmt.Sprintf("Kept secret %s: it was not created by this tool", name))
 		return ""
 	}

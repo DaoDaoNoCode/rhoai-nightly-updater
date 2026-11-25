@@ -10,7 +10,7 @@ import (
 
 // UseTestTimings makes the operation waits short, for a test binary: the
 // catalog's (catalog.UseTestTimings), the InstallPlan poll every 10ms,
-// the propagation, refresh clean-up and channel retry waits 10ms, the
+// the propagation and refresh clean-up waits 10ms, the
 // Subscription retry backoffs 10ms and 10ms, the install wait 400ms, the
 // ResolutionFailed, bundle pull and CSV Failed graces 60ms, the CSV
 // Succeeded settle 30ms and the CSV deletion wait 50ms. It panics outside a
@@ -22,7 +22,6 @@ func UseTestTimings() {
 	propagationWait = 10 * time.Millisecond
 	refreshCleanupWait = 10 * time.Millisecond
 	SubRetryBackoffs = []time.Duration{10 * time.Millisecond, 10 * time.Millisecond}
-	channelRetryDelay = 10 * time.Millisecond
 	installTimeout = 400 * time.Millisecond
 	resolutionFailedGrace = 60 * time.Millisecond
 	bundlePullFailureGrace = 60 * time.Millisecond
