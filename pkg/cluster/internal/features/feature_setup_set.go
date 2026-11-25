@@ -6,6 +6,7 @@ import (
 	"maps"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
@@ -232,6 +233,20 @@ func RunPrerequisitesSet(c *kube.Client, items []SetItem, onStep func(types.Upda
 			return m.Fail("prerequisites", fmt.Sprintf("The API server rejects %s's install: %v. Nothing was changed.%s", o.op.Title, err, kube.TemplateHint(err)), serving.MaaSWriteCode(err), "dry run failed")
 		}
 	}
+	// The Kuadrant CR as a dry run too, when Connectivity Link serves its
+	// API already. A Connectivity Link this set installs serves it only
+	// later: ensureKuadrant dry-runs it then, before it creates it.
+	if u.kuadrantMissing {
+		version, err := serving.KuadrantServedVersion(c)
+		if err != nil {
+			return m.Fail("prerequisites", fmt.Sprintf("Cannot read the Kuadrant API; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "kuadrant read failed")
+		}
+		if version != "" {
+			if err := serving.CreateKuadrant(c, version, u.kuadrantNS, true); err != nil {
+				return m.Fail("prerequisites", fmt.Sprintf("The API server rejects the Kuadrant CR %s/kuadrant: %v. Nothing was changed.%s", u.kuadrantNS, err, kube.TemplateHint(err)), serving.MaaSWriteCode(err), "kuadrant dry run failed")
+			}
+		}
+	}
 	// The record, once, before any change.
 	rec, changed := u.record(r.rec)
 	if changed {
@@ -250,23 +265,29 @@ func RunPrerequisitesSet(c *kube.Client, items []SetItem, onStep func(types.Upda
 	for _, o := range u.operators {
 		w, r, err := startOperator(m, o, nil)
 		if r != nil || err != nil {
+			// The Subscriptions made before it stay; their steps end.
+			for _, w := range waits {
+				if w.created {
+					m.Step(w.step, "skipped", fmt.Sprintf("%s: Subscription %s/%s created; Set up again to wait for it.", w.title, w.ns, w.name))
+				}
+			}
 			return r, err
 		}
 		if w != nil {
 			waits = append(waits, *w)
 		}
 	}
-	if r, err := waitOperators(m, waits); r != nil || err != nil {
+	if r, err := waitOperators(m, waits, within(c, envkit.OperatorTimeout)); r != nil || err != nil {
 		return r, err
 	}
 	if u.kuadrant {
-		if r, err := ensureKuadrant(m, &rec, rec.Shared["kuadrant"] != ""); r != nil || err != nil {
+		if r, err := ensureKuadrant(m, &rec, rec.Shared["kuadrant"] != "", within(c, envkit.OperatorTimeout)); r != nil || err != nil {
 			return r, err
 		}
 	}
 	note := ""
 	if needsReadyWait(plans) {
-		n, r, err := waitReady(m, plans)
+		n, r, err := waitReady(m, plans, within(c, prerequisiteReadyTimeout))
 		if r != nil || err != nil {
 			return r, err
 		}
@@ -287,10 +308,27 @@ func needsReadyWait(plans []*featurePlan) bool {
 	return false
 }
 
+// setWaitMargin is what a set keeps of its context's deadline after each
+// of its waits: time to report the failure and record it.
+var setWaitMargin = 30 * time.Second
+
+// within is full, or what is left of c's deadline less setWaitMargin when
+// that is less (never below zero): a set runs several waits under one
+// operation deadline, and each then ends with its own message (what is
+// not ready yet) before the deadline cuts the operation off.
+func within(c *kube.Client, full time.Duration) time.Duration {
+	deadline, ok := c.Context().Deadline()
+	if !ok {
+		return full
+	}
+	return max(min(full, kube.Clock().Until(deadline)-setWaitMargin), 0)
+}
+
 // waitOperators waits for every Subscription of waits at once, each on
-// its own step; it returns the first failure in waits' order (the others
-// are reported failed on their steps), or nil when all are installed.
-func waitOperators(m *serving.Run, waits []operatorWait) (*types.OperationResponse, error) {
+// its own step and for up to timeout from the same moment; it returns the
+// first failure in waits' order (the others are reported failed on their
+// steps), or nil when all are installed.
+func waitOperators(m *serving.Run, waits []operatorWait, timeout time.Duration) (*types.OperationResponse, error) {
 	if len(waits) == 0 {
 		return nil, nil
 	}
@@ -310,7 +348,7 @@ func waitOperators(m *serving.Run, waits []operatorWait) (*types.OperationRespon
 					fails[i] = &serving.OperatorWaitFailure{Message: fmt.Sprintf("The wait for %s stopped on an internal error. Its Subscription stays; Set up again to continue.", w.title), Code: "internal", Activity: "operator wait failed"}
 				}
 			}()
-			fails[i] = serving.AwaitOperator(m.Client, w.step, w.ns, w.name, w.title, say)
+			fails[i] = serving.AwaitOperator(m.Client, w.step, w.ns, w.name, w.title, timeout, w.title+": ", say)
 		})
 	}
 	wg.Wait()

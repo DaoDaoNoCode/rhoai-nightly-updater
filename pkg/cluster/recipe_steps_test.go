@@ -175,6 +175,37 @@ func TestRecipePrereqSteps_RecordTheComponentsTheyTurnedOn(t *testing.T) {
 	}
 }
 
+// The set records every component before its first patch; when a later
+// patch fails, the run claims only the components whose patch went
+// through, not the ones recorded but never changed.
+func TestRecipePrereqSteps_ClaimOnlyWhatWasTurnedOn(t *testing.T) {
+	pc := newPrereqCluster(t)
+	r, problems := recipe.Validate([]byte(tRecipeBase + `{"rhoai":{"build":"latest"},"dataScienceCluster":{"create":true},"project":{"mode":"create","name":"recipe-dev"},
+"features":{"pipelines":{"enabled":true},"mlflow":{"enabled":true}}}}`))
+	if len(problems) > 0 {
+		t.Fatal(problems)
+	}
+	patches := 0
+	pc.f.intercept = func(w http.ResponseWriter, r *http.Request, _ []byte) bool {
+		if r.Method != http.MethodPatch || r.URL.Path != tDSC || r.URL.Query().Get("dryRun") != "" {
+			return false
+		}
+		if patches++; patches == 2 {
+			pc.f.status(w, http.StatusInternalServerError, "injected failure")
+			return true
+		}
+		return false
+	}
+	st := &recipe.State{Recipe: r}
+	res, err := recipeStep(t, r, recipe.StepPrerequisites).Run(pc.c, st, func(types.UpdateStepEvent) {})
+	if err != nil || res.Success || !strings.Contains(res.Message, "Failed to set mlflowoperator to Managed") {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if strings.Join(st.Components, ",") != "aipipelines" || componentState(pc.f, "mlflowoperator") != "Removed" {
+		t.Errorf("components %v, mlflowoperator %s", st.Components, componentState(pc.f, "mlflowoperator"))
+	}
+}
+
 // Ownership comes from live cluster state, not the run record alone:
 // components count only while still Managed and listed in Set up's record;
 // the project counts only if it is the one the recipe created. S3 storage,

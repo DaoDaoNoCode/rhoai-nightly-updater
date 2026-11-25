@@ -692,8 +692,11 @@ func runPrereqFor(c *kube.Client, s *State, step, feature, exposure string, emit
 // claimComponents runs setup and records the DataScienceCluster components
 // it turned on (State.Components): the keys of the features its record of
 // the prerequisites it set up gained, from one read before and one after,
-// also when the setup then failed (it records a component before it turns
-// it on, and Clean up turns back only what it still owns). When either
+// that the DataScienceCluster then has on with this tool's field manager
+// owning them (features.TurnedOnByTool). Setup records every component
+// before its first patch, so a failed patch leaves later ones recorded but
+// never changed: those are not claimed. A component whose patch went
+// through is claimed also when the setup then failed. When either
 // read of that record fails nothing is claimed, and the step says so (its
 // message, its progress and the log): the run's Clean up then does not
 // offer them, Clean up everything still does.
@@ -705,13 +708,24 @@ func claimComponents(c *kube.Client, s *State, step string, feats []string, emit
 		defer cancel()
 		var after prereqRecordKeys
 		if after, readErr = readPrereqKeys(c.WithContext(ctx)); readErr == nil {
+			var gained []string
 			for key, e := range after {
 				// Turned on by this setup: the key is new in the record, or
 				// it got a new enablement ID (an entry that survived a turn
 				// off is written again when setup turns it on).
 				prev, had := before.Components[key]
 				if slices.Contains(feats, e.feature) && (!had || (e.id != "" && e.id != prev.ID)) {
-					s.AddComponentID(key, e.id)
+					gained = append(gained, key)
+				}
+			}
+			if len(gained) > 0 {
+				var on map[string]bool
+				if on, readErr = turnedOnByTool(c.WithContext(ctx), gained); readErr == nil {
+					for _, key := range gained {
+						if on[key] {
+							s.AddComponentID(key, after[key].id)
+						}
+					}
 				}
 			}
 		}

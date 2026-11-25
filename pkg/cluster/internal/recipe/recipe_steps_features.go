@@ -45,6 +45,7 @@ var (
 	prereqStatus     = features.GetPrerequisitesStatusFor
 	prereqSetStatus  = features.GetPrerequisitesSetStatus
 	runPrereqSet     = features.RunPrerequisitesSet
+	turnedOnByTool   = features.TurnedOnByTool
 	samplesStatus    = mlflow.SamplesStatus
 	runSamples       = mlflow.RunSamples
 	maasStatus       = serving.GetMaaSStatus
@@ -95,8 +96,14 @@ func featureSteps(r types.EnvironmentRecipe) []Step {
 		if f.Models.Exposure == "" {
 			// The way the model is reached is resolved in the project, after
 			// the MaaS step: what it needs beyond what every way needs (the
-			// prerequisites step) is set up here, usually nothing.
-			add(StepModelsPrereq, "What the model's access needs", time.Minute, 15*time.Minute, checkModelsPrereq, runModelsPrereq)
+			// prerequisites step) is set up here. With MaaS, Connectivity
+			// Link is there already; without it, a gateway installs it here
+			// (several minutes).
+			typical := 4 * time.Minute
+			if f.MaaS.Enabled {
+				typical = time.Minute
+			}
+			add(StepModelsPrereq, "What the model's access needs", typical, 15*time.Minute, checkModelsPrereq, runModelsPrereq)
 		}
 		add(StepModel, modelTitle(r), 5*time.Minute, 15*time.Minute, checkModel, runModel)
 		if f.MaaS.Enabled && f.MaaS.Publish && f.Models.Exposure != serving.ExposureMaaS {

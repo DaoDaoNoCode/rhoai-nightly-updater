@@ -241,14 +241,24 @@ func TestPrerequisitesSet_OperatorsAreWaitedForTogether(t *testing.T) {
 		defer close(done)
 		res, runErr = features.RunPrerequisitesSet(pc.c, []features.SetItem{{Feature: "models"}, {Feature: "kueue", OperatorsOnly: true}}, func(e UpdateStepEvent) { events = append(events, e) })
 	}()
+	// A wait that never sleeps would stop the clock for good (waits one
+	// after the other): the driver gives up after 30 s of real time without
+	// a step, a bound on a hang only.
+	var stuckSince time.Time
 	for running := true; running; {
 		select {
 		case <-done:
 			running = false
 		default:
-			if clk.Sleepers() >= waits() {
+			if n, want := clk.Sleepers(), waits(); n >= want {
 				clk.Advance(envkit.PollInterval)
+				stuckSince = time.Time{}
 			} else {
+				if stuckSince.IsZero() {
+					stuckSince = time.Now()
+				} else if time.Since(stuckSince) > 30*time.Second {
+					t.Fatalf("only %d of %d waits sleep: the waits are not concurrent", n, want)
+				}
 				runtime.Gosched()
 			}
 		}
@@ -331,6 +341,17 @@ func TestPrerequisitesSet_ConnectivityLinkOnceAndOneReadyWait(t *testing.T) {
 	rec, err := features.ReadPrereqRecord(pc.c)
 	if err != nil || rec.Shared["kuadrant"] != "Kuadrant kuadrant-system/kuadrant" || rec.Shared["rhcl"] == "" || recordWrites(pc.f) != 1 {
 		t.Errorf("record %+v %v, %d writes", rec, err, recordWrites(pc.f))
+	}
+	// The MaaS tab counts the Connectivity Link the set installed as this
+	// tool's.
+	st, err := serving.GetMaaSStatus(pc.c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range st.Parts {
+		if p.ID == "rhcl" && (!p.ManagedByTool || p.NotManaged) {
+			t.Errorf("rhcl part %+v", p)
+		}
 	}
 }
 

@@ -626,9 +626,14 @@ func ReadSubscriptionProgress(c *kube.Client, ns, name string) (SubscriptionProg
 // WaitForSubscription waits until OLM has installed the Subscription's
 // current CSV (or reports why it cannot), reporting progress.
 func WaitForSubscription(c *kube.Client, ns, name string, progress func(string)) (SubscriptionProgress, error) {
+	return WaitForSubscriptionWithin(c, ns, name, OperatorTimeout, progress)
+}
+
+// WaitForSubscriptionWithin is WaitForSubscription that waits timeout.
+func WaitForSubscriptionWithin(c *kube.Client, ns, name string, timeout time.Duration, progress func(string)) (SubscriptionProgress, error) {
 	var last SubscriptionProgress
 	var failedSince time.Time
-	_, err := kube.WaitForGone(c, OperatorTimeout, PollInterval, func(cc *kube.Client) (bool, error) {
+	_, err := kube.WaitForGone(c, timeout, PollInterval, func(cc *kube.Client) (bool, error) {
 		p, err := ReadSubscriptionProgress(cc, ns, name)
 		if err != nil {
 			return false, err

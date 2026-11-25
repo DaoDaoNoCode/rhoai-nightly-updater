@@ -258,6 +258,25 @@ func patchDSCComponent(c *kube.Client, key, state, resourceVersion string, dryRu
 	return obj, nil
 }
 
+// TurnedOnByTool reports which of keys the DataScienceCluster has in their
+// on state with this tool's field manager owning it: a change this tool's
+// setup made. A component recorded before a patch that then never ran (an
+// earlier patch failed) is not one.
+func TurnedOnByTool(c *kube.Client, keys []string) (map[string]bool, error) {
+	read, err := rhoai.ReadFirstDSC(c)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, key := range keys {
+		state, _ := envkit.ComponentManagement(read.Object, key)
+		if read.Object != nil && state == componentOnState(key) && DSCComponentOwned(read.Object, key) {
+			out[key] = true
+		}
+	}
+	return out, nil
+}
+
 // DSCComponentOwned: this tool's field manager of the component still owns
 // its managementState. The API server moves a field to another manager only
 // when that manager changes its value (an update to the same value, or an
@@ -790,7 +809,7 @@ func RunPrerequisites(c *kube.Client, req types.PrerequisitesRequest, onStep fun
 			}
 		}
 		if fs.kuadrant {
-			if r, err := ensureKuadrant(m, &p.rec, false); r != nil || err != nil {
+			if r, err := ensureKuadrant(m, &p.rec, false, envkit.OperatorTimeout); r != nil || err != nil {
 				return r, err
 			}
 		}
@@ -869,8 +888,11 @@ func turnOnComponents(m *serving.Run, cps []componentPlan, dscName string, recor
 }
 
 // operatorWait is a Subscription to wait for OLM to install, on the
-// operator's own step.
-type operatorWait struct{ step, ns, name, title string }
+// operator's own step; created: Set up just created it.
+type operatorWait struct {
+	step, ns, name, title string
+	created               bool
+}
 
 // ensureOperator installs o when it is missing, or waits for the install
 // OLM is doing, on the operator's own step.
@@ -918,7 +940,7 @@ func startOperator(m *serving.Run, o operatorPlan, record func() (*types.Operati
 			r, err := m.Fail(op.ID, fmt.Sprintf("Failed to %v. Set up again to continue.", err), serving.MaaSWriteCode(err), "operator install failed")
 			return nil, r, err
 		}
-		return &operatorWait{op.ID, op.Namespace, op.SubName, op.Title}, nil, nil
+		return &operatorWait{op.ID, op.Namespace, op.SubName, op.Title, true}, nil, nil
 	case o.st.Installed() && o.st.Phase == "Succeeded":
 		m.Step(op.ID, "success", fmt.Sprintf("%s %s is installed%s.", op.Title, o.st.Version, serving.ByWhom(o.byTool)))
 	case o.st.Pending() != nil || o.st.Installed():
@@ -927,7 +949,7 @@ func startOperator(m *serving.Run, o operatorPlan, record func() (*types.Operati
 			m.Step(op.ID, "success", fmt.Sprintf("%s %s is being installed in %s.", op.Title, o.st.Version, o.st.CSVNS))
 			return nil, nil, nil
 		}
-		return &operatorWait{op.ID, sub.Metadata.Namespace, sub.Metadata.Name, op.Title}, nil, nil
+		return &operatorWait{op.ID, sub.Metadata.Namespace, sub.Metadata.Name, op.Title, false}, nil, nil
 	}
 	return nil, nil, nil
 }
@@ -937,7 +959,8 @@ func startOperator(m *serving.Run, o operatorPlan, record func() (*types.Operati
 // Connectivity Link runs in, as the MaaS setup does. It stays after Clean
 // up: Connectivity Link's policies are shared. recorded: the caller
 // recorded it already (a set of prerequisites records everything once).
-func ensureKuadrant(m *serving.Run, rec *prereqRecord, recorded bool) (*types.OperationResponse, error) {
+// apiWait bounds the wait for Connectivity Link's Kuadrant API.
+func ensureKuadrant(m *serving.Run, rec *prereqRecord, recorded bool, apiWait time.Duration) (*types.OperationResponse, error) {
 	c := m.Client
 	k, err := serving.ReadKuadrant(c)
 	if err != nil {
@@ -954,12 +977,12 @@ func ensureKuadrant(m *serving.Run, rec *prereqRecord, recorded bool) (*types.Op
 	ns := kube.FirstNonEmpty(rhcl.CSVNS, serving.RHCLOperator.Namespace)
 	m.Step("kuadrant", "running", "Waiting for Connectivity Link's Kuadrant API...")
 	version := ""
-	if _, err := kube.WaitForGone(c, envkit.OperatorTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
+	if _, err := kube.WaitForGone(c, apiWait, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 		v, err := serving.KuadrantServedVersion(cc)
 		version = v
 		return v != "", err
 	}); err != nil || version == "" {
-		return m.Fail("kuadrant", fmt.Sprintf("Connectivity Link's Kuadrant API is not served after %s%s. Set up again to continue.", serving.ClockText(envkit.OperatorTimeout), serving.ErrSuffix(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "not_ready"), "kuadrant api missing")
+		return m.Fail("kuadrant", fmt.Sprintf("Connectivity Link's Kuadrant API is not served after %s%s. Set up again to continue.", serving.ClockText(apiWait), serving.ErrSuffix(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "not_ready"), "kuadrant api missing")
 	}
 	if !recorded {
 		if rec.Shared == nil {
@@ -990,7 +1013,7 @@ func ensureKuadrant(m *serving.Run, rec *prereqRecord, recorded bool) (*types.Op
 // operator this setup installs. A condition that is never reported is not a
 // failure (an older RHOAI does not report it).
 func waitPrerequisitesReady(m *serving.Run, p *featurePlan) (*types.OperationResponse, error) {
-	note, r, err := waitReady(m, []*featurePlan{p})
+	note, r, err := waitReady(m, []*featurePlan{p}, prerequisiteReadyTimeout)
 	if r != nil || err != nil {
 		return r, err
 	}
@@ -1018,7 +1041,7 @@ func planComponents(plans []*featurePlan) []componentPlan {
 // for every component of every plan, each plan's dependency condition and
 // each ready hook. It returns what KServe still reports missing (a note
 // for the result), or the failed response.
-func waitReady(m *serving.Run, plans []*featurePlan) (string, *types.OperationResponse, error) {
+func waitReady(m *serving.Run, plans []*featurePlan, timeout time.Duration) (string, *types.OperationResponse, error) {
 	c := m.Client
 	cps := planComponents(plans)
 	m.Step("ready", "running", fmt.Sprintf("Waiting for RHOAI's operator to report %s ready (usually 1 to 3 minutes)...", kube.JoinTitles(componentKeys(cps))))
@@ -1026,7 +1049,7 @@ func waitReady(m *serving.Run, plans []*featurePlan) (string, *types.OperationRe
 	// refused stops the wait; extra is what the ready hooks still wait for.
 	refused, extra := "", ""
 	var dsc rhoai.DSCRead
-	done, err := kube.WaitForGone(c, prerequisiteReadyTimeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
+	done, err := kube.WaitForGone(c, timeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
 		r, err := rhoai.ReadFirstDSC(cc)
 		if err != nil {
 			return false, err
@@ -1098,7 +1121,7 @@ func waitReady(m *serving.Run, plans []*featurePlan) (string, *types.OperationRe
 			if strings.Contains(last, "KServe does not see") {
 				hint = " KServe checks its operators again only from time to time: the Diagnostics page offers to restart its operator when it still reports an installed operator missing."
 			}
-			r, err := m.Fail("ready", fmt.Sprintf("Not ready after %s (%s). What was set up stays; the tab shows each part.%s", serving.ClockText(prerequisiteReadyTimeout), last, hint), "not_ready", "not ready")
+			r, err := m.Fail("ready", fmt.Sprintf("Not ready after %s (%s). What was set up stays; the tab shows each part.%s", serving.ClockText(timeout), last, hint), "not_ready", "not ready")
 			return "", r, err
 		}
 		m.Step("ready", "success", fmt.Sprintf("RHOAI's operator does not report %s's readiness; continuing.", kube.JoinTitles(componentKeys(cps))))
