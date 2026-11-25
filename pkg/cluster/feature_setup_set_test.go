@@ -348,10 +348,12 @@ func TestPrerequisitesSet_ConnectivityLinkOnceAndOneReadyWait(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	managed := map[string]bool{}
 	for _, p := range st.Parts {
-		if p.ID == "rhcl" && (!p.ManagedByTool || p.NotManaged) {
-			t.Errorf("rhcl part %+v", p)
-		}
+		managed[p.ID] = p.ManagedByTool && !p.NotManaged
+	}
+	if !managed["rhcl"] || !managed["kuadrant"] {
+		t.Errorf("parts %+v", st.Parts)
 	}
 }
 

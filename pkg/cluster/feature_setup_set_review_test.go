@@ -167,3 +167,68 @@ func TestPrerequisitesSet_AWaitThatPanics(t *testing.T) {
 		t.Errorf("steps = %s", got)
 	}
 }
+
+// Kuadrant's CRDs left by an earlier Connectivity Link keep its API
+// served after its namespace is gone. The Kuadrant CR's dry run then waits
+// for the install that makes the namespace again, instead of stopping the
+// set (which a Resume would repeat).
+func TestPrerequisitesSet_ConnectivityLinkReinstalledOverLeftoverCRDs(t *testing.T) {
+	pc := newPrereqCluster(t)
+	pc.sim.packages["rhcl-operator"] = rhclFakePackage()
+	pc.putPackage("rhcl-operator")
+	pc.f.mu.Lock()
+	pc.f.groups = map[string]string{"/apis/kuadrant.io": kuadrantGroupDoc}
+	installKuadrantCRDLocked(pc.f)
+	pc.f.mu.Unlock()
+	// The API server refuses a namespaced create in a namespace that does
+	// not exist.
+	pc.f.intercept = func(w http.ResponseWriter, r *http.Request, _ []byte) bool {
+		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/namespaces/kuadrant-system/kuadrants") && !pc.f.hasLocked(tKuadrantNS) {
+			pc.f.status(w, http.StatusNotFound, `namespaces "kuadrant-system" not found`)
+			return true
+		}
+		return false
+	}
+	res, events := runPrereqSet(t, pc.c, []features.SetItem{{Feature: "models", Exposure: serving.ExposureDefault}})
+	if !res.Success {
+		t.Fatalf("setup: %+v (%s)", res, finalSteps(events))
+	}
+	cr := "/apis/kuadrant.io/v1/namespaces/kuadrant-system/kuadrants/kuadrant"
+	if !pc.f.has(tKuadrantNS) || !pc.f.has(cr) {
+		t.Errorf("no Kuadrant CR in a new kuadrant-system: %+v", events)
+	}
+}
+
+const tKuadrantNS = "/api/v1/namespaces/kuadrant-system"
+
+// When the operation's deadline leaves the ready wait less than its full
+// time, a component that has not reported yet fails the set as not ready
+// rather than being taken for an older RHOAI that never reports it.
+func TestPrerequisitesSet_AShortReadyWindowIsNotReady(t *testing.T) {
+	pc := newPrereqCluster(t)
+	prev := pc.f.onMergePatch
+	pc.f.onMergePatch = func(r *http.Request, k fakeKey, patch, next map[string]any) {
+		prev(r, k, patch, next)
+		status := ensureMap(next, "status")
+		conds, _ := status["conditions"].([]any)
+		var kept []any
+		for _, c := range conds {
+			if m, _ := c.(map[string]any); m["type"] != "aipipelinesReady" {
+				kept = append(kept, c)
+			}
+		}
+		status["conditions"] = kept
+	}
+	ctx, cancel := kube.Clock().WithTimeout(context.Background(), 31*time.Second)
+	defer cancel()
+	res, events := runPrereqSet(t, pc.c.WithContext(ctx), []features.SetItem{{Feature: "pipelines"}})
+	if res.Success || res.ErrorCode != "not_ready" || !strings.Contains(res.Message, "aipipelines: not reported yet") || !strings.Contains(res.Message, "The operation's time ran out before the full wait") {
+		t.Fatalf("setup: %+v (%s)", res, finalSteps(events))
+	}
+	// With its full time, a component never reported is an older RHOAI's.
+	pc2 := newPrereqCluster(t)
+	pc2.f.onMergePatch = pc.f.onMergePatch
+	if res, events := runPrereqSet(t, pc2.c, []features.SetItem{{Feature: "pipelines"}}); !res.Success {
+		t.Errorf("full window: %+v (%s)", res, finalSteps(events))
+	}
+}

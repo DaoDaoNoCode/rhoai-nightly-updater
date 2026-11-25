@@ -258,6 +258,26 @@ func patchDSCComponent(c *kube.Client, key, state, resourceVersion string, dryRu
 	return obj, nil
 }
 
+// OnComponents reports the components this tool turns on for a feature
+// that the DataScienceCluster has in their on state now, whoever set it.
+func OnComponents(c *kube.Client) (map[string]bool, error) {
+	read, err := rhoai.ReadFirstDSC(c)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, fs := range featureSetups {
+		for _, fc := range fs.components {
+			for _, key := range append(slices.Clone(fc.Keys), fc.V1Key) {
+				if state, _ := envkit.ComponentManagement(read.Object, key); key != "" && read.Object != nil && state == fc.OnState() {
+					out[key] = true
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
 // TurnedOnByTool reports which of keys the DataScienceCluster has in their
 // on state with this tool's field manager owning it: a change this tool's
 // setup made. A component recorded before a patch that then never ran (an
@@ -1013,7 +1033,7 @@ func ensureKuadrant(m *serving.Run, rec *prereqRecord, recorded bool, apiWait ti
 // operator this setup installs. A condition that is never reported is not a
 // failure (an older RHOAI does not report it).
 func waitPrerequisitesReady(m *serving.Run, p *featurePlan) (*types.OperationResponse, error) {
-	note, r, err := waitReady(m, []*featurePlan{p}, prerequisiteReadyTimeout)
+	note, r, err := waitReady(m, []*featurePlan{p}, prerequisiteReadyTimeout, false)
 	if r != nil || err != nil {
 		return r, err
 	}
@@ -1040,8 +1060,11 @@ func planComponents(plans []*featurePlan) []componentPlan {
 // waitReady is the "ready" step of plans: one wait, under one deadline,
 // for every component of every plan, each plan's dependency condition and
 // each ready hook. It returns what KServe still reports missing (a note
-// for the result), or the failed response.
-func waitReady(m *serving.Run, plans []*featurePlan, timeout time.Duration) (string, *types.OperationResponse, error) {
+// for the result), or the failed response. cut: timeout is shorter than
+// the full wait (what is left of the operation's time), so a component
+// that does not report yet is not taken for an older RHOAI that never
+// reports it.
+func waitReady(m *serving.Run, plans []*featurePlan, timeout time.Duration, cut bool) (string, *types.OperationResponse, error) {
 	c := m.Client
 	cps := planComponents(plans)
 	m.Step("ready", "running", fmt.Sprintf("Waiting for RHOAI's operator to report %s ready (usually 1 to 3 minutes)...", kube.JoinTitles(componentKeys(cps))))
@@ -1110,7 +1133,7 @@ func waitReady(m *serving.Run, plans []*featurePlan, timeout time.Duration) (str
 	}
 	if !done {
 		// A component never reported at all is not a failure.
-		failed := extra != ""
+		failed := extra != "" || cut
 		for _, cp := range cps {
 			if s, _ := componentReadyCondition(dsc.Object, []string{cp.key}); s == "False" {
 				failed = true
@@ -1120,6 +1143,9 @@ func waitReady(m *serving.Run, plans []*featurePlan, timeout time.Duration) (str
 			hint := ""
 			if strings.Contains(last, "KServe does not see") {
 				hint = " KServe checks its operators again only from time to time: the Diagnostics page offers to restart its operator when it still reports an installed operator missing."
+			}
+			if cut {
+				hint += " The operation's time ran out before the full wait; Set up again to wait again."
 			}
 			r, err := m.Fail("ready", fmt.Sprintf("Not ready after %s (%s). What was set up stays; the tab shows each part.%s", serving.ClockText(timeout), last, hint), "not_ready", "not ready")
 			return "", r, err

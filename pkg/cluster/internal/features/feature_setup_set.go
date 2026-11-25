@@ -95,9 +95,10 @@ type setUnion struct {
 	components []setComponent
 	operators  []operatorPlan
 	// kuadrant: a plan makes the Kuadrant CR; missing: it does not exist
-	// yet, in kuadrantNS.
-	kuadrant, kuadrantMissing bool
-	kuadrantNS                string
+	// yet, in kuadrantNS; nsMissing: the set's Connectivity Link install
+	// creates kuadrantNS.
+	kuadrant, kuadrantMissing, nsMissing bool
+	kuadrantNS                           string
 }
 
 func unionOf(plans []*featurePlan) setUnion {
@@ -129,6 +130,7 @@ func unionOf(plans []*featurePlan) setUnion {
 	for _, o := range u.operators {
 		if o.op.ID == serving.RHCLOperator.ID {
 			u.kuadrantNS = kube.FirstNonEmpty(o.st.CSVNS, serving.RHCLOperator.Namespace)
+			u.nsMissing = o.install != nil && o.install.NSMissing
 		}
 	}
 	return u
@@ -234,9 +236,11 @@ func RunPrerequisitesSet(c *kube.Client, items []SetItem, onStep func(types.Upda
 		}
 	}
 	// The Kuadrant CR as a dry run too, when Connectivity Link serves its
-	// API already. A Connectivity Link this set installs serves it only
-	// later: ensureKuadrant dry-runs it then, before it creates it.
-	if u.kuadrantMissing {
+	// API already and its namespace exists. A Connectivity Link this set
+	// installs serves it only later, and an API left served by CRDs of an
+	// earlier install has no namespace until the install makes it again:
+	// ensureKuadrant dry-runs it then, before it creates it.
+	if u.kuadrantMissing && !u.nsMissing {
 		version, err := serving.KuadrantServedVersion(c)
 		if err != nil {
 			return m.Fail("prerequisites", fmt.Sprintf("Cannot read the Kuadrant API; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "kuadrant read failed")
@@ -287,7 +291,8 @@ func RunPrerequisitesSet(c *kube.Client, items []SetItem, onStep func(types.Upda
 	}
 	note := ""
 	if needsReadyWait(plans) {
-		n, r, err := waitReady(m, plans, within(c, prerequisiteReadyTimeout))
+		timeout := within(c, prerequisiteReadyTimeout)
+		n, r, err := waitReady(m, plans, timeout, timeout < prerequisiteReadyTimeout)
 		if r != nil || err != nil {
 			return r, err
 		}

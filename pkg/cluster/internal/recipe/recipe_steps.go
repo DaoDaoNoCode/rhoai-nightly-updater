@@ -690,18 +690,22 @@ func runPrereqFor(c *kube.Client, s *State, step, feature, exposure string, emit
 }
 
 // claimComponents runs setup and records the DataScienceCluster components
-// it turned on (State.Components): the keys of the features its record of
-// the prerequisites it set up gained, from one read before and one after,
-// that the DataScienceCluster then has on with this tool's field manager
-// owning them (features.TurnedOnByTool). Setup records every component
-// before its first patch, so a failed patch leaves later ones recorded but
-// never changed: those are not claimed. A component whose patch went
-// through is claimed also when the setup then failed. When either
-// read of that record fails nothing is claimed, and the step says so (its
-// message, its progress and the log): the run's Clean up then does not
-// offer them, Clean up everything still does.
+// it turned on (State.Components), from facts, not from what the record
+// gained: a component of the features, recorded by Set up, that was not
+// on before the step (features.OnComponents) and that the
+// DataScienceCluster now has on under this tool's field manager
+// (features.TurnedOnByTool). Set up records every component before its
+// first patch, so a failed patch leaves later ones recorded but never
+// changed: they are not claimed, and a Resume whose retry turns one on
+// claims it then. A component on before the step is never claimed. A
+// component whose patch went through is claimed also when the setup then
+// failed. Each is claimed with the enablement ID Set up recorded for it
+// (State.ComponentIDs), which the run's Clean up names. When a read fails
+// nothing is claimed, and the step says so (its message, its progress and
+// the log): the run's Clean up then does not offer them, Clean up
+// everything still does.
 func claimComponents(c *kube.Client, s *State, step string, feats []string, emit func(types.UpdateStepEvent), setup func() (*types.OperationResponse, error)) (*types.OperationResponse, error) {
-	before, readErr := features.ReadPrereqRecord(c)
+	onBefore, readErr := onComponents(c)
 	res, err := setup()
 	if readErr == nil {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Context()), prereqRecordReadTimeout)
@@ -710,11 +714,9 @@ func claimComponents(c *kube.Client, s *State, step string, feats []string, emit
 		if after, readErr = readPrereqKeys(c.WithContext(ctx)); readErr == nil {
 			var gained []string
 			for key, e := range after {
-				// Turned on by this setup: the key is new in the record, or
-				// it got a new enablement ID (an entry that survived a turn
-				// off is written again when setup turns it on).
-				prev, had := before.Components[key]
-				if slices.Contains(feats, e.feature) && (!had || (e.id != "" && e.id != prev.ID)) {
+				// Turned on by this setup: off before it, recorded for its
+				// features (with the enablement ID the setup wrote).
+				if !onBefore[key] && slices.Contains(feats, e.feature) {
 					gained = append(gained, key)
 				}
 			}

@@ -177,7 +177,9 @@ func TestRecipePrereqSteps_RecordTheComponentsTheyTurnedOn(t *testing.T) {
 
 // The set records every component before its first patch; when a later
 // patch fails, the run claims only the components whose patch went
-// through, not the ones recorded but never changed.
+// through, not the ones recorded but never changed. A Resume whose retry
+// turns the rest on claims them then (the record had them already), and
+// the run's Clean up offers them.
 func TestRecipePrereqSteps_ClaimOnlyWhatWasTurnedOn(t *testing.T) {
 	pc := newPrereqCluster(t)
 	r, problems := recipe.Validate([]byte(tRecipeBase + `{"rhoai":{"build":"latest"},"dataScienceCluster":{"create":true},"project":{"mode":"create","name":"recipe-dev"},
@@ -203,6 +205,21 @@ func TestRecipePrereqSteps_ClaimOnlyWhatWasTurnedOn(t *testing.T) {
 	}
 	if strings.Join(st.Components, ",") != "aipipelines" || componentState(pc.f, "mlflowoperator") != "Removed" {
 		t.Errorf("components %v, mlflowoperator %s", st.Components, componentState(pc.f, "mlflowoperator"))
+	}
+	// Resume: the runner keeps the components; the retry succeeds.
+	pc.f.mu.Lock()
+	pc.f.intercept = nil
+	pc.f.mu.Unlock()
+	resumed := &recipe.State{Recipe: r, Components: st.Components}
+	if res, err := recipeStep(t, r, recipe.StepPrerequisites).Run(pc.c, resumed, func(types.UpdateStepEvent) {}); err != nil || !res.Success {
+		t.Fatalf("resume: %+v %v", res, err)
+	}
+	if strings.Join(resumed.Components, ",") != "aipipelines,mlflowoperator" {
+		t.Errorf("resumed components %v", resumed.Components)
+	}
+	run := &types.RecipeRun{Steps: []types.RecipeRunStep{{ID: recipe.StepPrerequisites}}, Components: resumed.Components}
+	if _, req := recipe.Ownership(pc.c, nil, run); req == nil || strings.Join(req.Components, ",") != "aipipelines,mlflowoperator" {
+		t.Errorf("clean up %+v", req)
 	}
 }
 
@@ -322,18 +339,19 @@ func TestRecipeOwnership_FromTheCluster(t *testing.T) {
 	}
 }
 
-// If the prerequisites snapshot cannot be fetched, the step reports that
+// If the cluster cannot be read for the claim, the step reports that
 // component ownership is unknown for the run (so they stay out of Clean up)
 // rather than dropping that information without notice.
 func TestRecipePrereqSteps_UnreadableRecordIsSaid(t *testing.T) {
 	pc := newPrereqCluster(t)
 	r := tRecipe(t, "create")
 	r.Spec.Features.Pipelines.Enabled = true
+	// The step's first read, before the setup: what is on already.
 	reads := 0
 	serve := pc.f.beforeServe
 	pc.f.beforeServe = func(method, path string) {
 		serve(method, path)
-		if method == http.MethodGet && strings.HasSuffix(path, "/configmaps/rhoai-nightly-updater-snapshot") {
+		if method == http.MethodGet && strings.HasSuffix(path, "/datascienceclusters") {
 			reads++
 			pc.f.mu.Lock()
 			if reads == 1 {

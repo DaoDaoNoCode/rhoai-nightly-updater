@@ -46,6 +46,7 @@ var (
 	prereqSetStatus  = features.GetPrerequisitesSetStatus
 	runPrereqSet     = features.RunPrerequisitesSet
 	turnedOnByTool   = features.TurnedOnByTool
+	onComponents     = features.OnComponents
 	samplesStatus    = mlflow.SamplesStatus
 	runSamples       = mlflow.RunSamples
 	maasStatus       = serving.GetMaaSStatus
