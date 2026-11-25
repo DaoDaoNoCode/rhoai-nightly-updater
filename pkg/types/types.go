@@ -1204,6 +1204,13 @@ type InferenceGatewayState struct {
 	// adds once a model uses the gateway: "enforced", "not-enforced",
 	// "missing", or "" when unknown.
 	AuthPolicy string `json:"authPolicy,omitempty"`
+	// AuthorinoTLSOff: the AuthPolicy is enforced, but Connectivity Link's
+	// Authorino serves its listener without TLS, which RHOAI's setup of the
+	// gateway's authentication turns on; calls through the gateway can then
+	// fail with HTTP 500. AuthorinoTLSCommands are RHOAI's steps for a
+	// cluster-admin ("" when they cannot be shown; Warning says why).
+	AuthorinoTLSOff      bool   `json:"authorinoTlsOff,omitempty"`
+	AuthorinoTLSCommands string `json:"authorinoTlsCommands,omitempty"`
 	// AllowedProjects are the namespaces the gateway's listeners list by
 	// name (allowedRoutes from Selector, kubernetes.io/metadata.name In
 	// [...], RHOAI's documented values array; from Same lists the
@@ -2640,7 +2647,9 @@ type ModelCallCheck struct {
 	// Result is "ok" (it answered), "model-name" (404 from the model's
 	// server: the request's model name is not the served one), "route"
 	// (404 without a body: nothing answers on that path), "auth" (401),
-	// "forbidden" (403), "server-error" (5xx), "unreachable" (no answer),
+	// "forbidden" (403), "gateway-error" (500 from a gateway, empty or
+	// Connectivity Link's own "Internal Server Error.": its authorization
+	// failed, not the model), "server-error" (5xx), "unreachable" (no answer),
 	// "maas" (reached through MaaS with an API key, which this tool does
 	// not create: MaaS's own readiness is reported), "not-checked" (this
 	// app cannot call it; Message says why), or "unexpected".

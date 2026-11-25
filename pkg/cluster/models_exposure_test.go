@@ -234,6 +234,48 @@ func TestModelsSetup_CanItBeCalled(t *testing.T) {
 	}
 }
 
+// A 500 the gateway answered itself (empty, or Kuadrant's fail-closed
+// "Internal Server Error.") is not the model's: the check names the
+// gateway's authorization and what Kuadrant's Authorino says, read
+// through the Kuadrant CR's namespace.
+func TestModelsCheck_GatewayAuthorizationFailure(t *testing.T) {
+	mc := newModelsCluster(t)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Gateway: true, Project: "proj"}); !res.Success {
+		t.Fatalf("setup: %+v", res)
+	}
+	const authorino = "/apis/operator.authorino.kuadrant.io/v1beta1/namespaces/kuadrant-system/authorinos/authorino"
+	cases := []struct {
+		name, authorino, body, says string
+	}{
+		{"plaintext", `{"spec":{"listener":{"tls":{"enabled":false}}}}`, "",
+			`Authorino in kuadrant-system doesn't serve TLS, which RHOAI's setup turns on ("Configuring authentication for llm-d using Red Hat Connectivity Link"): a cluster-admin turns it on; the Inference gateway part shows the commands.`},
+		{"tls on", `{"spec":{"listener":{"tls":{"enabled":true}}}}`, "Internal Server Error.\n",
+			"Authorino in kuadrant-system serves TLS: check that it runs, and that odh-model-controller re-read it"},
+		{"unknown", "", "", "Check that Red Hat Connectivity Link's Authorino runs."},
+	}
+	for _, tc := range cases {
+		if tc.authorino == "" {
+			mc.f.deleteObject(authorino)
+		} else {
+			mc.f.putJSON(authorino, tc.authorino)
+		}
+		before := len(mc.calls.sent())
+		mc.calls.answers = []simAnswer{{status: 500, body: tc.body}}
+		res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "check", Project: "proj"})
+		if res.Success || res.ErrorCode != "not_callable" || !strings.Contains(res.Message, "The gateway failed the call") || !strings.Contains(res.Message, tc.says) {
+			t.Errorf("%s: %+v", tc.name, res)
+		}
+		// One request: a gateway's 500 is not retried.
+		if n := len(mc.calls.sent()) - before; n != 1 {
+			t.Errorf("%s: %d requests", tc.name, n)
+		}
+		st, _ := GetResourcesStatus(mc.c)
+		if c := st.Models.Items[0].CallCheck; c == nil || c.Result != "gateway-error" || c.Status != 500 || !strings.Contains(c.Message, tc.says) {
+			t.Errorf("%s: status check %+v", tc.name, c)
+		}
+	}
+}
+
 // A project editor sets spec.model.name (KServe and vLLM take any string):
 // a name with characters a shell or JSON treats specially is never shown,
 // and the call check does not use it.
@@ -299,6 +341,12 @@ func TestClassifyModelCall(t *testing.T) {
 		{"403", 403, ``, nil, false, "forbidden", false, "may not call the model"},
 		{"503", 503, `no healthy upstream`, nil, false, "server-error", true, "no healthy upstream"},
 		{"500", 500, `boom`, nil, false, "server-error", false, "boom"},
+		{"500 empty", 500, ``, nil, false, "gateway-error", false, "The gateway failed the call (500 with an empty body), so it did not reach the model. The likely cause is the gateway's authorization"},
+		{"500 kuadrant", 500, "Internal Server Error.\n", nil, false, "gateway-error", false, `500 "Internal Server Error.", Red Hat Connectivity Link's answer when it cannot authorize a call`},
+		{"500 starlette", 500, `Internal Server Error`, nil, false, "server-error", false, "The call failed on the server side (500): Internal Server Error"},
+		{"500 vllm", 500, `{"error":{"message":"boom","type":"InternalServerError","code":500}}`, nil, false, "server-error", false, "boom"},
+		{"502 empty", 502, ``, nil, false, "server-error", true, "Bad Gateway"},
+		{"internal 500 empty", 500, ``, nil, true, "server-error", false, "Internal Server Error"},
 		{"dns", 0, ``, &net.DNSError{Name: "inference.apps.example.com", Err: "no such host"}, false, "unreachable", true, "DNS record"},
 		{"timeout", 0, ``, errSimDNS, false, "unreachable", true, "No answer"},
 		{"internal tls", 0, ``, x509.UnknownAuthorityError{}, true, "not-checked", false, "curl -k"},

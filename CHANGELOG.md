@@ -372,6 +372,21 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **Models: the inference gateway says when Authorino serves no TLS, and
+  the call check names the gateway's authorization on a gateway 500.** With
+  the gateway's AuthPolicy enforced, the Models tab read only that, and
+  showed "Authentication: On" while every call answered HTTP 500 (live,
+  Connectivity Link 1.5.0 installed for all namespaces). RHOAI's setup of
+  authentication for llm-d turns on TLS on Authorino's listener, and
+  odh-model-controller points the gateway at Authorino over TLS whenever it
+  read Authorino's TLS as on or found no Authorino, and keeps that after it
+  reads TLS as off. The gateway now reads Kuadrant's Authorino (in the
+  Kuadrant CR's namespace) and, without TLS, says calls can fail with 500
+  and shows RHOAI's steps for a cluster-admin; it changes nothing. A 500
+  with an empty body, or Kuadrant's own "Internal Server Error.", is
+  reported as the gateway's failure, with what Authorino says, instead of
+  a bare "Internal Server Error". No new permission.
+
 - **The tool names itself to the API server.** Every request now sends
   `User-Agent: rhoai-nightly-updater-client/<version>`, so audit logs name
   the tool, and writes without a field manager are recorded as
