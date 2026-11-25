@@ -9,7 +9,9 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/authz"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
@@ -245,7 +247,76 @@ func checkProjectStep(c *kube.Client, s *State) (Check, error) {
 	if !found.complete() {
 		return Check{}, nil // labels will be reconciled on ensure
 	}
+	// Done only once the steps that use it can see it (userSeesProject);
+	// until then Run waits for it.
+	if seen, err := userSeesProject(c, p.Name); err != nil || !seen {
+		return Check{}, err
+	}
 	return Check{Done: true, Reason: fmt.Sprintf("Project %s was created by a recipe.", p.Name)}, nil
+}
+
+// How long the project step waits for a project it created (or found
+// created) to be among the signed-in user's data science projects, and how
+// often it looks. The project-scoped steps after it (the MLflow samples,
+// the pipeline server, the workbench, the model, the playground) check
+// that list (authz.IsUserDSProject), and several of them start as soon as
+// the project step ended.
+//
+// OpenShift answers a user's project LIST from the openshift-apiserver's
+// project authorization cache, not from the namespaces themselves. Each
+// openshift-apiserver re-synchronizes that cache from its namespace and RBAC
+// informers once a second (openshift/openshift-apiserver release-4.21 at
+// bcfcb015fdb7b195ea1ccb3e9f710520ab5843d5,
+// pkg/cmd/openshift-apiserver/openshiftapiserver/openshift_apiserver.go:608-611,
+// "period := 1 * time.Second" and ProjectAuthorizationCache.Run(period);
+// pkg/project/auth/cache.go:283-287, Run runs synchronize every period
+// with utilwait.Forever). A project just created, its admin RoleBinding
+// and the dashboard label patched on it are listed once that replica's
+// informers saw them and its next synchronization ran; a LIST may reach
+// any replica. The poll is that period; the wait is 30 periods, a margin
+// for informers that lag on a loaded cluster.
+var (
+	projectVisiblePoll = time.Second
+	projectVisibleWait = 30 * time.Second
+)
+
+// userSeesProject: name is among the signed-in user's data science
+// projects, as the later steps check (authz.IsUserDSProject, with the
+// user's own client).
+func userSeesProject(c *kube.Client, name string) (bool, error) {
+	u := c.SignedInUser()
+	if u == nil {
+		return false, errors.New("there is no signed-in user's client to list your data science projects")
+	}
+	seen, err := authz.IsUserDSProject(u, name)
+	if err != nil {
+		return false, fmt.Errorf("list your data science projects: %w", err)
+	}
+	return seen, nil
+}
+
+// waitUserSeesProject waits, on the cluster packages' clock, until name is
+// among the signed-in user's data science projects (projectVisibleWait).
+// It returns "" once it is, or why the step fails: the list cannot be read,
+// or the project is still not in it. err is the step's context ending.
+func waitUserSeesProject(c *kube.Client, name string, emit func(types.UpdateStepEvent)) (msg, code string, err error) {
+	deadline := kube.Clock().Now().Add(projectVisibleWait)
+	for waited := false; ; waited = true {
+		seen, err := userSeesProject(c, name)
+		switch {
+		case err != nil:
+			return fmt.Sprintf("Project %s is set up, but checking that it is among your data science projects failed: %v. Resume checks it again.", name, err), kube.ErrorCodeOr(err, "prerequisites"), nil
+		case seen:
+			return "", "", nil
+		case !kube.Clock().Now().Before(deadline):
+			return fmt.Sprintf("Project %s is set up, but OpenShift still does not list it among your data science projects after %s (a new project usually appears there within seconds). The steps that use it need it there. Check that you can open it in the RHOAI dashboard, then Resume.", name, projectVisibleWait), "timeout", nil
+		case !waited:
+			emit(types.UpdateStepEvent{Step: StepProject, Status: "running", Message: fmt.Sprintf("Waiting for project %s to appear among your data science projects...", name)})
+		}
+		if err := kube.Clock().Sleep(c.Context(), projectVisiblePoll); err != nil {
+			return "", "", err
+		}
+	}
 }
 
 // EnsureProject provisions a mode-create project like the dashboard, using the
@@ -307,6 +378,13 @@ func EnsureProject(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (
 	}
 	if err := labelProject(c, name, uid, s.Recipe.Metadata.Name, kueue); err != nil {
 		return fail(fmt.Sprintf("Project %s was created, but setting its labels failed: %v. Resume sets them again.", name, err), kube.ErrorCodeOr(err, "prerequisites"))
+	}
+	// The step ends once the user's project list has the project: the
+	// steps after it read that list, and some start right away.
+	if msg, code, err := waitUserSeesProject(c, name, emit); err != nil {
+		return &types.OperationResponse{Success: false, Message: fmt.Sprintf("Stopped while waiting for project %s to appear among your data science projects.", name), ErrorCode: "timeout"}, err
+	} else if msg != "" {
+		return fail(msg, code)
 	}
 	record.Action(c, "create-recipe-project", fmt.Sprintf("project=%s recipe=%s", name, s.Recipe.Metadata.Name), true)
 	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("Created project %s.", name), Logs: []string{"OK: Project " + name + " created (uid " + uid + ")"}}, nil

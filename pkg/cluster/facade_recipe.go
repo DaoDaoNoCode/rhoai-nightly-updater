@@ -58,3 +58,6 @@ func RecipeOwnedProjects(c *Client) ([]types.RecipeOwnedProject, error) {
 func ForgetGoneRecipeProjects(c *Client) ([]string, error) {
 	return recipe.ForgetGoneProjects(c)
 }
+
+// RecipeMaxRunningSteps is recipe.MaxRunningSteps.
+const RecipeMaxRunningSteps = recipe.MaxRunningSteps

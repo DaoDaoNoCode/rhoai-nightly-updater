@@ -2231,8 +2231,12 @@ export interface RecipeRunStatus {
   /** The record says running, but the updater process that ran it is gone: Resume continues it. */
   interrupted?: boolean;
   stopRequested?: boolean;
-  /** The running step's latest progress. */
+  /** The run's latest progress, of whichever step reported last. */
   step?: { step: string; status: string; message: string; detail?: string; errorCode?: string };
+  /** Each running step's latest progress, by step ID, while the run runs in the answering updater pod (several steps run at once). */
+  progress?: Record<string, { step: string; status: string; message: string }>;
+  /** While the run runs in the answering pod: it starts no other step and ends once the running ones finished, and why. */
+  ending?: "failed" | "stopped" | "restart" | "gate" | "timeout" | "lock_lost";
   /** The clean-up request for what the run created, once it is not running and created anything. */
   cleanup?: CleanupRequest;
   /** Removing the offered distributed workloads setup also turns the dashboard's Kueue setting back, which the run turned on. */

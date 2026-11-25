@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -23,12 +25,23 @@ import (
 // goroutines finish, it reads the ConfigMap and asserts that all entries
 // are present.
 //
-// numGoroutines is kept <= maxConflictRetries to ensure every goroutine
-// can succeed within its retry budget.
+// numGoroutines is the attempts one write has (record.MaxActivityAttempts):
+// each writer loses at most once per other writer, so every one lands.
+// Each retry waits a jittered backoff first (recorded here; the cluster
+// packages' fake clock makes it instant).
 func TestRecordActivityConcurrent(t *testing.T) {
 	t.Setenv("NAMESPACE", "test-ns")
 
-	const numGoroutines = 3 // keep <= maxConflictRetries for deterministic success
+	const numGoroutines = record.MaxActivityAttempts
+	var backoffs atomic.Int32
+	conflicts := 0
+	t.Cleanup(record.SetActivityBackoffForTest(func(attempt int) time.Duration {
+		if attempt < 1 || attempt >= record.MaxActivityAttempts {
+			t.Errorf("backoff before attempt %d", attempt)
+		}
+		backoffs.Add(1)
+		return time.Duration(attempt) * time.Millisecond
+	}))
 	// Shared state: the stored ConfigMap body (starts empty -> 404).
 	var mu sync.Mutex
 	var storedCM []byte // nil means ConfigMap does not exist yet
@@ -123,6 +136,7 @@ func TestRecordActivityConcurrent(t *testing.T) {
 			if storedCM != nil {
 				// Already exists — return 409 Conflict
 				w.Header().Set("Content-Type", "application/json")
+				conflicts++
 				w.WriteHeader(http.StatusConflict)
 				w.Write([]byte(`{"kind":"Status","status":"Failure","message":"already exists","reason":"AlreadyExists","code":409}`))
 				return
@@ -145,6 +159,7 @@ func TestRecordActivityConcurrent(t *testing.T) {
 			if requestRV != serverRV {
 				// resourceVersion mismatch — return 409 Conflict
 				w.Header().Set("Content-Type", "application/json")
+				conflicts++
 				w.WriteHeader(http.StatusConflict)
 				w.Write([]byte(`{"kind":"Status","status":"Failure","message":"the object has been modified; please apply your changes to the latest version","reason":"Conflict","code":409}`))
 				return
@@ -215,6 +230,12 @@ func TestRecordActivityConcurrent(t *testing.T) {
 	if len(entries) != numGoroutines {
 		t.Fatalf("expected %d entries, got %d", numGoroutines, len(entries))
 	}
+
+	mu.Lock()
+	if int(backoffs.Load()) != conflicts {
+		t.Errorf("%d backoffs for %d conflicts", backoffs.Load(), conflicts)
+	}
+	mu.Unlock()
 
 	// Verify every goroutine's entry is present (by Detail field).
 	seen := make(map[string]bool, numGoroutines)

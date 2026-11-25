@@ -4,16 +4,30 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-const maxConflictRetries = 3
+// maxConflictRetries bounds the read-modify-write attempts of one entry.
+// Writers that collide each lose at most once per other writer that wins,
+// so this many attempts let that many concurrent writers all land (up to
+// three recipe steps, the run's own entries and another pod's).
+const maxConflictRetries = 8
+
+// activityBackoff is the wait before attempt (1 or more) after a conflict:
+// a random part of 25 ms doubled per attempt, at most 800 ms, so writers
+// that collided do not collide again in step. Tests replace it.
+var activityBackoff = func(attempt int) time.Duration {
+	ceiling := min(25*time.Millisecond<<(attempt-1), 800*time.Millisecond)
+	return time.Duration(rand.Int64N(int64(ceiling))) + time.Millisecond
+}
 
 const (
 	ActivityConfigMapName  = "rhoai-nightly-updater-activity"
@@ -219,7 +233,9 @@ func GetActivityNamespace() string {
 // Activity appends an activity entry to the ConfigMap-backed log.
 // It uses optimistic concurrency (resourceVersion) to prevent lost updates
 // when multiple replicas attempt concurrent writes. On 409 Conflict the
-// read-modify-write cycle is retried up to maxConflictRetries times.
+// read-modify-write cycle is retried up to maxConflictRetries times, after
+// a jittered backoff (activityBackoff, waited on the cluster packages'
+// clock).
 // It never returns an error to callers — failures are logged as warnings.
 func Activity(c *kube.Client, entry types.ActivityEntry) {
 	// Not cancelled with the request (for example an SSE connection drop),
@@ -255,6 +271,10 @@ func recordActivityWithClient(c *kube.Client, entry types.ActivityEntry) {
 	for attempt := range maxConflictRetries {
 		if attempt > 0 {
 			slog.Info("retrying activity record after conflict", "attempt", attempt+1)
+			if err := kube.Clock().Sleep(c.Context(), activityBackoff(attempt)); err != nil {
+				slog.Warn("failed to save activity configmap: no time left to retry after a conflict", "attempts", attempt, "error", err)
+				return
+			}
 		}
 
 		var entries []types.ActivityEntry

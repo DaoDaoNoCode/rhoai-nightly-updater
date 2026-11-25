@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/recipe"
@@ -38,6 +39,19 @@ func projectFake(t *testing.T) (*resourceFake, *Client) {
 	// On ProjectRequest POST, seed the namespace and return a Project whose
 	// metadata matches, the way openshift-apiserver responds.
 	f.intercept = func(w http.ResponseWriter, r *http.Request, _ []byte) bool {
+		if r.Method == http.MethodGet && r.URL.Path == "/apis/project.openshift.io/v1/projects" {
+			// A user's projects: the namespaces (openshift-apiserver lists
+			// them from its project cache, which may lag: projectListsHidden).
+			f.projectLists++
+			items := []any{}
+			for k, obj := range f.objects {
+				if k.gv == "v1" && k.plural == "namespaces" && f.projectLists > f.projectListsHidden && matchesSelector(obj, r.URL.Query().Get("labelSelector")) {
+					items = append(items, map[string]any{"metadata": obj["metadata"], "status": map[string]any{"phase": "Active"}})
+				}
+			}
+			f.write(w, 200, map[string]any{"kind": "ProjectList", "apiVersion": "project.openshift.io/v1", "items": items})
+			return true
+		}
 		if r.Method != http.MethodPost || r.URL.Path != tProjectRequest {
 			return false
 		}
@@ -385,6 +399,9 @@ func TestRecipeProject_LabelPatchKeepsAConcurrentWritersMap(t *testing.T) {
 		if !intercept(w, r, body) {
 			return false
 		}
+		if r.Method != http.MethodPost {
+			return true
+		}
 		// Strip annotations from the freshly created namespace (intercept holds
 		// the fake lock).
 		delete(f.objects[fakeKey{gv: "v1", plural: "namespaces", name: "recipe-dev"}]["metadata"].(map[string]any), "annotations")
@@ -409,5 +426,66 @@ func TestRecipeProject_LabelPatchKeepsAConcurrentWritersMap(t *testing.T) {
 	ann := f.get(tRecipeNS)["metadata"].(map[string]any)["annotations"].(map[string]any)
 	if ann["someone/else"] != "x" || len(ann) < 2 {
 		t.Fatalf("annotations %v", ann)
+	}
+}
+
+// openshift-apiserver lists a user's projects from its project cache,
+// which catches up with a new project within about a second: the project
+// step ends only once the user's list has it, so the steps after it (which
+// check that list) find it. Here the first two LISTs leave it out.
+func TestRecipeProject_WaitsUntilTheUserSeesIt(t *testing.T) {
+	f, c := projectFake(t)
+	f.projectListsHidden = 2
+	var events []string
+	start := kube.Clock().Now()
+	res, err := recipe.EnsureProject(c, &recipe.State{Recipe: tRecipe(t, "create")}, func(e types.UpdateStepEvent) { events = append(events, e.Message) })
+	if err != nil || !res.Success {
+		t.Fatalf("ensure %+v %v", res, err)
+	}
+	waited := kube.Clock().Now().Sub(start)
+	f.mu.Lock()
+	lists := f.projectLists
+	f.mu.Unlock()
+	if lists != 3 || waited < 2*time.Second || waited > 3*time.Second {
+		t.Errorf("%d project lists over %v, want 3 over 2 polls", lists, waited)
+	}
+	for _, call := range f.callsTo(http.MethodGet, "/apis/project.openshift.io/v1/projects") {
+		if call.Token != fakeUserToken || call.Query.Get("labelSelector") != "opendatahub.io/dashboard=true" {
+			t.Errorf("the list was not the user's data science projects: %+v", call)
+		}
+	}
+	if !strings.Contains(strings.Join(events, "\n"), "Waiting for project recipe-dev to appear among your data science projects") {
+		t.Errorf("events %q", events)
+	}
+
+	// Found created (a resume): the check is done only while the user sees it.
+	s := &recipe.State{Recipe: tRecipe(t, "create")}
+	f.mu.Lock()
+	f.projectLists, f.projectListsHidden = 0, 1
+	f.mu.Unlock()
+	step := recipeStep(t, s.Recipe, recipe.StepProject)
+	chk, err := step.Check(c, s)
+	if err != nil || chk.Done {
+		t.Errorf("check while the user does not see it: %+v %v", chk, err)
+	}
+	if chk, err = step.Check(c, s); err != nil || !chk.Done {
+		t.Errorf("check once the user sees it: %+v %v", chk, err)
+	}
+}
+
+// A project the user's list never shows fails the project step itself,
+// with what to do, after the bounded wait; the steps after it never start.
+func TestRecipeProject_NeverSeenFailsTheProjectStep(t *testing.T) {
+	f, c := projectFake(t)
+	f.projectListsHidden = 1 << 30
+	start := kube.Clock().Now()
+	res, err := recipe.EnsureProject(c, &recipe.State{Recipe: tRecipe(t, "create")}, func(types.UpdateStepEvent) {})
+	if err != nil || res.Success || res.ErrorCode != "timeout" ||
+		!strings.Contains(res.Message, "Project recipe-dev is set up, but OpenShift still does not list it among your data science projects after 30s") ||
+		!strings.Contains(res.Message, "then Resume") {
+		t.Fatalf("ensure %+v %v", res, err)
+	}
+	if waited := kube.Clock().Now().Sub(start); waited < 30*time.Second || waited > 32*time.Second {
+		t.Errorf("waited %v", waited)
 	}
 }

@@ -26,7 +26,7 @@ import { StatusLabel, type StatusKind } from "../StatusLabel";
 import { TooltipButton } from "../TooltipButton";
 import { StepProgress, type StepState } from "../environment/StepProgress";
 import { shortDigest } from "../../build";
-import { formatClock, resumeStep, usually, usuallySentence } from "./recipeForm";
+import { formatClock, listText, resumeStep, usually, usuallySentence } from "./recipeForm";
 import { RecipeProblems, refusalOf } from "./RecipeReviewModal";
 
 /** Ticks once a second while `active`, so elapsed times stay current. */
@@ -71,6 +71,11 @@ function stepNumber(run: RecipeRun, step: RecipeRunStep): string {
   return `${run.steps.indexOf(step) + 1} of ${run.steps.length}`;
 }
 
+/** "step 4 of 8, S3 storage" for one step; "S3 storage and MLflow" for several. */
+function stepsText(run: RecipeRun, steps: RecipeRunStep[]): string {
+  return steps.length === 1 ? `step ${stepNumber(run, steps[0])}, ${steps[0].title}` : listText(steps.map((s) => s.title));
+}
+
 /**
  * The last recipe run: its steps as they ran, the running step's latest
  * progress and elapsed time, and what to do next. Running: Stop after this
@@ -100,8 +105,14 @@ export const RecipeRunCard: React.FC<{
   const [resumeError, setResumeError] = useState<ApiError | null>(null);
   const [reresolve, setReresolve] = useState(false);
 
-  const current = run.steps.find((s) => s.status === "running") ?? null;
-  const failed = run.steps.find((s) => s.status === "failed") ?? null;
+  // Steps that do not depend on each other run at the same time (up to three).
+  const runningSteps = run.steps.filter((s) => s.status === "running");
+  const current = runningSteps[0] ?? null;
+  const several = runningSteps.length > 1;
+  const failedSteps = run.steps.filter((s) => s.status === "failed");
+  const failed = failedSteps[0] ?? null;
+  const doneCount = run.steps.filter((s) => s.status === "success" || s.status === "skipped").length;
+  const stopLabel = several ? "Stop after the running steps" : "Stop after this step";
   const next = resumeStep(run);
   const name = run.recipe.metadata.name;
 
@@ -113,7 +124,13 @@ export const RecipeRunCard: React.FC<{
       const started = s.startedAt ? Date.parse(s.startedAt) : NaN;
       // One line: the current phase, the time so far, one estimate. A clock the
       // phase's own message carries ("(3:10 so far, ...)") is dropped: the line has its own.
-      const progress = (status.step?.message || "Starting...").replace(/\s*\([^)]*\d+:\d\d[^)]*\)/g, "").trim();
+      // Each running step's own progress. Without it (another pod's run), the run's latest when it is this row's: only one step
+      // runs, and the latest is not another step's end (the runner reports a step's end under that step's ID).
+      const latest = status.step;
+      const attributable = runningSteps.length === 1 && !!latest && !run.steps.some((o) => o.id === latest.step && o.id !== s.id);
+      const own = status.progress?.[s.id]?.message || (attributable ? latest.message : "");
+      const fallback = status.remote ? `Running on updater pod ${status.pod || "(unknown)"}` : "Starting...";
+      const progress = (own || fallback).replace(/\s*\([^)]*\d+:\d\d[^)]*\)/g, "").trim();
       const phaseText = /[.!?]$/.test(progress) ? progress : `${progress}.`;
       message = Number.isFinite(started)
         ? `${phaseText} ${formatClock(now - started)} so far; ${usually(s.typicalSeconds, s.maxSeconds)}.`
@@ -156,9 +173,13 @@ export const RecipeRunCard: React.FC<{
     }
   };
 
-  const [labelKind, labelText] = LABELS[phase];
+  // The run starts no other step and ends once the running ones finished (pkg/types RecipeRunStatus ending).
+  const ending = live ? status.ending ?? "" : "";
+  const [phaseKind, phaseLabel] = LABELS[phase];
+  const labelKind: StatusKind = ending === "failed" ? "warning" : phaseKind;
+  const labelText = ending === "failed" ? "Stopping: a step failed" : phase === "stopping" && several ? "Stopping after the running steps" : phaseLabel;
   const runStarted = Date.parse(run.resumedAt || run.startedAt);
-  const stopReason = phase === "stopping" ? "Stop was asked for: the run stops after the current step." : status.remote
+  const stopReason = ending ? "No other step starts: the run stops once the running steps finish." : phase === "stopping" ? `Stop was asked for: the run stops after ${several ? "the running steps" : "the current step"}.` : status.remote
     ? `Updater pod ${status.pod || "(unknown)"} runs it; only that pod can stop it, and it does when it shuts down.`
     : permissionReason;
   const resumeButton = next && (
@@ -166,7 +187,9 @@ export const RecipeRunCard: React.FC<{
       Resume
     </TooltipButton>
   );
-  const continuesAt = next ? `Resume continues at step ${stepNumber(run, next)}, ${next.title}; what is set up stays.` : "";
+  // Resume runs every step that is not set up (the steps of independent lanes side by side).
+  const notSetUp = listText(run.steps.filter((s) => s.status !== "success" && s.status !== "skipped").map((s) => s.title));
+  const continuesAt = next ? `Resume runs the steps that are not set up: ${notSetUp}; what is set up stays.` : "";
 
   let outcome: React.ReactNode = null;
   switch (phase) {
@@ -186,8 +209,9 @@ export const RecipeRunCard: React.FC<{
     case "failed":
       // The failed step's own message: the title already names the step.
       outcome = (
-        <OutcomeAlert result={{ success: false, message: failed?.message || run.stopReason || "The run failed.", errorCode: run.errorCode, logs: null }}
-          failedTitle={failed ? `Step ${stepNumber(run, failed)} failed: ${failed.title}` : "The run failed"} />
+        <OutcomeAlert result={{ success: false, message: (failedSteps.length > 1 ? run.stopReason : failed?.message) || run.stopReason || "The run failed.", errorCode: run.errorCode, logs: null }}
+          failedTitle={failedSteps.length > 1 ? `${failedSteps.length} steps failed: ${listText(failedSteps.map((s) => s.title))}`
+            : failed ? `Step ${stepNumber(run, failed)} failed: ${failed.title}` : "The run failed"} />
       );
       break;
     case "sign-in":
@@ -196,8 +220,7 @@ export const RecipeRunCard: React.FC<{
           // The user menu's Log out: oauth-proxy's sign_out clears its session cookie (App).
           actionLinks={<AlertActionLink component="a" href="/oauth/sign_out">Log out</AlertActionLink>}>
           {/* The backend's reason names the step and says what to do ("Stopped before S3 storage: Your sign-in expires ..., then Resume."). */}
-          {run.stopReason || <>{next ? `The run stopped before step ${stepNumber(run, next)}, ${next.title}: ` : "The run stopped: "}
-            your sign-in ended or expires before that step could finish. Nothing of that step started. Log out and log in again, then Resume.</>}
+          {run.stopReason || <>The run stopped: your sign-in ended or expires before the next steps could finish. None of them started. Log out and log in again, then Resume.</>}
         </Alert>
       );
       break;
@@ -211,16 +234,44 @@ export const RecipeRunCard: React.FC<{
     case "interrupted":
       outcome = (
         <Alert variant="warning" isInline component="p" isLiveRegion title="The run was interrupted">
-          {run.pod ? `The updater pod ${run.pod}` : "The updater"} stopped{current ? ` during step ${stepNumber(run, current)}, ${current.title}` : ""}, before the run ended
+          {run.pod ? `The updater pod ${run.pod}` : "The updater"} stopped{current ? ` during ${stepsText(run, runningSteps)}` : ""}, before the run ended
           (a crash, a forced restart or a lost node). Nothing resumes by itself. Resume runs the steps again: each checks the cluster
           first, so what is set up stays.
         </Alert>
       );
       break;
     case "running":
-    case "stopping":
-      // The steps above show it; the outcome comes when it ends.
+    case "stopping": {
+      // Steps still run, but no other starts: say so now, not only when the run ends.
+      if (!ending && phase !== "stopping") break;
+      const finishing = runningSteps.length > 0
+        ? `${listText(runningSteps.map((s) => s.title))} ${runningSteps.length > 1 ? "finish" : "finishes"} first, then the run stops.`
+        : "The run stops now.";
+      const resumeLine = "Resume runs the steps that are not set up.";
+      if (ending === "failed") {
+        const why = failedSteps.length === 1 ? failedSteps[0].message : "";
+        outcome = (
+          <Alert variant="warning" isInline component="p" isLiveRegion
+            title={`${listText(failedSteps.map((s) => s.title)) || "A step"} failed`}>
+            {why ? `${why.replace(/\.?\s*$/, ".")} ` : ""}No other step starts; {finishing} {resumeLine}
+          </Alert>
+        );
+      } else if (ending === "gate") {
+        outcome = (
+          <Alert variant="warning" isInline component="p" isLiveRegion title="Stopping before the next steps">
+            Your sign-in or permission no longer allows a new step, so no other step starts; {finishing} Log in again if asked, then Resume.
+          </Alert>
+        );
+      } else {
+        const title = ending === "restart" ? "Stopping: the updater is restarting" : ending === "timeout" || ending === "lock_lost" ? "Stopping" : "Stopping as asked";
+        outcome = (
+          <Alert variant={ending === "timeout" || ending === "lock_lost" ? "warning" : "info"} isInline component="p" isLiveRegion title={title}>
+            No other step starts; {finishing} {resumeLine}
+          </Alert>
+        );
+      }
       break;
+    }
   }
 
   return (
@@ -245,18 +296,21 @@ export const RecipeRunCard: React.FC<{
           {live && (
             <StackItem>
               <Content component="p">
-                {status.remote ? `Running on updater pod ${status.pod || "(unknown)"}` : "Running"} for {Number.isFinite(runStarted) ? formatClock(now - runStarted) : "a while"}
-                {current ? `, step ${stepNumber(run, current)}` : ""}. The steps run on the updater: you can leave this page or close the browser and
-                come back. Logging out does not stop the run; Stop after this step does. Teammates cannot change this cluster until it ends.
+                {status.remote ? `Running on updater pod ${status.pod || "(unknown)"}` : "Running"} for {Number.isFinite(runStarted) ? formatClock(now - runStarted) : "a while"}:
+                {` ${doneCount} of ${run.steps.length} steps done`}{runningSteps.length > 0 ? `; running: ${runningSteps.map((s) => s.title).join(", ")}` : ""}.
+                Steps that do not depend on each other run at the same time. The steps run on the updater: you can leave this page or close the
+                browser and come back. Logging out does not stop the run; {stopLabel} does. Teammates cannot change this cluster until it ends.
               </Content>
             </StackItem>
           )}
+          {/* While the run ends, why no other step starts comes first, above the steps. */}
+          {live && outcome && <StackItem>{outcome}</StackItem>}
           <StackItem>
             <StepProgress idPrefix="recipe-run" aria-label={`Recipe ${name}: steps`} states={states} running={live}
               steps={run.steps.map((s) => ({ id: s.id, title: s.title, pending: usuallySentence(s.typicalSeconds, s.maxSeconds) }))}
-              shownElsewhere={phase === "failed" ? failed?.message || run.stopReason : undefined} />
+              shownElsewhere={phase === "failed" ? failed?.message || run.stopReason : ending === "failed" && failedSteps.length === 1 ? failed?.message : undefined} />
           </StackItem>
-          {outcome && <StackItem>{outcome}</StackItem>}
+          {!live && outcome && <StackItem>{outcome}</StackItem>}
           {!live && next && phase !== "succeeded" && <StackItem><Content component="p">{continuesAt}</Content></StackItem>}
           {(live || resumeButton || onCleanup) && (
             <StackItem>
@@ -264,7 +318,7 @@ export const RecipeRunCard: React.FC<{
                 {live && (
                   <ActionListItem>
                     <TooltipButton variant="secondary" onClick={() => { setStopError(null); setStopOpen(true); }} disabledReason={stopReason}>
-                      Stop after this step
+                      {stopLabel}
                     </TooltipButton>
                   </ActionListItem>
                 )}
@@ -283,15 +337,15 @@ export const RecipeRunCard: React.FC<{
       </CardBody>
       <ConfirmActionModal
         isOpen={stopOpen}
-        title="Stop after this step?"
+        title={`${stopLabel}?`}
         changes={[]}
         summary={
           <Content component="p">
-            {current ? `Step ${stepNumber(run, current)}, ${current.title}, finishes` : "The running step finishes"}, then the run stops and the cluster
-            is free for others. What is set up stays; Resume continues from there.
+            {several ? `The running steps, ${listText(runningSteps.map((s) => s.title))}, finish` : current ? `Step ${stepNumber(run, current)}, ${current.title}, finishes` : "The running step finishes"}
+            , then the run stops and the cluster is free for others. No other step starts. What is set up stays; Resume continues from there.
           </Content>
         }
-        confirmLabel="Stop after this step"
+        confirmLabel={stopLabel}
         isLoading={stopping}
         onConfirm={() => void stop()}
         onCancel={() => setStopOpen(false)}
@@ -311,7 +365,7 @@ export const RecipeRunCard: React.FC<{
           <Stack hasGutter>
             <StackItem>
               <Content component="p">
-                {next ? `It continues at step ${stepNumber(run, next)}, ${next.title}. ` : ""}Each step checks the cluster first, so what is set
+                {next ? `It runs the steps that are not set up: ${notSetUp}. ` : ""}Each step checks the cluster first, so what is set
                 up stays and is not done again.
               </Content>
             </StackItem>

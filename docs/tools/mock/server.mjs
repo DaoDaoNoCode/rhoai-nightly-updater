@@ -710,21 +710,35 @@ async function recipeRoute(req, res, key) {
     world.recipeRun = { ...world.recipeRun, stopRequested: true };
     return json(res, 200, { stopRequested: true });
   }
-  // run and resume: the run begins at the first step that is not set up.
+  // run and resume: the run runs the steps that are not set up, one per
+  // POST /__docs/advance. A resume keeps the run's recipe and the steps it
+  // set up (by step ID, as the runner's checks skip them).
   const prior = world.recipeRun.run;
-  const done = key === "POST /api/recipes/resume" && prior ? prior.steps.filter((s) => s.status === "success" || s.status === "skipped").length : installed ? 1 : 0;
-  const titles = F.recipeSteps(F.recipe()).map(([, title]) => title);
-  const advance = (n) => {
-    if (n >= titles.length) {
-      world.recipeRun = { run: { ...F.recipeRun({ done: titles.length, current: "", state: "succeeded", stopReason: "Every step of dev is set up." }) }, running: false };
+  const resume = key === "POST /api/recipes/resume" && prior;
+  const rcp = resume ? prior.recipe : recipe ?? F.recipe();
+  const name = rcp.metadata?.name ?? "dev";
+  const all = F.recipeRun({ rcp, done: F.recipeSteps(rcp).length, current: "", state: "succeeded", stopReason: `Every step of ${name} is set up.` });
+  const doneIds = new Set(resume ? prior.steps.filter((s) => s.status === "success" || s.status === "skipped").map((s) => s.id) : installed ? ["rhoai"] : []);
+  const todo = all.steps.map((s) => s.id).filter((id) => !doneIds.has(id));
+  const advance = (k) => {
+    if (k >= todo.length) {
+      world.recipeRun = { run: all, running: false };
       world.operation = { inProgress: false, operation: null };
       return;
     }
-    world.recipeRun = { run: F.recipeRun({ done: n }), running: true, pod: world.recipeRun.run?.pod, step: { step: "", status: "running", message: `Checking ${titles[n]}...` } };
-    world.operation = { inProgress: true, operation: { id: "op-recipe", type: "recipe", label: "Environment recipe", user: F.USER, target: `dev: step ${n + 1} of ${titles.length} (${titles[n]})`, startedAt: new Date(F.NOW).toISOString(), updatedAt: new Date(F.NOW).toISOString() } };
-    nextStep().then(() => advance(n + 1));
+    const steps = all.steps.map((s) => {
+      if (doneIds.has(s.id) || todo.indexOf(s.id) < k) return s;
+      const { id, title, typicalSeconds, maxSeconds } = s;
+      return id === todo[k] ? { id, title, typicalSeconds, maxSeconds, status: "running", startedAt: new Date(F.NOW).toISOString() } : { id, title, typicalSeconds, maxSeconds, status: "pending" };
+    });
+    const title = steps.find((s) => s.id === todo[k]).title;
+    world.recipeRun = { run: { ...all, state: "running", stopReason: undefined, finishedAt: undefined, steps }, running: true, pod: prior?.pod,
+      progress: { [todo[k]]: { step: todo[k], status: "running", message: `Checking ${title}...` } }, step: { step: todo[k], status: "running", message: `Checking ${title}...` } };
+    const doneNow = steps.filter((s) => s.status === "success" || s.status === "skipped").length;
+    world.operation = { inProgress: true, operation: { id: "op-recipe", type: "recipe", label: "Environment recipe", user: F.USER, target: `${name}: ${doneNow} of ${steps.length} steps done; running: ${title}`, startedAt: new Date(F.NOW).toISOString(), updatedAt: new Date(F.NOW).toISOString() } };
+    nextStep().then(() => advance(k + 1));
   };
-  advance(done);
+  advance(0);
   return json(res, 202, { runId: "run-7c1e" });
 }
 

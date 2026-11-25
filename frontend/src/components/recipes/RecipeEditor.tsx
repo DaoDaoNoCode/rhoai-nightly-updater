@@ -23,7 +23,7 @@ import { SingleSelect } from "../SingleSelect";
 import { TooltipButton } from "../TooltipButton";
 import { FieldHelperText, NestedFields } from "../FormFields";
 import {
-  RECIPE_IMAGE_PREFIX, formProblems, maasPublishReason, needsProjectReason, noProjectReason, pipelinesReason, playgroundReason, playgroundThroughMaaS,
+  RECIPE_IMAGE_PREFIX, formProblems, listText, maasPublishReason, needsProjectReason, noProjectReason, pipelinesReason, playgroundReason, playgroundThroughMaaS,
   type DashboardDevChoice, type ExposureChoice, type RecipeForm,
 } from "./recipeForm";
 
@@ -60,9 +60,6 @@ function useCatalog(wanted: boolean) {
   }, [wanted, catalog]);
   return { catalog, error };
 }
-
-/** "a, b and c". */
-const listOf = (items: string[]): string => (items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`);
 
 /** What else the recipe sets up in the project Kueue labels (the tab's own warning). */
 function kueueOthers(f: RecipeForm): string[] {
@@ -306,7 +303,7 @@ export const RecipeEditor: React.FC<{
                     help="Kueue queues for the project, as the Distributed workloads tab sets them up: a ClusterQueue and ResourceFlavor (cluster-wide objects; only this project uses them) and its LocalQueue. First adds what they need: Kueue in the DataScienceCluster, cert-manager and the Kueue operator (not Ray: see the samples). Set up after the project's other parts.">
                     {kueueOthers(form).length > 0 && (
                       <FieldHelperText>
-                        {`The project also gets ${listOf(kueueOthers(form))}. Kueue manages only what is sent to a queue, so ${kueueOthers(form).length === 1 ? "it keeps" : "they keep"} running; a project of its own is still safer.`}
+                        {`The project also gets ${listText(kueueOthers(form))}. Kueue manages only what is sent to a queue, so ${kueueOthers(form).length === 1 ? "it keeps" : "they keep"} running; a project of its own is still safer.`}
                       </FieldHelperText>
                     )}
                     <Checkbox id="recipe-kueue-raycluster" label="RayCluster sample" isChecked={form.kueueRayCluster} onChange={(_e, v) => set("kueueRayCluster", v)}

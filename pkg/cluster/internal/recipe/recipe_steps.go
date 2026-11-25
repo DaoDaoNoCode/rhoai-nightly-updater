@@ -362,8 +362,13 @@ const (
 type Step struct {
 	ID, Title    string
 	Typical, Max time.Duration
-	Check        func(c *kube.Client, s *State) (Check, error)
-	Run          func(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error)
+	// After names the steps of the run this one starts after: each must
+	// have ended well (succeeded, or found set up) first. Steps sets it
+	// from the run's order (stepsFirst, stepLanes, stepsLast); steps
+	// without one between them run side by side.
+	After []string
+	Check func(c *kube.Client, s *State) (Check, error)
+	Run   func(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error)
 }
 
 // Seconds exposes typical and maximum durations in whole seconds—the same
@@ -372,9 +377,10 @@ func (s Step) Seconds() (typical, most int) {
 	return int(s.Typical / time.Second), int(s.Max / time.Second)
 }
 
-// Steps lists a recipe's stages in execution order: RHOAI build,
+// Steps lists a recipe's stages in plan order: RHOAI build,
 // DataScienceCluster, optional project, what every feature needs (one
-// step), then each feature's setup steps.
+// step), then each feature's setup steps. Each step's After says which
+// steps it waits for; the others run side by side.
 func Steps(r types.EnvironmentRecipe) []Step {
 	steps := []Step{
 		{ID: StepRHOAI, Title: "RHOAI", Typical: 7 * time.Minute, Max: 15 * time.Minute, Check: checkRHOAI, Run: runRHOAI},
@@ -402,7 +408,7 @@ func Steps(r types.EnvironmentRecipe) []Step {
 			Step{ID: StepMLflow, Title: "MLflow", Typical: 2 * time.Minute, Max: 10 * time.Minute, Check: checkMLflow, Run: runMLflow},
 		)
 	}
-	return append(steps, featureSteps(r)...)
+	return withAfter(append(steps, featureSteps(r)...))
 }
 
 // fail is a step's refusal or failure.

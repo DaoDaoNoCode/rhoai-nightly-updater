@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,45 +27,56 @@ import (
 // taking it again per step, keeps another operation from changing what a
 // later step relies on.
 //
-// Per step the runner:
-//  1. ends the run as stopped when Stop after this step was asked for, or
-//     when the updater is shutting down (stopped, "restart": the marker is
-//     cleared with that outcome, so the run is not reported interrupted);
+// A step starts once every step it comes after (its After: the recipe's
+// order, internal/recipe stepsFirst, stepLanes, stepsLast) ended well;
+// steps that do not wait for each other run side by side, at most
+// cluster.RecipeMaxRunningSteps at once, started in plan order. Before
+// steps start the runner:
+//  1. starts none when Stop was asked for, or when the updater is
+//     shutting down (stopped, "restart": the marker is cleared with that
+//     outcome, so the run is not reported interrupted);
 //  2. passes the mutation wrapper's gate again (statusWriter.gate, which
 //     holds the token of the request that started the run): it checks the
 //     signed-in user's token (sessionProblem: not expired
 //     or revoked, user:full, not expiring before the step's deadline and
 //     its restore) and that they are still a cluster-admin
 //     (mutationPermission); otherwise the run stops with sign_in_again (or
-//     the code sessionProblem gives) or forbidden before the step starts;
+//     the code sessionProblem gives) or forbidden before the steps start.
+//
+// Then, per step, it:
 //  3. gives the step its own context, WithTimeout(run, OperationDeadline),
 //     the budget every operation has, a copy of the user's client on it,
 //     and a ServiceAccount bookkeeper made now (the ServiceAccount token
 //     rotates);
-//  4. runs the step's read-only Check, then its Run only when needed, and
+//  4. runs the step's read-only Check, then its Run only when needed, on
+//     its own copy of the run's State (merged back when it ended), and
 //     shows its progress in the operation (the lease, GET
-//     /api/operation);
-//  5. records the step's outcome; the first failure ends the run as
-//     failed. Nothing is retried, but for the bounded retries inside a
+//     /api/operation) and in GET /api/recipes/run;
+//  5. records the step's outcome. After a failure no step starts; the
+//     running ones end, then the run ends failed, naming every failed
+//     step. Nothing is retried, but for the bounded retries inside a
 //     step.
 //
 // The lease heartbeat stops a run whose lease was lost with
-// cluster.ErrOperationLockLost: the step's context ends (its own rules:
-// no restore), and the run ends failed with errorCode lock_lost.
+// cluster.ErrOperationLockLost: every running step's context ends (its
+// own rules: no restore), and the run ends failed with errorCode
+// lock_lost. The run's limit (recipeRunCap) ends them the same way.
 //
 // The user's token stays in this process's memory for the whole run
 // (never written, never logged; SECURITY.md, Environment recipes). Logging
-// out does not revoke it, so it does not stop a run; Stop after this step
-// does. After a restart nothing resumes by itself: the new process has no
-// token, and the ServiceAccount never acts for the user. The run record
+// out does not revoke it, so it does not stop a run; Stop does: the
+// running steps finish, and no other starts. After a restart nothing
+// resumes by itself: the new process has no token, and the ServiceAccount
+// never acts for the user. The run record
 // then still says running with a dead boot ID: GET /api/recipes/run
 // reports it interrupted, and Resume runs the steps again, where each
 // step's check skips what is set up.
 //
 // The run keeps one mutation slot (drain.go) from its start to its end, so
-// a shutdown waits for the running step (within ShutdownDrainTimeout: one
-// step is one operation's budget) and for the run's last record, and the
-// run then sees the drain before its next step.
+// a shutdown waits for the running steps (within ShutdownDrainTimeout: no
+// step starts once the drain began, so each ends within one operation's
+// budget of its start) and for the run's last record, and the run starts
+// no step once it sees the drain.
 
 // Seams of the runner; tests replace them.
 var (
@@ -75,6 +87,9 @@ var (
 	recordRecipeActivity = cluster.RecordRecipeActivity
 	recipeOwnership      = cluster.RecipeOwnership
 	recipeOwnedProjects  = cluster.RecipeOwnedProjects
+	// stepResultQueued, when set, is told each step's index once its end
+	// is queued for the loop.
+	stepResultQueued func(i int)
 )
 
 // recipeRecordTimeout bounds one write of the run record. The last one
@@ -84,7 +99,11 @@ var (
 const recipeRecordTimeout = 5 * time.Second
 
 // recipeRunCap bounds a whole run: the sum of its steps' budgets. A safety
-// net only: each step's own deadline does the real work.
+// net only: each step's own deadline does the real work. Steps that run
+// side by side end sooner than that sum, never later (some step always
+// runs until the run ends), so the serial sum still bounds the slowest
+// run: a cap from the longest chain could end a run whose steps waited
+// for a free slot.
 func recipeRunCap(steps int) time.Duration {
 	return time.Duration(steps) * (cluster.OperationDeadline + cluster.RecoveryTimeout)
 }
@@ -97,6 +116,12 @@ type recipeRunner struct {
 	opID    string
 	running bool
 	stop    bool
+	// steps is the latest progress of each running step of the run, by
+	// step ID (runStep's emit; stepEnded forgets it).
+	steps map[string]types.UpdateStepEvent
+	// ending: the running run starts no other step, and why
+	// (types.RecipeRunStatus.Ending).
+	ending string
 	// done is closed when the running run has ended (lock released).
 	done chan struct{}
 }
@@ -116,8 +141,44 @@ func (rr *recipeRunner) status() *types.RecipeRunStatus {
 		if op := inflight.snapshot(); op != nil && op.ID == rr.opID && op.Step != "" {
 			st.Step = &types.UpdateStepEvent{Step: op.Step, Status: op.StepStatus, Message: op.Message}
 		}
+		if len(rr.steps) > 0 {
+			st.Progress = maps.Clone(rr.steps)
+		}
+		st.Ending = rr.ending
 	}
 	return st
+}
+
+// progress records a running step's latest progress, when opID's run is
+// the one running.
+func (rr *recipeRunner) progress(opID, stepID string, e types.UpdateStepEvent) {
+	rr.mu.Lock()
+	defer rr.mu.Unlock()
+	if !rr.running || rr.opID != opID {
+		return
+	}
+	if rr.steps == nil {
+		rr.steps = map[string]types.UpdateStepEvent{}
+	}
+	rr.steps[stepID] = types.UpdateStepEvent{Step: e.Step, Status: e.Status, Message: e.Message}
+}
+
+// setEnding records why opID's running run starts no other step.
+func (rr *recipeRunner) setEnding(opID, why string) {
+	rr.mu.Lock()
+	defer rr.mu.Unlock()
+	if rr.running && rr.opID == opID {
+		rr.ending = why
+	}
+}
+
+// endProgress forgets an ended step's progress.
+func (rr *recipeRunner) endProgress(opID, stepID string) {
+	rr.mu.Lock()
+	defer rr.mu.Unlock()
+	if rr.opID == opID {
+		delete(rr.steps, stepID)
+	}
 }
 
 // requestStop asks the running run to stop after its step. It reports
@@ -288,9 +349,9 @@ func beginRecipeRun(c *cluster.Client, w http.ResponseWriter, st *recipeStart, r
 		writeError(w, "Cannot record the recipe run in the updater's operation ConfigMap ("+err.Error()+"). Nothing was changed; try again.", http.StatusServiceUnavailable, "record_unavailable")
 		return
 	}
-	beginHeldOperation(st.op.ID, recipeTarget(rcp, 0, len(steps), ""))
+	beginHeldOperation(st.op.ID, recipeTarget(rcp, 0, len(steps), nil))
 	recipes.mu.Lock()
-	recipes.run, recipes.opID, recipes.running, recipes.stop = run, st.op.ID, true, false
+	recipes.run, recipes.opID, recipes.running, recipes.stop, recipes.steps, recipes.ending = run, st.op.ID, true, false, nil, ""
 	done := make(chan struct{})
 	recipes.done = done
 	recipes.mu.Unlock()
@@ -337,12 +398,12 @@ func keepComponents(run *types.RecipeRun, state *cluster.RecipeState, prior *typ
 	}
 }
 
-// recipeTarget is the operation's target: "<recipe>: step k of n
-// (<title>)".
-func recipeTarget(rcp types.EnvironmentRecipe, i, n int, title string) string {
-	t := fmt.Sprintf("%s: step %d of %d", rcp.Metadata.Name, i+1, n)
-	if title != "" {
-		t += " (" + title + ")"
+// recipeTarget is the operation's target: "<recipe>: k of n steps done",
+// and "; running: <title>, <title>" while steps run.
+func recipeTarget(rcp types.EnvironmentRecipe, done, n int, running []string) string {
+	t := fmt.Sprintf("%s: %d of %d steps done", rcp.Metadata.Name, done, n)
+	if len(running) > 0 {
+		t += "; running: " + strings.Join(running, ", ")
 	}
 	return t
 }
@@ -358,9 +419,12 @@ type recipeExec struct {
 	user          string
 	client        *cluster.Client
 	newBookkeeper func(context.Context) *cluster.Client
-	state         cluster.RecipeState
-	steps         []cluster.RecipeStep
-	done          chan struct{}
+	// state is the run's State. Only the loop's goroutine reads or
+	// changes it: each step runs on its own Clone, merged back when it
+	// ended (stepResult).
+	state cluster.RecipeState
+	steps []cluster.RecipeStep
+	done  chan struct{}
 }
 
 // recipeEnd is how a run ended.
@@ -378,81 +442,347 @@ func (x *recipeExec) execute() {
 	x.finish(x.loop())
 }
 
+// stepResult is how a step ended, as its worker reports it: its status,
+// message and errorCode, and the State it ran on (state), with the copy
+// it started from (base), for State.Merge.
+type stepResult struct {
+	i                 int
+	status, msg, code string
+	base, state       cluster.RecipeState
+}
+
+// The reasons the loop starts no more steps (the runner's notes, points 1
+// and 2), besides a step's failure.
+const (
+	haltStopped  = "stopped"
+	haltRestart  = "restart"
+	haltTimeout  = "timeout"
+	haltGate     = "gate"
+	haltLockLost = "lock_lost"
+)
+
+// recipeHalt is why the loop starts no more steps: the kind, and for a
+// gate refusal its message and code.
+type recipeHalt struct {
+	kind, msg, code string
+}
+
+// recipeLoop is the loop's own bookkeeping: what each step did, and what
+// runs. Only the loop's goroutine uses it.
+type recipeLoop struct {
+	// after: the indexes of the steps each step comes after (the steps'
+	// After; an ID that is not one of the run's steps is no wait).
+	after [][]int
+	// started: the step began; status: its outcome once it ended.
+	started []bool
+	status  []string
+	running int
+	// lastEnded is the step that ended last, -1 before any.
+	lastEnded int
+	halt      *recipeHalt
+	failed    bool
+}
+
+func newRecipeLoop(steps []cluster.RecipeStep) *recipeLoop {
+	index := map[string]int{}
+	for i, s := range steps {
+		index[s.ID] = i
+	}
+	l := &recipeLoop{after: make([][]int, len(steps)), started: make([]bool, len(steps)), status: make([]string, len(steps)), lastEnded: -1}
+	for i, s := range steps {
+		for _, id := range s.After {
+			if j, ok := index[id]; ok && j != i {
+				l.after[i] = append(l.after[i], j)
+			}
+		}
+	}
+	return l
+}
+
+// endedWell: step i succeeded or was found set up.
+func (l *recipeLoop) endedWell(i int) bool {
+	return l.status[i] == types.RecipeStepSuccess || l.status[i] == types.RecipeStepSkipped
+}
+
+// ready lists the steps that may start, in plan order: not started, and
+// every step they come after ended well.
+func (l *recipeLoop) ready() []int {
+	var out []int
+	for i := range l.started {
+		if l.started[i] {
+			continue
+		}
+		ok := true
+		for _, j := range l.after[i] {
+			ok = ok && l.endedWell(j)
+		}
+		if ok {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
 // loop runs the steps (see the runner's notes) and returns how the run
-// ended. A panic ends it failed.
+// ended. Only runStep runs in other goroutines (work), at most
+// cluster.RecipeMaxRunningSteps at once; this goroutine alone decides
+// which steps start (beforeSteps), records starts and ends (stepStarted,
+// stepEnded, save) and changes the run's State, getting each step's end
+// over results. Once a step failed, or the run is to stop (Stop, a drain,
+// the sign-in, the run's limit), no step starts; the running ones end
+// (each within its deadline), then the run ends. A panic here ends the
+// run failed once its running steps ended.
 func (x *recipeExec) loop() (end recipeEnd) {
-	current := -1
+	l := newRecipeLoop(x.steps)
+	results := make(chan stepResult, len(x.steps))
 	defer recoverRun("recipe", func() {
-		if current >= 0 {
-			x.stepEnded(current, types.RecipeStepFailed, operationPanicMessage, "internal")
-		}
 		end = recipeEnd{types.RecipeRunFailed, operationPanicMessage, "internal"}
+		x.recoverLoop(l, results)
 	})
-	n := len(x.steps)
-	for i, step := range x.steps {
-		if end, stop := x.beforeStep(i); stop {
-			return end
+	unsaved := false
+	// ended takes over a step's end; the loop alone calls it.
+	ended := func(r stepResult) {
+		l.running--
+		x.state.Merge(r.base, r.state)
+		x.stepEnded(r.i, r.status, r.msg, r.code)
+		l.status[r.i], l.lastEnded = r.status, r.i
+		l.failed = l.failed || r.status == types.RecipeStepFailed
+		unsaved = true
+	}
+	for {
+		saved := false
+		if l.halt == nil && !l.failed {
+			saved = x.startSteps(l, results)
 		}
-		current = i
-		x.stepStarted(i, step)
-		// The gate and the transition write took time: a drain that began
-		// meanwhile must not get a whole new step. Nothing that waits lies
-		// between this check and the step's deadline (runStep's first
-		// line), so a step that starts ends by the drain's start plus
-		// OperationDeadline.
-		if mutations.isDraining() {
+		// A step's end is written with the next start, or here when none
+		// starts while others run (the run's end writes the last one).
+		if unsaved && !saved && l.running > 0 {
+			x.save(x.snapshot())
+		}
+		// Steps still run, but no other starts: the status says so now.
+		if l.running > 0 && (l.failed || l.halt != nil) {
+			why := "failed"
+			if !l.failed {
+				why = l.halt.kind
+			}
+			recipes.setEnding(x.opID, why)
+		}
+		if l.running == 0 {
+			break
+		}
+		ended(<-results)
+		// Every end already queued counts before anything starts: a
+		// failure that came in beside a success must stop new starts.
+		for queued := true; queued; {
+			select {
+			case r := <-results:
+				ended(r)
+			default:
+				queued = false
+			}
+		}
+	}
+	return x.ended(l)
+}
+
+// recoverLoop ends a run whose loop panicked: the running steps end (each
+// by its deadline) and what they changed in the State is kept; none starts.
+// Every step the record shows running (also one marked running for a start
+// that never happened) counts as failed: the run's bookkeeping broke. A
+// second panic here is logged, never let through: the run still ends.
+func (x *recipeExec) recoverLoop(l *recipeLoop, results chan stepResult) {
+	defer recoverRun("recipe recovery", func() {})
+	var drained []stepResult
+	for ; l.running > 0; l.running-- {
+		r := <-results
+		x.state.Merge(r.base, r.state)
+		drained = append(drained, r)
+	}
+	recipes.update(func(run *types.RecipeRun) {
+		// What ended while the loop was broken is recorded as it ended.
+		for _, r := range drained {
+			s := &run.Steps[r.i]
+			s.Status, s.Message, s.ErrorCode = r.status, truncateText(r.msg, maxOperationMessageBytes), r.code
+		}
+		for i := range run.Steps {
+			if s := &run.Steps[i]; s.Status == types.RecipeStepRunning {
+				s.Status, s.Message, s.ErrorCode = types.RecipeStepFailed, operationPanicMessage, "internal"
+			}
+		}
+		run.Components = slices.Clone(x.state.Components)
+		run.ComponentIDs = maps.Clone(x.state.ComponentIDs)
+		run.CreatedParts = slices.Clone(x.state.Created)
+		run.Exposure, run.GatewayRef = x.state.Exposure, x.state.GatewayRef
+	})
+}
+
+// startSteps starts the steps that may start now, up to the limit: it
+// passes beforeSteps once for all of them, records them running in one
+// write, then starts each in a worker. It reports whether it wrote the
+// record. A reason not to start sets l.halt.
+func (x *recipeExec) startSteps(l *recipeLoop, results chan<- stepResult) bool {
+	batch := l.ready()
+	if free := cluster.RecipeMaxRunningSteps - l.running; len(batch) > free {
+		batch = batch[:max(free, 0)]
+	}
+	if len(batch) == 0 {
+		return false
+	}
+	if halt := x.beforeSteps(); halt != nil {
+		l.halt = halt
+		return false
+	}
+	for _, i := range batch {
+		x.stepStarted(i)
+	}
+	x.save(x.snapshot())
+	// The gate and the transition write took time: a drain that began
+	// meanwhile must not get a whole new step, and a Stop accepted
+	// meanwhile starts nothing either. Nothing that waits lies between this
+	// check and the steps' deadlines (runStep's first line), so every step
+	// that starts ends by the drain's start plus OperationDeadline.
+	if draining, stop := mutations.isDraining(), recipes.stopRequested(); draining || stop {
+		for _, i := range batch {
 			x.stepEnded(i, types.RecipeStepPending, "", "")
-			return recipeEnd{types.RecipeRunStopped, fmt.Sprintf("Stopped before %s: the updater is restarting. Resume continues with it once it is back.", step.Title), "restart"}
 		}
-		status, msg, code := x.runStep(step)
-		x.stepEnded(i, status, msg, code)
-		if errors.Is(context.Cause(x.runCtx), cluster.ErrOperationLockLost) {
-			return recipeEnd{types.RecipeRunFailed, cluster.LockLostMessage, "lock_lost"}
+		l.halt = &recipeHalt{kind: haltStopped}
+		if draining {
+			l.halt.kind = haltRestart
 		}
-		if status == types.RecipeStepFailed {
-			return recipeEnd{types.RecipeRunFailed, fmt.Sprintf("Step %d of %d (%s) failed: %s", i+1, n, step.Title, msg), code}
+		if l.running > 0 {
+			x.save(x.snapshot())
 		}
-		current = -1
+		return true
+	}
+	for _, i := range batch {
+		base := x.state.Clone()
+		l.started[i] = true
+		l.running++
+		go x.work(i, base, results)
+	}
+	return true
+}
+
+// work runs step i on its own copy of the run's State and reports its end,
+// also when the step panics (then it failed, internal): a step's panic
+// never ends the process.
+func (x *recipeExec) work(i int, base cluster.RecipeState, results chan<- stepResult) {
+	r := stepResult{i: i, base: base, state: base.Clone()}
+	queued := stepResultQueued
+	defer func() {
+		results <- r
+		if queued != nil {
+			queued(i)
+		}
+	}()
+	defer recoverRun("recipe step "+x.steps[i].ID, func() {
+		r.status, r.msg, r.code = types.RecipeStepFailed, operationPanicMessage, "internal"
+	})
+	r.status, r.msg, r.code = x.runStep(x.steps[i], &r.state)
+}
+
+// beforeSteps decides whether steps may start now (the runner's notes,
+// points 1 and 2): nil when they may, otherwise why not.
+func (x *recipeExec) beforeSteps() *recipeHalt {
+	switch {
+	case recipes.stopRequested():
+		return &recipeHalt{kind: haltStopped}
+	case mutations.isDraining():
+		return &recipeHalt{kind: haltRestart}
+	case errors.Is(context.Cause(x.runCtx), cluster.ErrOperationLockLost):
+		return &recipeHalt{kind: haltLockLost}
+	case x.runCtx.Err() != nil:
+		return &recipeHalt{kind: haltTimeout}
+	}
+	if msg, code := x.gate(x.runCtx); msg != "" {
+		return &recipeHalt{kind: haltGate, msg: msg, code: code}
+	}
+	return nil
+}
+
+// ended is how the run ended once no step runs: lock_lost when the lease
+// was lost; failed when a step failed, naming the first in plan order with
+// its message, and every other one that failed; stopped with why steps
+// did not start; succeeded when every step ended well.
+func (x *recipeExec) ended(l *recipeLoop) recipeEnd {
+	n := len(x.steps)
+	if errors.Is(context.Cause(x.runCtx), cluster.ErrOperationLockLost) {
+		return recipeEnd{types.RecipeRunFailed, cluster.LockLostMessage, "lock_lost"}
+	}
+	run := x.snapshot()
+	var failed []int
+	for i := range x.steps {
+		if l.status[i] == types.RecipeStepFailed {
+			failed = append(failed, i)
+		}
+	}
+	if len(failed) > 0 {
+		first := run.Steps[failed[0]]
+		reason := fmt.Sprintf("Step %d of %d (%s) failed: %s", failed[0]+1, n, first.Title, first.Message)
+		if len(failed) > 1 {
+			var others []string
+			for _, i := range failed[1:] {
+				others = append(others, fmt.Sprintf("step %d of %d (%s)", i+1, n, x.steps[i].Title))
+			}
+			reason += " Also failed: " + andList(others) + "."
+		}
+		return recipeEnd{types.RecipeRunFailed, reason, first.ErrorCode}
+	}
+	var next []string
+	for _, i := range l.ready() {
+		next = append(next, x.steps[i].Title)
+	}
+	where := "before its first step"
+	if l.lastEnded >= 0 {
+		where = "after " + x.steps[l.lastEnded].Title
+	}
+	if h := l.halt; h != nil {
+		switch h.kind {
+		case haltStopped:
+			return recipeEnd{types.RecipeRunStopped, fmt.Sprintf("Stopped %s, as asked. Resume continues with %s.", where, andList(next)), "stopped"}
+		case haltRestart:
+			return recipeEnd{types.RecipeRunStopped, fmt.Sprintf("Stopped %s: the updater is restarting. Resume continues with %s once it is back.", where, andList(next)), "restart"}
+		case haltGate:
+			return recipeEnd{types.RecipeRunStopped, fmt.Sprintf("Stopped before %s: %s", andList(next), h.msg), h.code}
+		case haltTimeout:
+			return recipeEnd{types.RecipeRunFailed, fmt.Sprintf("Stopped %s: the run took longer than its limit (%s).", where, recipeRunCap(n)), "timeout"}
+		}
+		// haltLockLost: the lease's loss is checked first.
+	}
+	for i := range x.steps {
+		if !l.endedWell(i) {
+			// Steps that wait for each other: a test keeps the order
+			// acyclic, so this is a bug.
+			return recipeEnd{types.RecipeRunFailed, fmt.Sprintf("Step %d of %d (%s) could not start: a step it comes after never ended.", i+1, n, x.steps[i].Title), "internal"}
+		}
 	}
 	return recipeEnd{state: types.RecipeRunSucceeded, reason: fmt.Sprintf("Every step of recipe %s is set up.", x.state.Recipe.Metadata.Name)}
 }
 
-// beforeStep decides whether step i may start (the runner's notes, points
-// 1 and 2).
-func (x *recipeExec) beforeStep(i int) (recipeEnd, bool) {
-	title := x.steps[i].Title
-	where := "before its first step"
-	if i > 0 {
-		where = "after " + x.steps[i-1].Title
+// andList joins items as "a", "a and b", "a, b and c".
+func andList(items []string) string {
+	if len(items) < 2 {
+		return strings.Join(items, "")
 	}
-	switch {
-	case recipes.stopRequested():
-		return recipeEnd{types.RecipeRunStopped, fmt.Sprintf("Stopped %s, as asked. Resume continues with %s.", where, title), "stopped"}, true
-	case mutations.isDraining():
-		return recipeEnd{types.RecipeRunStopped, fmt.Sprintf("Stopped %s: the updater is restarting. Resume continues with %s once it is back.", where, title), "restart"}, true
-	case errors.Is(context.Cause(x.runCtx), cluster.ErrOperationLockLost):
-		return recipeEnd{types.RecipeRunFailed, cluster.LockLostMessage, "lock_lost"}, true
-	case x.runCtx.Err() != nil:
-		return recipeEnd{types.RecipeRunFailed, fmt.Sprintf("Stopped %s: the run took longer than its limit (%s).", where, recipeRunCap(len(x.steps))), "timeout"}, true
-	}
-	if msg, code := x.gate(x.runCtx); msg != "" {
-		return recipeEnd{types.RecipeRunStopped, fmt.Sprintf("Stopped before %s: %s", title, msg), code}, true
-	}
-	return recipeEnd{}, false
+	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
 }
 
-// runStep runs the step on its own deadline, client and bookkeeper (point 3
-// and 4) and returns its status, message and errorCode.
-func (x *recipeExec) runStep(step cluster.RecipeStep) (string, string, string) {
+// runStep runs the step on its own deadline, client and bookkeeper (points
+// 3 and 4), on st (the step's own copy of the run's State), and returns
+// its status, message and errorCode. It runs in a worker: of x it reads
+// only what stays the same during the run (never x.state), and it reports
+// progress to the operation and the runner, which lock.
+func (x *recipeExec) runStep(step cluster.RecipeStep, st *cluster.RecipeState) (string, string, string) {
 	stepCtx, cancel := context.WithTimeout(x.runCtx, cluster.OperationDeadline)
 	defer cancel()
 	c := x.client.WithContext(stepCtx)
 	c.SetBookkeeping(x.newBookkeeper(stepCtx))
 	emit := func(e cluster.UpdateStepEvent) {
+		recipes.progress(x.opID, step.ID, e)
 		inflight.recordStep(x.opID, UpdateStep{Step: e.Step, Status: e.Status, Message: e.Message, Detail: e.Detail, ErrorCode: e.ErrorCode})
 	}
 	emit(cluster.UpdateStepEvent{Step: step.ID, Status: "running", Message: fmt.Sprintf("Checking %s...", step.Title)})
-	chk, err := step.Check(c, &x.state)
+	chk, err := step.Check(c, st)
 	switch {
 	case err != nil:
 		if ctxErr := stepCtx.Err(); ctxErr != nil {
@@ -464,7 +794,7 @@ func (x *recipeExec) runStep(step cluster.RecipeStep) (string, string, string) {
 	case chk.Done:
 		return types.RecipeStepSkipped, "Already set up: " + chk.Reason, ""
 	}
-	res, err := step.Run(c, &x.state, emit)
+	res, err := step.Run(c, st, emit)
 	switch {
 	case err != nil:
 		return types.RecipeStepFailed, stepStopped(x.runCtx, err), stepStoppedCode(x.runCtx)
@@ -499,24 +829,43 @@ func errorCodeOf(err error, fallback string) string {
 	return fallback
 }
 
-// stepStarted marks step i running, shows it in the operation, and
-// records the transition: the previous step's outcome and this start, in
-// one write.
-func (x *recipeExec) stepStarted(i int, step cluster.RecipeStep) {
+// snapshot is a copy of the run as it is now.
+func (x *recipeExec) snapshot() *types.RecipeRun {
+	return recipes.update(func(*types.RecipeRun) {})
+}
+
+// stepStarted marks step i running in memory (startSteps writes the
+// record) and shows the running steps in the operation.
+func (x *recipeExec) stepStarted(i int) {
 	run := recipes.update(func(run *types.RecipeRun) {
 		run.Steps[i].Status, run.Steps[i].StartedAt = types.RecipeStepRunning, time.Now().UTC().Format(time.RFC3339)
 		run.Steps[i].Message, run.Steps[i].ErrorCode, run.Steps[i].FinishedAt = "", "", ""
 	})
-	inflight.update(x.opID, func(op *Operation) {
-		op.Target = truncateText(recipeTarget(x.state.Recipe, i, len(x.steps), step.Title), maxOperationTargetBytes)
-	})
-	x.save(run)
+	x.showTarget(run)
 }
 
-// stepEnded records step i's outcome in memory (the next start or the
-// run's end writes it) and takes over what the step learnt (the project).
+// showTarget shows in the operation how far run is, and what runs.
+func (x *recipeExec) showTarget(run *types.RecipeRun) {
+	done := 0
+	var running []string
+	for _, s := range run.Steps {
+		switch s.Status {
+		case types.RecipeStepSuccess, types.RecipeStepSkipped:
+			done++
+		case types.RecipeStepRunning:
+			running = append(running, s.Title)
+		}
+	}
+	inflight.update(x.opID, func(op *Operation) {
+		op.Target = truncateText(recipeTarget(x.state.Recipe, done, len(run.Steps), running), maxOperationTargetBytes)
+	})
+}
+
+// stepEnded records step i's outcome in memory (the loop writes it) and
+// takes over what the steps learnt (the project, components, created
+// parts, the exposure: x.state, merged).
 func (x *recipeExec) stepEnded(i int, status, msg, code string) {
-	recipes.update(func(run *types.RecipeRun) {
+	run := recipes.update(func(run *types.RecipeRun) {
 		s := &run.Steps[i]
 		s.Status, s.Message, s.ErrorCode = status, truncateText(msg, maxOperationMessageBytes), code
 		s.FinishedAt = time.Now().UTC().Format(time.RFC3339)
@@ -536,6 +885,8 @@ func (x *recipeExec) stepEnded(i int, status, msg, code string) {
 		run.CreatedParts = slices.Clone(x.state.Created)
 		run.Exposure, run.GatewayRef = x.state.Exposure, x.state.GatewayRef
 	})
+	recipes.endProgress(x.opID, x.steps[i].ID)
+	x.showTarget(run)
 	inflight.recordStep(x.opID, UpdateStep{Step: x.steps[i].ID, Status: status, Message: msg, ErrorCode: code})
 }
 
