@@ -89,15 +89,15 @@ describe("S3 storage that is not secured", () => {
     run.push(sseEvent("rollout", "success", "OK: The S3 storage runs with the new admin key; the old key no longer works"));
     run.push(sseEvent("server:dev/dspa", "running", "Checking the new key against the storage"));
     expect(await within(dialog).findByText("Checking the new key against the storage")).toBeInTheDocument();
-    run.push(sseEvent("server:dev/dspa", "success", "OK: Pipeline server dev/dspa has the key of SeaweedFS user rnu-dspa-dev in its Secrets; its API server keeps the old key, which no longer works, until its pods restart", { detail: "oc delete pod -n dev -l app=ds-pipeline-dspa,dspa=dspa" }));
-    run.push(sseEvent("server:team-b/dspa", "success", "OK: Pipeline server team-b/dspa has the key of SeaweedFS user rnu-dspa-team-b in its Secrets; its API server keeps the old key, which no longer works, until its pods restart", { detail: "oc delete pod -n team-b -l app=ds-pipeline-dspa,dspa=dspa; rm -rf /" }));
+    run.push(sseEvent("server:dev/dspa", "success", "OK: Pipeline server dev/dspa has the key of SeaweedFS user rnu-dspa-dev in its Secrets; its API server started before the key was written, so it keeps the old key, which no longer works, until its pods restart", { detail: "oc delete pod -n dev -l app=ds-pipeline-dspa,dspa=dspa" }));
+    run.push(sseEvent("server:team-b/dspa", "success", "OK: Pipeline server team-b/dspa has the key of SeaweedFS user rnu-dspa-team-b in its Secrets; its API server started before the key was written, so it keeps the old key, which no longer works, until its pods restart", { detail: "oc delete pod -n team-b -l app=ds-pipeline-dspa,dspa=dspa; rm -rf /" }));
     status = { ...status, s3Keys: secured };
     run.push(sseEvent("operation_complete", "success", "The S3 storage is secured: it has a new admin key, which is in no project. Given a key of their own: dev/dspa, team-b/dspa."));
     run.close();
     expect(await within(dialog).findByText("The S3 storage is secured")).toBeInTheDocument();
     expect(dialog).toHaveTextContent("Given a key of their own: dev/dspa, team-b/dspa.");
     // The restart command of each rekeyed server, to copy; a detail that is not exactly such a command is not shown.
-    expect(dialog).toHaveTextContent("still uses the old key, which no longer works, until its pods restart");
+    expect(dialog).toHaveTextContent("These pipeline servers' API servers started before their key was written, so they still use the old key, which no longer works, until their pods restart.");
     expect(within(dialog).getByRole("button", { name: "Copy the restart commands" })).toBeInTheDocument();
     expect(dialog).toHaveTextContent("oc delete pod -n dev -l app=ds-pipeline-dspa,dspa=dspa");
     expect(dialog).not.toHaveTextContent("rm -rf");

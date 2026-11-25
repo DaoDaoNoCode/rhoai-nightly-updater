@@ -122,6 +122,11 @@ func TestSecureS3_GivesEachRecordedPipelineServerItsOwnKey(t *testing.T) {
 		t.Fatalf("the status changed something: %v %v", m, f.sw.iamCalls())
 	}
 
+	// Each recorded server's API server runs, started before the run: it
+	// read the old key (DSPO passes it as environment variables).
+	for _, ns := range []string{"team-a", "team-b"} {
+		f.putJSON("/api/v1/namespaces/"+ns+"/pods/ds-pipeline-dspa-1", `{"metadata":{"name":"ds-pipeline-dspa-1","labels":{"app":"ds-pipeline-dspa","dspa":"dspa"}},"status":{"startTime":"2026-01-01T00:00:00Z"}}`)
+	}
 	resp, err := secureRun(t, c)
 	if err != nil || !resp.Success {
 		t.Fatalf("secure: %+v %v", resp, err)
@@ -168,7 +173,7 @@ func TestSecureS3_GivesEachRecordedPipelineServerItsOwnKey(t *testing.T) {
 		found := false
 		for _, e := range secureEvents {
 			found = found || e.Step == "server:"+ns+"/dspa" && e.Status == "success" && e.Detail == cmd &&
-				strings.Contains(e.Message, "its API server keeps the old key, which no longer works, until its pods restart")
+				strings.Contains(e.Message, "its API server started before the key was written, so it keeps the old key, which no longer works, until its pods restart")
 		}
 		if !found {
 			t.Errorf("%s: no success step with the restart command", ns)
@@ -195,8 +200,18 @@ func TestSecureS3_GivesEachRecordedPipelineServerItsOwnKey(t *testing.T) {
 	// Idempotent re-invocation must leave existing scoped keys unchanged.
 	before := f.sw.keysOf(storage.ScopedUserName("team-a"))
 	resp, _ = secureRun(t, c)
-	if !resp.Success || !strings.Contains(resp.Message, "Given a key of their own: team-a/dspa, team-b/dspa.") || strings.Contains(resp.Message, "Restart") {
+	// A run again (a retry, or after the stream dropped) still gives the
+	// command while the API server has not restarted since its key was
+	// written; once its pod is newer, it does not.
+	if !resp.Success || !strings.Contains(resp.Message, "Given a key of their own: team-a/dspa, team-b/dspa.") || !strings.Contains(resp.Message, "oc delete pod -n team-a -l app=ds-pipeline-dspa,dspa=dspa") {
 		t.Errorf("re-run: %+v", resp)
+	}
+	for _, ns := range []string{"team-a", "team-b"} {
+		f.putJSON("/api/v1/namespaces/"+ns+"/pods/ds-pipeline-dspa-1", `{"metadata":{"name":"ds-pipeline-dspa-1","labels":{"app":"ds-pipeline-dspa","dspa":"dspa"}},"status":{"startTime":"`+time.Now().Add(time.Hour).UTC().Format(time.RFC3339)+`"}}`)
+	}
+	resp, _ = secureRun(t, c)
+	if !resp.Success || strings.Contains(resp.Message, "oc delete pod") || strings.Contains(resp.Message, "Restart") {
+		t.Errorf("re-run after the API servers restarted: %+v", resp)
 	}
 	if got := strings.Join(lastStatuses(), " "); got != "check=success rollout=skipped server:team-a/dspa=success server:team-b/dspa=success" || !sawEvent("server:team-a/dspa", "already uses its own key") {
 		t.Errorf("re-run steps = %s", got)

@@ -396,8 +396,10 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   environment variables only when it starts (DSPO `deployment.yaml.tmpl`
   `secretKeyRef`; its config hash leaves credentials out), so a pipeline
   server given its own key keeps the old, revoked one until its pods
-  restart. Each such server's step and the result now say so, and the
-  dialog gives the restart command to copy
+  restart. While a pipeline server's API server pod started before the
+  tool last wrote its key (pod start time against the Secret's
+  managedFields time), its step and the result say so, also on a later
+  run, and the dialog gives the restart command to copy
   (`oc delete pod -n <project> -l app=ds-pipeline-<dspa>,dspa=<dspa>`).
   The tool does not restart them itself: that would need a new permission.
 - **The installer refuses clusters with external OIDC sign-in.** On a
