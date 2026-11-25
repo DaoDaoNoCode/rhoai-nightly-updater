@@ -496,19 +496,6 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   up keeps a ClusterQueue that is there: a 19 GiB one reads "Made by an
   earlier version of this tool", and a recipe's Distributed workloads step
   stops on it; Clean up, then Set up.
-- **Distributed workloads set up again in a project deleted and made
-  again.** After a recipe's Clean up of its project only, the next Set up
-  refused with "Clean up first", and Clean up stopped at a LocalQueue or
-  sample of the tool's names in the new project, so the tool's ClusterQueue
-  and ResourceFlavor stayed. Both now forget that project's LocalQueue,
-  sample and label entries unless the tool's own objects are still there
-  with their UIDs (a namespace an admin force-finalizes can leave them),
-  keep the cluster-wide queues, and treat same-named objects in the new
-  project as someone else's: Set up refuses them, Clean up leaves them, and
-  one that uses the tool's ClusterQueue keeps it. A label someone else set
-  is never claimed or removed. A project deleted and made again while Set
-  up runs gets what Set up just created there deleted again by UID, and
-  Set up asks to set up again.
 - **The Distributed workloads tab can turn Kueue back.** Once its setup
   was cleaned up, the prerequisites still read "kueue Unmanaged (turned on
   by this tool)", but only Clean up everything could turn it back. The

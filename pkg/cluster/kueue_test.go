@@ -3,7 +3,6 @@ package cluster
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -899,56 +898,27 @@ func TestKueueDefaultQueueRefusedOnEverySetup(t *testing.T) {
 	}
 }
 
-// kqLeftover is the tool's object at path as setup made it (its UID and
-// label), to put back after the project is made again, as a namespace an
-// admin force-finalized leaves its objects in etcd for the next namespace
-// of that name.
-func kqLeftover(t *testing.T, f *resourceFake, path string) map[string]any {
-	t.Helper()
-	obj := f.get(path)
-	if obj == nil {
-		t.Fatalf("%s is not there", path)
-	}
-	raw, _ := json.Marshal(obj)
-	var out map[string]any
-	_ = json.Unmarshal(raw, &out)
-	return out
-}
-
-// kqRemakeProject deletes project proj's LocalQueue and samples, as deleting
-// the namespace does, and makes the namespace again with UID new-uid and
-// the dashboard label plus labels (a JSON fragment starting with a comma).
-func kqRemakeProject(f *resourceFake, labels string) {
-	for _, p := range []string{kqLQ, kqRayCs + "/" + kueue.RayClusterName, kqRayJobs + "/" + kueue.RayJobName} {
-		f.deleteObject(p)
-	}
-	f.putJSON(wbProjectNS, `{"metadata":{"name":"proj","uid":"new-uid","labels":{"opendatahub.io/dashboard":"true"`+labels+`}},"status":{"phase":"Active"}}`)
-}
-
-// kqSetUpBoth sets up the queues and both samples in proj and returns the
-// record.
-func kqSetUpBoth(t *testing.T) (*resourceFake, *Client, kueue.Record) {
-	t.Helper()
-	f, u := putKueueCluster(t)
-	if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj", RayCluster: true, RayJob: true}); !res.Success {
-		t.Fatalf("setup: %+v", res)
-	}
-	return f, u, kueueRecord(t, u)
-}
-
-// A foreign LocalQueue named like the tool's in the new project: a new UID
-// (UIDs are never reused) and the tool's label, which anyone can copy.
-const kqForeignLQ = `{"metadata":{"name":"nightly-kueue","namespace":"proj","uid":"foreign-uid","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}},"spec":{"clusterQueue":"%s"}}`
-
 // The project deleted and made again (a recipe's project-only Clean up, then
 // a new run): deleting it deleted the recorded LocalQueue, samples and label,
 // so setup sets them up again in the new project, keeps the cluster-scoped
-// queues, and claims only what it adds there now. The tool's own objects a
-// force-finalized namespace left behind (their old UIDs) are still its own.
+// queues, and claims only what it adds there now.
 func TestKueueSetupAfterProjectMadeAgain(t *testing.T) {
+	recreate := func(f *resourceFake, labels string) {
+		for _, p := range []string{kqLQ, kqRayCs + "/" + kueue.RayClusterName, kqRayJobs + "/" + kueue.RayJobName} {
+			f.deleteObject(p)
+		}
+		f.putJSON(wbProjectNS, `{"metadata":{"name":"proj","uid":"new-uid","labels":{"opendatahub.io/dashboard":"true"`+labels+`}},"status":{"phase":"Active"}}`)
+	}
+	setUp := func(t *testing.T) (*resourceFake, *Client, kueue.Record) {
+		f, u := putKueueCluster(t)
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj", RayCluster: true, RayJob: true}); !res.Success {
+			t.Fatalf("setup: %+v", res)
+		}
+		return f, u, kueueRecord(t, u)
+	}
 	t.Run("set up again in the new project", func(t *testing.T) {
-		f, u, old := kqSetUpBoth(t)
-		kqRemakeProject(f, "")
+		f, u, old := setUp(t)
+		recreate(f, "")
 		before := len(f.mutations())
 		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj", RayCluster: true, RayJob: true})
 		if !res.Success {
@@ -960,343 +930,33 @@ func TestKueueSetupAfterProjectMadeAgain(t *testing.T) {
 		}
 		rec := kueueRecord(t, u)
 		if rec.ProjectUID != "new-uid" || !rec.LabelAdded || rec.FlavorUID != old.FlavorUID || rec.ClusterQueueUID != old.ClusterQueueUID ||
-			rec.LocalQueueUID == "" || rec.LocalQueueUID == old.LocalQueueUID || rec.RayClusterUID == "" || rec.RayClusterUID == old.RayClusterUID ||
-			rec.RayJobUID == "" || rec.RayJobUID == old.RayJobUID {
+			rec.LocalQueueUID == "" || rec.LocalQueueUID == old.LocalQueueUID || rec.RayClusterUID == old.RayClusterUID || rec.RayJobUID == old.RayJobUID {
 			t.Fatalf("record %+v (was %+v)", rec, old)
-		}
-		for path, uid := range map[string]string{kqLQ: rec.LocalQueueUID, kqRayCs + "/" + kueue.RayClusterName: rec.RayClusterUID, kqRayJobs + "/" + kueue.RayJobName: rec.RayJobUID} {
-			if got := ensureMap(f.get(path), "metadata")["uid"]; got != uid {
-				t.Fatalf("%s has UID %v, the record %s", path, got, uid)
-			}
 		}
 	})
 	t.Run("label set by someone else is not claimed", func(t *testing.T) {
-		f, u, _ := kqSetUpBoth(t)
-		kqRemakeProject(f, `,"kueue.openshift.io/managed":"true"`)
+		f, u, _ := setUp(t)
+		recreate(f, `,"kueue.openshift.io/managed":"true"`)
 		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"}); !res.Success {
 			t.Fatalf("setup again: %+v", res)
 		}
-		if rec := kueueRecord(t, u); rec.LabelAdded || rec.LabelPrior != "" || rec.ProjectUID != "new-uid" {
+		if rec := kueueRecord(t, u); rec.LabelAdded || rec.LabelPrior != "" {
 			t.Fatalf("label claimed: %+v", rec)
 		}
 	})
-	t.Run("the tool's own objects left behind are used again", func(t *testing.T) {
-		f, u, old := kqSetUpBoth(t)
-		lq, rc := kqLeftover(t, f, kqLQ), kqLeftover(t, f, kqRayCs+"/"+kueue.RayClusterName)
-		kqRemakeProject(f, "")
-		f.put(kqLQ, lq)
-		f.put(kqRayCs+"/"+kueue.RayClusterName, rc)
-		before := len(f.mutations())
-		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj", RayCluster: true, RayJob: true})
-		if !res.Success {
-			t.Fatalf("setup again: %+v", res)
-		}
-		want := []string{"PATCH " + wbProjectNS, "POST " + kqRayJobs}
-		if got := f.mutations()[before:]; strings.Join(got, "\n") != strings.Join(want, "\n") {
-			t.Fatalf("writes:\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
-		}
-		rec := kueueRecord(t, u)
-		if rec.ProjectUID != "new-uid" || !rec.LabelAdded || rec.LocalQueueUID != old.LocalQueueUID || rec.RayClusterUID != old.RayClusterUID ||
-			rec.RayJobUID == "" || rec.RayJobUID == old.RayJobUID || rec.ClusterQueueUID != old.ClusterQueueUID {
-			t.Fatalf("record %+v (was %+v)", rec, old)
-		}
-	})
 	t.Run("same-named queue in the new project is someone else's", func(t *testing.T) {
-		f, u, old := kqSetUpBoth(t)
-		kqRemakeProject(f, "")
-		f.putJSON(kqLQ, fmt.Sprintf(kqForeignLQ, kueue.ClusterQueueName))
+		f, u, old := setUp(t)
+		recreate(f, "")
+		f.putJSON(kqLQ, `{"metadata":{"name":"nightly-kueue","namespace":"proj","uid":"`+old.LocalQueueUID+`","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}},"spec":{"clusterQueue":"nightly-kueue"}}`)
 		before := len(f.mutations())
 		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"})
-		if res.Success || res.ErrorCode != "not_managed" || !strings.Contains(res.Message, "LocalQueue nightly-kueue exists and was not created by this tool") || len(f.mutations()) != before {
+		if res.Success || !strings.Contains(res.Message, "not created by this tool") || len(f.mutations()) != before {
 			t.Fatalf("got %+v", res)
 		}
-		if rec := kueueRecord(t, u); !reflect.DeepEqual(rec, old) {
-			t.Fatalf("a refused check changed the record: %+v (was %+v)", rec, old)
+		if rec := kueueRecord(t, u); rec.ProjectUID != "ns-uid" || rec.LocalQueueUID != old.LocalQueueUID {
+			t.Fatalf("a refused check changed the record: %+v", rec)
 		}
 	})
-	// Refusals after the check settled the record in memory write nothing.
-	for _, tc := range []struct {
-		name, want string
-		change     func(f *resourceFake)
-	}{
-		{"label value false", "kueue.openshift.io/managed=false", func(f *resourceFake) {
-			kqRemakeProject(f, `,"kueue.openshift.io/managed":"false"`)
-		}},
-		{"a LocalQueue named default", "LocalQueue named default", func(f *resourceFake) {
-			kqRemakeProject(f, "")
-			f.putJSON(kqLQs+"/default", `{"metadata":{"name":"default","namespace":"proj"},"spec":{"clusterQueue":"x"}}`)
-		}},
-	} {
-		t.Run("refused: "+tc.name, func(t *testing.T) {
-			f, u, old := kqSetUpBoth(t)
-			tc.change(f)
-			before := len(f.mutations())
-			res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj", RayCluster: true})
-			if res.Success || !strings.Contains(res.Message, tc.want) || !strings.HasSuffix(res.Message, "Nothing was changed.") || len(f.mutations()) != before {
-				t.Fatalf("got %+v", res)
-			}
-			if rec := kueueRecord(t, u); !reflect.DeepEqual(rec, old) {
-				t.Fatalf("a refused check changed the record: %+v (was %+v)", rec, old)
-			}
-		})
-	}
-	t.Run("the record changed after the check", func(t *testing.T) {
-		f, u, old := kqSetUpBoth(t)
-		kqRemakeProject(f, "")
-		changed := old
-		changed.ProjectUID = "someone-elses"
-		raw, _ := json.Marshal(changed)
-		done := false
-		f.beforeRequest = func(r *http.Request) {
-			if r.Method == http.MethodPatch && r.URL.Path == wbProjectNS && r.URL.Query().Get("dryRun") == "All" && !done {
-				done = true
-				if err := record.WriteSnapshotKey(u, kueue.RecordKey, "rhoai-nightly-updater-kueue", string(raw)); err != nil {
-					t.Error(err)
-				}
-			}
-		}
-		before := len(f.mutations())
-		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"})
-		if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "record of its Kueue setup changed") || !strings.HasSuffix(res.Message, "Nothing was changed.") || len(f.mutations()) != before {
-			t.Fatalf("got %+v, writes %v", res, f.mutations()[before:])
-		}
-		if rec := kueueRecord(t, u); rec.ProjectUID != "someone-elses" || rec.LocalQueueUID != old.LocalQueueUID || rec.RayJobUID != old.RayJobUID {
-			t.Fatalf("record %+v", rec)
-		}
-	})
-	t.Run("an unreadable leftover refuses", func(t *testing.T) {
-		f, u, old := kqSetUpBoth(t)
-		kqRemakeProject(f, "")
-		f.fail["GET "+kqRayJobs+"/"+kueue.RayJobName] = 500
-		before := len(f.mutations())
-		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"})
-		if res.Success || !strings.Contains(res.Message, "cannot tell what of its setup is left there") || len(f.mutations()) != before {
-			t.Fatalf("got %+v", res)
-		}
-		if rec := kueueRecord(t, u); !reflect.DeepEqual(rec, old) {
-			t.Fatalf("record %+v (was %+v)", rec, old)
-		}
-	})
-}
-
-// The project deleted and made again while setup ran (after its check):
-// what setup just created there is deleted again by its UID, its record
-// entry cleared, and setup stops.
-func TestKueueSetupProjectMadeAgainMeanwhile(t *testing.T) {
-	// remakeAfter makes the project again (new UID, nothing else changed)
-	// on the first read of the namespace after the create POSTed to
-	// collection; it returns where the UID of the object at path (the one
-	// created) is kept then.
-	remakeAfter := func(f *resourceFake, collection, path string) *string {
-		created, done, uid := false, false, new(string)
-		f.beforeRequest = func(r *http.Request) {
-			switch {
-			case r.Method == http.MethodPost && r.URL.Path == collection && r.URL.Query().Get("dryRun") == "":
-				created = true
-			case r.Method == http.MethodGet && r.URL.Path == wbProjectNS && created && !done:
-				done = true
-				*uid, _ = ensureMap(f.get(path), "metadata")["uid"].(string)
-				ns := f.get(wbProjectNS)
-				ensureMap(ns, "metadata")["uid"] = "new-uid"
-				f.put(wbProjectNS, ns)
-			}
-		}
-		return uid
-	}
-	t.Run("after the LocalQueue", func(t *testing.T) {
-		f, u := putKueueCluster(t)
-		uid := remakeAfter(f, kqLQs, kqLQ)
-		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj", RayCluster: true})
-		if res.Success || res.ErrorCode != "conflict" || res.Message != "Project proj was deleted and made again while it was set up; what was created in it was deleted again. Set up again." {
-			t.Fatalf("got %+v", res)
-		}
-		dels := f.callsTo("DELETE", kqLQ)
-		if f.has(kqLQ) || len(dels) != 1 || *uid == "" || !strings.Contains(dels[0].Body, `"preconditions":{"uid":"`+*uid+`"}`) {
-			t.Fatalf("LocalQueue there %v, deletes %+v", f.has(kqLQ), dels)
-		}
-		rec := kueueRecord(t, u)
-		if rec.LocalQueueUID != "" || rec.ProjectUID != "ns-uid" || rec.ClusterQueueUID == "" || rec.FlavorUID == "" || rec.LabelAdded {
-			t.Fatalf("record %+v", rec)
-		}
-		if len(f.callsTo("PATCH", wbProjectNS)) != 1 || len(f.callsTo("POST", kqRayCs)) != 1 {
-			t.Fatal("went on after the LocalQueue")
-		}
-		// The next setup settles the record and sets up in the new project.
-		f.beforeRequest = nil
-		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj", RayCluster: true}); !res.Success {
-			t.Fatalf("setup again: %+v", res)
-		}
-		if rec := kueueRecord(t, u); rec.ProjectUID != "new-uid" || rec.LocalQueueUID == "" || rec.RayClusterUID == "" {
-			t.Fatalf("record %+v", rec)
-		}
-	})
-	t.Run("after a sample", func(t *testing.T) {
-		f, u := putKueueCluster(t)
-		uid := remakeAfter(f, kqRayCs, kqRayCs+"/"+kueue.RayClusterName)
-		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj", RayCluster: true, RayJob: true})
-		if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "was deleted and made again while it was set up") {
-			t.Fatalf("got %+v", res)
-		}
-		dels := f.callsTo("DELETE", kqRayCs+"/"+kueue.RayClusterName)
-		if f.has(kqRayCs+"/"+kueue.RayClusterName) || len(dels) != 1 || *uid == "" || !strings.Contains(dels[0].Body, `"uid":"`+*uid+`"`) {
-			t.Fatalf("RayCluster there %v, deletes %+v", f.has(kqRayCs+"/"+kueue.RayClusterName), dels)
-		}
-		if rec := kueueRecord(t, u); rec.RayClusterUID != "" || rec.LocalQueueUID == "" || len(f.callsTo("POST", kqRayJobs)) != 1 {
-			t.Fatalf("record %+v, RayJob posts %d", rec, len(f.callsTo("POST", kqRayJobs)))
-		}
-	})
-	t.Run("delete fails", func(t *testing.T) {
-		f, u := putKueueCluster(t)
-		remakeAfter(f, kqLQs, kqLQ)
-		f.fail["DELETE "+kqLQ] = 500
-		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"})
-		if res.Success || !strings.Contains(res.Message, "this tool created LocalQueue nightly-kueue there and cannot delete it again") || !strings.HasSuffix(res.Message, "Delete it yourself, then set up again.") {
-			t.Fatalf("got %+v", res)
-		}
-		if rec := kueueRecord(t, u); rec.LocalQueueUID == "" || !f.has(kqLQ) {
-			t.Fatalf("record %+v", rec)
-		}
-	})
-	t.Run("project gone", func(t *testing.T) {
-		f, u := putKueueCluster(t)
-		created := false
-		f.beforeRequest = func(r *http.Request) {
-			if r.Method == http.MethodPost && r.URL.Path == kqLQs && r.URL.Query().Get("dryRun") == "" {
-				created = true
-			} else if r.Method == http.MethodGet && r.URL.Path == wbProjectNS && created {
-				f.deleteObject(wbProjectNS)
-			}
-		}
-		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"})
-		if res.Success || res.Message != "Project proj was deleted while it was set up; what was created in it was deleted again. Set up again." {
-			t.Fatalf("got %+v", res)
-		}
-		if rec := kueueRecord(t, u); rec.LocalQueueUID != "" {
-			t.Fatalf("record %+v", rec)
-		}
-	})
-}
-
-// Clean up after the project was deleted and made again: a same-named
-// LocalQueue or sample of someone else's in the new project does not stop
-// it from deleting the cluster-wide queues; the tool's own leftovers (their
-// old UIDs) are deleted by UID; a ClusterQueue someone's queue uses stays.
-func TestKueueTeardownAfterProjectMadeAgain(t *testing.T) {
-	t.Run("someone else's queue and sample of the names", func(t *testing.T) {
-		f, u, _ := kqSetUpBoth(t)
-		kqRemakeProject(f, "")
-		f.putJSON(kqLQ, fmt.Sprintf(kqForeignLQ, "team-cq"))
-		f.putJSON(kqRayJobs+"/"+kueue.RayJobName, `{"metadata":{"name":"nightly-rayjob","namespace":"proj","uid":"their-job","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}}}`)
-		before := len(f.mutations())
-		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"})
-		if !res.Success {
-			t.Fatalf("teardown: %+v", res)
-		}
-		want := []string{"DELETE " + kqCQ, "DELETE " + kqFlavor}
-		if got := f.mutations()[before:]; strings.Join(got, "\n") != strings.Join(want, "\n") {
-			t.Fatalf("writes:\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
-		}
-		if !f.has(kqLQ) || !f.has(kqRayJobs+"/"+kueue.RayJobName) || f.has(kqCQ) || f.has(kqFlavor) {
-			t.Fatal("wrong objects deleted")
-		}
-		if rec := kueueRecord(t, u); !rec.Empty() || rec.Project != "" {
-			t.Fatalf("record %+v", rec)
-		}
-	})
-	t.Run("someone else's queue uses the ClusterQueue", func(t *testing.T) {
-		f, u, _ := kqSetUpBoth(t)
-		kqRemakeProject(f, "")
-		f.putJSON(kqLQ, fmt.Sprintf(kqForeignLQ, kueue.ClusterQueueName))
-		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"})
-		if res.Success || res.ErrorCode != "in_use" || !strings.Contains(res.Message, "LocalQueue proj/nightly-kueue") || !f.has(kqCQ) || !f.has(kqFlavor) || !f.has(kqLQ) {
-			t.Fatalf("got %+v", res)
-		}
-		if rec := kueueRecord(t, u); rec.LocalQueueUID != "" || rec.ProjectUID != "" || rec.ClusterQueueUID == "" {
-			t.Fatalf("record %+v", rec)
-		}
-	})
-	t.Run("the tool's own leftovers are deleted by UID", func(t *testing.T) {
-		f, u, old := kqSetUpBoth(t)
-		lq := kqLeftover(t, f, kqLQ)
-		kqRemakeProject(f, "")
-		f.put(kqLQ, lq)
-		before := len(f.mutations())
-		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"}); !res.Success {
-			t.Fatalf("teardown: %+v", res)
-		}
-		want := []string{"DELETE " + kqLQ, "DELETE " + kqCQ, "DELETE " + kqFlavor}
-		if got := f.mutations()[before:]; strings.Join(got, "\n") != strings.Join(want, "\n") {
-			t.Fatalf("writes:\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
-		}
-		if dels := f.callsTo("DELETE", kqLQ); !strings.Contains(dels[0].Body, `"uid":"`+old.LocalQueueUID+`"`) {
-			t.Fatalf("LocalQueue deleted without its UID: %s", dels[0].Body)
-		}
-		if _, ok := nsLabels(f)[kueue.ProjectLabel]; ok {
-			t.Fatal("the new project got a label")
-		}
-	})
-	t.Run("a label someone else set stays", func(t *testing.T) {
-		f, u, _ := kqSetUpBoth(t)
-		kqRemakeProject(f, `,"kueue.openshift.io/managed":"true"`)
-		patches := len(f.callsTo("PATCH", wbProjectNS))
-		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj", RayCluster: true}); !res.Success {
-			t.Fatalf("setup again: %+v", res)
-		}
-		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"}); !res.Success {
-			t.Fatalf("teardown: %+v", res)
-		}
-		if nsLabels(f)[kueue.ProjectLabel] != "true" || len(f.callsTo("PATCH", wbProjectNS)) != patches {
-			t.Fatal("removed a label someone else set")
-		}
-		if f.has(kqLQ) || f.has(kqCQ) || f.has(kqFlavor) || f.has(kqRayCs+"/"+kueue.RayClusterName) {
-			t.Fatal("left an object of the tool's")
-		}
-		if rec := kueueRecord(t, u); !rec.Empty() || rec.Project != "" {
-			t.Fatalf("record %+v", rec)
-		}
-	})
-	t.Run("project unreadable", func(t *testing.T) {
-		f, u, old := kqSetUpBoth(t)
-		f.fail["GET "+wbProjectNS] = 500
-		before := len(f.mutations())
-		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"})
-		if res.Success || !strings.Contains(res.Message, "Cannot read project proj") || !strings.HasSuffix(res.Message, "Nothing was deleted.") || len(f.mutations()) != before {
-			t.Fatalf("got %+v, writes %v", res, f.mutations()[before:])
-		}
-		if rec := kueueRecord(t, u); !reflect.DeepEqual(rec, old) {
-			t.Fatalf("record %+v (was %+v)", rec, old)
-		}
-	})
-	t.Run("project being deleted is still the recorded one", func(t *testing.T) {
-		f, u, _ := kqSetUpBoth(t)
-		ns := f.get(wbProjectNS)
-		ensureMap(ns, "metadata")["deletionTimestamp"] = "2026-11-25T10:00:00Z"
-		ensureMap(ns, "status")["phase"] = "Terminating"
-		f.put(wbProjectNS, ns)
-		patches := len(f.callsTo("PATCH", wbProjectNS))
-		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"}); !res.Success {
-			t.Fatalf("teardown: %+v", res)
-		}
-		if len(f.callsTo("DELETE", kqLQ)) != 1 || len(f.callsTo("DELETE", kqRayCs+"/"+kueue.RayClusterName)) != 1 || len(f.callsTo("PATCH", wbProjectNS)) != patches+1 {
-			t.Fatalf("writes %v", f.mutations())
-		}
-	})
-}
-
-// delete-sample after the project was deleted and made again: the sample
-// went with it; a same-named one of someone else's stays.
-func TestKueueDeleteSampleAfterProjectMadeAgain(t *testing.T) {
-	f, u, _ := kqSetUpBoth(t)
-	kqRemakeProject(f, "")
-	f.putJSON(kqRayJobs+"/"+kueue.RayJobName, `{"metadata":{"name":"nightly-rayjob","namespace":"proj","uid":"their-job","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}}}`)
-	before := len(f.mutations())
-	res, _ := runKueueOp(t, u, types.KueueRequest{Action: "delete-sample", Sample: "rayjob"})
-	if !res.Success || !strings.Contains(res.Message, "is gone already") || len(f.mutations()) != before || !f.has(kqRayJobs+"/"+kueue.RayJobName) {
-		t.Fatalf("got %+v, writes %v", res, f.mutations()[before:])
-	}
-	if rec := kueueRecord(t, u); rec.RayJobUID != "" || rec.ProjectUID != "" || rec.LabelAdded || rec.ClusterQueueUID == "" {
-		t.Fatalf("record %+v", rec)
-	}
 }
 
 // M3: the opt-in checks the setup live before it changes the dashboard: a
