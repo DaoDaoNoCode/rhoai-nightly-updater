@@ -44,13 +44,13 @@ func takeProject(t *testing.T, uid, user string) *projectHolder {
 	return h
 }
 
-func takeCluster(t *testing.T) (*lockRefusal, context.Context) {
+func takeCluster(t *testing.T) *lockRefusal {
 	t.Helper()
-	ctx, cancel := context.WithCancelCause(context.Background())
+	_, cancel := context.WithCancelCause(context.Background())
 	t.Cleanup(func() { cancel(nil) })
 	c := cluster.NewClientWithContext(context.Background(), "sa-token")
 	var started bool
-	return acquireRunnerLock(startRunner(c, &started), cancel), ctx
+	return acquireRunnerLock(startRunner(c, &started), cancel)
 }
 
 // A cluster operation is refused while a project action runs: in another
@@ -62,7 +62,7 @@ func TestClusterLockRefusedWhileProjectLockLive(t *testing.T) {
 	f := installFakeRecord(t)
 	f.setProject("uid-1", otherPodProjectLease("uid-1", "alice", clk.Now()))
 
-	refusal, _ := takeCluster(t)
+	refusal := takeCluster(t)
 	if refusal == nil || refusal.holder == nil || refusal.holder.ProjectUID != "uid-1" || refusal.reason != conflictCluster {
 		t.Fatalf("another pod's project lock: refusal %+v", refusal)
 	}
@@ -78,7 +78,7 @@ func TestClusterLockRefusedWhileProjectLockLive(t *testing.T) {
 
 	// An expired one does not refuse.
 	f.setProject("uid-1", otherPodProjectLease("uid-1", "alice", clk.Now().Add(-2*leaseTTL)))
-	if refusal, _ := takeCluster(t); refusal != nil {
+	if refusal := takeCluster(t); refusal != nil {
 		t.Fatalf("expired project lock refused: %+v", refusal)
 	}
 	releaseClusterMutationLock()
@@ -89,7 +89,7 @@ func TestClusterLockRefusedWhileProjectLockLive(t *testing.T) {
 	if h.refusal != nil {
 		t.Fatalf("project lock refused: %+v", h.refusal)
 	}
-	refusal, _ = takeCluster(t)
+	refusal = takeCluster(t)
 	if refusal == nil || !refusal.busy || refusal.reason != conflictCluster || refusal.opID == "" || inflight.get(refusal.opID).ProjectUID != "uid-2" {
 		t.Fatalf("own project action: refusal %+v", refusal)
 	}
@@ -112,7 +112,7 @@ func TestProjectLockRefusedWhileClusterLockLive(t *testing.T) {
 		t.Fatal("something is held after the refusal")
 	}
 	f.setLease(nil)
-	if refusal, _ := takeCluster(t); refusal != nil {
+	if refusal := takeCluster(t); refusal != nil {
 		t.Fatalf("cluster lock refused: %+v", refusal)
 	}
 	if h := takeProject(t, "uid-1", "alice"); h.refusal == nil || !h.refusal.busy || h.refusal.reason != conflictCluster {
