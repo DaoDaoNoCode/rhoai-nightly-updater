@@ -330,20 +330,25 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   database volume (`genai-pgvector-storage`) and the pods of
   `genai-pgvector` and `lsd-genai-playground`, and the head, worker and
   submitter pods of the distributed workloads setup's Ray samples.
-  Those are now left out when every owner reference of the object leads,
-  through its ReplicaSet and Deployment (or the RayJob's Job), to
-  something this tool owns: the playground's OGXServer when it is the one
-  this tool recorded for the project (same UID), the tool's pipeline
-  server, the tool's models, and the RayCluster and RayJob in the record
-  of the distributed workloads setup for this project. A reference is
+  After the existing exclusions (the tool's label, objects being deleted,
+  the labels of the tool's pipeline server and model pods), an object is
+  now also left out when every owner reference of it leads, through its
+  ReplicaSet and Deployment (or the RayJob submitter's Job), to something
+  this tool owns: the playground's OGXServer when it is the one this tool
+  recorded for the project (same UID), the tool's pipeline server, the
+  tool's models, and the RayCluster and RayJob in the tool's record of
+  the distributed workloads setup for this project. A reference is
   matched by kind and UID. When Clean up everything (or the recipe's
   Clean up with the distributed workloads part ticked) deletes one of
   these before the project, the check just before the project's delete
   still counts their pieces as the tool's while Kubernetes removes them:
-  it uses the owners the first check found. A playground reconfigured in
-  Gen AI studio (a new OGXServer) is still listed, and so is an object
-  with any other owner. A read that fails still refuses the Clean
-  up. No permission changed.
+  it uses the owners the first check found. Still listed: a playground
+  reconfigured in Gen AI studio (a new OGXServer), an object that one of
+  the exclusions does not cover and that has another owner, and the head
+  and worker pods of the RayCluster KubeRay makes for the RayJob sample
+  (`nightly-rayjob-<5 characters>`, until the job ends and it is removed;
+  recognising them would need a new permission to read RayClusters). A
+  read that fails still refuses the Clean up. No permission changed.
 - **A recipe says when the dashboard will mark its workbench as bypassing
   Kueue.** A recipe that sets up a workbench and turns the dashboard's Kueue
   setting on creates the workbench first, so the dashboard marks it

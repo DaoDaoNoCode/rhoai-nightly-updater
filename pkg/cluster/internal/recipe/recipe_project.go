@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/authz"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
@@ -596,25 +597,13 @@ func ProjectTeardownProblem(c *kube.Client, name, uid string, confirmed, known [
 	return "", "", left, owners, nil
 }
 
-// ProjectLeftovers lists what is in recipe project name that this tool did
-// not create, for the confirmation; ErrorCodeConfirmContents refusals name
-// the same strings.
-func ProjectLeftovers(c *kube.Client, name string) ([]string, error) {
-	meta, _, err := kube.ReadObjectMeta(c, namespacePath(name))
-	if err != nil {
-		return nil, fmt.Errorf("read namespace %s: %w", name, err)
-	}
-	left, _, err := projectLeftovers(c, name, meta.UID, nil)
-	return left, err
-}
-
 // projectLeftovers names what is in project ns (with UID nsUID) that this
 // tool did not create, as far as it can list: workbenches (Notebooks),
 // InferenceServices and LLMInferenceServices, PersistentVolumeClaims and
 // pods. Left out are objects with the tool's label, objects being deleted,
 // the pods of the tool's pipeline server (DSPO labels them dspa=<name>),
 // the pods of the tool's models (KServe's part-of and name labels), and
-// what an owner of the tool's owns (ownedByToolRoot), a root:
+// what an owner of the tool's owns (ownerWalk), a root:
 //
 //   - the tool's pipeline servers (DSPO makes the DSPA the owner of what it
 //     creates);
@@ -635,14 +624,23 @@ func ProjectLeftovers(c *kube.Client, name string) ([]string, error) {
 //     recorded one, so they are listed;
 //   - the Ray samples of the tool's distributed workloads setup, by the
 //     UIDs its record holds when the record is of this project
-//     (kueue.ReadRecord; the project's UID too when the record has it):
-//     KubeRay owns the head and worker pods by the RayCluster, and a
-//     RayJob's submitter pod by its Job, which the RayJob owns. The Job a
-//     pod names is read by name (only while a RayJob is a root); no Ray
-//     object is read.
+//     (kueue.ReadRecord; the project's UID too when the record has it).
+//     The record is this tool's own (a ConfigMap in its namespace that the
+//     ServiceAccount writes); no Ray object is read, so whether the sample
+//     is still there or still carries the tool's label is not checked
+//     (there is no read of Ray objects to check it with). KubeRay owns the
+//     RayCluster sample's head and worker pods by the RayCluster, and the
+//     RayJob's submitter pod by its Job, which the RayJob owns; that Job is
+//     read by name, only for a pod KubeRay marks as the RayJob's submitter
+//     (rayJobSubmitter) while a RayJob is a root. The RayJob sample's own
+//     RayCluster (named <rayjob>-<5 characters>, controlled by the RayJob;
+//     the sample sets rayClusterSpec) is not recognised: its head and
+//     worker pods stay listed while the job runs, until
+//     shutdownAfterJobFinishes removes that cluster. Recognising them would
+//     need a read of RayClusters, which this tool does not have;
 //
 // An object counts only when every one of its references leads to a root
-// (ownedByToolRoot). InferenceServices are no root: this tool creates
+// (ownerWalk). InferenceServices are no root: this tool creates
 // none, and a Serverless one's pods are owned through Knative objects this
 // does not read. A kind whose API is not served has none. A read that
 // fails is returned (fail closed); an owner that is not there (a 404)
@@ -758,23 +756,31 @@ func projectLeftovers(c *kube.Client, ns, nsUID string, known []string) (left, o
 	toolModelPod := func(m kube.ObjectMeta) bool {
 		return m.Labels["app.kubernetes.io/part-of"] == "llminferenceservice" && toolModels[m.Labels["app.kubernetes.io/name"]]
 	}
+	// Left out by its labels or its deletion, before any owner is looked at.
+	excluded := func(kind string, m kube.ObjectMeta) bool {
+		return m.HasToolLabel() || m.Terminating() || (kind == "Pod" && (toolDSPAs[m.Labels["dspa"]] || toolModelPod(m)))
+	}
 	links, err := listOwnerChainLinks(c, ns, len(roots) > 0)
 	if err != nil {
 		return nil, nil, err
 	}
 	if hasRootOfKind(roots, "RayJob") {
-		if err := readPodJobs(c, ns, pods, links); err != nil {
+		var submitters []kube.ObjectMeta
+		for _, p := range pods {
+			if !excluded("Pod", p) && rayJobSubmitter(p) {
+				submitters = append(submitters, p)
+			}
+		}
+		if err := readPodJobs(c, ns, submitters, links); err != nil {
 			return nil, nil, err
 		}
 	}
-	ownedByTool := func(m kube.ObjectMeta) bool {
-		return ownedByToolRoot(m, roots, links)
-	}
+	walk := newOwnerWalk(roots, links)
 	for k := range roots {
 		owners = append(owners, k)
 	}
 	for uid, link := range links {
-		if k := ownerKey(link.kind, uid); !roots[k] && ownedByTool(link.meta) {
+		if k := ownerKey(link.kind, uid); !roots[k] && walk.owned(link.meta) {
 			owners = append(owners, k)
 		}
 	}
@@ -782,7 +788,7 @@ func projectLeftovers(c *kube.Client, ns, nsUID string, known []string) (left, o
 	var out []string
 	for _, got := range lists {
 		for _, m := range got.items {
-			if m.HasToolLabel() || m.Terminating() || ownedByTool(m) || (got.kind == "Pod" && (toolDSPAs[m.Labels["dspa"]] || toolModelPod(m))) {
+			if excluded(got.kind, m) || walk.owned(m) {
 				continue
 			}
 			out = append(out, got.kind+" "+m.Name)
@@ -808,15 +814,28 @@ func hasRootOfKind(roots map[string]bool, kind string) bool {
 	return false
 }
 
-// readPodJobs reads, by name, each Job that one of pods names as its owner
-// and adds it to links when it is the one named (its UID): a RayJob's
-// submitter pod is owned by a Job the RayJob owns. A Job that is not there
-// (404) is left out; another failed read is returned (fail closed).
+// rayJobSubmitter says whether pod is the submitter of the tool's RayJob
+// sample as KubeRay marks it: its Job's pod template carries
+// ray.io/originated-from-crd=RayJob and ray.io/originated-from-cr-name=<the
+// RayJob> (KubeRay ray-operator controllers/ray/utils constant.go,
+// RayOriginatedFromCRDLabelKey and RayOriginatedFromCRNameLabelKey). Only
+// such a pod's Job is read.
+func rayJobSubmitter(pod kube.ObjectMeta) bool {
+	return pod.Labels["ray.io/originated-from-crd"] == "RayJob" && pod.Labels["ray.io/originated-from-cr-name"] == kueue.RayJobName
+}
+
+// readPodJobs reads, by name, each Job that one of pods (the submitters
+// rayJobSubmitter picked) names as its owner and adds it to links when it
+// is the one named (its UID): a RayJob's submitter pod is owned by a Job
+// the RayJob owns. A name that is not a valid object name (DNS-1123
+// subdomain, as Kubernetes requires of a Job's name) is not requested, so
+// its pod stays listed. A Job that is not there (404) is left out; another
+// failed read is returned (fail closed).
 func readPodJobs(c *kube.Client, ns string, pods []kube.ObjectMeta, links map[string]ownerLink) error {
 	read := map[string]bool{}
 	for _, p := range pods {
 		for _, o := range p.OwnerReferences {
-			if o.Kind != "Job" || o.Name == "" || read[o.Name] {
+			if o.Kind != "Job" || read[o.Name] || len(o.Name) > 253 || !components.DNS1123Subdomain.MatchString(o.Name) {
 				continue
 			}
 			read[o.Name] = true
@@ -832,14 +851,15 @@ func readPodJobs(c *kube.Client, ns string, pods []kube.ObjectMeta, links map[st
 	return nil
 }
 
-// maxOwnerLinks bounds the walk of ownedByToolRoot: a pod reaches a root
+// maxOwnerLinks bounds the owner walk (ownerWalk): a pod reaches a root
 // that owns its Deployment by its third reference (Pod to ReplicaSet,
 // ReplicaSet to Deployment, Deployment to the root; the Deployment
 // controller owns the ReplicaSets it makes, the ReplicaSet controller the
-// pods).
+// pods), and a RayJob's submitter pod reaches the RayJob by its second
+// (Pod to Job, Job to RayJob).
 const maxOwnerLinks = 3
 
-// ownerLink is an owner ownedByToolRoot may pass through on the way to a
+// ownerLink is an owner the owner walk may pass through on the way to a
 // root: a ReplicaSet, a Deployment or a Job of the project.
 type ownerLink struct {
 	kind string
@@ -876,10 +896,11 @@ func listOwnerChainLinks(c *kube.Client, ns string, needed bool) (map[string]own
 	return out, nil
 }
 
-// ownedByToolRoot says whether every ownerReference of m is a root (an
-// ownerKey of the tool's owners) or an object read here (the project's
-// ReplicaSets, Deployments and the Jobs pods name) whose own references
-// all are, at most maxOwnerLinks references from m; an object without
+// ownerWalk says whether an object is owned by the tool's roots (owned):
+// every ownerReference of it is a root (an ownerKey of the tool's owners)
+// or an object read here (the project's ReplicaSets and Deployments, and
+// the Jobs of RayJob submitter pods) whose own references all are, at most
+// maxOwnerLinks references from the object; an object without
 // ownerReferences is not owned this way. This follows the Kubernetes
 // garbage collector, which keeps an object while any of its owners is
 // there and finds an owner by apiVersion, kind and name and then compares
@@ -892,25 +913,54 @@ func listOwnerChainLinks(c *kube.Client, ns string, needed bool) (map[string]own
 // not carried) leaves the object listed, where the collector would treat
 // a dangling one as absent. Every path is followed to the bound, which
 // also ends a cycle of references; no owner is skipped for having been
-// met on another path.
-func ownedByToolRoot(m kube.ObjectMeta, roots map[string]bool, links map[string]ownerLink) bool {
-	var reaches func(m kube.ObjectMeta, depth int) bool
-	reaches = func(m kube.ObjectMeta, depth int) bool {
-		if len(m.OwnerReferences) == 0 {
+// met on another path. The answer for an owner at a depth is the same
+// whichever path meets it, so it is kept (memo): the walk costs at most
+// one evaluation per owner and depth.
+type ownerWalk struct {
+	roots map[string]bool
+	links map[string]ownerLink
+	memo  map[ownerAtDepth]bool
+}
+
+type ownerAtDepth struct {
+	uid   string
+	depth int
+}
+
+func newOwnerWalk(roots map[string]bool, links map[string]ownerLink) *ownerWalk {
+	return &ownerWalk{roots: roots, links: links, memo: map[ownerAtDepth]bool{}}
+}
+
+func (w *ownerWalk) owned(m kube.ObjectMeta) bool {
+	return w.reaches(m, 1)
+}
+
+// reaches says whether every reference of m, depth references from the
+// object the walk started at, leads to a root.
+func (w *ownerWalk) reaches(m kube.ObjectMeta, depth int) bool {
+	if len(m.OwnerReferences) == 0 {
+		return false
+	}
+	for _, o := range m.OwnerReferences {
+		if w.roots[ownerKey(o.Kind, o.UID)] {
+			continue
+		}
+		next, ok := w.links[o.UID]
+		if !ok || next.kind != o.Kind || depth == maxOwnerLinks || !w.linkReaches(o.UID, next, depth+1) {
 			return false
 		}
-		for _, o := range m.OwnerReferences {
-			if roots[ownerKey(o.Kind, o.UID)] {
-				continue
-			}
-			next, ok := links[o.UID]
-			if !ok || next.kind != o.Kind || depth == maxOwnerLinks || !reaches(next.meta, depth+1) {
-				return false
-			}
-		}
-		return true
 	}
-	return reaches(m, 1)
+	return true
+}
+
+func (w *ownerWalk) linkReaches(uid string, l ownerLink, depth int) bool {
+	k := ownerAtDepth{uid: uid, depth: depth}
+	if v, ok := w.memo[k]; ok {
+		return v
+	}
+	v := w.reaches(l.meta, depth)
+	w.memo[k] = v
+	return v
 }
 
 // DeleteProject is Clean up's part for a recipe project: it deletes the

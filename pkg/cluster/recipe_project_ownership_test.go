@@ -318,22 +318,27 @@ func TestCleanUp_RecipeProjectKeepsTheOwnersOfEarlierParts(t *testing.T) {
 	}
 }
 
-// No owner is skipped for having been met on another path, whatever the
-// order of a pod's references: ReplicaSets a and b both lead through
-// Deployment x to the server, and each pod names them in another order.
+// The answer for an owner does not depend on the path that met it first:
+// Deployment x leads through Deployment y to the server in three
+// references from the pod (Pod, x, y), but ReplicaSet a, which the pod
+// also names, reaches x only at the bound, so a's path is one reference
+// too long and the pod stays listed, in either order of its references.
+// A walk that skips an owner already met would take a's x as done in one
+// of the orders.
 func TestRecipeProjectLeftovers_ReferenceOrderDoesNotMatter(t *testing.T) {
 	f, c := projectFake(t)
 	putRecipePlayground(f, "ogx-uid")
 	recordRecipePlayground(t, c, "ogx-uid", true)
 	f.putJSON(tRecipeRSList+"/a", `{"metadata":{"uid":"rs-a","ownerReferences":[{"kind":"Deployment","name":"x","uid":"dep-x"}]}}`)
-	f.putJSON(tRecipeRSList+"/b", `{"metadata":{"uid":"rs-b","ownerReferences":[{"kind":"Deployment","name":"x","uid":"dep-x"}]}}`)
-	f.putJSON(tRecipeDepList+"/x", `{"metadata":{"uid":"dep-x","ownerReferences":[{"kind":"OGXServer","name":"lsd-genai-playground","uid":"ogx-uid"}]}}`)
+	f.putJSON(tRecipeDepList+"/x", `{"metadata":{"uid":"dep-x","ownerReferences":[{"kind":"Deployment","name":"y","uid":"dep-y"}]}}`)
+	f.putJSON(tRecipeDepList+"/y", `{"metadata":{"uid":"dep-y","ownerReferences":[{"kind":"OGXServer","name":"lsd-genai-playground","uid":"ogx-uid"}]}}`)
+	depX := `{"kind":"Deployment","name":"x","uid":"dep-x"}`
 	rsA := `{"kind":"ReplicaSet","name":"a","uid":"rs-a"}`
-	rsB := `{"kind":"ReplicaSet","name":"b","uid":"rs-b"}`
-	f.putJSON("/api/v1/namespaces/recipe-dev/pods/a-first", `{"metadata":{"ownerReferences":[`+rsA+`,`+rsB+`]}}`)
-	f.putJSON("/api/v1/namespaces/recipe-dev/pods/b-first", `{"metadata":{"ownerReferences":[`+rsB+`,`+rsA+`]}}`)
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/x-first", `{"metadata":{"ownerReferences":[`+depX+`,`+rsA+`]}}`)
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/a-first", `{"metadata":{"ownerReferences":[`+rsA+`,`+depX+`]}}`)
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/x-only", `{"metadata":{"ownerReferences":[`+depX+`]}}`)
 	left, err := recipe.ProjectLeftovers(c, "recipe-dev")
-	if err != nil || strings.Join(left, ",") != "Pod mine" {
+	if err != nil || strings.Join(left, ",") != "Pod a-first,Pod mine,Pod x-first" {
 		t.Fatalf("leftovers %v %v", left, err)
 	}
 }
@@ -374,9 +379,7 @@ func TestRecipeProjectLeftovers_RootsMatchByKind(t *testing.T) {
 
 // recordRecipeRay records the distributed workloads setup's Ray samples
 // (RayCluster rc-uid, RayJob rj-uid) for project (with projectUID) as its
-// setup does, and puts their pods as KubeRay runs them (live RHOAI 3.7):
-// head and worker owned by the RayCluster, the submitter by Job
-// nightly-rayjob, which the RayJob owns.
+// setup does.
 func recordRecipeRay(t *testing.T, c *Client, project, projectUID string) {
 	t.Helper()
 	if err := record.WriteSnapshotKey(c, kueue.RecordKey, "test", `{"project":"`+project+`","projectUID":"`+projectUID+`","rayClusterUID":"rc-uid","rayJobUID":"rj-uid"}`); err != nil {
@@ -386,32 +389,43 @@ func recordRecipeRay(t *testing.T, c *Client, project, projectUID string) {
 
 const tRayJob = "/apis/batch/v1/namespaces/recipe-dev/jobs/nightly-rayjob"
 
+// putRecipeRayPods puts the Ray samples' pods as KubeRay runs them (live
+// RHOAI 3.7): the RayCluster sample's head and worker owned by it; the
+// RayJob's submitter, marked by KubeRay's originated-from labels, owned by
+// Job nightly-rayjob, which the RayJob owns; and the head of the RayJob's
+// own RayCluster (nightly-rayjob-abcde, which the RayJob controls and this
+// tool does not record), which stays listed.
 func putRecipeRayPods(f *resourceFake) {
 	rc := `{"metadata":{"ownerReferences":[{"apiVersion":"ray.io/v1","kind":"RayCluster","name":"nightly-raycluster","uid":"rc-uid","controller":true}]}}`
 	f.putJSON("/api/v1/namespaces/recipe-dev/pods/nightly-raycluster-head-7xk2p", rc)
 	f.putJSON("/api/v1/namespaces/recipe-dev/pods/nightly-raycluster-small-group-worker-q8w4m", rc)
 	f.putJSON(tRayJob, `{"metadata":{"uid":"job-uid","ownerReferences":[{"apiVersion":"ray.io/v1","kind":"RayJob","name":"nightly-rayjob","uid":"rj-uid","controller":true}]}}`)
-	f.putJSON("/api/v1/namespaces/recipe-dev/pods/nightly-rayjob-9z5kd", `{"metadata":{"ownerReferences":[{"apiVersion":"batch/v1","kind":"Job","name":"nightly-rayjob","uid":"job-uid","controller":true}]}}`)
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/nightly-rayjob-9z5kd", `{"metadata":{"labels":{"ray.io/originated-from-crd":"RayJob","ray.io/originated-from-cr-name":"nightly-rayjob"},"ownerReferences":[{"apiVersion":"batch/v1","kind":"Job","name":"nightly-rayjob","uid":"job-uid","controller":true}]}}`)
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/nightly-rayjob-abcde-head-k2m9x", `{"metadata":{"labels":{"ray.io/originated-from-crd":"RayJob","ray.io/originated-from-cr-name":"nightly-rayjob"},"ownerReferences":[{"apiVersion":"ray.io/v1","kind":"RayCluster","name":"nightly-rayjob-abcde","uid":"rjc-uid","controller":true}]}}`)
 	f.putJSON("/api/v1/namespaces/recipe-dev/pods/mine", `{}`)
 }
 
 // The Ray samples of the tool's distributed workloads setup are roots by
 // the UIDs its record holds, only when the record is of this project (and
 // of this namespace, by UID, when it says): their head, worker and
-// submitter pods are left out. A Job that is not there leaves the
+// submitter pods are left out. The RayJob's own RayCluster is not
+// recognised, so its head stays listed. A Job that is not there leaves the
 // submitter listed; a Job read that fails refuses.
 func TestRecipeProjectLeftovers_RaySamples(t *testing.T) {
-	const rayPods = "Pod mine,Pod nightly-raycluster-head-7xk2p,Pod nightly-raycluster-small-group-worker-q8w4m,Pod nightly-rayjob-9z5kd"
+	const (
+		rayJobCluster = "Pod nightly-rayjob-abcde-head-k2m9x"
+		rayPods       = "Pod mine,Pod nightly-raycluster-head-7xk2p,Pod nightly-raycluster-small-group-worker-q8w4m,Pod nightly-rayjob-9z5kd," + rayJobCluster
+	)
 	for _, tc := range []struct {
 		name, project, projectUID, want string
 		noJob                           bool
 		jobFails                        bool
 	}{
-		{name: "the record of this project", project: "recipe-dev", projectUID: "<ns>", want: "Pod mine"},
-		{name: "a record without the project's UID", project: "recipe-dev", want: "Pod mine"},
+		{name: "the record of this project", project: "recipe-dev", projectUID: "<ns>", want: "Pod mine," + rayJobCluster},
+		{name: "a record without the project's UID", project: "recipe-dev", want: "Pod mine," + rayJobCluster},
 		{name: "a record of another project", project: "other", want: rayPods},
 		{name: "a record of the project before it was made again", project: "recipe-dev", projectUID: "old-ns-uid", want: rayPods},
-		{name: "the Job is gone", project: "recipe-dev", projectUID: "<ns>", noJob: true, want: "Pod mine,Pod nightly-rayjob-9z5kd"},
+		{name: "the Job is gone", project: "recipe-dev", projectUID: "<ns>", noJob: true, want: "Pod mine,Pod nightly-rayjob-9z5kd," + rayJobCluster},
 		{name: "the Job cannot be read", project: "recipe-dev", projectUID: "<ns>", jobFails: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -439,7 +453,7 @@ func TestRecipeProjectLeftovers_RaySamples(t *testing.T) {
 			if err != nil || strings.Join(left, ",") != tc.want {
 				t.Fatalf("leftovers %v %v", left, err)
 			}
-			if jobReads := len(f.callsTo("GET", tRayJob)); (jobReads > 0) != (tc.want == "Pod mine" || tc.noJob) {
+			if jobReads := len(f.callsTo("GET", tRayJob)); (jobReads > 0) != (tc.project == "recipe-dev" && tc.projectUID != "old-ns-uid") {
 				t.Fatalf("read the Job %d times", jobReads)
 			}
 		})
@@ -467,8 +481,30 @@ func TestCleanUp_RecipeProjectAfterTheRaySamples(t *testing.T) {
 		return &types.OperationResponse{Success: true, Message: "Distributed workloads setup deleted."}, nil
 	}
 	res, err := CleanUp(c, types.CleanupRequest{Kueue: true, RecipeProjects: []string{"recipe-dev"}, RecipeProjectUIDs: map[string]string{"recipe-dev": uid},
-		ConfirmProjectContents: map[string][]string{"recipe-dev": {"Pod mine"}}}, nil)
+		ConfirmProjectContents: map[string][]string{"recipe-dev": {"Pod mine", "Pod nightly-rayjob-abcde-head-k2m9x"}}}, nil)
 	if err != nil || !res.Success || ran != 1 || f.has(tRecipeNS) {
 		t.Fatalf("got %+v, %v, kueue ran %d, project still there: %v", res, err, ran, f.has(tRecipeNS))
+	}
+}
+
+// Only a pod KubeRay marks as the tool's RayJob's submitter gets its Job
+// read, and only by a valid object name: an ordinary batch pod and a
+// submitter whose reference names an invalid Job send no Job request and
+// stay listed.
+func TestRecipeProjectLeftovers_JobReadsOnlyForRayJobSubmitters(t *testing.T) {
+	f, c, uid := createdRecipeProject(t)
+	recordRecipePlayground(t, c, "", false)
+	recordRecipeRay(t, c, "recipe-dev", uid)
+	f.putJSON("/apis/batch/v1/namespaces/recipe-dev/jobs/backup", `{"metadata":{"uid":"backup-uid"}}`)
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/backup-x7k2p", `{"metadata":{"ownerReferences":[{"apiVersion":"batch/v1","kind":"Job","name":"backup","uid":"backup-uid"}]}}`)
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/bad-name", `{"metadata":{"labels":{"ray.io/originated-from-crd":"RayJob","ray.io/originated-from-cr-name":"nightly-rayjob"},"ownerReferences":[{"kind":"Job","name":"../../secrets/x","uid":"job-uid"}]}}`)
+	left, err := recipe.ProjectLeftovers(c, "recipe-dev")
+	if err != nil || strings.Join(left, ",") != "Pod backup-x7k2p,Pod bad-name" {
+		t.Fatalf("leftovers %v %v", left, err)
+	}
+	for _, call := range f.calls {
+		if strings.Contains(call.Path, "/jobs") {
+			t.Fatalf("read a Job: %s %s", call.Method, call.Path)
+		}
 	}
 }
