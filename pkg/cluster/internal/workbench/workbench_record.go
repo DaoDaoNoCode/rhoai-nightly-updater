@@ -139,3 +139,31 @@ func updateRecord(c *kube.Client, project string, change func(e *Recorded)) erro
 		return writeRecord(c, rec)
 	})
 }
+
+// ForgetGoneProjects drops the entries whose project is gone (gone answers
+// with the project and the entry's recorded namespace UID, "" for an entry
+// from before it was recorded), in one read-change-write through
+// record.UpdateSnapshot, and returns the projects it dropped. An entry
+// gone cannot tell about stays (fail closed: gone says false).
+func ForgetGoneProjects(c *kube.Client, gone func(project, projectUID string) bool) ([]string, error) {
+	var dropped []string
+	err := record.UpdateSnapshot(c, func() error {
+		rec, err := ReadRecord(c)
+		if err != nil {
+			return err
+		}
+		for key, e := range rec {
+			project, ok := strings.CutSuffix(key, "/"+Name)
+			if ok && gone(project, e.ProjectUID) {
+				delete(rec, key)
+				dropped = append(dropped, project)
+			}
+		}
+		if len(dropped) == 0 {
+			return nil
+		}
+		return writeRecord(c, rec)
+	})
+	sort.Strings(dropped)
+	return dropped, err
+}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -386,7 +387,7 @@ func TestUserRecordEntriesHardCeiling(t *testing.T) {
 	u.SetUsername("alice")
 	u.SetProjectUser("uid-proj")
 	var full *record.RecordsFullError
-	if err := record.AdmitUserEntry(u, "proj", nil, []byte(`{}`)); !errors.As(err, &full) || !strings.Contains(full.Msg, "full (200 entries)") || !strings.Contains(full.Msg, "Clean up") {
+	if err := record.AdmitUserEntry(u, "proj", nil, []byte(`{}`)); !errors.As(err, &full) || !strings.Contains(full.Msg, "full (200 entries)") || !strings.Contains(full.Msg, "background check, which runs every 5 minutes") {
 		t.Fatalf("a new entry past the ceiling: %v", err)
 	}
 	u0 := userClientOf(c, fakeUserToken)
@@ -395,5 +396,33 @@ func TestUserRecordEntriesHardCeiling(t *testing.T) {
 	prior := &record.RecordOwner{Project: "gone-0", ProjectUID: "uid-gone-0", By: "u-0", ActorRole: record.ActorRoleUser}
 	if err := record.AdmitUserEntry(u0, "gone-0", prior, []byte(`{}`)); err != nil {
 		t.Fatalf("the same user's entry: %v", err)
+	}
+}
+
+// The background check drops the workbench entries of projects that are
+// gone, by namespace UID where recorded (a project made again under its
+// name is gone too) and by name for older entries; live ones, and ones
+// whose project cannot be read, stay.
+func TestSweepDropsWorkbenchEntriesOfGoneProjects(t *testing.T) {
+	f, c := newResourceFake(t)
+	f.putJSON("/api/v1/namespaces/live", `{"metadata":{"uid":"uid-live"}}`)
+	f.putJSON("/api/v1/namespaces/remade", `{"metadata":{"uid":"uid-remade-new"}}`)
+	f.putJSON("/api/v1/namespaces/legacy-live", `{"metadata":{"uid":"whatever"}}`)
+	f.fail["GET /api/v1/namespaces/unreadable"] = 500
+	putOwnerRecords(t, f, map[string]workbench.Recorded{
+		"live/" + workbench.Name:        {UID: "a", ActorRole: record.ActorRoleUser, ProjectUID: "uid-live"},
+		"gone/" + workbench.Name:        {UID: "b", ActorRole: record.ActorRoleUser, ProjectUID: "uid-gone"},
+		"remade/" + workbench.Name:      {UID: "c", ActorRole: record.ActorRoleUser, ProjectUID: "uid-remade-old"},
+		"legacy-live/" + workbench.Name: {UID: "d"},
+		"legacy-gone/" + workbench.Name: {UID: "e"},
+		"unreadable/" + workbench.Name:  {UID: "f", ActorRole: record.ActorRoleUser, ProjectUID: "uid-x"},
+	})
+	SweepGoneProjectRecords(c)
+	rec, err := workbench.ReadRecord(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rec.Projects(); !slices.Equal(got, []string{"legacy-live", "live", "unreadable"}) {
+		t.Fatalf("workbench entries after the sweep: %v", got)
 	}
 }

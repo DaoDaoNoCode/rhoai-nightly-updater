@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -110,6 +111,11 @@ func ReadRecordOwners(c *kube.Client) ([]RecordOwner, error) {
 
 // ErrorCodeRecordsFull is the errorCode of a setup refused by a cap.
 const ErrorCodeRecordsFull = "records_full"
+
+// SweepInterval is how often the background check runs that drops the
+// entries of projects that are gone (pkg/api's maasPruneInterval is set
+// from it), named in the ceiling's refusal.
+const SweepInterval = 5 * time.Minute
 
 // MaxUserRecordEntryBytes bounds one user's entry as written (its JSON).
 // MaxUserRecordEntries bounds every user's entry persisted, those of
@@ -254,7 +260,7 @@ func AdmitUserEntry(c *kube.Client, project string, prior *RecordOwner, entryJSO
 			}
 		}
 		if n >= MaxUserRecordEntries {
-			return &RecordsFullError{Msg: fmt.Sprintf("The updater's records of users' objects are full (%d entries). A cluster-admin runs Clean up on the Environment page to remove what is no longer needed.", n)}
+			return &RecordsFullError{Msg: fmt.Sprintf("The updater's records of users' objects are full (%d entries). Entries of deleted projects are removed by the updater's background check, which runs every %d minutes when no other operation runs; set up again after it. A cluster-admin can free entries now by deleting workbenches and playgrounds no longer needed (Clean up on the Environment page).", n, int(SweepInterval/time.Minute))}
 		}
 	}
 	msg, err := UserRecordCapRefusal(owners, entry, func(o RecordOwner) (bool, error) { return ProjectExists(c, o) })

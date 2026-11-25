@@ -8,13 +8,14 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/workbench"
 )
 
 // Background reconciliation (see pkg/api maas_prune_job.go): resources that
 // disappear eventually drop out of this application's tracking records without
 // manual intervention.
 //
-// Models, pipeline-server, and playground records store UIDs for objects this
+// Models, pipeline-server, playground and workbench records store UIDs for objects this
 // tool created, keyed by project. Deleting a project removes its contents; a
 // later namespace with the same name gets fresh UIDs, so stale rows neither
 // validate anything nor serve a purpose—they only clutter storage. The sweep
@@ -36,14 +37,27 @@ func SweepGoneInBackground(c *kube.Client) {
 // SweepGoneProjectRecords drops record entries whose projects no longer exist;
 // unreadable or unwritable records are skipped until a later run.
 func SweepGoneProjectRecords(c *kube.Client) {
-	gone := map[string]bool{}
-	projectGone := func(project string) bool {
-		if g, seen := gone[project]; seen {
-			return g
+	type nsState struct {
+		gone bool
+		uid  string
+	}
+	seen := map[string]nsState{}
+	namespace := func(project string) nsState {
+		if st, ok := seen[project]; ok {
+			return st
 		}
-		_, found, err := kube.ReadObjectMeta(c, rhoai.ClusterPath("v1", "namespaces", project))
-		gone[project] = err == nil && !found
-		return gone[project]
+		meta, found, err := kube.ReadObjectMeta(c, rhoai.ClusterPath("v1", "namespaces", project))
+		st := nsState{gone: err == nil && !found, uid: meta.UID}
+		seen[project] = st
+		return st
+	}
+	projectGone := func(project string) bool { return namespace(project).gone }
+	// An entry that recorded its project's namespace UID is gone also when
+	// a namespace of that name now has another UID (the project was made
+	// again); one without (from before the UID was kept) goes by its name.
+	projectUIDGone := func(project, uid string) bool {
+		st := namespace(project)
+		return st.gone || uid != "" && st.uid != "" && st.uid != uid
 	}
 	projectOf := func(key string) string {
 		project, _, _ := strings.Cut(key, "/")
@@ -109,6 +123,13 @@ func SweepGoneProjectRecords(c *kube.Client) {
 		}
 	}
 
+	if dropped, err := workbench.ForgetGoneProjects(c, projectUIDGone); err != nil {
+		slog.Warn("background check: the workbench record cannot be read or written", "error", err)
+	} else {
+		for _, p := range dropped {
+			forgotten = append(forgotten, "workbench in "+p)
+		}
+	}
 	if len(forgotten) > 0 {
 		slog.Info("background check: forgot the records of projects that are gone", "entries", strings.Join(forgotten, ", "))
 	}
