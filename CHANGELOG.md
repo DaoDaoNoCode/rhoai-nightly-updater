@@ -274,10 +274,15 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   offered (its Distributed workloads prerequisites step did not read as
   created either). The recipe's offer, the Environment tabs' offer and Clean
   up itself now make one check: the component is in its own on state and
-  this tool's field manager still owns it. The dialog says that Kueue goes
-  back last, only once no ClusterQueue or LocalQueue is left on the cluster,
-  and Clean up's messages about a component that stays on name its on state
-  (`Unmanaged` for `kueue`) instead of `Managed`.
+  this tool's field manager still owns it. A run claims a component only when
+  Set up's record (which now keeps when it turned each on) says it was turned
+  on while the run ran, so a component turned back and turned on again later
+  from the Environment tab is not an old run's. The dialog says that Kueue
+  goes back last, only once no ClusterQueue or LocalQueue is left on the
+  cluster, and sends only the components it says go back: one it lists as
+  staying on is not turned back by the server either. Clean up's messages
+  about a component that is not turned back no longer call it `Managed`
+  (`Not turned back: kueue (in use: ...)`, `... so it stays Unmanaged`).
 - **The recipe's Clean up dialog names RHOAI 3.6's components.** It listed
   `aiHub` and `ogx` by their keys; they now read AI hub and OGX. AI hub stays
   on while the model registry stays, as `modelregistry` does (Clean up keeps
