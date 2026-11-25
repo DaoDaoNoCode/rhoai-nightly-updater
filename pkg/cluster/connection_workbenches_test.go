@@ -271,11 +271,13 @@ func TestCleanUp_RecipeProjectDeleteLeavesWorkbenchesAlone(t *testing.T) {
 	f, c := newResourceFake(t)
 	putConnectionUsers(f)
 	defer func(p, d any) {
-		recipeProjectProblem = p.(func(*Client, string, string, []string) (string, string, []string, error))
-		cleanupProject = d.(func(*Client, string, string, []string) (*types.OperationResponse, error))
+		recipeProjectProblem = p.(func(*Client, string, string, []string, []string) (string, string, []string, []string, error))
+		cleanupProject = d.(func(*Client, string, string, []string, []string) (*types.OperationResponse, error))
 	}(recipeProjectProblem, cleanupProject)
-	recipeProjectProblem = func(*Client, string, string, []string) (string, string, []string, error) { return "", "", nil, nil }
-	cleanupProject = func(*Client, string, string, []string) (*types.OperationResponse, error) {
+	recipeProjectProblem = func(*Client, string, string, []string, []string) (string, string, []string, []string, error) {
+		return "", "", nil, nil, nil
+	}
+	cleanupProject = func(*Client, string, string, []string, []string) (*types.OperationResponse, error) {
 		return &types.OperationResponse{Success: true, Message: "Project deleted."}, nil
 	}
 	res, err := CleanUp(c, types.CleanupRequest{RecipeProjects: []string{"proj"}, RecipeProjectUIDs: map[string]string{"proj": "u"}}, nil)

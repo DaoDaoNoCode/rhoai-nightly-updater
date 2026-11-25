@@ -455,7 +455,7 @@ func TestMaaSTeardown_UnpublishesFirst(t *testing.T) {
 }
 
 func TestCleanUp_UnpublishesFirstAndRemovesThePlatformLast(t *testing.T) {
-	parts := cleanupParts(nil, types.CleanupRequest{MaaSPublished: []string{"p"}, Models: []string{"p"}, InferenceGateway: true, MaaSPlatform: true})
+	parts := cleanupParts(nil, types.CleanupRequest{MaaSPublished: []string{"p"}, Models: []string{"p"}, InferenceGateway: true, MaaSPlatform: true}, nil)
 	var ids []string
 	for _, p := range parts {
 		ids = append(ids, p.id)

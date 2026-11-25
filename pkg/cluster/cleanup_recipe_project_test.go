@@ -91,7 +91,7 @@ func TestRecipeProject_DeleteUsesTheReviewedUIDAsPrecondition(t *testing.T) {
 			f.putJSON(tRecipeNS, `{"metadata":{"uid":"swapped","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"},"annotations":{"rhoai-nightly-updater/recipe":"dev"}}}`)
 		}
 	}
-	res, _ := recipe.DeleteProject(c, "recipe-dev", reviewed, nil)
+	res, _ := recipe.DeleteProject(c, "recipe-dev", reviewed, nil, nil)
 	dels := f.callsTo("DELETE", tRecipeNS)
 	if res.Success || len(dels) != 1 || !strings.Contains(dels[0].Body, `"uid":"`+reviewed+`"`) || !f.has(tRecipeNS) {
 		t.Fatalf("got %+v, deletes %+v", res, dels)
@@ -106,15 +106,15 @@ func TestRecipeProject_TeardownNeedsTheReviewedUID(t *testing.T) {
 		{"no UID", "", "which project recipe-dev you reviewed"},
 		{"another UID", "an-older-uid", "not the one you reviewed"},
 	} {
-		problem, _, _, err := recipe.ProjectTeardownProblem(c, "recipe-dev", tc.uid, nil)
+		problem, _, _, _, err := recipe.ProjectTeardownProblem(c, "recipe-dev", tc.uid, nil, nil)
 		if err != nil || !strings.Contains(problem, tc.want) {
 			t.Errorf("%s: %q, %v", tc.name, problem, err)
 		}
-		if res, _ := recipe.DeleteProject(c, "recipe-dev", tc.uid, nil); res.Success || len(f.callsTo("DELETE", tRecipeNS)) != 0 {
+		if res, _ := recipe.DeleteProject(c, "recipe-dev", tc.uid, nil, nil); res.Success || len(f.callsTo("DELETE", tRecipeNS)) != 0 {
 			t.Fatalf("%s: %+v", tc.name, res)
 		}
 	}
-	if res, _ := recipe.DeleteProject(c, "recipe-dev", uid, nil); !res.Success || f.has(tRecipeNS) {
+	if res, _ := recipe.DeleteProject(c, "recipe-dev", uid, nil, nil); !res.Success || f.has(tRecipeNS) {
 		t.Fatalf("the reviewed project: %+v", res)
 	}
 }

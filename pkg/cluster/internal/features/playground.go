@@ -744,6 +744,29 @@ func playgroundOwnership(c *kube.Client, project string, rec PlaygroundRecord, h
 	return true, meta.UID, nil
 }
 
+// ToolPlaygroundServerUID returns the UID of project's playground OGXServer
+// when it is the one this tool requested there by the recorded UID alone:
+// the record names a UID and the live server has it. Otherwise it returns
+// "" (no record, a record without a UID yet, no server, or another
+// server). The time rule of playgroundOwnership is not used: a server
+// whose UID is not recorded yet is not taken as the tool's. A read that
+// fails is returned.
+func ToolPlaygroundServerUID(c *kube.Client, project string) (string, error) {
+	records, err := ReadPlaygroundRecords(c)
+	if err != nil {
+		return "", err
+	}
+	rec, has := records[project]
+	if !has || rec.UID == "" {
+		return "", nil
+	}
+	meta, found, err := readPlaygroundServer(c, project, playgroundServerName)
+	if err != nil || !found || meta.UID != rec.UID {
+		return "", err
+	}
+	return meta.UID, nil
+}
+
 // ReadPlaygroundRecords returns the recorded projects (none when nothing is
 // recorded).
 func ReadPlaygroundRecords(c *kube.Client) (map[string]PlaygroundRecord, error) {
