@@ -274,13 +274,20 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   offered (its Distributed workloads prerequisites step did not read as
   created either). The recipe's offer, the Environment tabs' offer and Clean
   up itself now make one check: the component is in its own on state and
-  this tool's field manager still owns it. A run claims a component only when
-  Set up's record (which now keeps when it turned each on) says it was turned
-  on while the run ran, so a component turned back and turned on again later
-  from the Environment tab is not an old run's. The dialog says that Kueue
-  goes back last, only once no ClusterQueue or LocalQueue is left on the
-  cluster, and sends only the components it says go back: one it lists as
-  staying on is not turned back by the server either. Clean up's messages
+  this tool's field manager still owns it. Set up now gives each time it
+  turns a component on its own ID in its record; a run keeps the ID its step
+  turned on and claims only that one, and its Clean up names it, checked
+  again under the cluster lock right before the component goes back. So a
+  component turned back and turned on again (from the Environment tab, by
+  another run, even in the same second, or while the dialog was open) is not
+  turned back for an old run ("turned on again since you reviewed this Clean
+  up"). Runs and records from before the ID match as before. The dialog says
+  that Kueue goes back last, only once no ClusterQueue or LocalQueue is left
+  on the cluster, and sends only the components it says go back: one it
+  lists as staying on is not turned back by the server either. KServe is
+  listed as staying on for a model the Environment status shows in a project
+  that stays, not because the recipe has a model (one that failed or was
+  deleted no longer keeps it on). Clean up's messages
   about a component that is not turned back no longer call it `Managed`
   (`Not turned back: kueue (in use: ...)`, `... so it stays Unmanaged`).
 - **The recipe's Clean up dialog names RHOAI 3.6's components.** It listed
