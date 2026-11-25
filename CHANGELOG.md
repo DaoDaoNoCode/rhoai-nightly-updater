@@ -890,7 +890,7 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Security
 
-- **This tool's MaaS subscription no longer takes API keys meant for other
+- **This tool's MaaS subscription no longer outranks other
   subscriptions.** maas-api binds a key minted without naming a
   subscription to the caller's subscription with the highest priority, and
   every signed-in user is in this tool's (`system:authenticated`). Earlier
@@ -899,13 +899,17 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   "one below the lowest" gave negative values, which maas-api reads as 0.
   The claims in 3.0.0 and later that such a key "never goes to it" were
   wrong. Every write of the subscription (Publish, Change limit, Change
-  who can use them, Unpublish, the background prune) now sets priority 0,
-  the CRD's default and the lowest MaaS honours: another subscription at 1
-  or more wins, and one at 0 ties, decided by the larger token limit, then
-  the name (the MaaS tab names those). A subscription with another priority
-  shows a warning on the MaaS tab with **Set to the lowest priority (0)**,
-  which changes only its `spec.priority`. Keys already bound to it keep it:
-  revoke them and make them again. No RBAC change.
+  who can use them, Unpublish of one of several models, the background
+  prune) now sets priority 0, the CRD's default and the lowest MaaS
+  honours: a subscription at 1 or more wins. On a tie at 0 MaaS decides:
+  it takes the one whose largest single token limit on any of its models is larger (the time window is not compared; Unlimited counts as largest), then the first by name
+  (the MaaS tab names the subscriptions at 0; MaaS marks them
+  `SpecPriorityDuplicate` in their status, which is expected). Naming the
+  subscription when creating a key avoids the choice. A subscription with
+  another priority shows a warning on the MaaS tab with **Set to the
+  lowest priority (0)**, which changes only its `spec.priority`. Keys
+  already bound to it keep it: revoke them and make them again. No RBAC
+  change.
 - On ROSA HCP the `quay.io/rhoai` token is also copied into RHOAI's
   applications namespace (Secret `rhoai-nightly-updater-pull`), with the
   signed-in cluster-admin's token; only cluster-admins and OpenShift's own

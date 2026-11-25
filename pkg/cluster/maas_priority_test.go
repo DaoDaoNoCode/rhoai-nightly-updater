@@ -151,7 +151,7 @@ func TestMaaSStatus_SubscriptionPriority(t *testing.T) {
 	setSubPriority(t, mc, 10)
 	st, _ = GetMaaSStatus(mc.c)
 	p := st.SubscriptionPriority
-	if p == nil || p.Value != 10 || !slices.Equal(p.Ties, []string{"admin-negative", "admin-unset", "admin-zero"}) {
+	if p == nil || p.Value != 10 || !slices.Equal(p.Ties, []types.MaaSPriorityTie{{Name: "admin-negative", Priority: -2}, {Name: "admin-unset"}, {Name: "admin-zero"}}) {
 		t.Fatalf("priority %+v", p)
 	}
 	if p.Fix == nil || p.Fix.ID != "subscription-priority" || p.Fix.Label != "Set to the lowest priority (0)" || p.Fix.Danger ||
@@ -182,6 +182,36 @@ func TestMaaSStatus_SubscriptionPriority(t *testing.T) {
 	}
 }
 
+// Set to the lowest priority changes the priority alone: a publication
+// that is gone (its project deleted) is not pruned by it, as every other
+// MaaS change does first; the next one does.
+func TestMaaSSetSubscriptionPriority_LeavesGonePublications(t *testing.T) {
+	mc := publishedCluster(t)
+	setSubPriority(t, mc, 10)
+	// The project is deleted (its namespace object goes, the rest stays).
+	mc.f.mu.Lock()
+	delete(mc.f.objects, fakeKey{gv: "v1", plural: "namespaces", name: "proj"})
+	mc.f.mu.Unlock()
+	subBefore := mc.f.get(tMaaSSub)
+	refsBefore := asJSON(ensureMap(subBefore, "spec")["modelRefs"])
+	mc.f.requests = nil
+	res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "subscription-priority"})
+	if !res.Success || subPriority(t, mc) != "0" {
+		t.Fatalf("res %+v", res)
+	}
+	if !gatewayAdmits(t, mc) {
+		t.Fatal("the gone project left the gateway: the action pruned")
+	}
+	if got := asJSON(ensureMap(mc.f.get(tMaaSSub), "spec")["modelRefs"]); got != refsBefore {
+		t.Fatalf("modelRefs changed: %s", got)
+	}
+	for _, r := range mc.f.requests {
+		if !strings.HasPrefix(r, "GET ") && !strings.HasSuffix(r, " "+tMaaSSub) && !strings.HasSuffix(r, "/configmaps/rhoai-nightly-updater-activity") {
+			t.Errorf("another write: %s", r)
+		}
+	}
+}
+
 // priorityPatches are the merge patches of this tool's subscription that
 // were not dry runs.
 func priorityPatches(mc *modelsCluster) []fakeCall {
@@ -208,7 +238,7 @@ func TestMaaSSetSubscriptionPriority(t *testing.T) {
 	mc.f.requests = nil
 
 	res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "subscription-priority"})
-	if !res.Success || finalSteps(events) != "check=success priority=success ready=success" {
+	if !res.Success || finalSteps(events) != "check=success priority=success" {
 		t.Fatalf("res %+v, steps %s", res, finalSteps(events))
 	}
 	if got := subPriority(t, mc); got != "0" {
@@ -300,6 +330,18 @@ func TestMaaSSetSubscriptionPriority_Refusals(t *testing.T) {
 		res, events := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "subscription-priority"})
 		if res.Success || res.ErrorCode != "conflict" || finalSteps(events) != "check=success priority=failed" || subPriority(t, mc) != "10" {
 			t.Fatalf("res %+v, steps %s", res, finalSteps(events))
+		}
+	})
+	t.Run("being deleted", func(t *testing.T) {
+		mc := publishedCluster(t)
+		sub := mc.f.get(tMaaSSub)
+		meta := ensureMap(sub, "metadata")
+		meta["deletionTimestamp"], meta["finalizers"] = "2026-11-25T00:00:00Z", []any{"maas.opendatahub.io/cleanup"}
+		ensureMap(sub, "spec")["priority"] = 10
+		mc.f.put(tMaaSSub, sub)
+		res, _ := runMaaSOp(t, mc.c, types.MaaSRequest{Action: "subscription-priority"})
+		if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "is being deleted") || len(mc.f.callsTo(http.MethodPatch, tMaaSSub)) != 0 {
+			t.Fatalf("res %+v", res)
 		}
 	})
 	t.Run("not for a model", func(t *testing.T) {

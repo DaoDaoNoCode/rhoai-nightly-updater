@@ -166,6 +166,13 @@ func RunMaaSAnnotated(c *kube.Client, req types.MaaSRequest, annotations map[str
 	if problem := ValidateMaaSRequest(req); problem != "" {
 		return m.Fail("check", problem, "validation", "invalid request")
 	}
+	// Set to the lowest priority changes the priority alone, as its
+	// confirmation lists: what is left of gone publications waits for the
+	// next other change.
+	if req.Action == "subscription-priority" {
+		m.Target = "the priority of this tool's MaaS subscription"
+		return m.setSubscriptionPriority()
+	}
 	// Projects of publications that are gone leave the MaaS gateway first
 	// (maas_prune.go).
 	m.Logs = append(m.Logs, ReleaseGoneMaaSProjects(c)...)
@@ -201,9 +208,6 @@ func RunMaaSAnnotated(c *kube.Client, req types.MaaSRequest, annotations map[str
 	case "change-database":
 		m.Target = "the MaaS database"
 		return m.changeDatabase(req.Database)
-	case "subscription-priority":
-		m.Target = "the priority of this tool's MaaS subscription"
-		return m.setSubscriptionPriority()
 	}
 	return m.unpublish(req.Project, entry.Name, true)
 }

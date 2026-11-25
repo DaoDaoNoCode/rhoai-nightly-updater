@@ -1659,9 +1659,18 @@ type MaaSSubscriptionPriority struct {
 	Fix *MaaSAction `json:"fix,omitempty"`
 	// Ties are the other MaaSSubscriptions in models-as-a-service that
 	// maas-api ranks level with it (spec.priority 0, unset or negative,
-	// which maas-api reads as 0): a caller in one of them and in this
-	// tool's gets the one with the larger token limit, then by name.
-	Ties []string `json:"ties,omitempty"`
+	// which maas-api reads as 0): for a caller in one of them and in this
+	// tool's, it takes the one whose largest single token limit on any of
+	// its models is larger (the window is not compared; unlimited counts as
+	// the largest), then the first by name.
+	Ties []MaaSPriorityTie `json:"ties,omitempty"`
+}
+
+// MaaSPriorityTie is another subscription at priority 0 for maas-api, with
+// its spec.priority as written (0 when unset; a negative one is read as 0).
+type MaaSPriorityTie struct {
+	Name     string `json:"name"`
+	Priority int64  `json:"priority"`
 }
 
 // MaaSRemoval is a publication of this tool that is gone, and why.

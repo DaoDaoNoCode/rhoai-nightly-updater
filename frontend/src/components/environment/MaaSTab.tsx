@@ -18,7 +18,7 @@ import {
   Tooltip,
 } from "@patternfly/react-core";
 import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
-import type { MaaSGroupProblem, MaaSModel, MaaSPart, MaaSRequest, MaaSStatus } from "../../types";
+import type { MaaSGroupProblem, MaaSModel, MaaSPart, MaaSPriorityTie, MaaSRequest, MaaSStatus, MaaSSubscriptionPriority } from "../../types";
 import { AudienceFields, DatabaseChoice, KeysLostCheck, LimitFields } from "./MaaSDialogFields";
 import {
   audienceProblem, audienceRequest, audienceText, createdDatabaseInSentence, databaseLabel, databaseProblem, databaseRequest, defaultAudienceForm, defaultDatabaseForm,
@@ -291,43 +291,55 @@ const GonePublications: React.FC<{ maas: MaaSStatus }> = ({ maas }) => {
   return <Content component="small" className="pf-v6-u-text-color-subtle">Being removed automatically: {gone}.</Content>;
 };
 
+/** How MaaS decides between subscriptions at the same priority (maas-api selector.go: the largest single limit, the window not compared). */
+const TIE_RULE = "the one whose largest single token limit on any of its models is larger (the time window is not compared; Unlimited counts as largest), then the first by name";
+
+/** A subscription MaaS ranks level, with its own priority when MaaS reads it as 0. */
+const tieText = (t: MaaSPriorityTie) => (t.priority < 0 ? `${t.name} (${t.priority}, read as 0)` : t.name);
+
+/** The warning while this tool's subscription has another priority than 0 (an earlier version's), with Set to the lowest priority (0). */
+export const SubscriptionPriorityWarning: React.FC<{ priority: MaaSSubscriptionPriority; readOnly: boolean; reason: string | null; setPending: (p: Pending) => void }> = ({ priority: p, readOnly, reason, setPending }) => {
+  if (!p.fix || p.value === 0) return null;
+  const fix = <>{readOnly ? "A cluster-admin sets it" : "Set it"} to 0, the lowest priority MaaS honours. Until then, name the subscription when you create a key. API keys made before keep the subscription they were bound to: revoke them and make them again.</>;
+  return (
+    <Alert variant="warning" isInline component="div" title={`This tool's subscription has priority ${p.value}`}
+      actionLinks={!readOnly ? <AlertActionLink isAriaDisabled={!!reason} onClick={() => setPending({ kind: "maas-action", action: "subscription-priority" })}>{p.fix.label}</AlertActionLink> : undefined}>
+      {p.value > 0 ? (
+        <Content component="p">
+          An earlier version of this tool set it, so it outranks every subscription with a lower priority: users of this subscription who are also in such a subscription get this tool&apos;s one for a key made without naming a subscription. {fix}
+        </Content>
+      ) : (
+        <Content component="p">
+          An earlier version of this tool set it below the other subscriptions&apos;. MaaS reads a negative priority as 0, so it ties with every subscription at priority 0: users of this subscription who are also in one of those get {TIE_RULE}. {fix}
+        </Content>
+      )}
+    </Alert>
+  );
+};
+
 /**
  * The priority of this tool's subscription, as MaaS uses it when a key is made without naming a subscription
- * (maas-api: the highest priority, then the larger token limit, then the name; negative reads as 0).
+ * (maas-api: the highest priority, then the largest single token limit, then the name; negative reads as 0).
  */
 export const SubscriptionPriority: React.FC<{ maas: MaaSStatus; readOnly: boolean; reason: string | null; setPending: (p: Pending) => void }> = ({ maas, readOnly, reason, setPending }) => {
   const p = maas.subscriptionPriority;
-  const ties = p?.ties ?? [];
+  if (!p) return null;
+  const ties = p.value <= 0 ? p.ties ?? [] : [];
   return (
     <Stack hasGutter>
-      {(!p || p.value === 0) && (
+      {p.value === 0 && (
         <StackItem>
-          <Content component="p">It has the lowest priority MaaS honours (0). Someone who is also in another subscription gets that one when they create an API key without naming a subscription. When that subscription has priority 0 too, MaaS picks the one with the larger token limit, then the first by name. To use another subscription, name it when you create the key; the commands below name this one.</Content>
+          <Content component="p">It has the lowest priority MaaS honours (0), so it does not outrank other subscriptions. For a key made without naming a subscription, MaaS takes the caller&apos;s subscription with priority 1 or more, and among those at 0 {TIE_RULE}. Name the subscription when you create a key to avoid the choice; the commands below name this one.</Content>
         </StackItem>
       )}
-      {p && p.value === 0 && ties.length > 0 && (
+      {ties.length > 0 && (
         <StackItem>
           <Content component="small" className="pf-v6-u-text-color-subtle">
-            Also at priority 0: {ties.join(", ")}. Their members get this tool&apos;s subscription for a key made without naming one when its token limit is larger, or, at the same limit, when its name comes first. A priority of 1 or more on theirs avoids that.
+            Subscriptions MaaS ranks level with it: {ties.map(tieText).join(", ")}. A user in one of them and in this one gets {TIE_RULE}, for a key made without naming a subscription. MaaS marks subscriptions that share a priority with SpecPriorityDuplicate in their status; that is expected. A priority of 1 or more on theirs avoids the tie.
           </Content>
         </StackItem>
       )}
-      {p && p.value !== 0 && (
-        <StackItem>
-          <Alert variant="warning" isInline component="div" title={`This tool's subscription has priority ${p.value}`}
-            actionLinks={!readOnly && p.fix ? <AlertActionLink isAriaDisabled={!!reason} onClick={() => setPending({ kind: "maas-action", action: "subscription-priority" })}>{p.fix.label}</AlertActionLink> : undefined}>
-            {p.value > 0 ? (
-              <Content component="p">
-                An earlier version of this tool set it. MaaS gives a key made without naming a subscription to the caller&apos;s subscription with the highest priority, so signed-in users who are also in a subscription with a lower priority get this tool&apos;s one instead. {readOnly ? "A cluster-admin sets it" : "Set it"} to 0, the lowest priority MaaS honours. API keys made before keep the subscription they were bound to: revoke them and make them again to use another subscription.
-              </Content>
-            ) : (
-              <Content component="p">
-                An earlier version of this tool set it below the other subscriptions&apos;. MaaS reads a negative priority as 0, so it ties with every subscription at priority 0, and MaaS&apos;s warning about subscriptions with the same priority misses it. {readOnly ? "A cluster-admin sets it" : "Set it"} to 0, the lowest priority MaaS honours.
-              </Content>
-            )}
-          </Alert>
-        </StackItem>
-      )}
+      {p.fix && <StackItem><SubscriptionPriorityWarning priority={p} readOnly={readOnly} reason={reason} setPending={setPending} /></StackItem>}
     </Stack>
   );
 };
@@ -389,6 +401,7 @@ export const MaaSTab: React.FC<MaaSTabProps> = (props) => {
   const setupPlan = maas?.setupPlan ?? [];
   const setupLabel = maas?.platform.managedByTool || maas?.platform.deployed ? "Finish setting up MaaS" : "Set up MaaS";
   const partReason = readOnly ? READ_ONLY_SETUP : baseReason;
+  const showUse = !!maas && state.status === "ready" && published;
   return (
     <Stack hasGutter>
       <StackItem><FeatureHeader title="MaaS" purpose={FEATURE_PURPOSE.maas} state={state} /></StackItem>
@@ -422,7 +435,11 @@ export const MaaSTab: React.FC<MaaSTabProps> = (props) => {
         </StackItem>
       )}
       {(maas || !maasError) && <StackItem><PublishedModels {...props} /></StackItem>}
-      {maas && state.status === "ready" && published && <StackItem><UseMaaS maas={maas} readOnly={readOnly} reason={partReason} setPending={setPending} /></StackItem>}
+      {showUse && <StackItem><UseMaaS maas={maas} readOnly={readOnly} reason={partReason} setPending={setPending} /></StackItem>}
+      {/* Without Use it (the platform not ready, or nothing published), the warning still shows. */}
+      {maas && !showUse && maas.subscriptionPriority?.fix && (
+        <StackItem><SubscriptionPriorityWarning priority={maas.subscriptionPriority} readOnly={readOnly} reason={partReason} setPending={setPending} /></StackItem>
+      )}
       <StackItem>
         <FeatureSection title="What this creates">
           <CreatesList items={[
@@ -431,7 +448,7 @@ export const MaaSTab: React.FC<MaaSTabProps> = (props) => {
             <>MaaS&apos;s PostgreSQL, as you choose in Set up (the MaaS docs leave it to you): yours (only Secret <code>maas-db-config</code> is written), the docs&apos; development database (one pod, no volume: keys are lost when it restarts), or a persistent one on CloudNativePG, this tool&apos;s own option, which installs the CloudNativePG operator from <code>certified-operators</code> in <code>cnpg-system</code> (it stays after Clean up). A <code>maas-db-config</code> someone else wrote is used as it is</>,
             <>Gateway <code>maas-default-gateway</code> in <code>openshift-ingress</code> with an external load balancer at <code>maas.&lt;apps domain&gt;</code> (and GatewayClass <code>openshift-default</code> when the cluster has none; it stays after Clean up, as OpenShift&apos;s shared class)</>,
             <>MaaS turned on in the DataScienceCluster (<code>aigateway</code> and <code>aigateway.modelsAsAService</code>); RHOAI&apos;s operator then runs maas-api and the default tenant</>,
-            <>Publishing: the model routes through the MaaS gateway only, and a MaaSModelRef, the subscription <code>{maas?.subscription ?? "rhoai-nightly-updater-subscription"}</code> and the authorization policy <code>rhoai-nightly-updater-access</code> list it. The subscription has priority 0, the lowest MaaS honours: a key made without naming a subscription goes to the caller&apos;s own when it has priority 1 or more, and at 0 to the one with the larger token limit, then the first by name</>,
+            <>Publishing: the model routes through the MaaS gateway only, and a MaaSModelRef, the subscription <code>{maas?.subscription ?? "rhoai-nightly-updater-subscription"}</code> and the authorization policy <code>rhoai-nightly-updater-access</code> list it. The subscription has priority 0, the lowest MaaS honours, so it does not outrank other subscriptions: for a key made without naming a subscription, MaaS takes the caller&apos;s subscription with priority 1 or more, and among those at 0 {TIE_RULE}</>,
           ]} />
         </FeatureSection>
       </StackItem>
@@ -538,7 +555,6 @@ export function maasSteps(p: MaaSPending): { id: string; title: string }[] {
           return [
             { id: "check", title: "Check this tool's subscription" },
             { id: "priority", title: "Set its priority to 0" },
-            { id: "ready", title: "Wait until MaaS applies it" },
           ];
         default:
           return [

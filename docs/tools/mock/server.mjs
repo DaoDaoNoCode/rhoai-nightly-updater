@@ -634,7 +634,7 @@ async function maasStream(req, res) {
     "change-access": [["check", "Checking the subscription and the authorization policy", "Who can use the published models can change."],
       ["access", "Changing the subscription's owners and the authorization policy's subjects", "The subscription and the authorization policy name the new audience."], ["ready", "Waiting for MaaS to apply it", "MaaS applies it."]],
     "subscription-priority": [["check", "Checking this tool's subscription", "MaaSSubscription models-as-a-service/rhoai-nightly-updater-subscription has priority 10; it can change to 0."],
-      ["priority", "Setting the subscription's priority to 0", "It has priority 0. API keys made before keep the subscription they were bound to: revoke and make again those meant for another subscription."], ["ready", "Waiting for MaaS to apply it", "MaaS applies it."]],
+      ["priority", "Setting the subscription's priority to 0", "MaaSSubscription models-as-a-service/rhoai-nightly-updater-subscription has priority 0; maas-api uses it for the keys minted from now on. API keys made before keep the subscription they were bound to: revoke and make again those meant for another subscription."]],
     "change-database": [["check", "Checking the database and who uses MaaS", "MaaS can switch databases."], ["cnpg", null, "Not needed."],
       ["database", "Waiting for the development database to be available (up to 2:00, as the script waits)", `Secret ${F.MAAS_INFRA}/maas-db-config names the new database.`],
       ["cleanup", `Deleting CloudNativePG Cluster ${F.MAAS_INFRA}/maas-db`, "Deleted the database before."]],

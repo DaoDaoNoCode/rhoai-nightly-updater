@@ -1851,8 +1851,17 @@ export interface MaaSSubscriptionPriority {
   value: number;
   /** Sets it to 0 ("subscription-priority"); absent while it is 0. */
   fix?: MaaSAction;
-  /** Other subscriptions MaaS ranks level with it (priority 0, unset or negative): a key goes to the larger token limit, then by name. */
-  ties?: string[];
+  /**
+   * Other subscriptions MaaS ranks level with it (priority 0, unset or negative, read as 0): a key goes to the one whose largest
+   * single token limit on any of its models is larger, then the first by name.
+   */
+  ties?: MaaSPriorityTie[];
+}
+
+/** Another subscription at priority 0 for MaaS, with its spec.priority as written (pkg/types MaaSPriorityTie). */
+export interface MaaSPriorityTie {
+  name: string;
+  priority: number;
 }
 
 /** A publication of this tool that is gone, and why (pkg/types MaaSRemoval). */

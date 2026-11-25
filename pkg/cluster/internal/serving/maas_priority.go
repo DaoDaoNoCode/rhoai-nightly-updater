@@ -17,8 +17,9 @@ import (
 //
 // maas-api binds a key minted without naming a subscription to the
 // caller's subscription with the highest spec.priority; on equal
-// priorities, to the one with the largest single token limit (unlimited
-// counts as the largest), then the first name (models-as-a-service
+// priorities, to the one with the largest single token limit on any of its
+// models (the window is not compared; unlimited counts as the largest),
+// then the first name (models-as-a-service
 // rhoai-3.7-ea.1 dd6be8b and main 7e56355,
 // maas-api/internal/subscription/selector.go sortSubscriptionsByPriority;
 // docs concepts/api-key-authentication.md "Subscription Binding and
@@ -28,9 +29,11 @@ import (
 // "+kubebuilder:default=0") and so the lowest value maas-api honours: a
 // subscription someone creates later without a priority ties with this
 // tool's, which every signed-in user is in, instead of losing to it, and one
-// with priority 1 or more wins. On a tie, maas-api takes the larger token
-// limit, then the name; naming the subscription when minting the key avoids
-// the choice.
+// with priority 1 or more wins. On a tie, maas-api takes the larger single
+// token limit, then the name; naming the subscription when minting the key
+// avoids the choice. maas-controller marks subscriptions that share a
+// spec.priority with the condition SpecPriorityDuplicate (reason
+// SharedPriority), in their status only.
 const maasSubscriptionPriority = 0
 
 // maasSubscriptionListed is a MaaSSubscription in models-as-a-service as
@@ -90,11 +93,11 @@ func maasSubscriptionNames(subs []maasSubscriptionListed) []string {
 // maasPriorityTies are the subscriptions maas-api ranks level with this
 // tool's at priority 0: spec.priority 0, unset or negative (read as 0), not
 // being deleted (maas-api leaves those out).
-func maasPriorityTies(subs []maasSubscriptionListed) []string {
-	var out []string
+func maasPriorityTies(subs []maasSubscriptionListed) []types.MaaSPriorityTie {
+	var out []types.MaaSPriorityTie
 	for _, s := range subs {
 		if s.Priority <= maasSubscriptionPriority && !s.Deleting {
-			out = append(out, s.Name)
+			out = append(out, types.MaaSPriorityTie{Name: s.Name, Priority: s.Priority})
 		}
 	}
 	return out
@@ -122,7 +125,7 @@ func maasPriorityState(c *kube.Client, sub maasToolSub) *types.MaaSSubscriptionP
 func maasPriorityAction(from int64) *types.MaaSAction {
 	return &types.MaaSAction{
 		ID: "subscription-priority", Label: "Set to the lowest priority (0)",
-		Summary: fmt.Sprintf("Sets the priority of this tool's subscription from %d to 0, the lowest MaaS honours, so that a key minted without naming a subscription goes to the caller's own subscription when it has a priority of 1 or more, and, at 0 too, to the one with the larger token limit, then by name. Keys made before keep the subscription they were bound to: revoke them and make them again.", from),
+		Summary: fmt.Sprintf("Sets the priority of this tool's subscription from %d to 0, the lowest MaaS honours, so that it no longer outranks other subscriptions: for a key made without naming a subscription, MaaS takes the caller's subscription with priority 1 or more, and among those at 0 the one whose largest single token limit on any of its models is larger (the time window is not compared; Unlimited counts as largest), then the first by name. Naming the subscription when you create a key avoids the choice. Keys made before keep the subscription they were bound to: revoke them and make them again.", from),
 		Changes: []string{fmt.Sprintf("MaaSSubscription %s/%s: spec.priority %d to 0 (a merge patch with the read resourceVersion, after a server-side dry run); nothing else of it changes.", MaaSTenantNamespace, MaaSSubscriptionName, from)},
 	}
 }

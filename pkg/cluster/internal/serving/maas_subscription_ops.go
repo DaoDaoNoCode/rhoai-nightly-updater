@@ -154,8 +154,11 @@ func (m *Run) changeAccess(req *types.MaaSAudience) (*types.OperationResponse, e
 // value below the other subscriptions'. Only that field changes, by a merge
 // patch that carries the read resourceVersion, after a server-side dry run;
 // a subscription this tool did not create is refused. Keys minted before
-// keep their subscription: maas-api stores it at mint time. Steps: "check",
-// "priority", "ready".
+// keep their subscription: maas-api stores it at mint time. There is
+// nothing to wait for: maas-api picks a subscription from its own cache of
+// MaaSSubscriptions when a key is minted, so the new priority counts as soon
+// as it is written, and maas-controller's gateway policies do not use the
+// priority. Steps: "check", "priority".
 func (m *Run) setSubscriptionPriority() (*types.OperationResponse, error) {
 	c := m.Client
 	desc := fmt.Sprintf("MaaSSubscription %s/%s", MaaSTenantNamespace, MaaSSubscriptionName)
@@ -186,8 +189,8 @@ func (m *Run) setSubscriptionPriority() (*types.OperationResponse, error) {
 		return m.Fail("priority", fmt.Sprintf("Failed to update %s: %v. Its priority is unchanged; run it again to retry.", desc, err), MaaSWriteCode(err), "patch failed")
 	}
 	m.Logs = append(m.Logs, fmt.Sprintf("OK: %s spec.priority %d to 0", desc, cur.priority))
-	m.Step("priority", "success", desc+" has priority 0. API keys made before keep the subscription they were bound to: revoke and make again those meant for another subscription.")
-	return m.waitAccessActive("This tool's subscription has priority 0, the lowest MaaS honours.", false)
+	m.Step("priority", "success", desc+" has priority 0; maas-api uses it for the keys minted from now on. API keys made before keep the subscription they were bound to: revoke and make again those meant for another subscription.")
+	return m.Done("This tool's subscription has priority 0, the lowest MaaS honours.")
 }
 
 // patchMaaSSubscriptionPriority sets spec.priority of this tool's
