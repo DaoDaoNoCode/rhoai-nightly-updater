@@ -175,6 +175,8 @@ export function useGoalRun(now: () => number = Date.now, sleep: (ms: number) => 
               unreadable = errorResult(e, "The status could not be read");
               break;
             }
+            // The read ended past the time: a part ready only now does not start the next change.
+            if (now() - t1 >= READY_TIMEOUT_MS) break;
           }
           outcome = step.waitReady.check();
         }

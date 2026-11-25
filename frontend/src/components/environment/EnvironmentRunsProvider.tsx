@@ -5,6 +5,7 @@ import type { LegacyStorageState, OperationResponse, ResourcesStatus, S3KeysStat
 import { getResourcesStatus, isSessionExpired } from "../../services/api";
 import { RESOURCE_POLL_BASE_MS, RESOURCE_POLL_MAX_MS } from "../../constants";
 import { exponentialBackoff } from "../../hooks/usePolling";
+import { sameData } from "../../utils";
 import { useAppScreens, useClusterBusyHandler } from "../../state/AppInfo";
 import { useRegisterBackgroundRun } from "../ProgressViews";
 import { BUSY_REASON } from "./environmentTabs";
@@ -94,7 +95,11 @@ export const EnvironmentRunsProvider: React.FC<React.PropsWithChildren<{
   const appResult = useRef(appOnResult);
   useLayoutEffect(() => { appResult.current = appOnResult; });
   const fetchResources = useCallback(() => page.current?.current.fetchResources() ?? Promise.resolve(), []);
-  const restartPolling = useCallback(() => page.current?.current.restartPolling(), []);
+  // Each part's request polls quickly again: the page's polling, or (page closed) the run's own reads.
+  const restartPolling = useCallback(() => {
+    if (page.current) page.current.current.restartPolling();
+    else away.current = { ...away.current, reads: 0, nextReadAt: Date.now() + RESOURCE_POLL_BASE_MS };
+  }, []);
   const onResult = useCallback((res: OperationResponse) => (appResult.current ?? page.current?.current.onResult)?.(res), []);
   const latestStatus = useCallback(() => page.current?.current.statusRef.current ?? away.current.status, []);
   const refreshStatus = useCallback(async (remainingMs: number) => {
@@ -116,15 +121,15 @@ export const EnvironmentRunsProvider: React.FC<React.PropsWithChildren<{
   }, []);
   const [view, setView] = useState<EnvironmentPageView | null>(null);
   const [migrateKind, setMigrateKind] = useState<MigrateKind | null>(null);
-  const migration = useMigrateStorage(useCallback(() => { void fetchResources(); }, [fetchResources]));
+  const migration = useMigrateStorage(useCallback(() => { void fetchResources(); }, [fetchResources]), onResult);
   // Finished runs whose dialog was dismissed surface as toast with a path back—outcomes stay
   // visible without shifting page layout. confirm: a Clean up waits for confirmation on the page.
   const [toast, setToast] = useState<"run" | "migrate" | "confirm" | null>(null);
 
   const { run, runOpen, setRunOpen, cleanupScope, setCleanupScope, setSetupConfirm, setCleanupRetry, resAction } = runs;
-  // What a closing page leaves open: its confirmations close with it (Back cancels them), a running Migrate dialog stays.
+  // What a closing page leaves open: its confirmations close with it (Back cancels them); a Migrate dialog stays only while its run goes on.
   const closing = useRef({ migrating: false, confirmAsked: false });
-  closing.current = { migrating: !!migration.run, confirmAsked: toast === "confirm" };
+  closing.current = { migrating: !!migration.run?.running, confirmAsked: toast === "confirm" };
   const attach = useCallback((link: { current: EnvironmentPageLink }) => {
     page.current = link;
     return () => {
@@ -282,7 +287,7 @@ export function useLinkEnvironmentPage(link: EnvironmentPageLink, view: Environm
   const href = next?.href;
   useEffect(() => {
     // Unchanged (most polls): no new render of the provider.
-    setView((v) => (v && v.next?.label === label && v.next?.href === href && v.whatNext === whatNext && v.legacy === legacy && v.keys === keys && v.mutateBlocker === mutateBlocker
+    setView((v) => (v && v.next?.label === label && v.next?.href === href && v.whatNext === whatNext && sameData(v.legacy, legacy) && sameData(v.keys, keys) && v.mutateBlocker === mutateBlocker
       ? v
       : { next: label !== undefined && href !== undefined ? { label, href } : null, whatNext, legacy, keys, mutateBlocker }));
   }, [setView, label, href, whatNext, legacy, keys, mutateBlocker]);

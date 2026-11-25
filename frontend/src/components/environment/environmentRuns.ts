@@ -88,6 +88,15 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     setModelRegistryOp, setModelRegistryRefresh, setKueueOp, setKueueRefresh,
   } = runs;
 
+  /**
+   * A streamed run: as run.follow, and a refusal before it started
+   * (cluster_busy) reaches onResult as a request's answer does.
+   */
+  const follow: typeof run.follow = (title, steps, stream, kind) => run.follow(title, steps, (onStep, onDone, onDetach) => stream(onStep, (success, error, apiError) => {
+    if (!success && apiError?.errorCode) onResult?.({ success: false, message: error ?? apiError.message, errorCode: apiError.errorCode, logs: [] });
+    onDone(success, error, apiError);
+  }, onDetach), kind);
+
   /** Runs one request of a run; the run's dialog shows its outcome. */
   const runAction = async (action: string, fn: () => Promise<OperationResponse>, target: string | null): Promise<OperationResponse> => {
     trackFeature(action);
@@ -160,7 +169,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setModelsOp(null);
       void fetchResources();
     };
-    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, modelsSteps(p), (onStep, onDone, onDetach) => streamModels(modelsRequest(op, p),
+    follow(spec?.runTitle ?? spec?.title ?? p.kind, modelsSteps(p), (onStep, onDone, onDetach) => streamModels(modelsRequest(op, p),
       onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }), op.action === "teardown" || op.action === "disallow" ? "delete" : op.action === "check" ? "change" : "setup");
   };
 
@@ -181,7 +190,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setPlaygroundOp(null);
       setPlaygroundRefresh((n) => n + 1);
     };
-    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, playgroundSteps(p), (onStep, onDone, onDetach) => streamPlayground({
+    follow(spec?.runTitle ?? spec?.title ?? p.kind, playgroundSteps(p), (onStep, onDone, onDetach) => streamPlayground({
       action: op.action,
       project: op.project,
       ...(p.kind === "setup-playground" && p.models?.length ? { models: p.models } : {}),
@@ -207,7 +216,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setWorkbenchOp(null);
       setWorkbenchRefresh((n) => n + 1);
     };
-    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, workbenchSteps(p), (onStep, onDone, onDetach) => streamWorkbench({
+    follow(spec?.runTitle ?? spec?.title ?? p.kind, workbenchSteps(p), (onStep, onDone, onDetach) => streamWorkbench({
       action, project: p.project, ...(p.kind === "teardown-workbench" && p.deleteStorage ? { deleteStorage: true } : {}),
     }, onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }),
     action === "teardown" || action === "delete-storage" ? "delete" : action === "setup" ? "setup" : "change");
@@ -235,7 +244,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setMaaSRefresh((n) => n + 1);
       void fetchResources();
     };
-    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, maasSteps(p), (onStep, onDone, onDetach) => streamMaaS(req,
+    follow(spec?.runTitle ?? spec?.title ?? p.kind, maasSteps(p), (onStep, onDone, onDetach) => streamMaaS(req,
       onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }),
     action === "teardown" || action === "unpublish" || action === "remove-tier-policies" ? "delete" : "setup");
   };
@@ -258,7 +267,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setModelRegistryRefresh((n) => n + 1);
       setPrereqRefresh((n) => n + 1);
     };
-    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, modelRegistrySteps(p), (onStep, onDone, onDetach) => streamModelRegistry(
+    follow(spec?.runTitle ?? spec?.title ?? p.kind, modelRegistrySteps(p), (onStep, onDone, onDetach) => streamModelRegistry(
       { action: op.action, ...(p.kind === "setup-model-registry" && p.samples ? { samples: true } : {}) },
       onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }), op.action === "setup" ? "setup" : "delete");
   };
@@ -285,7 +294,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     const req: KueueRequest = p.kind === "setup-kueue"
       ? { action, project: p.project, ...(p.rayCluster ? { rayCluster: true } : {}), ...(p.rayJob ? { rayJob: true } : {}), ...(p.rayCluster || p.rayJob ? { rayImage: p.rayImage } : {}) }
       : p.kind === "delete-kueue-sample" ? { action, sample: p.sample } : { action };
-    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, kueueSteps(p), (onStep, onDone, onDetach) => streamKueue(req,
+    follow(spec?.runTitle ?? spec?.title ?? p.kind, kueueSteps(p), (onStep, onDone, onDetach) => streamKueue(req,
       onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }),
     action === "setup" || action === "optin" ? "setup" : "delete");
   };
@@ -306,7 +315,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setPrereqRefresh((n) => n + 1);
       void fetchResources();
     };
-    run.follow(spec?.runTitle ?? p.kind, prerequisitesSteps(p, prereq), (onStep, onDone, onDetach) => streamPrerequisites({ feature: p.feature, ...(p.exposure ? { exposure: p.exposure } : {}) },
+    follow(spec?.runTitle ?? p.kind, prerequisitesSteps(p, prereq), (onStep, onDone, onDetach) => streamPrerequisites({ feature: p.feature, ...(p.exposure ? { exposure: p.exposure } : {}) },
       onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }), "setup");
   };
 
@@ -330,7 +339,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setSamplesRefresh((n) => n + 1);
     };
     const steps = mlflowSampleSteps(p.action, p.samples);
-    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, steps, (onStep, onDone, onDetach) => {
+    follow(spec?.runTitle ?? spec?.title ?? p.kind, steps, (onStep, onDone, onDetach) => {
       const done: StreamDoneHandler = (success, error, apiError) => { end(); onDone(success, error, apiError); };
       const detach: StreamDetachHandler = (reason) => { end(); onDetach(reason); };
       return streamMLflowSamples({ project: p.project, action: p.action, samples: p.samples }, onStep, done, detach);
@@ -480,7 +489,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     const workbenches: Record<string, ConnectionWorkbench[]> = {};
     // Whether a part already changed the cluster before a refusal: its outcome then stays on screen.
     let changed = false;
-    run.follow(title, cleanupSteps(req), (onStep, onDone, onDetach) => streamCleanup(req, (step) => {
+    follow(title, cleanupSteps(req), (onStep, onDone, onDetach) => streamCleanup(req, (step) => {
       if (step.step.startsWith("recipe-project:") && step.errorCode === CONFIRM_PROJECT_CONTENTS) {
         refusals[step.step.slice("recipe-project:".length)] = (step.detail ?? "").split("\n").filter(Boolean);
       }

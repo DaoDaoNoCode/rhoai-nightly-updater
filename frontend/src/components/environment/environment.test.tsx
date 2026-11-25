@@ -107,6 +107,18 @@ describe("useGoalRun", () => {
     expect(result.current.run?.result).toMatchObject({ success: false, message: "Your OpenShift session has expired." });
     expect(next).not.toHaveBeenCalled();
   });
+  it("a part found ready only by a read that ended past the waiting time does not start the next change", async () => {
+    const c = fakeClock();
+    const next = vi.fn(ok("B"));
+    let read = false;
+    const { result } = renderHook(() => useGoalRun(c.now, c.sleep));
+    await act(() => result.current.start("Goal", [
+      { id: "a", title: "A", run: ok("created"), waitReady: { typical: "x", check: () => (read ? { state: "ready" } : { state: "starting" }) } },
+      { id: "b", title: "B", run: next },
+    ], { refresh: async (remainingMs) => { await c.sleep(remainingMs + 1); read = true; } }));
+    expect(next).not.toHaveBeenCalled();
+    expect(result.current.run?.result).toMatchObject({ success: false, errorCode: "in_progress" });
+  });
   it("a part that cannot start fails the run with the reason and the fix", async () => {
     const c = fakeClock();
     const next = vi.fn(ok("B"));
