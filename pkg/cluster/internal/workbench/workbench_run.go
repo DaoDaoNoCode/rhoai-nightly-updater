@@ -218,12 +218,12 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 		}
 		meta, _ := kube.ParseObjectMeta(body)
 		if err := updateRecord(c, project, func(e *Recorded) {
-			e.StorageUID, e.At, e.By, e.ActorRole = meta.UID, kube.NowRFC3339(), kube.GetUser(c), record.ActorRole(c)
+			e.StorageUID, e.At, e.By, e.ActorRole, e.ProjectUID = meta.UID, kube.NowRFC3339(), kube.GetUser(c), record.ActorRole(c), c.ProjectUID()
 		}); err != nil {
 			if _, delErr := kube.DeleteWithUID(c, storagePath(project), meta.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
-				return r.fail("storage", fmt.Sprintf("PersistentVolumeClaim %s was created, but this tool could not record it (%v) nor delete it again (%v). Delete it yourself (oc delete pvc %s -n %s), then set up again.", StorageName, err, delErr, StorageName, project), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record failed")
+				return r.fail("storage", fmt.Sprintf("PersistentVolumeClaim %s was created, but this tool could not record it (%s) nor delete it again (%v). Delete it yourself (oc delete pvc %s -n %s), then set up again.", StorageName, record.ErrorText(c, err), delErr, StorageName, project), record.ErrorCode(err), "record failed")
 			}
-			return r.fail("storage", fmt.Sprintf("PersistentVolumeClaim %s was created, but this tool could not record it as its own (%v), so it was deleted again. Set up again to retry.", StorageName, err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record failed")
+			return r.fail("storage", fmt.Sprintf("PersistentVolumeClaim %s was created, but this tool could not record it as its own (%s), so it was deleted again. Set up again to retry.", StorageName, record.ErrorText(c, err)), record.ErrorCode(err), "record failed")
 		}
 		r.step("storage", "success", fmt.Sprintf("Created storage %s.", StorageName))
 	}
@@ -247,12 +247,12 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 	}
 	meta, _ := kube.ParseObjectMeta(body)
 	if err := updateRecord(c, project, func(e *Recorded) {
-		e.UID, e.At, e.By, e.ActorRole = meta.UID, kube.NowRFC3339(), kube.GetUser(c), record.ActorRole(c)
+		e.UID, e.At, e.By, e.ActorRole, e.ProjectUID = meta.UID, kube.NowRFC3339(), kube.GetUser(c), record.ActorRole(c), c.ProjectUID()
 	}); err != nil {
 		if _, delErr := kube.DeleteWithUID(c, notebookPath(project), meta.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
-			return r.fail("workbench", fmt.Sprintf("Workbench %s was created, but this tool could not record it (%v) nor delete it again (%v). Delete it in the dashboard, then set up again.", Name, err, delErr), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record failed")
+			return r.fail("workbench", fmt.Sprintf("Workbench %s was created, but this tool could not record it (%s) nor delete it again (%v). Delete it in the dashboard, then set up again.", Name, record.ErrorText(c, err), delErr), record.ErrorCode(err), "record failed")
 		}
-		return r.fail("workbench", fmt.Sprintf("Workbench %s was created, but this tool could not record it as its own (%v), so it was deleted again. Set up again to retry.", Name, err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record failed")
+		return r.fail("workbench", fmt.Sprintf("Workbench %s was created, but this tool could not record it as its own (%s), so it was deleted again. Set up again to retry.", Name, record.ErrorText(c, err)), record.ErrorCode(err), "record failed")
 	}
 	r.step("workbench", "success", fmt.Sprintf("Created workbench %s; it is starting (usually 1 to 3 minutes while the image is pulled).", Name))
 	slog.Info("workbench setup", "project", project, "user", kube.GetUser(c))
@@ -284,25 +284,17 @@ func (r *run) registryPullCopy() []string {
 }
 
 // recordCapRefusal is why a setup by a user who is not a cluster-admin
-// must not add an entry to the records (record.UserRecordCapRefusal), with
-// its errorCode; "" for a cluster-admin, or when project has an entry.
+// must not add or take over the project's entry in the records
+// (record.AdmitUserEntry), with its errorCode; "" for a cluster-admin. The
+// write itself is admitted again (updateRecord), so this early check only
+// refuses before anything is made.
 func recordCapRefusal(c *kube.Client, rec Record, project string) (string, string) {
-	if !c.ProjectUser() {
-		return "", ""
+	var prior *record.RecordOwner
+	if e, has := rec.Get(project); has {
+		prior = &record.RecordOwner{Project: project, ProjectUID: e.ProjectUID, By: e.By, ActorRole: e.ActorRole}
 	}
-	if _, has := rec.Get(project); has {
-		return "", ""
-	}
-	owners, err := record.ReadRecordOwners(c)
-	if err != nil {
-		return err.Error(), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
-	}
-	msg, err := record.UserRecordCapRefusal(owners, project, kube.GetUser(c), func(p string) (bool, error) { return record.ProjectExists(c, p) })
-	if err != nil {
-		return err.Error(), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
-	}
-	if msg != "" {
-		return msg, record.ErrorCodeRecordsFull
+	if err := record.AdmitUserEntry(c, project, prior, nil); err != nil {
+		return err.Error(), record.ErrorCode(err)
 	}
 	return "", ""
 }

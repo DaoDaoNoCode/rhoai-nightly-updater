@@ -680,10 +680,18 @@ type PlaygroundRecord struct {
 	// ActorRole is record.ActorRoleUser when a user who is not a
 	// cluster-admin asked for it (record.UserRecordCapRefusal counts it).
 	ActorRole string `json:"actorRole,omitempty"`
+	// ProjectUID is the project's namespace UID, for a user's entry (the
+	// caps count by it).
+	ProjectUID string `json:"projectUID,omitempty"`
 }
 
 func (r PlaygroundRecord) equal(o PlaygroundRecord) bool {
-	return r.RequestedAt == o.RequestedAt && r.By == o.By && r.UID == o.UID && r.ActorRole == o.ActorRole && slices.Equal(r.Models, o.Models)
+	return r.RequestedAt == o.RequestedAt && r.By == o.By && r.UID == o.UID && r.ActorRole == o.ActorRole && r.ProjectUID == o.ProjectUID && slices.Equal(r.Models, o.Models)
+}
+
+// owner is the entry's owner for the caps.
+func (r PlaygroundRecord) owner(project string) *record.RecordOwner {
+	return &record.RecordOwner{Project: project, ProjectUID: r.ProjectUID, By: r.By, ActorRole: r.ActorRole}
 }
 
 // playgroundServerName is the OGXServer the dashboard's install makes
@@ -833,6 +841,21 @@ func setPlaygroundRecord(c *kube.Client, project string, rec *PlaygroundRecord) 
 		case rec == nil:
 			delete(records, project)
 		default:
+			// A user's entry is admitted by the caps in the same step as
+			// its write (record.AdmitUserEntry).
+			if rec.ActorRole == record.ActorRoleUser {
+				var prior *record.RecordOwner
+				if has {
+					prior = old.owner(project)
+				}
+				data, err := json.Marshal(rec)
+				if err != nil {
+					return err
+				}
+				if err := record.AdmitUserEntry(c, project, prior, data); err != nil {
+					return err
+				}
+			}
 			records[project] = *rec
 		}
 		return WritePlaygroundRecords(c, records)
@@ -843,7 +866,7 @@ func setPlaygroundRecord(c *kube.Client, project string, rec *PlaygroundRecord) 
 func newPlaygroundRecord(c *kube.Client) *PlaygroundRecord {
 	// Seconds, as creationTimestamp: a server made in the same second as
 	// the request counts as made after it.
-	return &PlaygroundRecord{RequestedAt: kube.Clock().Now().UTC().Format(time.RFC3339), By: kube.GetUser(c), ActorRole: record.ActorRole(c)}
+	return &PlaygroundRecord{RequestedAt: kube.Clock().Now().UTC().Format(time.RFC3339), By: kube.GetUser(c), ActorRole: record.ActorRole(c), ProjectUID: c.ProjectUID()}
 }
 
 // --- cluster parts (ServiceAccount reads) -------------------------------------------
@@ -1528,7 +1551,7 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 			rec.Models = append(rec.Models, types.PlaygroundModelRef{Name: m.Name, Source: m.Source})
 		}
 		if err := setPlaygroundRecord(p.c, p.project, rec); err != nil {
-			return p.fail("install", fmt.Sprintf("Cannot record the request in this tool's namespace; nothing was set up: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "record")
+			return p.fail("install", fmt.Sprintf("Cannot record the request in this tool's namespace; nothing was set up: %s.%s", record.ErrorText(p.c, err), kube.TemplateHint(err)), record.ErrorCode(err), "record")
 		}
 		body := map[string]any{"enable_guardrails": false, "enable_tracing": false, "vector_stores": []any{}}
 		// model_type and embedding_dimension per model: odh-dashboard
@@ -1635,23 +1658,24 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 }
 
 // recordCapRefusal is why a setup by a user who is not a cluster-admin
-// must not add a playground entry to the records
-// (record.UserRecordCapRefusal), with its errorCode; "" for a
-// cluster-admin.
+// must not add or take over the project's playground entry
+// (record.AdmitUserEntry), with its errorCode; "" for a cluster-admin. The
+// write is admitted again (setPlaygroundRecord).
 func (p *playgroundRun) recordCapRefusal() (string, string) {
 	if !p.c.ProjectUser() {
 		return "", ""
 	}
-	owners, err := record.ReadRecordOwners(p.c)
+	records, err := ReadPlaygroundRecords(p.c)
 	if err != nil {
-		return err.Error(), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
+		kube.LogFactReadFailure("cannot read this tool's playground records", "snapshot", err)
+		return fmt.Sprintf("Cannot read this tool's records (%s).", kube.FactReadProblem(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
 	}
-	msg, err := record.UserRecordCapRefusal(owners, p.project, kube.GetUser(p.c), func(project string) (bool, error) { return record.ProjectExists(p.c, project) })
-	if err != nil {
-		return err.Error(), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
+	var prior *record.RecordOwner
+	if old, has := records[p.project]; has {
+		prior = old.owner(p.project)
 	}
-	if msg != "" {
-		return msg, record.ErrorCodeRecordsFull
+	if err := record.AdmitUserEntry(p.c, p.project, prior, nil); err != nil {
+		return err.Error(), record.ErrorCode(err)
 	}
 	return "", ""
 }

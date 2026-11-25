@@ -32,6 +32,9 @@ type Recorded struct {
 	// ActorRole is record.ActorRoleUser when a user who is not a
 	// cluster-admin set it up (record.UserRecordCapRefusal counts it).
 	ActorRole string `json:"actorRole,omitempty"`
+	// ProjectUID is the project's namespace UID, for a user's entry: the
+	// caps count a project deleted and made again as another one.
+	ProjectUID string `json:"projectUID,omitempty"`
 }
 
 // Record maps each project to its stored workbench metadata.
@@ -107,7 +110,7 @@ func updateRecord(c *kube.Client, project string, change func(e *Recorded)) erro
 		if err != nil {
 			return err
 		}
-		e := rec[recordKey(project)]
+		e, had := rec[recordKey(project)]
 		before := e
 		change(&e)
 		if e == before {
@@ -115,9 +118,24 @@ func updateRecord(c *kube.Client, project string, change func(e *Recorded)) erro
 		}
 		if e.UID == "" && e.StorageUID == "" {
 			delete(rec, recordKey(project))
-		} else {
-			rec[recordKey(project)] = e
+			return writeRecord(c, rec)
 		}
+		// A user's entry is admitted by the caps in the same step as its
+		// write (record.AdmitUserEntry): a new one, or one taken over.
+		if e.ActorRole == record.ActorRoleUser {
+			var prior *record.RecordOwner
+			if had {
+				prior = &record.RecordOwner{Project: project, ProjectUID: before.ProjectUID, By: before.By, ActorRole: before.ActorRole}
+			}
+			data, err := json.Marshal(e)
+			if err != nil {
+				return err
+			}
+			if err := record.AdmitUserEntry(c, project, prior, data); err != nil {
+				return err
+			}
+		}
+		rec[recordKey(project)] = e
 		return writeRecord(c, rec)
 	})
 }

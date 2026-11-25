@@ -129,7 +129,7 @@ var wantFactsRoots = []string{
 	clusterPkg + "/internal/dashdev.readComponentURL",
 	clusterPkg + "/internal/features.playgroundClusterParts",
 	"var " + clusterPkg + "/internal/features.genAIBaseURL",
-	recordPkg + ".namespaceExists",
+	recordPkg + ".namespaceUID",
 }
 
 // TestFactsClientOnlyReads: the facts client sends nothing but GET and

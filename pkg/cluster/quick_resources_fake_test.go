@@ -205,6 +205,11 @@ func fakePath(k fakeKey) string {
 func (f *resourceFake) put(path string, obj map[string]any) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.putLocked(path, obj)
+}
+
+// putLocked is put with f.mu held (from an intercept).
+func (f *resourceFake) putLocked(path string, obj map[string]any) {
 	k, _ := parseFakePath(path)
 	meta := ensureMap(obj, "metadata")
 	meta["name"] = k.name

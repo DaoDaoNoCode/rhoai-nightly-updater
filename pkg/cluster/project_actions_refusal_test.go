@@ -3,6 +3,7 @@ package cluster
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -154,15 +155,22 @@ func TestPlaygroundGenAI403IsACleanRefusal(t *testing.T) {
 // project user's setup writes them, and makes the projects exist.
 func putUserRecords(t *testing.T, f *resourceFake, user string, n int) {
 	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	putUserRecordsLocked(f, user, n)
+}
+
+// putUserRecordsLocked is putUserRecords with f.mu held (an intercept).
+func putUserRecordsLocked(f *resourceFake, user string, n int) {
 	rec := map[string]workbench.Recorded{}
 	for i := range n {
 		p := fmt.Sprintf("%s-%d", user, i)
-		rec[p+"/"+workbench.Name] = workbench.Recorded{UID: "uid-" + p, By: user, ActorRole: record.ActorRoleUser}
-		f.putJSON("/api/v1/namespaces/"+p, `{"metadata":{"name":"`+p+`"},"status":{"phase":"Active"}}`)
+		rec[p+"/"+workbench.Name] = workbench.Recorded{UID: "uid-" + p, By: user, ActorRole: record.ActorRoleUser, ProjectUID: "uid-ns-" + p}
+		f.putLocked("/api/v1/namespaces/"+p, map[string]any{"metadata": map[string]any{"uid": "uid-ns-" + p}, "status": map[string]any{"phase": "Active"}})
 	}
 	data, _ := json.Marshal(rec)
-	cm, _ := json.Marshal(map[string]any{"metadata": map[string]any{"name": record.SnapshotConfigMapName}, "data": map[string]string{workbench.RecordKey: string(data)}})
-	f.putJSON("/api/v1/namespaces/"+record.GetActivityNamespace()+"/configmaps/"+record.SnapshotConfigMapName, string(cm))
+	f.putLocked("/api/v1/namespaces/"+record.GetActivityNamespace()+"/configmaps/"+record.SnapshotConfigMapName,
+		map[string]any{"metadata": map[string]any{}, "data": map[string]any{workbench.RecordKey: string(data)}})
 }
 
 // A project user's 11th project is refused before any write; the same
@@ -259,5 +267,33 @@ func TestMLflowAddPreflightCoversTheRollback(t *testing.T) {
 		if !got[want] {
 			t.Errorf("the add's preflight does not review delete %s: %v", want, got)
 		}
+	}
+}
+
+// The caps admit a user's entry in the same step as its write: another
+// action that adds the user's 10th project while this setup creates its
+// storage makes the write refuse, and the storage made is deleted again.
+func TestWorkbenchRecordAdmissionIsAtomic(t *testing.T) {
+	f, c := newResourceFake(t)
+	putWorkbenchCluster(t, f, true)
+	putUserRecords(t, f, "alice", record.MaxUserRecordProjectsPerUser-1)
+	inner := f.intercept
+	f.intercept = func(w http.ResponseWriter, r *http.Request, body []byte) bool {
+		if r.Method == http.MethodPost && r.URL.Path == wbPVCs && r.URL.Query().Get("dryRun") == "" {
+			// Another project action of alice records her 10th project
+			// now.
+			putUserRecordsLocked(f, "alice", record.MaxUserRecordProjectsPerUser)
+		}
+		return inner(w, r, body)
+	}
+	u := userClientOf(c, fakeUserToken)
+	u.SetUsername("alice")
+	u.SetProjectUser("uid-proj")
+	res := wbSteps(t, u, types.WorkbenchRequest{Action: "setup", Project: "proj"})
+	if res.Success || res.ErrorCode != record.ErrorCodeRecordsFull || !strings.Contains(res.Message, "so it was deleted again") {
+		t.Fatalf("%+v", res)
+	}
+	if len(f.callsTo("DELETE", wbPVC)) != 1 {
+		t.Fatalf("the storage made was not deleted again: %v", f.mutations())
 	}
 }

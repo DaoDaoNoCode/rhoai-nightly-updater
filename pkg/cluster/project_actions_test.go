@@ -12,6 +12,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/authz"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/workbench"
 )
 
 // ssarFake answers SelfSubjectAccessReviews: allow decides each, fail
@@ -122,39 +123,44 @@ func TestReviewProjectActionsFailsClosed(t *testing.T) {
 	}
 }
 
+// entry is a user's new entry of project.
+func entry(project, user string) record.RecordOwner {
+	return record.RecordOwner{Project: project, ProjectUID: "uid-" + project, By: user, ActorRole: record.ActorRoleUser}
+}
+
 // The records caps: a user's 11th project and the 101st project with
 // users' records are refused; a project already counted, a project that is
 // gone and a cluster-admin's records do not count.
 func TestRecordsCapsPerUserAndTotal(t *testing.T) {
-	exists := func(string) (bool, error) { return true, nil }
+	exists := func(record.RecordOwner) (bool, error) { return true, nil }
 	var mine []record.RecordOwner
 	for i := range record.MaxUserRecordProjectsPerUser {
-		mine = append(mine, record.RecordOwner{Project: fmt.Sprintf("a-%d", i), By: "alice", ActorRole: record.ActorRoleUser})
+		mine = append(mine, entry(fmt.Sprintf("a-%d", i), "alice"))
 	}
-	if msg, _ := record.UserRecordCapRefusal(mine, "new", "alice", exists); !strings.Contains(msg, "in 10 projects") {
+	if msg, _ := record.UserRecordCapRefusal(mine, entry("new", "alice"), exists); !strings.Contains(msg, "in 10 projects") {
 		t.Fatalf("11th project: %q", msg)
 	}
-	if msg, _ := record.UserRecordCapRefusal(mine, "a-3", "alice", exists); msg != "" {
+	if msg, _ := record.UserRecordCapRefusal(mine, entry("a-3", "alice"), exists); msg != "" {
 		t.Fatalf("a project already counted: %q", msg)
 	}
-	if msg, _ := record.UserRecordCapRefusal(mine, "new", "bob", exists); msg != "" {
+	if msg, _ := record.UserRecordCapRefusal(mine, entry("new", "bob"), exists); msg != "" {
 		t.Fatalf("another user: %q", msg)
 	}
-	gone := func(p string) (bool, error) { return p != "a-0", nil }
-	if msg, _ := record.UserRecordCapRefusal(mine, "new", "alice", gone); msg != "" {
+	gone := func(o record.RecordOwner) (bool, error) { return o.Project != "a-0", nil }
+	if msg, _ := record.UserRecordCapRefusal(mine, entry("new", "alice"), gone); msg != "" {
 		t.Fatalf("a deleted project still counts: %q", msg)
 	}
-	if _, err := record.UserRecordCapRefusal(mine, "new", "alice", func(string) (bool, error) { return false, errors.New("HTTP 500") }); err == nil {
+	if _, err := record.UserRecordCapRefusal(mine, entry("new", "alice"), func(record.RecordOwner) (bool, error) { return false, errors.New("HTTP 500") }); err == nil {
 		t.Fatal("an unreadable project count allowed (fail closed)")
 	}
 	var all []record.RecordOwner
 	for i := range record.MaxUserRecordProjects {
-		all = append(all, record.RecordOwner{Project: fmt.Sprintf("p-%d", i), By: fmt.Sprintf("u-%d", i), ActorRole: record.ActorRoleUser})
+		all = append(all, entry(fmt.Sprintf("p-%d", i), fmt.Sprintf("u-%d", i)))
 	}
-	if msg, _ := record.UserRecordCapRefusal(all, "new", "carol", exists); !strings.Contains(msg, "are full (100 projects)") || !strings.Contains(msg, "Clean up") {
+	if msg, _ := record.UserRecordCapRefusal(all, entry("new", "carol"), exists); !strings.Contains(msg, "are full (100 projects)") || !strings.Contains(msg, "Clean up") {
 		t.Fatalf("101st project: %q", msg)
 	}
-	if msg, _ := record.UserRecordCapRefusal(all, "p-5", "carol", exists); msg != "" {
+	if msg, _ := record.UserRecordCapRefusal(all, entry("p-5", "carol"), exists); msg != "" {
 		t.Fatalf("a project already counted in the total: %q", msg)
 	}
 }
@@ -169,7 +175,7 @@ func TestAdminRecordsOutsideCaps(t *testing.T) {
 		}
 		admins = append(admins, record.RecordOwner{Project: fmt.Sprintf("p-%d", i), By: "alice", ActorRole: role})
 	}
-	if msg, err := record.UserRecordCapRefusal(admins, "new", "alice", func(string) (bool, error) { return true, nil }); msg != "" || err != nil {
+	if msg, err := record.UserRecordCapRefusal(admins, entry("new", "alice"), func(record.RecordOwner) (bool, error) { return true, nil }); msg != "" || err != nil {
 		t.Fatalf("admins' records counted: %q %v", msg, err)
 	}
 	c := newTestClient(testClientOptions{Token: "t", Ctx: context.Background(), AsUser: true})
@@ -179,5 +185,80 @@ func TestAdminRecordsOutsideCaps(t *testing.T) {
 	c.SetProjectUser("uid-proj")
 	if record.ActorRole(c) != record.ActorRoleUser {
 		t.Fatal("a project user's client writes as an admin")
+	}
+}
+
+// The caps count projects by namespace UID: a project deleted and made
+// again under the same name is another project, and an entry whose
+// project now has another UID is left over (not counted).
+func TestRecordsCapsCountByNamespaceUID(t *testing.T) {
+	var mine []record.RecordOwner
+	for i := range record.MaxUserRecordProjectsPerUser {
+		mine = append(mine, entry(fmt.Sprintf("a-%d", i), "alice"))
+	}
+	remade := record.RecordOwner{Project: "a-3", ProjectUID: "uid-a-3-new", By: "alice", ActorRole: record.ActorRoleUser}
+	exists := func(record.RecordOwner) (bool, error) { return true, nil }
+	if msg, _ := record.UserRecordCapRefusal(mine, remade, exists); msg == "" {
+		t.Fatal("a project made again under the same name counted as the old one")
+	}
+	// The old a-3 is gone (its name now has another UID): not counted.
+	f, c := newResourceFake(t)
+	f.putJSON("/api/v1/namespaces/a-3", `{"metadata":{"name":"a-3","uid":"uid-a-3-new"}}`)
+	f.putJSON("/api/v1/namespaces/a-4", `{"metadata":{"name":"a-4","uid":"uid-a-4"}}`)
+	if ok, err := record.ProjectExists(c, mine[3]); ok || err != nil {
+		t.Fatalf("an entry of the old a-3 exists: %v %v", ok, err)
+	}
+	if ok, err := record.ProjectExists(c, mine[4]); !ok || err != nil {
+		t.Fatalf("a-4 does not exist: %v %v", ok, err)
+	}
+}
+
+// putOwnerRecords writes workbench entries for the caps' admission.
+func putOwnerRecords(t *testing.T, f *resourceFake, entries map[string]workbench.Recorded) {
+	t.Helper()
+	data, _ := json.Marshal(entries)
+	cm, _ := json.Marshal(map[string]any{"metadata": map[string]any{"name": record.SnapshotConfigMapName}, "data": map[string]string{workbench.RecordKey: string(data)}})
+	f.putJSON("/api/v1/namespaces/"+record.GetActivityNamespace()+"/configmaps/"+record.SnapshotConfigMapName, string(cm))
+}
+
+// Admission of a user's entry: a new one and one taken over (a
+// cluster-admin's or another user's) count against the caps; the same
+// user's entry in the same project does not; an entry too large is
+// refused; a cluster-admin's entry is always admitted.
+func TestAdmitUserEntry(t *testing.T) {
+	f, c := newResourceFake(t)
+	full := map[string]workbench.Recorded{"proj/" + workbench.Name: {StorageUID: "s", By: "kube:admin"}}
+	for i := range record.MaxUserRecordProjectsPerUser {
+		p := fmt.Sprintf("alice-%d", i)
+		full[p+"/"+workbench.Name] = workbench.Recorded{UID: "u", By: "alice", ActorRole: record.ActorRoleUser, ProjectUID: "uid-" + p}
+		f.putJSON("/api/v1/namespaces/"+p, `{"metadata":{"name":"`+p+`","uid":"uid-`+p+`"}}`)
+	}
+	putOwnerRecords(t, f, full)
+	u := userClientOf(c, fakeUserToken)
+	u.SetUsername("alice")
+	u.SetProjectUser("uid-proj")
+	admin := &record.RecordOwner{Project: "proj", By: "kube:admin"}
+	var full1 *record.RecordsFullError
+	if err := record.AdmitUserEntry(u, "proj", admin, []byte(`{}`)); !errors.As(err, &full1) {
+		t.Fatalf("taking over an admin's entry at the cap: %v", err)
+	}
+	other := &record.RecordOwner{Project: "proj", ProjectUID: "uid-proj", By: "bob", ActorRole: record.ActorRoleUser}
+	if err := record.AdmitUserEntry(u, "proj", other, []byte(`{}`)); !errors.As(err, &full1) {
+		t.Fatalf("taking over another user's entry at the cap: %v", err)
+	}
+	same := &record.RecordOwner{Project: "alice-1", ProjectUID: "uid-alice-1", By: "alice", ActorRole: record.ActorRoleUser}
+	u1 := userClientOf(c, fakeUserToken)
+	u1.SetUsername("alice")
+	u1.SetProjectUser("uid-alice-1")
+	if err := record.AdmitUserEntry(u1, "alice-1", same, []byte(`{}`)); err != nil {
+		t.Fatalf("the same user's entry: %v", err)
+	}
+	if err := record.AdmitUserEntry(u1, "alice-1", same, []byte(strings.Repeat("x", record.MaxUserRecordEntryBytes+1))); !errors.As(err, &full1) {
+		t.Fatalf("an entry too large: %v", err)
+	}
+	a := userClientOf(c, fakeUserToken)
+	a.SetUsername("alice")
+	if err := record.AdmitUserEntry(a, "proj", nil, []byte(strings.Repeat("x", 10*record.MaxUserRecordEntryBytes))); err != nil {
+		t.Fatalf("a cluster-admin's entry: %v", err)
 	}
 }

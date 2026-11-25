@@ -2,6 +2,7 @@ package record
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -49,12 +50,24 @@ func ActorRole(c *kube.Client) string {
 // whose values have "by" and "actorRole".
 var UserRecordKeys = []string{"workbenches", "playgrounds"}
 
-// RecordOwner is one entry of UserRecordKeys: its project, who wrote it
-// and with which role.
+// RecordOwner is one entry of UserRecordKeys: its project (and, for a
+// user's entry, the project's namespace UID), who wrote it and with which
+// role.
 type RecordOwner struct {
-	Project   string
-	By        string
-	ActorRole string
+	Project    string
+	ProjectUID string
+	By         string
+	ActorRole  string
+}
+
+// key is what the caps count an entry by: its project's namespace UID, so
+// a project deleted and made again under the same name is another project;
+// the name for an entry without one.
+func (o RecordOwner) key() string {
+	if o.ProjectUID != "" {
+		return "uid:" + o.ProjectUID
+	}
+	return "name:" + o.Project
 }
 
 // ReadRecordOwners reads the entries of UserRecordKeys from the snapshot
@@ -80,15 +93,16 @@ func ReadRecordOwners(c *kube.Client) ([]RecordOwner, error) {
 			continue
 		}
 		entries := map[string]struct {
-			By        string `json:"by"`
-			ActorRole string `json:"actorRole"`
+			By         string `json:"by"`
+			ActorRole  string `json:"actorRole"`
+			ProjectUID string `json:"projectUID"`
 		}{}
 		if err := json.Unmarshal([]byte(raw), &entries); err != nil {
 			return nil, fmt.Errorf("parse this tool's records (%s): %w", key, err)
 		}
 		for k, e := range entries {
 			project, _, _ := strings.Cut(k, "/")
-			out = append(out, RecordOwner{Project: project, By: e.By, ActorRole: e.ActorRole})
+			out = append(out, RecordOwner{Project: project, ProjectUID: e.ProjectUID, By: e.By, ActorRole: e.ActorRole})
 		}
 	}
 	return out, nil
@@ -97,37 +111,74 @@ func ReadRecordOwners(c *kube.Client) ([]RecordOwner, error) {
 // ErrorCodeRecordsFull is the errorCode of a setup refused by a cap.
 const ErrorCodeRecordsFull = "records_full"
 
-// UserRecordCapRefusal says why a setup by user (who is not a
-// cluster-admin) in project must not add a record entry, "" when it may.
-// owners are the recorded entries (ReadRecordOwners). A project that
-// already holds a user's entry adds nothing to the total, nor one of
-// user's to theirs. exists reports whether a counted project still exists;
-// it is asked only when a cap would refuse, and a project that is gone is
-// not counted (its entries are left over from a deleted project). An error
-// of exists refuses (fail closed).
-func UserRecordCapRefusal(owners []RecordOwner, project, user string, exists func(project string) (bool, error)) (string, error) {
-	all, mine := map[string]bool{}, map[string]bool{}
+// MaxUserRecordEntryBytes bounds one user's entry as written (its JSON):
+// with the caps it bounds what users' entries take of the ConfigMap.
+const MaxUserRecordEntryBytes = 2048
+
+// RecordsFullError is a refusal by the caps of users' records.
+type RecordsFullError struct{ Msg string }
+
+func (e *RecordsFullError) Error() string { return e.Msg }
+
+// ErrorCode is the errorCode of an error of a record write: records_full
+// for a refusal by the caps, else the API error's.
+func ErrorCode(err error) string {
+	if _, ok := errors.AsType[*RecordsFullError](err); ok {
+		return ErrorCodeRecordsFull
+	}
+	return kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
+}
+
+// ErrorText says a record write's error to c's user: a refusal by the
+// caps as it is; for a project user any other error by its HTTP status or
+// category only, since it comes from a ServiceAccount request whose text
+// may name what they may not see (logged here); for a cluster-admin the
+// error.
+func ErrorText(c *kube.Client, err error) string {
+	if full, ok := errors.AsType[*RecordsFullError](err); ok {
+		return full.Msg
+	}
+	if c.ProjectUser() {
+		kube.LogFactReadFailure("a record write of a project user's action failed", "snapshot", err)
+		return "this tool's record could not be written (" + kube.FactReadProblem(err) + ")"
+	}
+	return err.Error()
+}
+
+// UserRecordCapRefusal says why entry (a user's, about to be written)
+// must not be added, "" when it may. owners are the recorded entries
+// (ReadRecordOwners), the entry's own old value included. A project that
+// already holds a user's entry adds nothing to the total, nor one of the
+// same user's to theirs. exists reports whether a counted entry's project
+// still exists (by name and, when recorded, namespace UID); it is asked
+// only when a cap would refuse, and a project that is gone is not counted.
+// An error of exists refuses (fail closed).
+func UserRecordCapRefusal(owners []RecordOwner, entry RecordOwner, exists func(RecordOwner) (bool, error)) (string, error) {
+	all, mine := map[string]RecordOwner{}, map[string]RecordOwner{}
 	for _, o := range owners {
 		if o.ActorRole != ActorRoleUser {
 			continue
 		}
-		all[o.Project] = true
-		if o.By == user {
-			mine[o.Project] = true
+		all[o.key()] = o
+		if o.By == entry.By {
+			mine[o.key()] = o
 		}
 	}
-	if mine[project] || all[project] && len(mine) < MaxUserRecordProjectsPerUser {
+	k := entry.key()
+	_, inMine := mine[k]
+	_, inAll := all[k]
+	if inMine || inAll && len(mine) < MaxUserRecordProjectsPerUser {
 		return "", nil
 	}
-	live := func(set map[string]bool) (int, error) {
-		n := 0
-		names := make([]string, 0, len(set))
-		for p := range set {
-			names = append(names, p)
+	live := func(set map[string]RecordOwner) (int, error) {
+		keys := make([]string, 0, len(set))
+		for key := range set {
+			keys = append(keys, key)
 		}
-		slices.Sort(names)
-		for _, p := range names {
-			ok, err := exists(p)
+		slices.Sort(keys)
+		n := 0
+		for _, key := range keys {
+			ok, err := exists(set[key])
 			if err != nil {
 				return 0, err
 			}
@@ -146,7 +197,7 @@ func UserRecordCapRefusal(owners []RecordOwner, project, user string, exists fun
 			return fmt.Sprintf("You have this tool's objects in %d projects, the most it keeps for one user. Remove them from a project you no longer need (Delete on its Environment page), then set up again.", n), nil
 		}
 	}
-	if !all[project] && len(all) >= MaxUserRecordProjects {
+	if !inAll && len(all) >= MaxUserRecordProjects {
 		n, err := live(all)
 		if err != nil {
 			return "", err
@@ -158,20 +209,66 @@ func UserRecordCapRefusal(owners []RecordOwner, project, user string, exists fun
 	return "", nil
 }
 
-// ProjectExists reports whether project's namespace exists, read with the
-// facts client (the ServiceAccount's get on namespaces): only to tell
-// whether a recorded project still counts in the caps, never shown.
-func ProjectExists(c *kube.Client, project string) (bool, error) {
-	return namespaceExists(c.Facts(), project)
+// AdmitUserEntry decides whether c (a project user's client) may write
+// its entry of project, whose JSON is entryJSON (nil before the entry is
+// made: the early check of a setup), where prior is the entry's old value
+// (nil: none). A cluster-admin's entry is always admitted. An entry that
+// stays the same user's in the same project needs no admission; a new
+// one, or one that changes hands (a cluster-admin's or another user's
+// entry taken over), is counted against the caps. Called inside
+// UpdateSnapshot it makes the admission and the write one step for this
+// process. A refusal is a *RecordsFullError; a failed read is an error
+// whose text names only the read's HTTP status (the ServiceAccount's error
+// is logged, not returned).
+func AdmitUserEntry(c *kube.Client, project string, prior *RecordOwner, entryJSON []byte) error {
+	if !c.ProjectUser() {
+		return nil
+	}
+	if len(entryJSON) > MaxUserRecordEntryBytes {
+		return &RecordsFullError{Msg: fmt.Sprintf("This tool's record of the setup would take %d bytes, more than the %d it keeps for one user's entry.", len(entryJSON), MaxUserRecordEntryBytes)}
+	}
+	entry := RecordOwner{Project: project, ProjectUID: c.ProjectUID(), By: kube.GetUser(c), ActorRole: ActorRoleUser}
+	if prior != nil && prior.ActorRole == ActorRoleUser && prior.By == entry.By && prior.ProjectUID == entry.ProjectUID {
+		return nil
+	}
+	owners, err := ReadRecordOwners(c)
+	if err != nil {
+		kube.LogFactReadFailure("cannot read this tool's records for the users' caps", "snapshot", err)
+		return fmt.Errorf("cannot read this tool's records (%s)", kube.FactReadProblem(err))
+	}
+	msg, err := UserRecordCapRefusal(owners, entry, func(o RecordOwner) (bool, error) { return ProjectExists(c, o) })
+	if err != nil {
+		kube.LogFactReadFailure("cannot read whether a recorded project exists", "Namespace", err)
+		return fmt.Errorf("cannot check this tool's records (%s)", kube.FactReadProblem(err))
+	}
+	if msg != "" {
+		return &RecordsFullError{Msg: msg}
+	}
+	return nil
 }
 
-// namespaceExists reads project's namespace with f, the facts client.
-func namespaceExists(f *kube.Client, project string) (bool, error) {
-	found, err := f.GetIntoOptional("/api/v1/namespaces/"+project, &struct{}{})
-	if err != nil {
-		return false, fmt.Errorf("check whether a recorded project exists: %w", err)
+// ProjectExists reports whether o's project still exists: its namespace,
+// read with the facts client (the ServiceAccount's get on namespaces), and,
+// when o records one, with the same UID. Only to tell whether a recorded
+// project still counts in the caps, never shown.
+func ProjectExists(c *kube.Client, o RecordOwner) (bool, error) {
+	uid, found, err := namespaceUID(c.Facts(), o.Project)
+	if err != nil || !found {
+		return false, err
 	}
-	return found, nil
+	return o.ProjectUID == "" || o.ProjectUID == uid, nil
+}
+
+// namespaceUID reads project's namespace with f, the facts client.
+func namespaceUID(f *kube.Client, project string) (string, bool, error) {
+	var ns struct {
+		Metadata kube.ObjectMeta `json:"metadata"`
+	}
+	found, err := f.GetIntoOptional("/api/v1/namespaces/"+project, &ns)
+	if err != nil {
+		return "", false, err
+	}
+	return ns.Metadata.UID, found, nil
 }
 
 // snapshotWriter serializes this process's read-change-write cycles of
