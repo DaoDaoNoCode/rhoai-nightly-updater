@@ -61,7 +61,6 @@ var (
 	propagationWait         = 10 * time.Second
 	refreshCleanupWait      = 5 * time.Second
 	SubRetryBackoffs        = []time.Duration{2 * time.Second, 4 * time.Second}
-	channelRetryDelay       = 8 * time.Second
 )
 
 // WaitForNightlyCatalogReady polls the nightly CatalogSource until it reports
