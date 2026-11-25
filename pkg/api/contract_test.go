@@ -75,6 +75,8 @@ func TestFrontendContract(t *testing.T) {
 		{"workbench-admin.json", "/api/resources/workbench?project=team-a", "user:admin", HandleWorkbenchStatus, "", nil},
 		// The Distributed workloads tab's status (admin-only, the admin's token).
 		{"kueue-admin.json", "/api/resources/kueue?project=team-a", "user:admin", HandleKueueStatus, "", nil},
+		// The Observability tab's status (admin-only, the ServiceAccount's reads).
+		{"observability-admin.json", "/api/resources/observability", "user:admin", HandleObservabilityStatus, "", nil},
 		{"recipe-plan-admin.json", "/api/recipes/plan", "user:admin", HandleRecipePlan, `{"recipe":` + testRecipe + `}`, nil},
 	}
 	update := *updateContract || os.Getenv("UPDATE_CONTRACT") == "1"
@@ -139,10 +141,27 @@ func TestFrontendContract(t *testing.T) {
 // field set, so a renamed or retyped field shows in the fixtures.
 func stubContractData(t *testing.T) {
 	t.Helper()
-	origSummary, origProject, origPlayground, origSamples, origRegistry, origWorkbench, origKueue := getSummary, getProjectStatus, getPlaygroundStatus, getMLflowSamplesStatus, getModelRegistryStatus, getWorkbenchStatus, getKueueStatus
+	origSummary, origProject, origPlayground, origSamples, origRegistry, origWorkbench, origKueue, origObservability := getSummary, getProjectStatus, getPlaygroundStatus, getMLflowSamplesStatus, getModelRegistryStatus, getWorkbenchStatus, getKueueStatus, getObservabilityStatus
 	t.Cleanup(func() {
-		getSummary, getProjectStatus, getPlaygroundStatus, getMLflowSamplesStatus, getModelRegistryStatus, getWorkbenchStatus, getKueueStatus = origSummary, origProject, origPlayground, origSamples, origRegistry, origWorkbench, origKueue
+		getSummary, getProjectStatus, getPlaygroundStatus, getMLflowSamplesStatus, getModelRegistryStatus, getWorkbenchStatus, getKueueStatus, getObservabilityStatus = origSummary, origProject, origPlayground, origSamples, origRegistry, origWorkbench, origKueue, origObservability
 	})
+	getObservabilityStatus = func(_ *cluster.Client) (*types.ObservabilityStatus, error) {
+		return &types.ObservabilityStatus{
+			Blocked:   &types.ComponentBlock{Component: "monitoring", DSC: "default-dsci", State: "Managed", Reason: "shown only when blocked"},
+			Namespace: "redhat-ods-monitoring", Configured: true, ManagedByTool: true, External: false, Ready: false,
+			Parts: []types.MaaSPart{
+				{ID: "loki-operator", Title: "Loki Operator", State: "ready", Message: "Version 6.7.0 runs in openshift-operators-redhat", ManagedByTool: true, NotManaged: false},
+				{ID: "metrics-collector", Title: "Metrics collector (OpenTelemetry)", State: "problem", Message: "This is a product bug.", Warning: "a warning",
+					Commands: "oc delete pod -n openshift-opentelemetry-operator -l control-plane=controller-manager", DocURL: "https://github.com/opendatahub-io/odh-observability/blob/main/docs/observability-modes.md#metrics"},
+			},
+			SetupPlan: []string{"Wait until RHOAI's operator reports the monitoring stack available"}, SetupBlockedReason: "a reason",
+			CleanupPlan: []string{"Delete Secret redhat-ods-monitoring/rhoai-nightly-updater-usage-logs"}, CleanupKept: []string{"The operators"}, CleanupBlockedReason: "a reason",
+			Volumes:      []types.ObservabilityVolume{{Name: "storage-data-science-perses-0", Size: "1Gi", StorageClass: "gp3-csi", SetUpByTool: true}},
+			VolumesTotal: "1Gi",
+			Conditions:   []types.ObservabilityCondition{{Type: "Ready", Status: "True", Reason: "Available", Message: "a message"}},
+			DashboardURL: "https://rh-ai.apps.example.com",
+		}, nil
+	}
 	getKueueStatus = func(_, _ *cluster.Client, project string) (*types.KueueStatus, error) {
 		f := false
 		return &types.KueueStatus{

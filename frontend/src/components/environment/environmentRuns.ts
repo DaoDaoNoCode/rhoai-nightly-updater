@@ -542,6 +542,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setMaaSRefresh((n) => n + 1);
       setModelRegistryRefresh((n) => n + 1);
       setKueueRefresh((n) => n + 1);
+      setObservabilityRefresh((n) => n + 1);
       // A component turned back changes what the features' prerequisites read.
       if (req.components?.length) setPrereqRefresh((n) => n + 1);
       onDone(success, error, apiError);

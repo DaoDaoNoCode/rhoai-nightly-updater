@@ -27,7 +27,12 @@ var (
 	cleanupStorage        = TeardownS3Storage
 	cleanupMLflow         = TeardownMLflow
 	cleanupKueue          = kueue.Teardown
-	cleanupModelRegistry  = func(c *Client) (*types.OperationResponse, error) {
+	cleanupObservability  = func(c *Client) (*types.OperationResponse, error) {
+		return observability.Run(c, types.ObservabilityRequest{Action: "teardown"}, nil)
+	}
+	// Bound to storage.UsageLogsUseStorage; swappable in tests.
+	usageLogsUseStorage  = storage.UsageLogsUseStorage
+	cleanupModelRegistry = func(c *Client) (*types.OperationResponse, error) {
 		return modelregistry.Run(c, types.ModelRegistryRequest{Action: "teardown"}, nil)
 	}
 	cleanupModels = func(c *Client, project string) (*types.OperationResponse, error) {
@@ -142,6 +147,10 @@ func cleanupParts(c *Client, req types.CleanupRequest, toolOwners map[string][]s
 				return cleanupPipelineServer(c, project, req.ConfirmUnrecorded[project], confirmedWorkbenches(c, req, project))
 			},
 		})
+	}
+	// The usage logs keep their data in the S3 storage: they go first.
+	if req.Observability {
+		parts = append(parts, cleanupPart{id: CleanupStepID("observability", ""), title: "the usage logs and dashboards", run: func() (*types.OperationResponse, error) { return cleanupObservability(c) }, says: true})
 	}
 	if req.Storage {
 		parts = append(parts, cleanupPart{
@@ -341,6 +350,26 @@ func CleanUp(c *Client, req types.CleanupRequest, onStep func(UpdateStepEvent)) 
 			detail = workbenchesDetail(current)
 		}
 		emit(UpdateStepEvent{Step: CleanupStepID("pipeline-server", project), Status: "failed", Message: problem, ErrorCode: code, Detail: detail})
+	}
+	// The S3 storage cannot go while RHOAI's usage logs keep their data in
+	// it, unless their clean-up is part of this one (it runs first): refused
+	// before anything is deleted, also when that cannot be told.
+	if req.Storage && !req.Observability {
+		used, err := usageLogsUseStorage(c)
+		problem := ""
+		switch {
+		case err != nil:
+			problem = fmt.Sprintf("Cannot tell whether RHOAI's usage logs keep their data in the S3 storage, so it was not deleted: %v.", err)
+		case used:
+			problem = "RHOAI's usage logs (the Observability tab) keep their data in the S3 storage: select Usage logs and dashboards too, or keep the S3 storage."
+		}
+		if problem != "" {
+			problems = append(problems, problem)
+			if refusalCode == "" || cleanupConfirmCode(refusalCode) {
+				refusalCode = "prerequisites"
+			}
+			emit(UpdateStepEvent{Step: CleanupStepID("storage", ""), Status: "failed", Message: problem, ErrorCode: "prerequisites"})
+		}
 	}
 	for _, chk := range checks {
 		// Detail enumerates non-tool resources still in the project, one

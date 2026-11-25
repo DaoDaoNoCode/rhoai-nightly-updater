@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -570,5 +571,71 @@ func TestObservability_MaaSSetupWithUsageLogsStopsWhenTheyCannot(t *testing.T) {
 	}
 	if m := oc.f.mutations(); len(m) != 0 {
 		t.Fatalf("changed: %v", m)
+	}
+}
+
+// Clean up everything: MaaS publications first, then ..., the usage logs,
+// then the S3 storage that keeps their data, and the MaaS platform after.
+func TestCleanUp_UsageLogsGoBeforeTheS3Storage(t *testing.T) {
+	ran := fakeTeardowns(t, nil)
+	prevObs, prevUnpub, prevPlat := cleanupObservability, cleanupUnpublish, cleanupMaaSPlatform
+	t.Cleanup(func() { cleanupObservability, cleanupUnpublish, cleanupMaaSPlatform = prevObs, prevUnpub, prevPlat })
+	cleanupObservability = func(*Client) (*types.OperationResponse, error) {
+		*ran = append(*ran, "observability")
+		return &types.OperationResponse{Success: true, Message: "Usage logs removed."}, nil
+	}
+	cleanupUnpublish = func(_ *Client, project string) (*types.OperationResponse, error) {
+		*ran = append(*ran, "maas-unpublish:"+project)
+		return &types.OperationResponse{Success: true}, nil
+	}
+	cleanupMaaSPlatform = func(*Client) (*types.OperationResponse, error) {
+		*ran = append(*ran, "maas-platform")
+		return &types.OperationResponse{Success: true}, nil
+	}
+	_, c := newResourceFake(t)
+	res, err := CleanUp(c, types.CleanupRequest{MaaSPublished: []string{"p"}, PipelineServers: []string{"a"}, Observability: true, Storage: true, MaaSPlatform: true}, nil)
+	if err != nil || !res.Success {
+		t.Fatalf("got %+v, %v", res, err)
+	}
+	if got := strings.Join(*ran, " "); got != "maas-unpublish:p pipeline-server:a observability storage maas-platform" {
+		t.Fatalf("order: %s", got)
+	}
+}
+
+func TestCleanUp_RefusesTheS3StorageWhileUsageLogsUseItAndAreNotSelected(t *testing.T) {
+	ran := fakeTeardowns(t, nil)
+	prev := usageLogsUseStorage
+	t.Cleanup(func() { usageLogsUseStorage = prev })
+	for _, tc := range []struct {
+		name string
+		used bool
+		err  error
+		want string
+	}{
+		{"used", true, nil, "select Usage logs and dashboards too"},
+		{"cannot tell", false, errors.New("forbidden"), "Cannot tell whether RHOAI's usage logs"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			*ran = nil
+			usageLogsUseStorage = func(*Client) (bool, error) { return tc.used, tc.err }
+			_, c := newResourceFake(t)
+			var events []UpdateStepEvent
+			res, err := CleanUp(c, types.CleanupRequest{Storage: true, MLflow: true}, func(e UpdateStepEvent) { events = append(events, e) })
+			if err != nil || res.Success || !strings.Contains(res.Message, tc.want) || !strings.HasSuffix(res.Message, "Nothing was deleted.") || len(*ran) != 0 {
+				t.Fatalf("got %+v, ran %v", res, *ran)
+			}
+			if len(events) == 0 || events[0].Step != "storage" || events[0].Status != "failed" {
+				t.Errorf("events: %+v", events)
+			}
+		})
+	}
+	// Selected together, no check is needed: the usage logs go first.
+	usageLogsUseStorage = func(*Client) (bool, error) { t.Fatal("checked"); return false, nil }
+	prevObs := cleanupObservability
+	t.Cleanup(func() { cleanupObservability = prevObs })
+	cleanupObservability = func(*Client) (*types.OperationResponse, error) { return &types.OperationResponse{Success: true}, nil }
+	_, c := newResourceFake(t)
+	if res, _ := CleanUp(c, types.CleanupRequest{Storage: true, Observability: true}, nil); !res.Success {
+		t.Fatalf("together: %+v", res)
 	}
 }

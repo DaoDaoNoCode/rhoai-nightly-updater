@@ -2023,6 +2023,10 @@ type CleanupRequest struct {
 	// Kueue deletes this tool's distributed workloads setup: its samples,
 	// queues and project label, and turns back its dashboard opt-in.
 	Kueue bool `json:"kueue,omitempty"`
+	// Observability removes the usage logs and dashboards this tool set up
+	// (the Observability tab's Clean up); it runs before the S3 storage,
+	// which keeps their data.
+	Observability bool `json:"observability,omitempty"`
 	// Models are the projects whose models of the tool's catalog go (all
 	// of them);
 	// InferenceGateway deletes the inference gateway after them.

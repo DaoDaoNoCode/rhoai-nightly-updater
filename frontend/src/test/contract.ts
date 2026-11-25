@@ -1,4 +1,4 @@
-import type { KueueStatus, WorkbenchStatus, ClusterSummary, MLflowSamplesStatus, ModelRegistryStatus, PlaygroundStatus, ProjectStatus, RecipePlan, RecipeRunStatus, UserOperationStatus, UserPermissions } from "../types";
+import type { KueueStatus, ObservabilityStatus, WorkbenchStatus, ClusterSummary, MLflowSamplesStatus, ModelRegistryStatus, PlaygroundStatus, ProjectStatus, RecipePlan, RecipeRunStatus, UserOperationStatus, UserPermissions } from "../types";
 import summaryJson from "./contract/summary.json";
 import operationUserJson from "./contract/operation-user.json";
 import permissionsUserJson from "./contract/user-permissions-user.json";
@@ -16,6 +16,7 @@ import recipeRunFeaturesJson from "./contract/recipe-run-features-admin.json";
 import modelRegistryJson from "./contract/model-registry-admin.json";
 import workbenchJson from "./contract/workbench-admin.json";
 import kueueJson from "./contract/kueue-admin.json";
+import observabilityJson from "./contract/observability-admin.json";
 
 /*
  * The backend's answers to a user who is not a cluster-admin, as the Go
@@ -68,6 +69,8 @@ export const contract = {
   workbench: (project = CONTRACT_PROJECT): WorkbenchStatus => forProject<WorkbenchStatus>(workbenchJson, CONTRACT_PROJECT, project),
   // A cluster-admin's GET /api/resources/kueue: set up, the RayCluster sample admitted, the opt-in on.
   kueue: (project = CONTRACT_PROJECT): KueueStatus => forProject<KueueStatus>(kueueJson, CONTRACT_PROJECT, project),
+  // A cluster-admin's GET /api/resources/observability: every field set.
+  observability: (): ObservabilityStatus => clone<ObservabilityStatus>(observabilityJson),
 };
 
 // Compile-time checks: the generated JSON fits the frontend's types. A
@@ -93,6 +96,7 @@ const typed: {
   modelRegistry: Widen<ModelRegistryStatus>;
   workbench: Widen<WorkbenchStatus>;
   kueue: Widen<KueueStatus>;
+  observability: Widen<ObservabilityStatus>;
 } = {
   summary: summaryJson,
   operation: operationUserJson,
@@ -110,5 +114,6 @@ const typed: {
   modelRegistry: modelRegistryJson,
   workbench: workbenchJson,
   kueue: kueueJson,
+  observability: observabilityJson,
 };
 void typed;

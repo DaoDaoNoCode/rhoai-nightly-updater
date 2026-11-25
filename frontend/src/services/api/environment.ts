@@ -139,6 +139,8 @@ export interface CleanupRequest {
   modelRegistry?: boolean;
   /** This tool's distributed workloads setup (samples, queues, project label, dashboard opt-in). */
   kueue?: boolean;
+  /** The usage logs and dashboards this tool set up (the Observability tab's Clean up); runs before the S3 storage. */
+  observability?: boolean;
   /** Projects whose models are removed (after MLflow). */
   models?: string[];
   /** Inference gateway teardown, following the models. */

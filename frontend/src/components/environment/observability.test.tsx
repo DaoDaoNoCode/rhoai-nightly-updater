@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import type { ObservabilityStatus } from "../../types";
@@ -7,6 +7,9 @@ import { observabilityState } from "./featureState";
 import { MaaSTab, maasConfirm, maasRequestOf, maasSetupChoices, maasSteps } from "./MaaSTab";
 import type { MaaSStatus } from "../../types";
 import { IDLE } from "./featureState";
+import { CleanupModal, cleanupBlocked, cleanupCandidates, cleanupSteps } from "./CleanupModal";
+import type { ResourcesStatus } from "../../types";
+import { contract } from "../../test/contract";
 
 const fresh: ObservabilityStatus = {
   configured: false, managedByTool: false, ready: false, namespace: "redhat-ods-monitoring",
@@ -158,5 +161,38 @@ describe("MaaS: usage logs, user IDs and the portal", () => {
     expect(setPending).toHaveBeenCalledWith({ kind: "maas-capture-user", on: true });
     screen.getByRole("button", { name: "Turn on" }).click();
     expect(setPending).toHaveBeenCalledWith({ kind: "maas-portal", on: true });
+  });
+});
+
+describe("Clean up everything: the usage logs", () => {
+  const status: ResourcesStatus = { minio: { deployed: true, ready: true, managedByTool: true, namespace: "seaweedfs" }, mlflow: { deployed: false, ready: false, managedByTool: false }, pipelineServers: [] };
+
+  it("offers them only when this tool set them up, and runs them before the S3 storage", () => {
+    expect(cleanupCandidates(status, "all", false, null, null, null, null, null, ready).observability).toBe(true);
+    expect(cleanupCandidates(status, "all", false, null, null, null, null, null, { ...ready, managedByTool: false, external: true }).observability).toBe(false);
+    expect(cleanupCandidates(status, "mlflow", false, null, null, null, null, null, ready).observability).toBe(false);
+    const ids = cleanupSteps({ maasPublished: ["p"], storage: true, observability: true, maasPlatform: true }).map((s) => s.id);
+    expect(ids).toEqual(["maas-unpublish:p", "observability", "storage", "maas-platform"]);
+  });
+
+  it("the S3 storage without them is refused at plan time, with what to do", () => {
+    expect(cleanupBlocked(status, { storage: true }, [], true)).toMatch(/Select Usage logs and dashboards too, or keep the S3 storage/);
+    expect(cleanupBlocked(status, { storage: true, observability: true }, [], true)).toBeNull();
+    expect(cleanupBlocked(status, { storage: true }, [], false)).toBeNull();
+  });
+
+  it("the dialog ticks them, says what is lost, and disables Delete when they are unticked but the storage is not", async () => {
+    render(<CleanupModal scope="all" status={status} observability={ready} minioLeftovers={false} baseReason={null} onConfirm={() => {}} onCancel={() => {}} />);
+    const box = screen.getByRole("checkbox", { name: /Usage logs and dashboards/ });
+    expect(box).toBeChecked();
+    expect(screen.getByText(/Every usage log and metric/)).toBeInTheDocument();
+    fireEvent.click(box);
+    await waitFor(() => expect(screen.getAllByText(/keep their data in the S3 storage/).length).toBeGreaterThan(0));
+  });
+
+  it("the contract fixture fits the tab", () => {
+    const o = contract.observability();
+    expect(o.parts.length).toBeGreaterThan(0);
+    expect(observabilityState({ ...o, blocked: undefined }).status).toBe("needs-attention");
   });
 });

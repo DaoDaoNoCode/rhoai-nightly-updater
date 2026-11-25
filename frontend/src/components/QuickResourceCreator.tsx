@@ -149,7 +149,7 @@ const EnvironmentView: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, r
   const kueueProjectParam = searchParams.has("project") ? urlProject : null;
   const kueueRead = useKueueStatus(tab === "kueue" ? kueueProjectParam : null, kueueRefresh, !!kueueOp, !readOnly && (tab === "overview" || tab === "kueue" || !!cleanupScope));
   const kueueData = kueueRead.data;
-  const observabilityRead = useObservabilityStatus(observabilityRefresh, !!observabilityOp, !readOnly && (tab === "overview" || tab === "observability"));
+  const observabilityRead = useObservabilityStatus(observabilityRefresh, !!observabilityOp, !readOnly && (tab === "overview" || tab === "observability" || !!cleanupScope));
   const observabilityData = observabilityRead.data;
   // Prerequisites feed Overview and feature tabs; on Models, exposure picks which plan applies.
   const [modelsExposure, setModelsExposure] = useState<ModelExposureKind | null>(null);
@@ -251,8 +251,8 @@ const EnvironmentView: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, r
   const playgroundOptions = playgroundProjectOptions(pg, projectNames);
   const overviewRows = buildOverviewRows({ storage: storageNow, pipelines: pipelinesSummary, workbench: workbenchSummary, mlflow: mlflowNow, modelRegistry: registryNow, models: modelsSummary, playground: playgroundSummary, kueue: kueueNow, maas: maasNow, observability: observabilityNow }, prereq);
   const anythingToClean = !!resStatus && (() => {
-    const c = cleanupCandidates(resStatus, "all", minioLeftovers, pg, maas, registry, wb, kueueData);
-    return c.kueue || c.workbenches.length > 0 || c.keptStorage.length > 0 || c.servers.length > 0 || c.storage || c.mlflow || c.modelRegistry || c.models.length > 0 || c.gateway || c.playgrounds.length > 0 || c.maasPublished.length > 0 || c.maasPlatform || c.recipeProjects.length > 0;
+    const c = cleanupCandidates(resStatus, "all", minioLeftovers, pg, maas, registry, wb, kueueData, observabilityData);
+    return c.kueue || c.observability || c.workbenches.length > 0 || c.keptStorage.length > 0 || c.servers.length > 0 || c.storage || c.mlflow || c.modelRegistry || c.models.length > 0 || c.gateway || c.playgrounds.length > 0 || c.maasPublished.length > 0 || c.maasPlatform || c.recipeProjects.length > 0;
   })();
 
   const { open: runNext, whatNext } = runFollowUp({
@@ -459,7 +459,7 @@ const EnvironmentView: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, r
       )}
 
       {cleanupScope && resStatus && (
-        <CleanupModal scope={cleanupScope} status={resStatus} playground={pg} workbench={wb} maas={maas} modelRegistry={registry} kueue={kueueData} minioLeftovers={minioLeftovers} baseReason={baseReason}
+        <CleanupModal scope={cleanupScope} status={resStatus} playground={pg} workbench={wb} maas={maas} modelRegistry={registry} kueue={kueueData} observability={observabilityData} minioLeftovers={minioLeftovers} baseReason={baseReason}
           restorable={Object.values(prereq?.features ?? {}).flatMap((f) => f?.restorable ?? [])}
           retry={cleanupRetry} onConfirm={startCleanup} onCancel={() => { setCleanupScope(null); setCleanupRetry(null); }} />
       )}
