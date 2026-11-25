@@ -166,10 +166,12 @@ The Models tab serves small models from Hugging Face on CPU in a data science pr
 
 | Model | Type, for | Reserves (request, limit) | Download | vLLM options |
 |---|---|---|---|---|
-| `smollm2-135m-instruct`, SmolLM2 135M Instruct | Chat (smoke test) | 2 CPUs, 4 / 5 GiB | about 270 MB | `--max-model-len 4096` |
-| `qwen25-05b-instruct`, Qwen2.5 0.5B Instruct (the default) | Chat | 4 CPUs, 6 / 8 GiB | about 1.0 GB | `--max-model-len 4096` |
-| `qwen3-1-7b`, Qwen3 1.7B | Chat, tool calling, reasoning (thinking off by default) | 4 CPUs, 12 / 14 GiB | about 4.1 GB | `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false}'` |
+| `smollm2-135m-instruct`, SmolLM2 135M Instruct | Chat (smoke test) | 2 CPUs, 4 / 5 GiB | about 270 MB | `--max-model-len 409 --enable-force-include-usage` |
+| `qwen25-05b-instruct`, Qwen2.5 0.5B Instruct (the default) | Chat | 4 CPUs, 6 / 8 GiB | about 1.0 GB | `--max-model-len 409 --enable-force-include-usage` |
+| `qwen3-1-7b`, Qwen3 1.7B | Chat, tool calling, reasoning (thinking off by default) | 4 CPUs, 12 / 14 GiB | about 4.1 GB | `--max-model-len 4096 --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser qwen3 --default-chat-template-kwargs '{"enable_thinking":false} --enable-force-include-usage` |
 | `granite-embedding-125m-english`, Granite Embedding 125M English | Embeddings (768 dimensions), semantic search | 2 CPUs, 3 / 4 GiB | about 250 MB | `--runner pooling --max-model-len 512` |
+
+Every chat model runs with `--enable-force-include-usage`, so vLLM reports token usage in streamed responses too: Models as a Service counts tokens from it, and without it a streamed chat would count 0 and never reach a token limit (the MaaS docs' model setup). A model set up by an earlier version lacks it; set it up again (it restarts) before you publish it.
 
 <img src="docs/images/environment-models.png" alt="Models tab: Ready in dev-project; the model picker with Qwen3 1.7B (CPU, tool calling) chosen; the inference gateway Ready with its external address, DNS, authentication and the projects it allows; Qwen3 Ready with its use case, resources, source, vLLM options, address, runtime image, no fitting hardware profile and its token authentication" width="760">
 

@@ -127,3 +127,14 @@ describe("The Subscription row: priority", () => {
     expect(maasPlatformStatus(published({ value: 10, fix: FIX }), { ...IDLE, maas: { action: "subscription-priority", project: null } })).toBe("ready");
   });
 });
+
+describe("Use it: what to try next", () => {
+  it("says the tool's chat models report usage when streaming, so MaaS counts streamed tokens too", async () => {
+    stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] }, "/api/resources/maas": published({ value: 0 }) });
+    render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
+    const next = await screen.findByText(/MaaS counts the tokens each response reports/);
+    expect(next.textContent).toContain("this tool's chat models run with --enable-force-include-usage, so streaming responses report them too");
+    expect(next.textContent).toContain("A model set up by an earlier version lacks it: set it up again on the Models tab (it restarts).");
+    expect(next.textContent).not.toContain("only when the model server runs with");
+  });
+});

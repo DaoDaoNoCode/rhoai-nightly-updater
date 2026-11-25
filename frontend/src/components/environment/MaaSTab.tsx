@@ -386,7 +386,7 @@ const UseMaaS: React.FC<{ maas: MaaSStatus; readOnly: boolean; reason: string | 
         )}
       </DescriptionList>
       <WhatNext id="maas-next" items={[
-        <>Run the commands: the chat answers, and a request without a key gets 401. More than the model&apos;s limit gets 429 (an unlimited model never does; its usage is still metered) for calls whose response reports its token usage, as the non-streaming chat above does; streaming responses report it only when the model server runs with <code>--enable-force-include-usage</code> (the MaaS docs&apos; model setup).</>,
+        <>Run the commands: the chat answers, and a request without a key gets 401. More than the model&apos;s limit gets 429 (an unlimited model never does; its usage is still metered). MaaS counts the tokens each response reports; this tool&apos;s chat models run with <code>--enable-force-include-usage</code>, so streaming responses report them too (the MaaS docs&apos; model setup). A model set up by an earlier version lacks it: set it up again on the Models tab (it restarts).</>,
         <>Use the model in the dashboard&apos;s playground as a Models as a Service model.</>,
       ]} />
     </TabSection>

@@ -362,6 +362,16 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **MaaS token limits count streamed chats.** The Models tab's chat models
+  now run with vLLM's `--enable-force-include-usage` (appended to
+  `VLLM_ADDITIONAL_ARGS`), as the MaaS docs require for token rate limits
+  (models-as-a-service `quota-and-access-configuration.md`, "Model server
+  must include usage data"). Without it a streamed chat reported no usage,
+  so MaaS counted 0 tokens, limits never returned 429 and usage logs read 0.
+  The embedding model is unchanged. A model set up by an earlier version
+  lacks the flag: Publish refuses it as changed until you set it up again
+  on the Models tab, which restarts it; one already published keeps
+  counting 0 for streams until it is set up again.
 - **Dry runs of a delete no longer delete.** Five deletes asked for a
   server-side dry run in the URL (`?dryRun=All`) while sending
   DeleteOptions (UID preconditions) in the body, and the API server then

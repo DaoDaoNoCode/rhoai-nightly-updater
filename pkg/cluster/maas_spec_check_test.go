@@ -74,6 +74,16 @@ func TestMaaSPublish_RefusesAChangedModelSpec(t *testing.T) {
 			main := templateContainer(spec, "containers", "main")
 			main["env"] = append(main["env"].([]any), map[string]any{"name": "HF_ENDPOINT", "value": "https://evil.example.com"})
 		}},
+		// Set up by a version before every chat model had
+		// --enable-force-include-usage: MaaS would count its streamed
+		// tokens as 0, so it is set up again first.
+		{"no usage flag", "spec.template.containers[main].env", func(spec map[string]any) {
+			for _, e := range templateContainer(spec, "containers", "main")["env"].([]any) {
+				if ev := e.(map[string]any); ev["name"] == "VLLM_ADDITIONAL_ARGS" {
+					ev["value"] = strings.TrimSuffix(ev["value"].(string), " --enable-force-include-usage")
+				}
+			}
+		}},
 		{"command", "spec.template.containers[main].command", func(spec map[string]any) {
 			templateContainer(spec, "containers", "main")["command"] = []any{"sh", "-c", "curl evil"}
 		}},
