@@ -198,6 +198,11 @@ func runKueueStep(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*
 			res.Logs = append(res.Logs, opt.Logs...)
 		}
 	}
+	// The dashboard's mark on the recipe's workbench, from the cluster as it
+	// was before this step (the workbench step ran before it).
+	if note := kueueWorkbenchNote(s.Recipe, kueueLiveOf(before)); err == nil && res != nil && res.Success && note != "" {
+		res.Message = strings.TrimSpace(res.Message + " " + note)
+	}
 	rc, cancel := readWithin(c)
 	defer cancel()
 	if markErr := markKueueCreated(rc, s); markErr != nil {
@@ -281,13 +286,60 @@ func kueuePartProblem(sa, u *kube.Client, runID, uid string, notIt func(string) 
 	return ""
 }
 
+// kueueLive is what the plan's Kueue notes read on the cluster before the
+// run: this tool's dashboard opt-in in effect (optInLive), the dashboard's
+// Kueue setting on (disableKueue false, whoever set it), and the project
+// carrying kueue.openshift.io/managed=true that this tool did not add.
+type kueueLive struct {
+	OptInOn, SettingOn, ProjectManaged bool
+}
+
+// kueueLiveOf reads kueueLive from the Distributed workloads status.
+func kueueLiveOf(st *types.KueueStatus) kueueLive {
+	d := st.OptIn.DisableKueue
+	return kueueLive{
+		OptInOn: optInLive(st), SettingOn: d != nil && !*d,
+		ProjectManaged: st.Label != nil && st.Label.Present && !st.Label.AddedByTool,
+	}
+}
+
+// kueueWorkbenchNote is what the dashboard will show of the recipe's
+// workbench, or "" (F7, live on RHOAI 3.7-ea.1): it marks a workbench in a
+// Kueue project without a queue label "Workbench bypasses Kueue queue
+// management" (odh-dashboard NotebookTableRow.tsx L108-111, once the
+// setting and the project label are both on). The recipe creates the
+// workbench before its Kueue step, so the workbench gets a profile without a
+// queue unless both were on before the run. Editing it to a Queue profile
+// clears the mark and restarts it; RHOAI's notebook controller does not
+// copy the queue label to the workbench's pod, so Kueue does not admit it
+// either way, and the note does not claim it does. The model is not marked
+// (llm-d deployments, live), so it is not named.
+func kueueWorkbenchNote(r types.EnvironmentRecipe, live kueueLive) string {
+	f := r.Spec.Features
+	settingOnAfter := f.Kueue.DashboardOptIn || live.SettingOn
+	if !f.Kueue.Enabled || !f.Workbench.Enabled || !settingOnAfter || (live.SettingOn && live.ProjectManaged) {
+		return ""
+	}
+	why := "it is created before the Kueue setting is on"
+	if live.SettingOn {
+		why = "it is created before its project uses Kueue"
+	}
+	profile := "a Queue hardware profile"
+	if f.Kueue.DashboardOptIn {
+		// This run's Turn on creates or keeps the tool's Queue profile.
+		profile = "the hardware profile " + kueue.ProfileDisplayName
+	}
+	return fmt.Sprintf("The dashboard will mark this recipe's workbench 'Workbench bypasses Kueue queue management': %s. Choosing %s for it in the dashboard (Edit workbench) removes the mark and restarts the workbench.", why, profile)
+}
+
 // kueueWarnings are the plan's notes for distributed workloads, from what
-// the recipe turns on: advice when the same project also gets other
-// setups (Kueue manages only what is sent to a queue, so they keep
-// running, as the tab says), and the dashboard setting's cluster-wide
-// change, only when the recipe turns it on and it is not on already
-// (optInOn).
-func kueueWarnings(r types.EnvironmentRecipe, optInOn bool) []types.RecipeWarning {
+// the recipe turns on and what is on the cluster (live): advice when the
+// same project also gets other setups (Kueue manages only what is sent to
+// a queue, so they keep running, as the tab says), the dashboard's mark on
+// the recipe's workbench (kueueWorkbenchNote), and the dashboard setting's
+// cluster-wide change, only when the recipe turns it on and it is not on
+// already (OptInOn).
+func kueueWarnings(r types.EnvironmentRecipe, live kueueLive) []types.RecipeWarning {
 	f := r.Spec.Features
 	if !f.Kueue.Enabled {
 		return nil
@@ -312,21 +364,24 @@ func kueueWarnings(r types.EnvironmentRecipe, optInOn bool) []types.RecipeWarnin
 	if len(others) > 0 {
 		out = append(out, types.RecipeWarning{Kind: types.RecipeWarningAdvice, Message: fmt.Sprintf("Project %s also gets %s. Kueue manages only what is sent to a queue, so they keep running. A project of its own is still safer.", projectName(r.Spec.Project), kube.JoinTitles(others))})
 	}
-	if f.Kueue.DashboardOptIn && !optInOn {
+	if note := kueueWorkbenchNote(r, live); note != "" {
+		out = append(out, types.RecipeWarning{Kind: types.RecipeWarningAdvice, Message: note})
+	}
+	if f.Kueue.DashboardOptIn && !live.OptInOn {
 		out = append(out, types.RecipeWarning{Kind: types.RecipeWarningCluster, Message: "The dashboard's Kueue setting is turned on: in every new project on this cluster, workbenches and model deployments can only use the queue hardware profile, and a project without its own LocalQueue cannot create workbenches or deploy models until an admin adds one."})
 	}
 	return out
 }
 
-// planKueueWarnings are kueueWarnings with whether the tool's opt-in is in
-// effect now, read in the recipe's project (a read that fails counts as
-// not in effect: the warning shows).
+// planKueueWarnings are kueueWarnings with what is on the cluster now, read
+// in the recipe's project (a read that fails counts as nothing on: the
+// warnings show).
 func planKueueWarnings(c *kube.Client, r types.EnvironmentRecipe) []types.RecipeWarning {
-	on := false
-	if k := r.Spec.Features.Kueue; k.Enabled && k.DashboardOptIn && r.Spec.Project != nil {
+	var live kueueLive
+	if k := r.Spec.Features.Kueue; k.Enabled && (k.DashboardOptIn || r.Spec.Features.Workbench.Enabled) && r.Spec.Project != nil {
 		if st, err := kueueStatus(c, c, r.Spec.Project.Name); err == nil {
-			on = optInLive(st)
+			live = kueueLiveOf(st)
 		}
 	}
-	return kueueWarnings(r, on)
+	return kueueWarnings(r, live)
 }

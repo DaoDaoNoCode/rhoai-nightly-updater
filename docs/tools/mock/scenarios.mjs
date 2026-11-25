@@ -784,6 +784,15 @@ scenarios["recipe-full-succeeded"] = (w) => {
   w.recipeRun = { run: F.recipeRun({ rcp, done: steps.length, current: "", state: "succeeded", stopReason: "Every step of recipe full is set up." }), running: false };
   w.resources = { ...w.resources, mlflow: F.mlflowStates.running, pipelineServers: [...w.resources.pipelineServers, { ...F.pipelineServer, namespace: "recipe-full", apiRoute: undefined, uiRoute: undefined }] };
 };
+// The full recipe with the dashboard's Kueue setting turned on: the review and the Kueue step say the dashboard marks
+// its workbench (kueueWorkbenchNote).
+scenarios["recipe-full-kueue-optin"] = (w) => {
+  scenarios["recipe-full-succeeded"](w);
+  const rcp = F.fullRecipe();
+  rcp.spec.features.kueue = { ...rcp.spec.features.kueue, dashboardOptIn: true };
+  const steps = F.recipeSteps(rcp);
+  w.recipeRun = { run: F.recipeRun({ rcp, done: steps.length, current: "", state: "succeeded", stopReason: "Every step of recipe full is set up." }), running: false };
+};
 // The same run on a DataScienceCluster that names the model registry
 // component aiHub (v3, RHOAI 3.6), with the playground's ogx turned on too:
 // the Clean up dialog names both as the dashboard does.

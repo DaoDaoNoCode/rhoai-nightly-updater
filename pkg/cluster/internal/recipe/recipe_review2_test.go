@@ -207,7 +207,7 @@ func TestModelCheck_ExposureMismatchBlocks(t *testing.T) {
 // the recipe enables the setting and it is not already active.
 func TestKueuePlan_WarningsFromWhatTheRecipeEnables(t *testing.T) {
 	r := validRecipe(t, "  project: {mode: existing, name: proj}\n  features:\n    mlflow: {enabled: true, samples: true}\n    models: {enabled: true}\n    playground: {enabled: true}\n    kueue: {enabled: true}\n")
-	w := kueueWarnings(r, false)
+	w := kueueWarnings(r, kueueLive{})
 	if len(w) != 1 || !strings.Contains(w[0].Message, "a model, a playground and the MLflow samples") {
 		t.Fatalf("%+v", w)
 	}

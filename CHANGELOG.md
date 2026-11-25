@@ -314,6 +314,15 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **A recipe says when the dashboard will mark its workbench as bypassing
+  Kueue.** A recipe that sets up a workbench and turns the dashboard's Kueue
+  setting on creates the workbench first, so the dashboard marks it
+  "Workbench bypasses Kueue queue management" (seen live on RHOAI 3.7). The
+  review and the Kueue step's result now say so, and that choosing the
+  hardware profile Kueue CPU (RHOAI Nightly Updater) (or a Queue profile)
+  in the dashboard's Edit workbench removes the mark and restarts it. They
+  do not claim Kueue then admits the workbench: RHOAI's notebook controller
+  does not pass the queue label to its pod.
 - **The Distributed workloads tab can turn Kueue back.** Once its setup
   was cleaned up, the prerequisites still read "kueue Unmanaged (turned on
   by this tool)", but only Clean up everything could turn it back. The
