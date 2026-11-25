@@ -65,6 +65,35 @@ describe("ComponentsPage DSC states", () => {
     await settleApps();
   });
 
+  it("keeps the create's result above the live rows once the DSC exists, and the preview says what a missing prerequisite does", async () => {
+    let created = false;
+    const after = present([dep("agent-ops-ui")]);
+    after.dscPhase = "Not Ready";
+    after.components = [{ name: "trainer", managementState: "Managed", status: "Error", message: "dependency not met: JobSet Operator is not installed.", cause: "Prerequisite operator not installed: JobSet Operator" }];
+    stubApi({
+      "/api/components": () => jsonResponse(created ? after
+        : { components: [], deployments: [], dscName: "", dscPhase: "", changedCount: 0, dscExists: false, dscState: "no-dsc", operatorVersion: "3.7.0", operatorPhase: "Succeeded" }),
+      "/api/setup/dsc/preview": { yaml: "kind: DataScienceCluster", apiVersion: "datasciencecluster.opendatahub.io/v2", operatorVersion: "3.7.0", branch: "rhoai-3.7", sourceURL: "", source: "csv", sourceDescription: "alm-examples of the installed CSV rhods-operator.3.7.0" },
+      "POST /api/setup/dsc": () => { created = true; return jsonResponse({ success: true, message: "DataScienceCluster created with default components", logs: ["OK: DataScienceCluster created"] }); },
+    });
+    renderPage();
+    await settleApps();
+    const open = await screen.findByRole("button", { name: "Preview and create DataScienceCluster" });
+    await waitFor(() => expect(open).not.toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(open);
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByText(/kind: DataScienceCluster/);
+    expect(within(dialog).getByText(/A component that reports a prerequisite operator as not installed stays not ready until an administrator installs that operator\./)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+    expect(await screen.findByText("DataScienceCluster created with default components")).toBeInTheDocument();
+    expect(await screen.findByText(/Cause: Prerequisite operator not installed: JobSet Operator/)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "No DataScienceCluster yet" })).not.toBeInTheDocument();
+    expect(screen.getByText(/The operator now deploys the components set to Managed\./)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Close/ }));
+    await waitFor(() => expect(screen.queryByText("DataScienceCluster created with default components")).not.toBeInTheDocument());
+    await settleApps();
+  });
+
   it("no-crd says RHOAI is not installed and links to the Dashboard", async () => {
     stubApi({ "/api/components": { components: [], deployments: [], dscName: "", dscPhase: "", changedCount: 0, dscExists: false, dscState: "no-crd" } });
     renderPage();

@@ -123,6 +123,8 @@ export const ComponentsPage: React.FC = () => {
   const [repairMode, setRepairMode] = useState<DSCRepairMode | null>(null);
   const [repairLoading, setRepairLoading] = useState(false);
   const [repairResult, setRepairResult] = useState<OperationResponse | null>(null);
+  // The create's result: the empty state that shows it is gone once the DSC exists.
+  const [createResult, setCreateResult] = useState<OperationResponse | null>(null);
   const [defaultsPreview, setDefaultsPreview] = useState("");
   const [previewVersion, setPreviewVersion] = useState("");
   const [previewAPIVersion, setPreviewAPIVersion] = useState("");
@@ -239,7 +241,7 @@ export const ComponentsPage: React.FC = () => {
           operatorVersion={data.operatorVersion}
           operatorPhase={data.operatorPhase}
           mutateBlocker={mutateReason ?? gitOpsCreateDSCReason(status)}
-          onResult={onResult}
+          onResult={(res) => { onResult(res); setCreateResult(res); }}
           onCreated={handleRefresh}
         />
       )}
@@ -394,6 +396,17 @@ export const ComponentsPage: React.FC = () => {
               </StackItem>
             )}
           </Stack>
+        </PageSection>
+      )}
+
+      {data && !noDSC && createResult?.success && (
+        <PageSection>
+          <OutcomeAlert result={createResult} failedTitle="Could not create the DataScienceCluster" logs onClose={() => setCreateResult(null)}>
+            The operator now deploys the components set to Managed. Until a component is ready, the card below lists it among the
+            components that need attention, with RHOAI&apos;s message. One that reports a prerequisite operator as not installed stays
+            there, with that cause, until an administrator installs the operator; <Link to="/diagnostics">Diagnostics</Link> gives the
+            install commands.
+          </OutcomeAlert>
         </PageSection>
       )}
 

@@ -196,6 +196,14 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Changed
 
+- **Components: Create says what a missing prerequisite operator does.**
+  The Create DataScienceCluster preview says that a component reporting a
+  prerequisite operator as not installed stays not ready until an
+  administrator installs it, and where the page and Diagnostics show it.
+  The create's result now stays on the page once the DataScienceCluster
+  exists (it disappeared with the empty state), above the live rows, with
+  the same pointer. Create itself does not wait: the rows show each
+  component as RHOAI reports it.
 - **The recipe's DataScienceCluster step lists the components that are not
   ready.** After it creates the release's default DataScienceCluster, the
   step also waits, within the same 5 minutes as for the DataScienceCluster's

@@ -984,6 +984,8 @@ On **Components**, the DataScienceCluster card names the failing components:
 1. **Not Ready**, with the operator's summary.
 2. The **Cause** of each failing component, and a link to Diagnostics, which shows the fix.
 
+Right after **Create** on this page (or the recipe's DataScienceCluster step, [§5.1](#51-environment-recipe-runs-resume-interrupted-sign-in-again)) this is expected for a while: the operator deploys every component the release's default sets to `Managed`, including ones whose prerequisite operator RHOAI does not install (RHOAI 3.6 and 3.7 default trainer to `Managed`; it needs the JobSet Operator). Those stay not ready until an administrator installs the operator, or sets the component to `Removed`.
+
 On **Diagnostics**, open the problem:
 
 <img src="docs/images/diag-prerequisite-missing.png" alt="Diagnostics: Prerequisite operator Job Set Operator is not installed, with the commands that install it" width="760">
