@@ -992,7 +992,7 @@ On **Diagnostics**, open the problem:
 
 1. **Observed**: the conditions and catalog facts the tool read.
 2. **Fix**: what to do, in plain words. The tool does not install operators.
-3. **Command**: the exact commands (here: Namespace, OperatorGroup, Subscription, `oc wait`, then the operand; for the JobSet Operator, the cert-manager Operator for Red Hat OpenShift first when it is not installed, which the image above predates).
+3. **Command**: the exact commands (here: Namespace, OperatorGroup, Subscription, `oc wait`, then the operand; for the JobSet Operator, the cert-manager Operator for Red Hat OpenShift first when it is not installed, as in the image above).
 4. Copy them, read them, and run them as cluster-admin.
 
 The other causes in the table below look the same. Open each example to see it:
