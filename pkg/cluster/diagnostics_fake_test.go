@@ -26,6 +26,8 @@ type fakeAPI struct {
 	mu     sync.Mutex
 	routes map[string]func(r *http.Request, body []byte) (int, string)
 	reqs   []fakeReq
+	// headers are extra response headers by "METHOD /path" (Retry-After).
+	headers map[string]http.Header
 }
 
 type fakeReq struct {
@@ -46,6 +48,9 @@ func newFakeAPI(t *testing.T) (*fakeAPI, *Client) {
 		f.mu.Lock()
 		f.reqs = append(f.reqs, fakeReq{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Body: string(body)})
 		h, ok := f.routes[r.Method+" "+r.URL.Path]
+		for k, v := range f.headers[r.Method+" "+r.URL.Path] {
+			w.Header()[k] = v
+		}
 		f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		switch {

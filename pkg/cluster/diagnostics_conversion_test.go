@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/diagnostics"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
@@ -62,7 +63,15 @@ func TestConversionCheck_ReportsOneProblemPerKind(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := conversionWorld(t, tc.status, tc.body)
+			// As live: Retry-After 30. The probe takes the answer at once
+			// (NoRetryWhen), so v3 is read once and no time passes.
+			const v3 = "/apis/datasciencecluster.opendatahub.io/v3/datascienceclusters"
+			f.headers = map[string]http.Header{"GET " + v3: {"Retry-After": {"30"}}}
+			start := kube.Clock().Now()
 			out := diagnostics.CheckConversionFailures(c)
+			if n, waited := len(f.requests("GET", v3)), kube.Clock().Since(start); n != 1 || waited != 0 {
+				t.Fatalf("v3 read %d times, waited %s", n, waited)
+			}
 			assertWrites(t, f)
 			if out.Check.Status != "fail" || len(out.Problems) != 2 {
 				t.Fatalf("check %+v problems %d", out.Check, len(out.Problems))
