@@ -24,6 +24,15 @@ import (
 // beginOperation) becomes the last completed operation, and its marker is
 // cleared in the same write that releases its lease; the lease of an
 // operation that never began is released on its own.
+//
+// This process's slot is freed last, after that write, on purpose (fail
+// closed): the cross-pod lease is released in the completion write, so
+// until it is done the lock is still held as far as the cluster is
+// concerned, and a request that arrives meanwhile is refused with 409
+// cluster_busy, which is correct and retryable. Freeing the slot earlier
+// lets the next operation start while the record still names this one
+// (its marker, its lease and lastCompleted in flux), the window every
+// ordering fix of that kind had to patch over.
 func releaseClusterMutationLock() {
 	owner := leases.stop(cluster.ClusterLockKey)
 	done, bookkeeper := inflight.finish()
@@ -34,7 +43,15 @@ func releaseClusterMutationLock() {
 		leases.release(bookkeeper, cluster.ClusterLockKey, *owner)
 	}
 	locks.release(lockWant{})
+	if clusterLockReleased != nil {
+		clusterLockReleased()
+	}
 }
+
+// clusterLockReleased, when set, runs once releaseClusterMutationLock has
+// freed this process's slot (tests: the point after which the next
+// operation may take the lock).
+var clusterLockReleased func()
 
 // lockCluster acquires the cluster lock, this process's slot and then the
 // cross-pod lease, or answers 409 Conflict with errorCode "cluster_busy"

@@ -859,15 +859,16 @@ func TestRecipeRun_EndingRunDoesNotIdleTheNextOne(t *testing.T) {
 		}
 		return origSave(c, run, replace)
 	}
-	origComplete := saveCompletedOperation
-	saveCompletedOperation = func(c *cluster.Client, done *types.CompletedOperation, owner *cluster.LeaseOwner) error {
-		err := origComplete(c, done, owner)
+	// The first run released the lock once its slot is free, which comes
+	// after its completion write (releaseClusterMutationLock frees the
+	// slot last): signalled from there, not when the write returns.
+	clusterLockReleased = func() {
 		select {
 		case released <- struct{}{}:
 		default:
 		}
-		return err
 	}
+	t.Cleanup(func() { clusterLockReleased = nil })
 	_ = rec
 	_, done1 := startRun(t)
 	<-released // the first run released the lock; its last write still waits
