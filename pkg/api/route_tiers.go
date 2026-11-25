@@ -176,7 +176,7 @@ func requestRole(w http.ResponseWriter, r *http.Request) (admin, ok bool) {
 		return false, false
 	}
 	if err != nil {
-		slog.Warn("cannot verify the user's role; answering as for a user", "path", r.URL.Path, "error", err)
+		logAuthFailure("cannot verify the user's role; answering as for a user", err, "path", r.URL.Path)
 		return false, true
 	}
 	return admin, true
@@ -228,4 +228,13 @@ func writeUserReadError(w http.ResponseWriter, what string, err error) {
 	default:
 		writeError(w, what+": "+err.Error(), code, errorCode)
 	}
+}
+
+// logAuthFailure logs a failed check with the user's token at Warn with
+// its HTTP status or category only, and its text at Debug: the text of a
+// permission review can carry the authorizer's evaluationError, which may
+// name roles and bindings (SECURITY.md, project actions).
+func logAuthFailure(msg string, err error, attrs ...any) {
+	slog.Warn(msg, append(attrs, "problem", cluster.FactReadProblem(err))...)
+	slog.Debug(msg, append(attrs, "error", err)...)
 }

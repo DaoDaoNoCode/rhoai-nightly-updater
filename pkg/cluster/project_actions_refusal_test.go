@@ -438,3 +438,31 @@ func TestUserResponsesCarryNoServiceAccountText(t *testing.T) {
 		t.Fatalf("an admin's delete changed: %+v", res)
 	}
 }
+
+// For a project user, a failed read of the tool's workbench record (the
+// ServiceAccount's) in Start, Stop, Set up and Delete is answered with its
+// HTTP status only; a cluster-admin's answer keeps the text.
+func TestWorkbenchRecordReadErrorsForUsers(t *testing.T) {
+	const secret = "configmaps forbidden: User system:serviceaccount:updater:sa in team-b"
+	snapshot := "/api/v1/namespaces/" + record.GetActivityNamespace() + "/configmaps/" + record.SnapshotConfigMapName
+	for _, action := range []string{"start", "stop", "setup", "teardown", "delete-storage"} {
+		f, c := newResourceFake(t)
+		putWorkbenchCluster(t, f, true)
+		putToolWorkbench(t, f, c)
+		if action == "delete-storage" {
+			f.deleteObject(wbNotebook) // only kept storage is left
+		}
+		f.fail["GET "+snapshot] = 500
+		f.failMessage["GET "+snapshot] = secret
+		u := userClientOf(c, fakeUserToken)
+		u.SetProjectUser("uid-proj")
+		res := wbSteps(t, u, types.WorkbenchRequest{Action: action, Project: "proj"})
+		if res.Success || strings.Contains(res.Message, "team-b") || !strings.Contains(res.Message, "HTTP 500") {
+			t.Fatalf("%s for a user: %+v", action, res)
+		}
+		admin := userClientOf(c, fakeUserToken)
+		if res := wbSteps(t, admin, types.WorkbenchRequest{Action: action, Project: "proj"}); !strings.Contains(res.Message, "team-b") {
+			t.Fatalf("%s for an admin changed: %+v", action, res)
+		}
+	}
+}

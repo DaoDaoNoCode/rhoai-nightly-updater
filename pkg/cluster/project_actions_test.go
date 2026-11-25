@@ -407,22 +407,32 @@ func TestSweepDropsWorkbenchEntriesOfGoneProjects(t *testing.T) {
 	f, c := newResourceFake(t)
 	f.putJSON("/api/v1/namespaces/live", `{"metadata":{"uid":"uid-live"}}`)
 	f.putJSON("/api/v1/namespaces/remade", `{"metadata":{"uid":"uid-remade-new"}}`)
+	// Namespaces whose UID changed while what the entry records still
+	// lives there (replaced between a setup's gate and its creates).
+	f.putJSON("/api/v1/namespaces/remade-pvc", `{"metadata":{"uid":"uid-remade-pvc-new"}}`)
+	f.putJSON("/api/v1/namespaces/remade-pvc/persistentvolumeclaims/"+workbench.StorageName, `{"metadata":{"uid":"pvc-live"}}`)
+	f.putJSON("/api/v1/namespaces/remade-nb", `{"metadata":{"uid":"uid-remade-nb-new"}}`)
+	f.putJSON("/api/v1/namespaces/remade-unreadable", `{"metadata":{"uid":"uid-ru-new"}}`)
+	f.fail["GET /api/v1/namespaces/remade-unreadable/persistentvolumeclaims"] = 500
 	f.putJSON("/api/v1/namespaces/legacy-live", `{"metadata":{"uid":"whatever"}}`)
 	f.fail["GET /api/v1/namespaces/unreadable"] = 500
 	putOwnerRecords(t, f, map[string]workbench.Recorded{
-		"live/" + workbench.Name:        {UID: "a", ActorRole: record.ActorRoleUser, ProjectUID: "uid-live"},
-		"gone/" + workbench.Name:        {UID: "b", ActorRole: record.ActorRoleUser, ProjectUID: "uid-gone"},
-		"remade/" + workbench.Name:      {UID: "c", ActorRole: record.ActorRoleUser, ProjectUID: "uid-remade-old"},
-		"legacy-live/" + workbench.Name: {UID: "d"},
-		"legacy-gone/" + workbench.Name: {UID: "e"},
-		"unreadable/" + workbench.Name:  {UID: "f", ActorRole: record.ActorRoleUser, ProjectUID: "uid-x"},
+		"live/" + workbench.Name:              {UID: "a", ActorRole: record.ActorRoleUser, ProjectUID: "uid-live"},
+		"gone/" + workbench.Name:              {UID: "b", ActorRole: record.ActorRoleUser, ProjectUID: "uid-gone"},
+		"remade/" + workbench.Name:            {StorageUID: "pvc-gone", ActorRole: record.ActorRoleUser, ProjectUID: "uid-remade-old"},
+		"remade-pvc/" + workbench.Name:        {StorageUID: "pvc-live", ActorRole: record.ActorRoleUser, ProjectUID: "uid-remade-pvc-old"},
+		"remade-nb/" + workbench.Name:         {UID: "nb", StorageUID: "pvc-x", ActorRole: record.ActorRoleUser, ProjectUID: "uid-remade-nb-old"},
+		"remade-unreadable/" + workbench.Name: {StorageUID: "pvc-y", ActorRole: record.ActorRoleUser, ProjectUID: "uid-ru-old"},
+		"legacy-live/" + workbench.Name:       {UID: "d"},
+		"legacy-gone/" + workbench.Name:       {UID: "e"},
+		"unreadable/" + workbench.Name:        {UID: "f", ActorRole: record.ActorRoleUser, ProjectUID: "uid-x"},
 	})
 	SweepGoneProjectRecords(c)
 	rec, err := workbench.ReadRecord(c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := rec.Projects(); !slices.Equal(got, []string{"legacy-live", "live", "unreadable"}) {
+	if got := rec.Projects(); !slices.Equal(got, []string{"legacy-live", "live", "remade-nb", "remade-pvc", "remade-unreadable", "unreadable"}) {
 		t.Fatalf("workbench entries after the sweep: %v", got)
 	}
 }

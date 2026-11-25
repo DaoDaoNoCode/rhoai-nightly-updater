@@ -8,6 +8,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Workbench ownership for this tool. Because any project editor can attach the
@@ -141,11 +142,10 @@ func updateRecord(c *kube.Client, project string, change func(e *Recorded)) erro
 }
 
 // ForgetGoneProjects drops the entries whose project is gone (gone answers
-// with the project and the entry's recorded namespace UID, "" for an entry
-// from before it was recorded), in one read-change-write through
+// for the project and its entry), in one read-change-write through
 // record.UpdateSnapshot, and returns the projects it dropped. An entry
 // gone cannot tell about stays (fail closed: gone says false).
-func ForgetGoneProjects(c *kube.Client, gone func(project, projectUID string) bool) ([]string, error) {
+func ForgetGoneProjects(c *kube.Client, gone func(project string, e Recorded) bool) ([]string, error) {
 	var dropped []string
 	err := record.UpdateSnapshot(c, func() error {
 		rec, err := ReadRecord(c)
@@ -154,7 +154,7 @@ func ForgetGoneProjects(c *kube.Client, gone func(project, projectUID string) bo
 		}
 		for key, e := range rec {
 			project, ok := strings.CutSuffix(key, "/"+Name)
-			if ok && gone(project, e.ProjectUID) {
+			if ok && gone(project, e) {
 				delete(rec, key)
 				dropped = append(dropped, project)
 			}
@@ -166,4 +166,23 @@ func ForgetGoneProjects(c *kube.Client, gone func(project, projectUID string) bo
 	})
 	sort.Strings(dropped)
 	return dropped, err
+}
+
+// StorageLive reports whether project still has the PersistentVolumeClaim
+// with this UID, listed with c (the ServiceAccount's list of
+// PersistentVolumeClaims, which deploy/template.yaml grants cluster-wide):
+// for the background check only, never shown.
+func StorageLive(c *kube.Client, project, uid string) (bool, error) {
+	var items []struct {
+		Metadata kube.ObjectMeta `json:"metadata"`
+	}
+	if err := c.ListInto(rhoai.NamespacedPath("v1", "persistentvolumeclaims", project, ""), &items); err != nil {
+		return false, err
+	}
+	for _, it := range items {
+		if it.Metadata.UID == uid {
+			return true, nil
+		}
+	}
+	return false, nil
 }

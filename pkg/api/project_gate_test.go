@@ -1,9 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -471,5 +473,33 @@ func TestRemovedDemoStatusPerRole(t *testing.T) {
 	newProjectGateEnv(t, roleClusterAdmin)
 	if demo := get().Samples[0]; len(demo.Actions) != 1 || demo.Actions[0] != "add" {
 		t.Fatalf("an admin's removed demo: %+v", demo)
+	}
+}
+
+// A role check that fails with the authorizer's own words (an
+// evaluationError) answers as for a user without them, and logs them only
+// at debug level; the default level gets a fixed category.
+func TestRoleCheckFailureKeepsUpstreamTextOut(t *testing.T) {
+	setupDevMode(t)
+	const secret = "role reader-of-team-b not found"
+	mutationPermission = func(context.Context, string) (bool, error) {
+		return false, errors.New("permission review incomplete: " + secret)
+	}
+	var info, debug bytes.Buffer
+	orig := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(orig) })
+	slog.SetDefault(slog.New(slog.NewTextHandler(&info, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	w := httptest.NewRecorder()
+	HandleOperation(w, getAs(t, "/api/operation", "user:alice"))
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "team-b") {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(info.String(), "team-b") || !strings.Contains(info.String(), "cannot verify the user's role") {
+		t.Fatalf("default-level logs:\n%s", info.String())
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(&debug, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	HandleOperation(httptest.NewRecorder(), getAs(t, "/api/operation", "user:alice"))
+	if !strings.Contains(debug.String(), "team-b") {
+		t.Fatalf("the detail is not at debug level:\n%s", debug.String())
 	}
 }

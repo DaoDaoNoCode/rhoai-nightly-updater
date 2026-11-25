@@ -100,7 +100,7 @@ func writeAuthError(w http.ResponseWriter, err error, unavailableMsg string) {
 		writeError(w, "Your OpenShift session has expired. Log in again.", http.StatusUnauthorized, "session_expired")
 		return
 	}
-	slog.Warn("cannot verify the user with the API server", "error", err)
+	logAuthFailure("cannot verify the user with the API server", err)
 	writeError(w, unavailableMsg, http.StatusServiceUnavailable, "authorization_unavailable")
 }
 

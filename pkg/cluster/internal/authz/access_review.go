@@ -1,6 +1,7 @@
 package authz
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,6 +55,11 @@ const (
 
 var reviewsInFlight = make(chan struct{}, maxReviewsInFlight)
 
+// waitingForReviewSlot runs, with the call's context, when a review is
+// about to wait for a process slot; tests replace it (before any call) to
+// learn that a review waits.
+var waitingForReviewSlot = func(context.Context) {}
+
 // ErrAccessReviewFailed: an access review could not be made or came back
 // without a decision. Its text names only how it failed (an HTTP status or
 // a category), never the API server's or the authorizer's words.
@@ -83,6 +89,7 @@ func ReviewUserAccess(u *kube.Client, reqs []AccessRequest) ([]AccessRequest, er
 		wg.Go(func() {
 			slots <- struct{}{}
 			defer func() { <-slots }()
+			waitingForReviewSlot(u.Context())
 			select {
 			case reviewsInFlight <- struct{}{}:
 			case <-u.Context().Done():

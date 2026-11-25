@@ -107,7 +107,7 @@ func (r *run) readOwned(id, project string) (Notebook, *types.OperationResponse)
 	}
 	rec, err := ReadRecord(r.c)
 	if err != nil {
-		res, _ := r.fail(id, err.Error()+" Nothing was changed.", kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record read failed")
+		res, _ := r.fail(id, recordReadText(r.c, err)+" Nothing was changed.", kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record read failed")
 		return nb, res
 	}
 	if !rec.OwnsNotebook(nb.Metadata) {
@@ -143,7 +143,7 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 	}
 	rec, err := ReadRecord(c)
 	if err != nil {
-		return r.fail("check", err.Error()+" Nothing was changed.", kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record read failed")
+		return r.fail("check", recordReadText(c, err)+" Nothing was changed.", kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record read failed")
 	}
 	nb, nbFound, err := readNotebook(c, project)
 	if err != nil {
@@ -281,6 +281,17 @@ func (r *run) registryPullCopy() []string {
 		return []string{HostedPullCopyNote}
 	}
 	return nil
+}
+
+// recordReadText says a failed read of this tool's record (the
+// ServiceAccount's) to c's user: for a project user by its HTTP status or
+// category only (the error is logged), for a cluster-admin as it is.
+func recordReadText(c *kube.Client, err error) string {
+	if c.ProjectUser() {
+		kube.LogFactReadFailure("cannot read the workbench record for a project user's action", "snapshot", err)
+		return "Cannot read this tool's record of its workbenches (" + kube.FactReadProblem(err) + ")."
+	}
+	return err.Error()
 }
 
 // recordCapRefusal is why a setup by a user who is not a cluster-admin
@@ -460,7 +471,7 @@ func (r *run) teardown(project string, deleteStorage bool) (*types.OperationResp
 	r.step("workbench", "running", fmt.Sprintf("Deleting workbench %s in %s", Name, project))
 	rec, err := ReadRecord(c)
 	if err != nil {
-		return r.fail("workbench", err.Error()+" Nothing was deleted.", kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record read failed")
+		return r.fail("workbench", recordReadText(c, err)+" Nothing was deleted.", kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record read failed")
 	}
 	nb, found, err := readNotebook(c, project)
 	if err != nil {
@@ -559,7 +570,7 @@ func (r *run) deleteKeptStorage(project string) (*types.OperationResponse, error
 	}
 	rec, err := ReadRecord(c)
 	if err != nil {
-		return r.fail("storage", err.Error()+" Nothing was deleted.", kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record read failed")
+		return r.fail("storage", recordReadText(c, err)+" Nothing was deleted.", kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record read failed")
 	}
 	pvc, found, err := readStorage(c, project)
 	if err != nil {

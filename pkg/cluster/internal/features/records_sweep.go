@@ -52,12 +52,29 @@ func SweepGoneProjectRecords(c *kube.Client) {
 		return st
 	}
 	projectGone := func(project string) bool { return namespace(project).gone }
-	// An entry that recorded its project's namespace UID is gone also when
-	// a namespace of that name now has another UID (the project was made
-	// again); one without (from before the UID was kept) goes by its name.
-	projectUIDGone := func(project, uid string) bool {
+	// A workbench entry that recorded its project's namespace UID is gone
+	// also when a namespace of that name now has another UID (the project
+	// was made again), unless what it records still lives there: the
+	// namespace may have been replaced between a setup's gate (which read
+	// the UID) and its creates. Its storage is checked with the
+	// ServiceAccount's list of PersistentVolumeClaims; its Notebook cannot
+	// be (the ServiceAccount reads no Notebooks), so an entry that records
+	// one stays, as does one whose check fails (fail closed). An entry
+	// without a namespace UID (from before it was kept) goes by its name.
+	workbenchGone := func(project string, e workbench.Recorded) bool {
 		st := namespace(project)
-		return st.gone || uid != "" && st.uid != "" && st.uid != uid
+		switch {
+		case st.gone:
+			return true
+		case e.ProjectUID == "" || st.uid == "" || st.uid == e.ProjectUID:
+			return false
+		case e.UID != "":
+			return false
+		case e.StorageUID == "":
+			return true
+		}
+		live, err := workbench.StorageLive(c, project, e.StorageUID)
+		return err == nil && !live
 	}
 	projectOf := func(key string) string {
 		project, _, _ := strings.Cut(key, "/")
@@ -123,7 +140,7 @@ func SweepGoneProjectRecords(c *kube.Client) {
 		}
 	}
 
-	if dropped, err := workbench.ForgetGoneProjects(c, projectUIDGone); err != nil {
+	if dropped, err := workbench.ForgetGoneProjects(c, workbenchGone); err != nil {
 		slog.Warn("background check: the workbench record cannot be read or written", "error", err)
 	} else {
 		for _, p := range dropped {
