@@ -211,13 +211,13 @@ func TestClusterBusyDoesNotUseTheSlot(t *testing.T) {
 			}
 			mux := http.NewServeMux()
 			Register(mux)
-			clusterMutationInProgress.Store(true)
+			locks.setCluster(true)
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, postJSON(t, tc.path, "user:admin", tc.body))
 			if w.Code != http.StatusConflict || decodeError(t, w)["errorCode"] != "cluster_busy" {
 				t.Fatalf("busy: %d %s", w.Code, w.Body.String())
 			}
-			clusterMutationInProgress.Store(false)
+			locks.setCluster(false)
 			testClock.Advance(time.Second)
 			w = httptest.NewRecorder()
 			mux.ServeHTTP(w, postJSON(t, tc.path, "user:admin", tc.body))

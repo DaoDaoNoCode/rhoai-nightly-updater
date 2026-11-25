@@ -26,7 +26,7 @@ func TestMaaSSubscriptionPriorityRunsUnderTheLockAsTheUser(t *testing.T) {
 	var asUser, locked bool
 	runMaaS = func(c *cluster.Client, req types.MaaSRequest, _ func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 		ran = append(ran, req)
-		asUser, locked = c.ActsAsUser(), clusterMutationInProgress.Load()
+		asUser, locked = c.ActsAsUser(), locks.clusterHeld()
 		return &types.OperationResponse{Success: true}, nil
 	}
 	body := `{"action":"subscription-priority"}`
@@ -46,7 +46,7 @@ func TestMaaSSubscriptionPriorityRunsUnderTheLockAsTheUser(t *testing.T) {
 	if len(ran) != 1 || ran[0].Action != "subscription-priority" || !asUser || !locked {
 		t.Fatalf("ran %v as user %v under the lock %v (%d %s)", ran, asUser, locked, w.Code, w.Body.String())
 	}
-	if clusterMutationInProgress.Load() {
+	if locks.clusterHeld() {
 		t.Fatal("the lock is still held")
 	}
 }
