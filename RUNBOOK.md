@@ -36,6 +36,7 @@ What the tool itself changes: [docs/CLUSTER_CHANGES.md](docs/CLUSTER_CHANGES.md)
 | DataScienceCluster **Not Ready**, a Diagnostics problem | [§11.7](#117-datasciencecluster-not-ready), [§11.6](#116-upgrade-leftovers-the-operator-cannot-fix-itself) |
 | A component missing or "Not set" after an upgrade, a change refused on Components, a hard reset that stopped | [§11.9](#119-change-or-reset-the-datasciencecluster) |
 | "The operator cannot convert DataScienceCluster to v3", "The DataScienceCluster is shown as v2" | [§11.8](#118-the-operator-cannot-convert-a-crd-version) |
+| `k8s API error 429 (TooManyRequests)`, "storage is (re)initializing", "Stopped waiting for ... API after ..." | [§11.10](#1110-the-api-server-asks-to-retry-429-retry-after) |
 | "Argo CD manages ...", **Install pending**, **OLM installing**, `gitops_managed`, `install_mismatch`, "sets the image of CatalogSource ... in Git" | [§13](#13-clusters-managed-by-argo-cd) |
 
 ---
@@ -1000,7 +1001,7 @@ Reproduce the cases safely on a test cluster: delete `JobSetOperator/cluster` (T
 
 Diagnostics → "API versions" reports `The operator cannot convert <Kind> to <version>` (for example DataScienceCluster v3, Platform v1alpha2). Unlike §11.2 the webhook's Service is up: the operator answers, but its image does not know the version, so every read at that version fails, `oc get` included when it is the preferred one. Seen on a RHOAI 3.6 nightly (2026-10-07) whose operator image was older than the CRDs its bundle installed: `conversion webhook for datasciencecluster.opendatahub.io/v2, Kind=DataScienceCluster failed: no kind "DataScienceCluster" is registered for version "datasciencecluster.opendatahub.io/v3"`. A list without `limit` answers HTTP 429 `storage is (re)initializing` with `Retry-After`, and `oc` retries that forever, so pass `--request-timeout`.
 
-What the tool does: it reads the next served version that works (here v2) and says so on the Components page; it never compares a DSC with defaults of another version, because v3 renamed components. When the bundle ships v3 defaults only, the Components page explains that instead of comparing.
+What the tool does: it reads the next served version that works (here v2) at once, without waiting for the `Retry-After` of that 429 (its versioned reads and the Diagnostics probes do not retry a conversion failure; every other 429, and a 5xx of a read, is retried as client-go does when it carries a valid `Retry-After` in seconds, see §11.10), and says so on the Components page; it never compares a DSC with defaults of another version, because v3 renamed components. When the bundle ships v3 defaults only, the Components page explains that instead of comparing.
 
 Check (read-only):
 
@@ -1099,6 +1100,12 @@ If it stops after the delete, every message prints the object it planned, and no
   ```
 
 - **"A new DataScienceCluster ... appeared"** or **"DataScienceCluster X now exists"**: someone, or the operator, created one meanwhile; the reset created nothing and Finish is not offered while it exists. Review it on the Components page.
+
+### 11.10 The API server asks to retry (429, `Retry-After`)
+
+The kube-apiserver answers 429 `TooManyRequests` with a `Retry-After` header while it throttles (priority and fairness, up to 32 s) and while a resource's watch cache initializes, for example right after an operator installs a CRD: `storage is (re)initializing`, up to 30 s (30 once the cache has been down about a minute); a list with `limit` is served from etcd meanwhile. The tool's API client retries as client-go does: a 429 or 5xx that carries `Retry-After` in seconds is sent again after that wait, at most 10 times. A 429 or 5xx without it is not retried, nor is any other 4xx. Limits client-go does not have: a 5xx is retried only for a read (a write may have been applied; a 429 is refused before the request runs, so writes are retried), the waits of one request add up to at most 32 s (a longer wait is not shortened; the answer is returned), and a wait longer than the operation's remaining time is not begun. Versioned RHOAI reads and Diagnostics take a conversion failure (§11.8) at once. The waits for Kuadrant's and CloudNativePG's APIs take a 429 that outlasts the retries as "not served yet" and poll on until their timeout.
+
+A step that still fails says so: `k8s API error 429 (TooManyRequests): ...` in its message, errorCode `rate_limited`. A wait for an API to be served that another read error ended says `Stopped waiting for <API> after <m:ss>: <error>`; `... is not served after 10:00` means the whole wait passed (`; the API server last answered: ...` when it was still throttled). Run the step again once the API server answers; to see whether it still throttles, `oc get --raw '/apis/<group>/<version>/<resource>?limit=1' --request-timeout=20s` (quoted: zsh treats `?` as a pattern).
 
 ## 12. Activity log
 

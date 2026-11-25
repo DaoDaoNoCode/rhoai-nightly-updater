@@ -209,6 +209,7 @@ var methodVerbs = map[string][]string{
 var transportMethods = map[string]string{
 	"applyWithOptions": "the body of Apply and DryRunApply",
 	"doWithHeader":     "the body of Do and ListIntoAt",
+	"doOnce":           "one attempt of doWithHeader",
 }
 
 // isTransport reports whether fn is a Client method that implements the

@@ -21,6 +21,7 @@ type TestClientOptions struct {
 	Bookkeeper   *Client
 	SignedInUser *Client
 	StatusRead   bool
+	NoRetry      func(error) bool
 }
 
 // NewTestClient is the Client a test talks to its fake cluster with. It
@@ -38,6 +39,7 @@ func NewTestClient(o TestClientOptions) *Client {
 		asUser:       o.AsUser,
 		signedInUser: o.SignedInUser,
 		statusRead:   o.StatusRead,
+		noRetry:      o.NoRetry,
 	}
 }
 
@@ -56,6 +58,7 @@ func (c *Client) TestOptions() TestClientOptions {
 		Bookkeeper:   c.bookkeeper,
 		SignedInUser: c.signedInUser,
 		StatusRead:   c.statusRead,
+		NoRetry:      c.noRetry,
 	}
 }
 

@@ -50,6 +50,7 @@ func TestErrorCodeFromK8sErr(t *testing.T) {
 		{fmt.Errorf("patch: %w", &K8sError{Status: 403, User: true}), "forbidden"},
 		{&K8sError{Status: 403}, "forbidden"},
 		{&NetworkError{Err: errors.New("connection refused")}, "network"},
+		{fmt.Errorf("list: %w", &K8sError{Status: 429, Reason: "TooManyRequests"}), "rate_limited"},
 		{&K8sError{Status: 500}, ""},
 		{errors.New("x"), ""},
 	} {
