@@ -34,6 +34,10 @@ func ErrorCodeFromK8sErr(err error) string {
 	if IsK8sError(err, 403) {
 		return "forbidden"
 	}
+	if IsK8sError(err, 429) {
+		// Throttled, also after the client's retries (HTTPStatusForError).
+		return "rate_limited"
+	}
 	return ""
 }
 
