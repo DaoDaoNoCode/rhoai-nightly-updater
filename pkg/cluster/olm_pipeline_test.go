@@ -198,10 +198,11 @@ func TestOperationsPreserveSubscriptionSettings(t *testing.T) {
 				t.Fatal("no Subscription applied")
 			}
 			spec := applies[len(applies)-1]
-			// Refresh pins the installed CSV (R5-F3); the others drop the
-			// old channel's startingCSV.
+			// Refresh pins the installed CSV (R5-F3); Update pins the head
+			// it verified (as the GitOps path does), here the same CSV;
+			// Reinstall drops the old channel's startingCSV.
 			wantStart := any(nil)
-			if op == "refresh" {
+			if op == "refresh" || op == "update" {
 				wantStart = "rhods-operator.3.6.0"
 			}
 			if spec["installPlanApproval"] != "Manual" || fmt.Sprint(spec["config"]) != fmt.Sprint(config) || spec["startingCSV"] != wantStart {

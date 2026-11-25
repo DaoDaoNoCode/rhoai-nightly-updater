@@ -340,6 +340,16 @@ func UpdateStreamWithOptions(c *kube.Client, image string, opts OperationOptions
 	// --- Step 7: apply_subscription ---
 	emit(types.UpdateStepEvent{Step: "apply_subscription", Status: "running", Message: "Creating Subscription"})
 	newSub := BuildSubscription(recovery.SubscriptionBase(), rhoai.CatalogName, nightlyChannel)
+	// As on the GitOps path (UpdateUnderGitOps): the new Subscription pins
+	// startingCSV to the head the verification catalog listed. With the old
+	// CSV deleted, OLM's resolver then installs exactly that CSV from the
+	// catalog and channel, or marks the Subscription unresolvable
+	// (operator-lifecycle-manager pkg/controller/registry/resolver/resolver.go
+	// getSubscriptionVariables), so a catalog that changed after it was
+	// verified cannot put another build in its place. Once installed the pin
+	// no longer matters (the resolver follows the installed CSV).
+	newSub["spec"].(map[string]any)["startingCSV"] = target.HeadCSV
+	logs = append(logs, fmt.Sprintf("The new Subscription pins startingCSV %s: OLM installs exactly that CSV, or reports that the catalog does not have it", target.HeadCSV))
 	recovery.SubscriptionChanged = true
 	if r, err := applyUpdateSubscription(c, newSub, nightlyChannel, recovery, &logs, emit, fail); r != nil || err != nil {
 		return r, err

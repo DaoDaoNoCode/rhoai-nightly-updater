@@ -362,6 +362,11 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **Update installs exactly the build it verified.** Like Update on a
+  cluster managed from Git, Update now pins the new Subscription's
+  `startingCSV` to the head CSV the verification catalog listed, so OLM
+  installs that CSV or reports that the catalog lacks it; a catalog that
+  changed after verification cannot put another build in its place.
 - **Secure S3 storage no longer says a pipeline server uses its new key
   before it does.** The pipeline API server reads its S3 key from
   environment variables only when it starts (DSPO `deployment.yaml.tmpl`
