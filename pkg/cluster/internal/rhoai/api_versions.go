@@ -297,4 +297,7 @@ type DSCCondition struct {
 	Message            string `json:"message"`
 	Severity           string `json:"severity"`
 	LastTransitionTime string `json:"lastTransitionTime"`
+	// ObservedGeneration is the generation the condition was set for (0
+	// when the controller does not say).
+	ObservedGeneration int64 `json:"observedGeneration"`
 }

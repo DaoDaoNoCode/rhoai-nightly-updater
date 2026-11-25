@@ -663,6 +663,10 @@ type Dependency struct {
 	// breaks. Either makes it block, like a blocking condition.
 	NeededBy     []string
 	NeededImpact string
+	// Requires are the operators its install documentation says to install
+	// first (documentedPrerequisites), resolved like it; only for one that
+	// is not installed.
+	Requires []*Dependency
 }
 
 // installed: a Succeeded CSV.
@@ -731,6 +735,25 @@ func (d *Dependency) ProblemID() string {
 	return "prerequisite-missing-" + d.slug()
 }
 
+// documentedPrerequisites are operators that an operator's own install
+// documentation requires first while its bundle declares no OLM dependency
+// on them, so neither OLM nor the catalog can tell. Keyed by catalog
+// package; the values are names resolved against the catalogs like the
+// names in condition messages.
+//   - job-set (JobSet Operator, which RHOAI's trainer needs): the OpenShift
+//     documentation's install procedure lists "You have installed the
+//     cert-manager Operator for Red Hat OpenShift" as a prerequisite and
+//     then has the JobSetOperator CR named cluster created
+//     (openshift/openshift-docs modules/installing-jobset.adoc at 1a87527);
+//     odh-gitops installs cert-manager with it (e1eb776,
+//     charts/rhai-on-openshift-chart/values.yaml jobSet.dependencies.
+//     certManager: true). Its CSV (openshift/jobset-operator release-4.21,
+//     jobset-operator.v1.0.2) requires no CRD but is granted cert-manager.io
+//     certificates and issuers.
+var documentedPrerequisites = map[string][]string{
+	"job-set": {"cert-manager Operator for Red Hat OpenShift"},
+}
+
 // ResolveDependencies fills in catalog, CSV and operand state. Lookups are
 // made only when there is something to resolve.
 func ResolveDependencies(c *kube.Client, deps []*Dependency) {
@@ -772,7 +795,31 @@ func ResolveDependencies(c *kube.Client, deps []*Dependency) {
 		if d.Operand != nil && d.installed() {
 			d.OperandSt, d.OperandErr = readSingletonOperand(c, *d.Operand)
 		}
+		if d.Package != nil && d.CSV == nil {
+			d.Requires = resolveRequired(documentedPrerequisites[d.Package.Name], pkgs, pkgErr, csvs, csvErr)
+		}
 	}
+}
+
+// resolveRequired resolves the documented prerequisites of an operator
+// that is not installed: their catalog package and installed CSV. The
+// operand is not read: the install commands create it only if missing.
+func resolveRequired(names []string, pkgs []CatalogPackage, pkgErr error, csvs []ClusterCSV, csvErr error) []*Dependency {
+	var out []*Dependency
+	for _, name := range names {
+		r := &Dependency{Mention: name, Key: NormalizeOperatorName(name), CatalogErr: pkgErr, CSVErr: csvErr}
+		if pkgErr == nil {
+			if matches := MatchPackages(pkgs, r.Key); len(matches) > 0 {
+				r.Package = &matches[0]
+				r.Operand = r.Package.SingletonFor(r.Key)
+			}
+		}
+		if csvErr == nil {
+			r.CSV = FindInstalledCSV(csvs, r.Package, r.Key)
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // resolveOperandMention finds the operator of a missing operand: the
@@ -922,12 +969,20 @@ func PrerequisiteProblem(c *kube.Client, d *Dependency) report.Problem {
 		pkg := d.Package
 		p.Title = fmt.Sprintf("Prerequisite operator %s is not installed", name)
 		p.Description = fmt.Sprintf("%q is not installed. It is package %s in the %s catalog. %s", d.Mention, pkg.Name, pkg.Catalog, impact)
+		first := requiredFirst(c, d)
+		evidence = append(evidence, first.evidence...)
 		plan, err := PlanInstall(c, *pkg, d.Operand)
 		if err != nil {
+			fixes = append(fixes, first.Notes...)
 			fixes = append(fixes, fmt.Sprintf("Install %s (package %s, channel %s, catalog %s) from the OpenShift console: %v", name, pkg.Name, pkg.DefaultChannel, pkg.Catalog, err))
 			break
 		}
 		evidence = append(evidence, plan.evidence...)
+		if first.Script != "" {
+			plan.Script = chainAfter(first.Script, plan.Script, fmt.Sprintf("A step of the commands before %s failed, so its install did not run.", name))
+			first.Notes = append(first.Notes, fmt.Sprintf("The Command has two blocks: each stops at its first failing command, and the %s block runs only when the first one succeeded.", name))
+		}
+		plan.Notes = append(first.Notes, plan.Notes...)
 		if g, err := argo.ReadOperatorGitOps(c); err == nil && g.Active() {
 			if app := kube.NonEmpty(g.SubscriptionApp, g.CatalogApp); app != "" {
 				fixes = append(fixes, fmt.Sprintf("Argo CD application %q manages RHOAI here: add %s to Git (with the odh-gitops chart, enable it under dependencies in the values) rather than applying the objects below by hand, which Argo CD would not know about; they are listed for reference.", app, name))
@@ -941,6 +996,52 @@ func PrerequisiteProblem(c *kube.Client, d *Dependency) report.Problem {
 	p.Evidence = evidence
 	p.Fix = strings.Join(fixes, " ")
 	return p
+}
+
+// chainAfter makes a Command that runs then only when first succeeded.
+// Each script runs in a subshell with set -e, so it stops at its first
+// failing command and only the subshell exits: pasted into bash or zsh,
+// the shell stays open. The second runs under "if [ $? -eq 0 ]", not
+// after "&&": the shells ignore set -e inside a subshell that is the left
+// side of && or ||, so a failing command there would not stop it. The
+// here-documents work inside a subshell.
+func chainAfter(first, then, skipped string) string {
+	return "(\nset -e\n" + first + "\n)\nif [ $? -eq 0 ]; then\n(\nset -e\n" + then + "\n)\nelse\n  echo " + kube.ShellQuote(skipped) + " >&2\nfi"
+}
+
+// requiredFirst is what goes before the install of d: for each operator
+// its documentation requires first, nothing when it is installed, the wait
+// for an install that has not finished, or its install commands.
+func requiredFirst(c *kube.Client, d *Dependency) prerequisiteInstall {
+	var out prerequisiteInstall
+	var scripts []string
+	for _, r := range d.Requires {
+		name := r.DisplayName()
+		switch {
+		case r.installed():
+			out.evidence = append(out.evidence, fmt.Sprintf("%s, which the %s documentation requires first, is installed: CSV %s/%s is Succeeded", name, d.DisplayName(), r.CSV.Namespace, r.CSV.Name))
+		case r.CSV != nil:
+			out.evidence = append(out.evidence, fmt.Sprintf("%s, which the %s documentation requires first: CSV %s/%s is in phase %s", name, d.DisplayName(), r.CSV.Namespace, r.CSV.Name, kube.NonEmpty(r.CSV.Phase, "unknown")))
+			out.Notes = append(out.Notes, fmt.Sprintf("The %s documentation requires %s first; its install has not finished, so the first command waits for it.", d.DisplayName(), name))
+			scripts = append(scripts, kube.ShellCommand("oc", "wait", "csv/"+r.CSV.Name, "-n", r.CSV.Namespace, "--for=jsonpath={.status.phase}=Succeeded", "--timeout=10m"))
+		case r.CSVErr != nil:
+			out.Notes = append(out.Notes, fmt.Sprintf("The %s documentation requires %s first; whether it is installed could not be checked (%v), so install it first if it is not.", d.DisplayName(), name, r.CSVErr))
+		case r.Package == nil:
+			out.Notes = append(out.Notes, fmt.Sprintf("The %s documentation requires %s first, which is not installed, and no package in this cluster's catalogs matches it: install it first.", d.DisplayName(), name))
+		default:
+			plan, err := PlanInstall(c, *r.Package, r.Operand)
+			if err != nil {
+				out.Notes = append(out.Notes, fmt.Sprintf("The %s documentation requires %s first, which is not installed: install it first (package %s, channel %s, catalog %s) from the OpenShift console: %v.", d.DisplayName(), name, r.Package.Name, r.Package.DefaultChannel, r.Package.Catalog, err))
+				continue
+			}
+			out.evidence = append(out.evidence, "Catalog: "+r.Package.describe())
+			out.evidence = append(out.evidence, plan.evidence...)
+			out.Notes = append(out.Notes, fmt.Sprintf("The %s documentation requires %s first, which is not installed, so the commands install it first. %s", d.DisplayName(), name, strings.Join(plan.Notes, " ")))
+			scripts = append(scripts, plan.Script)
+		}
+	}
+	out.Script = strings.Join(scripts, "\n")
+	return out
 }
 
 func firstWord(s string) string {
@@ -971,6 +1072,9 @@ func PlanInstall(c *kube.Client, p CatalogPackage, operand *ALMExample) (prerequ
 	var plan prerequisiteInstall
 	var objects []string
 	var ns string
+	// Every instruction names the operator: a prerequisite's install can
+	// come first in the same Command (requiredFirst).
+	opName := kube.NonEmpty(p.DisplayName, p.Name)
 	switch {
 	case p.supports("OwnNamespace"):
 		ns = p.SuggestedNS
@@ -992,7 +1096,7 @@ func PlanInstall(c *kube.Client, p CatalogPackage, operand *ALMExample) (prerequ
 		if p.SuggestedNS == "" {
 			where = "a namespace named after the package (the CSV suggests none)"
 		}
-		plan.Notes = append(plan.Notes, fmt.Sprintf("It goes into %s %s, watching only that namespace (install mode OwnNamespace, which the CSV supports).", where, ns))
+		plan.Notes = append(plan.Notes, fmt.Sprintf("%s goes into %s %s, watching only that namespace (install mode OwnNamespace, which the CSV supports).", opName, where, ns))
 		ogs, err := listOperatorGroups(c, ns)
 		switch {
 		case err != nil:
@@ -1009,7 +1113,7 @@ func PlanInstall(c *kube.Client, p CatalogPackage, operand *ALMExample) (prerequ
 		}
 	case p.supports("AllNamespaces"):
 		ns = "openshift-operators"
-		plan.Notes = append(plan.Notes, "The CSV does not support OwnNamespace, so it is installed for all namespaces into openshift-operators.")
+		plan.Notes = append(plan.Notes, fmt.Sprintf("The %s CSV does not support OwnNamespace, so it is installed for all namespaces into openshift-operators.", opName))
 		ogs, err := listOperatorGroups(c, ns)
 		switch {
 		case err != nil:
@@ -1034,13 +1138,13 @@ func PlanInstall(c *kube.Client, p CatalogPackage, operand *ALMExample) (prerequ
 		kube.ShellCommand("oc", "wait", "subscription/"+p.Name, "-n", ns, "--for=jsonpath={.status.state}=AtLatestKnown", "--timeout=10m"),
 		"oc wait csv/\"$(oc get subscription/" + p.Name + " -n " + ns + " -o jsonpath='{.status.installedCSV}')\" -n " + ns + " --for=jsonpath='{.status.phase}'=Succeeded --timeout=10m",
 	}
-	plan.Notes = append(plan.Notes, fmt.Sprintf("The Subscription follows the default channel %s of %s with automatic updates; the two oc wait lines return once the operator is installed.", p.DefaultChannel, p.Catalog))
+	plan.Notes = append(plan.Notes, fmt.Sprintf("The %s Subscription follows the default channel %s of %s with automatic updates; its two oc wait lines return once %s is installed.", opName, p.DefaultChannel, p.Catalog, opName))
 	plan.evidence = append(plan.evidence, fmt.Sprintf("Install modes supported by %s: %s; suggested namespace: %s", kube.NonEmpty(p.CurrentCSV, p.Name), strings.Join(p.InstallModes, ", "), kube.NonEmpty(p.SuggestedNS, "none")))
 	if operand != nil {
 		cmd, err := OperandCommand(*operand)
 		if err == nil {
 			lines = append(lines, cmd)
-			plan.Notes = append(plan.Notes, fmt.Sprintf("The last command creates %s from the CSV's example, which the operator needs before it does anything; some operators create it themselves, so it is created only if it is still missing.", operand.Ref()))
+			plan.Notes = append(plan.Notes, fmt.Sprintf("The last command of the %s install creates %s from the CSV's example, which the operator needs before it does anything; some operators create it themselves, so it is created only if it is still missing.", opName, operand.Ref()))
 		}
 	}
 	plan.Script = strings.Join(lines, "\n")

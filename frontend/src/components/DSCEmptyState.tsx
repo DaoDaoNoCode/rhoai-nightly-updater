@@ -143,6 +143,13 @@ export const DSCEmptyState: React.FC<DSCEmptyStateProps> = ({ dscState, operator
               </Content>
             </StackItem>
             <StackItem>
+              <Content component="p">
+                A component that reports a prerequisite operator as not installed stays not ready until an administrator installs
+                that operator. After creating, the Components page lists every component that is not ready with RHOAI&apos;s message
+                and, for a missing prerequisite operator, the cause; Diagnostics gives the install commands.
+              </Content>
+            </StackItem>
+            <StackItem>
               {previewError ? (
                 <Alert component="p" variant="danger" title="Could not load the defaults" isInline>{previewError}</Alert>
               ) : preview ? (
