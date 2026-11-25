@@ -34,6 +34,10 @@ type recipeFake struct {
 	pinnedIn []*types.RecipePinnedBuild // the pinned build each plan got
 	problems []types.RecipeProblem
 	steps    []*fakeRecipeStep
+	// running: the steps in their Run now; maxRunning: the most at once.
+	running, maxRunning int
+	// watch, when set, gets a copy of every record written.
+	watch chan *types.RecipeRun
 }
 
 // fakeRecipeStep is one step: Check reports done when done is set; Run
@@ -58,6 +62,9 @@ type fakeRecipeStep struct {
 	exposure   string
 	// seen gets the run's state when Check runs.
 	seen func(*cluster.RecipeState)
+	// after is the step's After; nil: the step before it (a serial run),
+	// empty: none.
+	after []string
 }
 
 func (f *recipeFake) addStep(id string) *fakeRecipeStep {
@@ -71,9 +78,13 @@ func (f *recipeFake) addStep(id string) *fakeRecipeStep {
 
 func (f *recipeFake) clusterSteps() []cluster.RecipeStep {
 	var out []cluster.RecipeStep
-	for _, s := range f.steps {
+	for i, s := range f.steps {
+		after := s.after
+		if after == nil && i > 0 {
+			after = []string{f.steps[i-1].id}
+		}
 		out = append(out, cluster.RecipeStep{
-			ID: s.id, Title: "Step " + s.id, Typical: time.Minute, Max: 15 * time.Minute,
+			ID: s.id, Title: "Step " + s.id, Typical: time.Minute, Max: 15 * time.Minute, After: after,
 			Check: func(c *cluster.Client, st *cluster.RecipeState) (cluster.RecipeCheck, error) {
 				f.mu.Lock()
 				defer f.mu.Unlock()
@@ -86,7 +97,14 @@ func (f *recipeFake) clusterSteps() []cluster.RecipeStep {
 			Run: func(c *cluster.Client, st *cluster.RecipeState, emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 				f.mu.Lock()
 				s.ran = true
+				f.running++
+				f.maxRunning = max(f.maxRunning, f.running)
 				f.mu.Unlock()
+				defer func() {
+					f.mu.Lock()
+					f.running--
+					f.mu.Unlock()
+				}()
 				for _, key := range s.components {
 					// The enablement ID the record would have for it.
 					st.AddComponentID(key, "en-"+key)
@@ -170,6 +188,9 @@ func installRecipeFake(t *testing.T) (*recipeFake, *fakeRecord) {
 			return cluster.ErrRecipeRunReplaced
 		}
 		f.record = copyRecipeRun(run)
+		if f.watch != nil {
+			f.watch <- copyRecipeRun(run)
+		}
 		return nil
 	}
 	readRecipeRun = func(*cluster.Client) (*types.RecipeRun, error) {
@@ -284,7 +305,7 @@ func TestRecipeRun_StepsInOrderHoldingTheLock(t *testing.T) {
 		t.Error("the background MaaS check ran during the run")
 	}
 	op := inflight.snapshot()
-	if op == nil || op.Type != "recipe" || op.Label != "Environment recipe" || op.Target != "dev: step 1 of 3 (Step one)" || op.Step != "one-inner" {
+	if op == nil || op.Type != "recipe" || op.Label != "Environment recipe" || op.Target != "dev: 0 of 3 steps done; running: Step one" || op.Step != "one-inner" {
 		t.Errorf("operation %+v", op)
 	}
 	if st := recipeRunStatus(nil, nil); !st.Running || st.Run.ID != runID || st.Step == nil || st.Step.Step != "one-inner" {
