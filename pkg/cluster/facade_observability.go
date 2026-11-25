@@ -22,3 +22,18 @@ func ValidateObservabilityRequest(req types.ObservabilityRequest) string {
 func RunObservability(c *Client, req types.ObservabilityRequest, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
 	return observability.Run(c, req, onStep)
 }
+
+// ValidateMaaSRequest is observability.ValidateMaaSRequest.
+func ValidateMaaSRequest(req types.MaaSRequest) string {
+	return observability.ValidateMaaSRequest(req)
+}
+
+// RunMaaS is observability.RunMaaS.
+func RunMaaS(c *Client, req types.MaaSRequest, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
+	return observability.RunMaaS(c, req, onStep)
+}
+
+// GetMaaSStatus is observability.GetMaaSStatus.
+func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
+	return observability.GetMaaSStatus(c)
+}

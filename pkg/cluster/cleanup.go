@@ -12,6 +12,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kueue"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/modelregistry"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/observability"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/recipe"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
@@ -37,7 +38,7 @@ var (
 	cleanupWorkbench    = workbench.Teardown
 	cleanupWbStorage    = workbench.DeleteStorage
 	cleanupUnpublish    = serving.UnpublishMaaSModel
-	cleanupMaaSPlatform = serving.TeardownMaaSPlatform
+	cleanupMaaSPlatform = observability.TeardownMaaSPlatform
 	cleanupComponents   = features.RestoreReviewedComponents
 	cleanupProject      = recipe.DeleteProject
 	// Bound to recipe.CreatedPartProblem; swappable in tests.

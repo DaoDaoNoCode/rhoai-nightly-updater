@@ -1655,6 +1655,50 @@ type MaaSStatus struct {
 	// RemovalProblem is the error of its last try, when that failed.
 	Removing       []MaaSRemoval `json:"removing,omitempty"`
 	RemovalProblem string        `json:"removalProblem,omitempty"`
+	// UsageLogs is the usage logs and dashboards as MaaS sees them, and
+	// Portal the MaaS portal (nil when this RHOAI has none).
+	UsageLogs *MaaSUsageLogs `json:"usageLogs,omitempty"`
+	Portal    *MaaSPortal    `json:"portal,omitempty"`
+}
+
+// MaaSUsageLogs is the MaaS tab's "Usage logs and dashboards" row.
+type MaaSUsageLogs struct {
+	// State is "ready", "missing", "waiting" or "unknown", Message says it.
+	State   string `json:"state"`
+	Message string `json:"message,omitempty"`
+	// Warning is what the default tenant reports about them (its Degraded
+	// condition), when it does.
+	Warning string `json:"warning,omitempty"`
+	// SetUpBlockedReason says why Set up cannot set them up now (the S3
+	// storage), "" when it can: Set up's checkbox is ticked then.
+	SetUpBlockedReason string `json:"setUpBlockedReason,omitempty"`
+	// CaptureUser is MaasTenantConfig default-tenant's
+	// spec.telemetry.logs.captureUser (nil: not set, MaaS records no user
+	// IDs); CaptureUserByTool: this tool set it (Turn off puts back
+	// CaptureUserPrevious: "unset", "false"). TenantFound: the tenant exists.
+	CaptureUser         *bool  `json:"captureUser,omitempty"`
+	CaptureUserByTool   bool   `json:"captureUserByTool,omitempty"`
+	CaptureUserPrevious string `json:"captureUserPrevious,omitempty"`
+	TenantFound         bool   `json:"tenantFound,omitempty"`
+}
+
+// MaaSPortal is the MaaS tab's portal row: the DataScienceCluster's
+// dashboard.maasPortal.
+type MaaSPortal struct {
+	// ManagementState as read ("" not set); On: Managed.
+	ManagementState string `json:"managementState,omitempty"`
+	On              bool   `json:"on"`
+	// Available is the DataScienceCluster's MaaSPortalAvailable ("True",
+	// "False", "" not reported), Message its message.
+	Available string `json:"available,omitempty"`
+	Message   string `json:"message,omitempty"`
+	// URL is the portal's address (the dashboard's gateway domain).
+	URL string `json:"url,omitempty"`
+	// SetByTool: this tool turned it on (Turn off puts back Previous).
+	SetByTool bool   `json:"setByTool,omitempty"`
+	Previous  string `json:"previous,omitempty"`
+	// BlockedReason says why it cannot be turned on or off here.
+	BlockedReason string `json:"blockedReason,omitempty"`
 }
 
 // MaaSSubscriptionPriority is the spec.priority of this tool's
@@ -1783,6 +1827,13 @@ type MaaSRequest struct {
 	Access          *MaaSAudience        `json:"access,omitempty"`
 	Limit           *MaaSLimit           `json:"limit,omitempty"`
 	ConfirmKeysLost bool                 `json:"confirmKeysLost,omitempty"`
+	// UsageLogs (setup only): set up the usage logs and dashboards (the
+	// Observability tab's Set up) first. CaptureUser (setup only): record
+	// user IDs in the usage logs once MaaS is ready (MaasTenantConfig
+	// spec.telemetry.logs.captureUser). The actions "capture-user-on",
+	// "capture-user-off", "portal-on" and "portal-off" take no field.
+	UsageLogs   bool `json:"usageLogs,omitempty"`
+	CaptureUser bool `json:"captureUser,omitempty"`
 }
 
 // --- MaaS: the database choice and the subscription's settings ------------

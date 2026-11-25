@@ -467,3 +467,108 @@ func TestObservability_S3StorageStaysWhileUsageLogsUseIt(t *testing.T) {
 		t.Fatalf("S3 teardown = %+v %v", res, err)
 	}
 }
+
+const obsTenant = "/apis/maas.opendatahub.io/v1alpha1/namespaces/models-as-a-service/maastenantconfigs/default-tenant"
+
+func obsMaaSRun(t *testing.T, c *Client, req types.MaaSRequest) *types.OperationResponse {
+	t.Helper()
+	res, err := RunMaaS(c, req, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+func TestObservability_MaaSRecordsUserIDsAndPutsThemBack(t *testing.T) {
+	oc := newObsCluster(t, true)
+	oc.f.putJSON(obsTenant, `{"metadata":{"name":"default-tenant","resourceVersion":"3"},"spec":{}}`)
+	if res := obsMaaSRun(t, oc.c, types.MaaSRequest{Action: "capture-user-off"}); res.Success || res.ErrorCode != "not_managed" {
+		t.Fatalf("off without this tool's record: %+v", res)
+	}
+	if res := obsMaaSRun(t, oc.c, types.MaaSRequest{Action: "capture-user-on"}); !res.Success {
+		t.Fatalf("on: %+v", res)
+	}
+	tc := oc.f.get(obsTenant)
+	if v := ensureMap(ensureMap(ensureMap(tc, "spec"), "telemetry"), "logs")["captureUser"]; v != true {
+		t.Fatalf("captureUser = %v", v)
+	}
+	if ensureMap(ensureMap(tc, "metadata"), "annotations")["rhoai-nightly-updater/capture-user-previous"] != "unset" {
+		t.Fatalf("record = %v", ensureMap(tc, "metadata"))
+	}
+	for _, call := range oc.f.callsTo(http.MethodPatch, obsTenant) {
+		if call.Token != fakeUserToken || call.Query.Get("fieldManager") != "rhoai-nightly-updater-capture-user" || call.Query.Get("fieldValidation") != "Strict" {
+			t.Errorf("tenant patch %+v", call)
+		}
+	}
+	st, err := GetMaaSStatus(oc.sa)
+	if err != nil || st.UsageLogs == nil || st.UsageLogs.CaptureUser == nil || !*st.UsageLogs.CaptureUser || !st.UsageLogs.CaptureUserByTool || st.UsageLogs.State != "missing" {
+		t.Fatalf("status = %+v %v", st.UsageLogs, err)
+	}
+	if res := obsMaaSRun(t, oc.c, types.MaaSRequest{Action: "capture-user-off"}); !res.Success {
+		t.Fatalf("off: %+v", res)
+	}
+	tc = oc.f.get(obsTenant)
+	if _, ok := ensureMap(ensureMap(tc, "spec"), "telemetry")["logs"].(map[string]any)["captureUser"]; ok {
+		t.Fatalf("captureUser not unset: %v", tc["spec"])
+	}
+	if _, ok := ensureMap(ensureMap(tc, "metadata"), "annotations")["rhoai-nightly-updater/capture-user-previous"]; ok {
+		t.Fatal("the record stays")
+	}
+}
+
+func TestObservability_MaaSPortalTurnsOnAndBack(t *testing.T) {
+	oc := newObsCluster(t, true)
+	oc.f.putJSON(tDSC, `{"metadata":{"name":"default-dsc","resourceVersion":"5"},"spec":{"components":{"dashboard":{"managementState":"Managed","maasPortal":{"managementState":"Removed"}}}},
+		"status":{"conditions":[{"type":"MaaSPortalAvailable","status":"False","message":"Submodule ManagementState is set to Removed"}]}}`)
+	oc.f.putJSON("/apis/components.platform.opendatahub.io/v1alpha1/dashboards/default-dashboard", `{"metadata":{"name":"default-dashboard"},"spec":{"gateway":{"domain":"rh-ai.apps.example.com"}}}`)
+	st, _ := GetMaaSStatus(oc.sa)
+	if st.Portal == nil || st.Portal.On || st.Portal.Available != "False" || st.Portal.BlockedReason != "" {
+		t.Fatalf("portal before = %+v", st.Portal)
+	}
+	if res := obsMaaSRun(t, oc.c, types.MaaSRequest{Action: "portal-on"}); !res.Success {
+		t.Fatalf("on: %+v", res)
+	}
+	st, _ = GetMaaSStatus(oc.sa)
+	if !st.Portal.On || !st.Portal.SetByTool || st.Portal.Previous != "Removed" || st.Portal.URL != "https://rh-ai.apps.example.com/maas-portal/" {
+		t.Fatalf("portal after = %+v", st.Portal)
+	}
+	// Clean up MaaS puts it back first (here MaaS itself is not set up).
+	if res := obsMaaSRun(t, oc.c, types.MaaSRequest{Action: "teardown"}); len(res.Logs) == 0 || res.Logs[0] != "OK: MaaS portal as before" {
+		t.Fatalf("teardown = %+v", res)
+	}
+	dash := ensureMap(ensureMap(ensureMap(oc.f.get(tDSC), "spec"), "components"), "dashboard")
+	if ensureMap(dash, "maasPortal")["managementState"] != "Removed" {
+		t.Fatalf("portal = %v", dash)
+	}
+}
+
+func TestObservability_MaaSRequestValidation(t *testing.T) {
+	for req, want := range map[*types.MaaSRequest]string{
+		{Action: "portal-on", Project: "p"}:            "takes no field",
+		{Action: "publish", UsageLogs: true}:           "takes no usage logs choice",
+		{Action: "capture-user-on", CaptureUser: true}: "takes no field",
+	} {
+		if got := ValidateMaaSRequest(*req); !strings.Contains(got, want) {
+			t.Errorf("%+v: %q", *req, got)
+		}
+	}
+	if got := ValidateMaaSRequest(types.MaaSRequest{Action: "setup", UsageLogs: true, CaptureUser: true}); got != "" {
+		t.Errorf("setup with usage logs: %q", got)
+	}
+}
+
+func TestObservability_MaaSSetupWithUsageLogsStopsWhenTheyCannot(t *testing.T) {
+	oc := newObsCluster(t, true)
+	putS3DeploymentArgs(oc.f, 1, unsecuredArgsJSON)
+	var steps []string
+	res, err := RunMaaS(oc.c, types.MaaSRequest{Action: "setup", UsageLogs: true}, func(e UpdateStepEvent) { steps = append(steps, e.Step+"="+e.Status) })
+	if err != nil || res.Success || !strings.Contains(res.Message, "MaaS was not set up") {
+		t.Fatalf("setup = %+v %v", res, err)
+	}
+	if got := strings.Join(steps, " "); !strings.HasPrefix(got, "observability-check=running observability-check=failed") {
+		t.Fatalf("steps = %s", got)
+	}
+	if m := oc.f.mutations(); len(m) != 0 {
+		t.Fatalf("changed: %v", m)
+	}
+}
