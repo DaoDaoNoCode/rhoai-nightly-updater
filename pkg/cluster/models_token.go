@@ -229,10 +229,7 @@ type tokenPlan struct {
 // deletes nothing (Kubernetes API concepts, "Dry-run"; apiserver
 // DryRunnableStorage.Delete checks preconditions on a dry run).
 func probeWithUID(c *Client, path, uid string) (string, error) {
-	body, _ := json.Marshal(map[string]any{
-		"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": map[string]any{"uid": uid},
-	})
-	_, _, err := c.do(http.MethodDelete, path, "application/json", body, url.Values{"dryRun": {"All"}})
+	err := deleteWithOptions(c, path, map[string]any{"preconditions": map[string]any{"uid": uid}}, true)
 	switch {
 	case err == nil:
 		return "ours", nil

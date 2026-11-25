@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -44,7 +45,8 @@ func serveModules(f *resourceFake) {
 // of the DSC.
 func serveModulesOnceDeleted(f *resourceFake) {
 	f.beforeRequest = func(r *http.Request) {
-		if r.Method == http.MethodDelete && r.URL.Query().Get("dryRun") == "" {
+		body, _ := io.ReadAll(r.Body)
+		if r.Method == http.MethodDelete && !isDryRun(r.Method, r.URL, body) {
 			serveModules(f)
 		}
 	}

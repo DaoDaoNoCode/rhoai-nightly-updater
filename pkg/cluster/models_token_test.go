@@ -80,6 +80,10 @@ func TestModelsSetup_MakesTheDashboardsTokenAuthentication(t *testing.T) {
 	if !strings.Contains(strings.Join(mc.f.requests, "\n"), "DRYRUN DELETE "+tTokenSecret) {
 		t.Error("the recorded Secret was not checked")
 	}
+	// The check deleted nothing: the model keeps the token Secret recorded.
+	if sec := mc.f.get(tTokenSecret); sec == nil || sec["metadata"].(map[string]any)["uid"] != secretUID {
+		t.Errorf("setup again deleted the model's token Secret: %v", sec)
+	}
 }
 
 // A model set up before the token objects existed gets them on its next

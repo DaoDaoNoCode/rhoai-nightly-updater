@@ -91,7 +91,7 @@ func newLeftoverWorld(t *testing.T, dscMsgs []string, crMsgs []string, lmeval ma
 		w.mu.Lock()
 		defer w.mu.Unlock()
 		w.deletes = append(w.deletes, fakeReq{Method: r.Method, Query: r.URL.RawQuery, Body: string(body)})
-		if r.URL.Query().Get("dryRun") != "All" {
+		if !isDryRun(r.Method, r.URL, body) {
 			w.dep = nil
 			if w.recreate {
 				w.dep = w.serviceDeployment("new-uid")
@@ -550,7 +550,7 @@ func TestLeftoverRecreateDeployment(t *testing.T) {
 	if !res.Success || !strings.HasPrefix(res.Message, "Recreated Deployment redhat-ods-applications/trustyai-service-operator-controller-manager") {
 		t.Fatalf("%+v", res)
 	}
-	if len(w.deletes) != 2 || w.deletes[0].Query != "dryRun=All" || w.deletes[1].Query != "" ||
+	if len(w.deletes) != 2 || w.deletes[0].Query != "" || !strings.Contains(w.deletes[0].Body, `"dryRun":["All"]`) || w.deletes[1].Query != "" || strings.Contains(w.deletes[1].Body, "dryRun") ||
 		!strings.Contains(w.deletes[1].Body, `"propagationPolicy":"Background"`) || !strings.Contains(w.deletes[1].Body, `"uid":"old-uid"`) || !strings.Contains(w.deletes[1].Body, `"resourceVersion":"7"`) {
 		t.Fatalf("deletes %+v", w.deletes)
 	}
@@ -621,8 +621,8 @@ func TestLeftoverRecreateRefusals(t *testing.T) {
 		{"precondition", 409, `{"kind":"Status","status":"Failure","code":409,"reason":"Conflict","message":"Precondition failed: UID in precondition"}`, false, "conflict"},
 	} {
 		w := newLeftoverWorld(t, nil, []string{msgTrustySelector}, storedFalse())
-		w.f.handle("DELETE", serviceDep, func(r *http.Request, _ []byte) (int, string) {
-			if tc.dry || r.URL.Query().Get("dryRun") != "All" {
+		w.f.handle("DELETE", serviceDep, func(r *http.Request, body []byte) (int, string) {
+			if tc.dry || !isDryRun(r.Method, r.URL, body) {
 				return tc.status, tc.body
 			}
 			return 200, `{}`

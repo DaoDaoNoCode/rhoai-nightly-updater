@@ -1,10 +1,7 @@
 package cluster
 
 import (
-	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -339,9 +336,8 @@ func (m *maasRun) removeTierPolicies() (*types.OperationResponse, error) {
 	}
 	for _, p := range legacy {
 		path := legacyTierPolicyPath(p.Kind, p.Version)
-		opts, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": map[string]any{"uid": p.UID}})
-		if _, _, err := c.do(http.MethodDelete, path, "application/json", opts, url.Values{"dryRun": {"All"}}); err != nil && !IsK8sError(err, 404) {
-			return m.fail("check", fmt.Sprintf("The API server rejects deleting %s %s: %v. Nothing was deleted.%s", p.Kind, p.Name, err, templateHint(err)), maasWriteCode(err), "dry run failed")
+		if err := deleteWithOptions(c, path, map[string]any{"preconditions": map[string]any{"uid": p.UID}}, true); err != nil && !IsK8sError(err, 404) {
+			return m.fail("check", fmt.Sprintf("%s refused deleting %s %s in its dry run: %v. Nothing was deleted.%s", refusedBy(err), p.Kind, p.Name, err, templateHint(err)), maasWriteCode(err), "dry run failed")
 		}
 	}
 	m.step("check", "success", "To delete: "+strings.Join(policyNames(legacy), ", ")+".")

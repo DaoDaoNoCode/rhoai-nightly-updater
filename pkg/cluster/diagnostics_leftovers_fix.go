@@ -79,9 +79,9 @@ func leftoverWriteError(err error, what string, dryRun bool) *types.OperationRes
 	if IsK8sError(err, http.StatusConflict) || (IsK8sError(err, http.StatusUnprocessableEntity) && (strings.Contains(msg, "testing value") || strings.Contains(msg, "test failed"))) {
 		return leftoverRefused(fmt.Sprintf("%s changed after it was checked, so nothing was changed. Run diagnostics again.", what), "conflict", []string{msg})
 	}
-	stage := "The API server refused the change"
+	stage := refusedBy(err) + " refused the change"
 	if dryRun {
-		stage = "The API server refused the change in its dry run"
+		stage += " in its dry run"
 	}
 	return leftoverRefused(fmt.Sprintf("%s: %s. Nothing was changed.", stage, msg), nonEmpty(errorCodeFromK8sErr(err), "validation"), []string{msg})
 }
@@ -293,16 +293,10 @@ func readWorkloadAsUser(c *Client, kind, namespace, name string) (workloadObject
 // deleteWorkload deletes with UID and resourceVersion preconditions and
 // background propagation, as a server-side dry run when dryRun is set.
 func deleteWorkload(c *Client, path, uid, resourceVersion string, dryRun bool) error {
-	opts, _ := json.Marshal(map[string]any{
-		"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Background",
-		"preconditions": map[string]string{"uid": uid, "resourceVersion": resourceVersion},
-	})
-	var q url.Values
-	if dryRun {
-		q = url.Values{"dryRun": {"All"}}
-	}
-	_, _, err := c.do(http.MethodDelete, path, "application/json", opts, q)
-	return err
+	return deleteWithOptions(c, path, map[string]any{
+		"propagationPolicy": "Background",
+		"preconditions":     map[string]string{"uid": uid, "resourceVersion": resourceVersion},
+	}, dryRun)
 }
 
 func fixLeftoverRecreateWorkload(c *Client, target string, ack *AckBinding) *types.OperationResponse {

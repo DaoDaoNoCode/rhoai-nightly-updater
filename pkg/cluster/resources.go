@@ -198,6 +198,27 @@ func deleteWithUIDPropagation(c *Client, path, uid, policy string) (int, error) 
 	return status, err
 }
 
+// deleteWithOptions deletes path with opts as its DeleteOptions (the body;
+// apiVersion and kind are added), as a server-side dry run when dryRun is
+// set. The dry run is asked for in the body, as the API server reads a
+// DELETE's options only from its body when it has one
+// (deleteOptionInQuery); do refuses a dryRun query on a DELETE with a body.
+func deleteWithOptions(c *Client, path string, opts map[string]any, dryRun bool) error {
+	body := map[string]any{"apiVersion": "v1", "kind": "DeleteOptions"}
+	for k, v := range opts {
+		body[k] = v
+	}
+	if dryRun {
+		body["dryRun"] = []string{"All"}
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	_, _, err = c.do(http.MethodDelete, path, "application/json", data, nil)
+	return err
+}
+
 // withToolFieldManager adds fieldManager to a POST path so created objects
 // record this tool as their manager.
 func withToolFieldManager(path string) string {

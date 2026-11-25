@@ -352,6 +352,13 @@ func TestMirrorRemove(t *testing.T) {
 		if len(dels) != 3 || !strings.Contains(dels[2].Body, `"uid":"`+plan.UID+`"`) || !strings.Contains(dels[2].Body, `"resourceVersion":"`+plan.ResourceVersion+`"`) {
 			t.Fatalf("deletes %+v", dels)
 		}
+		// The review's and the run's dry runs ask for it in their
+		// DeleteOptions, where the API server reads it; the delete does not.
+		for i, d := range dels {
+			if d.dryRun() != (i < 2) || d.Query.Has("dryRun") || !strings.Contains(d.Body, `"uid":"`+plan.UID+`"`) {
+				t.Fatalf("delete %d: %+v", i, d)
+			}
+		}
 	})
 	t.Run("the docs' command made it, without the label", func(t *testing.T) {
 		f, c := nodeSetupFake(t, "HighlyAvailable", false)
@@ -630,5 +637,19 @@ func TestNodeSetupActionsAreLabelledInTheActivityLog(t *testing.T) {
 		if activityFailedLabels[recorded] == "" {
 			t.Errorf("%s: no failed label", recorded)
 		}
+	}
+}
+
+// A request this updater did not send (UnsentRequestError) is not called
+// the cluster's refusal; the cluster's own refusal keeps its words.
+func TestNodeSetupRefusalNamesWhoRefused(t *testing.T) {
+	w := &nodeSetupWork{}
+	unsent := writeRefusal(w, &UnsentRequestError{Reason: "a DELETE with DeleteOptions in its body and dryRun in its query, which the API server would ignore"}, true)
+	if !strings.HasPrefix(unsent, "This updater, before sending it, refused it in a dry run: this updater did not send the request") || !strings.Contains(unsent, "Nothing was changed.") {
+		t.Errorf("unsent: %s", unsent)
+	}
+	refused := writeRefusal(w, &K8sError{Status: http.StatusUnprocessableEntity, K8sMessage: "spec is invalid"}, true)
+	if !strings.HasPrefix(refused, "The cluster refused it in a dry run: ") {
+		t.Errorf("refused: %s", refused)
 	}
 }

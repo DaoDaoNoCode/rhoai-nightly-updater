@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -229,13 +230,14 @@ func serveToggleDSC(f *fakeAPI, version, dsc, patchBody string, components ...st
 	})
 }
 
-// realWrites are the writes that are not server-side dry runs.
+// realWrites are the writes that are not server-side dry runs (isDryRun:
+// a DELETE with a body takes dryRun from the body).
 func (f *fakeAPI) realWrites() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []string
 	for _, r := range f.reqs {
-		if r.Method == http.MethodGet || strings.Contains(r.Path, "/configmaps") || strings.Contains(r.Query, "dryRun=All") {
+		if r.Method == http.MethodGet || strings.Contains(r.Path, "/configmaps") || isDryRun(r.Method, &url.URL{RawQuery: r.Query}, []byte(r.Body)) {
 			continue
 		}
 		out = append(out, r.Method+" "+r.Path)

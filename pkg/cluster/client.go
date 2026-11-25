@@ -319,6 +319,12 @@ func (c *Client) do(method, path, contentType string, body []byte, query url.Val
 		}
 		req.URL.RawQuery = q.Encode()
 	}
+	// The API server ignores the query's DeleteOptions of a DELETE with a
+	// body (deleteOptionInQuery): a dry run asked for in the query would
+	// delete.
+	if key := deleteOptionInQuery(method, req.URL, body); key != "" {
+		return nil, 0, &UnsentRequestError{Reason: "a DELETE with DeleteOptions in its body and " + key + " in its query, which the API server would ignore"}
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -338,6 +344,49 @@ func (c *Client) do(method, path, contentType string, body []byte, query url.Val
 		return respBody, resp.StatusCode, err
 	}
 	return respBody, resp.StatusCode, nil
+}
+
+// deleteOptionQueryKeys are the DeleteOptions a DELETE may also carry in its
+// query (metav1.DeleteOptions' query parameters). The ListOptions a DELETE
+// of a collection takes in its query (labelSelector, fieldSelector, ...)
+// are not among them.
+var deleteOptionQueryKeys = []string{"dryRun", "propagationPolicy", "gracePeriodSeconds", "orphanDependents", "ignoreStoreReadErrorWithClusterBreakingPotential"}
+
+// deleteOptionInQuery returns the DeleteOptions key in the query of a
+// DELETE with a body, "" when there is none. A DELETE with a body takes all
+// its DeleteOptions, dryRun included, from the body and ignores the query:
+// k8s.io/apiserver pkg/endpoints/handlers/delete.go decodes the query only
+// when the body is empty, in DeleteResource at :95-128 and DeleteCollection
+// at :272-302 (v0.35 to v0.37; :95-126 and :270-300 in v0.32 and v0.33). So
+// that option would be ignored, and a dry run would delete.
+func deleteOptionInQuery(method string, u *url.URL, body []byte) string {
+	if method != http.MethodDelete || len(body) == 0 {
+		return ""
+	}
+	q := u.Query()
+	for _, key := range deleteOptionQueryKeys {
+		if q.Has(key) {
+			return key
+		}
+	}
+	return ""
+}
+
+// UnsentRequestError is a request this updater refused to send, as the API
+// server would not do what it says. Nothing was sent, so nothing changed.
+type UnsentRequestError struct{ Reason string }
+
+func (e *UnsentRequestError) Error() string {
+	return "this updater did not send the request (" + e.Reason + "); nothing was changed. This is a bug in the updater"
+}
+
+// refusedBy names who refused a request that failed with err: this
+// updater, which did not send it (UnsentRequestError), or the API server.
+func refusedBy(err error) string {
+	if _, ok := errors.AsType[*UnsentRequestError](err); ok {
+		return "This updater, before sending it,"
+	}
+	return "The API server"
 }
 
 func (c *Client) get(path string) ([]byte, int, error) {

@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -51,11 +52,11 @@ type resourceFake struct {
 	// can change the stored objects (for example to inject a foreign object
 	// between the tool's check and its write).
 	beforeServe func(method, path string)
-	// beforeRequest is beforeServe with the whole request (its query tells
-	// a server-side dry run from the write).
+	// beforeRequest is beforeServe with the whole request (isDryRun on its
+	// query and body tells a server-side dry run from the write).
 	beforeRequest func(r *http.Request)
 	// failDryRun maps "METHOD /path" to an HTTP status to return for a
-	// server-side dry run (?dryRun=All) of that request.
+	// server-side dry run (isDryRun) of that request.
 	failDryRun map[string]int
 	// failEcho maps "METHOD /path" (a write) or "DRYRUN METHOD /path" (its
 	// server-side dry run) to an HTTP status returned with a message that
@@ -86,6 +87,12 @@ type fakeCall struct {
 	Query                           url.Values
 	// Token is the request's bearer token: who made it.
 	Token string
+}
+
+// dryRun reports whether the API server runs the call as a server-side dry
+// run (isDryRun: a DELETE with a body takes it from the body).
+func (c fakeCall) dryRun() bool {
+	return isDryRun(c.Method, &url.URL{RawQuery: c.Query.Encode()}, []byte(c.Body))
 }
 
 // callsTo returns the calls of method to path, in order.
@@ -323,11 +330,13 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 		f.beforeServe(r.Method, r.URL.Path)
 	}
 	if f.beforeRequest != nil {
+		r.Body = io.NopCloser(bytes.NewReader(body))
 		f.beforeRequest(r)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	dryRun := r.URL.Query().Get("dryRun") == "All"
+	// As the API server reads it: a DELETE with a body from its body.
+	dryRun := isDryRun(r.Method, r.URL, body)
 	echoKey := r.Method + " " + r.URL.Path
 	if dryRun {
 		echoKey = "DRYRUN " + echoKey
