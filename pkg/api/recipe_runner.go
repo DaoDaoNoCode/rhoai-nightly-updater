@@ -87,6 +87,9 @@ var (
 	recordRecipeActivity = cluster.RecordRecipeActivity
 	recipeOwnership      = cluster.RecipeOwnership
 	recipeOwnedProjects  = cluster.RecipeOwnedProjects
+	// stepResultQueued, when set, is told each step's index once its end
+	// is queued for the loop.
+	stepResultQueued func(i int)
 )
 
 // recipeRecordTimeout bounds one write of the run record. The last one
@@ -520,21 +523,19 @@ func (x *recipeExec) loop() (end recipeEnd) {
 	l := newRecipeLoop(x.steps)
 	results := make(chan stepResult, len(x.steps))
 	defer recoverRun("recipe", func() {
-		// The running steps end by their deadlines; none starts. Each
-		// counts as failed: the run's bookkeeping broke.
-		for ; l.running > 0; l.running-- {
-			<-results
-		}
-		recipes.update(func(run *types.RecipeRun) {
-			for i := range run.Steps {
-				if l.started[i] && l.status[i] == "" {
-					run.Steps[i].Status, run.Steps[i].Message, run.Steps[i].ErrorCode = types.RecipeStepFailed, operationPanicMessage, "internal"
-				}
-			}
-		})
 		end = recipeEnd{types.RecipeRunFailed, operationPanicMessage, "internal"}
+		x.recoverLoop(l, results)
 	})
 	unsaved := false
+	// ended takes over a step's end; the loop alone calls it.
+	ended := func(r stepResult) {
+		l.running--
+		x.state.Merge(r.base, r.state)
+		x.stepEnded(r.i, r.status, r.msg, r.code)
+		l.status[r.i], l.lastEnded = r.status, r.i
+		l.failed = l.failed || r.status == types.RecipeStepFailed
+		unsaved = true
+	}
 	for {
 		saved := false
 		if l.halt == nil && !l.failed {
@@ -548,15 +549,50 @@ func (x *recipeExec) loop() (end recipeEnd) {
 		if l.running == 0 {
 			break
 		}
-		r := <-results
-		l.running--
-		x.state.Merge(r.base, r.state)
-		x.stepEnded(r.i, r.status, r.msg, r.code)
-		l.status[r.i], l.lastEnded = r.status, r.i
-		l.failed = l.failed || r.status == types.RecipeStepFailed
-		unsaved = true
+		ended(<-results)
+		// Every end already queued counts before anything starts: a
+		// failure that came in beside a success must stop new starts.
+		for queued := true; queued; {
+			select {
+			case r := <-results:
+				ended(r)
+			default:
+				queued = false
+			}
+		}
 	}
 	return x.ended(l)
+}
+
+// recoverLoop ends a run whose loop panicked: the running steps end (each
+// by its deadline) and what they changed in the State is kept; none starts.
+// Every step the record shows running (also one marked running for a start
+// that never happened) counts as failed: the run's bookkeeping broke. A
+// second panic here is logged, never let through: the run still ends.
+func (x *recipeExec) recoverLoop(l *recipeLoop, results chan stepResult) {
+	defer recoverRun("recipe recovery", func() {})
+	var drained []stepResult
+	for ; l.running > 0; l.running-- {
+		r := <-results
+		x.state.Merge(r.base, r.state)
+		drained = append(drained, r)
+	}
+	recipes.update(func(run *types.RecipeRun) {
+		// What ended while the loop was broken is recorded as it ended.
+		for _, r := range drained {
+			s := &run.Steps[r.i]
+			s.Status, s.Message, s.ErrorCode = r.status, truncateText(r.msg, maxOperationMessageBytes), r.code
+		}
+		for i := range run.Steps {
+			if s := &run.Steps[i]; s.Status == types.RecipeStepRunning {
+				s.Status, s.Message, s.ErrorCode = types.RecipeStepFailed, operationPanicMessage, "internal"
+			}
+		}
+		run.Components = slices.Clone(x.state.Components)
+		run.ComponentIDs = maps.Clone(x.state.ComponentIDs)
+		run.CreatedParts = slices.Clone(x.state.Created)
+		run.Exposure, run.GatewayRef = x.state.Exposure, x.state.GatewayRef
+	})
 }
 
 // startSteps starts the steps that may start now, up to the limit: it
@@ -580,15 +616,18 @@ func (x *recipeExec) startSteps(l *recipeLoop, results chan<- stepResult) bool {
 	}
 	x.save(x.snapshot())
 	// The gate and the transition write took time: a drain that began
-	// meanwhile must not get a whole new step. Nothing that waits lies
-	// between this check and the steps' deadlines (runStep's first line),
-	// so every step that starts ends by the drain's start plus
-	// OperationDeadline.
-	if mutations.isDraining() {
+	// meanwhile must not get a whole new step, and a Stop accepted
+	// meanwhile starts nothing either. Nothing that waits lies between this
+	// check and the steps' deadlines (runStep's first line), so every step
+	// that starts ends by the drain's start plus OperationDeadline.
+	if draining, stop := mutations.isDraining(), recipes.stopRequested(); draining || stop {
 		for _, i := range batch {
 			x.stepEnded(i, types.RecipeStepPending, "", "")
 		}
-		l.halt = &recipeHalt{kind: haltRestart}
+		l.halt = &recipeHalt{kind: haltStopped}
+		if draining {
+			l.halt.kind = haltRestart
+		}
 		if l.running > 0 {
 			x.save(x.snapshot())
 		}
@@ -608,7 +647,13 @@ func (x *recipeExec) startSteps(l *recipeLoop, results chan<- stepResult) bool {
 // never ends the process.
 func (x *recipeExec) work(i int, base cluster.RecipeState, results chan<- stepResult) {
 	r := stepResult{i: i, base: base, state: base.Clone()}
-	defer func() { results <- r }()
+	queued := stepResultQueued
+	defer func() {
+		results <- r
+		if queued != nil {
+			queued(i)
+		}
+	}()
 	defer recoverRun("recipe step "+x.steps[i].ID, func() {
 		r.status, r.msg, r.code = types.RecipeStepFailed, operationPanicMessage, "internal"
 	})

@@ -443,3 +443,113 @@ func TestRecipeRun_AfterAMissingStepDoesNotWait(t *testing.T) {
 		t.Errorf("record %+v", run)
 	}
 }
+
+// A failure and a success that are both queued before the loop takes
+// either: the loop takes every queued end before it starts anything, so
+// the step after the success does not start.
+func TestRecipeRun_QueuedFailureStopsStarts(t *testing.T) {
+	f, rec := installRecipeFake(t)
+	head := f.addStep("head")
+	a, b, c := parallel(f.addStep("a"), "head"), parallel(f.addStep("b"), "head"), parallel(f.addStep("c"), "head")
+	d := parallel(f.addStep("d"), "a")
+	close(d.release) // it must not start; if it does, the run still ends
+	b.result = &types.OperationResponse{Success: false, Message: "b broke", ErrorCode: "timeout"}
+	queued := make(chan int, 10)
+	stepResultQueued = func(i int) { queued <- i }
+	t.Cleanup(func() { stepResultQueued = nil })
+	// The write after c's end blocks the loop until a and b both ended.
+	blocked, unblock := make(chan struct{}), make(chan struct{})
+	origSave := saveRecipeRun
+	saveRecipeRun = func(cl *cluster.Client, run *types.RecipeRun, replace bool) error {
+		if stepStatuses(run) == "head=success a=running b=running c=success d=pending" {
+			close(blocked)
+			<-unblock
+		}
+		return origSave(cl, run, replace)
+	}
+	close(head.release)
+	_, done := startRun(t)
+	waitStarted(t, a)
+	waitStarted(t, b)
+	waitStarted(t, c)
+	close(c.release)
+	<-blocked
+	// a's success is queued first, then b's failure: taking only the
+	// first would start d.
+	waitQueued := func(want int) {
+		for got := <-queued; got != want; got = <-queued {
+		}
+	}
+	close(a.release)
+	waitQueued(1)
+	close(b.release)
+	waitQueued(2)
+	close(unblock)
+	waitDone(t, done)
+	run := f.saved()
+	if run.State != types.RecipeRunFailed || stepStatuses(run) != "head=success a=success b=failed c=success d=pending" || d.ran {
+		t.Errorf("record %s, d ran %v: %+v", stepStatuses(run), d.ran, run)
+	}
+	assertReleased(t, rec)
+}
+
+// Stop accepted while the runner writes the record of a batch it is about
+// to start: the batch goes back to pending and does not start.
+func TestRecipeRun_StopDuringTheStartWrite(t *testing.T) {
+	f, rec := installRecipeFake(t)
+	head := f.addStep("head")
+	a := parallel(f.addStep("a"), "head")
+	close(head.release)
+	origSave := saveRecipeRun
+	saveRecipeRun = func(cl *cluster.Client, run *types.RecipeRun, replace bool) error {
+		if stepStatuses(run) == "head=success a=running" {
+			recipes.requestStop()
+		}
+		return origSave(cl, run, replace)
+	}
+	_, done := startRun(t)
+	waitDone(t, done)
+	run := f.saved()
+	if run.State != types.RecipeRunStopped || run.ErrorCode != "stopped" || stepStatuses(run) != "head=success a=pending" || a.ran || len(a.clients) != 0 ||
+		run.StopReason != "Stopped after Step head, as asked. Resume continues with Step a." {
+		t.Errorf("record %s: %+v", stepStatuses(run), run)
+	}
+	assertReleased(t, rec)
+}
+
+// A panic of the loop while it starts a batch: the running step ends and
+// keeps its outcome and its State changes, the step marked running for the
+// start that never happened counts as failed, and no step is left running
+// in the record.
+func TestRecipeRun_LoopPanicDuringAStart(t *testing.T) {
+	captureLog(t)
+	f, rec := installRecipeFake(t)
+	head := f.addStep("head")
+	a, b := parallel(f.addStep("a"), "head"), parallel(f.addStep("b"), "head")
+	a.components, b.components = []string{"aipipelines"}, []string{"mlflowoperator"}
+	c := parallel(f.addStep("c"), "a")
+	close(head.release)
+	origSave := saveRecipeRun
+	panicked := false
+	saveRecipeRun = func(cl *cluster.Client, run *types.RecipeRun, replace bool) error {
+		if !panicked && stepStatuses(run) == "head=success a=success b=running c=running" {
+			panicked = true
+			close(b.release)
+			panic("record bug")
+		}
+		return origSave(cl, run, replace)
+	}
+	_, done := startRun(t)
+	waitStarted(t, a)
+	waitStarted(t, b)
+	close(a.release)
+	waitDone(t, done)
+	run := f.saved()
+	if run.State != types.RecipeRunFailed || run.ErrorCode != "internal" || stepStatuses(run) != "head=success a=success b=success c=failed" || c.ran {
+		t.Errorf("record %s: %+v", stepStatuses(run), run)
+	}
+	if strings.Join(run.Components, ",") != "aipipelines,mlflowoperator" {
+		t.Errorf("components %v", run.Components)
+	}
+	assertReleased(t, rec)
+}
