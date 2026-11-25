@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
@@ -573,6 +574,9 @@ func runDSC(c *kube.Client, _ *State, emit func(types.UpdateStepEvent)) (*types.
 		return &types.OperationResponse{Success: false, Message: "Stopped while waiting for the components' conditions.", Logs: res.Logs}, ctxErr
 	}
 	note, lines := moduleNote(rep, repErr, complete)
+	for _, l := range lines {
+		slog.Info("dsc component condition", "condition", l)
+	}
 	return &types.OperationResponse{Success: true, Message: strings.TrimSpace(strings.TrimSuffix(res.Message, ".") + ". " + note), Logs: append(res.Logs, lines...)}, nil
 }
 
@@ -644,9 +648,15 @@ func waitModuleReports(ctx context.Context, c *kube.Client) (components.ModuleRe
 
 // dscNoteBudget bounds the step result's note: the run record keeps a
 // step's message to 1024 bytes (pkg/api maxOperationMessageBytes), the
-// create's own sentence included. Conditions past it are counted, not
-// shown; the Components page shows every component's message.
+// create's own sentence included. The advice, the components not reported
+// yet and the count of conditions left out are kept within it first; a
+// condition that does not fit in what is left is counted, and one alone too
+// long for it is shortened (dscNoteCut). Every condition goes to the
+// updater's log in full, and the Components page shows each message.
 const dscNoteBudget = 900
+
+// dscNoteCut marks a condition message shortened to fit the run record.
+const dscNoteCut = " [shortened; the Components page shows it in full]"
 
 // dscNoteAdvice follows the list of components that are not ready.
 const dscNoteAdvice = " A component that is still starting becomes ready on its own; one that reports a missing prerequisite stays not ready until an administrator installs it (the Components page shows the cause, Diagnostics the commands)."
@@ -681,20 +691,33 @@ func moduleNote(rep components.ModuleReport, err error, complete bool) (string, 
 		}
 		return unreported, lines
 	}
+	const head = "Not ready when checked, as RHOAI reports it: "
+	// Kept free for "; and N more not ready." and the separators.
+	const countRoom = 32
+	room := dscNoteBudget - len(head) - len(dscNoteAdvice) - len(unreported) - 1 - countRoom
 	var b strings.Builder
-	b.WriteString("Not ready when checked, as RHOAI reports it: ")
-	budget := dscNoteBudget - len(dscNoteAdvice) - len(unreported) - 40
-	more := 0
-	for i, m := range rep.NotReady {
-		lines = append(lines, m.Line())
-		if i > 0 && (more > 0 || b.Len()+len(m.Line()) > budget) {
+	b.WriteString(head)
+	shown, more := 0, 0
+	for _, m := range rep.NotReady {
+		line := m.Line()
+		lines = append(lines, line)
+		used := b.Len() - len(head)
+		sep := ""
+		if shown > 0 {
+			sep = clauseSeparator(b.String())
+		}
+		switch {
+		case more == 0 && used+len(sep)+len(line) <= room:
+		case shown == 0:
+			// The first condition alone is too long: shortened, so the
+			// rest of the note still fits.
+			line = cutUTF8(line, room-len(dscNoteCut)) + dscNoteCut
+		default:
 			more++
 			continue
 		}
-		if i > 0 {
-			b.WriteString(clauseSeparator(b.String()))
-		}
-		b.WriteString(m.Line())
+		b.WriteString(sep + line)
+		shown++
 	}
 	if more > 0 {
 		sep, label := clauseSeparator(b.String()), "and"
@@ -711,6 +734,20 @@ func moduleNote(rep components.ModuleReport, err error, complete bool) (string, 
 		b.WriteString(" " + unreported)
 	}
 	return b.String(), lines
+}
+
+// cutUTF8 is s cut to at most n bytes, on a character boundary.
+func cutUTF8(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return strings.TrimRight(s[:n], " ")
 }
 
 // namesOrCount lists names when they fit in limit bytes, else counts them.

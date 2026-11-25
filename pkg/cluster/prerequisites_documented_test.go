@@ -38,8 +38,31 @@ func TestDSCCheck_JobSetCommandsInstallCertManagerFirst(t *testing.T) {
 			!strings.Contains(p.TechnicalCmd, `"managementState": "Managed"`) {
 			t.Fatalf("cmd = %s", p.TechnicalCmd)
 		}
-		if !strings.Contains(p.Fix, "The Job Set Operator documentation requires cert-manager Operator for Red Hat OpenShift first, which is not installed, so the commands install it first") {
+		// Each operator is named in its own instructions.
+		for _, want := range []string{
+			"The Job Set Operator documentation requires cert-manager Operator for Red Hat OpenShift first, which is not installed, so the commands install it first",
+			"cert-manager Operator for Red Hat OpenShift goes into its suggested namespace cert-manager-operator",
+			"its two oc wait lines return once cert-manager Operator for Red Hat OpenShift is installed",
+			"The last command of the cert-manager Operator for Red Hat OpenShift install creates CertManager/cluster",
+			"the Job Set Operator block runs only when the first one succeeded",
+			"Job Set Operator goes into its suggested namespace openshift-jobset-operator",
+			"its two oc wait lines return once Job Set Operator is installed",
+			"The last command of the Job Set Operator install creates JobSetOperator/cluster",
+		} {
+			if !strings.Contains(p.Fix, want) {
+				t.Fatalf("fix lacks %q:\n%s", want, p.Fix)
+			}
+		}
+		if strings.Contains(p.Fix, "It goes into") {
 			t.Fatalf("fix = %s", p.Fix)
+		}
+		// Two subshell blocks with set -e, the JobSet one only when the
+		// first exited 0 (not after &&, where set -e does not apply).
+		blocks := strings.Split(p.TechnicalCmd, "\n)\nif [ $? -eq 0 ]; then\n(\n")
+		if len(blocks) != 2 || !strings.HasPrefix(blocks[0], "(\nset -e\n") || !strings.HasPrefix(blocks[1], "set -e\n") ||
+			!strings.HasSuffix(blocks[1], "\n)\nelse\n  echo 'A step of the commands before Job Set Operator failed, so its install did not run.' >&2\nfi") ||
+			strings.Contains(blocks[0], "openshift-jobset-operator") || !strings.Contains(blocks[1], "openshift-jobset-operator") {
+			t.Fatalf("blocks = %q", blocks)
 		}
 		if !strings.Contains(strings.Join(p.Evidence, "\n"), "Catalog: package openshift-cert-manager-operator in catalog redhat-operators") {
 			t.Fatalf("evidence = %q", p.Evidence)
@@ -64,7 +87,7 @@ func TestDSCCheck_JobSetCommandsInstallCertManagerFirst(t *testing.T) {
 		w.installedCSVs(csvItem("cert-manager-operator.v1.20.1", "cert-manager-operator", "cert-manager Operator for Red Hat OpenShift", "Installing", time.Minute,
 			"openshift-cert-manager-operator", certManagerExamples, nil))
 		p := jobSetProblem(t, w)
-		if !strings.HasPrefix(p.TechnicalCmd, "oc wait csv/cert-manager-operator.v1.20.1 -n cert-manager-operator '--for=jsonpath={.status.phase}=Succeeded' --timeout=10m\noc apply -f - <<'EOF'") ||
+		if !strings.HasPrefix(p.TechnicalCmd, "(\nset -e\noc wait csv/cert-manager-operator.v1.20.1 -n cert-manager-operator '--for=jsonpath={.status.phase}=Succeeded' --timeout=10m\n)\nif [ $? -eq 0 ]; then\n(\nset -e\noc apply -f - <<'EOF'") ||
 			strings.Contains(p.TechnicalCmd, "name: cert-manager-operator\n") {
 			t.Fatalf("cmd = %s", p.TechnicalCmd)
 		}

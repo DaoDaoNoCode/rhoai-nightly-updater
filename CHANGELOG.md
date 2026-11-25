@@ -201,7 +201,10 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   for Red Hat OpenShift before the JobSet Operator (and odh-gitops installs
   them together), but the JobSet bundle declares no OLM dependency, so the
   printed commands left it out. When cert-manager is not installed they now
-  install it first (from the cluster's catalog, as its own problem does);
+  install it first (from the cluster's catalog, as its own problem does),
+  in a block of its own that must succeed before the JobSet block runs
+  (each a subshell with `set -e`, so a failed step neither starts JobSet
+  nor closes the shell), and each instruction names its operator;
   while its install runs they wait for it; when it is installed the
   evidence says so. `JobSetOperator/cluster` is still created from the
   CSV's example when it is missing.
@@ -218,8 +221,9 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   step also waits, within the same 5 minutes as for the DataScienceCluster's
   conditions (never for Ready), until every component CR in
   `components.platform.opendatahub.io` has reported its own conditions for
-  its current generation. Its result then lists each component whose own
-  `ProvisioningSucceeded` or `Ready` is not True, with that condition's
+  its current generation (proven by the status or by its `Ready` or
+  `ProvisioningSucceeded` condition). Its result then lists each component
+  whose own `ProvisioningSucceeded` or `Ready` is not True, with that condition's
   reason and message as RHOAI wrote them (provisioning failures first, such
   as trainer's "dependency not met: JobSet Operator is not installed" on a
   cluster without JobSet: RHOAI's default turns trainer on, and RHOAI does

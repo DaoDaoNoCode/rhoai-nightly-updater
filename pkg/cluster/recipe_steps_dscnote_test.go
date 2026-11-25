@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/recipe"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -178,5 +179,83 @@ func TestRecipeDSCStep_LongListFitsTheRunRecord(t *testing.T) {
 	}
 	if n := strings.Count(strings.Join(res.Logs, "\n"), "=False"); n != 20 {
 		t.Fatalf("%d conditions in the logs", n)
+	}
+}
+
+func compCondGen(typ, status, reason, msg string, gen int) string {
+	return fmt.Sprintf(`{"type":%q,"status":%q,"reason":%q,"message":%q,"observedGeneration":%d}`, typ, status, reason, msg, gen)
+}
+
+// Provisioning that is not True is not ready even when Ready is True;
+// False is still listed first.
+func TestRecipeDSCStep_ProvisioningUnknownIsNotReady(t *testing.T) {
+	defer recipe.SetDSCTimingForTest(time.Minute, time.Second, time.Minute, time.Second)()
+	f, c := dscStepFake(t, 0, 1)
+	serveComponents(f, map[string]string{"rays": "Ray", "trainers": "Trainer", "dashboards": "Dashboard"}, map[string]string{
+		"dashboards/default-dashboard": componentCR(1, 1, compCond("Ready", "True", "", ""), compCond("ProvisioningSucceeded", "True", "", "")),
+		"rays/default-ray":             componentCR(1, 1, compCond("Ready", "True", "", ""), compCond("ProvisioningSucceeded", "Unknown", "Reconciling", "provisioning in progress")),
+		"trainers/default-trainer":     componentCR(1, 1, compCond("Ready", "False", "Error", msgTrainerJobSetLive), compCond("ProvisioningSucceeded", "False", "Error", msgTrainerJobSetLive)),
+	})
+	res := runDSCStep(t, c)
+	want := "DataScienceCluster created with default components. Not ready when checked, as RHOAI reports it: Trainer default-trainer: ProvisioningSucceeded=False (Error): " +
+		msgTrainerJobSetLive + " Ray default-ray: ProvisioningSucceeded=Unknown (Reconciling): provisioning in progress." + dscNoteAdvice
+	if !res.Success || res.Message != want {
+		t.Fatalf("message\n got %q\nwant %q", res.Message, want)
+	}
+}
+
+// A status observedGeneration of 0 (or none) proves nothing: the
+// controllers' framework sets it only once the component is ready. The
+// ProvisioningSucceeded condition's own observedGeneration does.
+func TestRecipeDSCStep_ObservedGenerationMustProveTheReport(t *testing.T) {
+	defer recipe.SetDSCTimingForTest(time.Minute, time.Second, time.Minute, time.Second)()
+	f, c := dscStepFake(t, 0, 1)
+	serveComponents(f, map[string]string{"rays": "Ray", "trainers": "Trainer", "dashboards": "Dashboard"}, map[string]string{
+		// Ready with no generation anywhere: not proven.
+		"rays/default-ray": `{"metadata":{"generation":1},"status":{"conditions":[` + compCond("Ready", "True", "", "") + `]}}`,
+		// observedGeneration 0, as the framework leaves it until ready:
+		// not proven either.
+		"dashboards/default-dashboard": componentCR(1, 0, compCond("Ready", "False", "DeploymentsNotReady", "0/1 deployments ready")),
+		// The live trainer: status observedGeneration 0, its
+		// ProvisioningSucceeded condition set for generation 1.
+		"trainers/default-trainer": componentCR(1, 0, compCond("Ready", "False", "Error", msgTrainerJobSetLive), compCondGen("ProvisioningSucceeded", "False", "Error", msgTrainerJobSetLive, 1)),
+	})
+	res := runDSCStep(t, c)
+	want := "DataScienceCluster created with default components. Not ready when checked, as RHOAI reports it: Trainer default-trainer: ProvisioningSucceeded=False (Error): " +
+		msgTrainerJobSetLive + dscNoteAdvice + " Not reported yet within 1m of the create: Dashboard default-dashboard, Ray default-ray."
+	if !res.Success || res.Message != want {
+		t.Fatalf("message\n got %q\nwant %q", res.Message, want)
+	}
+}
+
+// One condition longer than the whole record: it is shortened so the
+// count of the others, the advice and the components not reported yet
+// still fit in 1024 bytes; the logs keep it in full.
+func TestRecipeDSCStep_OversizedConditionIsShortened(t *testing.T) {
+	defer recipe.SetDSCTimingForTest(time.Minute, time.Second, time.Minute, time.Second)()
+	f, c := dscStepFake(t, 0, 1)
+	huge := strings.Repeat("é", 3000) // two bytes each: the cut must not split one
+	serveComponents(f, map[string]string{"trainers": "Trainer", "rays": "Ray", "dashboards": "Dashboard", "kserves": "Kserve", "workbenches": "Workbenches"}, map[string]string{
+		"trainers/default-trainer":        componentCR(1, 1, compCond("ProvisioningSucceeded", "False", "Error", huge)),
+		"rays/default-ray":                componentCR(1, 1, compCond("Ready", "False", "DeploymentsNotReady", "0/1 deployments ready")),
+		"dashboards/default-dashboard":    componentCR(1, 1, compCond("Ready", "False", "DeploymentsNotReady", "0/2 deployments ready")),
+		"kserves/default-kserve":          componentCR(2, 1, compCond("Ready", "True", "", "")),
+		"workbenches/default-workbenches": componentCR(3, 1),
+	})
+	res := runDSCStep(t, c)
+	if !res.Success || len(res.Message) > 1024 || !utf8.ValidString(res.Message) {
+		t.Fatalf("%d bytes, valid UTF-8 %v: %s", len(res.Message), utf8.ValidString(res.Message), res.Message)
+	}
+	for _, want := range []string{
+		"as RHOAI reports it: Trainer default-trainer: ProvisioningSucceeded=False (Error): éé",
+		"é [shortened; the Components page shows it in full]; and 2 more not ready." + dscNoteAdvice,
+		" Not reported yet within 1m of the create: Kserve default-kserve, Workbenches default-workbenches.",
+	} {
+		if !strings.Contains(res.Message, want) {
+			t.Fatalf("lacks %q:\n%s", want, res.Message)
+		}
+	}
+	if !strings.Contains(strings.Join(res.Logs, "\n"), "Trainer default-trainer: ProvisioningSucceeded=False (Error): "+huge) {
+		t.Fatal("the logs lack the full condition")
 	}
 }

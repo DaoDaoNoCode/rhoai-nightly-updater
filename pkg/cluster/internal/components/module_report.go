@@ -15,7 +15,15 @@ import (
 // status is stale (observedGeneration < generation) or that has no Ready
 // condition has not reported yet (rhods-operator rhoai-3.7-ea.1
 // internal/controller/modules/modules_controller_actions.go,
-// evaluateModulesStatus). ProvisioningSucceeded=False is the operator's own
+// evaluateModulesStatus). RHOAI accepts a status.observedGeneration of 0;
+// this does not, because the controllers' framework sets it only once the
+// component is ready, and sets the generation on the ProvisioningSucceeded
+// condition on every reconcile (odh-platform-utilities framework/v0.6.0,
+// which rhods-operator 3.7-ea.1 uses: controller/reconciler/reconciler.go):
+// a report counts once the status or its Ready or ProvisioningSucceeded
+// condition says it is for the current generation. A component is ready
+// only when Ready is True and ProvisioningSucceeded, when present, is True
+// too. ProvisioningSucceeded=False is the operator's own
 // verdict that it could not set the component up (a dependency it checks
 // for, a manifest it could not apply), while Ready=False with provisioning
 // succeeded is a component still rolling out (status.go
@@ -91,28 +99,35 @@ func ReadModuleReport(c *kube.Client) (ModuleReport, error) {
 		rep.Total++
 		src := m.Kind + " " + m.Obj.Metadata.Name
 		st := m.Obj.Status
-		if st.ObservedGeneration > 0 && st.ObservedGeneration < m.Obj.Metadata.Generation {
-			rep.NotReported = append(rep.NotReported, src)
-			continue
-		}
+		gen := m.Obj.Metadata.Generation
 		var ready, provisioned *rhoai.DSCCondition
+		current := gen <= 0 || st.ObservedGeneration >= gen
 		for i, cond := range st.Conditions {
 			switch cond.Type {
 			case "Ready":
 				ready = &st.Conditions[i]
 			case "ProvisioningSucceeded":
 				provisioned = &st.Conditions[i]
+			default:
+				continue
+			}
+			if cond.ObservedGeneration >= gen {
+				current = true
 			}
 		}
 		switch {
+		case !current:
+			rep.NotReported = append(rep.NotReported, src)
 		case provisioned != nil && provisioned.Status == "False":
 			failed = append(failed, ModuleCondition{Source: src, Cond: *provisioned, ProvisioningFailed: true})
 		case ready == nil:
 			rep.NotReported = append(rep.NotReported, src)
-		case ready.Status == "True":
-			rep.Ready++
-		default:
+		case ready.Status != "True":
 			notReady = append(notReady, ModuleCondition{Source: src, Cond: *ready})
+		case provisioned != nil && provisioned.Status != "True":
+			notReady = append(notReady, ModuleCondition{Source: src, Cond: *provisioned})
+		default:
+			rep.Ready++
 		}
 	}
 	bySource := func(l []ModuleCondition) {

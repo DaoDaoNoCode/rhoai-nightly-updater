@@ -979,7 +979,8 @@ func PrerequisiteProblem(c *kube.Client, d *Dependency) report.Problem {
 		}
 		evidence = append(evidence, plan.evidence...)
 		if first.Script != "" {
-			plan.Script = first.Script + "\n" + plan.Script
+			plan.Script = chainAfter(first.Script, plan.Script, fmt.Sprintf("A step of the commands before %s failed, so its install did not run.", name))
+			first.Notes = append(first.Notes, fmt.Sprintf("The Command has two blocks: each stops at its first failing command, and the %s block runs only when the first one succeeded.", name))
 		}
 		plan.Notes = append(first.Notes, plan.Notes...)
 		if g, err := argo.ReadOperatorGitOps(c); err == nil && g.Active() {
@@ -995,6 +996,17 @@ func PrerequisiteProblem(c *kube.Client, d *Dependency) report.Problem {
 	p.Evidence = evidence
 	p.Fix = strings.Join(fixes, " ")
 	return p
+}
+
+// chainAfter makes a Command that runs then only when first succeeded.
+// Each script runs in a subshell with set -e, so it stops at its first
+// failing command and only the subshell exits: pasted into bash or zsh,
+// the shell stays open. The second runs under "if [ $? -eq 0 ]", not
+// after "&&": the shells ignore set -e inside a subshell that is the left
+// side of && or ||, so a failing command there would not stop it. The
+// here-documents work inside a subshell.
+func chainAfter(first, then, skipped string) string {
+	return "(\nset -e\n" + first + "\n)\nif [ $? -eq 0 ]; then\n(\nset -e\n" + then + "\n)\nelse\n  echo " + kube.ShellQuote(skipped) + " >&2\nfi"
 }
 
 // requiredFirst is what goes before the install of d: for each operator
@@ -1060,6 +1072,9 @@ func PlanInstall(c *kube.Client, p CatalogPackage, operand *ALMExample) (prerequ
 	var plan prerequisiteInstall
 	var objects []string
 	var ns string
+	// Every instruction names the operator: a prerequisite's install can
+	// come first in the same Command (requiredFirst).
+	opName := kube.NonEmpty(p.DisplayName, p.Name)
 	switch {
 	case p.supports("OwnNamespace"):
 		ns = p.SuggestedNS
@@ -1081,7 +1096,7 @@ func PlanInstall(c *kube.Client, p CatalogPackage, operand *ALMExample) (prerequ
 		if p.SuggestedNS == "" {
 			where = "a namespace named after the package (the CSV suggests none)"
 		}
-		plan.Notes = append(plan.Notes, fmt.Sprintf("It goes into %s %s, watching only that namespace (install mode OwnNamespace, which the CSV supports).", where, ns))
+		plan.Notes = append(plan.Notes, fmt.Sprintf("%s goes into %s %s, watching only that namespace (install mode OwnNamespace, which the CSV supports).", opName, where, ns))
 		ogs, err := listOperatorGroups(c, ns)
 		switch {
 		case err != nil:
@@ -1098,7 +1113,7 @@ func PlanInstall(c *kube.Client, p CatalogPackage, operand *ALMExample) (prerequ
 		}
 	case p.supports("AllNamespaces"):
 		ns = "openshift-operators"
-		plan.Notes = append(plan.Notes, "The CSV does not support OwnNamespace, so it is installed for all namespaces into openshift-operators.")
+		plan.Notes = append(plan.Notes, fmt.Sprintf("The %s CSV does not support OwnNamespace, so it is installed for all namespaces into openshift-operators.", opName))
 		ogs, err := listOperatorGroups(c, ns)
 		switch {
 		case err != nil:
@@ -1123,13 +1138,13 @@ func PlanInstall(c *kube.Client, p CatalogPackage, operand *ALMExample) (prerequ
 		kube.ShellCommand("oc", "wait", "subscription/"+p.Name, "-n", ns, "--for=jsonpath={.status.state}=AtLatestKnown", "--timeout=10m"),
 		"oc wait csv/\"$(oc get subscription/" + p.Name + " -n " + ns + " -o jsonpath='{.status.installedCSV}')\" -n " + ns + " --for=jsonpath='{.status.phase}'=Succeeded --timeout=10m",
 	}
-	plan.Notes = append(plan.Notes, fmt.Sprintf("The Subscription follows the default channel %s of %s with automatic updates; the two oc wait lines return once the operator is installed.", p.DefaultChannel, p.Catalog))
+	plan.Notes = append(plan.Notes, fmt.Sprintf("The %s Subscription follows the default channel %s of %s with automatic updates; its two oc wait lines return once %s is installed.", opName, p.DefaultChannel, p.Catalog, opName))
 	plan.evidence = append(plan.evidence, fmt.Sprintf("Install modes supported by %s: %s; suggested namespace: %s", kube.NonEmpty(p.CurrentCSV, p.Name), strings.Join(p.InstallModes, ", "), kube.NonEmpty(p.SuggestedNS, "none")))
 	if operand != nil {
 		cmd, err := OperandCommand(*operand)
 		if err == nil {
 			lines = append(lines, cmd)
-			plan.Notes = append(plan.Notes, fmt.Sprintf("The last command creates %s from the CSV's example, which the operator needs before it does anything; some operators create it themselves, so it is created only if it is still missing.", operand.Ref()))
+			plan.Notes = append(plan.Notes, fmt.Sprintf("The last command of the %s install creates %s from the CSV's example, which the operator needs before it does anything; some operators create it themselves, so it is created only if it is still missing.", opName, operand.Ref()))
 		}
 	}
 	plan.Script = strings.Join(lines, "\n")
