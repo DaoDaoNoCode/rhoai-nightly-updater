@@ -87,6 +87,10 @@ type resourceFake struct {
 	intercept func(w http.ResponseWriter, r *http.Request, body []byte) bool
 	// sw is the SeaweedFS the tool's own S3 and IAM requests reach.
 	sw *seaweedFake
+	// projectLists counts the LISTs of projects projectFake answered; the
+	// first projectListsHidden of them leave out every project (the
+	// openshift-apiserver's project cache not synchronized yet).
+	projectLists, projectListsHidden int
 	// serverClockOffset, when not zero, is how far the API server's clock
 	// (its responses' Date header) is from the wall clock.
 	serverClockOffset time.Duration
