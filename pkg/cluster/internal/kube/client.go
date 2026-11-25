@@ -359,11 +359,12 @@ func (c *Client) NoRetryWhen(skip func(error) bool) *Client {
 // MetadataOnly returns a copy of c whose reads ask for the objects'
 // metadata only (PartialObjectMetadata, as client-go's metadata client asks
 // for it: k8s.io/client-go/metadata): a list of Secrets then carries no
-// data. An API server that does not offer it answers with the full objects
-// (the JSON fallback in the header), which parse the same way.
+// data. There is no plain JSON fallback in the header: an API server that
+// cannot answer with metadata only refuses (406) instead of sending the
+// objects' data.
 func (c *Client) MetadataOnly() *Client {
 	cp := *c
-	cp.accept = "application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1,application/json;as=PartialObjectMetadata;g=meta.k8s.io;v=v1,application/json"
+	cp.accept = "application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1,application/json;as=PartialObjectMetadata;g=meta.k8s.io;v=v1"
 	return &cp
 }
 

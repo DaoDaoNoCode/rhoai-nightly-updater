@@ -357,6 +357,12 @@ objects:
       - apiGroups: ["perses.dev"]
         resources: ["persesdatasources", "persesdashboards"]
         verbs: ["list"]
+      # Which StorageClass is the cluster's default: the Observability
+      # tab's (and MaaS Set up's) check before Set up. Cluster-scoped, no
+      # credential. SECURITY.md, "Observability".
+      - apiGroups: ["storage.k8s.io"]
+        resources: ["storageclasses"]
+        verbs: ["list"]
       - apiGroups: ["gateway.networking.k8s.io"]
         resources: ["httproutes"]
         resourceNames: ["smollm2-135m-instruct-kserve-route", "qwen25-05b-instruct-kserve-route", "qwen3-1-7b-kserve-route"]

@@ -7,10 +7,10 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/argo"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
-	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -76,8 +76,8 @@ func readTenant(c *kube.Client) (tenant, error) {
 // spec.components.dashboard: maasPortal, or maasConsumerPortal (an earlier
 // API's spelling, dashboard_types.go L38-40); found false when this RHOAI
 // has neither, and reports no MaaSPortalAvailable.
-func portalKey(dsc map[string]any) (key, state string, found bool) {
-	spec, _ := dsc["spec"].(map[string]any)
+func portalKey(read rhoai.DSCRead) (key, state string, found bool) {
+	spec, _ := read.Object["spec"].(map[string]any)
 	comps, _ := spec["components"].(map[string]any)
 	dash, _ := comps["dashboard"].(map[string]any)
 	for _, k := range []string{"maasPortal", "maasConsumerPortal"} {
@@ -86,27 +86,43 @@ func portalKey(dsc map[string]any) (key, state string, found bool) {
 			return k, state, true
 		}
 	}
-	if s, _ := serving.DSCConditionStatus(dsc, "MaaSPortalAvailable"); s != "" {
+	if s, _ := serving.DSCConditionStatus(read.Object, "MaaSPortalAvailable"); s != "" {
+		// Not written yet: the key of the version read (v2 calls it
+		// maasConsumerPortal, dashboard_types.go L38-40).
+		if read.Version == "v2" {
+			return "maasConsumerPortal", "", true
+		}
 		return "maasPortal", "", true
 	}
 	return "", "", false
 }
 
-// portalURL is https://<gateway domain>/maas-portal/ from the Dashboard
-// CR (spec.gateway.domain, which RHOAI fills from the GatewayConfig), or "".
-func portalURL(c *kube.Client) string {
+// portalURL is the portal's address from the Dashboard CR: its
+// status.maasPortalUrl when the dashboard operator published one, else
+// https://<spec.gateway.domain>/maas-portal/ (odh-dashboard
+// docs/maas-portal.md L36), with published false; "" when neither is there.
+func portalURL(c *kube.Client) (url string, published bool) {
 	var items []struct {
 		Spec struct {
 			Gateway struct {
 				Domain string `json:"domain"`
 			} `json:"gateway"`
 		} `json:"spec"`
+		Status struct {
+			MaaSPortalURL string `json:"maasPortalUrl"`
+		} `json:"status"`
 	}
 	api := componentsGroup + "/" + rhoai.ServedVersions(c, componentsGroup, []string{"v1alpha1"}).Versions[0]
-	if err := c.ListInto(rhoai.ClusterPath(api, "dashboards", ""), &items); err != nil || len(items) == 0 || items[0].Spec.Gateway.Domain == "" {
-		return ""
+	if err := c.ListInto(rhoai.ClusterPath(api, "dashboards", ""), &items); err != nil || len(items) == 0 {
+		return "", false
 	}
-	return "https://" + items[0].Spec.Gateway.Domain + "/maas-portal/"
+	if u := items[0].Status.MaaSPortalURL; u != "" {
+		return u, true
+	}
+	if d := items[0].Spec.Gateway.Domain; d != "" {
+		return "https://" + d + "/maas-portal/", false
+	}
+	return "", false
 }
 
 // GetMaaSStatus is serving.GetMaaSStatus with the usage logs and the
@@ -132,15 +148,11 @@ func usageLogsState(c *kube.Client) *types.MaaSUsageLogs {
 		out.State, out.Message = "unknown", "This cluster has no DSCInitialization."
 		return out
 	}
-	st, _, s3Err := storage.S3StatusAndEndpoints(c)
-	secured := false
-	if s3Err == nil && st.Deployed {
-		secured, s3Err = storage.StorageSecured(c)
-	}
-	if s3Err != nil {
-		out.SetUpBlockedReason = "Cannot read the S3 storage: " + s3Err.Error()
-	} else {
-		out.SetUpBlockedReason = storage.UsageLogsStorageBlock(st, secured)
+	// What the Observability tab's Set up would refuse, all of it (the
+	// operators, monitoring Managed, the S3 storage, the default
+	// StorageClass, usage logs in this RHOAI).
+	if v := read(c); v.refusal != "" {
+		out.SetUpBlockedReason = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(v.refusal), "Nothing was changed."))
 	}
 	if t, err := readTenant(c); err == nil && t.Found {
 		out.TenantFound, out.CaptureUser = true, t.CaptureUser
@@ -173,7 +185,7 @@ func portalState(c *kube.Client) *types.MaaSPortal {
 	if err != nil || read.Object == nil {
 		return nil
 	}
-	_, state, found := portalKey(read.Object)
+	_, state, found := portalKey(read)
 	if !found {
 		return nil
 	}
@@ -184,21 +196,20 @@ func portalState(c *kube.Client) *types.MaaSPortal {
 	if prev, ok := annotations[portalAnnotation].(string); ok {
 		p.SetByTool, p.Previous = true, prev
 	}
-	if dash, _ := dashboardState(read.Object); dash != "Managed" {
-		p.BlockedReason = fmt.Sprintf("The dashboard is %s in the DataScienceCluster; the portal runs only with it Managed.", kube.FirstNonEmpty(dash, "not set"))
+	// The portal is independent of the core dashboard's managementState
+	// (odh-dashboard docs/maas-portal.md L11, L18); only Argo CD tracking
+	// the DataScienceCluster keeps this tool from changing it.
+	if tr := argo.TrackingOf(c, read.Object, rhoai.DSCGroup, "DataScienceCluster"); tr.ManagedBy() != "" {
+		p.BlockedReason = argo.GitOpsRefusal("The DataScienceCluster", tr.ManagedBy(), "changing the MaaS portal") + tr.UnconfirmedNote()
 	}
 	if p.On {
-		p.URL = portalURL(c)
+		var published bool
+		p.URL, published = portalURL(c)
+		if p.URL != "" && !published {
+			p.Message = strings.TrimSpace(p.Message + " The dashboard operator has not published the portal's address yet; this is where it will be.")
+		}
 	}
 	return p
-}
-
-func dashboardState(dsc map[string]any) (string, bool) {
-	spec, _ := dsc["spec"].(map[string]any)
-	comps, _ := spec["components"].(map[string]any)
-	dash, ok := comps["dashboard"].(map[string]any)
-	state, _ := dash["managementState"].(string)
-	return state, ok
 }
 
 // --- actions ------------------------------------------------------------------------
@@ -242,12 +253,8 @@ func RunMaaS(c *kube.Client, req types.MaaSRequest, onStep func(types.UpdateStep
 		}
 		return m.Done(map[bool]string{true: "The MaaS portal is turned on; RHOAI's dashboard operator deploys it.", false: "The MaaS portal is as before this tool turned it on."}[req.Action == "portal-on"])
 	case "teardown":
-		notes := restoreMaaSExtras(c)
 		res, err := serving.RunMaaS(c, req, onStep)
-		if res != nil && len(notes) > 0 {
-			res.Logs = append(notes, res.Logs...)
-		}
-		return res, err
+		return afterMaaSTeardown(c, res, err)
 	case "setup":
 		return runMaaSSetup(m, req, onStep)
 	}
@@ -360,12 +367,12 @@ func setPortal(m *serving.Run, on bool) (*types.OperationResponse, error) {
 	if read.Object == nil {
 		return m.Fail(StepPortal, "This cluster has no DataScienceCluster. Nothing was changed.", "prerequisites", "no dsc")
 	}
-	key, state, found := portalKey(read.Object)
+	key, state, found := portalKey(read)
 	if !found {
 		return m.Fail(StepPortal, "This RHOAI's DataScienceCluster has no MaaS portal (spec.components.dashboard.maasPortal). Nothing was changed.", "unsupported", "no portal")
 	}
-	if dash, _ := dashboardState(read.Object); on && dash != "Managed" {
-		return m.Fail(StepPortal, fmt.Sprintf("The dashboard is %s in the DataScienceCluster; the portal runs only with it Managed. Nothing was changed.", kube.FirstNonEmpty(dash, "not set")), "prerequisites", "dashboard off")
+	if tr := argo.TrackingOf(c, read.Object, rhoai.DSCGroup, "DataScienceCluster"); tr.ManagedBy() != "" {
+		return m.Fail(StepPortal, argo.GitOpsRefusal("The DataScienceCluster", tr.ManagedBy(), "changing the MaaS portal")+tr.UnconfirmedNote()+" Nothing was changed.", kube.ErrorCodeGitOpsManaged, "gitops")
 	}
 	md, _ := read.Object["metadata"].(map[string]any)
 	annotations, _ := md["annotations"].(map[string]any)
@@ -410,38 +417,52 @@ func setPortal(m *serving.Run, on bool) (*types.OperationResponse, error) {
 }
 
 // restoreMaaSExtras puts the user IDs setting and the portal back when this
-// tool turned them on (MaaS's Clean up, first). It returns what happened,
-// for the result's logs; a failure there does not stop the Clean up.
-func restoreMaaSExtras(c *kube.Client) []string {
-	var notes []string
-	if t, err := readTenant(c); err == nil && t.Found {
+// tool turned them on. It returns what it did, and what it could not do
+// (a reason, "" when everything is as before).
+func restoreMaaSExtras(c *kube.Client) (logs []string, problem string) {
+	var problems []string
+	if t, err := readTenant(c); err != nil {
+		problems = append(problems, "Cannot read MaasTenantConfig default-tenant to put the user IDs setting back: "+err.Error()+".")
+	} else if t.Found {
 		if _, ok := t.Meta.Annotations[captureUserAnnotation]; ok {
 			q := &serving.Run{Client: c, Activity: "capture-user-off-maas", Target: "MaaS user IDs in the usage logs"}
 			if r, _ := setCaptureUser(q, false); r != nil {
-				notes = append(notes, "User IDs setting not put back: "+r.Message)
+				problems = append(problems, "The user IDs setting was not put back: "+r.Message)
 			} else {
-				notes = append(notes, "OK: user IDs setting as before")
+				logs = append(logs, "OK: user IDs setting as before")
 			}
 		}
 	}
 	if p := portalState(c); p != nil && p.SetByTool {
 		q := &serving.Run{Client: c, Activity: "portal-off-maas", Target: "the MaaS portal"}
 		if r, _ := setPortal(q, false); r != nil {
-			notes = append(notes, "MaaS portal not put back: "+r.Message)
+			problems = append(problems, "The MaaS portal was not put back: "+r.Message)
 		} else {
-			notes = append(notes, "OK: MaaS portal as before")
+			logs = append(logs, "OK: MaaS portal as before")
 		}
 	}
-	return notes
+	return logs, strings.Join(problems, " ")
 }
 
-// TeardownMaaSPlatform is serving.TeardownMaaSPlatform with the user IDs
-// setting and the portal put back first (Clean up everything).
-func TeardownMaaSPlatform(c *kube.Client) (*types.OperationResponse, error) {
-	notes := restoreMaaSExtras(c)
-	res, err := serving.TeardownMaaSPlatform(c)
-	if res != nil && len(notes) > 0 {
-		res.Logs = append(notes, res.Logs...)
+// afterMaaSTeardown puts the user IDs setting and the portal back once the
+// MaaS teardown succeeded (a teardown that refuses changes neither), and
+// makes the result fail, retryably, when that could not be done.
+func afterMaaSTeardown(c *kube.Client, res *types.OperationResponse, err error) (*types.OperationResponse, error) {
+	if err != nil || res == nil || !res.Success {
+		return res, err
 	}
-	return res, err
+	logs, problem := restoreMaaSExtras(c)
+	res.Logs = append(res.Logs, logs...)
+	if problem != "" {
+		res.Success, res.ErrorCode = false, "partial_failure"
+		res.Message += " " + problem + " Clean up MaaS again to finish."
+	}
+	return res, nil
+}
+
+// TeardownMaaSPlatform is serving.TeardownMaaSPlatform, then the user IDs
+// setting and the portal put back (Clean up everything).
+func TeardownMaaSPlatform(c *kube.Client) (*types.OperationResponse, error) {
+	res, err := serving.TeardownMaaSPlatform(c)
+	return afterMaaSTeardown(c, res, err)
 }

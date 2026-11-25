@@ -105,3 +105,12 @@ func mustBeTest(what string) {
 		panic(what + " is only for tests")
 	}
 }
+
+// SetUsageLogsListPageLimitForTest sets how many objects one list and one
+// batch delete of the usage-logs bucket take.
+func SetUsageLogsListPageLimitForTest(n int) (restore func()) {
+	mustBeTest("SetUsageLogsListPageLimitForTest")
+	prev := usageLogsListPageLimit
+	usageLogsListPageLimit = n
+	return func() { usageLogsListPageLimit = prev }
+}

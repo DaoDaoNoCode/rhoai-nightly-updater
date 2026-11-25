@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +43,8 @@ type obsCluster struct {
 	pending       bool
 	metrics, logs bool
 	gen           int
+	// neverReady: the usage logs stay not available (Loki does not schedule).
+	neverReady bool
 }
 
 func newObsCluster(t *testing.T, allOps bool) *obsCluster {
@@ -92,7 +95,7 @@ func obsCond(typ string, on bool, off string) map[string]any {
 	if on {
 		return map[string]any{"type": typ, "status": "True", "reason": "Available"}
 	}
-	return map[string]any{"type": typ, "status": "False", "reason": off, "message": "not configured in Monitoring CR"}
+	return map[string]any{"type": typ, "status": "False", "reason": off, "severity": "Info", "message": "not configured in Monitoring CR"}
 }
 
 // syncMonitoring is RHOAI's operator after a change of the fields.
@@ -102,12 +105,15 @@ func (oc *obsCluster) syncMonitoring() {
 		obsCond("MonitoringStackAvailable", oc.metrics, "MetricsNotConfigured"),
 		obsCond("PersesAvailable", oc.metrics, "MetricsAndTracesNotConfigured"),
 		obsCond("OpenTelemetryCollectorAvailable", oc.metrics, "MetricsAndTracesNotConfigured"),
-		obsCond("UsageLogsLokiStackAvailable", oc.logs, "UsageLogsNotConfigured"),
+		obsCond("UsageLogsLokiStackAvailable", oc.logs && !oc.neverReady, "UsageLogsNotConfigured"),
 		obsCond("UsageLogsCollectorAvailable", oc.logs, "UsageLogsNotConfigured"),
 		obsCond("Ready", true, ""),
 	}
 	for _, c := range conds {
 		c.(map[string]any)["observedGeneration"] = oc.gen
+	}
+	if oc.neverReady && oc.logs {
+		conds[4] = map[string]any{"type": "UsageLogsLokiStackAvailable", "status": "False", "reason": "Pending", "message": "ingester pending", "observedGeneration": oc.gen}
 	}
 	oc.f.put(obsMon, map[string]any{"metadata": map[string]any{"name": "default-monitoring", "generation": oc.gen}, "status": map[string]any{"conditions": conds}})
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -123,7 +129,10 @@ func (oc *obsCluster) syncMonitoring() {
 	}
 	if oc.metrics {
 		put(obsPVCs, "prometheus-data-science-monitoringstack-db-prometheus-data-science-monitoringstack-0", nil)
-		put(obsSecrets, "data-science-collector-ca-cert", nil)
+		put(obsSecrets, "data-science-collector-ca-cert", map[string]any{"annotations": map[string]any{"cert-manager.io/certificate-name": "data-science-collector-ca"}})
+		// Not the stack's: no evidence; made in the same window.
+		put(obsSecrets, "someone-elses-secret", nil)
+		put(obsPVCs, "someone-elses-pvc", nil)
 		put(obsSecrets, "data-science-perses-dockercfg-x", map[string]any{"annotations": map[string]any{"kubernetes.io/service-account.name": "data-science-perses"}})
 		put(obsSecrets, "owned-by-the-stack", map[string]any{"ownerReferences": []any{map[string]any{"kind": "LokiStack", "name": "x", "uid": "u"}}})
 	}
@@ -271,6 +280,8 @@ func TestObservability_SetUpAndCleanUp(t *testing.T) {
 		obsSecrets + "/data-science-collector-ca-cert":                                                    false,
 		obsSecrets + "/data-science-perses-dockercfg-x":                                                   true,
 		obsSecrets + "/before-setup":                                                                      true,
+		obsSecrets + "/someone-elses-secret":                                                              true,
+		obsPVCs + "/someone-elses-pvc":                                                                    true,
 		obsSecrets + "/" + storage.UsageLogsSecret:                                                        false,
 	} {
 		if oc.f.has(path) != want {
@@ -423,7 +434,7 @@ func TestObservability_CollectorStuckWithoutCertificates(t *testing.T) {
 		}
 	}
 	if part.State != "problem" || !strings.Contains(part.Message, "data-science-collector-ta-client-cert") || !strings.Contains(part.Message, "product bug") ||
-		!strings.Contains(part.Commands, "Not in RHOAI docs; worked in our test") || !strings.Contains(part.Commands, "oc delete pod -n openshift-opentelemetry-operator -l control-plane=controller-manager") {
+		!strings.Contains(part.Commands, "Not in RHOAI docs; worked in our test") || !strings.Contains(part.Commands, "oc delete pod -n openshift-opentelemetry-operator -l app.kubernetes.io/name=opentelemetry-operator,control-plane=controller-manager") {
 		t.Fatalf("part = %+v", part)
 	}
 	// Without the kubelet's event, a pod that only starts slowly is no problem.
@@ -534,7 +545,7 @@ func TestObservability_MaaSPortalTurnsOnAndBack(t *testing.T) {
 		t.Fatalf("portal after = %+v", st.Portal)
 	}
 	// Clean up MaaS puts it back first (here MaaS itself is not set up).
-	if res := obsMaaSRun(t, oc.c, types.MaaSRequest{Action: "teardown"}); len(res.Logs) == 0 || res.Logs[0] != "OK: MaaS portal as before" {
+	if res := obsMaaSRun(t, oc.c, types.MaaSRequest{Action: "teardown"}); !res.Success || !slices.Contains(res.Logs, "OK: MaaS portal as before") {
 		t.Fatalf("teardown = %+v", res)
 	}
 	dash := ensureMap(ensureMap(ensureMap(oc.f.get(tDSC), "spec"), "components"), "dashboard")

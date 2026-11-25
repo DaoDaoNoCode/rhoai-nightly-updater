@@ -148,6 +148,10 @@ export const ObservabilityTab: React.FC<ObservabilityTabProps> = ({ observabilit
           <PartList aria-label="What usage logs and the dashboards need">
             {o.parts.map((p) => <ObservabilityPartItem key={p.id} part={p} />)}
           </PartList>
+        ) : readOnly ? (
+          <Alert variant="info" isInline component="p" title="Shown to cluster-admins only">
+            The usage logs and dashboards setup is read with the updater&apos;s own rights for cluster-admins. Ask a cluster-admin to check it, or open the RHOAI dashboard&apos;s Observe &amp; monitor.
+          </Alert>
         ) : observabilityError ? <LoadFailed title="Cannot read the usage logs and dashboards" error={observabilityError} onRetry={onRetry} />
           : <PartsSkeleton aria-label="What usage logs and the dashboards need" what="what usage logs and the dashboards need" count={7} />}
       </StackItem>

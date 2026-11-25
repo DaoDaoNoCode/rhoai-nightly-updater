@@ -3,6 +3,7 @@ package observability
 import (
 	"fmt"
 	"log/slog"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -68,17 +69,7 @@ func SetUp(m *serving.Run) (*types.OperationResponse, error) {
 	if v.refusal != "" {
 		return m.Fail(StepCheck, v.refusal, kube.FirstNonEmpty(v.code, "prerequisites"), "check failed")
 	}
-	storageClass := ""
-	if v.addUsageLogs {
-		sc, err := defaultStorageClass(c)
-		if err != nil {
-			return m.Fail(StepCheck, fmt.Sprintf("Cannot read the StorageClasses; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "check failed")
-		}
-		if sc == "" {
-			return m.Fail(StepCheck, "This cluster has no default StorageClass (annotation "+defaultClassAnnotation+"), and the LokiStack's disks need one: RHOAI's default for usageLogs.storage.storageClassName is gp3-csi, which exists on AWS only. A cluster-admin marks a StorageClass as the default. Nothing was changed.", "prerequisites", "no default storage class")
-		}
-		storageClass = sc
-	}
+	storageClass := v.storageClass
 	// Every write as a server-side dry run first.
 	if err := v.ops.DryRun(c); err != nil {
 		return m.Fail(StepCheck, fmt.Sprintf("%v. Nothing was changed.%s", err, kube.TemplateHint(err)), serving.MaaSWriteCode(err), "dry run failed")
@@ -87,7 +78,8 @@ func SetUp(m *serving.Run) (*types.OperationResponse, error) {
 	var secretFound bool
 	var current storage.S3Keys
 	_, logsByTool := v.rec.Added[fieldUsageLogs]
-	if v.addUsageLogs || logsByTool {
+	storageByTool := logsByTool || v.rec.Storage
+	if v.addUsageLogs || storageByTool {
 		var err error
 		current, secretMeta, secretFound, err = storage.UsageLogsSecretKeys(c, v.ns)
 		if err != nil {
@@ -100,7 +92,7 @@ func SetUp(m *serving.Run) (*types.OperationResponse, error) {
 			return m.Fail(StepCheck, fmt.Sprintf("The API server rejects Secret %s/%s: %v. Nothing was changed.", v.ns, storage.UsageLogsSecret, err), serving.MaaSWriteCode(err), "dry run failed")
 		}
 	}
-	body, _ := settingsPatch(c, v, storageClass, nil)
+	body, _ := settingsPatch(v, storageClass, nil)
 	if body != nil {
 		if _, err := patchDSCI(c, v.d, body, true); err != nil {
 			return m.Fail(StepCheck, fmt.Sprintf("The API server rejects the monitoring fields in DSCInitialization %s: %v. Nothing was changed.%s", v.d.Meta.Name, err, kube.TemplateHint(err)), serving.MaaSWriteCode(err), "dry run failed")
@@ -112,8 +104,24 @@ func SetUp(m *serving.Run) (*types.OperationResponse, error) {
 	if r, err := v.ops.Install(m); r != nil || err != nil {
 		return r, err
 	}
-	// 2. The usage-logs storage.
-	if v.addUsageLogs || logsByTool {
+	// 2. The usage-logs storage, after a record that it may exist (so Clean
+	// up sees a setup that stops before the fields are added).
+	if v.addUsageLogs || storageByTool {
+		if !v.recOK || !v.rec.Storage {
+			intent := v.rec
+			intent.Storage = true
+			if intent.At == "" {
+				intent.At = kube.NowRFC3339()
+			}
+			if intent.Added == nil {
+				intent.Added = map[string]AddedField{}
+			}
+			answer, err := patchDSCI(c, v.d, map[string]any{"metadata": map[string]any{"annotations": map[string]any{RecordAnnotation: recordJSON(intent)}}}, false)
+			if err != nil {
+				return m.Fail(StepStorage, fmt.Sprintf("Cannot record on DSCInitialization %s that this tool makes the usage-logs storage, so it made none of it: %v.%s", v.d.Meta.Name, err, kube.TemplateHint(err)), serving.MaaSWriteCode(err), "record failed")
+			}
+			v.d, v.rec, v.recOK = answer, intent, true
+		}
 		m.Step(StepStorage, "running", fmt.Sprintf("Making bucket %s and SeaweedFS user %s on this tool's S3 storage, and Secret %s/%s", storage.UsageLogsBucket, storage.UsageLogsUser, v.ns, storage.UsageLogsSecret))
 		keys, fresh, err := storage.ProvisionUsageLogsKey(c, current)
 		if err != nil {
@@ -135,7 +143,7 @@ func SetUp(m *serving.Run) (*types.OperationResponse, error) {
 		if err != nil {
 			return m.Fail(StepSettings, fmt.Sprintf("Cannot list what namespace %s has before the change; the DSCInitialization was not changed: %v.%s", v.ns, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "list failed")
 		}
-		body, rec := settingsPatch(c, v, storageClass, &before)
+		body, rec := settingsPatch(v, storageClass, &before)
 		answer, err := patchDSCI(c, d, body, false)
 		if err != nil {
 			return m.Fail(StepSettings, fmt.Sprintf("Failed to change DSCInitialization %s: %v. Set up again to continue.%s", d.Meta.Name, err, kube.TemplateHint(err)), serving.MaaSWriteCode(err), "dsci patch failed")
@@ -146,9 +154,11 @@ func SetUp(m *serving.Run) (*types.OperationResponse, error) {
 	} else {
 		m.Step(StepSettings, "success", fmt.Sprintf("DSCInitialization %s sets usage logs and metrics storage already.", d.Meta.Name))
 	}
-	// 4. Ready, then what the stack made is recorded for Clean up.
+	// 4. Ready, then what the stack made is recorded for Clean up: only in
+	// the run that added the fields (a later Set up records nothing: what
+	// appears after it is not provably this change's).
 	r, err := waitReady(m)
-	if v.recOK {
+	if body != nil {
 		if lerr := recordLeft(c, v.ns); lerr != nil {
 			m.Logs = append(m.Logs, "Could not record the disks the stack made (Clean up then lists them instead of deleting them): "+lerr.Error())
 		}
@@ -158,11 +168,14 @@ func SetUp(m *serving.Run) (*types.OperationResponse, error) {
 
 // settingsPatch is the DSCInitialization merge patch that adds the missing
 // fields with the record that names them (nil when nothing is missing).
-func settingsPatch(c *kube.Client, v *view, storageClass string, before *Names) (map[string]any, Record) {
+func settingsPatch(v *view, storageClass string, before *Names) (map[string]any, Record) {
 	if !v.addMetrics && !v.addUsageLogs {
 		return nil, v.rec
 	}
-	rec := Record{At: kube.NowRFC3339(), By: kube.GetUser(c), Added: map[string]AddedField{}, Before: before}
+	rec := Record{At: kube.NowRFC3339(), Storage: v.rec.Storage || v.addUsageLogs, Added: map[string]AddedField{}, Before: before}
+	for name, f := range v.rec.Added {
+		rec.Added[name] = f
+	}
 	monitoring := map[string]any{}
 	if v.addMetrics {
 		set := metricsStorageValue()
@@ -192,11 +205,15 @@ func defaultStorageClass(c *kube.Client) (string, error) {
 	}
 	name, newest := "", ""
 	for _, it := range items {
-		if it.Metadata.Annotations[defaultClassAnnotation] != "true" {
+		a := it.Metadata.Annotations
+		if a[defaultClassAnnotation] != "true" && a[betaDefaultClassAnnotation] != "true" {
 			continue
 		}
-		if name == "" || it.Metadata.CreationTimestamp > newest {
-			name, newest = it.Metadata.Name, it.Metadata.CreationTimestamp
+		// The newest; among equally new ones, the first by name
+		// (Kubernetes' storage admission, pkg/volume/util GetDefaultClass).
+		ts := it.Metadata.CreationTimestamp
+		if name == "" || ts > newest || (ts == newest && it.Metadata.Name < name) {
+			name, newest = it.Metadata.Name, ts
 		}
 	}
 	return name, nil
@@ -334,6 +351,39 @@ func leftover(m kube.ObjectMeta, before []string, at string) bool {
 	return err1 == nil && err2 == nil && !created.Before(mark)
 }
 
+// The stack's objects that its owners' garbage collection leaves, as RHOAI
+// 3.7.0-ea.1 makes them (n8 spike, rendered/pvcs.txt and
+// monitoring-ns-objects-after-gc.txt): the PVCs of the StatefulSets of the
+// MonitoringStack's Prometheus, of Perses and of the usage-logs LokiStack,
+// and the Secrets cert-manager issued for the collector (annotation
+// cert-manager.io/certificate-name) plus the web CA odh-observability made.
+// Only objects that match are recorded, and so deleted, whatever else
+// appears in the namespace meanwhile.
+var stackPVCNames = []*regexp.Regexp{
+	regexp.MustCompile(`^prometheus-data-science-monitoringstack-db-prometheus-data-science-monitoringstack-\d+$`),
+	regexp.MustCompile(`^storage-data-science-perses-\d+$`),
+	regexp.MustCompile(`^(storage|wal)-data-science-usage-logs-lokistack-[a-z-]+-\d+$`),
+}
+
+const (
+	certificateNameAnnotation = "cert-manager.io/certificate-name"
+	webCASecret               = "prometheus-web-tls-ca"
+)
+
+func stackPVC(m kube.ObjectMeta) bool {
+	for _, re := range stackPVCNames {
+		if re.MatchString(m.Name) {
+			return true
+		}
+	}
+	return false
+}
+
+func stackSecret(m kube.ObjectMeta) bool {
+	_, issued := m.Annotations[certificateNameAnnotation]
+	return issued || m.Name == webCASecret
+}
+
 // recordLeft adds to the record what the stack made that its garbage
 // collection leaves (leftover), by name and UID, so Clean up can delete
 // exactly those. Without the record's list of what was there before, it
@@ -369,12 +419,12 @@ func recordLeft(c *kube.Client, ns string) error {
 			}
 		}
 		for _, p := range pvcs {
-			if leftover(p.Metadata, rec.Before.PVCs, rec.At) {
+			if leftover(p.Metadata, rec.Before.PVCs, rec.At) && stackPVC(p.Metadata) {
 				left.PVCs[p.Metadata.Name] = p.Metadata.UID
 			}
 		}
 		for _, s := range secrets {
-			if leftover(s.Metadata, rec.Before.Secrets, rec.At) {
+			if leftover(s.Metadata, rec.Before.Secrets, rec.At) && stackSecret(s.Metadata) {
 				left.Secrets[s.Metadata.Name] = s.Metadata.UID
 			}
 		}
@@ -471,8 +521,9 @@ func teardown(m *serving.Run) (*types.OperationResponse, error) {
 		return r, err
 	}
 
-	// 4. The usage-logs storage.
-	if _, ok := rec.Added[fieldUsageLogs]; ok {
+	// 4. The usage-logs storage (also of a setup that stopped before the
+	// fields: its intent record).
+	if _, ok := rec.Added[fieldUsageLogs]; ok || rec.Storage {
 		m.Step(StepStorage, "running", fmt.Sprintf("Deleting Secret %s/%s, SeaweedFS user %s and bucket %s", ns, storage.UsageLogsSecret, storage.UsageLogsUser, storage.UsageLogsBucket))
 		path := rhoai.NamespacedPath("v1", "secrets", ns, storage.UsageLogsSecret)
 		sm, found, err := kube.ReadObjectMeta(c, path)
@@ -547,6 +598,11 @@ func waitGone(m *serving.Run, ns string, rec Record) (*types.OperationResponse, 
 				waiting = append(waiting, t+" is still True")
 			}
 		}
+		left, err := stackLeft(cc, ns, rec)
+		if err != nil {
+			return false, err
+		}
+		waiting = append(waiting, left...)
 		users, err := diskUsers(cc, ns, rec.Left.pvcs())
 		if err != nil {
 			return false, err
@@ -568,6 +624,79 @@ func waitGone(m *serving.Run, ns string, rec Record) (*types.OperationResponse, 
 	}
 	m.Step(StepGC, "success", "RHOAI's operator deleted the stack.")
 	return nil, nil
+}
+
+// stackLeft lists what of the stack the removed fields deployed is still
+// there, read with the user's token: the LokiStack on this tool's Secret,
+// the MonitoringStack and Perses (metrics), and the OpenTelemetry
+// collectors (both fields). A kind whose API is not served is gone.
+func stackLeft(c *kube.Client, ns string, rec Record) ([]string, error) {
+	_, metrics := rec.Added[fieldMetricsStorage]
+	_, logs := rec.Added[fieldUsageLogs]
+	var out []string
+	if logs {
+		var stacks []struct {
+			Metadata kube.ObjectMeta `json:"metadata"`
+			Spec     struct {
+				Storage struct {
+					Secret struct {
+						Name string `json:"name"`
+					} `json:"secret"`
+				} `json:"storage"`
+			} `json:"spec"`
+		}
+		if err := c.ListInto(rhoai.NamespacedPath(lokiAPI(c), "lokistacks", ns, ""), &stacks); err != nil && !kube.IsK8sNotFound(err) {
+			return nil, fmt.Errorf("list the LokiStacks of %s: %w", ns, err)
+		}
+		for _, s := range stacks {
+			if s.Spec.Storage.Secret.Name == storage.UsageLogsSecret {
+				out = append(out, "LokiStack "+s.Metadata.Name)
+			}
+		}
+	}
+	if metrics {
+		names, err := listNames(c, rhoai.NamespacedPath(monitoringStackAPI(c), "monitoringstacks", ns, ""))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, prefixed("MonitoringStack ", names)...)
+		if names, err = listNames(c, rhoai.NamespacedPath(persesAPI(c), "perses", ns, "")); err != nil {
+			return nil, err
+		}
+		out = append(out, prefixed("Perses ", names)...)
+	}
+	if metrics && logs {
+		names, err := listNames(c, rhoai.NamespacedPath(otelAPI(c), "opentelemetrycollectors", ns, ""))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, prefixed("OpenTelemetryCollector ", names)...)
+	}
+	return out, nil
+}
+
+// listNames lists the names at path (none when the API is not served).
+func listNames(c *kube.Client, path string) ([]string, error) {
+	var items []meta
+	if err := c.ListInto(path, &items); err != nil {
+		if kube.IsK8sNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []string
+	for _, it := range items {
+		out = append(out, it.Metadata.Name)
+	}
+	return out, nil
+}
+
+func prefixed(prefix string, names []string) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = prefix + n
+	}
+	return out
 }
 
 // diskUsers lists the pods of ns that mount one of pvcs (by name).
@@ -616,16 +745,18 @@ func deleteLeft(m *serving.Run, ns string, rec Record) ([]string, *types.Operati
 		return nil, r, err
 	}
 	var notes []string
+	// The stack's disks made after this tool's change that it did not
+	// record are listed, never deleted.
+	var unrecorded []string
+	for _, p := range pvcs {
+		if _, ok := rec.Left.pvcs()[p.Metadata.Name]; !ok && rec.Before != nil && leftover(p.Metadata, rec.Before.PVCs, rec.At) && stackPVC(p.Metadata) {
+			unrecorded = append(unrecorded, p.Metadata.Name)
+		}
+	}
+	if len(unrecorded) > 0 {
+		notes = append(notes, fmt.Sprintf("These disks of the stack were made after this tool's change but not recorded by it, so they were kept (they hold metrics and usage logs; a cluster-admin deletes them when nothing needs them): oc delete pvc -n %s %s", kube.ShellQuote(ns), strings.Join(unrecorded, " ")))
+	}
 	if rec.Left == nil {
-		var unrecorded []string
-		for _, p := range pvcs {
-			if rec.Before != nil && leftover(p.Metadata, rec.Before.PVCs, rec.At) {
-				unrecorded = append(unrecorded, p.Metadata.Name)
-			}
-		}
-		if len(unrecorded) > 0 {
-			notes = append(notes, fmt.Sprintf("This tool's setup did not record which disks the stack made, so these were kept (they hold metrics and usage logs; a cluster-admin deletes them when nothing needs them): oc delete pvc -n %s %s", kube.ShellQuote(ns), strings.Join(unrecorded, " ")))
-		}
 		m.Step(StepLeft, "success", "Nothing recorded to delete.")
 		return notes, nil, nil
 	}
@@ -646,7 +777,11 @@ func deleteLeft(m *serving.Run, ns string, rec Record) ([]string, *types.Operati
 				continue
 			}
 			o := live[i].Metadata
-			if o.UID != recorded[name] || len(o.OwnerReferences) > 0 || !leftover(o, nil, rec.At) {
+			stack := stackSecret(o)
+			if pvc {
+				stack = stackPVC(o)
+			}
+			if o.UID != recorded[name] || len(o.OwnerReferences) > 0 || !leftover(o, nil, rec.At) || !stack {
 				notes = append(notes, fmt.Sprintf("%s %s/%s was made again or changed owner since this tool's setup, so it was kept.", title, ns, name))
 				continue
 			}

@@ -517,7 +517,7 @@ const PortalRow: React.FC<{ p: MaaSPortal; reason: string | null; readOnly: bool
       actions={readOnly ? undefined : (
         <>
           {!p.on && <ActionListItem><TooltipButton variant="secondary" size="sm" disabledReason={reason ?? p.blockedReason ?? null} onClick={() => setPending({ kind: "maas-portal", on: true })}>Turn on</TooltipButton></ActionListItem>}
-          {p.on && <ActionListItem><TooltipButton variant="secondary" size="sm" disabledReason={reason ?? turnOffReason} onClick={() => setPending({ kind: "maas-portal", on: false })}>Turn off</TooltipButton></ActionListItem>}
+          {p.on && <ActionListItem><TooltipButton variant="secondary" size="sm" disabledReason={reason ?? p.blockedReason ?? turnOffReason} onClick={() => setPending({ kind: "maas-portal", on: false })}>Turn off</TooltipButton></ActionListItem>}
           {p.on && p.url && <ActionListItem><ExternalLink href={p.url} isInline>Open the portal</ExternalLink></ActionListItem>}
         </>
       )}>
@@ -526,7 +526,8 @@ const PortalRow: React.FC<{ p: MaaSPortal; reason: string | null; readOnly: bool
           ? <>The RHOAI dashboard&apos;s portal for MaaS users: their API keys, the models they may use, and their usage. RHOAI reports {p.available === "True" ? "it available" : p.available === "False" ? `it not available yet${p.message ? `: ${p.message}` : ""}` : "nothing about it yet"}.{p.setByTool ? ` Turned on by this tool (it was ${p.previous === "unset" ? "not set" : p.previous}); Turn off and Clean up MaaS put that back.` : ""}</>
           : <>Off ({p.managementState || "not set"} in the DataScienceCluster). Turn on sets <code>spec.components.dashboard.maasPortal</code> to Managed; RHOAI&apos;s dashboard operator then deploys the portal at the dashboard&apos;s address under /maas-portal/.</>}
       </Content>
-      {p.blockedReason && !p.on && <Content component="p">{p.blockedReason}</Content>}
+      {p.on && p.available === "True" && p.message && <Content component="p">{p.message}</Content>}
+      {p.blockedReason && <Content component="p">{p.blockedReason}</Content>}
     </PartItem>
   );
 };

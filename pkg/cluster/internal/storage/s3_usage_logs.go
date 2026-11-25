@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -30,13 +32,21 @@ const (
 	// UsageLogsSecret is the Secret in RHOAI's monitoring namespace that
 	// holds the usage-logs key (the seven keys of docs/observability-modes.md
 	// L300-328).
-	UsageLogsSecret        = "rhoai-nightly-updater-usage-logs"
-	usageLogsPolicyName    = "rnu-usage-logs"
-	usageLogsPurposeTag    = "rnu-purpose"
-	usageLogsPurpose       = "usage-logs"
-	usageLogsProbeObject   = "rhoai-nightly-updater-probe/usage-logs-key-check"
-	usageLogsListPageLimit = 1000
+	UsageLogsSecret      = "rhoai-nightly-updater-usage-logs"
+	usageLogsPolicyName  = "rnu-usage-logs"
+	usageLogsPurposeTag  = "rnu-purpose"
+	usageLogsPurpose     = "usage-logs"
+	usageLogsProbeObject = "rhoai-nightly-updater-probe/usage-logs-key-check"
+	// usageLogsBucketMarker is the object this tool writes into the bucket
+	// right after it made it: what tells this tool's bucket from another of
+	// the same name (Set up adopts, and Clean up empties and deletes, only a
+	// bucket that has it).
+	usageLogsBucketMarker = "rhoai-nightly-updater/bucket-owner"
 )
+
+// usageLogsListPageLimit is how many objects one list (and one batch
+// delete, S3's maximum) takes; tests shorten it.
+var usageLogsListPageLimit = 1000
 
 // UsageLogsPolicy is the usage-logs user's inline policy: list, read, write
 // and delete objects of its bucket, nothing else (the policy of the
@@ -71,16 +81,12 @@ func ProvisionUsageLogsKey(c *kube.Client, current S3Keys) (keys S3Keys, fresh b
 	if err != nil {
 		return S3Keys{}, false, err
 	}
-	status, body, err := sw.object(http.MethodPut, UsageLogsBucket, "", nil, nil)
-	if err != nil {
-		return S3Keys{}, false, fmt.Errorf("create bucket %s: %w", UsageLogsBucket, err)
+	if err := ensureUsageLogsBucket(sw); err != nil {
+		return S3Keys{}, false, err
 	}
-	if status >= 300 && status != http.StatusConflict {
-		return S3Keys{}, false, fmt.Errorf("create bucket %s: %w", UsageLogsBucket, parseServiceError(status, body))
-	}
-	keys, fresh, err = provisionBucketUser(sw, bucketUser{name: UsageLogsUser, policyName: usageLogsPolicyName, policy: UsageLogsPolicy, tagKey: usageLogsPurposeTag, tagValue: usageLogsPurpose,
+	keys, fresh, err = provisionBucketUser(sw, bucketUser{name: UsageLogsUser, policyName: usageLogsPolicyName, policy: UsageLogsPolicy, tagKey: usageLogsPurposeTag, tagValue: usageLogsPurpose, requireTag: true,
 		foreign: func(other string) error {
-			return fmt.Errorf("SeaweedFS user %s is tagged %s=%s, not %s, so it is not the usage-logs user this tool makes; nothing was changed. Delete it in the SeaweedFS admin UI if nothing needs it", UsageLogsUser, usageLogsPurposeTag, other, usageLogsPurpose)
+			return fmt.Errorf("SeaweedFS user %s exists and is not tagged %s=%s (it has %q), so this tool did not make it and does not use it; nothing was changed. Delete it in the SeaweedFS admin UI if nothing needs it", UsageLogsUser, usageLogsPurposeTag, usageLogsPurpose, other)
 		}}, current)
 	if err != nil {
 		return S3Keys{}, false, err
@@ -89,6 +95,50 @@ func ProvisionUsageLogsKey(c *kube.Client, current S3Keys) (keys S3Keys, fresh b
 		return keys, fresh, fmt.Errorf("the new key of SeaweedFS user %s does not work as it should: %w", UsageLogsUser, err)
 	}
 	return keys, fresh, nil
+}
+
+// ensureUsageLogsBucket makes the bucket and writes this tool's marker into
+// it; a bucket that exists is used only when it has the marker.
+func ensureUsageLogsBucket(sw *seaweedClient) error {
+	status, body, err := sw.object(http.MethodPut, UsageLogsBucket, "", nil, nil)
+	if err != nil {
+		return fmt.Errorf("create bucket %s: %w", UsageLogsBucket, err)
+	}
+	switch {
+	case status == http.StatusConflict:
+		ours, err := bucketMarked(sw)
+		if err != nil {
+			return err
+		}
+		if !ours {
+			return fmt.Errorf("bucket %s exists and has no object %s, so this tool did not make it and does not use it; nothing was changed. Delete or rename it in the SeaweedFS admin UI if nothing needs it", UsageLogsBucket, usageLogsBucketMarker)
+		}
+		return nil
+	case status >= 300:
+		return fmt.Errorf("create bucket %s: %w", UsageLogsBucket, parseServiceError(status, body))
+	}
+	status, body, err = sw.object(http.MethodPut, UsageLogsBucket, usageLogsBucketMarker, nil, []byte("made by rhoai-nightly-updater for RHOAI's usage logs (the Observability tab)"))
+	if err != nil {
+		return fmt.Errorf("mark bucket %s: %w", UsageLogsBucket, err)
+	}
+	if status >= 300 {
+		return fmt.Errorf("mark bucket %s: %w", UsageLogsBucket, parseServiceError(status, body))
+	}
+	return nil
+}
+
+// bucketMarked reports whether the usage-logs bucket has this tool's marker.
+func bucketMarked(sw *seaweedClient) (bool, error) {
+	status, body, err := sw.object(http.MethodHead, UsageLogsBucket, usageLogsBucketMarker, nil, nil)
+	switch {
+	case err != nil:
+		return false, fmt.Errorf("read bucket %s: %w", UsageLogsBucket, err)
+	case status == http.StatusOK:
+		return true, nil
+	case status == http.StatusNotFound:
+		return false, nil
+	}
+	return false, fmt.Errorf("read bucket %s: %w", UsageLogsBucket, parseServiceError(status, body))
 }
 
 // probeUsageLogsKey checks keys against the storage: write, list, read and
@@ -146,8 +196,10 @@ func UsageLogsKeyRegistered(c *kube.Client, keyID string) (bool, error) {
 }
 
 // DeleteUsageLogsStorage deletes the usage-logs user (its keys first, as
-// SeaweedFS refuses to delete a user with keys) and the bucket with every
-// object in it. What is gone already counts as deleted. It returns what it
+// SeaweedFS refuses to delete a user with keys) when it carries this tool's
+// tag, and the bucket with every object in it when it has this tool's
+// marker: each on its own proof, so a run that stopped after one finishes
+// the other. What is gone already counts as deleted. It returns what it
 // did, one line each; on an error, what it did before.
 func DeleteUsageLogsStorage(c *kube.Client) ([]string, error) {
 	var logs []string
@@ -161,7 +213,7 @@ func DeleteUsageLogsStorage(c *kube.Client) ([]string, error) {
 	}
 	if found {
 		if got := tags[usageLogsPurposeTag]; got != usageLogsPurpose {
-			return logs, fmt.Errorf("SeaweedFS user %s is not tagged %s=%s, so it is not the usage-logs user this tool made; it was not deleted", UsageLogsUser, usageLogsPurposeTag, usageLogsPurpose)
+			return logs, fmt.Errorf("SeaweedFS user %s is not tagged %s=%s, so this tool did not make it; it was not deleted", UsageLogsUser, usageLogsPurposeTag, usageLogsPurpose)
 		}
 		ids, _, err := sw.ListAccessKeys(UsageLogsUser)
 		if err != nil {
@@ -177,6 +229,22 @@ func DeleteUsageLogsStorage(c *kube.Client) ([]string, error) {
 		}
 		logs = append(logs, fmt.Sprintf("OK: SeaweedFS user %s and its keys deleted", UsageLogsUser))
 	}
+	status, body, err := sw.object(http.MethodHead, UsageLogsBucket, "", nil, nil)
+	switch {
+	case err != nil:
+		return logs, fmt.Errorf("read bucket %s: %w", UsageLogsBucket, err)
+	case status == http.StatusNotFound:
+		return logs, nil
+	case status >= 300:
+		return logs, fmt.Errorf("read bucket %s: %w", UsageLogsBucket, parseServiceError(status, body))
+	}
+	ours, err := bucketMarked(sw)
+	if err != nil {
+		return logs, err
+	}
+	if !ours {
+		return logs, fmt.Errorf("bucket %s has no object %s, so this tool did not make it; it was not emptied or deleted", UsageLogsBucket, usageLogsBucketMarker)
+	}
 	n, gone, err := emptyBucket(sw, UsageLogsBucket)
 	if err != nil {
 		return logs, err
@@ -184,7 +252,7 @@ func DeleteUsageLogsStorage(c *kube.Client) ([]string, error) {
 	if gone {
 		return logs, nil
 	}
-	status, body, err := sw.object(http.MethodDelete, UsageLogsBucket, "", nil, nil)
+	status, body, err = sw.object(http.MethodDelete, UsageLogsBucket, "", nil, nil)
 	if err != nil {
 		return logs, fmt.Errorf("delete bucket %s: %w", UsageLogsBucket, err)
 	}
@@ -222,15 +290,11 @@ func emptyBucket(sw *seaweedClient, bucket string) (deleted int, gone bool, err 
 		if err := xml.Unmarshal(body, &page); err != nil {
 			return deleted, false, fmt.Errorf("list bucket %s: parse the answer: %w", bucket, err)
 		}
-		for _, key := range page.Keys {
-			status, body, err := sw.object(http.MethodDelete, bucket, key, nil, nil)
-			if err != nil {
-				return deleted, false, fmt.Errorf("delete an object of bucket %s: %w", bucket, err)
+		if len(page.Keys) > 0 {
+			if err := sw.deleteObjects(bucket, page.Keys); err != nil {
+				return deleted, false, err
 			}
-			if status >= 300 && status != http.StatusNotFound {
-				return deleted, false, fmt.Errorf("delete an object of bucket %s: %w", bucket, parseServiceError(status, body))
-			}
-			deleted++
+			deleted += len(page.Keys)
 		}
 		if !page.IsTruncated || page.Next == "" {
 			return deleted, false, nil
@@ -304,4 +368,46 @@ func UsageLogsUseStorage(c *kube.Client) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// deleteObjects deletes keys of bucket in one request (S3 DeleteObjects, at
+// most 1000 keys; quiet mode answers only the failures).
+func (s *seaweedClient) deleteObjects(bucket string, keys []string) error {
+	type object struct {
+		Key string `xml:"Key"`
+	}
+	body, err := xml.Marshal(struct {
+		XMLName xml.Name `xml:"Delete"`
+		Quiet   bool     `xml:"Quiet"`
+		Objects []object `xml:"Object"`
+	}{Quiet: true, Objects: func() []object {
+		out := make([]object, len(keys))
+		for i, k := range keys {
+			out[i] = object{Key: k}
+		}
+		return out
+	}()})
+	if err != nil {
+		return err
+	}
+	sum := md5.Sum(body)
+	status, resp, err := s.sendWith(http.MethodPost, "/"+bucket, url.Values{"delete": {""}}, "application/xml", body, "s3", false, map[string]string{"Content-MD5": base64.StdEncoding.EncodeToString(sum[:])})
+	if err != nil {
+		return fmt.Errorf("delete objects of bucket %s: %w", bucket, err)
+	}
+	if status >= 300 {
+		return fmt.Errorf("delete objects of bucket %s: %w", bucket, parseServiceError(status, resp))
+	}
+	var result struct {
+		Errors []struct {
+			Key     string `xml:"Key"`
+			Code    string `xml:"Code"`
+			Message string `xml:"Message"`
+		} `xml:"Error"`
+	}
+	if err := xml.Unmarshal(resp, &result); err == nil && len(result.Errors) > 0 {
+		e := result.Errors[0]
+		return fmt.Errorf("delete objects of bucket %s: %d not deleted, the first %s: %s %s", bucket, len(result.Errors), e.Key, e.Code, e.Message)
+	}
+	return nil
 }

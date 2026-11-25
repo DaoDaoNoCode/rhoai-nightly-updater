@@ -233,6 +233,9 @@ func provisionScopedKey(sw *seaweedClient, project string, current S3Keys) (keys
 // bucket: its inline policy, and the tag that says whose it is.
 type bucketUser struct {
 	name, policyName, policy, tagKey, tagValue string
+	// requireTag: a user that exists already is used only when it carries
+	// the tag (this tool made it); otherwise it is refused.
+	requireTag bool
 	// foreign is the error for a user whose tag names another owner.
 	foreign func(other string) error
 }
@@ -242,21 +245,24 @@ type bucketUser struct {
 // new pair (fresh) after revoking the old ones (an interrupted run may leave
 // keys that never reached a Secret).
 func provisionBucketUser(sw *seaweedClient, u bucketUser, current S3Keys) (keys S3Keys, fresh bool, err error) {
-	if err := sw.CreateUser(u.name); err != nil {
+	created, err := sw.createUser(u.name)
+	if err != nil {
 		return S3Keys{}, false, fmt.Errorf("create SeaweedFS user %s: %w", u.name, err)
 	}
 	tags, _, err := sw.ListUserTags(u.name)
 	if err != nil {
 		return S3Keys{}, false, fmt.Errorf("read the tags of SeaweedFS user %s: %w", u.name, err)
 	}
-	if other := tags[u.tagKey]; other != "" && other != u.tagValue {
+	if other := tags[u.tagKey]; (other != "" && other != u.tagValue) || (u.requireTag && !created && other == "") {
 		return S3Keys{}, false, u.foreign(other)
+	}
+	// The tag first: it is what tells this tool's user from another of the
+	// same name.
+	if err := sw.TagUser(u.name, u.tagKey, u.tagValue); err != nil {
+		return S3Keys{}, false, fmt.Errorf("tag SeaweedFS user %s: %w", u.name, err)
 	}
 	if err := sw.PutUserPolicy(u.name, u.policyName, u.policy); err != nil {
 		return S3Keys{}, false, fmt.Errorf("set the policy of SeaweedFS user %s: %w", u.name, err)
-	}
-	if err := sw.TagUser(u.name, u.tagKey, u.tagValue); err != nil {
-		return S3Keys{}, false, fmt.Errorf("tag SeaweedFS user %s: %w", u.name, err)
 	}
 	ids, _, err := sw.ListAccessKeys(u.name)
 	if err != nil {

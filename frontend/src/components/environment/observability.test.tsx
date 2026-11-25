@@ -196,3 +196,14 @@ describe("Clean up everything: the usage logs", () => {
     expect(observabilityState({ ...o, blocked: undefined }).status).toBe("needs-attention");
   });
 });
+
+describe("Observability tab, read-only", () => {
+  it("says it is for cluster-admins instead of loading forever", () => {
+    render(
+      <MemoryRouter>
+        <ObservabilityTab observability={null} observabilityError={null} onRetry={() => {}} state={observabilityState(null)} baseReason={null} readOnly setPending={() => {}} onSetUp={() => {}} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("Shown to cluster-admins only")).toBeInTheDocument();
+  });
+});

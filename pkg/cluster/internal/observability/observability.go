@@ -49,6 +49,10 @@ const (
 	monitoringGroup = "services.platform.opendatahub.io"
 	lokiGroup       = "loki.grafana.com"
 	persesGroup     = "perses.dev"
+	// The Cluster Observability Operator's MonitoringStack and the
+	// OpenTelemetry operator's collectors (Clean up's wait, user token).
+	monitoringStackGroup = "monitoring.rhobs"
+	otelGroup            = "opentelemetry.io"
 
 	// The fields this tool adds, as the docs write them.
 	fieldMetricsStorage = "metrics.storage"
@@ -57,13 +61,14 @@ const (
 	// (docs/observability-modes.md L262-269).
 	metricsSize      = "5Gi"
 	metricsRetention = "90d"
-	// UsageLogsSize is the LokiStack size for development clusters
-	// (docs/observability-modes.md L342-343; the CRD's default,
-	// 1x.extra-small, "reserves 2 CPU and 8Gi per ingester, which does not
-	// schedule on smaller clusters").
+	// UsageLogsSize is the smallest LokiStack size the CRD allows
+	// (rhods-operator d6782ebf api/services/v1alpha1/monitoring_types.go
+	// L162-170: the default, 1x.extra-small, "reserves 2 CPU and 8Gi per
+	// ingester, which does not schedule on smaller clusters").
 	UsageLogsSize = "1x.demo"
 
-	defaultClassAnnotation = "storageclass.kubernetes.io/is-default-class"
+	defaultClassAnnotation     = "storageclass.kubernetes.io/is-default-class"
+	betaDefaultClassAnnotation = "storageclass.beta.kubernetes.io/is-default-class"
 )
 
 // The versions read when discovery cannot tell.
@@ -93,6 +98,14 @@ func monitoringAPI(c *kube.Client) string {
 
 func lokiAPI(c *kube.Client) string {
 	return lokiGroup + "/" + rhoai.ServedVersions(c, lokiGroup, lokiFallback).Versions[0]
+}
+
+func monitoringStackAPI(c *kube.Client) string {
+	return monitoringStackGroup + "/" + rhoai.ServedVersions(c, monitoringStackGroup, []string{"v1alpha1"}).Versions[0]
+}
+
+func otelAPI(c *kube.Client) string {
+	return otelGroup + "/" + rhoai.ServedVersions(c, otelGroup, []string{"v1beta1"}).Versions[0]
 }
 
 func persesAPI(c *kube.Client) string {
@@ -183,7 +196,10 @@ func (d dsci) usageLogsSecret() string {
 // Record is this tool's annotation on the DSCInitialization.
 type Record struct {
 	At string `json:"at"`
-	By string `json:"by,omitempty"`
+	// Storage: this tool may have made the usage-logs storage (bucket, user,
+	// key, Secret); written before it makes any of it, so Clean up sees a
+	// setup that stopped before the fields were added.
+	Storage bool `json:"storage,omitempty"`
 	// Added are the spec.monitoring fields this tool added ("metrics.storage",
 	// "usageLogs"), each with its value before (null: not set) and the value
 	// it set.
@@ -228,7 +244,7 @@ func readRecord(d dsci) (rec Record, ok bool, err error) {
 	if err := json.Unmarshal([]byte(raw), &rec); err != nil {
 		return rec, false, fmt.Errorf("annotation %s on DSCInitialization %s does not parse: %w", RecordAnnotation, d.Meta.Name, err)
 	}
-	if len(rec.Added) == 0 {
+	if len(rec.Added) == 0 && !rec.Storage {
 		return rec, false, fmt.Errorf("annotation %s on DSCInitialization %s names no field", RecordAnnotation, d.Meta.Name)
 	}
 	return rec, true, nil

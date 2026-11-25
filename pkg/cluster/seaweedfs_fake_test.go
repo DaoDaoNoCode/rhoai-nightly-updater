@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -38,7 +39,9 @@ type seaweedFake struct {
 	objects map[string][]byte
 	// buckets that exist (pipelines always does).
 	buckets map[string]bool
-	nextKey int
+	// batchDeletes are the sizes of the DeleteObjects requests, in order.
+	batchDeletes []int
+	nextKey      int
 	// when set, failIAM forces the given IAM action to return that HTTP status.
 	failIAM map[string]int
 	// per-user override for object-call HTTP status (simulates an invalid key).
@@ -212,6 +215,10 @@ func (sw *seaweedFake) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case key == "" && r.Method == http.MethodPut:
+		if sw.buckets[bucket] {
+			sw.xmlError(w, http.StatusConflict, "BucketAlreadyExists")
+			return
+		}
 		sw.buckets[bucket] = true
 		w.WriteHeader(http.StatusOK)
 	case key == "" && r.Method == http.MethodDelete:
@@ -227,6 +234,27 @@ func (sw *seaweedFake) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		delete(sw.buckets, bucket)
 		w.WriteHeader(http.StatusNoContent)
+	case key == "" && r.Method == http.MethodHead:
+		if !sw.buckets[bucket] {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	case key == "" && r.Method == http.MethodPost && r.URL.Query().Has("delete"):
+		// S3 DeleteObjects: AWS requires Content-MD5.
+		if r.Header.Get("Content-MD5") == "" {
+			sw.xmlError(w, http.StatusBadRequest, "MissingContentMD5")
+			return
+		}
+		var req struct {
+			Keys []string `xml:"Object>Key"`
+		}
+		_ = xml.Unmarshal(body, &req)
+		sw.batchDeletes = append(sw.batchDeletes, len(req.Keys))
+		for _, k := range req.Keys {
+			delete(sw.objects, bucket+"/"+k)
+		}
+		fmt.Fprint(w, "<DeleteResult></DeleteResult>")
 	case key == "" && r.Method == http.MethodGet:
 		if !sw.buckets[bucket] {
 			sw.xmlError(w, http.StatusNotFound, "NoSuchBucket")
@@ -234,16 +262,25 @@ func (sw *seaweedFake) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		var keys []string
 		for k := range sw.objects {
-			if rest, ok := strings.CutPrefix(k, bucket+"/"); ok && strings.HasPrefix(rest, r.URL.Query().Get("prefix")) {
+			if rest, ok := strings.CutPrefix(k, bucket+"/"); ok && strings.HasPrefix(rest, r.URL.Query().Get("prefix")) && rest > r.URL.Query().Get("continuation-token") {
 				keys = append(keys, rest)
 			}
 		}
 		sort.Strings(keys)
+		truncated := false
+		if n, _ := strconv.Atoi(r.URL.Query().Get("max-keys")); n > 0 && len(keys) > n {
+			keys, truncated = keys[:n], true
+		}
 		out := "<ListBucketResult><Name>" + bucket + "</Name>"
 		for _, k := range keys {
 			out += "<Contents><Key>" + k + "</Key></Contents>"
 		}
-		fmt.Fprint(w, out+"<IsTruncated>false</IsTruncated></ListBucketResult>")
+		if truncated {
+			out += "<IsTruncated>true</IsTruncated><NextContinuationToken>" + keys[len(keys)-1] + "</NextContinuationToken>"
+		} else {
+			out += "<IsTruncated>false</IsTruncated>"
+		}
+		fmt.Fprint(w, out+"</ListBucketResult>")
 	case r.Method == http.MethodHead || r.Method == http.MethodGet:
 		data, ok := sw.objects[bucket+"/"+key]
 		if !ok {

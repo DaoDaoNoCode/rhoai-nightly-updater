@@ -18,12 +18,12 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// Where the parts' Docs links go: RHOAI's monitoring module's own docs
-// (opendatahub-io/odh-observability; RHOAI's branch is
-// red-hat-data-services/odh-observability rhoai-3.7-ea.1).
+// Where the parts' Docs links go: RHOAI's monitoring module's own docs, on
+// RHOAI's branch (red-hat-data-services/odh-observability rhoai-3.7-ea.1),
+// at their headings.
 const (
-	docsUsageLogs = "https://github.com/opendatahub-io/odh-observability/blob/main/docs/usage-logs.md"
-	docsModes     = "https://github.com/opendatahub-io/odh-observability/blob/main/docs/observability-modes.md"
+	docsUsageLogs = "https://github.com/red-hat-data-services/odh-observability/blob/rhoai-3.7-ea.1/docs/usage-logs.md"
+	docsModes     = "https://github.com/red-hat-data-services/odh-observability/blob/rhoai-3.7-ea.1/docs/observability-modes.md"
 )
 
 // The Monitoring CR's conditions Set up waits for (docs/usage-logs.md
@@ -57,6 +57,15 @@ type monitoringCondition struct {
 	Reason             string `json:"reason"`
 	Message            string `json:"message"`
 	ObservedGeneration int64  `json:"observedGeneration"`
+	// Severity Info on a False condition: not configured (odh-observability
+	// MarkNotConfigured always sets it, whatever the reason: MetricsNotConfigured,
+	// LokiNotRequired, ...).
+	Severity string `json:"severity"`
+}
+
+// notConfigured: the condition says its part is not configured.
+func (c monitoringCondition) notConfigured() bool {
+	return c.Status == "False" && c.Severity == "Info"
 }
 
 func (m *monitoringCR) condition(typ string) (monitoringCondition, bool) {
@@ -152,8 +161,11 @@ type view struct {
 	external bool
 	// addMetrics, addUsageLogs: Set up adds the field.
 	addMetrics, addUsageLogs bool
-	block                    *types.ComponentBlock
-	refusal, code            string
+	// storageClass is the cluster's default StorageClass (read only when
+	// Set up adds usageLogs).
+	storageClass  string
+	block         *types.ComponentBlock
+	refusal, code string
 }
 
 func (v *view) refuse(msg, code string) {
@@ -205,6 +217,16 @@ func read(c *kube.Client) *view {
 	if msg, code := v.ops.Refusal(); msg != "" {
 		v.refuse(msg, code)
 	}
+	if v.addUsageLogs {
+		sc, err := defaultStorageClass(c)
+		switch {
+		case err != nil:
+			v.refuse(fmt.Sprintf("Cannot read the StorageClasses; nothing was changed: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err))
+		case sc == "":
+			v.refuse("This cluster has no default StorageClass (annotation "+defaultClassAnnotation+"), and the LokiStack's disks need one: RHOAI's default for usageLogs.storage.storageClassName is gp3-csi, which exists on AWS only. A cluster-admin marks a StorageClass as the default. Nothing was changed.", "prerequisites")
+		}
+		v.storageClass = sc
+	}
 	v.s3, _, v.s3Err = storage.S3StatusAndEndpoints(c)
 	if v.s3.Deployed {
 		v.secured, v.s3Err = storage.StorageSecured(c)
@@ -217,7 +239,37 @@ func read(c *kube.Client) *view {
 		}
 	}
 	v.mon, v.monErr = readMonitoring(c)
+	if v.addUsageLogs && v.monErr == nil && v.block == nil {
+		v.usageLogsSupported()
+	}
 	return v
+}
+
+// usageLogsSupported refuses Set up when this RHOAI cannot store usage
+// logs as Set up would configure them: its Monitoring CR reports no usage
+// logs conditions (RHOAI's operator reports UsageLogs* in the releases
+// whose DSCInitialization has spec.monitoring.usageLogs), or the cluster
+// has no default StorageClass (the CRD's default for storageClassName is
+// gp3-csi, an AWS class).
+func (v *view) usageLogsSupported() {
+	switch {
+	case v.mon == nil:
+		v.refuse("RHOAI's operator has not made the Monitoring CR yet, so this tool cannot tell whether this RHOAI stores usage logs. Nothing was changed.", "prerequisites")
+		return
+	case !v.mon.reports("UsageLogs"):
+		v.refuse("This RHOAI's monitoring reports no usage logs (its Monitoring CR has no UsageLogs conditions), so it has none to set up. Nothing was changed.", "unsupported")
+		return
+	}
+}
+
+// reports: the Monitoring CR has a condition whose type starts with prefix.
+func (m *monitoringCR) reports(prefix string) bool {
+	for _, c := range m.Conditions {
+		if strings.HasPrefix(c.Type, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // argoOf is the Argo CD application that manages the DSCInitialization
@@ -329,6 +381,10 @@ func (v *view) setupPlan() []string {
 	}
 	if len(plan) > 0 {
 		plan = append(plan, "Wait until RHOAI's operator reports the monitoring stack, Perses, the usage-logs LokiStack and collector available (about 3 minutes)")
+	} else if v.recOK && !v.rec.Restored && v.monErr == nil && len(notAvailable(v.mon, waitedConditions)) > 0 {
+		// A setup of this tool that stopped waiting (or before the fields):
+		// Set up again checks the storage and waits again.
+		plan = append(plan, "Check the usage-logs storage, then wait again until RHOAI's operator reports the monitoring stack, Perses, the usage-logs LokiStack and collector available (the last Set up stopped before they were)")
 	}
 	return plan
 }
@@ -342,7 +398,7 @@ func (v *view) cleanupPlan(volumes []volume) (plan, kept []string, blocked strin
 			fields = append(fields, "spec.monitoring."+name)
 		}
 	}
-	if !v.rec.Restored {
+	if !v.rec.Restored && len(fields) > 0 {
 		plan = append(plan, fmt.Sprintf("DSCInitialization %s: remove %s, as before this tool's setup; RHOAI's operator then deletes the stack", v.d.Meta.Name, strings.Join(fields, " and ")))
 	}
 	var pvcs []string
@@ -361,7 +417,7 @@ func (v *view) cleanupPlan(volumes []volume) (plan, kept []string, blocked strin
 	if names := sortedKeys(v.rec.Left.secrets()); len(names) > 0 {
 		plan = append(plan, fmt.Sprintf("Delete the Secrets the stack left in %s (certificates): %s", v.ns, strings.Join(names, ", ")))
 	}
-	if _, ok := v.rec.Added[fieldUsageLogs]; ok {
+	if _, ok := v.rec.Added[fieldUsageLogs]; ok || v.rec.Storage {
 		plan = append(plan, fmt.Sprintf("Delete Secret %s/%s, SeaweedFS user %s with its key, and bucket %s with the usage logs in it", v.ns, storage.UsageLogsSecret, storage.UsageLogsUser, storage.UsageLogsBucket))
 	}
 	kept = append(kept, "The Cluster Observability Operator, Red Hat build of OpenTelemetry, Loki Operator and cert-manager: left in place, as other features and admins share them")
@@ -388,7 +444,7 @@ func sortedKeys(m map[string]string) []string {
 
 // storagePart is the usage-logs storage: bucket, key and Secret.
 func (v *view) storagePart() types.MaaSPart {
-	pt := types.MaaSPart{ID: "usage-logs-storage", Title: "Usage-logs storage", DocURL: docsModes + "#usage-logs-storage"}
+	pt := types.MaaSPart{ID: "usage-logs-storage", Title: "Usage-logs storage", DocURL: docsModes + "#enabling-built-in-logs-loki"}
 	_, byTool := v.rec.Added[fieldUsageLogs]
 	switch {
 	case !v.dsciOK:
@@ -416,7 +472,7 @@ func (v *view) storagePart() types.MaaSPart {
 
 // dsciPart is the DSCInitialization's spec.monitoring fields.
 func (v *view) dsciPart() types.MaaSPart {
-	pt := types.MaaSPart{ID: "monitoring-settings", Title: "Monitoring settings (DSCInitialization)", DocURL: docsUsageLogs + "#enable-usage-logs"}
+	pt := types.MaaSPart{ID: "monitoring-settings", Title: "Monitoring settings (DSCInitialization)", DocURL: docsUsageLogs + "#configure-the-managed-collector-and-local-storage"}
 	if !v.dsciOK {
 		pt.State, pt.Message = "unknown", "Cannot read the DSCInitialization."
 		if v.dsciErr == nil {
@@ -481,7 +537,7 @@ func (v *view) conditionPart(pt types.MaaSPart, conds []string, what string) typ
 		case !v.mon.current(cond):
 			waiting = append(waiting, t+": RHOAI's operator has not reconciled the latest change yet")
 		case cond.Status == "True":
-		case strings.HasSuffix(cond.Reason, "NotConfigured"):
+		case cond.notConfigured():
 			notConfigured = append(notConfigured, t)
 		default:
 			waiting = append(waiting, fmt.Sprintf("%s: %s", t, kube.TruncateText(kube.FirstNonEmpty(cond.Message, cond.Reason, "not available"), 300)))
@@ -493,14 +549,14 @@ func (v *view) conditionPart(pt types.MaaSPart, conds []string, what string) typ
 	case len(waiting) > 0 || len(notConfigured) > 0:
 		pt.State, pt.Message = "waiting", "RHOAI's operator reports: "+strings.Join(append(waiting, notConfigured...), "; ")+"."
 	default:
-		pt.State, pt.Message = "ready", fmt.Sprintf("%s: RHOAI's operator reports %s True.", kube.SentenceStart(what), strings.Join(conds, " and "))
+		pt.State, pt.Message = "ready", fmt.Sprintf("%s: deployed (RHOAI's operator reports %s True).", kube.SentenceStart(what), strings.Join(conds, " and "))
 	}
 	return pt
 }
 
 // stackPart is the metrics stack and Perses.
 func (v *view) stackPart() types.MaaSPart {
-	pt := v.conditionPart(types.MaaSPart{ID: "monitoring-stack", Title: "Metrics stack and Perses", DocURL: docsModes + "#metrics"},
+	pt := v.conditionPart(types.MaaSPart{ID: "monitoring-stack", Title: "Metrics stack and Perses", DocURL: docsModes + "#3-all-built-in"},
 		[]string{"MonitoringStackAvailable", "PersesAvailable"}, "the metrics stack (Prometheus, Thanos) and Perses, the dashboards' server")
 	if cond, ok := v.mon.condition("MonitoringDependenciesReady"); ok && cond.Status == "False" {
 		pt.Warning = "RHOAI's operator reports missing operators (MonitoringDependenciesReady False): " + kube.TruncateText(kube.FirstNonEmpty(cond.Message, cond.Reason), 300)
@@ -521,7 +577,7 @@ func (v *view) stackPart() types.MaaSPart {
 
 // usageLogsPart is the usage-logs LokiStack and collector.
 func (v *view) usageLogsPart(c *kube.Client) types.MaaSPart {
-	pt := v.conditionPart(types.MaaSPart{ID: "usage-logs", Title: "Usage logs (LokiStack and collector)", DocURL: docsUsageLogs},
+	pt := v.conditionPart(types.MaaSPart{ID: "usage-logs", Title: "Usage logs (LokiStack and collector)", DocURL: docsUsageLogs + "#configure-the-managed-collector-and-local-storage"},
 		[]string{"UsageLogsLokiStackAvailable", "UsageLogsCollectorAvailable"}, "the usage-logs LokiStack and its collector")
 	if pt.State == "waiting" || pt.State == "unknown" {
 		if detail := lokiStacksDetail(c, v.ns); detail != "" {
@@ -563,7 +619,7 @@ func lokiStacksDetail(c *kube.Client, ns string) string {
 // collectorPart is the metrics collector, with problem A when its pods
 // wait for certificates that were never made.
 func (v *view) collectorPart(c *kube.Client) types.MaaSPart {
-	pt := v.conditionPart(types.MaaSPart{ID: "metrics-collector", Title: "Metrics collector (OpenTelemetry)", DocURL: docsModes + "#metrics"},
+	pt := v.conditionPart(types.MaaSPart{ID: "metrics-collector", Title: "Metrics collector (OpenTelemetry)", DocURL: docsModes + "#3-all-built-in"},
 		[]string{"OpenTelemetryCollectorAvailable"}, "the metrics collector")
 	if pt.State != "ready" {
 		return pt
@@ -580,7 +636,7 @@ func (v *view) collectorPart(c *kube.Client) types.MaaSPart {
 	pt.State = "problem"
 	pt.Message = fmt.Sprintf("RHOAI reports the collector available, but its pods %s wait for Secret %s, which was never made: the built-in metrics are not collected (usage logs are not affected). This is a product bug in RHOAI's monitoring and the OpenTelemetry operator: the operator checks for cert-manager once when it starts, before RHOAI's monitoring gives it cert-manager's permissions, and then never makes the collector's certificates.",
 		strings.Join(pods, ", "), strings.Join(missing, " and "))
-	pt.Commands = fmt.Sprintf("# Not in RHOAI docs; worked in our test: restart the OpenTelemetry operator once (OLM makes its pod again).\noc delete pod -n %s -l control-plane=controller-manager", kube.ShellQuote(opNS))
+	pt.Commands = fmt.Sprintf("# Not in RHOAI docs; worked in our test: restart the OpenTelemetry operator once (OLM makes its pod again).\noc delete pod -n %s -l app.kubernetes.io/name=opentelemetry-operator,control-plane=controller-manager", kube.ShellQuote(opNS))
 	return pt
 }
 
@@ -676,7 +732,7 @@ func stuckCollector(c *kube.Client, ns string) (pods, missing []string, err erro
 // KServe made for it (problem B: made before Perses ran, they fail until
 // the Perses operator retries them).
 func (v *view) dashboardsPart(c *kube.Client) types.MaaSPart {
-	pt := v.conditionPart(types.MaaSPart{ID: "dashboards", Title: "Dashboards (Perses)", DocURL: docsUsageLogs + "#dashboards"},
+	pt := v.conditionPart(types.MaaSPart{ID: "dashboards", Title: "Dashboards (Perses)", DocURL: docsUsageLogs + "#configure-reads-and-verify-new-traffic"},
 		[]string{"PersesAvailable"}, "Perses, which serves the usage and metrics dashboards")
 	if pt.State != "ready" {
 		return pt

@@ -105,6 +105,8 @@ type fakeCall struct {
 	Query                           url.Values
 	// Token is the request's bearer token: who made it.
 	Token string
+	// Accept is the request's Accept header.
+	Accept string
 }
 
 // dryRun reports whether the API server runs the call as a server-side dry
@@ -367,7 +369,7 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 		echoKey = "DRYRUN " + echoKey
 	}
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	f.calls = append(f.calls, fakeCall{Method: r.Method, Path: r.URL.Path, ContentType: r.Header.Get("Content-Type"), Body: string(body), Query: r.URL.Query(), Token: token})
+	f.calls = append(f.calls, fakeCall{Method: r.Method, Path: r.URL.Path, ContentType: r.Header.Get("Content-Type"), Body: string(body), Query: r.URL.Query(), Token: token, Accept: r.Header.Get("Accept")})
 	if code, ok := f.failAs[token+" "+r.Method+" "+r.URL.Path]; ok {
 		f.status(w, code, kube.FirstNonEmpty(f.failMessage[token+" "+r.Method+" "+r.URL.Path], "injected failure for this token"))
 		return
