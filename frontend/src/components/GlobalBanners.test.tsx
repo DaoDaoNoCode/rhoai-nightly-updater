@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { GlobalBanners } from "./GlobalBanners";
 import { USER_PERMISSIONS, renderWithApp, settleApps } from "../test/providers";
 import { ApiError } from "../services/api";
@@ -126,12 +126,28 @@ describe("notices only a cluster-admin can act on", () => {
   it("an install from the Helm chart links the published GitOps guide's upgrade section", async () => {
     renderWithApp(<GlobalBanners />, { version: async () => ({ ...(await outdated()), installMethod: "gitops" }), update: newer }, "/");
     await settleApps();
-    await screen.findByText("For admins: this updater's deployment is out of date", { exact: false });
-    for (const link of screen.getAllByRole("link", { name: /the GitOps guide: Upgrading and rolling back/ })) {
-      expect(link).toHaveAttribute("href", "https://github.com/DaoDaoNoCode/rhoai-nightly-updater/blob/main/docs/GITOPS.md#6-upgrading-and-rolling-back");
+    const deployment = (await screen.findByText("For admins: this updater's deployment is out of date", { exact: false })).closest(".pf-v6-c-alert") as HTMLElement;
+    // Its details are folded: open them.
+    fireEvent.click(within(deployment).getAllByRole("button").find((b) => b.getAttribute("aria-expanded") === "false")!);
+    // Both banners (the deployment's and the new release's), at the running release's tag on the mirror.
+    const links = screen.getAllByRole("link", { name: /the GitOps guide: Upgrading and rolling back/ });
+    expect(links).toHaveLength(2);
+    for (const link of links) {
+      expect(link).toHaveAttribute("href", "https://github.com/DaoDaoNoCode/rhoai-nightly-updater/blob/v5.0.0/docs/GITOPS.md#6-upgrading-and-rolling-back");
       expect(link).toHaveAttribute("target", "_blank");
     }
     expect(screen.queryByText(/docs\/GITOPS\.md/)).not.toBeInTheDocument();
+    await settleApps();
+  });
+
+  it("an install.sh install links the upgrade guide of the running release, a dev build main's", async () => {
+    renderWithApp(<GlobalBanners />, { version: outdated, update: newer }, "/");
+    await settleApps();
+    const deployment = (await screen.findByText("For admins: this updater's deployment is out of date", { exact: false })).closest(".pf-v6-c-alert") as HTMLElement;
+    // Its details are folded: open them.
+    fireEvent.click(within(deployment).getAllByRole("button").find((b) => b.getAttribute("aria-expanded") === "false")!);
+    expect(screen.getByRole("link", { name: "the upgrade guide" })).toHaveAttribute("href", "https://github.com/DaoDaoNoCode/rhoai-nightly-updater/blob/v5.0.0/docs/UPGRADING.md");
+    expect(screen.queryByText(/docs\/UPGRADING\.md/)).not.toBeInTheDocument();
     await settleApps();
   });
 

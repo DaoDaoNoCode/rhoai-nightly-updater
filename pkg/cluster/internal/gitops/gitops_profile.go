@@ -99,7 +99,7 @@ func UpdateStream(c *kube.Client, image string, emit func(types.UpdateStepEvent)
 		return fail(fmt.Sprintf("Failed to check IDMS: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
 	if !idms.Exists {
-		return fail(fmt.Sprintf("No IDMS found mirroring %s. Create it first (Status page, One-time cluster setup). Nothing was changed.", rhoai.IDMSSource), "prerequisites")
+		return fail(fmt.Sprintf("No IDMS found mirroring %s. Create it first: %s. Nothing was changed.", rhoai.IDMSSource, types.DocURL("docs/QUICKSTART.md", "the-image-mirror")), "prerequisites")
 	}
 	logs = append(logs, fmt.Sprintf("OK: IDMS exists (%s)", idms.Name))
 
@@ -240,7 +240,7 @@ func UpdateDryRun(c *kube.Client, image string) (*types.OperationResponse, error
 		return fail(fmt.Sprintf("Failed to check IDMS: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
 	if !idms.Exists {
-		return fail(fmt.Sprintf("No IDMS found mirroring %s. Create it first (Status page, One-time cluster setup).", rhoai.IDMSSource), "prerequisites")
+		return fail(fmt.Sprintf("No IDMS found mirroring %s. Create it first: %s.", rhoai.IDMSSource, types.DocURL("docs/QUICKSTART.md", "the-image-mirror")), "prerequisites")
 	}
 	logs = append(logs, fmt.Sprintf("OK: IDMS exists (%s)", idms.Name))
 	ogLog, ogProblem, ogCode := checkOperatorNamespaceAndGroup(c)

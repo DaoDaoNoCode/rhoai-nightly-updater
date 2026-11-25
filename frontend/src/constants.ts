@@ -100,8 +100,17 @@ export const RECIPE_RUN_IDLE_POLL_MS = 15_000;
 /** How often a user's Status page reads the cluster summary (GET /api/summary), in ms. */
 export const SUMMARY_POLL_MS = 60_000;
 
+/** This project's public GitHub mirror, which hosts its releases and docs (pkg/types PublicRepoURL). */
+export const PUBLIC_REPO_URL = "https://github.com/DaoDaoNoCode/rhoai-nightly-updater";
+
+/** A version the release jobs tag and publish on the mirror (pkg/types releaseTag). */
+const RELEASE_TAG = /^v\d+\.\d+\.\d+(-(alpha|beta|rc)\.\d+)?$/;
+
 /**
- * docs/GITOPS.md on this project's public GitHub mirror (pkg/types GitOpsDocURL): what an operator of the Helm chart
- * follows. Its main branch moves only at releases; section anchors are GitHub's ("#6-upgrading-and-rolling-back").
+ * The published page of a repository doc (path as "docs/GITOPS.md") on the mirror, as pkg/types DocURL builds it: at
+ * the running release's tag, else main (a dev build); anchor is GitHub's anchor of a heading ("11-profiles").
  */
-export const GITOPS_DOC_URL = "https://github.com/DaoDaoNoCode/rhoai-nightly-updater/blob/main/docs/GITOPS.md";
+export function docsURL(path: string, anchor?: string, version?: string): string {
+  const ref = version && RELEASE_TAG.test(version) ? version : "main";
+  return `${PUBLIC_REPO_URL}/blob/${ref}/${path}${anchor ? `#${anchor}` : ""}`;
+}

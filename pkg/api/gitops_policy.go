@@ -48,7 +48,7 @@ func gitOpsPolicyStatus() string {
 // returns the problem, or "".
 func runGitOpsPolicyCheck(c *cluster.Client) string {
 	if err := checkGitOpsPolicy(c); err != nil {
-		problem := "The gitops profile's admission policy is not in place (" + err.Error() + "), so Update is off until Argo CD syncs it again (" + types.GitOpsDocURL + "#the-admission-policy)."
+		problem := "The gitops profile's admission policy is not in place (" + err.Error() + "), so Update is off until Argo CD syncs it again (" + types.DocURL("docs/GITOPS.md", "the-admission-policy") + ")."
 		setGitOpsPolicyState(problem)
 		return problem
 	}

@@ -71,9 +71,12 @@ describe("update available notice", () => {
     expect(screen.queryByText(/full redeploy/)).not.toBeInTheDocument();
     // The installer takes its settings from its options, not from the running install.
     expect(screen.getByText(/Pass the options this install was made with/)).toBeInTheDocument();
-    for (const option of ["--namespace", "--app-name", "--image-repo", "docs/UPGRADING.md"]) {
+    for (const option of ["--namespace", "--app-name", "--image-repo"]) {
       expect(screen.getByText(option)).toBeInTheDocument();
     }
+    // The upgrade guide's section for this kind of release, published on the mirror.
+    expect(screen.getByRole("link", { name: /the upgrade guide: Patch and minor releases/ }))
+      .toHaveAttribute("href", expect.stringMatching(/^https:\/\/github\.com\/DaoDaoNoCode\/rhoai-nightly-updater\/blob\/[^/]+\/docs\/UPGRADING\.md#patch-and-minor-releases$/));
     expect(screen.queryByText(/if this install does not use the default names/)).not.toBeInTheDocument();
     // A GitHub asset downloads anonymously: no sign-in hint.
     expect(screen.queryByText(/asks you to sign in/)).not.toBeInTheDocument();
@@ -215,7 +218,7 @@ describe("update available notice", () => {
         expect(screen.getByText(text)).toBeInTheDocument();
       }
       // The published GitOps guide, not a repository path.
-      expect(screen.getByRole("link", { name: /the GitOps guide: Upgrading and rolling back/ })).toHaveAttribute("href", "https://github.com/DaoDaoNoCode/rhoai-nightly-updater/blob/main/docs/GITOPS.md#6-upgrading-and-rolling-back");
+      expect(screen.getByRole("link", { name: /the GitOps guide: Upgrading and rolling back/ })).toHaveAttribute("href", "https://github.com/DaoDaoNoCode/rhoai-nightly-updater/blob/v2.0.0/docs/GITOPS.md#6-upgrading-and-rolling-back");
       expect(screen.getByText(/Do not run/)).toBeInTheDocument();
       expect(screen.queryByText(/curl -fsSLO/)).not.toBeInTheDocument();
       expect(screen.queryByText("git checkout v2.0.1 && make upgrade")).not.toBeInTheDocument();

@@ -29,27 +29,47 @@ func githubAnchor(heading string) string {
 // The gitops profile's texts link the published GitOps guide, and each
 // section they link is a heading of docs/GITOPS.md.
 func TestGitOpsTextsLinkThePublishedGuide(t *testing.T) {
-	raw, err := os.ReadFile("../../docs/GITOPS.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	anchors := map[string]bool{}
-	for _, m := range regexp.MustCompile(`(?m)^#{2,4} (.+)$`).FindAllStringSubmatch(string(raw), -1) {
-		anchors[githubAnchor(m[1])] = true
-	}
-	// Every anchor this tool links (backend and frontend).
-	for _, a := range []string{"6-upgrading-and-rolling-back", "10-moving-an-install-from-installsh-to-argo-cd", "11-profiles", "the-admission-policy"} {
-		if !anchors[a] {
-			t.Errorf("docs/GITOPS.md has no heading for #%s", a)
+	// Every section this tool links (backend and frontend), by file.
+	for file, want := range map[string][]string{
+		"docs/GITOPS.md":     {"6-upgrading-and-rolling-back", "10-moving-an-install-from-installsh-to-argo-cd", "11-profiles", "the-admission-policy"},
+		"docs/UPGRADING.md":  {"patch-and-minor-releases"},
+		"docs/QUICKSTART.md": {"the-image-mirror"},
+	} {
+		raw, err := os.ReadFile("../../" + file)
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	if !strings.HasPrefix(types.GitOpsDocURL, "https://github.com/") || !strings.HasSuffix(types.GitOpsDocURL, "/blob/main/docs/GITOPS.md") {
-		t.Fatalf("GitOpsDocURL %q", types.GitOpsDocURL)
+		anchors := map[string]bool{}
+		for _, m := range regexp.MustCompile(`(?m)^#{2,4} (.+)$`).FindAllStringSubmatch(string(raw), -1) {
+			anchors[githubAnchor(m[1])] = true
+		}
+		for _, a := range want {
+			if !anchors[a] {
+				t.Errorf("%s has no heading for #%s", file, a)
+			}
+		}
 	}
 
 	rec := httptest.NewRecorder()
 	refusedInGitOpsProfile("Dashboard Dev")(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/x", nil))
-	if !strings.Contains(rec.Body.String(), types.GitOpsDocURL+"#11-profiles") || strings.Contains(rec.Body.String(), "docs/GITOPS.md)") {
+	if !strings.Contains(rec.Body.String(), types.DocURL("docs/GITOPS.md", "11-profiles")) || strings.Contains(rec.Body.String(), "(docs/GITOPS.md") {
 		t.Fatalf("403: %s", rec.Body.String())
+	}
+}
+
+// A release links its own tag's docs on the mirror; a dev build, main.
+func TestDocURLFollowsTheRunningRelease(t *testing.T) {
+	defer types.SetDocsVersion(Version)
+	for version, want := range map[string]string{
+		"v5.0.0":         types.PublicRepoURL + "/blob/v5.0.0/docs/GITOPS.md#11-profiles",
+		"v5.0.0-alpha.2": types.PublicRepoURL + "/blob/v5.0.0-alpha.2/docs/GITOPS.md#11-profiles",
+		"dev":            types.PublicRepoURL + "/blob/main/docs/GITOPS.md#11-profiles",
+		"v5.0.0-dirty":   types.PublicRepoURL + "/blob/main/docs/GITOPS.md#11-profiles",
+		"":               types.PublicRepoURL + "/blob/main/docs/GITOPS.md#11-profiles",
+	} {
+		types.SetDocsVersion(version)
+		if got := types.DocURL("docs/GITOPS.md", "11-profiles"); got != want {
+			t.Errorf("%q: %s, want %s", version, got, want)
+		}
 	}
 }
