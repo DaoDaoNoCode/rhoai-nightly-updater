@@ -319,7 +319,7 @@ Diagnostics scans on load and only reads the cluster. Each problem shows what wa
 
 ### Not a cluster-admin? What you see
 
-Since 5.0.0 whoever RHOAI lets in can sign in: anyone who may `get` `auths.services.platform.opendatahub.io`, which RHOAI grants to the allowed groups of its Auth CR (by default every OpenShift user; without RHOAI, only cluster-admins). Cluster-admins see everything above. Everyone else sees three pages, and changes nothing:
+Since 5.0.0 whoever RHOAI lets in can sign in: anyone who may `get` `auths.services.platform.opendatahub.io`, which RHOAI grants to the allowed groups of its Auth CR (by default every OpenShift user; without RHOAI, only cluster-admins). Cluster-admins see everything above. Everyone else sees three pages, and changes only what their role in a project allows (below):
 
 <p align="center">
   <picture>
@@ -330,13 +330,13 @@ Since 5.0.0 whoever RHOAI lets in can sign in: anyone who may `get` `auths.servi
 
 - **Status**: RHOAI's version, channel and phase, the nightly build the cluster runs and whether a newer one exists, and the DataScienceCluster with each component. No update, activity log or cluster setup.
 - **Build Explorer**: as above, without the comparison with the installed build.
-- **Environment**: their own data science projects only (the ones the projects API lists for them), read with their own permissions: the pipeline server, models, playground and MLflow sample data of the project they pick, and the sample pipeline. Setting up or removing anything, and the shared parts (S3 storage, the inference gateway, MaaS), stay a cluster-admin's. With no projects, the page says to create one in the RHOAI dashboard or to ask a project admin.
+- **Environment**: their own data science projects only (the ones the projects API lists for them), read with their own permissions: the pipeline server, models, workbench, playground and MLflow sample data of the project they pick, and the sample pipeline. A project's admins and editors can set up, start, stop and delete the workbench, set up and delete the playground, and add and remove the MLflow sample data there: each action runs with their own permissions after the updater checked that their role in the project allows every request it makes, and a button they may not use says why. Pipeline servers, models and the shared parts (S3 storage, the inference gateway, MaaS) stay a cluster-admin's. With no projects, the page says to create one in the RHOAI dashboard or to ask a project admin.
 - Components, Dashboard Dev and Diagnostics are not in the navigation; a direct link says **Only cluster-admins can see this page**.
 - A running update shows as a banner with its start time, never who started it:
 
   <img src="docs/images/banner-user-update-running.png" alt="The banner a user who is not a cluster-admin sees: An update is running since 14:26, Update to nightly. What this page shows may change until it finishes." width="760">
 
-Which token each read uses, and the summary's exact fields: [SECURITY.md, Per-user views](SECURITY.md#per-user-views-500).
+Which token each read uses, and the summary's exact fields: [SECURITY.md, Per-user views](SECURITY.md#per-user-views-500); what a project action checks: [SECURITY.md, Project actions for non-admins](SECURITY.md#project-actions-for-non-admins-500).
 
 <details>
 <summary><b>All pages, full size (light and dark)</b></summary>

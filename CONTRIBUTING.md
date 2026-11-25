@@ -624,6 +624,7 @@ Local development only (`dev.sh` sets the first four rows):
 |---|---|
 | `DEV_MODE=true` | No oauth-proxy, no cluster-admin gate; binds `127.0.0.1`; checks Host/Origin |
 | `DEV_TOKEN`, `DEV_USER` | Your `oc` token and username |
+| `DEV_ROLE=user` | Turns off the cluster-admin bypass of `DEV_MODE` (the mutation gate and the sign-in check ask the API server with the request's token), to try the non-admin path: send a non-admin's token as `Authorization: Bearer` while `DEV_TOKEN` stays yours (it stands for the ServiceAccount). Only without a mounted ServiceAccount token |
 | `KUBERNETES_SERVICE_HOST`, `KUBERNETES_SERVICE_PORT` | The API server from `oc whoami --show-server` |
 | `DEV_S3_ENDPOINT`, `S3_LOCAL_PORT` | The backend's one direct S3 request (creating the storage bucket) cannot resolve the Service's cluster DNS name from a workstation. `dev.sh` keeps `oc port-forward -n seaweedfs svc/seaweedfs-s3` open on `127.0.0.1:$S3_LOCAL_PORT` (default 18333; retried until the Service exists) and sets `DEV_S3_ENDPOINT` to it. Used only with `DEV_MODE`, and only for a loopback `http://host:port`; pipeline servers and the copy Job always use the in-cluster address |
 | `KUBE_CA_FILE` | CA bundle for an API server with a private CA. Example: `oc config view --raw --minify -o jsonpath='{..certificate-authority-data}' \| base64 -d > /tmp/ca.pem`. Without it the system trust store is used (ROSA API certificates are publicly trusted) |
