@@ -8,25 +8,25 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 )
 
-// This struct mirrors what the tool provisioned, stored under key "kueue" in
-// the namespace snapshot ConfigMap (server-side apply under a dedicated field
-// manager, matching workbench and models records). Because users with project
-// edit or cluster create rights can duplicate names and labels, ownership
-// requires both the tool label and a UID that appears in this record.
+// The shape matches what this tool has provisioned and serializes under snapshot
+// key "kueue" (server-side apply with its own field manager, same pattern as
+// workbench and models records). Project editors and anyone with cluster create
+// can clone names and labels, so ownership checks need the tool label and a UID
+// recorded here.
 const (
 	RecordKey     = "kueue"
 	recordManager = "rhoai-nightly-updater-kueue"
 )
 
-// Record holds Kueue configuration the tool applied—at most one per cluster, keyed by Project.
+// Record is the Kueue state applied by the tool—one cluster-wide entry per Project at most.
 type Record struct {
 	Project    string `json:"project,omitempty"`
 	ProjectUID string `json:"projectUID,omitempty"`
-	// LabelAdded means the tool placed kueue.openshift.io/managed=true on
-	// the project; cleanup strips solely that label.
+	// LabelAdded: the tool applied kueue.openshift.io/managed=true on the
+	// project; teardown removes only that label.
 	LabelAdded bool `json:"labelAdded,omitempty"`
-	// LabelPrior is the label as it was before this tool's setup: "absent"
-	// (the only case the tool sets it), or its value.
+	// LabelPrior is how the label looked before setup: "absent" (when the
+	// tool introduces it) or the previous value string.
 	LabelPrior      string `json:"labelPrior,omitempty"`
 	FlavorUID       string `json:"flavorUID,omitempty"`
 	ClusterQueueUID string `json:"clusterQueueUID,omitempty"`
@@ -38,16 +38,16 @@ type Record struct {
 	By              string `json:"by,omitempty"`
 }
 
-// OptIn captures edits made during dashboard opt-in.
+// OptIn holds dashboard opt-in changes the tool performed.
 type OptIn struct {
-	// DisableKueueSet indicates the tool flipped disableKueue to false;
-	// Previous stores the prior state ("unset" or "true").
+	// DisableKueueSet means disableKueue was set to false; Previous keeps
+	// what it was before ("unset" or "true").
 	DisableKueueSet bool   `json:"disableKueueSet,omitempty"`
 	Previous        string `json:"previous,omitempty"`
-	// ConfigNamespace names the namespace containing odh-dashboard-config.
+	// ConfigNamespace is where odh-dashboard-config lives.
 	ConfigNamespace string `json:"configNamespace,omitempty"`
-	// Queue hardware profile UID plus creation resourceVersion; deletion
-	// happens only if the profile was never modified elsewhere.
+	// Profile UID and creation resourceVersion; the profile is deleted
+	// only when nothing else has changed it since.
 	ProfileUID             string `json:"profileUID,omitempty"`
 	ProfileNamespace       string `json:"profileNamespace,omitempty"`
 	ProfileResourceVersion string `json:"profileResourceVersion,omitempty"`
@@ -57,18 +57,29 @@ func (o *OptIn) empty() bool {
 	return o == nil || (!o.DisableKueueSet && o.ProfileUID == "")
 }
 
-// Empty reports whether the record contains no tool-owned state.
+// Empty is true when nothing in the record reflects tool-owned resources.
 func (r Record) Empty() bool {
 	return !r.LabelAdded && r.FlavorUID == "" && r.ClusterQueueUID == "" && r.LocalQueueUID == "" &&
 		r.RayClusterUID == "" && r.RayJobUID == "" && r.OptIn.empty()
 }
 
-// SampleUID returns the stored UID for the given sample kind.
+// SampleUID looks up the UID persisted for a sample kind.
 func (r Record) SampleUID(kind string) string {
 	if kind == SampleRayJob {
 		return r.RayJobUID
 	}
 	return r.RayClusterUID
+}
+
+// forgetProject clears project-local fields: project UID, tool-added label,
+// LocalQueue, and sample UIDs. Call only after the project namespace is
+// removed—deletion wipes in-namespace objects, so these IDs no longer refer to
+// anything. ResourceFlavor, ClusterQueue, and dashboard opt-in remain because
+// they are cluster-scoped.
+func (r *Record) forgetProject() {
+	r.ProjectUID = ""
+	r.LabelAdded, r.LabelPrior = false, ""
+	r.LocalQueueUID, r.RayClusterUID, r.RayJobUID = "", "", ""
 }
 
 func (r *Record) setSampleUID(kind, uid string) {
@@ -79,12 +90,12 @@ func (r *Record) setSampleUID(kind, uid string) {
 	}
 }
 
-// owns is true when m has the tool label and matches the stored UID.
+// owns reports whether m carries the tool label and its UID equals the stored one.
 func owns(m kube.ObjectMeta, uid string) bool {
 	return uid != "" && m.UID == uid && hasToolLabel(m)
 }
 
-// ReadRecord loads the tool record from the snapshot, or zero when absent.
+// ReadRecord fetches the tool record from the snapshot; missing data yields zero value.
 func ReadRecord(c *kube.Client) (Record, error) {
 	var rec Record
 	raw, err := record.ReadSnapshotKey(c, RecordKey)
@@ -99,8 +110,8 @@ func ReadRecord(c *kube.Client) (Record, error) {
 	return rec, nil
 }
 
-// writeRecord persists rec; clearing everything drops project fields. The
-// cluster lock serializes callers, so read-modify-write cannot conflict.
+// writeRecord saves rec; an empty wipe also clears project fields. Callers hold
+// the cluster lock, so concurrent read-modify-write cannot collide.
 func writeRecord(c *kube.Client, rec Record) error {
 	if rec.Empty() && rec.Project == "" {
 		rec = Record{}
@@ -120,8 +131,7 @@ func writeRecord(c *kube.Client, rec Record) error {
 	return nil
 }
 
-// updateRecord loads the record, runs change, and writes back only if
-// marshaled output differs.
+// updateRecord reads, applies change, and writes only when serialization changes.
 func updateRecord(c *kube.Client, change func(r *Record)) (Record, error) {
 	rec, err := ReadRecord(c)
 	if err != nil {
