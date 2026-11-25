@@ -182,8 +182,12 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   is still turned on late, by **What distributed workloads need**; with no
   `models.exposure`, **What the model's access needs** adds what the
   resolved way needs after the MaaS step. A run recorded by an earlier
-  version resumes with the new steps, keeping the components it turned on
-  ([RUNBOOK §5.1](RUNBOOK.md#51-environment-recipe-runs-resume-interrupted-sign-in-again)).
+  version resumes with the new steps, keeping the components it turned on.
+  A refusal for any feature (a GitOps-managed DataScienceCluster, an
+  operator that cannot be installed, a dry run the API server rejects)
+  now stops the step for all of them, before any change. The MaaS tab
+  shows a Connectivity Link and Kuadrant CR the step installed as this
+  tool's ([RUNBOOK §5.1](RUNBOOK.md#51-environment-recipe-runs-resume-interrupted-sign-in-again)).
 
 - **The S3 storage has its own Environment tab.** It was part of the
   Pipelines tab; it is the cluster's, and other features can use it too,

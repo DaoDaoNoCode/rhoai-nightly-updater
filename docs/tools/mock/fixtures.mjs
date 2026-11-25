@@ -1823,7 +1823,7 @@ export function recipeSteps(rcp = recipe()) {
   if (f.mlflow?.enabled && f.mlflow.samples) out.push(["mlflow-samples", "MLflow samples", 60, 900]);
   if (f.maas?.enabled) out.push(["maas", "Models as a Service", 600, 900]);
   if (f.models?.enabled) {
-    if (!f.models.exposure) out.push(["models-prereq", "What the model's access needs", 60, 900]);
+    if (!f.models.exposure) out.push(["models-prereq", "What the model's access needs", f.maas?.enabled ? 60 : 240, 900]);
     out.push(["model", `Model ${MODEL_NAMES[f.models.model || "qwen25-05b-instruct"] ?? f.models.model}`, 300, 900]);
     if (f.maas?.enabled && f.maas.publish && f.models.exposure !== "maas") out.push(["maas-publish", "Publish the model through MaaS", 120, 900]);
   }
@@ -1916,7 +1916,7 @@ export function recipeRun({ done = 0, current = "running", message = "", state =
     if (i < done) {
       return id === "rhoai"
         ? { id, title, ...times, status: "skipped", message: "Already set up: RHOAI 3.6.0 is installed; the recipe keeps it.", startedAt: ago(start), finishedAt: ago(start) }
-        : { id, title, ...times, status: "success", ...(RECIPE_OWNS.has(id) ? { created: true } : {}), message: (RECIPE_DONE[id] ?? `${title} is set up.`).replaceAll("recipe-dev", project), startedAt: ago(start - i * 2.5), finishedAt: ago(start - (i + 1) * 2.5) };
+        : { id, title, ...times, status: "success", ...(RECIPE_OWNS.has(id) ? { created: true } : {}), message: (id === "prerequisites" ? prerequisitesDone(rcp) : RECIPE_DONE[id] ?? `${title} is set up.`).replaceAll("recipe-dev", project), startedAt: ago(start - i * 2.5), finishedAt: ago(start - (i + 1) * 2.5) };
     }
     if (i === done && current) {
       return { id, title, ...times, status: current, ...(message ? { message } : {}), ...(current === "failed" ? { errorCode: "timeout", ...(RECIPE_OWNS.has(id) ? { created: true } : {}), finishedAt: ago(0.5) } : {}), startedAt: ago(1.2) };
@@ -1940,12 +1940,22 @@ export function recipeRun({ done = 0, current = "running", message = "", state =
 /** The prerequisites record's enablement ID of a component (pkg/cluster/internal/features prereqComponent ID). */
 export const enablementId = (key) => `e1a7${[...key].reduce((n, ch) => (n * 31 + ch.charCodeAt(0)) >>> 0, 7).toString(16).padStart(8, "0")}0c9d`;
 
+/** The prerequisites step's result (pkg/cluster internal/features RunPrerequisitesSet). */
+function prerequisitesDone(rcp) {
+  const f = rcp.spec.features;
+  const titles = [f.pipelines?.enabled && "Pipelines", f.mlflow?.enabled && "MLflow", f.models?.enabled && "Models", f.playground?.enabled && "Playground",
+    f.modelRegistry?.enabled && "Model registry", f.kueue?.enabled && "Distributed workloads"].filter(Boolean);
+  const what = titles.length === 1 ? titles[0] : `${titles.slice(0, -1).join(", ")} and ${titles[titles.length - 1]}`;
+  return `What ${what} ${titles.length === 1 ? "needs" : "need"} on the cluster is set up.`;
+}
+
 /** Step IDs the recipe may mark created (project + DSC prereq phases). */
 const RECIPE_OWNS = new Set(["project", "prerequisites", "kueue-prereq", "maas", "model-registry", "kueue"]);
 
 /** The DSC components a prereq step turns on, for the recipe's features. */
 const RECIPE_COMPONENTS = {
-  prerequisites: (f) => [f.pipelines?.enabled && "aipipelines", f.mlflow?.enabled && "mlflowoperator", f.models?.enabled && "kserve", f.modelRegistry?.enabled && "modelregistry"].filter(Boolean),
+  prerequisites: (f) => [f.pipelines?.enabled && "aipipelines", f.mlflow?.enabled && "mlflowoperator", f.models?.enabled && "kserve",
+    f.playground?.enabled && "ogx", f.playground?.enabled && "dashboard", f.modelRegistry?.enabled && "modelregistry"].filter(Boolean),
   "kueue-prereq": () => ["kueue"],
 };
 
@@ -1978,22 +1988,18 @@ export function recipeProjects(w) {
 const RECIPE_DONE = {
   dsc: "DataScienceCluster default-dsc created with the release's default components.",
   project: "Created project recipe-dev.",
-  "pipelines-prereq": "Turned on Data Science Pipelines in the DataScienceCluster; it is ready.",
   s3: "S3 storage (SeaweedFS) deployed with bucket 'pipelines'.",
   "pipeline-server": "The pipeline server in recipe-dev is ready.",
-  "mlflow-prereq": "Turned on MLflow in the DataScienceCluster; it is ready.",
   mlflow: "MLflow is ready.",
   "mlflow-samples": "Samples added in project 'recipe-dev'.",
   maas: "The MaaS platform is set up and ready.",
-  "models-prereq": "Turned on KServe in the DataScienceCluster, and installed cert-manager and Connectivity Link; they are ready.",
+  "models-prereq": "What Models needs on the cluster is set up.",
   model: "qwen3-1-7b in recipe-dev serves, through the cluster's default gateway.",
   "maas-publish": "Published qwen3-1-7b in recipe-dev through MaaS.",
-  "playground-prereq": "Everything it needs is there.",
   playground: "The playground in recipe-dev is ready, with qwen3-1-7b.",
-  "model-registry-prereq": "Turned on Model registry in the DataScienceCluster; it is ready.",
   "model-registry": "Model registry nightly-registry is ready in rhoai-model-registries. Sample model mnist (version v1) is registered.",
   workbench: "Workbench nightly-workbench is starting in recipe-dev with Jupyter | Data Science | CPU | Python 3.12 on hardware profile Default.",
-  "kueue-prereq": "Turned on Kueue (set to Unmanaged, so RHOAI uses the Kueue operator) and installed cert-manager and the Red Hat build of Kueue; they are ready.",
+  "kueue-prereq": "What Distributed workloads needs on the cluster is set up.",
   kueue: "Distributed workloads are set up in recipe-dev with the RayCluster sample; Kueue admits it when the quota allows.",
   "dashboard-dev": "Deployed PR #4321, its build for RHOAI (the dashboard images made for RHOAI, not ODH); the dashboard is ready.",
 };
