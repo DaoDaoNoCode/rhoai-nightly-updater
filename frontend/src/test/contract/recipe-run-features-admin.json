@@ -1,7 +1,12 @@
 {
   "cleanup": {
+    "componentIds": {
+      "kserve": "a41e9c07d2b85f13",
+      "kueue": "c3d8e15a90f2b674"
+    },
     "components": [
-      "kserve"
+      "kserve",
+      "kueue"
     ],
     "kueue": true,
     "kueueUid": "clusterqueue-uid",
@@ -33,9 +38,15 @@
   ],
   "run": {
     "bootId": "another-process",
+    "componentIds": {
+      "aipipelines": "5f0c2a9e1b7d4c36",
+      "kserve": "a41e9c07d2b85f13",
+      "kueue": "c3d8e15a90f2b674"
+    },
     "components": [
       "aipipelines",
-      "kserve"
+      "kserve",
+      "kueue"
     ],
     "createdParts": [
       {
@@ -307,6 +318,7 @@
         "typicalSeconds": 30
       },
       {
+        "created": true,
         "finishedAt": "2026-11-20T15:56:00Z",
         "id": "kueue-prereq",
         "maxSeconds": 900,

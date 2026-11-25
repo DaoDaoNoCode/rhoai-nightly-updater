@@ -191,7 +191,7 @@ func fakeRecipeProjectTeardown(t *testing.T, ran *[]string, holds map[string][]s
 		*ran = append(*ran, id+":"+strings.Join(confirmed, "|"))
 		return &types.OperationResponse{Success: true, Message: "Deleted project " + name + "."}, nil
 	}
-	cleanupComponents = func(*Client, []string) (*types.OperationResponse, error) {
+	cleanupComponents = func(*Client, []string, map[string]string) (*types.OperationResponse, error) {
 		*ran = append(*ran, "components")
 		return &types.OperationResponse{Success: true, Message: "Components restored."}, nil
 	}

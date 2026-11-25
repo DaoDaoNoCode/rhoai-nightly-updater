@@ -706,13 +706,7 @@ func TestKueueComponentRestore(t *testing.T) {
 	f := pc.f
 	f.putJSON(tDSC, `{"metadata":{"name":"default-dsc","resourceVersion":"1"},"spec":{"components":{"kueue":{"managementState":"Removed"}}}}`)
 	u := userClientOf(pc.c, fakeUserToken)
-	// Simulate prerequisite DSC patch state without running full operator install.
-	if _, _, err := u.Do(http.MethodPatch, tDSC, "application/merge-patch+json", []byte(`{"spec":{"components":{"kueue":{"managementState":"Unmanaged"}}}}`), map[string][]string{"fieldManager": {"rhoai-nightly-updater-dsc-kueue"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeTestPrereqRecord(u, `{"components":{"kueue":{"previous":"Removed","feature":"kueue"}}}`); err != nil {
-		t.Fatal(err)
-	}
+	kueueTurnedOnByTool(t, u)
 	if f.groups == nil {
 		f.groups = map[string]string{}
 	}
@@ -762,6 +756,28 @@ func TestModelsHardwareProfileKueueRule(t *testing.T) {
 				t.Fatalf("hardware profile %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// kueueTurnedOnByTool leaves the DataScienceCluster's kueue as the
+// Distributed workloads prerequisites (and a recipe's kueue-prereq step)
+// leave it, without the operator installs: Unmanaged, written by the
+// component's own field manager, and named in the prerequisites record.
+// The fake's merge patches must record field ownership.
+func kueueTurnedOnByTool(t *testing.T, u *Client) {
+	t.Helper()
+	kueueTurnedOnByToolAs(t, u, "")
+}
+
+// kueueTurnedOnByToolAs is kueueTurnedOnByTool with the record's
+// enablement ID ("" a record from before IDs).
+func kueueTurnedOnByToolAs(t *testing.T, u *Client, id string) {
+	t.Helper()
+	if _, _, err := u.Do(http.MethodPatch, tDSC, "application/merge-patch+json", []byte(`{"spec":{"components":{"kueue":{"managementState":"Unmanaged"}}}}`), map[string][]string{"fieldManager": {"rhoai-nightly-updater-dsc-kueue"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeTestPrereqRecord(u, `{"components":{"kueue":{"previous":"Removed","feature":"kueue","id":"`+id+`"}}}`); err != nil {
+		t.Fatal(err)
 	}
 }
 

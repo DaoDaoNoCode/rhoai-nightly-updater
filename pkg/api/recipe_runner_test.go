@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -86,7 +87,10 @@ func (f *recipeFake) clusterSteps() []cluster.RecipeStep {
 				f.mu.Lock()
 				s.ran = true
 				f.mu.Unlock()
-				st.AddComponents(s.components...)
+				for _, key := range s.components {
+					// The enablement ID the record would have for it.
+					st.AddComponentID(key, "en-"+key)
+				}
 				for _, p := range s.created {
 					st.AddCreated(p)
 				}
@@ -965,6 +969,10 @@ func TestRecipeResume_KeepsComponentsAndOwnershipIsLive(t *testing.T) {
 	if strings.Join(run.Components, ",") != "aipipelines,mlflowoperator" {
 		t.Errorf("components %v", run.Components)
 	}
+	// With the enablement each attempt turned on.
+	if want := map[string]string{"aipipelines": "en-aipipelines", "mlflowoperator": "en-mlflowoperator"}; !reflect.DeepEqual(run.ComponentIDs, want) {
+		t.Errorf("component IDs %v", run.ComponentIDs)
+	}
 	for _, s := range run.Steps {
 		if s.Created {
 			t.Errorf("the record stores created: %+v", s)
@@ -982,7 +990,7 @@ func TestRecipeResume_KeepsComponentsAndOwnershipIsLive(t *testing.T) {
 		return map[string]bool{"pipelines-prereq": true}, &types.CleanupRequest{Components: []string{"aipipelines"}}
 	}
 	st := recipeRunStatus(nil, nil)
-	if asked == nil || strings.Join(asked.Components, ",") != "aipipelines,mlflowoperator" {
+	if asked == nil || strings.Join(asked.Components, ",") != "aipipelines,mlflowoperator" || asked.ComponentIDs["mlflowoperator"] != "en-mlflowoperator" {
 		t.Fatalf("ownership asked for %+v", asked)
 	}
 	if !st.Run.Steps[0].Created || st.Run.Steps[1].Created || st.Cleanup == nil || strings.Join(st.Cleanup.Components, ",") != "aipipelines" {

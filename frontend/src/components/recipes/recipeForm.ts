@@ -343,10 +343,15 @@ export interface RecipeCleanupPart {
  * and DataScienceCluster components the run enabled. Shared S3 storage, MLflow, and
  * pipeline servers outside recipe-created projects are omitted (see leftInPlace).
  */
-/** The DataScienceCluster components a recipe turns on, by the names the dashboard and RHOAI's docs use. */
+/**
+ * The DataScienceCluster components a recipe turns on, by the names the dashboard and RHOAI's docs use: every key
+ * the feature setups write (pkg/cluster/internal/features featureSetups). aiHub is RHOAI 3.6's model registry
+ * component (it also runs the Model Catalog; the dashboard calls the area AI hub), ogx the playground's operator
+ * (llamastackoperator before).
+ */
 const COMPONENT_NAMES: Record<string, string> = {
   aipipelines: "Data Science Pipelines", datasciencepipelines: "Data Science Pipelines", mlflowoperator: "MLflow", modelregistry: "Model registry",
-  kserve: "KServe", kueue: "Kueue", ray: "Ray", dashboard: "Dashboard", llamastackoperator: "Llama Stack",
+  aiHub: "AI hub", kserve: "KServe", kueue: "Kueue", ray: "Ray", dashboard: "Dashboard", llamastackoperator: "Llama Stack", ogx: "OGX",
 };
 
 /** A component's plain name ("aipipelines" as Data Science Pipelines). */
@@ -402,7 +407,11 @@ export function cleanupRequest(ready: CleanupRequest | undefined, chosen: Readon
   if (ready?.maasPlatform && chosen.has("maas-platform")) Object.assign(req, { maasPlatform: true, maasPlatformUid: ready.maasPlatformUid ?? "" });
   if (ready?.kueue && chosen.has("kueue")) Object.assign(req, { kueue: true, kueueUid: ready.kueueUid ?? "" });
   if (req.modelRegistry || req.maasPlatform || req.kueue) req.recipeRunId = ready?.recipeRunId ?? "";
-  if (ready?.components?.length && chosen.has("components")) req.components = ready.components;
+  if (ready?.components?.length && chosen.has("components")) {
+    req.components = ready.components;
+    // The enablement reviewed of each: the backend turns back only that one.
+    if (ready.componentIds) req.componentIds = ready.componentIds;
+  }
   return req;
 }
 
@@ -434,11 +443,11 @@ export function dashboardDevLeft(run: RecipeRun): boolean {
  * The DataScienceCluster components a recipe's Clean up would turn back, and
  * those that stay on because something that uses them stays (the backend
  * keeps a component while anything on the cluster uses it): MLflow for
- * mlflowoperator, a pipeline server that is not deleted for aipipelines, the
- * model in a project that is not deleted for kserve, and a model registry
- * that is not deleted for modelregistry.
+ * mlflowoperator, a pipeline server that is not deleted for aipipelines, a
+ * model the status shows in a project that is not deleted for kserve, and a model registry
+ * that is not deleted for modelregistry and aiHub.
  */
-export function componentsSplit(status: ResourcesStatus | null, run: RecipeRun, req: CleanupRequest, offered: CleanupRequest | undefined): { back: string[]; stay: string[] } {
+export function componentsSplit(status: ResourcesStatus | null, run: RecipeRun, req: CleanupRequest, offered: CleanupRequest | undefined): { back: string[]; stay: string[]; backKeys: string[] } {
   const up = (r: ResourceState | null | undefined) => !!r?.deployed && !isTerminating(r);
   const deleted = new Set(req.recipeProjects ?? []);
   const project = run.project?.name;
@@ -450,11 +459,17 @@ export function componentsSplit(status: ResourcesStatus | null, run: RecipeRun, 
         const kept = (status?.pipelineServers ?? []).filter((ps) => up(ps) && ps.namespace && !deleted.has(ps.namespace)).map((ps) => ps.namespace);
         return kept.length ? `the pipeline server in ${kept.join(", ")} stays` : null;
       }
-      case "kserve":
-        return project && run.recipe.spec.features.models.enabled && !deleted.has(project) ? `the model in ${project} stays` : null;
+      case "kserve": {
+        // The models the status shows now, in projects this Clean up keeps (a model that failed or was deleted keeps
+        // nothing on); without the status, the recipe's own model counts while its project stays.
+        if (!status) return project && run.recipe.spec.features.models.enabled && !deleted.has(project) ? `the model in ${project} stays` : null;
+        const kept = [...new Set([...(status.models?.items ?? []), ...(status.models?.outside ?? [])].filter((m) => up(m) && m.namespace && !deleted.has(m.namespace)).map((m) => m.namespace))];
+        return kept.length ? `the model in ${kept.join(", ")} stays` : null;
+      }
       // Turned back only with the setup this Clean up removes (as the backend
       // keeps a component while what uses it stays).
       case "modelregistry":
+      case "aiHub":
         return offered?.modelRegistry && req.modelRegistry ? null : offered?.modelRegistry ? "the model registry stays" : "the model registry is not removed here";
       case "kueue":
         return offered?.kueue && req.kueue ? null : offered?.kueue ? "the distributed workloads setup stays" : "the distributed workloads setup is not removed here";
@@ -463,9 +478,31 @@ export function componentsSplit(status: ResourcesStatus | null, run: RecipeRun, 
   };
   const back: string[] = [];
   const stay: string[] = [];
+  const backKeys: string[] = [];
   for (const key of offered?.components ?? []) {
     const w = why(key);
-    if (w) stay.push(`${componentName(key)} (${w})`); else back.push(componentName(key));
+    if (w) stay.push(`${componentName(key)} (${w})`);
+    else {
+      back.push(componentName(key));
+      backKeys.push(key);
+    }
   }
-  return { back, stay };
+  return { back, stay, backKeys };
+}
+
+/**
+ * The request with only the components the dialog says go back (componentsSplit backKeys): one it says stays on is
+ * not sent, so the server cannot turn back what the user was told stays (a Kueue whose setup is not removed here but
+ * has no queue left, an AI hub with no registry left). No component going back sends no components step.
+ */
+export function withComponentsBack(req: CleanupRequest, backKeys: string[]): CleanupRequest {
+  if (!req.components) return req;
+  const out: CleanupRequest = { ...req };
+  delete out.components;
+  delete out.componentIds;
+  if (backKeys.length === 0) return out;
+  out.components = backKeys;
+  const ids = Object.fromEntries(backKeys.flatMap((k) => (req.componentIds?.[k] ? [[k, req.componentIds[k]]] : [])));
+  if (Object.keys(ids).length > 0) out.componentIds = ids;
+  return out;
 }

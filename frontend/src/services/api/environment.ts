@@ -154,6 +154,11 @@ export interface CleanupRequest {
   maasPlatform?: boolean;
   /** One-click prerequisites: DataScienceCluster components this tool enabled and now revert when unused. */
   components?: string[];
+  /**
+   * A recipe's Clean up: the enablement of each of components it reviewed (the prerequisites record's ID). One
+   * turned on again since is not turned back, checked under the cluster lock right before.
+   */
+  componentIds?: Record<string, string>;
   /** Recipe-created projects; each is removed after its contents, only while still owned by the recipe. */
   recipeProjects?: string[];
   /**

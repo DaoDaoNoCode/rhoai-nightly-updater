@@ -175,7 +175,9 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     const api = stubApi({
       ...editorReads,
       "GET /api/recipes/run": ended,
-      "GET /api/resources/status": { minio: { deployed: true, ready: true }, mlflow: { deployed: true, ready: true } } as ResourcesStatus,
+      // The run's model, deployed in its project.
+      "GET /api/resources/status": { minio: { deployed: true, ready: true }, mlflow: { deployed: true, ready: true },
+        models: { catalog: null, items: [{ name: "qwen3-1-7b", namespace: "recipe-full", deployed: true, ready: true }] } } as unknown as ResourcesStatus,
       "POST /api/resources/cleanup/stream": () => { const s = sseResponse(); streams.push(s); return s.response; },
       "POST /api/recipes/plan": () => jsonResponse(featuresPlan()),
     });
@@ -203,20 +205,92 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     expect(left).toEqual(["The S3 storage", "MLflow"]);
     expect(dialog).toHaveTextContent("The Dashboard Dev build stays: revert it on the Dashboard Dev page.");
     expect(within(dialog).getByRole("link", { name: "Dashboard Dev page" })).toHaveAttribute("href", "/dashboard-dev");
+    // The run turned kueue on (Unmanaged): offered, and kept on while its distributed workloads setup stays.
     expect(within(dialog).getByRole("checkbox", { name: "Turn back the DataScienceCluster components the run turned on: KServe" })).toBeChecked();
+    expect(dialog).toHaveTextContent("Each goes back to what it was. Stays on while what uses it stays: Kueue (the distributed workloads setup stays).");
     // Keeping the project keeps its model, so kserve stays on, and the label says so.
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Project recipe-full, which the recipe created" }));
-    expect(dialog).toHaveTextContent("None goes back now. Stays on while what uses it stays: KServe (the model in recipe-full stays).");
+    expect(dialog).toHaveTextContent("None goes back now. Stays on while what uses it stays: KServe (the model in recipe-full stays); Kueue (the distributed workloads setup stays).");
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Project recipe-full, which the recipe created" }));
     // The run's success says the workbench may still be starting, not that all is ready.
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "The MaaS platform the run set up" }));
+    // With the distributed workloads setup removed, Kueue goes back too, with its own condition.
+    expect(dialog).not.toHaveTextContent("no ClusterQueue or LocalQueue");
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "The distributed workloads setup the run created" }));
+    expect(within(dialog).getByRole("checkbox", { name: "Turn back the DataScienceCluster components the run turned on: KServe and Kueue" })).toBeChecked();
+    expect(dialog).toHaveTextContent("Each goes back to what it was. Kueue goes back last, only once no ClusterQueue or LocalQueue is left on the cluster.");
     fireEvent.click(within(dialog).getByRole("button", { name: "Clean up" }));
     await settle();
     expect(streams).toHaveLength(1);
     expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([
       // The reviewed identities: the backend checks them again before it deletes the platform.
-      { recipeProjects: ["recipe-full"], recipeProjectUIDs: { "recipe-full": "1a2b3c4d-uid" }, maasPlatform: true, maasPlatformUid: "creds-uid", kueue: true, kueueUid: "clusterqueue-uid", recipeRunId: "run2", components: ["kserve"] },
+      { recipeProjects: ["recipe-full"], recipeProjectUIDs: { "recipe-full": "1a2b3c4d-uid" }, maasPlatform: true, maasPlatformUid: "creds-uid", kueue: true, kueueUid: "clusterqueue-uid", recipeRunId: "run2", components: ["kserve", "kueue"],
+        componentIds: ended.cleanup!.componentIds },
+    ]);
+    await act(async () => { streams[0].close(); });
+    await settle();
+  });
+
+  it("Clean up on RHOAI 3.6: AI hub and OGX by name, AI hub kept while the registry stays and its Model Catalog said", async () => {
+    const ended = contract.recipeRunFeatures();
+    // The run's distributed workloads setup is not offered (gone, or not the run's): Kueue stays, and is not sent.
+    // ogx's record entry predates enablement IDs: it is named as such ("none").
+    const cleanup = { ...ended.cleanup!, kueue: false, kueueUid: undefined, components: ["aiHub", "kserve", "kueue", "ogx"],
+      componentIds: { ...ended.cleanup!.componentIds, aiHub: "9b1d0e7c4a2f5836", ogx: "none" } };
+    const streams: ReturnType<typeof sseResponse>[] = [];
+    const api = stubApi({
+      ...editorReads,
+      "GET /api/recipes/run": { ...ended, cleanup },
+      "GET /api/resources/status": { minio: { deployed: true, ready: true }, mlflow: { deployed: true, ready: true } } as ResourcesStatus,
+      "POST /api/resources/cleanup/stream": () => { const s = sseResponse(); streams.push(s); return s.response; },
+      "POST /api/recipes/plan": () => jsonResponse(featuresPlan()),
+    });
+    renderPage(<RecipesPage />, "/recipes");
+    await settleApps();
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up..." }));
+    const dialog = screen.getByRole("dialog", { name: /Clean up what recipe full set up\?/ });
+    await settle();
+    expect(within(dialog).getByRole("checkbox", { name: "Turn back the DataScienceCluster components the run turned on: KServe and OGX" })).toBeChecked();
+    expect(dialog).toHaveTextContent("Stays on while what uses it stays: AI hub (the model registry stays); Kueue (the distributed workloads setup is not removed here).");
+    expect(dialog).not.toHaveTextContent("Model Catalog");
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "The model registry the run created" }));
+    expect(within(dialog).getByRole("checkbox", { name: "Turn back the DataScienceCluster components the run turned on: AI hub, KServe and OGX" })).toBeChecked();
+    expect(dialog).toHaveTextContent("Each goes back to what it was. Turning AI hub back also removes the Model Catalog.");
+    expect(dialog).not.toHaveTextContent("aiHub");
+    // What is sent is what the dialog says goes back: AI hub with its registry, never the Kueue it says stays.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Clean up" }));
+    await settle();
+    expect(streams).toHaveLength(1);
+    expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([
+      { recipeProjects: ["recipe-full"], recipeProjectUIDs: { "recipe-full": "1a2b3c4d-uid" }, modelRegistry: true, modelRegistryUid: "registry-uid", recipeRunId: "run2", components: ["aiHub", "kserve", "ogx"],
+        componentIds: { aiHub: "9b1d0e7c4a2f5836", kserve: ended.cleanup!.componentIds!.kserve, ogx: "none" } },
+    ]);
+    await act(async () => { streams[0].close(); });
+    await settle();
+  });
+
+  it("Clean up sends no component the dialog says stays on", async () => {
+    const ended = contract.recipeRunFeatures();
+    const streams: ReturnType<typeof sseResponse>[] = [];
+    const api = stubApi({
+      ...editorReads,
+      "GET /api/recipes/run": ended,
+      "GET /api/resources/status": { minio: { deployed: true, ready: true }, mlflow: { deployed: true, ready: true } } as ResourcesStatus,
+      "POST /api/resources/cleanup/stream": () => { const s = sseResponse(); streams.push(s); return s.response; },
+      "POST /api/recipes/plan": () => jsonResponse(featuresPlan()),
+    });
+    renderPage(<RecipesPage />, "/recipes");
+    await settleApps();
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Clean up what the recipe set up..." }));
+    const dialog = screen.getByRole("dialog", { name: /Clean up what recipe full set up\?/ });
+    await settle();
+    // The distributed workloads setup stays (unticked), so Kueue stays on and is not sent.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Clean up" }));
+    await settle();
+    expect(api.bodies["POST /api/resources/cleanup/stream"]).toEqual([
+      { recipeProjects: ["recipe-full"], recipeProjectUIDs: { "recipe-full": "1a2b3c4d-uid" }, components: ["kserve"], componentIds: { kserve: ended.cleanup!.componentIds!.kserve } },
     ]);
     await act(async () => { streams[0].close(); });
     await settle();

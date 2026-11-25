@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_RECIPE_FORM, cleanupParts, componentName, componentsSplit, playgroundThroughMaaS } from "./recipeForm";
+import { DEFAULT_RECIPE_FORM, cleanupParts, componentName, componentsSplit, playgroundThroughMaaS, withComponentsBack } from "./recipeForm";
 import { planText } from "./RecipeReviewModal";
 import { contract } from "../../test/contract";
 import type { ResourcesStatus } from "../../types";
@@ -8,6 +8,10 @@ describe("recipe Clean up and plan words", () => {
   it("names DataScienceCluster components as RHOAI does, never by their keys (U1)", () => {
     expect(["aipipelines", "mlflowoperator", "modelregistry", "kserve", "kueue"].map(componentName)).toEqual(
       ["Data Science Pipelines", "MLflow", "Model registry", "KServe", "Kueue"]);
+    // Every key the feature setups turn on (pkg/cluster/internal/features featureSetups) has a name.
+    const keys = ["aipipelines", "datasciencepipelines", "mlflowoperator", "aiHub", "modelregistry", "kserve", "ogx", "llamastackoperator", "dashboard", "kueue"];
+    expect(keys.filter((k) => componentName(k) === k)).toEqual([]);
+    expect(["aiHub", "ogx"].map(componentName)).toEqual(["AI hub", "OGX"]);
     const parts = cleanupParts({ components: ["aipipelines", "kserve"] });
     expect(parts[0].title).toBe("The DataScienceCluster components the run turned on: Data Science Pipelines and KServe");
   });
@@ -31,7 +35,7 @@ describe("recipe Clean up and plan words", () => {
     const offered = { recipeProjects: ["recipe-full"], modelRegistry: true, kueue: true, components: ["kserve", "modelregistry", "kueue"] };
     // Unchecked registry and queue choices mean those components stay enabled.
     expect(componentsSplit(status, run, { recipeProjects: ["recipe-full"] }, offered)).toEqual({
-      back: ["KServe"], stay: ["Model registry (the model registry stays)", "Kueue (the distributed workloads setup stays)"],
+      back: ["KServe"], stay: ["Model registry (the model registry stays)", "Kueue (the distributed workloads setup stays)"], backKeys: ["kserve"],
     });
     // Once checked, they appear in the revert set as well.
     expect(componentsSplit(status, run, { recipeProjects: ["recipe-full"], modelRegistry: true, kueue: true }, offered).back).toEqual(["KServe", "Model registry", "Kueue"]);
@@ -39,6 +43,53 @@ describe("recipe Clean up and plan words", () => {
     expect(componentsSplit(status, run, { recipeProjects: ["recipe-full"] }, { ...offered, modelRegistry: false, kueue: false }).stay).toEqual([
       "Model registry (the model registry is not removed here)", "Kueue (the distributed workloads setup is not removed here)",
     ]);
+    // RHOAI 3.6 names the model registry component aiHub: it stays on while the registry stays, as modelregistry does.
+    const on36 = { ...offered, components: ["kserve", "aiHub", "kueue"] };
+    expect(componentsSplit(status, run, { recipeProjects: ["recipe-full"] }, on36).stay).toEqual([
+      "AI hub (the model registry stays)", "Kueue (the distributed workloads setup stays)",
+    ]);
+    expect(componentsSplit(status, run, { recipeProjects: ["recipe-full"], modelRegistry: true, kueue: true }, on36).back).toEqual(["KServe", "AI hub", "Kueue"]);
+    expect(componentsSplit(status, run, { recipeProjects: ["recipe-full"] }, { ...on36, modelRegistry: false }).stay[0]).toBe("AI hub (the model registry is not removed here)");
+  });
+
+  it("keeps KServe on for a model the status shows in a project that stays, not for one that failed or is gone", () => {
+    const run = contract.recipeRunFeatures().run!;
+    const offered = { recipeProjects: ["recipe-full"], components: ["kserve"] };
+    const model = (deployed: boolean, namespace = "recipe-full") => ({ models: { catalog: null, items: [{ name: "m", namespace, deployed, ready: deployed }] } }) as unknown as ResourcesStatus;
+    const kept = { recipeProjects: [] };
+    expect(componentsSplit(model(true), run, kept, offered).stay).toEqual(["KServe (the model in recipe-full stays)"]);
+    // The recipe's model failed or was deleted: nothing keeps KServe on, so it goes back.
+    expect(componentsSplit(model(false), run, kept, offered).backKeys).toEqual(["kserve"]);
+    expect(componentsSplit({} as ResourcesStatus, run, kept, offered).backKeys).toEqual(["kserve"]);
+    // A model in another project that stays keeps it on too (the server counts every model).
+    expect(componentsSplit(model(true, "team-a"), run, { recipeProjects: ["recipe-full"] }, offered).stay).toEqual(["KServe (the model in team-a stays)"]);
+    // Deleted with its project: it goes back.
+    expect(componentsSplit(model(true), run, { recipeProjects: ["recipe-full"] }, offered).backKeys).toEqual(["kserve"]);
+    // Only in a project that is no longer a data science project (models.outside): it still counts.
+    const outside = { models: { catalog: null, items: [], outside: [{ name: "m", namespace: "old-proj", deployed: true }] } } as unknown as ResourcesStatus;
+    expect(componentsSplit(outside, run, kept, offered).stay).toEqual(["KServe (the model in old-proj stays)"]);
+    // Being deleted: it keeps nothing on.
+    const going = { models: { catalog: null, items: [{ name: "m", namespace: "recipe-full", deployed: true, terminating: true }] } } as unknown as ResourcesStatus;
+    expect(componentsSplit(going, run, kept, offered).backKeys).toEqual(["kserve"]);
+    // Deployed but still starting (not ready): readiness does not decide, it keeps KServe on.
+    const starting = { models: { catalog: null, items: [{ name: "m", namespace: "recipe-full", deployed: true, ready: false }] } } as unknown as ResourcesStatus;
+    expect(componentsSplit(starting, run, kept, offered).stay).toEqual(["KServe (the model in recipe-full stays)"]);
+    // No status: the recipe's own model counts while its project stays.
+    expect(componentsSplit(null, run, kept, offered).stay).toEqual(["KServe (the model in recipe-full stays)"]);
+  });
+
+  it("sends only the components the dialog says go back", () => {
+    const req = { recipeProjects: ["recipe-full"], components: ["kserve", "kueue", "aiHub"] };
+    expect(withComponentsBack(req, ["kserve"])).toEqual({ recipeProjects: ["recipe-full"], components: ["kserve"] });
+    // None goes back: no components step at all.
+    expect(withComponentsBack(req, [])).toEqual({ recipeProjects: ["recipe-full"] });
+    // The reviewed enablement goes only with a component that is sent.
+    expect(withComponentsBack({ ...req, componentIds: { kserve: "a", kueue: "b" } }, ["kserve", "aiHub"])).toEqual({ recipeProjects: ["recipe-full"], components: ["kserve", "aiHub"], componentIds: { kserve: "a" } });
+    expect(withComponentsBack({ ...req, componentIds: { kueue: "b" } }, [])).toEqual({ recipeProjects: ["recipe-full"] });
+    // A component reviewed without an ID goes with the backend's "none".
+    expect(withComponentsBack({ ...req, componentIds: { kserve: "none" } }, ["kserve"]).componentIds).toEqual({ kserve: "none" });
+    // The components part unticked stays unticked.
+    expect(withComponentsBack({ recipeProjects: ["recipe-full"] }, ["kserve"])).toEqual({ recipeProjects: ["recipe-full"] });
   });
 
   it("a plan's messages do not repeat that nothing was changed (U3)", () => {

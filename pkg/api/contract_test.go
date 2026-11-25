@@ -349,7 +349,9 @@ const testRecipeFeatures = `{"apiVersion":"rhoai-nightly-updater/v1alpha1","kind
 
 // stubFeaturesRecipeRun is a run of every feature that succeeded: its
 // steps are the runner's own (titles and figures), and its Clean up
-// offers the project, the MaaS platform and the model registry it created.
+// offers the project, the MaaS platform and the model registry it created,
+// and the components it turned on that are still as it left them (kserve,
+// and kueue in its own on state, Unmanaged).
 func stubFeaturesRecipeRun(t *testing.T) {
 	t.Helper()
 	rcp, problems := cluster.ValidateRecipe([]byte(testRecipeFeatures))
@@ -373,14 +375,16 @@ func stubFeaturesRecipeRun(t *testing.T) {
 			Recipe: rcp, Project: &types.RecipeProjectRef{Name: "recipe-full", UID: "1a2b3c4d-uid", Owned: true}, Steps: steps,
 			Exposure:     "default-gateway",
 			CreatedParts: []types.RecipeCreatedPart{{Part: types.RecipePartMaaSPlatform, UID: "creds-uid"}, {Part: types.RecipePartModelRegistry, UID: "registry-uid"}, {Part: types.RecipePartKueue, UID: "clusterqueue-uid"}},
-			Components:   []string{"aipipelines", "kserve"},
+			Components:   []string{"aipipelines", "kserve", "kueue"},
+			ComponentIDs: map[string]string{"aipipelines": "5f0c2a9e1b7d4c36", "kserve": "a41e9c07d2b85f13", "kueue": "c3d8e15a90f2b674"},
 		}, nil
 	}
 	recipeOwnership = func(_, _ *cluster.Client, run *types.RecipeRun) (map[string]bool, *types.CleanupRequest) {
-		return map[string]bool{"project": true, "maas": true, "model-registry": true, "models-prereq": true, "kueue": true},
+		return map[string]bool{"project": true, "maas": true, "model-registry": true, "models-prereq": true, "kueue-prereq": true, "kueue": true},
 			&types.CleanupRequest{RecipeProjects: []string{run.Project.Name}, RecipeProjectUIDs: map[string]string{run.Project.Name: run.Project.UID},
-				MaaSPlatform: true, ModelRegistry: true, Components: []string{"kserve"},
-				Kueue: true, KueueUID: "clusterqueue-uid",
+				MaaSPlatform: true, ModelRegistry: true, Components: []string{"kserve", "kueue"},
+				ComponentIDs: map[string]string{"kserve": "a41e9c07d2b85f13", "kueue": "c3d8e15a90f2b674"},
+				Kueue:        true, KueueUID: "clusterqueue-uid",
 				RecipeRunID: run.ID, MaaSPlatformUID: "creds-uid", ModelRegistryUID: "registry-uid"}
 	}
 }

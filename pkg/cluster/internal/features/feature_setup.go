@@ -1,6 +1,8 @@
 package features
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -175,6 +177,19 @@ type prereqRecord struct {
 type prereqComponent struct {
 	Previous string `json:"previous,omitempty"`
 	Feature  string `json:"feature"`
+	// ID names this enablement (random, one per time setup turns the
+	// component on; "" in records written before 5.0.0). A recipe run
+	// records the ID its step turned on and claims only that one, and its
+	// Clean up names it, so a component turned back and turned on again
+	// since (even in the same second) is not turned back for that run.
+	ID string `json:"id,omitempty"`
+}
+
+// newEnablementID is a prereqComponent ID.
+func newEnablementID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b) // crypto/rand.Read never returns an error (Go 1.24)
+	return hex.EncodeToString(b)
 }
 
 // ReadPrereqRecord reads what the feature setups recorded (empty when nothing).
@@ -676,7 +691,8 @@ func (p *featurePlan) status() types.FeaturePrerequisites {
 		out.SetupBlockedReason = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(p.refusal), "Nothing was changed."))
 	}
 	for _, cp := range p.components {
-		if cp.recorded && cp.owned && cp.state == cp.fc.OnState() {
+		// The same check as Clean up's own and a recipe run's offer.
+		if _, _, ok := StillAsSetUp(p.rec, p.dsc.Object, cp.key); ok {
 			out.Restorable = append(out.Restorable, types.RestorableComponent{Component: cp.key, Previous: cp.recordedPrior, Feature: p.fs.id})
 		}
 	}
@@ -765,7 +781,7 @@ func RunPrerequisites(c *kube.Client, req types.PrerequisitesRequest, onStep fun
 			}
 			for _, cp := range p.components {
 				if cp.turnOn {
-					rec.Components[cp.key] = prereqComponent{Previous: cp.state, Feature: fs.id}
+					rec.Components[cp.key] = prereqComponent{Previous: cp.state, Feature: fs.id, ID: newEnablementID()}
 				}
 			}
 			m.Step("dsc", "running", fmt.Sprintf("Setting %s to %s in DataScienceCluster %s (Clean up can turn %s back)...", kube.JoinTitles(on), onStateOf(p.components), p.dscName, kube.Verb(len(on), "it", "them")))
@@ -1016,14 +1032,23 @@ func waitPrerequisitesReady(m *serving.Run, p *featurePlan) (*types.OperationRes
 
 // --- turning components back (Clean up) ----------------------------------------------
 
-// componentOnState is the state the component key is turned on with.
-func componentOnState(key string) string {
+// featureComponentOf is the component a feature setup turns on that key
+// names (one of its keys, or its v1 key).
+func featureComponentOf(key string) (envkit.FeatureComponent, bool) {
 	for _, fs := range featureSetups {
 		for _, fc := range fs.components {
-			if slices.Contains(fc.Keys, key) {
-				return fc.OnState()
+			if slices.Contains(fc.Keys, key) || (fc.V1Key != "" && fc.V1Key == key) {
+				return fc, true
 			}
 		}
+	}
+	return envkit.FeatureComponent{}, false
+}
+
+// componentOnState is the state the component key is turned on with.
+func componentOnState(key string) string {
+	if fc, ok := featureComponentOf(key); ok {
+		return fc.OnState()
 	}
 	return "Managed"
 }
@@ -1031,14 +1056,8 @@ func componentOnState(key string) string {
 // RestorableComponentKey: key is a component this tool turns on for a
 // feature (Clean up may turn it back).
 func RestorableComponentKey(key string) bool {
-	for _, fs := range featureSetups {
-		for _, fc := range fs.components {
-			if slices.Contains(fc.Keys, key) || (fc.V1Key != "" && fc.V1Key == key) {
-				return true
-			}
-		}
-	}
-	return false
+	_, ok := featureComponentOf(key)
+	return ok
 }
 
 // restoreVerdict is what Clean up does with one component, decided on one
@@ -1047,30 +1066,83 @@ type restoreVerdict struct {
 	restore bool   // turn it back to prev
 	prev    string // its value before this tool's setup
 	drop    bool   // forget it in the record (it is not this tool's to turn back any more)
-	kept    string // why it stays Managed, for the result ("" none)
+	kept    string // why it stays on, for the result ("" none)
 	log     string
 	// refusal stops the whole restore before any further write.
 	refusal, code string
 }
 
-// restoreCheck runs every check of turning key back, on dscRead: the record
-// says this tool turned it on, it is still Managed, this tool's field
-// manager still owns it (nobody changed it since: DSCComponentOwned),
-// Argo CD does not manage the DataScienceCluster, and nothing on the
-// cluster uses it (a list that fails refuses).
-func restoreCheck(c *kube.Client, rec prereqRecord, dscRead rhoai.DSCRead, key string) restoreVerdict {
+// setUpCheck is how a component stands against what this tool's setup left.
+type setUpCheck int
+
+const (
+	stillSetUp   setUpCheck = iota // as the setup left it
+	notRecorded                    // the record does not name it
+	notOn                          // not in its on state (turned back, or no DataScienceCluster)
+	changedSince                   // another field manager wrote its state since
+)
+
+// checkSetUp checks key on the DataScienceCluster dsc (as read) against
+// what this tool's setup left: the record names it, it is in its own on
+// state (componentOnState: Unmanaged for kueue, Managed for the others;
+// read as envkit.ComponentManagement reads it) and this tool's field
+// manager still owns that state (DSCComponentOwned). It returns the
+// record's entry and the state read.
+func checkSetUp(rec prereqRecord, dsc map[string]any, key string) (prereqComponent, string, setUpCheck) {
 	rc, ok := rec.Components[key]
 	if !ok {
-		return restoreVerdict{kept: key + " (this tool did not turn it on)"}
+		return rc, "", notRecorded
 	}
-	prev := kube.FirstNonEmpty(rc.Previous, "Removed")
-	state, _ := envkit.ComponentManagement(dscRead.Object, key)
+	state, _ := envkit.ComponentManagement(dsc, key)
 	switch {
-	case dscRead.Object == nil || state != componentOnState(key):
+	case dsc == nil || state != componentOnState(key):
+		return rc, state, notOn
+	case !DSCComponentOwned(dsc, key):
+		return rc, state, changedSince
+	}
+	return rc, state, stillSetUp
+}
+
+// StillAsSetUp reports whether key is still as this tool's setup left it
+// on the DataScienceCluster dsc (as read; nil is not), with the feature
+// that turned it on and that enablement's ID ("" when the record predates
+// it): the record names it, it is in its own on state, and this tool's
+// field manager still owns it. It is the check Clean up makes
+// first (restoreCheck), and what the Environment tabs and a recipe run
+// offer to turn back. Whether anything still uses the component is checked
+// only by Clean up, when it runs, after the parts before it (which may
+// remove what uses it).
+func StillAsSetUp(rec prereqRecord, dsc map[string]any, key string) (feature, id string, ok bool) {
+	rc, _, chk := checkSetUp(rec, dsc, key)
+	return rc.Feature, rc.ID, chk == stillSetUp
+}
+
+// restoreCheck runs every check of turning key back, on dscRead: still as
+// this tool's setup left it (checkSetUp), still the enablement the user
+// reviewed when the request names one (reviewed, the record's ID; a
+// recipe's Clean up), Argo CD does not manage the DataScienceCluster, and
+// nothing on the cluster uses it (a list that fails refuses).
+func restoreCheck(c *kube.Client, rec prereqRecord, dscRead rhoai.DSCRead, key string, reviewed reviewedEnablement) restoreVerdict {
+	rc, state, chk := checkSetUp(rec, dscRead.Object, key)
+	switch chk {
+	case notRecorded:
+		return restoreVerdict{kept: key + " (this tool did not turn it on)"}
+	case notOn:
 		return restoreVerdict{drop: true, log: key + " is " + kube.FirstNonEmpty(state, "not set") + " already"}
-	case !DSCComponentOwned(dscRead.Object, key):
+	case changedSince:
 		return restoreVerdict{drop: true, kept: key + " (changed by someone since this tool's setup)"}
 	}
+	if reviewed.checked && rc.ID != reviewed.id {
+		// Turned back and turned on again since the review (by the
+		// Environment page or another run): that enablement is not the
+		// one reviewed, and stays recorded for its own Clean up. A
+		// request that names no enablement for key was not reviewed.
+		if !reviewed.named {
+			return restoreVerdict{kept: key + " (this Clean up did not review it)"}
+		}
+		return restoreVerdict{kept: key + " (turned on again since you reviewed this Clean up; it is not turned back for this run)"}
+	}
+	prev := kube.FirstNonEmpty(rc.Previous, "Removed")
 	if argoCD := argo.TrackingOf(c, dscRead.Object, rhoai.DSCGroup, "DataScienceCluster"); argoCD.ManagedBy() != "" {
 		return restoreVerdict{refusal: argo.GitOpsRefusal("The DataScienceCluster", argoCD.ManagedBy(), "turning "+key+" back to "+prev) + argoCD.UnconfirmedNote(), code: kube.ErrorCodeGitOpsManaged}
 	}
@@ -1096,7 +1168,7 @@ func restoreCheck(c *kube.Client, rec prereqRecord, dscRead rhoai.DSCRead, key s
 		users, err = dsc.ComponentUsers(c, key)
 	}
 	if err != nil {
-		return restoreVerdict{refusal: fmt.Sprintf("Cannot tell whether anything still uses %s, so it stays Managed: %v.%s", key, err, kube.TemplateHint(err)), code: kube.ErrorCodeFromK8sErr(err)}
+		return restoreVerdict{refusal: fmt.Sprintf("Cannot tell whether anything still uses %s, so it stays %s: %v.%s", key, componentOnState(key), err, kube.TemplateHint(err)), code: kube.ErrorCodeFromK8sErr(err)}
 	}
 	if len(users) > 0 {
 		shown := users
@@ -1120,6 +1192,36 @@ func restoreCheck(c *kube.Client, rec prereqRecord, dscRead rhoai.DSCRead, key s
 // tool's manager (the API server moves a field only when its value
 // changes), so then the in-use check is what keeps a component in use on.
 func RestoreComponents(c *kube.Client, keys []string) (*types.OperationResponse, error) {
+	return RestoreReviewedComponents(c, keys, nil)
+}
+
+// reviewedEnablement is the enablement a Clean up reviewed of a component:
+// checked when the request names enablements at all (a recipe's), named
+// when it names one for this component, id the record's ID it had (""
+// for types.ComponentNotIdentified, an entry written before IDs).
+type reviewedEnablement struct {
+	checked, named bool
+	id             string
+}
+
+func reviewedOf(reviewed map[string]string, key string) reviewedEnablement {
+	if reviewed == nil {
+		return reviewedEnablement{}
+	}
+	id, named := reviewed[key]
+	if id == types.ComponentNotIdentified {
+		id = ""
+	}
+	return reviewedEnablement{checked: true, named: named && (id != "" || reviewed[key] == types.ComponentNotIdentified), id: id}
+}
+
+// RestoreReviewedComponents is RestoreComponents for a Clean up that names
+// the enablement it reviewed of each component (reviewed: key to the
+// prerequisites record's ID, or types.ComponentNotIdentified; a recipe's
+// Clean up): a component turned on again since is not turned back, nor is
+// one the request does not name (restoreCheck). Without reviewed each is
+// checked as RestoreComponents checks it.
+func RestoreReviewedComponents(c *kube.Client, keys []string, reviewed map[string]string) (*types.OperationResponse, error) {
 	rec, err := ReadPrereqRecord(c)
 	if err != nil {
 		return &types.OperationResponse{Success: false, Message: err.Error() + " Nothing was changed.", ErrorCode: kube.ErrorCodeFromK8sErr(err)}, nil
@@ -1144,7 +1246,7 @@ func RestoreComponents(c *kube.Client, keys []string) (*types.OperationResponse,
 		}
 	}
 	for _, key := range keys {
-		v := restoreCheck(c, rec, dsc, key)
+		v := restoreCheck(c, rec, dsc, key, reviewedOf(reviewed, key))
 		if v.refusal != "" {
 			return &types.OperationResponse{Success: false, Message: v.refusal + " Nothing was changed.", ErrorCode: v.code}, nil
 		}
@@ -1174,7 +1276,7 @@ func RestoreComponents(c *kube.Client, keys []string) (*types.OperationResponse,
 		for attempt := 1; ; attempt++ {
 			v := restoreVerdict{restore: true, prev: kube.FirstNonEmpty(rec.Components[key].Previous, "Removed")}
 			if checkedOn[key] != reads {
-				if v = restoreCheck(c, rec, dsc, key); v.refusal != "" {
+				if v = restoreCheck(c, rec, dsc, key, reviewedOf(reviewed, key)); v.refusal != "" {
 					return stop(v.refusal, v.code)
 				}
 				checkedOn[key] = reads
@@ -1200,11 +1302,11 @@ func RestoreComponents(c *kube.Client, keys []string) (*types.OperationResponse,
 				return stop(fmt.Sprintf("Failed to turn %s back to %s: %v.%s", key, v.prev, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err))
 			}
 			if attempt == 3 {
-				return stop(fmt.Sprintf("The DataScienceCluster kept changing while %s was turned back (someone else is editing it), so it stays Managed. Clean up again later.", key), "conflict")
+				return stop(fmt.Sprintf("The DataScienceCluster kept changing while %s was turned back (someone else is editing it), so it stays %s. Clean up again later.", key, componentOnState(key)), "conflict")
 			}
 			logs = append(logs, "The DataScienceCluster changed since it was read; reading it again and checking again.")
 			if dsc, err = rhoai.ReadFirstDSC(c); err != nil {
-				return stop(fmt.Sprintf("The DataScienceCluster changed since it was read, and it cannot be read again, so %s stays Managed: %v.%s", key, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err))
+				return stop(fmt.Sprintf("The DataScienceCluster changed since it was read, and it cannot be read again, so %s stays %s: %v.%s", key, componentOnState(key), err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err))
 			}
 			reads++
 		}
@@ -1219,7 +1321,7 @@ func RestoreComponents(c *kube.Client, keys []string) (*types.OperationResponse,
 		msg = append(msg, kube.JoinTitles(done)+", as before setup.")
 	}
 	if len(kept) > 0 {
-		msg = append(msg, "Kept Managed: "+strings.Join(kept, "; ")+".")
+		msg = append(msg, "Not turned back: "+strings.Join(kept, "; ")+".")
 	}
 	if len(msg) == 0 {
 		msg = append(msg, "No component to turn back.")

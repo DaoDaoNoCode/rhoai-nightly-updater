@@ -1899,6 +1899,11 @@ type ComponentBlock struct {
 	Reason string `json:"reason"`
 }
 
+// ComponentNotIdentified is CleanupRequest.ComponentIDs' value for a
+// reviewed component whose prerequisites record entry had no enablement
+// ID (written before IDs).
+const ComponentNotIdentified = "none"
+
 // CleanupRequest is the body of POST /api/resources/cleanup/stream: what
 // to delete of what this tool created, in this order.
 type CleanupRequest struct {
@@ -1948,6 +1953,15 @@ type CleanupRequest struct {
 	// tool turned on that go back to what they were, last, each only while
 	// this tool still owns the field and nothing on the cluster uses it.
 	Components []string `json:"components,omitempty"`
+	// ComponentIDs: a recipe's Clean up names the enablement it reviewed
+	// of each of Components (the prerequisites record's ID, or
+	// ComponentNotIdentified for a record entry written before IDs). One
+	// turned on again since has another ID (an entry without one that now
+	// has one, too) and is not turned back, checked under the cluster lock
+	// right before; with ComponentIDs set, a component it does not name is
+	// not turned back either. Without ComponentIDs (the Environment page's
+	// Clean up) each is checked as before.
+	ComponentIDs map[string]string `json:"componentIds,omitempty"`
 	// RecipeProjects are projects recipes created, each deleted after the
 	// parts that live in it and before the components: only while it
 	// carries the recipe's label and the UID the recipe recorded.

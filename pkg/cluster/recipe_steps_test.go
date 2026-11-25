@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kueue"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/recipe"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -146,6 +147,28 @@ func TestRecipePrereqSteps_RecordTheComponentsTheyTurnedOn(t *testing.T) {
 	if strings.Join(st.Components, ",") != "aipipelines" {
 		t.Errorf("components %v", st.Components)
 	}
+	// With the enablement it turned on, as the record has it.
+	defer func() {
+		// Set up again over an entry that survived a turn off (written
+		// again with a new ID): the run claims it with the new ID.
+		pc.f.mu.Lock()
+		k, _ := parseFakePath(tDSC)
+		ensureMap(ensureMap(ensureMap(pc.f.objects[k], "spec"), "components"), "aipipelines")["managementState"] = "Removed"
+		pc.f.mu.Unlock()
+		old := prereqRecordID(t, pc.c, "aipipelines")
+		again := &recipe.State{Recipe: r}
+		res, err := recipeStep(t, r, recipe.StepPipelinesPrereq).Run(pc.c, again, func(types.UpdateStepEvent) {})
+		if err != nil || !res.Success {
+			t.Fatalf("again: %+v %v", res, err)
+		}
+		id := prereqRecordID(t, pc.c, "aipipelines")
+		if id == old || !reflect.DeepEqual(again.ComponentIDs, map[string]string{"aipipelines": id}) || componentState(pc.f, "aipipelines") != "Managed" {
+			t.Errorf("again: component IDs %v, record %q (was %q)", again.ComponentIDs, id, old)
+		}
+	}()
+	if id := prereqRecordID(t, pc.c, "aipipelines"); id == "" || !reflect.DeepEqual(st.ComponentIDs, map[string]string{"aipipelines": id}) {
+		t.Errorf("component IDs %v, record %q", st.ComponentIDs, id)
+	}
 }
 
 // Ownership comes from live cluster state, not the run record alone:
@@ -159,7 +182,9 @@ func TestRecipeOwnership_FromTheCluster(t *testing.T) {
 		if res, _ := runPrereqs(t, pc.c, "pipelines"); !res.Success {
 			t.Fatalf("setup %+v", res)
 		}
+		id := prereqRecordID(t, pc.c, "aipipelines")
 		run := &types.RecipeRun{
+			ComponentIDs: map[string]string{"aipipelines": id},
 			Steps: []types.RecipeRunStep{
 				{ID: recipe.StepPipelinesPrereq}, {ID: recipe.StepS3, Created: true}, {ID: recipe.StepPipelineServer, Created: true}, {ID: recipe.StepMLflow, Created: true},
 			},
@@ -167,7 +192,7 @@ func TestRecipeOwnership_FromTheCluster(t *testing.T) {
 			Components: []string{"aipipelines", "mlflowoperator"},
 		}
 		created, req := recipe.Ownership(pc.c, nil, run)
-		want := types.CleanupRequest{Components: []string{"aipipelines"}}
+		want := types.CleanupRequest{Components: []string{"aipipelines"}, ComponentIDs: map[string]string{"aipipelines": id}}
 		if req == nil || !reflect.DeepEqual(*req, want) || !reflect.DeepEqual(created, map[string]bool{recipe.StepPipelinesPrereq: true}) {
 			t.Fatalf("created %v, cleanup %+v", created, req)
 		}
@@ -179,6 +204,47 @@ func TestRecipeOwnership_FromTheCluster(t *testing.T) {
 		if created, req := recipe.Ownership(pc.c, nil, run); req != nil || len(created) != 0 {
 			t.Fatalf("after the change: created %v, cleanup %+v", created, req)
 		}
+	})
+	// Kueue's on state is Unmanaged: the run that turned it on offers to
+	// turn it back while it is as the run left it, also while a queue is
+	// left (Clean up deletes the setup's queues first and checks then).
+	t.Run("kueue", func(t *testing.T) {
+		pc := newPrereqCluster(t)
+		pc.f.putJSON(tDSC, `{"metadata":{"name":"default-dsc","resourceVersion":"1"},"spec":{"components":{"kueue":{"managementState":"Removed"}}}}`)
+		u := userClientOf(pc.c, fakeUserToken)
+		kueueTurnedOnByTool(t, u)
+		run := &types.RecipeRun{Steps: []types.RecipeRunStep{{ID: recipe.StepKueuePrereq}}, Components: []string{"kueue"}}
+		offered := func(when string) {
+			t.Helper()
+			created, req := recipe.Ownership(pc.c, nil, run)
+			if req == nil || !reflect.DeepEqual(*req, types.CleanupRequest{Components: []string{"kueue"}, ComponentIDs: map[string]string{"kueue": types.ComponentNotIdentified}}) || !reflect.DeepEqual(created, map[string]bool{recipe.StepKueuePrereq: true}) {
+				t.Fatalf("%s: created %v, cleanup %+v", when, created, req)
+			}
+		}
+		notOffered := func(when string) {
+			t.Helper()
+			if created, req := recipe.Ownership(pc.c, nil, run); req != nil || len(created) != 0 {
+				t.Fatalf("%s: created %v, cleanup %+v", when, created, req)
+			}
+		}
+		offered("as the run left it")
+		pc.f.groups = map[string]string{kqGroup: kqV1beta2}
+		pc.f.putJSON(kqCQ, `{"metadata":{"name":"`+kueue.ClusterQueueName+`"}}`)
+		offered("with a ClusterQueue left")
+		other := func(state string) {
+			t.Helper()
+			if _, _, err := u.Do(http.MethodPatch, tDSC, "application/merge-patch+json", []byte(`{"spec":{"components":{"kueue":{"managementState":"`+state+`"}}}}`), map[string][]string{"fieldManager": {"kubectl-edit"}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		other("Removed")
+		notOffered("turned back by someone else")
+		// Unmanaged again, but written by another field manager: not what the run left.
+		other("Unmanaged")
+		if componentState(pc.f, "kueue") != "Unmanaged" {
+			t.Fatalf("kueue %s", componentState(pc.f, "kueue"))
+		}
+		notOffered("rewritten by someone else")
 	})
 	t.Run("project", func(t *testing.T) {
 		f, c := projectFake(t)
