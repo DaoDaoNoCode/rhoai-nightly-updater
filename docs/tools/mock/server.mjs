@@ -515,6 +515,38 @@ async function kueueStream(req, res) {
   res.end();
 }
 
+/** POST /api/resources/observability/stream (pkg/cluster RunObservability). */
+async function observabilityStream(req, res) {
+  const { action } = await body(req);
+  beginOperation("observability", "Usage logs and dashboards", `${action} usage logs and dashboards`);
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+  let n = 0;
+  const send = (ev) => res.write(`data: ${JSON.stringify({ ...ev, elapsedMs: ++n * 3000 })}\n\n`);
+  let message;
+  if (action === "setup") {
+    send({ step: "observability-check", status: "success", message: "Everything Set up changes is checked." });
+    for (const [step, text] of [["cert-manager", "cert-manager Operator for Red Hat OpenShift 1.20.1 is installed (not by this tool)."], ["cluster-observability-operator", "Cluster Observability Operator 1.5.5 is installed."], ["opentelemetry", "Red Hat build of OpenTelemetry 0.158.0 is installed."], ["loki-operator", "Loki Operator 6.7.0 is installed."]]) {
+      send({ step, status: "success", message: text });
+    }
+    send({ step: "usage-logs-storage", status: "success", message: "Bucket rhoai-usage-logs, SeaweedFS user rnu-usage-logs (its key reaches that bucket only) and Secret redhat-ods-monitoring/rhoai-nightly-updater-usage-logs are ready." });
+    send({ step: "monitoring-settings", status: "success", message: "DSCInitialization default-dsci sets usage logs and metrics storage; RHOAI's operator deploys the stack." });
+    send({ step: "monitoring-ready", status: "running", message: "Waiting for RHOAI's operator to report the monitoring stack, Perses and the usage logs available (about 3 minutes)" });
+    await nextStep();
+    world.observability = F.observabilityWorld("ready");
+    send({ step: "monitoring-ready", status: "success", message: "RHOAI's operator reports the monitoring stack, Perses and the usage logs available." });
+    message = "Usage logs and the dashboards are set up. New calls through the MaaS gateway show in the usage dashboards (RHOAI dashboard, Observe & monitor) once they are made; older calls were not logged.";
+  } else {
+    for (const [step, text] of [["observability-check", "Clean up removes only what this tool's setup added."], ["monitoring-settings", "DSCInitialization default-dsci is as before this tool's setup; RHOAI's operator deletes the stack."], ["monitoring-gc", "RHOAI's operator deleted the stack."], ["monitoring-leftovers", "Deleted 11 objects the stack left."], ["usage-logs-storage", "Secret rhoai-nightly-updater-usage-logs, SeaweedFS user rnu-usage-logs and bucket rhoai-usage-logs are deleted."]]) {
+      send({ step, status: "success", message: text });
+    }
+    world.observability = F.observabilityWorld("none");
+    message = "Usage logs and the dashboards this tool set up are removed, with their data. The Cluster Observability Operator, OpenTelemetry, the Loki Operator and cert-manager stay: other features share them.";
+  }
+  endOperation(true, message);
+  send({ step: "operation_complete", status: "success", message });
+  res.end();
+}
+
 /** POST /api/resources/playground/stream (pkg/cluster RunPlayground). */
 async function playgroundStream(req, res) {
   const { action, project, models = [] } = await body(req);
@@ -783,6 +815,7 @@ const routes = {
   "GET /api/resources/workbench": (u) => workbenchOf(u.searchParams.get("project") || ""),
   "GET /api/resources/kueue": (u) => kueueOf(u.searchParams.get("project") || ""),
   "GET /api/resources/maas": () => reads["GET /api/resources/maas"](world),
+  "GET /api/resources/observability": () => world.observability,
   "GET /api/resources/model-registry": () => reads["GET /api/resources/model-registry"](world),
   "GET /api/resources/maas/groups": (u) => F.maasGroupProblems(u.searchParams.getAll("name")),
   // Models routing and one-click prerequisites.
@@ -925,6 +958,7 @@ async function api(req, res, u) {
   if (key === "POST /api/resources/model-registry/stream") return modelRegistryStream(req, res);
   if (key === "POST /api/resources/workbench/stream") return workbenchStream(req, res);
   if (key === "POST /api/resources/kueue/stream") return kueueStream(req, res);
+  if (key === "POST /api/resources/observability/stream") return observabilityStream(req, res);
   if (key === "POST /api/resources/maas/stream") return maasStream(req, res);
   if (key.startsWith("POST /api/resources/samples/") && world.canMutate === false) {
     return json(res, 403, { error: "Only cluster-admins can change the cluster through the updater.", errorCode: "forbidden" });

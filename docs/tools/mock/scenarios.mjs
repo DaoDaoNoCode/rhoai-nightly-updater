@@ -25,6 +25,8 @@ export function baseWorld() {
     workbench: { items: [] },
     // The Distributed workloads tab (GET /api/resources/kueue).
     kueue: F.kueueWorld("none"),
+    // The Observability tab (GET /api/resources/observability).
+    observability: F.observabilityWorld("none"),
     // Models as a Service (GET /api/resources/maas).
     maas: F.maasWorld("none"),
     // This tool's model registry (GET /api/resources/model-registry).
@@ -575,6 +577,12 @@ export const scenarios = {
   "env-maas-in-use": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(false)] }); w.maasRefusal = F.MAAS_IN_USE; },
   // The Workbench tab: not set up (the plan shown), running, stopped, and no hardware profile fits.
   // The Distributed workloads tab: not set up, operator missing, ready with samples, opt-in on.
+  "env-observability-none": () => {},
+  "env-observability-ready": (w) => { w.observability = F.observabilityWorld("ready"); },
+  "env-observability-collector-stuck": (w) => { w.observability = F.observabilityWorld("collector-stuck"); },
+  "env-observability-dashboards-pending": (w) => { w.observability = F.observabilityWorld("dashboards-pending"); },
+  "env-observability-external": (w) => { w.observability = F.observabilityWorld("external"); },
+  "env-observability-no-storage": (w) => { w.observability = F.observabilityWorld("no-storage"); },
   "env-kueue-none": () => {},
   "env-kueue-operator-missing": (w) => { w.kueue = F.kueueWorld("operator-missing"); w.prereq = { ...(w.prereq ?? {}), kueue: "missing" }; },
   "env-kueue-ready": (w) => { w.kueue = F.kueueWorld("ready", { samples: true }); },

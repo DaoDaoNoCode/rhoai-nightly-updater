@@ -489,7 +489,7 @@ func (v *view) conditionPart(pt types.MaaSPart, conds []string, what string) typ
 	}
 	switch {
 	case len(notConfigured) > 0 && len(waiting) == 0:
-		pt.State, pt.Message = "missing", fmt.Sprintf("Not deployed: RHOAI's operator deploys %s once the DSCInitialization's monitoring fields are set (%s).", what, strings.Join(notConfigured, ", ")+" report not configured")
+		pt.State, pt.Message = "missing", fmt.Sprintf("Not deployed yet (%s report not configured). Once the DSCInitialization's monitoring fields are set, RHOAI's operator deploys %s.", strings.Join(notConfigured, ", "), what)
 	case len(waiting) > 0 || len(notConfigured) > 0:
 		pt.State, pt.Message = "waiting", "RHOAI's operator reports: "+strings.Join(append(waiting, notConfigured...), "; ")+"."
 	default:

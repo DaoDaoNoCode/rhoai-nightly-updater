@@ -45,6 +45,7 @@ export const FEATURE_PURPOSE = {
   playground: "The dashboard's Gen AI playground in a project: a chat page to try the project's models and ask about your documents.",
   kueue: "Distributed workloads with Kueue in a project, as the RHOAI docs set them up: queues with a CPU and memory quota, and Ray samples the dashboard's Workload metrics and Infrastructure pages (Observe & monitor) show.",
   maas: "Models as a Service: offer models to everyone on the cluster through one gateway, with API keys and token limits.",
+  observability: "RHOAI's monitoring for the whole cluster, as the RHOAI docs set it up: the MaaS usage logs and the usage and metrics dashboards in the RHOAI dashboard (Observe & monitor).",
 } as const;
 
 /**

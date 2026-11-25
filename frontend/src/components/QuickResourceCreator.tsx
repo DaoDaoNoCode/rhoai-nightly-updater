@@ -26,6 +26,7 @@ import { usePlaygroundStatus } from "./environment/usePlaygroundStatus";
 import { useModelRegistryStatus } from "./environment/useModelRegistryStatus";
 import { ModelRegistryTab, modelRegistryConfirm } from "./environment/ModelRegistryTab";
 import { KueueTab, kueueConfirm, kueueTurnBack } from "./environment/KueueTab";
+import { ObservabilityTab, observabilityConfirm, useObservabilityStatus } from "./environment/ObservabilityTab";
 import { kueueState, useKueueStatus } from "./environment/kueueState";
 import { PipelinesTab, pipelineServerConfirm } from "./environment/PipelinesTab";
 import { StorageTab, storageConfirm } from "./environment/StorageTab";
@@ -48,6 +49,7 @@ import {
   defaultPlaygroundProject,
   playgroundState,
   maasState,
+  observabilityState,
   modelRegistryState,
   pipelinesState,
   storageState,
@@ -119,7 +121,7 @@ const EnvironmentView: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, r
   const { runs, migration, setMigrateKind } = env;
   const { resAction, actionProject, run, setupConfirm, setSetupConfirm, cleanupScope, setCleanupScope, cleanupRetry, setCleanupRetry,
     sampleOp, samplesRefresh, modelsOp, playgroundOp, playgroundRefresh, workbenchOp, workbenchRefresh, maasOp, maasRefresh, prereqRefresh, checking, checkError,
-    modelRegistryOp, modelRegistryRefresh, kueueOp, kueueRefresh } = runs;
+    modelRegistryOp, modelRegistryRefresh, kueueOp, kueueRefresh, observabilityOp, observabilityRefresh } = runs;
   // Single poll loop: aggressive right after activity, then 30 s cadence for ten minutes,
   // else leisurely refresh; inactive tabs skip polling (A06-5).
   const settlingNow = !!resAction || resourcesSettling || !!run.run?.running;
@@ -147,6 +149,8 @@ const EnvironmentView: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, r
   const kueueProjectParam = searchParams.has("project") ? urlProject : null;
   const kueueRead = useKueueStatus(tab === "kueue" ? kueueProjectParam : null, kueueRefresh, !!kueueOp, !readOnly && (tab === "overview" || tab === "kueue" || !!cleanupScope));
   const kueueData = kueueRead.data;
+  const observabilityRead = useObservabilityStatus(observabilityRefresh, !!observabilityOp, !readOnly && (tab === "overview" || tab === "observability"));
+  const observabilityData = observabilityRead.data;
   // Prerequisites feed Overview and feature tabs; on Models, exposure picks which plan applies.
   const [modelsExposure, setModelsExposure] = useState<ModelExposureKind | null>(null);
   const prereqRead = usePrerequisites(prereqRefresh, tab === "models" ? modelsExposure : RECOMMENDED_EXPOSURE, tab !== "maas");
@@ -184,10 +188,10 @@ const EnvironmentView: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, r
     ...((wb?.items ?? []).some((i) => i.namespace === project && i.deployed) ? ["a workbench"] : []),
     ...((pg?.items ?? []).some((i) => i.namespace === project && i.deployed) ? ["a playground"] : []),
   ];
-  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, [...pipelineServers, ...(resStatus?.outsidePipelineServers ?? [])]) ?? modelsConfirm(p, resStatus) ?? playgroundConfirm(p, pg) ?? workbenchConfirm(p, wb, setPending) ?? maasConfirm(p, maas, setPending) ?? modelRegistryConfirm(p, registry, setPending) ?? kueueConfirm(p, kueueData, setPending, p.kind === "setup-kueue" ? othersIn(p.project) : []) ?? prerequisitesConfirm(p, prereq) ?? samplesConfirm(p);
+  const confirmOf = (p: Pending) => storageConfirm(p, minio, legacy, setPending) ?? mlflowConfirm(p, mlflow) ?? pipelineServerConfirm(p, [...pipelineServers, ...(resStatus?.outsidePipelineServers ?? [])]) ?? modelsConfirm(p, resStatus) ?? playgroundConfirm(p, pg) ?? workbenchConfirm(p, wb, setPending) ?? maasConfirm(p, maas, setPending) ?? modelRegistryConfirm(p, registry, setPending) ?? kueueConfirm(p, kueueData, setPending, p.kind === "setup-kueue" ? othersIn(p.project) : []) ?? observabilityConfirm(p, observabilityData) ?? prerequisitesConfirm(p, prereq) ?? samplesConfirm(p);
 
   const runningSomething = !!resAction || migrating || securing || !!run.run?.running || !!checking;
-  const busy: Busy = { resAction: securing ? "secure-minio" : resAction, actionProject, migrating, models: modelsOp, playground: playgroundOp, workbench: workbenchOp, maas: maasOp, modelRegistry: modelRegistryOp, kueue: kueueOp };
+  const busy: Busy = { resAction: securing ? "secure-minio" : resAction, actionProject, migrating, models: modelsOp, playground: playgroundOp, workbench: workbenchOp, maas: maasOp, modelRegistry: modelRegistryOp, kueue: kueueOp, observability: observabilityOp };
   const baseReason = mutateBlocker ?? (runningSomething ? BUSY_REASON : null);
   // Post-delete the namespace may remain (deployed:false, managedByTool:true). Keep Delete
   // available while tool-owned storage artifacts persist—data PVC, Routes, or other leftovers.
@@ -243,8 +247,9 @@ const EnvironmentView: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, r
   const registryNow = !registry && registryRead.error ? unreadableState() : modelRegistryState(registry, busy);
   const kueueProject = missingProject ? null : kueueProjectParam;
   const kueueNow: FeatureState = readOnly ? unreadableState() : !kueueData && kueueRead.error ? unreadableState(kueueProject) : kueueState(kueueData, kueueProject, busy);
+  const observabilityNow: FeatureState = readOnly ? unreadableState() : !observabilityData && observabilityRead.error ? unreadableState() : observabilityState(observabilityData, busy);
   const playgroundOptions = playgroundProjectOptions(pg, projectNames);
-  const overviewRows = buildOverviewRows({ storage: storageNow, pipelines: pipelinesSummary, workbench: workbenchSummary, mlflow: mlflowNow, modelRegistry: registryNow, models: modelsSummary, playground: playgroundSummary, kueue: kueueNow, maas: maasNow }, prereq);
+  const overviewRows = buildOverviewRows({ storage: storageNow, pipelines: pipelinesSummary, workbench: workbenchSummary, mlflow: mlflowNow, modelRegistry: registryNow, models: modelsSummary, playground: playgroundSummary, kueue: kueueNow, maas: maasNow, observability: observabilityNow }, prereq);
   const anythingToClean = !!resStatus && (() => {
     const c = cleanupCandidates(resStatus, "all", minioLeftovers, pg, maas, registry, wb, kueueData);
     return c.kueue || c.workbenches.length > 0 || c.keptStorage.length > 0 || c.servers.length > 0 || c.storage || c.mlflow || c.modelRegistry || c.models.length > 0 || c.gateway || c.playgrounds.length > 0 || c.maasPublished.length > 0 || c.maasPlatform || c.recipeProjects.length > 0;
@@ -262,7 +267,7 @@ const EnvironmentView: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, r
 
   const { checkAgain, checkModel, execute, setUp, startSetUp, startCleanup } = environmentActions({
     runs, status: resStatus, latestStatus: env.latestStatus, refreshStatus: env.refreshStatus, fetchResources: env.fetchResources, readFresh: resources.readFresh, restartPolling: env.restartPolling, askCleanupConfirmation: env.askCleanupConfirmation,
-    pg, wb, maas, modelRegistry: registry, kueue: kueueData, othersIn, prereq, confirmOf, setPending, projectNames, onResult: env.onResult,
+    pg, wb, maas, modelRegistry: registry, kueue: kueueData, observability: observabilityData, othersIn, prereq, confirmOf, setPending, projectNames, onResult: env.onResult,
   });
 
   // Shared prerequisites block rendered above each feature tab's sections.
@@ -311,7 +316,7 @@ const EnvironmentView: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, r
       */}
       <PageSection isFilled id="environment-tab-content" role="tabpanel" aria-labelledby={`environment-tab-${tab}`}>
         <Stack hasGutter>
-          {resError && resStatus && tab !== "maas" && (
+          {resError && resStatus && tab !== "maas" && tab !== "observability" && (
             <StackItem>
               <Alert variant="warning" title="Resource status may be out of date" isInline component="p"
                 actionLinks={<AlertActionLink onClick={checkAgain}>Retry</AlertActionLink>}>
@@ -342,11 +347,11 @@ const EnvironmentView: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, r
                 actionLinks={<AlertActionLink onClick={checkAgain}>Check again</AlertActionLink>} />
             </StackItem>
           )}
-          {!resStatus && tab !== "maas" ? (
+          {!resStatus && tab !== "maas" && tab !== "observability" ? (
             <StackItem>
               {resError ? <PageErrorState inSection={false} error={resError} title="Can't load the environment" onRetry={checkAgain} />
                 : tab === "overview" ? overview
-                  : <FeatureLoading title={TAB_TITLES[tab]} purpose={FEATURE_PURPOSE[tab]} parts={TAB_PARTS[tab]} />}
+                  : <FeatureLoading title={TAB_TITLES[tab]} purpose={FEATURE_PURPOSE[tab]} parts={TAB_PARTS[tab as keyof typeof TAB_PARTS]} />}
             </StackItem>
           ) : (
             <StackItem>
@@ -405,6 +410,10 @@ const EnvironmentView: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, r
                   onProject={(p) => navigate({ project: p })} onClearProject={() => navigate({ project: "" })} missingProject={missingProject}
                   state={headerWithPrerequisites(kueueNow, prereq?.features?.kueue)} prerequisitesReason={prerequisitesReason(prereq?.features?.kueue, "kueue")}
                   busy={busy} baseReason={baseReason} readOnly={readOnly} setPending={setPending} onSetUp={(setup) => setUp(TAB_TITLES.kueue, setup)} onCleanup={() => setCleanupScope("kueue")} />
+              )}
+              {tab === "observability" && (
+                <ObservabilityTab observability={observabilityData} observabilityError={observabilityRead.error} onRetry={() => void observabilityRead.reload()} state={observabilityNow}
+                  baseReason={baseReason} readOnly={readOnly} setPending={setPending} onSetUp={(setup) => setUp(TAB_TITLES.observability, setup)} />
               )}
               {tab === "maas" && (
                 <MaaSTab maas={maas} maasError={maasRead.error} onRetry={() => void maasRead.reload()} state={maasNow} busy={busy} baseReason={baseReason} readOnly={readOnly}

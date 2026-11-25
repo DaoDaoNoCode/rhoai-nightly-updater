@@ -1,4 +1,4 @@
-import type { CatalogModel, MaaSPart, MaaSRequest, MaaSStatus, ModelRegistryStatus, ModelState, PlaygroundModel, PlaygroundState, PlaygroundStatus, ResourceState, ResourcesStatus } from "../../types";
+import type { CatalogModel, MaaSPart, MaaSRequest, MaaSStatus, ModelRegistryStatus, ModelState, ObservabilityStatus, PlaygroundModel, PlaygroundState, PlaygroundStatus, ResourceState, ResourcesStatus } from "../../types";
 import { envStatus, envStatusText, notManaged, type EnvStatus } from "./resourceStatus";
 import type { Pending } from "./resourceRow";
 import { mlflowOpenHref } from "./UseIt";
@@ -31,6 +31,13 @@ export interface Busy {
   modelRegistry?: ModelRegistryOp | null;
   /** Distributed workloads work in progress from this page. */
   kueue?: KueueOp | null;
+  /** Observability work in progress from this page. */
+  observability?: ObservabilityOp | null;
+}
+
+/** An Observability operation in progress. */
+export interface ObservabilityOp {
+  action: "setup" | "teardown";
 }
 
 /** A Model registry operation in progress. */
@@ -885,3 +892,34 @@ export function modelRegistryState(mr: ModelRegistryStatus | null, busy: Busy = 
       return { status: s, label: "Unknown", next: { kind: "show-issue", part: "model-registry" }, project: null };
   }
 }
+
+// --- Observability: RHOAI's monitoring for the whole cluster -------------------
+
+/** The Observability tab and its Overview row: usage logs and dashboards as one feature. */
+export function observabilityState(o: ObservabilityStatus | null, busy: Busy = IDLE): FeatureState {
+  if (!o) return loadingState();
+  if (busy.observability?.action === "teardown") return { status: "deleting", label: "Cleaning up", next: null, project: null };
+  if (busy.observability) return { status: "setting-up", label: "Setting up", next: null, project: null };
+  const own = owner(!!o.external);
+  if (o.blocked) return { status: "not-set-up", label: "Not available", next: null, project: null };
+  const states = o.parts.map((p) => maasPartStatus(p as unknown as MaaSPart));
+  if (o.ready) {
+    return { status: "ready", label: "Ready", ...own, next: o.dashboardUrl ? { kind: "open", label: "Open the dashboards", href: o.dashboardUrl } : null, project: null };
+  }
+  const problem = o.parts.find((p) => PROBLEM.includes(maasPartStatus(p as unknown as MaaSPart)));
+  if ((o.managedByTool || o.configured) && problem) {
+    return { status: "needs-attention", label: "Needs attention", ...own, next: { kind: "show-issue", part: `observability-${problem.id}` }, project: null };
+  }
+  if ((o.managedByTool || o.configured) && (o.setupPlan ?? []).length === 0) {
+    return { status: states.includes("setting-up") ? "setting-up" : "needs-attention", label: states.includes("setting-up") ? "Setting up" : "Needs attention", ...own, next: null, project: null };
+  }
+  return {
+    status: "not-set-up",
+    label: o.managedByTool ? "Partly set up" : "Not set up",
+    next: { kind: "set-up", label: o.managedByTool ? "Finish setting up usage logs" : "Set up usage logs", setup: [{ kind: "setup-observability" }], reason: o.setupBlockedReason ?? null },
+    project: null,
+  };
+}
+
+/** Something about Observability may still change on its own (a part on its way). */
+export const observabilitySettling = (o: ObservabilityStatus | null) => !!o && o.parts.some((p) => p.state === "waiting");

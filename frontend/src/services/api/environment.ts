@@ -1,6 +1,6 @@
 /** Environment page coverage: S3 storage, pipeline servers, MLflow, models, playground, MaaS, samples, prerequisites, and clean-up. */
 
-import { OperationResponse, ProjectStatus, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, ModelsRequest, PlaygroundRequest, PlaygroundStatus, WorkbenchRequest, WorkbenchStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelRegistryRequest, ModelRegistryStatus, KueueRequest, KueueStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest } from '../../types';
+import { OperationResponse, ProjectStatus, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, ModelsRequest, PlaygroundRequest, PlaygroundStatus, WorkbenchRequest, WorkbenchStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelRegistryRequest, ModelRegistryStatus, KueueRequest, KueueStatus, ObservabilityRequest, ObservabilityStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest } from '../../types';
 import { request } from './client';
 import { StreamDoneHandler, StreamDetachHandler, streamSSE } from './stream';
 
@@ -373,4 +373,24 @@ export function streamKueue(
   onConnectionDrop?: StreamDetachHandler,
 ): AbortController {
   return streamSSE('/api/resources/kueue/stream', req, onStep, onDone, onConnectionDrop);
+}
+
+/** The Observability tab (GET /api/resources/observability): usage logs and dashboards, part by part. */
+export function getObservability(signal?: AbortSignal): Promise<ObservabilityStatus> {
+  return request('/api/resources/observability', { signal });
+}
+
+/**
+ * Sets up ("observability-check", the operators' steps, "usage-logs-storage",
+ * "monitoring-settings", "monitoring-ready") or cleans up
+ * ("observability-check", "monitoring-settings", "monitoring-gc",
+ * "monitoring-leftovers", "usage-logs-storage") the usage logs and dashboards.
+ */
+export function streamObservability(
+  req: ObservabilityRequest,
+  onStep: (step: UpdateStep) => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+): AbortController {
+  return streamSSE('/api/resources/observability/stream', req, onStep, onDone, onConnectionDrop);
 }

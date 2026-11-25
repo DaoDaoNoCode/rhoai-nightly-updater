@@ -2306,3 +2306,52 @@ export interface RecipeOwnedProject {
 export interface RecipeRunAccepted {
   runId: string;
 }
+
+/** One part of the Observability tab (pkg/types MaaSPart, with the tab's own part IDs). */
+export type ObservabilityPart = Omit<MaaSPart, "id" | "actions"> & { id: string };
+
+/** A PersistentVolumeClaim of RHOAI's monitoring namespace (pkg/types ObservabilityVolume). */
+export interface ObservabilityVolume {
+  name: string;
+  size: string;
+  storageClass?: string;
+  /** This tool's setup caused it: Clean up deletes it. */
+  setUpByTool?: boolean;
+}
+
+/** One condition of the Monitoring CR. */
+export interface ObservabilityCondition {
+  type: string;
+  status: string;
+  reason?: string;
+  message?: string;
+}
+
+/** GET /api/resources/observability (pkg/types ObservabilityStatus): usage logs and dashboards, part by part. */
+export interface ObservabilityStatus {
+  blocked?: ComponentBlock;
+  /** RHOAI's monitoring namespace (DSCInitialization spec.monitoring.namespace). */
+  namespace?: string;
+  /** Usage logs are configured in the DSCInitialization, by anyone. */
+  configured: boolean;
+  /** This tool's setup added monitoring fields (its annotation on the DSCInitialization). */
+  managedByTool: boolean;
+  /** Usage logs are configured, not by this tool: shown, never changed. */
+  external?: boolean;
+  ready: boolean;
+  parts: ObservabilityPart[];
+  setupPlan?: string[];
+  setupBlockedReason?: string;
+  cleanupPlan?: string[];
+  cleanupKept?: string[];
+  cleanupBlockedReason?: string;
+  volumes?: ObservabilityVolume[];
+  volumesTotal?: string;
+  conditions?: ObservabilityCondition[];
+  dashboardUrl?: string;
+}
+
+/** POST /api/resources/observability/stream. */
+export interface ObservabilityRequest {
+  action: "setup" | "teardown";
+}
