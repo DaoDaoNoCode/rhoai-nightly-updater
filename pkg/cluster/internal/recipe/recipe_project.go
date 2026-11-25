@@ -608,12 +608,17 @@ func ProjectLeftovers(c *kube.Client, name string) ([]string, error) {
 // tool's pipeline server (DSPO labels them dspa=<name>), the pods of the
 // tool's models (KServe's part-of and name labels), and what an owner of
 // the tool's owns (ownedByToolRoot): the tool's pipeline servers (DSPO
-// makes the DSPA the owner of what it creates) and the playground's
-// OGXServer when this tool requested it, by the recorded UID
-// (features.ToolPlaygroundServerUID; its operator owns the pgvector claim
-// and the two Deployments whose pods run the playground). Pods of a Ray
-// cluster (KubeRay's) stay listed: the ServiceAccount does not read Ray
-// objects. A kind whose API is not served has none. A read that fails is
+// makes the DSPA the owner of what it creates), the tool's models
+// (LLMInferenceServices with its label: KServe's controller makes the
+// model's Deployment <name>-kserve with the LLMInferenceService as its
+// controller owner, kserve pkg/controller/v1alpha1/llmisvc
+// workload_single_node.go) and the playground's OGXServer when this tool
+// requested it, by the recorded UID (features.ToolPlaygroundServerUID; its
+// operator owns the pgvector claim and the two Deployments whose pods run
+// the playground). InferenceServices are no root: this tool creates none,
+// and a Serverless one's pods are owned through Knative objects this
+// does not read. Pods of a Ray cluster (KubeRay's) stay listed: the
+// ServiceAccount does not read Ray objects. A kind whose API is not served has none. A read that fails is
 // returned (fail closed); an owner that is not there leaves the object
 // listed, unless known (the owners an earlier check of the same
 // operation returned) has its UID. owners are the UIDs of the tool's
@@ -654,31 +659,13 @@ func projectLeftovers(c *kube.Client, ns string, known []string) (left, owners [
 	if playground != "" {
 		roots[playground] = true
 	}
-	links, err := listOwnerChainLinks(c, ns, len(roots) > 0)
-	if err != nil {
-		return nil, nil, err
+	// The objects of the kinds listed are read first: the tool's models
+	// among them are roots too.
+	type listed struct {
+		kind  string
+		items []kube.ObjectMeta
 	}
-	ownedByTool := func(m kube.ObjectMeta) bool {
-		return ownedByToolRoot(m, roots, links)
-	}
-	for uid := range roots {
-		owners = append(owners, uid)
-	}
-	for uid, link := range links {
-		if !roots[uid] && ownedByTool(link.meta) {
-			owners = append(owners, uid)
-		}
-	}
-	sort.Strings(owners)
-	// The tool's models (LLMInferenceServices with its label), filled in as
-	// they are listed, before the pods. KServe runs a model in pods of a
-	// Deployment it owns and labels them part-of llminferenceservice and
-	// name <model>, so a pod of the tool's model is the tool's.
-	toolModels := map[string]bool{}
-	toolModelPod := func(m kube.ObjectMeta) bool {
-		return m.Labels["app.kubernetes.io/part-of"] == "llminferenceservice" && toolModels[m.Labels["app.kubernetes.io/name"]]
-	}
-	var out []string
+	var lists []listed
 	for _, l := range []struct{ kind, path string }{
 		{"Notebook", rhoai.NamespacedPath("kubeflow.org/v1", "notebooks", ns, "")},
 		{"InferenceService", rhoai.NamespacedPath("serving.kserve.io/v1beta1", "inferenceservices", ns, "")},
@@ -701,15 +688,56 @@ func projectLeftovers(c *kube.Client, ns string, known []string) (left, owners [
 		if !found {
 			continue // the API is not served
 		}
+		got := listed{kind: l.kind}
 		for _, it := range list.Items {
-			m := it.Metadata
-			if l.kind == "LLMInferenceService" && m.HasToolLabel() {
+			got.items = append(got.items, it.Metadata)
+		}
+		lists = append(lists, got)
+	}
+	// The tool's models (LLMInferenceServices with its label). KServe runs
+	// a model in pods of a Deployment it owns and labels them part-of
+	// llminferenceservice and name <model>, so a pod of the tool's model
+	// is the tool's by its labels too (toolModelPod), whatever its owners.
+	toolModels := map[string]bool{}
+	for _, got := range lists {
+		if got.kind != "LLMInferenceService" {
+			continue
+		}
+		for _, m := range got.items {
+			if m.HasToolLabel() {
 				toolModels[m.Name] = true
+				if m.UID != "" {
+					roots[m.UID] = true
+				}
 			}
-			if m.HasToolLabel() || m.Terminating() || ownedByTool(m) || (l.kind == "Pod" && (toolDSPAs[m.Labels["dspa"]] || toolModelPod(m))) {
+		}
+	}
+	toolModelPod := func(m kube.ObjectMeta) bool {
+		return m.Labels["app.kubernetes.io/part-of"] == "llminferenceservice" && toolModels[m.Labels["app.kubernetes.io/name"]]
+	}
+	links, err := listOwnerChainLinks(c, ns, len(roots) > 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	ownedByTool := func(m kube.ObjectMeta) bool {
+		return ownedByToolRoot(m, roots, links)
+	}
+	for uid := range roots {
+		owners = append(owners, uid)
+	}
+	for uid, link := range links {
+		if !roots[uid] && ownedByTool(link.meta) {
+			owners = append(owners, uid)
+		}
+	}
+	sort.Strings(owners)
+	var out []string
+	for _, got := range lists {
+		for _, m := range got.items {
+			if m.HasToolLabel() || m.Terminating() || ownedByTool(m) || (got.kind == "Pod" && (toolDSPAs[m.Labels["dspa"]] || toolModelPod(m))) {
 				continue
 			}
-			out = append(out, l.kind+" "+m.Name)
+			out = append(out, got.kind+" "+m.Name)
 		}
 	}
 	sort.Strings(out)

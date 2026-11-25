@@ -218,29 +218,51 @@ func TestRecipeProject_DeleteKeepsTheFirstCheckOwners(t *testing.T) {
 }
 
 // Clean up everything with a part that deletes an owner in a recipe
-// project (the playground, the pipeline server) and the project: the
+// project (the playground, the pipeline server, the model) and the project: the
 // part's dependents the garbage collector has not removed yet do not stop
 // the project's delete, as the first check found their owner; a pod
 // someone made in the project between the two checks still does.
 func TestCleanUp_RecipeProjectKeepsTheOwnersOfEarlierParts(t *testing.T) {
 	const dspaPath = "/apis/datasciencepipelinesapplications.opendatahub.io/v1/namespaces/recipe-dev/datasciencepipelinesapplications/dspa"
+	const llmPath = "/apis/serving.kserve.io/v1alpha2/namespaces/recipe-dev/llminferenceservices/smol"
 	for _, tc := range []struct {
 		name     string
 		pipeline bool
+		model    bool
 		intruder bool
 	}{
 		{name: "the playground"},
 		{name: "the pipeline server", pipeline: true},
+		{name: "the model", model: true},
 		{name: "a pod made between the checks", intruder: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c, uid := createdRecipeProject(t)
-			pg, ps, wp := cleanupPlayground, cleanupPipelineServer, pipelineWorkbenchesProblem
-			t.Cleanup(func() { cleanupPlayground, cleanupPipelineServer, pipelineWorkbenchesProblem = pg, ps, wp })
+			pg, ps, wp, md := cleanupPlayground, cleanupPipelineServer, pipelineWorkbenchesProblem, cleanupModels
+			t.Cleanup(func() {
+				cleanupPlayground, cleanupPipelineServer, pipelineWorkbenchesProblem, cleanupModels = pg, ps, wp, md
+			})
 			req := types.CleanupRequest{RecipeProjects: []string{"recipe-dev"}, RecipeProjectUIDs: map[string]string{"recipe-dev": uid},
 				ConfirmProjectContents: map[string][]string{"recipe-dev": {"Pod mine"}}}
 			var ran []string
-			if tc.pipeline {
+			switch {
+			case tc.model:
+				// As KServe runs the tool's model (live RHOAI 3.7): Deployment
+				// smol-kserve, owned by the LLMInferenceService, and its
+				// ReplicaSet's pod with KServe's labels.
+				recordRecipePlayground(t, c, "", false)
+				f.putJSON("/api/v1/namespaces/recipe-dev/pods/mine", `{}`)
+				f.putJSON(llmPath, `{"metadata":{"uid":"llm-uid","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}}}`)
+				f.putJSON(tRecipeDepList+"/smol-kserve", `{"metadata":{"uid":"dep-smol","ownerReferences":[{"apiVersion":"serving.kserve.io/v1alpha2","kind":"LLMInferenceService","name":"smol","uid":"llm-uid","controller":true,"blockOwnerDeletion":true}]}}`)
+				f.putJSON(tRecipeRSList+"/smol-kserve-9bb6646f9", `{"metadata":{"uid":"rs-smol","ownerReferences":[{"kind":"Deployment","name":"smol-kserve","uid":"dep-smol","controller":true}]}}`)
+				f.putJSON("/api/v1/namespaces/recipe-dev/pods/smol-kserve-9bb6646f9-wzrps", `{"metadata":{"labels":{"app.kubernetes.io/part-of":"llminferenceservice","app.kubernetes.io/name":"smol"},"ownerReferences":[{"kind":"ReplicaSet","name":"smol-kserve-9bb6646f9","uid":"rs-smol","controller":true}]}}`)
+				req.Models = []string{"recipe-dev"}
+				cleanupModels = func(_ *Client, project string) (*types.OperationResponse, error) {
+					ran = append(ran, "model:"+project)
+					f.deleteObject(llmPath)
+					return &types.OperationResponse{Success: true, Message: "Model deleted."}, nil
+				}
+			case tc.pipeline:
 				recordRecipePlayground(t, c, "", false)
 				f.putJSON("/api/v1/namespaces/recipe-dev/pods/mine", `{}`)
 				f.putJSON(dspaPath, `{"metadata":{"uid":"dspa-uid","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"}}}`)
@@ -257,7 +279,7 @@ func TestCleanUp_RecipeProjectKeepsTheOwnersOfEarlierParts(t *testing.T) {
 					f.deleteObject(dspaPath)
 					return &types.OperationResponse{Success: true, Message: "Pipeline server deleted."}, nil
 				}
-			} else {
+			default:
 				putRecipePlayground(f, "ogx-uid")
 				recordRecipePlayground(t, c, "ogx-uid", true)
 				req.Playgrounds = []string{"recipe-dev"}

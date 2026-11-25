@@ -332,11 +332,12 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   this tool recorded for the project (same UID): the volume and the
   Deployments belong to that OGXServer, and their pods to the Deployments'
   ReplicaSets, as Kubernetes relates owners. The pods of the tool's
-  pipeline server's Deployments are left out the same way. When Clean up
-  everything deletes the playground or the pipeline server before the
-  project, the check just before the project's delete still counts them
-  as the tool's while Kubernetes removes them: it uses the owners the
-  first check found (by UID). A playground whose server is not the
+  pipeline server's and the tool's models' Deployments are left out the
+  same way. When Clean up everything deletes the playground, the pipeline
+  server or the model before the project, the check just before the
+  project's delete still counts their pieces as the tool's while
+  Kubernetes removes them: it uses the owners the first check found (by
+  UID). A playground whose server is not the
   recorded one, and the pods of a Ray cluster, are still listed. A read
   that fails still refuses the Clean up. No permission changed.
 - **A recipe says when the dashboard will mark its workbench as bypassing
