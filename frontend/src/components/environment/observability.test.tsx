@@ -4,6 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { ObservabilityStatus } from "../../types";
 import { ObservabilityTab, observabilityConfirm, observabilitySteps } from "./ObservabilityTab";
 import { observabilityState } from "./featureState";
+import { MaaSTab, maasConfirm, maasRequestOf, maasSetupChoices, maasSteps } from "./MaaSTab";
+import type { MaaSStatus } from "../../types";
+import { IDLE } from "./featureState";
 
 const fresh: ObservabilityStatus = {
   configured: false, managedByTool: false, ready: false, namespace: "redhat-ods-monitoring",
@@ -102,5 +105,58 @@ describe("Observability state and confirmations", () => {
   it("the steps follow the backend's", () => {
     expect(observabilitySteps({ kind: "setup-observability" }).map((s) => s.id)).toEqual(["observability-check", "cert-manager", "cluster-observability-operator", "opentelemetry", "loki-operator", "usage-logs-storage", "monitoring-settings", "monitoring-ready"]);
     expect(observabilitySteps({ kind: "teardown-observability" }).map((s) => s.id)).toEqual(["observability-check", "monitoring-settings", "monitoring-gc", "monitoring-leftovers", "usage-logs-storage"]);
+  });
+});
+
+const maasBase: MaaSStatus = {
+  platform: { deployed: true, ready: true, managedByTool: true },
+  parts: [{ id: "dsc", title: "MaaS in the DataScienceCluster", state: "ready" }],
+  subscription: "rhoai-nightly-updater-subscription",
+  usageLogs: { state: "missing", message: "Not set up.", tenantFound: true },
+  portal: { on: false, managementState: "Removed", available: "False" },
+};
+
+describe("MaaS: usage logs, user IDs and the portal", () => {
+  it("Set up's checkboxes: usage logs ticked when the S3 storage allows them, user IDs never by default", () => {
+    expect(maasSetupChoices({ kind: "setup-maas" }, maasBase)).toEqual({ offer: true, usageLogs: true, captureUser: false, offerCapture: true });
+    const blocked = { ...maasBase, usageLogs: { ...maasBase.usageLogs!, setUpBlockedReason: "needs secured S3 storage" } };
+    expect(maasSetupChoices({ kind: "setup-maas", usageLogs: true }, blocked)).toMatchObject({ offer: true, usageLogs: false });
+    expect(maasRequestOf({ kind: "setup-maas", captureUser: true }, maasBase)).toEqual({ action: "setup", usageLogs: true, captureUser: true });
+    expect(maasRequestOf({ kind: "setup-maas", usageLogs: false }, maasBase)).toEqual({ action: "setup" });
+    expect(maasRequestOf({ kind: "maas-portal", on: true }, maasBase)).toEqual({ action: "portal-on" });
+    expect(maasRequestOf({ kind: "maas-capture-user", on: false }, maasBase)).toEqual({ action: "capture-user-off" });
+  });
+
+  it("Set up's steps: the usage logs first, user IDs last", () => {
+    const ids = maasSteps({ kind: "setup-maas" }, { action: "setup", usageLogs: true, captureUser: true }).map((s) => s.id);
+    expect(ids.slice(0, 2)).toEqual(["observability-check", "cert-manager"]);
+    expect(ids.indexOf("monitoring-ready")).toBeLessThan(ids.indexOf("check"));
+    expect(ids[ids.length - 1]).toBe("capture-user");
+    expect(maasSteps({ kind: "setup-maas" }).map((s) => s.id)[0]).toBe("check");
+  });
+
+  it("the confirmation says what recording user IDs does", () => {
+    const spec = maasConfirm({ kind: "setup-maas" }, maasBase, () => {})!;
+    render(<>{spec.extra}</>);
+    expect(screen.getByRole("checkbox", { name: "Also set up usage logs and dashboards (first)" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Record user IDs for per-user usage (My Usage)" })).not.toBeChecked();
+    expect(screen.getByText(/shows nothing \(0 for every user\)/)).toBeInTheDocument();
+    expect(screen.getByText(/OpenShift user name/)).toBeInTheDocument();
+  });
+
+  it("the rows: usage logs with Record user IDs, the portal with Turn on", () => {
+    const setPending = vi.fn();
+    render(
+      <MemoryRouter>
+        <MaaSTab maas={maasBase} maasError={null} onRetry={() => {}} state={{ status: "ready", label: "Ready", next: null, project: null }} busy={IDLE} baseReason={null} readOnly={false}
+          setPending={setPending} onSetUp={() => {}} onModels={() => {}} onObservability={() => {}} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("heading", { name: "Usage logs and dashboards" })).toBeInTheDocument();
+    expect(screen.getByText(/shown to cluster-admins only/)).toBeInTheDocument();
+    screen.getByRole("button", { name: "Record user IDs" }).click();
+    expect(setPending).toHaveBeenCalledWith({ kind: "maas-capture-user", on: true });
+    screen.getByRole("button", { name: "Turn on" }).click();
+    expect(setPending).toHaveBeenCalledWith({ kind: "maas-portal", on: true });
   });
 });

@@ -252,7 +252,11 @@ export type Pending =
   | { kind: "teardown-playground"; project: string }
   /** Models as a Service: the platform, or this tool's model in a project (one streamed operation). */
   /** database: the dialog's choice, while Set up must create one (maasForms.ts). */
-  | { kind: "setup-maas"; database?: DatabaseForm }
+  /** usageLogs, captureUser: the dialog's checkboxes (absent: their defaults, maasSetupChoices). */
+  | { kind: "setup-maas"; database?: DatabaseForm; usageLogs?: boolean; captureUser?: boolean }
+  /** MaaS: record user IDs in the usage logs (on), or put the setting back (off); the MaaS portal on or back. */
+  | { kind: "maas-capture-user"; on: boolean }
+  | { kind: "maas-portal"; on: boolean }
   | { kind: "teardown-maas" }
   /** access: only for the first published model (the audience is the subscription's). */
   | { kind: "publish-maas"; project: string; model: string; access?: AudienceForm; limit?: LimitForm }
@@ -289,11 +293,11 @@ export const isPrerequisitesPending = (p: Pending): p is PrerequisitesPending =>
 /** A Playground change: one streamed request (pkg/api HandlePlaygroundStream). */
 export type PlaygroundPending = Extract<Pending, { kind: "setup-playground" | "teardown-playground" }>;
 /** A MaaS change: one streamed request (pkg/api HandleMaaSStream). */
-export type MaaSPending = Extract<Pending, { kind: "setup-maas" | "teardown-maas" | "publish-maas" | "unpublish-maas" | "restore-routing-maas" | "maas-action" | "maas-limit" | "maas-access" | "maas-database" }>;
+export type MaaSPending = Extract<Pending, { kind: "setup-maas" | "teardown-maas" | "publish-maas" | "unpublish-maas" | "restore-routing-maas" | "maas-action" | "maas-limit" | "maas-access" | "maas-database" | "maas-capture-user" | "maas-portal" }>;
 /** A Model registry change: one streamed operation. */
 export type ModelRegistryPending = Extract<Pending, { kind: "setup-model-registry" | "teardown-model-registry" }>;
 export const isModelRegistryPending = (p: Pending): p is ModelRegistryPending => p.kind === "setup-model-registry" || p.kind === "teardown-model-registry";
-const MAAS_KINDS: string[] = ["setup-maas", "teardown-maas", "publish-maas", "unpublish-maas", "restore-routing-maas", "maas-action", "maas-limit", "maas-access", "maas-database"];
+const MAAS_KINDS: string[] = ["setup-maas", "teardown-maas", "publish-maas", "unpublish-maas", "restore-routing-maas", "maas-action", "maas-limit", "maas-access", "maas-database", "maas-capture-user", "maas-portal"];
 export const isMaaSPending = (p: Pending): p is MaaSPending => MAAS_KINDS.includes(p.kind);
 export type WorkbenchPending = Extract<Pending, { kind: "setup-workbench" | "start-workbench" | "stop-workbench" | "teardown-workbench" | "delete-workbench-storage" }>;
 export const isWorkbenchPending = (p: Pending): p is WorkbenchPending => p.kind === "setup-workbench" || p.kind === "start-workbench" || p.kind === "stop-workbench" || p.kind === "teardown-workbench" || p.kind === "delete-workbench-storage";

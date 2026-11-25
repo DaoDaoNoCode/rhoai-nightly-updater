@@ -417,7 +417,7 @@ const EnvironmentView: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, r
               )}
               {tab === "maas" && (
                 <MaaSTab maas={maas} maasError={maasRead.error} onRetry={() => void maasRead.reload()} state={maasNow} busy={busy} baseReason={baseReason} readOnly={readOnly}
-                  setPending={setPending} onSetUp={(setup) => setUp("MaaS", setup)} onModels={() => navigate({ tab: "models" })} />
+                  setPending={setPending} onSetUp={(setup) => setUp("MaaS", setup)} onModels={() => navigate({ tab: "models" })} onObservability={() => navigate({ tab: "observability" })} />
               )}
             </StackItem>
           )}

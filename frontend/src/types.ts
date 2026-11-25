@@ -1851,6 +1851,10 @@ export interface MaaSStatus {
   removing?: MaaSRemoval[];
   /** The error of the last automatic removal, when it failed. */
   removalProblem?: string;
+  /** The usage logs and dashboards as MaaS sees them (pkg/types MaaSUsageLogs). */
+  usageLogs?: MaaSUsageLogs;
+  /** The MaaS portal; absent when this RHOAI has none. */
+  portal?: MaaSPortal;
 }
 
 /**
@@ -1891,8 +1895,38 @@ export interface MaaSGroupProblem {
 }
 
 /** The body of POST /api/resources/maas/stream. */
+/** The MaaS tab's "Usage logs and dashboards" row (pkg/types MaaSUsageLogs). */
+export interface MaaSUsageLogs {
+  state: "ready" | "missing" | "waiting" | "unknown";
+  message?: string;
+  warning?: string;
+  /** Why MaaS's Set up cannot set them up now (the S3 storage); absent when it can. */
+  setUpBlockedReason?: string;
+  /** MaasTenantConfig default-tenant spec.telemetry.logs.captureUser; absent: not set. */
+  captureUser?: boolean;
+  captureUserByTool?: boolean;
+  captureUserPrevious?: string;
+  tenantFound?: boolean;
+}
+
+/** The MaaS portal (pkg/types MaaSPortal): DataScienceCluster dashboard.maasPortal. */
+export interface MaaSPortal {
+  managementState?: string;
+  on: boolean;
+  available?: string;
+  message?: string;
+  url?: string;
+  setByTool?: boolean;
+  previous?: string;
+  blockedReason?: string;
+}
+
 export interface MaaSRequest {
-  action: "setup" | "teardown" | "publish" | "unpublish" | "restore-routing" | "change-limit" | "change-access" | MaaSActionId;
+  action: "setup" | "teardown" | "publish" | "unpublish" | "restore-routing" | "change-limit" | "change-access" | "capture-user-on" | "capture-user-off" | "portal-on" | "portal-off" | MaaSActionId;
+  /** setup: set up the usage logs and dashboards first (the Observability tab's Set up). */
+  usageLogs?: boolean;
+  /** setup: record user IDs in the usage logs once MaaS is ready. */
+  captureUser?: boolean;
   project?: string;
   /** The catalog name of the chat model to publish or unpublish; absent: the default. */
   model?: string;

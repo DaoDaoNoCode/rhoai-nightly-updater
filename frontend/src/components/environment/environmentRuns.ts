@@ -248,7 +248,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setMaaSRefresh((n) => n + 1);
       void fetchResources();
     };
-    follow(spec?.runTitle ?? spec?.title ?? p.kind, maasSteps(p), (onStep, onDone, onDetach) => streamMaaS(req,
+    follow(spec?.runTitle ?? spec?.title ?? p.kind, maasSteps(p, req), (onStep, onDone, onDetach) => streamMaaS(req,
       onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }),
     action === "teardown" || action === "unpublish" || action === "remove-tier-policies" ? "delete" : "setup");
   };
@@ -323,7 +323,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setPrereqRefresh((n) => n + 1);
       void fetchResources();
     };
-    run.follow(spec?.runTitle ?? spec?.title ?? p.kind, observabilitySteps(p), (onStep, onDone, onDetach) => streamObservability({ action: op.action },
+    follow(spec?.runTitle ?? spec?.title ?? p.kind, observabilitySteps(p), (onStep, onDone, onDetach) => streamObservability({ action: op.action },
       onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }), op.action === "setup" ? "setup" : "delete");
   };
 

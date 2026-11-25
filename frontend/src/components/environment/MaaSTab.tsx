@@ -5,6 +5,7 @@ import {
   Alert,
   AlertActionLink,
   Button,
+  Checkbox,
   Content,
   DescriptionList,
   DescriptionListDescription,
@@ -29,6 +30,7 @@ import { usePolling } from "../../hooks/usePolling";
 import { useLatestRequest } from "../../hooks/useLatestRequest";
 import { IDLE_REFRESH_MS, RESOURCE_SETTLE_MAX_MS } from "../../constants";
 import { ImageRef } from "../ImageRef";
+import { TooltipButton } from "../TooltipButton";
 import { type ConfirmSpec, type MaaSPending, type Pending, ExternalLink, WarningAlert } from "./resourceRow";
 import { CleanupSection, CreatesList, FEATURE_PURPOSE, FeatureHeader, FeatureSection, PartItem, PartList, PrimaryAction, TabSection, WhatNext } from "./FeatureLayout";
 import { ComponentAlert, CopyableCode, shellQuote } from "./UseIt";
@@ -36,6 +38,8 @@ import { LoadFailed, PartsSkeleton, RowsSkeleton } from "./Loading";
 import { EnvStatusLabel } from "./resourceStatus";
 import { READ_ONLY_SETUP } from "./PipelinesTab";
 import { type Busy, type FeatureState, maasDashboardHref, maasPartLabelStatus } from "./featureState";
+import { OBSERVABILITY_COST, observabilitySteps } from "./ObservabilityTab";
+import type { MaaSPortal, MaaSUsageLogs } from "../../types";
 
 export const MAAS_POLL_MS = 5_000;
 
@@ -99,6 +103,8 @@ export interface MaaSTabProps {
   onSetUp: (setup: Pending[]) => void;
   /** Opens the Models tab. */
   onModels: () => void;
+  /** Opens the Observability tab. */
+  onObservability?: () => void;
 }
 
 /** This tool's MaaSSubscription and the display name it writes on it (pkg/cluster maas_subscription.go), as the dashboard lists it. */
@@ -421,6 +427,14 @@ export const MaaSTab: React.FC<MaaSTabProps> = (props) => {
         ) : maasError ? <LoadFailed title="Cannot read Models as a Service" error={maasError} onRetry={onRetry} />
           : <PartsSkeleton aria-label="What MaaS needs" what="what MaaS needs" count={3} />}
       </StackItem>
+      {maas && (maas.usageLogs || maas.portal) && (
+        <StackItem>
+          <PartList aria-label="Usage and the MaaS portal">
+            {maas.usageLogs && <UsageLogsRow u={maas.usageLogs} reason={partReason} readOnly={readOnly} setPending={setPending} onObservability={props.onObservability} />}
+            {maas.portal && <PortalRow p={maas.portal} reason={partReason} readOnly={readOnly} setPending={setPending} />}
+          </PartList>
+        </StackItem>
+      )}
       {maas && setupPlan.length > 0 && attention.length > 0 && (
         <StackItem>
           <Alert variant="warning" isInline component="p" title="Set up runs; these parts need attention too">
@@ -462,11 +476,81 @@ export const MaaSTab: React.FC<MaaSTabProps> = (props) => {
   );
 };
 
+/** What recording user IDs means, in the words the dialogs and the row use. */
+export const CAPTURE_USER_EFFECT = "Without it, \"My Usage\" in the RHOAI dashboard and the MaaS portal shows nothing (0 for every user). With it, MaaS writes each caller's OpenShift user name into the usage logs, and each user sees their own calls.";
+
+const usageStatus = (u: MaaSUsageLogs) => maasPartLabelStatus({ id: "tenant", title: "", state: u.state === "missing" ? "missing" : u.state, ...(u.warning ? { warning: u.warning } : {}) } as MaaSPart);
+
+/** The "Usage logs and dashboards" row: their state, and recording user IDs. */
+const UsageLogsRow: React.FC<{ u: MaaSUsageLogs; reason: string | null; readOnly: boolean; setPending: (p: Pending) => void; onObservability?: () => void }> = ({ u, reason, readOnly, setPending, onObservability }) => (
+  <PartItem id="maas-usage-logs" title="Usage logs and dashboards" scope="Shared by the cluster" unmanaged={false}
+    status={u.state === "waiting" ? "not-set-up" : usageStatus(u)} statusText={u.state === "waiting" ? "Waiting" : undefined}
+    actions={onObservability ? <ActionListItem><Button variant="link" isInline onClick={onObservability}>Open the Observability tab</Button></ActionListItem> : undefined}>
+    {u.message && <Content component="p">{u.message}</Content>}
+    {u.warning && <WarningAlert text={u.warning} />}
+    <Content component="p">The Usage dashboard is shown to cluster-admins only: the RHOAI dashboard offers the admin views to users who may read the platform&apos;s Prometheus, and RHOAI documents no other grant.</Content>
+    {u.tenantFound && (
+      <Flex gap={{ default: "gapMd" }} alignItems={{ default: "alignItemsCenter" }}>
+        <FlexItem>
+          <Content component="p">
+            User IDs: {u.captureUser ? "recorded" : "not recorded"}{u.captureUser && !u.captureUserByTool ? " (set by someone else)" : ""}. {CAPTURE_USER_EFFECT}
+          </Content>
+        </FlexItem>
+        {!readOnly && !u.captureUser && (
+          <FlexItem><Button variant="secondary" size="sm" isAriaDisabled={!!reason} onClick={() => setPending({ kind: "maas-capture-user", on: true })}>Record user IDs</Button></FlexItem>
+        )}
+        {!readOnly && u.captureUser && u.captureUserByTool && (
+          <FlexItem><Button variant="secondary" size="sm" isAriaDisabled={!!reason} onClick={() => setPending({ kind: "maas-capture-user", on: false })}>Stop recording user IDs</Button></FlexItem>
+        )}
+      </Flex>
+    )}
+  </PartItem>
+);
+
+/** The MaaS portal row: Turn on, Turn off, its address. */
+const PortalRow: React.FC<{ p: MaaSPortal; reason: string | null; readOnly: boolean; setPending: (p: Pending) => void }> = ({ p, reason, readOnly, setPending }) => {
+  const status = !p.on ? "not-set-up" : p.available === "True" ? "ready" : p.available === "False" ? "setting-up" : "unknown";
+  const turnOffReason = !p.setByTool ? "This tool did not turn it on; whoever did turns it off in the DataScienceCluster." : null;
+  return (
+    <PartItem id="maas-portal" title="MaaS portal" scope="Shared by the cluster" unmanaged={p.on && !p.setByTool} status={status}
+      statusText={!p.on ? "Off" : undefined}
+      actions={readOnly ? undefined : (
+        <>
+          {!p.on && <ActionListItem><TooltipButton variant="secondary" size="sm" disabledReason={reason ?? p.blockedReason ?? null} onClick={() => setPending({ kind: "maas-portal", on: true })}>Turn on</TooltipButton></ActionListItem>}
+          {p.on && <ActionListItem><TooltipButton variant="secondary" size="sm" disabledReason={reason ?? turnOffReason} onClick={() => setPending({ kind: "maas-portal", on: false })}>Turn off</TooltipButton></ActionListItem>}
+          {p.on && p.url && <ActionListItem><ExternalLink href={p.url} isInline>Open the portal</ExternalLink></ActionListItem>}
+        </>
+      )}>
+      <Content component="p">
+        {p.on
+          ? <>The RHOAI dashboard&apos;s portal for MaaS users: their API keys, the models they may use, and their usage. RHOAI reports {p.available === "True" ? "it available" : p.available === "False" ? `it not available yet${p.message ? `: ${p.message}` : ""}` : "nothing about it yet"}.{p.setByTool ? ` Turned on by this tool (it was ${p.previous === "unset" ? "not set" : p.previous}); Turn off and Clean up MaaS put that back.` : ""}</>
+          : <>Off ({p.managementState || "not set"} in the DataScienceCluster). Turn on sets <code>spec.components.dashboard.maasPortal</code> to Managed; RHOAI&apos;s dashboard operator then deploys the portal at the dashboard&apos;s address under /maas-portal/.</>}
+      </Content>
+      {p.blockedReason && !p.on && <Content component="p">{p.blockedReason}</Content>}
+    </PartItem>
+  );
+};
+
+/** What Set up's usage-logs checkboxes start as: ticked when the S3 storage allows them; user IDs unticked. */
+export function maasSetupChoices(p: Extract<Pending, { kind: "setup-maas" }>, m: MaaSStatus | null): { offer: boolean; usageLogs: boolean; captureUser: boolean; offerCapture: boolean } {
+  const u = m?.usageLogs;
+  const offer = !!u && u.state === "missing";
+  const usageLogs = offer && (p.usageLogs ?? !u?.setUpBlockedReason) && !u?.setUpBlockedReason;
+  const offerCapture = !!u && !u.captureUser && (usageLogs || u.state !== "missing");
+  return { offer, usageLogs, captureUser: offerCapture && !!p.captureUser, offerCapture };
+}
+
 /** The request a confirmed MaaS change sends (POST /api/resources/maas/stream); the forms' defaults where the user changed nothing. */
 export function maasRequestOf(p: MaaSPending, m: MaaSStatus | null): MaaSRequest {
   switch (p.kind) {
-    case "setup-maas":
-      return { action: "setup", ...(m?.database?.needed ? { database: databaseRequest(p.database ?? defaultDatabaseForm(m.database)) } : {}) };
+    case "setup-maas": {
+      const ch = maasSetupChoices(p, m);
+      return { action: "setup", ...(m?.database?.needed ? { database: databaseRequest(p.database ?? defaultDatabaseForm(m.database)) } : {}), ...(ch.usageLogs ? { usageLogs: true } : {}), ...(ch.captureUser ? { captureUser: true } : {}) };
+    }
+    case "maas-capture-user":
+      return { action: p.on ? "capture-user-on" : "capture-user-off" };
+    case "maas-portal":
+      return { action: p.on ? "portal-on" : "portal-off" };
     case "teardown-maas":
       return { action: "teardown" };
     case "publish-maas":
@@ -492,8 +576,12 @@ const firstPublication = (m: MaaSStatus | null) => !(m?.items ?? []).some((i) =>
 const limitOf = (m: MaaSStatus | null, project: string, model: string) => (m?.items ?? []).find((i) => i.namespace === project && i.name === model)?.limit;
 
 /** The steps a MaaS operation streams, in its order (pkg/cluster RunMaaS). */
-export function maasSteps(p: MaaSPending): { id: string; title: string }[] {
+export function maasSteps(p: MaaSPending, req?: MaaSRequest): { id: string; title: string }[] {
   switch (p.kind) {
+    case "maas-capture-user":
+      return [{ id: "capture-user", title: p.on ? "Record user IDs in the usage logs" : "Put the user IDs setting back" }];
+    case "maas-portal":
+      return [{ id: "portal", title: p.on ? "Turn the MaaS portal on" : "Put the MaaS portal back" }];
     case "maas-limit":
       return [
         { id: "check", title: "Check the publication and the subscription" },
@@ -515,6 +603,7 @@ export function maasSteps(p: MaaSPending): { id: string; title: string }[] {
       ];
     case "setup-maas":
       return [
+        ...(req?.usageLogs ? observabilitySteps({ kind: "setup-observability" }) : []),
         { id: "check", title: "Check what the platform needs" },
         { id: "rhcl", title: "Red Hat Connectivity Link" },
         { id: "kuadrant", title: "Connectivity Link instance (Kuadrant)" },
@@ -524,6 +613,7 @@ export function maasSteps(p: MaaSPending): { id: string; title: string }[] {
         { id: "authorino-tls", title: "Authorino TLS" },
         { id: "dsc", title: "Turn on MaaS in the DataScienceCluster" },
         { id: "ready", title: "Wait for maas-api and the tenant" },
+        ...(req?.captureUser ? [{ id: "capture-user", title: "Record user IDs in the usage logs" }] : []),
       ];
     case "maas-action":
       switch (p.action) {
@@ -607,15 +697,35 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
       const form = pending.database ?? defaultDatabaseForm(db);
       const choice = db?.needed ? db.choices.find((c) => c.id === form.kind) : undefined;
       const problem = db?.needed ? databaseProblem(form, db) : null;
+      const ch = maasSetupChoices(pending, m);
       return {
         title: "Set up Models as a Service?", confirm: "Set up", runTitle: "Set up Models as a Service",
         summary: <Content component="p">Installs whatever the MaaS install docs list that this cluster doesn't have yet, in the docs' order. On a cluster without any of it this takes about 10 minutes. The gateway creates a cloud load balancer, which costs money while it exists. If a step fails, Set up again continues from there.</Content>,
-        choice: db?.needed ? <DatabaseChoice db={db} value={form} idPrefix="setup" onChange={(f) => setPending?.({ kind: "setup-maas", database: f })} />
+        choice: db?.needed ? <DatabaseChoice db={db} value={form} idPrefix="setup" onChange={(f) => setPending?.({ ...pending, database: f })} />
           : db && db.current ? <Content component="p">Database: {databaseLabel(db.current)}{db.current === "adopted" ? ", used as it is" : ""}.</Content> : undefined,
+        extra: (ch.offer || ch.offerCapture) ? (
+          <Stack hasGutter>
+            {ch.offer && (
+              <StackItem>
+                <Checkbox id="maas-setup-usage-logs" label="Also set up usage logs and dashboards (first)" isChecked={ch.usageLogs} isDisabled={!!m?.usageLogs?.setUpBlockedReason}
+                  onChange={(_e, v) => setPending?.({ ...pending, usageLogs: v })}
+                  description={m?.usageLogs?.setUpBlockedReason ?? `The Observability tab's Set up runs before MaaS's: MaaS calls are logged and the usage dashboards work. ${OBSERVABILITY_COST}`} />
+              </StackItem>
+            )}
+            {ch.offerCapture && (
+              <StackItem>
+                <Checkbox id="maas-setup-capture-user" label="Record user IDs for per-user usage (My Usage)" isChecked={ch.captureUser}
+                  onChange={(_e, v) => setPending?.({ ...pending, captureUser: v })} description={CAPTURE_USER_EFFECT} />
+              </StackItem>
+            )}
+          </Stack>
+        ) : undefined,
         confirmDisabled: !!problem,
         changes: [
           ...(m?.setupPlan ?? []).map((c) => <>{c}.</>),
+          ...(ch.usageLogs ? (m?.usageLogs ? [<>First, usage logs and dashboards: the Observability tab&apos;s Set up (its own steps and plan, on that tab).</>] : []) : []),
           ...(choice?.plan ?? []).map((c) => <>Database: {c}.</>),
+          ...(ch.captureUser ? [<>Once MaaS is ready: MaasTenantConfig <code>default-tenant</code> <code>spec.telemetry.logs.captureUser: true</code> (its value before is recorded; Clean up MaaS puts it back).</>] : []),
           <>Not changed: anything that exists already and was not created by this tool, other than the settings listed above.</>,
         ],
       };
@@ -742,6 +852,30 @@ export function maasConfirm(pending: Pending, m: MaaSStatus | null, setPending?:
             ? <>The model had no route of its own before it was published, so its route is removed: it then answers only at its in-cluster address, as a model set up &quot;Only inside the cluster&quot;. The MaaS gateway stops admitting {pending.project} unless another model of this tool is published there; the inference gateway is not changed.</>
             : <>The model routes through the gateways it used before publishing, so its direct address answers again; the MaaS gateway stops admitting {pending.project} unless another model of this tool is published there.</>,
         ],
+      };
+    }
+    case "maas-capture-user": {
+      const u = m?.usageLogs;
+      return pending.on ? {
+        title: "Record user IDs in the usage logs?", confirm: "Record user IDs", runTitle: "Record user IDs in the usage logs",
+        summary: <Content component="p">{CAPTURE_USER_EFFECT}</Content>,
+        changes: [<>MaasTenantConfig <code>default-tenant</code> in models-as-a-service: <code>spec.telemetry.logs.captureUser: true</code>; its value before ({u?.captureUser === false ? "false" : "not set"}) is recorded on it, and Stop recording user IDs and Clean up MaaS put it back.</>],
+      } : {
+        title: "Stop recording user IDs?", confirm: "Stop recording", runTitle: "Stop recording user IDs",
+        summary: <Content component="p">MaaS stops writing user names into new usage logs; logs written already keep them. &quot;My Usage&quot; then shows nothing.</Content>,
+        changes: [<>MaasTenantConfig <code>default-tenant</code>: <code>spec.telemetry.logs.captureUser</code> back to {u?.captureUserPrevious === "false" ? "false" : "not set"}, as before this tool set it.</>],
+      };
+    }
+    case "maas-portal": {
+      const p = m?.portal;
+      return pending.on ? {
+        title: "Turn on the MaaS portal?", confirm: "Turn on", runTitle: "Turn on the MaaS portal",
+        summary: <Content component="p">RHOAI&apos;s dashboard operator deploys the portal where MaaS users manage their API keys and see their models and usage, at the dashboard&apos;s address under /maas-portal/.</Content>,
+        changes: [<>DataScienceCluster: <code>spec.components.dashboard.maasPortal.managementState: Managed</code> (it is {p?.managementState || "not set"}; recorded on the DataScienceCluster, and Turn off and Clean up MaaS put it back).</>],
+      } : {
+        title: "Turn off the MaaS portal?", confirm: "Turn off", runTitle: "Turn off the MaaS portal",
+        summary: <Content component="p">RHOAI&apos;s dashboard operator removes the portal. API keys and MaaS itself stay.</Content>,
+        changes: [<>DataScienceCluster: <code>spec.components.dashboard.maasPortal.managementState</code> back to {p?.previous === "unset" || !p?.previous ? "not set" : p.previous}, as before this tool turned it on.</>],
       };
     }
     case "restore-routing-maas": {
