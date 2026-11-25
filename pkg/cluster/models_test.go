@@ -355,15 +355,9 @@ func TestPlanModelImage_KeepsTheReleasedImageOnRepair(t *testing.T) {
 	mc := newModelsCluster(t)
 	var existing serving.LLMISvcObject
 	existing.Metadata.Annotations = map[string]string{serving.ModelImageSourceAnnotation: "released", serving.ModelImageVersionAnnotation: "3.5.3"}
-	existing.Spec.Template = &struct {
-		Containers []struct {
-			Name  string `json:"name"`
-			Image string `json:"image"`
-		} `json:"containers"`
-	}{Containers: []struct {
-		Name  string `json:"name"`
-		Image string `json:"image"`
-	}{{Name: "main", Image: "registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:5353"}}}
+	if err := json.Unmarshal([]byte(`{"spec":{"template":{"containers":[{"name":"main","image":"registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:5353"}]}}}`), &existing); err != nil {
+		t.Fatal(err)
+	}
 	plan, err := serving.PlanModelImage(mc.c, testPresetImage, false, &existing, true)
 	if err != nil || plan.Kind != "released" || plan.Image != "registry.redhat.io/rhaii/vllm-cpu-rhel9@sha256:5353" || plan.Version != "3.5.3" {
 		t.Fatalf("got %+v, %v", plan, err)

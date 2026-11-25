@@ -1762,6 +1762,8 @@ export interface MaaSAction {
 /** One of this tool's models and its MaaS publication (pkg/types MaaSModel). */
 export interface MaaSModel extends ResourceState {
   displayName?: string;
+  /** A chat model whose vLLM lacks --enable-force-include-usage (set up by an earlier version): MaaS counts its streamed chats as 0 tokens; how to fix it. */
+  usageWarning?: string;
   modelReady: boolean;
   published: boolean;
   /** Set up on the Models tab "Through MaaS only": Unpublish leaves it with no route (only inside the cluster). */

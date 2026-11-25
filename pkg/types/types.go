@@ -1806,6 +1806,10 @@ type MaaSModel struct {
 	Subscription string `json:"subscription,omitempty"`
 	// Limit is the model's entry in this tool's subscription (published only).
 	Limit *MaaSLimit `json:"limit,omitempty"`
+	// UsageWarning: a chat model of this tool whose vLLM arguments lack
+	// --enable-force-include-usage (set up by an earlier version), so MaaS
+	// counts its streamed responses as 0 tokens; says how to fix it.
+	UsageWarning string `json:"usageWarning,omitempty"`
 }
 
 // MaaSRequest is the body of POST /api/resources/maas/stream.

@@ -230,6 +230,10 @@ type LLMISvcObject struct {
 			Containers []struct {
 				Name  string `json:"name"`
 				Image string `json:"image"`
+				Env   []struct {
+					Name  string `json:"name"`
+					Value string `json:"value"`
+				} `json:"env"`
 			} `json:"containers"`
 		} `json:"template"`
 	} `json:"spec"`
@@ -261,6 +265,29 @@ func (m LLMISvcObject) routesThroughInferenceGateway(def KServeGateway) bool {
 		}
 	}
 	return false
+}
+
+// usageFlag makes vLLM report token usage in streamed responses, which
+// MaaS counts (models.go, ModelCatalog).
+const usageFlag = "--enable-force-include-usage"
+
+// lacksUsageFlag: the main container's VLLM_ADDITIONAL_ARGS does not carry
+// usageFlag (a chat model set up before every chat model had it).
+func (m LLMISvcObject) lacksUsageFlag() bool {
+	if m.Spec.Template == nil {
+		return true
+	}
+	for _, c := range m.Spec.Template.Containers {
+		if c.Name != "main" {
+			continue
+		}
+		for _, e := range c.Env {
+			if e.Name == "VLLM_ADDITIONAL_ARGS" {
+				return !slices.Contains(strings.Fields(e.Value), usageFlag)
+			}
+		}
+	}
+	return true
 }
 
 func (m LLMISvcObject) mainImage() string {

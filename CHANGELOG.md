@@ -433,7 +433,8 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   The embedding model is unchanged. A model set up by an earlier version
   lacks the flag: Publish refuses it as changed until you set it up again
   on the Models tab, which restarts it; one already published keeps
-  counting 0 for streams until it is set up again.
+  counting 0 for streams until it is set up again, and its row on the MaaS
+  tab warns about it until then (nothing is changed automatically).
 - **Dry runs of a delete no longer delete.** Five deletes asked for a
   server-side dry run in the URL (`?dryRun=All`) while sending
   DeleteOptions (UID preconditions) in the body, and the API server then

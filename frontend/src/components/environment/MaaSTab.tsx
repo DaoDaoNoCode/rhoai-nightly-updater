@@ -256,6 +256,7 @@ const PublishedModels: React.FC<MaaSTabProps> = ({ maas, busy, baseReason, readO
                             {/* Why Publish is off, without hovering it. */}
                             {notOffered(i) && <StackItem><Content component="small">Chat models only</Content></StackItem>}
                           </>}
+                      {i.usageWarning && <StackItem><Alert variant="warning" isInline isPlain component="div" title="Streamed tokens are not counted">{i.usageWarning}</Alert></StackItem>}
                     </Stack>
                   </Td>
                   <Td dataLabel="Actions" isActionCell>
