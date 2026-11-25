@@ -2,6 +2,7 @@ package kueue
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -220,13 +221,17 @@ func (r *run) setup(req types.KueueRequest) (*types.OperationResponse, error) {
 	case ns.Metadata.Labels[dashboardLabel] != "true":
 		return r.fail("check", fmt.Sprintf("Namespace %s is not a data science project (it lacks the label %s=true), so the dashboard does not show its workloads. Choose a data science project. Nothing was changed.", project, dashboardLabel), "validation", "not a ds project")
 	}
-	// If the namespace was removed and recreated after we wrote the record,
-	// its LocalQueue, samples, and label went with the old UID. Setup then
-	// treats the name as a fresh project—objects that share names may belong
-	// to others. We only rewrite the record during the queues step, so an
-	// early refusal below still leaves the cluster unchanged.
-	if rec.ProjectUID != "" && ns.Metadata.UID != rec.ProjectUID {
-		rec.forgetProject()
+	// The project deleted and made again since the record was written: its
+	// LocalQueue, samples and label went with the old namespace, unless an
+	// admin force-finalized it and they came back (reconcileReplacedProject).
+	// This happens in memory only; the queues step writes it, so a refusal
+	// below changes nothing.
+	checkedProject, checkedUID := rec.Project, rec.ProjectUID
+	replaced := rec.ProjectUID != "" && ns.Metadata.UID != rec.ProjectUID
+	if replaced {
+		if err := reconcileReplacedProject(c, &rec, project); err != nil {
+			return r.fail("check", fmt.Sprintf("Project %s was deleted and made again since this tool's setup, and this tool cannot tell what of its setup is left there: %v. Nothing was changed.", project, err), codeOf(err), "read failed")
+		}
 	}
 	// Project label policy: missing means we may add it; "true" is acceptable
 	// as-is; any other value was chosen deliberately and we never stomp it.
@@ -311,13 +316,20 @@ func (r *run) setup(req types.KueueRequest) (*types.OperationResponse, error) {
 	// First phase: materialize queues and write each UID to the record right
 	// after a successful create.
 	r.step("queues", "running", fmt.Sprintf("Creating ResourceFlavor %s, ClusterQueue %s and LocalQueue %s", FlavorName, ClusterQueueName, LocalQueueName))
-	if _, err := updateRecord(c, func(e *Record) {
-		if e.ProjectUID != "" && e.ProjectUID != ns.Metadata.UID {
-			e.forgetProject()
+	if _, err := updateRecordIf(c, func(e *Record) error {
+		if e.Project != checkedProject || e.ProjectUID != checkedUID {
+			return errRecordChanged
+		}
+		if replaced {
+			e.setProjectEntries(rec)
 		}
 		e.Project = project
 		e.ProjectUID = ns.Metadata.UID
+		return nil
 	}); err != nil {
+		if errors.Is(err, errRecordChanged) {
+			return r.fail("queues", fmt.Sprintf("This tool's record of its Kueue setup changed while it checked project %s; set up again. Nothing was changed.", project), "conflict", "record changed")
+		}
 		return r.fail("queues", err.Error()+" Nothing was changed.", codeOf(err), "record write failed")
 	}
 	for _, o := range objs {
@@ -333,6 +345,11 @@ func (r *run) setup(req types.KueueRequest) (*types.OperationResponse, error) {
 				return r.fail("queues", fmt.Sprintf("%s %s was created, but this tool could not record it (%v) nor delete it again (%v). Delete it yourself, then set up again.", o.kind, o.name, err, delErr), codeOf(err), "record failed")
 			}
 			return r.fail("queues", fmt.Sprintf("%s %s was created, but this tool could not record it as its own (%v), so it was deleted again. Set up again to retry.", o.kind, o.name, err), codeOf(err), "record failed")
+		}
+		if o.kind == "LocalQueue" {
+			if msg, code := undoInReplacedProject(c, project, ns.Metadata.UID, o.kind+" "+o.name, queuePath(o.kind, o.project), meta.UID, o.uid); msg != "" {
+				return r.fail("queues", msg, code, "project replaced")
+			}
 		}
 		r.logs = append(r.logs, fmt.Sprintf("OK: %s %s created", o.kind, o.name))
 	}
@@ -378,6 +395,14 @@ func (r *run) setup(req types.KueueRequest) (*types.OperationResponse, error) {
 			}
 			return r.fail("samples", fmt.Sprintf("%s was created, but this tool could not record it (%v), so it was deleted again. Set up again to retry.", sampleText(kind), err), codeOf(err), "record failed")
 		}
+		if msg, code := undoInReplacedProject(c, project, ns.Metadata.UID, sampleText(kind), samplePath(kind, project), meta.UID, func(e *Record) *string {
+			if kind == SampleRayJob {
+				return &e.RayJobUID
+			}
+			return &e.RayClusterUID
+		}); msg != "" {
+			return r.fail("samples", msg, code, "project replaced")
+		}
 		made = append(made, sampleText(kind))
 	}
 	r.step("samples", "success", fmt.Sprintf("Created %s; Kueue admits %s when the quota allows (pulling the Ray image can take several minutes).", kube.JoinTitles(made), kube.Verb(len(made), "it", "them")))
@@ -390,6 +415,71 @@ func sampleManifest(kind, project, image string) map[string]any {
 		return RayJobManifest(project, image)
 	}
 	return RayClusterManifest(project, image)
+}
+
+// undoInReplacedProject reads project again right after setup created what
+// (at path, with UID uid) in it. When the namespace is gone or no longer
+// has the UID nsUID that setup checked and recorded, the project was
+// deleted (and maybe made again) in between, and the object may sit in a
+// project that is not the recorded one: it is deleted again by its UID and
+// its record entry (entry) cleared. It returns why setup stops and an
+// error code, or "" while the project is still the one checked. A plain
+// function, not a method: the RBAC scan resolves path at its call sites.
+func undoInReplacedProject(c *kube.Client, project, nsUID, what, path, uid string, entry func(e *Record) *string) (string, string) {
+	ns, found, err := readNamespace(c, project)
+	if err != nil {
+		return fmt.Sprintf("Cannot read project %s again after creating %s in it: %v. %s stays; set up again to continue.", project, what, err, what), codeOf(err)
+	}
+	if found && ns.Metadata.UID == nsUID {
+		return "", ""
+	}
+	how := "deleted and made again"
+	if !found {
+		how = "deleted"
+	}
+	if _, err := kube.DeleteWithUID(c, path, uid); err != nil && !kube.IsK8sNotFound(err) {
+		return fmt.Sprintf("Project %s was %s while it was set up; this tool created %s there and cannot delete it again: %v. Delete it yourself, then set up again.", project, how, what, err), codeOf(err)
+	}
+	if _, err := updateRecord(c, func(e *Record) {
+		if p := entry(e); *p == uid {
+			*p = ""
+		}
+	}); err != nil {
+		slog.Warn("cannot drop a deleted object from the Kueue record", "object", what, "error", err)
+	}
+	return fmt.Sprintf("Project %s was %s while it was set up; what was created in it was deleted again. Set up again.", project, how), "conflict"
+}
+
+// settleReplacedProject checks that the project rec names is still the one
+// recorded (its UID). When it is gone or was made again, it settles the
+// record's project entries (reconcileReplacedProject) and stores them while
+// the stored record is still the one read; a namespace being deleted with
+// the recorded UID is not replaced. It returns the record to go on with,
+// or why not and an error code.
+func (r *run) settleReplacedProject(rec Record) (Record, string, string) {
+	if rec.ProjectUID == "" {
+		return rec, "", ""
+	}
+	c := r.c
+	ns, found, err := readNamespace(c, rec.Project)
+	if err != nil {
+		return rec, fmt.Sprintf("Cannot read project %s: %v.", rec.Project, err), codeOf(err)
+	}
+	if found && ns.Metadata.UID == rec.ProjectUID {
+		return rec, "", ""
+	}
+	old := rec.ProjectUID
+	if err := reconcileReplacedProject(c, &rec, rec.Project); err != nil {
+		return rec, fmt.Sprintf("Project %s was deleted or made again since this tool's setup, and this tool cannot tell what of its setup is left there: %v.", rec.Project, err), codeOf(err)
+	}
+	stored, err := writeReconciled(c, old, rec)
+	if err != nil {
+		if errors.Is(err, errRecordChanged) {
+			return rec, "This tool's record of its Kueue setup changed meanwhile; try again.", "conflict"
+		}
+		return rec, err.Error(), codeOf(err)
+	}
+	return stored, "", ""
 }
 
 // patchLabel adds or removes ProjectLabel through JSON Patch. Every patch
@@ -502,6 +592,14 @@ func (r *run) deleteSampleOnly(kind string) (*types.OperationResponse, error) {
 	if rec.Project == "" || rec.SampleUID(kind) == "" {
 		return r.fail("samples", fmt.Sprintf("This tool has no %s to delete.", sampleText(kind)), "validation", "no sample")
 	}
+	rec, msg, code := r.settleReplacedProject(rec)
+	if msg != "" {
+		return r.fail("samples", msg+" Nothing was deleted.", code, "project check failed")
+	}
+	if rec.SampleUID(kind) == "" {
+		r.step("samples", "success", fmt.Sprintf("%s went with project %s, which was deleted or made again since this tool's setup.", sampleText(kind), rec.Project))
+		return r.done(fmt.Sprintf("%s in %s is gone already. Nothing was deleted.", sampleText(kind), rec.Project))
+	}
 	if msg, code := r.deleteSample(rec, kind); msg != "" {
 		return r.fail("samples", msg, code, "sample delete failed")
 	}
@@ -534,7 +632,7 @@ func queueUsers(c *kube.Client, o toolObject, rec Record) ([]string, error) {
 			return nil, err
 		}
 		for _, q := range qs {
-			ours := q.Metadata.Namespace == rec.Project && q.Metadata.Name == LocalQueueName
+			ours := q.Metadata.Namespace == rec.Project && q.Metadata.Name == LocalQueueName && rec.LocalQueueUID != "" && q.Metadata.UID == rec.LocalQueueUID
 			if q.Spec.ClusterQueue == ClusterQueueName && !ours {
 				users = append(users, "LocalQueue "+q.Metadata.Namespace+"/"+q.Metadata.Name)
 			}
@@ -576,6 +674,13 @@ func (r *run) teardown() (*types.OperationResponse, error) {
 		}
 		r.step("samples", "success", "This tool has set up nothing.")
 		return r.done("This tool has no distributed workloads set up; nothing was deleted.")
+	}
+	// A project deleted and made again (or gone) took the recorded
+	// LocalQueue, samples and label with it: what has the name there now is
+	// someone else's and does not stop the cluster-wide queues' Clean up.
+	rec, problem, code := r.settleReplacedProject(rec)
+	if problem != "" {
+		return r.fail("samples", problem+" Nothing was deleted.", code, "project check failed")
 	}
 	for _, kind := range []string{SampleRayCluster, SampleRayJob} {
 		if rec.Project == "" || rec.SampleUID(kind) == "" {

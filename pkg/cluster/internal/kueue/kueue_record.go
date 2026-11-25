@@ -2,6 +2,7 @@ package kueue
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
@@ -71,15 +72,71 @@ func (r Record) SampleUID(kind string) string {
 	return r.RayClusterUID
 }
 
-// forgetProject clears project-local fields: project UID, tool-added label,
-// LocalQueue, and sample UIDs. Call only after the project namespace is
-// removed—deletion wipes in-namespace objects, so these IDs no longer refer to
-// anything. ResourceFlavor, ClusterQueue, and dashboard opt-in remain because
-// they are cluster-scoped.
-func (r *Record) forgetProject() {
-	r.ProjectUID = ""
-	r.LabelAdded, r.LabelPrior = false, ""
-	r.LocalQueueUID, r.RayClusterUID, r.RayJobUID = "", "", ""
+// reconcileReplacedProject settles rec's project entries for a project that
+// is gone or was deleted and made again (its namespace's UID is not
+// rec.ProjectUID). Deleting a namespace deletes what is in it, but a
+// namespace an admin force-finalizes can leave its objects in etcd, and
+// they come back in a new namespace of that name with their old UIDs and
+// the tool's label: those are still the tool's. So the recorded LocalQueue
+// and both samples (whichever a setup asks for) are read by name in
+// project, and each recorded UID stays only while an object with exactly
+// that UID is there (setup then reuses it, Clean up deletes it by UID);
+// otherwise it is cleared. ProjectUID and the label entries are always
+// cleared: the label was on the old Namespace object. The ResourceFlavor,
+// ClusterQueue and dashboard opt-in are cluster-scoped and stay. A read
+// that fails is returned, and rec is not changed (fail closed).
+func reconcileReplacedProject(c *kube.Client, rec *Record, project string) error {
+	next := *rec
+	next.ProjectUID = ""
+	next.LabelAdded, next.LabelPrior = false, ""
+	if rec.LocalQueueUID != "" {
+		q, found, err := readLocalQueue(c, project)
+		if err != nil {
+			return fmt.Errorf("read LocalQueue %s: %w", LocalQueueName, err)
+		}
+		if !found || q.Metadata.UID != rec.LocalQueueUID {
+			next.LocalQueueUID = ""
+		}
+	}
+	for _, kind := range []string{SampleRayCluster, SampleRayJob} {
+		if rec.SampleUID(kind) == "" {
+			continue
+		}
+		s, found, err := readSample(c, kind, project)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", sampleText(kind), err)
+		}
+		if !found || s.Metadata.UID != rec.SampleUID(kind) {
+			next.setSampleUID(kind, "")
+		}
+	}
+	*rec = next
+	return nil
+}
+
+// setProjectEntries copies from's project-scoped entries (project UID,
+// label, LocalQueue and samples) into r.
+func (r *Record) setProjectEntries(from Record) {
+	r.ProjectUID = from.ProjectUID
+	r.LabelAdded, r.LabelPrior = from.LabelAdded, from.LabelPrior
+	r.LocalQueueUID, r.RayClusterUID, r.RayJobUID = from.LocalQueueUID, from.RayClusterUID, from.RayJobUID
+}
+
+// errRecordChanged: the stored record is no longer the one a run checked.
+var errRecordChanged = errors.New("this tool's record of its Kueue setup changed meanwhile")
+
+// writeReconciled stores the project entries reconcileReplacedProject
+// settled in rec, only while the stored record still names rec.Project
+// with the project UID oldUID; otherwise it returns errRecordChanged and
+// writes nothing.
+func writeReconciled(c *kube.Client, oldUID string, rec Record) (Record, error) {
+	return updateRecordIf(c, func(e *Record) error {
+		if e.Project != rec.Project || e.ProjectUID != oldUID {
+			return errRecordChanged
+		}
+		e.setProjectEntries(rec)
+		return nil
+	})
 }
 
 func (r *Record) setSampleUID(kind, uid string) {
@@ -133,12 +190,23 @@ func writeRecord(c *kube.Client, rec Record) error {
 
 // updateRecord reads, applies change, and writes only when serialization changes.
 func updateRecord(c *kube.Client, change func(r *Record)) (Record, error) {
+	return updateRecordIf(c, func(r *Record) error {
+		change(r)
+		return nil
+	})
+}
+
+// updateRecordIf is updateRecord with a change that may refuse: its error
+// is returned and nothing is written.
+func updateRecordIf(c *kube.Client, change func(r *Record) error) (Record, error) {
 	rec, err := ReadRecord(c)
 	if err != nil {
 		return rec, err
 	}
 	before, _ := json.Marshal(rec)
-	change(&rec)
+	if err := change(&rec); err != nil {
+		return rec, err
+	}
 	after, _ := json.Marshal(rec)
 	if string(before) == string(after) {
 		return rec, nil
