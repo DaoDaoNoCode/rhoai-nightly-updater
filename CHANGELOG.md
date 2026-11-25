@@ -16,7 +16,7 @@ release date (`YYYY-MM-DD`); the release guard (`scripts/release.sh check`)
 only accepts a tag whose version is the top dated section. See
 [CONTRIBUTING.md](CONTRIBUTING.md#releases).
 
-## [4.0.1] - unreleased
+## [4.0.1] - 2026-11-25
 
 Same template as 4.0.0 (revision 7): upgrade with the release's
 `install.sh` ([UPGRADING.md](docs/UPGRADING.md#patch-and-minor-releases)),
