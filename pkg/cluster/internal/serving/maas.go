@@ -1212,7 +1212,7 @@ func GetMaaSStatus(c *kube.Client) (*types.MaaSStatus, error) {
 		return nil, err
 	}
 	dsc, dscErr := readMaaSDSC(c)
-	r := &maasStatusRun{c: c, st: st, rec: rec}
+	r := &maasStatusRun{c: c, st: st, rec: rec, prereqShared: prereqShared(c)}
 	r.gone, r.modelsErr = goneMaaSPublications(c, rec)
 	r.infra, r.infraErr = MaaSInfraNamespace(c)
 	if r.infraErr != nil {
@@ -1240,9 +1240,12 @@ func GetMaaSStatus(c *kube.Client) (*types.MaaSStatus, error) {
 // maasStatusRun builds GetMaaSStatus's answer: each method reads one part
 // of the platform and appends it, in setup order.
 type maasStatusRun struct {
-	c   *kube.Client
-	st  *types.MaaSStatus
-	rec MaaSRecord
+	// prereqShared are the shared parts the feature prerequisites' record
+	// says this tool installed (prereqShared).
+	prereqShared map[string]string
+	c            *kube.Client
+	st           *types.MaaSStatus
+	rec          MaaSRecord
 	// infra is MaaSInfraNamespace; "" with infraErr when it is not known.
 	infra    string
 	infraErr error
@@ -1314,6 +1317,9 @@ func (r *maasStatusRun) statusRHCL() (rhcl, cnpg envkit.OperatorState, cnpgReadE
 	}
 	rhclPart := types.MaaSPart{ID: "rhcl", Title: "Red Hat Connectivity Link", DocURL: maasDocsBase + "install/platform-setup.md#install-gateway-api-controller"}
 	_, rhclByTool := rec.Shared["rhcl"]
+	if _, ok := r.prereqShared["rhcl"]; ok {
+		rhclByTool = true
+	}
 	switch {
 	case rhclErr != nil:
 		rhclPart.State, rhclPart.Message = "unknown", "Cannot read the installed operators: "+rhclErr.Error()
@@ -1387,6 +1393,9 @@ func (r *maasStatusRun) statusKuadrant(rhcl envkit.OperatorState) kuadrantState 
 	kuadrantNS := kube.FirstNonEmpty(kq.Namespace, rhcl.CSVNS, RHCLOperator.Namespace)
 	kPart := types.MaaSPart{ID: "kuadrant", Title: "Connectivity Link instance (Kuadrant)", DocURL: maasDocsBase + "install/platform-setup.md#install-gateway-api-controller"}
 	_, kByTool := rec.Shared["kuadrant"]
+	if _, ok := r.prereqShared["kuadrant"]; ok {
+		kByTool = true
+	}
 	switch {
 	case kErr != nil:
 		kPart.State, kPart.Message = "unknown", "Cannot read the Kuadrant CR: "+kErr.Error()
@@ -2031,4 +2040,24 @@ func maasOnlySetup(c *kube.Client, project, name string) (bool, error) {
 // background check drops it.
 func (r MaaSRecord) SetUpByTool() bool {
 	return r.DSCChanged || r.AIGatewayChanged || r.DBNamespace != "" || r.Database != "" || r.InfraNamespace != "" || r.POCCredsUID != ""
+}
+
+// prereqShared is the "shared" map of the feature prerequisites' record
+// (features, snapshot key "prerequisites"): the operators and the Kuadrant
+// CR a feature's Set up (or a recipe's prerequisites step) installed, such
+// as Connectivity Link for a model reached through a gateway. The MaaS
+// status counts them as this tool's too. A record that cannot be read
+// counts nothing.
+func prereqShared(c *kube.Client) map[string]string {
+	raw, err := record.ReadSnapshotKey(c, "prerequisites")
+	if err != nil || raw == "" {
+		return nil
+	}
+	var rec struct {
+		Shared map[string]string `json:"shared"`
+	}
+	if json.Unmarshal([]byte(raw), &rec) != nil {
+		return nil
+	}
+	return rec.Shared
 }
