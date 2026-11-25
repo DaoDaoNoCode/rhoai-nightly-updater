@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
 
 // This package issues its own SeaweedFS IAM and S3 requests, each signed with
@@ -181,6 +183,7 @@ func (s *seaweedClient) send(method, path string, query url.Values, contentType 
 		req.Header.Set("Content-Type", contentType)
 	}
 	signV4(req, body, s.keys.AccessKey, s.keys.SecretKey, service, time.Now())
+	kube.NoteRequest(req)
 	resp, err := s.http.Do(req)
 	if err != nil {
 		return 0, nil, fmt.Errorf("%s %s: %w", method, s.endpoint, err)

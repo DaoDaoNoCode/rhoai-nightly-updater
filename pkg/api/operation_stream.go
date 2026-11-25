@@ -42,6 +42,9 @@ func streamOperation(w http.ResponseWriter, label string, run func(emit func(clu
 	}()
 	result, err = run(forwardSteps(sseWriter))
 	sendOperationResult(sseWriter, result, err)
+	if sw, ok := w.(*statusWriter); ok {
+		sw.streamSucceeded = result != nil && result.Success && err == nil
+	}
 	return result, err
 }
 

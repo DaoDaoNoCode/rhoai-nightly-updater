@@ -15,11 +15,12 @@ import (
 )
 
 // rateLimiter provides simple per-user rate limiting for mutation endpoints:
-// one accepted request per user and endpoint per window. This is protection
+// one accepted change per user and endpoint per window. This is protection
 // against double-clicks and duplicate tabs, not a DDoS defense. A slot is
 // taken atomically when the request is accepted (so concurrent duplicates
-// are refused while the first one runs) and given back when the request is
-// rejected or asks not to count.
+// are refused while the first one runs) and given back when the request
+// asks not to count (dry runs) or did not go through without having sent
+// anything that may have changed the cluster (mutationAuth).
 type rateLimiter struct {
 	mu     sync.Mutex
 	users  map[string]time.Time // key -> time the slot was taken
@@ -160,6 +161,10 @@ func mutationAuth(asUser bool, fn func(c *cluster.Client, w http.ResponseWriter,
 		// cluster.ErrOperationLockLost when another pod takes the lock over.
 		opContext, cancelOp := context.WithCancelCause(opContext)
 		defer cancelOp(nil)
+		// The operation's own requests record whether they may have
+		// changed something, for the rate-limit slot; the bookkeeper's
+		// (the updater's records) do not.
+		changesContext, changes := cluster.TrackChanges(opContext)
 		// The updater's own records (the cross-pod lease, the operation
 		// marker, the activity log and the snapshot) are always written
 		// with the ServiceAccount: they outlive the request (lease
@@ -167,9 +172,9 @@ func mutationAuth(asUser bool, fn func(c *cluster.Client, w http.ResponseWriter,
 		// depend on the token the operation acts with.
 		bookkeeper := cluster.NewClientWithContext(opContext, clusterToken)
 		bookkeeper.SetUsername(username)
-		client := cluster.NewClientWithContext(opContext, clusterToken)
+		client := cluster.NewClientWithContext(changesContext, clusterToken)
 		if asUser {
-			client = cluster.NewUserClient(opContext, userToken)
+			client = cluster.NewUserClient(changesContext, userToken)
 		}
 		client.SetUsername(username)
 		client.SetBookkeeping(bookkeeper)
@@ -206,11 +211,15 @@ func mutationAuth(asUser bool, fn func(c *cluster.Client, w http.ResponseWriter,
 			}}
 		completed := false
 		defer func() {
-			// Rejected requests (4xx/5xx status, including 409 busy),
-			// requests that opt out (dry runs) and handlers that panicked
-			// (unrecovered, or recovered by reportOperationPanic) do not
-			// use up the user's slot.
-			if !completed || sw.panicked || sw.status >= 400 || sw.Header().Get("X-Skip-Rate-Limit") == "true" {
+			// Requests that opt out (dry runs) do not use up the user's
+			// slot. Nor does one that did not go through (a 4xx/5xx
+			// status, including 409 busy; a stream whose final event
+			// refused, such as a confirmation the clean-up asks for; a
+			// panic) when its client sent nothing that may have changed
+			// the cluster, so the user can answer the refusal at once. A
+			// change that went through, or went part of the way, keeps it.
+			wentThrough := completed && sw.succeeded()
+			if sw.Header().Get("X-Skip-Rate-Limit") == "true" || !wentThrough && !changes.Made() {
 				mutationLimiter.release(rateLimitKey, slot)
 			}
 		}()

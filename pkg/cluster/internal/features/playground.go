@@ -297,6 +297,7 @@ func (a GenAIAPI) Call(method, path, ns string, in, out any) error {
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	kube.NoteRequest(req)
 	resp, err := genAIHTTPClient.Do(req)
 	if err != nil {
 		// url.Error names the URL, which holds no secret.

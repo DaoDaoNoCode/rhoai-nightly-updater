@@ -323,6 +323,14 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **Answering a refusal at once is no longer rate limited.** A streamed
+  change the server refused without changing anything (Clean up asking to
+  confirm a project's contents or a pipeline server's workbenches, a failed
+  check) used the user's 30-second slot, so confirming within 30 seconds got
+  "Not started: wait before repeating this change". A change that did not go
+  through now gives the slot back only when it sent nothing that may have
+  changed the cluster; one that changed something first, then failed or
+  crashed, keeps it (a failed change that is not streamed gave it back).
 - **A recipe's Clean up no longer asks about its own playground and Ray
   samples.** Before it deletes the recipe's project, Clean up lists what
   the project holds that this tool did not create, and that list named
