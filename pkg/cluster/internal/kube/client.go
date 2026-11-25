@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -190,6 +191,9 @@ type Client struct {
 	// recent answer (argoApplicationsCache). Clients of changes never set
 	// it: every check that refuses or allows a change reads fresh.
 	statusRead bool
+	// noRetry, when set, keeps an answer the API server asks to repeat from
+	// being retried when it reports true for its error (NoRetryWhen).
+	noRetry func(error) bool
 }
 
 // NewUserClient is NewClientWithContext for the signed-in user's own token:
@@ -302,15 +306,109 @@ func NewClientWithContext(ctx context.Context, token string) *Client {
 
 // Do sends one authenticated request to the Kubernetes API. query values are
 // added to the path's own query. Error responses are returned as *K8sError
-// together with their body; transport failures as *NetworkError.
+// together with their body; transport failures as *NetworkError. A response
+// the API server asks to repeat later is sent again (see retryWait).
 func (c *Client) Do(method, path, contentType string, body []byte, query url.Values) ([]byte, int, error) {
 	respBody, _, code, err := c.doWithHeader(method, path, contentType, body, query)
 	return respBody, code, err
 }
 
+// Retries of a request the API server asks to repeat (retryWait), as
+// client-go's rest client makes them (k8s.io/client-go v0.33.4).
+const (
+	// maxRetries is client-go's default (rest/request.go:170): at most 10
+	// retries, 11 attempts (rest/with_retry.go:161-165).
+	maxRetries = 10
+	// retryWaitBudget bounds the summed Retry-After waits of one request.
+	// client-go has none (rest/urlbackoff.go:86 sleeps the full value each
+	// time). 32 s is the largest Retry-After the kube-apiserver sends: an
+	// unready watch cache asks for 1 to 30 s (apiserver
+	// pkg/storage/cacher/util.go:51-56), priority and fairness for up to
+	// 32 s (pkg/util/flowcontrol/dropped_requests_tracker.go:29). A wait
+	// over the budget is not shortened: the answer is returned instead.
+	retryWaitBudget = 32 * time.Second
+)
+
+// NoRetryWhen returns a copy of c whose requests are not retried when skip
+// reports true for the error of an answer the API server asks to repeat
+// (retryWait). For a read whose caller handles that answer at once: a
+// versioned RHOAI read gets "429 storage is (re)initializing: ... conversion
+// webhook ... failed" with Retry-After 30 while the watch cache cannot
+// convert the stored objects, which never clears by itself, and reads the
+// next served version instead (rhoai.readServed).
+func (c *Client) NoRetryWhen(skip func(error) bool) *Client {
+	cp := *c
+	cp.noRetry = skip
+	return &cp
+}
+
 // doWithHeader is Do that also returns the response's header (nil when no
-// response came).
+// response came). An answer the API server asks to repeat (retryWait) is
+// sent again after the wait it asks for, as client-go does
+// (rest/request.go:1242-1286); the body is a []byte, so every attempt sends
+// it in full. When the client's context ends during a wait, the context's
+// error is returned with the last answer's in its text (client-go's
+// WrapPreviousError, rest/with_retry.go:268-305).
 func (c *Client) doWithHeader(method, path, contentType string, body []byte, query url.Values) ([]byte, http.Header, int, error) {
+	var waited time.Duration
+	for retries := 0; ; retries++ {
+		respBody, header, code, err := c.doOnce(method, path, contentType, body, query)
+		wait, retry := c.retryWait(header, code, err, retries, waited)
+		if !retry {
+			return respBody, header, code, err
+		}
+		slog.Debug("the API server asked to retry the request", "method", method, "path", path, "status", code, "retryAfter", wait, "retry", retries+1)
+		if sleepErr := clk.Sleep(c.ctx, wait); sleepErr != nil {
+			return nil, nil, 0, &retryStoppedError{ctxErr: sleepErr, last: err}
+		}
+		waited += wait
+	}
+}
+
+// retryStoppedError is the context's error that ended a retry wait, with
+// the last answer in its text only, as client-go's wrapPreviousError
+// (rest/with_retry.go:298-305): errors.Is and As see the context's error,
+// so the request reads as cancelled or timed out, not as that answer.
+type retryStoppedError struct{ ctxErr, last error }
+
+func (e *retryStoppedError) Error() string {
+	return e.ctxErr.Error() + " - error from a previous attempt: " + e.last.Error()
+}
+
+func (e *retryStoppedError) Unwrap() error { return e.ctxErr }
+
+// retryWait reports whether an answer is sent again and after how long.
+// As in client-go (rest/with_retry.go:148-193, checkWait :309-318,
+// retryAfterSeconds rest/request.go:1542-1549): an error status 429, or 500
+// and above, with Retry-After in whole seconds, at most maxRetries times. A
+// 429 or 5xx without that header is returned at once. Unlike client-go, the
+// waits of one request are bounded by retryWaitBudget, a wait longer than
+// what is left of the client's context deadline is not begun (the answer
+// is returned rather than the deadline's error), and NoRetryWhen's skip
+// applies.
+func (c *Client) retryWait(header http.Header, code int, err error, retries int, waited time.Duration) (time.Duration, bool) {
+	if _, ok := errors.AsType[*K8sError](err); !ok || (code != http.StatusTooManyRequests && code < http.StatusInternalServerError) {
+		return 0, false
+	}
+	secs, convErr := strconv.Atoi(header.Get("Retry-After"))
+	if convErr != nil || retries >= maxRetries {
+		return 0, false
+	}
+	if secs > int(retryWaitBudget/time.Second) {
+		return 0, false // also keeps a huge value from overflowing
+	}
+	wait := time.Duration(max(secs, 0)) * time.Second
+	if waited+wait > retryWaitBudget || (c.noRetry != nil && c.noRetry(err)) {
+		return 0, false
+	}
+	if deadline, ok := c.ctx.Deadline(); ok && clk.Until(deadline) < wait {
+		return 0, false
+	}
+	return wait, true
+}
+
+// doOnce sends the request once.
+func (c *Client) doOnce(method, path, contentType string, body []byte, query url.Values) ([]byte, http.Header, int, error) {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)

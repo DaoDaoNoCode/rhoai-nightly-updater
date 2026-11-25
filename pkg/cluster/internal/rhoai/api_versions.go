@@ -206,6 +206,9 @@ func GetServed(c *kube.Client, group, pathFmt string, fallback []string) (served
 }
 
 func readServed(c *kube.Client, group, pathFmt string, named bool, query url.Values, fallback []string) (servedRead, error) {
+	// A conversion failure is answered with 429 and Retry-After 30 but does
+	// not clear by itself: read the next version at once (NoRetryWhen).
+	c = c.NoRetryWhen(IsConversionWebhookError)
 	var out servedRead
 	var conversionErr, notFound error
 	versions := ServedVersions(c, group, fallback)

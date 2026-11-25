@@ -147,8 +147,11 @@ func probeConversions(c *kube.Client) (probes []conversionProbe, groups int, err
 			probes = append(probes, p)
 		}
 	}
+	// A probe that cannot convert gets 429 with Retry-After 30 from the
+	// watch cache, which does not clear by itself: report it at once.
+	pc := c.NoRetryWhen(rhoai.IsConversionWebhookError)
 	kube.ParallelFor(len(probes), conversionProbeParallelism, func(i int) {
-		body, err := getDiscovered(c, probes[i].path(), url.Values{"limit": {"1"}})
+		body, err := getDiscovered(pc, probes[i].path(), url.Values{"limit": {"1"}})
 		if err != nil {
 			probes[i].Err = err
 			return

@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
@@ -218,22 +219,75 @@ func TestAddDSCComponents_GroupedV3Components(t *testing.T) {
 	}
 }
 
-func TestClientReturns429WithoutWaitingForRetryAfter(t *testing.T) {
-	var calls int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		w.Header().Set("Retry-After", "30")
-		w.WriteHeader(http.StatusTooManyRequests)
-		_, _ = w.Write([]byte(liveDSCv3Conversion429))
-	}))
-	defer srv.Close()
-	c := newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
-	start := kube.Clock().Now()
-	_, status, err := c.Get("/apis/datasciencecluster.opendatahub.io/v3/datascienceclusters")
-	if elapsed := kube.Clock().Since(start); elapsed != 0 {
-		t.Fatalf("waited %s", elapsed)
+// The live answer of a DSC whose v3 objects cannot be converted: 429
+// "storage is (re)initializing: ... conversion webhook ... failed" with
+// Retry-After 30, which does not clear by itself. A versioned read takes it
+// at once and reads v2 (rhoai.readServed's NoRetryWhen); a plain read
+// retries it as client-go would, within the wait budget (one 30 s wait).
+// While the cache only initializes (no conversion error) the versioned
+// read waits and reads v3 (F9).
+func TestListServedTakesTheConversion429AtOnce(t *testing.T) {
+	const v3, v2 = "/apis/datasciencecluster.opendatahub.io/v3/datascienceclusters", "/apis/datasciencecluster.opendatahub.io/v2/datascienceclusters"
+	serve := func(t *testing.T, v3Answer string) (calls map[string]int, c *Client) {
+		calls = map[string]int{}
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls[r.URL.Path]++
+			switch {
+			case r.URL.Path == "/apis/datasciencecluster.opendatahub.io":
+				_, _ = w.Write([]byte(dscGroupDoc))
+			case r.URL.Path == v3 && calls[v3] == 1:
+				w.Header().Set("Retry-After", "30")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = w.Write([]byte(v3Answer))
+			case r.URL.Path == v3 && strings.Contains(v3Answer, "conversion webhook"):
+				w.Header().Set("Retry-After", "30")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = w.Write([]byte(v3Answer))
+			case r.URL.Path == v3:
+				_, _ = w.Write([]byte(`{"items":[]}`))
+			case r.URL.Path == v2:
+				_, _ = w.Write([]byte(liveDSCv2))
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		t.Cleanup(srv.Close)
+		rhoai.APIVersionsCache.Purge()
+		t.Cleanup(rhoai.APIVersionsCache.Purge)
+		return calls, newTestClient(testClientOptions{BaseURL: srv.URL, HTTPClient: srv.Client(), Ctx: context.Background()})
 	}
-	if status != 429 || calls != 1 || !rhoai.IsConversionWebhookError(err) {
-		t.Fatalf("status %d calls %d err %v", status, calls, err)
-	}
+
+	t.Run("conversion failure: v2 at once", func(t *testing.T) {
+		calls, c := serve(t, liveDSCv3Conversion429)
+		start := kube.Clock().Now()
+		r, err := rhoai.ListServed(c, rhoai.DSCGroup, rhoai.DSCListFmt, nil, rhoai.DSCFallbackVersions)
+		if elapsed := kube.Clock().Since(start); elapsed != 0 {
+			t.Fatalf("waited %s", elapsed)
+		}
+		if err != nil || r.Version != "v2" || len(r.Skipped) != 1 || r.Skipped[0].Version != "v3" || calls[v3] != 1 {
+			t.Fatalf("got %+v %v after %d v3 reads", r, err, calls[v3])
+		}
+	})
+	t.Run("conversion failure, plain read: one wait, then the answer", func(t *testing.T) {
+		calls, c := serve(t, liveDSCv3Conversion429)
+		start := kube.Clock().Now()
+		_, status, err := c.Get(v3)
+		if elapsed := kube.Clock().Since(start); elapsed != 30*time.Second {
+			t.Fatalf("waited %s", elapsed)
+		}
+		if status != 429 || calls[v3] != 2 || !rhoai.IsConversionWebhookError(err) {
+			t.Fatalf("status %d calls %d err %v", status, calls[v3], err)
+		}
+	})
+	t.Run("cache initializing: v3 after the wait", func(t *testing.T) {
+		calls, c := serve(t, `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"storage is (re)initializing","reason":"TooManyRequests","details":{"retryAfterSeconds":30},"code":429}`)
+		start := kube.Clock().Now()
+		r, err := rhoai.ListServed(c, rhoai.DSCGroup, rhoai.DSCListFmt, nil, rhoai.DSCFallbackVersions)
+		if elapsed := kube.Clock().Since(start); elapsed != 30*time.Second {
+			t.Fatalf("waited %s", elapsed)
+		}
+		if err != nil || r.Version != "v3" || len(r.Skipped) != 0 || calls[v3] != 2 {
+			t.Fatalf("got %+v %v after %d v3 reads", r, err, calls[v3])
+		}
+	})
 }
