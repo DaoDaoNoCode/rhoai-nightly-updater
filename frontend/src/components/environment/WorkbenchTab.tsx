@@ -92,7 +92,7 @@ const PlanDetails: React.FC<{ plan: WorkbenchPlan; label: string; kept?: boolean
 );
 
 const ItemDetails: React.FC<{ item: WorkbenchState }> = ({ item }) => (
-  <DetailsList label="Workbench details" image={item.image} profile={profileText(item.hardwareProfile, item.cpu, item.memory)}
+  <DetailsList label="Workbench details" image={item.image} imageDeprecated={item.imageDeprecated} profile={profileText(item.hardwareProfile, item.cpu, item.memory)}
     storage={item.storage ? storageText(item.storage.size, item.storage.storageClass) : undefined} connection={!!item.connectionAttached} />
 );
 
@@ -289,7 +289,7 @@ export function workbenchSteps(p: WorkbenchPending): { id: string; title: string
 }
 
 /** Rationale when Set up picks a deprecated image (pkg/cluster/internal/workbench DeprecatedImageNote). */
-export const DEPRECATED_IMAGE_NOTE = "The dashboard labels this image Deprecated (it gets no new versions): every workbench image it offers on this cluster is deprecated.";
+export const DEPRECATED_IMAGE_NOTE = "The dashboard labels this image Deprecated (it gets no new versions): no current workbench image is ready on this cluster.";
 
 /** Explains in-memory loss on stop or teardown; shared wording across Stop, Delete, and Clean up. */
 export const RUNNING_SESSION_LOST = `Unsaved work in the running session is lost: only files saved under ${WORKBENCH_FILES} are in the storage.`;

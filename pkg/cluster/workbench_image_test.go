@@ -132,6 +132,10 @@ func TestWorkbenchSetupDeprecatedImageAndKeepsExistingImage(t *testing.T) {
 	if st.Plan == nil || !st.Plan.ImageDeprecated || st.Plan.ImageStream != "s2i-minimal-notebook" {
 		t.Fatalf("plan %+v %q", st.Plan, st.PlanProblem)
 	}
+	// The workbench itself runs a deprecated image: labelled, as the dashboard's table does.
+	if len(st.Items) != 1 || !st.Items[0].ImageDeprecated {
+		t.Fatalf("items %+v", st.Items)
+	}
 
 	// Once a non-deprecated stream exists (e.g. post-upgrade), new workbenches plan
 	// to use it, yet setup on an already-provisioned workbench leaves state unchanged.
@@ -149,5 +153,10 @@ func TestWorkbenchSetupDeprecatedImageAndKeepsExistingImage(t *testing.T) {
 	}
 	if got := image(); got != "reg/minimal:3.7" {
 		t.Fatalf("the existing workbench's image changed to %q", got)
+	}
+	// Its stream no longer deprecated (or gone): no label.
+	f.putJSON(wbStreams+"s2i-minimal-notebook", `{"metadata":{"labels":{"opendatahub.io/notebook-image":"true"}},"spec":{"tags":[{"name":"3.7"}]},"status":{"tags":[{"tag":"3.7"}]}}`)
+	if st, err = GetWorkbenchStatus(c, u, "proj"); err != nil || len(st.Items) != 1 || st.Items[0].ImageDeprecated {
+		t.Fatalf("current stream: %+v %v", st.Items, err)
 	}
 }

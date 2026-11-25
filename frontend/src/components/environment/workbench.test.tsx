@@ -68,6 +68,13 @@ describe("Workbench confirmations", () => {
     expect(screen.getByText(DEPRECATED_IMAGE_NOTE)).toBeInTheDocument();
   });
 
+  it("a workbench on a deprecated image shows the dashboard's Deprecated label", async () => {
+    stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] }, "/api/resources/workbench": item({ imageDeprecated: true }), "/api/resources/prerequisites": { features: {} } });
+    renderAt("/test-resources?tab=workbench&project=dev");
+    const details = await screen.findByLabelText("Workbench details");
+    expect(within(details).getByText("Deprecated")).toBeInTheDocument();
+  });
+
   it("Set up with a current image shows no Deprecated label", () => {
     render(<>{workbenchConfirm({ kind: "setup-workbench", project: "dev" }, notSetUp())!.summary}</>);
     expect(screen.queryByText("Deprecated")).not.toBeInTheDocument();

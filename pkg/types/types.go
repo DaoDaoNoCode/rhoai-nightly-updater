@@ -1469,7 +1469,10 @@ type WorkbenchState struct {
 	URL string `json:"url,omitempty"`
 	// Image is the image's display name and tag, HardwareProfile the
 	// profile's name, as the workbench records them.
-	Image           string `json:"image,omitempty"`
+	Image string `json:"image,omitempty"`
+	// ImageDeprecated: the ImageStream it runs is deprecated
+	// (opendatahub.io/deprecated), which the dashboard labels Deprecated.
+	ImageDeprecated bool   `json:"imageDeprecated,omitempty"`
 	HardwareProfile string `json:"hardwareProfile,omitempty"`
 	// CPU and Memory are what its container requests.
 	CPU    string `json:"cpu,omitempty"`

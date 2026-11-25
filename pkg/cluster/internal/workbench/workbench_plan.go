@@ -210,10 +210,17 @@ func lessForSelector(a, b ImageStream) bool {
 // tag marked opendatahub.io/default-image wins (RHOAI marks its default
 // image so, e.g. "Jupyter | Minimal | CPU" on 3.6), else the first stream in
 // the selector's order (tier, then order) with the dashboard's default
-// version (recommended when set, else newest). A custom stream without a
-// tier sorts as "custom", before RHOAI's "Red Hat-provided" tier, which the
-// selector does not rank, so the passes keep RHOAI's images first. ok is
-// false if every stream lacks a usable tag.
+// version (recommended when set, else newest). ok is false if every stream
+// lacks a usable tag.
+//
+// Decision (2026-11-24, two advisors): pass 1 before pass 2 differs from the
+// dashboard's selector order on purpose. The selector ranks a custom stream
+// without a tier as "custom", before RHOAI's "Red Hat-provided" tier, which
+// it does not rank; but an image a cluster-admin imported is not known to
+// work as a workbench (kube-rbac-proxy, Elyra, the notebook server this tool
+// relies on), while RHOAI's are built for it, and the dashboard itself
+// preselects nothing. So a current RHOAI image is chosen before a current
+// custom one (recipes-handoff env-features/f6-f7-evidence.md, "Decision").
 func ChooseImage(streams []ImageStream) (ImageChoice, bool) {
 	var candidates []ImageStream
 	for _, s := range streams {

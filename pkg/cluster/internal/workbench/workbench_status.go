@@ -102,6 +102,33 @@ func State(nb Notebook, pods []Pod) (state, reason, message string) {
 	return StateStarting, "", ""
 }
 
+// runsDeprecatedImage reports whether the ImageStream of the workbench's image
+// selection (stream:tag) is deprecated, as the dashboard's workbench table
+// labels it (odh-dashboard rhoai-3.7-ea.1 NotebookImageDisplayName.tsx
+// L99-101, L400-402). This tool's workbenches run images of RHOAI's
+// applications namespace (the annotation opendatahub.io/workbench-image-namespace
+// is "" then); one of another namespace, or a read that fails, shows no label.
+func runsDeprecatedImage(c *kube.Client, nb Notebook, sel string) bool {
+	name, _, ok := cutLast(sel, ":")
+	if !ok || nb.Metadata.Annotations["opendatahub.io/workbench-image-namespace"] != "" {
+		return false
+	}
+	apps, err := rhoai.AppsNamespace(c)
+	if err != nil {
+		return false
+	}
+	streams, err := listImageStreams(c, apps)
+	if err != nil {
+		return false
+	}
+	for _, s := range streams {
+		if s.Metadata.Name == name {
+			return s.deprecated()
+		}
+	}
+	return false
+}
+
 // itemState builds a WorkbenchState from the project's nightly-workbench and
 // PVC; found is false only if both resources are missing.
 func itemState(c *kube.Client, project, dashboardURL string, rec Record) (types.WorkbenchState, bool, error) {
@@ -139,6 +166,7 @@ func itemState(c *kube.Client, project, dashboardURL string, rec Record) (types.
 		if _, tag, ok := cutLast(sel, ":"); ok && st.Image != sel {
 			st.Image += " (" + tag + ")"
 		}
+		st.ImageDeprecated = runsDeprecatedImage(c, nb, sel)
 	}
 	st.HardwareProfile = profileLabel(c, nb.Metadata.Annotations[profileNamespaceAnnotation], nb.Metadata.Annotations[profileNameAnnotation])
 	for _, ct := range nb.Spec.Template.Spec.Containers {

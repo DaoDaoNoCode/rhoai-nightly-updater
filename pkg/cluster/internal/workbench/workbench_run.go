@@ -251,7 +251,7 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 
 // DeprecatedImageNote says that the image is deprecated, as the dashboard
 // labels it, and why this tool chose it anyway.
-const DeprecatedImageNote = "The dashboard labels this image Deprecated (it gets no new versions): every workbench image it offers on this cluster is deprecated."
+const DeprecatedImageNote = "The dashboard labels this image Deprecated (it gets no new versions): no current workbench image is ready on this cluster."
 
 // deprecatedNote is " "+DeprecatedImageNote for a deprecated image, else "".
 func deprecatedNote(img ImageChoice) string {
