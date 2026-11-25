@@ -1277,9 +1277,16 @@ func (m *modelsRun) setupModelApply(s *modelsSetup) (*types.OperationResponse, e
 func (m *modelsRun) setupModelReady(s *modelsSetup) (*types.OperationResponse, error) {
 	c, mp := m.c, s.mp
 	m.step("model-ready", "running", "Waiting for the model to start (typically 3 to 5 minutes the first time)")
+	// The wait ends 30 s before the operation's deadline; for a model
+	// published next, also the publication's route wait and 30 s for its
+	// writes before it, so a deadline never cuts a publication in half.
+	reserve := 30 * time.Second
+	if mp.publish {
+		reserve += maasRouteTimeout + 30*time.Second
+	}
 	timeout := modelReadyTimeout
 	if dl, ok := c.Context().Deadline(); ok {
-		if left := kube.Clock().Until(dl) - 30*time.Second; left < timeout {
+		if left := kube.Clock().Until(dl) - reserve; left < timeout {
 			timeout = left
 		}
 	}

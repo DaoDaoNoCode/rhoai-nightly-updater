@@ -447,9 +447,12 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   add the MaaSModelRef; Ready is not asked first), and the wait for MaaS to
   accept it ends before the operation's deadline. A start that failed, or an
   image pull still failing, is not published: set the model up again (or
-  Resume the run) once the pull succeeds. The "Can it be called?" check and
-  the confirmation of the MaaS tab's **Restore direct routing** now point to
-  setting the model up again on the Models tab.
+  Resume the run) once the pull succeeds. The "Can it be called?" check points to
+  setting the model up again on the Models tab, and the confirmation of the
+  MaaS tab's **Restore direct routing** says how to publish the model again:
+  set up on the Models tab through MaaS only, set it up again there (or
+  restore, then Publish); published from the MaaS tab, restore, then
+  Publish.
 - **Dry runs of a delete no longer delete.** Five deletes asked for a
   server-side dry run in the URL (`?dryRun=All`) while sending
   DeleteOptions (UID preconditions) in the body, and the API server then

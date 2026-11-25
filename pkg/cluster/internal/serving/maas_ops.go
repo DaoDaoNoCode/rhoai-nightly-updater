@@ -1289,7 +1289,8 @@ func (m *Run) publishMaaSObjects(pl *maasPublish) (*types.OperationResponse, err
 
 // publishWaitReady waits for MaaS to accept the model and ends the run.
 // The wait ends 30 s before the operation's deadline, so a publish that
-// starts late still ends as published and still being accepted.
+// starts late still ends as published and still being accepted; with no
+// time left for it, acceptance is not checked.
 func (m *Run) publishWaitReady(pl *maasPublish) (*types.OperationResponse, error) {
 	c, project, name := m.Client, pl.project, pl.name
 	m.Step("ready", "running", "Waiting for MaaS to accept the model")
@@ -1298,6 +1299,10 @@ func (m *Run) publishWaitReady(pl *maasPublish) (*types.OperationResponse, error
 		if left := kube.Clock().Until(dl) - 30*time.Second; left < timeout {
 			timeout = left
 		}
+	}
+	if timeout <= 0 {
+		m.Step("ready", "success", "Acceptance not checked: the operation's time is up. The MaaS tab shows its state.")
+		return m.Done(fmt.Sprintf("%s in %s is published and still being accepted.", name, project))
 	}
 	last := ""
 	ready, err := kube.WaitForGone(c, timeout, envkit.PollInterval, func(cc *kube.Client) (bool, error) {
