@@ -151,12 +151,12 @@ describe("The MaaS portal row", () => {
 
 describe("A published model without usage reporting", () => {
   it("its row warns that streamed tokens are not counted and says how to fix it", async () => {
-    const warning = "Its vLLM runs without --enable-force-include-usage (set up by an earlier version), so MaaS counts its streamed chats as 0 tokens and token limits do not apply to them. Set it up again on the Models tab to add it (the model restarts); Publish refuses it until then.";
+    const warning = "Its vLLM runs without --enable-force-include-usage (set up by an earlier version). The MaaS docs require it so that streamed chats report their tokens; where the gateway does not add them itself, MaaS counts such chats as 0 tokens and token limits do not apply to them. Set it up again on the Models tab to add it (the model restarts); Publish refuses it until then.";
     const m = published({ value: 0 });
     stubApi({ "/api/resources/status": status, "/api/resources/projects": { projects: ["dev"] },
       "/api/resources/maas": { ...m, items: m.items!.map((i) => ({ ...i, usageWarning: warning })) } });
     render(<MemoryRouter initialEntries={["/test-resources?tab=maas"]}><QuickResourceCreator mutateBlocker={null} /></MemoryRouter>);
-    const title = await screen.findByText(/Streamed tokens are not counted/);
+    const title = await screen.findByText(/Set up without the usage option the MaaS docs require/);
     const table = screen.getByRole("grid", { name: "This tool's models in MaaS" });
     expect(table).toContainElement(title);
     expect(table).toHaveTextContent(warning);

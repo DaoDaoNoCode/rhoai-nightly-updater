@@ -166,7 +166,7 @@ func TestMaaSStatus_WarnsAboutAModelWithoutTheUsageFlag(t *testing.T) {
 		}
 	})
 	w := row().UsageWarning
-	for _, want := range []string{"without --enable-force-include-usage (set up by an earlier version)", "counts its streamed chats as 0 tokens", "Set it up again on the Models tab to add it (the model restarts)"} {
+	for _, want := range []string{"without --enable-force-include-usage (set up by an earlier version)", "The MaaS docs require it so that streamed chats report their tokens", "Set it up again on the Models tab to add it (the model restarts)"} {
 		if !strings.Contains(w, want) {
 			t.Errorf("warning %q lacks %q", w, want)
 		}

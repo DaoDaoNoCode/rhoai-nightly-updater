@@ -1762,7 +1762,7 @@ export interface MaaSAction {
 /** One of this tool's models and its MaaS publication (pkg/types MaaSModel). */
 export interface MaaSModel extends ResourceState {
   displayName?: string;
-  /** A chat model whose vLLM lacks --enable-force-include-usage (set up by an earlier version): MaaS counts its streamed chats as 0 tokens; how to fix it. */
+  /** A chat model whose vLLM lacks --enable-force-include-usage (set up by an earlier version): the MaaS docs require it so streamed chats report their tokens; how to fix it. */
   usageWarning?: string;
   modelReady: boolean;
   published: boolean;
