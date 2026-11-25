@@ -414,7 +414,7 @@ describe("Recipes page", () => {
     expect(streams).toHaveLength(2);
     await act(async () => {
       streams[1].push(sseEvent("recipe-project:recipe-dev", "success", "Deleted project recipe-dev; OpenShift removes what it holds."));
-      streams[1].push(sseEvent("operation_complete", "success", "Deleted project recipe-dev, and turned aipipelines back."));
+      streams[1].push(sseEvent("operation_complete", "success", "Deleted project recipe-dev."));
       streams[1].close();
     });
     await settle();
