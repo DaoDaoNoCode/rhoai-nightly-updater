@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/catalog"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/operator"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
@@ -27,7 +29,8 @@ func unpackingSubscription(f *fakeOLM) {
 // unpackPodsPullFailing is OLM's unpack pods as the field case had them:
 // one Pending pod whose "pull" init container (the bundle image) cannot
 // be pulled, a second one with the same failure, one whose containers are
-// only starting, and an older pod that already finished.
+// only starting, one whose OLM "util" container (not the bundle) cannot be
+// pulled, and an older pod that already finished.
 const unpackPodsPullFailing = `{"items":[
  {"metadata":{"name":"a1"},"status":{"phase":"Pending","initContainerStatuses":[
    {"name":"util","image":"registry.redhat.io/openshift4/ose-operator-framework-tools-rhel9@sha256:1","ready":true,"state":{"terminated":{"reason":"Completed"}}},
@@ -36,6 +39,8 @@ const unpackPodsPullFailing = `{"items":[
    {"name":"pull","image":"` + testBundleImage + `","ready":false,"state":{"waiting":{"reason":"ImagePullBackOff","message":"Back-off pulling image \"` + testBundleImage + `\": manifest unknown"}}}]}},
  {"metadata":{"name":"b1"},"status":{"phase":"Pending","initContainerStatuses":[
    {"name":"pull","image":"registry.redhat.io/rhoai/other-bundle@sha256:9","ready":false,"state":{"waiting":{"reason":"PodInitializing"}}}]}},
+ {"metadata":{"name":"d1"},"status":{"phase":"Pending","initContainerStatuses":[
+   {"name":"util","image":"registry.redhat.io/openshift4/util-image@sha256:7","ready":false,"state":{"waiting":{"reason":"ErrImagePull","message":"unauthorized"}}}]}},
  {"metadata":{"name":"c1"},"status":{"phase":"Failed","initContainerStatuses":[
    {"name":"pull","image":"registry.redhat.io/rhoai/old-bundle@sha256:8","ready":false,"state":{"waiting":{"reason":"ErrImagePull","message":"old"}}}]}}
 ]}`
@@ -73,7 +78,7 @@ func TestUpdateStream_ReportsTheBundleUnpackPullFailure(t *testing.T) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	wantState := "OLM is unpacking the operator bundle; Subscription conditions: CatalogSourcesUnhealthy=False (AllCatalogSourcesHealthy), BundleUnpacking=True (UnpackingInProgress). " +
-		"OLM could not pull the operator bundle " + testBundleImage + `: ImagePullBackOff (Back-off pulling image "` + testBundleImage + `": manifest unknown)`
+		"an OLM bundle unpack in " + rhoai.CatalogNS + " cannot pull " + testBundleImage + ": ImagePullBackOff (manifest unknown)"
 	for _, want := range []string{
 		"last state: " + wantState,
 		"OLM was still unpacking the operator bundle",
@@ -84,10 +89,10 @@ func TestUpdateStream_ReportsTheBundleUnpackPullFailure(t *testing.T) {
 			t.Fatalf("message lacks %q:\n%s", want, result.Message)
 		}
 	}
-	if n := strings.Count(result.Message, "OLM could not pull"); n != 1 {
+	if n := strings.Count(result.Message, "cannot pull"); n != 1 {
 		t.Fatalf("%d pull failures reported, want the one image once:\n%s", n, result.Message)
 	}
-	for _, unwanted := range []string{"PodInitializing", "old-bundle", "other-bundle", "kept because OLM is still installing"} {
+	for _, unwanted := range []string{"PodInitializing", "old-bundle", "other-bundle", "util-image", "Back-off", "kept because OLM is still installing"} {
 		if strings.Contains(result.Message, unwanted) {
 			t.Fatalf("message reports %q:\n%s", unwanted, result.Message)
 		}
@@ -112,7 +117,7 @@ func TestUpdateUnderGitOps_ReportsTheBundleUnpackPullFailure(t *testing.T) {
 	f.onSubscribe = func(f *fakeOLM, _ map[string]any) { unpackingSubscription(f) }
 	result, err := operator.UpdateStream(f.client(context.Background()), gitOpsImage, func(UpdateStepEvent) {})
 	if err != nil || result.Success || result.ErrorCode != "install_timeout" ||
-		!strings.Contains(result.Message, "OLM could not pull the operator bundle "+testBundleImage+": ImagePullBackOff") ||
+		!strings.Contains(result.Message, "cannot pull "+testBundleImage+": ImagePullBackOff (manifest unknown)") ||
 		!strings.Contains(result.Message, "OLM was still unpacking the operator bundle") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -158,5 +163,109 @@ func TestWaitForInstall_SaysWhenUnpackPodsCannotBeRead(t *testing.T) {
 	}
 	if unpackPodLists(f) == 0 {
 		t.Fatal("the unpack pods were not read")
+	}
+}
+
+// The kubelet's pull message is never quoted: a registry error can carry a
+// signed URL. Only the reason and a recognised kind of error reach the
+// progress, the logs and the result.
+func TestWaitForInstall_NeverQuotesThePullMessage(t *testing.T) {
+	// A signed download URL as a registry error can quote it (fake values).
+	signature := "X-Amz-Signature=" + strings.Repeat("0", 8)
+	signedURL := "https://cdn.registry.example/blobs/sha256:1?X-Amz-Credential=example&" + signature
+	for _, tc := range []struct{ message, kind string }{
+		{"reading manifest sha256:1 in " + signedURL + ": manifest unknown", "manifest unknown"},
+		{"fetching blob " + signedURL + ": unauthorized: authentication required", "unauthorized"},
+		{"pinging container registry " + signedURL + ": 404 Not Found", "not found"},
+		{"pull QPS exceeded at " + signedURL, "pull QPS exceeded"},
+		{"Get " + signedURL + ": dial tcp: i/o timeout", "pull error"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			f := newFakeOLM(t)
+			f.sub = map[string]any{"metadata": map[string]any{"name": rhoai.SubName}, "spec": map[string]any{}, "status": map[string]any{}}
+			unpackingSubscription(f)
+			f.unpackPods = `{"items":[{"metadata":{"name":"a1"},"status":{"phase":"Pending","initContainerStatuses":[
+			  {"name":"pull","image":"` + testBundleImage + `","ready":false,"state":{"waiting":{"reason":"ErrImagePull","message":` + jsonString(tc.message) + `}}}]}}]}`
+			emit, events := eventsRecorder()
+			var logs []string
+			out := operator.WaitForInstall(f.client(context.Background()), emit, &logs, &operator.Recovery{}, "")
+			want := "cannot pull " + testBundleImage + ": ErrImagePull (" + tc.kind + ")"
+			if !strings.Contains(out.Message, want) {
+				t.Fatalf("message lacks %q:\n%s", want, out.Message)
+			}
+			texts := append([]string{out.Message}, logs...)
+			for _, e := range events() {
+				texts = append(texts, e.Message, e.Detail)
+			}
+			for _, text := range texts {
+				if strings.Contains(text, "https://") || strings.Contains(text, signature) || strings.Contains(text, "X-Amz-Credential") || strings.Contains(text, "cdn.registry.example") {
+					t.Fatalf("the pull message leaked: %q", text)
+				}
+			}
+		})
+	}
+}
+
+// The field case: the unpack pod cannot pull the bundle until 8 minutes 16
+// seconds after the Subscription was created, then the Job's next pod
+// pulls it and OLM installs the CSV, which stays Succeeded for the settle
+// period. With the 11-minute wait Update succeeds; with the former 8 it
+// gave up and restored the previous operator. Production poll interval and
+// settle period, on the tests' fake clock.
+func TestUpdateStream_SurvivesABundlePullThatRecoversAfterEightMinutes(t *testing.T) {
+	const newCSV = "rhods-operator.3.6.1"
+	for _, tc := range []struct {
+		name    string
+		timeout time.Duration
+		success bool
+	}{
+		{"11-minute wait", 11 * time.Minute, true},
+		{"former 8-minute wait", 8 * time.Minute, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(operator.SetInstallTimeoutForTest(tc.timeout))
+			prevPoll, prevSettle := operator.InstallPlanPollInterval, operator.CSVSucceededSettle
+			operator.InstallPlanPollInterval, operator.CSVSucceededSettle = 5*time.Second, 20*time.Second
+			t.Cleanup(func() { operator.InstallPlanPollInterval, operator.CSVSucceededSettle = prevPoll, prevSettle })
+
+			f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"channel": "fast"})
+			f.channels = `[{"name":"stable-3.x","currentCSV":"` + newCSV + `"}]`
+			f.unpackPods = unpackPodsPullFailing
+			var subscribed time.Time
+			f.onSubscribe = func(f *fakeOLM, spec map[string]any) {
+				if spec["channel"] != "fast" { // the restored Subscription is not the attempt
+					subscribed = kube.Clock().Now()
+					unpackingSubscription(f)
+				}
+			}
+			recovered := false
+			f.intercept = func(f *fakeOLM, _ http.ResponseWriter, r *http.Request) bool {
+				if !recovered && !subscribed.IsZero() && r.Method == http.MethodGet && r.URL.Path == rhoai.SubscriptionPath() &&
+					kube.Clock().Since(subscribed) >= 8*time.Minute+16*time.Second {
+					recovered = true
+					f.unpackPods = ""
+					olmInstalls(newCSV)(f, nil)
+				}
+				return false
+			}
+			emit, events := eventsRecorder()
+			result, err := operator.UpdateStream(f.client(context.Background()), testNightlyImage, emit)
+			if err != nil || result == nil || result.Success != tc.success {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			sawPullFailure := false
+			for _, e := range events() {
+				sawPullFailure = sawPullFailure || strings.Contains(e.Message, "cannot pull "+testBundleImage)
+			}
+			if !sawPullFailure {
+				t.Fatalf("the pull failure was not shown while it lasted: %v", events())
+			}
+			if tc.success && (!strings.Contains(result.Message, newCSV+" is installed") || lastStatus(events(), operator.RestoreStepName) != "") {
+				t.Fatalf("result=%+v events=%v", result, events())
+			}
+			if !tc.success && (result.ErrorCode != "install_timeout" || lastStatus(events(), operator.RestoreStepName) != "success") {
+				t.Fatalf("result=%+v events=%v", result, events())
+			}
+		})
 	}
 }

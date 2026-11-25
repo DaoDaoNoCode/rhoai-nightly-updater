@@ -372,25 +372,32 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
-- **Update's install wait outlasts OLM's bundle unpack timeout and says
-  why OLM has not resolved yet.** On a ROSA HCP cluster an Update failed after 8 minutes
-  with "last state: Waiting for OLM to resolve the Subscription": OLM's
-  bundle unpack pod could not pull the operator bundle (`ImagePullBackOff`,
-  `manifest unknown`) on a node that did not have the `quay.io/rhoai`
-  credentials yet, and the Job's next pod, on a new node, pulled it 16
-  seconds after the tool gave up and restored the previous operator. OLM
-  on OpenShift 4.22 and older reports no failure on the Subscription
-  before its bundle unpack timeout (10 minutes by default; until then
+- **Update waits longer for OLM to unpack a bundle, and says why OLM has
+  not resolved yet.** On a ROSA HCP cluster an Update failed after 8
+  minutes with "last state: Waiting for OLM to resolve the Subscription":
+  OLM's bundle unpack pod could not pull the operator bundle
+  (`ImagePullBackOff`, `manifest unknown`) on a node that did not have the
+  `quay.io/rhoai` credentials yet, and the Job's next pod, on a new node,
+  started 16 seconds after the tool gave up and restored the previous
+  operator. OLM on OpenShift 4.22 and older reports no failure on the
+  Subscription before its bundle unpack timeout (10 minutes by default,
+  counted from when it creates the unpack Job; until then
   `BundleUnpacking` reads only `UnpackingInProgress`). The install wait of
-  Update, Update under Argo CD, Re-deploy and Install a different build now
-  lasts 11 minutes (still ending before the 15-minute operation deadline),
-  shows the Subscription's conditions while OLM resolves, and, while OLM
-  unpacks, the image and reason of every unpack pod in
-  `openshift-marketplace` that cannot pull (for example "OLM could not pull
-  the operator bundle registry.redhat.io/rhoai/...: ImagePullBackOff
-  (...)"). A wait that ends while OLM still unpacks says so and how to
-  check. On OpenShift 4.23 and later, where OLM puts the pull failure on
-  the Subscription's `BundleUnpacking` condition, the wait still stops
+  Update, Update under Argo CD, Re-deploy and Install a different build
+  now lasts at most 11 minutes instead of 8 (less when the steps before it
+  took long: it still ends before the 15-minute operation deadline; a
+  maximum, not a promise of OLM's verdict). While OLM resolves, the
+  progress shows the Subscription's conditions; while OLM unpacks, every
+  OLM bundle unpack pod in `openshift-marketplace` that cannot pull, with
+  its image, the kubelet's reason and the kind of error (for example "an
+  OLM bundle unpack in openshift-marketplace cannot pull
+  registry.redhat.io/rhoai/...: ImagePullBackOff (manifest unknown)"; the
+  registry's own message is never quoted, as it can carry a signed URL).
+  A wait that ends while OLM still unpacks says so and how to check. The
+  Update confirmation now says when the new state is kept (OLM created an
+  InstallPlan and no CSV failed) and that the previous one is restored
+  otherwise. On OpenShift 4.23 and later, where OLM puts the pull failure
+  on the Subscription's `BundleUnpacking` condition, the wait still stops
   after 3 minutes of it, as before. No new permission: the pod list in
   `openshift-marketplace` was already read for the catalog pod.
 

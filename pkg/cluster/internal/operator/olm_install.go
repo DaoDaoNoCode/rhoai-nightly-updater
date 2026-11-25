@@ -45,15 +45,30 @@ import (
 //   - CatalogSourcesUnhealthy describes every catalog in scope, not only the
 //     Subscription's, so it is reported but never treated as a failure.
 var (
-	// installTimeout bounds the wait for OLM to install the new operator:
-	// OLM's bundle unpack timeout and a minute, so that a bundle pull that
-	// fails for a while (a node that has no pull secret yet) ends in OLM's
-	// own verdict, BundleUnpackFailed, or recovers, before the wait gives
-	// up. Seen on a ROSA HCP cluster: the first unpack pod could not pull
-	// the bundle on a node that was being replaced, and the Job's next pod,
-	// on a new node, started 8 minutes 16 seconds after the wait began. The
-	// wait still ends InstallDeadlineReserve before the operation's
-	// 15-minute deadline when that comes first.
+	// installTimeout is the longest the updater waits for OLM to install
+	// the new operator: OLM's bundle unpack timeout and a minute, so that a
+	// bundle pull that fails for a while (a node that has no pull secret
+	// yet) can recover, or end in OLM's own verdict, BundleUnpackFailed,
+	// before the wait gives up. It is a maximum, not a promise of OLM's
+	// verdict: OLM's 10 minutes start when it creates the unpack Job, after
+	// it resolved the Subscription. Seen on a ROSA HCP cluster: the first
+	// unpack pod could not pull the bundle on a node that was being
+	// replaced, and the Job's next pod, on a new node, started 8 minutes 16
+	// seconds after the wait began.
+	//
+	// Time budget: the operation's deadline is record.OperationDeadline (15
+	// minutes), and WaitForInstall ends InstallDeadlineReserve (10 s) before
+	// it, so the wait lasts min(11 minutes, 15 minutes - the earlier steps -
+	// 10 s). The longest waits of the earlier steps add up to 6 minutes
+	// (the verification catalog and the nightly catalog each up to
+	// catalog.ReadyTimeout plus PackageManifestPropagationWait, 2.5
+	// minutes; the old CSV's deletion up to csvDeletionTimeout, 1 minute),
+	// so even then the wait gets about 9 minutes, and ends with the
+	// "operation's time budget" message. The restore after a failure does
+	// not come out of that budget: it runs after the operation stopped, on
+	// record.PostOperationContext with its own record.RecoveryTimeout
+	// (Recovery.Restore, operator_recovery.go:247, 275 and 300), which the
+	// pod's shutdown drain covers (TestShutdownBudgetFitsTerminationGracePeriod).
 	installTimeout = olmBundleUnpackTimeout + time.Minute
 	// resolutionFailedGrace is how long ResolutionFailed may persist before
 	// the operation is treated as failed.

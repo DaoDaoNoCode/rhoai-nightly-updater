@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
+	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -23,10 +24,11 @@ import (
 const BundleUnpackRefLabel = "operatorframework.io/bundle-unpack-ref"
 
 // BundleUnpackPullFailures reads OLM's bundle-unpack pods in the catalog
-// namespace and words each one whose container cannot pull its image, for
-// example "OLM could not pull the operator bundle registry.redhat.io/...:
-// ImagePullBackOff (...)". Like OLM, which surfaces the waiting reasons of
-// a pending unpack pod's init containers on the bundle lookup
+// namespace and words each one whose "pull" init container (the one that
+// runs the bundle image) cannot pull it, for example "an OLM bundle unpack
+// in openshift-marketplace cannot pull registry.redhat.io/...:
+// ImagePullBackOff (manifest unknown)". Like OLM, which surfaces the waiting
+// reasons of a pending unpack pod's init containers on the bundle lookup
 // (bundle_unpacker.go:582-608 and 633-669), it reads only Pending pods.
 //
 // OLM 4.22 and older do not copy that reason to the Subscription: while
@@ -38,9 +40,13 @@ const BundleUnpackRefLabel = "operatorframework.io/bundle-unpack-ref"
 // fails it and OLM sets BundleUnpackFailed (operator.go:1396-1421). The
 // pods are the only place that says why the unpack waits.
 //
-// The pods are not tied to one bundle: the tool does not know the bundle
-// image the catalog resolves to, and the Job's ConfigMap owner cannot be
-// read with the existing permissions. The message names the image instead.
+// The pods are not tied to one bundle: the Update path does not know the
+// bundle image the catalog resolves to (it knows the head CSV's name from
+// the PackageManifest), and the Job's ConfigMap owner cannot be read with
+// the existing permissions. So the result is worded as what is seen in the
+// namespace, with the image, never as RHOAI's own unpack. The kubelet's
+// message is never quoted: a registry error can carry a signed URL. Only
+// the waiting reason and a recognised kind of error (pullErrorKind) are.
 // The list is the existing pod read in rhoai.CatalogNS (catalogPodPullFailure).
 func BundleUnpackPullFailures(c *kube.Client) ([]string, error) {
 	path := rhoai.NamespacedPath("v1", "pods", rhoai.CatalogNS, "") + "?labelSelector=" + url.QueryEscape(BundleUnpackRefLabel)
@@ -48,6 +54,7 @@ func BundleUnpackPullFailures(c *kube.Client) ([]string, error) {
 		Status struct {
 			Phase                 string `json:"phase"`
 			InitContainerStatuses []struct {
+				Name  string `json:"name"`
 				Image string `json:"image"`
 				containerWaitStatus
 			} `json:"initContainerStatuses"`
@@ -63,18 +70,41 @@ func BundleUnpackPullFailures(c *kube.Client) ([]string, error) {
 		}
 		for _, cs := range pod.Status.InitContainerStatuses {
 			waiting := cs.State.Waiting
-			if waiting == nil || !imagePullFailureReasons[waiting.Reason] {
+			if cs.Name != bundlePullContainer || waiting == nil || !imagePullFailureReasons[waiting.Reason] {
 				continue
 			}
 			detail := waiting.Reason
 			if waiting.Message != "" {
-				detail += " (" + kube.TruncateText(waiting.Message, 300) + ")"
+				detail += " (" + pullErrorKind(waiting.Message) + ")"
 			}
-			msg := fmt.Sprintf("OLM could not pull the operator bundle %s: %s", kube.NonEmpty(cs.Image, "(image not reported)"), detail)
+			msg := fmt.Sprintf("an OLM bundle unpack in %s cannot pull %s: %s", rhoai.CatalogNS, kube.NonEmpty(cs.Image, "(image not reported)"), detail)
 			if !slices.Contains(failures, msg) {
 				failures = append(failures, msg)
 			}
 		}
 	}
 	return failures, nil
+}
+
+// bundlePullContainer is the init container of OLM's unpack pod that runs
+// the bundle image (bundle_unpacker.go:192-195); the others run OLM's own
+// images.
+const bundlePullContainer = "pull"
+
+// pullErrorKind names the kind of error in a kubelet image pull message,
+// without quoting it.
+func pullErrorKind(message string) string {
+	m := strings.ToLower(message)
+	switch {
+	case strings.Contains(m, "manifest unknown"):
+		return "manifest unknown"
+	case strings.Contains(m, "unauthorized"), strings.Contains(m, "authentication required"):
+		return "unauthorized"
+	case strings.Contains(m, "not found"):
+		return "not found"
+	case strings.Contains(m, "qps exceeded"):
+		return "pull QPS exceeded"
+	default:
+		return "pull error"
+	}
 }
