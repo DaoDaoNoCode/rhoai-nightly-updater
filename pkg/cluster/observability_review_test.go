@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/observability"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -127,7 +128,7 @@ func TestObservability_StorageByRecordedNames(t *testing.T) {
 		ensureMap(d, "metadata")["annotations"] = map[string]any{"rhoai-nightly-updater/monitoring": `{"at":"2026-11-25T05:00:00Z","storage":true,"added":{}}`}
 		oc.f.put(obsDSCI, d)
 		res, _ := obsRun(t, oc.c, "teardown")
-		if res.Success || !strings.Contains(res.Message, "names no bucket or user") || !strings.Contains(res.Message, "a cluster-admin deletes") {
+		if res.Success || !strings.Contains(res.Message, "names no bucket or user") || !strings.Contains(res.Message, "A cluster-admin does it by hand") {
 			t.Fatalf("teardown: %+v", res)
 		}
 		if m := oc.f.mutations(); len(m) != 0 {
@@ -312,6 +313,9 @@ func TestObservability_CertificateSecretsNeedTheOwnerChain(t *testing.T) {
 	if !oc.f.has(obsSecrets+"/stray-cert") || !oc.f.has(obsSecrets+"/prometheus-web-tls-ca") {
 		t.Fatal("deleted a Secret without evidence")
 	}
+	if !strings.Contains(res.Message, "oc delete secret -n redhat-ods-monitoring prometheus-web-tls-ca stray-cert") {
+		t.Fatalf("the unrecorded Secrets are not listed: %s", res.Message)
+	}
 }
 
 // Set up extending an earlier setup keeps what it recorded: each field's
@@ -361,5 +365,138 @@ func TestObservability_MaaSRestoreReadFailureIsVisible(t *testing.T) {
 	logs, problem := observability.RestoreMaaSExtrasForTest(oc.c)
 	if problem == "" || !strings.Contains(problem, "Cannot read the DataScienceCluster") {
 		t.Fatalf("logs %v problem %q", logs, problem)
+	}
+}
+
+// Putting user IDs and the portal back: a value only the API server's
+// defaulting filled in (no manager owns it) is "unset", and goes back to
+// absent; one someone wrote is put back as it was.
+func TestObservability_RestoreRemovesWhatWasOnlyDefaulted(t *testing.T) {
+	t.Run("captureUser defaulted", func(t *testing.T) {
+		oc := newObsCluster(t, true)
+		oc.f.putJSON(obsTenant, `{"metadata":{"name":"default-tenant","resourceVersion":"3"},"spec":{"telemetry":{"logs":{"captureUser":false}}}}`)
+		if res := obsMaaSRun(t, oc.c, types.MaaSRequest{Action: "capture-user-on"}); !res.Success {
+			t.Fatalf("on: %+v", res)
+		}
+		if got := ensureMap(ensureMap(oc.f.get(obsTenant), "metadata"), "annotations")["rhoai-nightly-updater/capture-user-previous"]; got != "unset" {
+			t.Fatalf("recorded %v", got)
+		}
+		if res := obsMaaSRun(t, oc.c, types.MaaSRequest{Action: "capture-user-off"}); !res.Success {
+			t.Fatalf("off: %+v", res)
+		}
+		if _, ok := ensureMap(ensureMap(ensureMap(oc.f.get(obsTenant), "spec"), "telemetry"), "logs")["captureUser"]; ok {
+			t.Fatalf("captureUser not removed: %v", oc.f.get(obsTenant)["spec"])
+		}
+	})
+	t.Run("captureUser written false", func(t *testing.T) {
+		oc := newObsCluster(t, true)
+		oc.f.putJSON(obsTenant, `{"metadata":{"name":"default-tenant","resourceVersion":"3","managedFields":[{"manager":"someone","operation":"Update","fieldsV1":{"f:spec":{"f:telemetry":{"f:logs":{"f:captureUser":{}}}}}}]},"spec":{"telemetry":{"logs":{"captureUser":false}}}}`)
+		obsMaaSRun(t, oc.c, types.MaaSRequest{Action: "capture-user-on"})
+		obsMaaSRun(t, oc.c, types.MaaSRequest{Action: "capture-user-off"})
+		if got := ensureMap(ensureMap(ensureMap(oc.f.get(obsTenant), "spec"), "telemetry"), "logs")["captureUser"]; got != false {
+			t.Fatalf("captureUser = %v", got)
+		}
+	})
+	t.Run("portal defaulted", func(t *testing.T) {
+		oc := newObsCluster(t, true)
+		oc.f.putJSON(tDSC, `{"metadata":{"name":"default-dsc","resourceVersion":"5"},"spec":{"components":{"dashboard":{"maasPortal":{"managementState":"Removed"}}}},"status":{}}`)
+		obsMaaSRun(t, oc.c, types.MaaSRequest{Action: "portal-on"})
+		if st, _ := GetMaaSStatus(oc.sa); st.Portal.Previous != "unset" {
+			t.Fatalf("previous = %q", st.Portal.Previous)
+		}
+		if res := obsMaaSRun(t, oc.c, types.MaaSRequest{Action: "portal-off"}); !res.Success {
+			t.Fatalf("off: %+v", res)
+		}
+		if _, ok := ensureMap(ensureMap(ensureMap(ensureMap(oc.f.get(tDSC), "spec"), "components"), "dashboard"), "maasPortal")["managementState"]; ok {
+			t.Fatalf("managementState not removed: %v", oc.f.get(tDSC)["spec"])
+		}
+	})
+}
+
+// A record without names: Clean up lists every step for a cluster-admin.
+func TestObservability_RecordWithoutNamesListsEveryStep(t *testing.T) {
+	oc := newObsCluster(t, true)
+	d := oc.f.get(obsDSCI)
+	ensureMap(ensureMap(ensureMap(d, "spec"), "monitoring"), "usageLogs")["size"] = "1x.demo"
+	ensureMap(d, "metadata")["annotations"] = map[string]any{"rhoai-nightly-updater/monitoring": `{"at":"2026-11-25T05:00:00Z","storage":true,"added":{"usageLogs":{"previous":null,"set":{"size":"1x.demo"}}},"left":{"pvcs":{"wal-data-science-usage-logs-lokistack-ingester-0":"u"},"secrets":{"data-science-collector-ca-cert":"s"}}}`}
+	oc.f.put(obsDSCI, d)
+	res, _ := obsRun(t, oc.c, "teardown")
+	for _, want := range []string{
+		`oc patch dscinitialization --all --type=merge -p '{"spec":{"monitoring":{"usageLogs":null}}}'`,
+		"wait until RHOAI's operator deleted the stack",
+		"oc delete pvc -n redhat-ods-monitoring wal-data-science-usage-logs-lokistack-ingester-0",
+		"oc delete secret -n redhat-ods-monitoring data-science-collector-ca-cert",
+		"oc delete secret -n redhat-ods-monitoring rhoai-nightly-updater-usage-logs",
+		"SeaweedFS admin UI",
+		"oc annotate dscinitialization --all rhoai-nightly-updater/monitoring-",
+	} {
+		if !strings.Contains(res.Message, want) {
+			t.Errorf("message lacks %q:\n%s", want, res.Message)
+		}
+	}
+	if res.Success || len(oc.f.mutations()) != 0 {
+		t.Fatalf("teardown: %+v %v", res, oc.f.mutations())
+	}
+	st, _ := GetObservabilityStatus(oc.sa)
+	if st.CleanupBlockedReason == "" {
+		t.Fatal("Clean up offered")
+	}
+}
+
+// Datasources that maas-controller repointed at maas-api's /v1/logs (the
+// usage-logs-loki Secret) get a warning; the local ones do not.
+func TestObservability_WarnsAboutDatasourcesRepointedAtMaaSAPI(t *testing.T) {
+	ds := "/apis/perses.dev/v1alpha1/namespaces/" + obsNS + "/persesdatasources/"
+	for _, tc := range []struct {
+		name, all, multi string
+		want             string
+	}{
+		{"local", "https://data-science-usage-logs-lokistack-gateway-http.redhat-ods-monitoring.svc:8080/api/logs/v1/application", "https://usage-logs-tenancy-proxy.redhat-ods-monitoring.svc:8443", ""},
+		{"repointed", "https://maas-api.redhat-ai-gateway-infra.svc.cluster.local:8443/v1/logs", "https://maas-api.redhat-ai-gateway-infra.svc.cluster.local:8443/v1/logs?only_user=true", "PersesDatasources usage-logs-all and usage-logs-multi-tenancy now read through maas-api"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oc := newObsCluster(t, true)
+			obsSetUp(t, oc)
+			for name, u := range map[string]string{"usage-logs-all": tc.all, "usage-logs-multi-tenancy": tc.multi} {
+				oc.f.put(ds+name, map[string]any{"metadata": map[string]any{"name": name}, "spec": map[string]any{"config": map[string]any{"plugin": map[string]any{"spec": map[string]any{"proxy": map[string]any{"spec": map[string]any{"url": u}}}}}}})
+			}
+			st, _ := GetObservabilityStatus(oc.sa)
+			for _, p := range st.Parts {
+				if p.ID != "dashboards" {
+					continue
+				}
+				if tc.want == "" && p.Warning != "" {
+					t.Fatalf("warning on local datasources: %s", p.Warning)
+				}
+				if tc.want != "" && (!strings.Contains(p.Warning, tc.want) || !strings.Contains(p.Warning, "500 AUTH_FAILURE") || !strings.Contains(p.Warning, "usage-logs-loki")) {
+					t.Fatalf("warning = %q", p.Warning)
+				}
+				return
+			}
+			t.Fatal("no dashboards part")
+		})
+	}
+}
+
+// Metadata-only reads use the form of what they read: an object read asked
+// for as a list (the live bug: 500 "content is not a list") or a list asked
+// for as one object is refused, by the fake as by the API server.
+func TestObservability_MetadataReadsUseTheirOwnForm(t *testing.T) {
+	oc := newObsCluster(t, true)
+	if _, _, err := kube.ReadObjectMeta(oc.c.MetadataOnly(), obsSecrets+"/before-setup"); err == nil || !strings.Contains(err.Error(), "content is not a list") {
+		t.Fatalf("an object read with the list form: %v", err)
+	}
+	var items []map[string]any
+	if err := oc.c.MetadataOnlyObject().ListInto(obsSecrets, &items); err == nil {
+		t.Fatal("a list read with the object form was answered")
+	}
+	obsSetUp(t, oc)
+	if res, _ := obsRun(t, oc.c, "teardown"); !res.Success {
+		t.Fatalf("teardown: %+v", res)
+	}
+	for _, call := range oc.f.callsTo(http.MethodGet, "/apis/opentelemetry.io/v1beta1/namespaces/"+obsNS+"/opentelemetrycollectors/data-science-usage-logs") {
+		if !strings.Contains(call.Accept, "as=PartialObjectMetadata;") {
+			t.Errorf("collector read Accept = %q", call.Accept)
+		}
 	}
 }

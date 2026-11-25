@@ -100,7 +100,7 @@ const Disks: React.FC<{ o: ObservabilityStatus }> = ({ o }) => {
                 <Td dataLabel="PersistentVolumeClaim"><code>{v.name}</code></Td>
                 <Td dataLabel="Size">{v.size}</Td>
                 <Td dataLabel="StorageClass">{v.storageClass ?? "Default"}</Td>
-                <Td dataLabel="Clean up">{v.setUpByTool ? <Label color="orange" isCompact>Deleted with its data</Label> : "Kept"}</Td>
+                <Td dataLabel="Clean up">{v.setUpByTool ? (o.cleanupBlockedReason ? "Kept: Clean up is blocked" : <Label color="orange" isCompact>Deleted with its data</Label>) : "Kept"}</Td>
               </Tr>
             ))}
           </Tbody>

@@ -554,7 +554,7 @@ func TestObservability_MaaSRecordsUserIDsAndPutsThemBack(t *testing.T) {
 
 func TestObservability_MaaSPortalTurnsOnAndBack(t *testing.T) {
 	oc := newObsCluster(t, true)
-	oc.f.putJSON(tDSC, `{"metadata":{"name":"default-dsc","resourceVersion":"5"},"spec":{"components":{"dashboard":{"managementState":"Managed","maasPortal":{"managementState":"Removed"}}}},
+	oc.f.putJSON(tDSC, `{"metadata":{"name":"default-dsc","resourceVersion":"5","managedFields":[{"manager":"someone","operation":"Update","fieldsV1":{"f:spec":{"f:components":{"f:dashboard":{"f:maasPortal":{"f:managementState":{}}}}}}}]},"spec":{"components":{"dashboard":{"managementState":"Managed","maasPortal":{"managementState":"Removed"}}}},
 		"status":{"conditions":[{"type":"MaaSPortalAvailable","status":"False","message":"Submodule ManagementState is set to Removed"}]}}`)
 	oc.f.putJSON("/apis/components.platform.opendatahub.io/v1alpha1/dashboards/default-dashboard", `{"metadata":{"name":"default-dashboard"},"spec":{"gateway":{"domain":"rh-ai.apps.example.com"}}}`)
 	st, _ := GetMaaSStatus(oc.sa)

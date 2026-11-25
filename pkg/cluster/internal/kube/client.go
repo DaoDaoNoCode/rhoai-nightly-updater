@@ -356,15 +356,26 @@ func (c *Client) NoRetryWhen(skip func(error) bool) *Client {
 	return &cp
 }
 
-// MetadataOnly returns a copy of c whose reads ask for the objects'
-// metadata only (PartialObjectMetadata, as client-go's metadata client asks
-// for it: k8s.io/client-go/metadata): a list of Secrets then carries no
-// data. There is no plain JSON fallback in the header: an API server that
-// cannot answer with metadata only refuses (406) instead of sending the
-// objects' data.
+// MetadataOnly returns a copy of c for lists that ask for the objects'
+// metadata only (PartialObjectMetadataList, as client-go's metadata client
+// asks for it: k8s.io/client-go/metadata): a list of Secrets then carries no
+// data. MetadataOnlyObject is the same for a read of one object
+// (PartialObjectMetadata). Each sends one media type: the API server takes
+// the first it supports, and refuses a list asked for as one object (406)
+// and one object asked for as a list (406; 500 "content is not a list" for
+// a custom resource, seen live 2026-11-25), so the two never mix. There is
+// no plain JSON fallback: a server that cannot answer with metadata only
+// refuses instead of sending the objects' data.
 func (c *Client) MetadataOnly() *Client {
 	cp := *c
-	cp.accept = "application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1,application/json;as=PartialObjectMetadata;g=meta.k8s.io;v=v1"
+	cp.accept = "application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1"
+	return &cp
+}
+
+// MetadataOnlyObject is MetadataOnly for a read of one object.
+func (c *Client) MetadataOnlyObject() *Client {
+	cp := *c
+	cp.accept = "application/json;as=PartialObjectMetadata;g=meta.k8s.io;v=v1"
 	return &cp
 }
 

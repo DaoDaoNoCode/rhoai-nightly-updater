@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -479,7 +480,7 @@ func ownedByMonitoring(c *kube.Client, ns string, m kube.ObjectMeta, monUID stri
 
 // readOwner reads the metadata of an owner of a stack object.
 func readOwner(c *kube.Client, ns, kind, name string) (kube.ObjectMeta, bool, error) {
-	mc := c.MetadataOnly()
+	mc := c.MetadataOnlyObject()
 	switch kind {
 	case "OpenTelemetryCollector":
 		return kube.ReadObjectMeta(mc, rhoai.NamespacedPath(otelAPI(c), "opentelemetrycollectors", ns, name))
@@ -587,7 +588,7 @@ func teardown(m *serving.Run) (*types.OperationResponse, error) {
 	}
 	ns := d.Namespace()
 	if !rec.Restored {
-		v := &view{d: d, rec: rec, recOK: true}
+		v := &view{d: d, rec: rec, recOK: true, ns: ns}
 		if _, _, blocked := v.cleanupPlan(nil); blocked != "" {
 			return m.Fail(StepCheck, blocked+" Nothing was changed.", "conflict", "changed since setup")
 		}
@@ -769,10 +770,49 @@ const (
 
 // missingNamesText is Clean up's (and Set up's) refusal of a record that
 // says this tool made the usage-logs storage but names no bucket or user
-// (written by a build before the names were recorded): what to delete by
-// hand, as nothing proves which bucket and user are this tool's.
+// (written by a build before the names were recorded): nothing proves which
+// bucket and user are this tool's, so it deletes nothing, and says every
+// step a cluster-admin takes instead, in order.
 func missingNamesText(rec Record, ns string) string {
-	return fmt.Sprintf("This tool's record on the DSCInitialization (annotation %s) says it made usage-logs storage but names no bucket or user, so this tool deletes none: a cluster-admin deletes Secret %s/%s, and in the SeaweedFS admin UI the bucket named in that Secret's bucketnames and its user (rnu-usage-logs), then removes the annotation.", RecordAnnotation, ns, kube.FirstNonEmpty(rec.Secret, storage.UsageLogsSecret))
+	secret := kube.FirstNonEmpty(rec.Secret, storage.UsageLogsSecret)
+	var steps []string
+	if !rec.Restored && len(rec.Added) > 0 {
+		monitoring := map[string]any{}
+		for name, f := range rec.Added {
+			var prev any
+			if len(f.Previous) > 0 && string(f.Previous) != "null" {
+				prev = f.Previous
+			}
+			switch name {
+			case fieldMetricsStorage:
+				monitoring["metrics"] = map[string]any{"storage": prev}
+			case fieldUsageLogs:
+				monitoring["usageLogs"] = prev
+			}
+		}
+		patch, _ := json.Marshal(map[string]any{"spec": map[string]any{"monitoring": monitoring}})
+		steps = append(steps, fmt.Sprintf("remove the monitoring fields this tool added: oc patch dscinitialization --all --type=merge -p %s", kube.ShellQuote(string(patch))),
+			"wait until RHOAI's operator deleted the stack: oc get lokistack,opentelemetrycollector,perses,monitoringstack -n "+kube.ShellQuote(ns)+" shows none of data-science-usage-logs-lokistack, data-science-usage-logs, data-science-collector, data-science-perses, data-science-monitoringstack")
+	}
+	if pvcs := sortedKeys(rec.Left.pvcs()); len(pvcs) > 0 {
+		steps = append(steps, fmt.Sprintf("delete the disks the stack left: oc delete pvc -n %s %s", kube.ShellQuote(ns), strings.Join(pvcs, " ")))
+	} else {
+		steps = append(steps, fmt.Sprintf("delete the disks the stack left, once nothing uses them: oc get pvc -n %s, then oc delete pvc -n %s each of prometheus-data-science-monitoringstack-db-*, storage-data-science-perses-*, storage- and wal-data-science-usage-logs-lokistack-*", kube.ShellQuote(ns), kube.ShellQuote(ns)))
+	}
+	if secrets := sortedKeys(rec.Left.secrets()); len(secrets) > 0 {
+		steps = append(steps, fmt.Sprintf("delete the certificate Secrets the stack left: oc delete secret -n %s %s", kube.ShellQuote(ns), strings.Join(secrets, " ")))
+	} else {
+		steps = append(steps, fmt.Sprintf("delete the certificate Secrets the stack left: oc get secret -n %s -o name, then oc delete those whose annotation cert-manager.io/certificate-name names a Certificate of the stack (data-science-collector-*), and prometheus-web-tls-ca", kube.ShellQuote(ns)))
+	}
+	steps = append(steps,
+		fmt.Sprintf("read the bucket and key from this tool's Secret (oc extract secret/%s -n %s --keys=bucketnames,access_key_id --to=-), then delete it: oc delete secret -n %s %s", secret, kube.ShellQuote(ns), kube.ShellQuote(ns), secret),
+		"in the SeaweedFS admin UI (S3 storage tab), delete that bucket with its objects, and the user that owns that access key (rnu-usage-logs)",
+		fmt.Sprintf("remove this tool's record: oc annotate dscinitialization --all %s-", RecordAnnotation))
+	out := fmt.Sprintf("This tool's record on the DSCInitialization (annotation %s) says it made usage-logs storage but names no bucket or user, so this tool deletes nothing. A cluster-admin does it by hand, in this order:", RecordAnnotation)
+	for i, st := range steps {
+		out += fmt.Sprintf(" (%d) %s;", i+1, st)
+	}
+	return strings.TrimSuffix(out, ";") + "."
 }
 
 // stackObjectsLeft lists the stack objects the removed fields deployed that
@@ -833,7 +873,7 @@ func stackObjectsLeft(c *kube.Client, ns string, rec Record) ([]string, error) {
 
 // objectThere reads the metadata at path: whether the object exists.
 func objectThere(c *kube.Client, path string) (bool, error) {
-	_, found, err := kube.ReadObjectMeta(c.MetadataOnly(), path)
+	_, found, err := kube.ReadObjectMeta(c.MetadataOnlyObject(), path)
 	return found, err
 }
 
@@ -896,8 +936,20 @@ func deleteLeft(m *serving.Run, ns string, rec Record) ([]string, *types.Operati
 			unrecorded = append(unrecorded, p.Metadata.Name)
 		}
 	}
-	if i := slices.IndexFunc(secrets, func(o meta) bool { return o.Metadata.Name == webCASecret }); i >= 0 && rec.Before != nil && leftover(secrets[i].Metadata, rec.Before.Secrets, rec.At) {
-		notes = append(notes, fmt.Sprintf("Secret %s/%s, which RHOAI's monitoring made with the stack, has no owner that ties it to this tool's change, so it was kept: oc delete secret -n %s %s", ns, webCASecret, kube.ShellQuote(ns), webCASecret))
+	// Certificate Secrets and the web CA the stack made after this tool's
+	// change that it could not tie to the stack (no Certificate with an
+	// owner chain to the Monitoring CR): listed with the command, kept.
+	var unrecordedSecrets []string
+	for _, o := range secrets {
+		_, recorded := rec.Left.secrets()[o.Metadata.Name]
+		_, issued := o.Metadata.Annotations[certificateNameAnnotation]
+		if !recorded && (issued || o.Metadata.Name == webCASecret) && rec.Before != nil && leftover(o.Metadata, rec.Before.Secrets, rec.At) {
+			unrecordedSecrets = append(unrecordedSecrets, o.Metadata.Name)
+		}
+	}
+	if len(unrecordedSecrets) > 0 {
+		sort.Strings(unrecordedSecrets)
+		notes = append(notes, fmt.Sprintf("These Secrets were made with the stack after this tool's change, but nothing ties them to it (no Certificate whose owners lead to RHOAI's Monitoring CR, or no owner at all), so they were kept; a cluster-admin deletes them once nothing needs them: oc delete secret -n %s %s", kube.ShellQuote(ns), strings.Join(unrecordedSecrets, " ")))
 	}
 	if len(unrecorded) > 0 {
 		notes = append(notes, fmt.Sprintf("These disks of the stack were made after this tool's change but not recorded by it, so they were kept (they hold metrics and usage logs; a cluster-admin deletes them when nothing needs them): oc delete pvc -n %s %s", kube.ShellQuote(ns), strings.Join(unrecorded, " ")))

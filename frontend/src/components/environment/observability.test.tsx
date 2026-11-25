@@ -217,3 +217,11 @@ describe("Clean up everything: the server says whether the usage logs use the S3
     expect(screen.queryByText(/keep their data in the S3 storage/)).toBeNull();
   });
 });
+
+describe("Observability disks while Clean up is blocked", () => {
+  it("says the disks are kept, not deleted", () => {
+    renderTab({ ...ready, cleanupBlockedReason: "A cluster-admin does it by hand" });
+    expect(screen.getByText("Kept: Clean up is blocked")).toBeInTheDocument();
+    expect(screen.queryByText("Deleted with its data")).toBeNull();
+  });
+});

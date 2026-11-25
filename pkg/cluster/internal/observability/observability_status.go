@@ -754,6 +754,14 @@ func (v *view) dashboardsPart(c *kube.Client) types.MaaSPart {
 		pt.Warning = "Cannot read the Perses dashboards and datasources: " + err.Error()
 		return pt
 	}
+	if repointed, err := repointedDatasources(c, v.ns); err == nil && len(repointed) > 0 {
+		which := "PersesDatasource " + repointed[0] + " now reads"
+		if len(repointed) > 1 {
+			which = "PersesDatasources " + strings.Join(repointed, " and ") + " now read"
+		}
+		pt.Warning = fmt.Sprintf("%s through maas-api (%s), not the local LokiStack: RHOAI's MaaS controller points them there while Secret usage-logs-loki exists in the MaaS namespace (odh-observability docs/usage-logs.md, \"Configure reads and verify new traffic\", meant for an AI Grid hub or OIDC sign-ins). With it, the Usage and My Usage views fail for every OpenShift sign-in: maas-api answers HTTP 500 AUTH_FAILURE, because Perses calls its Service directly, without the X-MaaS-Username header only the MaaS gateway sets (maas-api internal/token/handler.go L83-95; seen live on RHOAI 3.7 on 2026-11-25). This tool never creates that Secret; whoever made it deletes it to read the local store again.",
+			which, maasAPILogs)
+	}
 	if len(notSynced) == 0 {
 		pt.Message = fmt.Sprintf("Perses runs, with the %d dashboards and datasources RHOAI and MaaS made for it: in the RHOAI dashboard, Observe & monitor, Dashboard.", total)
 		return pt
@@ -794,9 +802,55 @@ func persesNotSynced(c *kube.Client, ns string) ([]string, int, error) {
 
 type persesObject struct {
 	Metadata kube.ObjectMeta `json:"metadata"`
+	Spec     any             `json:"spec"`
 	Status   struct {
 		Conditions []kube.Condition `json:"conditions"`
 	} `json:"status"`
+}
+
+// maasAPILogs is the path maas-api serves the usage logs at, behind its
+// Service (maas-controller's repointed datasources, live 2026-11-25:
+// https://maas-api.<maas namespace>.svc.cluster.local:8443/v1/logs).
+const maasAPILogs = "maas-api .../v1/logs"
+
+// repointedDatasources lists the PersesDatasources of ns whose spec points
+// at maas-api's /v1/logs (any URL in it: host maas-api, path /v1/logs).
+func repointedDatasources(c *kube.Client, ns string) ([]string, error) {
+	items, err := listPerses(c, rhoai.NamespacedPath(persesAPI(c), "persesdatasources", ns, ""))
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, it := range items {
+		if pointsAtMaaSAPI(it.Spec) {
+			out = append(out, it.Metadata.Name)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// pointsAtMaaSAPI: a string in v is a URL whose host is maas-api (of any
+// namespace) and whose path starts with /v1/logs.
+func pointsAtMaaSAPI(v any) bool {
+	switch t := v.(type) {
+	case string:
+		u, err := url.Parse(t)
+		return err == nil && strings.HasPrefix(u.Hostname(), "maas-api.") && strings.HasPrefix(u.Path, "/v1/logs")
+	case map[string]any:
+		for _, e := range t {
+			if pointsAtMaaSAPI(e) {
+				return true
+			}
+		}
+	case []any:
+		for _, e := range t {
+			if pointsAtMaaSAPI(e) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // listPerses lists Perses objects at path; none when the API is not served.

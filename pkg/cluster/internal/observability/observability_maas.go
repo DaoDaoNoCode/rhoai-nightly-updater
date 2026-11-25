@@ -222,6 +222,24 @@ func portalRead(c *kube.Client) (*types.MaaSPortal, error) {
 	return p, nil
 }
 
+// fieldSetBySomeone: a manager wrote the field at path (its managedFields
+// name it); a value only the API server's defaulting filled in has none.
+func fieldSetBySomeone(m kube.ObjectMeta, path ...string) bool {
+	var managers []string
+	for _, e := range m.ManagedFields {
+		managers = append(managers, e.Manager)
+	}
+	return m.OwnsFieldPath(managers, path...)
+}
+
+// dscMeta is a DataScienceCluster's metadata as read.
+func dscMeta(obj map[string]any) kube.ObjectMeta {
+	raw, _ := json.Marshal(obj["metadata"])
+	var m kube.ObjectMeta
+	_ = json.Unmarshal(raw, &m)
+	return m
+}
+
 // --- actions ------------------------------------------------------------------------
 
 // ValidateMaaSRequest is serving.ValidateMaaSRequest with the usage logs'
@@ -337,8 +355,11 @@ func setCaptureUser(m *serving.Run, on bool) (*types.OperationResponse, error) {
 		m.Step(StepCaptureUser, "success", "MaaS records user IDs already.")
 		return nil, nil
 	case on:
+		// "unset" unless someone wrote the field: a false the API server
+		// filled in from the CRD's default is not a value anyone set, and
+		// putting it back means removing the field.
 		was := unsetValue
-		if t.CaptureUser != nil {
+		if t.CaptureUser != nil && fieldSetBySomeone(t.Meta, "f:spec", "f:telemetry", "f:logs", "f:captureUser") {
 			was = "false"
 		}
 		meta["annotations"] = map[string]any{captureUserAnnotation: was}
@@ -395,7 +416,11 @@ func setPortal(m *serving.Run, on bool) (*types.OperationResponse, error) {
 		m.Step(StepPortal, "success", "The MaaS portal is on already.")
 		return nil, nil
 	case on:
-		meta["annotations"] = map[string]any{portalAnnotation: kube.FirstNonEmpty(state, unsetValue)}
+		was := unsetValue
+		if state != "" && fieldSetBySomeone(dscMeta(read.Object), "f:spec", "f:components", "f:dashboard", "f:"+key, "f:managementState") {
+			was = state
+		}
+		meta["annotations"] = map[string]any{portalAnnotation: was}
 		body = map[string]any{"metadata": meta, "spec": map[string]any{"components": map[string]any{"dashboard": map[string]any{key: map[string]any{"managementState": "Managed"}}}}}
 	case !byTool:
 		return m.Fail(StepPortal, "This tool did not turn the MaaS portal on, so it does not turn it off: whoever turned it on changes it in the DataScienceCluster. Nothing was changed.", "not_managed", "not set by this tool")
