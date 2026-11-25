@@ -402,13 +402,18 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   after 21 seconds on `429 TooManyRequests: storage is (re)initializing`, the
   API server's answer while a new CRD's watch cache initializes, and said the
   API "is not served after 10:00". The client now retries as client-go does: a
-  429, or a 5xx with `Retry-After`, is sent again after the `Retry-After`
-  seconds, at most 10 times, and the waits of one request add up to at most 32
-  seconds (the largest wait the API server asks for). Versioned RHOAI reads and
-  Diagnostics still take a conversion failure, which never clears, at once. A
-  wait for an API (Kuadrant's, CloudNativePG's) that a read error ends now says
-  `Stopped waiting for ... after <m:ss>: <error>` instead of claiming the whole
-  timeout. See [RUNBOOK §11.10](RUNBOOK.md#1110-the-api-server-asks-to-retry-429-retry-after).
+  429 or 5xx that carries `Retry-After` in seconds is sent again after that
+  many seconds, at most 10 times (a 5xx only for a read: a write may have been
+  applied), and the waits of one request add up to at most 32 seconds (the
+  largest wait the API server asks for). Versioned RHOAI reads and Diagnostics
+  still take a conversion failure, which never clears, at once. The check
+  whether Kuadrant's API is served lists with `limit=1`, which the API server
+  serves from etcd while the new CRD's watch cache initializes, and the waits
+  for Kuadrant's and CloudNativePG's APIs treat a 429 that outlasts the
+  retries as "not served yet" and poll on. A wait that another read error
+  ends now says `Stopped waiting for ... after <m:ss>: <error>` instead of
+  claiming the whole timeout. Errors of a throttled request carry errorCode
+  `rate_limited`. See [RUNBOOK §11.10](RUNBOOK.md#1110-the-api-server-asks-to-retry-429-retry-after).
 
 - **A fresh Connectivity Link install no longer leaves Kuadrant stuck
   without Authorino and Limitador.** Set up (the MaaS tab, and models'
