@@ -134,6 +134,11 @@ func demoLowMemoryMessage(managed bool) string {
 // CR mlflow, which is cluster-wide.
 const demoLowMemoryForUserMessage = "MLflow still has the 2Gi memory limit an earlier version of this tool set, and generating the demo runs MLflow out of memory. Removing the limit changes MLflow CR " + CRName + ", which a cluster-admin does: when a cluster-admin adds this demo on the Environment page, the limit is removed first. Then add the demo again once MLflow is ready."
 
+// demoExistsForUserMessage refuses Add to a user who is not a
+// cluster-admin where the demo's experiment exists: adding there brings
+// the demo's data up to date or resets it, which replaces it.
+const demoExistsForUserMessage = "Experiment '" + DemoExperiment + "' exists in this project already. Adding the demo there brings its data up to date or regenerates it, which replaces what is in it, so a cluster-admin does it (Regenerate on the Environment page). Nothing was changed."
+
 func demoStatusOfExperiment(t *Target) types.SampleStatus {
 	s := types.SampleStatus{}
 	exp, err := t.experimentByName(DemoExperiment)

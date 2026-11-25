@@ -52,6 +52,13 @@ type projectRoute struct {
 	feature string
 	maxBody int64
 	parse   func(body []byte) (project, action, problem string)
+	// adminClusterLock: a cluster-admin's request takes the cluster lock,
+	// not the project's, because it can change something shared: the
+	// MLflow samples' Add and Regenerate of the demo remove an old memory
+	// limit from the cluster-wide MLflow CR, which restarts MLflow for
+	// every project (mlflow raiseOldMemoryLimit). A user's never does
+	// (refused), so theirs holds the project's lock.
+	adminClusterLock bool
 }
 
 // projectActionRoutes are the routes of project actions, by path: the
@@ -71,7 +78,7 @@ var projectActionRoutes = map[string]projectRoute{
 		}
 		return req.Project, req.Action, cluster.ValidatePlaygroundRequest(req)
 	}},
-	"/api/resources/samples/mlflow/stream": {feature: "mlflow-samples", maxBody: 4096, parse: func(body []byte) (string, string, string) {
+	"/api/resources/samples/mlflow/stream": {feature: "mlflow-samples", maxBody: 4096, adminClusterLock: true, parse: func(body []byte) (string, string, string) {
 		var req types.MLflowSamplesRequest
 		if err := json.Unmarshal(body, &req); err != nil {
 			return "", "", "invalid request body"
@@ -297,9 +304,18 @@ func withProjectMutationAuth(route projectRoute, fn func(c *cluster.Client, w ht
 		client.SetBookkeeping(bookkeeper)
 		client.SetFacts(bookkeeper)
 		if !admin {
-			client.SetProjectUser()
+			client.SetProjectUser(uid)
 		}
 		sw := &statusWriter{ResponseWriter: w, path: r.URL.Path, user: username, bookkeeper: bookkeeper, cancelOp: cancelOp, admin: admin}
+		if admin && route.adminClusterLock {
+			if !lockCluster(sw) {
+				mutationLimiter.release(rateLimitKey, slot)
+				return
+			}
+			defer releaseClusterMutationLock()
+			runProjectAction(fn, client, sw, r, changes, rateLimitKey, slot)
+			return
+		}
 		refusal := acquireProjectLock(uid, username, func() *Operation {
 			kind := operationTypes[sw.path]
 			op := inflight.startProject(kind[0], label, username, project, uid, bookkeeper)
@@ -313,16 +329,23 @@ func withProjectMutationAuth(route projectRoute, fn func(c *cluster.Client, w ht
 			return
 		}
 		defer releaseProjectLock(uid)
-		completed := false
-		defer func() {
-			wentThrough := completed && sw.succeeded()
-			if sw.Header().Get("X-Skip-Rate-Limit") == "true" || !wentThrough && !changes.Made() {
-				mutationLimiter.release(rateLimitKey, slot)
-			}
-		}()
-		fn(client, sw, r)
-		completed = true
+		runProjectAction(fn, client, sw, r, changes, rateLimitKey, slot)
 	}
+}
+
+// runProjectAction runs the handler of an accepted project action and gives
+// the user's rate-limit slot back when it did not go through and sent
+// nothing that may have changed the cluster (as withMutationAuth).
+func runProjectAction(fn func(c *cluster.Client, w http.ResponseWriter, r *http.Request), client *cluster.Client, sw *statusWriter, r *http.Request, changes *cluster.Changes, rateLimitKey string, slot time.Time) {
+	completed := false
+	defer func() {
+		wentThrough := completed && sw.succeeded()
+		if sw.Header().Get("X-Skip-Rate-Limit") == "true" || !wentThrough && !changes.Made() {
+			mutationLimiter.release(rateLimitKey, slot)
+		}
+	}()
+	fn(client, sw, r)
+	completed = true
 }
 
 // beginProject marks the request's project action as begun before its
@@ -333,6 +356,12 @@ func withProjectMutationAuth(route projectRoute, fn func(c *cluster.Client, w ht
 func beginProject(w http.ResponseWriter, target string) bool {
 	sw, ok := w.(*statusWriter)
 	if !ok {
+		return true
+	}
+	// A cluster-admin's action that holds the cluster lock
+	// (adminClusterLock) begins as a cluster operation: its marker.
+	if op := inflight.get(sw.opID); op != nil && op.ProjectUID == "" {
+		beginOperation(w, target)
 		return true
 	}
 	if err := beginProjectAction(sw.opID, target); err != nil {

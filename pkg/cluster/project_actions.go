@@ -191,8 +191,12 @@ var projectActions = []ProjectAction{
 		Requests: joinRequests(playgroundScanned, genAIRequests("status", "install"))},
 	{ID: "playground.teardown", Feature: "playground", Action: "teardown", Label: "Delete the playground", ForUsers: true,
 		Requests: joinRequests([]ProjectRequest{playgroundServer}, genAIRequests("status", "delete"))},
+	// An add that MLflow refuses half-way removes the sample again through
+	// its remove path (mlflow rollBackRefusedAdd), so the add needs what
+	// the remove needs too: a user who may add but not delete is refused
+	// before anything is made, not left with half a sample.
 	{ID: "mlflow-samples.add", Feature: "mlflow-samples", Action: "add", Label: "Add MLflow sample data", ForUsers: true,
-		Requests: joinRequests(samplesScanned, mlflowRequests("add"))},
+		Requests: joinRequests(samplesScanned, mlflowRequests("add"), mlflowRequests("remove"))},
 	{ID: "mlflow-samples.remove", Feature: "mlflow-samples", Action: "remove", Label: "Remove MLflow sample data", ForUsers: true,
 		Requests: joinRequests(samplesScanned, mlflowRequests("remove"))},
 	// Regenerate replaces the demo's data: not in the design's list of

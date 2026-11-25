@@ -537,10 +537,14 @@
 1 update /configmaps ns=${NS} name=rhoai-nightly-updater-activity
 
 ## project action requests (9 actions)
-### mlflow-samples.add (14)
+### mlflow-samples.add (18)
 create mlflow.kubeflow.org/datasets name= ns=project mlflow
 create mlflow.kubeflow.org/experiments name= ns=project mlflow
 create mlflow.kubeflow.org/registeredmodels name= ns=project mlflow
+delete mlflow.kubeflow.org/experiments name=nightly-sample-training ns=project mlflow
+delete mlflow.kubeflow.org/mcpservers name=com.deepwiki/rhoai-nightly-sample ns=project mlflow
+delete mlflow.kubeflow.org/registeredmodels name=nightly-sample-classifier ns=project mlflow
+delete mlflow.kubeflow.org/skills name=nightly-sample-mcp-builder ns=project mlflow
 get mlflow.kubeflow.org/experiments name=MLflow Demo ns=project mlflow
 get mlflow.kubeflow.org/experiments name=nightly-sample-training ns=project mlflow
 get mlflow.kubeflow.org/mcpservers name=com.deepwiki/rhoai-nightly-sample ns=project mlflow

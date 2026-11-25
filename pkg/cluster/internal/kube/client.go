@@ -214,6 +214,9 @@ type Client struct {
 	// records are counted in the caps of users' records
 	// (record.UserRecordCapRefusal).
 	projectUser bool
+	// projectUID is the namespace UID of the project a project user's
+	// action runs in (SetProjectUser): their records are keyed by it.
+	projectUID string
 }
 
 // NewUserClient is NewClientWithContext for the signed-in user's own token:
@@ -229,8 +232,13 @@ func NewUserClient(ctx context.Context, token string) *Client {
 func (c *Client) ActsAsUser() bool { return c.asUser }
 
 // SetProjectUser marks the client of a project action run by a signed-in
-// user who is not a cluster-admin (see projectUser).
-func (c *Client) SetProjectUser() { c.projectUser = true }
+// user who is not a cluster-admin (see projectUser), in the project whose
+// namespace has projectUID.
+func (c *Client) SetProjectUser(projectUID string) { c.projectUser, c.projectUID = true, projectUID }
+
+// ProjectUID is the namespace UID SetProjectUser was given ("" for a
+// cluster-admin's client).
+func (c *Client) ProjectUID() string { return c.projectUID }
 
 // ProjectUser reports whether SetProjectUser marked the client: the action
 // runs for a user who is not a cluster-admin.

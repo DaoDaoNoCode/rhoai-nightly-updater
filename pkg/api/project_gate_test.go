@@ -353,3 +353,24 @@ func TestDevRoleUserRunsThePreflight(t *testing.T) {
 		t.Fatalf("%d asked %d reviews %d user %v: %s", w.Code, asked, env.reviews, env.projectUser, w.Body.String())
 	}
 }
+
+// A cluster-admin's MLflow samples action holds the cluster lock (it may
+// restart the shared MLflow); a user's holds the project's.
+func TestAdminSamplesHoldTheClusterLock(t *testing.T) {
+	for _, role := range []string{roleClusterAdmin, roleEditor} {
+		env := newProjectGateEnv(t, role)
+		var clusterHeld, projectHeld bool
+		runMLflowSamples = func(*cluster.Client, types.MLflowSamplesRequest, func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+			env.runs++
+			clusterHeld, projectHeld = locks.clusterHeld(), locks.projectOp("uid-team-a") != ""
+			return &types.OperationResponse{Success: true}, nil
+		}
+		w := serveProjectAction(t, "/api/resources/samples/mlflow/stream", `{"action":"add","project":"team-a","samples":["genai-demo"]}`)
+		if w.Code != http.StatusOK || clusterHeld != (role == roleClusterAdmin) || projectHeld == (role == roleClusterAdmin) {
+			t.Fatalf("%s: %d cluster %v project %v", role, w.Code, clusterHeld, projectHeld)
+		}
+		if locks.clusterHeld() || locks.projectOp("uid-team-a") != "" {
+			t.Fatalf("%s: a lock is left", role)
+		}
+	}
+}

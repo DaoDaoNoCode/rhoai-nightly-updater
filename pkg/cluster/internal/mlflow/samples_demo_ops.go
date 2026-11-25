@@ -185,6 +185,13 @@ func demoAddOrRegenerate(t *Target, log func(string), always bool) (string, erro
 	if err != nil {
 		return "", err
 	}
+	// A user who is not a cluster-admin adds the demo only where there is
+	// none: on an existing demo the generator brings its features up to
+	// date (and a reset deletes them first), which replaces data, and that
+	// is Regenerate, a cluster-admin's (the non-admin design, section 1).
+	if exp != nil && t.c.ProjectUser() {
+		return "", &sampleRefusal{demoExistsForUserMessage}
+	}
 	if exp == nil {
 		if exp, err = t.createDemoExperiment(log); err != nil {
 			return "", err

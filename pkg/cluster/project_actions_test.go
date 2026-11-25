@@ -176,7 +176,7 @@ func TestAdminRecordsOutsideCaps(t *testing.T) {
 	if record.ActorRole(c) != record.ActorRoleAdmin {
 		t.Fatal("an unmarked client writes as a user")
 	}
-	c.SetProjectUser()
+	c.SetProjectUser("uid-proj")
 	if record.ActorRole(c) != record.ActorRoleUser {
 		t.Fatal("a project user's client writes as an admin")
 	}

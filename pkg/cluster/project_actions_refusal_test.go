@@ -174,7 +174,7 @@ func TestWorkbenchSetupRecordsCapsAndProjectUser(t *testing.T) {
 	putUserRecords(t, f, "alice", record.MaxUserRecordProjectsPerUser)
 	u := userClientOf(c, fakeUserToken)
 	u.SetUsername("alice")
-	u.SetProjectUser()
+	u.SetProjectUser("uid-proj")
 	before := len(f.mutations())
 	res := wbSteps(t, u, types.WorkbenchRequest{Action: "setup", Project: "proj"})
 	if res.Success || res.ErrorCode != record.ErrorCodeRecordsFull || !strings.Contains(res.Message, "Nothing was changed") || len(f.mutations()) != before {
@@ -194,7 +194,7 @@ func TestWorkbenchSetupRecordsCapsAndProjectUser(t *testing.T) {
 	putWorkbenchCluster(t, f3, true)
 	user := userClientOf(c3, fakeUserToken)
 	user.SetUsername("bob")
-	user.SetProjectUser()
+	user.SetProjectUser("uid-proj")
 	if res := wbSteps(t, user, types.WorkbenchRequest{Action: "setup", Project: "proj"}); !res.Success {
 		t.Fatalf("a project user's setup: %+v", res)
 	}
@@ -209,5 +209,55 @@ func TestWorkbenchSetupRecordsCapsAndProjectUser(t *testing.T) {
 	}
 	if e, _ := rec.Get("proj"); e.ActorRole != record.ActorRoleUser || e.By != "bob" {
 		t.Fatalf("record %+v", e)
+	}
+}
+
+// A user who is not a cluster-admin adds the demo where there is none,
+// and never brings an existing one up to date or resets it (that replaces
+// its data: Regenerate, a cluster-admin's); nothing is sent to the
+// generator then.
+func TestUserAddNeverResetsAnExistingDemo(t *testing.T) {
+	env := newSamplesEnv(t)
+	env.user.SetProjectUser("uid-proj")
+	if ok, msg, st := env.run(t, "add", SampleGenAIDemo); !ok || env.mlflow.generates != 1 {
+		t.Fatalf("a user's fresh add: %s\n%s", msg, stepMessages(st))
+	}
+	// A partly reset demo (a feature this generator lacks has its tag at
+	// 0): an admin's Add would reset it.
+	env.mlflow.expByName(mlflow.DemoExperiment).tags[mlflow.DemoVersionTagPrefix+"retired_feature"] = "0"
+	n := len(env.mlflow.requests)
+	ok, msg, steps := env.run(t, "add", SampleGenAIDemo)
+	if ok || !strings.Contains(stepMessages(steps), "exists in this project already") || env.mlflow.generates != 1 || len(env.mlflow.writes(n)) != 0 {
+		t.Fatalf("a user's add on an existing demo: %s\n%s writes %v", msg, stepMessages(steps), env.mlflow.writes(n))
+	}
+	// A cluster-admin's Add of the same demo resets and generates it.
+	admin := newSamplesEnv(t)
+	if ok, msg, _ := admin.run(t, "add", SampleGenAIDemo); !ok {
+		t.Fatal(msg)
+	}
+	admin.mlflow.expByName(mlflow.DemoExperiment).tags[mlflow.DemoVersionTagPrefix+"retired_feature"] = "0"
+	if ok, msg, _ := admin.run(t, "add", SampleGenAIDemo); !ok || admin.mlflow.generates != 2 {
+		t.Fatalf("an admin's add on a partly reset demo: %s generates %d", msg, admin.mlflow.generates)
+	}
+}
+
+// The add's preflight covers its rollback: a user who may add MLflow
+// samples but not delete them is refused before anything is made, so a
+// refusal half-way can always be rolled back.
+func TestMLflowAddPreflightCoversTheRollback(t *testing.T) {
+	f := &ssarFake{allow: func(r AccessRequest) bool { return r.Group != mlflow.AuthGroup || r.Verb != "delete" }}
+	u := newSSARClient(t, f)
+	missing, err := ReviewProjectActions(u, []string{"mlflow-samples.add"}, "team-a", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, m := range missing["mlflow-samples.add"] {
+		got[m.Request.Resource+"/"+m.Request.Name] = true
+	}
+	for _, want := range []string{"experiments/" + mlflow.TrainingExperiment, "registeredmodels/" + mlflow.TrainingModel, "mcpservers/" + mlflow.MCPSampleName, "skills/" + mlflow.SkillSampleName} {
+		if !got[want] {
+			t.Errorf("the add's preflight does not review delete %s: %v", want, got)
+		}
 	}
 }
