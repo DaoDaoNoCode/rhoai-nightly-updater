@@ -533,9 +533,11 @@ func updateApplyCatalog(c *kube.Client, image string, recovery *Recovery, logs *
 	if _, deleteErr := c.DeleteIfExists(csPath); deleteErr != nil {
 		return fail("Cannot replace nightly catalog: "+deleteErr.Error(), kube.ErrorCodeFromK8sErr(deleteErr))
 	}
-	if _, _, err := c.Apply(csPath, catalog.SourceSpec(image)); err != nil {
+	body, _, err := c.Apply(csPath, catalog.SourceSpec(image))
+	if err != nil {
 		return fail(fmt.Sprintf("Failed to apply CatalogSource: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
+	recovery.NoteCatalogWritten(body)
 	*logs = append(*logs, "OK: CatalogSource applied")
 	emit(types.UpdateStepEvent{Step: "apply_catalog_source", Status: "success", Message: "CatalogSource applied", Detail: image})
 	return nil, nil
@@ -1350,9 +1352,11 @@ func reinstallNightlySteps(c *kube.Client, image, channel, approveCSV string, re
 	emit(types.UpdateStepEvent{Step: "create_catalog_source", Status: "running", Message: "Creating CatalogSource with nightly image"})
 	csApplyPath := rhoai.NamespacedPath("operators.coreos.com/v1alpha1", "catalogsources", rhoai.CatalogNS, rhoai.CatalogName)
 	recovery.NoteCatalogChanged()
-	if _, _, err := c.Apply(csApplyPath, catalog.SourceSpec(image)); err != nil {
+	csBody, _, err := c.Apply(csApplyPath, catalog.SourceSpec(image))
+	if err != nil {
 		return fail(fmt.Sprintf("Failed to create nightly CatalogSource: %v", err), kube.ErrorCodeFromK8sErr(err))
 	}
+	recovery.NoteCatalogWritten(csBody)
 	logs = append(logs, "OK: CatalogSource created with nightly image")
 	emit(types.UpdateStepEvent{Step: "create_catalog_source", Status: "success", Message: "CatalogSource created", Detail: image})
 

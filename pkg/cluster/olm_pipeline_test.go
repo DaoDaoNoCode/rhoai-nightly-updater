@@ -1323,3 +1323,35 @@ func TestWaitRequiresTheCSVToStaySucceeded(t *testing.T) {
 		}
 	})
 }
+
+// Someone else changes the nightly catalog while Update waits for it to
+// serve the verified build: Update stops with a conflict, and its restore
+// leaves that catalog as it is (it is no longer the object and generation
+// Update wrote) and says so, instead of putting the old image back.
+func TestUpdateStream_CatalogChangedMeanwhileIsLeftAlone(t *testing.T) {
+	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
+	const theirs = "quay.io/rhoai/rhoai-fbc-fragment:rhoai-3.6@sha256:theirs"
+	f.intercept = func(f *fakeOLM, _ http.ResponseWriter, r *http.Request) bool {
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/catalogsources/"+rhoai.CatalogName) && f.catalog != nil {
+			spec := f.catalog["spec"].(map[string]any)
+			if spec["image"] == testNightlyImage {
+				spec["image"] = theirs
+				meta := f.catalog["metadata"].(map[string]any)
+				meta["generation"] = meta["generation"].(int) + 1
+			}
+		}
+		return false
+	}
+	result, err := operator.UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
+	if err != nil || result.Success || result.ErrorCode != "conflict" {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if !strings.Contains(result.Message, "was changed, replaced or deleted by someone else after this operation wrote it, so it was left as it is") {
+		t.Errorf("message = %q", result.Message)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.catalog == nil || f.catalog["spec"].(map[string]any)["image"] != theirs {
+		t.Fatalf("catalog = %v, want the other writer's image kept", f.catalog)
+	}
+}
