@@ -487,24 +487,53 @@ func TestCleanUp_RecipeProjectAfterTheRaySamples(t *testing.T) {
 	}
 }
 
-// Only a pod KubeRay marks as the tool's RayJob's submitter gets its Job
-// read, and only by a valid object name: an ordinary batch pod and a
-// submitter whose reference names an invalid Job send no Job request and
-// stay listed.
+// Only the tool's RayJob's submitter Job (named after the RayJob) is read,
+// once, and only for a pod KubeRay marks as its submitter that nothing else
+// leaves out: an ordinary batch pod, a submitter naming another Job, and
+// labelled submitters that carry the tool's label or are being deleted
+// send no Job request.
 func TestRecipeProjectLeftovers_JobReadsOnlyForRayJobSubmitters(t *testing.T) {
 	f, c, uid := createdRecipeProject(t)
 	recordRecipePlayground(t, c, "", false)
 	recordRecipeRay(t, c, "recipe-dev", uid)
+	submitter := `"ray.io/originated-from-crd":"RayJob","ray.io/originated-from-cr-name":"nightly-rayjob"`
 	f.putJSON("/apis/batch/v1/namespaces/recipe-dev/jobs/backup", `{"metadata":{"uid":"backup-uid"}}`)
-	f.putJSON("/api/v1/namespaces/recipe-dev/pods/backup-x7k2p", `{"metadata":{"ownerReferences":[{"apiVersion":"batch/v1","kind":"Job","name":"backup","uid":"backup-uid"}]}}`)
-	f.putJSON("/api/v1/namespaces/recipe-dev/pods/bad-name", `{"metadata":{"labels":{"ray.io/originated-from-crd":"RayJob","ray.io/originated-from-cr-name":"nightly-rayjob"},"ownerReferences":[{"kind":"Job","name":"../../secrets/x","uid":"job-uid"}]}}`)
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/backup-x7k2p", `{"metadata":{"ownerReferences":[{"kind":"Job","name":"backup","uid":"backup-uid"}]}}`)
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/other-job", `{"metadata":{"labels":{`+submitter+`},"ownerReferences":[{"kind":"Job","name":"backup","uid":"backup-uid"}]}}`)
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/tool-labelled", `{"metadata":{"labels":{`+submitter+`,"app.kubernetes.io/managed-by":"rhoai-nightly-updater"},"ownerReferences":[{"kind":"Job","name":"nightly-rayjob","uid":"job-uid"}]}}`)
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/going", `{"metadata":{"labels":{`+submitter+`},"deletionTimestamp":"2026-11-25T10:00:00Z","ownerReferences":[{"kind":"Job","name":"nightly-rayjob","uid":"job-uid"}]}}`)
 	left, err := recipe.ProjectLeftovers(c, "recipe-dev")
-	if err != nil || strings.Join(left, ",") != "Pod backup-x7k2p,Pod bad-name" {
+	if err != nil || strings.Join(left, ",") != "Pod backup-x7k2p,Pod other-job" {
 		t.Fatalf("leftovers %v %v", left, err)
 	}
 	for _, call := range f.calls {
 		if strings.Contains(call.Path, "/jobs") {
 			t.Fatalf("read a Job: %s %s", call.Method, call.Path)
 		}
+	}
+}
+
+// A reference to the submitter Job counts only with the Job's name as well
+// as its UID: a second pod naming the same UID under another (invalid)
+// name stays listed, and the Job is read once.
+func TestRecipeProjectLeftovers_JobReferenceNeedsTheJobsName(t *testing.T) {
+	f, c, uid := createdRecipeProject(t)
+	recordRecipePlayground(t, c, "", false)
+	recordRecipeRay(t, c, "recipe-dev", uid)
+	putRecipeRayPods(f)
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/same-uid", `{"metadata":{"labels":{"ray.io/originated-from-crd":"RayJob","ray.io/originated-from-cr-name":"nightly-rayjob"},"ownerReferences":[{"kind":"Job","name":"../../secrets/x","uid":"job-uid"}]}}`)
+	f.putJSON("/api/v1/namespaces/recipe-dev/pods/nightly-rayjob-second", `{"metadata":{"labels":{"ray.io/originated-from-crd":"RayJob","ray.io/originated-from-cr-name":"nightly-rayjob"},"ownerReferences":[{"kind":"Job","name":"nightly-rayjob","uid":"job-uid"}]}}`)
+	left, err := recipe.ProjectLeftovers(c, "recipe-dev")
+	if err != nil || strings.Join(left, ",") != "Pod mine,Pod nightly-rayjob-abcde-head-k2m9x,Pod same-uid" {
+		t.Fatalf("leftovers %v %v", left, err)
+	}
+	var reads []string
+	for _, call := range f.calls {
+		if strings.Contains(call.Path, "/jobs") {
+			reads = append(reads, call.Method+" "+call.Path)
+		}
+	}
+	if len(reads) != 1 || reads[0] != "GET "+tRayJob {
+		t.Fatalf("Job requests %v", reads)
 	}
 }

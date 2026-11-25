@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/authz"
-	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
@@ -630,9 +629,10 @@ func ProjectTeardownProblem(c *kube.Client, name, uid string, confirmed, known [
 //     is still there or still carries the tool's label is not checked
 //     (there is no read of Ray objects to check it with). KubeRay owns the
 //     RayCluster sample's head and worker pods by the RayCluster, and the
-//     RayJob's submitter pod by its Job, which the RayJob owns; that Job is
-//     read by name, only for a pod KubeRay marks as the RayJob's submitter
-//     (rayJobSubmitter) while a RayJob is a root. The RayJob sample's own
+//     RayJob's submitter pod by its Job, which the RayJob owns and names
+//     after itself; that Job, nightly-rayjob, is read once, only when a
+//     pod KubeRay marks as the RayJob's submitter (rayJobSubmitter) names
+//     it while a RayJob is a root (readRayJobSubmitterJob). The RayJob sample's own
 //     RayCluster (named <rayjob>-<5 characters>, controlled by the RayJob;
 //     the sample sets rayClusterSpec) is not recognised: its head and
 //     worker pods stay listed while the job runs, until
@@ -645,9 +645,9 @@ func ProjectTeardownProblem(c *kube.Client, name, uid string, confirmed, known [
 // does not read. A kind whose API is not served has none. A read that
 // fails is returned (fail closed); an owner that is not there (a 404)
 // leaves the object listed, unless known (the owners an earlier check of
-// the same operation returned) has it. owners are the tool's owners found, each "<kind>/<uid>"
-// (ownerKey): known, the roots, and the ReplicaSets, Deployments and Jobs
-// that lead to one (so a pod still counts once the garbage collector has
+// the same operation returned) has it. owners are the tool's owners found,
+// each "<kind>/<uid>", a Job "Job/<name>/<uid>" (ownerKey, jobKey): known,
+// the roots, and the ReplicaSets, Deployments and Jobs that lead to one (so a pod still counts once the garbage collector has
 // removed its ReplicaSet but not yet the pod).
 //
 // The trust model: what leaves an object out is a label or field that an
@@ -662,8 +662,8 @@ func projectLeftovers(c *kube.Client, ns, nsUID string, known []string) (left, o
 	toolDSPAs := map[string]bool{}
 	roots := map[string]bool{}
 	for _, k := range known {
-		if kind, uid, ok := strings.Cut(k, "/"); ok && kind != "" && uid != "" {
-			roots[ownerKey(kind, uid)] = true
+		if kind, rest, ok := strings.Cut(k, "/"); ok && kind != "" && rest != "" {
+			roots[k] = true
 		}
 	}
 	dspas, err := storage.ListDSPAs(c, ns)
@@ -771,7 +771,7 @@ func projectLeftovers(c *kube.Client, ns, nsUID string, known []string) (left, o
 				submitters = append(submitters, p)
 			}
 		}
-		if err := readPodJobs(c, ns, submitters, links); err != nil {
+		if err := readRayJobSubmitterJob(c, ns, submitters, links); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -780,7 +780,7 @@ func projectLeftovers(c *kube.Client, ns, nsUID string, known []string) (left, o
 		owners = append(owners, k)
 	}
 	for uid, link := range links {
-		if k := ownerKey(link.kind, uid); !roots[k] && walk.owned(link.meta) {
+		if k := referenceKey(link.kind, link.meta.Name, uid); !roots[k] && walk.owned(link.meta) {
 			owners = append(owners, k)
 		}
 	}
@@ -805,6 +805,20 @@ func ownerKey(kind, uid string) string {
 	return kind + "/" + uid
 }
 
+// jobKey names a Job owner by its name too: the walk follows a reference
+// to a Job only when it names the Job read (or carried) by name and UID.
+func jobKey(name, uid string) string {
+	return "Job/" + name + "/" + uid
+}
+
+// referenceKey is the key an ownerReference (kind, name, UID) must match.
+func referenceKey(kind, name, uid string) string {
+	if kind == "Job" {
+		return jobKey(name, uid)
+	}
+	return ownerKey(kind, uid)
+}
+
 func hasRootOfKind(roots map[string]bool, kind string) bool {
 	for k := range roots {
 		if strings.HasPrefix(k, kind+"/") {
@@ -824,21 +838,23 @@ func rayJobSubmitter(pod kube.ObjectMeta) bool {
 	return pod.Labels["ray.io/originated-from-crd"] == "RayJob" && pod.Labels["ray.io/originated-from-cr-name"] == kueue.RayJobName
 }
 
-// readPodJobs reads, by name, each Job that one of pods (the submitters
-// rayJobSubmitter picked) names as its owner and adds it to links when it
-// is the one named (its UID): a RayJob's submitter pod is owned by a Job
-// the RayJob owns. A name that is not a valid object name (DNS-1123
-// subdomain, as Kubernetes requires of a Job's name) is not requested, so
-// its pod stays listed. A Job that is not there (404) is left out; another
-// failed read is returned (fail closed).
-func readPodJobs(c *kube.Client, ns string, pods []kube.ObjectMeta, links map[string]ownerLink) error {
-	read := map[string]bool{}
+// readRayJobSubmitterJob reads the tool's RayJob's submitter Job and adds
+// it to links, when one of pods (the submitters rayJobSubmitter picked)
+// names it as its owner. KubeRay names that Job after the RayJob
+// (red-hat-data-services/kuberay rhoai-3.7-ea.1 ray-operator
+// controllers/ray/rayjob_controller.go createNewK8sJob: the Job's name is
+// rayJobInstance.Name), so only a reference to a Job named
+// kueue.RayJobName is read, at most once; a pod whose Job reference names
+// anything else stays listed without a read. The name in the request is
+// the reference's, just compared equal to that constant. A Job that is
+// not there (404) is left out; another failed read is returned (fail
+// closed).
+func readRayJobSubmitterJob(c *kube.Client, ns string, pods []kube.ObjectMeta, links map[string]ownerLink) error {
 	for _, p := range pods {
 		for _, o := range p.OwnerReferences {
-			if o.Kind != "Job" || read[o.Name] || len(o.Name) > 253 || !components.DNS1123Subdomain.MatchString(o.Name) {
+			if o.Kind != "Job" || o.Name != kueue.RayJobName {
 				continue
 			}
-			read[o.Name] = true
 			meta, found, err := kube.ReadObjectMeta(c, rhoai.NamespacedPath("batch/v1", "jobs", ns, o.Name))
 			if err != nil {
 				return fmt.Errorf("read Job %s/%s: %w", ns, o.Name, err)
@@ -846,6 +862,7 @@ func readPodJobs(c *kube.Client, ns string, pods []kube.ObjectMeta, links map[st
 			if found && meta.UID != "" {
 				links[meta.UID] = ownerLink{kind: "Job", meta: meta}
 			}
+			return nil
 		}
 	}
 	return nil
@@ -897,10 +914,11 @@ func listOwnerChainLinks(c *kube.Client, ns string, needed bool) (map[string]own
 }
 
 // ownerWalk says whether an object is owned by the tool's roots (owned):
-// every ownerReference of it is a root (an ownerKey of the tool's owners)
-// or an object read here (the project's ReplicaSets and Deployments, and
-// the Jobs of RayJob submitter pods) whose own references all are, at most
-// maxOwnerLinks references from the object; an object without
+// every ownerReference of it is a root (referenceKey: kind and UID, and a
+// Job's name too) or an object read here (the project's ReplicaSets and
+// Deployments, and the RayJob submitter's Job, whose name the reference
+// must also give) whose own references all are, at most maxOwnerLinks
+// references from the object; an object without
 // ownerReferences is not owned this way. This follows the Kubernetes
 // garbage collector, which keeps an object while any of its owners is
 // there and finds an owner by apiVersion, kind and name and then compares
@@ -942,11 +960,11 @@ func (w *ownerWalk) reaches(m kube.ObjectMeta, depth int) bool {
 		return false
 	}
 	for _, o := range m.OwnerReferences {
-		if w.roots[ownerKey(o.Kind, o.UID)] {
+		if w.roots[referenceKey(o.Kind, o.Name, o.UID)] {
 			continue
 		}
 		next, ok := w.links[o.UID]
-		if !ok || next.kind != o.Kind || depth == maxOwnerLinks || !w.linkReaches(o.UID, next, depth+1) {
+		if !ok || next.kind != o.Kind || (o.Kind == "Job" && next.meta.Name != o.Name) || depth == maxOwnerLinks || !w.linkReaches(o.UID, next, depth+1) {
 			return false
 		}
 	}
