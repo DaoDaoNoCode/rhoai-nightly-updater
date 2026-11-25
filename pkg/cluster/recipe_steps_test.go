@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kueue"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/recipe"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -122,10 +123,10 @@ func TestRecipeDSCStep_Failures(t *testing.T) {
 	})
 }
 
-// Prerequisite steps write into state which DataScienceCluster components
-// they enabled (matching what Set up's record added for that feature) and
-// mark their slice of work complete. Components pre-recorded are excluded
-// from what the run claims.
+// The prerequisites step writes into state which DataScienceCluster
+// components it enabled (what Set up's record gained for the recipe's
+// features, from one read before and one after the whole set).
+// Components pre-recorded are excluded from what the run claims.
 func TestRecipePrereqSteps_RecordTheComponentsTheyTurnedOn(t *testing.T) {
 	pc := newPrereqCluster(t)
 	r, problems := recipe.Validate([]byte(tRecipeBase + `{"rhoai":{"build":"latest"},"dataScienceCluster":{"create":true},"project":{"mode":"create","name":"recipe-dev"},
@@ -138,14 +139,17 @@ func TestRecipePrereqSteps_RecordTheComponentsTheyTurnedOn(t *testing.T) {
 		t.Fatalf("mlflow setup: %+v", res)
 	}
 	st := &recipe.State{Recipe: r}
-	for _, id := range []string{recipe.StepPipelinesPrereq, recipe.StepMLflowPrereq} {
-		res, err := recipeStep(t, r, id).Run(pc.c, st, func(types.UpdateStepEvent) {})
-		if err != nil || !res.Success {
-			t.Fatalf("%s: %+v %v", id, res, err)
-		}
+	res, err := recipeStep(t, r, recipe.StepPrerequisites).Run(pc.c, st, func(types.UpdateStepEvent) {})
+	if err != nil || !res.Success {
+		t.Fatalf("%+v %v", res, err)
 	}
 	if strings.Join(st.Components, ",") != "aipipelines" {
 		t.Errorf("components %v", st.Components)
+	}
+	// Each component is the first feature's that needs it.
+	rec, err := features.ReadPrereqRecord(pc.c)
+	if err != nil || rec.Components["aipipelines"].Feature != "pipelines" || rec.Components["mlflowoperator"].Feature != "mlflow" {
+		t.Errorf("record %+v %v", rec, err)
 	}
 	// With the enablement it turned on, as the record has it.
 	defer func() {
@@ -157,7 +161,7 @@ func TestRecipePrereqSteps_RecordTheComponentsTheyTurnedOn(t *testing.T) {
 		pc.f.mu.Unlock()
 		old := prereqRecordID(t, pc.c, "aipipelines")
 		again := &recipe.State{Recipe: r}
-		res, err := recipeStep(t, r, recipe.StepPipelinesPrereq).Run(pc.c, again, func(types.UpdateStepEvent) {})
+		res, err := recipeStep(t, r, recipe.StepPrerequisites).Run(pc.c, again, func(types.UpdateStepEvent) {})
 		if err != nil || !res.Success {
 			t.Fatalf("again: %+v %v", res, err)
 		}
@@ -168,6 +172,72 @@ func TestRecipePrereqSteps_RecordTheComponentsTheyTurnedOn(t *testing.T) {
 	}()
 	if id := prereqRecordID(t, pc.c, "aipipelines"); id == "" || !reflect.DeepEqual(st.ComponentIDs, map[string]string{"aipipelines": id}) {
 		t.Errorf("component IDs %v, record %q", st.ComponentIDs, id)
+	}
+}
+
+// The set records every component before its first patch; when a later
+// patch fails, the run claims only the components whose patch went
+// through, not the ones recorded but never changed. A Resume whose retry
+// turns the rest on claims them then (the record had them already), and
+// the run's Clean up offers them.
+func TestRecipePrereqSteps_ClaimOnlyWhatWasTurnedOn(t *testing.T) {
+	pc := newPrereqCluster(t)
+	r, problems := recipe.Validate([]byte(tRecipeBase + `{"rhoai":{"build":"latest"},"dataScienceCluster":{"create":true},"project":{"mode":"create","name":"recipe-dev"},
+"features":{"pipelines":{"enabled":true},"mlflow":{"enabled":true}}}}`))
+	if len(problems) > 0 {
+		t.Fatal(problems)
+	}
+	patches := 0
+	pc.f.intercept = func(w http.ResponseWriter, r *http.Request, _ []byte) bool {
+		if r.Method != http.MethodPatch || r.URL.Path != tDSC || r.URL.Query().Get("dryRun") != "" {
+			return false
+		}
+		if patches++; patches == 2 {
+			pc.f.status(w, http.StatusInternalServerError, "injected failure")
+			return true
+		}
+		return false
+	}
+	st := &recipe.State{Recipe: r}
+	res, err := recipeStep(t, r, recipe.StepPrerequisites).Run(pc.c, st, func(types.UpdateStepEvent) {})
+	if err != nil || res.Success || !strings.Contains(res.Message, "Failed to set mlflowoperator to Managed") {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if strings.Join(st.Components, ",") != "aipipelines" || componentState(pc.f, "mlflowoperator") != "Removed" {
+		t.Errorf("components %v, mlflowoperator %s", st.Components, componentState(pc.f, "mlflowoperator"))
+	}
+	// Resume: the runner keeps the components; the retry succeeds.
+	pc.f.mu.Lock()
+	pc.f.intercept = nil
+	pc.f.mu.Unlock()
+	first := prereqRecordID(t, pc.c, "aipipelines")
+	if !reflect.DeepEqual(st.ComponentIDs, map[string]string{"aipipelines": first}) {
+		t.Errorf("component IDs %v", st.ComponentIDs)
+	}
+	resumed := &recipe.State{Recipe: r, Components: st.Components, ComponentIDs: st.ComponentIDs}
+	if res, err := recipeStep(t, r, recipe.StepPrerequisites).Run(pc.c, resumed, func(types.UpdateStepEvent) {}); err != nil || !res.Success {
+		t.Fatalf("resume: %+v %v", res, err)
+	}
+	ids := map[string]string{"aipipelines": first, "mlflowoperator": prereqRecordID(t, pc.c, "mlflowoperator")}
+	if strings.Join(resumed.Components, ",") != "aipipelines,mlflowoperator" || ids["mlflowoperator"] == "" || !reflect.DeepEqual(resumed.ComponentIDs, ids) {
+		t.Errorf("resumed components %v, IDs %v, record %v", resumed.Components, resumed.ComponentIDs, ids)
+	}
+	// The run's Clean up offers both, bound to those enablements, and
+	// turns them back from that offer.
+	u := userClientOf(pc.c, fakeUserToken)
+	run := &types.RecipeRun{ID: "run-1", Steps: []types.RecipeRunStep{{ID: recipe.StepPrerequisites}}, Components: resumed.Components, ComponentIDs: resumed.ComponentIDs}
+	created, req := recipe.Ownership(u, u, run)
+	if req == nil || strings.Join(req.Components, ",") != "aipipelines,mlflowoperator" || !reflect.DeepEqual(req.ComponentIDs, ids) || !created[recipe.StepPrerequisites] {
+		t.Fatalf("offer: created %v, cleanup %+v", created, req)
+	}
+	res, err = CleanUp(u, *req, func(UpdateStepEvent) {})
+	if err != nil || !res.Success {
+		t.Fatalf("clean up: %+v %v", res, err)
+	}
+	for _, key := range []string{"aipipelines", "mlflowoperator"} {
+		if componentState(pc.f, key) != "Removed" {
+			t.Errorf("%s is %s after Clean up", key, componentState(pc.f, key))
+		}
 	}
 }
 
@@ -195,6 +265,12 @@ func TestRecipeOwnership_FromTheCluster(t *testing.T) {
 		want := types.CleanupRequest{Components: []string{"aipipelines"}, ComponentIDs: map[string]string{"aipipelines": id}}
 		if req == nil || !reflect.DeepEqual(*req, want) || !reflect.DeepEqual(created, map[string]bool{recipe.StepPipelinesPrereq: true}) {
 			t.Fatalf("created %v, cleanup %+v", created, req)
+		}
+		// A run of this version marks its prerequisites step, which turned
+		// the components of every feature but Kueue on.
+		run.Steps[0].ID = recipe.StepPrerequisites
+		if created, _ := recipe.Ownership(pc.c, nil, run); !reflect.DeepEqual(created, map[string]bool{recipe.StepPrerequisites: true}) {
+			t.Fatalf("this version's run: created %v", created)
 		}
 		// Another actor reverts management state: no longer what this run left.
 		k, _ := parseFakePath(tDSC)
@@ -281,18 +357,19 @@ func TestRecipeOwnership_FromTheCluster(t *testing.T) {
 	}
 }
 
-// If the prerequisites snapshot cannot be fetched, the step reports that
+// If the cluster cannot be read for the claim, the step reports that
 // component ownership is unknown for the run (so they stay out of Clean up)
 // rather than dropping that information without notice.
 func TestRecipePrereqSteps_UnreadableRecordIsSaid(t *testing.T) {
 	pc := newPrereqCluster(t)
 	r := tRecipe(t, "create")
 	r.Spec.Features.Pipelines.Enabled = true
+	// The step's first read, before the setup: what is on already.
 	reads := 0
 	serve := pc.f.beforeServe
 	pc.f.beforeServe = func(method, path string) {
 		serve(method, path)
-		if method == http.MethodGet && strings.HasSuffix(path, "/configmaps/rhoai-nightly-updater-snapshot") {
+		if method == http.MethodGet && strings.HasSuffix(path, "/datascienceclusters") {
 			reads++
 			pc.f.mu.Lock()
 			if reads == 1 {
@@ -305,7 +382,7 @@ func TestRecipePrereqSteps_UnreadableRecordIsSaid(t *testing.T) {
 	}
 	st := &recipe.State{Recipe: r}
 	var events []string
-	res, err := recipeStep(t, r, recipe.StepPipelinesPrereq).Run(pc.c, st, func(e types.UpdateStepEvent) { events = append(events, e.Message) })
+	res, err := recipeStep(t, r, recipe.StepPrerequisites).Run(pc.c, st, func(e types.UpdateStepEvent) { events = append(events, e.Message) })
 	if err != nil || res == nil {
 		t.Fatalf("%+v %v", res, err)
 	}

@@ -71,7 +71,7 @@ func TestRecipePlan_FreshClusterWithoutTheOneTimeSetup(t *testing.T) {
 	f, c := projectFake(t)
 	plan, state := planRecipeFor(t, c, `{"rhoai":{"build":{"image":"`+tRecipeFBC+`"}},"dataScienceCluster":{"create":true},"project":{"mode":"create","name":"recipe-dev"},
 "features":{"pipelines":{"enabled":true},"mlflow":{"enabled":true}}}`)
-	if got := planActions(plan); got != "rhoai=run dsc=later project=run pipelines-prereq=later s3=run pipeline-server=later mlflow-prereq=later mlflow=later" {
+	if got := planActions(plan); got != "rhoai=run dsc=later project=run prerequisites=later s3=run pipeline-server=later mlflow=later" {
 		t.Fatalf("actions %s", got)
 	}
 	if !strings.Contains(problemText(plan), "additional-pull-secret is missing") || !strings.Contains(problemText(plan), "no image mirror") {
@@ -151,6 +151,10 @@ func TestRecipePlan_ArgoCDRefusesTheFeaturesDoNot(t *testing.T) {
 	f, c := projectFake(t)
 	installedRHOAI(f)
 	f.argo = argoManagingAll(argo.SubscriptionObject)
+	// The prerequisites step is checked now (RHOAI and its
+	// DataScienceCluster are there): Models' needs cert-manager from the
+	// catalog.
+	putFakePackage(f, "openshift-cert-manager-operator", certManagerFakePackage())
 	plan, _ := planRecipeFor(t, c, `{"rhoai":{"build":"latest"},"dataScienceCluster":{"create":true},"project":{"mode":"create","name":"recipe-dev"},
 "features":{"models":{"enabled":true},"playground":{"enabled":true},"mlflow":{"enabled":true,"samples":true}},"dashboardDev":{"deploy":"main"}}`)
 	text := problemText(plan)
@@ -161,7 +165,7 @@ func TestRecipePlan_ArgoCDRefusesTheFeaturesDoNot(t *testing.T) {
 		t.Errorf("Argo CD's management did not refuse: %s", text)
 	}
 	if got := problemFixes(plan); got != "argo_managed@" {
-		t.Errorf("fixes %s", got)
+		t.Errorf("fixes %s: %s", got, text)
 	}
 }
 
@@ -172,9 +176,8 @@ func TestRecipePlan_ArgoCDRefusesTheFeaturesDoNot(t *testing.T) {
 func TestRecipePlan_EveryFeatureInDependencyOrder(t *testing.T) {
 	f, c := projectFake(t)
 	plan, _ := planRecipeFor(t, c, tRecipeAllFeatures)
-	want := "rhoai=run dsc=later project=run pipelines-prereq=later s3=run pipeline-server=later mlflow-prereq=later mlflow=later mlflow-samples=later " +
-		"maas=later models-prereq=later model=later maas-publish=later playground-prereq=later playground=later " +
-		"model-registry-prereq=later model-registry=later workbench=later dashboard-dev=later"
+	want := "rhoai=run dsc=later project=run prerequisites=later s3=run pipeline-server=later mlflow=later mlflow-samples=later " +
+		"maas=later model=later maas-publish=later playground=later model-registry=later workbench=later dashboard-dev=later"
 	if got := planActions(plan); got != want {
 		t.Fatalf("actions\n got %s\nwant %s", got, want)
 	}
@@ -189,7 +192,7 @@ func TestRecipePlan_EveryFeatureInDependencyOrder(t *testing.T) {
 		titles[s.ID] = s.Title
 		typical, most = typical+s.TypicalSeconds, most+s.MaxSeconds
 	}
-	if titles["model"] != "Model Qwen3 1.7B (CPU, tool calling)" || titles["dashboard-dev"] != "Dashboard Dev (PR #1234)" || titles["maas"] != "Models as a Service" {
+	if titles["prerequisites"] != "What the features need" || titles["model"] != "Model Qwen3 1.7B (CPU, tool calling)" || titles["dashboard-dev"] != "Dashboard Dev (PR #1234)" || titles["maas"] != "Models as a Service" {
 		t.Errorf("titles %v", titles)
 	}
 	if plan.TypicalSeconds != typical || plan.MaxSeconds != most {
@@ -219,14 +222,23 @@ func TestRecipeSteps_PublishOnlyWhenNeededDashboardDevLast(t *testing.T) {
 		return strings.Join(out, " ")
 	}
 	base := `{"rhoai":{"build":"latest"},"dataScienceCluster":{"create":true},"project":{"mode":"existing","name":"p"},"dashboardDev":{"deploy":"main"},"features":`
-	if got := ids(base + `{"models":{"enabled":true,"exposure":"maas"},"maas":{"enabled":true,"publish":true}}}`); got != "rhoai dsc project maas models-prereq model dashboard-dev" {
+	if got := ids(base + `{"models":{"enabled":true,"exposure":"maas"},"maas":{"enabled":true,"publish":true}}}`); got != "rhoai dsc project prerequisites maas model dashboard-dev" {
 		t.Errorf("maas exposure: %s", got)
 	}
-	if got := ids(base + `{"models":{"enabled":true},"maas":{"enabled":true,"publish":true}}}`); got != "rhoai dsc project maas models-prereq model maas-publish dashboard-dev" {
+	if got := ids(base + `{"models":{"enabled":true},"maas":{"enabled":true,"publish":true}}}`); got != "rhoai dsc project prerequisites maas models-prereq model maas-publish dashboard-dev" {
 		t.Errorf("recommended exposure: %s", got)
 	}
-	if got := ids(base + `{"modelRegistry":{"enabled":true}}}`); got != "rhoai dsc project model-registry-prereq model-registry dashboard-dev" {
+	if got := ids(base + `{"modelRegistry":{"enabled":true}}}`); got != "rhoai dsc project prerequisites model-registry dashboard-dev" {
 		t.Errorf("registry: %s", got)
+	}
+	// Kueue's operators join the prerequisites step; its component stays in
+	// kueue-prereq, late.
+	if got := ids(base + `{"pipelines":{"enabled":true},"kueue":{"enabled":true}}}`); got != "rhoai dsc project prerequisites s3 pipeline-server kueue-prereq kueue dashboard-dev" {
+		t.Errorf("kueue: %s", got)
+	}
+	// Nothing needs prerequisites: no step.
+	if got := ids(base + `{"workbench":{"enabled":true}}}`); got != "rhoai dsc project workbench dashboard-dev" {
+		t.Errorf("workbench only: %s", got)
 	}
 }
 

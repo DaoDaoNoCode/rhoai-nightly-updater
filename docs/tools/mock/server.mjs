@@ -713,15 +713,15 @@ async function recipeRoute(req, res, key) {
   // run and resume: the run begins at the first step that is not set up.
   const prior = world.recipeRun.run;
   const done = key === "POST /api/recipes/resume" && prior ? prior.steps.filter((s) => s.status === "success" || s.status === "skipped").length : installed ? 1 : 0;
-  const titles = ["RHOAI", "DataScienceCluster", "Project recipe-dev", "What Pipelines needs", "S3 storage", "Pipeline server", "What MLflow needs", "MLflow"];
+  const titles = F.recipeSteps(F.recipe()).map(([, title]) => title);
   const advance = (n) => {
-    if (n >= 8) {
-      world.recipeRun = { run: { ...F.recipeRun({ done: 8, current: "", state: "succeeded", stopReason: "Every step of dev is set up." }) }, running: false };
+    if (n >= titles.length) {
+      world.recipeRun = { run: { ...F.recipeRun({ done: titles.length, current: "", state: "succeeded", stopReason: "Every step of dev is set up." }) }, running: false };
       world.operation = { inProgress: false, operation: null };
       return;
     }
     world.recipeRun = { run: F.recipeRun({ done: n }), running: true, pod: world.recipeRun.run?.pod, step: { step: "", status: "running", message: `Checking ${titles[n]}...` } };
-    world.operation = { inProgress: true, operation: { id: "op-recipe", type: "recipe", label: "Environment recipe", user: F.USER, target: `dev: step ${n + 1} of 8 (${titles[n]})`, startedAt: new Date(F.NOW).toISOString(), updatedAt: new Date(F.NOW).toISOString() } };
+    world.operation = { inProgress: true, operation: { id: "op-recipe", type: "recipe", label: "Environment recipe", user: F.USER, target: `dev: step ${n + 1} of ${titles.length} (${titles[n]})`, startedAt: new Date(F.NOW).toISOString(), updatedAt: new Date(F.NOW).toISOString() } };
     nextStep().then(() => advance(n + 1));
   };
   advance(done);

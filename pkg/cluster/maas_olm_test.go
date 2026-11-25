@@ -104,6 +104,14 @@ func newFakeOLMSim(f *resourceFake) *fakeOLMSim {
 	return s
 }
 
+// putFakePackage makes catalog p's package name available on f.
+func putFakePackage(f *resourceFake, name string, p fakePackage) {
+	var status map[string]any
+	_ = json.Unmarshal([]byte(packageManifestStatus(name, p)), &status)
+	f.put("/apis/packages.operators.coreos.com/v1/namespaces/openshift-marketplace/packagemanifests/"+name, map[string]any{
+		"metadata": map[string]any{"labels": map[string]any{"catalog": p.source}}, "status": status})
+}
+
 // csvLocked stores an installed CSV of pkg at version in ns.
 func (s *fakeOLMSim) csvLocked(pkg, ns, version string) {
 	s.f.objects[fakeKey{gv: "operators.coreos.com/v1alpha1", ns: ns, plural: "clusterserviceversions", name: pkg + ".v" + version}] = map[string]any{

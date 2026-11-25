@@ -27,14 +27,24 @@ import (
 // page setup), so recipes cannot alter anything someone could not set in
 // the app.
 const (
-	StepRHOAI           = "rhoai"
-	StepDSC             = "dsc"
-	StepProject         = "project"
-	StepPipelinesPrereq = "pipelines-prereq"
-	StepS3              = "s3"
-	StepPipelineServer  = "pipeline-server"
-	StepMLflowPrereq    = "mlflow-prereq"
-	StepMLflow          = "mlflow"
+	StepRHOAI   = "rhoai"
+	StepDSC     = "dsc"
+	StepProject = "project"
+	// StepPrerequisites sets up what every feature of the recipe needs, as
+	// one set (features.RunPrerequisitesSet).
+	StepPrerequisites  = "prerequisites"
+	StepS3             = "s3"
+	StepPipelineServer = "pipeline-server"
+	StepMLflow         = "mlflow"
+)
+
+// Each feature's own prerequisites step in the runs of earlier versions,
+// before StepPrerequisites: their run records still name them.
+const (
+	StepPipelinesPrereq     = "pipelines-prereq"
+	StepMLflowPrereq        = "mlflow-prereq"
+	StepPlaygroundPrereq    = "playground-prereq"
+	StepModelRegistryPrereq = "model-registry-prereq"
 )
 
 // State is per-run data that flows across steps and what gets recorded:
@@ -146,7 +156,7 @@ func Ownership(c, u *kube.Client, run *types.RecipeRun) (map[string]bool, *types
 			req.ComponentIDs = map[string]string{}
 		}
 		req.ComponentIDs[key] = kube.FirstNonEmpty(live.id, types.ComponentNotIdentified)
-		created[prereqStepOf[live.feature]] = true
+		created[prereqStepFor(run, live.feature)] = true
 	}
 	for part, uid := range liveCreated(c, u, run) {
 		switch part {
@@ -171,10 +181,26 @@ func Ownership(c, u *kube.Client, run *types.RecipeRun) (map[string]bool, *types
 	return created, req
 }
 
-// prereqStepOf maps a feature name to its prerequisite step id.
-var prereqStepOf = map[string]string{
+// legacyPrereqStepOf is each feature's own prerequisites step in the runs
+// of earlier versions (before StepPrerequisites).
+var legacyPrereqStepOf = map[string]string{
 	"pipelines": StepPipelinesPrereq, "mlflow": StepMLflowPrereq, "models": StepModelsPrereq,
-	"playground": StepPlaygroundPrereq, "model-registry": StepModelRegistryPrereq, "kueue": StepKueuePrereq,
+	"playground": StepPlaygroundPrereq, "model-registry": StepModelRegistryPrereq,
+}
+
+// prereqStepFor is the step of run that turned on a component for
+// feature: kueue-prereq for Kueue's, the prerequisites step for the
+// others, or, in a run recorded before it, the feature's own step.
+func prereqStepFor(run *types.RecipeRun, feature string) string {
+	if feature == "kueue" {
+		return StepKueuePrereq
+	}
+	for _, st := range run.Steps {
+		if st.ID == StepPrerequisites {
+			return StepPrerequisites
+		}
+	}
+	return legacyPrereqStepOf[feature]
 }
 
 // liveComponents returns component keys the run still owns, each paired
@@ -347,8 +373,8 @@ func (s Step) Seconds() (typical, most int) {
 }
 
 // Steps lists a recipe's stages in execution order: RHOAI build,
-// DataScienceCluster, optional project, then per-feature prerequisite and
-// setup steps.
+// DataScienceCluster, optional project, what every feature needs (one
+// step), then each feature's setup steps.
 func Steps(r types.EnvironmentRecipe) []Step {
 	steps := []Step{
 		{ID: StepRHOAI, Title: "RHOAI", Typical: 7 * time.Minute, Max: 15 * time.Minute, Check: checkRHOAI, Run: runRHOAI},
@@ -357,17 +383,22 @@ func Steps(r types.EnvironmentRecipe) []Step {
 	if r.Spec.Project != nil {
 		steps = append(steps, Step{ID: StepProject, Title: "Project " + r.Spec.Project.Name, Typical: 10 * time.Second, Max: time.Minute, Check: checkProjectStep, Run: EnsureProject})
 	}
+	if len(prereqItems(r)) > 0 {
+		// After the project (quick, and refused early when it is not the
+		// recipe's), before every feature: nothing in it needs the project.
+		// On a fresh cluster its operator installs and readiness waits take
+		// minutes; once everything is there the run skips it.
+		steps = append(steps, Step{ID: StepPrerequisites, Title: "What the features need", Typical: 5 * time.Minute, Max: 15 * time.Minute, Check: checkPrerequisites, Run: runPrerequisites})
+	}
 	f := r.Spec.Features
 	if f.Pipelines.Enabled {
 		steps = append(steps,
-			Step{ID: StepPipelinesPrereq, Title: "What Pipelines needs", Typical: 2 * time.Minute, Max: 10 * time.Minute, Check: checkPipelinesPrereq, Run: runPipelinesPrereq},
 			Step{ID: StepS3, Title: "S3 storage", Typical: time.Minute, Max: 5 * time.Minute, Check: checkS3, Run: runS3},
 			Step{ID: StepPipelineServer, Title: "Pipeline server", Typical: 2 * time.Minute, Max: 10 * time.Minute, Check: checkPipelineServer, Run: runPipelineServer},
 		)
 	}
 	if f.MLflow.Enabled {
 		steps = append(steps,
-			Step{ID: StepMLflowPrereq, Title: "What MLflow needs", Typical: 2 * time.Minute, Max: 10 * time.Minute, Check: checkMLflowPrereq, Run: runMLflowPrereq},
 			Step{ID: StepMLflow, Title: "MLflow", Typical: 2 * time.Minute, Max: 10 * time.Minute, Check: checkMLflow, Run: runMLflow},
 		)
 	}
@@ -565,14 +596,72 @@ func waitDSCConditions(c *kube.Client) error {
 
 // --- feature prerequisites ---------------------------------------------------
 
-// checkPrereq: the feature's prerequisites are ready → done; a reason the
-// setup cannot make them ready blocks.
-func checkPrereq(c *kube.Client, feature string) (Check, error) {
-	return checkPrereqFor(c, feature, "")
+// prereqItems is what the recipe's features need on the cluster, as one
+// set, in the order of their steps: Models for the recipe's exposure (with
+// none, what every way needs: StepModelsPrereq adds what the resolved one
+// needs), and only the Kueue operators (kueue-prereq turns its component
+// on, after the other features are set up, as before).
+func prereqItems(r types.EnvironmentRecipe) []features.SetItem {
+	f := r.Spec.Features
+	var items []features.SetItem
+	for _, it := range []struct {
+		on   bool
+		item features.SetItem
+	}{
+		{f.Pipelines.Enabled, features.SetItem{Feature: "pipelines"}},
+		{f.MLflow.Enabled, features.SetItem{Feature: "mlflow"}},
+		{f.Models.Enabled, features.SetItem{Feature: "models", Exposure: f.Models.Exposure}},
+		{f.Playground.Enabled, features.SetItem{Feature: "playground"}},
+		{f.ModelRegistry.Enabled, features.SetItem{Feature: "model-registry"}},
+		{f.Kueue.Enabled, features.SetItem{Feature: "kueue", OperatorsOnly: true}},
+	} {
+		if it.on {
+			items = append(items, it.item)
+		}
+	}
+	return items
 }
 
-// checkPrereqFor is checkPrereq for a model reached by exposure (Models:
-// gateways need Connectivity Link too).
+// checkPrerequisites: what every feature needs is ready → done; a reason
+// its setup cannot make one ready blocks.
+func checkPrerequisites(c *kube.Client, s *State) (Check, error) {
+	items := prereqItems(s.Recipe)
+	st, err := prereqSetStatus(c, items)
+	if err != nil {
+		return Check{}, fmt.Errorf("read what the features need: %w", err)
+	}
+	ready := true
+	for _, it := range items {
+		fp := st.Features[it.Feature]
+		if fp.SetupBlockedReason != "" {
+			return Check{Blocked: features.FeatureTitle(it.Feature) + ": " + fp.SetupBlockedReason, Fix: fixAt(types.RecipeFixFeatureBlocked, pageEnvironment)}, nil
+		}
+		ready = ready && fp.Ready
+	}
+	if ready {
+		return Check{Done: true, Reason: "Everything the features need is there."}, nil
+	}
+	return Check{}, nil
+}
+
+// runPrerequisites sets up what every feature needs, as one set, and
+// records the components it turned on (claimComponents).
+func runPrerequisites(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+	items := prereqItems(s.Recipe)
+	var claim []string
+	for _, it := range items {
+		if !it.OperatorsOnly {
+			claim = append(claim, it.Feature)
+		}
+	}
+	return claimComponents(c, s, StepPrerequisites, claim, emit, func() (*types.OperationResponse, error) {
+		return runPrereqSet(c, items, emit)
+	})
+}
+
+// checkPrereqFor: what feature needs, for a model reached by exposure
+// (Models: gateways need Connectivity Link too), is ready → done; a reason
+// the setup cannot make it ready blocks.
 func checkPrereqFor(c *kube.Client, feature, exposure string) (Check, error) {
 	st, err := prereqStatus(c, exposure)
 	if err != nil {
@@ -588,53 +677,57 @@ func checkPrereqFor(c *kube.Client, feature, exposure string) (Check, error) {
 	return Check{}, nil
 }
 
-func checkPipelinesPrereq(c *kube.Client, _ *State) (Check, error) {
-	return checkPrereq(c, "pipelines")
-}
-func checkMLflowPrereq(c *kube.Client, _ *State) (Check, error) { return checkPrereq(c, "mlflow") }
-
-// runPipelinesPrereq is Set up what Pipelines needs.
-func runPipelinesPrereq(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
-	return runPrereq(c, s, StepPipelinesPrereq, "pipelines", emit)
-}
-
-// runMLflowPrereq is Set up what MLflow needs.
-func runMLflowPrereq(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
-	return runPrereq(c, s, StepMLflowPrereq, "mlflow", emit)
-}
-
 // prereqRecordReadTimeout bounds the read of the prerequisites record
 // after the setup, which also runs when the step's context has ended.
 const prereqRecordReadTimeout = 10 * time.Second
 
-// runPrereq runs Set up what feature needs and records the
-// DataScienceCluster components it turned on (State.Components): the keys
-// of feature that its record of the prerequisites it set up gained, also
-// when the setup then failed (it records a component before it turns it
-// on, and Clean up turns back only what it still owns). When either read
-// of that record fails nothing is claimed, and the step says so (its
-// message, its progress and the log): the run's Clean up then does not
-// offer them, Clean up everything still does.
-func runPrereq(c *kube.Client, s *State, step, feature string, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
-	return runPrereqFor(c, s, step, feature, "", emit)
+// runPrereqFor runs Set up what feature needs, for a model reached by
+// exposure, and records the components it turned on (claimComponents).
+func runPrereqFor(c *kube.Client, s *State, step, feature, exposure string, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+	return claimComponents(c, s, step, []string{feature}, emit, func() (*types.OperationResponse, error) {
+		return features.RunPrerequisites(c, types.PrerequisitesRequest{Feature: feature, Exposure: exposure}, emit)
+	})
 }
 
-// runPrereqFor is runPrereq for a model reached by exposure.
-func runPrereqFor(c *kube.Client, s *State, step, feature, exposure string, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
-	before, readErr := features.ReadPrereqRecord(c)
-	res, err := features.RunPrerequisites(c, types.PrerequisitesRequest{Feature: feature, Exposure: exposure}, emit)
+// claimComponents runs setup and records the DataScienceCluster components
+// it turned on (State.Components), from facts, not from what the record
+// gained: a component of the features, recorded by Set up, that was not
+// on before the step (features.OnComponents) and that the
+// DataScienceCluster now has on under this tool's field manager
+// (features.TurnedOnByTool). Set up records every component before its
+// first patch, so a failed patch leaves later ones recorded but never
+// changed: they are not claimed, and a Resume whose retry turns one on
+// claims it then. A component on before the step is never claimed. A
+// component whose patch went through is claimed also when the setup then
+// failed. Each is claimed with the enablement ID Set up recorded for it
+// (State.ComponentIDs), which the run's Clean up names. When a read fails
+// nothing is claimed, and the step says so (its message, its progress and
+// the log): the run's Clean up then does not offer them, Clean up
+// everything still does.
+func claimComponents(c *kube.Client, s *State, step string, feats []string, emit func(types.UpdateStepEvent), setup func() (*types.OperationResponse, error)) (*types.OperationResponse, error) {
+	onBefore, readErr := onComponents(c)
+	res, err := setup()
 	if readErr == nil {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Context()), prereqRecordReadTimeout)
 		defer cancel()
 		var after prereqRecordKeys
 		if after, readErr = readPrereqKeys(c.WithContext(ctx)); readErr == nil {
+			var gained []string
 			for key, e := range after {
-				// Turned on by this setup: the key is new in the record, or
-				// it got a new enablement ID (an entry that survived a turn
-				// off is written again when setup turns it on).
-				prev, had := before.Components[key]
-				if e.feature == feature && (!had || (e.id != "" && e.id != prev.ID)) {
-					s.AddComponentID(key, e.id)
+				// Turned on by this setup: off before it, recorded for its
+				// features (with the enablement ID the setup wrote).
+				if !onBefore[key] && slices.Contains(feats, e.feature) {
+					gained = append(gained, key)
+				}
+			}
+			if len(gained) > 0 {
+				var on map[string]bool
+				if on, readErr = turnedOnByTool(c.WithContext(ctx), gained); readErr == nil {
+					for _, key := range gained {
+						if on[key] {
+							s.AddComponentID(key, after[key].id)
+						}
+					}
 				}
 			}
 		}

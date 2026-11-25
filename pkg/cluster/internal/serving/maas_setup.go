@@ -408,18 +408,33 @@ func ErrSuffix(err error) string {
 // WaitOperator waits for OLM to install a Subscription's CSV, reporting
 // progress on step; it returns a failed response, or nil when installed.
 func (m *Run) WaitOperator(step, ns, name, title string) (*types.OperationResponse, error) {
-	m.Step(step, "running", fmt.Sprintf("Waiting for OLM to install %s (usually 1 to 3 minutes)...", title))
-	p, err := envkit.WaitForSubscription(m.Client, ns, name, func(s string) { m.Step(step, "running", s) })
+	if f := AwaitOperator(m.Client, step, ns, name, title, envkit.OperatorTimeout, "", m.Step); f != nil {
+		return m.Fail(step, f.Message, f.Code, f.Activity)
+	}
+	return nil, nil
+}
+
+// OperatorWaitFailure is why AwaitOperator stopped: the message, the
+// errorCode and the activity of the failed operation.
+type OperatorWaitFailure struct{ Message, Code, Activity string }
+
+// AwaitOperator is WaitOperator's wait, for up to timeout, reporting each
+// step through say (OLM's progress after prefix) and recording nothing, so
+// that several can wait at once (each say must be safe to call from its
+// own goroutine). It returns nil once OLM installed the operator.
+func AwaitOperator(c *kube.Client, step, ns, name, title string, timeout time.Duration, prefix string, say func(id, status, msg string)) *OperatorWaitFailure {
+	say(step, "running", fmt.Sprintf("Waiting for OLM to install %s (usually 1 to 3 minutes)...", title))
+	p, err := envkit.WaitForSubscriptionWithin(c, ns, name, timeout, func(s string) { say(step, "running", prefix+s) })
 	switch {
 	case err != nil:
-		return m.Fail(step, fmt.Sprintf("Stopped waiting for %s: %v. Its Subscription stays; Set up again to continue.", title, err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "operator wait failed")
+		return &OperatorWaitFailure{fmt.Sprintf("Stopped waiting for %s: %v. Its Subscription stays; Set up again to continue.", title, err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "cancelled"), "operator wait failed"}
 	case p.Failed != "":
-		return m.Fail(step, fmt.Sprintf("%s does not install: %s. Its Subscription %s/%s stays; a cluster-admin checks it (oc describe subscription %s -n %s).", title, p.Failed, ns, name, name, ns), "not_ready", "operator install failed")
+		return &OperatorWaitFailure{fmt.Sprintf("%s does not install: %s. Its Subscription %s/%s stays; a cluster-admin checks it (oc describe subscription %s -n %s).", title, p.Failed, ns, name, name, ns), "not_ready", "operator install failed"}
 	case !p.Done:
-		return m.Fail(step, fmt.Sprintf("%s is not installed after %s (%s). Set up again to continue once it is.", title, ClockText(envkit.OperatorTimeout), kube.FirstNonEmpty(p.Text, "no progress")), "not_ready", "operator not ready")
+		return &OperatorWaitFailure{fmt.Sprintf("%s is not installed after %s (%s). Set up again to continue once it is.", title, ClockText(timeout), kube.FirstNonEmpty(p.Text, "no progress")), "not_ready", "operator not ready"}
 	}
-	m.Step(step, "success", fmt.Sprintf("%s is installed (%s).", title, p.InstalledCSV))
-	return nil, nil
+	say(step, "success", fmt.Sprintf("%s is installed (%s).", title, p.InstalledCSV))
+	return nil
 }
 
 // setupGateway is setup's gateway step (setup-gateway.sh loadbalancer mode).

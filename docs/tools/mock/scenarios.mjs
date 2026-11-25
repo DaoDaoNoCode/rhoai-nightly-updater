@@ -669,7 +669,7 @@ scenarios["diag-leftovers-refused"] = (w) => { scenarios["diag-leftovers"](w); w
 // RHOAI and no DataScienceCluster (new, and its review), a run at step 5
 // (POST /__docs/advance moves it on), one that failed at the pipeline
 // server, and one whose updater pod went away.
-const RECIPE_OPERATION = (w, step, title, name = "dev", of = 8) => {
+const RECIPE_OPERATION = (w, step, title, name = "dev", of = 7) => {
   w.operation = { inProgress: true, operation: { id: "op-recipe", type: "recipe", label: "Environment recipe", user: F.USER, target: `${name}: step ${step} of ${of} (${title})`, startedAt: F.ago(12), updatedAt: F.ago(0.1) } };
 };
 scenarios["recipe-new"] = (w) => { scenarios["no-dsc"](w); w.resources = { minio: F.s3States.none, mlflow: F.mlflowStates.none, pipelineServers: [] }; };
@@ -681,10 +681,10 @@ scenarios["recipe-running"] = (w) => {
 };
 scenarios["recipe-failed"] = (w) => {
   const why = "The pipeline server did not become ready in 10 minutes: pod ds-pipeline-dspa-6c9f7d8b5-k8w2n is in ImagePullBackOff (registry.redhat.io/rhoai/odh-ml-pipelines-api-server-v2-rhel9).";
-  w.recipeRun = { run: F.recipeRun({ done: 5, current: "failed", message: why, state: "failed", errorCode: "timeout", stopReason: `Step 6 of 8 (Pipeline server) failed: ${why}` }), running: false };
+  w.recipeRun = { run: F.recipeRun({ done: 5, current: "failed", message: why, state: "failed", errorCode: "timeout", stopReason: `Step 6 of 7 (Pipeline server) failed: ${why}` }), running: false };
 };
 scenarios["recipe-succeeded"] = (w) => {
-  w.recipeRun = { run: F.recipeRun({ done: 8, current: "", state: "succeeded", stopReason: "Every step of recipe dev is set up." }), running: false };
+  w.recipeRun = { run: F.recipeRun({ done: 7, current: "", state: "succeeded", stopReason: "Every step of recipe dev is set up." }), running: false };
   // What the run set up is there: MLflow, and the pipeline server in its project.
   w.resources = { ...w.resources, mlflow: F.mlflowStates.running, pipelineServers: [...w.resources.pipelineServers, { ...F.pipelineServer, namespace: "recipe-dev", apiRoute: undefined, uiRoute: undefined }] };
   // An earlier run's project is still there too.
@@ -727,7 +727,7 @@ scenarios["recipe-full-succeeded-aihub"] = (w) => {
 };
 scenarios["recipe-interrupted"] = (w) => {
   w.recipeRun = { run: F.recipeRun({ done: 3, pod: "rhoai-nightly-updater-6f7b8c9d5-q9m3z" }), running: false, interrupted: true };
-  w.operation = { inProgress: false, operation: null, interrupted: { type: "recipe", label: "Environment recipe", user: F.USER, target: "dev: step 4 of 8 (What Pipelines needs)", startedAt: F.ago(14), pod: "rhoai-nightly-updater-6f7b8c9d5-q9m3z", id: "op-recipe", bootId: "b-4e2a" } };
+  w.operation = { inProgress: false, operation: null, interrupted: { type: "recipe", label: "Environment recipe", user: F.USER, target: "dev: step 4 of 7 (What the features need)", startedAt: F.ago(14), pod: "rhoai-nightly-updater-6f7b8c9d5-q9m3z", id: "op-recipe", bootId: "b-4e2a" } };
 };
 
 // The reads every page makes, as the server answers them; the frontend's

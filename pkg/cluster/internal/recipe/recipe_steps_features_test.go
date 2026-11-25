@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/modelregistry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
@@ -96,9 +97,13 @@ type fakeCluster struct {
 	publishAcceptedAfter, publishReads int
 
 	prereqExposures []string
-	ran             []string
-	modelsReq       types.ModelsRequest
-	maasReqs        []types.MaaSRequest
+	// prereqBlocked is a feature's SetupBlockedReason; setItems are the
+	// sets of prerequisites read or run, in order.
+	prereqBlocked map[string]string
+	setItems      [][]features.SetItem
+	ran           []string
+	modelsReq     types.ModelsRequest
+	maasReqs      []types.MaaSRequest
 }
 
 func ok(msg string) (*types.OperationResponse, error) {
@@ -113,7 +118,9 @@ func (fc *fakeCluster) install(t *testing.T) {
 	p14, p15, p16, p17, p18, p19, p20 := runRegistry, workbenchStatus, runWorkbench, dashboardSession, deployMain, deployPR, waitDashboard
 	p21, p22, p24, p25, p26, p27 := registryMeta, dbConfigMeta, dashboardReady, stepPoll, dashboardState, prPublished
 	p28, p29 := maasPlayground, userMaaSModels
+	p30, p31 := prereqSetStatus, runPrereqSet
 	t.Cleanup(func() {
+		prereqSetStatus, runPrereqSet = p30, p31
 		prereqStatus, samplesStatus, runSamples, maasStatus, maasRecord, runMaaS, modelExposures = p0, p1, p2, p3, p4, p5, p6
 		readModel, runModels, maasPublished, playgroundStatus, runPlayground, registryStatus, registryRecord = p7, p8, p9, p10, p11, p12, p13
 		runRegistry, workbenchStatus, runWorkbench, dashboardSession, deployMain, deployPR, waitDashboard = p14, p15, p16, p17, p18, p19, p20
@@ -131,6 +138,22 @@ func (fc *fakeCluster) install(t *testing.T) {
 			st.Features[f] = types.FeaturePrerequisites{Ready: ready}
 		}
 		return st, nil
+	}
+	prereqSetStatus = func(_ *kube.Client, items []features.SetItem) (*types.PrerequisitesStatus, error) {
+		fc.setItems = append(fc.setItems, items)
+		st := &types.PrerequisitesStatus{Features: map[string]types.FeaturePrerequisites{}}
+		for _, it := range items {
+			st.Features[it.Feature] = types.FeaturePrerequisites{Ready: fc.prereqReady[it.Feature], SetupBlockedReason: fc.prereqBlocked[it.Feature]}
+		}
+		return st, nil
+	}
+	runPrereqSet = func(_ *kube.Client, items []features.SetItem, _ func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+		fc.setItems = append(fc.setItems, items)
+		fc.ran = append(fc.ran, "prerequisites")
+		for _, it := range items {
+			fc.prereqReady[it.Feature] = true
+		}
+		return &types.OperationResponse{Success: true, Message: "set up"}, nil
 	}
 	samplesStatus = func(_, _ *kube.Client, project string) (*types.MLflowSamplesStatus, error) {
 		st := &types.MLflowSamplesStatus{Project: project, Available: true}
@@ -431,7 +454,7 @@ func TestFeatureSteps_CheckSkipsWhatIsSetUp(t *testing.T) {
 			t.Errorf("%s: %+v %v", step.ID, chk, err)
 		}
 	}
-	want := "mlflow-samples maas models-prereq model maas-publish playground-prereq playground model-registry-prereq model-registry workbench dashboard-dev"
+	want := "mlflow-samples maas models-prereq model maas-publish playground model-registry workbench dashboard-dev"
 	if got := strings.Join(ids, " "); got != want {
 		t.Errorf("order %s\nwant  %s", got, want)
 	}
@@ -498,6 +521,9 @@ func TestFeatureSteps_ResumeAfterMaaSContinuesWithModels(t *testing.T) {
 	// Dashboard Dev step executes even though no override session is recorded yet.
 	fc := &fakeCluster{samplesAdded: true, maasReady: true, session: &types.DashboardOverride{}, maasEntry: readyMaaSEntry()}
 	fc.install(t)
+	// The prerequisites step (before these) set up what the playground and
+	// the model registry need.
+	fc.prereqReady["playground"], fc.prereqReady["model-registry"] = true, true
 	c := testClient()
 	s := &State{Recipe: r, RunID: "run-1"}
 	var outcome []string
@@ -510,14 +536,12 @@ func TestFeatureSteps_ResumeAfterMaaSContinuesWithModels(t *testing.T) {
 			outcome = append(outcome, step.ID+"=skipped")
 			continue
 		}
-		if step.ID == StepModelsPrereq || step.ID == StepPlaygroundPrereq || step.ID == StepModelRegistryPrereq {
+		if step.ID == StepModelsPrereq {
 			// Prerequisite runs belong to the Environment page tests; here we
 			// only flip fakeCluster so later checks see them ready.
-			fc.prereqReady[strings.TrimSuffix(step.ID, "-prereq")] = true
-			if step.ID == StepModelsPrereq {
-				if problem, _ := pinExposure(c, s); problem != "" {
-					t.Fatal(problem)
-				}
+			fc.prereqReady["models"] = true
+			if problem, _ := pinExposure(c, s); problem != "" {
+				t.Fatal(problem)
 			}
 			outcome = append(outcome, step.ID+"=ran")
 			continue
@@ -528,7 +552,7 @@ func TestFeatureSteps_ResumeAfterMaaSContinuesWithModels(t *testing.T) {
 		}
 		outcome = append(outcome, step.ID+"=ran")
 	}
-	want := "mlflow-samples=skipped maas=skipped models-prereq=ran model=ran maas-publish=ran playground-prereq=ran playground=ran model-registry-prereq=ran model-registry=ran workbench=ran dashboard-dev=ran"
+	want := "mlflow-samples=skipped maas=skipped models-prereq=ran model=ran maas-publish=ran playground=ran model-registry=ran workbench=ran dashboard-dev=ran"
 	if got := strings.Join(outcome, " "); got != want {
 		t.Fatalf("resume\n got %s\nwant %s", got, want)
 	}

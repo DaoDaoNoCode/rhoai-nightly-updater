@@ -108,13 +108,13 @@
       {
         "created": true,
         "finishedAt": "2026-11-20T14:25:00Z",
-        "id": "pipelines-prereq",
-        "maxSeconds": 600,
-        "message": "Already set up: Everything it needs is set up.",
+        "id": "prerequisites",
+        "maxSeconds": 900,
+        "message": "Already set up: Everything the features need is there.",
         "startedAt": "2026-11-20T14:25:00Z",
         "status": "skipped",
-        "title": "What Pipelines needs",
-        "typicalSeconds": 120
+        "title": "What the features need",
+        "typicalSeconds": 300
       },
       {
         "finishedAt": "2026-11-20T14:26:00Z",
