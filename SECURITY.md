@@ -151,7 +151,26 @@ The UI's tests of these answers load JSON that `TestFrontendContract` (pkg/api) 
 ### Caches
 
 - Every cache of a user-token read is keyed by the token (`tokenKey`, a SHA-256 prefix): the playground status and fan-out (as before), and the MLflow samples status, now `token|invalidations|project` (before 5.0.0 it was keyed by the project only, `TestMLflowSamplesStatus_CachedPerUser`, `TestPlayground_StatusIsTheUsers`).
-- The per-cluster caches (keyed by the API server URL) are filled only by the SA: API discovery read with a user's client neither reads nor fills `apiVersionsCache` (`servedVersions`); the other per-cluster caches are not reached by the user reads.
+- The per-cluster caches (keyed by the API server URL) are filled only by the SA: API discovery read with a user's client neither reads nor fills `apiVersionsCache` (`servedVersions`). RHOAI's namespaces (`NamespacesCache`), the control plane (`ControlPlaneCache`) and the dashboard's address (`URLCache`) are read through the facts client (below), for a change's client too; a client of the user's token without a facts client is refused for the namespaces (`ErrNoFactsClient`) and reads the other two afresh without caching (`TestUserClientNeitherReadsNorFillsTheNamespaceCache`, `TestClusterFactCachesAreFilledOnlyThroughFacts`).
+
+### Cluster facts of a change (the facts client)
+
+A change and a user read act with the user's token, but a few things they need are cluster-wide and no user data, and a project user's token may not read them. pkg/api gives the change's client, each recipe step's and a user read's the SA's client as their facts client (`SetFacts`, next to `SetBookkeeping`), and those reads go through `c.Facts()`: a read-only copy that sends only GET and HEAD (any other request fails with `ErrFactsReadOnly` before it leaves, in `doOnce`, the only place a request is sent), whose `BearerToken` is empty, and that carries no bookkeeper or signed-in user. "The facts client exposes no write method" is enforced that way, not as a separate Go type: the read helpers all take a `*kube.Client`.
+
+| Fact | Read by (SA rule already in `deploy/template.yaml`) | Used by |
+|---|---|---|
+| RHOAI's applications and monitoring namespaces | DSCInitializations `list` | every change (`DiscoverNamespaces`) |
+| Whether a component is on, at the newest served version that converts | DataScienceClusters `list` (`ReadFirstDSC`: a version whose conversion webhook fails is skipped) | pipeline server and MLflow setup (`SetupComponentBlock`), workbench setup/start/delete, playground setup |
+| Whether the control plane is hosted | Infrastructure `cluster` `get`, ValidatingWebhookConfigurations `list` (`ReadControlPlane`) | the internal registry's pull copy, pull advice |
+| The dashboard's address | Dashboard component CRs `list`, Route `rhods-dashboard` `get` | playground, MLflow samples' links |
+| MLflow's address and readiness | MLflow `mlflow` `get` | MLflow samples |
+| The gen-ai backend's state | Deployment `gen-ai-ui` `get` | playground setup |
+
+`types.ProjectFacts` (the applications namespace, the DataScienceCluster's components with state and readiness, hosted or not) is the fixed answer for a project action, read only through the facts client (`ReadProjectFacts`; a new field is a reviewed change); what could not be read is named by a fixed code, never the read's text.
+
+- A component check that cannot read the DataScienceCluster at any served version refuses the setup (`prerequisites_unknown`, with the HTTP status only), for admins too; before, it blocked nothing.
+- The MLflow samples check the project with the projects API and the user's token (`IsUserDSProject`) before the SA reads MLflow.
+- RBAC: every function `c.Facts()` is passed to is a root of the SA's scan, also when only a change calls it, so `TestTemplateRBACCoversEveryServiceAccountCall` proves the template already grants each read; `TestFactsClientOnlyReads` proves that what they reach makes only get/list/watch requests and never calls `BearerToken` or `TokenKey`, and that every write is refused at run time. The SA gains no permission, `deploy/template.yaml` and `rbac-requests.golden` are unchanged.
 
 ### Errors
 
