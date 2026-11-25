@@ -330,6 +330,7 @@ var operationTypes = map[string][2]string{
 	"/api/resources/model-registry/stream":        {"model-registry", "Model registry"},
 	"/api/resources/workbench/stream":             {"workbench", "Workbench"},
 	"/api/resources/kueue/stream":                 {"kueue", "Distributed workloads"},
+	"/api/resources/observability/stream":         {"observability", "Usage logs and dashboards"},
 	"/api/resources/maas/stream":                  {"maas", "Models as a Service"},
 	"/api/resources/prerequisites/stream":         {"prerequisites", "Set up a feature's prerequisites"},
 	"/api/resources/cleanup/stream":               {"cleanup", "Clean up the environment"},

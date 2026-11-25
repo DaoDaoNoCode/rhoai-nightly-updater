@@ -220,39 +220,59 @@ func adminSeaweed(c *kube.Client) (*seaweedClient, error) {
 // stale keys (interrupted runs may leave keys that never reached a Secret).
 func provisionScopedKey(sw *seaweedClient, project string, current S3Keys) (keys S3Keys, fresh bool, err error) {
 	user := ScopedUserName(project)
-	if err := sw.CreateUser(user); err != nil {
-		return S3Keys{}, false, fmt.Errorf("create SeaweedFS user %s: %w", user, err)
+	return provisionBucketUser(sw, bucketUser{name: user, policyName: scopedPolicyName, policy: ScopedPolicy, tagKey: scopedNamespaceTag, tagValue: project,
+		// If the user's tag references a different project (even when names
+		// hash to the same value), treat that project as owner and skip
+		// re-key/re-tag.
+		foreign: func(other string) error {
+			return fmt.Errorf("SeaweedFS user %s belongs to project %s, not %s; nothing was changed. Delete that user in the SeaweedFS admin UI if project %s no longer needs it, or set up the pipeline server in a project with another name", user, other, project, other)
+		}}, current)
+}
+
+// bucketUser is a SeaweedFS IAM user this tool makes for one use of one
+// bucket: its inline policy, and the tag that says whose it is.
+type bucketUser struct {
+	name, policyName, policy, tagKey, tagValue string
+	// foreign is the error for a user whose tag names another owner.
+	foreign func(other string) error
+}
+
+// provisionBucketUser ensures the user exists with its policy and tag, and
+// yields its key: current when it is still registered on the user, else a
+// new pair (fresh) after revoking the old ones (an interrupted run may leave
+// keys that never reached a Secret).
+func provisionBucketUser(sw *seaweedClient, u bucketUser, current S3Keys) (keys S3Keys, fresh bool, err error) {
+	if err := sw.CreateUser(u.name); err != nil {
+		return S3Keys{}, false, fmt.Errorf("create SeaweedFS user %s: %w", u.name, err)
 	}
-	// If the user's tag references a different project—even when names hash
-	// to the same value—treat that project as owner and skip re-key/re-tag.
-	tags, _, err := sw.ListUserTags(user)
+	tags, _, err := sw.ListUserTags(u.name)
 	if err != nil {
-		return S3Keys{}, false, fmt.Errorf("read the tags of SeaweedFS user %s: %w", user, err)
+		return S3Keys{}, false, fmt.Errorf("read the tags of SeaweedFS user %s: %w", u.name, err)
 	}
-	if other := tags[scopedNamespaceTag]; other != "" && other != project {
-		return S3Keys{}, false, fmt.Errorf("SeaweedFS user %s belongs to project %s, not %s; nothing was changed. Delete that user in the SeaweedFS admin UI if project %s no longer needs it, or set up the pipeline server in a project with another name", user, other, project, other)
+	if other := tags[u.tagKey]; other != "" && other != u.tagValue {
+		return S3Keys{}, false, u.foreign(other)
 	}
-	if err := sw.PutUserPolicy(user, scopedPolicyName, ScopedPolicy); err != nil {
-		return S3Keys{}, false, fmt.Errorf("set the policy of SeaweedFS user %s: %w", user, err)
+	if err := sw.PutUserPolicy(u.name, u.policyName, u.policy); err != nil {
+		return S3Keys{}, false, fmt.Errorf("set the policy of SeaweedFS user %s: %w", u.name, err)
 	}
-	if err := sw.TagUser(user, scopedNamespaceTag, project); err != nil {
-		return S3Keys{}, false, fmt.Errorf("tag SeaweedFS user %s: %w", user, err)
+	if err := sw.TagUser(u.name, u.tagKey, u.tagValue); err != nil {
+		return S3Keys{}, false, fmt.Errorf("tag SeaweedFS user %s: %w", u.name, err)
 	}
-	ids, _, err := sw.ListAccessKeys(user)
+	ids, _, err := sw.ListAccessKeys(u.name)
 	if err != nil {
-		return S3Keys{}, false, fmt.Errorf("list the keys of SeaweedFS user %s: %w", user, err)
+		return S3Keys{}, false, fmt.Errorf("list the keys of SeaweedFS user %s: %w", u.name, err)
 	}
 	if current.AccessKey != "" && current.SecretKey != "" && slices.Contains(ids, current.AccessKey) {
 		return current, false, nil
 	}
 	for _, id := range ids {
-		if err := sw.DeleteAccessKey(user, id); err != nil {
-			return S3Keys{}, false, fmt.Errorf("delete an old key of SeaweedFS user %s: %w", user, err)
+		if err := sw.DeleteAccessKey(u.name, id); err != nil {
+			return S3Keys{}, false, fmt.Errorf("delete an old key of SeaweedFS user %s: %w", u.name, err)
 		}
 	}
-	keys, err = sw.CreateAccessKey(user)
+	keys, err = sw.CreateAccessKey(u.name)
 	if err != nil {
-		return S3Keys{}, false, fmt.Errorf("create a key for SeaweedFS user %s: %w", user, err)
+		return S3Keys{}, false, fmt.Errorf("create a key for SeaweedFS user %s: %w", u.name, err)
 	}
 	return keys, true, nil
 }

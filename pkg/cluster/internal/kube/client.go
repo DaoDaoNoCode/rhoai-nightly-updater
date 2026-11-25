@@ -201,6 +201,9 @@ type Client struct {
 	// noRetry, when set, keeps an answer the API server asks to repeat from
 	// being retried when it reports true for its error (NoRetryWhen).
 	noRetry func(error) bool
+	// accept, when set, is the Accept header of its requests
+	// (MetadataOnly).
+	accept string
 }
 
 // NewUserClient is NewClientWithContext for the signed-in user's own token:
@@ -353,6 +356,17 @@ func (c *Client) NoRetryWhen(skip func(error) bool) *Client {
 	return &cp
 }
 
+// MetadataOnly returns a copy of c whose reads ask for the objects'
+// metadata only (PartialObjectMetadata, as client-go's metadata client asks
+// for it: k8s.io/client-go/metadata): a list of Secrets then carries no
+// data. An API server that does not offer it answers with the full objects
+// (the JSON fallback in the header), which parse the same way.
+func (c *Client) MetadataOnly() *Client {
+	cp := *c
+	cp.accept = "application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1,application/json;as=PartialObjectMetadata;g=meta.k8s.io;v=v1,application/json"
+	return &cp
+}
+
 // doWithHeader is Do that also returns the response's header (nil when no
 // response came). An answer the API server asks to repeat (retryWait) is
 // sent again after the wait it asks for, as client-go does
@@ -441,7 +455,7 @@ func (c *Client) doOnce(method, path, contentType string, body []byte, query url
 		return nil, nil, 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", FirstNonEmpty(c.accept, "application/json"))
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}

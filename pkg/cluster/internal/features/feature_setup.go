@@ -399,8 +399,10 @@ func planFeature(c *kube.Client, fs featureSetup, r clusterReads) *featurePlan {
 		p.refuse(r.recErr.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(r.recErr))
 	}
 
-	// The components.
+	// The components. A feature without any (Observability: its operators
+	// only) does not need a DataScienceCluster.
 	switch {
+	case len(fs.components) == 0:
 	case r.dscErr != nil:
 		msg := fmt.Sprintf("Cannot read the DataScienceCluster; nothing was changed: %v.%s", r.dscErr, kube.TemplateHint(r.dscErr))
 		p.refuse(msg, kube.ErrorCodeFromK8sErr(r.dscErr))
@@ -412,7 +414,7 @@ func planFeature(c *kube.Client, fs featureSetup, r clusterReads) *featurePlan {
 	case r.dsc.Object == nil:
 		p.refuse("This cluster has no DataScienceCluster. A cluster-admin creates one on the Components page. Nothing was changed.", "prerequisites")
 	}
-	if r.dscErr == nil && r.dsc.Object != nil {
+	if r.dscErr == nil && r.dsc.Object != nil && len(fs.components) > 0 {
 		meta, _ := r.dsc.Object["metadata"].(map[string]any)
 		p.dscName, _ = meta["name"].(string)
 		p.argo = argo.TrackingOf(c, r.dsc.Object, rhoai.DSCGroup, "DataScienceCluster")
@@ -668,6 +670,14 @@ func operatorInstallCommands(p *envkit.OperatorInstallPlan) string {
 	for _, o := range objs {
 		meta := o["metadata"].(map[string]any)
 		delete(meta, "labels")
+		// The namespace's documented labels stay; only this tool's own go.
+		if o["kind"] == "Namespace" && len(p.Op.NSLabels) > 0 {
+			labels := map[string]any{}
+			for k, v := range p.Op.NSLabels {
+				labels[k] = v
+			}
+			meta["labels"] = labels
+		}
 		docs = append(docs, yamlish(o, ""))
 	}
 	return "oc apply -f - <<'EOF'\n" + strings.Join(docs, "---\n") + "EOF\n" +

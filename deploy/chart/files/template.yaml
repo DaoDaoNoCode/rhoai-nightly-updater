@@ -345,6 +345,18 @@ objects:
         resources: ["maastenantconfigs"]
         resourceNames: ["default-tenant"]
         verbs: ["get"]
+      # The Observability tab's status (usage logs and dashboards): the
+      # usage-logs LokiStack's conditions when it is not Ready, and the
+      # conditions of the Perses dashboards and datasources RHOAI and MaaS
+      # make. List only; none of them holds a credential (the LokiStack
+      # names its storage Secret, it does not hold it). SECURITY.md,
+      # "Observability".
+      - apiGroups: ["loki.grafana.com"]
+        resources: ["lokistacks"]
+        verbs: ["list"]
+      - apiGroups: ["perses.dev"]
+        resources: ["persesdatasources", "persesdashboards"]
+        verbs: ["list"]
       - apiGroups: ["gateway.networking.k8s.io"]
         resources: ["httproutes"]
         resourceNames: ["smollm2-135m-instruct-kserve-route", "qwen25-05b-instruct-kserve-route", "qwen3-1-7b-kserve-route"]

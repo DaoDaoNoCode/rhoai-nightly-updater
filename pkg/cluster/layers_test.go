@@ -27,6 +27,7 @@ var clusterLayers = [][]string{
 	{"modelregistry"},
 	{"dsc"},
 	{"features", "diagnostics"},
+	{"observability"},
 	{"recipe"},
 }
 

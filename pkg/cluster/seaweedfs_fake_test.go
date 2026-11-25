@@ -36,6 +36,8 @@ type seaweedFake struct {
 	users map[string]*fakeIAMUser
 	// "bucket/key" -> payload.
 	objects map[string][]byte
+	// buckets that exist (pipelines always does).
+	buckets map[string]bool
 	nextKey int
 	// when set, failIAM forces the given IAM action to return that HTTP status.
 	failIAM map[string]int
@@ -198,16 +200,50 @@ func (sw *seaweedFake) serve(w http.ResponseWriter, r *http.Request) {
 			sw.xmlError(w, code, "InternalError")
 			return
 		}
-		if sw.users[user].policy == "" || bucket != "pipelines" || (key == "" && r.Method != http.MethodGet) {
+		// A user reaches the buckets its inline policy names, objects and
+		// listing only.
+		if p := sw.users[user].policy; p == "" || !strings.Contains(p, `"arn:aws:s3:::`+bucket+`"`) || (key == "" && r.Method != http.MethodGet) {
 			sw.xmlError(w, http.StatusForbidden, "AccessDenied")
 			return
 		}
 	}
+	if sw.buckets == nil {
+		sw.buckets = map[string]bool{"pipelines": true}
+	}
 	switch {
 	case key == "" && r.Method == http.MethodPut:
+		sw.buckets[bucket] = true
 		w.WriteHeader(http.StatusOK)
+	case key == "" && r.Method == http.MethodDelete:
+		if !sw.buckets[bucket] {
+			sw.xmlError(w, http.StatusNotFound, "NoSuchBucket")
+			return
+		}
+		for k := range sw.objects {
+			if strings.HasPrefix(k, bucket+"/") {
+				sw.xmlError(w, http.StatusConflict, "BucketNotEmpty")
+				return
+			}
+		}
+		delete(sw.buckets, bucket)
+		w.WriteHeader(http.StatusNoContent)
 	case key == "" && r.Method == http.MethodGet:
-		fmt.Fprint(w, `<ListBucketResult><Name>pipelines</Name></ListBucketResult>`)
+		if !sw.buckets[bucket] {
+			sw.xmlError(w, http.StatusNotFound, "NoSuchBucket")
+			return
+		}
+		var keys []string
+		for k := range sw.objects {
+			if rest, ok := strings.CutPrefix(k, bucket+"/"); ok && strings.HasPrefix(rest, r.URL.Query().Get("prefix")) {
+				keys = append(keys, rest)
+			}
+		}
+		sort.Strings(keys)
+		out := "<ListBucketResult><Name>" + bucket + "</Name>"
+		for _, k := range keys {
+			out += "<Contents><Key>" + k + "</Key></Contents>"
+		}
+		fmt.Fprint(w, out+"<IsTruncated>false</IsTruncated></ListBucketResult>")
 	case r.Method == http.MethodHead || r.Method == http.MethodGet:
 		data, ok := sw.objects[bucket+"/"+key]
 		if !ok {

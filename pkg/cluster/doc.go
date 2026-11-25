@@ -34,6 +34,8 @@
 //	dsc                     the DataScienceCluster's writes and their guards
 //	features, diagnostics   feature setups and the playground; the
 //	                        diagnostics runner, its checks and fixes
+//	observability           usage logs and dashboards: RHOAI's monitoring
+//	                        set up and cleaned up (the Observability tab)
 //	recipe                  environment recipes: their schema checks, the
 //	                        plan, the steps of a run and the recipe project
 //
