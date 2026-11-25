@@ -86,9 +86,11 @@ func (s *State) AddComponents(keys ...string) {
 //     (deletable via the tool label, recipe annotation, UID stored on the
 //     recipes project record), still bears the run-recorded UID, and is not
 //     terminating; clean-up includes that UID (RecipeProjectUIDs);
-//   - DataScienceCluster components the run enabled and that still match
-//     that configuration (liveComponents); a prerequisite step reads as
-//     created while any of its feature components do;
+//   - DataScienceCluster components the run turned on and that are still
+//     as its setup left them (liveComponents: in their own on state,
+//     Unmanaged for kueue, and this tool's field manager owns it); a
+//     prerequisite step reads as created while any of its feature
+//     components do;
 //   - the cluster-wide parts the run created, proven on the objects
 //     themselves (liveCreated, CreatedPartProblem): the MaaS platform's
 //     database Secret and the ModelRegistry carry the run's annotation and
@@ -151,9 +153,13 @@ var prereqStepOf = map[string]string{
 }
 
 // liveComponents returns component keys the run still owns, each paired
-// with the enabling feature: Managed on the DataScienceCluster and
-// present in the tool's prerequisite record (what Clean up reverts). Failed
-// reads yield an empty map (Clean up everything remains available).
+// with the enabling feature: still as this tool's setup left them on the
+// DataScienceCluster (features.StillAsSetUp, the check Clean up itself
+// makes first: named in the tool's prerequisite record, in the component's
+// own on state, its field manager still the tool's). Whether anything uses
+// a component is not checked here: Clean up checks it when it runs, after
+// the parts before it (the Kueue setup's queues go first). Failed reads
+// yield an empty map (Clean up everything remains available).
 func liveComponents(c *kube.Client, keys []string) map[string]string {
 	if len(keys) == 0 {
 		return nil
@@ -166,13 +172,10 @@ func liveComponents(c *kube.Client, keys []string) map[string]string {
 	if err != nil || read.State != rhoai.DSCStatePresent {
 		return nil
 	}
-	spec, _ := read.Object["spec"].(map[string]any)
-	comps, _ := spec["components"].(map[string]any)
 	out := map[string]string{}
 	for _, k := range keys {
-		comp, _ := comps[k].(map[string]any)
-		if r, recorded := rec.Components[k]; recorded && comp["managementState"] == "Managed" {
-			out[k] = r.Feature
+		if feature, ok := features.StillAsSetUp(rec, read.Object, k); ok {
+			out[k] = feature
 		}
 	}
 	return out

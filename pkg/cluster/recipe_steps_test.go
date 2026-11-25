@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kueue"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/recipe"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -179,6 +180,47 @@ func TestRecipeOwnership_FromTheCluster(t *testing.T) {
 		if created, req := recipe.Ownership(pc.c, nil, run); req != nil || len(created) != 0 {
 			t.Fatalf("after the change: created %v, cleanup %+v", created, req)
 		}
+	})
+	// Kueue's on state is Unmanaged: the run that turned it on offers to
+	// turn it back while it is as the run left it, also while a queue is
+	// left (Clean up deletes the setup's queues first and checks then).
+	t.Run("kueue", func(t *testing.T) {
+		pc := newPrereqCluster(t)
+		pc.f.putJSON(tDSC, `{"metadata":{"name":"default-dsc","resourceVersion":"1"},"spec":{"components":{"kueue":{"managementState":"Removed"}}}}`)
+		u := userClientOf(pc.c, fakeUserToken)
+		kueueTurnedOnByTool(t, u)
+		run := &types.RecipeRun{Steps: []types.RecipeRunStep{{ID: recipe.StepKueuePrereq}}, Components: []string{"kueue"}}
+		offered := func(when string) {
+			t.Helper()
+			created, req := recipe.Ownership(pc.c, nil, run)
+			if req == nil || !reflect.DeepEqual(*req, types.CleanupRequest{Components: []string{"kueue"}}) || !reflect.DeepEqual(created, map[string]bool{recipe.StepKueuePrereq: true}) {
+				t.Fatalf("%s: created %v, cleanup %+v", when, created, req)
+			}
+		}
+		notOffered := func(when string) {
+			t.Helper()
+			if created, req := recipe.Ownership(pc.c, nil, run); req != nil || len(created) != 0 {
+				t.Fatalf("%s: created %v, cleanup %+v", when, created, req)
+			}
+		}
+		offered("as the run left it")
+		pc.f.groups = map[string]string{kqGroup: kqV1beta2}
+		pc.f.putJSON(kqCQ, `{"metadata":{"name":"`+kueue.ClusterQueueName+`"}}`)
+		offered("with a ClusterQueue left")
+		other := func(state string) {
+			t.Helper()
+			if _, _, err := u.Do(http.MethodPatch, tDSC, "application/merge-patch+json", []byte(`{"spec":{"components":{"kueue":{"managementState":"`+state+`"}}}}`), map[string][]string{"fieldManager": {"kubectl-edit"}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		other("Removed")
+		notOffered("turned back by someone else")
+		// Unmanaged again, but written by another field manager: not what the run left.
+		other("Unmanaged")
+		if componentState(pc.f, "kueue") != "Unmanaged" {
+			t.Fatalf("kueue %s", componentState(pc.f, "kueue"))
+		}
+		notOffered("rewritten by someone else")
 	})
 	t.Run("project", func(t *testing.T) {
 		f, c := projectFake(t)
