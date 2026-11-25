@@ -179,7 +179,7 @@ export const RecipeRunCard: React.FC<{
   const labelKind: StatusKind = ending === "failed" ? "warning" : phaseKind;
   const labelText = ending === "failed" ? "Stopping: a step failed" : phase === "stopping" && several ? "Stopping after the running steps" : phaseLabel;
   const runStarted = Date.parse(run.resumedAt || run.startedAt);
-  const stopReason = ending ? "No other step starts: the run stops once the running steps finish." : phase === "stopping" ? `Stop was asked for: the run stops after ${several ? "the running steps" : "the current step"}.` : status.remote
+  const stopReason = ending ? `No other step starts: the run stops ${runningSteps.length > 0 ? "once the running steps finish" : "now"}.` : phase === "stopping" ? `Stop was asked for: the run stops after ${several ? "the running steps" : "the current step"}.` : status.remote
     ? `Updater pod ${status.pod || "(unknown)"} runs it; only that pod can stop it, and it does when it shuts down.`
     : permissionReason;
   const resumeButton = next && (
@@ -246,7 +246,7 @@ export const RecipeRunCard: React.FC<{
       if (!ending && phase !== "stopping") break;
       const finishing = runningSteps.length > 0
         ? `${listText(runningSteps.map((s) => s.title))} ${runningSteps.length > 1 ? "finish" : "finishes"} first, then the run stops.`
-        : "The run stops now.";
+        : "the run stops now.";
       const resumeLine = "Resume runs the steps that are not set up.";
       if (ending === "failed") {
         const why = failedSteps.length === 1 ? failedSteps[0].message : "";
@@ -263,9 +263,10 @@ export const RecipeRunCard: React.FC<{
           </Alert>
         );
       } else {
-        const title = ending === "restart" ? "Stopping: the updater is restarting" : ending === "timeout" || ending === "lock_lost" ? "Stopping" : "Stopping as asked";
+        const warn = ending === "timeout" || ending === "lock_lost" || ending === "internal";
+        const title = ending === "restart" ? "Stopping: the updater is restarting" : ending === "internal" ? "Stopping: an internal error in the updater" : warn ? "Stopping" : "Stopping as asked";
         outcome = (
-          <Alert variant={ending === "timeout" || ending === "lock_lost" ? "warning" : "info"} isInline component="p" isLiveRegion title={title}>
+          <Alert variant={warn ? "warning" : "info"} isInline component="p" isLiveRegion title={title}>
             No other step starts; {finishing} {resumeLine}
           </Alert>
         );

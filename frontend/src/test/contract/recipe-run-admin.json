@@ -1,4 +1,5 @@
 {
+  "ending": "failed",
   "pod": "pod-2",
   "remote": true,
   "run": {

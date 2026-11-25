@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -241,9 +242,14 @@ func TestRecipeRun_FailedStepShowsWithItsEnding(t *testing.T) {
 	waitStarted(t, a)
 	waitStarted(t, b)
 	close(b.release)
-	waitRecord(t, f, statusesAre("head=success a=running b=failed"))
+	if run := waitRecord(t, f, statusesAre("head=success a=running b=failed")); run.Ending != "failed" {
+		t.Errorf("the record of the failure has ending %q, want failed (another pod reads it)", run.Ending)
+	}
 	close(a.release)
 	waitDone(t, done)
+	if run := f.saved(); run.Ending != "" {
+		t.Errorf("the ended run's record keeps ending %q", run.Ending)
+	}
 	got := reads()
 	if !slices.Contains(got, "head=success a=running b=failed ending=failed") {
 		t.Errorf("no read of the failure with its ending: %q", got)
@@ -296,6 +302,41 @@ func TestRecipeRun_StopShowsItsEndingWithTheNextWrite(t *testing.T) {
 	waitDone(t, done)
 	if got := reads(); !slices.Contains(got, "head=success a=success b=running a2=pending ending=stopped") {
 		t.Errorf("no read of a's end with the run's ending: %q", got)
+	}
+	assertReleased(t, rec)
+}
+
+// Stop while two steps run, and the only step left waits for the slower
+// one: when the faster ends nothing may start yet, but the write of its
+// end already shows ending stopped (also in the record), and the run
+// ends stopped once the slower ended.
+func TestRecipeRun_StopWhileTheNextStepWaitsShowsItsEnding(t *testing.T) {
+	f, rec := installRecipeFake(t)
+	watchRecords(f)
+	head := f.addStep("head")
+	a, b := parallel(f.addStep("a"), "head"), parallel(f.addStep("b"), "head")
+	c := parallel(f.addStep("c"), "b")
+	reads := statusAtWrites(t)
+	close(head.release)
+	_, done := startRun(t)
+	waitStarted(t, a)
+	waitStarted(t, b)
+	if !recipes.requestStop() {
+		t.Fatal("no run to stop")
+	}
+	close(a.release)
+	if run := waitRecord(t, f, statusesAre("head=success a=success b=running c=pending")); run.Ending != "stopped" {
+		t.Errorf("the record of a's end has ending %q, want stopped", run.Ending)
+	}
+	close(b.release)
+	waitDone(t, done)
+	if got := reads(); !slices.Contains(got, "head=success a=success b=running c=pending ending=stopped") {
+		t.Errorf("no read of a's end with the run's ending: %q", got)
+	}
+	run := f.saved()
+	if run.State != types.RecipeRunStopped || run.ErrorCode != "stopped" || c.ran || run.Ending != "" ||
+		run.StopReason != "Stopped after Step b, as asked. Resume continues with Step c." {
+		t.Errorf("record %s: %+v", stepStatuses(run), run)
 	}
 	assertReleased(t, rec)
 }
@@ -659,7 +700,9 @@ func TestRecipeRun_StopDuringTheStartWrite(t *testing.T) {
 // A panic of the loop while it starts a batch: the running step ends and
 // keeps its outcome and its State changes, the step marked running for the
 // start that never happened counts as failed, and no step is left running
-// in the record.
+// in the record. While the running step ends, the status and the record
+// say the run ends (internal): the recovery's write is read before b may
+// end.
 func TestRecipeRun_LoopPanicDuringAStart(t *testing.T) {
 	captureLog(t)
 	f, rec := installRecipeFake(t)
@@ -669,12 +712,17 @@ func TestRecipeRun_LoopPanicDuringAStart(t *testing.T) {
 	c := parallel(f.addStep("c"), "a")
 	close(head.release)
 	origSave := saveRecipeRun
-	panicked := false
+	panicked, recovering := false, ""
 	saveRecipeRun = func(cl *cluster.Client, run *types.RecipeRun, replace bool) error {
 		if !panicked && stepStatuses(run) == "head=success a=success b=running c=running" {
 			panicked = true
-			close(b.release)
 			panic("record bug")
+		}
+		if panicked && recovering == "" && run.State == types.RecipeRunRunning {
+			// The recovery's write, before it waits for b.
+			st := recipes.status()
+			recovering = fmt.Sprintf("running %v, ending %q, record ending %q", st.Running, st.Ending, run.Ending)
+			close(b.release)
 		}
 		return origSave(cl, run, replace)
 	}
@@ -689,6 +737,9 @@ func TestRecipeRun_LoopPanicDuringAStart(t *testing.T) {
 	}
 	if strings.Join(run.Components, ",") != "aipipelines,mlflowoperator" {
 		t.Errorf("components %v", run.Components)
+	}
+	if want := `running true, ending "internal", record ending "internal"`; recovering != want {
+		t.Errorf("while the running step ended: %s, want %s", recovering, want)
 	}
 	assertReleased(t, rec)
 }
