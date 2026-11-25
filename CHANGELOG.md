@@ -169,6 +169,22 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Changed
 
+- **Recipes set up what every feature needs in one step.** A recipe run
+  had a prerequisites step per feature (What Pipelines needs, What MLflow
+  needs, What Models needs, ...), each with its own operator installs and
+  readiness wait, one after the other. One step, **What the features
+  need**, right after the project, now does it for all of them at once:
+  every check and dry run first, then every DataScienceCluster component,
+  every missing operator (cert-manager, Connectivity Link, the Red Hat
+  build of Kueue), waited for together, and one wait until everything is
+  ready. Each component is still recorded for its own feature, so the
+  Environment tabs' Clean up turns it back as before. Kueue's component
+  is still turned on late, by **What distributed workloads need**; with no
+  `models.exposure`, **What the model's access needs** adds what the
+  resolved way needs after the MaaS step. A run recorded by an earlier
+  version resumes with the new steps, keeping the components it turned on
+  ([RUNBOOK §5.1](RUNBOOK.md#51-environment-recipe-runs-resume-interrupted-sign-in-again)).
+
 - **The S3 storage has its own Environment tab.** It was part of the
   Pipelines tab; it is the cluster's, and other features can use it too,
   so it now has an **S3 storage** tab (`?tab=storage`, no project picker)

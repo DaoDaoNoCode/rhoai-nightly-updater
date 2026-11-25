@@ -1814,18 +1814,23 @@ export function recipeSteps(rcp = recipe()) {
   const f = sp.features;
   const out = [["rhoai", "RHOAI", 420, 900], ["dsc", "DataScienceCluster", 60, 420]];
   if (sp.project) out.push(["project", `Project ${sp.project.name}`, 10, 60]);
-  if (f.pipelines?.enabled) out.push(["pipelines-prereq", "What Pipelines needs", 120, 600], ["s3", "S3 storage", 60, 300], ["pipeline-server", "Pipeline server", 120, 600]);
-  if (f.mlflow?.enabled) out.push(["mlflow-prereq", "What MLflow needs", 120, 600], ["mlflow", "MLflow", 120, 600]);
+  // One step sets up what every feature needs (pkg/cluster internal/recipe prereqItems).
+  if (f.pipelines?.enabled || f.mlflow?.enabled || f.models?.enabled || f.playground?.enabled || f.modelRegistry?.enabled || f.kueue?.enabled) {
+    out.push(["prerequisites", "What the features need", 300, 900]);
+  }
+  if (f.pipelines?.enabled) out.push(["s3", "S3 storage", 60, 300], ["pipeline-server", "Pipeline server", 120, 600]);
+  if (f.mlflow?.enabled) out.push(["mlflow", "MLflow", 120, 600]);
   if (f.mlflow?.enabled && f.mlflow.samples) out.push(["mlflow-samples", "MLflow samples", 60, 900]);
   if (f.maas?.enabled) out.push(["maas", "Models as a Service", 600, 900]);
   if (f.models?.enabled) {
-    out.push(["models-prereq", "What Models needs", 240, 900], ["model", `Model ${MODEL_NAMES[f.models.model || "qwen25-05b-instruct"] ?? f.models.model}`, 300, 900]);
+    if (!f.models.exposure) out.push(["models-prereq", "What the model's access needs", 60, 900]);
+    out.push(["model", `Model ${MODEL_NAMES[f.models.model || "qwen25-05b-instruct"] ?? f.models.model}`, 300, 900]);
     if (f.maas?.enabled && f.maas.publish && f.models.exposure !== "maas") out.push(["maas-publish", "Publish the model through MaaS", 120, 900]);
   }
-  if (f.playground?.enabled) out.push(["playground-prereq", "What the playground needs", 120, 600], ["playground", "Playground", 120, 540]);
-  if (f.modelRegistry?.enabled) out.push(["model-registry-prereq", "What the model registry needs", 120, 600], ["model-registry", "Model registry", 120, 720]);
+  if (f.playground?.enabled) out.push(["playground", "Playground", 120, 540]);
+  if (f.modelRegistry?.enabled) out.push(["model-registry", "Model registry", 120, 720]);
   if (f.workbench?.enabled) out.push(["workbench", "Workbench", 30, 900]);
-  if (f.kueue?.enabled) out.push(["kueue-prereq", "What distributed workloads need", 240, 900], ["kueue", "Distributed workloads", 60, 600]);
+  if (f.kueue?.enabled) out.push(["kueue-prereq", "What distributed workloads need", 120, 900], ["kueue", "Distributed workloads", 60, 600]);
   const d = sp.dashboardDev ?? {};
   if (d.deploy === "main" || d.deploy === "pr") out.push(["dashboard-dev", d.deploy === "pr" ? `Dashboard Dev (PR #${d.pr})` : "Dashboard Dev (main)", 180, 480]);
   return out;
@@ -1835,8 +1840,8 @@ export const recipePinned = () => ({ tag: "rhoai-3.6", image: LATEST_IMAGE, dige
 
 /** The steps a mixed plan finds set up, with why. */
 const MIXED_SKIP = {
-  "pipelines-prereq": "Everything it needs is there.", s3: "The S3 storage is set up and ready.", "pipeline-server": "The pipeline server in PROJECT is ready.",
-  "mlflow-prereq": "Everything it needs is there.", mlflow: "MLflow is ready.", maas: "The MaaS platform is ready.",
+  prerequisites: "Everything the features need is there.", s3: "The S3 storage is set up and ready.", "pipeline-server": "The pipeline server in PROJECT is ready.",
+  mlflow: "MLflow is ready.", maas: "The MaaS platform is ready.",
 };
 const MIXED_BLOCKED = "Project PROJECT has a workbench nightly-workbench that this tool did not create; the recipe does not change it. Nothing was changed.";
 
@@ -1918,7 +1923,7 @@ export function recipeRun({ done = 0, current = "running", message = "", state =
     }
     return { id, title, ...times, status: "pending" };
   });
-  const components = Object.entries(RECIPE_COMPONENTS).filter(([id]) => steps.some((s) => s.id === id && s.created)).map(([, key]) => key);
+  const components = Object.entries(RECIPE_COMPONENTS).filter(([id]) => steps.some((s) => s.id === id && s.created)).flatMap(([, keys]) => keys(rcp.spec.features));
   // The cluster-wide parts the run created (they were not this tool's before their step).
   const createdParts = [["maas", "maas-platform", "uid-maas-db-creds"], ["model-registry", "model-registry", "uid-nightly-registry"], ["kueue", "kueue", "uid-nightly-kueue"]]
     .filter(([id]) => steps.some((s) => s.id === id && s.status === "success")).map(([, part, uid]) => ({ part, uid }));
@@ -1927,7 +1932,7 @@ export function recipeRun({ done = 0, current = "running", message = "", state =
     ...(state !== "running" ? { finishedAt: ago(0.5) } : {}), state, ...(stopReason ? { stopReason } : {}), ...(errorCode ? { errorCode } : {}),
     recipe: rcp, pinned: recipePinned(), project: { name: project, uid: "5d1c0a3e-9b7f-4c2e-8a61-2f0d9e4b7c13", owned: true }, steps,
     ...(components.length ? { components, componentIds: Object.fromEntries(components.map((k) => [k, enablementId(k)])) } : {}),
-    ...(rcp.spec.features.models?.enabled && steps.some((s) => s.id === "models-prereq" && s.status === "success") ? { exposure: rcp.spec.features.models.exposure || "default-gateway" } : {}),
+    ...(rcp.spec.features.models?.enabled && steps.some((s) => (s.id === "models-prereq" || s.id === "model") && s.status === "success") ? { exposure: rcp.spec.features.models.exposure || "default-gateway" } : {}),
     ...(createdParts.length ? { createdParts } : {}),
   };
 }
@@ -1936,10 +1941,13 @@ export function recipeRun({ done = 0, current = "running", message = "", state =
 export const enablementId = (key) => `e1a7${[...key].reduce((n, ch) => (n * 31 + ch.charCodeAt(0)) >>> 0, 7).toString(16).padStart(8, "0")}0c9d`;
 
 /** Step IDs the recipe may mark created (project + DSC prereq phases). */
-const RECIPE_OWNS = new Set(["project", "pipelines-prereq", "mlflow-prereq", "models-prereq", "model-registry-prereq", "kueue-prereq", "maas", "model-registry", "kueue"]);
+const RECIPE_OWNS = new Set(["project", "prerequisites", "kueue-prereq", "maas", "model-registry", "kueue"]);
 
-/** Maps prereq step id to DSC component name. */
-const RECIPE_COMPONENTS = { "pipelines-prereq": "aipipelines", "mlflow-prereq": "mlflowoperator", "models-prereq": "kserve", "model-registry-prereq": "modelregistry", "kueue-prereq": "kueue" };
+/** The DSC components a prereq step turns on, for the recipe's features. */
+const RECIPE_COMPONENTS = {
+  prerequisites: (f) => [f.pipelines?.enabled && "aipipelines", f.mlflow?.enabled && "mlflowoperator", f.models?.enabled && "kserve", f.modelRegistry?.enabled && "modelregistry"].filter(Boolean),
+  "kueue-prereq": () => ["kueue"],
+};
 
 /**
  * Cleanup payload for GET /api/recipes/run derived from pkg/cluster/internal/recipe

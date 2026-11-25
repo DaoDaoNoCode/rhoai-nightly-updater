@@ -1147,3 +1147,53 @@ func TestRecipeResume_KeepsTheResolvedExposure(t *testing.T) {
 		})
 	}
 }
+
+// A run recorded by an earlier version, whose steps had each feature's own
+// prerequisites step (pipelines-prereq, mlflow-prereq), resumes on this
+// version's steps, where one prerequisites step sets up what every feature
+// needs: a resume plans every step again as Pending, so the old ids do not
+// carry over, and the components the earlier attempt turned on, what it
+// created and how its model is reached stay the run's.
+func TestRecipeResume_ARunWithTheOldStepIDs(t *testing.T) {
+	f, rec := installRecipeFake(t)
+	pre := f.addStep("pipelines-prereq")
+	pre.components = []string{"aipipelines"}
+	f.addStep("mlflow-prereq").components = []string{"mlflowoperator"}
+	ps := f.addStep("pipeline-server")
+	ps.result = &types.OperationResponse{Success: false, Message: "not ready", ErrorCode: "timeout"}
+	for _, s := range f.steps {
+		close(s.release)
+	}
+	runID, done := startRun(t)
+	waitDone(t, done)
+	if run := f.saved(); run.State != types.RecipeRunFailed || stepStatuses(run) != "pipelines-prereq=success mlflow-prereq=success pipeline-server=failed" {
+		t.Fatalf("first attempt %s: %+v", stepStatuses(run), run)
+	}
+	f.mu.Lock()
+	f.record.CreatedParts = []types.RecipeCreatedPart{{Part: types.RecipePartMaaSPlatform, UID: "creds-1"}}
+	f.record.Exposure = "internal"
+	f.steps = nil
+	f.mu.Unlock()
+
+	// This version's steps.
+	f.addStep("prerequisites").done = true
+	server := f.addStep("pipeline-server")
+	var seen string
+	server.seen = func(st *cluster.RecipeState) { seen = st.Exposure }
+	for _, s := range f.steps {
+		close(s.release)
+	}
+	recipes = &recipeRunner{}
+	resumeRun(t, runID)
+	run := f.saved()
+	if run.ID != runID || run.State != types.RecipeRunSucceeded || stepStatuses(run) != "prerequisites=skipped pipeline-server=success" || !server.ran {
+		t.Fatalf("resumed %s: %+v", stepStatuses(run), run)
+	}
+	if strings.Join(run.Components, ",") != "aipipelines,mlflowoperator" {
+		t.Errorf("components %v", run.Components)
+	}
+	if len(run.CreatedParts) != 1 || run.CreatedParts[0].UID != "creds-1" || run.Exposure != "internal" || seen != "internal" {
+		t.Errorf("created %+v, exposure %q (the step saw %q)", run.CreatedParts, run.Exposure, seen)
+	}
+	assertReleased(t, rec)
+}

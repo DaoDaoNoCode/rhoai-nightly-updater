@@ -142,7 +142,8 @@ func (u setUnion) componentPlans() []componentPlan {
 }
 
 // record is base with everything the set changes, and whether that is
-// anything: the components it turns on (with their value before), the
+// anything: the components it turns on (with their value before and a new
+// enablement ID each), the
 // operators it installs and the Kuadrant CR it makes.
 func (u setUnion) record(base prereqRecord) (prereqRecord, bool) {
 	rec := prereqRecord{Components: maps.Clone(base.Components), Shared: maps.Clone(base.Shared)}
@@ -155,7 +156,7 @@ func (u setUnion) record(base prereqRecord) (prereqRecord, bool) {
 	changed := false
 	for _, sc := range u.components {
 		if sc.cp.turnOn {
-			rec.Components[sc.cp.key] = prereqComponent{Previous: sc.cp.state, Feature: sc.feature}
+			rec.Components[sc.cp.key] = prereqComponent{Previous: sc.cp.state, Feature: sc.feature, ID: newEnablementID()}
 			changed = true
 		}
 	}

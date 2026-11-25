@@ -124,9 +124,10 @@ describe("Recipes page: models, MaaS, the playground, the model registry, the wo
     // Dialog step list mirrors runner order and shows each title without adornment.
     const plan = within(screen.getByRole("dialog", { name: "Run recipe dev?" })).getByRole("list", { name: "Steps of this operation" });
     const titles = within(plan).getAllByRole("listitem").map((li) => li.textContent ?? "");
-    for (const [i, title] of ["MLflow samples", "Models as a Service", "What Models needs", "Model Qwen3 1.7B (CPU, tool calling)", "Publish the model through MaaS",
-      "What the playground needs", "Playground", "What the model registry needs", "Model registry", "Workbench", "What distributed workloads need", "Distributed workloads", "Dashboard Dev (PR #4321)"].entries()) {
-      expect(titles[8 + i]).toContain(title);
+    expect(titles[3]).toContain("What the features need");
+    for (const [i, title] of ["MLflow samples", "Models as a Service", "What the model's access needs", "Model Qwen3 1.7B (CPU, tool calling)", "Publish the model through MaaS",
+      "Playground", "Model registry", "Workbench", "What distributed workloads need", "Distributed workloads", "Dashboard Dev (PR #4321)"].entries()) {
+      expect(titles[7 + i]).toContain(title);
     }
     // The plan's warnings: what else the run changes.
     // The plan's notes, each titled by what it is: advice, and a change to the shared cluster.

@@ -19,26 +19,25 @@ import (
 // check depends on: while one of them will still run, the step is checked
 // when the run gets there (types.RecipeStepLater).
 var stepDependsOn = map[string][]string{
-	StepDSC:             {StepRHOAI},
-	StepPipelinesPrereq: {StepRHOAI, StepDSC},
-	StepPipelineServer:  {StepRHOAI, StepDSC, StepProject, StepPipelinesPrereq, StepS3},
-	StepMLflowPrereq:    {StepRHOAI, StepDSC},
-	StepMLflow:          {StepRHOAI, StepDSC, StepMLflowPrereq},
-	StepMLflowSamples:   {StepRHOAI, StepDSC, StepProject, StepMLflowPrereq, StepMLflow},
-	StepMaaS:            {StepRHOAI, StepDSC},
+	StepDSC:            {StepRHOAI},
+	StepPrerequisites:  {StepRHOAI, StepDSC},
+	StepPipelineServer: {StepRHOAI, StepDSC, StepProject, StepPrerequisites, StepS3},
+	StepMLflow:         {StepRHOAI, StepDSC, StepPrerequisites},
+	StepMLflowSamples:  {StepRHOAI, StepDSC, StepProject, StepPrerequisites, StepMLflow},
+	// The prerequisites step may install Connectivity Link and its
+	// Kuadrant CR, which the MaaS platform uses.
+	StepMaaS: {StepRHOAI, StepDSC, StepPrerequisites},
 	// How the model is reached is resolved in the project, and depends on
 	// the MaaS platform.
-	StepModelsPrereq:        {StepRHOAI, StepDSC, StepProject, StepMaaS},
-	StepModel:               {StepRHOAI, StepDSC, StepProject, StepMaaS, StepModelsPrereq},
-	StepMaaSPublish:         {StepRHOAI, StepDSC, StepProject, StepMaaS, StepModelsPrereq, StepModel},
-	StepPlaygroundPrereq:    {StepRHOAI, StepDSC},
-	StepPlayground:          {StepRHOAI, StepDSC, StepProject, StepMaaS, StepModelsPrereq, StepModel, StepMaaSPublish, StepPlaygroundPrereq},
-	StepModelRegistryPrereq: {StepRHOAI, StepDSC},
-	StepModelRegistry:       {StepRHOAI, StepDSC, StepModelRegistryPrereq},
+	StepModelsPrereq:  {StepRHOAI, StepDSC, StepProject, StepPrerequisites, StepMaaS},
+	StepModel:         {StepRHOAI, StepDSC, StepProject, StepPrerequisites, StepMaaS, StepModelsPrereq},
+	StepMaaSPublish:   {StepRHOAI, StepDSC, StepProject, StepPrerequisites, StepMaaS, StepModelsPrereq, StepModel},
+	StepPlayground:    {StepRHOAI, StepDSC, StepProject, StepPrerequisites, StepMaaS, StepModelsPrereq, StepModel, StepMaaSPublish},
+	StepModelRegistry: {StepRHOAI, StepDSC, StepPrerequisites},
 	// The workbench attaches the tool's S3 Connection when the project has
 	// the tool's pipeline server.
-	StepWorkbench:    {StepRHOAI, StepDSC, StepProject, StepPipelinesPrereq, StepS3, StepPipelineServer},
-	StepKueuePrereq:  {StepRHOAI, StepDSC},
+	StepWorkbench:    {StepRHOAI, StepDSC, StepProject, StepPrerequisites, StepS3, StepPipelineServer},
+	StepKueuePrereq:  {StepRHOAI, StepDSC, StepPrerequisites},
 	StepKueue:        {StepRHOAI, StepDSC, StepProject, StepKueuePrereq},
 	StepDashboardDev: {StepRHOAI, StepDSC},
 }

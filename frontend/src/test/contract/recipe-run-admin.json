@@ -96,12 +96,12 @@
         "typicalSeconds": 10
       },
       {
-        "id": "pipelines-prereq",
-        "maxSeconds": 600,
+        "id": "prerequisites",
+        "maxSeconds": 900,
         "startedAt": "2026-11-20T14:16:00Z",
         "status": "running",
-        "title": "What Pipelines needs",
-        "typicalSeconds": 120
+        "title": "What the features need",
+        "typicalSeconds": 300
       },
       {
         "id": "s3",

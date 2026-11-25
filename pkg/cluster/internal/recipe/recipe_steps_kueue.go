@@ -11,8 +11,9 @@ import (
 )
 
 // Kueue distributed workloads follow the Distributed workloads tab: first
-// prerequisites (feature "kueue": the component, cert-manager and the Kueue
-// operator), then this tool's queues in the recipe project, the project
+// prerequisites (feature "kueue": cert-manager and the Kueue operator, set
+// up early by the prerequisites step with the other features', then the
+// component, here), then this tool's queues in the recipe project, the project
 // label, requested samples, and when requested the dashboard Kueue setting.
 // These steps run after project setup for pipelines, models, and the
 // workbench—Kueue only governs work submitted to a queue, so the rest stays
@@ -38,7 +39,7 @@ func kueueSteps(r types.EnvironmentRecipe) []Step {
 		return nil
 	}
 	return []Step{
-		{ID: StepKueuePrereq, Title: "What distributed workloads need", Typical: 4 * time.Minute, Max: 15 * time.Minute, Check: checkKueuePrereq, Run: runKueuePrereq},
+		{ID: StepKueuePrereq, Title: "What distributed workloads need", Typical: 2 * time.Minute, Max: 15 * time.Minute, Check: checkKueuePrereq, Run: runKueuePrereq},
 		{ID: StepKueue, Title: "Distributed workloads", Typical: time.Minute, Max: 10 * time.Minute, Check: checkKueue, Run: runKueueStep},
 	}
 }

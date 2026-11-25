@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kueue"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/recipe"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
@@ -122,10 +123,10 @@ func TestRecipeDSCStep_Failures(t *testing.T) {
 	})
 }
 
-// Prerequisite steps write into state which DataScienceCluster components
-// they enabled (matching what Set up's record added for that feature) and
-// mark their slice of work complete. Components pre-recorded are excluded
-// from what the run claims.
+// The prerequisites step writes into state which DataScienceCluster
+// components it enabled (what Set up's record gained for the recipe's
+// features, from one read before and one after the whole set).
+// Components pre-recorded are excluded from what the run claims.
 func TestRecipePrereqSteps_RecordTheComponentsTheyTurnedOn(t *testing.T) {
 	pc := newPrereqCluster(t)
 	r, problems := recipe.Validate([]byte(tRecipeBase + `{"rhoai":{"build":"latest"},"dataScienceCluster":{"create":true},"project":{"mode":"create","name":"recipe-dev"},
@@ -138,14 +139,17 @@ func TestRecipePrereqSteps_RecordTheComponentsTheyTurnedOn(t *testing.T) {
 		t.Fatalf("mlflow setup: %+v", res)
 	}
 	st := &recipe.State{Recipe: r}
-	for _, id := range []string{recipe.StepPipelinesPrereq, recipe.StepMLflowPrereq} {
-		res, err := recipeStep(t, r, id).Run(pc.c, st, func(types.UpdateStepEvent) {})
-		if err != nil || !res.Success {
-			t.Fatalf("%s: %+v %v", id, res, err)
-		}
+	res, err := recipeStep(t, r, recipe.StepPrerequisites).Run(pc.c, st, func(types.UpdateStepEvent) {})
+	if err != nil || !res.Success {
+		t.Fatalf("%+v %v", res, err)
 	}
 	if strings.Join(st.Components, ",") != "aipipelines" {
 		t.Errorf("components %v", st.Components)
+	}
+	// Each component is the first feature's that needs it.
+	rec, err := features.ReadPrereqRecord(pc.c)
+	if err != nil || rec.Components["aipipelines"].Feature != "pipelines" || rec.Components["mlflowoperator"].Feature != "mlflow" {
+		t.Errorf("record %+v %v", rec, err)
 	}
 	// With the enablement it turned on, as the record has it.
 	defer func() {
@@ -157,7 +161,7 @@ func TestRecipePrereqSteps_RecordTheComponentsTheyTurnedOn(t *testing.T) {
 		pc.f.mu.Unlock()
 		old := prereqRecordID(t, pc.c, "aipipelines")
 		again := &recipe.State{Recipe: r}
-		res, err := recipeStep(t, r, recipe.StepPipelinesPrereq).Run(pc.c, again, func(types.UpdateStepEvent) {})
+		res, err := recipeStep(t, r, recipe.StepPrerequisites).Run(pc.c, again, func(types.UpdateStepEvent) {})
 		if err != nil || !res.Success {
 			t.Fatalf("again: %+v %v", res, err)
 		}
@@ -195,6 +199,12 @@ func TestRecipeOwnership_FromTheCluster(t *testing.T) {
 		want := types.CleanupRequest{Components: []string{"aipipelines"}, ComponentIDs: map[string]string{"aipipelines": id}}
 		if req == nil || !reflect.DeepEqual(*req, want) || !reflect.DeepEqual(created, map[string]bool{recipe.StepPipelinesPrereq: true}) {
 			t.Fatalf("created %v, cleanup %+v", created, req)
+		}
+		// A run of this version marks its prerequisites step, which turned
+		// the components of every feature but Kueue on.
+		run.Steps[0].ID = recipe.StepPrerequisites
+		if created, _ := recipe.Ownership(pc.c, nil, run); !reflect.DeepEqual(created, map[string]bool{recipe.StepPrerequisites: true}) {
+			t.Fatalf("this version's run: created %v", created)
 		}
 		// Another actor reverts management state: no longer what this run left.
 		k, _ := parseFakePath(tDSC)
@@ -305,7 +315,7 @@ func TestRecipePrereqSteps_UnreadableRecordIsSaid(t *testing.T) {
 	}
 	st := &recipe.State{Recipe: r}
 	var events []string
-	res, err := recipeStep(t, r, recipe.StepPipelinesPrereq).Run(pc.c, st, func(e types.UpdateStepEvent) { events = append(events, e.Message) })
+	res, err := recipeStep(t, r, recipe.StepPrerequisites).Run(pc.c, st, func(e types.UpdateStepEvent) { events = append(events, e.Message) })
 	if err != nil || res == nil {
 		t.Fatalf("%+v %v", res, err)
 	}

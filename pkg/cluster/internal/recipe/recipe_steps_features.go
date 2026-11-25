@@ -25,23 +25,26 @@ import (
 // using that control's request body; Check inspects the cluster the way page
 // status does so Resume can skip parts already configured.
 const (
-	StepMLflowSamples       = "mlflow-samples"
-	StepMaaS                = "maas"
-	StepModelsPrereq        = "models-prereq"
-	StepModel               = "model"
-	StepMaaSPublish         = "maas-publish"
-	StepPlaygroundPrereq    = "playground-prereq"
-	StepPlayground          = "playground"
-	StepModelRegistryPrereq = "model-registry-prereq"
-	StepModelRegistry       = "model-registry"
-	StepWorkbench           = "workbench"
-	StepDashboardDev        = "dashboard-dev"
+	StepMLflowSamples = "mlflow-samples"
+	StepMaaS          = "maas"
+	// StepModelsPrereq is what the model's access needs, once the run
+	// resolved it (a recipe without an exposure): the prerequisites step
+	// sets up what every way needs.
+	StepModelsPrereq  = "models-prereq"
+	StepModel         = "model"
+	StepMaaSPublish   = "maas-publish"
+	StepPlayground    = "playground"
+	StepModelRegistry = "model-registry"
+	StepWorkbench     = "workbench"
+	StepDashboardDev  = "dashboard-dev"
 )
 
 // Indirection for status reads and step runs below; tests replace these vars.
 // Each hook corresponds to a status or action entry point on the matching page.
 var (
 	prereqStatus     = features.GetPrerequisitesStatusFor
+	prereqSetStatus  = features.GetPrerequisitesSetStatus
+	runPrereqSet     = features.RunPrerequisitesSet
 	samplesStatus    = mlflow.SamplesStatus
 	runSamples       = mlflow.RunSamples
 	maasStatus       = serving.GetMaaSStatus
@@ -89,18 +92,21 @@ func featureSteps(r types.EnvironmentRecipe) []Step {
 	if f.Models.Enabled {
 		// On CPU workers, serving often lands in 3–6 minutes (QUICKSTART); the
 		// step still obeys serving.modelReadyTimeout.
-		add(StepModelsPrereq, "What Models needs", 4*time.Minute, 15*time.Minute, checkModelsPrereq, runModelsPrereq)
+		if f.Models.Exposure == "" {
+			// The way the model is reached is resolved in the project, after
+			// the MaaS step: what it needs beyond what every way needs (the
+			// prerequisites step) is set up here, usually nothing.
+			add(StepModelsPrereq, "What the model's access needs", time.Minute, 15*time.Minute, checkModelsPrereq, runModelsPrereq)
+		}
 		add(StepModel, modelTitle(r), 5*time.Minute, 15*time.Minute, checkModel, runModel)
 		if f.MaaS.Enabled && f.MaaS.Publish && f.Models.Exposure != serving.ExposureMaaS {
 			add(StepMaaSPublish, "Publish the model through MaaS", 2*time.Minute, 15*time.Minute, checkMaaSPublish, runMaaSPublish)
 		}
 	}
 	if f.Playground.Enabled {
-		add(StepPlaygroundPrereq, "What the playground needs", 2*time.Minute, 10*time.Minute, checkPlaygroundPrereq, runPlaygroundPrereq)
 		add(StepPlayground, "Playground", 2*time.Minute, 9*time.Minute, checkPlayground, runPlaygroundStep)
 	}
 	if f.ModelRegistry.Enabled {
-		add(StepModelRegistryPrereq, "What the model registry needs", 2*time.Minute, 10*time.Minute, checkModelRegistryPrereq, runModelRegistryPrereq)
 		add(StepModelRegistry, "Model registry", 2*time.Minute, 12*time.Minute, checkModelRegistry, runModelRegistry)
 	}
 	if f.Workbench.Enabled {
@@ -597,15 +603,6 @@ func runMaaSPublish(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) 
 
 // --- Playground --------------------------------------------------------------
 
-func checkPlaygroundPrereq(c *kube.Client, _ *State) (Check, error) {
-	return checkPrereqFor(c, "playground", "")
-}
-
-// runPlaygroundPrereq performs Set up for playground prerequisites.
-func runPlaygroundPrereq(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
-	return runPrereqFor(c, s, StepPlaygroundPrereq, "playground", "", emit)
-}
-
 // playgroundThroughMaaS says whether the recipe's model is offered only
 // through Models as a Service: the run publishes it there (the publish
 // step, which takes the model out of the dashboard's Gen AI assets as the
@@ -810,15 +807,6 @@ func runPlaygroundStep(c *kube.Client, s *State, emit func(types.UpdateStepEvent
 }
 
 // --- Model registry ----------------------------------------------------------
-
-func checkModelRegistryPrereq(c *kube.Client, _ *State) (Check, error) {
-	return checkPrereqFor(c, "model-registry", "")
-}
-
-// runModelRegistryPrereq carries out Set up for model-registry prerequisites.
-func runModelRegistryPrereq(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
-	return runPrereqFor(c, s, StepModelRegistryPrereq, "model-registry", "", emit)
-}
 
 // checkModelRegistry: this tool's registry is ready (with the sample model,
 // when the recipe asks for it and the registry can take it) → done; a
