@@ -7,8 +7,8 @@ import { PIPELINE_SAMPLE_ID } from "./PipelineSample";
 import { STORAGE_HREF, TAB_TITLES } from "./environmentTabs";
 
 /** The Overview's rows: each feature's summary state (with its prerequisites) and its tab's address. */
-export function overviewRows(summaries: { storage: FeatureState; pipelines: FeatureState; workbench: FeatureState; mlflow: FeatureState; modelRegistry: FeatureState; models: FeatureState; playground: FeatureState; kueue: FeatureState; maas: FeatureState }, prereq: PrerequisitesStatus | null): OverviewRow[] {
-  const { storage: storageNow, pipelines: pipelinesSummary, workbench: workbenchSummary, mlflow: mlflowNow, modelRegistry: modelRegistryNow, models: modelsSummary, playground: playgroundSummary, kueue: kueueNow, maas: maasNow } = summaries;
+export function overviewRows(summaries: { storage: FeatureState; pipelines: FeatureState; workbench: FeatureState; mlflow: FeatureState; modelRegistry: FeatureState; models: FeatureState; playground: FeatureState; kueue: FeatureState; maas: FeatureState; observability: FeatureState }, prereq: PrerequisitesStatus | null): OverviewRow[] {
+  const { storage: storageNow, pipelines: pipelinesSummary, workbench: workbenchSummary, mlflow: mlflowNow, modelRegistry: modelRegistryNow, models: modelsSummary, playground: playgroundSummary, kueue: kueueNow, maas: maasNow, observability: observabilityNow } = summaries;
   // Once a feature works, its samples are the natural next step.
   const pipelinesSamples = pipelinesSummary.status === "ready" && !!pipelinesSummary.project;
   const prereqFor = (feature: PrerequisiteFeature) => prereq?.features?.[feature];
@@ -48,6 +48,9 @@ export function overviewRows(summaries: { storage: FeatureState; pipelines: Feat
     },
     {
       id: "maas", name: "MaaS", gives: "Offer models to everyone on the cluster with API keys and token limits", state: maasNow, href: "?tab=maas",
+    },
+    {
+      id: "observability", name: TAB_TITLES.observability, gives: "MaaS usage logs and the usage and metrics dashboards (Observe & monitor)", state: observabilityNow, href: "?tab=observability",
     },
   ];
 }

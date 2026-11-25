@@ -105,6 +105,8 @@ type fakeCall struct {
 	Query                           url.Values
 	// Token is the request's bearer token: who made it.
 	Token string
+	// Accept is the request's Accept header.
+	Accept string
 }
 
 // dryRun reports whether the API server runs the call as a server-side dry
@@ -367,7 +369,7 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 		echoKey = "DRYRUN " + echoKey
 	}
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	f.calls = append(f.calls, fakeCall{Method: r.Method, Path: r.URL.Path, ContentType: r.Header.Get("Content-Type"), Body: string(body), Query: r.URL.Query(), Token: token})
+	f.calls = append(f.calls, fakeCall{Method: r.Method, Path: r.URL.Path, ContentType: r.Header.Get("Content-Type"), Body: string(body), Query: r.URL.Query(), Token: token, Accept: r.Header.Get("Accept")})
 	if code, ok := f.failAs[token+" "+r.Method+" "+r.URL.Path]; ok {
 		f.status(w, code, kube.FirstNonEmpty(f.failMessage[token+" "+r.Method+" "+r.URL.Path], "injected failure for this token"))
 		return
@@ -423,6 +425,21 @@ func (f *resourceFake) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A metadata-only read in the wrong form is refused as the API server
+	// refuses it (k8s.io/apiserver pkg/endpoints/handlers/response.go
+	// asPartialObjectMetadata/asPartialObjectMetadataList: 406; a custom
+	// resource asked for as a list answered 500 "content is not a list",
+	// live 2026-11-25).
+	if accept := r.Header.Get("Accept"); r.Method == http.MethodGet {
+		switch {
+		case strings.Contains(accept, "as=PartialObjectMetadataList") && !isList:
+			f.status(w, http.StatusInternalServerError, "content is not a list")
+			return
+		case strings.Contains(accept, "as=PartialObjectMetadata;") && isList:
+			f.status(w, http.StatusNotAcceptable, "you requested PartialObjectMetadata, but the requested object is a list")
+			return
+		}
+	}
 	switch r.Method {
 	case http.MethodGet:
 		if isList {

@@ -24,6 +24,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
+	"gopkg.in/yaml.v3"
 )
 
 // One-click prerequisites: what an Environment feature needs on the cluster
@@ -399,8 +400,10 @@ func planFeature(c *kube.Client, fs featureSetup, r clusterReads) *featurePlan {
 		p.refuse(r.recErr.Error()+" Nothing was changed.", kube.ErrorCodeFromK8sErr(r.recErr))
 	}
 
-	// The components.
+	// The components. A feature without any (Observability: its operators
+	// only) does not need a DataScienceCluster.
 	switch {
+	case len(fs.components) == 0:
 	case r.dscErr != nil:
 		msg := fmt.Sprintf("Cannot read the DataScienceCluster; nothing was changed: %v.%s", r.dscErr, kube.TemplateHint(r.dscErr))
 		p.refuse(msg, kube.ErrorCodeFromK8sErr(r.dscErr))
@@ -412,7 +415,7 @@ func planFeature(c *kube.Client, fs featureSetup, r clusterReads) *featurePlan {
 	case r.dsc.Object == nil:
 		p.refuse("This cluster has no DataScienceCluster. A cluster-admin creates one on the Components page. Nothing was changed.", "prerequisites")
 	}
-	if r.dscErr == nil && r.dsc.Object != nil {
+	if r.dscErr == nil && r.dsc.Object != nil && len(fs.components) > 0 {
 		meta, _ := r.dsc.Object["metadata"].(map[string]any)
 		p.dscName, _ = meta["name"].(string)
 		p.argo = argo.TrackingOf(c, r.dsc.Object, rhoai.DSCGroup, "DataScienceCluster")
@@ -668,16 +671,34 @@ func operatorInstallCommands(p *envkit.OperatorInstallPlan) string {
 	for _, o := range objs {
 		meta := o["metadata"].(map[string]any)
 		delete(meta, "labels")
-		docs = append(docs, yamlish(o, ""))
+		// The namespace's documented labels stay; only this tool's own go.
+		if o["kind"] == "Namespace" && len(p.Op.NSLabels) > 0 {
+			labels := map[string]any{}
+			for k, v := range p.Op.NSLabels {
+				labels[k] = v
+			}
+			meta["labels"] = labels
+		}
+		docs = append(docs, yamlDoc(o))
 	}
 	return "oc apply -f - <<'EOF'\n" + strings.Join(docs, "---\n") + "EOF\n" +
 		fmt.Sprintf("oc wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/%s -n %s --timeout=300s", p.Op.SubName, p.Op.Namespace)
 }
 
-// yamlish writes the plain maps, lists and strings of an object as YAML
-// (keys in a fixed order: apiVersion, kind, metadata, spec, then the rest).
-func yamlish(v any, indent string) string {
+// yamlDoc encodes an object of plain maps, lists and values as one YAML
+// document with a YAML encoder (a string stays a string: "true" and "" are
+// quoted), keys in a fixed order: apiVersion, kind, metadata, spec, then
+// the rest by name.
+func yamlDoc(v any) string {
 	var b strings.Builder
+	enc := yaml.NewEncoder(&b)
+	enc.SetIndent(2)
+	_ = enc.Encode(yamlNode(v))
+	_ = enc.Close()
+	return b.String()
+}
+
+func yamlNode(v any) *yaml.Node {
 	switch t := v.(type) {
 	case map[string]any:
 		keys := make([]string, 0, len(t))
@@ -696,23 +717,23 @@ func yamlish(v any, indent string) string {
 			}
 			return keys[i] < keys[j]
 		})
+		n := &yaml.Node{Kind: yaml.MappingNode}
 		for _, k := range keys {
-			switch child := t[k].(type) {
-			case map[string]any, []any:
-				b.WriteString(indent + k + ":\n" + yamlish(child, indent+"  "))
-			default:
-				fmt.Fprintf(&b, "%s%s: %v\n", indent, k, child)
-			}
+			n.Content = append(n.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: k}, yamlNode(t[k]))
 		}
+		return n
 	case []any:
+		n := &yaml.Node{Kind: yaml.SequenceNode}
 		for _, e := range t {
-			inner := yamlish(e, indent+"  ")
-			b.WriteString(indent + "- " + strings.TrimPrefix(inner, indent+"  "))
+			n.Content = append(n.Content, yamlNode(e))
 		}
-	default:
-		fmt.Fprintf(&b, "%s%v\n", indent, t)
+		return n
+	case string:
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: t}
 	}
-	return b.String()
+	n := &yaml.Node{}
+	_ = n.Encode(v)
+	return n
 }
 
 // status is the plan as the tab shows it.

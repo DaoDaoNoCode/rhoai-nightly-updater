@@ -24,6 +24,23 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Added
 
+- **Observability: MaaS usage logs and dashboards on the Environment page.**
+  A new **Observability** tab (and Overview row) sets up RHOAI's monitoring
+  as its docs do (odh-observability `docs/usage-logs.md`,
+  `docs/observability-modes.md`): the Cluster Observability Operator, the
+  Red Hat build of OpenTelemetry and the Loki Operator (after cert-manager,
+  default channels, as odh-gitops installs them), a bucket with a key of
+  its own on the tool's S3 storage and the documented Secret, and
+  `spec.monitoring.metrics.storage` and `spec.monitoring.usageLogs` (test
+  size `1x.demo`, the default StorageClass) in the DSCInitialization, then
+  waits for the stack. The cost (about 51Gi of disks) is shown first. It
+  flags the collector's missing certificates (a product bug, with the manual
+  fix labelled as not in RHOAI's docs) and dashboards Perses has not taken
+  yet. Clean up puts back only the recorded fields, then deletes the
+  recorded disks and certificates, the Secret, the SeaweedFS user and the
+  bucket; the operators stay. The ServiceAccount gains `list` on LokiStacks
+  and PersesDashboards, not PersesDatasources ([SECURITY.md](SECURITY.md#observability-usage-logs-and-dashboards)).
+  The S3 storage cannot be deleted while usage logs use it.
 - **Distributed workloads (Kueue) on the Environment page.** A new
   **Distributed workloads** tab (and Overview row) sets Kueue up exactly as
   the RHOAI docs do with self-managed queues: its prerequisites install the

@@ -64,6 +64,10 @@ type OperatorSpec struct {
 	Channel func(OperatorPackage) (string, string)
 	// Env is the Subscription's spec.config.env ("" none).
 	Env []map[string]any
+	// NSLabels and NSAnnotations go on the Namespace when this tool creates
+	// it, as the operator's own install docs (and odh-gitops'
+	// namespace.yaml) write them; a namespace that exists is used as it is.
+	NSLabels, NSAnnotations map[string]string
 }
 
 // operatorSubscriptionPath is the path of an operator Subscription this
@@ -500,7 +504,19 @@ func readOperatorGroups(c *kube.Client, ns string) (operatorGroups, error) {
 
 // OperatorObjects are the docs' objects for installing op on channel.
 func OperatorObjects(op OperatorSpec, channel string) (ns, group, sub map[string]any) {
-	ns = map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": op.Namespace, "labels": ToolLabels()}}
+	nsLabels := ToolLabels()
+	for k, v := range op.NSLabels {
+		nsLabels[k] = v
+	}
+	nsMeta := map[string]any{"name": op.Namespace, "labels": nsLabels}
+	if len(op.NSAnnotations) > 0 {
+		annotations := map[string]any{}
+		for k, v := range op.NSAnnotations {
+			annotations[k] = v
+		}
+		nsMeta["annotations"] = annotations
+	}
+	ns = map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": nsMeta}
 	group = map[string]any{"apiVersion": "operators.coreos.com/v1", "kind": "OperatorGroup",
 		"metadata": map[string]any{"name": op.Group, "namespace": op.Namespace, "labels": ToolLabels()}}
 	if op.OwnNamespace {

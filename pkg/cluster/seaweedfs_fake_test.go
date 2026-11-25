@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -36,7 +37,17 @@ type seaweedFake struct {
 	users map[string]*fakeIAMUser
 	// "bucket/key" -> payload.
 	objects map[string][]byte
-	nextKey int
+	// buckets that exist (pipelines always does).
+	buckets map[string]bool
+	// batchDeletes are the sizes of the DeleteObjects requests, in order.
+	batchDeletes []int
+	// takeBuckets: any bucket PUT finds it made by someone else (409);
+	// takeUsers: any CreateUser finds the user made by someone else.
+	takeBuckets, takeUsers bool
+	// batchDeleteMode: "error" answers a failure for the first key, "root"
+	// answers with another XML root.
+	batchDeleteMode string
+	nextKey         int
 	// when set, failIAM forces the given IAM action to return that HTTP status.
 	failIAM map[string]int
 	// per-user override for object-call HTTP status (simulates an invalid key).
@@ -198,16 +209,95 @@ func (sw *seaweedFake) serve(w http.ResponseWriter, r *http.Request) {
 			sw.xmlError(w, code, "InternalError")
 			return
 		}
-		if sw.users[user].policy == "" || bucket != "pipelines" || (key == "" && r.Method != http.MethodGet) {
+		// A user reaches the buckets its inline policy names, objects and
+		// listing only.
+		if p := sw.users[user].policy; p == "" || !strings.Contains(p, `"arn:aws:s3:::`+bucket+`"`) || (key == "" && r.Method != http.MethodGet) {
 			sw.xmlError(w, http.StatusForbidden, "AccessDenied")
 			return
 		}
 	}
+	if sw.buckets == nil {
+		sw.buckets = map[string]bool{"pipelines": true}
+	}
 	switch {
 	case key == "" && r.Method == http.MethodPut:
+		if sw.takeBuckets {
+			sw.buckets[bucket] = true
+		}
+		if sw.buckets[bucket] {
+			sw.xmlError(w, http.StatusConflict, "BucketAlreadyExists")
+			return
+		}
+		sw.buckets[bucket] = true
 		w.WriteHeader(http.StatusOK)
+	case key == "" && r.Method == http.MethodDelete:
+		if !sw.buckets[bucket] {
+			sw.xmlError(w, http.StatusNotFound, "NoSuchBucket")
+			return
+		}
+		for k := range sw.objects {
+			if strings.HasPrefix(k, bucket+"/") {
+				sw.xmlError(w, http.StatusConflict, "BucketNotEmpty")
+				return
+			}
+		}
+		delete(sw.buckets, bucket)
+		w.WriteHeader(http.StatusNoContent)
+	case key == "" && r.Method == http.MethodHead:
+		if !sw.buckets[bucket] {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	case key == "" && r.Method == http.MethodPost && r.URL.Query().Has("delete"):
+		// S3 DeleteObjects: AWS requires Content-MD5.
+		if r.Header.Get("Content-MD5") == "" {
+			sw.xmlError(w, http.StatusBadRequest, "MissingContentMD5")
+			return
+		}
+		var req struct {
+			Keys []string `xml:"Object>Key"`
+		}
+		_ = xml.Unmarshal(body, &req)
+		sw.batchDeletes = append(sw.batchDeletes, len(req.Keys))
+		switch sw.batchDeleteMode {
+		case "error":
+			fmt.Fprintf(w, "<DeleteResult><Error><Key>%s</Key><Code>AccessDenied</Code><Message>denied</Message></Error></DeleteResult>", req.Keys[0])
+			return
+		case "root":
+			fmt.Fprint(w, "<Error><Code>Odd</Code></Error>")
+			return
+		}
+		for _, k := range req.Keys {
+			delete(sw.objects, bucket+"/"+k)
+		}
+		fmt.Fprint(w, "<DeleteResult></DeleteResult>")
 	case key == "" && r.Method == http.MethodGet:
-		fmt.Fprint(w, `<ListBucketResult><Name>pipelines</Name></ListBucketResult>`)
+		if !sw.buckets[bucket] {
+			sw.xmlError(w, http.StatusNotFound, "NoSuchBucket")
+			return
+		}
+		var keys []string
+		for k := range sw.objects {
+			if rest, ok := strings.CutPrefix(k, bucket+"/"); ok && strings.HasPrefix(rest, r.URL.Query().Get("prefix")) && rest > r.URL.Query().Get("continuation-token") {
+				keys = append(keys, rest)
+			}
+		}
+		sort.Strings(keys)
+		truncated := false
+		if n, _ := strconv.Atoi(r.URL.Query().Get("max-keys")); n > 0 && len(keys) > n {
+			keys, truncated = keys[:n], true
+		}
+		out := "<ListBucketResult><Name>" + bucket + "</Name>"
+		for _, k := range keys {
+			out += "<Contents><Key>" + k + "</Key></Contents>"
+		}
+		if truncated {
+			out += "<IsTruncated>true</IsTruncated><NextContinuationToken>" + keys[len(keys)-1] + "</NextContinuationToken>"
+		} else {
+			out += "<IsTruncated>false</IsTruncated>"
+		}
+		fmt.Fprint(w, out+"</ListBucketResult>")
 	case r.Method == http.MethodHead || r.Method == http.MethodGet:
 		data, ok := sw.objects[bucket+"/"+key]
 		if !ok {
@@ -253,6 +343,10 @@ func (sw *seaweedFake) iam(w http.ResponseWriter, form url.Values, isAdmin, secu
 	}
 	switch action {
 	case "CreateUser":
+		if u == nil && sw.takeUsers {
+			sw.users[name] = &fakeIAMUser{keys: map[string]string{}, tags: map[string]string{}}
+			u = sw.users[name]
+		}
 		if u != nil {
 			sw.xmlError(w, http.StatusConflict, "EntityAlreadyExists")
 			return

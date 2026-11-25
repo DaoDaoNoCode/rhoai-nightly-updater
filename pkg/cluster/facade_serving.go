@@ -33,21 +33,6 @@ func GetModelExposures(c *Client, project, model string) (*types.ModelExposures,
 	return serving.GetModelExposures(c, project, model)
 }
 
-// ValidateMaaSRequest is serving.ValidateMaaSRequest.
-func ValidateMaaSRequest(req types.MaaSRequest) string {
-	return serving.ValidateMaaSRequest(req)
-}
-
-// RunMaaS is serving.RunMaaS.
-func RunMaaS(c *Client, req types.MaaSRequest, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
-	return serving.RunMaaS(c, req, onStep)
-}
-
-// GetMaaSStatus is serving.GetMaaSStatus.
-func GetMaaSStatus(c *Client) (*types.MaaSStatus, error) {
-	return serving.GetMaaSStatus(c)
-}
-
 // CheckMaaSGroups is serving.CheckMaaSGroups.
 func CheckMaaSGroups(c *Client, names []string) ([]types.MaaSGroupProblem, string) {
 	return serving.CheckMaaSGroups(c, names)

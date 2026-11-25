@@ -1773,6 +1773,18 @@ func TeardownS3(c *kube.Client, opts types.S3TeardownRequest) (*types.OperationR
 	if reason := S3TeardownBlocker(dspas, addresses...); reason != "" {
 		return fail("Cannot delete the S3 storage yet. "+reason, "prerequisites", "pipeline servers depend on it")
 	}
+	// RHOAI's usage logs keep their data in a bucket of it (the
+	// Observability tab): Loki would lose its store. A read that fails
+	// refuses, as for the pipeline servers.
+	if current {
+		used, err := UsageLogsUseStorage(c)
+		if err != nil {
+			return fail(fmt.Sprintf("Cannot verify whether RHOAI's usage logs use the S3 storage; nothing was deleted: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "dependency check failed")
+		}
+		if used {
+			return fail(fmt.Sprintf("Cannot delete the S3 storage yet. RHOAI's usage logs keep their data in a bucket of it (the DSCInitialization's usage-logs storage is Secret %s): clean up Observability first.", UsageLogsSecret), "prerequisites", "usage logs depend on it")
+		}
+	}
 
 	var d storageDeletion
 	var keptNamespaces []string

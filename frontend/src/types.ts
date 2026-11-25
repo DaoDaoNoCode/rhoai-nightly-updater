@@ -1851,6 +1851,10 @@ export interface MaaSStatus {
   removing?: MaaSRemoval[];
   /** The error of the last automatic removal, when it failed. */
   removalProblem?: string;
+  /** The usage logs and dashboards as MaaS sees them (pkg/types MaaSUsageLogs). */
+  usageLogs?: MaaSUsageLogs;
+  /** The MaaS portal; absent when this RHOAI has none. */
+  portal?: MaaSPortal;
 }
 
 /**
@@ -1891,8 +1895,38 @@ export interface MaaSGroupProblem {
 }
 
 /** The body of POST /api/resources/maas/stream. */
+/** The MaaS tab's "Usage logs and dashboards" row (pkg/types MaaSUsageLogs). */
+export interface MaaSUsageLogs {
+  state: "ready" | "missing" | "waiting" | "unknown";
+  message?: string;
+  warning?: string;
+  /** Why MaaS's Set up cannot set them up now (the S3 storage); absent when it can. */
+  setUpBlockedReason?: string;
+  /** MaasTenantConfig default-tenant spec.telemetry.logs.captureUser; absent: not set. */
+  captureUser?: boolean;
+  captureUserByTool?: boolean;
+  captureUserPrevious?: string;
+  tenantFound?: boolean;
+}
+
+/** The MaaS portal (pkg/types MaaSPortal): DataScienceCluster dashboard.maasPortal. */
+export interface MaaSPortal {
+  managementState?: string;
+  on: boolean;
+  available?: string;
+  message?: string;
+  url?: string;
+  setByTool?: boolean;
+  previous?: string;
+  blockedReason?: string;
+}
+
 export interface MaaSRequest {
-  action: "setup" | "teardown" | "publish" | "unpublish" | "restore-routing" | "change-limit" | "change-access" | MaaSActionId;
+  action: "setup" | "teardown" | "publish" | "unpublish" | "restore-routing" | "change-limit" | "change-access" | "capture-user-on" | "capture-user-off" | "portal-on" | "portal-off" | MaaSActionId;
+  /** setup: set up the usage logs and dashboards first (the Observability tab's Set up). */
+  usageLogs?: boolean;
+  /** setup: record user IDs in the usage logs once MaaS is ready. */
+  captureUser?: boolean;
   project?: string;
   /** The catalog name of the chat model to publish or unpublish; absent: the default. */
   model?: string;
@@ -2305,4 +2339,55 @@ export interface RecipeOwnedProject {
 /** The 202 answer of POST /api/recipes/run and /api/recipes/resume. */
 export interface RecipeRunAccepted {
   runId: string;
+}
+
+/** One part of the Observability tab (pkg/types MaaSPart, with the tab's own part IDs). */
+export type ObservabilityPart = Omit<MaaSPart, "id" | "actions"> & { id: string };
+
+/** A PersistentVolumeClaim of RHOAI's monitoring namespace (pkg/types ObservabilityVolume). */
+export interface ObservabilityVolume {
+  name: string;
+  size: string;
+  storageClass?: string;
+  /** This tool's setup caused it: Clean up deletes it. */
+  setUpByTool?: boolean;
+}
+
+/** One condition of the Monitoring CR. */
+export interface ObservabilityCondition {
+  type: string;
+  status: string;
+  reason?: string;
+  message?: string;
+}
+
+/** GET /api/resources/observability (pkg/types ObservabilityStatus): usage logs and dashboards, part by part. */
+export interface ObservabilityStatus {
+  blocked?: ComponentBlock;
+  /** RHOAI's monitoring namespace (DSCInitialization spec.monitoring.namespace). */
+  namespace?: string;
+  /** Usage logs are configured in the DSCInitialization, by anyone. */
+  configured: boolean;
+  /** This tool's setup added monitoring fields (its annotation on the DSCInitialization). */
+  managedByTool: boolean;
+  /** Usage logs are configured, not by this tool: shown, never changed. */
+  external?: boolean;
+  /** The usage logs keep their data in this tool's S3 storage (the server's check): it cannot go without them. */
+  usesS3Storage?: boolean;
+  ready: boolean;
+  parts: ObservabilityPart[];
+  setupPlan?: string[];
+  setupBlockedReason?: string;
+  cleanupPlan?: string[];
+  cleanupKept?: string[];
+  cleanupBlockedReason?: string;
+  volumes?: ObservabilityVolume[];
+  volumesTotal?: string;
+  conditions?: ObservabilityCondition[];
+  dashboardUrl?: string;
+}
+
+/** POST /api/resources/observability/stream. */
+export interface ObservabilityRequest {
+  action: "setup" | "teardown";
 }

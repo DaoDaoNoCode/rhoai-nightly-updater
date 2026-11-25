@@ -788,6 +788,37 @@ oc get cm rhoai-nightly-updater-snapshot -n <tool namespace> -o jsonpath='{.data
 | The dashboard marks a recipe's workbench "Workbench bypasses Kueue queue management" | Expected when the recipe turned the dashboard's Kueue setting on (or labelled the project) after creating the workbench; the review and the Kueue step's result say so. Edit the workbench in the dashboard and choose a Queue hardware profile (Kueue CPU (RHOAI Nightly Updater)): the mark goes and the workbench restarts. Kueue still does not admit it (no Workload): RHOAI's notebook controller does not copy `kueue.x-k8s.io/queue-name` to the workbench's pod template |
 | No **Turn back** on the prerequisites' Kueue part | The tab offers turning `kueue` back (Clean up's components part, `POST /api/resources/cleanup/stream` with `components: ["kueue"]`) while this tool still owns the field (hidden in read-only mode). It is off, and says why, while the status lists a ClusterQueue or LocalQueue on the cluster (`oc get clusterqueues,localqueues -A`), when that list cannot be read, or while a distributed workloads change runs. Delete the queues, or use **Clean up everything** |
 
+### 10.8 Observability (usage logs and dashboards)
+
+The **Observability** tab's status is `GET /api/resources/observability` (admin only, the ServiceAccount's reads). Set up and Clean up are `POST /api/resources/observability/stream` (`setup`, `teardown`) with the admin's token, under the cluster lock. What the tool added is recorded on the DSCInitialization (annotation `rhoai-nightly-updater/monitoring`: the fields, their values before, the PVC and Secret names before the change, and the UIDs of what the stack made that its owners' garbage collection leaves).
+
+```bash
+oc get dsci -o jsonpath='{.items[0].spec.monitoring}{"\n"}{.items[0].metadata.annotations.rhoai-nightly-updater/monitoring}'
+oc get monitoring -o jsonpath='{range .items[0].status.conditions[*]}{.type}={.status} {.reason}{"\n"}{end}'
+oc get lokistack,opentelemetrycollector,perses,pvc,pods -n redhat-ods-monitoring
+oc get persesdashboards -n redhat-ods-monitoring -o custom-columns=NAME:.metadata.name,REASON:.status.conditions[0].reason
+```
+
+| Symptom | Cause and fix |
+|---|---|
+| Set up refused: "needs secured S3 storage" or "not set up" | The usage logs get a SeaweedFS key of their own, which needs IAM writes. Set up the S3 storage, or run **Secure S3 storage**, on the S3 storage tab |
+| Set up refused: "no default StorageClass" | The LokiStack's disks need a StorageClass, and RHOAI's default for `usageLogs.storage.storageClassName` is `gp3-csi` (AWS only). A cluster-admin marks one as the default (`storageclass.kubernetes.io/is-default-class=true`) |
+| Set up refused: usage logs "configured, not by this tool" | `spec.monitoring.usageLogs` exists already (for example an external S3). The tool shows it and never changes it |
+| Set up refused: "monitoring is turned off" | `spec.monitoring.managementState` is not `Managed`. RHOAI's default is `Managed`; a cluster-admin decides |
+| Set up refused: the API server rejects the fields (strict decoding, unknown field) | This RHOAI's DSCInitialization has no `usageLogs` (before RHOAI 3.6). Nothing was changed |
+| **Metrics collector** shows a problem: pods wait for `data-science-collector-ta-client-cert` | Product bug (RHOAI monitoring and the OpenTelemetry operator): the operator checks for cert-manager once at start, before RHOAI's monitoring grants it cert-manager's permissions, so the collector's certificates are never made, while the Monitoring CR still reports the collector available. Usage logs are not affected. The fix shown (delete the OpenTelemetry operator's pod once; OLM recreates it, the collector starts about 70 s later) is **not in RHOAI's docs**; it worked in our test. The tool does not run it |
+| **Dashboards** waiting: dashboards "not in Perses yet" (`PersesBackendError`) | MaaS and KServe made them before Perses ran. The Perses operator retries them by itself with growing pauses (11 minutes in our test); nothing to do. Setting up usage logs before MaaS avoids it |
+| **Dashboards** warns that maas-api runs its Loki read proxy | The `maas-api` Deployment's container has the variable `LOKI_READ_ENDPOINT` (the tool reads only the variable names): someone created Secret `usage-logs-loki` in the MaaS namespace (odh-observability `docs/usage-logs.md`, "Configure reads and verify new traffic", meant for an AI Grid hub or OIDC sign-ins). maas-controller then sets that variable and points `usage-logs-all` and `usage-logs-multi-tenancy` at `https://maas-api.<ns>.svc.cluster.local:8443/v1/logs`, and every OpenShift sign-in gets HTTP 500 AUTH_FAILURE in Usage and My Usage: Perses calls maas-api's Service without the `X-MaaS-Username` header only the MaaS gateway sets (maas-api `internal/token/handler.go` L83-95; seen live on RHOAI 3.7). The tool never creates that Secret. Whoever made it deletes it to read the local store again. A Secret without a valid `LOKI_READ_ENDPOINT` key moves the datasources too but sets no variable, so the tab does not warn; `oc get secret usage-logs-loki -n redhat-ai-gateway-infra` tells |
+| No usage in the dashboards | Only calls made through the MaaS gateway after Set up are logged. "My Usage" is empty for everyone until MaaS records user IDs (`captureUser`). The admin "Usage" view is shown to cluster-admins only |
+| Not ready after 8 minutes | Check the conditions above; a LokiStack that does not schedule shows in the **Usage logs** part. Set up again waits again |
+| Clean up refused: "changed since this tool's setup" | Someone changed the fields the tool added. Put back what the tool set, or remove the fields and the annotation yourself |
+| Clean up kept disks "made again or changed owner", or lists disks "this tool's setup did not record" | They are not provably the tool's (another UID, an owner, or a setup that stopped before it recorded them): delete them yourself with the command shown when nothing needs them |
+| The S3 storage cannot be deleted: "usage logs keep their data in this storage" | Clean up Observability first (Clean up everything does it first when both are ticked) |
+| Set up refused: "a bucket or SeaweedFS user of the drawn name exists already" | Something else made a bucket or user of the name this setup drew; nothing of it was used, and the names left the record. Set up again draws others |
+| Clean up lists Secrets "made with the stack after this tool's change, but nothing ties them to it" | cert-manager's Secrets (`data-science-collector-*-cert`) and `prometheus-web-tls-ca` stay when no Certificate whose owners lead to RHOAI's Monitoring CR names them. Delete them with the command shown once nothing needs them |
+| Clean up refused: the record "names no bucket or user" | A setup by an earlier unreleased build. Do the steps in the message by hand, then remove the annotation |
+| Clean up lists disks "made after this tool's change but not recorded" | The setup did not record them (it stopped, or they appeared later). Delete them with the command shown once nothing needs them |
+
 ## 11. Manual recovery for operator deadlocks
 
 These follow the deadlock map in the RHOAI 3.6 operator notes (D1–D8). The tool refuses the flows that cause them, but a cluster can reach them by other means. All recovery steps are **MANUAL ADMIN STEPs**.

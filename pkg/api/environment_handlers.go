@@ -240,7 +240,7 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 		}
 		seenComponents[k] = true
 	}
-	if len(req.Workbenches) == 0 && len(req.WorkbenchStorage) == 0 && len(req.PipelineServers) == 0 && !req.Storage && !req.MLflow && !req.ModelRegistry && !req.Kueue && len(req.Models) == 0 && !req.InferenceGateway && len(req.Playgrounds) == 0 && len(req.MaaSPublished) == 0 && !req.MaaSPlatform && len(req.Components) == 0 && len(req.RecipeProjects) == 0 {
+	if len(req.Workbenches) == 0 && len(req.WorkbenchStorage) == 0 && len(req.PipelineServers) == 0 && !req.Storage && !req.MLflow && !req.ModelRegistry && !req.Kueue && !req.Observability && len(req.Models) == 0 && !req.InferenceGateway && len(req.Playgrounds) == 0 && len(req.MaaSPublished) == 0 && !req.MaaSPlatform && len(req.Components) == 0 && len(req.RecipeProjects) == 0 {
 		writeError(w, "nothing to clean up was selected", http.StatusBadRequest, "validation")
 		return
 	}
@@ -271,6 +271,9 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 	}
 	if req.Kueue {
 		target = append(target, "distributed workloads")
+	}
+	if req.Observability {
+		target = append(target, "usage logs and dashboards")
 	}
 	if n := len(req.Playgrounds); n > 0 {
 		target = append(target, fmt.Sprintf("%d %s", n, map[bool]string{true: "playground", false: "playgrounds"}[n == 1]))

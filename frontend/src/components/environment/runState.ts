@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { ResourcesStatus } from "../../types";
 import type { ConfirmSpec } from "./resourceRow";
-import type { FeatureState, MaaSOp, ModelRegistryOp, ModelsOp, PlaygroundOp, WorkbenchOp } from "./featureState";
+import type { FeatureState, MaaSOp, ModelRegistryOp, ModelsOp, ObservabilityOp, PlaygroundOp, WorkbenchOp } from "./featureState";
 import type { KueueOp } from "./kueueState";
 import type { SampleOp } from "./samples";
 import type { CleanupRetry, CleanupScope } from "./CleanupModal";
@@ -73,6 +73,9 @@ export function useRunState() {
   // The Distributed workloads operation running now, and a key that reads its state again.
   const [kueueOp, setKueueOp] = useState<KueueOp | null>(null);
   const [kueueRefresh, setKueueRefresh] = useState(0);
+  // The Observability operation running now, and a key that reads its state again.
+  const [observabilityOp, setObservabilityOp] = useState<ObservabilityOp | null>(null);
+  const [observabilityRefresh, setObservabilityRefresh] = useState(0);
   const [prereqRefresh, setPrereqRefresh] = useState(0);
   // A model's Check again, which runs in place (no dialog), and why it could not run.
   const [checking, setChecking] = useState<{ project: string; model: string } | null>(null);
@@ -87,6 +90,7 @@ export function useRunState() {
     maasOp, setMaaSOp, maasRun, setMaaSRun, runFeature, setRunFeature, runProject, setRunProject, maasRefresh, setMaaSRefresh,
     modelRegistryOp, setModelRegistryOp, modelRegistryRefresh, setModelRegistryRefresh,
     kueueOp, setKueueOp, kueueRefresh, setKueueRefresh,
+    observabilityOp, setObservabilityOp, observabilityRefresh, setObservabilityRefresh,
     prereqRefresh, setPrereqRefresh, checking, setChecking, checkError, setCheckError,
   };
 }

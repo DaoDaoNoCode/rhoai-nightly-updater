@@ -170,6 +170,11 @@ func parseServiceError(status int, body []byte) *IAMError {
 // (an IAM read action, sent as a POST); every other write is recorded in
 // the operation's changes (kube.NoteRequest).
 func (s *seaweedClient) send(method, path string, query url.Values, contentType string, body []byte, service string, reads bool) (int, []byte, error) {
+	return s.sendWith(method, path, query, contentType, body, service, reads, nil)
+}
+
+// sendWith is send with extra (unsigned) headers.
+func (s *seaweedClient) sendWith(method, path string, query url.Values, contentType string, body []byte, service string, reads bool, header map[string]string) (int, []byte, error) {
 	u := s.endpoint + path
 	if len(query) > 0 {
 		u += "?" + canonicalQuery(query)
@@ -184,6 +189,9 @@ func (s *seaweedClient) send(method, path string, query url.Values, contentType 
 	req.ContentLength = int64(len(body))
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
+	}
+	for k, v := range header {
+		req.Header.Set(k, v)
 	}
 	signV4(req, body, s.keys.AccessKey, s.keys.SecretKey, service, time.Now())
 	if !reads {
@@ -222,11 +230,17 @@ func (s *seaweedClient) iam(action string, params url.Values) ([]byte, error) {
 
 // CreateUser registers an IAM user; EntityAlreadyExists is treated as success.
 func (s *seaweedClient) CreateUser(name string) error {
-	_, err := s.iam("CreateUser", url.Values{"UserName": {name}})
-	if iamErrorCode(err) == "EntityAlreadyExists" {
-		return nil
-	}
+	_, err := s.createUser(name)
 	return err
+}
+
+// createUser is CreateUser that says whether this call made the user.
+func (s *seaweedClient) createUser(name string) (created bool, err error) {
+	_, err = s.iam("CreateUser", url.Values{"UserName": {name}})
+	if iamErrorCode(err) == "EntityAlreadyExists" {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // DeleteUser removes an IAM user along with inline policies and tags (SeaweedFS

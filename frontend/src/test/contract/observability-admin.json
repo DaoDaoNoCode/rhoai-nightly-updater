@@ -1,0 +1,60 @@
+{
+  "blocked": {
+    "component": "monitoring",
+    "dsc": "default-dsci",
+    "reason": "shown only when blocked",
+    "state": "Managed"
+  },
+  "cleanupBlockedReason": "a reason",
+  "cleanupKept": [
+    "The operators"
+  ],
+  "cleanupPlan": [
+    "Delete Secret redhat-ods-monitoring/rhoai-nightly-updater-usage-logs"
+  ],
+  "conditions": [
+    {
+      "message": "a message",
+      "reason": "Available",
+      "status": "True",
+      "type": "Ready"
+    }
+  ],
+  "configured": true,
+  "dashboardUrl": "https://rh-ai.apps.example.com",
+  "managedByTool": true,
+  "namespace": "redhat-ods-monitoring",
+  "parts": [
+    {
+      "id": "loki-operator",
+      "managedByTool": true,
+      "message": "Version 6.7.0 runs in openshift-operators-redhat",
+      "state": "ready",
+      "title": "Loki Operator"
+    },
+    {
+      "commands": "oc delete pod -n openshift-opentelemetry-operator -l control-plane=controller-manager",
+      "docUrl": "https://github.com/opendatahub-io/odh-observability/blob/main/docs/observability-modes.md#metrics",
+      "id": "metrics-collector",
+      "message": "This is a product bug.",
+      "state": "problem",
+      "title": "Metrics collector (OpenTelemetry)",
+      "warning": "a warning"
+    }
+  ],
+  "ready": false,
+  "setupBlockedReason": "a reason",
+  "setupPlan": [
+    "Wait until RHOAI's operator reports the monitoring stack available"
+  ],
+  "usesS3Storage": true,
+  "volumes": [
+    {
+      "name": "storage-data-science-perses-0",
+      "setUpByTool": true,
+      "size": "1Gi",
+      "storageClass": "gp3-csi"
+    }
+  ],
+  "volumesTotal": "1Gi"
+}

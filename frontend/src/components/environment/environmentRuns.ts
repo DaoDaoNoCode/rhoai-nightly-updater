@@ -1,4 +1,4 @@
-import type { ConnectionWorkbench, KueueRequest, KueueStatus, WorkbenchStatus, MaaSStatus, ModelRegistryStatus, OperationResponse, PlaygroundStatus, PrerequisitesStatus, ResourcesStatus } from "../../types";
+import type { ConnectionWorkbench, KueueRequest, KueueStatus, ObservabilityStatus, WorkbenchStatus, MaaSStatus, ModelRegistryStatus, OperationResponse, PlaygroundStatus, PrerequisitesStatus, ResourcesStatus } from "../../types";
 import {
   trackFeature,
   streamCleanup,
@@ -9,13 +9,14 @@ import {
   streamMaaS,
   streamModelRegistry,
   streamKueue,
+  streamObservability,
   streamPrerequisites,
   type StreamDoneHandler,
   type StreamDetachHandler,
   type CleanupRequest,
 } from "../../services/api";
 import { errorResult } from "../../outcomes";
-import { type ConfirmSpec, type ModelsPending, type Pending, type PlaygroundPending, type MaaSPending, isMaaSPending, type PrerequisitesPending, isPrerequisitesPending, type ModelRegistryPending, type KueuePending, isKueuePending, isModelRegistryPending, type SamplePending, isModelsPending, isPlaygroundPending, isSamplePending, type WorkbenchPending, isWorkbenchPending } from "./resourceRow";
+import { type ConfirmSpec, type ModelsPending, type Pending, type PlaygroundPending, type MaaSPending, isMaaSPending, type PrerequisitesPending, isPrerequisitesPending, type ModelRegistryPending, type KueuePending, isKueuePending, type ObservabilityPending, isObservabilityPending, isModelRegistryPending, type SamplePending, isModelsPending, isPlaygroundPending, isSamplePending, type WorkbenchPending, isWorkbenchPending } from "./resourceRow";
 import { workbenchConfirm, workbenchSteps } from "./WorkbenchTab";
 import { modelsConfirm, modelsSteps } from "./modelsConfirm";
 import { playgroundConfirm, playgroundSteps } from "./PlaygroundTab";
@@ -23,11 +24,12 @@ import { maasConfirm, maasRequestOf, maasSteps } from "./MaaSTab";
 import { modelRegistryConfirm, modelRegistrySteps } from "./ModelRegistryTab";
 import { kueueConfirm, kueueSteps } from "./KueueTab";
 import type { KueueOp } from "./kueueState";
+import { observabilityConfirm, observabilitySteps } from "./ObservabilityTab";
 import { type SampleOp, mlflowSampleSteps, samplesConfirm } from "./samples";
 import type { RunState } from "./runState";
 import type { GoalRunStep } from "./useGoalRun";
 import { cleanupSteps } from "./CleanupModal";
-import { type ModelRegistryOp, type PlaygroundOp, type WorkbenchOp, mlflowState, pipelinesState, setUpBlocked, storageState } from "./featureState";
+import { type ModelRegistryOp, type ObservabilityOp, type PlaygroundOp, type WorkbenchOp, mlflowState, pipelinesState, setUpBlocked, storageState } from "./featureState";
 import { prerequisitesConfirm, prerequisitesSteps } from "./Prerequisites";
 import { modelsOpOf, modelsRequest, resourceRequest, setUpWait } from "./runRequests";
 import { TAB_TITLES } from "./environmentTabs";
@@ -64,6 +66,7 @@ export interface EnvironmentActionsContext {
   maas: MaaSStatus | null;
   modelRegistry: ModelRegistryStatus | null;
   kueue: KueueStatus | null;
+  observability: ObservabilityStatus | null;
   /** What else this page set up in a project (the Kueue setup's warning). */
   othersIn: (project: string) => string[];
   prereq: PrerequisitesStatus | null;
@@ -79,13 +82,13 @@ export interface EnvironmentActionsContext {
  * then checks every part's prerequisites, then runs the missing parts.
  */
 export function environmentActions(ctx: EnvironmentActionsContext) {
-  const { runs, status: resStatus, latestStatus, refreshStatus, fetchResources, readFresh, restartPolling, askCleanupConfirmation, pg, wb, maas, modelRegistry, kueue, othersIn, prereq, confirmOf, setPending, projectNames, onResult } = ctx;
+  const { runs, status: resStatus, latestStatus, refreshStatus, fetchResources, readFresh, restartPolling, askCleanupConfirmation, pg, wb, maas, modelRegistry, kueue, observability, othersIn, prereq, confirmOf, setPending, projectNames, onResult } = ctx;
   const {
     setResAction, setActionProject, run, setRunOpen, setupConfirm, setSetupConfirm, setCleanupScope, setCleanupRetry,
     setSampleOp, setSampleRun, setSamplesRefresh, setModelsOp, setModelsRun, setPlaygroundOp, setPlaygroundRun, setPlaygroundRefresh,
     setWorkbenchOp, setWorkbenchRun, setWorkbenchRefresh,
     setMaaSOp, setMaaSRun, setRunFeature, setRunProject, setMaaSRefresh, setPrereqRefresh, checking, setChecking, setCheckError,
-    setModelRegistryOp, setModelRegistryRefresh, setKueueOp, setKueueRefresh,
+    setModelRegistryOp, setModelRegistryRefresh, setKueueOp, setKueueRefresh, setObservabilityOp, setObservabilityRefresh,
   } = runs;
 
   /**
@@ -125,6 +128,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     setMaaSRefresh((n) => n + 1);
     setModelRegistryRefresh((n) => n + 1);
     setKueueRefresh((n) => n + 1);
+    setObservabilityRefresh((n) => n + 1);
     setSamplesRefresh((n) => n + 1);
     setPrereqRefresh((n) => n + 1);
     void fetchResources();
@@ -244,7 +248,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setMaaSRefresh((n) => n + 1);
       void fetchResources();
     };
-    follow(spec?.runTitle ?? spec?.title ?? p.kind, maasSteps(p), (onStep, onDone, onDetach) => streamMaaS(req,
+    follow(spec?.runTitle ?? spec?.title ?? p.kind, maasSteps(p, req), (onStep, onDone, onDetach) => streamMaaS(req,
       onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }),
     action === "teardown" || action === "unpublish" || action === "remove-tier-policies" ? "delete" : "setup");
   };
@@ -297,6 +301,30 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     follow(spec?.runTitle ?? spec?.title ?? p.kind, kueueSteps(p), (onStep, onDone, onDetach) => streamKueue(req,
       onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }),
     action === "setup" || action === "optin" ? "setup" : "delete");
+  };
+
+  /** A confirmed Observability change: one streamed request whose steps the run dialog shows. */
+  const startObservability = (p: ObservabilityPending) => {
+    if (run.run?.running) return;
+    const spec = observabilityConfirm(p, observability);
+    const op: ObservabilityOp = { action: p.kind === "setup-observability" ? "setup" : "teardown" };
+    setPending(null);
+    setSampleRun(null);
+    setModelsRun(null);
+    setPlaygroundRun(null);
+    setRunOpen(true);
+    trackFeature(p.kind);
+    setRunFeature("observability");
+    setObservabilityOp(op);
+    restartPolling();
+    const end = () => {
+      setObservabilityOp(null);
+      setObservabilityRefresh((n) => n + 1);
+      setPrereqRefresh((n) => n + 1);
+      void fetchResources();
+    };
+    follow(spec?.runTitle ?? spec?.title ?? p.kind, observabilitySteps(p), (onStep, onDone, onDetach) => streamObservability({ action: op.action },
+      onStep, (success, error, apiError) => { end(); onDone(success, error, apiError); }, (reason) => { end(); onDetach(reason); }), op.action === "setup" ? "setup" : "delete");
   };
 
   /** A confirmed prerequisites setup: one streamed request whose steps the run dialog shows. */
@@ -386,6 +414,10 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       startKueue(p);
       return;
     }
+    if (isObservabilityPending(p)) {
+      startObservability(p);
+      return;
+    }
     setSampleRun(null);
     setModelsRun(null);
     setPlaygroundRun(null);
@@ -427,6 +459,11 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setPending(kueueSetup);
       return;
     }
+    const observabilitySetup = setup.find(isObservabilityPending);
+    if (observabilitySetup) {
+      setPending(observabilitySetup);
+      return;
+    }
     const registrySetup = setup.find(isModelRegistryPending);
     if (registrySetup) {
       setPending(registrySetup);
@@ -440,7 +477,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
     const specs: ConfirmSpec[] = [];
     const steps: GoalRunStep[] = [];
     for (const p of setup) {
-      if (isSamplePending(p) || isModelsPending(p) || isPlaygroundPending(p) || isWorkbenchPending(p) || isMaaSPending(p) || isPrerequisitesPending(p) || isModelRegistryPending(p) || isKueuePending(p) || p.kind === "turn-back-kueue") continue;
+      if (isSamplePending(p) || isModelsPending(p) || isPlaygroundPending(p) || isWorkbenchPending(p) || isMaaSPending(p) || isPrerequisitesPending(p) || isModelRegistryPending(p) || isKueuePending(p) || isObservabilityPending(p) || p.kind === "turn-back-kueue") continue;
       const spec = confirmOf(p);
       if (spec) specs.push(spec);
       const [action, fn, target] = resourceRequest(p);
@@ -505,6 +542,7 @@ export function environmentActions(ctx: EnvironmentActionsContext) {
       setMaaSRefresh((n) => n + 1);
       setModelRegistryRefresh((n) => n + 1);
       setKueueRefresh((n) => n + 1);
+      setObservabilityRefresh((n) => n + 1);
       // A component turned back changes what the features' prerequisites read.
       if (req.components?.length) setPrereqRefresh((n) => n + 1);
       onDone(success, error, apiError);

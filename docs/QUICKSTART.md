@@ -314,6 +314,10 @@ Nothing has to be installed first: the tab lists every part MaaS needs and what 
 
 Each tab has **Clean up** at the bottom, and the Overview has **Clean up everything**: one confirmed operation with a checkbox per part.
 
+## 12. Environment: usage logs and dashboards
+
+The **Observability** tab sets up RHOAI's monitoring for the MaaS usage logs and the dashboards in **Observe & monitor**. It needs the S3 storage, set up and secured (step 7 and **Secure S3 storage**). Click **Set up usage logs and dashboards**, read the changes and the cost (about 51Gi of disks; a test-size Loki, not for production), and confirm (about 5 minutes). Then call a model through MaaS: its calls show in the RHOAI dashboard's **Observe & monitor, Dashboard**, Usage tab (cluster-admins). **Clean up usage logs** deletes the stack's disks and the logs with them; the operators stay. More: [README: Observability](../README.md#observability-maas-usage-logs-and-dashboards).
+
 ## Day to day
 
 | Task | Where |

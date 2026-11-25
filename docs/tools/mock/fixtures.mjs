@@ -2066,3 +2066,89 @@ const RECIPE_DONE = {
   kueue: "Distributed workloads are set up in recipe-dev with the RayCluster sample; Kueue admits it when the quota allows.",
   "dashboard-dev": "Deployed PR #4321, its build for RHOAI (the dashboard images made for RHOAI, not ODH); the dashboard is ready.",
 };
+
+// --- Observability (GET /api/resources/observability, pkg/cluster observability.GetStatus) ---
+
+const OBS_NS = "redhat-ods-monitoring";
+const OBS_DOCS = "https://github.com/opendatahub-io/odh-observability/blob/main/docs/";
+const obsOperator = (id, title, version, ns, ready) => (ready
+  ? { id, title, state: "ready", message: `Version ${version} runs in ${ns}`, notManaged: id === "cert-manager" }
+  : { id, title, state: "missing", message: `Not installed. Set up installs version ${version} from redhat-operators (channel ${id === "loki-operator" ? "stable-6.7" : "stable"}).` });
+const OBS_VOLUMES = [
+  ["prometheus-data-science-monitoringstack-db-prometheus-data-science-monitoringstack-0", "5Gi"],
+  ["prometheus-data-science-monitoringstack-db-prometheus-data-science-monitoringstack-1", "5Gi"],
+  ["storage-data-science-perses-0", "1Gi"],
+  ["storage-data-science-usage-logs-lokistack-compactor-0", "10Gi"],
+  ["storage-data-science-usage-logs-lokistack-index-gateway-0", "10Gi"],
+  ["storage-data-science-usage-logs-lokistack-ingester-0", "10Gi"],
+  ["wal-data-science-usage-logs-lokistack-ingester-0", "10Gi"],
+].map(([name, size]) => ({ name, size, storageClass: "gp3-csi", setUpByTool: true }));
+
+/** The Observability tab in a state: "none", "ready", "collector-stuck", "dashboards-pending", "external", "no-storage". */
+export function observabilityWorld(state = "none") {
+  const set = ["ready", "collector-stuck", "dashboards-pending"].includes(state);
+  const ops = [
+    obsOperator("cert-manager", "cert-manager Operator for Red Hat OpenShift", "1.20.1", "cert-manager-operator", true),
+    obsOperator("cluster-observability-operator", "Cluster Observability Operator", "1.5.5", "openshift-cluster-observability-operator", set || state === "external"),
+    obsOperator("opentelemetry", "Red Hat build of OpenTelemetry", "0.158.0", "openshift-opentelemetry-operator", set || state === "external"),
+    obsOperator("loki-operator", "Loki Operator", "6.7.0", "openshift-operators-redhat", set || state === "external"),
+  ];
+  if (set) for (const o of ops.slice(1)) o.managedByTool = true;
+  const conditionPart = (id, title, readyText, doc, notConfigured) => (set || state === "external"
+    ? { id, title, state: "ready", message: readyText, docUrl: OBS_DOCS + doc }
+    : { id, title, state: "missing", message: `Not deployed yet. Once the DSCInitialization's monitoring fields are set, RHOAI's operator deploys ${notConfigured}.`, docUrl: OBS_DOCS + doc });
+  const parts = [
+    ...ops,
+    state === "no-storage"
+      ? { id: "usage-logs-storage", title: "Usage-logs storage", state: "problem", message: "Usage logs get an S3 key of their own, which needs secured S3 storage (IAM writes on): use Secure S3 storage on the S3 storage tab first.", docUrl: OBS_DOCS + "observability-modes.md#usage-logs-storage" }
+      : state === "external"
+        ? { id: "usage-logs-storage", title: "Usage-logs storage", state: "ready", notManaged: true, message: `Configured, not by this tool: usage logs use Secret ${OBS_NS}/team-s3. This tool leaves it as it is.`, docUrl: OBS_DOCS + "observability-modes.md#usage-logs-storage" }
+        : set
+          ? { id: "usage-logs-storage", title: "Usage-logs storage", state: "ready", managedByTool: true, message: `Bucket rhoai-usage-logs-3f9a1c on this tool's S3 storage, SeaweedFS user rnu-usage-logs-3f9a1c whose key reaches that bucket only, and Secret ${OBS_NS}/rhoai-nightly-updater-usage-logs with that key (set up by this tool).`, docUrl: OBS_DOCS + "observability-modes.md#usage-logs-storage" }
+          : { id: "usage-logs-storage", title: "Usage-logs storage", state: "missing", message: `Not set up. Set up makes a bucket rhoai-usage-logs-<random suffix> on this tool's S3 storage, a SeaweedFS user with a key that reaches that bucket only, and Secret ${OBS_NS}/rhoai-nightly-updater-usage-logs with that key.`, docUrl: OBS_DOCS + "observability-modes.md#usage-logs-storage" },
+    set || state === "external"
+      ? { id: "monitoring-settings", title: "Monitoring settings (DSCInitialization)", state: "ready", managedByTool: set, notManaged: !set, message: `DSCInitialization default-dsci sets spec.monitoring.metrics.storage (${set ? "by this tool" : "not by this tool"}) and spec.monitoring.usageLogs (${set ? "by this tool" : "not by this tool"}).`, docUrl: OBS_DOCS + "usage-logs.md#enable-usage-logs" }
+      : { id: "monitoring-settings", title: "Monitoring settings (DSCInitialization)", state: "missing", message: "DSCInitialization default-dsci has no spec.monitoring.metrics.storage or spec.monitoring.usageLogs. Set up adds them as RHOAI's docs write them: metrics with 5Gi of disk kept 90d (this also deploys Perses, the dashboards), usage logs on a 1x.demo LokiStack, a test size (not for production).", docUrl: OBS_DOCS + "usage-logs.md#enable-usage-logs" },
+    conditionPart("monitoring-stack", "Metrics stack and Perses", "The metrics stack (Prometheus, Thanos) and Perses, the dashboards' server: RHOAI's operator reports MonitoringStackAvailable and PersesAvailable True.", "observability-modes.md#metrics", "the metrics stack (Prometheus, Thanos) and Perses, the dashboards' server"),
+    conditionPart("usage-logs", "Usage logs (LokiStack and collector)", "The usage-logs LokiStack and its collector: RHOAI's operator reports UsageLogsLokiStackAvailable and UsageLogsCollectorAvailable True.", "usage-logs.md", "the usage-logs LokiStack and its collector"),
+    state === "collector-stuck"
+      ? { id: "metrics-collector", title: "Metrics collector (OpenTelemetry)", state: "problem", docUrl: OBS_DOCS + "observability-modes.md#metrics",
+        message: "RHOAI reports the collector available, but its pods data-science-collector-collector-0, data-science-collector-collector-1 wait for Secret data-science-collector-ta-client-cert, which was never made: the built-in metrics are not collected (usage logs are not affected). This is a product bug in RHOAI's monitoring and the OpenTelemetry operator: the operator checks for cert-manager once when it starts, before RHOAI's monitoring gives it cert-manager's permissions, and then never makes the collector's certificates.",
+        commands: "# Not in RHOAI docs; worked in our test: restart the OpenTelemetry operator once (OLM makes its pod again).\noc delete pod -n openshift-opentelemetry-operator -l control-plane=controller-manager" }
+      : conditionPart("metrics-collector", "Metrics collector (OpenTelemetry)", "The metrics collector: RHOAI's operator reports OpenTelemetryCollectorAvailable True.", "observability-modes.md#metrics", "the metrics collector"),
+    state === "dashboards-pending"
+      ? { id: "dashboards", title: "Dashboards (Perses)", state: "waiting", docUrl: OBS_DOCS + "usage-logs.md#dashboards",
+        message: "Not in Perses yet: dashboard dashboard-1-llm-d (PersesBackendError: connection refused); dashboard usage (PersesBackendError: connection refused). They were made before Perses ran; the Perses operator retries them by itself, with growing pauses. This tool does not change them." }
+      : conditionPart("dashboards", "Dashboards (Perses)", "Perses runs, with the 5 dashboards RHOAI and MaaS made for it: in the RHOAI dashboard, Observe & monitor, Dashboard.", "usage-logs.md#dashboards", "Perses, which serves the usage and metrics dashboards"),
+  ];
+  const out = {
+    namespace: OBS_NS, configured: set || state === "external", managedByTool: set, external: state === "external",
+    ready: state === "ready" || state === "external", parts, dashboardUrl: "https://rh-ai.apps.example-cluster.example.com",
+  };
+  if (!set && state !== "external") {
+    out.setupPlan = [
+      "Install Cluster Observability Operator 1.5.5: Namespace openshift-cluster-observability-operator, OperatorGroup openshift-cluster-observability-operator/openshift-cluster-observability-operator, Subscription openshift-cluster-observability-operator/cluster-observability-operator (package cluster-observability-operator, channel stable, from redhat-operators, automatic updates); it stays after Clean up, as other features share it",
+      "Install Red Hat build of OpenTelemetry 0.158.0: Namespace openshift-opentelemetry-operator, OperatorGroup openshift-opentelemetry-operator/openshift-opentelemetry-operator, Subscription openshift-opentelemetry-operator/opentelemetry-product (package opentelemetry-product, channel stable, from redhat-operators, automatic updates); it stays after Clean up, as other features share it",
+      "Install Loki Operator 6.7.0: OperatorGroup openshift-operators-redhat/openshift-operators-redhat, Subscription openshift-operators-redhat/loki-operator (package loki-operator, channel stable-6.7, from redhat-operators, automatic updates); it stays after Clean up, as other features share it",
+      "On this tool's S3 storage: a bucket rhoai-usage-logs-<random suffix>, and a SeaweedFS user rnu-usage-logs-<the same suffix> with a key that reaches that bucket only; their names are recorded on the DSCInitialization before they are made",
+      `Secret ${OBS_NS}/rhoai-nightly-updater-usage-logs with the seven keys RHOAI's docs list (the key, the bucket, the in-cluster S3 address)`,
+      "DSCInitialization default-dsci: add spec.monitoring.metrics.storage (size 5Gi, retention 90d) and spec.monitoring.usageLogs (size 1x.demo, S3 storage in Secret rhoai-nightly-updater-usage-logs, credentialMode static, the cluster's default StorageClass); this tool records what it added in annotation rhoai-nightly-updater/monitoring, and Clean up puts it back",
+      "Wait until RHOAI's operator reports the monitoring stack, Perses, the usage-logs LokiStack and collector available (about 3 minutes)",
+    ];
+  }
+  if (state === "no-storage") out.setupBlockedReason = "Usage logs get an S3 key of their own, which needs secured S3 storage (IAM writes on): use Secure S3 storage on the S3 storage tab first.";
+  if (set || state === "external") {
+    out.volumes = state === "external" ? OBS_VOLUMES.map((v) => ({ ...v, setUpByTool: false })) : OBS_VOLUMES;
+    out.volumesTotal = "51Gi";
+  }
+  if (set) {
+    out.cleanupPlan = [
+      "DSCInitialization default-dsci: remove spec.monitoring.metrics.storage and spec.monitoring.usageLogs, as before this tool's setup; RHOAI's operator then deletes the stack",
+      `Delete the 7 PersistentVolumeClaims the stack left in ${OBS_NS}, 51Gi in total, with their data (metrics and usage logs): ${OBS_VOLUMES.map((v) => `${v.name} (${v.size})`).join(", ")}`,
+      `Delete the Secrets the stack left in ${OBS_NS} (certificates): data-science-collector-ca-cert, data-science-collector-ta-client-cert, data-science-collector-ta-server-cert, prometheus-web-tls-ca`,
+      `Delete Secret ${OBS_NS}/rhoai-nightly-updater-usage-logs, SeaweedFS user rnu-usage-logs-3f9a1c with its key, and bucket rhoai-usage-logs-3f9a1c with the usage logs in it`,
+    ];
+    out.cleanupKept = ["The Cluster Observability Operator, Red Hat build of OpenTelemetry, Loki Operator and cert-manager: left in place, as other features and admins share them"];
+  }
+  return out;
+}

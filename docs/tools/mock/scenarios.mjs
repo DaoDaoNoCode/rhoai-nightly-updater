@@ -25,6 +25,8 @@ export function baseWorld() {
     workbench: { items: [] },
     // The Distributed workloads tab (GET /api/resources/kueue).
     kueue: F.kueueWorld("none"),
+    // The Observability tab (GET /api/resources/observability).
+    observability: F.observabilityWorld("none"),
     // Models as a Service (GET /api/resources/maas).
     maas: F.maasWorld("none"),
     // This tool's model registry (GET /api/resources/model-registry).
@@ -575,6 +577,22 @@ export const scenarios = {
   "env-maas-in-use": (w) => { scenarios["env-models-ready"](w); w.maas = F.maasWorld("ready", { items: [F.maasModel(false)] }); w.maasRefusal = F.MAAS_IN_USE; },
   // The Workbench tab: not set up (the plan shown), running, stopped, and no hardware profile fits.
   // The Distributed workloads tab: not set up, operator missing, ready with samples, opt-in on.
+  "env-maas-usage-logs": (w) => {
+    w.maas = { ...F.maasWorld("ready"), usageLogs: { state: "ready", tenantFound: true, captureUser: true, captureUserByTool: true, captureUserPrevious: "unset",
+      message: "Each call through the MaaS gateway is logged; the Usage dashboard (RHOAI dashboard, Observe & monitor) shows them to cluster-admins, and My Usage shows each user their own calls when user IDs are recorded." },
+    portal: { on: true, managementState: "Managed", available: "True", setByTool: true, previous: "Removed", url: "https://rh-ai.apps.example-cluster.example.com/maas-portal/" } };
+    w.observability = F.observabilityWorld("ready");
+  },
+  "env-maas-setup-usage-logs": (w) => {
+    w.maas = { ...F.maasWorld("none"), usageLogs: { state: "missing", tenantFound: false, message: "Not set up: MaaS calls are not logged, and the usage dashboards (RHOAI dashboard and MaaS portal) have no data. The Observability tab sets them up, as does MaaS's Set up with Also set up usage logs." },
+      portal: { on: false, managementState: "Removed", available: "False", message: "Submodule ManagementState is set to Removed" } };
+  },
+  "env-observability-none": () => {},
+  "env-observability-ready": (w) => { w.observability = F.observabilityWorld("ready"); },
+  "env-observability-collector-stuck": (w) => { w.observability = F.observabilityWorld("collector-stuck"); },
+  "env-observability-dashboards-pending": (w) => { w.observability = F.observabilityWorld("dashboards-pending"); },
+  "env-observability-external": (w) => { w.observability = F.observabilityWorld("external"); },
+  "env-observability-no-storage": (w) => { w.observability = F.observabilityWorld("no-storage"); },
   "env-kueue-none": () => {},
   "env-kueue-operator-missing": (w) => { w.kueue = F.kueueWorld("operator-missing"); w.prereq = { ...(w.prereq ?? {}), kueue: "missing" }; },
   "env-kueue-ready": (w) => { w.kueue = F.kueueWorld("ready", { samples: true }); },
