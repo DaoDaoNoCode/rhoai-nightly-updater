@@ -47,6 +47,7 @@ var collectorSecrets = []string{"data-science-collector-ta-client-cert", "data-s
 // monitoringCR is the Monitoring CR as read.
 type monitoringCR struct {
 	Name       string
+	UID        string
 	Generation int64
 	Conditions []monitoringCondition
 }
@@ -106,7 +107,7 @@ func readMonitoring(c *kube.Client) (*monitoringCR, error) {
 		return nil, nil
 	}
 	it := items[0]
-	return &monitoringCR{Name: it.Metadata.Name, Generation: it.Metadata.Generation, Conditions: it.Status.Conditions}, nil
+	return &monitoringCR{Name: it.Metadata.Name, UID: it.Metadata.UID, Generation: it.Metadata.Generation, Conditions: it.Status.Conditions}, nil
 }
 
 // volume is a PVC of the monitoring namespace.
@@ -239,8 +240,14 @@ func read(c *kube.Client) *view {
 		}
 	}
 	v.mon, v.monErr = readMonitoring(c)
-	if v.addUsageLogs && v.monErr == nil && v.block == nil {
-		v.usageLogsSupported()
+	if v.addUsageLogs && v.block == nil {
+		if v.monErr != nil {
+			// Cannot tell whether this RHOAI stores usage logs: Set up
+			// refuses, and may be run again.
+			v.refuse(fmt.Sprintf("Cannot read RHOAI's Monitoring CR, so this tool cannot tell whether this RHOAI stores usage logs; nothing was changed: %v.%s", v.monErr, kube.TemplateHint(v.monErr)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(v.monErr), "unavailable"))
+		} else {
+			v.usageLogsSupported()
+		}
 	}
 	return v
 }
@@ -298,6 +305,7 @@ func GetStatus(c *kube.Client) (*types.ObservabilityStatus, error) {
 	out := &types.ObservabilityStatus{Blocked: v.block, Namespace: v.ns, ManagedByTool: v.recOK, External: v.external && v.dsciOK,
 		DashboardURL: dashdev.CachedURL(c)}
 	out.Configured = v.dsciOK && v.d.field(fieldUsageLogs) != nil
+	out.UsesS3Storage = v.dsciOK && v.d.usageLogsSecret() == storage.UsageLogsSecret
 	out.Parts = append(out.Parts, v.ops.Parts()...)
 	out.Parts = append(out.Parts, v.storagePart(), v.dsciPart())
 	var volumes []volume
@@ -366,7 +374,7 @@ func (v *view) setupPlan() []string {
 	plan := append([]string(nil), v.ops.Plan()...)
 	if v.addUsageLogs {
 		plan = append(plan,
-			fmt.Sprintf("On this tool's S3 storage: bucket %s, and SeaweedFS user %s with a key that reaches that bucket only", storage.UsageLogsBucket, storage.UsageLogsUser),
+			"On this tool's S3 storage: a bucket rhoai-usage-logs-<random suffix>, and a SeaweedFS user rnu-usage-logs-<the same suffix> with a key that reaches that bucket only; their names are recorded on the DSCInitialization before they are made",
 			fmt.Sprintf("Secret %s/%s with the seven keys RHOAI's docs list (the key, the bucket, the in-cluster S3 address)", v.ns, storage.UsageLogsSecret))
 	}
 	var fields []string
@@ -418,7 +426,11 @@ func (v *view) cleanupPlan(volumes []volume) (plan, kept []string, blocked strin
 		plan = append(plan, fmt.Sprintf("Delete the Secrets the stack left in %s (certificates): %s", v.ns, strings.Join(names, ", ")))
 	}
 	if _, ok := v.rec.Added[fieldUsageLogs]; ok || v.rec.Storage {
-		plan = append(plan, fmt.Sprintf("Delete Secret %s/%s, SeaweedFS user %s with its key, and bucket %s with the usage logs in it", v.ns, storage.UsageLogsSecret, storage.UsageLogsUser, storage.UsageLogsBucket))
+		if nm := v.rec.names(); nm.Complete() {
+			plan = append(plan, fmt.Sprintf("Delete Secret %s/%s, SeaweedFS user %s with its key, and bucket %s with the usage logs in it", v.ns, storage.UsageLogsSecret, nm.User, nm.Bucket))
+		} else {
+			blocked = missingNamesText(v.rec, v.ns)
+		}
 	}
 	kept = append(kept, "The Cluster Observability Operator, Red Hat build of OpenTelemetry, Loki Operator and cert-manager: left in place, as other features and admins share them")
 	if v.rec.Left == nil {
@@ -454,9 +466,9 @@ func (v *view) storagePart() types.MaaSPart {
 		pt.Message = fmt.Sprintf("Configured, not by this tool: usage logs use Secret %s/%s. This tool leaves it as it is.", v.ns, kube.FirstNonEmpty(v.d.usageLogsSecret(), "(none: forwarding only)"))
 	case v.recOK && byTool:
 		pt.State, pt.ManagedByTool = "ready", true
-		pt.Message = fmt.Sprintf("Bucket %s on this tool's S3 storage, SeaweedFS user %s whose key reaches that bucket only, and Secret %s/%s with that key (set up by this tool).", storage.UsageLogsBucket, storage.UsageLogsUser, v.ns, storage.UsageLogsSecret)
+		pt.Message = fmt.Sprintf("Bucket %s on this tool's S3 storage, SeaweedFS user %s whose key reaches that bucket only, and Secret %s/%s with that key (set up by this tool).", v.rec.Bucket, v.rec.User, v.ns, storage.UsageLogsSecret)
 		if !v.s3.Deployed {
-			pt.State, pt.Message = "problem", fmt.Sprintf("This tool's S3 storage, which holds bucket %s, is not deployed: Loki cannot store usage logs. Set up the S3 storage again, or clean up Observability.", storage.UsageLogsBucket)
+			pt.State, pt.Message = "problem", fmt.Sprintf("This tool's S3 storage, which holds bucket %s, is not deployed: Loki cannot store usage logs. Set up the S3 storage again, or clean up Observability.", v.rec.Bucket)
 		}
 	case v.s3Err != nil:
 		pt.State, pt.Message = "unknown", "Cannot read the S3 storage: "+v.s3Err.Error()
@@ -465,7 +477,7 @@ func (v *view) storagePart() types.MaaSPart {
 			pt.State, pt.Message = "problem", why
 			return pt
 		}
-		pt.State, pt.Message = "missing", fmt.Sprintf("Not set up. Set up makes bucket %s on this tool's S3 storage, SeaweedFS user %s with a key that reaches that bucket only, and Secret %s/%s with that key.", storage.UsageLogsBucket, storage.UsageLogsUser, v.ns, storage.UsageLogsSecret)
+		pt.State, pt.Message = "missing", fmt.Sprintf("Not set up. Set up makes a bucket rhoai-usage-logs-<random suffix> on this tool's S3 storage, a SeaweedFS user with a key that reaches that bucket only, and Secret %s/%s with that key.", v.ns, storage.UsageLogsSecret)
 	}
 	return pt
 }

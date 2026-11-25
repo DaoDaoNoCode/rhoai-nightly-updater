@@ -200,6 +200,12 @@ type Record struct {
 	// key, Secret); written before it makes any of it, so Clean up sees a
 	// setup that stopped before the fields were added.
 	Storage bool `json:"storage,omitempty"`
+	// Bucket and User are the names this setup drew for the usage-logs
+	// storage (written before it makes them), and Secret the Secret's name:
+	// Clean up deletes exactly these.
+	Bucket string `json:"bucket,omitempty"`
+	User   string `json:"user,omitempty"`
+	Secret string `json:"secret,omitempty"`
 	// Added are the spec.monitoring fields this tool added ("metrics.storage",
 	// "usageLogs"), each with its value before (null: not set) and the value
 	// it set.
@@ -228,10 +234,17 @@ type Names struct {
 	Secrets []string `json:"secrets,omitempty"`
 }
 
-// Left are object UIDs by name.
+// Left are object UIDs by name. Certificates are the cert-manager
+// Certificates (of the RHOAI stack) whose Secrets Secrets holds.
 type Left struct {
-	PVCs    map[string]string `json:"pvcs,omitempty"`
-	Secrets map[string]string `json:"secrets,omitempty"`
+	PVCs         map[string]string `json:"pvcs,omitempty"`
+	Secrets      map[string]string `json:"secrets,omitempty"`
+	Certificates map[string]string `json:"certificates,omitempty"`
+}
+
+// names are the recorded usage-logs bucket and user.
+func (r Record) names() storage.UsageLogsNames {
+	return storage.UsageLogsNames{Bucket: r.Bucket, User: r.User}
 }
 
 // readRecord parses the record on d. ok is false without one; an

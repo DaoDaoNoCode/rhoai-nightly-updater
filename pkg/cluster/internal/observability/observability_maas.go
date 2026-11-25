@@ -181,13 +181,23 @@ func usageLogsState(c *kube.Client) *types.MaaSUsageLogs {
 }
 
 func portalState(c *kube.Client) *types.MaaSPortal {
+	p, _ := portalRead(c)
+	return p
+}
+
+// portalRead is portalState that tells a DataScienceCluster that cannot be
+// read (an error) from one without a portal (nil, nil).
+func portalRead(c *kube.Client) (*types.MaaSPortal, error) {
 	read, err := rhoai.ReadFirstDSC(c)
-	if err != nil || read.Object == nil {
-		return nil
+	if err != nil {
+		return nil, err
+	}
+	if read.Object == nil {
+		return nil, nil
 	}
 	_, state, found := portalKey(read)
 	if !found {
-		return nil
+		return nil, nil
 	}
 	p := &types.MaaSPortal{ManagementState: state, On: state == "Managed"}
 	p.Available, p.Message = serving.DSCConditionStatus(read.Object, "MaaSPortalAvailable")
@@ -209,7 +219,7 @@ func portalState(c *kube.Client) *types.MaaSPortal {
 			p.Message = strings.TrimSpace(p.Message + " The dashboard operator has not published the portal's address yet; this is where it will be.")
 		}
 	}
-	return p
+	return p, nil
 }
 
 // --- actions ------------------------------------------------------------------------
@@ -433,7 +443,9 @@ func restoreMaaSExtras(c *kube.Client) (logs []string, problem string) {
 			}
 		}
 	}
-	if p := portalState(c); p != nil && p.SetByTool {
+	if p, err := portalRead(c); err != nil {
+		problems = append(problems, "Cannot read the DataScienceCluster to put the MaaS portal back: "+err.Error()+".")
+	} else if p != nil && p.SetByTool {
 		q := &serving.Run{Client: c, Activity: "portal-off-maas", Target: "the MaaS portal"}
 		if r, _ := setPortal(q, false); r != nil {
 			problems = append(problems, "The MaaS portal was not put back: "+r.Message)

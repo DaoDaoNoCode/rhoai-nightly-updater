@@ -18,16 +18,14 @@ func TestLeftoverGuards(t *testing.T) {
 		want  bool
 		stack func(kube.ObjectMeta) bool
 	}{
-		{"a stack Secret made after", kube.ObjectMeta{Name: "x", CreationTimestamp: after, Annotations: cert}, true, stackSecret},
-		{"made before the record, though not listed", kube.ObjectMeta{Name: "x", CreationTimestamp: "2026-11-25T04:00:00Z", Annotations: cert}, false, stackSecret},
-		{"listed before", kube.ObjectMeta{Name: "before", CreationTimestamp: after, Annotations: cert}, false, stackSecret},
+		{"a stack Secret made after", kube.ObjectMeta{Name: "x", CreationTimestamp: after, Annotations: cert}, true, anyStack},
+		{"made before the record, though not listed", kube.ObjectMeta{Name: "x", CreationTimestamp: "2026-11-25T04:00:00Z", Annotations: cert}, false, anyStack},
+		{"listed before", kube.ObjectMeta{Name: "before", CreationTimestamp: after, Annotations: cert}, false, anyStack},
 		{"owned", kube.ObjectMeta{Name: "x", CreationTimestamp: after, Annotations: cert, OwnerReferences: []struct {
 			Kind string `json:"kind"`
 			Name string `json:"name"`
 			UID  string `json:"uid"`
-		}{{Kind: "Certificate"}}}, false, stackSecret},
-		{"no stack evidence", kube.ObjectMeta{Name: "x", CreationTimestamp: after}, false, stackSecret},
-		{"the web CA", kube.ObjectMeta{Name: webCASecret, CreationTimestamp: after}, true, stackSecret},
+		}{{Kind: "Certificate"}}}, false, anyStack},
 		{"a Loki PVC", kube.ObjectMeta{Name: "wal-data-science-usage-logs-lokistack-ingester-0", CreationTimestamp: after}, true, stackPVC},
 		{"another PVC", kube.ObjectMeta{Name: "data-mydb-0", CreationTimestamp: after}, false, stackPVC},
 	} {
@@ -38,3 +36,5 @@ func TestLeftoverGuards(t *testing.T) {
 	}
 	_ = time.Now
 }
+
+func anyStack(kube.ObjectMeta) bool { return true }

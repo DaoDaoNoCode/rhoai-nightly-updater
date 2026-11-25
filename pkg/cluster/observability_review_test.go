@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/observability"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -54,69 +55,85 @@ func TestObservability_CleanUpKeepsARecordedDiskThatGainedAnOwner(t *testing.T) 
 	}
 }
 
-// Same-name bucket or user this tool cannot prove it made: refused.
-func TestObservability_RefusesABucketOrUserItDidNotMake(t *testing.T) {
-	t.Run("bucket", func(t *testing.T) {
+// Ownership is by the names recorded before anything is made: a bucket or
+// user of a freshly drawn name that exists is refused, never adopted; a
+// retry of the same setup finds its own by the recorded names.
+func TestObservability_StorageByRecordedNames(t *testing.T) {
+	t.Run("collision", func(t *testing.T) {
 		oc := newObsCluster(t, true)
-		oc.f.sw.buckets = map[string]bool{"pipelines": true, storage.UsageLogsBucket: true}
+		// Someone made a bucket of the name this setup draws.
+		oc.f.sw.takeBuckets = true
 		res, _ := obsRun(t, oc.c, "setup")
-		if res.Success || !strings.Contains(res.Message, "this tool did not make it") {
+		if res.Success || res.ErrorCode != "conflict" || !strings.Contains(res.Message, "this tool did not make it") {
 			t.Fatalf("setup: %+v", res)
 		}
-		if _, ok := oc.f.sw.users[storage.UsageLogsUser]; ok {
-			t.Error("made the user next to a foreign bucket")
+		// Nothing was made under the drawn names: they left the record.
+		if rec, ok := obsRecord(t, oc.f); ok {
+			t.Fatalf("record kept the drawn names: %+v", rec)
 		}
-		// Clean up sees the setup that stopped (its intent record) and
-		// leaves the foreign bucket.
-		if st, _ := GetObservabilityStatus(oc.sa); !st.ManagedByTool {
-			t.Fatalf("status after the stopped setup: %+v", st)
-		}
-		res, _ = obsRun(t, oc.c, "teardown")
-		if res.Success || !oc.f.sw.buckets[storage.UsageLogsBucket] || !strings.Contains(res.Message, "has no object") {
-			t.Fatalf("teardown: %+v, buckets %v", res, oc.f.sw.buckets)
+		if len(oc.f.sw.users) != 0 {
+			t.Errorf("made a user: %v", oc.f.sw.userNames())
 		}
 	})
-	t.Run("user", func(t *testing.T) {
+	t.Run("user collision", func(t *testing.T) {
 		oc := newObsCluster(t, true)
-		oc.f.sw.users[storage.UsageLogsUser] = &fakeIAMUser{keys: map[string]string{}, tags: map[string]string{}}
+		oc.f.sw.takeUsers = true
 		res, _ := obsRun(t, oc.c, "setup")
-		if res.Success || !strings.Contains(res.Message, "is not tagged") {
+		if res.Success || res.ErrorCode != "conflict" {
 			t.Fatalf("setup: %+v", res)
 		}
-		if oc.f.sw.users[storage.UsageLogsUser].policy != "" {
-			t.Error("adopted the foreign user")
+		if _, ok := obsRecord(t, oc.f); ok {
+			t.Fatal("record kept the drawn names")
+		}
+		// The bucket this setup made for the name went again.
+		for b := range oc.f.sw.buckets {
+			if strings.HasPrefix(b, "rhoai-usage-logs-") {
+				t.Errorf("bucket %s left", b)
+			}
 		}
 	})
-}
-
-// A setup that stops after making the storage is seen and cleaned up; a
-// Clean up that stopped after deleting the user deletes the bucket next.
-func TestObservability_PartialSetUpAndCleanUpFinish(t *testing.T) {
-	oc := newObsCluster(t, true)
-	oc.f.sw.failIAM["CreateAccessKey"] = 500
-	res, _ := obsRun(t, oc.c, "setup")
-	if res.Success {
-		t.Fatalf("setup: %+v", res)
-	}
-	rec, ok := obsRecord(t, oc.f)
-	if !ok || !rec.Storage || len(rec.Added) != 0 {
-		t.Fatalf("intent record = %+v %v", rec, ok)
-	}
-	if st, _ := GetObservabilityStatus(oc.sa); !st.ManagedByTool || len(st.CleanupPlan) == 0 {
-		t.Fatalf("status = %+v", st)
-	}
-	delete(oc.f.sw.failIAM, "CreateAccessKey")
-	// The user goes by hand first; the bucket stays.
-	delete(oc.f.sw.users, storage.UsageLogsUser)
-	if res, _ := obsRun(t, oc.c, "teardown"); !res.Success {
-		t.Fatalf("teardown: %+v", res)
-	}
-	if oc.f.sw.buckets[storage.UsageLogsBucket] {
-		t.Error("bucket left")
-	}
-	if _, ok := obsRecord(t, oc.f); ok {
-		t.Error("record left")
-	}
+	t.Run("retry and partial clean up", func(t *testing.T) {
+		oc := newObsCluster(t, true)
+		oc.f.sw.failIAM["CreateAccessKey"] = 500
+		if res, _ := obsRun(t, oc.c, "setup"); res.Success {
+			t.Fatalf("setup: %+v", res)
+		}
+		rec, _ := obsRecord(t, oc.f)
+		if !oc.f.sw.buckets[rec.Bucket] {
+			t.Fatalf("bucket %s not made", rec.Bucket)
+		}
+		delete(oc.f.sw.failIAM, "CreateAccessKey")
+		// The retry finds its own bucket and user by the recorded names.
+		obsSetUp(t, oc)
+		again, _ := obsRecord(t, oc.f)
+		if again.Bucket != rec.Bucket || again.User != rec.User {
+			t.Fatalf("names changed: %+v -> %+v", rec, again)
+		}
+		// The user goes by hand first; Clean up deletes the bucket anyway.
+		delete(oc.f.sw.users, rec.User)
+		if res, _ := obsRun(t, oc.c, "teardown"); !res.Success {
+			t.Fatalf("teardown: %+v", res)
+		}
+		if oc.f.sw.buckets[rec.Bucket] {
+			t.Error("bucket left")
+		}
+		if _, ok := obsRecord(t, oc.f); ok {
+			t.Error("record left")
+		}
+	})
+	t.Run("record without names", func(t *testing.T) {
+		oc := newObsCluster(t, true)
+		d := oc.f.get(obsDSCI)
+		ensureMap(d, "metadata")["annotations"] = map[string]any{"rhoai-nightly-updater/monitoring": `{"at":"2026-11-25T05:00:00Z","storage":true,"added":{}}`}
+		oc.f.put(obsDSCI, d)
+		res, _ := obsRun(t, oc.c, "teardown")
+		if res.Success || !strings.Contains(res.Message, "names no bucket or user") || !strings.Contains(res.Message, "a cluster-admin deletes") {
+			t.Fatalf("teardown: %+v", res)
+		}
+		if m := oc.f.mutations(); len(m) != 0 {
+			t.Fatalf("changed: %v", m)
+		}
+	})
 }
 
 // The bucket is emptied in DeleteObjects batches, page by page.
@@ -124,8 +141,9 @@ func TestObservability_CleanUpEmptiesTheBucketInBatches(t *testing.T) {
 	t.Cleanup(storage.SetUsageLogsListPageLimitForTest(2))
 	oc := newObsCluster(t, true)
 	obsSetUp(t, oc)
-	for _, k := range []string{"a", "b", "c", "d"} {
-		oc.f.sw.objects[storage.UsageLogsBucket+"/application/"+k] = []byte("x")
+	rec, _ := obsRecord(t, oc.f)
+	for _, k := range []string{"a", "b", "c", "d", "e"} {
+		oc.f.sw.objects[rec.Bucket+"/application/"+k] = []byte("x")
 	}
 	if res, _ := obsRun(t, oc.c, "teardown"); !res.Success {
 		t.Fatalf("teardown: %+v", res)
@@ -133,8 +151,26 @@ func TestObservability_CleanUpEmptiesTheBucketInBatches(t *testing.T) {
 	if got := oc.f.sw.batchDeletes; len(got) != 3 || slices.Max(got) > 2 {
 		t.Fatalf("batches = %v", got)
 	}
-	if oc.f.sw.buckets[storage.UsageLogsBucket] {
+	if oc.f.sw.buckets[rec.Bucket] {
 		t.Error("bucket left")
+	}
+}
+
+// A DeleteObjects answer that names failures, or is no DeleteResult, stops
+// Clean up with the bucket kept.
+func TestObservability_BatchDeleteFailuresAreErrors(t *testing.T) {
+	for _, tc := range []struct{ mode, want string }{{"error", "not deleted"}, {"root", "not a DeleteResult"}} {
+		t.Run(tc.mode, func(t *testing.T) {
+			oc := newObsCluster(t, true)
+			obsSetUp(t, oc)
+			rec, _ := obsRecord(t, oc.f)
+			oc.f.sw.objects[rec.Bucket+"/application/a"] = []byte("x")
+			oc.f.sw.batchDeleteMode = tc.mode
+			res, _ := obsRun(t, oc.c, "teardown")
+			if res.Success || !strings.Contains(res.Message, tc.want) || !oc.f.sw.buckets[rec.Bucket] {
+				t.Fatalf("teardown: %+v", res)
+			}
+		})
 	}
 }
 
@@ -149,7 +185,8 @@ func TestObservability_CleanUpWaitsForTheStackToGo(t *testing.T) {
 	if res.Success || lastStatus(events, "monitoring-gc") != "failed" || !strings.Contains(res.Message, "LokiStack data-science-usage-logs-lokistack") {
 		t.Fatalf("teardown: %+v", res)
 	}
-	if !oc.f.has(obsSecrets+"/"+storage.UsageLogsSecret) || !oc.f.sw.buckets[storage.UsageLogsBucket] {
+	rec, _ := obsRecord(t, oc.f)
+	if !oc.f.has(obsSecrets+"/"+storage.UsageLogsSecret) || !oc.f.sw.buckets[rec.Bucket] {
 		t.Fatal("deleted the storage while the stack still uses it")
 	}
 }
@@ -242,4 +279,87 @@ func TestObservability_OperatorCommandsAreValidYAML(t *testing.T) {
 		}
 	}
 	t.Fatal("no Loki part")
+}
+
+// A Secret is the stack's only when a Certificate whose owner chain ends at
+// the Monitoring CR names it; prometheus-web-tls-ca is listed, not deleted.
+func TestObservability_CertificateSecretsNeedTheOwnerChain(t *testing.T) {
+	oc := newObsCluster(t, true)
+	// Made with the stack, but by a Certificate nobody of the stack owns.
+	oc.f.beforeServe = func(prev func(string, string)) func(string, string) {
+		return func(method, path string) {
+			prev(method, path)
+			if method == http.MethodGet && strings.Contains(path, "/monitorings") && oc.metrics && !oc.f.has(obsSecrets+"/stray-cert") {
+				now := time.Now().UTC().Format(time.RFC3339)
+				oc.f.put("/apis/cert-manager.io/v1/namespaces/"+obsNS+"/certificates/stray", map[string]any{"metadata": map[string]any{"name": "stray", "uid": "uid-stray"}, "spec": map[string]any{"secretName": "stray-cert"}})
+				oc.f.put(obsSecrets+"/stray-cert", map[string]any{"metadata": map[string]any{"name": "stray-cert", "uid": "uid-stray-cert", "creationTimestamp": now, "annotations": map[string]any{"cert-manager.io/certificate-name": "stray"}}})
+				oc.f.put(obsSecrets+"/prometheus-web-tls-ca", map[string]any{"metadata": map[string]any{"name": "prometheus-web-tls-ca", "uid": "uid-ca", "creationTimestamp": now}})
+			}
+		}
+	}(oc.f.beforeServe)
+	obsSetUp(t, oc)
+	rec, _ := obsRecord(t, oc.f)
+	if _, ok := rec.Left.Secrets["stray-cert"]; ok {
+		t.Fatalf("recorded a Secret of a Certificate outside the stack: %+v", rec.Left)
+	}
+	if _, ok := rec.Left.Secrets["prometheus-web-tls-ca"]; ok {
+		t.Fatal("recorded the web CA")
+	}
+	res, _ := obsRun(t, oc.c, "teardown")
+	if !res.Success || !strings.Contains(res.Message, "oc delete secret -n redhat-ods-monitoring prometheus-web-tls-ca") {
+		t.Fatalf("teardown: %+v", res)
+	}
+	if !oc.f.has(obsSecrets+"/stray-cert") || !oc.f.has(obsSecrets+"/prometheus-web-tls-ca") {
+		t.Fatal("deleted a Secret without evidence")
+	}
+}
+
+// Set up extending an earlier setup keeps what it recorded: each field's
+// value before, the disks it recorded and its time.
+func TestObservability_ExtendingASetUpKeepsItsRecord(t *testing.T) {
+	oc := newObsCluster(t, true)
+	// An earlier setup of this tool added metrics.storage and recorded a disk.
+	d := oc.f.get(obsDSCI)
+	ensureMap(ensureMap(ensureMap(d, "spec"), "monitoring"), "metrics")["storage"] = map[string]any{"size": "5Gi", "retention": "90d"}
+	ensureMap(d, "metadata")["annotations"] = map[string]any{"rhoai-nightly-updater/monitoring": `{"at":"2026-11-25T04:00:00Z","added":{"metrics.storage":{"previous":null,"set":{"size":"5Gi","retention":"90d"}}},"left":{"pvcs":{"old-disk":"uid-old"}}}`}
+	oc.f.put(obsDSCI, d)
+	obsSetUp(t, oc)
+	rec, _ := obsRecord(t, oc.f)
+	if rec.At != "2026-11-25T04:00:00Z" || rec.Left.PVCs["old-disk"] != "uid-old" || string(rec.Added["metrics.storage"].Previous) != "null" || rec.Added["usageLogs"].Set == nil {
+		t.Fatalf("record = %+v", rec)
+	}
+}
+
+// A Monitoring CR that cannot be read blocks Set up (and MaaS's checkbox),
+// retryably, when usage logs would be added.
+func TestObservability_UnreadableMonitoringBlocksSetUp(t *testing.T) {
+	oc := newObsCluster(t, true)
+	oc.f.fail["GET /apis/services.platform.opendatahub.io/v1alpha1/monitorings"] = http.StatusServiceUnavailable
+	st, _ := GetObservabilityStatus(oc.sa)
+	if !strings.Contains(st.SetupBlockedReason, "Cannot read RHOAI's Monitoring CR") {
+		t.Fatalf("blocked = %q", st.SetupBlockedReason)
+	}
+	ms, _ := GetMaaSStatus(oc.sa)
+	if ms.UsageLogs == nil || !strings.Contains(ms.UsageLogs.SetUpBlockedReason, "Cannot read RHOAI's Monitoring CR") {
+		t.Fatalf("MaaS usage logs = %+v", ms.UsageLogs)
+	}
+	res, _ := obsRun(t, oc.c, "setup")
+	if res.Success || res.ErrorCode == "" || len(oc.f.mutations()) != 0 {
+		t.Fatalf("setup: %+v", res)
+	}
+}
+
+// Putting the portal back after MaaS's teardown: a DataScienceCluster that
+// cannot be read is a partial failure, not "no portal".
+func TestObservability_MaaSRestoreReadFailureIsVisible(t *testing.T) {
+	oc := newObsCluster(t, true)
+	oc.f.putJSON(tDSC, `{"metadata":{"name":"default-dsc","resourceVersion":"5"},"spec":{"components":{"dashboard":{"maasPortal":{"managementState":"Removed"}}}},"status":{}}`)
+	if res := obsMaaSRun(t, oc.c, types.MaaSRequest{Action: "portal-on"}); !res.Success {
+		t.Fatalf("on: %+v", res)
+	}
+	oc.f.fail["GET /apis/datasciencecluster.opendatahub.io/v2/datascienceclusters"] = http.StatusServiceUnavailable
+	logs, problem := observability.RestoreMaaSExtrasForTest(oc.c)
+	if problem == "" || !strings.Contains(problem, "Cannot read the DataScienceCluster") {
+		t.Fatalf("logs %v problem %q", logs, problem)
+	}
 }

@@ -47,6 +47,7 @@
   "setupPlan": [
     "Wait until RHOAI's operator reports the monitoring stack available"
   ],
+  "usesS3Storage": true,
   "volumes": [
     {
       "name": "storage-data-science-perses-0",

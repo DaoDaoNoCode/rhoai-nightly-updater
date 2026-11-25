@@ -41,7 +41,13 @@ type seaweedFake struct {
 	buckets map[string]bool
 	// batchDeletes are the sizes of the DeleteObjects requests, in order.
 	batchDeletes []int
-	nextKey      int
+	// takeBuckets: any bucket PUT finds it made by someone else (409);
+	// takeUsers: any CreateUser finds the user made by someone else.
+	takeBuckets, takeUsers bool
+	// batchDeleteMode: "error" answers a failure for the first key, "root"
+	// answers with another XML root.
+	batchDeleteMode string
+	nextKey         int
 	// when set, failIAM forces the given IAM action to return that HTTP status.
 	failIAM map[string]int
 	// per-user override for object-call HTTP status (simulates an invalid key).
@@ -215,6 +221,9 @@ func (sw *seaweedFake) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case key == "" && r.Method == http.MethodPut:
+		if sw.takeBuckets {
+			sw.buckets[bucket] = true
+		}
 		if sw.buckets[bucket] {
 			sw.xmlError(w, http.StatusConflict, "BucketAlreadyExists")
 			return
@@ -251,6 +260,14 @@ func (sw *seaweedFake) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = xml.Unmarshal(body, &req)
 		sw.batchDeletes = append(sw.batchDeletes, len(req.Keys))
+		switch sw.batchDeleteMode {
+		case "error":
+			fmt.Fprintf(w, "<DeleteResult><Error><Key>%s</Key><Code>AccessDenied</Code><Message>denied</Message></Error></DeleteResult>", req.Keys[0])
+			return
+		case "root":
+			fmt.Fprint(w, "<Error><Code>Odd</Code></Error>")
+			return
+		}
 		for _, k := range req.Keys {
 			delete(sw.objects, bucket+"/"+k)
 		}
@@ -326,6 +343,10 @@ func (sw *seaweedFake) iam(w http.ResponseWriter, form url.Values, isAdmin, secu
 	}
 	switch action {
 	case "CreateUser":
+		if u == nil && sw.takeUsers {
+			sw.users[name] = &fakeIAMUser{keys: map[string]string{}, tags: map[string]string{}}
+			u = sw.users[name]
+		}
 		if u != nil {
 			sw.xmlError(w, http.StatusConflict, "EntityAlreadyExists")
 			return

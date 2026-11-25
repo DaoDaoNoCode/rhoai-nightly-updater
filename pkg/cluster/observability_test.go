@@ -91,6 +91,14 @@ func newObsCluster(t *testing.T, allOps bool) *obsCluster {
 	return oc
 }
 
+// del deletes the object at path, as its owner's garbage collection does.
+func (oc *obsCluster) del(path string) {
+	k, _ := parseFakePath(path)
+	oc.f.mu.Lock()
+	delete(oc.f.objects, k)
+	oc.f.mu.Unlock()
+}
+
 func obsCond(typ string, on bool, off string) map[string]any {
 	if on {
 		return map[string]any{"type": typ, "status": "True", "reason": "Available"}
@@ -115,7 +123,23 @@ func (oc *obsCluster) syncMonitoring() {
 	if oc.neverReady && oc.logs {
 		conds[4] = map[string]any{"type": "UsageLogsLokiStackAvailable", "status": "False", "reason": "Pending", "message": "ingester pending", "observedGeneration": oc.gen}
 	}
-	oc.f.put(obsMon, map[string]any{"metadata": map[string]any{"name": "default-monitoring", "generation": oc.gen}, "status": map[string]any{"conditions": conds}})
+	oc.f.put(obsMon, map[string]any{"metadata": map[string]any{"name": "default-monitoring", "uid": "uid-monitoring", "generation": oc.gen}, "status": map[string]any{"conditions": conds}})
+	owned := func(kind, name, uid string) []any {
+		return []any{map[string]any{"kind": kind, "name": name, "uid": uid}}
+	}
+	collectors := "/apis/opentelemetry.io/v1beta1/namespaces/" + obsNS + "/opentelemetrycollectors/"
+	certs := "/apis/cert-manager.io/v1/namespaces/" + obsNS + "/certificates/"
+	oc.del(collectors + "data-science-collector")
+	oc.del(collectors + "data-science-usage-logs")
+	oc.del(certs + "data-science-collector-ca")
+	if oc.metrics {
+		oc.f.put(collectors+"data-science-collector", map[string]any{"metadata": map[string]any{"name": "data-science-collector", "uid": "uid-coll", "ownerReferences": owned("Monitoring", "default-monitoring", "uid-monitoring")}})
+		oc.f.put(certs+"data-science-collector-ca", map[string]any{"metadata": map[string]any{"name": "data-science-collector-ca", "uid": "uid-cert", "ownerReferences": owned("OpenTelemetryCollector", "data-science-collector", "uid-coll")},
+			"spec": map[string]any{"secretName": "data-science-collector-ca-cert"}})
+	}
+	if oc.logs {
+		oc.f.put(collectors+"data-science-usage-logs", map[string]any{"metadata": map[string]any{"name": "data-science-usage-logs", "uid": "uid-ulc"}})
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	put := func(path, name string, extra map[string]any) {
 		if oc.f.has(path + "/" + name) {
@@ -226,7 +250,7 @@ func TestObservability_SetUpAndCleanUp(t *testing.T) {
 	}
 	// What the stack leaves: its disks and the certificate, not the
 	// ServiceAccount's Secret, an owned one, or this tool's own.
-	if len(rec.Left.PVCs) != 2 || rec.Left.Secrets["data-science-collector-ca-cert"] == "" || len(rec.Left.Secrets) != 1 {
+	if len(rec.Left.PVCs) != 2 || rec.Left.Secrets["data-science-collector-ca-cert"] == "" || len(rec.Left.Secrets) != 1 || rec.Left.Certificates["data-science-collector-ca"] != "uid-cert" {
 		t.Fatalf("left = %+v", rec.Left)
 	}
 	// The Secret: this tool's, the seven documented keys, a key of its own.
@@ -235,12 +259,12 @@ func TestObservability_SetUpAndCleanUp(t *testing.T) {
 		t.Fatalf("secret = %v", secret)
 	}
 	data := ensureMap(secret, "data")
-	if len(data) != 7 || secretValue(t, oc.f, obsSecrets+"/"+storage.UsageLogsSecret, "bucketnames") != storage.UsageLogsBucket ||
+	if len(data) != 7 || secretValue(t, oc.f, obsSecrets+"/"+storage.UsageLogsSecret, "bucketnames") != rec.Bucket || !strings.HasPrefix(rec.Bucket, "rhoai-usage-logs-") ||
 		secretValue(t, oc.f, obsSecrets+"/"+storage.UsageLogsSecret, "endpoint") != storage.S3Endpoint() {
 		t.Fatalf("secret data = %v", data)
 	}
 	id := secretValue(t, oc.f, obsSecrets+"/"+storage.UsageLogsSecret, "access_key_id")
-	if oc.f.sw.userOf(id) != storage.UsageLogsUser || !oc.f.sw.buckets[storage.UsageLogsBucket] {
+	if oc.f.sw.userOf(id) != rec.User || !oc.f.sw.buckets[rec.Bucket] || !strings.HasPrefix(rec.User, "rnu-usage-logs-") {
 		t.Fatalf("key %s is %q's; buckets %v", id, oc.f.sw.userOf(id), oc.f.sw.buckets)
 	}
 	// Status after: set up by this tool, Clean up plans the data loss.
@@ -262,7 +286,7 @@ func TestObservability_SetUpAndCleanUp(t *testing.T) {
 	}
 
 	// Usage logs were written to the bucket.
-	oc.f.sw.objects[storage.UsageLogsBucket+"/application/chunk"] = []byte("x")
+	oc.f.sw.objects[rec.Bucket+"/application/chunk"] = []byte("x")
 	// A disk someone made again under a recorded name is kept.
 	oc.f.put(obsPVCs+"/storage-data-science-usage-logs-lokistack-ingester-0", map[string]any{"metadata": map[string]any{"name": "storage-data-science-usage-logs-lokistack-ingester-0", "uid": "someone-elses", "creationTimestamp": time.Now().UTC().Format(time.RFC3339)}})
 
@@ -291,7 +315,7 @@ func TestObservability_SetUpAndCleanUp(t *testing.T) {
 	if !strings.Contains(res.Message, "was made again or changed owner") {
 		t.Errorf("message = %s", res.Message)
 	}
-	if _, ok := oc.f.sw.users[storage.UsageLogsUser]; ok || oc.f.sw.buckets[storage.UsageLogsBucket] {
+	if _, ok := oc.f.sw.users[rec.User]; ok || oc.f.sw.buckets[rec.Bucket] {
 		t.Errorf("SeaweedFS user or bucket left: %v %v", oc.f.sw.userNames(), oc.f.sw.buckets)
 	}
 	// Operators stay.

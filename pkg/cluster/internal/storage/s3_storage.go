@@ -1782,7 +1782,7 @@ func TeardownS3(c *kube.Client, opts types.S3TeardownRequest) (*types.OperationR
 			return fail(fmt.Sprintf("Cannot verify whether RHOAI's usage logs use the S3 storage; nothing was deleted: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "dependency check failed")
 		}
 		if used {
-			return fail(fmt.Sprintf("Cannot delete the S3 storage yet. RHOAI's usage logs keep their data in its bucket %s (the DSCInitialization's usage-logs storage is Secret %s): clean up Observability first.", UsageLogsBucket, UsageLogsSecret), "prerequisites", "usage logs depend on it")
+			return fail(fmt.Sprintf("Cannot delete the S3 storage yet. RHOAI's usage logs keep their data in a bucket of it (the DSCInitialization's usage-logs storage is Secret %s): clean up Observability first.", UsageLogsSecret), "prerequisites", "usage logs depend on it")
 		}
 	}
 

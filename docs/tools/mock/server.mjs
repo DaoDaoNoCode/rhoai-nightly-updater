@@ -528,7 +528,7 @@ async function observabilityStream(req, res) {
     for (const [step, text] of [["cert-manager", "cert-manager Operator for Red Hat OpenShift 1.20.1 is installed (not by this tool)."], ["cluster-observability-operator", "Cluster Observability Operator 1.5.5 is installed."], ["opentelemetry", "Red Hat build of OpenTelemetry 0.158.0 is installed."], ["loki-operator", "Loki Operator 6.7.0 is installed."]]) {
       send({ step, status: "success", message: text });
     }
-    send({ step: "usage-logs-storage", status: "success", message: "Bucket rhoai-usage-logs, SeaweedFS user rnu-usage-logs (its key reaches that bucket only) and Secret redhat-ods-monitoring/rhoai-nightly-updater-usage-logs are ready." });
+    send({ step: "usage-logs-storage", status: "success", message: "Bucket rhoai-usage-logs-3f9a1c, SeaweedFS user rnu-usage-logs-3f9a1c (its key reaches that bucket only) and Secret redhat-ods-monitoring/rhoai-nightly-updater-usage-logs are ready." });
     send({ step: "monitoring-settings", status: "success", message: "DSCInitialization default-dsci sets usage logs and metrics storage; RHOAI's operator deploys the stack." });
     send({ step: "monitoring-ready", status: "running", message: "Waiting for RHOAI's operator to report the monitoring stack, Perses and the usage logs available (about 3 minutes)" });
     await nextStep();
@@ -536,7 +536,7 @@ async function observabilityStream(req, res) {
     send({ step: "monitoring-ready", status: "success", message: "RHOAI's operator reports the monitoring stack, Perses and the usage logs available." });
     message = "Usage logs and the dashboards are set up. New calls through the MaaS gateway show in the usage dashboards (RHOAI dashboard, Observe & monitor) once they are made; older calls were not logged.";
   } else {
-    for (const [step, text] of [["observability-check", "Clean up removes only what this tool's setup added."], ["monitoring-settings", "DSCInitialization default-dsci is as before this tool's setup; RHOAI's operator deletes the stack."], ["monitoring-gc", "RHOAI's operator deleted the stack."], ["monitoring-leftovers", "Deleted 11 objects the stack left."], ["usage-logs-storage", "Secret rhoai-nightly-updater-usage-logs, SeaweedFS user rnu-usage-logs and bucket rhoai-usage-logs are deleted."]]) {
+    for (const [step, text] of [["observability-check", "Clean up removes only what this tool's setup added."], ["monitoring-settings", "DSCInitialization default-dsci is as before this tool's setup; RHOAI's operator deletes the stack."], ["monitoring-gc", "RHOAI's operator deleted the stack."], ["monitoring-leftovers", "Deleted 11 objects the stack left."], ["usage-logs-storage", "Secret rhoai-nightly-updater-usage-logs, SeaweedFS user rnu-usage-logs-3f9a1c and bucket rhoai-usage-logs-3f9a1c are deleted."]]) {
       send({ step, status: "success", message: text });
     }
     world.observability = F.observabilityWorld("none");

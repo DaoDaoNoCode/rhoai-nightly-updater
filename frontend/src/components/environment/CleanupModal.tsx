@@ -308,12 +308,12 @@ export const CleanupModal: React.FC<{
   const nothing = !req.workbenches && !req.workbenchStorage && !req.pipelineServers && !req.storage && !req.mlflow && !req.modelRegistry && !req.kueue && !req.observability && !req.models && !req.inferenceGateway && !req.playgrounds && !req.maasPublished && !req.maasPlatform && !req.components && !req.recipeProjects;
   const unconfirmed = asking.filter((p) => !confirmedContents.includes(p));
   const reason = baseReason ?? (nothing ? "Select something to delete."
-    : unconfirmed.length > 0 ? "Confirm that what the project holds is deleted with it." : cleanupBlocked(status, req, offered.maasPublished, offered.observability));
+    : unconfirmed.length > 0 ? "Confirm that what the project holds is deleted with it." : cleanupBlocked(status, req, offered.maasPublished, !!observability?.usesS3Storage));
   const lost = [
     ...(req.workbenchStorage ?? []).map((p) => <>The files in storage <code>nightly-workbench-storage</code> in {p}.</>),
     ...offered.runningWorkbenches.filter((p) => chosenWorkbenches.includes(p)).map((p) => <>Unsaved work in the running workbench in {p}: only files saved under <code>/opt/app-root/src</code> are in its storage.</>),
     ...(req.pipelineServers ?? []).map((p) => <>The runs and experiments of the pipeline server in {p}.</>),
-    ...(req.observability ? [<>Every usage log and metric: bucket <code>rhoai-usage-logs</code>{(observability?.volumes ?? []).some((v) => v.setUpByTool) ? <> and the disks of RHOAI&apos;s monitoring this tool&apos;s setup caused ({(observability?.volumes ?? []).filter((v) => v.setUpByTool).length})</> : null}.</>] : []),
+    ...(req.observability ? [<>Every usage log and metric: the usage-logs bucket{(observability?.volumes ?? []).some((v) => v.setUpByTool) ? <> and the disks of RHOAI&apos;s monitoring this tool&apos;s setup caused ({(observability?.volumes ?? []).filter((v) => v.setUpByTool).length})</> : null}.</>] : []),
     ...(req.storage ? [<>Every file in the S3 storage: pipeline artifacts and uploaded files{status.legacyStorage ? ", and the storage of an earlier version" : ""}.</>] : []),
     ...(req.deleteNamespace ? [<>Everything else in namespace <code>{S3_NAMESPACE}</code>.</>] : []),
     ...(req.mlflow ? [<>Every MLflow experiment, run and model, in every workspace.</>] : []),
@@ -435,7 +435,7 @@ export const CleanupModal: React.FC<{
                 {offered.observability && (
                   <FormGroup role="group" isStack label="Observability" fieldId="cleanup-observability">
                     <Checkbox id="cleanup-observability" label="Usage logs and dashboards" isChecked={usageLogsTicked} onChange={(_e, v) => setUsageLogsTicked(v)}
-                      description={<>Removes the monitoring fields this tool added to the DSCInitialization, then the disks and certificates the stack left, Secret <code>rhoai-nightly-updater-usage-logs</code>, SeaweedFS user <code>rnu-usage-logs</code> and bucket <code>rhoai-usage-logs</code>. Runs before the S3 storage, which keeps their data. The operators stay.</>} />
+                      description={<>Removes the monitoring fields this tool added to the DSCInitialization, then the disks and certificates the stack left, Secret <code>rhoai-nightly-updater-usage-logs</code>, the SeaweedFS user and the bucket this tool recorded. Runs before the S3 storage, which keeps their data. The operators stay.</>} />
                   </FormGroup>
                 )}
                 {offered.maasPlatform && (

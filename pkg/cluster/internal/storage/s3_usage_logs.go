@@ -3,9 +3,12 @@ package storage
 import (
 	"context"
 	"crypto/md5"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -21,14 +24,19 @@ import (
 // storage" (odh-observability rhoai-3.7-ea.1 docs/usage-logs.md L29). The
 // Observability tab gives it a bucket of its own on this tool's SeaweedFS,
 // and an IAM user whose inline policy reaches that bucket only, made with the
-// same IAM calls as the pipeline servers' users (provisionBucketUser). Its
-// name starts with "rnu-" but not with ScopedUserPrefix, so the leftover-key
-// sweep (leftoverUsers) and the storage teardown's sweep of pipeline users
-// (deleteScopedUsers) never take it: only the Observability tab's Clean up
-// deletes it. IAM writes need secured storage (S3IAMWritesArg).
+// same IAM calls as the pipeline servers' users (provisionBucketUser).
+//
+// Ownership is by name: each setup draws names with a random suffix
+// (NewUsageLogsNames) and records them on the DSCInitialization before it
+// makes anything; a bucket or user of a freshly drawn name that exists
+// already is refused, never adopted, and Clean up deletes exactly the
+// recorded names. The user's name starts with "rnu-" but not with
+// ScopedUserPrefix, so the leftover-key sweep (leftoverUsers) and the
+// storage teardown's sweep of pipeline users (deleteScopedUsers) never take
+// it. IAM writes need secured storage (S3IAMWritesArg).
 const (
-	UsageLogsBucket = "rhoai-usage-logs"
-	UsageLogsUser   = "rnu-usage-logs"
+	usageLogsBucketPrefix = "rhoai-usage-logs-"
+	usageLogsUserPrefix   = "rnu-usage-logs-"
 	// UsageLogsSecret is the Secret in RHOAI's monitoring namespace that
 	// holds the usage-logs key (the seven keys of docs/observability-modes.md
 	// L300-328).
@@ -37,21 +45,43 @@ const (
 	usageLogsPurposeTag  = "rnu-purpose"
 	usageLogsPurpose     = "usage-logs"
 	usageLogsProbeObject = "rhoai-nightly-updater-probe/usage-logs-key-check"
-	// usageLogsBucketMarker is the object this tool writes into the bucket
-	// right after it made it: what tells this tool's bucket from another of
-	// the same name (Set up adopts, and Clean up empties and deletes, only a
-	// bucket that has it).
-	usageLogsBucketMarker = "rhoai-nightly-updater/bucket-owner"
 )
 
 // usageLogsListPageLimit is how many objects one list (and one batch
 // delete, S3's maximum) takes; tests shorten it.
 var usageLogsListPageLimit = 1000
 
+// ErrUsageLogsNameTaken: a bucket or user of a freshly drawn name exists
+// already; nothing of this call is left (the bucket it made for the name is
+// deleted again).
+var ErrUsageLogsNameTaken = errors.New("a bucket or SeaweedFS user of the drawn name exists already, and this tool did not make it; nothing of it was used. Set up again draws another name")
+
+// UsageLogsNames are the bucket and IAM user one setup makes.
+type UsageLogsNames struct {
+	Bucket string `json:"bucket"`
+	User   string `json:"user"`
+}
+
+// Complete: both names are there.
+func (n UsageLogsNames) Complete() bool { return n.Bucket != "" && n.User != "" }
+
+// NewUsageLogsNames draws a bucket and a user name with one random suffix
+// (crypto/rand, 6 hex characters).
+func NewUsageLogsNames() (UsageLogsNames, error) {
+	b := make([]byte, 3)
+	if _, err := rand.Read(b); err != nil {
+		return UsageLogsNames{}, err
+	}
+	suffix := hex.EncodeToString(b)
+	return UsageLogsNames{Bucket: usageLogsBucketPrefix + suffix, User: usageLogsUserPrefix + suffix}, nil
+}
+
 // UsageLogsPolicy is the usage-logs user's inline policy: list, read, write
 // and delete objects of its bucket, nothing else (the policy of the
 // pipeline servers' users, for another bucket).
-const UsageLogsPolicy = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket","s3:GetObject","s3:PutObject","s3:DeleteObject"],"Resource":["arn:aws:s3:::` + UsageLogsBucket + `","arn:aws:s3:::` + UsageLogsBucket + `/*"]}]}`
+func UsageLogsPolicy(bucket string) string {
+	return `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:ListBucket","s3:GetObject","s3:PutObject","s3:DeleteObject"],"Resource":["arn:aws:s3:::` + bucket + `","arn:aws:s3:::` + bucket + `/*"]}]}`
+}
 
 // StorageSecured reports whether the S3 storage runs with IAM writes on
 // (Secure S3 storage); false when it is not deployed.
@@ -71,80 +101,53 @@ func UsageLogsStorageBlock(st types.ResourceState, secured bool) string {
 	return ""
 }
 
-// ProvisionUsageLogsKey makes the usage-logs bucket (kept when it exists),
-// the user with its policy and tag, and its key (current when it is still
-// the user's, else a new one: fresh), then checks the key: it can write,
-// list, read and delete an object of the bucket, and cannot list the
-// pipelines bucket (the policy's scope).
-func ProvisionUsageLogsKey(c *kube.Client, current S3Keys) (keys S3Keys, fresh bool, err error) {
+// ProvisionUsageLogsKey makes the recorded bucket and user (with its
+// policy and tag) and the user's key (current when it is still the user's,
+// else a new one: fresh), then checks the key: it can write, list, read and
+// delete an object of the bucket, and cannot list the pipelines bucket.
+// resume: the names were recorded by an earlier run of this setup, so a
+// bucket or user of that name is the one it made; otherwise one that exists
+// is refused.
+func ProvisionUsageLogsKey(c *kube.Client, names UsageLogsNames, current S3Keys, resume bool) (keys S3Keys, fresh bool, err error) {
 	sw, err := adminSeaweed(c)
 	if err != nil {
 		return S3Keys{}, false, err
 	}
-	if err := ensureUsageLogsBucket(sw); err != nil {
+	status, body, err := sw.object(http.MethodPut, names.Bucket, "", nil, nil)
+	switch {
+	case err != nil:
+		return S3Keys{}, false, fmt.Errorf("create bucket %s: %w", names.Bucket, err)
+	case status == http.StatusConflict && !resume:
+		return S3Keys{}, false, fmt.Errorf("bucket %s: %w", names.Bucket, ErrUsageLogsNameTaken)
+	case status >= 300 && status != http.StatusConflict:
+		return S3Keys{}, false, fmt.Errorf("create bucket %s: %w", names.Bucket, parseServiceError(status, body))
+	}
+	keys, fresh, err = provisionBucketUser(sw, bucketUser{name: names.User, policyName: usageLogsPolicyName, policy: UsageLogsPolicy(names.Bucket), tagKey: usageLogsPurposeTag, tagValue: usageLogsPurpose, mustCreate: !resume,
+		foreign: func(other string) error {
+			return fmt.Errorf("SeaweedFS user %s: %w", names.User, ErrUsageLogsNameTaken)
+		}}, current)
+	if errors.Is(err, ErrUsageLogsNameTaken) {
+		// The bucket this call made for the name goes again (it is empty).
+		if status, body, derr := sw.object(http.MethodDelete, names.Bucket, "", nil, nil); derr != nil || (status >= 300 && status != http.StatusNotFound) {
+			if derr == nil {
+				derr = parseServiceError(status, body)
+			}
+			return S3Keys{}, false, fmt.Errorf("%w; and bucket %s, which this setup made, could not be deleted again (%w): delete it in the SeaweedFS admin UI", err, names.Bucket, derr)
+		}
 		return S3Keys{}, false, err
 	}
-	keys, fresh, err = provisionBucketUser(sw, bucketUser{name: UsageLogsUser, policyName: usageLogsPolicyName, policy: UsageLogsPolicy, tagKey: usageLogsPurposeTag, tagValue: usageLogsPurpose, requireTag: true,
-		foreign: func(other string) error {
-			return fmt.Errorf("SeaweedFS user %s exists and is not tagged %s=%s (it has %q), so this tool did not make it and does not use it; nothing was changed. Delete it in the SeaweedFS admin UI if nothing needs it", UsageLogsUser, usageLogsPurposeTag, usageLogsPurpose, other)
-		}}, current)
 	if err != nil {
 		return S3Keys{}, false, err
 	}
-	if err := probeUsageLogsKey(c.Context(), keys); err != nil {
-		return keys, fresh, fmt.Errorf("the new key of SeaweedFS user %s does not work as it should: %w", UsageLogsUser, err)
+	if err := probeUsageLogsKey(c.Context(), keys, names.Bucket); err != nil {
+		return keys, fresh, fmt.Errorf("the new key of SeaweedFS user %s does not work as it should: %w", names.User, err)
 	}
 	return keys, fresh, nil
 }
 
-// ensureUsageLogsBucket makes the bucket and writes this tool's marker into
-// it; a bucket that exists is used only when it has the marker.
-func ensureUsageLogsBucket(sw *seaweedClient) error {
-	status, body, err := sw.object(http.MethodPut, UsageLogsBucket, "", nil, nil)
-	if err != nil {
-		return fmt.Errorf("create bucket %s: %w", UsageLogsBucket, err)
-	}
-	switch {
-	case status == http.StatusConflict:
-		ours, err := bucketMarked(sw)
-		if err != nil {
-			return err
-		}
-		if !ours {
-			return fmt.Errorf("bucket %s exists and has no object %s, so this tool did not make it and does not use it; nothing was changed. Delete or rename it in the SeaweedFS admin UI if nothing needs it", UsageLogsBucket, usageLogsBucketMarker)
-		}
-		return nil
-	case status >= 300:
-		return fmt.Errorf("create bucket %s: %w", UsageLogsBucket, parseServiceError(status, body))
-	}
-	status, body, err = sw.object(http.MethodPut, UsageLogsBucket, usageLogsBucketMarker, nil, []byte("made by rhoai-nightly-updater for RHOAI's usage logs (the Observability tab)"))
-	if err != nil {
-		return fmt.Errorf("mark bucket %s: %w", UsageLogsBucket, err)
-	}
-	if status >= 300 {
-		return fmt.Errorf("mark bucket %s: %w", UsageLogsBucket, parseServiceError(status, body))
-	}
-	return nil
-}
-
-// bucketMarked reports whether the usage-logs bucket has this tool's marker.
-func bucketMarked(sw *seaweedClient) (bool, error) {
-	status, body, err := sw.object(http.MethodHead, UsageLogsBucket, usageLogsBucketMarker, nil, nil)
-	switch {
-	case err != nil:
-		return false, fmt.Errorf("read bucket %s: %w", UsageLogsBucket, err)
-	case status == http.StatusOK:
-		return true, nil
-	case status == http.StatusNotFound:
-		return false, nil
-	}
-	return false, fmt.Errorf("read bucket %s: %w", UsageLogsBucket, parseServiceError(status, body))
-}
-
 // probeUsageLogsKey checks keys against the storage: write, list, read and
-// delete an object in the usage-logs bucket, and a refused listing of the
-// pipelines bucket.
-func probeUsageLogsKey(ctx context.Context, keys S3Keys) error {
+// delete an object in bucket, and a refused listing of the pipelines bucket.
+func probeUsageLogsKey(ctx context.Context, keys S3Keys, bucket string) error {
 	sc := newSeaweedClient(ctx, s3ToolEndpoint(), keys)
 	sc.http = s3SlowHTTPClient
 	content := []byte("rhoai-nightly-updater usage-logs key check")
@@ -160,7 +163,7 @@ func probeUsageLogsKey(ctx context.Context, keys S3Keys) error {
 		{"delete the test object", http.MethodDelete, usageLogsProbeObject, nil, nil, []int{http.StatusOK, http.StatusNoContent}},
 	}
 	for _, s := range steps {
-		status, body, err := sc.object(s.method, UsageLogsBucket, s.key, s.query, s.body)
+		status, body, err := sc.object(s.method, bucket, s.key, s.query, s.body)
 		if err != nil {
 			return fmt.Errorf("%s: %w", s.what, err)
 		}
@@ -176,90 +179,52 @@ func probeUsageLogsKey(ctx context.Context, keys S3Keys) error {
 		return fmt.Errorf("check that it cannot read bucket %s: %w", s3Bucket, err)
 	}
 	if status != http.StatusForbidden {
-		return fmt.Errorf("it can list bucket %s (HTTP %d), so its policy does not limit it to bucket %s", s3Bucket, status, UsageLogsBucket)
+		return fmt.Errorf("it can list bucket %s (HTTP %d), so its policy does not limit it to bucket %s", s3Bucket, status, bucket)
 	}
 	return nil
 }
 
-// UsageLogsKeyRegistered reports whether keyID is still a key of the
-// usage-logs user (false when the user is gone).
-func UsageLogsKeyRegistered(c *kube.Client, keyID string) (bool, error) {
-	sw, err := adminSeaweed(c)
-	if err != nil {
-		return false, err
-	}
-	ids, _, err := sw.ListAccessKeys(UsageLogsUser)
-	if err != nil {
-		return false, err
-	}
-	return slices.Contains(ids, keyID), nil
-}
-
-// DeleteUsageLogsStorage deletes the usage-logs user (its keys first, as
-// SeaweedFS refuses to delete a user with keys) when it carries this tool's
-// tag, and the bucket with every object in it when it has this tool's
-// marker: each on its own proof, so a run that stopped after one finishes
-// the other. What is gone already counts as deleted. It returns what it
-// did, one line each; on an error, what it did before.
-func DeleteUsageLogsStorage(c *kube.Client) ([]string, error) {
+// DeleteUsageLogsStorage deletes the recorded user (its keys first, as
+// SeaweedFS refuses to delete a user with keys) and the recorded bucket
+// with every object in it, each on its own: one that is gone already counts
+// as deleted, so a run that stopped after one finishes the other. It
+// returns what it did, one line each; on an error, what it did before.
+func DeleteUsageLogsStorage(c *kube.Client, names UsageLogsNames) ([]string, error) {
 	var logs []string
+	if !names.Complete() {
+		return logs, fmt.Errorf("this tool's record names no bucket or user")
+	}
 	sw, err := adminSeaweed(c)
 	if err != nil {
 		return logs, err
 	}
-	tags, found, err := sw.ListUserTags(UsageLogsUser)
+	ids, found, err := sw.ListAccessKeys(names.User)
 	if err != nil {
-		return logs, fmt.Errorf("read SeaweedFS user %s: %w", UsageLogsUser, err)
+		return logs, fmt.Errorf("list the keys of SeaweedFS user %s: %w", names.User, err)
 	}
 	if found {
-		if got := tags[usageLogsPurposeTag]; got != usageLogsPurpose {
-			return logs, fmt.Errorf("SeaweedFS user %s is not tagged %s=%s, so this tool did not make it; it was not deleted", UsageLogsUser, usageLogsPurposeTag, usageLogsPurpose)
-		}
-		ids, _, err := sw.ListAccessKeys(UsageLogsUser)
-		if err != nil {
-			return logs, fmt.Errorf("list the keys of SeaweedFS user %s: %w", UsageLogsUser, err)
-		}
 		for _, id := range ids {
-			if err := sw.DeleteAccessKey(UsageLogsUser, id); err != nil {
-				return logs, fmt.Errorf("delete a key of SeaweedFS user %s: %w", UsageLogsUser, err)
+			if err := sw.DeleteAccessKey(names.User, id); err != nil {
+				return logs, fmt.Errorf("delete a key of SeaweedFS user %s: %w", names.User, err)
 			}
 		}
-		if err := sw.DeleteUser(UsageLogsUser); err != nil {
-			return logs, fmt.Errorf("delete SeaweedFS user %s: %w", UsageLogsUser, err)
+		if err := sw.DeleteUser(names.User); err != nil {
+			return logs, fmt.Errorf("delete SeaweedFS user %s: %w", names.User, err)
 		}
-		logs = append(logs, fmt.Sprintf("OK: SeaweedFS user %s and its keys deleted", UsageLogsUser))
+		logs = append(logs, fmt.Sprintf("OK: SeaweedFS user %s and its keys deleted", names.User))
 	}
-	status, body, err := sw.object(http.MethodHead, UsageLogsBucket, "", nil, nil)
-	switch {
-	case err != nil:
-		return logs, fmt.Errorf("read bucket %s: %w", UsageLogsBucket, err)
-	case status == http.StatusNotFound:
-		return logs, nil
-	case status >= 300:
-		return logs, fmt.Errorf("read bucket %s: %w", UsageLogsBucket, parseServiceError(status, body))
-	}
-	ours, err := bucketMarked(sw)
-	if err != nil {
+	n, gone, err := emptyBucket(sw, names.Bucket)
+	if err != nil || gone {
 		return logs, err
 	}
-	if !ours {
-		return logs, fmt.Errorf("bucket %s has no object %s, so this tool did not make it; it was not emptied or deleted", UsageLogsBucket, usageLogsBucketMarker)
-	}
-	n, gone, err := emptyBucket(sw, UsageLogsBucket)
+	status, body, err := sw.object(http.MethodDelete, names.Bucket, "", nil, nil)
 	if err != nil {
-		return logs, err
-	}
-	if gone {
-		return logs, nil
-	}
-	status, body, err = sw.object(http.MethodDelete, UsageLogsBucket, "", nil, nil)
-	if err != nil {
-		return logs, fmt.Errorf("delete bucket %s: %w", UsageLogsBucket, err)
+		return logs, fmt.Errorf("delete bucket %s: %w", names.Bucket, err)
 	}
 	if status >= 300 && status != http.StatusNotFound {
-		return logs, fmt.Errorf("delete bucket %s: %w", UsageLogsBucket, parseServiceError(status, body))
+		return logs, fmt.Errorf("delete bucket %s: %w", names.Bucket, parseServiceError(status, body))
 	}
-	logs = append(logs, fmt.Sprintf("OK: bucket %s deleted with its %d %s", UsageLogsBucket, n, kube.Verb(n, "object", "objects")))
+	logs = append(logs, fmt.Sprintf("OK: bucket %s deleted with its %d %s", names.Bucket, n, kube.Verb(n, "object", "objects")))
 	return logs, nil
 }
 
@@ -308,11 +273,11 @@ func emptyBucket(sw *seaweedClient, bucket string) (deleted int, gone bool, err 
 // usageLogs.storage.secretName lists the same): the in-cluster S3 address,
 // plain HTTP inside the cluster (insecure "true"), and path-style requests
 // (s3ForcePathStyle "true"), as SeaweedFS serves them.
-func UsageLogsSecretData(keys S3Keys) map[string]string {
+func UsageLogsSecretData(keys S3Keys, bucket string) map[string]string {
 	return map[string]string{
 		"access_key_id":     keys.AccessKey,
 		"access_key_secret": keys.SecretKey,
-		"bucketnames":       UsageLogsBucket,
+		"bucketnames":       bucket,
 		"endpoint":          S3Endpoint(),
 		"region":            S3Region,
 		"insecure":          "true",
@@ -371,22 +336,21 @@ func UsageLogsUseStorage(c *kube.Client) (bool, error) {
 }
 
 // deleteObjects deletes keys of bucket in one request (S3 DeleteObjects, at
-// most 1000 keys; quiet mode answers only the failures).
+// most 1000 keys; quiet mode answers only the failures). An answer that is
+// not a DeleteResult, or names keys it could not delete, is an error.
 func (s *seaweedClient) deleteObjects(bucket string, keys []string) error {
 	type object struct {
 		Key string `xml:"Key"`
 	}
-	body, err := xml.Marshal(struct {
+	req := struct {
 		XMLName xml.Name `xml:"Delete"`
 		Quiet   bool     `xml:"Quiet"`
 		Objects []object `xml:"Object"`
-	}{Quiet: true, Objects: func() []object {
-		out := make([]object, len(keys))
-		for i, k := range keys {
-			out[i] = object{Key: k}
-		}
-		return out
-	}()})
+	}{Quiet: true}
+	for _, k := range keys {
+		req.Objects = append(req.Objects, object{Key: k})
+	}
+	body, err := xml.Marshal(req)
 	if err != nil {
 		return err
 	}
@@ -399,15 +363,19 @@ func (s *seaweedClient) deleteObjects(bucket string, keys []string) error {
 		return fmt.Errorf("delete objects of bucket %s: %w", bucket, parseServiceError(status, resp))
 	}
 	var result struct {
-		Errors []struct {
+		XMLName xml.Name `xml:"DeleteResult"`
+		Errors  []struct {
 			Key     string `xml:"Key"`
 			Code    string `xml:"Code"`
 			Message string `xml:"Message"`
 		} `xml:"Error"`
 	}
-	if err := xml.Unmarshal(resp, &result); err == nil && len(result.Errors) > 0 {
+	if err := xml.Unmarshal(resp, &result); err != nil {
+		return fmt.Errorf("delete objects of bucket %s: the answer is not a DeleteResult: %w", bucket, err)
+	}
+	if len(result.Errors) > 0 {
 		e := result.Errors[0]
-		return fmt.Errorf("delete objects of bucket %s: %d not deleted, the first %s: %s %s", bucket, len(result.Errors), e.Key, e.Code, e.Message)
+		return fmt.Errorf("delete objects of bucket %s: %d of %d not deleted, the first %s (%s: %s)", bucket, len(result.Errors), len(keys), e.Key, e.Code, e.Message)
 	}
 	return nil
 }

@@ -148,7 +148,7 @@ func stubContractData(t *testing.T) {
 	getObservabilityStatus = func(_ *cluster.Client) (*types.ObservabilityStatus, error) {
 		return &types.ObservabilityStatus{
 			Blocked:   &types.ComponentBlock{Component: "monitoring", DSC: "default-dsci", State: "Managed", Reason: "shown only when blocked"},
-			Namespace: "redhat-ods-monitoring", Configured: true, ManagedByTool: true, External: false, Ready: false,
+			Namespace: "redhat-ods-monitoring", Configured: true, ManagedByTool: true, External: false, UsesS3Storage: true, Ready: false,
 			Parts: []types.MaaSPart{
 				{ID: "loki-operator", Title: "Loki Operator", State: "ready", Message: "Version 6.7.0 runs in openshift-operators-redhat", ManagedByTool: true, NotManaged: false},
 				{ID: "metrics-collector", Title: "Metrics collector (OpenTelemetry)", State: "problem", Message: "This is a product bug.", Warning: "a warning",

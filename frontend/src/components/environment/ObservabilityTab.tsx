@@ -181,7 +181,7 @@ export const ObservabilityTab: React.FC<ObservabilityTabProps> = ({ observabilit
         <FeatureSection title="What this creates">
           <CreatesList items={[
             <>Only what is missing, as RHOAI&apos;s docs and its own GitOps repository install them: the Cluster Observability Operator, the Red Hat build of OpenTelemetry and the Loki Operator from <code>redhat-operators</code> (default channels), after cert-manager. They stay after Clean up: other features and admins use them</>,
-            <>Bucket <code>rhoai-usage-logs</code> on this tool&apos;s S3 storage, with SeaweedFS user <code>rnu-usage-logs</code> whose key reaches that bucket only, and Secret <code>rhoai-nightly-updater-usage-logs</code> in RHOAI&apos;s monitoring namespace with the seven keys the docs list</>,
+            <>A bucket <code>rhoai-usage-logs-&lt;random suffix&gt;</code> on this tool&apos;s S3 storage, with a SeaweedFS user <code>rnu-usage-logs-&lt;the same suffix&gt;</code> whose key reaches that bucket only (their names are recorded on the DSCInitialization before they are made), and Secret <code>rhoai-nightly-updater-usage-logs</code> in RHOAI&apos;s monitoring namespace with the seven keys the docs list</>,
             <>In the DSCInitialization: <code>spec.monitoring.metrics.storage</code> (5Gi, 90 days, as the docs write it; it also deploys Perses, the dashboards&apos; server) and <code>spec.monitoring.usageLogs</code> (size 1x.demo, on the cluster&apos;s default StorageClass). An annotation records what this tool added; Clean up puts back only that</>,
             <>RHOAI&apos;s operator then deploys Prometheus, Thanos, Perses, the usage-logs LokiStack and its collector. {OBSERVABILITY_COST}</>,
           ]} />
@@ -243,7 +243,7 @@ export function observabilityConfirm(p: Pending, o: ObservabilityStatus | null):
       summary: <>Removes what this tool&apos;s setup added and what the stack left, in that order. Everything else stays.</>,
       changes: (o?.cleanupPlan ?? []).map((line) => <>{line}</>),
       changesOpen: true,
-      dataLoss: <>Deletes every usage log and metric: bucket <code>rhoai-usage-logs</code> with its objects{disks.length > 0 ? <>, and {disks.length} disks ({gi}Gi, listed under Disks)</> : null}. They cannot be brought back.</>,
+      dataLoss: <>Deletes every usage log and metric: the usage-logs bucket with its objects{disks.length > 0 ? <>, and {disks.length} disks ({gi}Gi, listed under Disks)</> : null}. They cannot be brought back.</>,
       extra: (o?.cleanupKept ?? []).length > 0 ? (
         <Content component="p">Kept: {(o?.cleanupKept ?? []).join(". ")}.</Content>
       ) : undefined,

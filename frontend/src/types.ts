@@ -2372,6 +2372,8 @@ export interface ObservabilityStatus {
   managedByTool: boolean;
   /** Usage logs are configured, not by this tool: shown, never changed. */
   external?: boolean;
+  /** The usage logs keep their data in this tool's S3 storage (the server's check): it cannot go without them. */
+  usesS3Storage?: boolean;
   ready: boolean;
   parts: ObservabilityPart[];
   setupPlan?: string[];

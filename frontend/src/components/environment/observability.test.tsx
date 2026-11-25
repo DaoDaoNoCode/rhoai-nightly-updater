@@ -22,7 +22,7 @@ const fresh: ObservabilityStatus = {
 };
 
 const ready: ObservabilityStatus = {
-  configured: true, managedByTool: true, ready: true, namespace: "redhat-ods-monitoring", dashboardUrl: "https://rh-ai.apps.example.com",
+  configured: true, managedByTool: true, ready: true, usesS3Storage: true, namespace: "redhat-ods-monitoring", dashboardUrl: "https://rh-ai.apps.example.com",
   parts: [{ id: "usage-logs", title: "Usage logs (LokiStack and collector)", state: "ready", message: "Ready." }],
   volumes: [
     { name: "storage-data-science-usage-logs-lokistack-ingester-0", size: "10Gi", storageClass: "gp3-csi", setUpByTool: true },
@@ -205,5 +205,15 @@ describe("Observability tab, read-only", () => {
       </MemoryRouter>,
     );
     expect(screen.getByText("Shown to cluster-admins only")).toBeInTheDocument();
+  });
+});
+
+describe("Clean up everything: the server says whether the usage logs use the S3 storage", () => {
+  const status: ResourcesStatus = { minio: { deployed: true, ready: true, managedByTool: true, namespace: "seaweedfs" }, mlflow: { deployed: false, ready: false, managedByTool: false }, pipelineServers: [] };
+  it("does not block the storage when the server says the usage logs are elsewhere", async () => {
+    render(<CleanupModal scope="all" status={status} observability={{ ...ready, usesS3Storage: false }} minioLeftovers={false} baseReason={null} onConfirm={() => {}} onCancel={() => {}} />);
+    fireEvent.click(screen.getByRole("checkbox", { name: /Usage logs and dashboards/ }));
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: /Usage logs and dashboards/ })).not.toBeChecked());
+    expect(screen.queryByText(/keep their data in the S3 storage/)).toBeNull();
   });
 });

@@ -19,6 +19,10 @@ type ObservabilityStatus struct {
 	Configured    bool `json:"configured"`
 	ManagedByTool bool `json:"managedByTool"`
 	External      bool `json:"external,omitempty"`
+	// UsesS3Storage: the DSCInitialization's usage logs name this tool's
+	// Secret, so they keep their data in this tool's S3 storage (which then
+	// cannot be deleted without them).
+	UsesS3Storage bool `json:"usesS3Storage,omitempty"`
 	// Ready: every part is ready.
 	Ready bool `json:"ready"`
 	// Parts are the operators, the usage-logs storage, the DSCInitialization
