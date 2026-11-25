@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/components"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dsc"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
@@ -490,10 +491,12 @@ func runRHOAI(c *kube.Client, s *State, emit func(types.UpdateStepEvent)) (*type
 // Bounds of the DataScienceCluster step. Right after the operator's CSV
 // succeeded its webhook may not serve yet, so a create that fails that way
 // is tried again for dscCreateRetry; then the step waits dscConditionsWait
-// for the DSC to report conditions (the operator reconciles it). It does
-// not wait for the whole DSC to be Ready: on a default DSC a component can
-// report missing dependencies until a feature's prerequisites are in, and
-// each feature waits for its own components. Tests set them with
+// for the DSC to report conditions (the operator reconciles it), and in
+// what is left of that time for every component to report its own
+// conditions, which the step's result lists (moduleNote). It does not wait
+// for the whole DSC to be Ready: on a default DSC a component can report
+// missing dependencies until a feature's prerequisites are in, and each
+// feature waits for its own components. Tests set them with
 // SetDSCTimingForTest.
 var (
 	dscCreateRetry      = 2 * time.Minute
@@ -556,13 +559,21 @@ func runDSC(c *kube.Client, _ *State, emit func(types.UpdateStepEvent)) (*types.
 		return res, nil
 	}
 	emit(types.UpdateStepEvent{Step: StepDSC, Status: "running", Message: "Waiting for the operator to report the DataScienceCluster's conditions"})
-	if err := waitDSCConditions(c); err != nil {
+	ctx, cancel := kube.Clock().WithTimeout(c.Context(), dscConditionsWait)
+	defer cancel()
+	if err := waitDSCConditions(ctx, c); err != nil {
 		if ctxErr := c.Context().Err(); ctxErr != nil {
 			return &types.OperationResponse{Success: false, Message: "Stopped while waiting for the DataScienceCluster.", Logs: res.Logs}, ctxErr
 		}
 		return &types.OperationResponse{Success: false, Message: res.Message + ", but " + err.Error() + ". Resume waits again.", Logs: res.Logs, ErrorCode: "timeout"}, nil
 	}
-	return res, nil
+	emit(types.UpdateStepEvent{Step: StepDSC, Status: "running", Message: "Waiting for the components to report their own conditions"})
+	rep, complete, repErr := waitModuleReports(ctx, c)
+	if ctxErr := c.Context().Err(); ctxErr != nil {
+		return &types.OperationResponse{Success: false, Message: "Stopped while waiting for the components' conditions.", Logs: res.Logs}, ctxErr
+	}
+	note, lines := moduleNote(rep, repErr, complete)
+	return &types.OperationResponse{Success: true, Message: strings.TrimSpace(strings.TrimSuffix(res.Message, ".") + ". " + note), Logs: append(res.Logs, lines...)}, nil
 }
 
 // transientCreateFailure: the create failed in a way that a moment later
@@ -584,10 +595,8 @@ func transientCreateFailure(res *types.OperationResponse) bool {
 var errDSCNoConditions = errors.New("the operator has not reported its conditions yet")
 
 // waitDSCConditions polls until the DataScienceCluster has status
-// conditions, or dscConditionsWait passes.
-func waitDSCConditions(c *kube.Client) error {
-	ctx, cancel := kube.Clock().WithTimeout(c.Context(), dscConditionsWait)
-	defer cancel()
+// conditions, or ctx (dscConditionsWait) ends.
+func waitDSCConditions(ctx context.Context, c *kube.Client) error {
 	cc := c.WithContext(ctx)
 	for {
 		read, err := rhoai.ReadFirstDSC(cc)
@@ -605,6 +614,127 @@ func waitDSCConditions(c *kube.Client) error {
 			return fmt.Errorf("%w (waited %s)", errDSCNoConditions, dscConditionsWait)
 		}
 	}
+}
+
+// waitModuleReports polls the components' own conditions until every
+// component CR has reported for its current generation, or ctx ends. It
+// returns the last report read and whether it was complete; err is the
+// last read's error when no read succeeded.
+func waitModuleReports(ctx context.Context, c *kube.Client) (components.ModuleReport, bool, error) {
+	cc := c.WithContext(ctx)
+	var last components.ModuleReport
+	var lastErr error
+	read := false
+	for {
+		rep, err := components.ReadModuleReport(cc)
+		switch {
+		case err == nil:
+			last, lastErr, read = rep, nil, true
+			if rep.Complete() {
+				return rep, true, nil
+			}
+		case !read:
+			lastErr = err
+		}
+		if ctx.Err() != nil || kube.Clock().Sleep(ctx, dscConditionsPoll) != nil {
+			return last, false, lastErr
+		}
+	}
+}
+
+// dscNoteBudget bounds the step result's note: the run record keeps a
+// step's message to 1024 bytes (pkg/api maxOperationMessageBytes), the
+// create's own sentence included. Conditions past it are counted, not
+// shown; the Components page shows every component's message.
+const dscNoteBudget = 900
+
+// dscNoteAdvice follows the list of components that are not ready.
+const dscNoteAdvice = " A component that is still starting becomes ready on its own; one that reports a missing prerequisite stays not ready until an administrator installs it (the Components page shows the cause, Diagnostics the commands)."
+
+// moduleNote is the step result's note about the components, from their
+// own conditions as RHOAI reports them: which are not ready (those the
+// operator could not provision first), which have not reported yet, or
+// that all report ready. It is a note: the step has succeeded. lines are
+// the same conditions in full, for the result's logs.
+func moduleNote(rep components.ModuleReport, err error, complete bool) (string, []string) {
+	if err != nil {
+		return fmt.Sprintf("Could not read the components' own conditions: %v. The Components page shows each component's state.", err), nil
+	}
+	if !rep.Served {
+		return "This RHOAI serves no component API (" + rhoai.ComponentAPIGroup + "), so the components' own conditions cannot be read; the Components page shows their state.", nil
+	}
+	wait := components.FormatDuration(dscConditionsWait)
+	if rep.Total == 0 {
+		return fmt.Sprintf("No component reported its own conditions within %s of the create; the Components page shows each one as RHOAI reports it.", wait), nil
+	}
+	var lines []string
+	unreported := ""
+	if len(rep.NotReported) > 0 {
+		for _, s := range rep.NotReported {
+			lines = append(lines, s+": no conditions reported for its current generation")
+		}
+		unreported = fmt.Sprintf("Not reported yet within %s of the create: %s.", wait, namesOrCount(rep.NotReported, 200))
+	}
+	if len(rep.NotReady) == 0 {
+		if unreported == "" && complete {
+			return fmt.Sprintf("All %d components report Ready.", rep.Ready), lines
+		}
+		return unreported, lines
+	}
+	var b strings.Builder
+	b.WriteString("Not ready when checked, as RHOAI reports it: ")
+	budget := dscNoteBudget - len(dscNoteAdvice) - len(unreported) - 40
+	more := 0
+	for i, m := range rep.NotReady {
+		lines = append(lines, m.Line())
+		if i > 0 && (more > 0 || b.Len()+len(m.Line()) > budget) {
+			more++
+			continue
+		}
+		if i > 0 {
+			b.WriteString(clauseSeparator(b.String()))
+		}
+		b.WriteString(m.Line())
+	}
+	if more > 0 {
+		sep, label := clauseSeparator(b.String()), "and"
+		if sep == " " {
+			label = "And"
+		}
+		fmt.Fprintf(&b, "%s%s %d more not ready", sep, label, more)
+	}
+	if !endsSentence(b.String()) {
+		b.WriteString(".")
+	}
+	b.WriteString(dscNoteAdvice)
+	if unreported != "" {
+		b.WriteString(" " + unreported)
+	}
+	return b.String(), lines
+}
+
+// namesOrCount lists names when they fit in limit bytes, else counts them.
+func namesOrCount(names []string, limit int) string {
+	if s := strings.Join(names, ", "); len(s) <= limit {
+		return s
+	}
+	return fmt.Sprintf("%d components", len(names))
+}
+
+// endsSentence: s ends with the end of a sentence, as RHOAI's condition
+// messages often do.
+func endsSentence(s string) bool {
+	return strings.HasSuffix(s, ".") || strings.HasSuffix(s, "!") || strings.HasSuffix(s, "?")
+}
+
+// clauseSeparator goes between two listed conditions: a space after a
+// message that ends a sentence (the message stays as RHOAI wrote it), else
+// a semicolon.
+func clauseSeparator(s string) string {
+	if endsSentence(s) {
+		return " "
+	}
+	return "; "
 }
 
 // --- feature prerequisites ---------------------------------------------------
