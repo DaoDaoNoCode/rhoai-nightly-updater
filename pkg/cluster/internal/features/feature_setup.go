@@ -175,6 +175,10 @@ type prereqRecord struct {
 type prereqComponent struct {
 	Previous string `json:"previous,omitempty"`
 	Feature  string `json:"feature"`
+	// At is when setup turned it on (RFC 3339; "" in records written
+	// before 5.0.0): a recipe run claims only a component turned on while
+	// it ran (recipe liveComponents).
+	At string `json:"at,omitempty"`
 }
 
 // ReadPrereqRecord reads what the feature setups recorded (empty when nothing).
@@ -677,7 +681,7 @@ func (p *featurePlan) status() types.FeaturePrerequisites {
 	}
 	for _, cp := range p.components {
 		// The same check as Clean up's own and a recipe run's offer.
-		if _, ok := StillAsSetUp(p.rec, p.dsc.Object, cp.key); ok {
+		if _, _, ok := StillAsSetUp(p.rec, p.dsc.Object, cp.key); ok {
 			out.Restorable = append(out.Restorable, types.RestorableComponent{Component: cp.key, Previous: cp.recordedPrior, Feature: p.fs.id})
 		}
 	}
@@ -766,7 +770,7 @@ func RunPrerequisites(c *kube.Client, req types.PrerequisitesRequest, onStep fun
 			}
 			for _, cp := range p.components {
 				if cp.turnOn {
-					rec.Components[cp.key] = prereqComponent{Previous: cp.state, Feature: fs.id}
+					rec.Components[cp.key] = prereqComponent{Previous: cp.state, Feature: fs.id, At: kube.NowRFC3339()}
 				}
 			}
 			m.Step("dsc", "running", fmt.Sprintf("Setting %s to %s in DataScienceCluster %s (Clean up can turn %s back)...", kube.JoinTitles(on), onStateOf(p.components), p.dscName, kube.Verb(len(on), "it", "them")))
@@ -1017,14 +1021,23 @@ func waitPrerequisitesReady(m *serving.Run, p *featurePlan) (*types.OperationRes
 
 // --- turning components back (Clean up) ----------------------------------------------
 
-// componentOnState is the state the component key is turned on with.
-func componentOnState(key string) string {
+// featureComponentOf is the component a feature setup turns on that key
+// names (one of its keys, or its v1 key).
+func featureComponentOf(key string) (envkit.FeatureComponent, bool) {
 	for _, fs := range featureSetups {
 		for _, fc := range fs.components {
-			if slices.Contains(fc.Keys, key) {
-				return fc.OnState()
+			if slices.Contains(fc.Keys, key) || (fc.V1Key != "" && fc.V1Key == key) {
+				return fc, true
 			}
 		}
+	}
+	return envkit.FeatureComponent{}, false
+}
+
+// componentOnState is the state the component key is turned on with.
+func componentOnState(key string) string {
+	if fc, ok := featureComponentOf(key); ok {
+		return fc.OnState()
 	}
 	return "Managed"
 }
@@ -1032,14 +1045,8 @@ func componentOnState(key string) string {
 // RestorableComponentKey: key is a component this tool turns on for a
 // feature (Clean up may turn it back).
 func RestorableComponentKey(key string) bool {
-	for _, fs := range featureSetups {
-		for _, fc := range fs.components {
-			if slices.Contains(fc.Keys, key) || (fc.V1Key != "" && fc.V1Key == key) {
-				return true
-			}
-		}
-	}
-	return false
+	_, ok := featureComponentOf(key)
+	return ok
 }
 
 // restoreVerdict is what Clean up does with one component, decided on one
@@ -1087,15 +1094,16 @@ func checkSetUp(rec prereqRecord, dsc map[string]any, key string) (prereqCompone
 
 // StillAsSetUp reports whether key is still as this tool's setup left it
 // on the DataScienceCluster dsc (as read; nil is not), with the feature
-// that turned it on: the record names it, it is in its own on state, and
-// this tool's field manager still owns it. It is the check Clean up makes
+// that turned it on and when (the record's At, "" when the record predates
+// it): the record names it, it is in its own on state, and this tool's
+// field manager still owns it. It is the check Clean up makes
 // first (restoreCheck), and what the Environment tabs and a recipe run
 // offer to turn back. Whether anything still uses the component is checked
 // only by Clean up, when it runs, after the parts before it (which may
 // remove what uses it).
-func StillAsSetUp(rec prereqRecord, dsc map[string]any, key string) (feature string, ok bool) {
+func StillAsSetUp(rec prereqRecord, dsc map[string]any, key string) (feature, at string, ok bool) {
 	rc, _, chk := checkSetUp(rec, dsc, key)
-	return rc.Feature, chk == stillSetUp
+	return rc.Feature, rc.At, chk == stillSetUp
 }
 
 // restoreCheck runs every check of turning key back, on dscRead: still as
@@ -1261,7 +1269,7 @@ func RestoreComponents(c *kube.Client, keys []string) (*types.OperationResponse,
 		msg = append(msg, kube.JoinTitles(done)+", as before setup.")
 	}
 	if len(kept) > 0 {
-		msg = append(msg, "Kept Managed: "+strings.Join(kept, "; ")+".")
+		msg = append(msg, "Not turned back: "+strings.Join(kept, "; ")+".")
 	}
 	if len(msg) == 0 {
 		msg = append(msg, "No component to turn back.")

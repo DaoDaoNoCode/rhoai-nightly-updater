@@ -157,12 +157,16 @@ func TestRecipePrereqSteps_RecordTheComponentsTheyTurnedOn(t *testing.T) {
 func TestRecipeOwnership_FromTheCluster(t *testing.T) {
 	t.Run("components", func(t *testing.T) {
 		pc := newPrereqCluster(t)
+		// The run's window around its setup (the record's time is the wall clock's, to the second).
+		started := time.Now().UTC().Add(-time.Second).Format(time.RFC3339)
 		if res, _ := runPrereqs(t, pc.c, "pipelines"); !res.Success {
 			t.Fatalf("setup %+v", res)
 		}
+		finished := time.Now().UTC().Add(time.Second).Format(time.RFC3339)
 		run := &types.RecipeRun{
+			StartedAt: started,
 			Steps: []types.RecipeRunStep{
-				{ID: recipe.StepPipelinesPrereq}, {ID: recipe.StepS3, Created: true}, {ID: recipe.StepPipelineServer, Created: true}, {ID: recipe.StepMLflow, Created: true},
+				{ID: recipe.StepPipelinesPrereq, FinishedAt: finished}, {ID: recipe.StepS3, Created: true}, {ID: recipe.StepPipelineServer, Created: true}, {ID: recipe.StepMLflow, Created: true},
 			},
 			// mlflowoperator is Removed and absent from Set up's record.
 			Components: []string{"aipipelines", "mlflowoperator"},

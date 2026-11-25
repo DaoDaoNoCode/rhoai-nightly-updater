@@ -619,7 +619,7 @@ func TestRestoreComponents_ModelRegistryComponent(t *testing.T) {
 		pc := setUp(t)
 		pc.f.putJSON(mrCollection+"/theirs", `{"metadata":{}}`)
 		res, _ := features.RestoreComponents(pc.c, []string{"modelregistry"})
-		if !res.Success || !strings.Contains(res.Message, "Kept Managed: modelregistry (in use: model registry "+mrNS+"/theirs)") || componentState(pc.f, "modelregistry") != "Managed" {
+		if !res.Success || !strings.Contains(res.Message, "Not turned back: modelregistry (in use: model registry "+mrNS+"/theirs)") || componentState(pc.f, "modelregistry") != "Managed" {
 			t.Fatalf("%+v", res)
 		}
 	})

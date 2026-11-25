@@ -683,7 +683,7 @@ func TestRestoreComponents(t *testing.T) {
 		someoneSets(t, pc, "aipipelines", "Managed")
 		n := len(pc.f.mutations())
 		res, _ := features.RestoreComponents(pc.c, []string{"aipipelines"})
-		if !res.Success || !strings.Contains(res.Message, "Kept Managed: aipipelines (changed by someone since") {
+		if !res.Success || !strings.Contains(res.Message, "Not turned back: aipipelines (changed by someone since") {
 			t.Fatalf("restore: %+v", res)
 		}
 		if len(pc.f.mutations()) != n || componentState(pc.f, "aipipelines") != "Managed" {

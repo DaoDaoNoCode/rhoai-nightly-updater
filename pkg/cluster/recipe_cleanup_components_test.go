@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kueue"
@@ -136,7 +137,7 @@ func TestRecipeCleanUp_TurnsKueueBackFromItsOffer(t *testing.T) {
 		run := recipeKueueRun(t, f, u)
 		f.putJSON(kqAPI+"/namespaces/team/localqueues/team-queue", `{"metadata":{"name":"team-queue","namespace":"team"},"spec":{"clusterQueue":"team-cq"}}`)
 		res, steps, _ := recipeKueueCleanUp(t, u, run, nil)
-		if !res.Success || steps["components"] != "success" || !strings.Contains(res.Message, "in use: LocalQueue team/team-queue") {
+		if !res.Success || steps["components"] != "success" || !strings.Contains(res.Message, "Not turned back: kueue (in use: LocalQueue team/team-queue)") || strings.Contains(res.Message, "Managed") {
 			t.Fatalf("clean-up %+v, steps %v", res, steps)
 		}
 		if componentState(f, "kueue") != "Unmanaged" || f.has(kqCQ) || !prereqRecordHas(t, u, "kueue") {
@@ -162,4 +163,64 @@ func TestRecipeCleanUp_TurnsKueueBackFromItsOffer(t *testing.T) {
 			t.Fatalf("kueue %s", componentState(f, "kueue"))
 		}
 	})
+}
+
+// A run claims a component only when the prerequisites record says it was
+// turned on while the run ran: kueue turned back by the run's Clean up and
+// turned on again later from the Environment tab is not the old run's. A
+// record written before the time was kept still counts (as before); a run
+// with no end does not.
+func TestRecipeOwnership_ComponentTurnedOnInTheRun(t *testing.T) {
+	pc := newPrereqCluster(t)
+	pc.f.putJSON(tDSC, `{"metadata":{"name":"default-dsc","resourceVersion":"1"},"spec":{"components":{"kueue":{"managementState":"Removed"}}}}`)
+	u := userClientOf(pc.c, fakeUserToken)
+	kueueTurnedOnByTool(t, u)
+	record := func(at string) {
+		t.Helper()
+		if err := writeTestPrereqRecord(u, `{"components":{"kueue":{"previous":"Removed","feature":"kueue"`+at+`}}}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(started, stepEnd, end string) *types.RecipeRun {
+		return &types.RecipeRun{StartedAt: started, FinishedAt: end, Components: []string{"kueue"},
+			Steps: []types.RecipeRunStep{{ID: recipe.StepKueuePrereq, FinishedAt: stepEnd}, {ID: recipe.StepKueue, FinishedAt: end}}}
+	}
+	offered := func(r *types.RecipeRun) bool {
+		created, req := recipe.Ownership(pc.c, nil, r)
+		return req != nil && reflect.DeepEqual(req.Components, []string{"kueue"}) && created[recipe.StepKueuePrereq]
+	}
+	old := run("2026-11-20T10:00:00Z", "2026-11-20T10:05:00Z", "2026-11-20T10:30:00Z")
+	for _, tc := range []struct {
+		name, at string
+		run      *types.RecipeRun
+		want     bool
+	}{
+		{"turned on by its prerequisites step", `,"at":"2026-11-20T10:03:00Z"`, old, true},
+		{"turned on in its last second", `,"at":"2026-11-20T10:05:00Z"`, old, true},
+		{"turned on again after the run", `,"at":"2026-11-24T09:00:00Z"`, old, false},
+		{"turned on before the run", `,"at":"2026-11-20T09:59:59Z"`, old, false},
+		{"its step has no end: the run's", `,"at":"2026-11-20T10:20:00Z"`, run("2026-11-20T10:00:00Z", "", "2026-11-20T10:30:00Z"), true},
+		{"a run with no end", `,"at":"2026-11-20T10:03:00Z"`, run("2026-11-20T10:00:00Z", "", ""), false},
+		{"a time that does not parse", `,"at":"yesterday"`, old, false},
+		{"a record from before the time was kept", ``, old, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			record(tc.at)
+			if got := offered(tc.run); got != tc.want {
+				t.Fatalf("offered %v, want %v", got, tc.want)
+			}
+		})
+	}
+	// The setup records when it turned the component on.
+	c := newPrereqCluster(t).c
+	if res, _ := runPrereqs(t, c, "pipelines"); !res.Success {
+		t.Fatalf("setup %+v", res)
+	}
+	rec, err := features.ReadPrereqRecord(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := time.Parse(time.RFC3339, rec.Components["aipipelines"].At); err != nil {
+		t.Fatalf("record %+v: %v", rec.Components["aipipelines"], err)
+	}
 }

@@ -22,8 +22,8 @@ func TestCleanUp_SaysWhatEachPartDid(t *testing.T) {
 		wantInnerFailed bool
 	}{
 		{name: "components kept", req: types.CleanupRequest{Components: []string{"aipipelines"}},
-			components: "Kept Managed: aipipelines (this tool did not turn it on).",
-			want:       "Kept Managed: aipipelines (this tool did not turn it on)."},
+			components: "Not turned back: aipipelines (this tool did not turn it on).",
+			want:       "Not turned back: aipipelines (this tool did not turn it on)."},
 		{name: "nothing to turn back", req: types.CleanupRequest{Components: []string{"aipipelines"}},
 			components: "No component to turn back.",
 			want:       "No component to turn back."},
