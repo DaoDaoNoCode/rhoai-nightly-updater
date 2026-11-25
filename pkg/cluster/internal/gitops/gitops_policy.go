@@ -151,7 +151,7 @@ func gitOpsSubscriptionsProblem(newSub, restoreSub map[string]any) string {
 	return ""
 }
 
-const gitOpsPolicyFix = "Change the Subscription in Git, or add the variable to the chart's gitops.subscriptionEnvAllowlist (docs/GITOPS.md, section 11)."
+const gitOpsPolicyFix = "Change the Subscription in Git, or add the variable to the chart's gitops.subscriptionEnvAllowlist."
 
 // GitOpsAdmissionPolicyEnv is the environment variable with the name of the
 // gitops profile's ValidatingAdmissionPolicy and of its binding

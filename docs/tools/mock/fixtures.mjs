@@ -1924,7 +1924,7 @@ function playgroundWarnings(rcp) {
   if (!f.playground?.enabled || !maas) return [];
   const how = f.models.exposure === "maas" ? "it is reached through Models as a Service" : "the run publishes it there";
   const entry = MODEL_CATALOG.find((c) => c.name === (f.models.model || "qwen25-05b-instruct"));
-  return [{ kind: "advice", message: `Model ${entry?.displayName ?? f.models.model} is offered to the playground only through Models as a Service (${how}), so the playground uses it from there: the dashboard sets the playground up with your sign-in, as when you choose a Models as a Service model in its Gen AI studio. Chatting with it needs a Models as a Service subscription to it. SECURITY.md (Which token is used where) says where your sign-in goes.` }];
+  return [{ kind: "advice", message: `Model ${entry?.displayName ?? f.models.model} is offered to the playground only through Models as a Service (${how}), so the playground uses it from there: the dashboard sets the playground up with your sign-in, as when you choose a Models as a Service model in its Gen AI studio. Chatting with it needs a Models as a Service subscription to it.` }];
 }
 
 /** The plan's warnings for distributed workloads (pkg/cluster internal/recipe kueueWarnings). */

@@ -291,8 +291,7 @@ function useTemplateNotice(): Notice | null {
         {version.installMethod === "gitops" ? (
           <>
             {" "}Argo CD installed it from the Helm chart: in the GitOps repository, set the chart&apos;s{" "}
-            <code>targetRevision</code> to the release of the image in <code>parameters.IMAGE</code>. See{" "}
-            <code>docs/GITOPS.md</code>.
+            <code>targetRevision</code> to the release of the image in <code>parameters.IMAGE</code>.
           </>
         ) : (
           <>
@@ -351,7 +350,7 @@ function useUpdateNotice(): Notice | null {
             Argo CD installed this updater from the Helm chart, so an admin upgrades in Git: in one commit, set the
             chart&apos;s <code>targetRevision</code> to <code>{latest}</code> and <code>parameters.IMAGE</code> to the{" "}
             {latest} image by digest; Argo CD applies both{update.majorUpgrade ? ", including the new template" : ""}.
-            Do not run <code>install.sh</code> on this install. See <code>docs/GITOPS.md</code>.
+            Do not run <code>install.sh</code> on this install.
           </>
         ) : installer ? (
           <>

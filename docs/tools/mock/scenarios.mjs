@@ -275,7 +275,7 @@ export const scenarios = {
   // The profile's admission policy is gone (Update is off until Argo CD syncs it).
   "gitops-profile-no-policy": (w) => {
     scenarios.gitops(w); w.profile = "gitops";
-    w.admissionPolicy = "The gitops profile's admission policy is not in place (read ValidatingAdmissionPolicy rhoai-nightly-updater-rhoai-nightly-updater-gitops: k8s API error 404 (NotFound)), so Update is off until Argo CD syncs it again (docs/GITOPS.md, section 11).";
+    w.admissionPolicy = "The gitops profile's admission policy is not in place (read ValidatingAdmissionPolicy rhoai-nightly-updater-rhoai-nightly-updater-gitops: k8s API error 404 (NotFound)), so Update is off until Argo CD syncs it again.";
   },
   // A signed-in user who is not a cluster-admin.
   "gitops-profile-reader": (w) => { scenarios.gitops(w); w.profile = "gitops"; w.canMutate = false; },

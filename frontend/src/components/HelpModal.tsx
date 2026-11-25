@@ -225,7 +225,7 @@ export const HelpButton: React.FC = () => {
                 <DescriptionListTerm>Deployment</DescriptionListTerm>
                 <DescriptionListDescription>
                   {version.installMethod === "gitops"
-                    ? <>The deployment template is out of date; an admin should set the chart&apos;s <code>targetRevision</code> in the GitOps repository to the release of the image (<code>docs/GITOPS.md</code>).</>
+                    ? <>The deployment template is out of date; an admin should set the chart&apos;s <code>targetRevision</code> in the GitOps repository to the release of the image.</>
                     : <>The deployment template is out of date; an admin should run <code>make upgrade</code>.</>}
                 </DescriptionListDescription>
               </DescriptionListGroup>

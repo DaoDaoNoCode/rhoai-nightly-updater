@@ -211,7 +211,7 @@ describe("update available notice", () => {
       await settleApps();
       expect(await screen.findByText("v2.0.1 is available")).toBeInTheDocument();
       expect(screen.getByText(/an admin upgrades in Git/)).toBeInTheDocument();
-      for (const text of ["targetRevision", "parameters.IMAGE", "docs/GITOPS.md"]) {
+      for (const text of ["targetRevision", "parameters.IMAGE"]) {
         expect(screen.getByText(text)).toBeInTheDocument();
       }
       expect(screen.getByText(/Do not run/)).toBeInTheDocument();
