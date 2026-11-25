@@ -83,8 +83,11 @@ func newFakeOLM(t *testing.T) *fakeOLM {
 		operatorGrps: []any{map[string]any{"metadata": map[string]any{"name": "rhods-operator"}, "spec": map[string]any{}}},
 		channels:     `[{"name":"stable-3.x","currentCSV":"rhods-operator.3.6.0"}]`,
 		catalogPods:  `{"items":[]}`,
-		failDelete:   map[string]int{},
-		stuckCSVs:    map[string]bool{},
+		// OLM runs the registry pod of the catalog's current image: Update
+		// waits for it (waitForCatalogServing).
+		gitOpsPods: true,
+		failDelete: map[string]int{},
+		stuckCSVs:  map[string]bool{},
 	}
 }
 

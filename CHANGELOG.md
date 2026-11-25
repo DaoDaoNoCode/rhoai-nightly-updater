@@ -362,6 +362,15 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **Update waits until the catalog serves the verified build.** After
+  replacing the nightly catalog, Update waited for READY and up to 30
+  seconds for its channels, then detected the channel again. It now waits,
+  as on a cluster managed from Git, until OLM's registry pod runs the new
+  image, the catalog is READY and its PackageManifest lists the verified
+  head (same build) on the verified channel, and uses that channel. A
+  catalog that does not serve it in time stops Update before the old CSV is
+  deleted ("The catalog did not serve ... The operator was not changed"),
+  and the previous catalog and Subscription are restored.
 - **Update installs exactly the build it verified.** Like Update on a
   cluster managed from Git, Update now pins the new Subscription's
   `startingCSV` to the head CSV the verification catalog listed, so OLM

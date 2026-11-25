@@ -349,6 +349,7 @@ func TestUpdateDryRun(t *testing.T) {
 func TestUpdateStream_CatalogImagePullFailsFast(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", nil)
 	f.verifyState = "TRANSIENT_FAILURE"
+	f.gitOpsPods = false // the pod list below, not one that follows the image
 	f.catalogPods = `{"items":[{"status":{"containerStatuses":[{"state":{"waiting":{"reason":"ImagePullBackOff","message":"Back-off pulling image: unauthorized: access to the requested resource is not authorized"}}}]}}]}`
 	t.Cleanup(catalog.SetReadyTimeoutForTest(10 * time.Second))
 	start := kube.Clock().Now()
@@ -538,12 +539,14 @@ func TestFailuresMarkStepAndKeepLogs(t *testing.T) {
 
 // A01-9: when the swapped catalog has no matching channel, the catalog and
 // Subscription are restored and the message says the operator was kept.
-func TestUpdateStream_ChannelDetectionFailureRestores(t *testing.T) {
+func TestUpdateStream_CatalogNotServingTheHeadRestores(t *testing.T) {
 	f := newFakeOLM(t).installed("rhods-operator.3.6.0", map[string]any{"channel": "fast"})
 	empty := `[]`
 	f.mainChannels = &empty
 	result, err := operator.UpdateStream(f.client(context.Background()), testNightlyImage, func(UpdateStepEvent) {})
-	if err != nil || result.Success || result.ErrorCode != "channel_detection" {
+	// The catalog never lists the verified head on the verified channel:
+	// Update fails closed before the old CSV is deleted.
+	if err != nil || result.Success || result.ErrorCode != "timeout" || !strings.Contains(result.Message, "The catalog did not serve rhods-operator.3.6.0 on channel stable-3.x within") {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	if !strings.Contains(result.Message, "installed operator was not changed") {
