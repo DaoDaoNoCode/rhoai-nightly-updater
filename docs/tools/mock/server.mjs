@@ -323,7 +323,7 @@ async function modelsStream(req, res) {
     send({ step: "gateway", status: "success", message: msg });
     done.push(msg);
   } else if (action === "allow") {
-    send({ step: "check", status: "running", message: `Checking the inference gateway and project '${project}'...` });
+    send({ step: "check", status: "running", message: `Checking the inference gateway and project ${project}` });
     await nextStep();
     send({ step: "check", status: "success", message: "The gateway is this tool's; the project exists." });
     send({ step: "gateway", status: "running", message: `Adding '${project}' to the projects the inference gateway allows` });
@@ -346,7 +346,7 @@ async function modelsStream(req, res) {
       send({ step: "unpublish", status: "success", message: `${model} in '${project}' is unpublished from MaaS.` });
     }
     if (project) {
-      send({ step: "model", status: "running", message: `Deleting ${model} in '${project}'...` });
+      send({ step: "model", status: "running", message: `Deleting ${model} in ${project}` });
       await nextStep();
       removeModel(project, model);
       const msg = `Model ${model} deleted from '${project}'; KServe removed its Deployment, Service and route. The project stays.`;
@@ -376,7 +376,7 @@ async function modelsStream(req, res) {
       done.push("The inference gateway is set up.");
     }
     if (project) {
-      send({ step: "model", status: "running", message: `Creating ${display} in '${project}'...` });
+      send({ step: "model", status: "running", message: `Creating ${display} in ${project} (the newest released Red Hat vLLM CPU image 3.5.3)` });
       const others = (i) => i.namespace !== project || i.name !== model;
       m.items = [...(m.items ?? []).filter(others), F.modelStates.startingAs(model, project)];
       send({ step: "model", status: "success", message: `LLMInferenceService ${project}/${model} applied, on preset v3-6-0-kserve-config-llm-template-cpu with the newest released Red Hat vLLM CPU image 3.5.3. Reached through gateway openshift-ingress/openshift-ai-inference, KServe's default.` });
@@ -608,23 +608,37 @@ async function maasStream(req, res) {
   }
   // A model set up through MaaS only goes back to no route (pkg/cluster removeModelRoute).
   const noRoute = action === "unpublish" && (world.maas.items ?? []).some((i) => i.namespace === project && i.name === model && i.maasOnlySetup);
+  // [step, the backend's running message (null: it reports only the result), the result].
   const steps = {
-    setup: [["check", "Everything the platform needs is there."], ["database", `The database runs, and Secret ${F.MAAS_INFRA}/maas-db-config holds its connection URL (sslmode=require).`],
-      ["gateway", "Programmed; https://maas.apps.example.com is published in DNS."], ["authorino-tls", "Authorino serves TLS and trusts the service CA."],
-      ["dsc", "modelsAsAService is Managed."], ["ready", "maas-api is available, the tenant is ready, and the gateway checks every request."]],
-    teardown: [["check", "Removing, in reverse order of setup."], ["unpublish", "1 model unpublished."], ["dsc", "modelsAsAService is Removed again, as before setup."],
-      ["gateway", "The gateway this tool created is deleted. GatewayClass openshift-default stays."], ["database", "The database and its connection Secret are deleted."]],
-    publish: [["check", "The platform is ready and the model can be published."], ["gateway", `The MaaS gateway admits routes from '${project}'.`],
-      ["model", "The model routes through maas-default-gateway alone. While it is published, the model is used through MaaS (with an API key) and the dashboard's playground; its direct address answers 404 until it is unpublished."],
-      ["maas", "MaaSModelRef, MaaSSubscription and MaaSAuthPolicy are applied."], ["ready", "MaaS lists the model."]],
-    unpublish: [["check", "Unpublishing, in reverse order of publishing."], ["maas", "The model reference is deleted."], ["model", noRoute ? "The model has no outside route now, as before it was published: it answers only at its in-cluster address." : "The model routes as before publishing: KServe's default gateway (no refs)."],
-      ["gateway", `The MaaS gateway no longer admits routes from '${project}'.`]],
-    "change-limit": [["check", "The model's limit can change."], ["limit", "The subscription lists the model with its new limit."], ["ready", "MaaS applies it."]],
-    "change-access": [["check", "Who can use the published models can change."], ["access", "The subscription and the authorization policy name the new audience."], ["ready", "MaaS applies it."]],
-    "change-database": [["check", "MaaS can switch databases."], ["cnpg", "Not needed."], ["database", `Secret ${F.MAAS_INFRA}/maas-db-config names the new database.`], ["cleanup", "Deleted the database before."]],
+    setup: [["check", "Checking what the MaaS platform needs", "Everything the platform needs is there."],
+      ["database", `Creating a one-instance CloudNativePG database ${F.MAAS_INFRA}/maas-db (for development and test)`, `The database runs, and Secret ${F.MAAS_INFRA}/maas-db-config holds its connection URL (sslmode=require).`],
+      ["gateway", "Creating Gateway maas-default-gateway with an external load balancer", "Programmed; https://maas.apps.example.com is published in DNS."],
+      ["authorino-tls", "Configuring Authorino TLS in kuadrant-system as the docs' setup-authorino-tls.sh does", "Authorino serves TLS and trusts the service CA."],
+      ["dsc", "Setting aigateway and its modelsAsAService to Managed in DataScienceCluster default-dsc (it was aigateway Removed, modelsAsAService Removed; removal restores that)", "modelsAsAService is Managed."],
+      ["ready", "Waiting for the operator: maas-api, the default tenant, and the gateway's authentication (usually 2 to 3 minutes)", "maas-api is available, the tenant is ready, and the gateway checks every request."]],
+    teardown: [["check", "Checking what this tool set up", "Removing, in reverse order of setup."], ["unpublish", "Unpublishing this tool's models", "1 model unpublished."],
+      ["dsc", "Setting aigateway.modelsAsAService back to Removed", "modelsAsAService is Removed again, as before setup."],
+      ["gateway", "Deleting Gateway openshift-ingress/maas-default-gateway", "The gateway this tool created is deleted. GatewayClass openshift-default stays."],
+      ["database", `Deleting CloudNativePG Cluster ${F.MAAS_INFRA}/maas-db`, "The database and its connection Secret are deleted."]],
+    publish: [["check", "Checking the platform and the model", "The platform is ready and the model can be published."],
+      ["gateway", `Letting the MaaS gateway admit routes from ${project}`, `The MaaS gateway admits routes from '${project}'.`],
+      ["model", "Routing the model through the MaaS gateway alone", "The model routes through maas-default-gateway alone. While it is published, the model is used through MaaS (with an API key) and the dashboard's playground; its direct address answers 404 until it is unpublished."],
+      ["maas", "Creating the model reference, the subscription and the authorization policy", "MaaSModelRef, MaaSSubscription and MaaSAuthPolicy are applied."],
+      ["ready", "Waiting for MaaS to accept the model", "MaaS lists the model."]],
+    unpublish: [["check", "Checking the publication", "Unpublishing, in reverse order of publishing."],
+      ["maas", "Removing the model from the authorization policy and the subscription", "The model reference is deleted."],
+      ["model", noRoute ? "Waiting for KServe to remove the model's route" : "Routing the model as before publishing", noRoute ? "The model has no outside route now, as before it was published: it answers only at its in-cluster address." : "The model routes as before publishing: KServe's default gateway (no refs)."],
+      ["gateway", null, `The MaaS gateway no longer admits routes from '${project}'.`]],
+    "change-limit": [["check", "Checking the publication and the subscription", "The model's limit can change."],
+      ["limit", "Changing the model's entry in the subscription", "The subscription lists the model with its new limit."], ["ready", "Waiting for MaaS to apply it", "MaaS applies it."]],
+    "change-access": [["check", "Checking the subscription and the authorization policy", "Who can use the published models can change."],
+      ["access", "Changing the subscription's owners and the authorization policy's subjects", "The subscription and the authorization policy name the new audience."], ["ready", "Waiting for MaaS to apply it", "MaaS applies it."]],
+    "change-database": [["check", "Checking the database and who uses MaaS", "MaaS can switch databases."], ["cnpg", null, "Not needed."],
+      ["database", "Waiting for the development database to be available (up to 2:00, as the script waits)", `Secret ${F.MAAS_INFRA}/maas-db-config names the new database.`],
+      ["cleanup", `Deleting CloudNativePG Cluster ${F.MAAS_INFRA}/maas-db`, "Deleted the database before."]],
   }[action] ?? [];
-  for (const [step, done] of steps) {
-    send({ step, status: "running", message: "..." });
+  for (const [step, running, done] of steps) {
+    if (running) send({ step, status: "running", message: running });
     await nextStep();
     send({ step, status: "success", message: done });
   }
@@ -681,7 +695,7 @@ async function mlflowSamplesStream(req, res) {
   const ids = order.filter((id) => samples.includes(id));
   const verb = { add: "added", remove: "removed", regenerate: "regenerated" }[action];
   const events = [
-    { step: "check", status: "running", message: `Checking MLflow for project '${project}'...` },
+    { step: "check", status: "running", message: `Checking MLflow for project '${project}'` },
     { step: "check", status: "success", message: `MLflow is ready at ${current.mlflowURL}` },
     ...ids.flatMap((id) => [
       { step: id, status: "running", message: `${F.SAMPLE_NAMES[id]}: ${action}` },

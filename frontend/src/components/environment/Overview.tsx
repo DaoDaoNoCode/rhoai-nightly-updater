@@ -95,7 +95,8 @@ export const Overview: React.FC<{
   const loading = rows.some((r) => r.state.loading);
   // The next step is text in a cell, so it is an inline link, as PatternFly
   // puts links in table cells (Button variant="link" isInline): it sits on
-  // the row's text line. A step that opens a dialog ends with an ellipsis.
+  // the row's text line. A step that opens a dialog is labelled with its
+  // action alone, without an ellipsis, as PatternFly labels actions.
   // The State cell names the project, so the links do not repeat it.
   const next = (row: OverviewRow, step: NextStep | null) => {
     switch (step?.kind) {
