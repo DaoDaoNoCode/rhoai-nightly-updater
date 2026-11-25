@@ -96,7 +96,9 @@ func Plan(c *kube.Client, r types.EnvironmentRecipe, pinned *types.RecipePinnedB
 		resolve()
 	}
 	willRun := map[string]bool{}
-	for _, step := range Steps(r) {
+	steps := Steps(r)
+	typical, most := make([]int, len(steps)), make([]int, len(steps))
+	for i, step := range steps {
 		ps := types.RecipePlanStep{ID: step.ID, Title: step.Title}
 		ps.TypicalSeconds, ps.MaxSeconds = step.Seconds()
 		later := false
@@ -128,11 +130,13 @@ func Plan(c *kube.Client, r types.EnvironmentRecipe, pinned *types.RecipePinnedB
 			resolve()
 		}
 		if ps.Action == types.RecipeStepRun || ps.Action == types.RecipeStepLater {
-			plan.TypicalSeconds += ps.TypicalSeconds
-			plan.MaxSeconds += ps.MaxSeconds
+			typical[i], most[i] = ps.TypicalSeconds, ps.MaxSeconds
 		}
 		plan.Steps = append(plan.Steps, ps)
 	}
+	// Steps that do not wait for each other run side by side: the run
+	// takes about as long as its longest chain of steps.
+	plan.TypicalSeconds, plan.MaxSeconds = RunSeconds(steps, typical), RunSeconds(steps, most)
 	plan.Pinned = s.Pinned
 	plan.Warnings = append(planKueueWarnings(c, r), playgroundWarnings(r)...)
 	plan.Problems = append(plan.Problems, p...)

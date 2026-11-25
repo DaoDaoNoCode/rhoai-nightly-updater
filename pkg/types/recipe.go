@@ -323,8 +323,10 @@ type RecipePlan struct {
 	Problems []RecipeProblem   `json:"problems"`
 	// Pinned is the build the run installs when the RHOAI step runs.
 	Pinned *RecipePinnedBuild `json:"pinned,omitempty"`
-	// TypicalSeconds and MaxSeconds add up the steps that run (or are
-	// checked later).
+	// TypicalSeconds and MaxSeconds are how long the steps that run (or
+	// are checked later) take together, as the runner runs them side by
+	// side where they do not depend on each other (internal/recipe
+	// RunSeconds): about the longest chain of steps, not their sum.
 	TypicalSeconds int `json:"typicalSeconds"`
 	MaxSeconds     int `json:"maxSeconds"`
 	// Warnings say what the run changes beyond the recipe's own parts and
@@ -495,9 +497,13 @@ type RecipeRunStatus struct {
 	Interrupted bool `json:"interrupted,omitempty"`
 	// StopRequested: Stop after this step was asked for.
 	StopRequested bool `json:"stopRequested,omitempty"`
-	// Step is the latest progress of the running step (from the
-	// operation), when it runs.
+	// Step is the latest progress of the run (from the operation), when
+	// it runs: of whichever step reported last.
 	Step *UpdateStepEvent `json:"step,omitempty"`
+	// Progress is the latest progress of each running step, by step ID,
+	// while the run runs in this updater process (several steps run at
+	// once).
+	Progress map[string]UpdateStepEvent `json:"progress,omitempty"`
 	// Cleanup is the clean-up request for what the run created (POST
 	// /api/resources/cleanup/stream), as the cluster shows it now, when
 	// the run is not running and there is any (internal/recipe

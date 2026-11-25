@@ -171,7 +171,8 @@ func TestRecipePlan_ArgoCDRefusesTheFeaturesDoNot(t *testing.T) {
 
 // Every feature runs, in the runner's dependency order: the steps after
 // the RHOAI install are checked when the run gets there, nothing of the
-// schema is refused, and the plan adds up every step's figures (model
+// schema is refused, and the plan's figures are its longest chain of steps
+// (the serving lane), as the steps of other lanes run beside it (model
 // serving usually 5 minutes on a CPU worker).
 func TestRecipePlan_EveryFeatureInDependencyOrder(t *testing.T) {
 	f, c := projectFake(t)
@@ -187,16 +188,22 @@ func TestRecipePlan_EveryFeatureInDependencyOrder(t *testing.T) {
 		}
 	}
 	titles := map[string]string{}
-	typical, most := 0, 0
+	typical, most, sumTypical := 0, 0, 0
+	critical := map[string]bool{recipe.StepRHOAI: true, recipe.StepDSC: true, recipe.StepProject: true, recipe.StepPrerequisites: true,
+		recipe.StepMaaS: true, recipe.StepModelsPrereq: true, recipe.StepModel: true, recipe.StepMaaSPublish: true, recipe.StepPlayground: true,
+		recipe.StepKueuePrereq: true, recipe.StepKueue: true, recipe.StepDashboardDev: true}
 	for _, s := range plan.Steps {
 		titles[s.ID] = s.Title
-		typical, most = typical+s.TypicalSeconds, most+s.MaxSeconds
+		sumTypical += s.TypicalSeconds
+		if critical[s.ID] {
+			typical, most = typical+s.TypicalSeconds, most+s.MaxSeconds
+		}
 	}
 	if titles["prerequisites"] != "What the features need" || titles["model"] != "Model Qwen3 1.7B (CPU, tool calling)" || titles["dashboard-dev"] != "Dashboard Dev (PR #1234)" || titles["maas"] != "Models as a Service" {
 		t.Errorf("titles %v", titles)
 	}
-	if plan.TypicalSeconds != typical || plan.MaxSeconds != most {
-		t.Errorf("plan %d/%d, steps %d/%d", plan.TypicalSeconds, plan.MaxSeconds, typical, most)
+	if plan.TypicalSeconds != typical || plan.MaxSeconds != most || plan.TypicalSeconds >= sumTypical {
+		t.Errorf("plan %d/%d, critical path %d/%d, every step %d", plan.TypicalSeconds, plan.MaxSeconds, typical, most, sumTypical)
 	}
 	if s := recipeStep(t, plan.Recipe, recipe.StepModel); s.Typical != 5*time.Minute || s.Max != 15*time.Minute {
 		t.Errorf("model step %v/%v", s.Typical, s.Max)
