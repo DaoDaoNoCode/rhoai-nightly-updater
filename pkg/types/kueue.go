@@ -26,7 +26,7 @@ type KueueStatus struct {
 	// sequence, each with status even when the object is missing.
 	Objects []KueueObject `json:"objects"`
 	// Quota summarizes the ClusterQueue's nominal quota (e.g. "6 CPUs and
-	// 19Gi of memory"): the live ClusterQueue's, or what Set up creates
+	// 20Gi of memory"): the live ClusterQueue's, or what Set up creates
 	// when there is none.
 	Quota string `json:"quota"`
 	// Label reflects the project's kueue.openshift.io/managed label.

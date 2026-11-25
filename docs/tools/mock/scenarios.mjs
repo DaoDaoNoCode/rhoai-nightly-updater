@@ -600,7 +600,7 @@ export const scenarios = {
   "env-kueue-outdated": (w) => {
     w.kueue = F.kueueWorld("ready", { samples: true });
     w.kueue.quota = "6 CPUs and 11Gi of memory";
-    w.kueue.objects = w.kueue.objects.map((o) => (o.kind === "ClusterQueue" ? { ...o, outdated: "its quota is 6 CPUs and 11Gi of memory; this version sets 6 CPUs and 19Gi of memory" } : o));
+    w.kueue.objects = w.kueue.objects.map((o) => (o.kind === "ClusterQueue" ? { ...o, outdated: "its quota is 6 CPUs and 11Gi of memory; this version sets 6 CPUs and 20Gi of memory" } : o));
     w.kueue.samples = w.kueue.samples.map((s) => (s.kind === "raycluster" ? { ...s, state: "Admitted", rayState: "failed", outdated: "its head and worker have other CPU and memory than this version sets (head 1 CPU and 5Gi requested, up to 2 CPUs and 8Gi; worker 1 CPU and 3Gi requested, up to 1 CPU and 6Gi)" } : s));
   },
   "env-kueue-optin": (w) => { w.kueue = F.kueueWorld("ready", { samples: true, optIn: true }); },

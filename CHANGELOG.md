@@ -48,7 +48,7 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   (default channel, all namespaces), then set the DataScienceCluster's
   `kueue` to `Unmanaged` and wait for RHOAI's Kueue CR `cluster`. Set up
   creates ResourceFlavor `nightly-kueue-cpu`, a non-preemptive ClusterQueue
-  `nightly-kueue` (6 CPUs, 19 GiB) for the chosen project only, LocalQueue
+  `nightly-kueue` (6 CPUs, 20 GiB) for the chosen project only, LocalQueue
   `nightly-kueue` (never `default`) and the project label
   `kueue.openshift.io/managed=true`, plus optional RayCluster and RayJob
   samples (image editable, default `quay.io/modh/ray:2.47.1-py311-cu121`;
@@ -464,8 +464,8 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   Kueue queue management" (seen live on RHOAI 3.7). The review and the
   Kueue step's result now say so, and that choosing a Queue hardware
   profile in the dashboard's Edit workbench removes the mark and restarts
-  it. They do not claim Kueue then admits the workbench: RHOAI's notebook
-  controller does not pass the queue label to its pod.
+  it. They do not claim Kueue then admits the edited workbench: RHOAI's
+  notebook controller does not pass the queue label to its pod on an update.
 - **A recipe with a workbench and the dashboard's Kueue opt-in runs again.**
   Run a second time after a Clean up of its project only, with the
   dashboard's Kueue setting still on, such a recipe failed at the workbench
@@ -482,9 +482,20 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   will. A workbench already there is not changed. Without the opt-in the
   workbench still comes first, and the review now refuses, before anything
   runs, a workbench that would find no hardware profile (the setting on and
-  a project the run creates, or a Kueue project without a Queue profile of
-  its LocalQueues, or with Kueue not available), with what to change in the
-  recipe, instead of failing halfway.
+  a project the project step labels, a new one or one a resumed run
+  completes, or a Kueue project without an enabled Queue profile of its
+  LocalQueues, counting the one RHOAI creates with `autoCreateQueues`, or
+  with Kueue not available), with what to change in the recipe, instead of
+  failing halfway; a read it needs that fails refuses too. A workbench
+  created with a Queue profile is admitted by Kueue once the ClusterQueue
+  has room (seen live on RHOAI 3.7).
+- **The Kueue quota holds a workbench on the Queue profile.** The
+  ClusterQueue's 19 GiB did not count the workbench's kube-rbac-proxy
+  sidecar (100m CPU, 64 MiB requested), so with both samples running the
+  workbench waited behind the RayJob. New setups get 6 CPUs and 20 GiB. Set
+  up keeps a ClusterQueue that is there: a 19 GiB one reads "Made by an
+  earlier version of this tool", and a recipe's Distributed workloads step
+  stops on it; Clean up, then Set up.
 - **The Distributed workloads tab can turn Kueue back.** Once its setup
   was cleaned up, the prerequisites still read "kueue Unmanaged (turned on
   by this tool)", but only Clean up everything could turn it back. The

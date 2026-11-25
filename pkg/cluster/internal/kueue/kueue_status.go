@@ -254,7 +254,7 @@ func sampleState(u *kube.Client, kind, project string, rec Record, workloads []W
 }
 
 // quotaDiffers says whether a live nominal quota is known to differ from
-// the one this version sets, as amounts ("19456Mi" is "19Gi"); a quota
+// the one this version sets, as amounts ("20480Mi" is "20Gi"); a quota
 // that cannot be read is not called different.
 func quotaDiffers(cpu, memory string) bool {
 	wantCPU, wantMemory := Quota()

@@ -112,17 +112,28 @@ const (
 	// alongside both samples.
 	profileCPUMilli = 1000
 	profileMemoryMi = 2048
+	// A workbench on that profile also runs the kube-rbac-proxy sidecar
+	// that RHOAI 3's notebook controller adds for inject-auth, with requests
+	// of 100m CPU and 64Mi (kubeflow odh-notebook-controller, RHOAI
+	// 3.7-ea.1, notebook_controller.go L69-72 and
+	// notebook_mutating_webhook.go L487-494); Kueue counts every container
+	// of the workbench's pod.
+	sidecarCPUMilli = 100
+	sidecarMemoryMi = 64
 )
 
 // Quota derives the ClusterQueue nominal limits so both samples (head plus one
-// worker each, and the RayJob's submitter) and one opt-in-profile workload can
-// run concurrently, rounded up to whole CPUs and GiB: 6 CPUs and 19Gi. Kueue
-// models a RayCluster as a single Workload spanning its pods and counts their
-// requests, not limits; free capacity on nodes is not validated (admission
-// accounting only).
+// worker each, and the RayJob's submitter) and one workbench on the opt-in
+// profile (its container and the kube-rbac-proxy sidecar) can run
+// concurrently: 5.6 CPUs and 19520Mi requested, rounded up to whole CPUs
+// and GiB: 6 CPUs and 20Gi. Kueue models a RayCluster as a single Workload
+// spanning its pods and counts their requests, not limits; free capacity
+// on nodes is not validated (admission accounting only). Set up keeps a
+// ClusterQueue that is there, so only a new setup gets this size; the tab
+// flags one with another quota as made by an earlier version.
 func Quota() (cpu, memory string) {
-	milli := 2*(headSize.CPUMilli+workerSize.CPUMilli) + submitterSize.CPUMilli + profileCPUMilli
-	mi := 2*(headSize.MemoryMi+workerSize.MemoryMi) + submitterSize.MemoryMi + profileMemoryMi
+	milli := 2*(headSize.CPUMilli+workerSize.CPUMilli) + submitterSize.CPUMilli + profileCPUMilli + sidecarCPUMilli
+	mi := 2*(headSize.MemoryMi+workerSize.MemoryMi) + submitterSize.MemoryMi + profileMemoryMi + sidecarMemoryMi
 	return fmt.Sprint((milli + 999) / 1000), fmt.Sprintf("%dGi", (mi+1023)/1024)
 }
 
