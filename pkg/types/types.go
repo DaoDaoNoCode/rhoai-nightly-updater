@@ -1176,6 +1176,12 @@ type ResourcesStatus struct {
 	// they could not be read (none is offered then).
 	RecipeProjects      []RecipeOwnedProject `json:"recipeProjects,omitempty"`
 	RecipeProjectsError string               `json:"recipeProjectsError,omitempty"`
+	// ProjectStorages are the project S3 storages this tool recorded (the
+	// non-admin design 4.5), from its record alone: Clean up everything
+	// offers them, each volume to confirm on its own (its data goes).
+	// ProjectStoragesError says why the record could not be read.
+	ProjectStorages      []RecordedProjectStorage `json:"projectStorages,omitempty"`
+	ProjectStoragesError string                   `json:"projectStoragesError,omitempty"`
 	// OutsidePipelineServers are this tool's pipeline servers in projects
 	// that are not (or no longer) Data Science projects (the dashboard's
 	// label was removed): the project picker does not list them, but they
@@ -2083,6 +2089,11 @@ type CleanupRequest struct {
 	// kept from a deleted workbench, on its own: its files are lost.
 	Workbenches      []string `json:"workbenches,omitempty"`
 	WorkbenchStorage []string `json:"workbenchStorage,omitempty"`
+	// ProjectStorages are the projects whose project S3 storage goes
+	// (after their pipeline servers); ProjectStorageData those whose
+	// volume (nightly-s3-data) and its data go too, each confirmed.
+	ProjectStorages    []string `json:"projectStorages,omitempty"`
+	ProjectStorageData []string `json:"projectStorageData,omitempty"`
 	// MaaSPublished are the projects whose models this tool unpublishes from
 	// Models as a Service first, before anything else goes; MaaSPlatform
 	// removes the MaaS platform this tool set up, last.

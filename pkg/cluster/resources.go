@@ -69,6 +69,17 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 		status.RecipeProjects = nil
 		status.RecipeProjectsError = "Cannot read the projects recipes created: " + recipeErr.Error()
 	}
+	// The project storages, from the record only (the ServiceAccount
+	// reads none of their objects).
+	if rec, err := storage.ReadProjectStorageRecord(c); err != nil {
+		status.ProjectStoragesError = "Cannot read this tool's record of project S3 storages: " + err.Error()
+	} else {
+		for _, p := range rec.Projects() {
+			e, _ := rec.Get(p)
+			status.ProjectStorages = append(status.ProjectStorages, types.RecordedProjectStorage{Project: p, By: e.By, DataVolume: storage.ProjectS3PVC})
+		}
+		sort.Slice(status.ProjectStorages, func(i, j int) bool { return status.ProjectStorages[i].Project < status.ProjectStorages[j].Project })
+	}
 	status.DashboardURL = dashURL
 	status.ForeignLegacyNamespace = foreignNS
 	// What the features need from the DataScienceCluster. One that cannot

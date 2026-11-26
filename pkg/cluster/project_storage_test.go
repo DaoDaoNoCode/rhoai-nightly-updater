@@ -643,3 +643,30 @@ func TestProjectStorageRecordPrunedWithItsProject(t *testing.T) {
 		t.Fatal("the storage of a project made again is still recorded")
 	}
 }
+
+// Clean up everything lists the recorded project storages (from the
+// record: the ServiceAccount reads none of their objects) and deletes
+// each with a cluster-admin's token, its volume only when confirmed.
+func TestCleanUpListsProjectStorage(t *testing.T) {
+	f, u := newProjectStorageEnv(t)
+	if res := runPS(t, u, types.ProjectStorageRequest{Project: "proj", Action: "setup"}); !res.Success {
+		t.Fatalf("%+v", res)
+	}
+	sa := u.Bookkeeping()
+	st, err := GetResourcesStatus(sa)
+	if err != nil || len(st.ProjectStorages) != 1 || st.ProjectStorages[0].Project != "proj" || st.ProjectStorages[0].DataVolume != storage.ProjectS3PVC || st.ProjectStorages[0].By != "alice" {
+		t.Fatalf("%+v %v", st.ProjectStorages, err)
+	}
+	admin := userClientOf(sa, fakeUserToken)
+	res, err := CleanUp(admin, types.CleanupRequest{ProjectStorages: []string{"proj"}}, nil)
+	if err != nil || !res.Success || f.has(psDeployments+"/"+storage.ProjectS3Deployment) || !f.has(psPVCs+"/"+storage.ProjectS3PVC) {
+		t.Fatalf("%+v %v", res, err)
+	}
+	res, err = CleanUp(admin, types.CleanupRequest{ProjectStorages: []string{"proj"}, ProjectStorageData: []string{"proj"}}, nil)
+	if err != nil || !res.Success || f.has(psPVCs+"/"+storage.ProjectS3PVC) {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if st, _ := GetResourcesStatus(sa); len(st.ProjectStorages) != 0 {
+		t.Fatalf("still listed: %+v", st.ProjectStorages)
+	}
+}

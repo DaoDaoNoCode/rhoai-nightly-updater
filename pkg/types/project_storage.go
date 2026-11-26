@@ -72,3 +72,11 @@ type ProjectPipelineServerRequest struct {
 	// Connection off.
 	ConfirmWorkbenches map[string]string `json:"confirmWorkbenches,omitempty"`
 }
+
+// RecordedProjectStorage is a project S3 storage in this tool's record:
+// its project, who set it up, and its volume.
+type RecordedProjectStorage struct {
+	Project    string `json:"project"`
+	By         string `json:"by,omitempty"`
+	DataVolume string `json:"dataVolume"`
+}
