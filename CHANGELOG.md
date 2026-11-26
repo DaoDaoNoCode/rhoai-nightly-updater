@@ -493,7 +493,8 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 - **Models the playground cannot use** (B5+B6 live round). KServe reports
   a model without a route by its Service with no port, and the dashboard's
-  Gen AI playground calls that address as it is, so its chat hung. Set up
+  Gen AI playground writes that address (plus /v1) into its configuration,
+  so its chat hung. Set up
   now leaves such models out of its own choice and says so, refuses one
   chosen by name, and when no chat model is left names what the playground
   can use instead (a model on the inference gateway, or a Models as a
@@ -508,7 +509,11 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   project it changes; the S3 storage says who its network policy lets in;
   before the project has S3 storage, an editor is told that an admin of the
   project sets it up; the deploy dialog says which runtime image the model
-  runs, and offers the released image only while the plan is the preset's.
+  runs (for a new model, in fixed words), and offers the released image
+  only while the plan is the preset's. When the project's only chat models
+  cannot be used by the playground, Set up is disabled and the card says to
+  ask a cluster-admin for a model on the inference gateway; the polling
+  says when it stopped checking quickly.
 - **Permission messages**: a refusal names only what the request needs
   (the model it asks for, not every model of the catalog), each object once
   with its verbs, and who grants them once; an action only a project's

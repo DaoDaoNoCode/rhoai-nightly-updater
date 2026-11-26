@@ -1084,7 +1084,7 @@ export const playgroundModels = {
   deepseek: { name: "deepseek-r1-qwen-7b", displayName: "DeepSeek R1 Distill Qwen 7B", source: "namespace", status: "Failed", ready: false, chat: true },
   // A model without a route: KServe reports its Service without the port (pkg/cluster/internal/serving PlaygroundNoPortNote).
   smolNoPort: { name: "smollm2-135m-instruct", displayName: "SmolLM2 135M Instruct (CPU)", source: "namespace", status: "Running", ready: true, chat: true,
-    unusable: "RHOAI's Gen AI playground cannot use it, because KServe reports its address without the port." },
+    unusable: "KServe currently reports its address without the port, so RHOAI's Gen AI playground cannot use it." },
   maas: { name: "gpt-oss-20b", source: "maas", status: "Ready", ready: true, chat: true, subscriptions: ["rhoai-nightly-updater-subscription"] },
   opt: { name: "publishers/llm/models/facebook/opt-125m", displayName: "Facebook OPT 125M (Simulated)", source: "maas", status: "Ready", ready: true, chat: true, subscriptions: ["rhoai-nightly-updater-subscription"] },
 };
@@ -2198,7 +2198,7 @@ export function userModelExposures(project, model) {
     defaultReason: "A cluster-admin deploys models reached through the inference gateway or with token authentication, on the Environment page's Models tab.",
     options: [
       { key: "internal", exposure: "internal", title: "Only inside the cluster", available: true,
-        description: "No outside address. Programs on this cluster (for example a workbench) can call it without a token. RHOAI's Gen AI playground cannot use it, because KServe reports its address without the port.",
+        description: "No outside address. Programs on this cluster (for example a workbench) can call it without a token. KServe currently reports its address without the port, so RHOAI's Gen AI playground cannot use it.",
         warning: "Calls to the in-cluster address are not authenticated: any pod on the cluster whose network can reach the project can use the model." },
     ],
     // pkg/cluster/internal/serving statusImagePlan: the nightly docs cluster runs the released image.
