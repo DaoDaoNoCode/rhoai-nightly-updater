@@ -779,3 +779,24 @@ func TestProjectS3BindsOnlyS3OnThePodNetwork(t *testing.T) {
 		t.Fatalf("container ports: %s", raw)
 	}
 }
+
+// A storage that is not ready says why: its volume Pending, or its pod's
+// waiting reason.
+func TestProjectStorageStatusSaysWhyNotReady(t *testing.T) {
+	f, u := newProjectStorageEnv(t)
+	if res := runPS(t, u, types.ProjectStorageRequest{Project: "proj", Action: "setup"}); !res.Success {
+		t.Fatalf("%+v", res)
+	}
+	f.onGet = nil
+	deploy := psDeployments + "/" + storage.ProjectS3Deployment
+	f.put(deploy, mergeMeta(f.get(deploy), map[string]any{"status": map[string]any{}}))
+	f.putJSON(psNS+"/pods/nightly-s3-abc", `{"metadata":{"labels":{"app":"nightly-s3"}},"status":{"containerStatuses":[{"state":{"waiting":{"reason":"ImagePullBackOff","message":"Back-off pulling image"}}}]}}`)
+	if st := GetProjectStorageStatus(u, "proj"); st.Ready || st.Message != "ImagePullBackOff: Back-off pulling image" {
+		t.Fatalf("%+v", st)
+	}
+	pvc := psPVCs + "/" + storage.ProjectS3PVC
+	f.put(pvc, mergeMeta(f.get(pvc), map[string]any{"status": map[string]any{"phase": "Pending"}}))
+	if st := GetProjectStorageStatus(u, "proj"); !strings.Contains(st.Message, "nightly-s3-data is Pending") {
+		t.Fatalf("%+v", st)
+	}
+}

@@ -589,7 +589,7 @@ func GetProjectStorageStatus(c *kube.Client, project string) *types.ProjectStora
 		st.Ready = true
 		st.Message = "Running"
 	default:
-		st.Message = kube.FirstNonEmpty(deploy.replicaFailure(), "Starting")
+		st.Message = kube.FirstNonEmpty(deploy.replicaFailure(), projectS3WaitReason(c, project), "Starting")
 	}
 	var missing []string
 	for _, o := range st.Objects {
@@ -663,4 +663,44 @@ func projectS3ServerGone(c *kube.Client, project string) (bool, error) {
 		return false, err
 	}
 	return len(pods) == 0, nil
+}
+
+// projectS3WaitReason says why the storage's pod is not ready yet, read
+// with c (the user's token): its volume still Pending, or the reason its
+// container waits (an image pull, a crash); "" when neither says.
+func projectS3WaitReason(c *kube.Client, project string) string {
+	if !c.ActsAsUser() {
+		return ""
+	}
+	var pvc struct {
+		Status struct {
+			Phase string `json:"phase"`
+		} `json:"status"`
+	}
+	if found, err := c.GetIntoOptional(projectS3Path(kindPVC, project), &pvc); err == nil && found && pvc.Status.Phase == "Pending" {
+		return fmt.Sprintf("Volume %s is Pending: no storage was provided for it yet (the project's quota, or no default StorageClass).", ProjectS3PVC)
+	}
+	var pods []struct {
+		Status struct {
+			ContainerStatuses []struct {
+				State struct {
+					Waiting *struct {
+						Reason  string `json:"reason"`
+						Message string `json:"message"`
+					} `json:"waiting"`
+				} `json:"state"`
+			} `json:"containerStatuses"`
+		} `json:"status"`
+	}
+	if err := c.ListInto(rhoai.NamespacedPath("v1", "pods", project, "")+"?labelSelector=app%3D"+projectS3AppLabel, &pods); err != nil {
+		return ""
+	}
+	for _, p := range pods {
+		for _, cs := range p.Status.ContainerStatuses {
+			if w := cs.State.Waiting; w != nil && w.Reason != "" && w.Reason != "ContainerCreating" {
+				return kube.TruncateText(strings.TrimSpace(w.Reason+": "+w.Message), 300)
+			}
+		}
+	}
+	return ""
 }

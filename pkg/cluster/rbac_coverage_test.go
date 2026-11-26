@@ -131,6 +131,7 @@ var rbacUserTokenReads = map[string]string{
 	"project_s3.go:readProjectS3Deployment":        "a project's S3 storage Deployment nightly-s3",
 	"project_s3.go:ReadProjectS3Keys":              "a project's S3 storage key (Secret nightly-s3-credentials)",
 	"project_s3_run.go:projectStorageFenceProblem": "a project's S3 storage NetworkPolicy nightly-s3-ingress",
+	"project_s3_run.go:projectS3WaitReason":        "a project's S3 storage volume phase and pod waiting reason",
 	// A model's setup in a Kueue project (the dashboard's Kueue rule for
 	// its hardware profile).
 	"models_hardware.go:listModelLocalQueues": "a project's Kueue LocalQueues, for a model's hardware profile",
