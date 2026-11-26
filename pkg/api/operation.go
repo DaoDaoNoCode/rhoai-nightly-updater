@@ -202,6 +202,8 @@ func busyMessageForUser(op *Operation, reason, user string) string {
 		return "Another operation is in progress. Please wait."
 	case op.ProjectUID == "":
 		return "A cluster operation is running since " + op.StartedAt.UTC().Format("15:04") + " UTC. Project actions can start when it ends."
+	case user != "" && op.User == user && op.Cancellable:
+		return "You already have an action running (" + op.Label + " in project " + op.Project + "). Wait for it to finish or cancel it."
 	case user != "" && op.User == user:
 		return "You already have an action running (" + op.Label + " in project " + op.Project + "). Wait for it to finish."
 	case reason == conflictProject:
@@ -288,6 +290,14 @@ type Operation struct {
 	// entries of OperationStatus.Operations only.
 	Scope       string `json:"scope,omitempty"`
 	Interrupted bool   `json:"interrupted,omitempty"`
+	// Cancellable: a project action of this process that checks a cancel
+	// request at safe points (cancellableActions), which its starter or a
+	// cluster-admin may make (POST /api/operation/cancel); CancelNote says
+	// what a cancel leaves. Cancelling: the request was made; the action
+	// stops at its next safe point unless it ends first.
+	Cancellable bool   `json:"cancellable,omitempty"`
+	CancelNote  string `json:"cancelNote,omitempty"`
+	Cancelling  bool   `json:"cancelling,omitempty"`
 
 	// bookkeeper writes the operation's lease and marker: always the
 	// ServiceAccount's client, which may outlive the request.
@@ -306,6 +316,10 @@ type Operation struct {
 	// lockLost: the lease heartbeat stopped the operation because its lease
 	// was lost; its outcome is cluster.LockLostMessage.
 	lockLost bool
+	// cancelNote is set for a cancellable project action
+	// (cancellableActions); cancelled is the cancel requested for it.
+	cancelNote string
+	cancelled  *cluster.ActionCancelledError
 }
 
 // operationTypes maps mutation endpoints to a stable type and a label.
@@ -362,6 +376,9 @@ var operationTypes = map[string][2]string{
 	"/api/recipes/resume": {"recipe", "Environment recipe"},
 	// Stop takes no lock (it asks the running run to stop after its step).
 	"/api/recipes/stop": {"recipe-stop", "Stop an environment recipe"},
+	// Cancel takes no lock (it asks a running project action to stop at
+	// its next safe point).
+	"/api/operation/cancel": {"cancel-project-action", "Cancel a project action"},
 }
 
 // Size bounds of what is kept and persisted about an operation.
@@ -597,7 +614,10 @@ func copyOperation(op *Operation) *Operation {
 		return nil
 	}
 	cp := *op
-	cp.bookkeeper, cp.sw, cp.freshBookkeeper = nil, nil, nil
+	if op.ProjectUID != "" && op.cancelNote != "" {
+		cp.Cancellable, cp.CancelNote, cp.Cancelling = op.cancelled == nil, op.cancelNote, op.cancelled != nil
+	}
+	cp.bookkeeper, cp.sw, cp.freshBookkeeper, cp.cancelled = nil, nil, nil, nil
 	return &cp
 }
 
@@ -764,6 +784,7 @@ func operationSummary(status OperationStatus, user string, projects func() ([]cl
 		entry := types.OperationSummaryEntry{Scope: scopeProject, Label: op.Label, Project: op.Project, StartedAt: started}
 		if op.User == user {
 			entry.Own, entry.ID = true, op.ID
+			entry.Cancellable, entry.CancelNote, entry.Cancelling = op.Cancellable, op.CancelNote, op.Cancelling
 		}
 		sum.Operations = append(sum.Operations, entry)
 	}

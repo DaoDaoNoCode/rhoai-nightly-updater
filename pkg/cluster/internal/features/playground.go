@@ -1297,6 +1297,31 @@ func (p *playgroundRun) fail(id, msg, code, activity string) (*types.OperationRe
 	return &types.OperationResponse{Success: false, Message: msg, Logs: p.logs, ErrorCode: code}, nil
 }
 
+// cancelled ends the setup at a safe point because a cancel was requested
+// (record.CancelRequested): step id failed with the reason and what stays
+// (kept: the setup's failure path at that point), and the activity entry
+// failed with the reason.
+func (p *playgroundRun) cancelled(id string, cancel *record.ActionCancelledError, kept string) (*types.OperationResponse, error) {
+	msg := cancel.Reason() + " before this step. " + kept
+	if p.emit != nil {
+		p.emit(types.UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: PlaygroundCancelledCode})
+	}
+	p.logs = append(p.logs, msg)
+	slog.Info("playground operation cancelled", "step", id, "project", p.project)
+	record.Cancelled(p.c, p.action+"-playground", "project="+p.project, cancel)
+	return &types.OperationResponse{Success: false, Message: msg, Logs: p.logs, ErrorCode: PlaygroundCancelledCode}, nil
+}
+
+// PlaygroundCancelledCode is the errorCode of a playground setup that
+// stopped at a safe point because a cancel was requested.
+const PlaygroundCancelledCode = "cancelled"
+
+// playgroundKeptAfterCancel is what stays of a setup cancelled once the
+// dashboard was asked to set it up: as when its ready wait fails.
+func playgroundKeptAfterCancel(project string) string {
+	return fmt.Sprintf("The dashboard was already asked to set up the playground in %s, so it stays, recorded as this tool's: delete it on the Playground tab if you do not want it.", project)
+}
+
 func (p *playgroundRun) record(detail string, success bool) {
 	record.Activity(p.c, types.ActivityEntry{
 		Timestamp: kube.NowRFC3339(),
@@ -1541,6 +1566,10 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 	if stopped != nil {
 		return stopped, nil
 	}
+	// Safe point: nothing was asked or recorded yet.
+	if cancel := record.CancelRequested(p.c); cancel != nil {
+		return p.cancelled("install", cancel, "Nothing was changed.")
+	}
 	if existing == nil {
 		if msg, code := p.recordCapRefusal(); msg != "" {
 			return p.fail("install", msg+" Nothing was set up.", code, "records full")
@@ -1587,6 +1616,12 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 				said = true
 				p.step("install", "running", fmt.Sprintf("The previous playground's database in %s is still being removed; trying again every %s (up to %s)", p.project, playgroundInstallRetryPoll, serving.ClockText(playgroundInstallRetryTimeout)))
 			}
+			// Safe point between attempts: the dashboard set nothing up
+			// yet; the record goes as when the retries run out.
+			if cancel := record.CancelRequested(p.c); cancel != nil {
+				p.forgetIfAbsent()
+				return p.cancelled("install", cancel, "Nothing was set up.")
+			}
 			if err := kube.Clock().Sleep(p.c.Context(), playgroundInstallRetryPoll); err != nil {
 				installErr = err
 				break
@@ -1617,13 +1652,22 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 			}
 		}
 		p.step("install", "success", fmt.Sprintf("The dashboard is setting up the playground in %s.", p.project))
+		// Safe point: the install was asked for and is recorded.
+		if cancel := record.CancelRequested(p.c); cancel != nil {
+			return p.cancelled("ready", cancel, playgroundKeptAfterCancel(p.project))
+		}
 	} else {
 		p.step("install", "success", fmt.Sprintf("The playground in %s exists (phase %s); waiting for it.", p.project, kube.FirstNonEmpty(existing.Phase, "unknown")))
 	}
 	p.step("ready", "running", "Waiting until the playground is ready (typically 1 to 2 minutes)")
 	var last, problem string
 	var srv *GenAIServer
+	var cancel *record.ActionCancelledError
 	ready, err := kube.WaitForGone(p.c, playgroundReadyTimeout, playgroundPoll, func(cc *kube.Client) (bool, error) {
+		// Safe point at each poll of the wait.
+		if cancel = record.CancelRequested(p.c); cancel != nil {
+			return true, nil
+		}
 		s, err := p.api.with(cc.Context()).playgroundStatus(p.project)
 		if err != nil {
 			return false, err
@@ -1648,6 +1692,10 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 	switch {
 	case err != nil:
 		return p.failAPI("ready", err, "wait failed")
+	case cancel != nil && existing != nil:
+		return p.cancelled("ready", cancel, fmt.Sprintf("The playground in %s existed before and stays as it is.", p.project))
+	case cancel != nil:
+		return p.cancelled("ready", cancel, playgroundKeptAfterCancel(p.project))
 	case problem != "":
 		return p.fail("ready", "The dashboard set up the playground, but "+problem, "not_ready", "not ready")
 	case !ready:

@@ -14,15 +14,20 @@ type Route struct {
 // routes are the API endpoints. Every route that is not a GET changes the
 // cluster and must go through withMutationAuth (the cluster-admin gate) and
 // lockCluster (a recipe run and resume: lockRecipeRunner), except POST
-// /api/pageview, which only counts page views, and POST /api/recipes/stop,
-// which only asks the running recipe run (which holds the lock) to stop.
-// TestEveryNonGetRouteIsGated checks this. Every GET route has a tier in
+// /api/pageview, which only counts page views, POST /api/recipes/stop,
+// which only asks the running recipe run (which holds the lock) to stop,
+// and POST /api/operation/cancel, which only asks a running project action
+// to stop at its next safe point, for its starter or a cluster-admin
+// (operation_cancel.go). The project actions' routes go through
+// withProjectMutationAuth instead. TestEveryNonGetRouteIsGated checks
+// this. Every GET route has a tier in
 // getRouteTiers (route_tiers.go): who may read it; one without is
 // admin-only.
 var routes = []Route{
 	{"GET /api/status", HandleStatus},
 	{"GET /api/summary", HandleSummary},
 	{"GET /api/operation", HandleOperation},
+	{"POST /api/operation/cancel", HandleOperationCancel},
 	{"POST /api/update", HandleUpdate}, // dry run only
 	{"POST /api/update/stream", HandleUpdateStream},
 	{"POST /api/reinstall/stream", HandleReinstallStream},
@@ -145,6 +150,7 @@ var gitOpsRoutes = map[string]http.HandlerFunc{
 // to gitOpsRoutes on purpose.
 var gitOpsRefused = map[string]string{
 	"GET /api/summary":                                 "The cluster summary",
+	"POST /api/operation/cancel":                       "Cancelling a project action",
 	"POST /api/reinstall/stream":                       "Install a different build",
 	"POST /api/components/dsc/repair":                  "Repairing the DataScienceCluster",
 	"GET /api/components/dsc/plan":                     "Changing the DataScienceCluster",

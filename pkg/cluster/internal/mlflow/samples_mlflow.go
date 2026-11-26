@@ -337,6 +337,10 @@ func ValidateSamplesRequest(req types.MLflowSamplesRequest) string {
 	return ""
 }
 
+// CancelledCode is the errorCode of a samples run that stopped between
+// samples because a cancel was requested.
+const CancelledCode = "cancelled"
+
 // ErrNotDSProject: the project named in a request is not a Data Science
 // project.
 var ErrNotDSProject = errors.New("not a Data Science project")
@@ -401,11 +405,24 @@ func RunSamples(c *kube.Client, req types.MLflowSamplesRequest, onStep func(type
 		}
 	}
 	samples := mlflowSamples()
-	var failed []string
+	var failed, done []string
 	code := ""
 	for _, id := range order {
 		if !want[id] {
 			continue
+		}
+		// Safe point between samples: a sample (its creates and its
+		// tags) is one step and is never cut; the ones done stay.
+		if cancel := record.CancelRequested(c); cancel != nil {
+			kept := "Nothing was changed."
+			if len(done) > 0 {
+				kept = fmt.Sprintf("Done before the cancel, and kept: %s.", strings.Join(done, ", "))
+			}
+			msg := cancel.Reason() + " before this step. " + kept
+			emit(types.UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: CancelledCode})
+			slog.Info("mlflow samples cancelled", "action", req.Action, "project", req.Project, "done", len(done))
+			record.Cancelled(c, "mlflow-samples", activity, cancel)
+			return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: CancelledCode}, nil
 		}
 		s := samples[id]
 		fn := map[string]func(*Target, func(string)) (string, error){"add": s.add, "remove": s.remove, "regenerate": s.regenerate}[req.Action]
@@ -443,6 +460,7 @@ func RunSamples(c *kube.Client, req types.MLflowSamplesRequest, onStep func(type
 			continue
 		}
 		emit(types.UpdateStepEvent{Step: id, Status: "success", Message: fmt.Sprintf("%s: %s", name, msg)})
+		done = append(done, name)
 	}
 	slog.Info("mlflow samples", "action", req.Action, "samples", req.Samples, "project", req.Project, "failed", failed)
 	if len(failed) > 0 {

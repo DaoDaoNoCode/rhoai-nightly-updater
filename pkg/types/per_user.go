@@ -106,6 +106,7 @@ type OperationSummaryEntry struct {
 	Own         bool   `json:"own,omitempty"`
 	ID          string `json:"id,omitempty"`
 	Cancellable bool   `json:"cancellable,omitempty"`
+	CancelNote  string `json:"cancelNote,omitempty"`
 	Cancelling  bool   `json:"cancelling,omitempty"`
 }
 

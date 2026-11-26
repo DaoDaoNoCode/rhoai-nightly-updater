@@ -66,6 +66,25 @@ func (r *run) fail(id, msg, code, why string) (*types.OperationResponse, error) 
 	return &types.OperationResponse{Success: false, Message: msg, Logs: r.logs, ErrorCode: code}, nil
 }
 
+// cancelled ends the run at a safe point because a cancel was requested
+// (record.CancelRequested): step id failed with the reason and what stays
+// (kept: the run's failure path at that point), and the activity entry
+// failed with the reason.
+func (r *run) cancelled(id string, cancel *record.ActionCancelledError, kept string) (*types.OperationResponse, error) {
+	msg := cancel.Reason() + " before this step. " + kept
+	if r.emit != nil {
+		r.emit(types.UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: CancelledCode})
+	}
+	r.logs = append(r.logs, msg)
+	slog.Info("workbench operation cancelled", "step", id)
+	record.Cancelled(r.c, r.activity, r.target, cancel)
+	return &types.OperationResponse{Success: false, Message: msg, Logs: r.logs, ErrorCode: CancelledCode}, nil
+}
+
+// CancelledCode is the errorCode of a project action that stopped at a
+// safe point because a cancel was requested.
+const CancelledCode = "cancelled"
+
 func (r *run) done(msg string) (*types.OperationResponse, error) {
 	record.Action(r.c, r.activity, r.target, true)
 	return &types.OperationResponse{Success: true, Message: msg, Logs: r.logs}, nil
@@ -208,6 +227,10 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 	}
 	r.step("check", "success", describe(plan))
 
+	// Safe point: nothing was made yet.
+	if cancel := record.CancelRequested(c); cancel != nil {
+		return r.cancelled("storage", cancel, "Nothing was changed.")
+	}
 	if pvcFound {
 		r.step("storage", "success", fmt.Sprintf("Using the storage this tool kept: %s.", StorageName))
 	} else {
@@ -228,6 +251,11 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 		r.step("storage", "success", fmt.Sprintf("Created storage %s.", StorageName))
 	}
 
+	// Safe point: the storage is made and recorded; as when the
+	// workbench's create fails, it stays for the next setup.
+	if cancel := record.CancelRequested(c); cancel != nil {
+		return r.cancelled("workbench", cancel, fmt.Sprintf("No workbench was created; its storage %s stays, recorded as this tool's, and the next setup uses it (Delete storage on the Workbench tab removes it).", StorageName))
+	}
 	// Again right before the create: a workbench that mounted the kept
 	// storage in the meantime keeps it (fail closed).
 	if pvcFound {

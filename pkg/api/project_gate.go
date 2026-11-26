@@ -394,6 +394,11 @@ func withProjectMutationAuth(route projectRoute, fn func(c *cluster.Client, w ht
 		defer cancelOp(nil)
 		// Its activity entries are scoped to the project, whoever runs it.
 		opContext = cluster.WithActionScope(opContext, project, uid)
+		// A cancellable action checks a cancel request at its safe points
+		// (operation_cancel.go); opID is set once the action holds its lock,
+		// before it runs.
+		var opID string
+		opContext = cluster.WithCancelCheck(opContext, func() *cluster.ActionCancelledError { return inflight.cancelRequest(opID) })
 		changesContext, changes := cluster.TrackChanges(opContext)
 		bookkeeper := cluster.NewClientWithContext(opContext, saToken)
 		bookkeeper.SetUsername(username)
@@ -417,8 +422,8 @@ func withProjectMutationAuth(route projectRoute, fn func(c *cluster.Client, w ht
 		refusal := acquireProjectLock(uid, username, func() *Operation {
 			kind := operationTypes[sw.path]
 			op := inflight.startProject(kind[0], label, username, project, uid, bookkeeper)
-			inflight.update(op.ID, func(o *Operation) { o.sw = sw })
-			sw.opID = op.ID
+			inflight.update(op.ID, func(o *Operation) { o.sw, o.cancelNote = sw, cancellableActions[id] })
+			sw.opID, opID = op.ID, op.ID
 			return op
 		}, cancelOp)
 		if refusal != nil {

@@ -27,6 +27,9 @@ func WithActionScope(ctx context.Context, project, uid string) context.Context {
 	return record.WithActionScope(ctx, project, uid)
 }
 
+// CancelRequested is record.CancelRequested.
+func CancelRequested(c *Client) *ActionCancelledError { return record.CancelRequested(c) }
+
 // WithCancelCheck is record.WithCancelCheck.
 func WithCancelCheck(ctx context.Context, check func() *ActionCancelledError) context.Context {
 	return record.WithCancelCheck(ctx, check)
