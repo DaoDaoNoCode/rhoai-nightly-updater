@@ -66,20 +66,35 @@ func (r *run) fail(id, msg, code, why string) (*types.OperationResponse, error) 
 	return &types.OperationResponse{Success: false, Message: msg, Logs: r.logs, ErrorCode: code}, nil
 }
 
-// afterWriteTimeout bounds what follows a create that went through:
-// recording the object, or deleting it again.
-var afterWriteTimeout = 30 * time.Second
+// afterWriteTimeout bounds each of what may follow a create that went
+// through: recording the object, and deleting it again when that failed.
+// Each has its own budget, so a record write that uses all of its time
+// leaves the delete its own; both stay within the post-operation
+// allowance (record.BookkeepingContext and PostOperationContext end at the
+// operation's deadline plus record.PostDeadlineWork at the latest).
+var afterWriteTimeout = 15 * time.Second
 
-// afterWrite is r's client for what must follow a create that went
-// through: recording the object as this tool's, or deleting it again when
-// that fails. It runs on the post-operation context
-// (record.PostOperationContext), so it runs also when the operation
-// reached its deadline right after the create: nothing the run made is
-// left unrecorded (unless the operation lost its cross-pod lock, when no
-// cleanup may run).
-func (r *run) afterWrite() (*kube.Client, func()) {
+// recordMade runs write, the record of an object the run created, with a
+// bookkeeping context of its own: it runs also when the operation reached
+// its deadline right after the create, and after a lost cross-pod lock
+// (it writes only this tool's own record).
+func (r *run) recordMade(write func(c *kube.Client) error) error {
+	ctx, cancel := record.BookkeepingContext(r.c, afterWriteTimeout)
+	defer cancel()
+	return write(r.c.WithContext(ctx))
+}
+
+// undoCreate runs del, the delete (UID precondition) of an object the run
+// created and could not record, on a post-operation context of its own. Not after
+// the operation lost its cross-pod lock: another updater pod may be
+// changing the same objects, so no cleanup runs.
+func (r *run) undoCreate(del func(c *kube.Client) error) error {
+	if record.OperationLockLost(r.c) {
+		return record.ErrOperationLockLost
+	}
 	ctx, cancel := record.PostOperationContext(r.c, afterWriteTimeout)
-	return r.c.WithContext(ctx), cancel
+	defer cancel()
+	return del(r.c.WithContext(ctx))
 }
 
 // cancelled ends the run at a safe point because a cancel was requested
@@ -257,19 +272,20 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 			return r.fail("storage", fmt.Sprintf("Cannot create PersistentVolumeClaim %s in %s: %v. Nothing was changed.", StorageName, project, err), kube.ErrorCodeFromK8sErr(err), "storage create failed")
 		}
 		meta, _ := kube.ParseObjectMeta(body)
-		after, endAfter := r.afterWrite()
-		err = updateRecord(after, project, func(e *Recorded) {
-			e.StorageUID, e.At, e.By, e.ActorRole, e.ProjectUID = meta.UID, kube.NowRFC3339(), kube.GetUser(c), record.ActorRole(c), c.ProjectUID()
+		err = r.recordMade(func(rc *kube.Client) error {
+			return updateRecord(rc, project, func(e *Recorded) {
+				e.StorageUID, e.At, e.By, e.ActorRole, e.ProjectUID = meta.UID, kube.NowRFC3339(), kube.GetUser(c), record.ActorRole(c), c.ProjectUID()
+			})
 		})
 		if err != nil {
-			_, delErr := kube.DeleteWithUID(after, storagePath(project), meta.UID)
-			endAfter()
-			if delErr != nil && !kube.IsK8sNotFound(delErr) {
+			if delErr := r.undoCreate(func(dc *kube.Client) error {
+				_, err := kube.DeleteWithUID(dc, storagePath(project), meta.UID)
+				return err
+			}); delErr != nil && !kube.IsK8sNotFound(delErr) {
 				return r.fail("storage", fmt.Sprintf("PersistentVolumeClaim %s was created, but this tool could not record it (%s) nor delete it again (%v). Delete it yourself (oc delete pvc %s -n %s), then set up again.", StorageName, record.ErrorText(c, err), delErr, StorageName, project), record.ErrorCode(err), "record failed")
 			}
 			return r.fail("storage", fmt.Sprintf("PersistentVolumeClaim %s was created, but this tool could not record it as its own (%s), so it was deleted again. Set up again to retry.", StorageName, record.ErrorText(c, err)), record.ErrorCode(err), "record failed")
 		}
-		endAfter()
 		r.step("storage", "success", fmt.Sprintf("Created storage %s.", StorageName))
 	}
 
@@ -296,12 +312,15 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 		return r.fail("workbench", fmt.Sprintf("Cannot create workbench %s in %s: %v. Its storage %s stays; set up again to retry.", Name, project, err, StorageName), kube.ErrorCodeFromK8sErr(err), "create failed")
 	}
 	meta, _ := kube.ParseObjectMeta(body)
-	after, endAfter := r.afterWrite()
-	defer endAfter()
-	if err := updateRecord(after, project, func(e *Recorded) {
-		e.UID, e.At, e.By, e.ActorRole, e.ProjectUID = meta.UID, kube.NowRFC3339(), kube.GetUser(c), record.ActorRole(c), c.ProjectUID()
+	if err := r.recordMade(func(rc *kube.Client) error {
+		return updateRecord(rc, project, func(e *Recorded) {
+			e.UID, e.At, e.By, e.ActorRole, e.ProjectUID = meta.UID, kube.NowRFC3339(), kube.GetUser(c), record.ActorRole(c), c.ProjectUID()
+		})
 	}); err != nil {
-		if _, delErr := kube.DeleteWithUID(after, notebookPath(project), meta.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
+		if delErr := r.undoCreate(func(dc *kube.Client) error {
+			_, err := kube.DeleteWithUID(dc, notebookPath(project), meta.UID)
+			return err
+		}); delErr != nil && !kube.IsK8sNotFound(delErr) {
 			return r.fail("workbench", fmt.Sprintf("Workbench %s was created, but this tool could not record it (%s) nor delete it again (%v). Delete it in the dashboard, then set up again.", Name, record.ErrorText(c, err), delErr), record.ErrorCode(err), "record failed")
 		}
 		return r.fail("workbench", fmt.Sprintf("Workbench %s was created, but this tool could not record it as its own (%s), so it was deleted again. Set up again to retry.", Name, record.ErrorText(c, err)), record.ErrorCode(err), "record failed")
