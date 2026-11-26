@@ -90,16 +90,13 @@ Open the printed URL, or use the grid icon in the OpenShift console (Red Hat App
 oc get route rhoai-nightly-updater -n rhoai-nightly-updater -o jsonpath='https://{.spec.host}{"\n"}'
 ```
 
-<img src="images/masthead-version.png" alt="The masthead: the release, the appearance button, Help, Applications and the user menu" width="380">
+![The Status page: the release in the masthead, the RHOAI on this cluster card with Update to latest, Update to a specific build, Recent activity and Recovery](images/page-status.png)
 
-**What you should see:** the **Status** page. The masthead shows (1) the release you installed, then the appearance button (color scheme and contrast), **Help** (`?`), the application menu and your user name. A fresh cluster shows **One-time cluster setup** first.
+**What you should see:** the **Status** page. The masthead shows the release you installed, then the appearance button (color scheme and contrast), **Help** (`?`), the application menu and your user name. A fresh cluster shows **One-time cluster setup** first.
 
 **Your teammates** open the same URL. Since 5.0.0 whoever RHOAI lets in can sign in: by default every OpenShift user, since RHOAI grants `get` on `auths.services.platform.opendatahub.io` to the allowed groups of its Auth CR (`oc get auths.services.platform.opendatahub.io auth -o jsonpath='{.spec.allowedGroups}'`). Narrow those groups to narrow who signs in (it narrows the RHOAI dashboard too). Until RHOAI is installed ([step 4](#4-install-rhoai)) only cluster-admins sign in. Cluster-admins see every page. Everyone else sees a short Status page, Build Explorer and the Environment page for their own projects, read with their own permissions, and changes nothing ([README: Not a cluster-admin?](../README.md#not-a-cluster-admin-what-you-see)):
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="images/page-user-status-dark.png">
-  <img src="images/page-user-status-light.png" alt="Status for a user who is not a cluster-admin: RHOAI Succeeded 3.6.0 on stable-3.x, the installed nightly with a newer build available, and the DataScienceCluster components" width="760">
-</picture>
+![Status for a user who is not a cluster-admin: RHOAI Succeeded 3.6.0 on stable-3.x, the installed nightly with a newer build available, and the DataScienceCluster components](images/page-user-status.png)
 
 ## 3. One-time setup: pull secret and image mirror
 
@@ -122,7 +119,7 @@ What the app offers depends on the cluster. It reads Infrastructure `cluster` (`
 
 Every one-click action first opens a review: the app reads the cluster again with **your own** OpenShift token, runs a server-side dry run of the change, and shows what it creates or changes, what the nodes do, and how to undo it. A refusal (your RBAC, an admission webhook, someone else's object in the way) is shown there, with nothing changed. Then **Confirm** runs the steps: check, dry run, change, read back. The commands stay under **Do it yourself instead** for people who prefer the CLI.
 
-<img src="images/status-node-setup-review.png" alt="The review dialog of Add to the nodes' pull secret: what changes, what the nodes do, how to undo it" width="640">
+The review dialog has three parts: what changes, **What the nodes do**, and how to undo it.
 
 ### Self-managed OpenShift: the cluster pull secret
 
@@ -140,9 +137,7 @@ The app never removes or overwrites a setup it did not make. When it adds the en
 
 **Remove from the nodes' pull secret** is offered only for the entry the app added, and takes only that entry out again (it checks its record, the Secret's UID and the token's hash first; anything else is refused, with the command below). After it, images already on a node stay and running pods keep running, but a new nightly, or a pod that starts on a node without its image, fails with an unauthorized pull error.
 
-<img src="images/status-cluster-setup-self-managed.png" alt="Self-managed cluster setup: Add to the nodes' pull secret, Check that the nodes can pull and its result, and Create the image mirror" width="760">
-
-(1) **Add to the nodes' pull secret**; (2) **Check that the nodes can pull**; (3) its result; (4) **Create the image mirror**.
+On a self-managed cluster the **One-time cluster setup** card then offers **Add to the nodes' pull secret**, **Check that the nodes can pull** with its result (for example **The nodes can pull from quay.io/rhoai**), and **Create the image mirror**.
 
 Do it yourself instead (cluster-admin, bash or zsh, `jq` 1.6 or later):
 
@@ -214,8 +209,6 @@ The sources for what the nodes do and what each platform allows: [research/node-
 
 On the **Status** page, the **RHOAI on this cluster** card shows the newest nightly. Click **Install latest nightly**, read the confirmation, and click **Install**:
 
-<img src="images/install.gif" alt="Install latest nightly, confirm, the eight steps run, then Create the DataScienceCluster appears" width="760">
-
 To install another build, use **Choose another build**, or paste an image from [#rhoai-build-notifications](https://redhat.enterprise.slack.com/archives/C07ANR2U56C) under **Update to a specific build**. **Dry run** checks a build and changes nothing.
 
 **What you should see:** eight steps, from **Check prerequisites** to **Wait for the operator install**, each with a green check. The updater waits for OLM to install the operator, or to report a failure, as long as the operation's time allows, and shows what OLM is doing meanwhile. You can leave the page: the operation keeps running, and every page shows a banner until it ends. Then **Update complete** appears, the card says **Up to date**, and a **Create the DataScienceCluster** card appears.
@@ -224,7 +217,7 @@ If a step fails, the card says which one and why. A failed install restores the 
 
 ## 5. Create the DataScienceCluster
 
-<img src="images/status-create-dsc.png" alt="The Create the DataScienceCluster card" width="760">
+The **Create the DataScienceCluster** card appears on **Status**:
 
 1. Click **Create DataScienceCluster**. The dialog shows the YAML of `default-dsc`, with the defaults of the installed operator. Click **Create**.
 
@@ -234,17 +227,15 @@ If a step fails, the card says which one and why. A failed install restores the 
 
 Open **Components**, then **Diagnostics**.
 
-<img src="images/diag-all-passing.png" alt="Diagnostics: All 16 checks passed, no issues detected" width="760">
-
 **What you should see:**
 - **Components:** DataScienceCluster `default-dsc` is **Ready** and every enabled component is ready. Right after step 5, some deployments are still rolling out; refresh after a few minutes.
-- **Diagnostics:** **All 16 checks passed, no issues detected**. If a problem is listed, open it: it shows what was observed and the fix. [RUNBOOK §11.7](../RUNBOOK.md#117-datasciencecluster-not-ready) explains each one.
+- **Diagnostics:** **All N checks passed, no issues detected** (N is the number of health checks). If a problem is listed (as in [this example](images/page-diagnostics.png)), open it: it shows what was observed and the fix. [RUNBOOK §11.7](../RUNBOOK.md#117-datasciencecluster-not-ready) explains each one.
 
 ## 7. Environment: pipelines and S3 storage
 
 Steps 7 to 11 are optional: each sets up one feature to develop against or reproduce an issue with. Open **Environment**. The **Overview** has one row per feature (S3 storage, Pipelines, MLflow, Models, Playground, MaaS) with its state and next step; each feature has its own tab.
 
-<img src="images/environment-overview.png" alt="Overview: each feature with its state and next step" width="760">
+![Environment Overview: each feature with its state and next step, and Clean up everything](images/page-test-resources.png)
 
 Before **Set up**, each tab says what it still needs, and Set up stays disabled with the reason under it: a DataScienceCluster component that is not Managed (with **Open Components**), or no data science project. The tool never creates a project here: create one in the RHOAI dashboard (Projects, then Create project) first. (The one exception is an environment recipe with `project.mode: create`, which creates its project as the dashboard does and removes it in Clean up: [CLUSTER_CHANGES §8](CLUSTER_CHANGES.md#environment-recipes-the-recipe-project-500).) Every Set up asks first, names what it creates, and shows its steps.
 
@@ -259,8 +250,6 @@ Before **Set up**, each tab says what it still needs, and Set up stays disabled 
 
 1. Open the **MLflow** tab, click **Set up** and confirm. MLflow runs in `redhat-ods-applications`, with the MLflow operator's own resource defaults. One someone set up in the dashboard reads **Not managed by this tool** and works the same; the tool does not delete it.
 2. Under **Sample data**, choose a project (its MLflow workspace) and click **Add all**: MLflow's agent and prompt demo, a training experiment with a registered model, an MCP server entry and an agent skill. Each row says where it shows in the dashboard.
-
-<img src="images/environment-mlflow-samples.png" alt="MLflow tab, Sample data for dev-project: Add all and Remove all, and each sample with its state" width="760">
 
 **What you should see:** MLflow **Ready**, with **Open MLflow experiments** (MLflow's pages in the RHOAI dashboard) and the client settings (`MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_TOKEN`, `MLFLOW_WORKSPACE`) under **Use it**. **Remove all** removes the samples the tool added (the agent and prompt demo is removed in the MLflow UI).
 
@@ -280,8 +269,6 @@ Open the **Models** tab and pick a data science project.
 2. Under **Model access**, keep the recommended choice or pick another: the cluster's default inference gateway, MaaS only, another gateway that admits the project, or only inside the cluster. When no gateway fits, the tab offers **Set up the inference gateway** (once per cluster; it runs a cloud load balancer, which costs money while it exists).
 3. If **Needed on the cluster first** lists missing parts (KServe, cert-manager, and Connectivity Link when the model goes through a gateway), click **Set up what Models needs** and confirm with **Install and turn on**.
 4. Click **Set up** and confirm. The first time takes 3 to 5 minutes. Once the model runs, the tool calls it once, as a user would, and reports whether it answers.
-
-<img src="images/environment-models-picker.png" alt="The model picker open: each model with its use case, the CPUs and memory it reserves and its download; Qwen3 is disabled because no worker has room for it now" width="760">
 
 **The runtime image.** A model runs on the vLLM CPU image that the installed RHOAI's CPU preset names. On a nightly build that image is not published yet, so the cluster cannot pull it, and the tool uses the newest released Red Hat vLLM CPU image instead (`registry.redhat.io/rhaii/vllm-cpu-rhel9`, found in Red Hat's container catalog and pinned by digest); the model's details say which image it runs. A released RHOAI, or a cluster with a mirror for the preset's image, uses the preset's own image. `VLLM_CPU_IMAGE` sets an image of your own, for example a mirror on a disconnected cluster.
 
@@ -322,7 +309,7 @@ The **Observability** tab sets up RHOAI's monitoring for the MaaS usage logs and
 
 | Task | Where |
 |---|---|
-| Update to a new nightly | Status → **Update to latest**, or **Update to a specific build** ([what it looks like](images/update.gif)) |
+| Update to a new nightly | Status → **Update to latest**, or **Update to a specific build** |
 | Re-deploy the installed version (same version, fresh pods) | Status → Recovery → **Re-deploy operator** |
 | Switch to stable, another nightly, or an exact older build | Status → Recovery → **Choose a build** (downgrades need a confirmation checkbox) |
 | Test an odh-dashboard PR or main | Dashboard Dev → choose the RHOAI (Konflux) or ODH (OpenShift CI) build → **Deploy PR** or **Deploy latest main**; **Revert to default** when done. The containers card shows each container's commit, how far behind `main` (or the PR) it is, and when a newer build exists |

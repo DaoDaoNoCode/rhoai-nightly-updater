@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# Regenerates every image and GIF under docs/images from the docs mock
-# backend (docs/tools/mock), never from a cluster.
+# Regenerates the docs images under docs/images (the curated set that
+# docs/tools/images.manifest lists) from the docs mock backend
+# (docs/tools/mock), never from a cluster. Run it in the release pass, not
+# on feature branches (AGENTS.md, CONTRIBUTING.md "Documentation images").
 #
-#   ./docs/tools/screenshots.sh            all jobs
-#   ./docs/tools/screenshots.sh status gif-update   only these jobs
+#   ./docs/tools/screenshots.sh            all docs images
+#   ./docs/tools/screenshots.sh status     only these jobs
 #
-# Needs node (22+), playwright-cli, ffmpeg and ImageMagick 7 (magick).
-# SKIP_BUILD=1 reuses frontend/dist; PORT picks the mock's port (18181).
+# Needs node (22+), playwright-cli and ImageMagick 7 (magick).
+# SKIP_BUILD=1 reuses frontend/dist (no capture receipts then, below);
+# PORT picks the mock's port (18181).
 # The images use the Glass contrast mode; CONTRAST=default or
 # CONTRAST=high-contrast captures them in another mode.
 # The themes job (not run by default) captures every page in every color
@@ -20,11 +23,10 @@ PORT=${PORT:-18181}
 SESSION=${SESSION:-docs-screenshots}
 CONTRAST=${CONTRAST:-glass}
 case $CONTRAST in glass | default | high-contrast) ;; *) echo "ERROR: CONTRAST must be glass, default or high-contrast" >&2; exit 1 ;; esac
-ALL_JOBS=(pages status banners signin user components builds dashdev resources diagnostics
-  gif-update gif-install gif-migrate gif-repair gif-diagnostics gif-pr-search)
+ALL_JOBS=(pages status resources)
 if [ $# -gt 0 ]; then JOBS=("$@"); else JOBS=("${ALL_JOBS[@]}"); fi
 
-for tool in node playwright-cli ffmpeg magick curl; do
+for tool in node playwright-cli magick curl; do
   command -v "$tool" >/dev/null 2>&1 || { echo "ERROR: $tool is not installed" >&2; exit 1; }
 done
 
@@ -38,6 +40,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Capture receipts (docs/tools/images.checked, for make docs-stale) name the
+# commit the images show, so they are written only for a build of HEAD made
+# here, with no uncommitted change in the capture inputs from start to end.
+INPUTS=(frontend docs/tools/mock docs/tools/capture.js docs/tools/screenshots.sh
+  ':(exclude,glob)**/*.test.*' ':(exclude)frontend/src/test')
+inputs_state() { git -C "$ROOT" rev-parse HEAD; git -C "$ROOT" status --porcelain -- "${INPUTS[@]}"; }
+no_receipts=
+if [ "${SKIP_BUILD:-}" = 1 ]; then
+  no_receipts="SKIP_BUILD=1 reuses a frontend/dist whose commit cannot be checked"
+elif [ -n "$(git -C "$ROOT" status --porcelain -- "${INPUTS[@]}")" ]; then
+  no_receipts="the capture inputs have uncommitted changes"
+fi
+start_state=$(inputs_state)
+
 if [ "${SKIP_BUILD:-}" != 1 ]; then
   echo "Building the frontend..."
   [ -d "$ROOT/frontend/node_modules" ] || npm --prefix "$ROOT/frontend" ci --no-audit --no-fund >/dev/null
@@ -49,9 +65,12 @@ MOCK_PID=$!
 for _ in $(seq 50); do curl -fsS "http://127.0.0.1:$PORT/__docs/state" >/dev/null 2>&1 && break; sleep 0.2; done
 
 # 1440x900 at 2x: crops stay sharp on high-density screens; full pages are
-# scaled back to 1440 px.
+# scaled back to 1440 px. Without the GPU: with it, Chromium draws the Glass
+# background image (fixed, under a backdrop blur) slightly differently from
+# one frame to the next, so no two runs gave the same bytes.
 cat >"$WORK/cli.config.json" <<'JSON'
-{"browser":{"contextOptions":{"viewport":{"width":1440,"height":900},"deviceScaleFactor":2,
+{"browser":{"launchOptions":{"args":["--disable-gpu"]},
+"contextOptions":{"viewport":{"width":1440,"height":900},"deviceScaleFactor":2,
 "timezoneId":"UTC","locale":"en-US","colorScheme":"light",
 "permissions":["clipboard-read","clipboard-write"]}}}
 JSON
@@ -61,7 +80,7 @@ cd "$WORK"
 playwright-cli -s="$SESSION" open --config="$WORK/cli.config.json" "http://127.0.0.1:$PORT/__docs/state" >/dev/null
 
 RAW="$WORK/raw"
-mkdir -p "$RAW/full" "$RAW/crop" "$RAW/frames" "$RAW/themes"
+mkdir -p "$RAW/full" "$RAW/crop" "$RAW/themes"
 for job in "${JOBS[@]}"; do
   echo "Capturing $job..."
   curl -fsS -X POST "http://127.0.0.1:$PORT/__docs/job?name=$job&out=$RAW&contrast=$CONTRAST" >/dev/null
@@ -102,62 +121,53 @@ for f in "$RAW"/crop/*.png; do
   optimise "$f" "$IMAGES/$(basename "$f")"
 done
 
-# GIFs: each frame file is NNN-<ms>.png; one palette for the whole GIF and
-# no dithering, so the UI does not flicker.
-for dir in "$RAW"/frames/*/; do
-  [ -d "$dir" ] || continue
-  name=$(basename "$dir")
-  list="$WORK/$name.txt"
-  : >"$list"
-  last=
-  for f in "$dir"*.png; do
-    ms=${f##*-}; ms=${ms%.png}
-    printf "file '%s'\nduration %s\n" "$f" "$(awk "BEGIN{print $ms/1000}")" >>"$list"
-    last=$f
-  done
-  [ -n "$last" ] || continue
-  printf "file '%s'\n" "$last" >>"$list"
-  width=${GIF_WIDTH:-860}
-  ffmpeg -v error -y -f concat -safe 0 -i "$list" \
-    -vf "scale=$width:-1:flags=lanczos,palettegen=max_colors=256:stats_mode=full" "$WORK/$name-palette.png"
-  ffmpeg -v error -y -f concat -safe 0 -i "$list" -i "$WORK/$name-palette.png" \
-    -lavfi "scale=$width:-1:flags=lanczos[v];[v][1:v]paletteuse=dither=none:diff_mode=rectangle" \
-    -loop 0 "$IMAGES/$name.gif"
-done
-
-# Chromium's text rendering and the colour reduction shift a few pixels
-# slightly from run to run (by less than 10%). An image with no pixel that
-# differs from the committed one by more than 10% keeps its committed bytes,
-# so a run without a UI change leaves git clean. A real change, even one
-# full stop, moves pixels by far more. KEEP_ALL=1 keeps every new image.
+# On one machine two runs give the same bytes (Chromium without the GPU,
+# fixed clock and data). Another machine or Chromium version can still
+# shift a few pixels slightly (by less than 10%). An image with no pixel
+# that differs from the committed one by more than 10% keeps its committed
+# bytes, so a run without a UI change leaves git clean. A real change, even
+# one full stop, moves pixels by far more. KEEP_ALL=1 keeps every new image.
 while IFS= read -r f; do
   git -C "$ROOT" show "HEAD:$f" >"$WORK/old" 2>/dev/null || continue
   new="$ROOT/$f"
-  if [[ $f == *.gif ]]; then
-    [ "$(magick identify "$WORK/old" | wc -l)" = "$(magick identify "$new" | wc -l)" ] || continue
-    magick "$WORK/old" -coalesce -append "$WORK/old.png"
-    magick "$new" -coalesce -append "$WORK/new.png"
-  else
-    cp "$WORK/old" "$WORK/old.png"; cp "$new" "$WORK/new.png"
-  fi
+  cp "$WORK/old" "$WORK/old.png"; cp "$new" "$WORK/new.png"
   [ "$(magick identify -format '%wx%h' "$WORK/old.png")" = "$(magick identify -format '%wx%h' "$WORK/new.png")" ] || continue
   diff=$(magick compare -fuzz 10% -metric AE "$WORK/old.png" "$WORK/new.png" null: 2>&1 | cut -d' ' -f1 || true)
   if [ -z "${KEEP_ALL:-}" ] && awk "BEGIN{exit !(${diff:-1e9} < 1)}"; then cp "$WORK/old" "$new"; fi
 done < <(git -C "$ROOT" status --porcelain -- docs/images | awk '$1 == "M" {print $2}')
 
-# A contact sheet of the images that changed (GIFs: every frame), to look at
+# The commit each image was captured at, for docs/tools/stale-images.sh: a
+# run that leaves an image's bytes as they were makes no commit of the
+# image, so this line records that it was checked. Commit it with the images.
+CHECKED="$ROOT/docs/tools/images.checked"
+captured=()
+for f in "$RAW"/full/*.png "$RAW"/crop/*.png; do captured+=("$(basename "$f")"); done
+[ -n "$no_receipts" ] || [ "$(inputs_state)" = "$start_state" ] || no_receipts="HEAD or the capture inputs changed during the run"
+if [ ${#captured[@]} -gt 0 ] && [ -n "$no_receipts" ]; then
+  echo "No capture receipts written: $no_receipts. make docs-stale keeps the old receipts;"
+  echo "commit the inputs and run again without SKIP_BUILD to record this capture."
+elif [ ${#captured[@]} -gt 0 ]; then
+  head=$(git -C "$ROOT" rev-parse HEAD)
+  kept=
+  # A full run drops the lines of images it no longer makes.
+  if [ $# -gt 0 ] && [ -f "$CHECKED" ]; then
+    kept=$(awk 'NR == FNR { skip[$1] = 1; next } !/^#/ && NF && !skip[$1]' <(printf '%s\n' "${captured[@]}") "$CHECKED")
+  fi
+  {
+    echo "# Written by docs/tools/screenshots.sh: each docs image and the commit it was last"
+    echo "# captured at (make docs-stale). Commit it with the images; do not edit it by hand."
+    { [ -z "$kept" ] || printf '%s\n' "$kept"; for n in "${captured[@]}"; do echo "$n $head"; done; } | sort
+  } >"$CHECKED"
+fi
+
+# A contact sheet of the images that changed, to look at
 # before committing: a UI change can move content without breaking a locator.
 REVIEW="$ROOT/tmp/docs-review"
 rm -rf "$REVIEW" && mkdir -p "$REVIEW"
 changed=()
 while IFS= read -r f; do changed+=("$ROOT/$f"); done < <(git -C "$ROOT" status --porcelain -- docs/images | awk '$1 != "D" {print $2}')
 if [ ${#changed[@]} -gt 0 ]; then
-  for f in "${changed[@]}"; do
-    case $f in
-      *.gif) magick "$f" -coalesce -resize 600x "$REVIEW/$(basename "$f" .gif)-%02d.png" ;;
-      *) magick "$f" -resize 600x\> "$REVIEW/$(basename "$f")" ;;
-    esac
-  done
+  for f in "${changed[@]}"; do magick "$f" -resize 600x\> "$REVIEW/$(basename "$f")"; done
   # montage needs a font even without labels; index.txt lists the tiles in order.
   font=
   for candidate in /System/Library/Fonts/Supplemental/Arial.ttf /usr/share/fonts/dejavu/DejaVuSans.ttf /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf; do

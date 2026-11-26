@@ -1,0 +1,54 @@
+# The docs images (docs/images) and the sources each one shows. Every PNG
+# in docs/images needs a row here (make docs-check); a new image also needs
+# the owner's OK, and the set stays small (about 15).
+#
+# make docs-stale lists the images whose sources have commits after the
+# image was last captured (docs/tools/stale-images.sh); release-check stops
+# a final release while one is stale. Each row is an image and git
+# pathspecs (a directory covers everything under it); "*" rows apply to
+# every image. Test files never count.
+#
+# image                      sources
+*                            frontend/src/App.tsx frontend/src/theme frontend/src/components/StatusLabel.tsx
+*                            docs/tools/mock/fixtures.mjs docs/tools/mock/scenarios.mjs docs/tools/mock/server.mjs
+*                            docs/tools/capture.js docs/tools/screenshots.sh
+*                            frontend/package.json frontend/package-lock.json frontend/webpack.config.js
+*                            frontend/public frontend/src/index.tsx
+
+page-status.png              frontend/src/pages/StatusPage.tsx frontend/src/components/PageHeader.tsx
+page-status.png              frontend/src/components/StatusCards.tsx frontend/src/components/UpdatePanel.tsx
+page-status.png              frontend/src/components/ActivityLog.tsx frontend/src/components/ReinstallPanel.tsx
+page-status.png              frontend/src/components/PrerequisitesPanel.tsx frontend/src/components/OperatorActions.tsx
+page-components.png          frontend/src/pages/ComponentsPage.tsx frontend/src/components/PageHeader.tsx
+page-components.png          frontend/src/components/dsc frontend/src/components/DeploymentsTable.tsx
+page-build-explorer.png      frontend/src/pages/BuildExplorerPage.tsx frontend/src/components/PageHeader.tsx
+page-build-explorer.png      frontend/src/components/BuildContents.tsx frontend/src/components/ContainsSearchResults.tsx
+page-dashboard-dev.png       frontend/src/pages/DashboardDevPage.tsx frontend/src/components/PageHeader.tsx
+page-dashboard-dev.png       frontend/src/components/DashboardSessionPanel.tsx frontend/src/components/DashboardImages.tsx
+page-test-resources.png      frontend/src/pages/EnvironmentPage.tsx frontend/src/components/PageHeader.tsx
+page-test-resources.png      frontend/src/components/environment/Overview.tsx frontend/src/components/environment/overviewRows.ts
+page-test-resources.png      frontend/src/components/environment/environmentTabs.ts
+page-diagnostics.png         frontend/src/pages/TroubleshootingPage.tsx frontend/src/components/PageHeader.tsx
+page-diagnostics.png         docs/tools/mock/diagnostics
+page-user-status.png         frontend/src/pages/UserStatusPage.tsx frontend/src/components/PageHeader.tsx
+page-user-environment.png    frontend/src/pages/UserEnvironmentPage.tsx frontend/src/components/PageHeader.tsx
+page-user-environment.png    frontend/src/components/environment/UserProjectView.tsx frontend/src/components/environment/projectActions.tsx
+page-user-environment.png    frontend/src/components/environment/PipelineSample.tsx frontend/src/components/environment/samples.tsx
+
+status-cluster-setup.png     frontend/src/components/PrerequisitesPanel.tsx frontend/src/components/PullSecretCard.tsx
+status-cluster-setup.png     frontend/src/components/ImageMirrorSetup.tsx
+
+environment-storage.png      frontend/src/components/environment/StorageTab.tsx frontend/src/components/environment/FeatureLayout.tsx
+environment-storage.png      frontend/src/components/environment/s3KeysText.tsx frontend/src/components/environment/resourceRow.tsx
+environment-pipelines.png    frontend/src/components/environment/PipelinesTab.tsx frontend/src/components/environment/FeatureLayout.tsx
+environment-pipelines.png    frontend/src/components/environment/ProjectSelect.tsx frontend/src/components/environment/Prerequisites.tsx
+environment-pipelines.png    frontend/src/components/environment/resourceRow.tsx
+environment-mlflow.png       frontend/src/components/environment/MLflowTab.tsx frontend/src/components/environment/FeatureLayout.tsx
+environment-mlflow.png       frontend/src/components/environment/Prerequisites.tsx frontend/src/components/environment/resourceRow.tsx
+environment-models.png       frontend/src/components/environment/ModelsTab.tsx frontend/src/components/environment/ModelPart.tsx
+environment-models.png       frontend/src/components/environment/GatewayPart.tsx frontend/src/components/environment/ModelPicker.tsx
+environment-models.png       frontend/src/components/environment/FeatureLayout.tsx frontend/src/components/environment/resourceRow.tsx
+environment-maas.png         frontend/src/components/environment/MaaSTab.tsx frontend/src/components/environment/FeatureLayout.tsx
+environment-maas.png         frontend/src/components/environment/resourceRow.tsx
+environment-playground.png   frontend/src/components/environment/PlaygroundTab.tsx frontend/src/components/environment/FeatureLayout.tsx
+environment-playground.png   frontend/src/components/environment/ProjectSelect.tsx frontend/src/components/environment/resourceRow.tsx

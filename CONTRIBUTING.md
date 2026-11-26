@@ -182,13 +182,30 @@ The Helm chart (`deploy/chart`, [docs/GITOPS.md](docs/GITOPS.md)) renders copies
 
 ## Documentation images
 
-Screenshots and GIFs in `docs/images` come from a mock backend with made-up
-data, never from a cluster (the GitHub mirror is public). After a UI change,
-regenerate them and check the docs:
+`docs/images` holds a small curated set (about 15): the full pages and a
+few Environment and Status crops, light theme only, no callouts, no GIFs.
+They come from a mock backend with made-up data, never from a cluster (the
+GitHub mirror is public). Docs describe everything else in text that quotes
+the UI's own wording.
+
+- **Branches do not regenerate or commit docs images.** Prove a UI change
+  with light and dark playwright screenshots in a scratch directory (paths
+  in your report), reviewed before you call the task done; the `themes` and
+  `*-review` jobs of `make docs-screenshots JOBS=...` write such review
+  images to `tmp/themes`.
+- **The release pass** rebuilds the curated set (`make docs-screenshots`),
+  with a human look at each image that changed, and commits it with
+  `docs/tools/images.checked`. `make docs-stale` lists the images whose
+  sources changed since they were captured; CI runs it as a warning, and
+  `make release-check` (the release guard) stops a final release while one
+  is stale (a pre-release only warns).
+- **A new image** needs a row in `docs/tools/images.manifest` (its source
+  files) and the owner's OK.
 
 ```bash
-make docs-screenshots   # every image and GIF (playwright-cli, ffmpeg, ImageMagick)
-make docs-check         # links, anchors, image paths; every image used
+make docs-screenshots   # the release pass: the curated set (playwright-cli, ImageMagick)
+make docs-stale         # images whose sources changed after they were captured (git only)
+make docs-check         # links, anchors, image paths; every image used and in the manifest
 make docs-fixtures      # after a Diagnostics change: the mock's answers, from the test fakes
 ```
 

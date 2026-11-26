@@ -8,12 +8,7 @@ The RHOAI Nightly Updater is a web app that installs and updates Red Hat OpenShi
 
 Cluster-admins make the changes. Since 5.0.0 everyone RHOAI lets in can sign in too and see what runs: a short Status page, Build Explorer and their own data science projects ([Not a cluster-admin?](#not-a-cluster-admin-what-you-see)).
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/page-status-dark.png">
-    <img src="docs/images/page-status-light.png" alt="The Status page: the installed RHOAI build next to the newest nightly, with Update to latest" width="880">
-  </picture>
-</p>
+![The Status page: the installed RHOAI build next to the newest nightly, with Update to latest](docs/images/page-status.png)
 
 ## Install
 
@@ -34,34 +29,27 @@ The installer prints the app URL when it is done. To check the download, compare
 
 ### Status: what is installed, and Update
 
-<img src="docs/images/status-installed-vs-latest.png" alt="The RHOAI on this cluster card, with callouts" width="760">
+The **RHOAI on this cluster** card (top of the screenshot above):
 
-1. **Installed**: the nightly build the cluster runs (tag, digest, build date, dashboard commit).
-2. **Latest**: the newest build of the same stream on Quay.
-3. The verdict: **Update available**, **Up to date**, **Operator failed** or **No Subscription**.
-4. **Update to latest** installs the newest build. Progress streams step by step; if OLM fails, the previous catalog and Subscription are restored.
+- **Installed**: the nightly build the cluster runs (tag, digest, build date, dashboard commit).
+- **Latest**: the newest build of the same stream on Quay.
+- The verdict: **Update available**, **Up to date**, **Operator failed** or **No Subscription**.
+- **Update to latest** installs the newest build. Progress streams step by step; if OLM fails, the previous catalog and Subscription are restored.
 
 The same page has one-time cluster setup (pull secret, image mirror), **Update to a specific build**, **Recent activity** and **Recovery** (**Re-deploy operator**, **Choose a build**). On self-managed OpenShift the setup is one click each: **Create the image mirror** and **Add to the nodes' pull secret** (with removals), each after a review of exactly what changes and what the nodes do, run with your own permissions; ROSA HCP keeps the `rosa create image-mirror` instructions ([QUICKSTART](docs/QUICKSTART.md#3-one-time-setup-pull-secret-and-image-mirror)).
 
 ### Components: is RHOAI ready?
 
-<img src="docs/images/components-cause.png" alt="A DataScienceCluster that is Not Ready, with the cause of each failing component" width="760">
-
-1. The DataScienceCluster state (**Ready** or **Not Ready**).
-2. For each failing component, the operator's message and a short **Cause**, with a link to the fix on Diagnostics.
+The **DataScienceCluster** card shows its state (**Ready** or **Not Ready**) and, for each failing component, the operator's message and a short **Cause**, with a link to the fix on Diagnostics. The whole page: [screenshot](docs/images/page-components.png).
 
 #### Components and sub-components: change them without the OpenShift console
 
-<img src="docs/images/components-summary-ok.png" alt="The comparison when nothing needs fixing: Nothing to fix compared with the release default, the release default (operator 3.6.0, CSV rhods-operator.3.6.0), all 16 components in the DSC, Missing, Not in the installed CRD and Deploys nothing None, Changed from the default 2; then the first rows of the tree, aigateway and modelsAsAService labelled Changed from the default" width="760">
+When nothing needs fixing, the card reads **Nothing to fix compared with the release default**, as in the [Components screenshot](docs/images/page-components.png). With differences, the summary names each one and offers **Fix**:
 
-With differences, the summary names each one and offers **Fix**:
-
-<img src="docs/images/components-differences.png" alt="The comparison with 6 differences from the release default to fix, with Fix; Show only differences on; the rows that differ with their labels, such as modelsAsAService Changed from the default and Deploys nothing, parent Removed" width="760">
-
-1. The comparison with the release default: the count and paths of each kind of difference, or **None**.
-2. **Fix** sets what is missing to the release default and removes what the CRD does not define.
-3. **Show only differences** keeps the rows that differ, with the rows above them.
-4. Each row's labels; click one for what it means.
+- The comparison with the release default: the count and paths of each kind of difference, or **None**.
+- **Fix** sets what is missing to the release default and removes what the CRD does not define.
+- **Show only differences** keeps the rows that differ, with the rows above them.
+- Each row's labels; click one for what it means.
 
 The tree is read from the installed DataScienceCluster CRD, so it follows whatever the release defines (`dashboard.standard`, `kserve.nim`, `aigateway.modelsAsAService`, ...). Each row shows the value in the DSC (a select limited to the values the CRD accepts), the **release default** (the example the installed operator's CSV ships in `alm-examples`) and what the operator reports.
 
@@ -70,11 +58,11 @@ The tree is read from the installed DataScienceCluster CRD, so it follows whatev
 - **Each row is labelled** with its difference (**Changed from the default**, **Missing — default Managed**, **Not in the installed CRD**, **Deploys nothing — parent Removed**); click a label for what it means and what Fix does. A field the CRD does not define is a row too, under the component it is in. **Show only differences** keeps the rows that differ, with the rows above them for context.
 - **Reset to the release default**: a **soft reset** (recommended) changes in place only what differs, keeping the workbench and AI hub namespaces. A **hard reset** deletes the DSC and creates the release default in its place: every component is torn down and comes back, which can clear stuck deployments. It needs the DSC's name typed, and stops without creating anything if the old DSC is not gone within 10 minutes. Both keep **the components you turned on** (checked by default): what is enabled in your DSC but off in the release default, such as `aigateway` and `aigateway.modelsAsAService` after MaaS setup, stays as it is, with the parents it needs; the dialog names them. Unchecked, the reset applies the pure release default. See [RUNBOOK §11.9](RUNBOOK.md#119-change-or-reset-the-datasciencecluster).
 
-  <img src="docs/images/components-soft-reset.png" alt="Soft reset with Keep the components you turned on (2): aigateway, aigateway.modelsAsAService checked; it sets ray to Managed and workbenchesV2 to Removed, and lists Kept: aigateway, aigateway.modelsAsAService" width="640">
+  In the dialog the option reads **Keep the components you turned on (N)**, with each kept path checked, and the plan lists them under **Kept**.
 
 - **MaaS is never removed from here while it is in use.** A change that would stop `aigateway` or `aigateway.modelsAsAService` (setting either to Removed, a reset without the option above, Diagnostics' disable fix, a repair) is refused while any model is published to MaaS, any MaaSSubscription or MaaSAuthPolicy exists, or this tool's MaaS setup is recorded: without MaaS, every published model and every API key stops working. The message names the models and subscriptions. Remove MaaS on the Environment page's MaaS tab (**Clean up MaaS** unpublishes and removes it in order), or keep `aigateway` Managed. When the tool cannot read those, it refuses too.
 
-  <img src="docs/images/components-soft-reset-maas-in-use.png" alt="The same soft reset unchecked: it would remove aigateway, so This change is not possible now comes first, names the published model dev-project/qwen25-05b-instruct and says to remove MaaS on the MaaS tab or keep aigateway Managed; What a soft reset would do is collapsed; Reset is disabled" width="640">
+  Such a dialog starts with **This change is not possible now**, names the published models, and leaves its button disabled.
 
 Changes are off with the reason when Argo CD or an ACM policy manages the DSC, in the gitops profile, or without cluster-admin.
 
@@ -82,21 +70,16 @@ Below it, the Deployments table lists problems first, with pod details, git prov
 
 ### Build Explorer: which build has my change?
 
-<img src="docs/images/build-explorer-pr-search.gif" alt="Typing #5123 in the build search lists which nightly builds contain that PR" width="760">
-
-Every nightly tag on Quay: filter, see the contents of a build, compare it with the installed one, and search by image, commit SHA, PR number (`#5123`) or PR URL. See [Build Explorer search](#build-explorer-search) for what it can find and how it decides.
+Every nightly tag on Quay: filter, see the contents of a build, compare it with the installed one, and search by image, commit SHA, PR number (`#5123`) or PR URL (the box reads "Image, commit SHA, PR # or PR URL"); the result lists which builds contain it. See [Build Explorer search](#build-explorer-search) for what it can find and how it decides.
 
 ### Dashboard Dev: try an odh-dashboard PR
 
-<img src="docs/images/dashboard-dev-session.png" alt="An active Dashboard Dev session for PR #5123" width="760">
+![Dashboard Dev with an active session for PR #5123, the deploy form and the Dashboard containers card](docs/images/page-dashboard-dev.png)
 
-1. Who deployed which build, and when. Everyone on the cluster sees this dashboard until someone reverts.
-2. **Revert to default** restores the release images.
-
-<img src="docs/images/dashboard-dev-builds.png" alt="The Dashboard containers card: the commit each container runs, how far it is behind the PR, and a newer build of the same tag" width="760">
-
-3. The commit each container runs, when it was built, and how far it is behind upstream `main` (or the PR's latest commit), with a link to the comparison on GitHub.
-4. The tag has moved on to a newer build. **Deploy PR** or **Deploy latest main** again switches to it.
+- **Dashboard Dev session active: PR #5123**: who deployed which build, and when. Everyone on the cluster sees this dashboard until someone reverts.
+- **Revert to default** restores the release images.
+- **Dashboard containers**: the commit each container runs, when it was built, and how far it is behind upstream `main` (or the PR's latest commit, "PR #5123 has 2 newer commits"), with **Compare** on GitHub.
+- **Newer build available**: the tag has moved on to a newer build. **Deploy PR** or **Deploy latest main** again switches to it.
 
 It deploys RHOAI Konflux builds (`odh-pr-<N>`, `odh-stable`) or ODH OpenShift CI builds (`pr-<N>`, `main`). **Deploy latest main** pins the build under its commit tag (`:<commit>@sha256:...`), so the cluster names the commit it runs even after the `main` or `odh-stable` tag has moved on.
 
@@ -104,12 +87,12 @@ It deploys RHOAI Konflux builds (`odh-pr-<N>`, `odh-stable`) or ODH OpenShift CI
 
 One tab per feature after an **Overview**, kept in the address so a link opens the same view (`?tab=storage`, `?tab=pipelines&project=<name>`, `?tab=mlflow`, `?tab=models&project=<name>`).
 
-<img src="docs/images/environment-overview.png" alt="Overview: 3 of 9 ready; S3 storage Ready with Open admin UI; Pipelines Ready in dev-project with Open pipelines and Run a sample pipeline; Workbench Not set up in any project, with Choose a project; MLflow Ready, Not managed by this tool under the label, with Open MLflow experiments and Add sample data; Model registry Not set up, with Set up the model registry; Models and Playground Not set up in any project and Distributed workloads Not set up, each with Choose a project; MaaS Not set up, with Set up MaaS" width="760">
+![Environment Overview: 3 of 9 ready; S3 storage Ready with Open admin UI; Pipelines Ready in dev-project with Open pipelines and Run a sample pipeline; MLflow Ready, Not managed by this tool, with Open MLflow experiments and Add sample data; the other features Not set up, each with its next step; Clean up everything](docs/images/page-test-resources.png)
 
-1. How many features are ready.
-2. Each feature links to its tab (a project-scoped one with its project).
-3. Its state, from the same function as the tab: **Ready**, **Not set up**, **Needs attention**, **Error**, ... Something this tool did not create reads **Ready**, with **Not managed by this tool** under the label: ownership never counts as not ready. A project-scoped feature summarises the projects that have it ("Ready in juntao-test", "Ready in 3 projects", "Error in 1 of 3 projects", "Not set up in any project"); with several, **Show projects** lists each one with its state and a link to the tab there.
-4. The next step, a link in the row: **Open pipelines** in its one ready project (with several ready projects, **Choose a project**: the tab's picker decides; with a problem in one of several, **Open** that project), **Open MLflow experiments** (MLflow's experiments in the dashboard), **Open admin UI** (the S3 storage's), **Set up** (confirm, then a check that every part can be set up, then the missing parts in order, each counted only once it works), **Migrate storage**, **Show issue** (opens the tab at that part; a problem with the S3 storage opens the S3 storage tab, from its row or from Pipelines) or **Choose a project**. A step that cannot run says why under it.
+- How many features are ready ("3 of 9 ready").
+- Each feature links to its tab (a project-scoped one with its project).
+- Its state, from the same function as the tab: **Ready**, **Not set up**, **Needs attention**, **Error**, ... Something this tool did not create reads **Ready**, with **Not managed by this tool** under the label: ownership never counts as not ready. A project-scoped feature summarises the projects that have it ("Ready in juntao-test", "Ready in 3 projects", "Error in 1 of 3 projects", "Not set up in any project"); with several, **Show projects** lists each one with its state and a link to the tab there.
+- The next step, a link in the row: **Open pipelines** in its one ready project (with several ready projects, **Choose a project**: the tab's picker decides; with a problem in one of several, **Open** that project), **Open MLflow experiments** (MLflow's experiments in the dashboard), **Open admin UI** (the S3 storage's), **Set up** (confirm, then a check that every part can be set up, then the missing parts in order, each counted only once it works), **Migrate storage**, **Show issue** (opens the tab at that part; a problem with the S3 storage opens the S3 storage tab, from its row or from Pipelines) or **Choose a project**. A step that cannot run says why under it.
 
 Under the table, **Clean up everything** deletes what this tool created (first the MaaS publications, then the pipeline servers, the S3 storage, MLflow, the model registry, the playgrounds, the models, the inference gateway, and the MaaS platform last) in one confirmed operation, with a checkbox per part.
 
@@ -117,27 +100,20 @@ Under the table, **Clean up everything** deletes what this tool created (first t
 
 The **S3 storage** tab is the cluster's S3 storage (SeaweedFS in namespace `seaweedfs`), so it has no project picker. Every pipeline server this tool sets up keeps its artifacts there, in bucket `pipelines`; other features can use it too.
 
-1. Its state. **Set up S3 storage** sets it up on its own; **Set up Pipelines** sets it up first when it is missing.
-2. Its details inline: the S3 endpoint (`http://seaweedfs-s3.seaweedfs.svc:8333`), the bucket, the region and the pipeline servers that use it.
-3. The S3 access key and secret key are masked: the eye shows one and the copy button copies it; **Copy as environment variables** copies the whole connection (`AWS_ENDPOINT_URL`, the keys, region, bucket) as shell assignments with single-quoted values, to paste into a shell or `source`. The admin UI (user `admin`) has a password of its own, shown the same way. Each is read from the server only then (cluster-admins only), and gone when you hide it or leave the tab.
-4. **Open admin UI**. The menu (⋮) has **Delete S3 storage** (disabled while a pipeline server uses it, saying which) and **Repair** when it applies. Storage from an earlier version shows **Migrate storage** and, later, **Delete old storage** here ([RUNBOOK §10.1](RUNBOOK.md#101-migrate-storage-from-an-earlier-version)).
+- Its state. **Set up S3 storage** sets it up on its own; **Set up Pipelines** sets it up first when it is missing.
+- Its details inline: the S3 endpoint (`http://seaweedfs-s3.seaweedfs.svc:8333`), the bucket, the region and the pipeline servers that use it.
+- The S3 access key and secret key are masked: the eye shows one and the copy button copies it; **Copy as environment variables** copies the whole connection (`AWS_ENDPOINT_URL`, the keys, region, bucket) as shell assignments with single-quoted values, to paste into a shell or `source`. The admin UI (user `admin`) has a password of its own, shown the same way. Each is read from the server only then (cluster-admins only), and gone when you hide it or leave the tab.
+- **Open admin UI**. The menu (⋮) has **Delete S3 storage** (disabled while a pipeline server uses it, saying which) and **Repair** when it applies. Storage from an earlier version shows **Migrate storage** and, later, **Delete old storage** here ([RUNBOOK §10.1](RUNBOOK.md#101-migrate-storage-from-an-earlier-version)).
 
 <img src="docs/images/environment-pipelines.png" alt="Pipelines tab: Ready in dev-project, the project picker, the S3 storage's health with Open S3 storage, and the pipeline server with its dashboard Connection and Open pipelines" width="760">
 
-1. The feature's state in the selected project. Without `?project=` the tab opens the first project with a ready pipeline server.
-2. The project picker (type to filter; each project says what it has).
-3. The S3 storage as Pipelines needs it: its health only, with **Open S3 storage** for its details, keys and changes.
-4. The pipeline server is set up as the dashboard sets one up: named `dspa` (the only name workbench pipelines find), with the dashboard's settings, its S3 Secret owned by it, and a dashboard S3 **Connection** `rhoai-nightly-updater-s3` ("Shared S3 storage (RHOAI Nightly Updater)") that workbenches and model deployments in the project can use. The Connection carries the in-cluster address, so it works from pods only. Deleting the pipeline server, here or in the dashboard, deletes both.
-5. **Open pipelines**. The pipeline server's menu (⋮) has **Delete**, only for what this tool created; a disabled entry says why.
+- The feature's state in the selected project. Without `?project=` the tab opens the first project with a ready pipeline server.
+- The project picker (type to filter; each project says what it has).
+- The S3 storage as Pipelines needs it: its health only, with **Open S3 storage** for its details, keys and changes.
+- The pipeline server is set up as the dashboard sets one up: named `dspa` (the only name workbench pipelines find), with the dashboard's settings, its S3 Secret owned by it, and a dashboard S3 **Connection** `rhoai-nightly-updater-s3` ("Shared S3 storage (RHOAI Nightly Updater)") that workbenches and model deployments in the project can use. The Connection carries the in-cluster address, so it works from pods only. Deleting the pipeline server, here or in the dashboard, deletes both.
+- **Open pipelines**. The pipeline server's menu (⋮) has **Delete**, only for what this tool created; a disabled entry says why.
 
-A pipeline server an earlier version set up is named `nightly-dspa`. It keeps working (the dashboard's pipelines pages, the KFP SDK, Migrate storage, Delete), but workbench pipelines (Elyra) cannot find it, so the tab says so and offers **Recreate with the standard name**:
-
-<img src="docs/images/environment-pipelines-old-name.png" alt="Pipeline server nightly-dspa with the warning Workbench pipelines don't work with this pipeline server and the action Recreate with the standard name" width="760">
-
-1. Why: workbenches look for the pipeline server named `dspa`.
-2. **Recreate with the standard name** asks first; the confirmation says what goes:
-
-<img src="docs/images/environment-pipelines-recreate-dialog.png" alt="Recreate the pipeline server with the standard name: nightly-dspa, its Secret and its database are deleted, then dspa, its Secret and the Connection are created; the run history is lost, the artifacts in the S3 storage stay" width="760">
+A pipeline server an earlier version set up is named `nightly-dspa`. It keeps working (the dashboard's pipelines pages, the KFP SDK, Migrate storage, Delete), but workbench pipelines (Elyra) cannot find it, so the tab warns "Workbench pipelines don't work with this pipeline server" (workbenches look for the pipeline server named `dspa`) and offers **Recreate with the standard name**. It asks first; the confirmation says what goes: `nightly-dspa`, its Secret and its database are deleted, then `dspa`, its Secret and the Connection are created.
 
 Everything the new server needs is checked first; nothing is deleted if it would be refused. Then `nightly-dspa` is deleted with its database (its runs, experiments and imported pipelines are lost; the artifacts already in the S3 storage stay, but no run links to them), and `dspa` is set up in its place.
 
@@ -147,8 +123,8 @@ Storage an earlier version set up in namespace `minio` reads **Migration needed*
 
 <img src="docs/images/environment-mlflow.png" alt="MLflow tab: the MLflow server Ready and Not managed by this tool, with its image, address and Deploy PR" width="760">
 
-1. The **MLflow** tab: the server's health.
-2. Ownership, apart: this one was made in the dashboard. It works (Open MLflow experiments, a PR build, Revert), but the tool does not delete it.
+- The **MLflow** tab: the server's health.
+- Ownership, apart: this one was made in the dashboard. It works (Open MLflow experiments, a PR build, Revert), but the tool does not delete it.
 
 MLflow on RHOAI keeps each data science project apart as a workspace. Once it is ready, **Use it** has a project picker, **Open <project> in MLflow** (the dashboard's MLflow experiments for the project, `/develop-train/mlflow/experiments?workspace=<project>`; MLflow's own `<address>/#/experiments?workspace=<project>` only when the dashboard's address is not known), and the client settings to copy (`MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_TOKEN=$(oc whoami -t)`, `MLFLOW_WORKSPACE=<project>`). Deploying an opendatahub-io/mlflow PR image is under **Test an MLflow PR build**.
 
@@ -177,18 +153,15 @@ Every chat model runs with `--enable-force-include-usage`, so vLLM reports token
 
 <img src="docs/images/environment-models.png" alt="Models tab: Ready in dev-project; the model picker with Qwen3 1.7B (CPU, tool calling) chosen; the inference gateway Ready with its external address, DNS, authentication and the projects it allows; Qwen3 Ready with its use case, resources, source, vLLM options, address, runtime image, no fitting hardware profile and its token authentication" width="760">
 
-1. The feature's state in the selected project, for the chosen model.
-2. The **model picker**: which catalog model the tab shows, sets up and deletes (the address keeps it as `model=<name>`).
-3. The **inference gateway**, shared by the cluster, with its own **Set up the inference gateway**: a front door at `https://inference.<apps domain>` that checks each caller's OpenShift token. A model does not need it (see **How it is reached** below); a model setup never creates it. It runs on a cloud load balancer, which costs money while it exists. It needs a cluster that gives a LoadBalancer Service an address (a cloud cluster such as ROSA, or MetalLB): setup fails when the gateway gets no address within 2 minutes. When OpenShift does not publish its hostname in DNS (no DNS zone in the cluster's DNS configuration, or DNS managed elsewhere), setup succeeds with a warning that says what to check. An OpenShift Route in front of a ClusterIP gateway (the MaaS docs' `INGRESS_MODE=ocproute`, odh-gitops' `openshiftRoute`) is not supported by this tool yet. It accepts models only from the projects it lists by name (**Projects allowed on the gateway**), as RHOAI documents it; a model set up through it adds its project, and deleting the project's last model on it takes the project off again. Projects on the list that no model uses are named with **Remove** ("The gateway accepts projects that don't use it"). A project on the list that no longer exists is not something to attend to: one this tool added goes off the list by itself at the next Models change or Clean up, and until then a plain line says so ("Project X no longer exists; it is removed from the gateway at the next Models change") with a **Remove** that runs at once, with your sign-in. One that RHOAI's installation (or an admin) made reads **Not managed by this tool** and is used as it is.
-4. The chosen **model** in the project: what it is, what it is for, what it reserves, where it comes from and its vLLM options. **Open <project> in the dashboard** shows it with the project's deployments, and Gen AI studio offers it in the playground.
-5. Its address, which copies with one click. The runtime image below it: on a nightly build the preset's image is not published yet, so the newest released Red Hat image is used (pinned by digest); `VLLM_CPU_IMAGE` overrides it.
-6. The hardware profile the dashboard shows. No profile fits Qwen3 on a default cluster, so the dashboard shows "No hardware profile" (and "Unknown" in its details); the model runs as set up.
-7. Token authentication: the model's own ServiceAccount and token Secret, as the dashboard makes them. The dashboard lists that token for the model.
+- The feature's state in the selected project, for the chosen model.
+- The **model picker**: which catalog model the tab shows, sets up and deletes (the address keeps it as `model=<name>`).
+- The **inference gateway**, shared by the cluster, with its own **Set up the inference gateway**: a front door at `https://inference.<apps domain>` that checks each caller's OpenShift token. A model does not need it (see **How it is reached** below); a model setup never creates it. It runs on a cloud load balancer, which costs money while it exists. It needs a cluster that gives a LoadBalancer Service an address (a cloud cluster such as ROSA, or MetalLB): setup fails when the gateway gets no address within 2 minutes. When OpenShift does not publish its hostname in DNS (no DNS zone in the cluster's DNS configuration, or DNS managed elsewhere), setup succeeds with a warning that says what to check. An OpenShift Route in front of a ClusterIP gateway (the MaaS docs' `INGRESS_MODE=ocproute`, odh-gitops' `openshiftRoute`) is not supported by this tool yet. It accepts models only from the projects it lists by name (**Projects allowed on the gateway**), as RHOAI documents it; a model set up through it adds its project, and deleting the project's last model on it takes the project off again. Projects on the list that no model uses are named with **Remove** ("The gateway accepts projects that don't use it"). A project on the list that no longer exists is not something to attend to: one this tool added goes off the list by itself at the next Models change or Clean up, and until then a plain line says so ("Project X no longer exists; it is removed from the gateway at the next Models change") with a **Remove** that runs at once, with your sign-in. One that RHOAI's installation (or an admin) made reads **Not managed by this tool** and is used as it is.
+- The chosen **model** in the project: what it is, what it is for, what it reserves, where it comes from and its vLLM options. **Open <project> in the dashboard** shows it with the project's deployments, and Gen AI studio offers it in the playground.
+- Its address, which copies with one click. The runtime image below it: on a nightly build the preset's image is not published yet, so the newest released Red Hat image is used (pinned by digest); `VLLM_CPU_IMAGE` overrides it.
+- The hardware profile the dashboard shows. No profile fits Qwen3 on a default cluster, so the dashboard shows "No hardware profile" (and "Unknown" in its details); the model runs as set up.
+- Token authentication: the model's own ServiceAccount and token Secret, as the dashboard makes them. The dashboard lists that token for the model.
 
-<img src="docs/images/environment-models-picker.png" alt="The model picker open: each model with its use case, the CPUs and memory it reserves and its download; Qwen3 is disabled because no worker has room for it now" width="760">
-
-1. Each option says what the model is and what it is for, what it reserves, how much is downloaded, and its state in the project.
-2. A model no worker has room for now is disabled, and says why. One the project already has stays selectable.
+In the model picker ("Models this tool can set up"), each option says what the model is and what it is for, what it reserves, how much is downloaded, and its state in the project. A model no worker has room for now is disabled, and says why. One the project already has stays selectable.
 
 Each model also asks for node disk of about 1.5 times its download (KServe downloads it into an emptyDir by default), and the setup warns when the project's ResourceQuota has no room for it. Qwen3 fits no hardware profile on a default cluster: the dashboard shows "No hardware profile" for it, and the tab says so.
 
@@ -205,16 +178,18 @@ Each model also asks for node disk of about 1.5 times its download (KServe downl
 
 An unavailable choice says why under it, with a link to fix it where there is one (set up the inference gateway, the MaaS tab). When nothing fits, the tab recommends setting up the inference gateway. **Set up** then creates the chosen model in one operation and waits until it runs, typically 3 to 5 minutes the first time. A failing image pull is waited on (2 minutes, 8 on a node that joined minutes ago, whose pull credentials can arrive late) before the setup says what to check, also when the 10-minute ready wait ends first. Then **Can it be called?**: the tool sends the model one minimal request the way it is reached, with the model's own token, and reports whether it answers; a failure fails the setup (the model stays) and names the problem (a 404 from vLLM means the request's `model` is not the served name; a 404 without a body means the gateway did not route the request to the model yet; 401, 403, 5xx, no answer). Through a gateway it then sends the same request without a token: the gateway must refuse it, and an answer fails the check as **Answers without a token** (the gateway does not check who calls). A model that cannot be called, or answers without a token, **Needs attention** on its card. **Check again** on the model repeats it in place (it changes nothing, so it asks nothing). With the model it makes the dashboard's token authentication, as "Require token authentication" does: ServiceAccount `<model>-sa`, which may only `get` the model, its Role and RoleBinding, and token Secret `default-name-<model>-sa`, all owned by the model. The dashboard then lists that token for the model, and its Edit keeps authentication on. Once ready, **Use it** has commands that read that token (`oc get secret default-name-<model>-sa ... | base64 -d`) and call the model: `/v1/chat/completions` for a chat model, `/v1/embeddings` for the embedding model.
 
-<img src="docs/images/environment-models-use-qwen3.png" alt="Use it for Qwen3: a chat request, a tool-calling request with a tools list, the note that requests longer than about a minute must stream, and a streamed request that turns thinking on with chat_template_kwargs enable_thinking true" width="760">
+For Qwen3, **Use it** also has a **Tool calling** and a **Reasoning** request:
 
-1. Qwen3 calls tools: describe them in the request's `tools`, and the answer has `tool_calls` when one fits.
-2. Its thinking is off by default; `"chat_template_kwargs": {"enable_thinking": true}` turns it on for one request. That command streams (`"stream": true`, `curl -N`): thinking on CPU can take over a minute, and the cloud load balancer closes a connection that sends nothing for 60 seconds (the AWS default).
+- Qwen3 calls tools: describe them in the request's `tools`, and the answer has `tool_calls` when one fits.
+- Its thinking is off by default; `"chat_template_kwargs": {"enable_thinking": true}` turns it on for one request. That command streams (`"stream": true`, `curl -N`): thinking on CPU can take over a minute, and the cloud load balancer closes a connection that sends nothing for 60 seconds (the AWS default).
 
-<img src="docs/images/environment-models-not-allowed.png" alt="Inference gateway part: fraud-detection/fraud-assistant can't be reached because its project isn't allowed on the inference gateway, with Allow fraud-detection; Projects allowed on the gateway lists openshift-ingress, a-test-project, dev-project and llm-eval" width="760">
+A model deployed elsewhere (in the dashboard, say) in a project the gateway does not list:
 
-1. A model deployed elsewhere (in the dashboard, say) in a project the gateway does not list: its route is rejected, so it never becomes ready. The Overview's Models row says so too.
-2. **Allow <project>** adds the project to the gateway's list; the projects already on it stay. For a gateway this tool did not create, the tab gives RHOAI's step for a cluster admin instead.
-3. The projects the gateway allows. Deleting a project's last model takes the project off the list (it stays while another model there uses the gateway); a project that was deleted leaves it at the next Models change, and **Remove from the list** does it by hand.
+- Its route is rejected, so it never becomes ready. The inference gateway part says "<project>/<model> can't be reached: its project isn't allowed on the inference gateway", and the Overview's Models row says so too.
+- **Allow <project>** adds the project to the gateway's list; the projects already on it stay. For a gateway this tool did not create, the tab gives RHOAI's step for a cluster admin instead.
+- **Projects allowed on the gateway** lists them. Deleting a project's last model takes the project off the list (it stays while another model there uses the gateway); a project that was deleted leaves it at the next Models change, and **Remove from the list** does it by hand.
+
+On a nightly cluster whose preset image is missing from the registry, the model reads **Error** with "The cluster preset's image is not published yet", and **Use the newest released Red Hat image** changes only the model's image.
 
 Each part's menu has **Delete**, for the chosen model only; the gateway stays while a model uses it. **Clean up Models** deletes every model of this tool in the projects you choose, then the gateway. Troubleshooting: [RUNBOOK §10.2](RUNBOOK.md#102-models-the-inference-gateway-and-cpu-models).
 
@@ -244,22 +219,17 @@ The Playground tab sets up the RHOAI dashboard's Gen AI playground, a chat page 
 
 <img src="docs/images/environment-playground.png" alt="Playground tab: Ready in dev-project; the project's models in a table, with their type, where each runs and whether the playground uses it; the playground Ready with Open the playground" width="760">
 
-1. The feature's state in the selected project.
-2. **Models**: the project's ready chat models, and this tool's embedding model, with their type, where each runs and whether the playground uses it. The playground needs a chat model: when there is none, **Set up a model on the Models tab**.
-3. **Playground**: its state as the dashboard reports it, and **Open the playground** (Gen AI studio, then Playground, then the project). One someone set up in the dashboard reads **Not managed by this tool**: open it, but this tool does not delete it.
+- The feature's state in the selected project.
+- **Models**: the project's ready chat models, and this tool's embedding model, with their type, where each runs and whether the playground uses it. The playground needs a chat model: when there is none, **Set up a model on the Models tab**.
+- **Playground**: its state as the dashboard reports it, and **Open the playground** (Gen AI studio, then Playground, then the project). One someone set up in the dashboard reads **Not managed by this tool**: open it, but this tool does not delete it.
 
-<img src="docs/images/environment-playground-setup.png" alt="Before Set up: the project's own chat model and this tool's embedding model (768 dimensions) are chosen, Models as a Service models are listed but not chosen (they need a subscription), and Set up the playground in dev-project" width="760">
+Before **Set up the playground in <project>**:
 
-1. Before Set up, the models are rows you choose: the project's own ready models are chosen, as in the dashboard. This tool's Granite embedding model goes in as an embedding model of 768 dimensions, for searching your documents. An embedding model this tool did not set up is not added (its dimension is not known): the tab says to add it in the dashboard's Gen AI studio, choosing **Embedding** and entering its dimension.
-2. Models as a Service models are listed but not chosen: choose one to add it. It answers only with a Models as a Service subscription to it. Since 4.0.0 Set up runs with your own sign-in, so a chosen MaaS model is added as you, not with the tool's credentials (3.0.1 left them out for that reason).
-3. **Set up** runs it.
+- The models are rows you choose: the project's own ready models are chosen, as in the dashboard. This tool's Granite embedding model goes in as an embedding model of 768 dimensions, for searching your documents. An embedding model this tool did not set up is not added (its dimension is not known): the tab says to add it in the dashboard's Gen AI studio, choosing **Embedding** and entering its dimension.
+- Models as a Service models are listed but not chosen ("Not used unless you choose it"): choose one to add it. It answers only with a Models as a Service subscription to it. Since 4.0.0 Set up runs with your own sign-in, so a chosen MaaS model is added as you, not with the tool's credentials (3.0.1 left them out for that reason).
+- **Set up** runs it.
 
 **Set up** asks the dashboard itself to create the playground, as its Gen AI studio does, with the models you choose, and waits until it is ready, typically 1 to 2 minutes. **Use it** has a chat request to run from a terminal with your own `oc whoami -t` token. **Delete** (in the part's menu) asks the dashboard to delete it, with its chats and documents; the models stay. Troubleshooting: [RUNBOOK §10.3](RUNBOOK.md#103-playground-the-dashboards-gen-ai-playground).
-
-<img src="docs/images/environment-models-image.png" alt="Model Error: the cluster preset's image is not published yet, with Use the newest released Red Hat image" width="760">
-
-1. On a nightly cluster whose preset image is missing from the registry, the model says so in plain words.
-2. **Use the newest released Red Hat image** changes only the model's image.
 
 #### MaaS: Models as a Service
 
@@ -267,9 +237,9 @@ The MaaS tab sets up the cluster's Models as a Service platform the way the [Maa
 
 <img src="docs/images/environment-maas.png" alt="MaaS tab: Ready, 1 model published; the platform's parts in setup order with their health (Connectivity Link, Kuadrant and CloudNativePG not managed by this tool), and the published models with their limit per user, Change limit and Unpublish" width="760">
 
-1. **Database**: MaaS keeps its API keys in PostgreSQL, which the MaaS docs leave to you ("customer-provided"), so Set up asks. **Development database** (the default) is exactly the docs' `scripts/setup-database.sh`: one pod without storage, nothing else installed, but API keys are lost whenever its pod restarts (the dialog warns; the tab then says to restart maas-api). The tool never reads or changes its Secret `postgres-creds`: it records the UID when it creates it and deletes only that one. **Persistent development database (CloudNativePG)** is this tool's own option, in neither the MaaS nor the RHOAI docs: it installs the CloudNativePG operator from `certified-operators` and keeps keys on a 1 GiB volume. **Your PostgreSQL** is for anything whose keys must last: you enter its connection URL, which goes only into Secret `maas-db-config` and is never shown again or logged; the tool never touches the database. A `maas-db-config` someone else made is used as it is. **Change database** switches between them, from a database that runs (every API key is lost; refused while others use MaaS), and is also how your PostgreSQL's URL changes.
-2. **Authorino TLS**: Connectivity Link's Authorino must serve TLS and trust the cluster's service CA. Set up (or the part's **Configure Authorino TLS**) applies the docs' `setup-authorino-tls.sh` steps; **Do it from the CLI instead** shows the same commands.
-3. **Publish** / **Unpublish** per model of this tool. Publish asks who can use the published models (everyone signed in, or groups and users exactly as your identity provider names them, OIDC groups such as `/admins` included; a group with no OpenShift Group is a warning, in the dialog as you type and on the tab with the commands that create it; set with the first model, then **Change who can use them**) and the model's token limit for each user: the docs' premium example (100,000 a day, the default) or free example (100 a minute), unlimited where the cluster's MaaS offers it (read from its MaaSSubscription CRD; usage still counted; never faked with a huge number), or your own token rate limits. The table shows each limit, with **Change limit**; API keys keep working across both changes. A published model's address moves to the MaaS gateway until it is unpublished, and, as the dashboard's MaaS option does, it leaves Gen AI studio's AI assets (its genai label and use-case annotation are removed and put back on Unpublish), so the studio lists it once, through MaaS. Its MaaSModelRef is owned by the model and shows the catalog's name.
+- **Database**: MaaS keeps its API keys in PostgreSQL, which the MaaS docs leave to you ("customer-provided"), so Set up asks. **Development database** (the default) is exactly the docs' `scripts/setup-database.sh`: one pod without storage, nothing else installed, but API keys are lost whenever its pod restarts (the dialog warns; the tab then says to restart maas-api). The tool never reads or changes its Secret `postgres-creds`: it records the UID when it creates it and deletes only that one. **Persistent development database (CloudNativePG)** is this tool's own option, in neither the MaaS nor the RHOAI docs: it installs the CloudNativePG operator from `certified-operators` and keeps keys on a 1 GiB volume. **Your PostgreSQL** is for anything whose keys must last: you enter its connection URL, which goes only into Secret `maas-db-config` and is never shown again or logged; the tool never touches the database. A `maas-db-config` someone else made is used as it is. **Change database** switches between them, from a database that runs (every API key is lost; refused while others use MaaS), and is also how your PostgreSQL's URL changes.
+- **Authorino TLS**: Connectivity Link's Authorino must serve TLS and trust the cluster's service CA. Set up (or the part's **Configure Authorino TLS**) applies the docs' `setup-authorino-tls.sh` steps; **Do it from the CLI instead** shows the same commands.
+- **Publish** / **Unpublish** per model of this tool. Publish asks who can use the published models (everyone signed in, or groups and users exactly as your identity provider names them, OIDC groups such as `/admins` included; a group with no OpenShift Group is a warning, in the dialog as you type and on the tab with the commands that create it; set with the first model, then **Change who can use them**) and the model's token limit for each user: the docs' premium example (100,000 a day, the default) or free example (100 a minute), unlimited where the cluster's MaaS offers it (read from its MaaSSubscription CRD; usage still counted; never faked with a huge number), or your own token rate limits. The table shows each limit, with **Change limit**; API keys keep working across both changes. A published model's address moves to the MaaS gateway until it is unpublished, and, as the dashboard's MaaS option does, it leaves Gen AI studio's AI assets (its genai label and use-case annotation are removed and put back on Unpublish), so the studio lists it once, through MaaS. Its MaaSModelRef is owned by the model and shows the catalog's name.
 
 **Set up** does every step of the docs that is not done yet, in their order, after one confirmation that lists each change: Red Hat Connectivity Link from `redhat-operators` on the channel that meets the docs' minimum, and its Kuadrant instance; the AI gateway's infrastructure namespace; the database you choose (and the CloudNativePG operator only if you choose it); Gateway `maas-default-gateway` with an external load balancer at `maas.<apps domain>` (setup stops there when the cluster gives it no load balancer address, and warns when its hostname is not published in DNS; an OpenShift Route in front of a ClusterIP gateway (the MaaS docs' `INGRESS_MODE=ocproute`, odh-gitops' `openshiftRoute`) is not supported by this tool yet); Authorino TLS; then `aigateway` and MaaS turned on in the DataScienceCluster (the previous values are recorded); then it waits for maas-api and the default tenant. On a cluster without any of it this takes about 10 minutes; if a step fails, Set up again continues from there. What exists already is used as it is. Parts offer their own fixes: **Upgrade Connectivity Link** (below the docs' 1.5, along the path OLM offers, then Authorino TLS again), **Raise the memory limit** (only after the Kuadrant operator was OOMKilled), **Remove the old tier policies** (left by a tier-based MaaS). Every part has **Do it from the CLI instead**. **Use it** has the docs' commands to get a key (shown once), list the models and chat, with your own `oc whoami -t` token, and a link to the dashboard's MaaS pages. **Clean up MaaS** unpublishes, puts the DataScienceCluster back to what it was, then deletes the gateway, the database and the namespace it created (only when nothing else is in it); GatewayClass `openshift-default`, Connectivity Link with its Kuadrant instance and Authorino TLS, CloudNativePG, and what RHOAI's operator made stay, also when this tool installed them: other RHOAI features use them. Troubleshooting: [RUNBOOK §10.4](RUNBOOK.md#104-maas-models-as-a-service).
 
@@ -288,20 +258,20 @@ Cost, shown before Set up: about 51Gi of disks in 7 PVCs and about 25 pods (meas
 
 Once MLflow or a pipeline server works, one click shows it working, with no code.
 
-<img src="docs/images/environment-mlflow-samples.png" alt="MLflow tab, Sample data for dev-project: Add all and Remove all; the agent and prompt demo Added with Regenerate; the training sample Partly added with Add and Remove; the MCP server Not managed by this tool; the agent skill Not available" width="760">
+The MLflow tab's **Sample data**:
 
-1. **Add all** / **Remove all**: one confirmed operation for every sample that can be added or removed (the updater allows one samples operation per user every 30 seconds).
-2. Each sample in the chosen project (MLflow workspace) says what you then see, and where in the dashboard. **Partly added** names what is missing; **Removed** means deleted in MLflow (Add restores it); **Not available** means this MLflow has no such API (skills on older releases).
-3. The **agent and prompt demo** is MLflow's own demo. It has **Regenerate**, but no Remove: the updater holds no right to delete MLflow data it did not name, so remove it in the MLflow UI. Clean up leaves it in place. The updater creates the `MLflow Demo` experiment itself, tagged as its own, and never runs the generator on one it did not create (one made with the MLflow UI's demo button, for example): the generator deletes traces in that experiment whoever logged them. Such a demo shows as not managed by this tool.
-4. Something of a sample's name that this tool did not create is **Not managed by this tool** and left alone.
+- **Add all** / **Remove all**: one confirmed operation for every sample that can be added or removed (the updater allows one samples operation per user every 30 seconds).
+- Each sample in the chosen project (MLflow workspace) says what you then see, and where in the dashboard. **Partly added** names what is missing; **Removed** means deleted in MLflow (Add restores it); **Not available** means this MLflow has no such API (skills on older releases).
+- The **agent and prompt demo** is MLflow's own demo. It has **Regenerate**, but no Remove: the updater holds no right to delete MLflow data it did not name, so remove it in the MLflow UI. Clean up leaves it in place. The updater creates the `MLflow Demo` experiment itself, tagged as its own, and never runs the generator on one it did not create (one made with the MLflow UI's demo button, for example): the generator deletes traces in that experiment whoever logged them. Such a demo shows as not managed by this tool.
+- Something of a sample's name that this tool did not create is **Not managed by this tool** and left alone.
 
 The other samples are a training experiment with three runs and a registered model (`champion` alias), an MCP server entry (DeepWiki's public server; the Gen AI playground needs internet access to call it) and an agent skill. Everything the tool adds is tagged `rhoai-nightly-updater.sample`, and Remove deletes only that. Readers see every action disabled with the reason; without a working MLflow the section links to Set up.
 
-<img src="docs/images/environment-pipeline-sample.png" alt="Pipelines tab, Run a sample pipeline in dev-project: Download rhoai-nightly-sample.yaml, Open pipelines in dev-project, and the commands that make a 15-minute token for the pipeline API, upload it and start a run" width="760">
+The Pipelines tab's **Run a sample pipeline** (also on a user's Environment page, [screenshot](docs/images/page-user-environment.png)):
 
-1. **Download rhoai-nightly-sample.yaml**: a two-step pipeline (write a small file to the S3 storage, read it back). The image is UBI 9 minimal, pinned by digest; on a disconnected cluster, mirror it or set `SAMPLE_PIPELINE_IMAGE`. **Show the pipeline YAML** shows it with a copy button.
-2. **Open pipelines in dev-project**: choose Import pipeline and the file, then Create run.
-3. Or copy the commands (as an admin of the project): they make ServiceAccount `pipeline-api` with a Role that may only use this pipeline server's API (`datasciencepipelinesapplications/api`, `get` `create`, the check its kube-rbac-proxy makes) and a token for it that expires in 15 minutes, then `curl` the pipeline server's API (upload, then start a run). They need `jq`. Your own OpenShift token is not sent there: whoever can edit the project controls what answers at that address. `oc delete rolebinding/pipeline-api role/pipeline-api serviceaccount/pipeline-api -n <project>` removes them.
+- **Download rhoai-nightly-sample.yaml**: a two-step pipeline (write a small file to the S3 storage, read it back). The image is UBI 9 minimal, pinned by digest; on a disconnected cluster, mirror it or set `SAMPLE_PIPELINE_IMAGE`. **Show the pipeline YAML** shows it with a copy button.
+- **Open pipelines in dev-project**: choose Import pipeline and the file, then Create run.
+- Or copy the commands (as an admin of the project): they make ServiceAccount `pipeline-api` with a Role that may only use this pipeline server's API (`datasciencepipelinesapplications/api`, `get` `create`, the check its kube-rbac-proxy makes) and a token for it that expires in 15 minutes, then `curl` the pipeline server's API (upload, then start a run). They need `jq`. Your own OpenShift token is not sent there: whoever can edit the project controls what answers at that address. `oc delete rolebinding/pipeline-api role/pipeline-api serviceaccount/pipeline-api -n <project>` removes them.
 
 You run the sample yourself: the updater never calls a pipeline server's API, because that API is a Service in your project and the updater's token must not reach it ([SECURITY.md](SECURITY.md#the-sample-pipelines-token)). It works on any ready pipeline server, the dashboard's too.
 
@@ -313,7 +283,7 @@ Every setup has its removal on the same tab: **Delete** in the part's menu for t
 
 ### Diagnostics: what is wrong, and how to fix it
 
-<img src="docs/images/diagnostics-copy-command.gif" alt="Opening a Diagnostics problem, showing its command and copying it" width="760">
+![Diagnostics: 3 problems need attention and 1 informational, each a collapsed problem with its severity, then the health checks](docs/images/page-diagnostics.png)
 
 Diagnostics scans on load and only reads the cluster. Each problem shows what was **Observed**, the **Fix**, and a **Command** you copy and run yourself. A few problems have a **Fix** button, which asks for confirmation first.
 
@@ -321,47 +291,34 @@ Diagnostics scans on load and only reads the cluster. Each problem shows what wa
 
 Since 5.0.0 whoever RHOAI lets in can sign in: anyone who may `get` `auths.services.platform.opendatahub.io`, which RHOAI grants to the allowed groups of its Auth CR (by default every OpenShift user; without RHOAI, only cluster-admins). Cluster-admins see everything above. Everyone else sees three pages, and changes only what their role in a project allows (below):
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/page-user-status-dark.png">
-    <img src="docs/images/page-user-status-light.png" alt="Status for a user who is not a cluster-admin: the updater version; RHOAI operator Succeeded, version 3.6.0, channel stable-3.x; the installed nightly rhoai-3.6 with A newer rhoai-3.6 build exists; the DataScienceCluster Ready with each component's management state and Ready" width="880">
-  </picture>
-</p>
+![Status for a user who is not a cluster-admin: the updater version; RHOAI operator Succeeded, version 3.6.0, channel stable-3.x; the installed nightly rhoai-3.6 with A newer rhoai-3.6 build exists; the DataScienceCluster Ready with each component's management state and Ready](docs/images/page-user-status.png)
 
 - **Status**: RHOAI's version, channel and phase, the nightly build the cluster runs and whether a newer one exists, and the DataScienceCluster with each component. No update, activity log or cluster setup.
 - **Build Explorer**: as above, without the comparison with the installed build.
-- **Environment**: their own data science projects only (the ones the projects API lists for them), read with their own permissions: the pipeline server, models, workbench, playground and MLflow sample data of the project they pick, and the sample pipeline. A project's admins and editors can set up, start, stop and delete the workbench, set up and delete the playground, and add and remove the MLflow sample data there: each action runs with their own permissions after the updater checked that their role in the project allows every request it makes, and a button they may not use says why. Pipeline servers, models and the shared parts (S3 storage, the inference gateway, MaaS) stay a cluster-admin's. With no projects, the page says to create one in the RHOAI dashboard or to ask a project admin.
-- Components, Dashboard Dev and Diagnostics are not in the navigation; a direct link says **Only cluster-admins can see this page**.
-- A running cluster operation shows as a banner with its start time, never who started it or what it is:
+- **Environment**: their own data science projects only (the ones the projects API lists for them), read with their own permissions: the pipeline server, models, workbench, playground and MLflow sample data of the project they pick, and the sample pipeline. A project's admins and editors can set up, start, stop and delete the workbench, set up and delete the playground, and add and remove the MLflow sample data there: each action runs with their own permissions after the updater checked that their role in the project allows every request it makes, and a button they may not use says why. Pipeline servers, models and the shared parts (S3 storage, the inference gateway, MaaS) stay a cluster-admin's. With no projects, the page reads **You have no data science projects** and says to create one in the RHOAI dashboard or to ask a project admin. [Screenshot](docs/images/page-user-environment.png) of a user's project.
+- Components, Dashboard Dev and Diagnostics are not in the navigation; a direct link says **Only cluster-admins can see this page**, with **Go to Status**.
+- A running cluster operation shows as a banner with its start time, never who started it or what it is: "A cluster operation is running since 14:26 UTC. Project actions can start when it ends."
 
-  <img src="docs/images/banner-user-update-running.png" alt="The banner a user who is not a cluster-admin sees: A cluster operation is running since 14:26. Project actions can start when it ends." width="760">
+- Their own running project action shows with **Cancel** when it can be cancelled ("Your action (Set up the workbench) in project dev-project is running since 14:28."); another person's action in one of their projects shows with its label and project, never who runs it. Actions in projects that are not theirs do not show.
 
-- Their own running project action shows with **Cancel** when it can be cancelled; another person's action in one of their projects shows with its label and project, never who runs it. Actions in projects that are not theirs do not show:
-
-  <img src="docs/images/banner-user-project-actions.png" alt="Two banners: Your action (Set up the workbench) in project dev-project is running since 14:28., with Cancel; An action (Set up the playground) is running in project llm-eval since 14:24." width="760">
-
-  Cancel asks first and says what the action leaves. It is a request: the action stops before its next step and keeps what it made by then as its own failure there would; one that finishes first is recorded as done:
-
-  <img src="docs/images/dialog-cancel-project-action.png" alt="The Cancel the action dialog: Set up the workbench in project dev-project, what a cancel leaves, and the buttons Cancel action and Keep it running" width="560">
+  Cancel asks first and says what the action leaves, with **Cancel action** and **Keep it running**. It is a request: the action stops before its next step and keeps what it made by then as its own failure there would; one that finishes first is recorded as done.
 
 Which token each read uses, and the summary's exact fields: [SECURITY.md, Per-user views](SECURITY.md#per-user-views-500); what a project action checks: [SECURITY.md, Project actions for non-admins](SECURITY.md#project-actions-for-non-admins-500).
 
 <details>
-<summary><b>All pages, full size (light and dark)</b></summary>
+<summary><b>All pages, full size</b></summary>
 
 | Page | Screenshot |
 |---|---|
-| Components | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-components-dark.png"><img src="docs/images/page-components-light.png" alt="Components page" width="640"></picture> |
-| Build Explorer | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-build-explorer-dark.png"><img src="docs/images/page-build-explorer-light.png" alt="Build Explorer page" width="640"></picture> |
-| Dashboard Dev | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-dashboard-dev-dark.png"><img src="docs/images/page-dashboard-dev-light.png" alt="Dashboard Dev page" width="640"></picture> |
-| Environment | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-test-resources-dark.png"><img src="docs/images/page-test-resources-light.png" alt="Environment page" width="640"></picture> |
-| Diagnostics | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-diagnostics-dark.png"><img src="docs/images/page-diagnostics-light.png" alt="Diagnostics page" width="640"></picture> |
-| Status, not a cluster-admin | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-user-status-dark.png"><img src="docs/images/page-user-status-light.png" alt="Status page of a user who is not a cluster-admin" width="640"></picture> |
-| Environment, not a cluster-admin | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-user-environment-dark.png"><img src="docs/images/page-user-environment-light.png" alt="Environment page of a user who is not a cluster-admin, with one of their projects" width="640"></picture> |
-| Environment, no projects | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-user-no-projects-dark.png"><img src="docs/images/page-user-no-projects-light.png" alt="Environment page of a user with no data science projects" width="640"></picture> |
-| A cluster-admin's page, not a cluster-admin | <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/page-user-admin-only-dark.png"><img src="docs/images/page-user-admin-only-light.png" alt="Only cluster-admins can see this page, with Go to Status" width="640"></picture> |
+| Components | ![Components page](docs/images/page-components.png) |
+| Build Explorer | ![Build Explorer page](docs/images/page-build-explorer.png) |
+| Dashboard Dev | ![Dashboard Dev page](docs/images/page-dashboard-dev.png) |
+| Environment | ![Environment page](docs/images/page-test-resources.png) |
+| Diagnostics | ![Diagnostics page](docs/images/page-diagnostics.png) |
+| Status, not a cluster-admin | ![Status page of a user who is not a cluster-admin](docs/images/page-user-status.png) |
+| Environment, not a cluster-admin | ![Environment page of a user who is not a cluster-admin, with one of their projects](docs/images/page-user-environment.png) |
 
-The app follows your system's light or dark mode and contrast settings; the appearance button in the masthead sets the color scheme (System, Light, Dark) and the contrast mode (System, Default, High contrast, Glass) instead; on narrow screens the same choices are in the user menu. All screenshots come from a mock backend with made-up data, in the Glass contrast mode (`make docs-screenshots`, see [docs/tools](docs/tools/README.md)).
+The app follows your system's light or dark mode and contrast settings; the appearance button in the masthead sets the color scheme (System, Light, Dark) and the contrast mode (System, Default, High contrast, Glass) instead; on narrow screens the same choices are in the user menu. All screenshots come from a mock backend with made-up data, in the light theme and the Glass contrast mode (`make docs-screenshots`, see [docs/tools](docs/tools/README.md)).
 
 </details>
 

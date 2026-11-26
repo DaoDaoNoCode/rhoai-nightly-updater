@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Checks the Markdown docs: every relative link and image path exists, every
-// #anchor matches a heading (GitHub's slugs) or an <a id="...">, and every file in docs/images
-// is used. Exits 1 on a problem. Run: make docs-check
+// #anchor matches a heading (GitHub's slugs) or an <a id="...">, every file in docs/images
+// is used, and every image but the SVG logo has a row in docs/tools/images.manifest, which
+// names no image that is missing. Exits 1 on a problem. Run: make docs-check
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -59,6 +60,15 @@ for (const file of files) {
 for (const name of readdirSync(join(root, "docs", "images"))) {
   const abs = join(root, "docs", "images", name);
   if (!usedImages.has(abs)) problems.push(`unused image  docs/images/${name}`);
+}
+// The manifest: "<image> <source>..." rows, "*" rows for every image, # comments.
+const manifest = new Set(readFileSync(join(root, "docs", "tools", "images.manifest"), "utf8").split("\n")
+  .map((line) => line.trim().split(/\s+/)[0]).filter((name) => name && name !== "*" && !name.startsWith("#")));
+for (const name of readdirSync(join(root, "docs", "images"))) {
+  if (/\.(png|gif|jpe?g|webp)$/.test(name) && !manifest.has(name)) problems.push(`no manifest row docs/images/${name} (docs/tools/images.manifest; a new image needs the owner's OK)`);
+}
+for (const name of manifest) {
+  if (!existsSync(join(root, "docs", "images", name))) problems.push(`missing image docs/tools/images.manifest: ${name}`);
 }
 console.log(`${files.length} Markdown files, ${usedImages.size} images used`);
 for (const p of problems) console.log(p);

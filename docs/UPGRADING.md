@@ -98,25 +98,17 @@ flowchart TD
 
 ### In the app
 
-<img src="images/masthead-version.png" alt="The masthead shows the running release" width="380">
+- The masthead shows the running release (`vX.Y.Z`), left of the
+  appearance button. Builds of `main` or of a commit show no version here.
+- **Help** (`?`) → **About this installation** → **Updater build**: the
+  release, its commit and its build date.
 
-1. The masthead shows the running release (`vX.Y.Z`). Builds of
-   `main` or of a commit show no version here.
-
-<img src="images/help-about.png" alt="The Help dialog, About this installation: Updater build, the release with its commit and build date" width="760">
-
-1. **Help** (`?`) → **About this installation** → **Updater build**: the
-   release, its commit and its build date.
-
-When a newer release exists, every page shows a notice. A new MAJOR version
-says it **requires a full redeploy**:
-
-<img src="images/banner-major-update.png" alt="Notice: v2.0.0 is available. This updater runs v1.0.0, and v2.0.0 is a new major version that requires a full redeploy with the v2.0.0 installer command shown" width="760">
-
-A MINOR or PATCH release needs only that release's `install.sh` (or
-`make upgrade` from its checkout):
-
-<img src="images/banner-patch-update.png" alt="Notice: v2.0.1 is available. An admin upgrades with the v2.0.1 installer, a curl, sha256sum, less and bash command to copy; pass the options the install was made with; from a clone, git checkout v2.0.1 and make upgrade" width="760">
+When a newer release exists, every page shows a notice, **vX.Y.Z is
+available**, with the command to copy: "An admin upgrades with the vX.Y.Z
+installer" (`curl`, the checksum check, `bash install.sh`). A new MAJOR
+version says "vX.Y.Z is a new major version and requires a full redeploy"
+and that an admin redeploys. A MINOR or PATCH release needs only that
+release's `install.sh` (or `make upgrade` from its checkout).
 
 The command checks the download against the SHA-256 in that release's notes
 (`echo '<sha256>  install.sh' | sha256sum -c -`) before anything runs; the
@@ -127,9 +119,8 @@ first.
 
 If the Deployment was created from an older template than the running image
 expects (typically an install on `:latest` that pulled a newer image), every
-page shows this notice for admins. Upgrade as in sections 3 to 5:
-
-<img src="images/banner-template-outdated.png" alt="Notice for admins: this updater's deployment is out of date, created from an older template revision than the build expects" width="760">
+page shows the notice **For admins: this updater's deployment is out of
+date**. Upgrade as in sections 3 to 5.
 
 Dismissing the release notice hides it until an even newer release.
 
@@ -501,10 +492,8 @@ What users notice:
   changes are off, and each one says why. Log out from the banner or the
   user menu and log in again.
 
-  <img src="images/signin-before-4.png" alt="A sign-in from before 4.0.0: the banner Sign in again to make changes with the reason and Log out; Update to latest is disabled, its tooltip says Your sign-in cannot make changes: it was made before this updater acted with your own OpenShift permissions. Log out and log in again." width="760">
-
-  1. The banner with the reason and **Log out**.
-  2. Each change is disabled, with the same reason in its tooltip.
+  The banner reads **Sign in again to make changes**, with the reason and
+  **Log out**; each change is disabled, with the same reason in its tooltip.
 
 - Changes are made with the user's own permissions and the API server's
   audit log names the user, not the ServiceAccount. A change is also refused
@@ -585,15 +574,8 @@ What users notice:
   [SECURITY.md, Per-user views](../SECURITY.md#per-user-views-500); the
   pages: [README, Not a cluster-admin?](../README.md#not-a-cluster-admin-what-you-see).
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="images/page-user-environment-dark.png">
-  <img src="images/page-user-environment-light.png" alt="Environment for a user who is not a cluster-admin: A cluster-admin sets up the shared parts; the project dev-project with its pipeline server dspa Ready, a model, Set up workbench, the Gen AI playground with Delete, the MLflow sample data with Add and Remove, and the sample pipeline" width="640">
-</picture>
+![Environment for a user who is not a cluster-admin: A cluster-admin sets up the shared parts; the project dev-project with its pipeline server dspa Ready, a model, Set up workbench, the Gen AI playground with Delete, the MLflow sample data with Add and Remove, and the sample pipeline](images/page-user-environment.png)
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="images/page-user-admin-only-dark.png">
-  <img src="images/page-user-admin-only-light.png" alt="A page only cluster-admins see, opened by a user who is not one: the navigation has Status, Build Explorer and Environment; Only cluster-admins can see this page, with Go to Status" width="640">
-</picture>
 
 **MaaS subscription priority.** Earlier versions gave this tool's
 MaaSSubscription priority 10 (or a negative value), so API keys minted
