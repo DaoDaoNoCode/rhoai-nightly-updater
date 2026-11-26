@@ -2169,13 +2169,34 @@ const USER_ACTIONS = {
   "workbench.start": "Start the workbench",
   "workbench.stop": "Stop the workbench",
   "workbench.teardown": "Delete the workbench",
+  "project-s3.setup": "Set up the project's S3 storage",
+  "project-s3.repair": "Repair the project's S3 storage",
+  "project-s3.delete": "Delete the project's S3 storage",
+  "project-pipeline-server.setup": "Set up the pipeline server on the project's S3 storage",
+  "project-pipeline-server.teardown": "Delete the pipeline server on the project's S3 storage",
 };
+
+/** GET /api/resources/project-s3 (pkg/types ProjectStorageStatus): ready in dev-project, used by its pipeline server; none elsewhere. */
+export function projectStorage(project) {
+  const deployed = project === "dev-project";
+  const objects = [["PersistentVolumeClaim", "nightly-s3-data"], ["Secret", "nightly-s3-credentials"], ["NetworkPolicy", "nightly-s3-ingress"], ["Deployment", "nightly-s3"], ["Service", "nightly-s3"]]
+    .map(([kind, name]) => ({ kind, name, present: deployed, owned: deployed }));
+  return {
+    project, name: "nightly-s3", endpoint: `http://nightly-s3.${project}.svc:8333`, bucket: "pipelines", dataVolume: "nightly-s3-data",
+    deployed, managedByTool: deployed, recorded: deployed, ready: deployed, terminating: false, message: deployed ? "Running" : "Not set up",
+    objects, ...(deployed ? { usedBy: ["dspa"] } : {}),
+  };
+}
 export function userCapabilities(project) {
   const actions = {};
   for (const [id, label] of Object.entries(USER_ACTIONS)) {
+    // The docs persona edits the project: its S3 storage is for the project's admins.
+    const adminOnly = `Only an admin of project ${project} sets up, repairs and deletes its S3 storage (the OpenShift admin role there); ask an admin of project ${project}.`;
     actions[id] = id === "mlflow-samples.regenerate"
       ? { label, allowed: false, code: "admin_only", reason: `${label} is done by a cluster-admin in this tool.`, missing: [], blockedBy: [] }
-      : { label, allowed: true, missing: [], blockedBy: [] };
+      : id.startsWith("project-s3.")
+        ? { label, allowed: false, code: "missing_permissions", reason: `${label} in ${project} needs permissions your OpenShift account does not have: ${adminOnly}`, missing: [adminOnly], blockedBy: [] }
+        : { label, allowed: true, missing: [], blockedBy: [] };
   }
   return { project, role: "user", actions };
 }
