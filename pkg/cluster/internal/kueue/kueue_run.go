@@ -523,26 +523,41 @@ func (r *run) deleteSampleOnly(kind string) (*types.OperationResponse, error) {
 	return r.done(fmt.Sprintf("Deleted %s in %s.", sampleText(kind), rec.Project))
 }
 
-// queueUsers lists workloads or queues still bound to queue o; listing errors
-// propagate (fail closed).
-func queueUsers(c *kube.Client, o toolObject, rec Record) ([]string, error) {
-	var users []string
+// leavingPoll is how often the teardown re-reads the Workloads of pods
+// being deleted while it waits for them to go.
+const leavingPoll = 2 * time.Second
+
+// queueUsers lists workloads or queues still bound to queue o, and counts
+// the Workloads on it that are leaving (workloadLeaving) apart: they are not
+// in users. Listing errors propagate (fail closed).
+func queueUsers(c *kube.Client, o toolObject, rec Record) (users []string, leaving int, err error) {
 	switch o.kind {
 	case "LocalQueue":
 		ws, err := listWorkloads(c, rec.Project)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
+		var pods map[string]kube.ObjectMeta
 		for _, w := range ws {
 			sample := (rec.RayClusterUID != "" && w.Metadata.OwnedBy(rec.RayClusterUID)) || (rec.RayJobUID != "" && w.Metadata.OwnedBy(rec.RayJobUID))
-			if w.Spec.QueueName == LocalQueueName && !sample {
+			if w.Spec.QueueName != LocalQueueName || sample {
+				continue
+			}
+			if pods == nil && len(w.Metadata.OwnerReferences) > 0 && !w.Metadata.Terminating() {
+				if pods, err = listPodMetas(c, rec.Project); err != nil {
+					return nil, 0, err
+				}
+			}
+			if workloadLeaving(w, pods) {
+				leaving++
+			} else {
 				users = append(users, "Workload "+w.Metadata.Name)
 			}
 		}
 	case "ClusterQueue":
 		qs, err := listLocalQueues(c, "")
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		for _, q := range qs {
 			ours := q.Metadata.Namespace == rec.Project && q.Metadata.Name == LocalQueueName && rec.LocalQueueUID != "" && q.Metadata.UID == rec.LocalQueueUID
@@ -553,7 +568,7 @@ func queueUsers(c *kube.Client, o toolObject, rec Record) ([]string, error) {
 	case "ResourceFlavor":
 		qs, err := listClusterQueues(c)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		for _, q := range qs {
 			if q.Metadata.Name != ClusterQueueName && q.usesFlavor(FlavorName) {
@@ -561,7 +576,43 @@ func queueUsers(c *kube.Client, o toolObject, rec Record) ([]string, error) {
 			}
 		}
 	}
-	return users, nil
+	return users, leaving, nil
+}
+
+// settledUsers is queueUsers once no Workload on queue o is leaving. While
+// every remaining user is a Workload on its way out, it waits for them to
+// go, re-reading every leavingPoll: bounded by the operation's context, and
+// stopped by a cancel request at each poll. A user that is not leaving ends
+// the wait at once (the queue stays). problem is set when the users cannot
+// be read or the wait stopped.
+func (r *run) settledUsers(o toolObject, rec Record) (users []string, problem, code, why string) {
+	last := 0
+	stopped := func(err error) ([]string, string, string, string) {
+		return nil, fmt.Sprintf("Stopped waiting for workloads of pods being deleted: %v. %s %s stays; clean up again once they are gone.", err, o.kind, o.name), "cancelled", "wait stopped"
+	}
+	for {
+		users, leaving, err := queueUsers(r.c, o, rec)
+		if err != nil && last > 0 && r.c.Context().Err() != nil {
+			// The operation ended during a re-read of the wait.
+			return stopped(r.c.Context().Err())
+		}
+		if err != nil {
+			return nil, fmt.Sprintf("Cannot tell what uses %s %s, so it stays: %v.", o.kind, o.name, err), codeOf(err), "users read failed"
+		}
+		if len(users) > 0 || leaving == 0 {
+			return users, "", "", ""
+		}
+		if leaving != last {
+			last = leaving
+			r.step("queues", "running", fmt.Sprintf("Waiting for %s of pods being deleted to finish", kube.Verb(leaving, "the workload", fmt.Sprintf("%d workloads", leaving))))
+		}
+		if cancel := record.CancelRequested(r.c); cancel != nil {
+			return nil, fmt.Sprintf("%s while it waited for workloads of pods being deleted; %s %s stays.", cancel.Reason(), o.kind, o.name), "cancelled", "cancelled"
+		}
+		if err := kube.Clock().Sleep(r.c.Context(), leavingPoll); err != nil {
+			return stopped(err)
+		}
+	}
 }
 
 // teardown removes owned resources in sequence: samples, then LocalQueue,
@@ -628,9 +679,11 @@ func (r *run) teardown() (*types.OperationResponse, error) {
 			return r.fail("queues", fmt.Sprintf("%s %s is not the one this tool created (it was deleted and made again), so this tool does not delete it.", o.kind, o.name), "not_managed", "foreign queue")
 		}
 		if found {
-			users, err := queueUsers(c, o, rec)
-			if err != nil {
-				return r.fail("queues", fmt.Sprintf("Cannot tell what uses %s %s, so it stays: %v.", o.kind, o.name, err), codeOf(err), "users read failed")
+			// The Workloads of pods being deleted (a model just deleted
+			// before this teardown) are waited for, not refused.
+			users, problem, code, why := r.settledUsers(o, rec)
+			if problem != "" {
+				return r.fail("queues", problem, code, why)
 			}
 			if len(users) > 0 {
 				return r.fail("queues", fmt.Sprintf("%s %s is used by %s, so it stays; remove %s first.", o.kind, o.name, kube.JoinTitles(users), kube.Verb(len(users), "it", "them")), "in_use", "queue in use")

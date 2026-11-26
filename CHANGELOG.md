@@ -491,6 +491,15 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **Clean up everything stopped at distributed workloads right after
+  deleting the tool's model** ("LocalQueue nightly-kueue is used by
+  Workload pod-...", while the model's pod was still shutting down; a
+  second Clean up went through). Kueue makes a pod the owner of its
+  Workload, so a Workload whose pods are being deleted or gone is on its
+  way out: the teardown now waits for it ("Waiting for the workload of pods
+  being deleted to finish"), within the operation, and then deletes the
+  queues. Any other Workload on the queue still stops it at once, as
+  before.
 - **Models the playground cannot use** (B5+B6 live round). KServe reports
   a model without a route by its Service with no port, and the dashboard's
   Gen AI playground writes that address (plus /v1) into its configuration,

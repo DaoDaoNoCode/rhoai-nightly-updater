@@ -241,6 +241,51 @@ func listWorkloads(c *kube.Client, project string) ([]Workload, error) {
 	return items, err
 }
 
+// listPodMetas maps the UID of every Pod in the project to its metadata.
+func listPodMetas(c *kube.Client, project string) (map[string]kube.ObjectMeta, error) {
+	if err := userOnly(c); err != nil {
+		return nil, err
+	}
+	var items []struct {
+		Metadata kube.ObjectMeta `json:"metadata"`
+	}
+	if err := c.ListInto(rhoai.NamespacedPath("v1", "pods", project, ""), &items); err != nil {
+		return nil, err
+	}
+	pods := make(map[string]kube.ObjectMeta, len(items))
+	for _, p := range items {
+		pods[p.Metadata.UID] = p.Metadata
+	}
+	return pods, nil
+}
+
+// workloadLeaving reports whether Workload w is on its way out rather than
+// a user of its queue: it is being deleted itself, or it is the Workload of
+// Pods that are all being deleted or already gone (pods maps the project's
+// Pods by UID). Kueue's pod integration makes the Pod the owner of its
+// Workload (kubernetes-sigs/kueue pkg/controller/jobframework/reconciler.go
+// ConstructWorkload: ctrl.SetControllerReference(pod, workload); a pod group
+// gets one owner reference per Pod, pkg/controller/jobs/pod/pod_controller.go
+// ConstructComposableWorkload), so the garbage collector deletes the
+// Workload once its owning Pods are gone, as for any dependent whose owners
+// are all absent. A Workload with any other owner, or none, is a user.
+func workloadLeaving(w Workload, pods map[string]kube.ObjectMeta) bool {
+	if w.Metadata.Terminating() {
+		return true
+	}
+	owners := 0
+	for _, o := range w.Metadata.OwnerReferences {
+		if o.Kind != "Pod" {
+			return false
+		}
+		owners++
+		if pod, ok := pods[o.UID]; ok && !pod.Terminating() {
+			return false
+		}
+	}
+	return owners > 0
+}
+
 // rayContainer is a Ray pod's container: its image and resources (the
 // quantities as the API returns them).
 type rayContainer struct {
