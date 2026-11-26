@@ -44,6 +44,12 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   answers a user for one of their projects. Users' model records count in
   the records caps (a ceiling of 400 model entries of at most 1 KiB);
   every user's entry together stays within one budget of 500 KiB.
+  Token authentication needs Connectivity Link (refused, never turned off
+  unnoticed); a model through the gateway is kept only once the gateway
+  refused a call without a token (a new one is deleted again otherwise);
+  a delete is refused while any MaaSModelRef in the project targets the
+  model. Snapshot record writes are conditional on what they read and
+  retried after another updater pod's write.
 - **Project S3 storage.** A project's admins can set up, repair and
   delete S3 storage in their own project (SeaweedFS `nightly-s3`, with
   its volume, key Secret and NetworkPolicy; no Route), with their own
