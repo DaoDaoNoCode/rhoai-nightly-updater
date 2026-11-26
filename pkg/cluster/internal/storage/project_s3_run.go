@@ -206,7 +206,7 @@ func (r *projectS3Run) apply(repair bool) (*types.OperationResponse, error) {
 		}
 		keys = k
 	}
-	if keys.AccessKey == "" || keys.SecretKey == "" || keys.AdminPassword == "" || keys.ChecksumKey == "" {
+	if keys.AccessKey == "" || keys.SecretKey == "" || keys.ChecksumKey == "" {
 		fresh, err := newProjectS3Keys()
 		if err != nil {
 			return r.fail(ProjectS3StepCheck, fmt.Sprintf("Cannot make a key: %v. Nothing was changed.", err), "internal", "key generation failed")
@@ -226,7 +226,6 @@ func (r *projectS3Run) apply(repair bool) (*types.OperationResponse, error) {
 			}
 			keys.AccessKey, keys.SecretKey = fresh.AccessKey, fresh.SecretKey
 		}
-		keys.AdminPassword = kube.FirstNonEmpty(keys.AdminPassword, fresh.AdminPassword)
 		keys.ChecksumKey = kube.FirstNonEmpty(keys.ChecksumKey, fresh.ChecksumKey)
 	}
 	manifests := ProjectS3Manifests(project, apps, keys)

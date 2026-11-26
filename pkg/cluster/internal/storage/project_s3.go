@@ -20,20 +20,29 @@ import (
 // data science project, made with the token of an admin of that project,
 // for that project's pipeline server only.
 //
-// It is the shared storage's pod (S3Resources) with these differences:
+// It runs the shared storage's image and pod security, with these
+// differences:
 //   - every object lives in the project: no namespace and no Route of its
 //     own (the shared storage's admin Route serves /metrics without
-//     authentication); the admin UI is reached with oc port-forward;
-//   - IAM writes stay off (no S3IAMWritesArg, no S3SelfServiceArg): the
-//     one static key in Secret nightly-s3-credentials is the only key, and
-//     nobody can mint another;
-//   - the bucket is made inside the pod by -bucket, and the updater never
-//     sends a request to the project's S3 endpoint, so its own namespace
-//     needs no way in;
+//     authentication), and no admin UI;
+//   - only the S3 port is on the pod network (ProjectS3Args): `weed
+//     server` with every component bound to 127.0.0.1 and the S3 gateway
+//     alone on every address. weed mini cannot do this (one -ip.bind for
+//     master, volume, filer and S3), and NetworkPolicies are additive, so
+//     another policy in the project (allow-from-same-namespace, the
+//     router's, monitoring's) would otherwise open the master, volume and
+//     filer ports, which need no authentication;
+//   - IAM writes stay off (-s3.iam.readOnly, no S3IAMWritesArg or
+//     S3SelfServiceArg): the one static key in Secret
+//     nightly-s3-credentials is the only key, and nobody can mint another;
+//   - bucket pipelines is made on the first upload with that key
+//     (-s3.autoCreateBucket), and the updater never sends a request to the
+//     project's S3 endpoint, so its own namespace needs no way in;
 //   - NetworkPolicy nightly-s3-ingress lets in TCP 8333 only, from the
 //     project's pods and from RHOAI's applications namespace (the
 //     data-science-pipelines operator's object-store check), and is written
-//     and read back before the Deployment, so the pod never starts unfenced;
+//     and read back before the Deployment: defense in depth, since it
+//     cannot take back what another policy in the project allows;
 //   - new names for every object and every Secret that holds the key: the
 //     ServiceAccount may get four Secret names in any namespace
 //     (deploy/template.yaml), and none of them is used here
@@ -205,10 +214,9 @@ func ProjectS3Manifests(project, apps string, keys S3Keys) map[string]map[string
 			"apiVersion": "v1", "kind": kindSecret,
 			"metadata": meta(ProjectS3Secret),
 			"stringData": map[string]any{
-				S3AccessKeyField:     keys.AccessKey,
-				S3SecretKeyField:     keys.SecretKey,
-				s3AdminPasswordField: keys.AdminPassword,
-				s3ChecksumKeyField:   keys.ChecksumKey,
+				S3AccessKeyField:   keys.AccessKey,
+				S3SecretKeyField:   keys.SecretKey,
+				s3ChecksumKeyField: keys.ChecksumKey,
 			},
 		},
 		kindNetworkPolicy: {
@@ -232,15 +240,14 @@ func ProjectS3Manifests(project, apps string, keys S3Keys) map[string]map[string
 						"containers": []map[string]any{{
 							"name":  s3Container,
 							"image": s3Image(),
-							// As the shared storage's, without the IAM
-							// flags: IAM stays read-only (SeaweedFS's
-							// default), so no key can be added.
+							// Only the S3 port on the pod network; IAM
+							// read-only (ProjectS3Args).
 							"args": ProjectS3Args(),
 							"env": []map[string]any{
+								// The S3 gateway's static admin identity
+								// (weed/s3api/auth_credentials.go at 4.54).
 								secretEnv("AWS_ACCESS_KEY_ID", S3AccessKeyField),
 								secretEnv("AWS_SECRET_ACCESS_KEY", S3SecretKeyField),
-								{"name": "WEED_ADMIN_USER", "value": S3AdminUser},
-								secretEnv("WEED_ADMIN_PASSWORD", s3AdminPasswordField),
 							},
 							"ports": []map[string]any{
 								{"name": "s3", "containerPort": s3Port, "protocol": "TCP"},
@@ -273,11 +280,25 @@ func ProjectS3Manifests(project, apps string, keys S3Keys) map[string]map[string
 	}
 }
 
-// ProjectS3Args are the project storage's weed mini arguments: the shared
-// storage's without the IAM flags (S3IAMWritesArg, S3SelfServiceArg).
+// ProjectS3Args are the project storage's arguments to the image's
+// entrypoint (which adds -dir=/data -volume.max=0
+// -master.volumeSizeLimitMB=1024): one `weed server` process with master,
+// volume and filer, their HTTP and gRPC listeners on 127.0.0.1 (-ip,
+// -ip.bind), and the S3 gateway on every address (-s3.ip.bind), so the
+// pod network reaches only port 8333 (signed S3 requests; /status for the
+// kubelet) and the S3 gateway's gRPC port 18333 (s3.port + 10000), which
+// SeaweedFS 4.54 binds to the S3 address and which refuses every caller
+// but a local one without the filer signing key
+// (weed/s3api/s3api_server_grpc.go checkAdminAuth,
+// weed/security/grpc_peer.go CheckLocalGrpcPeer). No Iceberg or Lance
+// catalog, no WebDAV, SFTP, message queue, metrics or admin UI listener;
+// IAM read-only; no usage report to SeaweedFS's telemetry service.
+// Checked against the pinned image (TestProjectS3BindsOnlyS3OnThePodNetwork
+// pins these; SECURITY.md lists the sockets).
 func ProjectS3Args() []string {
-	return []string{"mini", "-dir=/data", "-webdav=false", "-bucket=" + s3Bucket,
-		"-admin.port=" + strconv.Itoa(s3AdminPort), "-admin.port.legacy=0"}
+	return []string{"server", "-ip=127.0.0.1", "-ip.bind=127.0.0.1", "-filer",
+		"-s3", "-s3.port=" + strconv.Itoa(s3Port), "-s3.ip.bind=0.0.0.0", "-s3.port.iceberg=0", "-s3.port.lance=0",
+		"-s3.iam.readOnly=true", "-s3.autoCreateBucket=true", "-master.telemetry=false"}
 }
 
 // projectS3PolicySpec is NetworkPolicy nightly-s3-ingress's spec: TCP 8333
@@ -495,7 +516,7 @@ func newProjectS3Keys() (S3Keys, error) {
 	for _, f := range []struct {
 		dst *string
 		n   int
-	}{{&k.AccessKey, 10}, {&k.SecretKey, 20}, {&k.AdminPassword, 16}, {&k.ChecksumKey, 16}} {
+	}{{&k.AccessKey, 10}, {&k.SecretKey, 20}, {&k.ChecksumKey, 16}} {
 		v, err := randomHex(f.n)
 		if err != nil {
 			return S3Keys{}, err
@@ -522,8 +543,7 @@ func ReadProjectS3Keys(c *kube.Client, project string) (keys S3Keys, meta kube.O
 	}
 	return S3Keys{
 		AccessKey: DecodeBase64Field(secret.Data[S3AccessKeyField]), SecretKey: DecodeBase64Field(secret.Data[S3SecretKeyField]),
-		AdminPassword: DecodeBase64Field(secret.Data[s3AdminPasswordField]),
-		ChecksumKey:   DecodeBase64Field(secret.Data[s3ChecksumKeyField]),
+		ChecksumKey: DecodeBase64Field(secret.Data[s3ChecksumKeyField]),
 	}, secret.Metadata, true, nil
 }
 

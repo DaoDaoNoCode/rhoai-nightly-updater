@@ -225,11 +225,11 @@ func mergeMeta(obj map[string]any, fields map[string]any) map[string]any {
 // The pod runs weed mini without the IAM-write flags, with its bucket.
 func TestNoIAMWriteFlags(t *testing.T) {
 	args := storage.ProjectS3Args()
-	if slices.Contains(args, storage.S3IAMWritesArg) || slices.Contains(args, storage.S3SelfServiceArg) || !slices.Contains(args, "-bucket=pipelines") {
+	if slices.Contains(args, storage.S3IAMWritesArg) || slices.Contains(args, storage.S3SelfServiceArg) || !slices.Contains(args, "-s3.iam.readOnly=true") {
 		t.Fatalf("args %v", args)
 	}
 	raw, _ := json.Marshal(storage.ProjectS3Manifests("proj", "apps", storage.S3Keys{})["Deployment"])
-	for _, bad := range []string{storage.S3IAMWritesArg, storage.S3SelfServiceArg, "runAsUser", "12535"} {
+	for _, bad := range []string{storage.S3IAMWritesArg, storage.S3SelfServiceArg, "runAsUser", "12535", "WEED_ADMIN"} {
 		if strings.Contains(string(raw), `"`+bad) {
 			t.Errorf("the Deployment has %s: %s", bad, raw)
 		}
@@ -746,5 +746,36 @@ func TestProjectStorageRepairNeverRotatesAKeyInUse(t *testing.T) {
 	res := runPS(t, u, types.ProjectStorageRequest{Project: "proj", Action: "repair"})
 	if res.Success || res.ErrorCode != storage.ErrorCodeProjectStorageInUse || !strings.Contains(res.Message, "set the pipeline server up again") || len(writesOf(f)) != before {
 		t.Fatalf("%+v %v", res, writesOf(f)[before:])
+	}
+}
+
+// Only the S3 gateway is on the pod network: one `weed server` whose
+// master, volume and filer (HTTP and gRPC) listen on 127.0.0.1, with no
+// Iceberg, Lance, WebDAV, SFTP, message queue, metrics or admin UI
+// listener, so no other NetworkPolicy in the project can open a port that
+// needs no authentication. Checked against the pinned SeaweedFS 4.54
+// image: listening on every address only 8333 (S3, signed requests) and
+// 18333 (the S3 gateway's gRPC, local callers only); 8080, 8888, 9333 and
+// their gRPC ports on 127.0.0.1 (SECURITY.md, "Project S3 storage").
+func TestProjectS3BindsOnlyS3OnThePodNetwork(t *testing.T) {
+	want := []string{"server", "-ip=127.0.0.1", "-ip.bind=127.0.0.1", "-filer", "-s3", "-s3.port=8333", "-s3.ip.bind=0.0.0.0",
+		"-s3.port.iceberg=0", "-s3.port.lance=0", "-s3.iam.readOnly=true", "-s3.autoCreateBucket=true", "-master.telemetry=false"}
+	if got := storage.ProjectS3Args(); !slices.Equal(got, want) {
+		t.Fatalf("args %v, want %v", got, want)
+	}
+	for _, a := range storage.ProjectS3Args() {
+		for _, bad := range []string{"-webdav", "-sftp", "-mq.", "-metricsPort", "-admin", "-master.ip", "-volume.ip", "-filer.ip", "mini"} {
+			if strings.HasPrefix(a, bad) {
+				t.Errorf("argument %s opens a listener or a bind besides S3's", a)
+			}
+		}
+		if strings.Contains(a, "0.0.0.0") && a != "-s3.ip.bind=0.0.0.0" {
+			t.Errorf("argument %s binds to every address", a)
+		}
+	}
+	dep := storage.ProjectS3Manifests("proj", "apps", storage.S3Keys{})["Deployment"]
+	raw, _ := json.Marshal(dep)
+	if !strings.Contains(string(raw), `"ports":[{"containerPort":8333,"name":"s3","protocol":"TCP"}]`) {
+		t.Fatalf("container ports: %s", raw)
 	}
 }
