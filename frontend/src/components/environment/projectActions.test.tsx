@@ -31,7 +31,7 @@ describe("useProjectCapability", () => {
     await waitFor(() => expect(result.current.setup.allowed).toBe(true));
     expect(result.current.setup.reason).toBeNull();
     expect(result.current.remove.allowed).toBe(false);
-    expect(result.current.remove.reason).toMatch(/ask an admin of project team-a to give you the edit role there/);
+    expect(result.current.remove.reason).toMatch(/Ask an admin of project team-a to give you the edit role there\./);
     expect(result.current.regenerate.reason).toBe("Regenerate the MLflow demo is done by a cluster-admin in this tool.");
     expect(result.current.unknown).toEqual({ allowed: false, reason: CAPABILITY_UNKNOWN });
   });

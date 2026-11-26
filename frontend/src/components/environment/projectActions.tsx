@@ -53,6 +53,8 @@ export interface ProjectCapabilityAnswer {
   allowed: boolean;
   /** Shown on a disabled control; null if the control is usable. */
   reason: string | null;
+  /** The refusal's code from the capabilities ("missing_permissions", ...), when the backend gave one. */
+  code?: string;
 }
 
 /**
@@ -70,7 +72,7 @@ export function useProjectCapability(project: string, action: string): ProjectCa
   if (!value.caps) return { allowed: false, reason: CAPABILITY_CHECKING };
   const cap = value.caps.actions[action];
   if (!cap) return { allowed: false, reason: CAPABILITY_UNKNOWN };
-  if (!cap.allowed) return { allowed: false, reason: cap.reason || CAPABILITY_UNKNOWN };
+  if (!cap.allowed) return { allowed: false, reason: cap.reason || CAPABILITY_UNKNOWN, code: cap.code };
   return { allowed: true, reason: null };
 }
 

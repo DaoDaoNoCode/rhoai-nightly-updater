@@ -60,6 +60,12 @@ function setupAddsProject(status: ResourcesStatus | null, project: string | null
   return !(gw.allowedProjects ?? []).includes(project);
 }
 
+/** The image a new model runs, as the plan says it (ModelsStatus or a user's model exposures), with why. */
+export function runtimeImageWords(plan: string | undefined, reason: string | undefined): string {
+  const image = plan === "released" ? "the newest released Red Hat vLLM CPU image, pinned by digest" : plan === "override" ? "the image VLLM_CPU_IMAGE names" : "the preset's own Red Hat vLLM CPU image";
+  return `Runtime image: ${image}.${reason ? ` ${reason}` : ""}`;
+}
+
 /** The confirmation of a Models change, or null for another feature's change. */
 export function modelsConfirm(pending: Pending, status: ResourcesStatus | null): ConfirmSpec | null {
   switch (pending.kind) {
@@ -117,7 +123,7 @@ export function modelsConfirm(pending: Pending, status: ResourcesStatus | null):
           ] : []),
           ...(project ? [
             <>Project <code>{project}</code>: LLMInferenceService <code>{name}</code> ({c?.displayName ?? name} from Hugging Face), labelled for the dashboard and its Gen AI studio, on the CPU preset{status?.models?.preset ? <> <code>{status.models.preset}</code></> : null}. KServe adds its Deployment, Service and route. Other models in the project are not changed.</>,
-            <>Runtime image: {status?.models?.imagePlan === "released" ? "the newest released Red Hat vLLM CPU image, pinned by digest" : status?.models?.imagePlan === "override" ? "the image VLLM_CPU_IMAGE names" : "the preset's own Red Hat vLLM CPU image"}.{reason ? ` ${reason}` : ""}</>,
+            <>{runtimeImageWords(status?.models?.imagePlan, reason)}</>,
           ] : []),
           ...(project ? [<>Token authentication, as the dashboard makes it: ServiceAccount {tokenSA(name)}, Role {name}-view-role (get on this model only), RoleBinding {name}-view and token Secret default-name-{tokenSA(name)}, owned by the model. Ones already there for this model are kept.</>] : []),
         ],

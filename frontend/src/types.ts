@@ -1825,6 +1825,8 @@ export interface PlaygroundModel {
   embeddingDimension?: number;
   /** A MaaS model's subscriptions: a playground chat request for it names one. */
   subscriptions?: string[];
+  /** Why the playground cannot use this project model (its address as KServe reports it does not connect); absent when it can. */
+  unusable?: string;
 }
 
 export interface PlaygroundModelRef {
@@ -2089,6 +2091,9 @@ export interface ModelExposures {
   recommendGatewayReason?: string;
   /** A user's answer: whether a worker has the model's requests free. */
   capacity?: "fits" | "may-not-fit" | "unknown";
+  /** A user's answer: the image a new model runs (as ModelsStatus.imagePlan), and why. */
+  imagePlan?: "preset" | "released" | "override";
+  imagePlanReason?: string;
 }
 
 /** One "Can it be called?" check (pkg/types ModelCallCheck). */

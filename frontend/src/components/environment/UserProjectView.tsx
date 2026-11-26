@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   Alert,
   AlertActionLink,
@@ -20,11 +20,15 @@ import type { MLflowSampleId, MLflowSamplesStatus, PlaygroundStatus, ProjectProb
 import { getMLflowSamples, getPlayground, getProjectStatus, getProjectStorage, getWorkbench, toApiError, type ApiError } from "../../services/api";
 import { Checkbox, TextInput } from "@patternfly/react-core";
 import { ConfirmActionModal } from "../ConfirmActionModal";
-import { keptStorage, workbenchStatusOf } from "./workbenchState";
-import { ProjectActionButton, ProjectCapabilitiesProvider, ProjectRunPanel, useProjectRun, type ProjectRunRequest } from "./projectActions";
+import { keptStorage, workbenchSettling, workbenchStatusOf } from "./workbenchState";
+import { ProjectActionButton, ProjectCapabilitiesProvider, ProjectRunPanel, useProjectCapability, useProjectRun, type ProjectRunRequest } from "./projectActions";
 import { FORBIDDEN_FOR_USER_BODY, FORBIDDEN_FOR_USER_TITLE, describeError, isNotForUser } from "../../errors";
 import { EnvStatusLabel, envStatus } from "./resourceStatus";
-import { IDLE, playgroundIn } from "./featureState";
+import { IDLE, PLAYGROUND_ALTERNATIVES, modelsWithoutPortText, playgroundIn } from "./featureState";
+import { playgroundSettling } from "./usePlaygroundStatus";
+import { isTerminating, terminalReason } from "./resourceRow";
+import { useResourcePolling } from "./useResourceStatus";
+import { useLatestRequest } from "../../hooks/useLatestRequest";
 import { PipelineSample } from "./PipelineSample";
 import { SAMPLE_INFO, sampleLabel, sampleNote } from "./samples";
 import { LinesSkeleton } from "./Loading";
@@ -73,31 +77,35 @@ interface ProjectRead<T> {
 }
 
 /**
- * One read for the chosen project, again when refreshKey changes. An answer
- * for a project no longer chosen is dropped; the error keeps its errorCode
- * (forbidden_for_user is "you cannot see this", not a failure).
+ * One read for the chosen project, again when refreshKey changes, and polled
+ * as the admin's Environment status is (useResourcePolling): quickly while
+ * busy (a project action runs) or while settling says a part of the answer
+ * is still changing on its own (setting up, starting, deleting), else a slow
+ * idle re-read, so a part another user changed shows up too. Only the newest
+ * read's answer is shown; an answer for a project no longer chosen is
+ * dropped; the error keeps its errorCode (forbidden_for_user is "you cannot
+ * see this", not a failure).
  */
-function useProjectRead<T>(load: (project: string) => Promise<T>, project: string, refreshKey: number): ProjectRead<T> {
+function useProjectRead<T>(load: (project: string, signal?: AbortSignal) => Promise<T>, project: string, refreshKey: number, settling: (data: T) => boolean, busy: boolean): ProjectRead<T> {
   const [state, setState] = useState<{ project: string; data: T | null; error: ApiError | null }>({ project: "", data: null, error: null });
-  const [attempt, setAttempt] = useState(0);
-  const current = useRef(project);
-  current.current = project;
-  useEffect(() => {
-    let live = true;
-    load(project).then(
-      (data) => { if (live && current.current === project) setState({ project, data, error: null }); },
-      (e: unknown) => {
-        if (live && current.current === project) setState((s) => ({ project, data: s.project === project ? s.data : null, error: toApiError(e) }));
-      },
-    );
-    return () => { live = false; };
-  }, [load, project, refreshKey, attempt]);
+  const latest = useLatestRequest();
+  const fetchNow = useCallback(async () => {
+    const ticket = latest.start();
+    try {
+      const data = await load(project, ticket.signal);
+      if (ticket.isLatest()) setState({ project, data, error: null });
+    } catch (e) {
+      if (ticket.isLatest()) setState((s) => ({ project, data: s.project === project ? s.data : null, error: toApiError(e) }));
+    }
+  }, [load, project, latest]);
+  useEffect(() => { void fetchNow(); }, [fetchNow, refreshKey]);
   const mine = state.project === project;
+  useResourcePolling(fetchNow, busy || (mine && state.data !== null && settling(state.data)));
   return {
     data: mine ? state.data : null,
     error: mine ? state.error : null,
     loading: !mine,
-    reload: () => setAttempt((n) => n + 1),
+    reload: () => { void fetchNow(); },
   };
 }
 
@@ -150,13 +158,29 @@ const Note: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <Content component="p" className="pf-v6-u-text-color-subtle">{children}</Content>
 );
 
-const loadStatus = (project: string) => getProjectStatus(project);
-const loadStorage = (project: string) => getProjectStorage(project);
-const loadPlayground = (project: string) => getPlayground(project);
-const loadSamples = (project: string) => getMLflowSamples(project);
+const loadStatus = (project: string, signal?: AbortSignal) => getProjectStatus(project, signal);
+const loadStorage = (project: string, signal?: AbortSignal) => getProjectStorage(project, signal);
+const loadPlayground = (project: string, signal?: AbortSignal) => getPlayground(project, signal);
+const loadSamples = (project: string, signal?: AbortSignal) => getMLflowSamples(project, signal);
+
+/** A pipeline server or model that is starting or being deleted (the admin's resourcesSettling). */
+const statusSettling = (st: ProjectStatus) => [...(st.pipelineServers ?? []), ...(st.models ?? [])]
+  .some((r) => isTerminating(r) || (r.deployed && !r.ready && !terminalReason(r)));
+/** Storage that is starting or being deleted; one that needs a repair waits for the user. */
+const storageSettling = (st: ProjectStorageStatus) => st.terminating || (st.deployed && !st.ready && !(st.missing?.length) && !st.networkPolicyProblem);
+const neverSettling = () => false;
 
 const PipelinesPart: React.FC<{ project: string; read: ProjectRead<ProjectStatus>; storage: ProjectStorageStatus | null; busy: boolean; start: StartAction }> = ({ project, read, storage, busy, start }) => {
   const server = projectServer(read.data, project);
+  // Who sets up the project's S3 storage, which the pipeline server needs: the user (an admin of the project), or an admin of the project they ask.
+  const storageSetup = useProjectCapability(project, "project-s3.setup");
+  const noServer = storage?.deployed
+    ? `No pipeline server in ${project}. Once the project's S3 storage is ready, its pipeline server can be set up here. ${IN_PROJECT_HINT}`
+    : storage && storageSetup.allowed
+      ? `No pipeline server in ${project}. Set up the project's S3 storage first; then its pipeline server can be set up here. ${IN_PROJECT_HINT}`
+      : storage && storageSetup.code === "missing_permissions"
+        ? `No pipeline server in ${project}. It can be set up here once the project's S3 storage is ready, which an admin of project ${project} sets up: ask one of them. ${IN_PROJECT_HINT}`
+        : `No pipeline server in ${project}. Once the project's S3 storage is ready, its pipeline server can be set up here. ${IN_PROJECT_HINT}`;
   const ppRun = (action: "setup" | "teardown", confirmWorkbenches?: Record<string, string>): ProjectRunRequest =>
     ({ kind: "project-pipeline-server", req: { action, project, ...(confirmWorkbenches ? { confirmWorkbenches } : {}) } });
   let body: React.ReactNode;
@@ -174,7 +198,7 @@ const PipelinesPart: React.FC<{ project: string; read: ProjectRead<ProjectStatus
           </ProjectActionButton>
         </StackItem>
       </Stack>
-    ) : <Note>No pipeline server in {project}. Once the project&apos;s S3 storage is ready, its pipeline server can be set up here. {IN_PROJECT_HINT}</Note>;
+    ) : <Note>{noServer}</Note>;
   } else {
     const wbs = server.connectionWorkbenches ?? [];
     const deletable = server.managedByTool && server.projectStorage && !server.terminating;
@@ -257,7 +281,7 @@ const StoragePart: React.FC<{ project: string; read: ProjectRead<ProjectStorageS
           </Flex>
         </StackItem>
         {!st.managedByTool && <StackItem><Note>Some of these objects were not created by this tool, so it does not change them.</Note></StackItem>}
-        <StackItem><Note>Address in the cluster: <code>{st.endpoint}</code>, bucket <code>{st.bucket}</code>. Reachable from {project} only.</Note></StackItem>
+        <StackItem><Note>Address in the cluster: <code>{st.endpoint}</code>, bucket <code>{st.bucket}</code>. Its network policy lets in only pods of {project} (such as its workbench and pipeline server) and of RHOAI&apos;s applications namespace (the pipelines operator checks the storage from there); it has no address outside the cluster.</Note></StackItem>
         {!st.ready && st.message && <StackItem><Note>{st.message}</Note></StackItem>}
         {st.networkPolicyProblem && <StackItem><Alert variant="warning" isInline isPlain component="div" title="Network policy changed"><Content component="p">{st.networkPolicyProblem}</Content></Alert></StackItem>}
         {(st.missing?.length ?? 0) > 0 && <StackItem><Alert variant="warning" isInline isPlain component="div" title="Objects missing"><Content component="p">Missing: {st.missing?.join(", ")}. Repair makes them again.</Content></Alert></StackItem>}
@@ -318,7 +342,11 @@ const ModelsPart: React.FC<{ project: string; read: ProjectRead<ProjectStatus>; 
               <Tr key={m.name ?? m.displayName}>
                 <Td dataLabel="Model">{m.displayName || m.name}</Td>
                 <Td dataLabel="Status"><EnvStatusLabel status={envStatus(m)} /></Td>
-                <Td dataLabel="Address">{m.url ? <code className="pf-v6-u-text-break-word">{m.url}</code> : <span className="pf-v6-u-text-color-subtle">None</span>}</Td>
+                <Td dataLabel="Address">
+                  {m.url ? <code className="pf-v6-u-text-break-word">{m.url}</code>
+                    : m.internalUrl ? <><code className="pf-v6-u-text-break-word">{m.internalUrl}</code> <span className="pf-v6-u-text-color-subtle">(inside the cluster)</span></>
+                      : <span className="pf-v6-u-text-color-subtle">None</span>}
+                </Td>
                 <Td dataLabel="Actions" modifier="nowrap">
                   {m.managedByTool && !m.terminating && m.name && (
                     <ProjectActionButton project={project} action="models.teardown" busy={busy} variant="link"
@@ -377,9 +405,11 @@ const ModelsPart: React.FC<{ project: string; read: ProjectRead<ProjectStatus>; 
 
 const PlaygroundPart: React.FC<{ project: string; read: ProjectRead<PlaygroundStatus>; busy: boolean; start: StartAction }> = ({ project, read, busy, start }) => {
   const item = read.data ? playgroundIn(read.data, project) : undefined;
-  // The project's own ready models, chat and embedding, as the admin's Set up chooses them.
-  const models = (read.data?.models ?? []).filter((m) => m.source === "namespace" && m.ready);
+  // The project's own ready models, chat and embedding, as the admin's Set up chooses them; those the playground cannot use are left out.
+  const ready = (read.data?.models ?? []).filter((m) => m.source === "namespace" && m.ready);
+  const models = ready.filter((m) => !m.unusable);
   const hasChat = models.some((m) => m.chat);
+  const withoutPort = ready.filter((m) => m.chat && m.unusable);
   let body: React.ReactNode;
   if (read.error && !read.data) body = <ReadProblem what="the playground" error={read.error} onRetry={read.reload} />;
   else if (!read.data) body = <LinesSkeleton what="the playground" lines={1} />;
@@ -390,13 +420,16 @@ const PlaygroundPart: React.FC<{ project: string; read: ProjectRead<PlaygroundSt
       <Stack hasGutter>
         <StackItem>
           <Note>{hasChat
-            ? `No playground in ${project}. Set up asks the RHOAI dashboard for one with the project's ready models.`
-            : `No playground in ${project}. It needs a ready chat model in the project; add one in the RHOAI dashboard.`}</Note>
+            ? `No playground in ${project}. Set up asks the RHOAI dashboard for one with the project's ready models.${withoutPort.length > 0 ? ` Left out: ${modelsWithoutPortText(withoutPort)}` : ""}`
+            : withoutPort.length > 0
+              ? `No playground in ${project}. ${modelsWithoutPortText(withoutPort)} ${PLAYGROUND_ALTERNATIVES}`
+              : `No playground in ${project}. It needs a ready chat model in the project; add one in the RHOAI dashboard.`}</Note>
         </StackItem>
-        {hasChat && (
+        {(hasChat || withoutPort.length > 0) && (
           <StackItem>
             <ProjectActionButton project={project} action="playground.setup" busy={busy} variant="primary"
-              onClick={() => start(`Set up the playground in ${project}`, { kind: "playground", req: { action: "setup", project, models: models.map((m) => ({ name: m.name, source: m.source })) } })}>
+              // Without a usable chat model Set up chooses itself, and its check says why none can be used.
+              onClick={() => start(`Set up the playground in ${project}`, { kind: "playground", req: { action: "setup", project, models: hasChat ? models.map((m) => ({ name: m.name, source: m.source })) : [] } })}>
               Set up playground
             </ProjectActionButton>
           </StackItem>
@@ -494,7 +527,7 @@ const SamplesPart: React.FC<{ project: string; read: ProjectRead<MLflowSamplesSt
   return <Part title="MLflow sample data" id="user-env-mlflow">{body}</Part>;
 };
 
-const loadWorkbench = (project: string) => getWorkbench(project);
+const loadWorkbench = (project: string, signal?: AbortSignal) => getWorkbench(project, signal);
 
 const WorkbenchPart: React.FC<{ project: string; read: ProjectRead<WorkbenchStatus>; busy: boolean; start: StartAction }> = ({ project, read, busy, start }) => {
   const data = read.data;
@@ -606,13 +639,13 @@ export const UserProjectView: React.FC<{ project: string; refreshKey: number }> 
 };
 
 const UserProjectParts: React.FC<{ project: string; refreshKey: number; onRunEnd: () => void }> = ({ project, refreshKey, onRunEnd }) => {
-  const status = useProjectRead(loadStatus, project, refreshKey);
-  const playground = useProjectRead(loadPlayground, project, refreshKey);
-  const samples = useProjectRead(loadSamples, project, refreshKey);
-  const workbench = useProjectRead(loadWorkbench, project, refreshKey);
-  const storage = useProjectRead(loadStorage, project, refreshKey);
-  const server = projectServer(status.data, project);
   const { run, start: startRun, running } = useProjectRun(onRunEnd);
+  const status = useProjectRead(loadStatus, project, refreshKey, statusSettling, running);
+  const playground = useProjectRead(loadPlayground, project, refreshKey, playgroundSettling, running);
+  const samples = useProjectRead(loadSamples, project, refreshKey, neverSettling, running);
+  const workbench = useProjectRead(loadWorkbench, project, refreshKey, workbenchSettling, running);
+  const storage = useProjectRead(loadStorage, project, refreshKey, storageSettling, running);
+  const server = projectServer(status.data, project);
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [choiceChecked, setChoiceChecked] = useState(false);
   const [typedValue, setTypedValue] = useState("");
@@ -644,7 +677,7 @@ const UserProjectParts: React.FC<{ project: string; refreshKey: number; onRunEnd
           onDeploy={(choice) => { setDeploying(false); startRun(choice.title, { kind: "models", req: choice.req }); }} />
       )}
       {pending && (
-        <ConfirmActionModal isOpen title={`${pending.title}?`} confirmLabel={pending.confirm} confirmVariant="danger"
+        <ConfirmActionModal isOpen title={`${pending.title}?`} confirmLabel={pending.confirm} confirmVariant="danger" changesIntro={`This changes project ${project}:`}
           changes={pending.choice && choiceChecked ? [...pending.changes, ...pending.choice.changes]
             : pending.typed && typedValue === pending.typed.expect ? [...pending.changes, ...pending.typed.changes] : pending.changes}
           choice={pending.choice ? (

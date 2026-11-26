@@ -28,12 +28,15 @@ import { LinesSkeleton, LoadFailed, PartsSkeleton } from "./Loading";
 import {
   type Busy,
   type FeatureState,
+  PLAYGROUND_ALTERNATIVES,
   defaultPlaygroundModels,
+  modelsWithoutPortText,
   playgroundChatModels,
   playgroundHref,
   playgroundIn,
   playgroundModelStatus,
   playgroundModelsNotReady,
+  playgroundModelsWithoutPort,
   playgroundStatusOf,
   playgroundOtherEmbeddingModels,
   playgroundUsableModels,
@@ -146,6 +149,7 @@ const ModelsPart: React.FC<PlaygroundTabProps & { project: string; picked: strin
   const usable = playgroundUsableModels(playground, project);
   const otherEmbedding = playgroundOtherEmbeddingModels(playground, project);
   const notReady = playgroundModelsNotReady(playground, project);
+  const withoutPort = playgroundModelsWithoutPort(playground, project);
   const recorded = playgroundIn(playground, project)?.models ?? [];
   const toggle = (m: PlaygroundModel, on: boolean) => onPick?.(on ? [...(picked ?? []).filter((k) => k !== modelKey(m)), modelKey(m)] : (picked ?? []).filter((k) => k !== modelKey(m)));
   return (
@@ -160,7 +164,9 @@ const ModelsPart: React.FC<PlaygroundTabProps & { project: string; picked: strin
               : recorded.length > 0
                 ? `Set up chose ${joinWords(modelsOf(recorded, playground).map(modelWords))}. The playground offers the project's own ready models and the Models as a Service models your subscriptions allow.`
                 : "The playground offers the project's own ready models and the Models as a Service models your subscriptions allow. A model added to the project later shows up without setting it up again."
-            : `${project} has no ready chat model yet. The playground needs one: the Models tab sets up a small one on CPU.`}
+            : withoutPort.some((m) => m.chat)
+              ? `${project} has no ready chat model the playground can use.`
+              : `${project} has no ready chat model yet. The playground needs one: the Models tab sets up a small one on CPU.`}
       </Content>
       {usable.length > 0 && chat.length > 0 && (
         <Table variant="compact" aria-label="Models the playground can use">
@@ -202,6 +208,11 @@ const ModelsPart: React.FC<PlaygroundTabProps & { project: string; picked: strin
       {notReady.length > 0 && (
         <Alert variant="info" isInline component="p" title="Some models are not ready">
           These models are not ready, so Set up leaves them out: {notReady.map((m) => `${m.name} (${m.status ?? "unknown"})`).join(", ")}. Once one is ready, the playground offers it without setting it up again.
+        </Alert>
+      )}
+      {withoutPort.length > 0 && (
+        <Alert variant="info" isInline component="p" title="Models the playground cannot use">
+          Set up leaves them out. {modelsWithoutPortText(withoutPort)} {PLAYGROUND_ALTERNATIVES}
         </Alert>
       )}
     </PartItem>

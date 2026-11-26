@@ -22,6 +22,7 @@ import type { CatalogModel, ModelExposures, ProjectModelRequest } from "../../ty
 import { getModelExposures, toApiError, type ApiError } from "../../services/api";
 import { useProjectCapability } from "./projectActions";
 import { LinesSkeleton } from "./Loading";
+import { runtimeImageWords } from "./modelsConfirm";
 
 /** What the dialog starts: a project model setup. */
 export interface DeployProjectModelChoice {
@@ -65,6 +66,9 @@ export const DeployProjectModel: React.FC<{
   const internal = exposures?.options.find((o) => o.key === "internal");
   const entry = catalog.find((m) => m.name === model);
   const canDeploy = !!internal && setupCap.allowed;
+  // The image the plan already resolves to: the choice of the released image is offered only while it would run the preset's.
+  const plan = exposures?.imagePlan;
+  const offerReleased = !plan || plan === "preset";
 
   return (
     <Modal variant={ModalVariant.medium} isOpen onClose={onClose} aria-labelledby="user-env-deploy-model-title">
@@ -89,10 +93,13 @@ export const DeployProjectModel: React.FC<{
               </Stack>
             )}
           </FormGroup>
-          <FormGroup fieldId="user-env-deploy-released">
-            <Checkbox id="user-env-deploy-released" label="Use the newest released Red Hat image"
-              description="Instead of the cluster preset's image; for a nightly build whose runtime image is not published yet."
-              isChecked={releasedImage} onChange={(_e, checked) => setReleasedImage(checked)} />
+          <FormGroup fieldId="user-env-deploy-image" role="group" aria-label="Runtime image">
+            {plan && <Content component="p" className="pf-v6-u-mb-sm">{runtimeImageWords(plan, exposures?.imagePlanReason)}</Content>}
+            {offerReleased && (
+              <Checkbox id="user-env-deploy-released" label="Use the newest released Red Hat image"
+                description="Instead of the cluster preset's image; for a nightly build whose runtime image is not published yet."
+                isChecked={releasedImage} onChange={(_e, checked) => setReleasedImage(checked)} />
+            )}
           </FormGroup>
         </Form>
         <Stack hasGutter className="pf-v6-u-mt-md">
@@ -109,7 +116,7 @@ export const DeployProjectModel: React.FC<{
       <ModalFooter>
         <Button variant="primary" isDisabled={!canDeploy} onClick={() => onDeploy({
           title: `Deploy ${entry?.displayName ?? model} in ${project}`,
-          req: { action: "setup", project, model, exposure: "internal", ...(releasedImage ? { releasedImage: true } : {}) },
+          req: { action: "setup", project, model, exposure: "internal", ...(releasedImage && offerReleased ? { releasedImage: true } : {}) },
         })}>Deploy</Button>
         <Button variant="link" onClick={onClose}>Cancel</Button>
       </ModalFooter>

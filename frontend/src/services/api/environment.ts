@@ -5,8 +5,8 @@ import { request } from './client';
 import { StreamDoneHandler, StreamDetachHandler, streamSSE } from './stream';
 
 /** Fetches one project’s status for an ordinary user (not cluster-admin), using that user’s token. */
-export function getProjectStatus(project: string): Promise<ProjectStatus> {
-  return request(`/api/resources/status?project=${encodeURIComponent(project)}`);
+export function getProjectStatus(project: string, signal?: AbortSignal): Promise<ProjectStatus> {
+  return request(`/api/resources/status?project=${encodeURIComponent(project)}`, { signal });
 }
 
 /** Overall Environment status; when project is set (Pipelines tab selection), the dashboard Connection is read for that project too. */
