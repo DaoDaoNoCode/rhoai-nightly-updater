@@ -231,6 +231,7 @@ func TestProjectModelRollbackPerWrite(t *testing.T) {
 		mc := newModelsCluster(t)
 		u := projectModelUser(mc)
 		mc.f.fail["PATCH /api/v1/namespaces/"+record.GetActivityNamespace()+testSnapshotPath] = http.StatusInternalServerError
+		mc.f.fail["POST /api/v1/namespaces/"+record.GetActivityNamespace()+"/configmaps"] = http.StatusInternalServerError
 		mc.f.failMessage["PATCH /api/v1/namespaces/"+record.GetActivityNamespace()+testSnapshotPath] = "serviceaccount words"
 		res, _ := runProjectModelForTest(t, u, types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct"})
 		if res.Success || !strings.Contains(res.Message, "deleted again") || strings.Contains(res.Message, "serviceaccount words") {
@@ -480,9 +481,15 @@ func TestProjectModelRollbackEveryWrite(t *testing.T) {
 	for _, tc := range []struct{ name, fail string }{
 		{"model", "POST /apis/serving.kserve.io/v1alpha2/namespaces/proj/llminferenceservices"},
 		{"record", "PATCH /api/v1/namespaces/" + record.GetActivityNamespace() + testSnapshotPath},
+		// With no snapshot ConfigMap yet, the record's first write creates it.
+		{"record create", "POST /api/v1/namespaces/" + record.GetActivityNamespace() + "/configmaps"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mc := newModelsCluster(t)
+			if tc.name == "record" {
+				// An apply of the record: the snapshot ConfigMap exists.
+				putModelRecord(t, mc.f, serving.ModelsRecord{})
+			}
 			mc.f.fail[tc.fail] = http.StatusForbidden
 			res, _ := runProjectModelForTest(t, projectModelUser(mc), types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct"})
 			if res.Success {

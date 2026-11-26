@@ -284,3 +284,77 @@ func TestUserRecordsFillTheBudgetUnder1MiB(t *testing.T) {
 	}
 	t.Logf("users' entries %d KiB, ConfigMap %d KiB", users>>10, len(cm)>>10)
 }
+
+// Two pods write the first record when no snapshot ConfigMap exists yet:
+// the other pod creates it between this pod's read and its write. This
+// pod's create-only request is refused (AlreadyExists), and the change
+// runs again from a fresh read and merges: both entries stay.
+func TestSnapshotFirstWritesFromTwoPodsKeepBothEntries(t *testing.T) {
+	f, c := newResourceFake(t)
+	m := serving.ModelCatalog[0].Name
+	path := "/api/v1/namespaces/" + record.GetActivityNamespace() + "/configmaps/" + record.SnapshotConfigMapName
+	collection := "/api/v1/namespaces/" + record.GetActivityNamespace() + "/configmaps"
+	interleaved, creates := false, 0
+	f.beforeServe = func(method, p string) {
+		if method != http.MethodPost || p != collection {
+			return
+		}
+		creates++
+		if interleaved {
+			return
+		}
+		interleaved = true
+		// The other pod's create, with its own entry.
+		putModelRecord(t, f, serving.ModelsRecord{serving.ModelRecordKey("other-pod", m): {UID: "b"}})
+	}
+	err := record.UpdateSnapshot(c, func(tc *Client) error {
+		rec, err := serving.ReadModelsRecord(tc)
+		if err != nil {
+			return err
+		}
+		rec[serving.ModelRecordKey("this-pod", m)] = serving.RecordedModel{UID: "c"}
+		return serving.WriteModelsRecord(tc, rec)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := serving.ReadModelsRecord(c)
+	for _, p := range []string{"other-pod", "this-pod"} {
+		if _, ok := rec[serving.ModelRecordKey(p, m)]; !ok {
+			t.Errorf("%s's entry is lost: %v", p, rec)
+		}
+	}
+	if creates != 1 || f.get(path) == nil {
+		t.Errorf("creates %d", creates)
+	}
+}
+
+// A sweep that conflicts with another pod's write reports only what its
+// successful attempt removed: here the other pod already removed the gone
+// project's entry, so this sweep removed nothing and writes nothing more.
+func TestSweepRetryReportsOnlyItsOwnRemovals(t *testing.T) {
+	f, c := newResourceFake(t)
+	m := serving.ModelCatalog[0].Name
+	putModelRecord(t, f, serving.ModelsRecord{serving.ModelRecordKey("gone-a", m): {UID: "a"}, serving.ModelRecordKey("live", m): {UID: "l"}})
+	path := "/api/v1/namespaces/" + record.GetActivityNamespace() + "/configmaps/" + record.SnapshotConfigMapName
+	patches := 0
+	f.beforeServe = func(method, p string) {
+		if method != http.MethodPatch || p != path {
+			return
+		}
+		patches++
+		if patches == 1 {
+			cm := f.get(path)
+			raw, _ := json.Marshal(serving.ModelsRecord{serving.ModelRecordKey("live", m): {UID: "l"}})
+			cm["data"].(map[string]any)[serving.ModelsRecordKey] = string(raw)
+			f.bumpRV(cm["metadata"].(map[string]any))
+		}
+	}
+	dropped, err := serving.ForgetGoneModels(c, func(project, _ string, _ serving.RecordedModel) bool { return project == "gone-a" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dropped) != 0 || patches != 1 {
+		t.Errorf("dropped %v after %d writes, want none after the one that conflicted", dropped, patches)
+	}
+}

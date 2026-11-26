@@ -490,6 +490,8 @@ func updateProjectStorageRecord(c *kube.Client, project string, change func(e *P
 func ForgetGoneProjectStorages(c *kube.Client, gone func(project string, e ProjectStorageRecorded) bool) ([]string, error) {
 	var dropped []string
 	err := record.UpdateSnapshot(c, func(c *kube.Client) error {
+		// An attempt's own removals: a retry after a conflict starts over.
+		dropped = nil
 		rec, err := ReadProjectStorageRecord(c)
 		if err != nil {
 			return err

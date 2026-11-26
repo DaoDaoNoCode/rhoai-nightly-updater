@@ -110,9 +110,12 @@ func TestWorkbenchSetupUndoesWhatItCannotRecordAtItsDeadline(t *testing.T) {
 			if tc.failRecord {
 				// The record write's request lasts past its budget (15 s),
 				// then fails.
+				// With no snapshot ConfigMap yet, its first write is the
+				// ConfigMap's create.
 				f.fail["PATCH "+snapshot] = http.StatusInternalServerError
+				f.fail["POST "+strings.TrimSuffix(snapshot, "/rhoai-nightly-updater-snapshot")] = http.StatusInternalServerError
 				f.beforeRequest = func(r *http.Request) {
-					if r.Method == http.MethodPatch && r.URL.Path == snapshot {
+					if r.Method == http.MethodPatch && r.URL.Path == snapshot || r.Method == http.MethodPost && r.URL.Path == strings.TrimSuffix(snapshot, "/rhoai-nightly-updater-snapshot") {
 						clk.Advance(16 * time.Second)
 					}
 				}

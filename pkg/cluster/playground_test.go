@@ -616,7 +616,9 @@ func TestPlayground_AnInstallAnsweredWithAnExistingServerIsNotOwned(t *testing.T
 	e := newPlaygroundEnv(t)
 	e.g.existingOnInstall = true
 	e.k8s.beforeServe = func(method, path string) {
-		if method == http.MethodPatch && path == testRecordPath {
+		// The record's first write: an apply, or the create of the
+		// snapshot ConfigMap when there is none yet.
+		if method == http.MethodPatch && path == testRecordPath || method == http.MethodPost && path == strings.TrimSuffix(testRecordPath, "/rhoai-nightly-updater-snapshot") {
 			e.g.mu.Lock()
 			if e.g.servers["proj"] == nil {
 				e.g.servers["proj"] = &features.GenAIServer{Name: "lsd-genai-playground", Phase: "Ready"}

@@ -22,10 +22,11 @@ import (
 // the ConfigMap (ReadSnapshotData) notes its resourceVersion, and every
 // apply of the change (ApplySnapshotKeys) carries it, which the API server
 // takes as a precondition (a 409 Conflict when the ConfigMap changed
-// since). On a conflict UpdateSnapshot runs the change again from a fresh
-// read: read, admit (the users' caps) and merge, every time. When the
-// ConfigMap does not exist yet the first write cannot be conditional on
-// it (it creates it).
+// since). When the first read found no ConfigMap, the change's first
+// write creates it with a create-only request instead, which another pod's
+// creation meanwhile refuses (409 AlreadyExists). On a conflict
+// UpdateSnapshot runs the change again from a fresh read: read, admit (the
+// users' caps) and merge, every time.
 
 type snapshotTxnKey struct{}
 
@@ -33,6 +34,10 @@ type snapshotTxnKey struct{}
 type snapshotTxn struct {
 	read bool
 	rv   string
+	// missing: the first read found no ConfigMap; created: this attempt
+	// created it (its later writes are conditional on the creation's
+	// resourceVersion).
+	missing bool
 }
 
 func txnOf(c *kube.Client) *snapshotTxn {
@@ -62,7 +67,7 @@ func ReadSnapshotData(c *kube.Client) (map[string]string, bool, error) {
 		return nil, false, err
 	}
 	if t := txnOf(c); t != nil && !t.read {
-		t.read, t.rv = true, cm.Metadata.ResourceVersion
+		t.read, t.rv, t.missing = true, cm.Metadata.ResourceVersion, !found
 	}
 	return cm.Data, found, nil
 }
@@ -73,7 +78,25 @@ func ReadSnapshotData(c *kube.Client) (map[string]string, bool, error) {
 func ApplySnapshotKeys(c *kube.Client, manager string, data map[string]any) error {
 	ns := GetActivityNamespace()
 	meta := map[string]any{"name": SnapshotConfigMapName, "namespace": ns}
-	if t := txnOf(c); t != nil && t.rv != "" {
+	t := txnOf(c)
+	if t != nil && t.missing {
+		// Create-only: another pod's creation since the read is a 409
+		// (AlreadyExists), and the change runs again from a fresh read.
+		cm, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": meta, "data": data})
+		body, _, err := c.Bookkeeping().Do(http.MethodPost, rhoai.NamespacedPath("v1", "configmaps", ns, ""), "application/json", cm, url.Values{"fieldManager": {manager}})
+		if err != nil {
+			return err
+		}
+		created, err := kube.ParseObjectMeta(body)
+		if err != nil || created.ResourceVersion == "" {
+			// Not known: the next write of this attempt is refused as a
+			// conflict rather than written unconditionally.
+			created.ResourceVersion = "0"
+		}
+		t.missing, t.rv = false, created.ResourceVersion
+		return nil
+	}
+	if t != nil && t.rv != "" {
 		meta["resourceVersion"] = t.rv
 	}
 	cm, _ := json.Marshal(map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": meta, "data": data})

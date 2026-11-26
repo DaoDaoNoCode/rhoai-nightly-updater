@@ -204,6 +204,8 @@ func forgetModels(c *kube.Client, keys ...string) error {
 func ForgetGoneModels(c *kube.Client, gone func(project, name string, e RecordedModel) bool) ([]string, error) {
 	var dropped []string
 	err := record.UpdateSnapshot(c, func(c *kube.Client) error {
+		// An attempt's own removals: a retry after a conflict starts over.
+		dropped = nil
 		rec, err := ReadModelsRecord(c)
 		if err != nil {
 			return err
