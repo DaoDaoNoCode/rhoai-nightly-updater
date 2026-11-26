@@ -788,6 +788,8 @@ export interface UpdateStep {
   detail?: string;
   elapsedMs: number;
   errorCode?: string;
+  /** The ID of the operation the stream follows (GET /api/operation's); sent to its requester only. */
+  operationId?: string;
 }
 
 // --- Diagnostics types (match backend cluster.DiagnosticResult JSON) ---

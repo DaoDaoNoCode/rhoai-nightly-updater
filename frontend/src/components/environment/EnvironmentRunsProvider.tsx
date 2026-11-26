@@ -178,7 +178,7 @@ export const EnvironmentRunsProvider: React.FC<React.PropsWithChildren<{
   const reopenMigration = useCallback(() => { if (migrationKind) setMigrateKind(migrationKind); }, [migrationKind]);
   const goal = run.run?.running ? run.run : null;
   useRegisterBackgroundRun(goal
-    ? { title: goal.title, startedAt: goal.startedAt, step: runStepNow(goal), open: reopenRun }
+    ? { title: goal.title, startedAt: goal.startedAt, step: runStepNow(goal), open: reopenRun, operationId: goal.operationId }
     : migration.run?.running ? { title: MIGRATE_TITLES[migration.run.kind], startedAt: migration.run.startedAt, step: migrateStepNow(migration.run), open: reopenMigration } : null);
 
   const outcome = run.run ? runOutcome(run.run) : null;

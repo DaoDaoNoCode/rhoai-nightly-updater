@@ -278,20 +278,31 @@ describe("the banners of running project actions", () => {
     await settleApps();
   });
 
-  it("show the tab's own running action once, in its run banner, with Cancel", async () => {
+  const RunOf: React.FC<{ operationId?: string }> = ({ operationId }) => {
+    const open = React.useCallback(() => {}, []);
+    useRegisterBackgroundRun({ title: "Set up the workbench in team-b", startedAt: Date.parse(startedAt), step: null, open, operationId });
+    return null;
+  };
+
+  it("show the tab's own running action once, in its run banner, with Cancel, when the run follows that operation", async () => {
     stubApi({ "POST /api/operation/cancel": { cancelRequested: true } });
-    const Run: React.FC = () => {
-      const open = React.useCallback(() => {}, []);
-      useRegisterBackgroundRun({ title: "Set up the workbench in team-b", startedAt: Date.parse(startedAt), step: null, open });
-      return null;
-    };
-    renderWithApp(<><Run /><GlobalBanners /></>, { permissions: async () => USER_PERMISSIONS, operation: async () => withOwnHere() }, "/");
+    renderWithApp(<><RunOf operationId="op-own" /><GlobalBanners /></>, { permissions: async () => USER_PERMISSIONS, operation: async () => withOwnHere() }, "/");
     await settleApps();
     const run = alertOf(await screen.findByText(/^Set up the workbench in team-b is running/));
     expect(within(run).getByText(/Closing its dialog does not stop it\. Your next project action can start when it ends\./)).toBeInTheDocument();
     expect(within(run).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
     expect(screen.queryByText(/^Your action \(Set up the workbench\)/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Cluster changes from this tool are disabled/)).not.toBeInTheDocument();
+    await settleApps();
+  });
+
+  it("keep another action of the same account apart from the tab's run, with its own Cancel", async () => {
+    renderWithApp(<><RunOf operationId="op-this-tab" /><GlobalBanners /></>, { permissions: async () => USER_PERMISSIONS, operation: async () => withOwnHere() }, "/");
+    await settleApps();
+    const run = alertOf(await screen.findByText(/^Set up the workbench in team-b is running/));
+    expect(within(run).queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    const other = alertOf(screen.getByText(`Your action (Set up the workbench) in project team-b is running since ${clock}.`));
+    expect(within(other).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
     await settleApps();
   });
 });

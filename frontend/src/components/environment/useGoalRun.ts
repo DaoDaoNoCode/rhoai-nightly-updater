@@ -50,6 +50,8 @@ export interface GoalRun {
   running: boolean;
   /** The outcome, once the run ended. */
   result: { success: boolean; message: string; errorCode?: string } | null;
+  /** The operation a followed stream reports (its events' operationId), once one arrived. */
+  operationId?: string;
 }
 
 /** The step a run is on now, as the alert shown while its dialog is closed names it; null before the first step starts. */
@@ -215,6 +217,8 @@ export function useGoalRun(now: () => number = Date.now, sleep: (ms: number) => 
     let finalMessage = "";
     controller.current = stream(
       (step) => {
+        const operationId = step.operationId;
+        if (operationId) setRun((r) => (r && r.operationId !== operationId ? { ...r, operationId } : r));
         if (step.step === "operation_complete") {
           finalMessage = step.message;
           return;

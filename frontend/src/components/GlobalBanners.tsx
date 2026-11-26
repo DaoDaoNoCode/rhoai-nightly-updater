@@ -264,7 +264,9 @@ function useProjectActions(): { notices: Notice[]; own: OwnProjectAction | null;
   const notices: Notice[] = [];
   for (const a of server.projectActions ?? []) {
     const mine = isMine(a);
-    if (mine && background && !own) {
+    // The tab's run shows this action (one banner) only when it follows
+    // that very operation: the IDs match.
+    if (mine && background?.operationId && a.id === background.operationId && !own) {
       own = { action: a, cancel: cancelLink(a), note: note(a) };
       continue;
     }

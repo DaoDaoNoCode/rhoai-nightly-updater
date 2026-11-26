@@ -23,6 +23,8 @@ export interface BackgroundRun {
   step: { title: string; index: number; count: number } | null;
   /** Opens its progress dialog again. Keep its identity across renders (useCallback). */
   open: () => void;
+  /** The operation it follows (GET /api/operation's ID), once its stream named it. */
+  operationId?: string;
 }
 
 interface Registry {
@@ -86,12 +88,13 @@ export function useRegisterBackgroundRun(run: BackgroundRun | null): void {
   const stepIndex = run?.step?.index;
   const stepCount = run?.step?.count;
   const open = run?.open;
+  const operationId = run?.operationId;
   useEffect(() => {
     if (!registry) return;
     registry.set(owner, title !== undefined && startedAt !== undefined && open
-      ? { title, startedAt, open, step: stepTitle !== undefined && stepIndex !== undefined && stepCount !== undefined ? { title: stepTitle, index: stepIndex, count: stepCount } : null }
+      ? { title, startedAt, open, operationId, step: stepTitle !== undefined && stepIndex !== undefined && stepCount !== undefined ? { title: stepTitle, index: stepIndex, count: stepCount } : null }
       : null);
-  }, [registry, owner, title, startedAt, stepTitle, stepIndex, stepCount, open]);
+  }, [registry, owner, title, startedAt, stepTitle, stepIndex, stepCount, open, operationId]);
   useEffect(() => () => registry?.set(owner, null), [registry, owner]);
 }
 

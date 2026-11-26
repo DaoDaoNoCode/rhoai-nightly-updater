@@ -401,3 +401,21 @@ func TestCancelPickupWaitsForTheLockRecovery(t *testing.T) {
 		t.Fatalf("a round whose renewals went through read the cancel requests %d times", reads)
 	}
 }
+
+// A project action's stream carries its operation ID on every event, for
+// the page that started it (it matches its banner by it).
+func TestProjectActionStreamCarriesItsOperationID(t *testing.T) {
+	newProjectGateEnv(t, roleEditor)
+	var id string
+	runWorkbench = func(_ *cluster.Client, _ types.WorkbenchRequest, onStep func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		for _, op := range inflight.list() {
+			id = op.ID
+		}
+		onStep(cluster.UpdateStepEvent{Step: "check", Status: "running", Message: "Checking"})
+		return &types.OperationResponse{Success: true, Message: "done"}, nil
+	}
+	w := serveProjectAction(t, "/api/resources/workbench/stream", `{"action":"setup","project":"team-a"}`)
+	if id == "" || strings.Count(w.Body.String(), `"operationId":"`+id+`"`) < 2 {
+		t.Fatalf("operation %q, stream %s", id, w.Body.String())
+	}
+}

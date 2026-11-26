@@ -193,6 +193,18 @@ describe("useGoalRun", () => {
     expect(result.current.run).toMatchObject({ kind: "delete", running: false, result: { success: false, message: "Cannot delete the S3 storage yet. Deleted before it stopped: a." } });
   });
 
+  it("keeps the operation ID its stream reports, for the banner that matches it", () => {
+    const { result } = renderHook(() => useGoalRun());
+    let emit: (s: { step: string; status: "running" | "success" | "failed" | "skipped"; message: string; elapsedMs: number; operationId?: string }) => void = () => {};
+    act(() => result.current.follow("Set up the workbench in team-a", [{ id: "check", title: "Check" }], (onStep) => {
+      emit = onStep;
+      return new AbortController();
+    }));
+    expect(result.current.run?.operationId).toBeUndefined();
+    act(() => emit({ step: "check", status: "running", message: "Checking", elapsedMs: 1, operationId: "0123456789abcdef" }));
+    expect(result.current.run?.operationId).toBe("0123456789abcdef");
+  });
+
   it("does nothing without steps or while a run is going; reset keeps a running run", async () => {
     const { result } = renderHook(() => useGoalRun());
     await act(() => result.current.start("Goal", []));
