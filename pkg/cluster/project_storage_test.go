@@ -800,3 +800,41 @@ func TestProjectStorageStatusSaysWhyNotReady(t *testing.T) {
 		t.Fatalf("%+v", st)
 	}
 }
+
+// The background check forgets a pipeline server recorded on project
+// storage when its project is gone or was made again (another UID), as it
+// does the storage's entry; one on the shared storage stays while a
+// namespace of its name exists.
+func TestProjectPipelineRecordPrunedWithItsProject(t *testing.T) {
+	f, u := newProjectStorageEnv(t)
+	sa := u.Bookkeeping()
+	if err := storage.WritePipelineRecord(sa, storage.PipelineRecord{
+		"proj/dspa":   {UID: "u1", Storage: storage.RecordedOnProjectStorage, ActorRole: record.ActorRoleUser, ProjectUID: "uid-proj"},
+		"shared/dspa": {UID: "u2"},
+		"gone/dspa":   {UID: "u3", Storage: storage.RecordedOnProjectStorage, ProjectUID: "uid-gone"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.putJSON("/api/v1/namespaces/shared", `{"metadata":{"name":"shared","uid":"uid-shared-again"}}`)
+	keys := func() []string {
+		rec, err := storage.ReadPipelineRecord(sa)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for k := range rec {
+			out = append(out, k)
+		}
+		slices.Sort(out)
+		return out
+	}
+	SweepGoneProjectRecords(sa)
+	if got := keys(); !slices.Equal(got, []string{"proj/dspa", "shared/dspa"}) {
+		t.Fatalf("after the first check: %v", got)
+	}
+	f.putJSON(psNS, `{"metadata":{"name":"proj","uid":"uid-again"}}`)
+	SweepGoneProjectRecords(sa)
+	if got := keys(); !slices.Equal(got, []string{"shared/dspa"}) {
+		t.Fatalf("a project made again kept its project pipeline record: %v", got)
+	}
+}

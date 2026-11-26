@@ -108,8 +108,13 @@ func SweepGoneProjectRecords(c *kube.Client) {
 		slog.Warn("background check: the pipeline server record cannot be read", "error", err)
 	} else {
 		changed := false
-		for key := range pipes {
-			if projectGone(projectOf(key)) {
+		for key, e := range pipes {
+			// One set up on project storage also goes when its project
+			// was made again (another namespace UID), as that storage's
+			// entry does: it is bounded only through that entry.
+			st := namespace(projectOf(key))
+			remade := e.Storage == storage.RecordedOnProjectStorage && e.ProjectUID != "" && st.uid != "" && st.uid != e.ProjectUID
+			if st.gone || remade {
 				delete(pipes, key)
 				changed = true
 				forgotten = append(forgotten, "pipeline server "+key)
