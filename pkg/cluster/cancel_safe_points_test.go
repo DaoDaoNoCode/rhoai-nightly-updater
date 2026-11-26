@@ -246,7 +246,7 @@ func TestMLflowSamplesCancelBetweenSamples(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Success || res.ErrorCode != "cancelled" || !strings.Contains(res.Message, "Done before the cancel, and kept: MCP server") {
+	if res.Success || res.ErrorCode != "cancelled" || !strings.Contains(res.Message, "Added before the cancel: MCP server") {
 		t.Fatalf("result %+v\n%s", res, stepMessages(steps))
 	}
 	st := env.status(t)
@@ -283,7 +283,7 @@ func TestMLflowSamplesRemoveCancelBetweenSamples(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Success || res.ErrorCode != "cancelled" || !strings.HasPrefix(res.Message, "Cancelled by a cluster-admin before this step. Done before the cancel, and kept:") {
+	if res.Success || res.ErrorCode != "cancelled" || !strings.HasPrefix(res.Message, "Cancelled by a cluster-admin before this step. Removed before the cancel:") {
 		t.Fatalf("result %+v", res)
 	}
 	st := env.status(t)
@@ -291,5 +291,38 @@ func TestMLflowSamplesRemoveCancelBetweenSamples(t *testing.T) {
 		if want := map[bool]string{true: "absent", false: "present"}[id == first]; st[id].State != want {
 			t.Errorf("%s: %s, want %s (first removed: %s)", id, st[id].State, want, first)
 		}
+	}
+}
+
+// A sample that failed before the cancel is reported with it (it may have
+// changed something), in the result and in the activity entry's detail;
+// "Nothing was changed" only when nothing ran.
+func TestMLflowSamplesCancelAfterAFailedSample(t *testing.T) {
+	env := newSamplesEnv(t)
+	env.mlflow.noDemo = true
+	var on atomic.Bool
+	user := env.user.WithContext(WithCancelCheck(env.user.Context(), func() *ActionCancelledError {
+		if on.Load() {
+			return &ActionCancelledError{}
+		}
+		return nil
+	}))
+	res, err := RunMLflowSamples(user, mlflowRequest("add", SampleGenAIDemo, SampleTraining), func(s UpdateStepEvent) {
+		if s.Step == SampleGenAIDemo && s.Status == "failed" {
+			on.Store(true)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Success || res.ErrorCode != "cancelled" || !strings.Contains(res.Message, "Failed before the cancel: ") || strings.Contains(res.Message, "Nothing was changed") {
+		t.Fatalf("result %+v", res)
+	}
+	if st := env.status(t); st[SampleTraining].State == "present" {
+		t.Fatal("the next sample ran after the cancel")
+	}
+	log := storedActivity(t, env.k8s)
+	if len(log) != 1 || log[0].Success || log[0].CancelledBy != "starter" || !strings.Contains(log[0].Detail, "(failed: ") {
+		t.Fatalf("activity %+v", log)
 	}
 }

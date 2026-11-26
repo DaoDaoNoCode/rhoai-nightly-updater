@@ -414,14 +414,25 @@ func RunSamples(c *kube.Client, req types.MLflowSamplesRequest, onStep func(type
 		// Safe point between samples: a sample (its creates and its
 		// tags) is one step and is never cut; the ones done stay.
 		if cancel := record.CancelRequested(c); cancel != nil {
-			kept := "Nothing was changed."
+			// What ran before the cancel stays as it ended: the samples done,
+			// and the ones that failed (which may have changed something).
+			var kept []string
 			if len(done) > 0 {
-				kept = fmt.Sprintf("Done before the cancel, and kept: %s.", strings.Join(done, ", "))
+				verb := map[string]string{"add": "Added", "remove": "Removed"}[req.Action]
+				kept = append(kept, fmt.Sprintf("%s before the cancel: %s.", kube.FirstNonEmpty(verb, "Done"), strings.Join(done, ", ")))
 			}
-			msg := cancel.Reason() + " before this step. " + kept
+			detail := activity
+			if len(failed) > 0 {
+				kept = append(kept, fmt.Sprintf("Failed before the cancel: %s.", strings.Join(failed, ", ")))
+				detail += " (failed: " + strings.Join(failed, ", ") + ")"
+			}
+			if len(kept) == 0 {
+				kept = append(kept, "Nothing was changed.")
+			}
+			msg := cancel.Reason() + " before this step. " + strings.Join(kept, " ")
 			emit(types.UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: CancelledCode})
-			slog.Info("mlflow samples cancelled", "action", req.Action, "project", req.Project, "done", len(done))
-			record.Cancelled(c, "mlflow-samples", activity, cancel)
+			slog.Info("mlflow samples cancelled", "action", req.Action, "project", req.Project, "done", len(done), "failed", len(failed))
+			record.Cancelled(c, "mlflow-samples", detail, cancel)
 			return &types.OperationResponse{Success: false, Message: msg, Logs: logs, ErrorCode: CancelledCode}, nil
 		}
 		s := samples[id]
