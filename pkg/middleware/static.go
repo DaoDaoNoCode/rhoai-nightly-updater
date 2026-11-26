@@ -5,7 +5,6 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
-	"io"
 	"mime"
 	"net/http"
 	"os"
@@ -74,19 +73,19 @@ type gzipEntry struct {
 	data    []byte
 }
 
-// etagEntry is the ETag of a file's content as it was at modTime and size.
-type etagEntry struct {
-	modTime time.Time
-	size    int64
-	etag    string
+// contentGzip is the gzip encoding of an unhashed file's content, the
+// content known by its ETag (srcTag), with the encoding's own ETag.
+type contentGzip struct {
+	srcTag, tag string
+	data        []byte
 }
 
 // StaticFiles serves the built frontend from dir:
 //   - existing files, with long-lived caching for content-hashed names and
 //     revalidation by a strong ETag of the served bytes for everything else
 //     (index.html; one ETag per encoding);
-//   - gzip when the client accepts it, from a precompressed "<file>.gz"
-//     next to the file or compressed once in memory;
+//   - gzip when the client accepts it, compressed once in memory, or for
+//     a hashed file from a precompressed "<file>.gz" next to it;
 //   - index.html for extension-less paths (client-side routes);
 //   - 404 for missing files with an extension (for example a bundle from
 //     an older build) and a JSON 404 for unknown /api/ paths, instead of
@@ -96,8 +95,8 @@ func StaticFiles(dir string) http.Handler {
 	if err != nil {
 		root = dir
 	}
-	var gzCache sync.Map   // full path -> *gzipEntry
-	var etagCache sync.Map // full path -> *etagEntry
+	var gzCache sync.Map     // full path -> *gzipEntry (hashed files)
+	var gzByContent sync.Map // full path -> *contentGzip (unhashed files)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		urlPath := path.Clean("/" + r.URL.Path)
 		if urlPath == "/api" || strings.HasPrefix(urlPath, "/api/") {
@@ -143,18 +142,23 @@ func StaticFiles(dir string) http.Handler {
 			w.Header().Set("Content-Type", ctype)
 		}
 
+		gzipOK := false
 		if compressible[ext] {
 			w.Header().Add("Vary", "Accept-Encoding")
-			if acceptsGzip(r.Header.Get("Accept-Encoding")) {
-				if data, modTime, ok := gzipped(&gzCache, full, info); ok {
-					w.Header().Set("Content-Encoding", "gzip")
-					if !hashed {
-						modTime = time.Time{}
-						w.Header().Set("ETag", contentETag(data))
-					}
-					http.ServeContent(w, r, name, modTime, bytes.NewReader(data))
-					return
+			gzipOK = acceptsGzip(r.Header.Get("Accept-Encoding"))
+		}
+		if !hashed && info.Size() <= maxGzipSource {
+			serveByContent(w, r, name, full, gzipOK, &gzByContent)
+			return
+		}
+		if gzipOK {
+			if data, modTime, ok := gzipped(&gzCache, full, info); ok {
+				w.Header().Set("Content-Encoding", "gzip")
+				if !hashed {
+					modTime = time.Time{}
 				}
+				http.ServeContent(w, r, name, modTime, bytes.NewReader(data))
+				return
 			}
 		}
 		f, err := os.Open(full)
@@ -165,45 +169,60 @@ func StaticFiles(dir string) http.Handler {
 		defer f.Close()
 		modTime := info.ModTime()
 		if !hashed {
-			// Zero: ServeContent sends no Last-Modified and ignores
-			// If-Modified-Since; If-None-Match decides.
+			// An unhashed file too large to hold: no validator at all, so
+			// it is always sent in full rather than answered by its date.
 			modTime = time.Time{}
-			if etag := fileETag(&etagCache, full, info); etag != "" {
-				w.Header().Set("ETag", etag)
-			}
 		}
 		http.ServeContent(w, r, name, modTime, f)
 	})
+}
+
+// serveByContent serves an unhashed file from its bytes read now, with a
+// strong ETag of exactly the bytes served (the gzip encoding its own) and
+// no Last-Modified: ServeContent with a zero modtime ignores
+// If-Modified-Since, so If-None-Match decides and revalidation follows the
+// content in both directions. A precompressed sibling is not used: it may
+// not hold these bytes.
+func serveByContent(w http.ResponseWriter, r *http.Request, name, full string, gzipOK bool, cache *sync.Map) {
+	src, err := os.ReadFile(full)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	srcTag := contentETag(src)
+	if gzipOK {
+		if gz, ok := gzipContent(cache, full, srcTag, src); ok {
+			w.Header().Set("Content-Encoding", "gzip")
+			w.Header().Set("ETag", gz.tag)
+			http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(gz.data))
+			return
+		}
+	}
+	w.Header().Set("ETag", srcTag)
+	http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(src))
+}
+
+// gzipContent is the gzip encoding of src (whose ETag is srcTag), compressed
+// once per content.
+func gzipContent(cache *sync.Map, full, srcTag string, src []byte) (*contentGzip, bool) {
+	if v, ok := cache.Load(full); ok {
+		if e := v.(*contentGzip); e.srcTag == srcTag {
+			return e, true
+		}
+	}
+	data, ok := compress(src)
+	if !ok {
+		return nil, false
+	}
+	e := &contentGzip{srcTag: srcTag, tag: contentETag(data), data: data}
+	cache.Store(full, e)
+	return e, true
 }
 
 // contentETag is a strong ETag of b: its SHA-256, shortened to 128 bits.
 func contentETag(b []byte) string {
 	sum := sha256.Sum256(b)
 	return `"` + hex.EncodeToString(sum[:16]) + `"`
-}
-
-// fileETag is contentETag of the file's bytes, computed once per
-// modification time and size; "" when the file cannot be read (the
-// response then has no validator, so it is always sent in full).
-func fileETag(cache *sync.Map, full string, info os.FileInfo) string {
-	if v, ok := cache.Load(full); ok {
-		e := v.(*etagEntry)
-		if e.modTime.Equal(info.ModTime()) && e.size == info.Size() {
-			return e.etag
-		}
-	}
-	f, err := os.Open(full)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return ""
-	}
-	etag := `"` + hex.EncodeToString(h.Sum(nil)[:16]) + `"`
-	cache.Store(full, &etagEntry{modTime: info.ModTime(), size: info.Size(), etag: etag})
-	return etag
 }
 
 // gzipped returns the gzip encoding of a file: a precompressed sibling when
@@ -227,16 +246,25 @@ func gzipped(cache *sync.Map, full string, info os.FileInfo) ([]byte, time.Time,
 	if err != nil {
 		return nil, time.Time{}, false
 	}
+	data, ok := compress(src)
+	if !ok {
+		return nil, time.Time{}, false
+	}
+	cache.Store(full, &gzipEntry{modTime: info.ModTime(), size: info.Size(), data: data})
+	return data, info.ModTime(), true
+}
+
+// compress is src gzipped at the best compression.
+func compress(src []byte) ([]byte, bool) {
 	var buf bytes.Buffer
 	zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
 	if _, err := zw.Write(src); err != nil {
-		return nil, time.Time{}, false
+		return nil, false
 	}
 	if err := zw.Close(); err != nil {
-		return nil, time.Time{}, false
+		return nil, false
 	}
-	cache.Store(full, &gzipEntry{modTime: info.ModTime(), size: info.Size(), data: buf.Bytes()})
-	return buf.Bytes(), info.ModTime(), true
+	return buf.Bytes(), true
 }
 
 // acceptsGzip parses Accept-Encoding for gzip (or *) with a non-zero q.

@@ -258,3 +258,66 @@ func TestStaticFilesRevalidateByContent(t *testing.T) {
 		}
 	}
 }
+
+// The ETag is of the bytes served now: a replacement of the same size and
+// modification time gets a new tag, for both encodings. HEAD answers the
+// chosen encoding's tag with no body; a strong If-Range with that tag
+// gives the range (206), the other encoding's tag the whole file (200).
+func TestStaticFilesETagFollowsTheBytesServed(t *testing.T) {
+	dir := writeDist(t)
+	h := StaticFiles(dir)
+	req := func(method, path, acceptEncoding string, header map[string]string) *httptest.ResponseRecorder {
+		r := httptest.NewRequestWithContext(t.Context(), method, path, nil)
+		if acceptEncoding != "" {
+			r.Header.Set("Accept-Encoding", acceptEncoding)
+		}
+		for k, v := range header {
+			r.Header.Set(k, v)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+
+	index := filepath.Join(dir, "index.html")
+	stamp := time.Now().Add(-time.Hour).Truncate(time.Second)
+	write := func(content string) {
+		t.Helper()
+		if err := os.WriteFile(index, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(index, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("<html>build A</html>")
+	idA, gzA := req("GET", "/", "", nil).Header().Get("ETag"), req("GET", "/", "gzip", nil).Header().Get("ETag")
+	write("<html>build B</html>") // same size, same modification time
+	idB, gzB := req("GET", "/", "", nil), req("GET", "/", "gzip", nil)
+	if idB.Body.String() != "<html>build B</html>" || gunzip(t, gzB.Body.Bytes()) != "<html>build B</html>" {
+		t.Fatalf("stale content: %q", idB.Body.String())
+	}
+	if idB.Header().Get("ETag") == idA || gzB.Header().Get("ETag") == gzA || idB.Header().Get("ETag") == gzB.Header().Get("ETag") {
+		t.Fatalf("tags: identity %s -> %s, gzip %s -> %s", idA, idB.Header().Get("ETag"), gzA, gzB.Header().Get("ETag"))
+	}
+	if w := req("GET", "/", "", map[string]string{"If-None-Match": idA}); w.Code != 200 {
+		t.Fatalf("the replaced file's tag: %d", w.Code)
+	}
+
+	idTag, gzTag := idB.Header().Get("ETag"), gzB.Header().Get("ETag")
+	for _, tc := range []struct{ ae, tag string }{{"", idTag}, {"gzip", gzTag}} {
+		w := req("HEAD", "/", tc.ae, nil)
+		if w.Code != 200 || w.Header().Get("ETag") != tc.tag || w.Body.Len() != 0 {
+			t.Fatalf("HEAD (%q): %d ETag %q body %d bytes", tc.ae, w.Code, w.Header().Get("ETag"), w.Body.Len())
+		}
+	}
+	if w := req("GET", "/", "", map[string]string{"Range": "bytes=0-5", "If-Range": idTag}); w.Code != http.StatusPartialContent || w.Body.String() != "<html>" {
+		t.Fatalf("If-Range with the tag: %d %q", w.Code, w.Body.String())
+	}
+	if w := req("GET", "/", "", map[string]string{"Range": "bytes=0-5", "If-Range": gzTag}); w.Code != 200 || w.Body.String() != "<html>build B</html>" {
+		t.Fatalf("If-Range with the gzip tag on identity: %d %q", w.Code, w.Body.String())
+	}
+	if w := req("GET", "/", "gzip", map[string]string{"Range": "bytes=0-5", "If-Range": idTag}); w.Code != 200 || gunzip(t, w.Body.Bytes()) != "<html>build B</html>" {
+		t.Fatalf("If-Range with the identity tag on gzip: %d", w.Code)
+	}
+}
