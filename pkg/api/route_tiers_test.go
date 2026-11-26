@@ -55,7 +55,8 @@ func TestRouteTiersMatchTheDesign(t *testing.T) {
 		tierNoClusterRead: {"GET /api/resources/samples/pipeline/spec", "GET /api/update-check"},
 		// The non-admin design (B3): a user's own activity entries, and the
 		// workbench of one of their projects.
-		tierPerRole: {"GET /api/activity", "GET /api/operation", "GET /api/resources/status", "GET /api/resources/workbench"},
+		// B5: the S3 storage of one of their projects.
+		tierPerRole: {"GET /api/activity", "GET /api/operation", "GET /api/resources/project-s3", "GET /api/resources/status", "GET /api/resources/workbench"},
 	}
 	got := map[readTier][]string{}
 	for p, tier := range getRouteTiers {

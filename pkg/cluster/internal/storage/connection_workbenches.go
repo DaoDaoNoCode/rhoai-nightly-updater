@@ -82,15 +82,15 @@ func connectionEntry(part, namespace, name string) bool {
 	return ok && !strings.Contains(n, "/") && strings.TrimSpace(ns) == namespace && strings.TrimSpace(n) == name
 }
 
-// withoutConnection strips entries that name the tool's Connection in
-// project from value, preserves every other entry unchanged, and reports
-// whether any match was removed.
-func withoutConnection(value, project string) (string, bool) {
+// withoutConnection strips entries that name the tool's Connection conn
+// in project from value, preserves every other entry unchanged, and
+// reports whether any match was removed.
+func withoutConnection(value, project, conn string) (string, bool) {
 	parts := strings.Split(value, ",")
 	kept := make([]string, 0, len(parts))
 	found := false
 	for _, p := range parts {
-		if connectionEntry(p, project, ConnectionSecretName) {
+		if connectionEntry(p, project, conn) {
 			found = true
 			continue
 		}
@@ -102,8 +102,9 @@ func withoutConnection(value, project string) (string, bool) {
 }
 
 // ConnectionWorkbenches selects Notebooks in project whose connections
-// annotation includes the tool's Connection, ordered by name.
-func ConnectionWorkbenches(list NotebookList, project string) []ConnectionWorkbench {
+// annotation includes the tool's Connection conn (ConnectionNameOf its
+// pipeline server), ordered by name.
+func ConnectionWorkbenches(list NotebookList, project, conn string) []ConnectionWorkbench {
 	var out []ConnectionWorkbench
 	for _, nb := range list.Items {
 		m := nb.Metadata
@@ -114,7 +115,7 @@ func ConnectionWorkbenches(list NotebookList, project string) []ConnectionWorkbe
 		if !ok {
 			continue
 		}
-		if _, named := withoutConnection(value, project); named {
+		if _, named := withoutConnection(value, project, conn); named {
 			_, stopped := m.Annotations[NotebookStoppedAnnotation]
 			out = append(out, ConnectionWorkbench{Name: m.Name, UID: m.UID, ResourceVersion: m.ResourceVersion, Annotation: value, Running: !stopped})
 		}
@@ -124,25 +125,25 @@ func ConnectionWorkbenches(list NotebookList, project string) []ConnectionWorkbe
 }
 
 // ConnectionEnvOnlyWorkbenches are the Notebooks of project whose
-// containers load the tool's Connection through envFrom while their
+// containers load the tool's Connection conn through envFrom while their
 // connections annotation does not name it (as workbenches of RHOAI 2.x
 // were attached), sorted. Nothing takes the Connection off them: after it
 // is deleted, their pods fail to start until it is removed in the
 // dashboard.
-func ConnectionEnvOnlyWorkbenches(list NotebookList, project string) []string {
+func ConnectionEnvOnlyWorkbenches(list NotebookList, project, conn string) []string {
 	var out []string
 	for _, nb := range list.Items {
 		m := nb.Metadata
 		if m.Namespace != "" && m.Namespace != project {
 			continue
 		}
-		if _, named := withoutConnection(m.Annotations[NotebookConnectionsAnnotation], project); named {
+		if _, named := withoutConnection(m.Annotations[NotebookConnectionsAnnotation], project, conn); named {
 			continue
 		}
 	containers:
 		for _, ct := range nb.Spec.Template.Spec.Containers {
 			for _, e := range ct.EnvFrom {
-				if e.SecretRef != nil && e.SecretRef.Name == ConnectionSecretName {
+				if e.SecretRef != nil && e.SecretRef.Name == conn {
 					out = append(out, m.Name)
 					break containers
 				}
@@ -163,21 +164,24 @@ func ConnectionWorkbenchNames(wbs []ConnectionWorkbench) []string {
 }
 
 // listConnectionWorkbenches fetches Notebooks in project that reference
-// the tool's Connection. Clusters lacking the Notebook API yield an empty list.
-func listConnectionWorkbenches(c *kube.Client, project string) ([]ConnectionWorkbench, []string, error) {
+// the tool's Connection conn. Clusters lacking the Notebook API yield an
+// empty list.
+func listConnectionWorkbenches(c *kube.Client, project, conn string) ([]ConnectionWorkbench, []string, error) {
 	var list NotebookList
 	found, err := c.GetIntoOptional(rhoai.NamespacedPath("kubeflow.org/v1", "notebooks", project, ""), &list)
 	if err != nil || !found {
 		return nil, nil, err
 	}
-	return ConnectionWorkbenches(list, project), ConnectionEnvOnlyWorkbenches(list, project), nil
+	return ConnectionWorkbenches(list, project, conn), ConnectionEnvOnlyWorkbenches(list, project, conn), nil
 }
 
 // connectionUsers are the workbenches a teardown takes the tool's
 // Connection off; nil when there is no such Connection (absent, or one that
 // is not the tool's and stays).
 type connectionUsers struct {
-	wbs []ConnectionWorkbench
+	// conn is the Connection (ConnectionNameOf the pipeline server).
+	conn string
+	wbs  []ConnectionWorkbench
 	// envOnly load the Connection through envFrom only
 	// (ConnectionEnvOnlyWorkbenches): reported, never changed.
 	envOnly []string
@@ -190,16 +194,16 @@ func envOnlyNote(project string, users *connectionUsers) string {
 	}
 	n := len(users.envOnly)
 	return fmt.Sprintf(" %s in %s %s the dashboard connection %s without naming it in %s, so it was not taken off %s: %s. %s fail to start now that the connection is deleted; remove it from %s in the dashboard.",
-		kube.CountNoun(n, "workbench", "workbenches"), project, kube.Verb(n, "loads", "load"), ConnectionSecretName, NotebookConnectionsAnnotation,
+		kube.CountNoun(n, "workbench", "workbenches"), project, kube.Verb(n, "loads", "load"), users.conn, NotebookConnectionsAnnotation,
 		kube.Verb(n, "it", "them"), strings.Join(users.envOnly, ", "), kube.Verb(n, "It will", "They will"), kube.Verb(n, "it", "them"))
 }
 
 // unconfirmedRefusal is the refusal for workbenches that use the Connection
 // and were not confirmed as they are now (by name and UID).
-func unconfirmedRefusal(project string, names []string, since string) string {
+func unconfirmedRefusal(project, conn string, names []string, since string) string {
 	n := len(names)
 	return fmt.Sprintf("%s in %s %s the dashboard connection %s%s, and removing it from %s was not confirmed: %s. Nothing was deleted. Review %s in the Delete dialog.",
-		kube.CountNoun(n, "workbench", "workbenches"), project, kube.Verb(n, "uses", "use"), ConnectionSecretName, since,
+		kube.CountNoun(n, "workbench", "workbenches"), project, kube.Verb(n, "uses", "use"), conn, since,
 		kube.Verb(n, "it", "them"), strings.Join(names, ", "), kube.Verb(n, "it", "them"))
 }
 
@@ -210,17 +214,19 @@ func unconfirmedRefusal(project string, names []string, since string) string {
 // again since under the same name is not confirmed). It fails closed: a
 // Connection or workbench list that cannot be read, or a workbench that is
 // not confirmed, gives a refusal message and code instead.
-func connectionWorkbenchesToDetach(c *kube.Client, project string, confirmed map[string]string) (*connectionUsers, string, string) {
-	meta, found, err := kube.ReadObjectMeta(c, rhoai.NamespacedPath("v1", "secrets", project, ConnectionSecretName))
+//
+// connPath is the Connection's path (the caller's literal one).
+func connectionWorkbenchesToDetach(c *kube.Client, project, conn, connPath string, confirmed map[string]string) (*connectionUsers, string, string) {
+	meta, found, err := kube.ReadObjectMeta(c, connPath)
 	switch {
 	case err != nil:
-		return nil, fmt.Sprintf("Cannot check the dashboard connection %s in %s: %v. Nothing was deleted.", ConnectionSecretName, project, err), kube.ErrorCodeFromK8sErr(err)
+		return nil, fmt.Sprintf("Cannot check the dashboard connection %s in %s: %v. Nothing was deleted.", conn, project, err), kube.ErrorCodeFromK8sErr(err)
 	case !found || !meta.HasToolLabel():
 		return nil, "", ""
 	}
-	wbs, envOnly, err := listConnectionWorkbenches(c, project)
+	wbs, envOnly, err := listConnectionWorkbenches(c, project, conn)
 	if err != nil {
-		return nil, fmt.Sprintf("Cannot check which workbenches in %s use the dashboard connection %s: %v. Nothing was deleted.", project, ConnectionSecretName, err), kube.ErrorCodeFromK8sErr(err)
+		return nil, fmt.Sprintf("Cannot check which workbenches in %s use the dashboard connection %s: %v. Nothing was deleted.", project, conn, err), kube.ErrorCodeFromK8sErr(err)
 	}
 	var unconfirmed []string
 	for _, w := range wbs {
@@ -229,19 +235,25 @@ func connectionWorkbenchesToDetach(c *kube.Client, project string, confirmed map
 		}
 	}
 	if len(unconfirmed) > 0 {
-		return nil, unconfirmedRefusal(project, unconfirmed, ""), ErrorCodeConfirmWorkbenches
+		return nil, unconfirmedRefusal(project, conn, unconfirmed, ""), ErrorCodeConfirmWorkbenches
 	}
-	return &connectionUsers{wbs: wbs, envOnly: envOnly}, "", ""
+	return &connectionUsers{conn: conn, wbs: wbs, envOnly: envOnly}, "", ""
 }
 
 // ConnectionWorkbenchesProblem is the check of connectionWorkbenchesToDetach
 // on its own (Clean up runs it for every pipeline server before it deletes
 // anything, and again to list them when a teardown refused): a refusal
-// message and code, and the workbenches that use the Connection now.
+// message and code, and the workbenches that use the Connection now. The
+// Connection is the one of the project's pipeline server
+// (ToolConnectionOf).
 func ConnectionWorkbenchesProblem(c *kube.Client, project string, confirmed map[string]string) (string, string, []ConnectionWorkbench) {
-	users, problem, code := connectionWorkbenchesToDetach(c, project, confirmed)
+	conn, err := ToolConnectionOf(c, project)
+	if err != nil {
+		return fmt.Sprintf("Cannot check the pipeline server in %s, so which dashboard connection its workbenches use is unknown: %v. Nothing was deleted.", project, err), kube.ErrorCodeFromK8sErr(err), nil
+	}
+	users, problem, code := connectionWorkbenchesToDetach(c, project, conn, ConnectionSecretPath(project, conn), confirmed)
 	if code == ErrorCodeConfirmWorkbenches {
-		all, _, err := listConnectionWorkbenches(c, project)
+		all, _, err := listConnectionWorkbenches(c, project, conn)
 		if err != nil {
 			return problem, code, nil
 		}
@@ -270,30 +282,31 @@ func detachConnection(c *kube.Client, project string, users *connectionUsers, lo
 	// before any is changed. The declaration is not a guarantee:
 	// odh-notebook-controller's webhook can still create its ConfigMaps
 	// and Secret ds-pipeline-config in the project on a dry run.
+	conn := users.conn
 	for _, w := range users.wbs {
-		if err := patchOutConnection(c, project, w, true); err != nil {
+		if err := patchOutConnection(c, project, conn, w, true); err != nil {
 			*logs = append(*logs, fmt.Sprintf("Warning: workbench %s cannot be changed (dry run): %v", w.Name, err))
-			return detachFailure(project, w, err, "Nothing was changed or deleted.")
+			return detachFailure(project, conn, w, err, "Nothing was changed or deleted.")
 		}
 	}
 	for _, w := range users.wbs {
-		*logs = append(*logs, fmt.Sprintf("Removing connection %s from workbench %s", ConnectionSecretName, w.Name))
-		if err := patchOutConnection(c, project, w, false); err != nil {
+		*logs = append(*logs, fmt.Sprintf("Removing connection %s from workbench %s", conn, w.Name))
+		if err := patchOutConnection(c, project, conn, w, false); err != nil {
 			*logs = append(*logs, fmt.Sprintf("Warning: workbench %s was not changed: %v", w.Name, err))
-			return detachFailure(project, w, err, "Nothing was deleted; the workbenches before it no longer use the connection. Run the deletion again to retry.")
+			return detachFailure(project, conn, w, err, "Nothing was deleted; the workbenches before it no longer use the connection. Run the deletion again to retry.")
 		}
-		*logs = append(*logs, fmt.Sprintf("OK: Workbench %s no longer uses connection %s", w.Name, ConnectionSecretName))
+		*logs = append(*logs, fmt.Sprintf("OK: Workbench %s no longer uses connection %s", w.Name, conn))
 	}
 	// A workbench may have attached the Connection (again) since the list
 	// was read: read it once more right before the delete, and refuse while
 	// any workbench names it, so none is left naming a deleted Secret.
-	left, _, err := listConnectionWorkbenches(c, project)
+	left, _, err := listConnectionWorkbenches(c, project, conn)
 	if err != nil {
-		return fmt.Sprintf("Cannot check again which workbenches in %s use the dashboard connection %s: %v. Nothing was deleted.", project, ConnectionSecretName, err), kube.ErrorCodeFromK8sErr(err)
+		return fmt.Sprintf("Cannot check again which workbenches in %s use the dashboard connection %s: %v. Nothing was deleted.", project, conn, err), kube.ErrorCodeFromK8sErr(err)
 	}
 	if len(left) > 0 {
-		*logs = append(*logs, fmt.Sprintf("Workbenches use connection %s again: %s", ConnectionSecretName, strings.Join(ConnectionWorkbenchNames(left), ", ")))
-		return unconfirmedRefusal(project, ConnectionWorkbenchNames(left), " (since the deletion started)"), ErrorCodeConfirmWorkbenches
+		*logs = append(*logs, fmt.Sprintf("Workbenches use connection %s again: %s", conn, strings.Join(ConnectionWorkbenchNames(left), ", ")))
+		return unconfirmedRefusal(project, conn, ConnectionWorkbenchNames(left), " (since the deletion started)"), ErrorCodeConfirmWorkbenches
 	}
 	return "", ""
 }
@@ -302,9 +315,9 @@ func detachConnection(c *kube.Client, project string, users *connectionUsers, lo
 // read: a JSON patch that tests its UID, resourceVersion and annotation
 // value, then rewrites only that entry (the annotation goes when nothing is
 // left); with dryRun, as a server-side dry run.
-func patchOutConnection(c *kube.Client, project string, w ConnectionWorkbench, dryRun bool) error {
+func patchOutConnection(c *kube.Client, project, conn string, w ConnectionWorkbench, dryRun bool) error {
 	pointer := "/metadata/annotations/" + strings.ReplaceAll(NotebookConnectionsAnnotation, "/", "~1")
-	rest, _ := withoutConnection(w.Annotation, project)
+	rest, _ := withoutConnection(w.Annotation, project, conn)
 	uid, _ := json.Marshal(w.UID)
 	rv, _ := json.Marshal(w.ResourceVersion)
 	was, _ := json.Marshal(w.Annotation)
@@ -346,14 +359,33 @@ func webhookDenial(err error) string {
 
 // detachFailure is the message and error code of a workbench change that
 // failed; after says what was (not) done.
-func detachFailure(project string, w ConnectionWorkbench, err error, after string) (string, string) {
+func detachFailure(project, conn string, w ConnectionWorkbench, err error, after string) (string, string) {
 	if reason := webhookDenial(err); reason != "" {
 		return fmt.Sprintf("The workbenches webhook refused to take the dashboard connection %s off workbench %s in %s: %s. Fix that workbench's other connections in the dashboard first (for example one whose Secret was deleted), then delete again. %s",
-			ConnectionSecretName, w.Name, project, strings.TrimSuffix(reason, "."), after), ErrorCodeWebhookRefused
+			conn, w.Name, project, strings.TrimSuffix(reason, "."), after), ErrorCodeWebhookRefused
 	}
 	why, code := err.Error(), kube.ErrorCodeFromK8sErr(err)
 	if kube.IsK8sConflict(err) || kube.IsK8sError(err, http.StatusUnprocessableEntity) || kube.IsK8sNotFound(err) {
 		why, code = "it changed since it was read", "conflict"
 	}
-	return fmt.Sprintf("Cannot take the dashboard connection %s off workbench %s in %s (%s). %s", ConnectionSecretName, w.Name, project, why, after), code
+	return fmt.Sprintf("Cannot take the dashboard connection %s off workbench %s in %s (%s). %s", conn, w.Name, project, why, after), code
+}
+
+// ToolConnectionOf is the Connection of the tool's pipeline server in
+// project (ConnectionNameOf), read with c; the shared storage's
+// ConnectionSecretName when the project has none of the tool's.
+func ToolConnectionOf(c *kube.Client, project string) (string, error) {
+	dspas, err := ListProjectDSPAs(c, project)
+	if errors.Is(err, ErrDSPACRDMissing) {
+		return ConnectionSecretName, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	for _, d := range dspas {
+		if d.ManagedByTool() {
+			return ConnectionNameOf(d), nil
+		}
+	}
+	return ConnectionSecretName, nil
 }

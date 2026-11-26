@@ -29,6 +29,12 @@ var projectActionRoots = map[string][]string{
 	// check); MLflow's access reviews are the hand list.
 	"mlflow-samples.add":    {mlflowPkg + ".RunSamples"},
 	"mlflow-samples.remove": {mlflowPkg + ".RunSamples"},
+	// Project S3 storage: setup and repair are the same code (apply).
+	"project-s3.setup":                 {clusterPkg + "/internal/storage.projectS3Run.apply"},
+	"project-s3.repair":                {clusterPkg + "/internal/storage.projectS3Run.apply"},
+	"project-s3.delete":                {clusterPkg + "/internal/storage.projectS3Run.delete"},
+	"project-pipeline-server.setup":    {clusterPkg + "/internal/storage.setupProjectPipelineServer"},
+	"project-pipeline-server.teardown": {clusterPkg + "/internal/storage.teardownProjectPipelineServer"},
 }
 
 // projectActionPruned are what a project action's code names but does not
@@ -84,14 +90,25 @@ func actionKey(verb, group, resource, name string) string {
 func scannedKeys(t *testing.T, id string) []string {
 	var out []string
 	for _, r := range projectActionScan(t, id) {
-		name := r.Name
-		if r.Resource == "namespaces" && r.Group == "" && name == anyNS {
-			name = ProjectNameSelf
-		}
-		out = append(out, actionKey(r.Verb, r.Group, r.Resource, name))
+		out = append(out, actionKey(r.Verb, r.Group, r.Resource, actionName(r)))
 	}
 	slices.Sort(out)
 	return slices.Compact(out)
+}
+
+// actionName is the name a scanned request is reviewed with: the
+// project's own namespace for a namespace read at run time, and every
+// name ("") for an object named at run time (a workbench the user
+// confirmed, for example): the review then needs the verb on all of them
+// (fail closed).
+func actionName(r rbacRequest) string {
+	switch {
+	case r.Resource == "namespaces" && r.Group == "" && r.Name == anyNS:
+		return ProjectNameSelf
+	case r.Name == anyNS:
+		return ""
+	}
+	return r.Name
 }
 
 func tableKeys(a ProjectAction) []string {
@@ -220,10 +237,7 @@ func writeProjectActionRequests(t *testing.T, b *strings.Builder) {
 		}
 		var rows []string
 		for _, r := range projectActionScan(t, a.ID) {
-			name := r.Name
-			if r.Resource == "namespaces" && r.Group == "" && name == anyNS {
-				name = ProjectNameSelf
-			}
+			name := actionName(r)
 			k := actionKey(r.Verb, r.Group, r.Resource, name)
 			switch r.Namespace {
 			case anyNS:

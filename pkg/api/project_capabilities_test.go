@@ -51,16 +51,21 @@ func TestProjectCapabilitiesPerRole(t *testing.T) {
 				if !ok {
 					t.Fatalf("%s missing", a.ID)
 				}
-				want := role == roleClusterAdmin || (a.ForUsers && role != roleViewer)
+				adminOnlyHere := role == roleEditor && needsProjectAdmin(a)
+				want := role == roleClusterAdmin && a.AdminRefusal == "" || (a.ForUsers && role != roleViewer && role != roleClusterAdmin && !adminOnlyHere)
 				if cp.Allowed != want {
 					t.Errorf("%s: allowed %v, want %v (%+v)", a.ID, cp.Allowed, want, cp)
 				}
 				switch {
 				case want && (cp.Reason != "" || len(cp.Missing) != 0):
 					t.Errorf("%s: allowed with a reason %+v", a.ID, cp)
-				case !want && !a.ForUsers && cp.Code != adminOnlyCode:
+				case !want && role == roleClusterAdmin && (cp.Code != notForClusterAdminsCode || cp.Reason != a.AdminRefusal):
 					t.Errorf("%s: %+v", a.ID, cp)
-				case !want && a.ForUsers && (cp.Code != missingPermissionsCode || len(cp.Missing) == 0 || !strings.Contains(cp.Reason, "edit role")):
+				case !want && role != roleClusterAdmin && !a.ForUsers && cp.Code != adminOnlyCode:
+					t.Errorf("%s: %+v", a.ID, cp)
+				case !want && adminOnlyHere && (cp.Code != missingPermissionsCode || !strings.Contains(cp.Reason, "ask an admin of project team-a")):
+					t.Errorf("%s: %+v", a.ID, cp)
+				case !want && role == roleViewer && a.ForUsers && (cp.Code != missingPermissionsCode || len(cp.Missing) == 0 || !strings.Contains(cp.Reason, "edit role")):
 					t.Errorf("%s: %+v", a.ID, cp)
 				}
 			}

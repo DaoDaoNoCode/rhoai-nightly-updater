@@ -2359,6 +2359,9 @@ type ResourceState struct {
 	// Connection is the dashboard S3 Connection (a Secret in the project)
 	// the tool created with this pipeline server, or "".
 	Connection string `json:"connection,omitempty"`
+	// ProjectStorage is true on a pipeline server that uses its project's
+	// own S3 storage (nightly-s3), not the cluster's shared storage.
+	ProjectStorage bool `json:"projectStorage,omitempty"`
 	// ConnectionState is what the Secret itself says, read only for the
 	// selected project (GET /api/resources/status?project=): "present"
 	// (the tool's), "missing" (none; deleted, for example in the

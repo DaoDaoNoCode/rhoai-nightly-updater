@@ -48,13 +48,17 @@ func ActorRole(c *kube.Client) string {
 
 // UserRecordKeys are the snapshot keys whose entries project actions
 // write, each a JSON object keyed by "<project>" or "<project>/<name>",
-// whose values have "by" and "actorRole".
-var UserRecordKeys = []string{"workbenches", "playgrounds"}
+// whose values have "by" and "actorRole". projectStorages (project S3
+// storage, the non-admin design section 4.5) has a ceiling of its own
+// (userRecordCeilings).
+var UserRecordKeys = []string{"workbenches", "playgrounds", "projectStorages"}
 
 // RecordOwner is one entry of UserRecordKeys: its project (and, for a
 // user's entry, the project's namespace UID), who wrote it and with which
 // role.
 type RecordOwner struct {
+	// Key is the snapshot key the entry is in (one of UserRecordKeys).
+	Key        string
 	Project    string
 	ProjectUID string
 	By         string
@@ -103,7 +107,7 @@ func ReadRecordOwners(c *kube.Client) ([]RecordOwner, error) {
 		}
 		for k, e := range entries {
 			project, _, _ := strings.Cut(k, "/")
-			out = append(out, RecordOwner{Project: project, ProjectUID: e.ProjectUID, By: e.By, ActorRole: e.ActorRole})
+			out = append(out, RecordOwner{Key: key, Project: project, ProjectUID: e.ProjectUID, By: e.By, ActorRole: e.ActorRole})
 		}
 	}
 	return out, nil
@@ -118,16 +122,37 @@ const ErrorCodeRecordsFull = "records_full"
 const SweepInterval = 5 * time.Minute
 
 // MaxUserRecordEntryBytes bounds one user's entry as written (its JSON).
-// MaxUserRecordEntries bounds every user's entry persisted, those of
-// projects that are gone included (which the project caps do not count):
-// 200 x 2 KiB = 400 KiB of the snapshot ConfigMap's 1 MiB, so users'
-// entries leave at least 600 KiB to the cluster-admins' records. 200 is
-// every key of UserRecordKeys (2) in each of the MaxUserRecordProjects
-// (100), so live entries alone never reach it.
+// MaxUserRecordEntries bounds every user's entry persisted in the
+// workbenches and playgrounds keys, those of projects that are gone
+// included (which the project caps do not count): 200 x 2 KiB = 400 KiB of
+// the snapshot ConfigMap's 1 MiB. 200 is both keys in each of the
+// MaxUserRecordProjects (100), so live entries alone never reach it.
+// The projectStorages key has a ceiling of its own
+// (MaxUserProjectStorageEntries of at most MaxUserProjectStorageEntryBytes
+// each, 100 KiB): one entry per project. Users' entries together take at
+// most 500 KiB, which leaves more than 500 KiB to the cluster-admins'
+// records.
 const (
-	MaxUserRecordEntryBytes = 2048
-	MaxUserRecordEntries    = 200
+	MaxUserRecordEntryBytes         = 2048
+	MaxUserRecordEntries            = 200
+	MaxUserProjectStorageEntryBytes = 1024
+	MaxUserProjectStorageEntries    = 100
 )
+
+// userRecordCeiling is the hard ceiling of one class of users' entries:
+// how many may be persisted, and how large one may be.
+type userRecordCeiling struct {
+	entries, bytes int
+}
+
+// ceilingOf is the ceiling of the entries of snapshot key key, and the
+// keys that share it.
+func ceilingOf(key string) (userRecordCeiling, []string) {
+	if key == "projectStorages" {
+		return userRecordCeiling{MaxUserProjectStorageEntries, MaxUserProjectStorageEntryBytes}, []string{"projectStorages"}
+	}
+	return userRecordCeiling{MaxUserRecordEntries, MaxUserRecordEntryBytes}, []string{"workbenches", "playgrounds"}
+}
 
 // RecordsFullError is a refusal by the caps of users' records.
 type RecordsFullError struct{ Msg string }
@@ -223,8 +248,15 @@ func UserRecordCapRefusal(owners []RecordOwner, entry RecordOwner, exists func(R
 	return "", nil
 }
 
-// AdmitUserEntry decides whether c (a project user's client) may write
-// its entry of project, whose JSON is entryJSON (nil before the entry is
+// AdmitUserEntry is AdmitUserEntryFor of an entry of the workbenches or
+// playgrounds key.
+func AdmitUserEntry(c *kube.Client, project string, prior *RecordOwner, entryJSON []byte) error {
+	return AdmitUserEntryFor(c, "", project, prior, entryJSON)
+}
+
+// AdmitUserEntryFor decides whether c (a project user's client) may write
+// its entry of project in snapshot key key ("": workbenches or
+// playgrounds), whose JSON is entryJSON (nil before the entry is
 // made: the early check of a setup), where prior is the entry's old value
 // (nil: none). A cluster-admin's entry is always admitted. An entry that
 // stays the same user's in the same project needs no admission; a new
@@ -234,12 +266,13 @@ func UserRecordCapRefusal(owners []RecordOwner, entry RecordOwner, exists func(R
 // process. A refusal is a *RecordsFullError; a failed read is an error
 // whose text names only the read's HTTP status (the ServiceAccount's error
 // is logged, not returned).
-func AdmitUserEntry(c *kube.Client, project string, prior *RecordOwner, entryJSON []byte) error {
+func AdmitUserEntryFor(c *kube.Client, key, project string, prior *RecordOwner, entryJSON []byte) error {
 	if !c.ProjectUser() {
 		return nil
 	}
-	if len(entryJSON) > MaxUserRecordEntryBytes {
-		return &RecordsFullError{Msg: fmt.Sprintf("This tool's record of the setup would take %d bytes, more than the %d it keeps for one user's entry.", len(entryJSON), MaxUserRecordEntryBytes)}
+	ceiling, class := ceilingOf(key)
+	if len(entryJSON) > ceiling.bytes {
+		return &RecordsFullError{Msg: fmt.Sprintf("This tool's record of the setup would take %d bytes, more than the %d it keeps for one user's entry.", len(entryJSON), ceiling.bytes)}
 	}
 	entry := RecordOwner{Project: project, ProjectUID: c.ProjectUID(), By: kube.GetUser(c), ActorRole: ActorRoleUser}
 	if prior != nil && prior.ActorRole == ActorRoleUser && prior.By == entry.By && prior.ProjectUID == entry.ProjectUID {
@@ -250,16 +283,16 @@ func AdmitUserEntry(c *kube.Client, project string, prior *RecordOwner, entryJSO
 		kube.LogFactReadFailure("cannot read this tool's records for the users' caps", "snapshot", err)
 		return fmt.Errorf("cannot read this tool's records (%s)", kube.FactReadProblem(err))
 	}
-	// The hard ceiling: every user's entry counts, stale ones included,
-	// when this write adds one.
+	// The hard ceiling: every user's entry of the same class counts, stale
+	// ones included, when this write adds one.
 	if prior == nil || prior.ActorRole != ActorRoleUser {
 		n := 0
 		for _, o := range owners {
-			if o.ActorRole == ActorRoleUser {
+			if o.ActorRole == ActorRoleUser && slices.Contains(class, o.Key) {
 				n++
 			}
 		}
-		if n >= MaxUserRecordEntries {
+		if n >= ceiling.entries {
 			return &RecordsFullError{Msg: fmt.Sprintf("The updater's records of users' objects are full (%d entries). Entries of deleted projects are removed by the updater's background check, which runs every %d minutes when no other operation runs; set up again after it. A cluster-admin can free entries now by deleting workbenches and playgrounds no longer needed (Clean up on the Environment page).", n, int(SweepInterval/time.Minute))}
 		}
 	}

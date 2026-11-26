@@ -12,6 +12,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/workbench"
 )
 
@@ -60,7 +61,22 @@ const (
 	SourceScan   = ""
 	SourceGenAI  = "gen-ai"
 	SourceMLflow = "mlflow"
+	// SourceProjectAdmin is the check that the user is an admin of the
+	// project (the non-admin design, amendment G1): a request the action
+	// never sends, which the admin role grants and edit does not.
+	SourceProjectAdmin = "project-admin"
 )
+
+// projectAdminCheck is the request whose review tells an admin of the
+// project from an editor: create RoleBindings, which Kubernetes' admin
+// role has and edit lacks (kubernetes v1.31.0 bootstrappolicy policy.go
+// 288-296).
+var projectAdminCheck = ProjectRequest{Verb: "create", Group: "rbac.authorization.k8s.io", Resource: "rolebindings", Scope: ScopeProject, Source: SourceProjectAdmin}
+
+// isProjectAdminCheck reports whether r, as reviewed, is that check.
+func isProjectAdminCheck(r AccessRequest) bool {
+	return r.Verb == projectAdminCheck.Verb && r.Group == projectAdminCheck.Group && r.Resource == projectAdminCheck.Resource && r.Name == ""
+}
 
 // ProjectRequest is one request a project action can send with the user's
 // token: what RBAC decides (verb, API group, resource, name) and where.
@@ -95,6 +111,10 @@ type ProjectAction struct {
 	// Requests are what it can send with the user's token. Nil for an
 	// action that is not ForUsers.
 	Requests []ProjectRequest
+	// AdminRefusal, when set, is why a cluster-admin may not run it (the
+	// owner's decision: a cluster-admin does not create project S3
+	// storage, and sets pipeline servers up on the shared storage).
+	AdminRefusal string
 }
 
 func scanned(verb, group, resource, name, scope string) ProjectRequest {
@@ -175,6 +195,7 @@ var projectActions = []ProjectAction{
 		scanned("get", "", "namespaces", ProjectNameSelf, ScopeProject),
 		wbGetStorage, wbPipelineCfg,
 		scanned("get", "", "secrets", "rhoai-nightly-updater-s3", ScopeProject),
+		scanned("get", "", "secrets", storage.ProjectConnectionSecretName, ScopeProject),
 		wbGetNotebook,
 		scanned("get", "opendatahub.io", "odhdashboardconfigs", "odh-dashboard-config", ScopeApps),
 		wbListPods,
@@ -211,7 +232,85 @@ var projectActions = []ProjectAction{
 	// Regenerate replaces the demo's data: not in the design's list of
 	// what users may run (section 1: add, remove), so a cluster-admin's.
 	{ID: "mlflow-samples.regenerate", Feature: "mlflow-samples", Action: "regenerate", Label: "Regenerate the MLflow demo"},
+	// Project S3 storage: set up, repair and delete by admins of the
+	// project only (G1; projectAdminCheck). A cluster-admin repairs and
+	// deletes one, and does not set one up.
+	{ID: "project-s3.setup", Feature: "project-s3", Action: "setup", Label: "Set up the project's S3 storage", ForUsers: true,
+		AdminRefusal: storage.AdminCannotCreateProjectStorage, Requests: joinRequests(projectS3Apply, []ProjectRequest{projectAdminCheck})},
+	{ID: "project-s3.repair", Feature: "project-s3", Action: "repair", Label: "Repair the project's S3 storage", ForUsers: true,
+		Requests: joinRequests(projectS3Apply, []ProjectRequest{projectAdminCheck})},
+	{ID: "project-s3.delete", Feature: "project-s3", Action: "delete", Label: "Delete the project's S3 storage", ForUsers: true,
+		Requests: joinRequests(projectS3Delete, []ProjectRequest{projectAdminCheck})},
+	// Its pipeline server: admins and editors of the project.
+	{ID: "project-pipeline-server.setup", Feature: "project-pipeline-server", Action: "setup", Label: "Set up the pipeline server on the project's S3 storage", ForUsers: true,
+		AdminRefusal: storage.AdminUsesSharedStorage, Requests: projectPipelineSetup},
+	{ID: "project-pipeline-server.teardown", Feature: "project-pipeline-server", Action: "teardown", Label: "Delete the pipeline server on the project's S3 storage", ForUsers: true,
+		Requests: projectPipelineTeardown},
 }
+
+// The project storage's own requests (the RBAC scan's), by its objects'
+// names.
+func projectS3Requests(verbs ...string) []ProjectRequest {
+	var out []ProjectRequest
+	for _, o := range []struct{ group, resource, name string }{
+		{"", "persistentvolumeclaims", storage.ProjectS3PVC},
+		{"", "secrets", storage.ProjectS3Secret},
+		{"networking.k8s.io", "networkpolicies", storage.ProjectS3NetworkPolicy},
+		{"apps", "deployments", storage.ProjectS3Deployment},
+		{"", "services", storage.ProjectS3Service},
+	} {
+		for _, v := range verbs {
+			out = append(out, scanned(v, o.group, o.resource, o.name, ScopeProject))
+		}
+	}
+	return out
+}
+
+var (
+	projectS3Apply = joinRequests(projectS3Requests("create", "get", "patch", "delete"), []ProjectRequest{
+		scanned("create", "", "persistentvolumeclaims", "", ScopeProject),
+		scanned("create", "", "secrets", "", ScopeProject),
+		scanned("create", "networking.k8s.io", "networkpolicies", "", ScopeProject),
+		scanned("create", "apps", "deployments", "", ScopeProject),
+		scanned("create", "", "services", "", ScopeProject),
+	})
+	projectS3Delete = joinRequests(projectS3Requests("get", "delete"), []ProjectRequest{
+		scanned("list", "datasciencepipelinesapplications.opendatahub.io", "datasciencepipelinesapplications", "", ScopeProject),
+	})
+	projectPipelineSetup = []ProjectRequest{
+		scanned("create", "", "secrets", "", ScopeProject),
+		scanned("create", "", "secrets", storage.DSPASecretName, ScopeProject),
+		scanned("create", "", "secrets", storage.ProjectConnectionSecretName, ScopeProject),
+		scanned("create", "datasciencepipelinesapplications.opendatahub.io", "datasciencepipelinesapplications", "", ScopeProject),
+		scanned("create", "datasciencepipelinesapplications.opendatahub.io", "datasciencepipelinesapplications", storage.DSPAName, ScopeProject),
+		scanned("delete", "", "secrets", storage.DSPASecretName, ScopeProject),
+		scanned("delete", "", "secrets", storage.ProjectConnectionSecretName, ScopeProject),
+		scanned("delete", "datasciencepipelinesapplications.opendatahub.io", "datasciencepipelinesapplications", storage.DSPAName, ScopeProject),
+		scanned("get", "", "secrets", storage.DSPASecretName, ScopeProject),
+		scanned("get", "", "secrets", storage.ProjectConnectionSecretName, ScopeProject),
+		scanned("get", "", "secrets", storage.ProjectS3Secret, ScopeProject),
+		scanned("get", "", "persistentvolumeclaims", storage.ProjectS3PVC, ScopeProject),
+		scanned("get", "", "services", storage.ProjectS3Service, ScopeProject),
+		scanned("get", "networking.k8s.io", "networkpolicies", storage.ProjectS3NetworkPolicy, ScopeProject),
+		scanned("get", "apps", "deployments", storage.ProjectS3Deployment, ScopeProject),
+		scanned("get", "datasciencepipelinesapplications.opendatahub.io", "datasciencepipelinesapplications", storage.DSPAName, ScopeProject),
+		scanned("list", "datasciencepipelinesapplications.opendatahub.io", "datasciencepipelinesapplications", "", ScopeProject),
+		scanned("patch", "", "secrets", storage.DSPASecretName, ScopeProject),
+		scanned("patch", "", "secrets", storage.ProjectConnectionSecretName, ScopeProject),
+		scanned("patch", "datasciencepipelinesapplications.opendatahub.io", "datasciencepipelinesapplications", storage.DSPAName, ScopeProject),
+	}
+	projectPipelineTeardown = []ProjectRequest{
+		scanned("delete", "", "secrets", storage.DSPASecretName, ScopeProject),
+		scanned("delete", "", "secrets", storage.ProjectConnectionSecretName, ScopeProject),
+		scanned("delete", "datasciencepipelinesapplications.opendatahub.io", "datasciencepipelinesapplications", storage.DSPAName, ScopeProject),
+		scanned("get", "", "secrets", storage.DSPASecretName, ScopeProject),
+		scanned("get", "", "secrets", storage.ProjectConnectionSecretName, ScopeProject),
+		scanned("get", "datasciencepipelinesapplications.opendatahub.io", "datasciencepipelinesapplications", storage.DSPAName, ScopeProject),
+		scanned("list", "datasciencepipelinesapplications.opendatahub.io", "datasciencepipelinesapplications", "", ScopeProject),
+		scanned("list", "kubeflow.org", "notebooks", "", ScopeProject),
+		scanned("patch", "kubeflow.org", "notebooks", "", ScopeProject),
+	}
+)
 
 // ProjectActions are the project actions (a copy).
 func ProjectActions() []ProjectAction {
@@ -370,6 +469,9 @@ actions:
 
 // missingText says a missing request and who can grant it.
 func missingText(r AccessRequest, project string) string {
+	if isProjectAdminCheck(r) && r.Namespace == project {
+		return fmt.Sprintf("Only an admin of project %s sets up, repairs and deletes its S3 storage (the OpenShift admin role there); ask an admin of project %s.", project, project)
+	}
 	if r.Namespace == project {
 		return fmt.Sprintf("%s: ask an admin of project %s to give you the edit role there.", r, project)
 	}
@@ -403,6 +505,8 @@ func projectFeatureComponents(feature string) []envkit.FeatureComponent {
 		return []envkit.FeatureComponent{envkit.MLflowComponent}
 	case "playground":
 		return features.PlaygroundComponents
+	case "project-pipeline-server":
+		return []envkit.FeatureComponent{envkit.PipelinesComponent}
 	}
 	return nil
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/authz"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/dashdev"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
@@ -235,20 +236,51 @@ func GetResourcesStatusFor(c, u *Client, project string) (*types.ResourcesStatus
 		if ps.Namespace != project || ps.Terminating {
 			continue
 		}
-		meta, found, err := kube.ReadObjectMeta(c, rhoai.NamespacedPath("v1", "secrets", project, storage.ConnectionSecretName))
-		switch {
-		case err != nil:
-			ps.ConnectionState, ps.ConnectionMessage = ConnectionUnreadable, err.Error()
-		case !found:
-			ps.ConnectionState = ConnectionMissing
-		case !meta.HasToolLabel():
-			ps.ConnectionState = ConnectionForeign
-		default:
-			ps.ConnectionState = ConnectionPresent
-			if u != nil {
-				addConnectionWorkbenches(u, project, ps)
+		// The Connection of a pipeline server on project storage
+		// (nightly-s3-connection) holds that project's root key: the
+		// ServiceAccount may not read it, so only the signed-in user's
+		// own token does.
+		if ps.ProjectStorage {
+			meta, found, err := readProjectConnection(u, project)
+			ps.ConnectionState, ps.ConnectionMessage = connectionStateOf(meta, found, err)
+			if ps.ConnectionState == ConnectionPresent {
+				addConnectionWorkbenches(u, project, storage.ProjectConnectionSecretName, ps)
 			}
+			continue
+		}
+		meta, found, err := kube.ReadObjectMeta(c, rhoai.NamespacedPath("v1", "secrets", project, storage.ConnectionSecretName))
+		ps.ConnectionState, ps.ConnectionMessage = connectionStateOf(meta, found, err)
+		if ps.ConnectionState == ConnectionPresent && u != nil {
+			addConnectionWorkbenches(u, project, storage.ConnectionSecretName, ps)
 		}
 	}
 	return status, nil
+}
+
+// connectionStateOf is the ResourceState.ConnectionState of a Connection
+// Secret as read.
+func connectionStateOf(meta kube.ObjectMeta, found bool, err error) (string, string) {
+	switch {
+	case err != nil:
+		return ConnectionUnreadable, err.Error()
+	case !found:
+		return ConnectionMissing, ""
+	case !meta.HasToolLabel():
+		return ConnectionForeign, ""
+	}
+	return ConnectionPresent, ""
+}
+
+// readProjectConnection reads the dashboard Connection of a pipeline
+// server on project storage with u, the signed-in user's own token (nil:
+// unreadable); never with the ServiceAccount's.
+func readProjectConnection(u *Client, project string) (kube.ObjectMeta, bool, error) {
+	if u == nil || !u.ActsAsUser() {
+		return kube.ObjectMeta{}, false, authz.ErrNotUserClient
+	}
+	var sec struct {
+		Metadata kube.ObjectMeta `json:"metadata"`
+	}
+	found, err := u.GetIntoOptional(rhoai.NamespacedPath("v1", "secrets", project, storage.ProjectConnectionSecretName), &sec)
+	return sec.Metadata, found, err
 }

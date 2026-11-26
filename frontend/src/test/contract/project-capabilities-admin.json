@@ -30,6 +30,40 @@
       "label": "Delete the playground",
       "missing": []
     },
+    "project-pipeline-server.setup": {
+      "allowed": false,
+      "blockedBy": [],
+      "code": "not_for_cluster_admins",
+      "label": "Set up the pipeline server on the project's S3 storage",
+      "missing": [],
+      "reason": "A cluster-admin's pipeline servers use the cluster's shared S3 storage: set it up on the Pipelines tab. A pipeline server on a project's own storage is set up by the project's admins and editors; a cluster-admin can delete one."
+    },
+    "project-pipeline-server.teardown": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Delete the pipeline server on the project's S3 storage",
+      "missing": []
+    },
+    "project-s3.delete": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Delete the project's S3 storage",
+      "missing": []
+    },
+    "project-s3.repair": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Repair the project's S3 storage",
+      "missing": []
+    },
+    "project-s3.setup": {
+      "allowed": false,
+      "blockedBy": [],
+      "code": "not_for_cluster_admins",
+      "label": "Set up the project's S3 storage",
+      "missing": [],
+      "reason": "A cluster-admin's pipeline servers use the cluster's shared S3 storage, so a cluster-admin does not set up project S3 storage: an admin of the project does. A cluster-admin can repair or delete one."
+    },
     "workbench.delete-storage": {
       "allowed": true,
       "blockedBy": [],

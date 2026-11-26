@@ -99,11 +99,14 @@ type Plan struct {
 	// StorageSize and StorageClass (empty string means the cluster default).
 	StorageSize  string
 	StorageClass string
-	// Connection: wire the tool's S3 Connection; Pipelines: attach
-	// Elyra settings; MLflow: associate MLflow.
-	Connection bool
-	Pipelines  bool
-	MLflow     bool
+	// Connection: wire the tool's S3 Connection, ConnectionName (that of
+	// the project's pipeline server: the shared storage's or the project
+	// storage's); Pipelines: attach Elyra settings; MLflow: associate
+	// MLflow.
+	Connection     bool
+	ConnectionName string
+	Pipelines      bool
+	MLflow         bool
 }
 
 // ImageChoice identifies an ImageStream tag used to run the workbench.
@@ -147,7 +150,7 @@ func NotebookManifest(p Plan) map[string]any {
 	base := "/notebook/" + p.Project + "/" + Name
 	connections := ""
 	if p.Connection {
-		connections = p.Project + "/" + ConnectionSecret
+		connections = p.Project + "/" + kube.FirstNonEmpty(p.ConnectionName, ConnectionSecret)
 	}
 	annotations := map[string]any{
 		"openshift.io/display-name":            DisplayName,

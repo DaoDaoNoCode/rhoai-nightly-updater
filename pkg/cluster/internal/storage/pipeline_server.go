@@ -167,6 +167,17 @@ func dspaCollectionPath(namespace string) string {
 // ListDSPAs lists pipeline servers in namespace, or cluster-wide when
 // namespace is "". A missing CRD returns errDSPACRDMissing.
 func ListDSPAs(c *kube.Client, namespace string) ([]DSPA, error) {
+	return listDSPAsAt(c, dspaCollectionPath(namespace))
+}
+
+// ListProjectDSPAs is ListDSPAs of one project, by its literal path: a
+// project action never lists them cluster-wide.
+func ListProjectDSPAs(c *kube.Client, project string) ([]DSPA, error) {
+	return listDSPAsAt(c, rhoai.NamespacedPath(DSPAAPIGroup, "datasciencepipelinesapplications", project, ""))
+}
+
+// listDSPAsAt lists the pipeline servers at path (a collection).
+func listDSPAsAt(c *kube.Client, path string) ([]DSPA, error) {
 	var list struct {
 		Items []struct {
 			Metadata kube.ObjectMeta `json:"metadata"`
@@ -198,7 +209,7 @@ func ListDSPAs(c *kube.Client, namespace string) ([]DSPA, error) {
 			} `json:"status"`
 		} `json:"items"`
 	}
-	found, err := c.GetIntoOptional(dspaCollectionPath(namespace), &list)
+	found, err := c.GetIntoOptional(path, &list)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse pipeline server list: %w", err)
@@ -314,9 +325,12 @@ func PipelineServerState(d DSPA, dashboardURL string) types.ResourceState {
 		// Workbench pipelines need the name dspa (see dspaName).
 		NonStandardName: d.Meta.Name != DSPAName,
 	}
-	if d.Meta.Annotations[DSPAConnectionAnnotation] == ConnectionSecretName {
-		state.Connection = ConnectionSecretName
+	// The Connection that goes with it: the shared storage's, or the
+	// project storage's (ConnectionNameOf).
+	if conn := ConnectionNameOf(d); d.Meta.Annotations[DSPAConnectionAnnotation] == conn {
+		state.Connection = conn
 	}
+	state.ProjectStorage = OnProjectStorage(d)
 	if !d.ExternalDB {
 		// DSPO's MariaDB PVC is named mariadb-<dspa> and owned by the DSPA
 		// (config/internal/mariadb/default/pvc.yaml.tmpl), so it is
@@ -423,6 +437,12 @@ func setupPipelineServer(c *kube.Client, project string, recreate bool, confirme
 	var old *DSPA
 	for i, d := range existing {
 		switch {
+		case d.Meta.Name == DSPAName && d.Meta.HasToolLabel() && OnProjectStorage(d):
+			// A pipeline server stays on the storage it was set up on
+			// (the non-admin design, 4.4 rule 1): this one is on the
+			// project's own storage, so the shared storage's setup leaves
+			// it alone.
+			return fail(fmt.Sprintf("The pipeline server in %s uses the project's own S3 storage (%s) and stays on it; it is set up and deleted with the project's own actions. Nothing was changed.", project, ProjectS3Deployment), "validation", "on project storage")
 		case d.Meta.Name == DSPAName && d.Meta.HasToolLabel():
 			if d.Meta.Terminating() {
 				return fail(fmt.Sprintf("The pipeline server in %s is still being deleted. Wait for it to finish, then retry.", project), "terminating", "terminating")
@@ -749,7 +769,7 @@ func TeardownPipelineServer(c *kube.Client, project, confirmedUID string, confir
 		}
 		logs = append(logs, "No pipeline server created by this tool in this project")
 		// A previous run may have removed the DSPA but not its secret.
-		wbs, problem, code := connectionWorkbenchesToDetach(c, project, confirmedWorkbenches)
+		wbs, problem, code := connectionWorkbenchesToDetach(c, project, ConnectionSecretName, rhoai.NamespacedPath("v1", "secrets", project, ConnectionSecretName), confirmedWorkbenches)
 		if problem != "" {
 			return fail(problem, code, "workbenches not confirmed")
 		}
@@ -757,7 +777,7 @@ func TeardownPipelineServer(c *kube.Client, project, confirmedUID string, confir
 			return fail(msg, code, "workbench change failed")
 		}
 		orphan := &DSPA{Meta: kube.ObjectMeta{UID: "none"}, SecretName: DSPASecretName}
-		note := deleteDSPASecret(c, project, orphan, all, &logs) + deleteConnection(c, project, &logs)
+		note := deleteDSPASecret(c, project, orphan, all, &logs) + deleteConnection(c, project, ConnectionSecretName, rhoai.NamespacedPath("v1", "secrets", project, ConnectionSecretName), &logs)
 		if !listMissing {
 			note += deleteProjectKey(c, project, nil, all, &logs)
 		}
@@ -767,6 +787,11 @@ func TeardownPipelineServer(c *kube.Client, project, confirmedUID string, confir
 		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("No pipeline server created by this tool remains in %s.%s", project, envOnlyNote(project, wbs)), Logs: logs}, nil
 	}
 
+	// A pipeline server on the project's own storage is deleted as one:
+	// its own Connection, no key in the shared storage.
+	if OnProjectStorage(*target) {
+		return teardownProjectPipelineServer(c, project, confirmedWorkbenches)
+	}
 	dspaPath, ok := toolDSPAPath(project, target.Meta.Name)
 	if !ok {
 		return fail(fmt.Sprintf("Pipeline server %s does not have a name this tool creates, so it was not deleted.", target.Meta.Name), "not_managed", "unexpected DSPA name")
@@ -785,7 +810,7 @@ func TeardownPipelineServer(c *kube.Client, project, confirmedUID string, confir
 	}
 	// The DSPA owns the Connection, so the garbage collector deletes it with
 	// the DSPA: its workbenches lose it before the DSPA goes.
-	wbs, problem, code := connectionWorkbenchesToDetach(c, project, confirmedWorkbenches)
+	wbs, problem, code := connectionWorkbenchesToDetach(c, project, ConnectionSecretName, rhoai.NamespacedPath("v1", "secrets", project, ConnectionSecretName), confirmedWorkbenches)
 	if problem != "" {
 		return fail(problem, code, "workbenches not confirmed")
 	}
@@ -823,7 +848,7 @@ func TeardownPipelineServer(c *kube.Client, project, confirmedUID string, confir
 	// The DSPA finalizer does not read the credentials secret, so it can go
 	// now; doing it before waiting keeps a timed-out teardown from leaving the
 	// secret behind with no pipeline server left to show a Tear down button.
-	secretNote := deleteDSPASecret(c, project, target, all, &logs) + deleteConnection(c, project, &logs) + deleteProjectKey(c, project, target, all, &logs)
+	secretNote := deleteDSPASecret(c, project, target, all, &logs) + deleteConnection(c, project, ConnectionSecretName, rhoai.NamespacedPath("v1", "secrets", project, ConnectionSecretName), &logs) + deleteProjectKey(c, project, target, all, &logs)
 
 	gone, waitErr := kube.WaitForDeletion(c, dspaPath, pipelineServerDeleteTimeout, pipelineServerDeletePoll)
 	if waitErr != nil {
@@ -1009,13 +1034,17 @@ type projectSecret struct {
 	found         bool
 }
 
-// projectSecretPath is the path of one of the two Secrets the tool writes in
-// a pipeline project; any other name gets the S3 secret's, so no other name
+// projectSecretPath is the path of one of the Secrets the tool writes in a
+// pipeline project (the DSPA's, and the shared or the project storage's
+// Connection); any other name gets the S3 secret's, so no other name
 // reaches the API (and the RBAC coverage test resolves the paths
 // statically). The read and write helpers take it as an argument.
 func projectSecretPath(project, name string) string {
-	if name == ConnectionSecretName {
+	switch name {
+	case ConnectionSecretName:
 		return rhoai.NamespacedPath("v1", "secrets", project, ConnectionSecretName)
+	case ProjectConnectionSecretName:
+		return rhoai.NamespacedPath("v1", "secrets", project, ProjectConnectionSecretName)
 	}
 	return rhoai.NamespacedPath("v1", "secrets", project, DSPASecretName)
 }
@@ -1147,23 +1176,22 @@ func addDashboardDSPASettings(c *kube.Client, spec, apiServer map[string]any) []
 // would delete it too; deleting it here also covers one an interrupted
 // setup left without an owner. It returns a note for the response when it
 // had to be left behind on an error.
-func deleteConnection(c *kube.Client, project string, logs *[]string) string {
-	path := rhoai.NamespacedPath("v1", "secrets", project, ConnectionSecretName)
+func deleteConnection(c *kube.Client, project, conn, path string, logs *[]string) string {
 	meta, found, err := kube.ReadObjectMeta(c, path)
 	switch {
 	case err != nil:
-		*logs = append(*logs, fmt.Sprintf("Warning: cannot read connection %s: %v", ConnectionSecretName, err))
-		return fmt.Sprintf(" The dashboard connection %s could not be checked and was left in place: %v.", ConnectionSecretName, err)
+		*logs = append(*logs, fmt.Sprintf("Warning: cannot read connection %s: %v", conn, err))
+		return fmt.Sprintf(" The dashboard connection %s could not be checked and was left in place: %v.", conn, err)
 	case !found:
 		return ""
 	case !meta.HasToolLabel():
-		*logs = append(*logs, fmt.Sprintf("Kept secret %s: it was not created by this tool", ConnectionSecretName))
+		*logs = append(*logs, fmt.Sprintf("Kept secret %s: it was not created by this tool", conn))
 		return ""
 	}
-	*logs = append(*logs, fmt.Sprintf("Deleting dashboard connection %s", ConnectionSecretName))
+	*logs = append(*logs, fmt.Sprintf("Deleting dashboard connection %s", conn))
 	if _, err := kube.DeleteWithUID(c, path, meta.UID); err != nil && !kube.IsK8sNotFound(err) {
 		*logs = append(*logs, fmt.Sprintf("Warning: failed to delete connection: %v", err))
-		return fmt.Sprintf(" The dashboard connection %s could not be deleted: %v. Re-run teardown or delete it manually.", ConnectionSecretName, err)
+		return fmt.Sprintf(" The dashboard connection %s could not be deleted: %v. Re-run teardown or delete it manually.", conn, err)
 	}
 	*logs = append(*logs, "OK: Connection deleted")
 	return ""

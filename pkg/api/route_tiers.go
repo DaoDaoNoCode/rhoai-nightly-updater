@@ -97,6 +97,9 @@ var getRouteTiers = map[string]readTier{
 	// The workbench of one of the user's projects, read with their token
 	// (HandleWorkbenchStatus); the project check comes first.
 	"GET /api/resources/workbench": tierPerRole,
+	// The S3 storage of one of the user's projects, read with their token
+	// (HandleProjectStorageStatus); the project check comes first.
+	"GET /api/resources/project-s3": tierPerRole,
 }
 
 // tierOf is the tier of a route pattern: admin-only unless getRouteTiers

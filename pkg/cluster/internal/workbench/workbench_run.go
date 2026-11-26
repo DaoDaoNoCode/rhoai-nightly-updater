@@ -16,6 +16,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/registry"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -402,7 +403,7 @@ func deprecatedNote(img ImageChoice) string {
 func describe(p Plan) string {
 	parts := []string{fmt.Sprintf("Image %s (%s)", p.Image.DisplayName, p.Image.Tag), "hardware profile " + p.Profile.DisplayName, "storage " + p.StorageSize}
 	if p.Connection {
-		parts = append(parts, "connection "+ConnectionSecret)
+		parts = append(parts, "connection "+kube.FirstNonEmpty(p.ConnectionName, ConnectionSecret))
 	}
 	return strings.Join(parts, ", ") + "." + deprecatedNote(p.Image)
 }
@@ -684,14 +685,15 @@ func Teardown(c *kube.Client, project string, deleteStorage bool) (*types.Operat
 	return Run(c, types.WorkbenchRequest{Action: "teardown", Project: project, DeleteStorage: deleteStorage}, nil)
 }
 
-// withoutEntry strips this tool's Connection for project out of value and
-// reports whether such an entry appeared (webhook token format: commas, "ns/name").
+// withoutEntry strips this tool's Connection for project (the shared
+// storage's or the project storage's) out of value and reports whether
+// such an entry appeared (webhook token format: commas, "ns/name").
 func withoutEntry(value, project string) (string, bool) {
 	var kept []string
 	found := false
 	for _, part := range strings.Split(value, ",") {
 		ns, name, ok := strings.Cut(strings.TrimSpace(part), "/")
-		if ok && strings.TrimSpace(ns) == project && strings.TrimSpace(name) == ConnectionSecret {
+		if n := strings.TrimSpace(name); ok && strings.TrimSpace(ns) == project && (n == ConnectionSecret || n == storage.ProjectConnectionSecretName) {
 			found = true
 			continue
 		}

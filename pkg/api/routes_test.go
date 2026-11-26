@@ -93,9 +93,12 @@ func TestEveryNonGetRouteIsGated(t *testing.T) {
 
 // projectRouteBodies are valid bodies of the project actions' routes.
 var projectRouteBodies = map[string]string{
-	"/api/resources/workbench/stream":      `{"action":"setup","project":"team-a"}`,
-	"/api/resources/playground/stream":     `{"action":"teardown","project":"team-a"}`,
-	"/api/resources/samples/mlflow/stream": `{"action":"add","project":"team-a","samples":["training"]}`,
+	// Actions a cluster-admin may run (Set up of project storage is not).
+	"/api/resources/project-s3/stream":              `{"action":"repair","project":"team-a"}`,
+	"/api/resources/project-pipeline-server/stream": `{"action":"teardown","project":"team-a"}`,
+	"/api/resources/workbench/stream":               `{"action":"setup","project":"team-a"}`,
+	"/api/resources/playground/stream":              `{"action":"teardown","project":"team-a"}`,
+	"/api/resources/samples/mlflow/stream":          `{"action":"add","project":"team-a","samples":["training"]}`,
 }
 
 // lockFreeMutationRoutes are the gated routes that take no cluster lock,

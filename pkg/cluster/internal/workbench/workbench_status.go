@@ -382,9 +382,9 @@ func BuildPlan(c *kube.Client, project string, dsc rhoai.DSCRead) (Plan, string,
 	if err != nil {
 		return fail("the storage classes", err)
 	}
-	connection, err := toolConnection(c, project)
+	connectionName, err := toolConnection(c, project)
 	if err != nil {
-		return fail("the dashboard connection "+ConnectionSecret, err)
+		return fail("the tool's dashboard connection", err)
 	}
 	pipelines, err := pipelineConfigExists(c, project)
 	if err != nil {
@@ -394,7 +394,7 @@ func BuildPlan(c *kube.Client, project string, dsc rhoai.DSCRead) (Plan, string,
 		Project: project, Username: kube.GetUser(c), Image: image, Profile: profile,
 		StorageSize:  kube.FirstNonEmpty(cfg.Spec.NotebookController.PVCSize, DefaultStorageSize),
 		StorageClass: ChooseStorageClass(classes, cfg.Spec.NotebookController.StorageClassName),
-		Connection:   connection, Pipelines: pipelines, MLflow: componentOn(dsc, "mlflowoperator"),
+		Connection:   connectionName != "", ConnectionName: connectionName, Pipelines: pipelines, MLflow: componentOn(dsc, "mlflowoperator"),
 	}, "", ""
 }
 

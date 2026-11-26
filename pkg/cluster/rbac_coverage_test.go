@@ -116,7 +116,21 @@ var rbacUserTokenReads = map[string]string{
 	"workbench_reads.go:pipelineConfigExists": "whether a project has Secret ds-pipeline-config",
 	"workbench_reads.go:listNotebooks":        "a project's Notebooks, for which use the workbench storage",
 	"workbench_reads.go:listProjectPods":      "a project's pods, for which mount the workbench storage",
-	"workbench_reads.go:toolConnection":       "a project's dashboard Connection rhoai-nightly-updater-s3",
+	"workbench_reads.go:toolConnection":       "a project's dashboard Connection rhoai-nightly-updater-s3 or nightly-s3-connection",
+	// A user's project status: the tool's Connection of its pipeline
+	// server (the shared storage's or the project storage's).
+	"user_reads.go:connectionState": "a project's dashboard Connection rhoai-nightly-updater-s3 or nightly-s3-connection",
+	// The Pipelines tab's status of a pipeline server on project storage:
+	// its Connection holds the project's root key, which the
+	// ServiceAccount may not read.
+	"resources.go:readProjectConnection": "a project's dashboard Connection nightly-s3-connection",
+	// Project S3 storage (GET /api/resources/project-s3 and its actions):
+	// every object read with the user's token; Secret
+	// nightly-s3-credentials holds the project's root key.
+	"project_s3.go:readProjectS3Object":            "a project's S3 storage objects (nightly-s3-*)",
+	"project_s3.go:readProjectS3Deployment":        "a project's S3 storage Deployment nightly-s3",
+	"project_s3.go:ReadProjectS3Keys":              "a project's S3 storage key (Secret nightly-s3-credentials)",
+	"project_s3_run.go:projectStorageFenceProblem": "a project's S3 storage NetworkPolicy nightly-s3-ingress",
 	// A model's setup in a Kueue project (the dashboard's Kueue rule for
 	// its hardware profile).
 	"models_hardware.go:listModelLocalQueues": "a project's Kueue LocalQueues, for a model's hardware profile",

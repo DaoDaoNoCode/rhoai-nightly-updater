@@ -39,7 +39,23 @@ type RecordedPipelineServer struct {
 	UID string `json:"uid"`
 	At  string `json:"at,omitempty"`
 	By  string `json:"by,omitempty"`
+	// Storage is RecordedOnProjectStorage for a pipeline server on its
+	// project's own S3 storage (set up by a project's admin or editor);
+	// "" for one on the shared storage.
+	Storage string `json:"storage,omitempty"`
+	// ActorRole and ProjectUID, for a pipeline server on project storage:
+	// record.ActorRoleUser for a user who is not a cluster-admin, and the
+	// project's namespace UID.
+	ActorRole  string `json:"actorRole,omitempty"`
+	ProjectUID string `json:"projectUID,omitempty"`
 }
+
+// RecordedOnProjectStorage is RecordedPipelineServer.Storage of a pipeline
+// server on project storage. Such an entry needs no cap of its own: a
+// pipeline server on project storage needs the project's storage, whose
+// entry the caps of users' records count, and deleting the storage drops
+// it (forgetProjectPipelineServer).
+const RecordedOnProjectStorage = "project"
 
 // PipelineRecord is the record, by "<project>/<name>".
 type PipelineRecord map[string]RecordedPipelineServer

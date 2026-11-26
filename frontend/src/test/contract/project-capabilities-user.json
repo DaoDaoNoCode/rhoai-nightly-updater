@@ -36,6 +36,36 @@
       "label": "Delete the playground",
       "missing": []
     },
+    "project-pipeline-server.setup": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Set up the pipeline server on the project's S3 storage",
+      "missing": []
+    },
+    "project-pipeline-server.teardown": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Delete the pipeline server on the project's S3 storage",
+      "missing": []
+    },
+    "project-s3.delete": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Delete the project's S3 storage",
+      "missing": []
+    },
+    "project-s3.repair": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Repair the project's S3 storage",
+      "missing": []
+    },
+    "project-s3.setup": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Set up the project's S3 storage",
+      "missing": []
+    },
     "workbench.delete-storage": {
       "allowed": true,
       "blockedBy": [],
