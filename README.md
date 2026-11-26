@@ -189,6 +189,8 @@ A model deployed elsewhere (in the dashboard, say) in a project the gateway does
 - **Allow <project>** adds the project to the gateway's list; the projects already on it stay. For a gateway this tool did not create, the tab gives RHOAI's step for a cluster admin instead.
 - **Projects allowed on the gateway** lists them. Deleting a project's last model takes the project off the list (it stays while another model there uses the gateway); a project that was deleted leaves it at the next Models change, and **Remove from the list** does it by hand.
 
+On a nightly cluster whose preset image is missing from the registry, the model reads **Error** with "The cluster preset's image is not published yet", and **Use the newest released Red Hat image** changes only the model's image.
+
 Each part's menu has **Delete**, for the chosen model only; the gateway stays while a model uses it. **Clean up Models** deletes every model of this tool in the projects you choose, then the gateway. Troubleshooting: [RUNBOOK §10.2](RUNBOOK.md#102-models-the-inference-gateway-and-cpu-models).
 
 #### Workbench: a Jupyter workbench made as the dashboard makes it
@@ -228,8 +230,6 @@ Before **Set up the playground in <project>**:
 - **Set up** runs it.
 
 **Set up** asks the dashboard itself to create the playground, as its Gen AI studio does, with the models you choose, and waits until it is ready, typically 1 to 2 minutes. **Use it** has a chat request to run from a terminal with your own `oc whoami -t` token. **Delete** (in the part's menu) asks the dashboard to delete it, with its chats and documents; the models stay. Troubleshooting: [RUNBOOK §10.3](RUNBOOK.md#103-playground-the-dashboards-gen-ai-playground).
-
-On a nightly cluster whose preset image is missing from the registry, the model reads **Error** with "The cluster preset's image is not published yet", and **Use the newest released Red Hat image** changes only the model's image.
 
 #### MaaS: Models as a Service
 
