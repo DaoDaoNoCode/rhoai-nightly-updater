@@ -419,3 +419,37 @@ func TestProjectActionStreamCarriesItsOperationID(t *testing.T) {
 		t.Fatalf("operation %q, stream %s", id, w.Body.String())
 	}
 }
+
+// MLflow samples Add: a user's holds the project's lock and can be
+// cancelled; a cluster-admin's holds the cluster lock (it may restart the
+// shared MLflow) and cannot.
+func TestMLflowSamplesCancellablePerRole(t *testing.T) {
+	for _, tc := range []struct {
+		role        string
+		cancellable bool
+	}{{roleEditor, true}, {roleClusterAdmin, false}} {
+		t.Run(tc.role, func(t *testing.T) {
+			newProjectGateEnv(t, tc.role)
+			started, proceed := make(chan struct{}), make(chan struct{})
+			runMLflowSamples = func(*cluster.Client, types.MLflowSamplesRequest, func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+				close(started)
+				<-proceed
+				return &types.OperationResponse{Success: true, Message: "done"}, nil
+			}
+			done := make(chan *httptest.ResponseRecorder, 1)
+			go func() {
+				done <- serveProjectAction(t, "/api/resources/samples/mlflow/stream", `{"action":"add","project":"team-a","samples":["training"]}`)
+			}()
+			<-started
+			ops := inflight.list()
+			if len(ops) != 1 || ops[0].Cancellable != tc.cancellable {
+				t.Errorf("the running action: %+v", ops)
+			}
+			if w := postCancel(t, "user:alice", ops[0].ID); (w.Code == http.StatusAccepted) != tc.cancellable {
+				t.Errorf("cancel: %d %s", w.Code, w.Body.String())
+			}
+			close(proceed)
+			<-done
+		})
+	}
+}
