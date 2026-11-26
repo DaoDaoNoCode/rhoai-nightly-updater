@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1400,6 +1401,251 @@ func TestKueueTerminatingDependencies(t *testing.T) {
 		f.putJSON(kqWorkloads+"/w1", `{"metadata":{"name":"w1","namespace":"proj","deletionTimestamp":"2026-11-24T10:00:00Z","finalizers":["kueue.x-k8s.io/resource-in-use"]},"spec":{"queueName":"team-queue"}}`)
 		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"}); !res.Success || nsLabels(f)[kueue.ProjectLabel] != "true" {
 			t.Fatalf("got %+v", res)
+		}
+	})
+}
+
+// A Workload of pods being deleted is leaving, not a user of the LocalQueue
+// (Kueue's pod integration makes the Pod its owner, and the garbage
+// collector deletes it once the Pod is gone): the teardown waits for it,
+// then deletes the queues. Any user that is not leaving refuses the
+// teardown at once, as before; a cancel or the operation's end stops the
+// wait and keeps the queue.
+func TestKueueTeardownWaitsForLeavingWorkloads(t *testing.T) {
+	const kqPods = "/api/v1/namespaces/proj/pods"
+	podWorkload := func(name, podUID string) string {
+		return `{"metadata":{"name":"` + name + `","namespace":"proj","ownerReferences":[{"kind":"Pod","name":"p","uid":"` + podUID + `"}]},"spec":{"queueName":"nightly-kueue"}}`
+	}
+	// goneAfter removes the paths (the Workload and its Pod, as the
+	// garbage collector does) when the teardown lists the Workloads for
+	// the nth time.
+	goneAfter := func(f *resourceFake, n int, paths ...string) *int {
+		lists := 0
+		f.beforeServe = func(method, path string) {
+			if method != "GET" || path != kqWorkloads {
+				return
+			}
+			lists++
+			if lists == n {
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				for _, p := range paths {
+					k, _ := parseFakePath(p)
+					delete(f.objects, k)
+				}
+			}
+		}
+		return &lists
+	}
+	waited := func(events []UpdateStepEvent, want string) bool {
+		for _, e := range events {
+			if e.Step == "queues" && e.Status == "running" && e.Message == want {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, tc := range []struct {
+		name  string
+		setup func(f *resourceFake)
+	}{
+		{"its pod is terminating", func(f *resourceFake) {
+			f.putJSON(kqPods+"/p", `{"metadata":{"name":"p","uid":"pod-uid","deletionTimestamp":"2026-11-25T15:34:16Z"}}`)
+			f.putJSON(kqWorkloads+"/w1", podWorkload("w1", "pod-uid"))
+		}},
+		{"its pod is gone", func(f *resourceFake) {
+			f.putJSON(kqWorkloads+"/w1", podWorkload("w1", "pod-uid"))
+		}},
+		{"its pod was made again", func(f *resourceFake) {
+			f.putJSON(kqPods+"/p", `{"metadata":{"name":"p","uid":"new-pod-uid"}}`)
+			f.putJSON(kqWorkloads+"/w1", podWorkload("w1", "pod-uid"))
+		}},
+		{"it is terminating", func(f *resourceFake) {
+			f.putJSON(kqWorkloads+"/w1", `{"metadata":{"name":"w1","namespace":"proj","deletionTimestamp":"2026-11-25T15:34:16Z","finalizers":["kueue.x-k8s.io/resource-in-use"]},"spec":{"queueName":"nightly-kueue"}}`)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, u := putKueueCluster(t)
+			if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"}); !res.Success {
+				t.Fatalf("setup: %+v", res)
+			}
+			tc.setup(f)
+			lists := goneAfter(f, 3, kqWorkloads+"/w1", kqPods+"/p")
+			res, events := runKueueOp(t, u, types.KueueRequest{Action: "teardown"})
+			if !res.Success || f.has(kqLQ) || f.has(kqCQ) || f.has(kqFlavor) {
+				t.Fatalf("got %+v", res)
+			}
+			if !waited(events, "Waiting for the workload of pods being deleted to finish") || *lists < 3 {
+				t.Fatalf("no wait reported (%d lists): %+v", *lists, events)
+			}
+		})
+	}
+
+	t.Run("one user is not leaving", func(t *testing.T) {
+		f, u := putKueueCluster(t)
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"}); !res.Success {
+			t.Fatalf("setup: %+v", res)
+		}
+		f.putJSON(kqPods+"/p", `{"metadata":{"name":"p","uid":"pod-uid","deletionTimestamp":"2026-11-25T15:34:16Z"}}`)
+		f.putJSON(kqPods+"/q", `{"metadata":{"name":"q","uid":"running-uid"}}`)
+		f.putJSON(kqWorkloads+"/w1", podWorkload("w1", "pod-uid"))
+		f.putJSON(kqWorkloads+"/w2", podWorkload("w2", "running-uid"))
+		f.putJSON(kqWorkloads+"/w3", `{"metadata":{"name":"w3","namespace":"proj","ownerReferences":[{"kind":"Job","name":"j","uid":"job-uid"}]},"spec":{"queueName":"nightly-kueue"}}`)
+		lists := goneAfter(f, 0)
+		res, events := runKueueOp(t, u, types.KueueRequest{Action: "teardown"})
+		// The list's order is the API server's: either user may come first.
+		if res.Success || res.ErrorCode != "in_use" || !f.has(kqLQ) || !strings.Contains(res.Message, "Workload w2") || !strings.Contains(res.Message, "Workload w3") ||
+			strings.Contains(res.Message, "Workload w1") || !strings.HasSuffix(res.Message, ", so it stays; remove them first.") {
+			t.Fatalf("got %+v", res)
+		}
+		if *lists != 1 || waited(events, "Waiting for the workload of pods being deleted to finish") {
+			t.Fatalf("waited (%d lists): %+v", *lists, events)
+		}
+	})
+
+	t.Run("no pod read without a workload only pods own", func(t *testing.T) {
+		f, u := putKueueCluster(t)
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"}); !res.Success {
+			t.Fatalf("setup: %+v", res)
+		}
+		f.putJSON(kqWorkloads+"/w3", `{"metadata":{"name":"w3","namespace":"proj","ownerReferences":[{"kind":"Pod","name":"p","uid":"pod-uid"},{"kind":"Job","name":"j","uid":"job-uid"}]},"spec":{"queueName":"nightly-kueue"}}`)
+		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"})
+		if res.Success || res.ErrorCode != "in_use" || len(f.callsTo("GET", kqPods)) != 0 {
+			t.Fatalf("got %+v, pod reads %d", res, len(f.callsTo("GET", kqPods)))
+		}
+	})
+
+	t.Run("unreadable pods", func(t *testing.T) {
+		f, u := putKueueCluster(t)
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"}); !res.Success {
+			t.Fatalf("setup: %+v", res)
+		}
+		f.putJSON(kqWorkloads+"/w1", podWorkload("w1", "pod-uid"))
+		f.fail["GET "+kqPods] = 403
+		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"})
+		if res.Success || !f.has(kqLQ) || !strings.HasPrefix(res.Message, "Cannot tell what uses LocalQueue nightly-kueue, so it stays") {
+			t.Fatalf("got %+v", res)
+		}
+	})
+
+	t.Run("cancel while waiting", func(t *testing.T) {
+		f, u := putKueueCluster(t)
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"}); !res.Success {
+			t.Fatalf("setup: %+v", res)
+		}
+		f.putJSON(kqWorkloads+"/w1", podWorkload("w1", "pod-uid"))
+		var sw cancelSwitch
+		lists := 0
+		f.beforeServe = func(method, path string) {
+			if method == "GET" && path == kqWorkloads {
+				if lists++; lists == 2 {
+					sw.on.Store(true)
+				}
+			}
+		}
+		res, _ := runKueueOp(t, withCancel(u, &sw), types.KueueRequest{Action: "teardown"})
+		if res.Success || res.ErrorCode != "cancelled" || !f.has(kqLQ) || lists != 2 ||
+			res.Message != "Cancelled by the user who started it while it waited for workloads of pods being deleted; LocalQueue nightly-kueue stays." {
+			t.Fatalf("got %+v after %d lists", res, lists)
+		}
+	})
+
+	// On one poll, the last Workload goes and the change arrives (a cancel,
+	// the queue edited): the teardown deletes nothing.
+	lastPoll := func(f *resourceFake, change func(lq map[string]any)) *int {
+		lists := 0
+		f.beforeServe = func(method, path string) {
+			if method != "GET" || path != kqWorkloads {
+				return
+			}
+			if lists++; lists == 2 {
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				k, _ := parseFakePath(kqWorkloads + "/w1")
+				delete(f.objects, k)
+				lk, _ := parseFakePath(kqLQ)
+				change(f.objects[lk])
+			}
+		}
+		return &lists
+	}
+
+	t.Run("cancel as the last workload goes", func(t *testing.T) {
+		f, u := putKueueCluster(t)
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"}); !res.Success {
+			t.Fatalf("setup: %+v", res)
+		}
+		f.putJSON(kqWorkloads+"/w1", podWorkload("w1", "pod-uid"))
+		var sw cancelSwitch
+		lists := lastPoll(f, func(map[string]any) { sw.on.Store(true) })
+		res, _ := runKueueOp(t, withCancel(u, &sw), types.KueueRequest{Action: "teardown"})
+		if res.Success || res.ErrorCode != "cancelled" || !f.has(kqLQ) || !f.has(kqCQ) || *lists != 2 || len(f.callsTo("DELETE", kqLQ)) != 0 {
+			t.Fatalf("got %+v after %d lists", res, *lists)
+		}
+	})
+
+	t.Run("the queue loses the tool's label during the wait", func(t *testing.T) {
+		f, u := putKueueCluster(t)
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"}); !res.Success {
+			t.Fatalf("setup: %+v", res)
+		}
+		f.putJSON(kqWorkloads+"/w1", podWorkload("w1", "pod-uid"))
+		lastPoll(f, func(lq map[string]any) {
+			meta := ensureMap(lq, "metadata")
+			delete(ensureMap(meta, "labels"), "app.kubernetes.io/managed-by")
+			meta["resourceVersion"] = "99"
+		})
+		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"})
+		if res.Success || res.ErrorCode != "not_managed" || !f.has(kqLQ) || len(f.callsTo("DELETE", kqLQ)) != 0 ||
+			res.Message != "LocalQueue nightly-kueue changed while this tool waited for the workloads of pods being deleted: it is no longer the one this tool created (another UID, or without the label app.kubernetes.io/managed-by=rhoai-nightly-updater), so this tool does not delete it." {
+			t.Fatalf("got %+v", res)
+		}
+	})
+
+	t.Run("Kueue updates the queue between the re-read and the delete", func(t *testing.T) {
+		f, u := putKueueCluster(t)
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"}); !res.Success {
+			t.Fatalf("setup: %+v", res)
+		}
+		f.putJSON(kqWorkloads+"/w1", podWorkload("w1", "pod-uid"))
+		goneAfter(f, 2, kqWorkloads+"/w1")
+		bumped := false
+		f.beforeRequest = func(r *http.Request) {
+			if r.Method == "DELETE" && r.URL.Path == kqLQ && !bumped {
+				bumped = true
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				k, _ := parseFakePath(kqLQ)
+				ensureMap(f.objects[k], "metadata")["resourceVersion"] = "100"
+			}
+		}
+		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"})
+		deletes := f.callsTo("DELETE", kqLQ)
+		if !res.Success || f.has(kqLQ) || len(deletes) != 2 || !strings.Contains(deletes[1].Body, `"resourceVersion":"100"`) {
+			t.Fatalf("got %+v, deletes %+v", res, deletes)
+		}
+	})
+
+	t.Run("the operation ends while waiting", func(t *testing.T) {
+		f, u := putKueueCluster(t)
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"}); !res.Success {
+			t.Fatalf("setup: %+v", res)
+		}
+		f.putJSON(kqWorkloads+"/w1", podWorkload("w1", "pod-uid"))
+		ctx, cancel := context.WithCancel(u.Context())
+		defer cancel()
+		lists := 0
+		f.beforeServe = func(method, path string) {
+			if method == "GET" && path == kqWorkloads {
+				if lists++; lists == 2 {
+					cancel()
+				}
+			}
+		}
+		res, _ := runKueueOp(t, u.WithContext(ctx), types.KueueRequest{Action: "teardown"})
+		if res.Success || res.ErrorCode != "cancelled" || !f.has(kqLQ) || !strings.HasPrefix(res.Message, "Stopped waiting for workloads of pods being deleted") {
+			t.Fatalf("got %+v after %d lists", res, lists)
 		}
 	})
 }

@@ -1115,3 +1115,33 @@ func TestPlayground_AnUnconfirmedRecordClaimsTheInstallsServer(t *testing.T) {
 		t.Fatalf("status %+v, %v", st, err)
 	}
 }
+
+// The playground's status is cached for a few seconds, and it lists the
+// models the playground can use: a model operation that ends makes the
+// next read fresh, so the Playground part re-read when the action ends
+// shows the model just set up (or deleted), not the cached answer.
+func TestPlayground_StatusIsReadAgainAfterAModelOperation(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	models := func() int {
+		t.Helper()
+		st, err := GetPlaygroundStatus(e.c, e.reader, "proj")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(st.Models)
+	}
+	if n := models(); n == 0 {
+		t.Fatal("no models before the change")
+	}
+	e.g.models["proj"] = `{"data":[]}`
+	if n := models(); n == 0 {
+		t.Fatal("the status was not cached: the test cannot tell a fresh read")
+	}
+	// Any model operation, here one refused at its check.
+	if res, _ := RunProjectModel(e.reader, types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "no-such-model"}, nil); res == nil || res.Success {
+		t.Fatalf("model operation: %+v", res)
+	}
+	if n := models(); n != 0 {
+		t.Fatalf("after a model operation the cached status (%d models) was used", n)
+	}
+}

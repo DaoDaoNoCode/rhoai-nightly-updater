@@ -105,6 +105,7 @@ type projectModelRun struct {
 // streamed step per part: setup "check", "model", "model-ready",
 // "callable"; teardown "model".
 func RunProjectModel(c *kube.Client, req types.ProjectModelRequest, onStep func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+	defer modelChanges.Add(1)
 	entry, _ := CatalogEntry(req.Model)
 	r := &projectModelRun{c: c, emit: onStep, req: req, entry: entry, activity: req.Action + "-models",
 		target: fmt.Sprintf("model %s in %s", kube.FirstNonEmpty(entry.Name, req.Model), req.Project)}
