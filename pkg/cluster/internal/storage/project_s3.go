@@ -508,6 +508,10 @@ func ForgetGoneProjectStorages(c *kube.Client, gone func(project string, e Proje
 		}
 		return writeProjectStorageRecord(c, rec)
 	})
+	if err != nil {
+		// Nothing of a failed change was removed.
+		return nil, err
+	}
 	return dropped, err
 }
 

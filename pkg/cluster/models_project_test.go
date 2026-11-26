@@ -233,6 +233,23 @@ func TestProjectModelRollbackPerWrite(t *testing.T) {
 		mc.f.fail["PATCH /api/v1/namespaces/"+record.GetActivityNamespace()+testSnapshotPath] = http.StatusInternalServerError
 		mc.f.fail["POST /api/v1/namespaces/"+record.GetActivityNamespace()+"/configmaps"] = http.StatusInternalServerError
 		mc.f.failMessage["PATCH /api/v1/namespaces/"+record.GetActivityNamespace()+testSnapshotPath] = "serviceaccount words"
+		// With no snapshot ConfigMap yet the failing write is its create.
+		mc.f.failMessage["POST /api/v1/namespaces/"+record.GetActivityNamespace()+"/configmaps"] = "serviceaccount words"
+		res, _ := runProjectModelForTest(t, u, types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct"})
+		if res.Success || !strings.Contains(res.Message, "deleted again") || strings.Contains(res.Message, "serviceaccount words") {
+			t.Fatalf("%+v", res)
+		}
+		if mc.f.has(testModelPath) {
+			t.Error("the unrecorded model is left")
+		}
+	})
+	t.Run("record apply", func(t *testing.T) {
+		// The snapshot ConfigMap exists: the failing write is the apply.
+		mc := newModelsCluster(t)
+		putModelRecord(t, mc.f, serving.ModelsRecord{})
+		u := projectModelUser(mc)
+		mc.f.fail["PATCH /api/v1/namespaces/"+record.GetActivityNamespace()+testSnapshotPath] = http.StatusInternalServerError
+		mc.f.failMessage["PATCH /api/v1/namespaces/"+record.GetActivityNamespace()+testSnapshotPath] = "serviceaccount words"
 		res, _ := runProjectModelForTest(t, u, types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct"})
 		if res.Success || !strings.Contains(res.Message, "deleted again") || strings.Contains(res.Message, "serviceaccount words") {
 			t.Fatalf("%+v", res)

@@ -166,6 +166,10 @@ func ForgetGoneProjects(c *kube.Client, gone func(project string, e Recorded) bo
 		}
 		return writeRecord(c, rec)
 	})
+	if err != nil {
+		// Nothing of a failed change was removed.
+		return nil, err
+	}
 	sort.Strings(dropped)
 	return dropped, err
 }

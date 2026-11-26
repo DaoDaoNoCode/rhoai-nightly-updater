@@ -358,3 +358,64 @@ func TestSweepRetryReportsOnlyItsOwnRemovals(t *testing.T) {
 		t.Errorf("dropped %v after %d writes, want none after the one that conflicted", dropped, patches)
 	}
 }
+
+// A create whose answer does not say the ConfigMap's resourceVersion: the
+// attempt's next write is not sent (neither unconditional nor on a made-up
+// version); the change runs again from a fresh read, and its writes then
+// carry the version read.
+func TestSnapshotCreateWithoutVersionRestartsBeforeWritingAgain(t *testing.T) {
+	f, c := newResourceFake(t)
+	collection := "/api/v1/namespaces/" + record.GetActivityNamespace() + "/configmaps"
+	swallowed := false
+	f.intercept = func(w http.ResponseWriter, r *http.Request, _ []byte) bool {
+		if swallowed || r.Method != http.MethodPost || r.URL.Path != collection {
+			return false
+		}
+		swallowed = true
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{}`))
+		return true
+	}
+	runs := 0
+	err := record.UpdateSnapshot(c, func(tc *Client) error {
+		runs++
+		if _, err := record.ReadSnapshotKey(tc, "first"); err != nil {
+			return err
+		}
+		if err := record.WriteSnapshotKey(tc, "first", "test-first", "1"); err != nil {
+			return err
+		}
+		return record.WriteSnapshotKey(tc, "second", "test-second", "2")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runs != 2 {
+		t.Errorf("the change ran %d times, want again after the create without a version", runs)
+	}
+	for _, call := range f.calls {
+		if call.Method == http.MethodPatch && strings.HasSuffix(call.Path, "/"+record.SnapshotConfigMapName) && !strings.Contains(call.Body, "resourceVersion") {
+			t.Errorf("an unconditional apply was sent: %s", call.Body)
+		}
+		if strings.Contains(call.Body, `"resourceVersion":"0"`) {
+			t.Errorf("an apply on a made-up version was sent: %s", call.Body)
+		}
+	}
+	for _, key := range []string{"first", "second"} {
+		if v, _ := record.ReadSnapshotKey(c, key); v == "" {
+			t.Errorf("key %s is missing", key)
+		}
+	}
+}
+
+// A sweep whose change fails reports no removals.
+func TestFailedSweepReportsNoRemovals(t *testing.T) {
+	f, c := newResourceFake(t)
+	m := serving.ModelCatalog[0].Name
+	putModelRecord(t, f, serving.ModelsRecord{serving.ModelRecordKey("gone-a", m): {UID: "a"}})
+	f.fail["PATCH /api/v1/namespaces/"+record.GetActivityNamespace()+"/configmaps/"+record.SnapshotConfigMapName] = http.StatusInternalServerError
+	dropped, err := serving.ForgetGoneModels(c, func(string, string, serving.RecordedModel) bool { return true })
+	if err == nil || dropped != nil {
+		t.Fatalf("dropped %v, err %v", dropped, err)
+	}
+}

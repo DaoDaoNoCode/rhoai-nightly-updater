@@ -222,6 +222,10 @@ func ForgetGoneModels(c *kube.Client, gone func(project, name string, e Recorded
 		}
 		return WriteModelsRecord(c, rec)
 	})
+	if err != nil {
+		// Nothing of a failed change was removed.
+		return nil, err
+	}
 	sort.Strings(dropped)
 	return dropped, err
 }

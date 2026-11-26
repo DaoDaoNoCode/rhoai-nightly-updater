@@ -34,11 +34,17 @@ type snapshotTxnKey struct{}
 type snapshotTxn struct {
 	read bool
 	rv   string
-	// missing: the first read found no ConfigMap; created: this attempt
-	// created it (its later writes are conditional on the creation's
-	// resourceVersion).
-	missing bool
+	// missing: the first read found no ConfigMap (the first write creates
+	// it). unknown: this attempt created it, but the answer did not say
+	// its resourceVersion: a later write of the attempt starts the change
+	// over from a fresh read instead of writing.
+	missing, unknown bool
 }
+
+// errSnapshotVersionUnknown restarts a change (UpdateSnapshot retries a
+// conflict) whose attempt created the ConfigMap without learning its
+// resourceVersion, before it writes again. Nothing was sent.
+var errSnapshotVersionUnknown = &kube.K8sError{Status: http.StatusConflict, Reason: "Conflict", K8sMessage: "the snapshot ConfigMap's version after its create is not known; reading it again"}
 
 func txnOf(c *kube.Client) *snapshotTxn {
 	if c == nil || c.Context() == nil {
@@ -88,13 +94,16 @@ func ApplySnapshotKeys(c *kube.Client, manager string, data map[string]any) erro
 			return err
 		}
 		created, err := kube.ParseObjectMeta(body)
+		t.missing = false
 		if err != nil || created.ResourceVersion == "" {
-			// Not known: the next write of this attempt is refused as a
-			// conflict rather than written unconditionally.
-			created.ResourceVersion = "0"
+			t.unknown = true
+			return nil
 		}
-		t.missing, t.rv = false, created.ResourceVersion
+		t.rv = created.ResourceVersion
 		return nil
+	}
+	if t != nil && t.unknown {
+		return errSnapshotVersionUnknown
 	}
 	if t != nil && t.rv != "" {
 		meta["resourceVersion"] = t.rv
