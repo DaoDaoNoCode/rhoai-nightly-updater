@@ -127,6 +127,7 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 			// Science project: listed apart, so it can still be deleted.
 			if d.ManagedByTool() && !d.Meta.Terminating() {
 				ps := storage.PipelineServerState(d, dashURL)
+				storage.SetProjectStorageState(&ps, d, pipelineRec)
 				ps.Unrecorded = !pipelineRec.OwnsAny(d.Meta)
 				if ps.Unrecorded {
 					ps.UID = d.Meta.UID
@@ -145,6 +146,7 @@ func GetResourcesStatus(c *Client) (*types.ResourcesStatus, error) {
 			continue
 		}
 		ps := storage.PipelineServerState(d, dashURL)
+		storage.SetProjectStorageState(&ps, d, pipelineRec)
 		ps.Unrecorded = !pipelineRec.OwnsAny(d.Meta)
 		if ps.Unrecorded {
 			ps.UID = d.Meta.UID

@@ -409,8 +409,12 @@ func setupPipelineServer(c *kube.Client, project string, recreate bool, confirme
 	// non-admin design, 4.4 rule 1): one on the project's own storage is
 	// left alone, whatever state the shared storage is in.
 	if dspas, err := ListDSPAs(c, project); err == nil {
+		rec, err := ReadPipelineRecord(c)
+		if err != nil {
+			return fail(fmt.Sprintf("Cannot read this tool's record of its pipeline servers; nothing was changed: %v", err), kube.ErrorCodeFromK8sErr(err), "pipeline record unreadable")
+		}
 		for _, d := range dspas {
-			if d.Meta.HasToolLabel() && OnProjectStorage(d) {
+			if d.Meta.HasToolLabel() && OnProjectStorageRecorded(d, rec) {
 				return fail(fmt.Sprintf("The pipeline server in %s uses the project's own S3 storage (%s) and stays on it; it is set up and deleted with the project's own actions. Nothing was changed.", project, ProjectS3Deployment), "validation", "on project storage")
 			}
 		}
@@ -797,9 +801,14 @@ func TeardownPipelineServer(c *kube.Client, project, confirmedUID string, confir
 		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("No pipeline server created by this tool remains in %s.%s", project, envOnlyNote(project, wbs)), Logs: logs}, nil
 	}
 
-	// A pipeline server on the project's own storage is deleted as one:
-	// its own Connection, no key in the shared storage.
-	if OnProjectStorage(*target) {
+	// A pipeline server on the project's own storage (by its record, else
+	// its host) is deleted as one: its own Connection, no key in the shared
+	// storage.
+	routeRec, err := ReadPipelineRecord(c)
+	if err != nil {
+		return fail(fmt.Sprintf("Cannot check whether pipeline server %s in %s is on the shared or the project's storage: %v. Nothing was deleted.", target.Meta.Name, project, err), kube.ErrorCodeFromK8sErr(err), "record read failed")
+	}
+	if OnProjectStorageRecorded(*target, routeRec) {
 		return teardownProjectPipelineServer(c, project, confirmedWorkbenches)
 	}
 	dspaPath, ok := toolDSPAPath(project, target.Meta.Name)

@@ -74,11 +74,15 @@ func GetProjectStatus(sa, u *Client, project string) (*types.ProjectStatus, erro
 				ps.ManagedByTool, ps.DataPVCs = false, nil
 				ps.TeardownBlockedReason = "This pipeline server was not created by this tool, so the tool will not delete it."
 			} else {
+				storage.SetProjectStorageState(&ps, d, rec)
 				ps.Unrecorded = !rec.OwnsAny(d.Meta)
 				if ps.Unrecorded {
 					ps.UID = d.Meta.UID
 				}
 				conn := storage.ConnectionNameOf(d)
+				if ps.ProjectStorage {
+					conn = storage.ProjectConnectionSecretName
+				}
 				ps.ConnectionState, ps.ConnectionMessage = connectionState(u, project, conn, ps.Terminating)
 				if ps.ConnectionState == ConnectionPresent {
 					addConnectionWorkbenches(u, project, conn, &ps)

@@ -889,3 +889,59 @@ func TestProjectStorageRepairFailureKeepsTheFence(t *testing.T) {
 		t.Fatalf("%+v", res)
 	}
 }
+
+// A pipeline server recorded as set up on project storage stays on the
+// project path when someone in the project points its host at the shared
+// storage: the status still shows it on project storage (and recorded),
+// the shared Set up refuses it, the project's Set up points it back, and
+// a cluster-admin's Delete deletes it as a project storage's.
+func TestPipelineServerRoutedByItsRecordNotItsHost(t *testing.T) {
+	f, u := newProjectStorageEnv(t)
+	if res := runPS(t, u, types.ProjectStorageRequest{Project: "proj", Action: "setup"}); !res.Success {
+		t.Fatalf("%+v", res)
+	}
+	if res := runPP(t, u, types.ProjectPipelineServerRequest{Project: "proj", Action: "setup"}); !res.Success {
+		t.Fatalf("%+v", res)
+	}
+	moveToShared := func() {
+		dspa := f.get(psDSPAs + "/dspa")
+		spec := dspa["spec"].(map[string]any)
+		spec["objectStorage"].(map[string]any)["externalStorage"].(map[string]any)["host"] = storage.S3Host()
+		f.put(psDSPAs+"/dspa", dspa)
+	}
+	moveToShared()
+	sa := u.Bookkeeping()
+	st, err := GetResourcesStatus(sa)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ps *types.ResourceState
+	for i := range st.PipelineServers {
+		if st.PipelineServers[i].Namespace == "proj" {
+			ps = &st.PipelineServers[i]
+		}
+	}
+	if ps == nil || !ps.ProjectStorage || ps.Unrecorded || ps.Connection != storage.ProjectConnectionSecretName {
+		t.Fatalf("status %+v", ps)
+	}
+	admin := userClientOf(sa, fakeUserToken)
+	before := len(writesOf(f))
+	if res, _ := SetupPipelineServer(admin, "proj"); res.Success || !strings.Contains(res.Message, "stays on it") || len(writesOf(f)) != before {
+		t.Fatalf("the shared Set up took a project storage's server: %+v %v", res, writesOf(f)[before:])
+	}
+	// The project's Set up points it back at the project's storage.
+	if res := runPP(t, u, types.ProjectPipelineServerRequest{Project: "proj", Action: "setup"}); !res.Success {
+		t.Fatalf("%+v", res)
+	}
+	if raw, _ := json.Marshal(f.get(psDSPAs + "/dspa")); !strings.Contains(string(raw), `"host":"nightly-s3.proj.svc:8333"`) {
+		t.Fatalf("host not set back: %s", raw)
+	}
+	moveToShared()
+	res, err := TeardownPipelineServer(admin, "proj", "", nil)
+	if err != nil || !res.Success || f.has(psDSPAs+"/dspa") || f.has(psSecrets+"/"+storage.ProjectConnectionSecretName) {
+		t.Fatalf("the admin's Delete: %+v %v", res, err)
+	}
+	if len(f.sw.calls) != 0 {
+		t.Fatalf("the shared storage was called: %v", f.sw.calls)
+	}
+}

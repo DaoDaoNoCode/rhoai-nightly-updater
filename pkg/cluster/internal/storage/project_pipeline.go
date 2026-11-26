@@ -170,12 +170,14 @@ func setupProjectPipelineServer(c *kube.Client, project string) (*types.Operatio
 	dspaFound := false
 	for _, d := range existing {
 		switch {
-		case d.Meta.Name == DSPAName && d.Meta.HasToolLabel() && OnProjectStorage(d) && rec.OwnsOnProjectStorage(d.Meta):
+		// Recorded as set up on project storage: set up again there,
+		// which also points its host back at the project's storage.
+		case d.Meta.Name == DSPAName && d.Meta.HasToolLabel() && rec.OwnsOnProjectStorage(d.Meta):
 			if d.Meta.Terminating() {
 				return fail(fmt.Sprintf("The pipeline server in %s is still being deleted. Wait for it to finish, then retry. Nothing was changed.", project), "terminating", "terminating")
 			}
 			dspaMeta, dspaFound = d.Meta, true
-		case d.ManagedByTool() && !OnProjectStorage(d):
+		case d.ManagedByTool() && !OnProjectStorageRecorded(d, rec):
 			return fail(fmt.Sprintf("The pipeline server in %s uses the cluster's shared S3 storage and stays on it; a cluster-admin manages it on the Pipelines tab. Nothing was changed.", project), "validation", "on shared storage")
 		default:
 			return fail(fmt.Sprintf("Project %s already has a pipeline server (%s) that this tool did not set up on the project's storage (or has no record of). It was left unchanged.", project, d.Meta.Name), "not_managed", "other pipeline server exists")
@@ -399,9 +401,13 @@ func teardownProjectPipelineServer(c *kube.Client, project string, confirmedWork
 	if err != nil {
 		return fail(fmt.Sprintf("Cannot list pipeline servers in %s; nothing was deleted: %v", project, err), kube.ErrorCodeFromK8sErr(err), "list failed")
 	}
+	rec, err := ReadPipelineRecord(c)
+	if err != nil {
+		return fail(fmt.Sprintf("Cannot read this tool's record of its pipeline servers (%s). Nothing was deleted.", record.ErrorText(c, err)), record.ErrorCode(err), "record read failed")
+	}
 	var target *DSPA
 	for i := range all {
-		if all[i].Meta.Name == DSPAName && all[i].Meta.HasToolLabel() && OnProjectStorage(all[i]) {
+		if all[i].Meta.Name == DSPAName && all[i].Meta.HasToolLabel() && OnProjectStorageRecorded(all[i], rec) {
 			target = &all[i]
 		}
 	}
@@ -424,10 +430,6 @@ func teardownProjectPipelineServer(c *kube.Client, project string, confirmedWork
 		}
 		record.Action(c, op, fmt.Sprintf("project=%s (none)", project), true)
 		return &types.OperationResponse{Success: true, Message: fmt.Sprintf("No pipeline server of this tool on project storage remains in %s.%s", project, envOnlyNote(project, wbs)), Logs: logs}, nil
-	}
-	rec, err := ReadPipelineRecord(c)
-	if err != nil {
-		return fail(fmt.Sprintf("Cannot check that pipeline server %s in %s is the one this tool set up (%s). Nothing was deleted.", target.Meta.Name, project, record.ErrorText(c, err)), record.ErrorCode(err), "record read failed")
 	}
 	if !rec.OwnsOnProjectStorage(target.Meta) {
 		return fail(fmt.Sprintf("Pipeline server %s in %s carries this tool's label, but this tool has no record that it set it up (or it was deleted and made again). It was left unchanged; delete it in the RHOAI dashboard. Nothing was deleted.", target.Meta.Name, project), "not_managed", "unrecorded")

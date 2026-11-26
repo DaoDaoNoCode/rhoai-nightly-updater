@@ -9,6 +9,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 // Which pipeline servers are the tool's, for the writes that hand them the
@@ -76,6 +77,29 @@ func (r PipelineRecord) Owns(meta kube.ObjectMeta) bool {
 func (r PipelineRecord) OwnsOnProjectStorage(meta kube.ObjectMeta) bool {
 	e, ok := r[meta.Namespace+"/"+meta.Name]
 	return ok && e.Storage == RecordedOnProjectStorage && e.UID != "" && e.UID == meta.UID
+}
+
+// OnProjectStorageRecorded reports whether d is handled as a pipeline
+// server on its project's own storage: recorded as set up there (whatever
+// its host says now: a project editor can change it), or, without a
+// shared-storage record, pointing at that storage. Teardown routing, the
+// shared Set up's refusal and the status decide by it.
+func OnProjectStorageRecorded(d DSPA, rec PipelineRecord) bool {
+	return rec.OwnsOnProjectStorage(d.Meta) || OnProjectStorage(d) && !rec.Owns(d.Meta)
+}
+
+// SetProjectStorageState marks state (d's status entry) as a pipeline
+// server on project storage when OnProjectStorageRecorded says so, with
+// that storage's Connection when the DSPA names it.
+func SetProjectStorageState(state *types.ResourceState, d DSPA, rec PipelineRecord) {
+	if !OnProjectStorageRecorded(d, rec) {
+		return
+	}
+	state.ProjectStorage = true
+	state.Connection = ""
+	if d.Meta.Annotations[DSPAConnectionAnnotation] == ProjectConnectionSecretName {
+		state.Connection = ProjectConnectionSecretName
+	}
 }
 
 // OwnsAny: meta is a pipeline server the tool recorded, on either storage
