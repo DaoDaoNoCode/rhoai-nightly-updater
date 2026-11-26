@@ -247,3 +247,54 @@ func TestMissingVerdictIsNotAllowed(t *testing.T) {
 		t.Fatalf("the gate: %d %s", w.Code, w.Body.String())
 	}
 }
+
+// The ways a model can be reached, per role: a cluster-admin gets the
+// Models tab's answer; an editor of the project gets the user's answer for
+// it; a user without a role there and a project that does not exist get
+// the same refusal, before anything is read with the ServiceAccount.
+func TestModelExposuresPerRole(t *testing.T) {
+	orig, origUser := getModelExposures, getProjectModelExposures
+	t.Cleanup(func() { getModelExposures, getProjectModelExposures = orig, origUser })
+	adminReads, userReads := 0, 0
+	getModelExposures = func(_ *cluster.Client, project, model string) (*types.ModelExposures, string, string) {
+		adminReads++
+		return &types.ModelExposures{Project: project, Model: model, Default: "maas"}, "", ""
+	}
+	getProjectModelExposures = func(_ *cluster.Client, project, model string) (*types.ModelExposures, string, string) {
+		userReads++
+		return &types.ModelExposures{Project: project, Model: model, Default: "internal", Gateway: &types.ProjectGatewayFact{Admits: false, Problem: "not-admitted"}}, "", ""
+	}
+	get := func(project string) *httptest.ResponseRecorder {
+		mux := http.NewServeMux()
+		Register(mux)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/resources/models/exposures?project="+project+"&model=qwen25-05b-instruct", nil)
+		r.Header.Set("X-Forwarded-Access-Token", "user:alice")
+		mux.ServeHTTP(w, r)
+		return w
+	}
+	newProjectGateEnv(t, roleClusterAdmin)
+	if w := get("team-a"); w.Code != http.StatusOK || adminReads != 1 || userReads != 0 || !strings.Contains(w.Body.String(), `"default":"maas"`) {
+		t.Fatalf("admin: %d %s", w.Code, w.Body.String())
+	}
+	newProjectGateEnv(t, roleEditor)
+	w := get("team-a")
+	if w.Code != http.StatusOK || userReads != 1 || adminReads != 1 || !strings.Contains(w.Body.String(), `"gateway":{"admits":false,"problem":"not-admitted"}`) {
+		t.Fatalf("editor: %d %s", w.Code, w.Body.String())
+	}
+	newProjectGateEnv(t, roleNothing)
+	noRole := get("team-a")
+	newProjectGateEnv(t, roleEditor)
+	missing := get("does-not-exist")
+	for _, w := range []*httptest.ResponseRecorder{noRole, missing} {
+		if w.Code != http.StatusForbidden || decodeError(t, w)["errorCode"] != cluster.ErrorCodeForbiddenForUser {
+			t.Fatalf("%d %s", w.Code, w.Body.String())
+		}
+	}
+	if strings.ReplaceAll(noRole.Body.String(), "team-a", "P") != strings.ReplaceAll(missing.Body.String(), "does-not-exist", "P") {
+		t.Errorf("not yours and does not exist differ: %s / %s", noRole.Body.String(), missing.Body.String())
+	}
+	if userReads != 1 || adminReads != 1 {
+		t.Errorf("a refused read reached the ServiceAccount: user %d admin %d", userReads, adminReads)
+	}
+}
