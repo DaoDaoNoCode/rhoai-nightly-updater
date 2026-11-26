@@ -164,14 +164,13 @@ func (d *lockLostAfter) RoundTrip(r *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-// After the cross-pod lock was lost right after a create, the record is
-// still attempted (the tool's own bookkeeping), but when it fails the
-// object is not deleted: another pod may be changing the same objects.
-func TestWorkbenchSetupDeletesNothingAfterItsLockWasLost(t *testing.T) {
+// After the cross-pod lock was lost right after a create, nothing more is
+// written: no record, no delete (another pod may be changing the same
+// objects).
+func TestWorkbenchSetupWritesNothingAfterItsLockWasLost(t *testing.T) {
 	t.Setenv("NAMESPACE", "rhoai-nightly-updater")
 	f, c := newResourceFake(t)
 	putWorkbenchCluster(t, f, true)
-	f.fail["PATCH /api/v1/namespaces/rhoai-nightly-updater/configmaps/rhoai-nightly-updater-snapshot"] = http.StatusInternalServerError
 	ctx, lose := context.WithCancelCause(context.Background())
 	defer lose(nil)
 	editTestClient(c, func(o *testClientOptions) {
@@ -184,8 +183,8 @@ func TestWorkbenchSetupDeletesNothingAfterItsLockWasLost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := len(f.callsTo(http.MethodPatch, "/api/v1/namespaces/rhoai-nightly-updater/configmaps/rhoai-nightly-updater-snapshot")); n == 0 {
-		t.Fatal("the record was not attempted")
+	if n := len(f.callsTo(http.MethodPatch, "/api/v1/namespaces/rhoai-nightly-updater/configmaps/rhoai-nightly-updater-snapshot")); n != 0 {
+		t.Fatalf("the record was written %d times after the lock was lost", n)
 	}
 	if d := f.callsTo(http.MethodDelete, wbPVC); len(d) != 0 || res.Success {
 		t.Fatalf("deleted after the lock was lost: %+v, %+v", d, res)

@@ -74,12 +74,12 @@ func (r *run) fail(id, msg, code, why string) (*types.OperationResponse, error) 
 // operation's deadline plus record.PostDeadlineWork at the latest).
 var afterWriteTimeout = 15 * time.Second
 
-// recordMade runs write, the record of an object the run created, with a
-// bookkeeping context of its own: it runs also when the operation reached
-// its deadline right after the create, and after a lost cross-pod lock
-// (it writes only this tool's own record).
+// recordMade runs write, the record of an object the run created, on a
+// post-operation context of its own: it runs also when the operation
+// reached its deadline right after the create. After a lost cross-pod lock
+// nothing is written (record.PostOperationContext is cancelled then).
 func (r *run) recordMade(write func(c *kube.Client) error) error {
-	ctx, cancel := record.BookkeepingContext(r.c, afterWriteTimeout)
+	ctx, cancel := record.PostOperationContext(r.c, afterWriteTimeout)
 	defer cancel()
 	return write(r.c.WithContext(ctx))
 }
