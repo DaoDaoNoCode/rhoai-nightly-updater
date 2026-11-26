@@ -30,8 +30,10 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   token, from the user Environment view; its admins and editors then set
   up and delete a pipeline server on it, with the dashboard connection
   `nightly-s3-connection` ("Project S3 storage (RHOAI Nightly
-  Updater)"). Only the S3 port is on the pod network (master,
-  volume and filer listen on 127.0.0.1 in the pod), and a NetworkPolicy,
+  Updater)"). Only the S3 API (8333) and the S3 gateway's gRPC (18333,
+  which refuses callers from outside the pod) are on the pod network
+  (master, volume and filer listen on 127.0.0.1 in the pod), and a
+  NetworkPolicy,
   written and read back before the pod starts, lets in only that port from
   the project and RHOAI's applications namespace; IAM writes stay off; the
   updater sends no request to it. No Secret that holds the project's key has a name the
