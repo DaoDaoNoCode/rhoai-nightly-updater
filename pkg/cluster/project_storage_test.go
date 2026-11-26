@@ -834,6 +834,20 @@ func TestProjectPipelineRecordPrunedWithItsProject(t *testing.T) {
 		t.Fatalf("after the first check: %v", got)
 	}
 	f.putJSON(psNS, `{"metadata":{"name":"proj","uid":"uid-again"}}`)
+	// The recorded pipeline server still lives in the namespace made
+	// again: its record stays; and while the check fails too.
+	f.putJSON(psDSPAs+"/dspa", `{"metadata":{"name":"dspa","uid":"u1"}}`)
+	SweepGoneProjectRecords(sa)
+	if got := keys(); !slices.Equal(got, []string{"proj/dspa", "shared/dspa"}) {
+		t.Fatalf("a live pipeline server's record was forgotten: %v", got)
+	}
+	f.deleteObject(psDSPAs + "/dspa")
+	f.fail["GET "+psDSPAs] = 500
+	SweepGoneProjectRecords(sa)
+	if got := keys(); !slices.Equal(got, []string{"proj/dspa", "shared/dspa"}) {
+		t.Fatalf("forgotten although the check failed: %v", got)
+	}
+	delete(f.fail, "GET "+psDSPAs)
 	SweepGoneProjectRecords(sa)
 	if got := keys(); !slices.Equal(got, []string{"shared/dspa"}) {
 		t.Fatalf("a project made again kept its project pipeline record: %v", got)

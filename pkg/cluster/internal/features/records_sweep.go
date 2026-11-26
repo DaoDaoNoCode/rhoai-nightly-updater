@@ -111,9 +111,16 @@ func SweepGoneProjectRecords(c *kube.Client) {
 		for key, e := range pipes {
 			// One set up on project storage also goes when its project
 			// was made again (another namespace UID), as that storage's
-			// entry does: it is bounded only through that entry.
+			// entry does (it is bounded only through that entry), unless
+			// the pipeline server it records still lives there (the
+			// namespace may have been replaced around it), or that cannot
+			// be told (fail closed), as for a workbench.
 			st := namespace(projectOf(key))
 			remade := e.Storage == storage.RecordedOnProjectStorage && e.ProjectUID != "" && st.uid != "" && st.uid != e.ProjectUID
+			if remade {
+				live, err := storage.PipelineServerLive(c, projectOf(key), e.UID)
+				remade = err == nil && !live
+			}
 			if st.gone || remade {
 				delete(pipes, key)
 				changed = true

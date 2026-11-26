@@ -2,6 +2,7 @@ package storage
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -176,4 +177,24 @@ func forgetPipelineServer(c *kube.Client, project, name string) error {
 	}
 	delete(rec, project+"/"+name)
 	return WritePipelineRecord(c, rec)
+}
+
+// PipelineServerLive reports whether project still has the pipeline server
+// with this UID, listed with c (the ServiceAccount's list of pipeline
+// servers, which the status already makes): for the background check
+// only, never shown. A missing API means it has none.
+func PipelineServerLive(c *kube.Client, project, uid string) (bool, error) {
+	dspas, err := ListProjectDSPAs(c, project)
+	if errors.Is(err, ErrDSPACRDMissing) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, d := range dspas {
+		if d.Meta.UID == uid {
+			return true, nil
+		}
+	}
+	return false, nil
 }
