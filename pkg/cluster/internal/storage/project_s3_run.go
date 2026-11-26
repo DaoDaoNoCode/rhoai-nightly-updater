@@ -250,37 +250,40 @@ func (r *projectS3Run) apply(repair bool) (*types.OperationResponse, error) {
 
 	// The writes, each recorded right after its create.
 	var created []string
-	// rollback deletes what this run created, newest first. The
-	// Deployment goes in the foreground and its pod must be gone before
-	// the NetworkPolicy goes: while that is not certain, the policy stays
-	// (recorded), so the pod never runs unfenced.
+	// deploymentDeleted: this run asked for a Deployment it created to be
+	// deleted (foreground), so the NetworkPolicy waits for its pod.
+	deploymentDeleted := false
+	// rollback deletes what this run created, newest first. A Deployment
+	// goes in the foreground. The NetworkPolicy goes only when no
+	// Deployment nightly-s3 and no pod of the storage is left (one this run
+	// deleted is waited for; one that was there before, as in a Repair,
+	// keeps it): otherwise it stays, recorded, so no pod runs unfenced.
 	rollback := func() string {
 		var kept []string
-		serverMayRun := false
 		for i := len(created) - 1; i >= 0; i-- {
 			kind := created[i]
 			uid := live[kind].meta.UID
-			if kind == kindNetworkPolicy && serverMayRun {
-				kept = append(kept, fmt.Sprintf("%s %s", kind, ProjectS3ObjectName(kind)))
-				continue
-			}
 			err := r.undo(func(dc *kube.Client) error {
 				policy := "Background"
 				if kind == kindDeployment {
 					policy = "Foreground"
+					deploymentDeleted = true
 				}
-				_, err := kube.DeleteWithUIDPropagation(dc, projectS3Path(kind, project), uid, policy)
-				if err != nil && !kube.IsK8sNotFound(err) {
-					return err
-				}
-				if kind == kindDeployment {
-					gone, err := kube.WaitForGone(dc, projectS3GoneTimeout, projectS3GonePoll, func(cc *kube.Client) (bool, error) { return projectS3ServerGone(cc, project) })
+				if kind == kindNetworkPolicy {
+					gone, err := projectS3ServerGone(dc, project)
+					if err == nil && !gone && deploymentDeleted {
+						gone, err = kube.WaitForGone(dc, projectS3GoneTimeout, projectS3GonePoll, func(cc *kube.Client) (bool, error) { return projectS3ServerGone(cc, project) })
+					}
 					if err != nil {
 						return err
 					}
 					if !gone {
 						return errProjectS3ServerRunning
 					}
+				}
+				_, err := kube.DeleteWithUIDPropagation(dc, projectS3Path(kind, project), uid, policy)
+				if err != nil && !kube.IsK8sNotFound(err) {
+					return err
 				}
 				return updateProjectStorageRecord(dc, project, func(e *ProjectStorageRecorded) {
 					if e.UID(kind) == uid {
@@ -290,9 +293,6 @@ func (r *projectS3Run) apply(repair bool) (*types.OperationResponse, error) {
 			})
 			if err != nil {
 				kept = append(kept, fmt.Sprintf("%s %s", kind, ProjectS3ObjectName(kind)))
-				if kind == kindDeployment {
-					serverMayRun = true
-				}
 			}
 		}
 		if len(kept) == 0 {
@@ -322,7 +322,12 @@ func (r *projectS3Run) apply(repair bool) (*types.OperationResponse, error) {
 			if err != nil {
 				created = created[:len(created)-1]
 				undoErr := r.undo(func(dc *kube.Client) error {
-					_, err := kube.DeleteWithUID(dc, projectS3Path(kind, project), meta.UID)
+					policy := "Background"
+					if kind == kindDeployment {
+						policy = "Foreground"
+						deploymentDeleted = true
+					}
+					_, err := kube.DeleteWithUIDPropagation(dc, projectS3Path(kind, project), meta.UID, policy)
 					return err
 				})
 				if undoErr != nil && !kube.IsK8sNotFound(undoErr) {

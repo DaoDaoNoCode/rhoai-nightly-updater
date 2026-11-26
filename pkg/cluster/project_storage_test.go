@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net/http"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -836,5 +837,55 @@ func TestProjectPipelineRecordPrunedWithItsProject(t *testing.T) {
 	SweepGoneProjectRecords(sa)
 	if got := keys(); !slices.Equal(got, []string{"shared/dspa"}) {
 		t.Fatalf("a project made again kept its project pipeline record: %v", got)
+	}
+}
+
+// A Deployment whose record cannot be written is deleted again in the
+// foreground, and the NetworkPolicy stays (recorded) while a pod of the
+// storage is still there.
+func TestProjectStorageRecordFailureOfTheDeploymentKeepsTheFence(t *testing.T) {
+	f, u := newProjectStorageEnv(t)
+	f.putJSON(psNS+"/pods/nightly-s3-abc", `{"metadata":{"labels":{"app":"nightly-s3"}}}`)
+	snapshot := "PATCH /api/v1/namespaces/" + record.GetActivityNamespace() + "/configmaps/" + record.SnapshotConfigMapName
+	f.beforeRequest = func(r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == psDeployments && r.URL.Query().Get("dryRun") == "" {
+			f.mu.Lock()
+			f.fail[snapshot] = 500
+			f.mu.Unlock()
+		}
+	}
+	res := runPS(t, u, types.ProjectStorageRequest{Project: "proj", Action: "setup"})
+	if res.Success || !f.has(psPolicies+"/"+storage.ProjectS3NetworkPolicy) {
+		t.Fatalf("the policy went while a pod of the storage was there: %+v", res)
+	}
+	var foreground bool
+	for _, c := range f.callsTo(http.MethodDelete, psDeployments+"/"+storage.ProjectS3Deployment) {
+		foreground = foreground || strings.Contains(c.Body, `"Foreground"`)
+	}
+	if !foreground {
+		t.Fatal("the unrecorded Deployment was not deleted in the foreground")
+	}
+}
+
+// A Repair that recreates a missing NetworkPolicy and then fails keeps
+// the policy while the storage's Deployment runs.
+func TestProjectStorageRepairFailureKeepsTheFence(t *testing.T) {
+	f, u := newProjectStorageEnv(t)
+	if res := runPS(t, u, types.ProjectStorageRequest{Project: "proj", Action: "setup"}); !res.Success {
+		t.Fatalf("%+v", res)
+	}
+	policy := psPolicies + "/" + storage.ProjectS3NetworkPolicy
+	f.deleteObject(policy)
+	// The Service's write fails once the policy was made again.
+	f.beforeRequest = func(r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == psPolicies && r.URL.Query().Get("dryRun") == "" {
+			f.mu.Lock()
+			f.fail["PATCH "+psServices+"/"+storage.ProjectS3Service] = 500
+			f.mu.Unlock()
+		}
+	}
+	res := runPS(t, u, types.ProjectStorageRequest{Project: "proj", Action: "repair"})
+	if res.Success || !f.has(policy) || psRecord(t, u).NetworkPolicyUID == "" {
+		t.Fatalf("%+v", res)
 	}
 }
