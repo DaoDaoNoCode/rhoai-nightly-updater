@@ -1053,10 +1053,11 @@ func GetPlaygroundStatus(sa, u *kube.Client, project string) (*types.PlaygroundS
 		return st, nil
 	}
 	st := &types.PlaygroundStatus{Project: project}
-	projects, err := authz.ListUserDSProjects(c)
+	listed, err := authz.ListUserDSProjects(c)
 	if err != nil {
 		return nil, err
 	}
+	projects := authz.ProjectNames(listed)
 	if project != "" && !slices.Contains(projects, project) {
 		return nil, fmt.Errorf("%w: '%s' is not one of your data science projects", mlflow.ErrNotDSProject, project)
 	}

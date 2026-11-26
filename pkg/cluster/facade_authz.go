@@ -35,10 +35,16 @@ func LookupUserWithToken(ctx context.Context, userToken string) (string, error) 
 	return authz.LookupUserWithToken(ctx, userToken)
 }
 
+// UserProject is authz.UserProject.
+type UserProject = authz.UserProject
+
 // ListUserDSProjects is authz.ListUserDSProjects.
-func ListUserDSProjects(u *Client) ([]string, error) {
+func ListUserDSProjects(u *Client) ([]UserProject, error) {
 	return authz.ListUserDSProjects(u)
 }
+
+// ProjectNames is authz.ProjectNames.
+func ProjectNames(projects []UserProject) []string { return authz.ProjectNames(projects) }
 
 // ProjectUID is authz.ProjectUID.
 func ProjectUID(u *Client, project string) (string, error) {

@@ -83,7 +83,7 @@ var HandleDSProjects = withUserRead(func(_, u *cluster.Client, w http.ResponseWr
 		writeUserReadError(w, "Cannot list your data science projects", err)
 		return
 	}
-	writeJSON(w, map[string]any{"projects": projects}, "ds-projects")
+	writeJSON(w, map[string]any{"projects": cluster.ProjectNames(projects)}, "ds-projects")
 })
 
 // getProjectStatus loads project status for a user; tests may stub this.

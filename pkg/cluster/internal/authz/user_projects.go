@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
+	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 )
@@ -29,13 +30,20 @@ const dsProjectSelector = "opendatahub.io/dashboard=true"
 // user by OpenShift's basic-user ClusterRole (openshift-apiserver
 // pkg/bootstrappolicy/policy.go:461, bound to system:authenticated at
 // :766). A cluster-admin sees every project.
-func ListUserDSProjects(u *kube.Client) ([]string, error) {
+//
+// Each project comes with its namespace UID: a project's metadata is its
+// namespace's (openshift-apiserver release-4.17
+// pkg/project/util/util.go:29, ConvertNamespaceFromExternal copies the
+// Namespace's ObjectMeta), so a project deleted and made again under its
+// name has another UID. Sorted by name.
+func ListUserDSProjects(u *kube.Client) ([]UserProject, error) {
 	if !u.ActsAsUser() {
 		return nil, ErrNotUserClient
 	}
 	var items []struct {
 		Metadata struct {
 			Name string `json:"name"`
+			UID  string `json:"uid"`
 		} `json:"metadata"`
 		Status struct {
 			Phase string `json:"phase"`
@@ -47,14 +55,30 @@ func ListUserDSProjects(u *kube.Client) ([]string, error) {
 		}
 		return nil, fmt.Errorf("list your data science projects: %w", err)
 	}
-	projects := []string{}
+	projects := []UserProject{}
 	for _, p := range items {
 		if p.Status.Phase != "Terminating" {
-			projects = append(projects, p.Metadata.Name)
+			projects = append(projects, UserProject{Name: p.Metadata.Name, UID: p.Metadata.UID})
 		}
 	}
-	slices.Sort(projects)
+	slices.SortFunc(projects, func(a, b UserProject) int { return strings.Compare(a.Name, b.Name) })
 	return projects, nil
+}
+
+// UserProject is one of the user's data science projects: its name and
+// its namespace UID.
+type UserProject struct {
+	Name string
+	UID  string
+}
+
+// ProjectNames is the names of projects, in their order.
+func ProjectNames(projects []UserProject) []string {
+	names := make([]string, 0, len(projects))
+	for _, p := range projects {
+		names = append(names, p.Name)
+	}
+	return names
 }
 
 // IsUserDSProject reports whether project is one of the signed-in user's
@@ -64,5 +88,5 @@ func IsUserDSProject(u *kube.Client, project string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return slices.Contains(projects, project), nil
+	return slices.Contains(ProjectNames(projects), project), nil
 }

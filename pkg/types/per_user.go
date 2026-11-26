@@ -87,16 +87,26 @@ type OperationSummary struct {
 	Label     string `json:"label"`
 	StartedAt string `json:"startedAt"`
 	// Operations lists what runs, as far as this user may see it: the
-	// running cluster operation (the fields above, as a list entry).
+	// running cluster operation (the fields above, as a list entry), and
+	// the running project actions in the user's own data science projects
+	// (never who runs another person's).
 	Operations []OperationSummaryEntry `json:"operations"`
 }
 
 // OperationSummaryEntry is one entry of OperationSummary.Operations: its
-// scope ("cluster"), its kind's label and when it started (RFC 3339).
+// scope ("cluster" or "project"), its kind's label and when it started
+// (RFC 3339); a project action's project. Own marks the user's own action:
+// only then is ID (what POST /api/operation/cancel names) set, and
+// Cancellable and Cancelling may be.
 type OperationSummaryEntry struct {
-	Scope     string `json:"scope"`
-	Label     string `json:"label"`
-	StartedAt string `json:"startedAt"`
+	Scope       string `json:"scope"`
+	Label       string `json:"label"`
+	StartedAt   string `json:"startedAt"`
+	Project     string `json:"project,omitempty"`
+	Own         bool   `json:"own,omitempty"`
+	ID          string `json:"id,omitempty"`
+	Cancellable bool   `json:"cancellable,omitempty"`
+	Cancelling  bool   `json:"cancelling,omitempty"`
 }
 
 // ProjectStatus is GET /api/resources/status?project= for a user who is

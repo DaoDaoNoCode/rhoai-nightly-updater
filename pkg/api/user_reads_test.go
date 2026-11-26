@@ -21,9 +21,9 @@ func TestProjectsAreReadWithTheUsersToken(t *testing.T) {
 	t.Cleanup(func() { listUserDSProjects = orig })
 	for _, who := range []string{"user:admin", "user:carol"} {
 		var asUser bool
-		listUserDSProjects = func(u *cluster.Client) ([]string, error) {
+		listUserDSProjects = func(u *cluster.Client) ([]cluster.UserProject, error) {
 			asUser = u.ActsAsUser()
-			return []string{"mine"}, nil
+			return []cluster.UserProject{{Name: "mine", UID: "uid-mine"}}, nil
 		}
 		w := httptest.NewRecorder()
 		HandleDSProjects(w, getAs(t, "/api/resources/projects", who))
@@ -32,7 +32,7 @@ func TestProjectsAreReadWithTheUsersToken(t *testing.T) {
 		}
 	}
 	// A refusal to the user's token is forbidden_for_user.
-	listUserDSProjects = func(*cluster.Client) ([]string, error) {
+	listUserDSProjects = func(*cluster.Client) ([]cluster.UserProject, error) {
 		return nil, fmt.Errorf("list: %w", &cluster.K8sError{Status: 403, User: true})
 	}
 	w := httptest.NewRecorder()

@@ -698,12 +698,20 @@ type OperationStatus struct {
 // a cluster operation it answers from memory; otherwise it reads the
 // operation record, which also tells about other pods' operations.
 //
-// A user who is not a cluster-admin gets types.OperationSummary only:
-// whether a cluster operation runs, its label and when it started; not who
-// started it, its target, its pod, or an interrupted one (tier per-role);
-// of the list, the running cluster operation only (project actions are
-// left out until their per-project view exists). The record is read, and
-// its marker retried, with the ServiceAccount for both.
+// A user who is not a cluster-admin gets types.OperationSummary only
+// (tier per-role, filtered here on the server): whether a cluster
+// operation runs, its label and when it started; and the running project
+// actions in their own data science projects, by label, project and
+// start, theirs with the ID a cancel names. Never who started another
+// person's action, a target, a pod, or an interrupted operation. A
+// project action is listed only when its project is one of theirs now,
+// with the same namespace UID (the projects API with their token: a
+// project they lost access to, or one deleted and made again under its
+// name, is not theirs), their own actions too; the projects are read only
+// while a project action runs. Without the identity (verifiedUser), or
+// when their projects cannot be read, no project action is listed (fail
+// closed). The record is read, and its marker retried, with the
+// ServiceAccount.
 var HandleOperation = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	admin, ok := requestRole(w, r)
 	if !ok {
@@ -711,20 +719,53 @@ var HandleOperation = withAuth(func(c *cluster.Client, w http.ResponseWriter, r 
 	}
 	status := operationStatus(c, admin)
 	if !admin {
-		writeJSON(w, operationSummary(status), "operation")
+		projects := func() ([]cluster.UserProject, error) {
+			return listUserDSProjects(userReadClient(r.Context(), c, extractUserToken(r), resolveUsername(r)))
+		}
+		writeJSON(w, operationSummary(status, verifiedUser(r), projects), "operation")
 		return
 	}
 	writeJSON(w, status, "operation")
 })
 
-// operationSummary is what a user who is not a cluster-admin sees of the
-// operation status.
-func operationSummary(status OperationStatus) types.OperationSummary {
+// operationSummary is what user (verifiedUser), who is not a
+// cluster-admin, sees of the operation status (HandleOperation). projects
+// lists their data science projects; it is called at most once, and only
+// when a project action runs.
+func operationSummary(status OperationStatus, user string, projects func() ([]cluster.UserProject, error)) types.OperationSummary {
 	sum := types.OperationSummary{Running: status.InProgress, Operations: []types.OperationSummaryEntry{}}
+	var theirs map[string]string // name -> namespace UID
 	for _, op := range status.Operations {
-		if op.Scope == scopeCluster && !op.Interrupted {
-			sum.Operations = append(sum.Operations, types.OperationSummaryEntry{Scope: scopeCluster, Label: op.Label, StartedAt: op.StartedAt.UTC().Format(time.RFC3339)})
+		if op.Interrupted {
+			continue
 		}
+		started := op.StartedAt.UTC().Format(time.RFC3339)
+		if op.Scope == scopeCluster {
+			sum.Operations = append(sum.Operations, types.OperationSummaryEntry{Scope: scopeCluster, Label: op.Label, StartedAt: started})
+			continue
+		}
+		if op.Scope != scopeProject || user == "" || op.Project == "" || op.ProjectUID == "" {
+			continue
+		}
+		if theirs == nil {
+			theirs = map[string]string{}
+			listed, err := projects()
+			if err != nil {
+				logAuthFailure("cannot list the user's data science projects; project actions are left out", err)
+				listed = nil
+			}
+			for _, p := range listed {
+				theirs[p.Name] = p.UID
+			}
+		}
+		if theirs[op.Project] != op.ProjectUID {
+			continue
+		}
+		entry := types.OperationSummaryEntry{Scope: scopeProject, Label: op.Label, Project: op.Project, StartedAt: started}
+		if op.User == user {
+			entry.Own, entry.ID = true, op.ID
+		}
+		sum.Operations = append(sum.Operations, entry)
 	}
 	if !status.InProgress || status.Operation == nil {
 		return sum
