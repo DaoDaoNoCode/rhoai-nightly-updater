@@ -24,6 +24,26 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Added
 
+- **Models for users who are not cluster-admins.** In one of their own
+  data science projects, a project's admins and editors can deploy and
+  delete the models of the tool's catalog on the Environment page
+  (`POST /api/resources/models/project/stream`, a project action): reached
+  only inside the cluster with token authentication off, or, with token
+  authentication (the dashboard's ServiceAccount, Role, RoleBinding and
+  token Secret, so the project's admin role), inside the cluster or through
+  the cluster's inference gateway when it already admits the project. An
+  editor asking for token authentication is refused before anything is
+  written, with "Ask an admin of project P, or deploy without token
+  authentication". Nothing outside the project changes: adding a project
+  to the gateway's list and publishing to MaaS stay a cluster-admin's (the
+  Models tab, unchanged). The cluster facts the setup needs are read by the
+  ServiceAccount with rules it already has and reduced to the project
+  (whether the gateway admits it: yes or no; whether the model fits: fits
+  or may not fit). A deploy can be cancelled before the model is created
+  and at each check of its ready wait. `GET /api/resources/models/exposures`
+  answers a user for one of their projects. Users' model records count in
+  the records caps (a ceiling of 400 model entries of at most 1 KiB);
+  every user's entry together stays within one budget of 500 KiB.
 - **Project S3 storage.** A project's admins can set up, repair and
   delete S3 storage in their own project (SeaweedFS `nightly-s3`, with
   its volume, key Secret and NetworkPolicy; no Route), with their own
