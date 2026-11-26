@@ -15,9 +15,15 @@ make docs-stale                          # images whose sources changed since th
 It needs Node 22+, `playwright-cli` and ImageMagick 7 (`magick`). It builds
 the frontend (`SKIP_BUILD=1` reuses `frontend/dist`), starts the mock, and
 replaces the images. A full run deletes the PNGs and GIFs first, so an image
-that no job produces any more disappears. Each run writes the commit it
-captured at into `images.checked` for every image it made; commit that file
-with the images.
+that no job produces any more disappears. A run that built the frontend
+itself, from a HEAD with no uncommitted change in the capture inputs
+(`frontend`, `docs/tools/mock`, `capture.js`, `screenshots.sh`; tests
+aside), writes that commit into `images.checked` as the capture receipt of
+every image it made; commit that file with the images. `make docs-stale`
+compares each image's sources with its receipt's commit, and an image
+without a valid receipt is stale. A `SKIP_BUILD=1` run, or one with
+uncommitted inputs, writes no receipts: its `frontend/dist` or its sources
+are not a commit the receipt could name.
 
 **Byte-stable.** With an unchanged UI, two runs give the same bytes: the
 browser clock and the mock's data are fixed, Chromium runs without the GPU
@@ -42,7 +48,8 @@ an image would otherwise show an error or every action disabled.
 | `capture.js` | The capture jobs (run through `playwright-cli run-code`): the full pages and crops of the docs, and the `themes` and `*-review` jobs (scratch review images in `THEMES_DIR`) |
 | `screenshots.sh` | Starts everything, runs the jobs, optimises the PNGs and writes `images.checked` |
 | `images.manifest` | Each docs image and the source paths it shows; `make docs-check` wants a row for every image |
-| `stale-images.sh` | `make docs-stale`: images whose sources have commits after the capture (git only); `make release-check` stops a final release on one |
+| `stale-images.sh` | `make docs-stale`: images whose sources have commits after the capture receipt's commit (git only); `make release-check` stops a final release on one |
+| `test-stale-images.sh` | `make docs-stale-test` (also in `make test-scripts` and CI): the staleness check in a throwaway git repository |
 
 Scenarios (`GET /__docs/state` lists them) cover the states the docs show
 and many more to look at by hand (`make docs-mock SCENARIO=<name>`): the

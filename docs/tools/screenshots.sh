@@ -8,7 +8,8 @@
 #   ./docs/tools/screenshots.sh status     only these jobs
 #
 # Needs node (22+), playwright-cli and ImageMagick 7 (magick).
-# SKIP_BUILD=1 reuses frontend/dist; PORT picks the mock's port (18181).
+# SKIP_BUILD=1 reuses frontend/dist (no capture receipts then, below);
+# PORT picks the mock's port (18181).
 # The images use the Glass contrast mode; CONTRAST=default or
 # CONTRAST=high-contrast captures them in another mode.
 # The themes job (not run by default) captures every page in every color
@@ -38,6 +39,20 @@ cleanup() {
   if [ -n "${KEEP_WORK:-}" ]; then echo "Work directory kept: $WORK"; else rm -rf "$WORK"; fi
 }
 trap cleanup EXIT
+
+# Capture receipts (docs/tools/images.checked, for make docs-stale) name the
+# commit the images show, so they are written only for a build of HEAD made
+# here, with no uncommitted change in the capture inputs from start to end.
+INPUTS=(frontend docs/tools/mock docs/tools/capture.js docs/tools/screenshots.sh
+  ':(exclude,glob)**/*.test.*' ':(exclude)frontend/src/test')
+inputs_state() { git -C "$ROOT" rev-parse HEAD; git -C "$ROOT" status --porcelain -- "${INPUTS[@]}"; }
+no_receipts=
+if [ "${SKIP_BUILD:-}" = 1 ]; then
+  no_receipts="SKIP_BUILD=1 reuses a frontend/dist whose commit cannot be checked"
+elif [ -n "$(git -C "$ROOT" status --porcelain -- "${INPUTS[@]}")" ]; then
+  no_receipts="the capture inputs have uncommitted changes"
+fi
+start_state=$(inputs_state)
 
 if [ "${SKIP_BUILD:-}" != 1 ]; then
   echo "Building the frontend..."
@@ -127,7 +142,11 @@ done < <(git -C "$ROOT" status --porcelain -- docs/images | awk '$1 == "M" {prin
 CHECKED="$ROOT/docs/tools/images.checked"
 captured=()
 for f in "$RAW"/full/*.png "$RAW"/crop/*.png; do captured+=("$(basename "$f")"); done
-if [ ${#captured[@]} -gt 0 ]; then
+[ -n "$no_receipts" ] || [ "$(inputs_state)" = "$start_state" ] || no_receipts="HEAD or the capture inputs changed during the run"
+if [ ${#captured[@]} -gt 0 ] && [ -n "$no_receipts" ]; then
+  echo "No capture receipts written: $no_receipts. make docs-stale keeps the old receipts;"
+  echo "commit the inputs and run again without SKIP_BUILD to record this capture."
+elif [ ${#captured[@]} -gt 0 ]; then
   head=$(git -C "$ROOT" rev-parse HEAD)
   kept=
   # A full run drops the lines of images it no longer makes.

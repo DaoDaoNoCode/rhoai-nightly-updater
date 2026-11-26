@@ -1,12 +1,12 @@
 #!/bin/sh
-# Lists the docs images whose sources have commits after the image was last
+# Lists the docs images whose sources have commits after the image was
 # captured: make docs-stale. Git history only, no browser. The sources of
-# each image are in docs/tools/images.manifest; "last captured" is the
-# newer of the image's own last commit and the last commit that changed its
-# line in docs/tools/images.checked (screenshots.sh writes that line, so an
-# image that came out byte for byte the same still counts as checked).
-# Commits are counted by ancestry (HEAD --not those commits), not by date,
-# so an older branch merged after the capture still counts.
+# each image are in docs/tools/images.manifest; the capture is the commit
+# docs/tools/images.checked records for the image (screenshots.sh writes it
+# only for a build of that commit with clean inputs). An image without such
+# a receipt, or whose receipt names a commit that is not an ancestor of
+# HEAD, counts as stale. Commits are counted by ancestry (HEAD --not the
+# capture commit), not by date, so a branch merged after the capture counts.
 #
 #   stale-images.sh                    exit 1 when an image is stale
 #   stale-images.sh --release VERSION  release-check: a final release
@@ -56,14 +56,18 @@ for img in $images; do
 		continue
 	fi
 	sources=$(awk -v img="$img" '!/^#/ && $1 == img { for (i = 2; i <= NF; i++) print $i }' "$MANIFEST")
-	image_commit=$(git log -1 --format=%H -- "docs/images/$img")
-	pattern=$(printf '%s' "$img" | sed 's/[.]/[.]/g')
-	checked_commit=
-	[ ! -f "$CHECKED" ] || checked_commit=$(git log -1 --format=%H -G "^$pattern " -- "$CHECKED")
-	# Not committed yet: it is new in this working tree, and captured now.
-	[ -n "$image_commit$checked_commit" ] || continue
+	captured=
+	[ ! -f "$CHECKED" ] || captured=$(awk -v img="$img" '!/^#/ && $1 == img { print $2; exit }' "$CHECKED")
+	commit=
+	[ -z "$captured" ] || commit=$(git rev-parse --verify --quiet "$captured^{commit}" || true)
+	if [ -z "$commit" ] || ! git merge-base --is-ancestor "$commit" HEAD; then
+		stale=$((stale + 1))
+		report="$report  $img: no capture receipt for a commit of this history in $CHECKED${captured:+ ($captured)}
+"
+		continue
+	fi
 	# shellcheck disable=SC2086 # word splitting: one pathspec per word (set -f: no globbing)
-	commits=$(git log --format='%h %ad %s' --date=short HEAD --not $image_commit $checked_commit -- \
+	commits=$(git log --format='%h %ad %s' --date=short HEAD --not "$commit" -- \
 		$common $sources ':(exclude,glob)**/*.test.*' ':(exclude)frontend/src/test')
 	[ -n "$commits" ] || continue
 	stale=$((stale + 1))

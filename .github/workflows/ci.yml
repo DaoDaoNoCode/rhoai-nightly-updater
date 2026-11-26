@@ -124,6 +124,7 @@ jobs:
       # The runner image has jq (the GitLab job installs it); without it the
       # test would be skipped.
       - run: REQUIRE_JQ=1 bash scripts/test-node-pull-secret.sh
+      - run: sh docs/tools/test-stale-images.sh
 
   # The docs' links, anchors and images, and shellcheck on every shell
   # script (node_pull_secret.sh is a pasted command: shellcheck is told the

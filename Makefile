@@ -38,7 +38,7 @@ RELEASES_URL ?=
 
 .PHONY: all build push deploy upgrade rollback resolve-image release undeploy dev lint lint-go lint-frontend frontend-deps \
 	test test-go test-frontend test-scripts test-seaweedfs-podman test-chart chart check-chart vuln clean help env docs-fixtures docs-mock frontend-lock \
-	docs-screenshots docs-check docs-stale shellcheck audit-frontend build-frontend release-check ci-go ci-checks ci-script-tests
+	docs-screenshots docs-check docs-stale docs-stale-test shellcheck audit-frontend build-frontend release-check ci-go ci-checks ci-script-tests
 
 .DEFAULT_GOAL := help
 
@@ -158,8 +158,8 @@ frontend-lock:  ## Update frontend/package-lock.json with CI's pinned node image
 # The script tests run at the same time (each in its own temporary
 # directory); the summary names anything skipped (test-node-pull-secret.sh
 # without jq, unless REQUIRE_JQ=1).
-test-scripts:  ## Test the release, install, node pull secret and test-go scripts (offline, in parallel; the summary names anything skipped)
-	sh scripts/run-parallel.sh 'sh scripts/test-release.sh' 'bash scripts/test-install.sh' 'bash scripts/test-node-pull-secret.sh' 'sh scripts/test-test-go.sh'
+test-scripts:  ## Test the release, install, node pull secret, test-go and docs staleness scripts (offline, in parallel; the summary names anything skipped)
+	sh scripts/run-parallel.sh 'sh scripts/test-release.sh' 'bash scripts/test-install.sh' 'bash scripts/test-node-pull-secret.sh' 'sh scripts/test-test-go.sh' 'sh docs/tools/test-stale-images.sh'
 
 # Not part of make test or CI: it needs Podman and pulls the pinned
 # SeaweedFS image (SECURITY.md, "S3 storage keys").
@@ -222,6 +222,9 @@ docs-check:  ## Check the Markdown links, anchors and image paths, and that ever
 
 docs-stale:  ## List the docs images whose sources changed after they were captured (git history, no browser; exit 1 when one is)
 	sh docs/tools/stale-images.sh
+
+docs-stale-test:  ## Test the docs staleness check in a throwaway git repository (also part of make test-scripts)
+	sh docs/tools/test-stale-images.sh
 
 clean:  ## Remove build artifacts
 	rm -f server

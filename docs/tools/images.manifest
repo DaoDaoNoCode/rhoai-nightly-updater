@@ -6,13 +6,14 @@
 # image was last captured (docs/tools/stale-images.sh); release-check stops
 # a final release while one is stale. Each row is an image and git
 # pathspecs (a directory covers everything under it); "*" rows apply to
-# every image. Test files never count. PatternFly upgrades
-# (frontend/package.json) can change every image without touching a path
-# here: regenerate them all after one.
+# every image. Test files never count.
 #
 # image                      sources
 *                            frontend/src/App.tsx frontend/src/theme frontend/src/components/StatusLabel.tsx
-*                            docs/tools/mock/fixtures.mjs docs/tools/mock/scenarios.mjs docs/tools/capture.js
+*                            docs/tools/mock/fixtures.mjs docs/tools/mock/scenarios.mjs docs/tools/mock/server.mjs
+*                            docs/tools/capture.js docs/tools/screenshots.sh
+*                            frontend/package.json frontend/package-lock.json frontend/webpack.config.js
+*                            frontend/public frontend/src/index.tsx
 
 page-status.png              frontend/src/pages/StatusPage.tsx frontend/src/components/PageHeader.tsx
 page-status.png              frontend/src/components/StatusCards.tsx frontend/src/components/UpdatePanel.tsx
