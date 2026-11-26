@@ -24,6 +24,22 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Added
 
+- **Project S3 storage.** A project's admins can set up, repair and
+  delete S3 storage in their own project (SeaweedFS `nightly-s3`, with
+  its volume, key Secret and NetworkPolicy; no Route), with their own
+  token, from the user Environment view; its admins and editors then set
+  up and delete a pipeline server on it, with the dashboard connection
+  `nightly-s3-connection` ("Project S3 storage (RHOAI Nightly
+  Updater)"). The NetworkPolicy, written and read back before the pod
+  starts, lets in only the S3 port from the project and RHOAI's
+  applications namespace; IAM writes stay off; the updater sends no
+  request to it. No Secret that holds the project's key has a name the
+  ServiceAccount may read. A pipeline server stays on the storage it was
+  set up on; cluster-admins keep using the shared storage, and can repair
+  and delete a project's. Delete keeps the volume unless its name is
+  typed, and is refused while a pipeline server uses the storage. Clean
+  up everything offers each recorded project storage, its volume unticked.
+  No template change ([SECURITY.md](SECURITY.md#project-s3-storage-500)).
 - **Project actions for users who are not cluster-admins.** In one of
   their own data science projects, a project's admins and editors can set
   up, start, stop and delete the workbench, set up and delete the

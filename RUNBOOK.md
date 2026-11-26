@@ -734,6 +734,26 @@ oc get cm rhoai-nightly-updater-snapshot -n <tool namespace> -o jsonpath='{.data
 | "Not managed by this tool" | A `nightly-workbench` with another UID than the recorded one (made in the dashboard, or made again). This tool does not start, stop or delete it |
 | The image is labelled Deprecated, or "no current workbench image is ready on this cluster" | The dashboard's Create workbench form preselects no image, so Set up picks one: RHOAI's own images that are not deprecated first (`opendatahub.io/deprecated` on the ImageStream, which the dashboard labels Deprecated), then custom images (a custom image is not known to work as a workbench), and a deprecated image only when no current one has a tag that is imported and not outdated. Within each, an image tag marked `opendatahub.io/default-image`, else the first in the dashboard's image list. `oc get imagestreams -n <applications namespace> -l opendatahub.io/notebook-image=true -o custom-columns=NAME:.metadata.name,DEPRECATED:.metadata.annotations.opendatahub\.io/deprecated`. A workbench already set up keeps its image: Set up again changes nothing; to move to a current image, delete the workbench (keep its storage) and set it up again |
 
+### 10.6.1 Project S3 storage
+
+A project's admins set up SeaweedFS in their own project from the user Environment view (`POST /api/resources/project-s3/stream`, actions `setup`, `repair`, `delete`); its admins and editors set up a pipeline server on it (`POST /api/resources/project-pipeline-server/stream`). Everything runs with the user's token; the UIDs are recorded in the snapshot ConfigMap (key `projectStorages`; the pipeline server in `pipelineServers` with `storage: project`). There is no Route: reach the admin UI with `oc port-forward deploy/nightly-s3 12535 -n <project>`.
+
+```bash
+oc get pvc/nightly-s3-data secret/nightly-s3-credentials networkpolicy/nightly-s3-ingress deploy/nightly-s3 svc/nightly-s3 -n <project>
+oc get networkpolicy nightly-s3-ingress -n <project> -o yaml   # 8333 from the project's pods and RHOAI's applications namespace only
+oc get cm rhoai-nightly-updater-snapshot -n <tool namespace> -o jsonpath='{.data.projectStorages}'
+```
+
+| Symptom | Cause and fix |
+|---|---|
+| Set up disabled: "ask an admin of project P" | Only the project's `admin` role sets up, repairs and deletes it (an editor lacks `create rolebindings`). A project admin does it; editors use the storage once it exists |
+| Set up refused for a cluster-admin | A cluster-admin's pipeline servers use the shared storage. An admin of the project sets project storage up; a cluster-admin can repair or delete one |
+| Set up refused: RHOAI's applications namespace could not be read | The NetworkPolicy lets in RHOAI's applications namespace, read from its DSCInitialization; with none (RHOAI not installed, or unreadable) nothing is made |
+| Set up refused: the pod cannot be created (forbidden, exceeded quota) | The project's quota, LimitRange or SCC refuses the pod (requests 64m/256Mi, limits 500m/1Gi, a 20Gi volume). What the setup made was deleted again; raise the quota and set up again |
+| Not ready after 90 s | The pod is pulling or pending (the image from `ghcr.io`, or `SEAWEEDFS_IMAGE` on a mirrored cluster; a volume without a default StorageClass). The objects stay, recorded; the status shows when it is ready, Delete removes them |
+| "NetworkPolicy nightly-s3-ingress was changed" or "is missing" | Someone in the project changed it. Repair applies it again |
+| Delete refused: a pipeline server uses it | Delete the pipeline server first (Pipelines part); the storage then goes. The volume goes only when its name is typed |
+
 ### 10.7 Distributed workloads (Kueue)
 
 The **Distributed workloads** tab's prerequisites (`POST /api/resources/prerequisites/stream`, feature `kueue`) install cert-manager and the Red Hat build of Kueue (package `kueue-operator`, namespace `openshift-kueue-operator`, the package's default channel), then set the DataScienceCluster's `kueue` to `Unmanaged`, and wait for `KueueReady` and the Kueue CR `cluster` Available. Its own operations (`POST /api/resources/kueue/stream`, actions `setup`, `teardown`, `delete-sample`, `optin`, `optout`) use the admin's token and record every UID in the snapshot ConfigMap (key `kueue`). Its status is `GET /api/resources/kueue?project=` (admin only).
