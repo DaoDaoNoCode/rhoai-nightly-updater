@@ -267,14 +267,17 @@ func projectS3Requests(verbs ...string) []ProjectRequest {
 }
 
 var (
-	projectS3Apply = joinRequests(projectS3Requests("create", "get", "patch", "delete"), []ProjectRequest{
+	// The pods of the storage (label app=nightly-s3): a rollback and a
+	// delete remove the NetworkPolicy only once none is left.
+	projectS3Pods  = scanned("list", "", "pods", "", ScopeProject)
+	projectS3Apply = joinRequests(projectS3Requests("create", "get", "patch", "delete"), []ProjectRequest{projectS3Pods,
 		scanned("create", "", "persistentvolumeclaims", "", ScopeProject),
 		scanned("create", "", "secrets", "", ScopeProject),
 		scanned("create", "networking.k8s.io", "networkpolicies", "", ScopeProject),
 		scanned("create", "apps", "deployments", "", ScopeProject),
 		scanned("create", "", "services", "", ScopeProject),
 	})
-	projectS3Delete = joinRequests(projectS3Requests("get", "delete"), []ProjectRequest{
+	projectS3Delete = joinRequests(projectS3Requests("get", "delete"), []ProjectRequest{projectS3Pods,
 		scanned("list", "datasciencepipelinesapplications.opendatahub.io", "datasciencepipelinesapplications", "", ScopeProject),
 	})
 	projectPipelineSetup = []ProjectRequest{

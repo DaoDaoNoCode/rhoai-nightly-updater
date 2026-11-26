@@ -14,6 +14,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -240,15 +241,37 @@ func (r *projectS3Run) apply(repair bool) (*types.OperationResponse, error) {
 
 	// The writes, each recorded right after its create.
 	var created []string
+	// rollback deletes what this run created, newest first. The
+	// Deployment goes in the foreground and its pod must be gone before
+	// the NetworkPolicy goes: while that is not certain, the policy stays
+	// (recorded), so the pod never runs unfenced.
 	rollback := func() string {
 		var kept []string
+		serverMayRun := false
 		for i := len(created) - 1; i >= 0; i-- {
 			kind := created[i]
 			uid := live[kind].meta.UID
+			if kind == kindNetworkPolicy && serverMayRun {
+				kept = append(kept, fmt.Sprintf("%s %s", kind, ProjectS3ObjectName(kind)))
+				continue
+			}
 			err := r.undo(func(dc *kube.Client) error {
-				_, err := kube.DeleteWithUID(dc, projectS3Path(kind, project), uid)
+				policy := "Background"
+				if kind == kindDeployment {
+					policy = "Foreground"
+				}
+				_, err := kube.DeleteWithUIDPropagation(dc, projectS3Path(kind, project), uid, policy)
 				if err != nil && !kube.IsK8sNotFound(err) {
 					return err
+				}
+				if kind == kindDeployment {
+					gone, err := kube.WaitForGone(dc, projectS3GoneTimeout, projectS3GonePoll, func(cc *kube.Client) (bool, error) { return projectS3ServerGone(cc, project) })
+					if err != nil {
+						return err
+					}
+					if !gone {
+						return errProjectS3ServerRunning
+					}
 				}
 				return updateProjectStorageRecord(dc, project, func(e *ProjectStorageRecorded) {
 					if e.UID(kind) == uid {
@@ -258,6 +281,9 @@ func (r *projectS3Run) apply(repair bool) (*types.OperationResponse, error) {
 			})
 			if err != nil {
 				kept = append(kept, fmt.Sprintf("%s %s", kind, ProjectS3ObjectName(kind)))
+				if kind == kindDeployment {
+					serverMayRun = true
+				}
 			}
 		}
 		if len(kept) == 0 {
@@ -395,6 +421,9 @@ func (r *projectS3Run) delete(deleteData bool) (*types.OperationResponse, error)
 		if found && !rec.Owns(kind, meta) {
 			kept = append(kept, fmt.Sprintf("%s %s (not created by this tool)", kind, ProjectS3ObjectName(kind)))
 			found = false
+			// A Deployment of that name that is not the recorded one may
+			// run a pod the NetworkPolicy fences: the policy stays while
+			// it exists (checked below).
 		}
 		live[kind] = &liveObject{meta: meta, found: found}
 	}
@@ -440,21 +469,24 @@ func (r *projectS3Run) delete(deleteData bool) (*types.OperationResponse, error)
 		return r.fail(ProjectS3StepDelete, fmt.Sprintf("Cannot finish deleting the S3 storage of %s: %v. Delete again to continue.%s", project, err, note), code, "delete failed")
 	}
 	// Foreground: the Deployment stays until its ReplicaSet and pod are
-	// gone, so its absence below means the pod is.
-	if err := del(kindDeployment, "Foreground"); err != nil {
-		return stop(err, nil)
+	// gone. Its recorded UID stays until no Deployment of that name and no
+	// pod of the storage is left (projectS3ServerGone), and only then do
+	// the Service, the Secret and the NetworkPolicy go: a delete that
+	// times out, or whose check fails, keeps the policy and the record, and
+	// a retry waits again (a Deployment already terminating is not deleted
+	// twice).
+	if o := live[kindDeployment]; o.found && !o.meta.Terminating() {
+		if err := del(kindDeployment, "Foreground"); err != nil {
+			return stop(err, nil)
+		}
 	}
-	if live[kindDeployment].found {
-		gone, err := kube.WaitForDeletion(c, projectS3Path(kindDeployment, project), projectS3GoneTimeout, projectS3GonePoll)
-		if err != nil {
-			return stop(fmt.Errorf("check that Deployment %s is gone: %w", ProjectS3Deployment, err), []string{kindDeployment})
-		}
-		if !gone {
-			if ferr := forget(kindDeployment); ferr != nil {
-				r.logs = append(r.logs, fmt.Sprintf("Warning: this tool's record could not be updated: %s", record.ErrorText(c, ferr)))
-			}
-			return r.fail(ProjectS3StepDelete, fmt.Sprintf("Deployment %s in %s is still being deleted after %s; its NetworkPolicy stays until the pod is gone. Delete again to finish.", ProjectS3Deployment, project, projectS3GoneTimeout), "in_progress", "deployment terminating")
-		}
+	r.step(ProjectS3StepDelete, "running", "Waiting until the storage's pod is gone")
+	gone, err := kube.WaitForGone(c, projectS3GoneTimeout, projectS3GonePoll, func(cc *kube.Client) (bool, error) { return projectS3ServerGone(cc, project) })
+	if err != nil {
+		return r.fail(ProjectS3StepDelete, fmt.Sprintf("Cannot check that the storage's pod in %s is gone (%v); its Service, Secret and NetworkPolicy stay. Delete again to finish.", project, err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "in_progress"), "pod check failed")
+	}
+	if !gone {
+		return r.fail(ProjectS3StepDelete, fmt.Sprintf("Deployment %s or its pod in %s is still there after %s; its NetworkPolicy stays until the pod is gone. Delete again to finish.", ProjectS3Deployment, project, projectS3GoneTimeout), "in_progress", "deployment terminating")
 	}
 	done := []string{kindDeployment}
 	for _, kind := range []string{kindService, kindSecret, kindNetworkPolicy} {
@@ -601,4 +633,25 @@ func projectReadProblem(what string, err error) string {
 		return fmt.Sprintf("Your OpenShift account may not read the %s.", what)
 	}
 	return fmt.Sprintf("Cannot read the %s: %v", what, err)
+}
+
+// errProjectS3ServerRunning: the storage's pod may still run.
+var errProjectS3ServerRunning = errors.New("the storage's pod is not gone yet")
+
+// projectS3ServerGone reports whether project has no Deployment
+// nightly-s3 (whoever made it) and no pod of the storage (label
+// app=nightly-s3), read with c (the user's token): only then may its
+// NetworkPolicy go.
+func projectS3ServerGone(c *kube.Client, project string) (bool, error) {
+	_, found, err := readProjectS3Deployment(c, project)
+	if err != nil || found {
+		return false, err
+	}
+	var pods []struct {
+		Metadata kube.ObjectMeta `json:"metadata"`
+	}
+	if err := c.ListInto(rhoai.NamespacedPath("v1", "pods", project, "")+"?labelSelector=app%3D"+projectS3AppLabel, &pods); err != nil {
+		return false, err
+	}
+	return len(pods) == 0, nil
 }

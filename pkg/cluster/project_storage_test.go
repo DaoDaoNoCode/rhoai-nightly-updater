@@ -670,3 +670,61 @@ func TestCleanUpListsProjectStorage(t *testing.T) {
 		t.Fatalf("still listed: %+v", st.ProjectStorages)
 	}
 }
+
+// A delete keeps the NetworkPolicy, the Service, the Secret and the
+// Deployment's record while the storage's pod may still run, also on the
+// next try; once no Deployment and no pod of the storage is left, it
+// finishes. A Deployment of that name left without its record (still
+// terminating) keeps the policy too.
+func TestProjectStorageDeleteKeepsTheFenceUntilThePodIsGone(t *testing.T) {
+	f, u := newProjectStorageEnv(t)
+	if res := runPS(t, u, types.ProjectStorageRequest{Project: "proj", Action: "setup"}); !res.Success {
+		t.Fatalf("%+v", res)
+	}
+	pod := psNS + "/pods/nightly-s3-abc"
+	f.putJSON(pod, `{"metadata":{"labels":{"app":"nightly-s3"}}}`)
+	policy := psPolicies + "/" + storage.ProjectS3NetworkPolicy
+	for try := 1; try <= 2; try++ {
+		res := runPS(t, u, types.ProjectStorageRequest{Project: "proj", Action: "delete"})
+		if res.Success || res.ErrorCode != "in_progress" || !f.has(policy) || !f.has(psServices+"/"+storage.ProjectS3Service) || !f.has(psSecrets+"/"+storage.ProjectS3Secret) {
+			t.Fatalf("try %d: %+v", try, res)
+		}
+		if e := psRecord(t, u); e.DeploymentUID == "" || e.NetworkPolicyUID == "" {
+			t.Fatalf("try %d: the record lost the Deployment or the policy: %+v", try, e)
+		}
+	}
+	// The garbage collector finishes the foreground deletion.
+	f.deleteObject(pod)
+	f.deleteObject(psDeployments + "/" + storage.ProjectS3Deployment)
+	if res := runPS(t, u, types.ProjectStorageRequest{Project: "proj", Action: "delete"}); !res.Success || f.has(policy) {
+		t.Fatalf("%+v", res)
+	}
+
+	// The record lost the Deployment (as before this fix) while it still
+	// terminates: the policy stays.
+	f2, u2 := newProjectStorageEnv(t)
+	if res := runPS(t, u2, types.ProjectStorageRequest{Project: "proj", Action: "setup"}); !res.Success {
+		t.Fatalf("%+v", res)
+	}
+	deploy := psDeployments + "/" + storage.ProjectS3Deployment
+	f2.put(deploy, mergeMeta(f2.get(deploy), map[string]any{"metadata": map[string]any{"name": storage.ProjectS3Deployment, "namespace": "proj", "uid": "uid-other", "deletionTimestamp": "2026-11-26T00:00:00Z", "labels": map[string]any{"app.kubernetes.io/managed-by": "rhoai-nightly-updater"}}}))
+	if res := runPS(t, u2, types.ProjectStorageRequest{Project: "proj", Action: "delete"}); res.Success || !f2.has(psPolicies+"/"+storage.ProjectS3NetworkPolicy) {
+		t.Fatalf("the policy went while a Deployment of the storage was still there: %+v", res)
+	}
+}
+
+// A setup whose pod is refused rolls back, but keeps the NetworkPolicy
+// (recorded) while the Deployment's pod may still be there.
+func TestProjectStorageRollbackKeepsTheFenceWhileThePodMayRun(t *testing.T) {
+	f, u := newProjectStorageEnv(t)
+	f.onGet = func(k fakeKey, obj map[string]any) {
+		if k.plural == "deployments" && k.name == storage.ProjectS3Deployment {
+			obj["status"] = map[string]any{"conditions": []any{map[string]any{"type": "ReplicaFailure", "status": "True", "reason": "FailedCreate", "message": "forbidden: exceeded quota"}}}
+		}
+	}
+	f.putJSON(psNS+"/pods/nightly-s3-abc", `{"metadata":{"labels":{"app":"nightly-s3"}}}`)
+	res := runPS(t, u, types.ProjectStorageRequest{Project: "proj", Action: "setup"})
+	if res.Success || !f.has(psPolicies+"/"+storage.ProjectS3NetworkPolicy) || psRecord(t, u).NetworkPolicyUID == "" {
+		t.Fatalf("%+v", res)
+	}
+}
