@@ -6,6 +6,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/authz"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
@@ -165,6 +166,50 @@ func ProjectModelExposures(u *kube.Client, project, model string) (*types.ModelE
 		out.Default, out.DefaultReason = ExposureDefault, "works from your laptop with an OpenShift token, the way the dashboard deploys models; it needs token authentication."
 	}
 	return out, "", ""
+}
+
+// ProjectMaaSRefFact is whether some MaaSModelRef in project, anyone's,
+// targets the LLMInferenceService model (spec.modelRef): a publication to
+// MaaS someone made without this tool, which a project's delete must not
+// leave pointing at nothing. It is read with c.Facts() (the
+// ServiceAccount's list of MaaSModelRefs, in that project only) and
+// reduced to yes or no: no name, no other project. A cluster without the
+// MaaS API has none; any other failed read is an error (callers refuse:
+// fail closed), logged by status only.
+func ProjectMaaSRefFact(c *kube.Client, project, model string) (bool, error) {
+	targeted, err := maasRefTargets(c.Facts(), project, model)
+	if err != nil {
+		kube.LogFactReadFailure("cannot read whether a MaaSModelRef targets a project's model", "MaaSModelRefs", err)
+	}
+	return targeted, err
+}
+
+// maasRefTargets lists project's MaaSModelRefs with f (the facts client)
+// and says whether one targets model.
+func maasRefTargets(f *kube.Client, project, model string) (bool, error) {
+	var list struct {
+		Items []struct {
+			Spec struct {
+				ModelRef struct {
+					Kind string `json:"kind"`
+					Name string `json:"name"`
+				} `json:"modelRef"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	found, err := f.GetIntoOptional(rhoai.NamespacedPath(MaaSAPI(f), "maasmodelrefs", project, ""), &list)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+	for _, it := range list.Items {
+		if it.Spec.ModelRef.Name == model && (it.Spec.ModelRef.Kind == "" || it.Spec.ModelRef.Kind == "LLMInferenceService") {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // capacityFacts keeps ModelCapacityFact's answers a minute (it lists every

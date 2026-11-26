@@ -588,6 +588,15 @@ func (r *projectModelRun) teardown() (*types.OperationResponse, error) {
 	if ModelHasMaaSRef(model) || maasRec.IsPublished(project, name) {
 		return r.fail("model", fmt.Sprintf("%s in %s is published to Models as a Service. A cluster-admin unpublishes it on the MaaS tab first; nothing was deleted.", name, project), "in_use", "published to maas")
 	}
+	// A publication someone made without this tool: a MaaSModelRef in the
+	// project that targets the model (a yes or no, read by the
+	// ServiceAccount). Unreadable refuses too (fail closed).
+	switch targeted, err := ProjectMaaSRefFact(c, project, name); {
+	case err != nil:
+		return r.fail("model", fmt.Sprintf("Cannot check whether a MaaS model reference in %s points at %s (%s); nothing was deleted. Try again.", project, name, kube.FactReadProblem(err)), envkit.ErrorCodePrerequisitesUnknown, "maas refs unreadable")
+	case targeted:
+		return r.fail("model", fmt.Sprintf("A MaaS model reference in %s points at %s, so it is published to Models as a Service. Whoever published it (or a cluster-admin) removes that first; nothing was deleted.", project, name), "in_use", "maas ref targets model")
+	}
 	path, _ := ToolModelPath(project, name)
 	if !model.Metadata.Terminating() {
 		if _, err := kube.DeleteWithUID(c, path, model.Metadata.UID); err != nil && !kube.IsK8sNotFound(err) {

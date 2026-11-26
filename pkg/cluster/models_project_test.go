@@ -528,3 +528,44 @@ func TestGatewayPolicyFailureRollsBackANewModel(t *testing.T) {
 		}
 	})
 }
+
+// A MaaSModelRef someone made in the project without this tool (no MaaS
+// record of it) that targets the model refuses its delete, as does a
+// list of them that cannot be read; the answer names no reference. One
+// that targets another model does not.
+func TestProjectModelDeleteRefusedForAForeignMaaSRef(t *testing.T) {
+	const refs = "/apis/maas.opendatahub.io/v1alpha1/namespaces/proj/maasmodelrefs"
+	for _, tc := range []struct {
+		name, code string
+		set        func(mc *modelsCluster)
+	}{
+		{"targets the model", "in_use", func(mc *modelsCluster) {
+			mc.f.putJSON(refs+"/someones-secret-ref", `{"metadata":{"name":"someones-secret-ref","namespace":"proj"},"spec":{"modelRef":{"kind":"LLMInferenceService","name":"qwen25-05b-instruct"}}}`)
+		}},
+		{"unreadable", "prerequisites_unknown", func(mc *modelsCluster) {
+			mc.f.fail["GET "+refs] = http.StatusInternalServerError
+		}},
+		{"targets another model", "", func(mc *modelsCluster) {
+			mc.f.putJSON(refs+"/other", `{"metadata":{"name":"other","namespace":"proj"},"spec":{"modelRef":{"kind":"LLMInferenceService","name":"qwen3-1-7b"}}}`)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mc := newModelsCluster(t)
+			u := projectModelUser(mc)
+			if res, _ := runProjectModelForTest(t, u, types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct"}); !res.Success {
+				t.Fatalf("setup: %+v", res)
+			}
+			tc.set(mc)
+			res, _ := runProjectModelForTest(t, u, types.ProjectModelRequest{Action: "teardown", Project: "proj", Model: "qwen25-05b-instruct"})
+			if tc.code == "" {
+				if !res.Success || mc.f.has(testModelPath) {
+					t.Fatalf("%+v", res)
+				}
+				return
+			}
+			if res.Success || res.ErrorCode != tc.code || !mc.f.has(testModelPath) || strings.Contains(res.Message, "someones-secret-ref") {
+				t.Fatalf("%+v", res)
+			}
+		})
+	}
+}

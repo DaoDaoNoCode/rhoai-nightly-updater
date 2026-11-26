@@ -299,6 +299,10 @@ var wantFactsRequests = []string{
 	// Connectivity Link checks its callers.
 	"list gateway.networking.k8s.io/gateways name=",
 	"list kuadrant.io/kuadrants name=",
+	// Whether a MaaSModelRef in the project targets a model (reduced to yes
+	// or no for that project, serving.ProjectMaaSRefFact): the one MaaS
+	// read, in one project, before a project's model is deleted.
+	"list maas.opendatahub.io/maasmodelrefs name=",
 }
 
 // The facts client's requests, pinned by resource and name; and what it
@@ -315,7 +319,9 @@ func TestFactsRequestsArePinned(t *testing.T) {
 			t.Errorf("a facts client reads a Secret: %s (%s)", r.key(), r.Site)
 		case r.Resource == "namespaces" && r.Name == "":
 			t.Errorf("a facts client lists namespaces: %s (%s)", r.key(), r.Site)
-		case strings.HasPrefix(r.Group, "maas.opendatahub.io"):
+		// The one MaaS read: a list of MaaSModelRefs in one namespace (the
+		// project), reduced to a yes or no (serving.ProjectMaaSRefFact).
+		case strings.HasPrefix(r.Group, "maas.opendatahub.io") && (r.Verb != "list" || r.Resource != "maasmodelrefs" || r.Namespace == ""):
 			t.Errorf("a facts client reads MaaS: %s (%s)", r.key(), r.Site)
 		}
 	}
