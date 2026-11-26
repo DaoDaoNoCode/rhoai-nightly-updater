@@ -20,7 +20,17 @@ type (
 	LockRenewal = record.LockRenewal
 	// ActionCancelledError is record.ActionCancelledError.
 	ActionCancelledError = record.ActionCancelledError
+	// CancelRequest is record.CancelRequest.
+	CancelRequest = record.CancelRequest
 )
+
+// ErrNoSuchAction is record.ErrNoSuchAction.
+var ErrNoSuchAction = record.ErrNoSuchAction
+
+// RequestOperationCancel is record.RequestOperationCancel.
+func RequestOperationCancel(c *Client, opID string, check func(*OperationRecord) (*CancelRequest, error)) error {
+	return record.RequestOperationCancel(c, opID, check)
+}
 
 // WithActionScope is record.WithActionScope.
 func WithActionScope(ctx context.Context, project, uid string) context.Context {

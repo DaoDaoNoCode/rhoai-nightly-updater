@@ -1,10 +1,13 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
 )
@@ -27,10 +30,15 @@ import (
 // exist, so the answer tells nothing about other people's actions; the
 // role is checked before the action is looked up, so a failed check is
 // the same answer either way. Only the actions that declare safe points
-// can be cancelled (cancellableActions: each with its tests), and only in
-// the updater pod that runs them. The cancel takes no lock and changes
-// nothing in the cluster; it reads nothing either, but the mutation gate's
-// access review with the caller's own token.
+// can be cancelled (cancellableActions: each with its tests). The cancel
+// takes no lock and changes nothing in the cluster. For an action of this
+// updater pod it only marks the action (its one call is the mutation
+// gate's access review with the caller's own token). For an action another
+// updater pod runs (one that still drains while it shuts down), it checks
+// that pod's lock entry in the operation record (its starter, live, can be
+// cancelled) and records the request under a key of its own there
+// (cluster.RequestOperationCancel, with the ServiceAccount, as every
+// record write); the holder reads it at its heartbeat (pickUpCancels).
 
 // cancellableActions are the project actions (cluster.ProjectActionID)
 // that check a cancel request at safe points, with what a cancel leaves
@@ -113,12 +121,76 @@ func HandleOperationCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !inflight.requestCancel(req.ID, username, admin) {
-		writeError(w, noSuchActionMessage, http.StatusNotFound, "not_found")
-		return
+		err := requestRemoteCancel(r.Context(), req.ID, username, admin)
+		switch {
+		case errors.Is(err, cluster.ErrNoSuchAction):
+			writeError(w, noSuchActionMessage, http.StatusNotFound, "not_found")
+			return
+		case err != nil:
+			slog.Warn("could not record a cancel request for another updater pod", "operation", req.ID, "problem", cluster.FactReadProblem(err))
+			writeError(w, "The cancel request could not be recorded (the updater's operation record could not be read or written). Nothing was changed; try again.", http.StatusServiceUnavailable, "lock_unavailable")
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	if err := json.NewEncoder(w).Encode(map[string]any{"cancelRequested": true, "message": cancelAcceptedMessage}); err != nil {
 		slog.Error("response encode error", "label", "operation-cancel", "error", err)
 	}
+}
+
+// remoteCancelTimeout bounds recording a cancel request for another pod.
+const remoteCancelTimeout = 5 * time.Second
+
+// requestRemoteCancel records a cancel request for the project action id
+// that another updater pod runs, for user (admin: a cluster-admin), when
+// the operation record holds its live lock entry, it can be cancelled, and
+// user started it or is a cluster-admin; otherwise
+// cluster.ErrNoSuchAction. The record is read, and written, with the
+// ServiceAccount.
+func requestRemoteCancel(ctx context.Context, id, user string, admin bool) error {
+	token := getClusterToken()
+	if token == "" {
+		return errors.New("cluster token not available")
+	}
+	ctx, cancel := context.WithTimeout(ctx, remoteCancelTimeout)
+	defer cancel()
+	c := cluster.NewClientWithContext(ctx, token)
+	c.SetUsername(user)
+	return requestOperationCancel(c, id, func(rec *cluster.OperationRecord) (*cluster.CancelRequest, error) {
+		for _, l := range rec.ProjectLocks {
+			if l.ID != id || !leaseHeldElsewhere(l) || l.CancelNote == "" || (!admin && (user == "" || l.User != user)) {
+				continue
+			}
+			slog.Info("cancel requested for a project action of another updater pod", "operation", id, "type", l.Type, "pod", l.Pod, "by", user, "starter", user == l.User)
+			return &cluster.CancelRequest{ByAdmin: user != l.User, At: clk.Now().UTC().Format(time.RFC3339)}, nil
+		}
+		return nil, cluster.ErrNoSuchAction
+	})
+}
+
+// requestOperationCancel records a cancel request; tests replace it.
+var requestOperationCancel = cluster.RequestOperationCancel
+
+// markCancelled records the cancel request another pod took for the
+// operation id of this process (pickUpCancels), as requestCancel would.
+func (t *operationTracker) markCancelled(id string, byAdmin bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	op := t.ops[id]
+	if op == nil || op.ProjectUID == "" || op.cancelNote == "" || op.cancelled != nil {
+		return
+	}
+	op.cancelled = &cluster.ActionCancelledError{ByAdmin: byAdmin}
+	slog.Info("cancel requested through another updater pod", "operation", id, "type", op.Type)
+}
+
+// awaitingCancel is whether the project action id of this process can be
+// cancelled and was not yet: the heartbeat then reads the record for a
+// cancel request another pod took (pickUpCancels).
+func (t *operationTracker) awaitingCancel(id string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	op := t.ops[id]
+	return op != nil && op.ProjectUID != "" && op.cancelNote != "" && op.cancelled == nil
 }

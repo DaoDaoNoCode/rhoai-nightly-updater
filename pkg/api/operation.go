@@ -890,10 +890,13 @@ func operationList(running []*Operation, rec *cluster.OperationRecord, interrupt
 			case leaseHeldElsewhere(l):
 				op := remoteOperation(l)
 				op.Scope = scopeProject
+				if op.Cancellable && rec.CancelRequests[l.ID] != nil {
+					op.Cancellable, op.Cancelling = false, true
+				}
 				out = append(out, op)
 			case kept[uid] != nil:
 				op := remoteOperation(l)
-				op.Scope, op.Interrupted, op.Remote = scopeProject, true, false
+				op.Scope, op.Interrupted, op.Remote, op.Cancellable = scopeProject, true, false, false
 				out = append(out, op)
 			}
 		}

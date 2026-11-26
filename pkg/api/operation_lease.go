@@ -104,7 +104,7 @@ func leaseFor(op *Operation, now time.Time) *types.OperationLease {
 		Message: truncateText(op.Message, maxOperationMessageBytes),
 	}
 	if op.ProjectUID != "" {
-		l.Project, l.ProjectUID, l.Begun = op.Project, op.ProjectUID, op.begun
+		l.Project, l.ProjectUID, l.Begun, l.CancelNote = op.Project, op.ProjectUID, op.begun, op.cancelNote
 	}
 	return l
 }
@@ -123,6 +123,9 @@ func remoteOperation(l *types.OperationLease) *Operation {
 		ID: l.ID, Type: l.Type, Label: l.Label, User: l.User, Target: l.Target,
 		StartedAt: started, UpdatedAt: beat, Step: l.Step, StepStatus: l.StepStatus, Message: l.Message,
 		Pod: l.Pod, Remote: true, Project: l.Project, ProjectUID: l.ProjectUID,
+		// A cancel request for it is taken here and recorded for its pod
+		// (operation_cancel.go).
+		Cancellable: l.CancelNote != "", CancelNote: l.CancelNote,
 	}
 }
 
@@ -369,6 +372,7 @@ type renewal struct {
 // renewals fail their tests again; their deadlines still apply).
 func (k *leaseKeeper) renewOnce(ctx context.Context) {
 	recoveries := k.renewBatch(ctx)
+	k.pickUpCancels(ctx)
 	if len(recoveries) == 0 || ctx.Err() != nil {
 		return
 	}
@@ -376,6 +380,48 @@ func (k *leaseKeeper) renewOnce(ctx context.Context) {
 		slog.Info("operation locks to take again; one per heartbeat round", "now", recoveries[0].h.key, "later", len(recoveries)-1)
 	}
 	k.recover(ctx, recoveries[0])
+}
+
+// pickUpCancels reads the operation record for the cancel requests another
+// updater pod recorded for this process's cancellable project actions
+// (operation_cancel.go), once per heartbeat while one runs and was not
+// cancelled yet, and marks those actions as requestCancel does. It only
+// reads, after the round's renewals, which it does not change; a failed
+// read is tried again at the next tick.
+func (k *leaseKeeper) pickUpCancels(ctx context.Context) {
+	k.mu.Lock()
+	var held []*heldLease
+	for _, h := range k.held {
+		if !h.gone && h.uid != "" {
+			held = append(held, h)
+		}
+	}
+	k.mu.Unlock()
+	var waiting []*heldLease
+	for _, h := range held {
+		if inflight.awaitingCancel(h.opID) {
+			waiting = append(waiting, h)
+		}
+	}
+	if len(waiting) == 0 || ctx.Err() != nil {
+		return
+	}
+	rctx, cancel := context.WithTimeout(ctx, leaseWriteTimeout)
+	defer cancel()
+	c := waiting[0].client.WithContext(rctx)
+	if fresh := waiting[0].fresh; fresh != nil {
+		c = fresh(rctx)
+	}
+	rec, err := readOperationState(c)
+	if err != nil || rec == nil {
+		slog.Debug("could not read the operation record for cancel requests", "error", err)
+		return
+	}
+	for _, h := range waiting {
+		if r := rec.CancelRequests[h.opID]; r != nil {
+			inflight.markCancelled(h.opID, r.ByAdmin)
+		}
+	}
 }
 
 // renewBatch is renewOnce's renewal of every held entry in one write,

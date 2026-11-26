@@ -86,6 +86,10 @@ type OperationLease struct {
 	Project    string `json:"project,omitempty"`
 	ProjectUID string `json:"projectUid,omitempty"`
 	Begun      bool   `json:"begun,omitempty"`
+	// CancelNote is set on a project lock whose action can be cancelled
+	// (it checks a cancel request at safe points): what a cancel leaves.
+	// Another updater pod takes a cancel request for it on that basis.
+	CancelNote string `json:"cancelNote,omitempty"`
 }
 
 // CompletedOperation is the most recent finished cluster operation, as

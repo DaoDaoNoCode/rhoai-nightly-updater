@@ -38,14 +38,25 @@ func postCancel(t *testing.T, token, id string) *httptest.ResponseRecorder {
 // answer of an action that does not exist; a failed role check is the same
 // answer whether it exists or not. An action that cannot be cancelled, and
 // a cluster operation, answer as none. The cancel only records the request
-// (no lock, no record read, the context untouched).
+// (no lock, nothing written for an action of this pod, the context
+// untouched).
 func TestCancelOnlyStarterOrAdmin(t *testing.T) {
 	setupDevMode(t)
 	setAdmin(t)
-	readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) {
-		t.Error("the cancel read the operation record")
-		return &cluster.OperationRecord{}, nil
+	writes := 0
+	requestOperationCancel = func(c *cluster.Client, _ string, check func(*cluster.OperationRecord) (*cluster.CancelRequest, error)) error {
+		rec, _ := readOperationState(c)
+		if _, err := check(rec); err != nil {
+			return err
+		}
+		writes++
+		return nil
 	}
+	defer func() {
+		if writes != 0 {
+			t.Errorf("%d cancel requests written for other pods", writes)
+		}
+	}()
 	id := cancellableAction(t, "a", "alice")
 
 	missing := postCancel(t, "user:bob", "no-such-action")
@@ -199,4 +210,105 @@ func TestBusyRefusalOffersCancelOnlyWhenCancellable(t *testing.T) {
 			t.Errorf("got %q, want %q", got, tc.want)
 		}
 	}
+}
+
+// A cancel for a project action another updater pod runs: checked against
+// its live lock entry in the record (its starter, or a cluster-admin; it
+// can be cancelled) and recorded for that pod; anyone else, and an action
+// that cannot be cancelled, get the same 404 and nothing is written. An
+// admin then sees it stopping.
+func TestCrossPodCancelIsRecordedForTheHolder(t *testing.T) {
+	setupDevMode(t)
+	setAdmin(t)
+	now := clk.Now()
+	cancellable := otherPodProjectLease("a", "alice", now)
+	cancellable.CancelNote = cancellableActions["workbench.setup"]
+	plain := otherPodProjectLease("p", "alice", now)
+	rec := &cluster.OperationRecord{ProjectLocks: map[string]*types.OperationLease{"a": cancellable, "p": plain}}
+	readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) { return rec, nil }
+	var written []*cluster.CancelRequest
+	requestOperationCancel = func(c *cluster.Client, id string, check func(*cluster.OperationRecord) (*cluster.CancelRequest, error)) error {
+		r, err := check(rec)
+		if err != nil {
+			return err
+		}
+		written = append(written, r)
+		return nil
+	}
+	missing := postCancel(t, "user:bob", "no-such-action")
+	for _, tc := range []struct{ token, id string }{{"user:bob", "remote-a"}, {"user:alice", "remote-p"}} {
+		if w := postCancel(t, tc.token, tc.id); w.Code != http.StatusNotFound || w.Body.String() != missing.Body.String() {
+			t.Fatalf("%s cancels %s: %d %s", tc.token, tc.id, w.Code, w.Body.String())
+		}
+	}
+	if len(written) != 0 {
+		t.Fatalf("refused requests were written: %+v", written)
+	}
+	if w := postCancel(t, "user:alice", "remote-a"); w.Code != http.StatusAccepted || len(written) != 1 || written[0].ByAdmin {
+		t.Fatalf("the starter: %d %s %+v", w.Code, w.Body.String(), written)
+	}
+	if w := postCancel(t, "user:admin", "remote-a"); w.Code != http.StatusAccepted || len(written) != 2 || !written[1].ByAdmin {
+		t.Fatalf("a cluster-admin: %d %+v", w.Code, written)
+	}
+
+	// With the request recorded, the action shows as stopping.
+	rec.CancelRequests = map[string]*cluster.CancelRequest{"remote-a": {ByAdmin: true}}
+	for _, op := range getAdminOperation(t).Operations {
+		if op.ID == "remote-a" && (op.Cancellable || !op.Cancelling) {
+			t.Fatalf("after the request: %+v", op)
+		}
+		if op.ID == "remote-p" && (op.Cancellable || op.Cancelling) {
+			t.Fatalf("an action without safe points: %+v", op)
+		}
+	}
+}
+
+// The holder: its heartbeat reads the request another pod recorded and
+// marks the action, which sees it at its next safe point. Its lock is not
+// lost and its context stays live.
+func TestCrossPodCancelIsPickedUpWithoutLeaseLoss(t *testing.T) {
+	newProjectGateEnv(t, roleEditor)
+	started, proceed := make(chan struct{}), make(chan struct{})
+	seen := make(chan *cluster.ActionCancelledError, 1)
+	runWorkbench = func(c *cluster.Client, _ types.WorkbenchRequest, _ func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		close(started)
+		<-proceed
+		if c.Context().Err() != nil {
+			t.Error("the action's context ended")
+		}
+		seen <- cluster.CancelRequested(c)
+		return &types.OperationResponse{Success: false, Message: "cancelled", ErrorCode: "cancelled"}, nil
+	}
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- serveProjectAction(t, "/api/resources/workbench/stream", `{"action":"setup","project":"team-a"}`)
+	}()
+	<-started
+	var id string
+	for _, op := range inflight.list() {
+		id = op.ID
+	}
+	reads := 0
+	readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) {
+		reads++
+		return &cluster.OperationRecord{CancelRequests: map[string]*cluster.CancelRequest{id: {ByAdmin: true}}}, nil
+	}
+	leases.renewOnce(context.Background())
+	if reads != 1 {
+		t.Fatalf("the heartbeat read the record %d times", reads)
+	}
+	op := inflight.get(id)
+	if op == nil || !op.Cancelling || op.lockLost {
+		t.Fatalf("after the heartbeat: %+v", op)
+	}
+	// Once marked, the heartbeat reads no more.
+	leases.renewOnce(context.Background())
+	if reads != 1 {
+		t.Fatalf("read again after the pickup: %d", reads)
+	}
+	close(proceed)
+	if c := <-seen; c == nil || !c.ByAdmin {
+		t.Fatalf("the action saw %+v", c)
+	}
+	<-done
 }
