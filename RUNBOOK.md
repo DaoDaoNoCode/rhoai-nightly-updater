@@ -81,13 +81,9 @@ Image tags: `:vX.Y.Z` (immutable release), `:vN` (newest release of major N), `:
 
 What the app's notices mean:
 
-<img src="docs/images/banner-major-update.png" alt="Notice: v2.0.0 is available; a new major version requires a full redeploy" width="760">
+- **"vX.Y.Z is available"**: a newer release exists. The notice shows that release's installer command (download, read, run) to copy; [UPGRADING](docs/UPGRADING.md#patch-and-minor-releases) explains it. "vX.Y.Z is a new major version and requires a full redeploy" means a new major version: run its `install.sh` (or check it out and `make upgrade`). Dismissing hides it until an even newer release.
 
-- **"vX.Y.Z is available"**: a newer release exists. The notice shows that release's installer command (download, read, run) to copy; [UPGRADING](docs/UPGRADING.md#patch-and-minor-releases) explains it. "Requires a full redeploy" means a new major version: run its `install.sh` (or check it out and `make upgrade`). Dismissing hides it until an even newer release.
-
-<img src="docs/images/banner-template-outdated.png" alt="Notice for admins: this updater's deployment is out of date" width="760">
-
-- **"This updater's deployment is out of date"**: the Deployment was created from an older template than the running image expects, typically an install on `:latest` that pulled a newer image. Re-apply the template of the release you run (its `install.sh`, or `make upgrade` from its checkout). Which version runs: [UPGRADING §1](docs/UPGRADING.md#1-which-version-am-i-running).
+- **"For admins: this updater's deployment is out of date"**: the Deployment was created from an older template than the running image expects, typically an install on `:latest` that pulled a newer image. Re-apply the template of the release you run (its `install.sh`, or `make upgrade` from its checkout). Which version runs: [UPGRADING §1](docs/UPGRADING.md#1-which-version-am-i-running).
 
 What the image checks do:
 - `deploy` and `upgrade` apply `IMAGE@sha256:<digest of TAG>`. A release's `install.sh` resolves its own `:vX.Y.Z` and refuses an image built from another commit.
@@ -174,17 +170,11 @@ oc get oauthaccesstokens --field-selector clientName=$APP-$NS                   
 
 ## 5. Operations: busy, stuck, interrupted
 
-An operation that another updater pod runs (here, after the pod was evicted mid-update):
+The banners at the top of every page:
 
-<img src="docs/images/banner-remote-operation.png" alt="Banner: qa-user is running Update to nightly on updater pod rhoai-nightly-updater-..., step 8 of 8, with the latest progress" width="760">
-
-A project action, as a cluster-admin sees it (who started it, and **Cancel** when it can be cancelled in this pod):
-
-<img src="docs/images/banner-admin-project-action.png" alt="Banner: Set up the playground in project llm-eval, started by ml-engineer at 14:24., with Cancel" width="760">
-
-An operation whose pod stopped before it finished:
-
-<img src="docs/images/banner-interrupted.png" alt="Banner: Update to nightly was interrupted, with who started it, the pod that stopped and what to do" width="760">
+- An operation that another updater pod runs (for example after the pod was evicted mid-update) names who runs what "on updater pod <pod>", its step and its latest progress.
+- A project action, as a cluster-admin sees it: "Set up the playground in project llm-eval, started by ml-engineer at 14:24.", with **Cancel** when it can be cancelled in this pod.
+- An operation whose pod stopped before it finished: **"Update to nightly" was interrupted**, with who started it, the pod that stopped and what to do.
 
 - **409 `cluster_busy` / "Another operation is changing this cluster":** one operation at a time. The banner names who started it and the current step. Wait, or follow it on the Status page.
 - **Cancel a project action:** **Cancel** on its banner (its starter or a cluster-admin; `POST /api/operation/cancel {"id": ...}`, 202). It is a request: the action stops at its next safe point (a workbench setup before its checks reach the workbench controller or before the workbench, a playground setup right before each install attempt and at each check of the ready wait, a user's MLflow samples change between samples) and ends as its own failure there would, so the storage or the playground it made stays, recorded as the tool's. A request in flight always finishes; an action that ends before its next safe point is recorded as done. Its activity entry reads "Cancelled by the user who started it" or "Cancelled by a cluster-admin"; for a cluster-admin's cancel, the pod log line `a cluster-admin cancelled a project action` names who asked. A cluster-admin's own MLflow samples change holds the cluster lock (it may restart the shared MLflow) and has no Cancel. Cancel requests count in the per-user limit of changes (429 `user_rate_limited`). An action another updater pod runs (one draining at shutdown) gets the request through key `cancelRequest.<operation ID>` of ConfigMap `rhoai-nightly-updater-operation`, which that pod reads at its next heartbeat (10 s). 404 `not_found`: no such action runs, it cannot be cancelled (other project actions, cluster operations: a recipe run has Stop), or it is not yours.
@@ -241,9 +231,7 @@ A recipe run (5.0.0, `POST /api/recipes/run`) is one operation that holds the lo
 
 ## 6. Update / Install a different build failed
 
-A successful update, for reference: each step turns green, then **Update complete**.
-
-<img src="docs/images/update.gif" alt="Update to latest, confirm, the eight steps run, Update complete" width="760">
+A successful update, for reference: **Update to latest**, confirm, the eight steps below turn green one by one, then **Update complete**.
 
 The update pipeline, and what happens when a step fails:
 
@@ -267,19 +255,13 @@ flowchart TD
 
 What the Status page shows when the operator is broken:
 
-<img src="docs/images/status-operator-failed.png" alt="RHOAI on this cluster: Operator failed, with the recommended fix" width="760">
-
-1. **Operator failed**: the CSV phase is `Failed`.
-2. The recommendation, with **Re-deploy the same version**, **Open Diagnostics** and **View in console**.
-3. **Update to latest**: a new build is the usual fix; Update removes the failed version first.
-
-<img src="docs/images/status-no-subscription.png" alt="Alert: The operator has no Subscription" width="760">
+- **Operator failed** on the **RHOAI on this cluster** card: the CSV phase is `Failed`.
+- The recommendation under it, with **Re-deploy the same version**, **Open Diagnostics** and **View in console**.
+- **Update to latest**: a new build is the usual fix; Update removes the failed version first.
 
 **The operator has no Subscription**: usually an interrupted Update or Install a different build. Update or Install a different build recreates the Subscription with the settings recorded before the last operation.
 
-<img src="docs/images/status-recovery.png" alt="The Recovery card: Re-deploy the operator and Install a different build" width="760">
-
-**Recovery** on the Status page: **Re-deploy operator** installs the same version again; **Choose a build** removes the operator and installs the target you choose (stable, a nightly, an exact build).
+**Recovery** on the Status page (**Re-deploy the operator**, **Install a different build**): **Re-deploy operator** installs the same version again; **Choose a build** removes the operator and installs the target you choose (stable, a nightly, an exact build).
 
 Read the step that failed and its log in the UI first. Then:
 
@@ -350,19 +332,12 @@ Alerts: `NightlyUpdaterDown` (target down or absent for 5 m), `NightlyUpdateFail
 
 - **Tags don't load / Quay errors:** the Quay token is derived from the cluster pull secret. Test it on the Status page, then check `oc logs ... -c app | grep -i quay`.
 - **Commit dates show "-", or the Build Explorer search reports a rate limit:** GitHub allows 60 requests/hour per egress IP without a token. Set `GITHUB_TOKEN` ([README: Configuration](README.md#configuration)). Results are cached in memory per pod (cleared on restart).
-- **A PR shows as not contained, but its change is in the build:**
-
-  <img src="docs/images/builds-pr-search.png" alt="PR search for #5123: only rhoai-3.7-ea.1 contains it; the release branches do not" width="760">
-
-  In this example only the build from `main` contains the PR. The release branches (`rhoai-3.6`, `rhoai-3.5`, ...) show **Does not contain** even if the change was cherry-picked there, because it arrived as a cherry-pick with a different SHA. A build contains the PR when the PR's merge commit is an ancestor of the component's commit in the fork (`red-hat-data-services/<name>`). The odh-dashboard fork merges upstream `main`, so this is reliable for dashboard PRs; a fork that cherry-picks or rebases upstream changes has different commit SHAs, so a PR it took that way shows as **Does not contain**. Look at the build's component commit (the link in the row) on GitHub instead. Builds built more than an hour before the merge say **Built before the merge**: they were not read.
+- **A PR shows as not contained, but its change is in the build:** for example, a search for `#5123` where only `rhoai-3.7-ea.1` (built from `main`) **Contains** the PR. The release branches (`rhoai-3.6`, `rhoai-3.5`, ...) show **Does not contain** even if the change was cherry-picked there, because it arrived as a cherry-pick with a different SHA. A build contains the PR when the PR's merge commit is an ancestor of the component's commit in the fork (`red-hat-data-services/<name>`). The odh-dashboard fork merges upstream `main`, so this is reliable for dashboard PRs; a fork that cherry-picks or rebases upstream changes has different commit SHAs, so a PR it took that way shows as **Does not contain**. Look at the build's component commit (the link in the row) on GitHub instead. Builds built more than an hour before the merge say **Built before the merge**: they were not read.
 - **Unknown (commit not on GitHub):** GitHub does not know the searched commit (or the PR's merge commit) in the repository or its fork, so it cannot compare. Check the SHA.
 
 ## 9. Dashboard Dev
 
-<img src="docs/images/dashboard-dev-session.png" alt="Dashboard Dev session active: PR #5123, Operator paused, with Revert to default" width="760">
-
-1. Who deployed which build, and when.
-2. **Revert to default** ends the session.
+The card **Dashboard Dev session active: PR #5123**, labelled **Operator paused**, says who deployed which build, and when; **Revert to default** ends the session.
 
 - **Banner "Dashboard Dev session active":** the dashboard module's operator (`dashboard-operator` on RHOAI 3.6; the banner names the Deployment the tool discovered) is paused (0 replicas), so RHOAI updates don't reach the dashboard. Use **Revert** on Dashboard Dev when done. Operator operations offer "Revert Dashboard Dev and continue".
 - **"A dashboard deletion is waiting for the paused <operator>":** this is deadlock D1. Revert at once (§11.1).
@@ -379,28 +354,11 @@ The page has an **Overview** (each feature's state and next step) and one tab pe
 
 While the page reads the cluster, each Overview row and each tab shows loading placeholders where its state and parts will be: nothing reads **Not set up** or empty until the status that says so has been read. A status that cannot be read (the playground's or MaaS's) reads **Unknown: cannot be read** on the Overview, with the reason and **Try again** above the table. **Refresh** reads everything again and keeps what is shown until the new answers are in; if that read fails, the last data stays with a warning that it may be out of date, and **Retry**.
 
-<img src="docs/images/s3-incomplete.png" alt="Storage Needs attention: Deployment seaweedfs is scaled to 0 replicas, with Repair, and the reason in the details" width="760">
+A broken S3 storage reads **Needs attention** (SeaweedFS does not serve through `seaweedfs-s3` and `seaweedfs-admin`), with why in its details (for example: Deployment `seaweedfs` is scaled to 0 replicas) and what **Repair** does. Repair re-runs setup and keeps the stored data; after it the storage reads **Ready** again.
 
-1. **Needs attention**: SeaweedFS does not serve through `seaweedfs-s3` and `seaweedfs-admin`.
-2. Why, in the details (here: scaled to 0), and what Repair does.
-3. **Repair** re-runs setup and keeps the stored data:
+The **S3 storage** tab ([README](README.md#environment-s3-storage-pipeline-servers-mlflow-models) has a screenshot): the state; the S3 endpoint, with the bucket, region and the pipeline servers that use it under it; the keys and the admin UI password, masked (show or copy them; cluster-admins only, read from the server only then); **Open admin UI**. In the storage's menu, **Delete S3 storage** stays disabled while a pipeline server uses it, and says which.
 
-<img src="docs/images/s3-repair.gif" alt="Repair, confirm Repair S3 storage, the storage is Running again" width="760">
-
-<img src="docs/images/environment-storage.png" alt="S3 storage tab: Ready, the endpoint and bucket, the pipeline server that uses it, masked keys and admin UI password, and Open admin UI" width="760">
-
-1. The S3 storage's state (the **S3 storage** tab).
-2. The S3 endpoint; the bucket, region and the pipeline servers that use it are under it.
-3. The keys and the admin UI password, masked: show or copy them (cluster-admins only; read from the server only then).
-4. **Open admin UI**. In the storage's menu, **Delete S3 storage** stays disabled while a pipeline server uses it, and says which.
-
-<img src="docs/images/environment-pipelines.png" alt="Pipelines tab: Ready in dev-project, the S3 storage's health with Open S3 storage, pipeline server with Open pipelines" width="760">
-
-1. The state in the selected project.
-2. The project.
-3. The S3 storage's health; **Open S3 storage** opens its tab.
-4. The dashboard S3 Connection `rhoai-nightly-updater-s3` set up with the pipeline server (owned by it; in-cluster address), and the workbenches that use it.
-5. **Open pipelines**.
+The **Pipelines** tab: the state in the selected project; the project; the S3 storage's health, with **Open S3 storage** to open its tab; the dashboard S3 Connection `rhoai-nightly-updater-s3` set up with the pipeline server (owned by it; in-cluster address), and the workbenches that use it; **Open pipelines**.
 
 | Problem | Fix |
 |---|---|
@@ -467,17 +425,11 @@ While the page reads the cluster, each Overview row and each tab shows loading p
 
 Versions before 3.0.0 kept the S3 storage in namespace `minio`, behind MinIO-era names. 3.0.0 moves it, with its data, to namespace `seaweedfs`:
 
-<img src="docs/images/s3-migration-needed.png" alt="SeaweedFS on the S3 storage tab: Migration needed, with Migrate storage, and the old storage's objects in its section" width="760">
+- SeaweedFS on the S3 storage tab reads **Migration needed**: the old storage still holds the data and serves its pipeline servers.
+- **Migrate storage** opens the plan (its steps, the pipeline servers it moves, and a volume it cannot copy); nothing changes until you confirm.
+- **Storage of an earlier version** names the old storage's objects and volumes (the only place with MinIO-era names).
 
-1. **Migration needed**: the old storage still holds the data and serves its pipeline servers.
-2. **Migrate storage** opens the plan; nothing changes until you confirm.
-3. **Storage of an earlier version** names the old storage's objects and volumes (the only place with MinIO-era names).
-
-<img src="docs/images/s3-migrate-dialog.png" alt="Dialog: Migrate storage, with the three steps, the pipeline server it moves and the volume that cannot be copied" width="760">
-
-The run streams each step; closing the dialog does not stop it. After it, the old storage is still there until you remove it:
-
-<img src="docs/images/s3-migrate.gif" alt="Migrate storage, confirm, the steps complete, then the checklist before removing the old storage" width="760">
+The run streams each step; closing the dialog does not stop it. It ends with a summary and the checklist below; the old storage is still there until you remove it:
 
 ```mermaid
 flowchart TD
@@ -495,9 +447,7 @@ What each step does, and what is never touched: [CLUSTER_CHANGES §8](docs/CLUST
 
 Before you remove the old storage, update what this tool did not create (data connections, workbenches, other pipeline servers): the endpoint becomes `http://seaweedfs-s3.seaweedfs.svc:8333` and the keys are the new storage's (the S3 storage tab shows them); bucket names and object paths stay. Anything still on `minio-service.minio.svc` stops working after the removal. A pipeline server the tool did not create is listed in the dialog and blocks the removal until it moves.
 
-<img src="docs/images/s3-remove-dialog.png" alt="Dialog: Remove the old storage?, with the checklist, what is deleted, and the choice to delete namespace minio" width="760">
-
-After a migration the S3 storage's menu offers **Delete old storage**, a separate dialog (the migration's own dialog ends with its outcome). It deletes the old objects. **Also delete namespace minio** (unticked) deletes the namespace and everything in it, including what the tool did not create; it is offered only when the namespace carries the tool's label and the tool wrote it, and the dialog lists the other Deployments and PVCs it sees there. Check the rest with `oc get all,pvc,secret,configmap -n minio` first.
+After a migration the S3 storage's menu offers **Delete old storage**, a separate dialog with that checklist and what is deleted (the migration's own dialog ends with its outcome). It deletes the old objects. **Also delete namespace minio** (unticked) deletes the namespace and everything in it, including what the tool did not create; it is offered only when the namespace carries the tool's label and the tool wrote it, and the dialog lists the other Deployments and PVCs it sees there. Check the rest with `oc get all,pvc,secret,configmap -n minio` first.
 
 Check the result:
 
@@ -948,7 +898,7 @@ oc get platforms.config.opendatahub.io -o jsonpath='{range .items[*].status.cond
 
 **Left over from an earlier release** (live on RHOAI 3.6.0 after upgrades over several releases: the DSC was Not Ready while every component said Ready). Every fix runs with your token, reads everything again first, and changes nothing unless each check passes.
 
-<img src="docs/images/diag-leftover-fields.png" alt="Diagnostics: TrustyAI default-trustyai has field values from an earlier release, with the operator's error, a table of the fields (stored false, after deny, the CRD default) and a Fix button" width="760">
+The problems read, for example, "TrustyAI default-trustyai has field values from an earlier release" (the operator's error, a table of the fields: stored `false`, after `deny`, the CRD default, and **Fix**) and "Deployment redhat-ods-applications/trustyai-service-operator-controller-manager must be recreated: its selector changed".
 
 1. **Stored field types**: `... to smd typed: errors: .spec.<path>: expected <type>, got ...`. A module CR still holds a value of the type an earlier release wrote (here `permitOnline: false` where the CRD now has a string enum `allow`/`deny` with default `deny`); Kubernetes never rewrites a stored object. The API server raises this error only for an object without `managedFields` (server-side apply then first records the live object's fields, and a value of the old type fails that conversion; kubernetes v1.34 `managedfields/internal/skipnonapplied.go:75-91`; a non-apply update that cannot track the fields removes them, `fieldmanager.go:145-164`). The module operator often crash-loops too ("failed waiting for *v1alpha1.<Kind> Informer to sync"); Diagnostics links that pod problem here when the pod's last exit says so.
    1. **Observed**: the operator's error, each field's stored value and what the installed CRD says (type, values, default), and who last wrote the CRD's schema.
@@ -958,16 +908,14 @@ oc get platforms.config.opendatahub.io -o jsonpath='{range .items[*].status.cond
    The DataScienceCluster controller watches module CRs, so it applies the object again by itself (rhods-operator rhoai-3.6). If a re-scan still shows the error with every field valid, the problem becomes "still reports an error ... that is already fixed" with **Retry now**: it adds the annotation `rhoai-nightly-updater.opendatahub.io/retry` to the DataScienceCluster and removes it again, which makes the operator reconcile at once. By hand: `oc annotate datasciencecluster default-dsc rhoai-nightly-updater.opendatahub.io/retry=now`, then the same with `rhoai-nightly-updater.opendatahub.io/retry-`.
 2. **Changed selector**: `spec.selector: Invalid value: ...: field is immutable` on a Deployment, StatefulSet, DaemonSet or Job (the only failure for that object). An older release created it with another selector. **Fix** deletes it (UID and resourceVersion preconditions, propagation Background, after a dry run) so the operator creates it again, then waits up to 2 minutes for it to be back and ready, and says so if it is not. It refuses when the object is not in the applications namespace (read from the DSCInitialization), its controller owner is not a module CR or the DataScienceCluster that reports the failure, or that owner's operator has no available pod.
 
-<img src="docs/images/diag-leftover-recreate-dialog.png" alt="The Fix dialog for recreating Deployment trustyai-service-operator-controller-manager: the acknowledgement checkbox, what stops meanwhile, and the Fix button" width="760">
+   In the Fix dialog of the second:
 
    1. The workload is down until the operator creates it again; changes to that component's resources wait meanwhile. When the tool cannot tell whether the component is in use (it has no reader for most components' resources), or the pods serve failurePolicy Fail webhooks, you tick an acknowledgement first. The server refuses the fix without it, and with it when the Deployment's UID or resourceVersion, or the reasons, changed since the scan (`conflict`). For a StatefulSet, DaemonSet or Job the scan cannot read, the acknowledgement covers only the reasons the scan showed; if reading it with your token finds more (whether its component is in use, webhooks its pods serve), the fix refuses and gives the command to delete it yourself.
    2. **Fix** runs the delete and the wait.
 
 The Diagnostics scan reads Deployments only (the ServiceAccount reads no other workload kind): for a StatefulSet, DaemonSet or Job, Fix reads it with your token and checks it before deleting.
 
-**Objects the operator cannot update** (guidance only):
-
-<img src="docs/images/diag-apply-failures.png" alt="Diagnostics: Deployment redhat-ods-applications/kuberay-operator must be recreated: spec.template.metadata.labels cannot be changed, with the commands" width="760">
+**Objects the operator cannot update** (guidance only), for example "Deployment redhat-ods-applications/kuberay-operator must be recreated: spec.template.metadata.labels cannot be changed", with the commands:
 
 MANUAL ADMIN STEPs, by error:
 
@@ -989,53 +937,24 @@ MANUAL ADMIN STEPs, by error:
 
 On **Components**, the DataScienceCluster card names the failing components:
 
-<img src="docs/images/components-cause.png" alt="Components: DataScienceCluster default-dsc Not Ready; trainer Error with the cause Prerequisite operator not installed: JobSet Operator" width="760">
-
-1. **Not Ready**, with the operator's summary.
-2. The **Cause** of each failing component, and a link to Diagnostics, which shows the fix.
+- **Not Ready**, with the operator's summary.
+- The **Cause** of each failing component (for example trainer, Error, "Prerequisite operator not installed: JobSet Operator"), and a link to Diagnostics, which shows the fix.
 
 Right after **Create** on this page (or the recipe's DataScienceCluster step, [§5.1](#51-environment-recipe-runs-resume-interrupted-sign-in-again)) this is expected for a while: the operator deploys every component the release's default sets to `Managed`, including ones whose prerequisite operator RHOAI does not install (RHOAI 3.6 and 3.7 default trainer to `Managed`; it needs the JobSet Operator). Those stay not ready until an administrator installs the operator, or sets the component to `Removed`.
 
-On **Diagnostics**, open the problem:
+On **Diagnostics**, open the problem ("Prerequisite operator Job Set Operator is not installed"):
 
-<img src="docs/images/diag-prerequisite-missing.png" alt="Diagnostics: Prerequisite operator Job Set Operator is not installed, with the commands that install it" width="760">
+- **Observed**: the conditions and catalog facts the tool read.
+- **Fix**: what to do, in plain words. The tool does not install operators.
+- **Command**: the exact commands (here: Namespace, OperatorGroup, Subscription, `oc wait`, then the operand; for the JobSet Operator, the cert-manager Operator for Red Hat OpenShift first when it is not installed: two blocks, each a subshell with `set -e` that stops at its first failing command, the JobSet one only `if [ $? -eq 0 ]`, so a failed or timed-out cert-manager step never starts the JobSet install and does not close your shell).
+- Copy them, read them, and run them as cluster-admin.
 
-1. **Observed**: the conditions and catalog facts the tool read.
-2. **Fix**: what to do, in plain words. The tool does not install operators.
-3. **Command**: the exact commands (here: Namespace, OperatorGroup, Subscription, `oc wait`, then the operand; for the JobSet Operator, the cert-manager Operator for Red Hat OpenShift first when it is not installed, as in the image above: two blocks, each a subshell with `set -e` that stops at its first failing command, the JobSet one only `if [ $? -eq 0 ]`, so a failed or timed-out cert-manager step never starts the JobSet install and does not close your shell).
-4. Copy them, read them, and run them as cluster-admin.
+The other causes in the table below look the same, for example:
 
-The other causes in the table below look the same. Open each example to see it:
-
-<details>
-<summary><b>Installed, but its operand is missing</b></summary>
-
-<img src="docs/images/diag-operand-missing.png" alt="Job Set Operator is installed, but its JobSetOperator/cluster does not exist, with the command that creates it" width="760">
-
-</details>
-
-<details>
-<summary><b>Module operator in back-off</b> (the only one with a Fix button)</summary>
-
-<img src="docs/images/diag-module-backoff.png" alt="The trainer module operator has not retried yet, with the restart command and a Fix button" width="760">
-
-1. **Fix** restarts the module operator, after a confirmation. The **Command** does the same by hand.
-
-</details>
-
-<details>
-<summary><b>Certificate not issued</b> (cert-manager stopped)</summary>
-
-<img src="docs/images/diag-certificate-stale.png" alt="Certificate reports Ready, but its Secret is missing: cert-manager is installed but its controller is not running" width="760">
-
-</details>
-
-<details>
-<summary><b>Upgrade gate</b></summary>
-
-<img src="docs/images/diag-upgrade-gates.png" alt="The DataScienceCluster waits on an upgrade gate, with the oc patch command" width="760">
-
-</details>
+- **Installed, but its operand is missing**: "Job Set Operator is installed, but its JobSetOperator/cluster does not exist", with the command that creates it.
+- **Module operator in back-off** (the only one with a Fix button): "The trainer module operator has not retried yet". **Fix** restarts the module operator, after a confirmation; the **Command** does the same by hand.
+- **Certificate not issued** (cert-manager stopped): "Certificate <namespace>/<name> reports Ready, but its Secret <name> is missing: cert-manager is installed but its controller is not running".
+- **Upgrade gate**: "The DataScienceCluster waits on an upgrade gate", with the `oc patch` command.
 
 Diagnostics ("DataScienceCluster is not ready") lists each failing DSC condition, followed by its classified cause and a **Related** link to the problem that fixes it. Conditions with severity `Info` do not block `Ready`. A prerequisite named only by Info conditions (for example `KserveLLMInferenceServiceWideEPDependencies: LeaderWorkerSet not installed`) is reported as informational: it gates an optional feature. The Components page shows the same cause in a short line. Read the conditions by hand with:
 
@@ -1082,16 +1001,14 @@ The Components page's **Components and sub-components** card ([README](README.md
 
 **Read the comparison first.** The top of the card says what the DSC was compared with (the DataScienceCluster example in the installed CSV's `alm-examples`, with the operator version) and lists, for each kind of difference, the count and the paths or **None**: Missing, Not in the installed CRD, Deploys nothing, Changed from the default. **None** means it was checked; **Not checked** means it could not be: without a release default (the CSV ships no DataScienceCluster example in the version the DSC is read at, or its example sets fields the installed CRD does not define, which the message names) Missing and Changed are not checked, and without the CRD's schema neither are the other two. Each row carries the same labels; click one for what it means and what Fix does, and turn on **Show only differences** to see only those rows (with their parents).
 
-<img src="docs/images/components-summary-ok.png" alt="Nothing to fix compared with the release default: Missing, Not in the installed CRD and Deploys nothing read None; Changed from the default lists aigateway and aigateway.modelsAsAService, whose rows are labelled Changed from the default" width="760">
+When nothing needs fixing, it reads **Nothing to fix compared with the release default**; Missing, Not in the installed CRD and Deploys nothing read **None**.
 
 With differences, the summary names each kind and offers **Fix**:
 
-<img src="docs/images/components-differences.png" alt="6 differences from the release default to fix: 3 Missing, 2 Not in the installed CRD, 1 Deploys nothing, 1 Changed from the default, with Fix; Show only differences on, the rows that differ with their labels" width="760">
-
-1. The comparison: each kind of difference with its count and paths, or **None**.
-2. **Fix**: sets what is missing to the release default and removes the fields the CRD does not define.
-3. **Show only differences**: only the rows that differ, with their parents.
-4. A row's label (here **Deploys nothing — parent Removed**); click it for what it means.
+- The comparison: each kind of difference with its count and paths, or **None**.
+- **Fix**: sets what is missing to the release default and removes the fields the CRD does not define.
+- **Show only differences**: only the rows that differ, with their parents.
+- A row's label (for example **Deploys nothing — parent Removed**); click it for what it means.
 
 **Deprecated fields.** The DataScienceCluster CRD marks only whole API versions as deprecated (`deprecated: true` on a served version), never single fields, so the page cannot list deprecated fields and does not guess. It does not need to: the API server prunes fields a CRD does not define, so a field the new CRD dropped cannot stay in the DSC, and components renamed between API versions (v2 to v3) are converted by the operator's conversion webhook. After an upgrade, what matters is what the new release default sets that the DSC lacks: those rows read **Missing**.
 
@@ -1101,15 +1018,13 @@ With differences, the summary names each kind and offers **Fix**:
 
 **Managed under a parent that is not Managed.** A sub-component is deployed through its parent's module (`aigateway.modelsAsAService` needs `aigateway` Managed); its row reads **Deploys nothing — parent Removed**, and Fix does not change it. Set the parent to Managed (the confirmation offers both in one change) or set the sub-component to Removed.
 
-**A change is refused.** Every change shows its exact list first:
-
-<img src="docs/images/components-toggle.png" alt="Set ray to Removed? The confirmation lists ray: Managed to Removed (removes it)" width="640">
+**A change is refused.** Every change shows its exact list first (for example **Set ray to Removed?**, listing ray: Managed to Removed):
 
 - "changed since you looked" or "changed since you reviewed this change": someone else changed the DSC (the field you saw has another value now, or the plan computed again differs from the one the dialog showed). Nothing was changed; reload. The JSON Patch also tests the DSC's uid and resourceVersion; when that test fails (the operator writing the DSC's status is enough) the tool reads the DSC again and runs every check again before it patches again, so you only see "changed each time the change was sent" when the DSC moved before each of 3 patches, and "deleted or created again" when another DSC took its place. Nothing was changed in either case. The "changed each time" message also quotes the API server's last answer: a webhook or validation refusal that happens while the operator keeps writing the status looks like a moved DSC, so read that answer too.
 - "The API server refused the change in its dry run: ...": a validation rule or the operator's webhook refused it, quoted as is (for example Kueue `Managed`, which the 3.6 webhook denies; use `Unmanaged`; or `kserve.modelCache` Managed without `cacheSize`, which needs settings this page does not edit: use the console).
 - "X must not be removed now: MaaS is in use (...)": X is `aigateway` or `aigateway.modelsAsAService`, and removing it takes Models as a Service away (maas-api, maas-controller and the gateway policies it made), so every published model and every API key would stop working, and a MaaSModelRef left behind keeps maas-controller's finalizer. The message lists what uses MaaS: every MaaSModelRef (cluster-wide), the MaaSSubscriptions and MaaSAuthPolicies in `models-as-a-service`, and this tool's MaaS record (ConfigMap `rhoai-nightly-updater-snapshot`, key `maas`: a setup, a database or a publication it has not removed). Remove MaaS on the Environment page's MaaS tab: **Clean up MaaS** unpublishes the tool's models and removes MaaS in order (it refuses while others' MaaS objects exist and names them; they remove theirs first). Or keep `aigateway` Managed: for a reset, keep **Keep the components you turned on** checked. "cannot tell whether MaaS is in use" is the same refusal when a read failed (the record, the `maas.opendatahub.io` API discovery, or one of the lists): the preview reads with the updater's ServiceAccount (`oc auth can-i list maasmodelrefs.maas.opendatahub.io -A --as=system:serviceaccount:<ns>:<sa>` must say yes; re-apply the template otherwise), the change itself with your own token (`oc auth can-i list maasmodelrefs.maas.opendatahub.io -A`); fix the one that fails and try again. The same check runs for Diagnostics' disable fix and the version-matched repair (when it runs; its preview does not list it, as the gitops profile cannot read MaaS objects). Other parts of `aigateway` (`aiGrid`, `batchGateway`) have no in-use signal the tool can read, so they get only the module checks below.
 
-  <img src="docs/images/components-toggle-maas-in-use.png" alt="Set aigateway to Removed? refused: MaaS is in use, with the published model, the subscription and the access policy; Set to Removed is disabled" width="640">
+  The dialog (for example **Set aigateway to Removed?**) then names the published model, the subscription and the access policy, and its button stays disabled.
 
 - "X must not be removed now" with other reasons: the removal checks of [§11.1](#111-d1-dashboard-operator-scaled-to-0-dashboard-cr-deletion-hangs) and [§11.4](#114-d7--d8-mlflow-or-pipeline-server-finalizers) (the RHOAI operator, found from the installed CSV's Deployments, and the module operator must run; the module CR must not be deleting; nothing must still use it). The dialog shows them before you confirm: the change runs the same checks. The dashboard, MLflow operator and pipelines are never removed by the tool. A module the tool cannot check (no kind named after it in `components.platform.opendatahub.io` or `services.platform.opendatahub.io`, or a module CR whose operator it cannot identify) is refused rather than removed unchecked: check its operator yourself and change it in the console.
 
@@ -1133,15 +1048,12 @@ With differences, the summary names each kind and offers **Fix**:
 
 **Keep the components you turned on.** Both resets offer it, checked by default, and name the components: every toggle that is Managed (or Unmanaged, where the CRD allows it) in the DSC and deployed, while the release default leaves it Removed or unset, with the parents it needs (for example `aigateway` and `aigateway.modelsAsAService` after MaaS setup, or `kueue` Unmanaged). Checked, the reset keeps their value and resets everything else; the soft reset lists them as "Kept: ... (you turned these on)", the hard reset creates them in the new DSC. Unchecked, the reset is the pure release default, and turning them off gets the removal checks (the MaaS guard above). Changing it plans the reset again; the option is part of what you review (`keepEnabled` in the plan and the request; the API requires it for both resets). A soft reset that would keep everything and change nothing else says so ("Nothing to change").
 
-<img src="docs/images/components-soft-reset.png" alt="Soft reset with Keep the components you turned on (2): aigateway, aigateway.modelsAsAService checked; it sets ray to Managed and workbenchesV2 to Removed, and lists Kept: aigateway, aigateway.modelsAsAService" width="640">
+The dialog reads **Keep the components you turned on (N)**, with each kept path checked, and its plan lists them under **Kept**.
 
-Unchecked while a model is published, the soft reset is refused before you confirm:
-
-<img src="docs/images/components-soft-reset-maas-in-use.png" alt="The same soft reset unchecked: it would remove aigateway, so This change is not possible now comes first, names the published model dev-project/qwen25-05b-instruct and says to remove MaaS on the MaaS tab or keep aigateway Managed; What a soft reset would do is collapsed; Reset is disabled" width="640">
-
+Unchecked while a model is published, the soft reset is refused before you confirm: **This change is not possible now** comes first, names the published models and says to remove MaaS on the MaaS tab or keep `aigateway` Managed; **What a soft reset would do** is collapsed and Reset is disabled.
 **Hard reset.** Use it when components are stuck and a soft reset does not help.
 
-<img src="docs/images/components-hard-reset.png" alt="The hard reset dialog with Keep the components you turned on checked: What a hard reset would do is open; it deletes default-dsc and tears down every enabled component (12), which come back as the release default, and stops without creating anything if the old DataScienceCluster is not gone within 10 minutes; aigateway and modelsAsAService are kept; collapsed sections list what stops working (5), the CRDs that cannot be read meanwhile (2), the changes in the new DataScienceCluster (2) and the object it creates; the DSC name typed to confirm" width="640">
+The dialog asks for the DSC name typed to confirm. With **Keep the components you turned on** checked, **What a hard reset would do** is open: it deletes the DSC and tears down every enabled component, which come back as the release default, and stops without creating anything if the old DataScienceCluster is not gone within 10 minutes; collapsed sections list what stops working, the CRDs that cannot be read meanwhile, the changes in the new DataScienceCluster and the object it creates.
 
 It runs as one operation with steps: check, delete, wait until the DSC is gone and the platform has cleaned up its modules, create the release default with the old name and the old workbench and AI hub namespaces, wait for Ready. The dialog lists how the new DSC differs from the current one, both as the API server stores them: a field the installed CRD gives a default (for example `kserve.rawDeploymentServiceConfig: Headless` or the `kueue` queue names) comes back by itself in the new DSC, so it is no change, and the soft reset does not remove it either. When the reset is not possible, the reasons come first, one line per component, and what it would do is collapsed; otherwise it is open, with a short summary (what is deleted, how many components are torn down, how long it waits for the old DSC) and collapsed sections with counts. Before anything is deleted, the check step runs a dry run of the delete and a dry run of the new spec against the live DSC (`fieldValidation=Strict`, so the CRD's rules and the operator's webhook see it), and records the object it will create in ConfigMap `rhoai-nightly-updater-operation` (key `dscHardReset`). The dry run of the new spec is an update: validating-webhook rules that check only creates (the operator's `denyMultipleDsc`, one DSC per cluster) do not see it, and run only at the create after the delete; if one refuses then, the reset stops with nothing created and **Finish the hard reset** applies (below).
 
