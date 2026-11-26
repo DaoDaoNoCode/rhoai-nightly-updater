@@ -13,6 +13,8 @@
 //                                 POST /__docs/hold without a path (the loading states)
 //   --delay <ms>                  answer every GET /api/resources/* that much later
 //   GET  /__docs/state            scenario name, held work, the fixed "now"
+//   GET  /__docs/unhandled        the /api reads this mock did not answer since the last
+//                                 call (then forgets them); capture.js fails on any
 //   POST /__docs/job?name=X&out=DIR[&contrast=M], GET /__docs/job   the capture job to run
 //                                 (M: the contrast mode, glass unless named)
 import { createServer } from "node:http";
@@ -38,6 +40,8 @@ const held = { steps: [], credits: 0, mutation: null };
 // starts with one of these prefixes wait until POST /__docs/hold without a
 // path lets them through (or a scenario reset does).
 const heldReads = { prefixes: [], waiting: [] };
+// GET /api/* requests no route answered ("METHOD /path"), until GET /__docs/unhandled.
+const unhandled = new Set();
 // --delay <ms> (make docs-mock DELAY=<ms>): every GET /api/resources/* answers
 // that much later, to look at the Environment page's loading states by hand.
 const READ_DELAY_MS = Number(args.delay || process.env.DOCS_MOCK_DELAY || 0);
@@ -105,15 +109,14 @@ async function updateStream(req, res) {
   const { image = F.LATEST_IMAGE } = await body(req);
   beginOperation("update", "Update to nightly", image);
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
-  const start = Date.now();
   let n = 0;
   const gitOps = !!(world.status?.catalogSource?.managedBy || world.status?.subscription?.managedBy);
   for (const step of (gitOps ? F.gitOpsUpdateSteps : F.updateSteps)(image)) {
     n += 1;
     await nextStep();
     if (res.destroyed) return;
-    // Gated (GIFs): a plausible 12 s per event instead of the real time.
-    const ev = { ...step, elapsedMs: world.gated ? n * 12000 : Date.now() - start };
+    // A plausible 12 s per event, never the real time: the same answer on every run.
+    const ev = { ...step, elapsedMs: n * 12000 };
     Object.assign(world.operation.operation ?? {}, { step: ev.step, stepStatus: ev.status, message: ev.message });
     if (step.step === "operation_complete") {
       world.status = world.afterUpdate ? world.afterUpdate() : F.healthyStatus(0);
@@ -310,7 +313,7 @@ async function modelsStream(req, res) {
     send({ step: "callable", status: "running", message: `Calling ${model} in '${project}' once` });
     await nextStep();
     const msg = `Answers requests: a request for model "${model}" got 200.`;
-    m.items = (m.items ?? []).map((i) => (i.namespace === project && i.name === model ? { ...i, callCheck: { result: "ok", ok: true, status: 200, message: msg, at: new Date().toISOString() } } : i));
+    m.items = (m.items ?? []).map((i) => (i.namespace === project && i.name === model ? { ...i, callCheck: { result: "ok", ok: true, status: 200, message: msg, at: new Date(F.NOW).toISOString() } } : i));
     send({ step: "callable", status: "success", message: msg });
     done.push(msg);
   } else if (action === "disallow") {
@@ -1040,6 +1043,8 @@ async function api(req, res, u) {
   const handler = routes[key];
   if (handler) return json(res, 200, handler(u));
   if (req.method !== "GET") return json(res, 200, { success: true, message: "Done (docs mock).", logs: [] });
+  unhandled.add(key);
+  console.error(`not in the docs mock: ${key}`);
   return json(res, 404, { error: `not in the docs mock: ${key}`, errorCode: "not_found" });
 }
 
@@ -1070,6 +1075,11 @@ function control(req, res, u) {
     }
     case "/__docs/state":
       return json(res, 200, { scenario, now: F.NOW, waitingSteps: held.steps.length, waitingMutation: !!held.mutation, scenarios: Object.keys(scenarios) });
+    case "/__docs/unhandled": {
+      const requests = [...unhandled].sort();
+      unhandled.clear();
+      return json(res, 200, { requests });
+    }
     case "/__docs/job":
       if (req.method === "POST") job = { name: u.searchParams.get("name") || "", out: u.searchParams.get("out") || "", contrast: u.searchParams.get("contrast") || "" };
       return json(res, 200, job);
