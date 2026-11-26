@@ -1082,6 +1082,9 @@ export const playgroundModels = {
   qwen: { name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", source: "namespace", status: "Running", ready: true, chat: true },
   granite: { name: "granite-embedding-125m-english", displayName: "Granite Embedding 125M English (CPU)", source: "namespace", status: "Running", ready: true, chat: false, embeddingDimension: 768 },
   deepseek: { name: "deepseek-r1-qwen-7b", displayName: "DeepSeek R1 Distill Qwen 7B", source: "namespace", status: "Failed", ready: false, chat: true },
+  // A model without a route: KServe reports its Service without the port (pkg/cluster/internal/serving PlaygroundNoPortNote).
+  smolNoPort: { name: "smollm2-135m-instruct", displayName: "SmolLM2 135M Instruct (CPU)", source: "namespace", status: "Running", ready: true, chat: true,
+    unusable: "RHOAI's Gen AI playground cannot use it, because KServe reports its address without the port." },
   maas: { name: "gpt-oss-20b", source: "maas", status: "Ready", ready: true, chat: true, subscriptions: ["rhoai-nightly-updater-subscription"] },
   opt: { name: "publishers/llm/models/facebook/opt-125m", displayName: "Facebook OPT 125M (Simulated)", source: "maas", status: "Ready", ready: true, chat: true, subscriptions: ["rhoai-nightly-updater-subscription"] },
 };
@@ -2195,9 +2198,12 @@ export function userModelExposures(project, model) {
     defaultReason: "A cluster-admin deploys models reached through the inference gateway or with token authentication, on the Environment page's Models tab.",
     options: [
       { key: "internal", exposure: "internal", title: "Only inside the cluster", available: true,
-        description: "No outside address. Programs on this cluster (for example a workbench) can call it without a token.",
+        description: "No outside address. Programs on this cluster (for example a workbench) can call it without a token. RHOAI's Gen AI playground cannot use it, because KServe reports its address without the port.",
         warning: "Calls to the in-cluster address are not authenticated: any pod on the cluster whose network can reach the project can use the model." },
     ],
+    // pkg/cluster/internal/serving statusImagePlan: the nightly docs cluster runs the released image.
+    imagePlan: "released",
+    imagePlanReason: "This cluster runs a nightly RHOAI build, whose preset names an image that Red Hat has not published yet, and no mirror set serves registry.redhat.io/rhaii/vllm-cpu-rhel9; the newest released Red Hat image is used instead.",
   };
 }
 export function userCapabilities(project) {
@@ -2205,10 +2211,12 @@ export function userCapabilities(project) {
   for (const [id, label] of Object.entries(USER_ACTIONS)) {
     // The docs persona edits the project: its S3 storage is for the project's admins.
     const adminOnly = `Only an admin of project ${project} sets up, repairs and deletes its S3 storage (the OpenShift admin role there); ask an admin of project ${project}.`;
+    // pkg/cluster MissingSummaryFor: the project-admin check alone, in one sentence.
+    const lower = label.charAt(0).toLowerCase() + label.slice(1);
     actions[id] = id === "mlflow-samples.regenerate"
       ? { label, allowed: false, code: "admin_only", reason: `${label} is done by a cluster-admin in this tool.`, missing: [], blockedBy: [] }
       : id.startsWith("project-s3.")
-        ? { label, allowed: false, code: "missing_permissions", reason: `${label} in ${project} needs permissions your OpenShift account does not have: ${adminOnly}`, missing: [adminOnly], blockedBy: [] }
+        ? { label, allowed: false, code: "missing_permissions", reason: `Only an admin of project ${project} can ${lower}; ask one of them.`, missing: [adminOnly], blockedBy: [] }
         : { label, allowed: true, missing: [], blockedBy: [] };
   }
   return { project, role: "user", actions };

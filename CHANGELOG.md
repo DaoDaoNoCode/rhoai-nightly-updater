@@ -491,6 +491,28 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **Models the playground cannot use** (B5+B6 live round). KServe reports
+  a model without a route by its Service with no port, and the dashboard's
+  Gen AI playground calls that address as it is, so its chat hung. Set up
+  now leaves such models out of its own choice and says so, refuses one
+  chosen by name, and when no chat model is left names what the playground
+  can use instead (a model on the inference gateway, or a Models as a
+  Service model). The check follows the reported address, so it ends once
+  KServe reports the port. The "Only inside the cluster" description says
+  it, for cluster-admins and users alike.
+- **A user's Environment page**: a model reached only inside the cluster
+  shows its in-cluster address with the Service's port (it read "None");
+  the parts are read again while one is setting up, starting or being
+  deleted, and slowly otherwise, as on the cluster-admin's page (a card
+  stayed "Setting up" until Refresh); a delete's confirmation names the
+  project it changes; the S3 storage says who its network policy lets in;
+  before the project has S3 storage, an editor is told that an admin of the
+  project sets it up; the deploy dialog says which runtime image the model
+  runs, and offers the released image only while the plan is the preset's.
+- **Permission messages**: a refusal names only what the request needs
+  (the model it asks for, not every model of the catalog), each object once
+  with its verbs, and who grants them once; an action only a project's
+  admins may run says so in one sentence.
 - **A workbench setup that reaches its deadline right after a create**
   records the object as this tool's (or deletes it again), on the
   post-operation context, instead of leaving it unrecorded.
