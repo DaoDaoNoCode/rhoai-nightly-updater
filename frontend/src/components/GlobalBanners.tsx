@@ -237,21 +237,39 @@ function useProjectActions(): { notices: Notice[]; own: OwnProjectAction | null;
   const me = useSignedInUser();
   const background = useBackgroundRun();
   const [asking, setAsking] = useState<ProjectActionNotice | null>(null);
+  // The asked-about action ended before the cancel: the dialog says so.
+  const [finished, setFinished] = useState(false);
   const [state, setState] = useState<CancelState>({});
   const setFor = (id: string, s: { pending?: boolean; error?: string }) => setState((all) => ({ ...all, [id]: s }));
+  const ask = (a: ProjectActionNotice | null) => {
+    setFinished(false);
+    setAsking(a);
+  };
   const send = (a: ProjectActionNotice) => {
     const id = a.id as string;
-    setAsking(null);
     setFor(id, { pending: true });
     cancelOperation(id)
-      .then(() => setFor(id, {}))
-      .catch((e: unknown) => setFor(id, { error: toApiError(e).message }))
+      .then(() => {
+        setFor(id, {});
+        ask(null);
+      })
+      .catch((e: unknown) => {
+        const err = toApiError(e);
+        setFor(id, {});
+        // 404: it ended meanwhile (or can no longer be cancelled); the
+        // dialog says so, the banner being gone.
+        if (err.status === 404) setFinished(true);
+        else {
+          setFor(id, { error: err.message });
+          ask(null);
+        }
+      })
       .finally(() => refreshServerOperation());
   };
   const isMine = (a: ProjectActionNotice) => a.own || (admin && !!me && a.user === me);
   const cancelLink = (a: ProjectActionNotice) => {
     if (!a.id || !a.cancellable || a.cancelling) return undefined;
-    return <AlertActionLink onClick={() => setAsking(a)} isDisabled={!!state[a.id]?.pending}>Cancel</AlertActionLink>;
+    return <AlertActionLink onClick={() => ask(a)} isDisabled={!!state[a.id]?.pending}>Cancel</AlertActionLink>;
   };
   const note = (a: ProjectActionNotice) => {
     const error = a.id ? state[a.id]?.error : undefined;
@@ -281,17 +299,32 @@ function useProjectActions(): { notices: Notice[]; own: OwnProjectAction | null;
       ),
     });
   }
+  // The action left the polled list while the dialog was open: it ended.
+  const ended = !!asking && (finished || !(server.projectActions ?? []).some((a) => a.id === asking.id));
+  const pending = !!asking?.id && !!state[asking.id]?.pending;
   const modal = asking && (
-    <Modal variant={ModalVariant.small} isOpen aria-labelledby="cancel-project-action-title" onClose={() => setAsking(null)}>
-      <ModalHeader title="Cancel the action?" labelId="cancel-project-action-title" />
-      <ModalBody>
-        <Content component="p"><strong>{asking.label}</strong> in project <code>{asking.project}</code>.</Content>
-        <Content component="p">{asking.cancelNote || "It stops before its next step."}</Content>
-        <Content component="p">If it finishes before its next step, it is recorded as done.</Content>
-      </ModalBody>
+    <Modal variant={ModalVariant.small} isOpen aria-labelledby="cancel-project-action-title" onClose={() => ask(null)}>
+      <ModalHeader title={ended ? "The action has finished" : "Cancel the action?"} labelId="cancel-project-action-title" />
+      {ended ? (
+        <ModalBody>
+          <Content component="p">{asking.label} in project <code>{asking.project}</code> finished before it could be cancelled.</Content>
+        </ModalBody>
+      ) : (
+        <ModalBody>
+          <Content component="p"><strong>{asking.label}</strong> in project <code>{asking.project}</code>.</Content>
+          <Content component="p">{asking.cancelNote || "It stops before its next step."}</Content>
+          <Content component="p">If it finishes before its next step, it is recorded as done.</Content>
+        </ModalBody>
+      )}
       <ModalFooter>
-        <Button variant="primary" onClick={() => send(asking)}>Cancel action</Button>
-        <Button variant="link" onClick={() => setAsking(null)}>Keep it running</Button>
+        {ended ? (
+          <Button variant="primary" onClick={() => ask(null)}>Close</Button>
+        ) : (
+          <>
+            <Button variant="primary" onClick={() => send(asking)} isLoading={pending} isDisabled={pending}>Cancel action</Button>
+            <Button variant="link" onClick={() => ask(null)} isDisabled={pending}>Keep it running</Button>
+          </>
+        )}
       </ModalFooter>
     </Modal>
   );
