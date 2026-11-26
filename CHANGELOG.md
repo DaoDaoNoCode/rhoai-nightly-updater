@@ -232,6 +232,16 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Changed
 
+- **Fewer docs screenshots, kept current at release.** The docs keep 15
+  light-only page-level images (from 87 files: light and dark pairs, GIFs,
+  banners, dialogs and Diagnostics states) and describe the rest in text
+  that quotes the UI. Branches no longer regenerate images: the release
+  pass does (`make docs-screenshots`, byte-stable when the UI did not
+  change, and failing on any `/api` read the docs mock does not answer).
+  `make docs-stale` lists images whose sources changed since their capture
+  (a warning in CI), and the release guard stops a final release while one
+  is stale. README images are plain Markdown, which GitLab shows.
+
 - **Diagnostics: the JobSet Operator's commands install cert-manager
   first.** The OpenShift documentation installs the cert-manager Operator
   for Red Hat OpenShift before the JobSet Operator (and odh-gitops installs
