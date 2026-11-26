@@ -105,10 +105,10 @@ var projectActionRoutes = map[string]projectRoute{
 		}
 		return req.Project, req.Action, cluster.ValidateMLflowSamplesRequest(req)
 	}},
-	// A model in one project (cluster.RunProjectModel): never a gateway's
-	// list, MaaS or anything outside the project, so a cluster-admin's
-	// request holds the project's lock too. A setup with token
-	// authentication is its own action (models.setup-token).
+	// A model in one project (cluster.RunProjectModel), reached only inside
+	// the cluster: never a gateway, MaaS or anything outside the project,
+	// so a cluster-admin's request holds the project's lock too. A request
+	// for the gateway or token authentication is refused (validation).
 	"/api/resources/models/project/stream": {feature: "models", maxBody: 4096, parse: func(body []byte) (string, string, string) {
 		var req types.ProjectModelRequest
 		if err := json.Unmarshal(body, &req); err != nil {

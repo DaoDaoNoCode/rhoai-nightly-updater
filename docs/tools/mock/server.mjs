@@ -924,7 +924,7 @@ function userRead(res, key, u) {
   if (key === "GET /api/resources/models/exposures") {
     const project = u.searchParams.get("project") || "";
     if (!(world.userProjects ?? []).includes(project)) return send(403, { error: `Project ${project} is not one of your data science projects. Nothing was read.`, errorCode: "forbidden_for_user" });
-    return send(200, F.userModelExposures(project, u.searchParams.get("model") || "", project === "dev-project"));
+    return send(200, F.userModelExposures(project, u.searchParams.get("model") || ""));
   }
   if (key.startsWith("GET ") && ADMIN_ONLY_READS.some((p) => u.pathname.startsWith(p))) return adminOnly();
   if (!key.startsWith("GET ") && key !== "POST /api/pageview") return adminOnly();

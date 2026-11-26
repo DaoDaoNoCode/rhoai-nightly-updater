@@ -62,10 +62,7 @@ func newProjectGateEnv(t *testing.T, role string) *projectGateEnv {
 					out[id] = rv
 					continue
 				}
-				// Kubernetes edit has no Roles or RoleBindings; admin has
-				// (a model's token authentication, B6).
-				editorLacks := role == roleEditor && r.Source == cluster.SourceTokenAuth
-				if role == roleViewer && r.Verb != "get" && r.Verb != "list" || editorLacks {
+				if role == roleViewer && r.Verb != "get" && r.Verb != "list" {
 					req := cluster.AccessRequest{Verb: r.Verb, Group: r.Group, Resource: r.Resource, Namespace: project, Name: r.Name}
 					rv := out[id]
 					rv.Missing = append(rv.Missing, cluster.MissingPermission{Request: req, Text: cluster.MissingTextFor(req, r.Source, project), Source: r.Source})
@@ -133,7 +130,6 @@ var projectActionRequests = map[string][2]string{
 	"project-pipeline-server.setup":    {"/api/resources/project-pipeline-server/stream", `{"action":"setup","project":"team-a"}`},
 	"project-pipeline-server.teardown": {"/api/resources/project-pipeline-server/stream", `{"action":"teardown","project":"team-a","confirmWorkbenches":{"wb":"uid-1"}}`},
 	"models.setup":                     {"/api/resources/models/project/stream", `{"action":"setup","project":"team-a","model":"qwen25-05b-instruct"}`},
-	"models.setup-token":               {"/api/resources/models/project/stream", `{"action":"setup","project":"team-a","model":"qwen25-05b-instruct","exposure":"default-gateway","tokenAuth":true}`},
 	"models.teardown":                  {"/api/resources/models/project/stream", `{"action":"teardown","project":"team-a","model":"qwen25-05b-instruct"}`},
 }
 
@@ -184,7 +180,7 @@ func TestProjectActionsPerRoleMatrix(t *testing.T) {
 					wantStatus, wantCode = http.StatusForbidden, adminOnlyCode
 				case role == roleNothing:
 					wantStatus, wantCode = http.StatusForbidden, cluster.ErrorCodeForbiddenForUser
-				case role == roleViewer, role == roleEditor && (needsProjectAdmin(a) || a.ID == "models.setup-token"):
+				case role == roleViewer, role == roleEditor && needsProjectAdmin(a):
 					wantStatus, wantCode = http.StatusForbidden, missingPermissionsCode
 				default:
 					wantStatus = http.StatusOK
@@ -556,29 +552,28 @@ func TestRoleCheckFailureKeepsUpstreamTextOut(t *testing.T) {
 	}
 }
 
-// An editor asking for a model's token authentication is refused by the
-// preflight before anything runs, with the design's own words (section
-// 2.2) alone, and the gate's "Nothing was changed."
-func TestEditorTokenAuthRefusedWithAdminWording(t *testing.T) {
-	env := newProjectGateEnv(t, roleEditor)
-	w := serveProjectAction(t, "/api/resources/models/project/stream", projectActionRequests["models.setup-token"][1])
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("%d %s", w.Code, w.Body.String())
-	}
-	body := decodeError(t, w)
-	want := "Token authentication creates a Role and a RoleBinding in team-a, which needs the project's admin role. Ask an admin of team-a, or deploy without token authentication. Nothing was changed."
-	if body["error"] != want || body["errorCode"] != missingPermissionsCode {
-		t.Fatalf("refusal: %v", body)
-	}
-	if missing, _ := body["missing"].([]any); len(missing) != 1 {
-		t.Errorf("missing: %v", body["missing"])
-	}
-	if env.runs != 0 {
-		t.Error("the action ran")
-	}
-	// Without token authentication the same editor deploys.
-	w = serveProjectAction(t, "/api/resources/models/project/stream", projectActionRequests["models.setup"][1])
-	if w.Code != http.StatusOK || env.runs != 1 {
-		t.Fatalf("without token authentication: %d %s", w.Code, w.Body.String())
+// A project model action reaches a model only inside the cluster without
+// token authentication: asking for the inference gateway or for token
+// authentication is refused for every role, before any check or write,
+// naming who does it; without them an editor deploys.
+func TestProjectModelGatewayAndTokenAreAClusterAdmins(t *testing.T) {
+	for _, role := range []string{roleClusterAdmin, roleEditor} {
+		env := newProjectGateEnv(t, role)
+		for _, body := range []string{
+			`{"action":"setup","project":"team-a","model":"qwen25-05b-instruct","tokenAuth":true}`,
+			`{"action":"setup","project":"team-a","model":"qwen25-05b-instruct","exposure":"default-gateway"}`,
+			`{"action":"setup","project":"team-a","model":"qwen25-05b-instruct","exposure":"maas"}`,
+		} {
+			w := serveProjectAction(t, "/api/resources/models/project/stream", body)
+			if w.Code != http.StatusBadRequest || !strings.Contains(decodeError(t, w)["error"].(string), "A cluster-admin deploys models reached through the inference gateway or with token authentication") {
+				t.Fatalf("%s %s: %d %s", role, body, w.Code, w.Body.String())
+			}
+		}
+		if env.runs != 0 || env.reviews != 0 {
+			t.Fatalf("%s: a refused request reached the checks or the action", role)
+		}
+		if w := serveProjectAction(t, "/api/resources/models/project/stream", projectActionRequests["models.setup"][1]); w.Code != http.StatusOK || env.runs != 1 {
+			t.Fatalf("%s inside the cluster: %d %s", role, w.Code, w.Body.String())
+		}
 	}
 }

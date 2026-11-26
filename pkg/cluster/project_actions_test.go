@@ -440,23 +440,3 @@ func TestSweepDropsWorkbenchEntriesOfGoneProjects(t *testing.T) {
 		t.Fatalf("workbench entries after the sweep: %v", got)
 	}
 }
-
-// The same request (create rolebindings in the project) is the project S3
-// storage's project-admin check and a model's token authentication: each
-// action says its own words for it, in one review.
-func TestMissingWordingFollowsTheRequestSource(t *testing.T) {
-	f := &ssarFake{allow: func(r AccessRequest) bool { return r.Group != "rbac.authorization.k8s.io" || r.Verb != "create" }}
-	u := newSSARClient(t, f)
-	got, err := ReviewProjectActions(u, []string{"project-s3.setup", "models.setup-token"}, "team-a", "apps")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s3 := MissingSummaryFor("Set up", "team-a", got["project-s3.setup"].Missing)
-	tok := MissingSummaryFor("Deploy", "team-a", got["models.setup-token"].Missing)
-	if !strings.Contains(s3, "sets up, repairs and deletes its S3 storage") || strings.Contains(s3, "token") {
-		t.Errorf("S3 storage: %q", s3)
-	}
-	if tok != "Token authentication creates a Role and a RoleBinding in team-a, which needs the project's admin role. Ask an admin of team-a, or deploy without token authentication." {
-		t.Errorf("token authentication: %q", tok)
-	}
-}

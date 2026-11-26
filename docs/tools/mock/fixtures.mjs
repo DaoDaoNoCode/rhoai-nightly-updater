@@ -2175,7 +2175,6 @@ const USER_ACTIONS = {
   "project-pipeline-server.setup": "Set up the pipeline server on the project's S3 storage",
   "project-pipeline-server.teardown": "Delete the pipeline server on the project's S3 storage",
   "models.setup": "Deploy a model",
-  "models.setup-token": "Deploy a model with token authentication",
   "models.teardown": "Delete a model",
 };
 
@@ -2190,20 +2189,11 @@ export function projectStorage(project) {
     objects, ...(deployed ? { usedBy: ["dspa"] } : {}),
   };
 }
-// The docs' user is a project editor: Kubernetes edit has no Roles or
-// RoleBindings, so a model's token authentication is refused with the
-// project-admin wording (pkg/cluster missingText).
-const editorTokenText = (project) => `Token authentication creates a Role and a RoleBinding in ${project}, which needs the project's admin role. Ask an admin of ${project}, or deploy without token authentication.`;
-/** A user's answer of GET /api/resources/models/exposures (pkg/cluster ProjectModelExposures): the gateway as a yes or no for the project. */
-export function userModelExposures(project, model, admits = true) {
+export function userModelExposures(project, model) {
   return {
-    project, model, default: admits ? "default-gateway" : "internal", authReady: false, capacity: "fits",
-    defaultReason: admits ? "works from your laptop with an OpenShift token, the way the dashboard deploys models; it needs token authentication." : "the cluster's inference gateway can't be used from this project.",
-    gateway: admits ? { admits: true } : { admits: false, problem: "not-admitted" },
+    project, model, default: "internal", authReady: false, capacity: "fits",
+    defaultReason: "A cluster-admin deploys models reached through the inference gateway or with token authentication, on the Environment page's Models tab.",
     options: [
-      { key: "default-gateway", exposure: "default-gateway", title: "Through the cluster's inference gateway", available: admits,
-        description: `Reachable from outside the cluster. Each call needs an OpenShift token that can see ${project}. Needs token authentication, which needs the project's admin role.`,
-        ...(admits ? { address: `https://inference.apps.example.com/${project}/${model}` } : { reason: `The cluster's inference gateway does not admit project ${project}. A cluster-admin can allow project ${project} on the inference gateway (Models tab, Allow).` }) },
       { key: "internal", exposure: "internal", title: "Only inside the cluster", available: true,
         description: "No outside address. Programs on this cluster (for example a workbench) can call it without a token.",
         warning: "Calls to the in-cluster address are not authenticated: any pod on the cluster whose network can reach the project can use the model." },
@@ -2219,8 +2209,6 @@ export function userCapabilities(project) {
       ? { label, allowed: false, code: "admin_only", reason: `${label} is done by a cluster-admin in this tool.`, missing: [], blockedBy: [] }
       : id.startsWith("project-s3.")
         ? { label, allowed: false, code: "missing_permissions", reason: `${label} in ${project} needs permissions your OpenShift account does not have: ${adminOnly}`, missing: [adminOnly], blockedBy: [] }
-      : id === "models.setup-token"
-        ? { label, allowed: false, code: "missing_permissions", reason: editorTokenText(project), missing: [editorTokenText(project)], blockedBy: [] }
         : { label, allowed: true, missing: [], blockedBy: [] };
   }
   return { project, role: "user", actions };

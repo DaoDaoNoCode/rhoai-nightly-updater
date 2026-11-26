@@ -1453,46 +1453,26 @@ type ModelsRequest struct {
 // /api/resources/models/project/stream: a model of the catalog set up or
 // deleted in one data science project, a project action (the non-admin
 // design, branch B6) that any user whose role in the project allows it
-// may run. It never changes anything outside the project: no gateway's
-// list of projects, no MaaS publication, no Connectivity Link.
+// may run. It never changes anything outside the project: no gateway, no
+// MaaS publication, no Role or RoleBinding.
 type ProjectModelRequest struct {
 	// Action is "setup" or "teardown".
 	Action  string `json:"action"`
 	Project string `json:"project"`
 	// Model is the catalog name; "" means the catalog's default.
 	Model string `json:"model,omitempty"`
-	// Exposure (setup only) is "internal" (the default: no route, only
-	// inside the cluster) or "default-gateway" (the cluster's default
-	// inference gateway, only when it already admits the project; it needs
-	// TokenAuth).
-	Exposure string `json:"exposure,omitempty"`
-	// TokenAuth (setup only) makes the model's token authentication as the
-	// dashboard's "Require token authentication" does: a ServiceAccount, a
-	// Role and a RoleBinding, and a token Secret, in the project, which
-	// needs the project's admin role. Without it the model's token
-	// authentication is off (security.opendatahub.io/enable-auth "false").
-	TokenAuth bool `json:"tokenAuth,omitempty"`
+	// Exposure (setup only) is "internal" or "": the model is reached
+	// only inside the cluster, with token authentication off
+	// (security.opendatahub.io/enable-auth "false"). Any other exposure,
+	// and TokenAuth, are refused: a model reached through the inference
+	// gateway or with token authentication is a cluster-admin's (the
+	// Models tab). They are kept in the request so that asking for them
+	// is refused, never ignored.
+	Exposure  string `json:"exposure,omitempty"`
+	TokenAuth bool   `json:"tokenAuth,omitempty"`
 	// ReleasedImage (setup only): run the newest released Red Hat vLLM CPU
 	// image instead of the preset's.
 	ReleasedImage bool `json:"releasedImage,omitempty"`
-}
-
-// ProjectGatewayFact is whether the cluster's default inference gateway
-// admits one project, as the ServiceAccount reads it for a user (a cluster
-// fact reduced to that project): yes or no, and when no a fixed code of
-// why. It names no other project and no gateway.
-type ProjectGatewayFact struct {
-	Admits bool `json:"admits"`
-	// Problem is "" when it admits the project, else one of
-	// "not-configured" (KServe names no default gateway), "missing" (the
-	// gateway it names does not exist), "not-ready" (it cannot carry a
-	// model now), "not-for-models" (it is MaaS's or the RHOAI operator's),
-	// "not-admitted" (its listeners do not let the project's routes
-	// attach), "admission-unknown" (it chooses projects in a way this tool
-	// does not evaluate), "auth-unknown" (whether RHOAI checks the callers'
-	// tokens there is not known), "auth-missing" (Red Hat Connectivity Link
-	// is not set up) or "unreadable" (a read failed).
-	Problem string `json:"problem,omitempty"`
 }
 
 // WorkbenchStatus is the Workbench feature (GET /api/resources/workbench):
@@ -2697,9 +2677,6 @@ type ModelExposures struct {
 
 	// --- A user's answer (one of their projects, the project model actions) ---
 
-	// Gateway is whether the cluster's default inference gateway admits
-	// the project (a user's answer only; nil for a cluster-admin's).
-	Gateway *ProjectGatewayFact `json:"gateway,omitempty"`
 	// Capacity is "fits" (a worker has the model's requests free),
 	// "may-not-fit" or "unknown" (a user's answer only), never a node's
 	// name.
@@ -2740,9 +2717,6 @@ type ModelExposureOption struct {
 // ModelCallCheck is the result of one "Can it be called?" check: a
 // minimal request through the model's route, with the model's own token.
 type ModelCallCheck struct {
-	// AnonymousRefused: through a gateway, the same request without a
-	// token was refused (401 or 403): the gateway checks who calls.
-	AnonymousRefused bool `json:"anonymousRefused,omitempty"`
 	// Result is "ok" (it answered), "model-name" (404 from the model's
 	// server: the request's model name is not the served one), "route"
 	// (404 without a body: nothing answers on that path), "auth" (401),

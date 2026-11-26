@@ -61,9 +61,6 @@ var cancellableActions = map[string]string{
 	"mlflow-samples.remove": "It stops before its next sample. The samples removed by then stay removed.",
 	"models.setup": "It stops before its next step. Before the model is created nothing changes; after that, the model stays, " +
 		"recorded as this tool's: Delete removes it.",
-	"models.setup-token": "It stops before its next step. Before the model is created nothing changes; after that, the model and its " +
-		"token objects stay, recorded as this tool's (Delete removes them), except a new model through the inference gateway, which is " +
-		"deleted again while its token checks are not confirmed.",
 }
 
 // noSuchActionMessage answers a cancel of an action that does not run in

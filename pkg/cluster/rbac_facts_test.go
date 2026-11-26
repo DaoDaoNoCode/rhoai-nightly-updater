@@ -273,9 +273,6 @@ var wantFactsRequests = []string{
 	"get apps/deployments name=llmisvc-controller-manager",
 	"get config.openshift.io/infrastructures name=cluster",
 	"get mlflow.opendatahub.io/mlflows name=mlflow",
-	// Authorino's listener, behind a gateway's error on a model's call
-	// check.
-	"get operator.authorino.kuadrant.io/authorinos name=authorino",
 	// Whether RHOAI is a nightly build (its Subscription's catalog): the
 	// model's image plan.
 	"get operators.coreos.com/subscriptions name=rhods-operator",
@@ -294,11 +291,6 @@ var wantFactsRequests = []string{
 	"list config.openshift.io/imagetagmirrorsets name=",
 	"list datasciencecluster.opendatahub.io/datascienceclusters name=",
 	"list dscinitialization.opendatahub.io/dscinitializations name=",
-	// Whether the default inference gateway admits the project (reduced to
-	// yes or no for that project, serving.ProjectGatewayFact) and whether
-	// Connectivity Link checks its callers.
-	"list gateway.networking.k8s.io/gateways name=",
-	"list kuadrant.io/kuadrants name=",
 	// Whether a MaaSModelRef in the project targets a model (reduced to yes
 	// or no for that project, serving.ProjectMaaSRefFact): the one MaaS
 	// read, in one project, before a project's model is deleted.

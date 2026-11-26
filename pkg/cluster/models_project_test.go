@@ -55,13 +55,6 @@ func refuseFactsToTheUser(mc *modelsCluster) {
 	}
 }
 
-// putAdmittingGateway is the cluster's inference gateway listing the
-// projects named (RHOAI's documented names list).
-func putAdmittingGateway(mc *modelsCluster, projects ...string) {
-	values, _ := json.Marshal(projects)
-	mc.f.putJSON(testGatewayPath, `{"metadata":{"name":"openshift-ai-inference","namespace":"openshift-ingress"},"spec":{"gatewayClassName":"openshift-ai-inference","listeners":[{"name":"https","hostname":"inference.apps.example.com","allowedRoutes":{"namespaces":{"from":"Selector","selector":{"matchExpressions":[{"key":"kubernetes.io/metadata.name","operator":"In","values":`+string(values)+`}]}}}}]}}`)
-}
-
 // metaOf is an object's metadata as the fake holds it.
 func metaOf(obj map[string]any) kube.ObjectMeta {
 	var m kube.ObjectMeta
@@ -124,84 +117,6 @@ func TestEditorModelWithoutTokenAllowed(t *testing.T) {
 	}
 }
 
-// With token authentication, a project admin's model gets the dashboard's
-// four objects, made with their token.
-func TestProjectAdminModelWithToken(t *testing.T) {
-	mc := newModelsCluster(t)
-	refuseFactsToTheUser(mc)
-	u := projectModelUser(mc)
-	res, _ := runProjectModelForTest(t, u, types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct", TokenAuth: true})
-	if !res.Success {
-		t.Fatalf("setup failed: %+v", res)
-	}
-	for _, p := range []string{
-		"/api/v1/namespaces/proj/serviceaccounts/qwen25-05b-instruct-sa",
-		"/apis/rbac.authorization.k8s.io/v1/namespaces/proj/roles/qwen25-05b-instruct-view-role",
-		"/apis/rbac.authorization.k8s.io/v1/namespaces/proj/rolebindings/qwen25-05b-instruct-view",
-	} {
-		if !mc.f.has(p) {
-			t.Errorf("%s was not made", p)
-		}
-	}
-	rec, _ := serving.ReadModelsRecord(mc.c)
-	if rec[serving.ModelRecordKey("proj", "qwen25-05b-instruct")].TokenSecretUID == "" {
-		t.Error("the token Secret is not recorded")
-	}
-}
-
-// The gateway fact is a yes or a no with a fixed code for the requested
-// project, and neither it nor the user's exposures answer names another
-// project the gateway lists.
-func TestGatewayFactIsYesNoOnly(t *testing.T) {
-	mc := newModelsCluster(t)
-	refuseFactsToTheUser(mc)
-	u := projectModelUser(mc)
-	putAdmittingGateway(mc, "openshift-ingress", "other-team-secret", "proj")
-	labels := map[string]string{"opendatahub.io/dashboard": "true"}
-	fact, host := serving.ProjectGatewayFact(u, "proj", labels)
-	if !fact.Admits || fact.Problem != "" || host != "inference.apps.example.com" {
-		t.Fatalf("fact %+v host %q", fact, host)
-	}
-	raw, _ := json.Marshal(fact)
-	if string(raw) != `{"admits":true}` {
-		t.Errorf("the fact carries more than yes or no: %s", raw)
-	}
-	ex, msg, _ := ProjectModelExposures(u, "proj", "qwen25-05b-instruct")
-	if msg != "" {
-		t.Fatal(msg)
-	}
-	answer, _ := json.Marshal(ex)
-	if strings.Contains(string(answer), "other-team-secret") {
-		t.Errorf("the answer names another project: %s", answer)
-	}
-	if ex.Default != serving.ExposureDefault || ex.Gateway == nil || !ex.Gateway.Admits {
-		t.Errorf("exposures: %+v", ex)
-	}
-
-	putAdmittingGateway(mc, "openshift-ingress", "other-team-secret")
-	fact, host = serving.ProjectGatewayFact(u, "proj", labels)
-	raw, _ = json.Marshal(fact)
-	if fact.Admits || host != "" || string(raw) != `{"admits":false,"problem":"not-admitted"}` {
-		t.Fatalf("not admitted: %s %q", raw, host)
-	}
-	words := serving.GatewayFactWords("proj", fact)
-	if strings.Contains(words, "other-team-secret") || !strings.Contains(words, "A cluster-admin can allow project proj on the inference gateway") {
-		t.Errorf("words: %q", words)
-	}
-	ex, _, _ = ProjectModelExposures(u, "proj", "qwen25-05b-instruct")
-	if answer, _ := json.Marshal(ex); strings.Contains(string(answer), "other-team-secret") || ex.Default != serving.ExposureInternal {
-		t.Errorf("not admitted, answer: %s", answer)
-	}
-
-	// A read that fails is a no (fail closed), without the server's text.
-	mc.f.fail["GET /apis/gateway.networking.k8s.io/v1/gateways"] = http.StatusInternalServerError
-	mc.f.failMessage["GET /apis/gateway.networking.k8s.io/v1/gateways"] = "secret server words"
-	fact, _ = serving.ProjectGatewayFact(u, "proj", labels)
-	if fact.Admits || fact.Problem != serving.GatewayUnreadable || strings.Contains(serving.GatewayFactWords("proj", fact), "secret server words") {
-		t.Errorf("unreadable: %+v", fact)
-	}
-}
-
 // The capacity fact is fits or may not fit: no node, pod or project name
 // reaches the user.
 func TestCapacityFactHasNoNames(t *testing.T) {
@@ -228,39 +143,36 @@ func TestCapacityFactHasNoNames(t *testing.T) {
 	}
 }
 
-// A user never adds their project to a gateway's list: a setup through a
-// gateway that does not admit the project is refused before any write,
-// saying that a cluster-admin can allow it.
-func TestUserCannotAddProjectToGateway(t *testing.T) {
+// A user's model is reached only inside the cluster without token
+// authentication: asking for the inference gateway or for token
+// authentication is refused before anything is read or written, naming
+// who does it; the user's exposures answer offers only the inside of the
+// cluster.
+func TestUserCannotReachTheGatewayOrMakeTokens(t *testing.T) {
 	mc := newModelsCluster(t)
 	u := projectModelUser(mc)
-	putAdmittingGateway(mc, "openshift-ingress")
-	res, _ := runProjectModelForTest(t, u, types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct", Exposure: "default-gateway", TokenAuth: true})
-	if res.Success || res.ErrorCode != "prerequisites" || !strings.Contains(res.Message, "A cluster-admin can allow project proj on the inference gateway") || !strings.Contains(res.Message, "Nothing was changed") {
-		t.Fatalf("%+v", res)
-	}
-	if w := modelWritesOf(mc); len(w) != 0 {
-		t.Errorf("a refused setup wrote %v", w)
-	}
-	// Through a gateway that admits it, the model routes there and the
-	// gateway is not changed.
-	putAdmittingGateway(mc, "openshift-ingress", "proj")
-	before := mc.f.get(testGatewayPath)
-	res, _ = runProjectModelForTest(t, u, types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct", Exposure: "default-gateway", TokenAuth: true})
-	if !res.Success {
-		t.Fatalf("through an admitting gateway: %+v", res)
-	}
-	for _, w := range modelWritesOf(mc) {
-		if strings.Contains(w, "gateways") || strings.Contains(w, "openshift-ingress") {
-			t.Errorf("the gateway was written: %s", w)
+	for _, req := range []types.ProjectModelRequest{
+		{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct", TokenAuth: true},
+		{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct", Exposure: "default-gateway"},
+		{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct", Exposure: "gateway"},
+	} {
+		before := len(mc.f.calls)
+		res, _ := runProjectModelForTest(t, u, req)
+		if res.Success || res.ErrorCode != "validation" || !strings.Contains(res.Message, serving.ClusterAdminModelWords) {
+			t.Fatalf("%+v: %+v", req, res)
+		}
+		for _, call := range mc.f.calls[before:] {
+			if !strings.HasPrefix(call.Path, "/api/v1/namespaces/"+record.GetActivityNamespace()+"/configmaps") {
+				t.Errorf("a refused request sent %s %s", call.Method, call.Path)
+			}
 		}
 	}
-	if after := mc.f.get(testGatewayPath); after["metadata"].(map[string]any)["resourceVersion"] != before["metadata"].(map[string]any)["resourceVersion"] {
-		t.Error("the gateway changed")
+	ex, msg, _ := ProjectModelExposures(u, "proj", "qwen25-05b-instruct")
+	if msg != "" || len(ex.Options) != 1 || ex.Options[0].Key != serving.ExposureInternal || ex.Default != serving.ExposureInternal {
+		t.Fatalf("exposures: %q %+v", msg, ex)
 	}
-	// Without token authentication a gateway is refused by validation.
-	if p := ValidateProjectModelRequest(types.ProjectModelRequest{Action: "setup", Project: "proj", Exposure: "default-gateway"}); !strings.Contains(p, "needs token authentication") {
-		t.Errorf("validation: %q", p)
+	if answer, _ := json.Marshal(ex); strings.Contains(string(answer), "gateway\"") {
+		t.Errorf("the answer offers a gateway: %s", answer)
 	}
 }
 
@@ -295,23 +207,25 @@ func TestUserCannotPublishToMaaS(t *testing.T) {
 	}
 }
 
-// A setup without token authentication does not take over a model that
-// has it (it would turn it off): refused with the admin-role wording.
+// A user's setup does not take over a model a cluster-admin set up with
+// token authentication (it would turn it off): refused, the model left.
 func TestEditorSetupAgainKeepsTokenAuth(t *testing.T) {
 	mc := newModelsCluster(t)
-	u := projectModelUser(mc)
-	if res, _ := runProjectModelForTest(t, u, types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct", TokenAuth: true}); !res.Success {
-		t.Fatalf("setup: %+v", res)
+	if res, _ := runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: "internal"}); !res.Success {
+		t.Fatalf("a cluster-admin's setup: %+v", res)
 	}
-	res, _ := runProjectModelForTest(t, u, types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct"})
-	if res.Success || !strings.Contains(res.Message, "needs the project's admin role") || !strings.Contains(res.Message, "Nothing was changed") {
+	before := mc.f.get(testModelPath)
+	res, _ := runProjectModelForTest(t, projectModelUser(mc), types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct"})
+	if res.Success || !strings.Contains(res.Message, "has token authentication") || !strings.Contains(res.Message, "Nothing was changed") {
 		t.Fatalf("%+v", res)
+	}
+	if after := mc.f.get(testModelPath); after["metadata"].(map[string]any)["resourceVersion"] != before["metadata"].(map[string]any)["resourceVersion"] {
+		t.Error("the model changed")
 	}
 }
 
 // Rollback per write: a model whose record cannot be written is deleted
-// again; a token object that fails leaves the model recorded (its token
-// objects are owned by it); nothing is left as nobody's.
+// again; a refusal by the records' caps writes nothing.
 func TestProjectModelRollbackPerWrite(t *testing.T) {
 	t.Run("record", func(t *testing.T) {
 		mc := newModelsCluster(t)
@@ -324,24 +238,6 @@ func TestProjectModelRollbackPerWrite(t *testing.T) {
 		}
 		if mc.f.has(testModelPath) {
 			t.Error("the unrecorded model is left")
-		}
-	})
-	t.Run("token", func(t *testing.T) {
-		mc := newModelsCluster(t)
-		u := projectModelUser(mc)
-		mc.f.fail["POST /apis/rbac.authorization.k8s.io/v1/namespaces/proj/rolebindings"] = http.StatusForbidden
-		res, _ := runProjectModelForTest(t, u, types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct", TokenAuth: true})
-		if res.Success {
-			t.Fatalf("%+v", res)
-		}
-		rec, _ := serving.ReadModelsRecord(mc.c)
-		model := mc.f.get(testModelPath)
-		if model == nil || !rec.Owns(metaOf(model)) {
-			t.Fatal("the model is not recorded after a token failure")
-		}
-		role := mc.f.get("/apis/rbac.authorization.k8s.io/v1/namespaces/proj/roles/qwen25-05b-instruct-view-role")
-		if role == nil || !strings.Contains(mustJSON(role["metadata"]), metaOf(model).UID) {
-			t.Error("the Role made before the failure is not owned by the recorded model")
 		}
 	})
 	t.Run("records full", func(t *testing.T) {
@@ -402,7 +298,7 @@ func TestProjectModelSetupCancelAtEverySafePoint(t *testing.T) {
 func TestProjectModelTeardown(t *testing.T) {
 	mc := newModelsCluster(t)
 	u := projectModelUser(mc)
-	if res, _ := runProjectModelForTest(t, u, types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct", TokenAuth: true}); !res.Success {
+	if res, _ := runProjectModelForTest(t, u, types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct"}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
 	before := len(mc.f.calls)
@@ -449,92 +345,6 @@ func TestAdminModelsFlowUnchanged(t *testing.T) {
 	if e := rec[serving.ModelRecordKey("proj", "qwen25-05b-instruct")]; e.ActorRole != record.ActorRoleAdmin || e.ProjectUID != "" {
 		t.Errorf("an admin's entry: %+v", e)
 	}
-}
-
-// Token authentication asked for inside the cluster needs Connectivity
-// Link: when it is not set up, or that cannot be read, the setup is
-// refused before anything is written; it never turns the authentication
-// off unnoticed.
-func TestTokenAuthNeedsConnectivityLink(t *testing.T) {
-	for _, tc := range []struct {
-		name, want, code string
-		breakIt          func(mc *modelsCluster)
-	}{
-		{"not set up", "which is not set up on this cluster", "prerequisites", func(mc *modelsCluster) {
-			delete(mc.f.groups, "/apis/kuadrant.io")
-			delete(mc.f.objects, fakeKey{gv: "kuadrant.io/v1beta1", ns: "kuadrant-system", plural: "kuadrants", name: "kuadrant"})
-		}},
-		{"unreadable", "cannot be checked now (HTTP 500)", "prerequisites_unknown", func(mc *modelsCluster) {
-			delete(mc.f.groups, "/apis/kuadrant.io")
-			mc.f.fail["GET /apis/kuadrant.io"] = http.StatusInternalServerError
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mc := newModelsCluster(t)
-			tc.breakIt(mc)
-			u := projectModelUser(mc)
-			res, _ := runProjectModelForTest(t, u, types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct", TokenAuth: true})
-			if res.Success || res.ErrorCode != tc.code || !strings.Contains(res.Message, tc.want) || !strings.Contains(res.Message, "Deploy without token authentication") {
-				t.Fatalf("%+v", res)
-			}
-			if w := modelWritesOf(mc); len(w) != 0 {
-				t.Errorf("a refused setup wrote %v", w)
-			}
-		})
-	}
-}
-
-// Through the gateway, a setup succeeds only once the gateway refused the
-// same call without a token. When it answers it (no token checks): a model
-// this setup created is deleted again and forgotten; a model set up
-// before, deployed again, is reported and left.
-func TestGatewayPolicyFailureRollsBackANewModel(t *testing.T) {
-	setup := types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct", Exposure: "default-gateway", TokenAuth: true}
-	t.Run("first deploy", func(t *testing.T) {
-		mc := newModelsCluster(t)
-		putAdmittingGateway(mc, "openshift-ingress", "proj")
-		mc.calls.open = true
-		res, _ := runProjectModelForTest(t, projectModelUser(mc), setup)
-		if res.Success || res.ErrorCode != "not_authenticated" || !strings.Contains(res.Message, "deleted again") {
-			t.Fatalf("%+v", res)
-		}
-		if mc.f.has(testModelPath) {
-			t.Error("the unchecked model is left")
-		}
-		rec, _ := serving.ReadModelsRecord(mc.c)
-		if _, ok := rec[serving.ModelRecordKey("proj", "qwen25-05b-instruct")]; ok {
-			t.Error("its entry is left")
-		}
-	})
-	t.Run("redeploy", func(t *testing.T) {
-		mc := newModelsCluster(t)
-		putAdmittingGateway(mc, "openshift-ingress", "proj")
-		u := projectModelUser(mc)
-		if res, _ := runProjectModelForTest(t, u, setup); !res.Success {
-			t.Fatalf("first: %+v", res)
-		}
-		mc.calls.open = true
-		res, _ := runProjectModelForTest(t, u, setup)
-		if res.Success || res.ErrorCode != "not_authenticated" || !strings.Contains(res.Message, "left as it is") {
-			t.Fatalf("%+v", res)
-		}
-		if !mc.f.has(testModelPath) {
-			t.Error("a model set up before was deleted")
-		}
-	})
-	t.Run("redeploy after the gateway stopped admitting the project", func(t *testing.T) {
-		mc := newModelsCluster(t)
-		putAdmittingGateway(mc, "openshift-ingress", "proj")
-		u := projectModelUser(mc)
-		if res, _ := runProjectModelForTest(t, u, setup); !res.Success {
-			t.Fatalf("first: %+v", res)
-		}
-		putAdmittingGateway(mc, "openshift-ingress")
-		res, _ := runProjectModelForTest(t, u, setup)
-		if res.Success || !strings.Contains(res.Message, "does not admit project proj") {
-			t.Fatalf("%+v", res)
-		}
-	})
 }
 
 // A MaaSModelRef someone made in the project without this tool (no MaaS
@@ -663,51 +473,24 @@ func TestCapacityFactsShareOneSnapshot(t *testing.T) {
 	}
 }
 
-// Rollback per write of a setup with token authentication: whichever of
-// its six writes fails (the model, its record, the ServiceAccount, the
-// Role, the RoleBinding, the token Secret), nothing is left as nobody's:
-// the model is either gone or recorded as the tool's, and every token
-// object left is owned by the recorded model (garbage collection removes
-// it with the model).
+// Rollback per write of a user's setup: whichever of its writes fails (the
+// model, its record), nothing is left as nobody's: the model is either
+// gone or recorded as the tool's.
 func TestProjectModelRollbackEveryWrite(t *testing.T) {
-	snapshot := "PATCH /api/v1/namespaces/" + record.GetActivityNamespace() + testSnapshotPath
-	tokens := map[string]string{
-		"ServiceAccount": "/api/v1/namespaces/proj/serviceaccounts/qwen25-05b-instruct-sa",
-		"Role":           "/apis/rbac.authorization.k8s.io/v1/namespaces/proj/roles/qwen25-05b-instruct-view-role",
-		"RoleBinding":    "/apis/rbac.authorization.k8s.io/v1/namespaces/proj/rolebindings/qwen25-05b-instruct-view",
-		"Secret":         "/api/v1/namespaces/proj/secrets/default-name-qwen25-05b-instruct-sa",
-	}
 	for _, tc := range []struct{ name, fail string }{
 		{"model", "POST /apis/serving.kserve.io/v1alpha2/namespaces/proj/llminferenceservices"},
-		{"record", snapshot},
-		{"ServiceAccount", "POST /api/v1/namespaces/proj/serviceaccounts"},
-		{"Role", "POST /apis/rbac.authorization.k8s.io/v1/namespaces/proj/roles"},
-		{"RoleBinding", "POST /apis/rbac.authorization.k8s.io/v1/namespaces/proj/rolebindings"},
-		{"Secret", "POST /api/v1/namespaces/proj/secrets"},
+		{"record", "PATCH /api/v1/namespaces/" + record.GetActivityNamespace() + testSnapshotPath},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mc := newModelsCluster(t)
 			mc.f.fail[tc.fail] = http.StatusForbidden
-			res, _ := runProjectModelForTest(t, projectModelUser(mc), types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct", TokenAuth: true})
+			res, _ := runProjectModelForTest(t, projectModelUser(mc), types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct"})
 			if res.Success {
 				t.Fatalf("a failed write succeeded: %+v", res)
 			}
 			rec, _ := serving.ReadModelsRecord(mc.c)
-			model := mc.f.get(testModelPath)
-			if model != nil && !rec.Owns(metaOf(model)) {
+			if model := mc.f.get(testModelPath); model != nil && !rec.Owns(metaOf(model)) {
 				t.Fatal("the model is left unrecorded")
-			}
-			for kind, path := range tokens {
-				obj := mc.f.get(path)
-				if obj == nil {
-					continue
-				}
-				if model == nil || !metaOf(obj).OwnedBy(metaOf(model).UID) {
-					t.Errorf("%s is left, not owned by the recorded model", kind)
-				}
-			}
-			if e := rec[serving.ModelRecordKey("proj", "qwen25-05b-instruct")]; e.TokenSecretUID != "" && mc.f.get(tokens["Secret"]) == nil {
-				t.Error("the record names a token Secret that does not exist")
 			}
 		})
 	}

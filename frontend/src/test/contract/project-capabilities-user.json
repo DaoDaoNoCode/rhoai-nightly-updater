@@ -30,12 +30,6 @@
       "label": "Deploy a model",
       "missing": []
     },
-    "models.setup-token": {
-      "allowed": true,
-      "blockedBy": [],
-      "label": "Deploy a model with token authentication",
-      "missing": []
-    },
     "models.teardown": {
       "allowed": true,
       "blockedBy": [],

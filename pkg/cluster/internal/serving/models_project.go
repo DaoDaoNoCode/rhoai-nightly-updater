@@ -14,55 +14,50 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
-// A project's model actions (the non-admin design, section 1 rows "Model,
-// internal, token auth off", "Model with token auth" and "Model behind the
-// inference gateway"; branch B6): a model of the catalog set up or deleted
-// in one data science project, by a cluster-admin or by any user whose
-// role in the project allows it (pkg/api's withProjectMutationAuth runs
-// the preflight first). Unlike the Models tab's operation (RunModels, a
-// cluster-admin's under the cluster lock), it changes nothing outside the
-// project: it never adds a project to a gateway's list, never publishes to
-// MaaS, never installs Connectivity Link, never writes the internal
-// registry. Every change and every in-project read is made with c, the
-// signed-in user's token; the cluster facts it needs (the
-// DataScienceCluster, KServe's controller and preset, its configuration,
-// the gateway, the nodes and pods, the mirrors) with c.Facts(), the
-// ServiceAccount's read-only copy, reduced to the requested project where
-// they list other tenants (models_project_facts.go).
+// A project's model actions (the non-admin design, section 1 row "Model,
+// internal, token auth off"; branch B6): a model of the catalog set up or
+// deleted in one data science project, by a cluster-admin or by any user
+// whose role in the project allows it (pkg/api's withProjectMutationAuth
+// runs the preflight first). The model is reached only inside the
+// cluster, with token authentication off (security.opendatahub.io/
+// enable-auth "false", as the dashboard writes it for a model without
+// "Require token authentication"). Unlike the Models tab's operation
+// (RunModels, a cluster-admin's under the cluster lock), it changes nothing
+// outside the project: it never routes a model through a gateway, never
+// adds a project to a gateway's list, never publishes to MaaS, never makes
+// a Role or RoleBinding.
 //
-// The three actions have their own entry points (setup, setupToken,
-// teardown), which the RBAC scan's roots name: a setup without token
-// authentication never reaches the code that makes the model's Role and
-// RoleBinding, so a project editor's preflight does not ask for them.
-//   - setup: reached only inside the cluster, its token authentication off
-//     (security.opendatahub.io/enable-auth "false", as the dashboard sets
-//     it for a model without "Require token authentication"); project
-//     admins and editors.
-//   - setupToken: with the dashboard's token authentication (a
-//     ServiceAccount, a Role, a RoleBinding and a token Secret, owned by
-//     the model, models_token.go), reached inside the cluster or through
-//     the cluster's default inference gateway when it already admits the
-//     project (ProjectGatewayFact); the Role and RoleBinding need the
-//     project's admin role.
-//   - teardown: the tool's model (by its recorded UID) only; garbage
-//     collection removes its token objects with it (ownerReferences), so
-//     an editor can delete a model a project admin set up with them.
+// Narrower than the design's section 1 (rows "Model with token auth" and
+// "Model behind the inference gateway"): a model reached through the
+// inference gateway, or with token authentication, is a cluster-admin's
+// (the Models tab). Through a gateway the route exists before anything
+// can confirm that the gateway checks its callers (odh-model-controller
+// makes the gateway's AuthPolicy only once a model uses it), so a user's
+// setup could not keep that safe on its own; and inside the cluster token
+// authentication does not authenticate the in-cluster address.
+//
+// Every change and every in-project read is made with c, the signed-in
+// user's token; the cluster facts it needs (the DataScienceCluster,
+// KServe's controller and preset, its configuration, the nodes and pods,
+// the mirrors) with c.Facts(), the ServiceAccount's read-only copy, reduced
+// to the requested project where they list other tenants
+// (models_project_facts.go). Its entry points (setup, teardown) are the
+// RBAC scan's roots.
 
 // The project model actions (cluster.ProjectActionID's action part).
 const (
-	ProjectModelSetup      = "setup"
-	ProjectModelSetupToken = "setup-token"
-	ProjectModelTeardown   = "teardown"
+	ProjectModelSetup    = "setup"
+	ProjectModelTeardown = "teardown"
 )
 
-// ProjectModelAction is the project action req asks for: a setup with
-// token authentication is its own action.
+// ProjectModelAction is the project action req asks for.
 func ProjectModelAction(req types.ProjectModelRequest) string {
-	if req.Action == ProjectModelSetup && req.TokenAuth {
-		return ProjectModelSetupToken
-	}
 	return req.Action
 }
+
+// ClusterAdminModelWords says what a project model action does not do, and
+// who does it.
+const ClusterAdminModelWords = "A cluster-admin deploys models reached through the inference gateway or with token authentication, on the Environment page's Models tab."
 
 // ValidateProjectModelRequest returns why req cannot run, or "".
 func ValidateProjectModelRequest(req types.ProjectModelRequest) string {
@@ -74,16 +69,9 @@ func ValidateProjectModelRequest(req types.ProjectModelRequest) string {
 	}
 	switch req.Action {
 	case ProjectModelSetup:
-		switch req.Exposure {
-		case "", ExposureInternal:
-		case ExposureDefault:
-			// Through a gateway without token authentication anyone who
-			// reaches the gateway could call the model.
-			if !req.TokenAuth {
-				return "a model reached through the inference gateway needs token authentication"
-			}
-		default:
-			return "exposure must be internal or default-gateway"
+		// Asked for, they are refused (never set up without them).
+		if req.Exposure != "" && req.Exposure != ExposureInternal || req.TokenAuth {
+			return "a model is set up here only inside the cluster, without token authentication. " + ClusterAdminModelWords
 		}
 	case ProjectModelTeardown:
 		if req.Exposure != "" || req.TokenAuth || req.ReleasedImage {
@@ -116,10 +104,7 @@ func RunProjectModel(c *kube.Client, req types.ProjectModelRequest, onStep func(
 	if problem := ValidateProjectModelRequest(req); problem != "" {
 		return r.fail("check", problem, "validation", "invalid request")
 	}
-	switch ProjectModelAction(req) {
-	case ProjectModelSetupToken:
-		return r.setupToken()
-	case ProjectModelTeardown:
+	if req.Action == ProjectModelTeardown {
 		return r.teardown()
 	}
 	return r.setup()
@@ -203,16 +188,15 @@ func projectModelsBlock(c *kube.Client) (string, string) {
 
 // check plans the model (no write): the project, model serving, the API,
 // the CPU preset, the model of that name and how it is reached, the image,
-// the hardware profile, room and quota, the records' caps. token: the
-// setup makes the model's token authentication.
-func (r *projectModelRun) check(token bool) (*modelPlan, []string, *types.OperationResponse, error) {
+// the hardware profile, room and quota, the records' caps.
+func (r *projectModelRun) check() (*modelPlan, []string, *types.OperationResponse, error) {
 	c, project, entry := r.c, r.req.Project, r.entry
 	r.step("check", "running", fmt.Sprintf("Checking what %s needs in %s", entry.DisplayName, project))
 	stop := func(msg, code, why string) (*modelPlan, []string, *types.OperationResponse, error) {
 		res, err := r.fail("check", msg, code, why)
 		return nil, nil, res, err
 	}
-	labels, msg, code := ProjectNamespace(c, project)
+	_, msg, code := ProjectNamespace(c, project)
 	if msg != "" {
 		return stop(msg+" Nothing was changed.", code, "project check failed")
 	}
@@ -249,8 +233,7 @@ func (r *projectModelRun) check(token bool) (*modelPlan, []string, *types.Operat
 	if found && existing.Metadata.Terminating() {
 		return stop(fmt.Sprintf("The model %s in %s is still being deleted. Wait until it is gone, then set it up again.", entry.Name, project), "terminating", "model terminating")
 	}
-	want := kube.FirstNonEmpty(r.req.Exposure, ExposureInternal)
-	exp := ExposurePlan{Exposure: want}
+	exp := ExposurePlan{Exposure: ExposureInternal, authOff: true}
 	if found {
 		maasRec, err := ReadMaaSRecord(c)
 		if err != nil {
@@ -260,38 +243,11 @@ func (r *projectModelRun) check(token bool) (*modelPlan, []string, *types.Operat
 			return stop(fmt.Sprintf("%s in %s is published to Models as a Service, which a cluster-admin manages: they unpublish it on the MaaS tab first. Nothing was changed.", entry.Name, project), "in_use", "published to maas")
 		}
 		def, _ := readKServeGateway(c.Facts())
-		cur, curGW := modelExposureOf(existing, def)
-		if cur != want {
-			return stop(fmt.Sprintf("%s in %s is already set up to be reached %s. To reach it another way, delete it and set it up again with that choice. Nothing was changed.", entry.Name, project, exposureWords(exposurePlanOf(cur, curGW))), "validation", "exposure differs")
+		if cur, curGW := modelExposureOf(existing, def); cur != ExposureInternal {
+			return stop(fmt.Sprintf("%s in %s is set up to be reached %s, which a cluster-admin manages (Models tab). Nothing was changed.", entry.Name, project, exposureWords(exposurePlanOf(cur, curGW))), "validation", "exposure differs")
 		}
-		if !token && existing.Metadata.Annotations[EnableAuthAnnot] != "false" {
-			return stop(fmt.Sprintf("%s in %s has token authentication; setting it up again keeps it, which needs the project's admin role (its Role and RoleBinding). Ask an admin of project %s, or delete the model and deploy it without token authentication. Nothing was changed.", entry.Name, project, project), "missing_permissions", "token auth on")
-		}
-	}
-	switch want {
-	case ExposureInternal:
-		// Without token authentication it is off, as the dashboard writes
-		// it. With it, Connectivity Link must be set up (KServe does not
-		// start a model with token authentication without its AuthPolicy
-		// API): a setup never turns the asked-for authentication off
-		// unnoticed (fail closed, also when that cannot be read).
-		exp.authOff = !token
-		if token {
-			ok, _, err := authReadiness(c.Facts())
-			if err != nil {
-				kube.LogFactReadFailure("cannot read whether Connectivity Link is set up for a project's model", "Kuadrant", err)
-				return stop(fmt.Sprintf("Token authentication needs Red Hat Connectivity Link, and whether it is set up cannot be checked now (%s). Deploy without token authentication, or try again. Nothing was changed.", kube.FactReadProblem(err)), envkit.ErrorCodePrerequisitesUnknown, "auth unknown")
-			}
-			if !ok {
-				return stop("Token authentication needs Red Hat Connectivity Link, which is not set up on this cluster (KServe does not start a model with token authentication without it). Deploy without token authentication, or ask a cluster-admin to set it up. Nothing was changed.", "prerequisites", "auth missing")
-			}
-		}
-	case ExposureDefault:
-		// Every setup through the gateway, a model set up again too: the
-		// gateway must still admit the project and check the callers'
-		// tokens.
-		if fact, _ := ProjectGatewayFact(c, project, labels); !fact.Admits {
-			return stop(GatewayFactWords(project, fact)+" Or choose 'Only inside the cluster'. Nothing was changed.", "prerequisites", "gateway "+fact.Problem)
+		if existing.Metadata.Annotations[EnableAuthAnnot] != "false" {
+			return stop(fmt.Sprintf("%s in %s has token authentication, which a cluster-admin manages (Models tab); setting it up here would turn it off. Delete it and deploy it again here, or ask a cluster-admin. Nothing was changed.", entry.Name, project), "validation", "token auth on")
 		}
 	}
 	var prev *LLMISvcObject
@@ -363,51 +319,12 @@ func (r *projectModelRun) applyModel(p *modelPlan) (*types.OperationResponse, er
 // setup sets up a model reached only inside the cluster, with token
 // authentication off: no Role, no RoleBinding, no token Secret.
 func (r *projectModelRun) setup() (*types.OperationResponse, error) {
-	p, notes, res, err := r.check(false)
+	p, notes, res, err := r.check()
 	if p == nil {
 		return res, err
 	}
 	if res, err := r.dryRunModel(p); res != nil || err != nil {
 		return res, err
-	}
-	r.step("check", "success", strings.TrimSpace("Everything the model needs is there. "+strings.Join(notes, " ")))
-	if res, err := r.beforeWrite(); res != nil || err != nil {
-		return res, err
-	}
-	created := !p.found
-	if res, err := r.applyModel(p); res != nil || err != nil {
-		return res, err
-	}
-	r.step("model", "success", fmt.Sprintf("LLMInferenceService %s/%s applied, on preset %s with %s. Reached %s. Without token authentication (%s: \"false\", as the dashboard sets it): any pod whose network reaches %s can call it.", p.project, p.entry.Name, p.preset, p.image.describe(), exposureWords(p.exp), EnableAuthAnnot, p.project))
-	return r.ready(p, created, func(model LLMISvcObject, _ ModelsRecord, progress func(string)) types.ModelCallCheck {
-		return r.callInternal(model, progress)
-	})
-}
-
-// setupToken sets up a model with the dashboard's token authentication,
-// reached inside the cluster or through the cluster's default inference
-// gateway when it already admits the project.
-func (r *projectModelRun) setupToken() (*types.OperationResponse, error) {
-	c := r.c
-	p, notes, res, err := r.check(true)
-	if p == nil {
-		return res, err
-	}
-	modelUID := ""
-	if p.found {
-		modelUID = p.current.UID
-	}
-	tok, msg, code := planModelToken(c, p.project, p.entry.Name, modelUID, p.rec[ModelRecordKey(p.project, p.entry.Name)].TokenSecretUID)
-	if msg != "" {
-		return r.fail("check", msg, code, "token check failed")
-	}
-	p.token = tok
-	if res, err := r.dryRunModel(p); res != nil || err != nil {
-		return res, err
-	}
-	created := !p.found
-	if _, msg, code := applyModelToken(c, p.project, p.entry.Name, p.current.UID, p.token, true); msg != "" {
-		return r.fail("check", msg+" Nothing was changed.", code, "token dry run failed")
 	}
 	r.step("check", "success", strings.TrimSpace("Everything the model needs is there. "+strings.Join(notes, " ")))
 	if res, err := r.beforeWrite(); res != nil || err != nil {
@@ -416,35 +333,8 @@ func (r *projectModelRun) setupToken() (*types.OperationResponse, error) {
 	if res, err := r.applyModel(p); res != nil || err != nil {
 		return res, err
 	}
-	if msg, code := (&modelsRun{c: c}).applyToken(p); msg != "" {
-		if p.exp.Exposure == ExposureDefault {
-			return r.gatewayUnconfirmed(p, created, "model", msg)
-		}
-		return r.fail("model", msg, code, "token apply failed")
-	}
-	r.step("model", "success", fmt.Sprintf("LLMInferenceService %s/%s applied, on preset %s with %s. Reached %s.%s", p.project, p.entry.Name, p.preset, p.image.describe(), exposureWords(p.exp), tokenWords(p.project, p.entry.Name, p.token)))
-	return r.ready(p, created, func(model LLMISvcObject, rec ModelsRecord, progress func(string)) types.ModelCallCheck {
-		def, _ := readKServeGateway(c.Facts())
-		exposure, gw := modelExposureOf(model, def)
-		switch exposure {
-		case ExposureInternal:
-			return r.callInternal(model, progress)
-		case ExposureDefault:
-			served := kube.FirstNonEmpty(model.Spec.Model.Name, model.Metadata.Name)
-			if !SafeServedName(served) {
-				return types.ModelCallCheck{Result: "not-checked", Message: "Not checked: " + unsafeServedNameWarning}
-			}
-			return callModelVia(c, model, p.project, p.entry.Name, served, p.entry.Type, exposure, gw, rec, progress, func() string {
-				if c.ProjectUser() {
-					// Authorino's namespace and settings are the
-					// ServiceAccount's reads.
-					return " Check that Red Hat Connectivity Link's Authorino runs; a cluster-admin can check it."
-				}
-				return gatewayErrorCause(c.Facts())
-			})
-		}
-		return types.ModelCallCheck{Result: "not-checked", Message: "Not checked: the model is reached in a way a cluster-admin set up."}
-	})
+	r.step("model", "success", fmt.Sprintf("LLMInferenceService %s/%s applied, on preset %s with %s. Reached %s. Without token authentication (%s: \"false\", as the dashboard sets it): any pod whose network reaches %s can call it.", p.project, p.entry.Name, p.preset, p.image.describe(), exposureWords(p.exp), EnableAuthAnnot, p.project))
+	return r.ready(p)
 }
 
 // callInternal calls the model at its in-cluster address once.
@@ -456,15 +346,12 @@ func (r *projectModelRun) callInternal(model LLMISvcObject, progress func(string
 	return callInternalModel(r.c, model, r.req.Project, r.entry.Name, served, r.entry.Type, progress)
 }
 
-// ready waits for the model, then calls it once (call). Its safe points
-// are the polls of the wait: a cancel there leaves the model, recorded as
-// the tool's. Through the gateway the setup succeeds only once the call
-// check confirmed that the gateway refuses a caller without a token;
-// otherwise a model this setup created is deleted again and one set up
-// before is reported (gatewayUnconfirmed).
-func (r *projectModelRun) ready(p *modelPlan, created bool, call func(LLMISvcObject, ModelsRecord, func(string)) types.ModelCallCheck) (*types.OperationResponse, error) {
+// ready waits for the model, then calls it once at its in-cluster
+// address. Its safe points are the polls of the wait: a cancel there
+// leaves the model, recorded as the tool's. The call check after the wait
+// runs to its end (bounded by modelCallRetryWindow).
+func (r *projectModelRun) ready(p *modelPlan) (*types.OperationResponse, error) {
 	c := r.c
-	gateway := p.exp.Exposure == ExposureDefault
 	r.step("model-ready", "running", "Waiting for the model to start (typically 3 to 5 minutes the first time)")
 	timeout := modelReadyTimeout
 	if dl, ok := c.Context().Deadline(); ok {
@@ -475,46 +362,26 @@ func (r *projectModelRun) ready(p *modelPlan, created bool, call func(LLMISvcObj
 	progress := func(line string) { r.step("model-ready", "running", line) }
 	res := waitModelReady(c, p.project, p.entry.Name, p.image.Kind == "preset", false, timeout, progress)
 	const deleteIt = " It was created; Delete removes it."
-	var msg, code, why string
 	switch {
 	case res.cancel != nil:
-		if gateway && created {
-			if note := r.rollBack(p); note != "" {
-				return r.cancelled("model-ready", res.cancel, note)
-			}
-			return r.cancelled("model-ready", res.cancel, "The model this setup created was deleted again: its token checks through the gateway were not confirmed.")
-		}
 		return r.cancelled("model-ready", res.cancel, "The model stays set up, recorded as this tool's: Delete removes it.")
 	case res.err != nil:
-		msg, code, why = fmt.Sprintf("Stopped waiting for the model: %v.%s", res.err, deleteIt), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(res.err), "cancelled"), "model wait failed"
+		return r.fail("model-ready", fmt.Sprintf("Stopped waiting for the model: %v.%s", res.err, deleteIt), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(res.err), "cancelled"), "model wait failed")
 	case res.imageMissing:
-		msg, code, why = "The model cannot start: the cluster preset's image is not in the registry (this nightly build's runtime image is not published yet). Set it up again with the newest released Red Hat image, which replaces only the model's image. Technical details: "+res.problem, "image_unavailable", "preset image missing"
+		return r.fail("model-ready", "The model cannot start: the cluster preset's image is not in the registry (this nightly build's runtime image is not published yet). Set it up again with the newest released Red Hat image, which replaces only the model's image. Technical details: "+res.problem, "image_unavailable", "preset image missing")
 	case res.imageMaybeMissing:
-		msg, code, why = "The model cannot start: "+res.problem+" A registry answered that the image does not exist (\"manifest unknown\"): if this nightly build's runtime image is not published yet, set it up again with the newest released Red Hat image.", "image_unavailable", "preset image may be missing"
+		return r.fail("model-ready", "The model cannot start: "+res.problem+" A registry answered that the image does not exist (\"manifest unknown\"): if this nightly build's runtime image is not published yet, set it up again with the newest released Red Hat image.", "image_unavailable", "preset image may be missing")
 	case res.problem != "":
-		msg, code, why = "The model cannot start: "+res.problem+deleteIt+" Or fix the cause and set it up again.", "not_ready", "model not starting"
+		return r.fail("model-ready", "The model cannot start: "+res.problem+deleteIt+" Or fix the cause and set it up again.", "not_ready", "model not starting")
 	case !res.ready && res.pulling != "":
-		msg, code, why = fmt.Sprintf("Created, but not ready after %s: its image pull is still failing. %s It stays set up; it starts once the pull succeeds.", ClockText(timeout), res.pulling), "not_ready", "image pull failing"
+		return r.fail("model-ready", fmt.Sprintf("Created, but not ready after %s: its image pull is still failing. %s It stays set up; it starts once the pull succeeds.", ClockText(timeout), res.pulling), "not_ready", "image pull failing")
 	case !res.ready:
-		if gateway {
-			return r.gatewayUnconfirmed(p, created, "model-ready", fmt.Sprintf("The model is not ready after %s, so whether the gateway checks the callers' tokens could not be confirmed.", ClockText(timeout)))
-		}
 		r.step("model-ready", "success", fmt.Sprintf("Created, but not ready after %s. It may still start; its state shows here.", ClockText(timeout)))
 		r.step("callable", "success", "Not checked: the model is not ready yet.")
 		return r.done(fmt.Sprintf("%s in %s is still starting.", p.entry.DisplayName, p.project))
 	}
-	if msg != "" {
-		if gateway {
-			return r.gatewayUnconfirmed(p, created, "model-ready", msg+" Whether the gateway checks the callers' tokens could not be confirmed.")
-		}
-		return r.fail("model-ready", msg, code, why)
-	}
 	r.step("model-ready", "success", "Ready.")
 	r.step("callable", "running", "Calling the model once, as a user would")
-	rec, err := ReadModelsRecord(c)
-	if err != nil {
-		rec = p.rec
-	}
 	model, found, err := ReadToolModel(c, p.project, p.entry.Name)
 	var check types.ModelCallCheck
 	switch {
@@ -523,47 +390,15 @@ func (r *projectModelRun) ready(p *modelPlan, created bool, call func(LLMISvcObj
 	case !found:
 		check = types.ModelCallCheck{Result: "not-checked", Message: "Not checked: the model does not exist any more."}
 	default:
-		check = call(model, rec, func(line string) { r.step("callable", "running", line) })
+		check = r.callInternal(model, func(line string) { r.step("callable", "running", line) })
 		check.At = kube.NowRFC3339()
 		rememberCallCheck(c, p.project, p.entry.Name, model.Metadata.UID, check)
-	}
-	if gateway && (!check.OK || !check.AnonymousRefused) {
-		return r.gatewayUnconfirmed(p, created, "callable", strings.TrimSpace(check.Message+" The gateway's refusal of a caller without a token was not confirmed."))
 	}
 	if !check.OK && check.Result != "not-checked" {
 		return r.fail("callable", callFailureWords(fmt.Sprintf("%s is ready in %s", p.entry.DisplayName, p.project), check)+" It stays set up.", "not_callable", "model not callable ("+check.Result+")")
 	}
 	r.step("callable", "success", check.Message)
 	return r.done(fmt.Sprintf("%s is ready in %s. %s", p.entry.DisplayName, p.project, check.Message))
-}
-
-// gatewayUnconfirmed ends a setup through the gateway whose token checks
-// were not confirmed (the call check's request without a token was not
-// refused, or the model could not be called): a model this setup created
-// is deleted again, by its UID, and forgotten (its token objects go with
-// it), so it is never left reachable through the gateway unchecked; a
-// model set up before is reported and left as it is.
-func (r *projectModelRun) gatewayUnconfirmed(p *modelPlan, created bool, step, why string) (*types.OperationResponse, error) {
-	if !created {
-		return r.fail(step, why+" The model was set up before this run and is left as it is: delete it, or ask a cluster-admin to check the gateway's token authentication (Red Hat Connectivity Link and RHOAI's AuthPolicy on the gateway).", "not_authenticated", "gateway token checks not confirmed")
-	}
-	if note := r.rollBack(p); note != "" {
-		return r.fail(step, why+" "+note, "not_authenticated", "gateway token checks not confirmed")
-	}
-	return r.fail(step, why+" The model this setup created was deleted again (its token objects go with it), so it is not left reachable through the gateway unchecked. Deploy it inside the cluster, or ask a cluster-admin to check the gateway's token authentication.", "not_authenticated", "gateway token checks not confirmed")
-}
-
-// rollBack deletes the model this setup created (its recorded UID) and
-// forgets it; "" when done, else what is left, in words.
-func (r *projectModelRun) rollBack(p *modelPlan) string {
-	path, _ := ToolModelPath(p.project, p.entry.Name)
-	if _, err := kube.DeleteWithUID(r.c, path, p.current.UID); err != nil && !kube.IsK8sNotFound(err) {
-		return fmt.Sprintf("The model this setup created could not be deleted again (%v): delete it now (Delete, or oc delete llminferenceservice %s -n %s).", err, p.entry.Name, p.project)
-	}
-	if err := forgetModels(r.c, ModelRecordKey(p.project, p.entry.Name)); err != nil {
-		slog.Warn("cannot update the models record; the background check forgets the entry", "error", kube.FactReadProblem(err))
-	}
-	return ""
 }
 
 // teardown deletes the tool's model (its recorded UID) and waits until
@@ -628,7 +463,7 @@ func (r *projectModelRun) teardown() (*types.OperationResponse, error) {
 	if err := forgetModels(c, key); err != nil {
 		slog.Warn("cannot update the models record; the background check forgets the entry", "error", kube.FactReadProblem(err))
 	}
-	msg := fmt.Sprintf("Model %s deleted from %s; KServe removed its Deployment, Service and route, and its token objects go with it (they are owned by the model). The project stays.", name, project)
+	msg := fmt.Sprintf("Model %s deleted from %s; KServe removed its Deployment and Service, and any token objects a cluster-admin's setup made go with it (they are owned by the model). The project stays.", name, project)
 	r.step("model", "success", msg)
 	return r.done(msg)
 }

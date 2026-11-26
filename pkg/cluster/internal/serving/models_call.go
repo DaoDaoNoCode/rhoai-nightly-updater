@@ -411,7 +411,6 @@ func probeWithoutToken(c *kube.Client, ok types.ModelCallCheck, base, served, ty
 			Message: fmt.Sprintf("The model also answered a request without a token (HTTP %d): gateway %s does not check who calls, so anyone who can reach %s can use the model. Check that RHOAI's AuthPolicy on the gateway is enforced (odh-model-controller and Red Hat Connectivity Link run), and that the gateway is not labelled %s=false.", status, kube.FirstNonEmpty(gw, "the gateway"), base, ODHManagedLabel)}
 	case err == nil && (status == http.StatusUnauthorized || status == http.StatusForbidden):
 		ok.Message += fmt.Sprintf(" A request without a token was refused (HTTP %d).", status)
-		ok.AnonymousRefused = true
 	case err == nil:
 		ok.Message += fmt.Sprintf(" A request without a token got HTTP %d, so whether the gateway refuses callers without a token is not confirmed.", status)
 	default:

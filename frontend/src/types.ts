@@ -1483,17 +1483,9 @@ export interface ProjectModelRequest {
   action: "setup" | "teardown";
   project: string;
   model?: string;
-  /** Setup: "internal" (default) or "default-gateway" (needs tokenAuth). */
-  exposure?: "internal" | "default-gateway";
-  /** Setup: the dashboard's token authentication (a Role and RoleBinding: the project's admin role). */
-  tokenAuth?: boolean;
+  /** Setup: only inside the cluster; anything else, and tokenAuth, is refused (a cluster-admin's, the Models tab). */
+  exposure?: "internal";
   releasedImage?: boolean;
-}
-
-/** Whether the cluster's inference gateway admits one project (pkg/types ProjectGatewayFact): yes or no and a code. */
-export interface ProjectGatewayFact {
-  admits: boolean;
-  problem?: string;
 }
 
 export interface KeptPVC {
@@ -2095,8 +2087,6 @@ export interface ModelExposures {
   authReady: boolean;
   recommendGateway?: boolean;
   recommendGatewayReason?: string;
-  /** A user's answer: whether the inference gateway admits the project. */
-  gateway?: ProjectGatewayFact;
   /** A user's answer: whether a worker has the model's requests free. */
   capacity?: "fits" | "may-not-fit" | "unknown";
 }

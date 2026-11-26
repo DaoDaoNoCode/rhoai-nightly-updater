@@ -2,44 +2,34 @@ import { describe, expect, it } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { UserProjectView } from "./UserProjectView";
+import { CLUSTER_ADMIN_MODELS } from "./DeployProjectModel";
 import { projectStatus, stubUserApi } from "../../test/userFixtures";
 import { jsonResponse } from "../../test/apiStub";
-import { contract } from "../../test/contract";
 import type { CatalogModel, ModelExposures } from "../../types";
 
-// A user's models in one of their projects (non-admin design B6): Deploy
-// inside the cluster, or through the inference gateway when it admits
-// the project and the user may make token authentication (the project's
-// admin role); Delete of the tool's model.
+// A user's models in one of their projects (non-admin design B6): Deploy a
+// model reached only inside the cluster, without token authentication;
+// Delete of the tool's model. Through the inference gateway or with token
+// authentication a model is a cluster-admin's (the Models tab).
 
 const CATALOG: CatalogModel[] = [
   { name: "smollm2-135m-instruct", displayName: "SmolLM2 135M Instruct (CPU)", uri: "hf://x", cpu: "2", memoryRequest: "4Gi", memory: "5Gi", type: "chat", useCase: "Chat (smoke test)", description: "", args: "", downloadSize: "270 MB" },
   { name: "qwen25-05b-instruct", displayName: "Qwen2.5 0.5B Instruct (CPU)", uri: "hf://y", cpu: "4", memoryRequest: "6Gi", memory: "8Gi", type: "chat", useCase: "Chat", description: "", args: "", downloadSize: "1.0 GB", default: true },
 ];
 
-function exposures(admits: boolean): ModelExposures {
+function exposures(capacity: "fits" | "may-not-fit" = "fits"): ModelExposures {
   return {
-    project: "team-a", model: "qwen25-05b-instruct", default: admits ? "default-gateway" : "internal", authReady: false,
-    gateway: admits ? { admits: true } : { admits: false, problem: "not-admitted" }, capacity: "fits",
+    project: "team-a", model: "qwen25-05b-instruct", default: "internal", authReady: false, capacity,
     options: [
-      { key: "default-gateway", exposure: "default-gateway", title: "Through the cluster's inference gateway", description: "Reachable from outside the cluster.", available: admits,
-        reason: admits ? undefined : "The cluster's inference gateway does not admit project team-a. A cluster-admin can allow project team-a on the inference gateway (Models tab, Allow)." },
       { key: "internal", exposure: "internal", title: "Only inside the cluster", description: "No outside address.", available: true, warning: "Calls to the in-cluster address are not authenticated." },
     ],
   };
 }
 
-const EDITOR_TOKEN_REASON = "Token authentication creates a Role and a RoleBinding in team-a, which needs the project's admin role. Ask an admin of team-a, or deploy without token authentication.";
-
-function stub(admits: boolean, editor: boolean) {
+function stub(capacity: "fits" | "may-not-fit" = "fits") {
   return stubUserApi({
     "/api/resources/status": () => jsonResponse({ ...projectStatus("team-a"), modelCatalog: CATALOG }),
-    "/api/resources/models/exposures": () => jsonResponse(exposures(admits)),
-    "/api/resources/projects/capabilities": () => {
-      const caps = contract.capabilitiesUser("team-a");
-      if (editor) caps.actions["models.setup-token"] = { ...caps.actions["models.setup-token"], allowed: false, reason: EDITOR_TOKEN_REASON, code: "missing_permissions", missing: ["x"] };
-      return jsonResponse(caps);
-    },
+    "/api/resources/models/exposures": () => jsonResponse(exposures(capacity)),
   });
 }
 
@@ -52,36 +42,27 @@ async function openDeploy() {
 }
 
 describe("a user's models", () => {
-  it("lets an editor deploy inside the cluster without token authentication, and says why the rest is not offered", async () => {
-    const api = stub(false, true);
+  it("deploys inside the cluster without token authentication, and says who deploys the rest", async () => {
+    const api = stub();
     render(<UserProjectView project="team-a" refreshKey={0} />);
     const dialog = await openDeploy();
-    const gateway = await within(dialog).findByRole("radio", { name: /Through the cluster's inference gateway/ });
-    expect(gateway).toBeDisabled();
-    expect(within(dialog).getByText(/A cluster-admin can allow project team-a on the inference gateway/)).toBeInTheDocument();
-    const token = within(dialog).getByRole("checkbox", { name: "Require token authentication" });
-    expect(token).toBeDisabled();
-    expect(within(dialog).getByText(EDITOR_TOKEN_REASON)).toBeInTheDocument();
+    expect(await within(dialog).findByText("Calls to the in-cluster address are not authenticated.")).toBeInTheDocument();
+    expect(within(dialog).getByText(CLUSTER_ADMIN_MODELS)).toBeInTheDocument();
+    expect(within(dialog).queryByRole("radio")).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("checkbox", { name: "Require token authentication" })).not.toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Deploy" }));
     await waitFor(() => expect(api.bodies["POST /api/resources/models/project/stream"]).toEqual([{ action: "setup", project: "team-a", model: "qwen25-05b-instruct", exposure: "internal" }]));
   });
 
-  it("lets a project admin deploy through a gateway that admits the project, with token authentication", async () => {
-    const api = stub(true, false);
+  it("warns when the cluster may not have room for the model", async () => {
+    stub("may-not-fit");
     render(<UserProjectView project="team-a" refreshKey={0} />);
     const dialog = await openDeploy();
-    const gateway = await within(dialog).findByRole("radio", { name: /Through the cluster's inference gateway/ });
-    await waitFor(() => expect(gateway).not.toBeDisabled());
-    fireEvent.click(gateway);
-    const token = within(dialog).getByRole("checkbox", { name: "Require token authentication" });
-    expect(token).toBeChecked();
-    expect(token).toBeDisabled();
-    fireEvent.click(within(dialog).getByRole("button", { name: "Deploy" }));
-    await waitFor(() => expect(api.bodies["POST /api/resources/models/project/stream"]).toEqual([{ action: "setup", project: "team-a", model: "qwen25-05b-instruct", exposure: "default-gateway", tokenAuth: true }]));
+    expect(await within(dialog).findByText("The cluster may not have room for it")).toBeInTheDocument();
   });
 
   it("deletes the tool's model after a confirmation", async () => {
-    const api = stub(false, true);
+    const api = stub();
     render(<UserProjectView project="team-a" refreshKey={0} />);
     const models = await screen.findByRole("region", { name: "Models" });
     const del = await within(models).findByRole("button", { name: "Delete" });
@@ -90,28 +71,5 @@ describe("a user's models", () => {
     const dialog = await screen.findByRole("dialog", { name: /Delete Qwen2.5 0.5B Instruct \(CPU\) in team-a/ });
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(api.bodies["POST /api/resources/models/project/stream"]).toEqual([{ action: "teardown", project: "team-a", model: "qwen25-05b-instruct" }]));
-  });
-
-  it("keeps a choice a later answer no longer allows, says why, and waits for the user to choose again", async () => {
-    const api = stubUserApi({
-      "/api/resources/status": () => jsonResponse({ ...projectStatus("team-a"), modelCatalog: CATALOG }),
-      // The gateway admits the project for Qwen; for SmolLM the answer is no.
-      "/api/resources/models/exposures": (url: string) => jsonResponse(exposures(new URL(url, "http://x").searchParams.get("model") === "qwen25-05b-instruct")),
-    });
-    render(<UserProjectView project="team-a" refreshKey={0} />);
-    const dialog = await openDeploy();
-    const gateway = await within(dialog).findByRole("radio", { name: /Through the cluster's inference gateway/ });
-    await waitFor(() => expect(gateway).not.toBeDisabled());
-    fireEvent.click(gateway);
-    fireEvent.change(within(dialog).getByRole("combobox", { name: "Model" }), { target: { value: "smollm2-135m-instruct" } });
-    expect(await within(dialog).findByText("Choose how it is reached again")).toBeInTheDocument();
-    expect(within(dialog).getByRole("radio", { name: /Through the cluster's inference gateway/ })).toBeChecked();
-    expect(within(dialog).getByRole("radio", { name: /Only inside the cluster/ })).not.toBeChecked();
-    const deploy = within(dialog).getByRole("button", { name: "Deploy" });
-    expect(deploy).toBeDisabled();
-    fireEvent.click(within(dialog).getByRole("radio", { name: /Only inside the cluster/ }));
-    await waitFor(() => expect(deploy).not.toBeDisabled());
-    fireEvent.click(deploy);
-    await waitFor(() => expect(api.bodies["POST /api/resources/models/project/stream"]).toEqual([{ action: "setup", project: "team-a", model: "smollm2-135m-instruct", exposure: "internal" }]));
   });
 });
