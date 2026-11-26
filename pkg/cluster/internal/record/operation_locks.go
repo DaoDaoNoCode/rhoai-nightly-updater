@@ -237,8 +237,9 @@ func patchLockValues(c *kube.Client, renewals []LockRenewal) error {
 // is set to "" as earlier versions do, a project lock is removed. It reads
 // the entry and checks its owner rather than testing the value last
 // written: a renewal whose answer was lost (a timeout) may have changed
-// the value, and the release must remove it all the same. The write is
-// conditional like AcquireOperationLock's.
+// the value, and the release must remove it all the same. A cancel request
+// recorded for the owner's operation (CancelRequestKey) is removed with
+// it. The write is conditional like AcquireOperationLock's.
 func ReleaseOperationLock(c *kube.Client, key string, owner LeaseOwner) error {
 	var cleared any
 	if key == LeaseKey {
@@ -249,7 +250,12 @@ func ReleaseOperationLock(c *kube.Client, key string, owner LeaseOwner) error {
 			if !owner.owns(DecodeValue[types.OperationLease](rec.values, key)) {
 				return nil, nil
 			}
-			return map[string]any{key: cleared}, nil
+			data := map[string]any{key: cleared}
+			// A cancel request for the operation goes with its lock.
+			if rec.CancelRequests[owner.ID] != nil {
+				data[CancelRequestKey(owner.ID)] = nil
+			}
+			return data, nil
 		})
 	})
 	switch {

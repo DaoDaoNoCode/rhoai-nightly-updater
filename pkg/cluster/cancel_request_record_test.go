@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -69,5 +70,65 @@ func TestCancelRequestKeyBesideTheLockAndPruned(t *testing.T) {
 	}
 	if f.get(record.CancelRequestKey("op-live")) != "" {
 		t.Fatal("the request outlived its action")
+	}
+}
+
+// Releasing a lock removes the cancel request recorded for its operation.
+func TestReleaseRemovesTheCancelRequest(t *testing.T) {
+	now := kube.Clock().Now()
+	f, c := newFakeOperationConfigMap(t)
+	mine := projectLease("op-mine", "boot-a", "mine", "alice", now)
+	f.set(ProjectLockKey("mine"), mine)
+	f.set(record.CancelRequestKey("op-mine"), record.CancelRequest{At: "2026-11-25T10:00:00Z"})
+	if err := ReleaseOperationLock(c, ProjectLockKey("mine"), LeaseOwner{BootID: "boot-a", ID: "op-mine"}); err != nil {
+		t.Fatal(err)
+	}
+	if f.get(ProjectLockKey("mine")) != "" || f.get(record.CancelRequestKey("op-mine")) != "" {
+		t.Fatalf("left: lock %q, request %q", f.get(ProjectLockKey("mine")), f.get(record.CancelRequestKey("op-mine")))
+	}
+}
+
+// The lock is released (or taken by another operation) between the cancel
+// request's read and its write: the write conflicts (409), the record is
+// read again, the check runs again and refuses, and no request is left.
+func TestCancelRequestRecheckedAfterAConflict(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		replace bool
+	}{{"released", false}, {"taken by another operation", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := kube.Clock().Now()
+			f, c := newFakeOperationConfigMap(t)
+			f.set(ProjectLockKey("p"), projectLease("op-1", "boot-b", "p", "alice", now))
+			changed := false
+			f.beforeWrite = func(f *fakeOperationConfigMap) {
+				if changed {
+					return
+				}
+				changed = true
+				delete(f.data, ProjectLockKey("p"))
+				if tc.replace {
+					raw, _ := json.Marshal(projectLease("op-2", "boot-b", "p", "bob", now))
+					f.data[ProjectLockKey("p")] = string(raw)
+				}
+				f.rv++
+			}
+			checks := 0
+			err := RequestOperationCancel(c, "op-1", func(rec *OperationRecord) (*record.CancelRequest, error) {
+				checks++
+				for _, l := range rec.ProjectLocks {
+					if l.ID == "op-1" {
+						return &record.CancelRequest{At: "2026-11-25T10:00:00Z"}, nil
+					}
+				}
+				return nil, record.ErrNoSuchAction
+			})
+			if !errors.Is(err, record.ErrNoSuchAction) || checks != 2 || f.conflicts != 1 {
+				t.Fatalf("err %v, checks %d, conflicts %d", err, checks, f.conflicts)
+			}
+			if f.get(record.CancelRequestKey("op-1")) != "" {
+				t.Fatal("a request was left")
+			}
+		})
 	}
 }
