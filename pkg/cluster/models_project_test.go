@@ -405,9 +405,16 @@ func TestProjectModelTeardown(t *testing.T) {
 	if res, _ := runProjectModelForTest(t, u, types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct", TokenAuth: true}); !res.Success {
 		t.Fatalf("setup: %+v", res)
 	}
+	before := len(mc.f.calls)
 	res, _ := runProjectModelForTest(t, u, types.ProjectModelRequest{Action: "teardown", Project: "proj", Model: "qwen25-05b-instruct"})
 	if !res.Success || mc.f.has(testModelPath) {
 		t.Fatalf("%+v", res)
+	}
+	// Every change outside this tool's own records is the user's.
+	for _, call := range mc.f.calls[before:] {
+		if call.Method != http.MethodGet && !strings.HasPrefix(call.Path, "/api/v1/namespaces/"+record.GetActivityNamespace()+"/configmaps") && call.Token != fakeUserToken {
+			t.Errorf("teardown sent %s %s with another token than the user's", call.Method, call.Path)
+		}
 	}
 	for _, m := range mc.f.mutations() {
 		if strings.HasPrefix(m, "DELETE ") && (strings.Contains(m, "/roles/") || strings.Contains(m, "/rolebindings/")) {
@@ -653,5 +660,55 @@ func TestCapacityFactsShareOneSnapshot(t *testing.T) {
 	}
 	if nodes != 1 || pods != 1 {
 		t.Errorf("reads of the nodes %d and pods %d, want one each", nodes, pods)
+	}
+}
+
+// Rollback per write of a setup with token authentication: whichever of
+// its six writes fails (the model, its record, the ServiceAccount, the
+// Role, the RoleBinding, the token Secret), nothing is left as nobody's:
+// the model is either gone or recorded as the tool's, and every token
+// object left is owned by the recorded model (garbage collection removes
+// it with the model).
+func TestProjectModelRollbackEveryWrite(t *testing.T) {
+	snapshot := "PATCH /api/v1/namespaces/" + record.GetActivityNamespace() + testSnapshotPath
+	tokens := map[string]string{
+		"ServiceAccount": "/api/v1/namespaces/proj/serviceaccounts/qwen25-05b-instruct-sa",
+		"Role":           "/apis/rbac.authorization.k8s.io/v1/namespaces/proj/roles/qwen25-05b-instruct-view-role",
+		"RoleBinding":    "/apis/rbac.authorization.k8s.io/v1/namespaces/proj/rolebindings/qwen25-05b-instruct-view",
+		"Secret":         "/api/v1/namespaces/proj/secrets/default-name-qwen25-05b-instruct-sa",
+	}
+	for _, tc := range []struct{ name, fail string }{
+		{"model", "POST /apis/serving.kserve.io/v1alpha2/namespaces/proj/llminferenceservices"},
+		{"record", snapshot},
+		{"ServiceAccount", "POST /api/v1/namespaces/proj/serviceaccounts"},
+		{"Role", "POST /apis/rbac.authorization.k8s.io/v1/namespaces/proj/roles"},
+		{"RoleBinding", "POST /apis/rbac.authorization.k8s.io/v1/namespaces/proj/rolebindings"},
+		{"Secret", "POST /api/v1/namespaces/proj/secrets"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mc := newModelsCluster(t)
+			mc.f.fail[tc.fail] = http.StatusForbidden
+			res, _ := runProjectModelForTest(t, projectModelUser(mc), types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct", TokenAuth: true})
+			if res.Success {
+				t.Fatalf("a failed write succeeded: %+v", res)
+			}
+			rec, _ := serving.ReadModelsRecord(mc.c)
+			model := mc.f.get(testModelPath)
+			if model != nil && !rec.Owns(metaOf(model)) {
+				t.Fatal("the model is left unrecorded")
+			}
+			for kind, path := range tokens {
+				obj := mc.f.get(path)
+				if obj == nil {
+					continue
+				}
+				if model == nil || !metaOf(obj).OwnedBy(metaOf(model).UID) {
+					t.Errorf("%s is left, not owned by the recorded model", kind)
+				}
+			}
+			if e := rec[serving.ModelRecordKey("proj", "qwen25-05b-instruct")]; e.TokenSecretUID != "" && mc.f.get(tokens["Secret"]) == nil {
+				t.Error("the record names a token Secret that does not exist")
+			}
+		})
 	}
 }
