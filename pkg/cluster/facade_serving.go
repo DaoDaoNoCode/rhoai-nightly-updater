@@ -23,6 +23,11 @@ func ValidateProjectModelRequest(req types.ProjectModelRequest) string {
 	return serving.ValidateProjectModelRequest(req)
 }
 
+// ProjectModelTarget is serving.ProjectModelTarget.
+func ProjectModelTarget(req types.ProjectModelRequest) string {
+	return serving.ProjectModelTarget(req)
+}
+
 // ProjectModelAction is serving.ProjectModelAction.
 func ProjectModelAction(req types.ProjectModelRequest) string {
 	return serving.ProjectModelAction(req)

@@ -55,6 +55,13 @@ func ProjectModelAction(req types.ProjectModelRequest) string {
 	return req.Action
 }
 
+// ProjectModelTarget is the catalog model req acts on (its name; "" asks
+// for the catalog's default), or "" for a model not in the catalog.
+func ProjectModelTarget(req types.ProjectModelRequest) string {
+	entry, _ := CatalogEntry(req.Model)
+	return entry.Name
+}
+
 // ClusterAdminModelWords says what a project model action does not do, and
 // who does it.
 const ClusterAdminModelWords = "A cluster-admin deploys models reached through the inference gateway or with token authentication, on the Environment page's Models tab."

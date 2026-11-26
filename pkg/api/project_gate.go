@@ -122,7 +122,7 @@ var projectActionRoutes = map[string]projectRoute{
 	}, target: func(body []byte) string {
 		var req types.ProjectModelRequest
 		_ = json.Unmarshal(body, &req)
-		return req.Model
+		return cluster.ProjectModelTarget(req)
 	}},
 }
 

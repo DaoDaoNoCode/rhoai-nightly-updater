@@ -43,9 +43,11 @@ export const CLUSTER_ADMIN_MODELS = "A cluster-admin deploys models reached thro
 export const DeployProjectModel: React.FC<{
   project: string;
   catalog: CatalogModel[];
+  /** The models already in the project: setting one up again keeps the image it runs, which the plan does not know. */
+  deployed?: string[];
   onDeploy: (choice: DeployProjectModelChoice) => void;
   onClose: () => void;
-}> = ({ project, catalog, onDeploy, onClose }) => {
+}> = ({ project, catalog, deployed = [], onDeploy, onClose }) => {
   const [model, setModel] = useState(() => (catalog.find((m) => m.default) ?? catalog[0])?.name ?? "");
   const [answer, setAnswer] = useState<{ model: string; exposures: ModelExposures | null; error: ApiError | null }>({ model: "", exposures: null, error: null });
   const [releasedImage, setReleasedImage] = useState(false);
@@ -67,7 +69,7 @@ export const DeployProjectModel: React.FC<{
   const entry = catalog.find((m) => m.name === model);
   const canDeploy = !!internal && setupCap.allowed;
   // The image the plan already resolves to: the choice of the released image is offered only while it would run the preset's.
-  const plan = exposures?.imagePlan;
+  const plan = deployed.includes(model) ? undefined : exposures?.imagePlan;
   const offerReleased = !plan || plan === "preset";
 
   return (

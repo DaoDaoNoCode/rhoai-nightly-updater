@@ -387,17 +387,20 @@ func markToolEmbeddingModels(c *kube.Client, project string, models []types.Play
 	}
 }
 
-// markAddressWithoutPort sets Unusable on the project's own models whose
-// in-cluster address does not connect as KServe reports it
-// (serving.AddressMissesPort): the playground calls the reported address
-// (serving.PlaygroundNoPortNote). The dashboard lists an
+// markAddressWithoutPort sets Unusable on the project's own models that
+// candidate accepts and whose in-cluster address does not connect as
+// KServe reports it (serving.AddressMissesPort): the dashboard's gen-ai
+// backend writes the reported address (plus /v1) into the playground's
+// configuration (serving.PlaygroundNoPortNote). The dashboard lists an
 // LLMInferenceService by its name (odh-dashboard packages/gen-ai/bff
 // token_k8s_client.go: ModelName llmSvc.Name). It reads with c the
-// project's LLMInferenceServices and, for each one whose address names a
-// Service without a port, that Service; nothing when the list has no
-// project model.
-func markAddressWithoutPort(c *kube.Client, project string, models []types.PlaygroundModel) error {
-	if !slices.ContainsFunc(models, func(m types.PlaygroundModel) bool { return m.Source == "namespace" }) {
+// project's LLMInferenceServices and, for each candidate whose address
+// names a Service without a port, that Service. A Service that cannot be
+// read is an *addressUncheckedError (the first; the others are still
+// checked): whether that model connects is not known.
+func markAddressWithoutPort(c *kube.Client, project string, models []types.PlaygroundModel, candidate func(types.PlaygroundModel) bool) error {
+	considered := func(m types.PlaygroundModel) bool { return m.Source == "namespace" && candidate(m) }
+	if !slices.ContainsFunc(models, considered) {
 		return nil
 	}
 	list, err := serving.ListProjectModels(c, project)
@@ -408,16 +411,41 @@ func markAddressWithoutPort(c *kube.Client, project string, models []types.Playg
 	for _, m := range list {
 		byName[m.Metadata.Name] = m
 	}
+	var first error
 	for i, m := range models {
 		obj, ok := byName[m.Name]
-		if m.Source != "namespace" || !ok {
+		if !ok || !considered(m) {
 			continue
 		}
-		if _, misses := serving.ModelInClusterAddress(c, obj); misses {
+		reported := serving.ModelInClusterURL(obj)
+		working, err := serving.ServicePortAddress(c, reported)
+		switch {
+		case err != nil && first == nil:
+			first = &addressUncheckedError{model: m.Name, err: err}
+		case err == nil && serving.AddressMissesPort(reported, working):
 			models[i].Unusable = serving.PlaygroundNoPortNote
 		}
 	}
-	return nil
+	return first
+}
+
+// addressUncheckedError: the Service of model could not be read, so
+// whether the playground can reach the model is not known.
+type addressUncheckedError struct {
+	model string
+	err   error
+}
+
+func (e *addressUncheckedError) Error() string {
+	return fmt.Sprintf("cannot read the Service of model %s: %v", e.model, e.err)
+}
+
+func (e *addressUncheckedError) Unwrap() error { return e.err }
+
+// setUpCandidate: a ready model Set up can add (chat, or an embedding
+// model of known dimension).
+func setUpCandidate(m types.PlaygroundModel) bool {
+	return m.Ready && (m.Chat || m.EmbeddingDimension > 0)
 }
 
 // PlaygroundAlternatives names the models the playground can use when a
@@ -1123,9 +1151,9 @@ func GetPlaygroundStatus(sa, u *kube.Client, project string) (*types.PlaygroundS
 			models, err := api.listProjectModels(project, false)
 			if err == nil {
 				markToolEmbeddingModels(c, project, models)
-				if err := markAddressWithoutPort(c, project, models); err != nil {
-					// Only a note is missing: Set up checks again.
-					slog.Debug("cannot tell which project models the playground can reach", "project", project, "error", err)
+				if err := markAddressWithoutPort(c, project, models, setUpCandidate); err != nil {
+					// Not a block: Set up checks again, and fails closed.
+					kube.LogFactReadFailure("cannot tell which project models the playground can reach", "model addresses", err, "project", project)
 				}
 				models = append(models, listMaaSPlaygroundModels(c)...)
 				if len(models) > playgroundMaxModels {
@@ -1475,8 +1503,19 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 		return stop(msg, code, "models")
 	}
 	markToolEmbeddingModels(p.c, p.project, models)
-	if err := markAddressWithoutPort(p.c, p.project, models); err != nil {
-		return stop(fmt.Sprintf("Cannot tell which models in %s the playground can reach: %v.", p.project, err), kube.ErrorCodeFromK8sErr(err), "model addresses")
+	candidate := setUpCandidate
+	if len(wanted) > 0 {
+		candidate = func(m types.PlaygroundModel) bool {
+			return slices.ContainsFunc(wanted, func(w types.PlaygroundModelRef) bool { return w.Source == m.Source && w.Name == m.Name })
+		}
+	}
+	if err := markAddressWithoutPort(p.c, p.project, models, candidate); err != nil {
+		// The error's text is the API server's: only its status goes out.
+		var unchecked *addressUncheckedError
+		if errors.As(err, &unchecked) {
+			return stop(fmt.Sprintf("Cannot check whether %s in %s is reachable (%s); try again.", unchecked.model, p.project, kube.FactReadProblem(err)), kube.ErrorCodeFromK8sErr(err), "model address unchecked")
+		}
+		return stop(fmt.Sprintf("Cannot read the models of %s (%s); try again.", p.project, kube.FactReadProblem(err)), kube.ErrorCodeFromK8sErr(err), "model addresses")
 	}
 	// The dashboard's install checks only the models it is asked to use
 	// (rhoai-3.6 generateLlamaStackConfig), so only those must be ready.

@@ -24,7 +24,7 @@ import { keptStorage, workbenchSettling, workbenchStatusOf } from "./workbenchSt
 import { ProjectActionButton, ProjectCapabilitiesProvider, ProjectRunPanel, useProjectCapability, useProjectRun, type ProjectRunRequest } from "./projectActions";
 import { FORBIDDEN_FOR_USER_BODY, FORBIDDEN_FOR_USER_TITLE, describeError, isNotForUser } from "../../errors";
 import { EnvStatusLabel, envStatus } from "./resourceStatus";
-import { IDLE, PLAYGROUND_ALTERNATIVES, modelsWithoutPortText, playgroundIn } from "./featureState";
+import { IDLE, modelsWithoutPortText, playgroundIn } from "./featureState";
 import { playgroundSettling } from "./usePlaygroundStatus";
 import { isTerminating, terminalReason } from "./resourceRow";
 import { useResourcePolling } from "./useResourceStatus";
@@ -33,6 +33,9 @@ import { PipelineSample } from "./PipelineSample";
 import { SAMPLE_INFO, sampleLabel, sampleNote } from "./samples";
 import { LinesSkeleton } from "./Loading";
 import { DeployProjectModel } from "./DeployProjectModel";
+
+/** What a user does when the project's only chat models cannot be used by the playground. */
+const ASK_FOR_GATEWAY_MODEL = "Ask a cluster-admin to expose a model through the inference gateway.";
 
 /** What a cluster-admin does on this page for a user who is not one: set up or remove anything. */
 export const ADMIN_SETS_UP = "A cluster-admin sets this up.";
@@ -73,7 +76,10 @@ interface ProjectRead<T> {
   data: T | null;
   error: ApiError | null;
   loading: boolean;
+  /** Read again now, and check quickly again if polling gave up. */
   reload: () => void;
+  /** A part still settling after 10 minutes: polling went back to its slow pace. */
+  gaveUp: boolean;
 }
 
 /**
@@ -100,12 +106,13 @@ function useProjectRead<T>(load: (project: string, signal?: AbortSignal) => Prom
   }, [load, project, latest]);
   useEffect(() => { void fetchNow(); }, [fetchNow, refreshKey]);
   const mine = state.project === project;
-  useResourcePolling(fetchNow, busy || (mine && state.data !== null && settling(state.data)));
+  const polling = useResourcePolling(fetchNow, busy || (mine && state.data !== null && settling(state.data)));
   return {
     data: mine ? state.data : null,
     error: mine ? state.error : null,
     loading: !mine,
-    reload: () => { void fetchNow(); },
+    reload: () => { polling.restart(); void fetchNow(); },
+    gaveUp: polling.gaveUp,
   };
 }
 
@@ -281,7 +288,7 @@ const StoragePart: React.FC<{ project: string; read: ProjectRead<ProjectStorageS
           </Flex>
         </StackItem>
         {!st.managedByTool && <StackItem><Note>Some of these objects were not created by this tool, so it does not change them.</Note></StackItem>}
-        <StackItem><Note>Address in the cluster: <code>{st.endpoint}</code>, bucket <code>{st.bucket}</code>. Its network policy lets in only pods of {project} (such as its workbench and pipeline server) and of RHOAI&apos;s applications namespace (the pipelines operator checks the storage from there); it has no address outside the cluster.</Note></StackItem>
+        <StackItem><Note>Address in the cluster: <code>{st.endpoint}</code>, bucket <code>{st.bucket}</code>. This tool&apos;s network policy lets in only pods of {project} (such as its workbench and pipeline server) and of RHOAI&apos;s applications namespace (the pipelines operator checks the storage from there); it has no address outside the cluster.</Note></StackItem>
         {!st.ready && st.message && <StackItem><Note>{st.message}</Note></StackItem>}
         {st.networkPolicyProblem && <StackItem><Alert variant="warning" isInline isPlain component="div" title="Network policy changed"><Content component="p">{st.networkPolicyProblem}</Content></Alert></StackItem>}
         {(st.missing?.length ?? 0) > 0 && <StackItem><Alert variant="warning" isInline isPlain component="div" title="Objects missing"><Content component="p">Missing: {st.missing?.join(", ")}. Repair makes them again.</Content></Alert></StackItem>}
@@ -422,14 +429,14 @@ const PlaygroundPart: React.FC<{ project: string; read: ProjectRead<PlaygroundSt
           <Note>{hasChat
             ? `No playground in ${project}. Set up asks the RHOAI dashboard for one with the project's ready models.${withoutPort.length > 0 ? ` Left out: ${modelsWithoutPortText(withoutPort)}` : ""}`
             : withoutPort.length > 0
-              ? `No playground in ${project}. ${modelsWithoutPortText(withoutPort)} ${PLAYGROUND_ALTERNATIVES}`
+              ? `No playground in ${project}. ${modelsWithoutPortText(withoutPort)} ${ASK_FOR_GATEWAY_MODEL}`
               : `No playground in ${project}. It needs a ready chat model in the project; add one in the RHOAI dashboard.`}</Note>
         </StackItem>
         {(hasChat || withoutPort.length > 0) && (
           <StackItem>
             <ProjectActionButton project={project} action="playground.setup" busy={busy} variant="primary"
-              // Without a usable chat model Set up chooses itself, and its check says why none can be used.
-              onClick={() => start(`Set up the playground in ${project}`, { kind: "playground", req: { action: "setup", project, models: hasChat ? models.map((m) => ({ name: m.name, source: m.source })) : [] } })}>
+              blockedReason={hasChat ? null : `None of the project's chat models can be used by the playground. ${ASK_FOR_GATEWAY_MODEL}`}
+              onClick={() => start(`Set up the playground in ${project}`, { kind: "playground", req: { action: "setup", project, models: models.map((m) => ({ name: m.name, source: m.source })) } })}>
               Set up playground
             </ProjectActionButton>
           </StackItem>
@@ -645,6 +652,7 @@ const UserProjectParts: React.FC<{ project: string; refreshKey: number; onRunEnd
   const samples = useProjectRead(loadSamples, project, refreshKey, neverSettling, running);
   const workbench = useProjectRead(loadWorkbench, project, refreshKey, workbenchSettling, running);
   const storage = useProjectRead(loadStorage, project, refreshKey, storageSettling, running);
+  const reads = [status, playground, samples, workbench, storage];
   const server = projectServer(status.data, project);
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [choiceChecked, setChoiceChecked] = useState(false);
@@ -660,6 +668,12 @@ const UserProjectParts: React.FC<{ project: string; refreshKey: number; onRunEnd
   return (
     <Stack hasGutter>
       {run && <StackItem><Card><CardBody><ProjectRunPanel run={run} idPrefix="user-env-run" /></CardBody></Card></StackItem>}
+      {reads.some((r) => r.gaveUp) && (
+        <StackItem>
+          <Alert variant="info" title="Stopped checking automatically after 10 minutes" isInline component="p"
+            actionLinks={<AlertActionLink onClick={() => reads.forEach((r) => r.reload())}>Check again</AlertActionLink>} />
+        </StackItem>
+      )}
       <StackItem><StoragePart project={project} read={storage} busy={running} start={start} /></StackItem>
       <StackItem><PipelinesPart project={project} read={status} storage={storage.data} busy={running} start={start} /></StackItem>
       <StackItem><ModelsPart project={project} read={status} busy={running} start={start} onDeploy={() => setDeploying(true)} /></StackItem>
@@ -673,7 +687,7 @@ const UserProjectParts: React.FC<{ project: string; refreshKey: number; onRunEnd
         </StackItem>
       )}
       {deploying && (
-        <DeployProjectModel project={project} catalog={status.data?.modelCatalog ?? []} onClose={() => setDeploying(false)}
+        <DeployProjectModel project={project} catalog={status.data?.modelCatalog ?? []} deployed={(status.data?.models ?? []).map((m) => m.name ?? "")} onClose={() => setDeploying(false)}
           onDeploy={(choice) => { setDeploying(false); startRun(choice.title, { kind: "models", req: choice.req }); }} />
       )}
       {pending && (

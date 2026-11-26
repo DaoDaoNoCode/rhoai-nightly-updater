@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
@@ -517,5 +519,29 @@ func TestProjectModelRollbackEveryWrite(t *testing.T) {
 				t.Fatal("the model is left unrecorded")
 			}
 		})
+	}
+}
+
+// A user's exposures answer says which image a new model runs on a nightly
+// cluster without a mirror: the plan's kind and fixed words, read with the
+// facts client (the user may read neither the Subscription nor the
+// preset), never the preset's repository or registry; a cluster-admin's
+// status keeps the full reason.
+func TestUserImagePlanIsKindAndFixedWords(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.f.putJSON(testSubscription, `{"spec":{"source":"`+rhoai.CatalogName+`"}}`)
+	refuseFactsToTheUser(mc)
+	mc.f.failAs[fakeUserToken+" GET "+testSubscription] = http.StatusForbidden
+	ex, msg, _ := ProjectModelExposures(projectModelUser(mc), "proj", "qwen25-05b-instruct")
+	if msg != "" || ex.ImagePlan != "released" || ex.ImagePlanReason != "This cluster's preset image is not published yet." {
+		t.Fatalf("exposures: %q %+v", msg, ex)
+	}
+	if answer, _ := json.Marshal(ex); strings.Contains(string(answer), "registry.redhat.io") || strings.Contains(string(answer), "vllm-cpu") || strings.Contains(string(answer), "mirror") {
+		t.Errorf("the answer names the image's source: %s", answer)
+	}
+	serving.PlanCache.Purge()
+	st := serving.ModelsStatus(mc.c, rhoai.DSCRead{}, errors.New("not read"), nil, errors.New("not listed"), nil)
+	if st.ImagePlan != "released" || !strings.Contains(st.ImagePlanReason, "registry.redhat.io/rhaii/vllm-cpu-rhel9") {
+		t.Errorf("admin status: %q %q", st.ImagePlan, st.ImagePlanReason)
 	}
 }

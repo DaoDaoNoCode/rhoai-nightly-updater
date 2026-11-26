@@ -112,6 +112,7 @@ func GetProjectStatus(sa, u *Client, project string) (*types.ProjectStatus, erro
 			// Service without its port (serving.WithServicePort), read
 			// with the user's token.
 			s.InternalURL, _ = serving.ModelInClusterAddress(u, m)
+			serving.DropStaleURL(&s, m)
 			st.Models = append(st.Models, s)
 		}
 	}

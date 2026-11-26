@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { UserProjectView } from "./UserProjectView";
-import { PLAYGROUND_ALTERNATIVES } from "./featureState";
 import { projectStatus, stubUserApi } from "../../test/userFixtures";
 import { contract } from "../../test/contract";
 import { jsonResponse } from "../../test/apiStub";
@@ -14,7 +13,7 @@ import type { CatalogModel, ModelExposures, ModelState, PlaygroundStatus, Projec
 // project's confirmations, the deploy dialog's image, and re-reading a
 // part until it settles.
 
-const NO_PORT = "RHOAI's Gen AI playground cannot use it, because KServe reports its address without the port.";
+const NO_PORT = "KServe currently reports its address without the port, so RHOAI's Gen AI playground cannot use it.";
 const SMOL_URL = "https://smollm2-135m-instruct-kserve-workload-svc.team-a.svc.cluster.local:8000";
 
 const smol: ModelState = {
@@ -32,8 +31,8 @@ function playgroundWithoutPort(project: string): PlaygroundStatus {
 afterEach(() => { vi.useRealTimers(); });
 
 describe("a model the playground cannot use", () => {
-  it("shows its in-cluster address, and the Playground card says why and still offers Set up", async () => {
-    const api = stubUserApi({
+  it("shows its in-cluster address, and the Playground card says why and what to ask for, Set up disabled", async () => {
+    stubUserApi({
       "/api/resources/status": () => jsonResponse({ ...projectStatus("team-a"), models: [smol] }),
       "/api/resources/playground": () => jsonResponse(playgroundWithoutPort("team-a")),
     });
@@ -43,12 +42,11 @@ describe("a model the playground cannot use", () => {
     expect(within(models).getByText("(inside the cluster)")).toBeInTheDocument();
 
     const pg = await screen.findByRole("region", { name: "Playground" });
-    expect(await within(pg).findByText(`No playground in team-a. smollm2-135m-instruct: ${NO_PORT} ${PLAYGROUND_ALTERNATIVES}`)).toBeInTheDocument();
+    expect(await within(pg).findByText(`No playground in team-a. smollm2-135m-instruct: ${NO_PORT} Ask a cluster-admin to expose a model through the inference gateway.`)).toBeInTheDocument();
+    expect(within(pg).queryByText(/Models as a Service/)).not.toBeInTheDocument();
     const setUp = within(pg).getByRole("button", { name: "Set up playground" });
-    await waitFor(() => expect(setUp).not.toHaveAttribute("aria-disabled", "true"));
-    fireEvent.click(setUp);
-    // Set up chooses itself: its check says why no model can be used.
-    await waitFor(() => expect(api.bodies["POST /api/resources/playground/stream"]).toEqual([{ action: "setup", project: "team-a", models: [] }]));
+    // Disabled with the reason, once the capabilities are in.
+    await waitFor(() => expect(setUp).toHaveAttribute("aria-disabled", "true"));
   });
 });
 
@@ -102,7 +100,7 @@ function exposures(over: Partial<ModelExposures>): ModelExposures {
 describe("the deploy dialog's image", () => {
   async function open(over: Partial<ModelExposures>) {
     const api = stubUserApi({
-      "/api/resources/status": () => jsonResponse({ ...projectStatus("team-a"), modelCatalog: CATALOG }),
+      "/api/resources/status": () => jsonResponse({ ...projectStatus("team-a"), modelCatalog: CATALOG, models: [] }),
       "/api/resources/models/exposures": () => jsonResponse(exposures(over)),
     });
     render(<UserProjectView project="team-a" refreshKey={0} />);
@@ -119,6 +117,22 @@ describe("the deploy dialog's image", () => {
     expect(within(dialog).queryByRole("checkbox", { name: "Use the newest released Red Hat image" })).not.toBeInTheDocument();
   });
 
+  it("shows no plan for a model already in the project: setting it up again keeps its image", async () => {
+    const api = stubUserApi({
+      "/api/resources/status": () => jsonResponse({ ...projectStatus("team-a"), modelCatalog: CATALOG, models: [{ ...smol, name: "qwen25-05b-instruct" }] }),
+      "/api/resources/models/exposures": () => jsonResponse(exposures({ imagePlan: "released", imagePlanReason: "This cluster's preset image is not published yet." })),
+    });
+    render(<UserProjectView project="team-a" refreshKey={0} />);
+    const models = await screen.findByRole("region", { name: "Models" });
+    const deploy = await within(models).findByRole("button", { name: "Deploy a model" });
+    await waitFor(() => expect(deploy).not.toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(deploy);
+    const dialog = await screen.findByRole("dialog", { name: "Deploy a model in team-a" });
+    await within(dialog).findByText(/Only inside the cluster/);
+    expect(within(dialog).queryByText(/Runtime image:/)).not.toBeInTheDocument();
+    expect(api.calls.some((c) => c.includes("/api/resources/models/exposures"))).toBe(true);
+  });
+
   it("offers the released image while the plan is the preset's", async () => {
     const { dialog } = await open({ imagePlan: "preset" });
     expect(await within(dialog).findByText("Runtime image: the preset's own Red Hat vLLM CPU image.")).toBeInTheDocument();
@@ -127,6 +141,33 @@ describe("the deploy dialog's image", () => {
 });
 
 describe("re-reading a part until it settles", () => {
+  const statusReads = (api: { calls: string[] }) => api.calls.filter((c) => c.startsWith("GET /api/resources/status")).length;
+
+  it("reads a settled part only at the slow idle pace", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const api = stubUserApi({ "/api/resources/status": () => jsonResponse({ ...projectStatus("team-a"), models: [smol] }) });
+    render(<UserProjectView project="team-a" refreshKey={0} />);
+    await screen.findByRole("region", { name: "Models" });
+    await waitFor(() => expect(statusReads(api)).toBe(1));
+    await act(() => vi.advanceTimersByTimeAsync(30_000));
+    expect(statusReads(api)).toBe(1);
+    await act(() => vi.advanceTimersByTimeAsync(16_000));
+    await waitFor(() => expect(statusReads(api)).toBe(2));
+  });
+
+  it("stops checking quickly after 10 minutes and says so, with Check again", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const starting: ModelState = { ...smol, ready: false, message: "Starting" };
+    const api = stubUserApi({ "/api/resources/status": () => jsonResponse({ ...projectStatus("team-a"), models: [starting] }) });
+    render(<UserProjectView project="team-a" refreshKey={0} />);
+    await screen.findByRole("region", { name: "Models" });
+    for (let i = 0; i < 25; i++) await act(() => vi.advanceTimersByTimeAsync(30_000));
+    const note = await screen.findByText("Stopped checking automatically after 10 minutes");
+    const before = statusReads(api);
+    fireEvent.click(within(note.closest(".pf-v6-c-alert") as HTMLElement).getByRole("button", { name: "Check again" }));
+    await waitFor(() => expect(statusReads(api)).toBeGreaterThan(before));
+  });
+
   it("reads the status again while a model starts, without Refresh", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const starting: ModelState = { ...smol, ready: false, message: "Starting" };

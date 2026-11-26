@@ -55,14 +55,22 @@ func ProjectModelExposures(u *kube.Client, project, model string) (*types.ModelE
 		Warning:     "Calls to the in-cluster address are not authenticated: any pod on the cluster whose network can reach the project can use the model."}
 	out := &types.ModelExposures{Project: project, Model: entry.Name, Options: []types.ModelExposureOption{in},
 		Default: ExposureInternal, DefaultReason: ClusterAdminModelWords, Capacity: ModelCapacityFact(u, entry, project)}
-	// The image a deploy runs (the setup's own plan, without the lookup):
-	// the preset and the plan are cluster facts, read with the facts
-	// client; only the plan's kind and reason are given.
+	// The image a new model runs (the setup's own plan, without the
+	// lookup): the preset and the plan are cluster facts, read with the
+	// facts client, and reduced to the plan's kind with fixed words: the
+	// plan's own reason names the preset's repository and the mirrors.
 	if preset := discoverCPUPreset(u.Facts()); preset.problem == "" {
-		plan := statusImagePlan(u.Facts(), preset.image)
-		out.ImagePlan, out.ImagePlanReason = plan.Kind, plan.Reason
+		out.ImagePlan = statusImagePlan(u.Facts(), preset.image).Kind
+		out.ImagePlanReason = userImagePlanReasons[out.ImagePlan]
 	}
 	return out, "", ""
+}
+
+// userImagePlanReasons say why a new model runs its image (ImagePlan's
+// kind), for a project user: no registry, repository or mirror.
+var userImagePlanReasons = map[string]string{
+	"released": "This cluster's preset image is not published yet.",
+	"override": "The updater's configuration names the image.",
 }
 
 // ProjectMaaSRefFact is whether some MaaSModelRef in project, anyone's,

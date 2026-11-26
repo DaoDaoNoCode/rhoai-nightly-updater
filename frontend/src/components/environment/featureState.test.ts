@@ -200,7 +200,7 @@ describe("The S3 storage on its own (its tab and its Overview row)", () => {
 });
 
 describe("playground models the playground cannot use", () => {
-  const note = "RHOAI's Gen AI playground cannot use it, because KServe reports its address without the port.";
+  const note = "KServe currently reports its address without the port, so RHOAI's Gen AI playground cannot use it.";
   const pg = {
     project: "p", items: [],
     models: [

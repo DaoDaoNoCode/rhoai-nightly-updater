@@ -192,14 +192,25 @@ func ModelInClusterURL(m LLMISvcObject) string {
 // it is. "" when the Service cannot be read or names no https port: no
 // address is better than one that does not connect.
 func WithServicePort(c *kube.Client, address string) string {
+	out, _ := ServicePortAddress(c, address)
+	return out
+}
+
+// ServicePortAddress is WithServicePort with the Service's read error: ""
+// and the error when the Service cannot be read, so a check can fail
+// closed; "" and nil when it names no port of the address's scheme. The
+// port is the Service's port named (or with appProtocol) like the
+// address's scheme, or its only port; the scheme's default port (443,
+// 80) leaves the address as it is.
+func ServicePortAddress(c *kube.Client, address string) (string, error) {
 	u, err := url.Parse(address)
 	if address == "" || err != nil || u.Port() != "" || strings.Trim(u.Path, "/") != "" {
-		return address
+		return address, nil
 	}
 	host := strings.TrimSuffix(u.Hostname(), ".cluster.local")
 	labels := strings.Split(host, ".")
 	if len(labels) != 3 || labels[2] != "svc" {
-		return address
+		return address, nil
 	}
 	var svc struct {
 		Spec struct {
@@ -210,12 +221,12 @@ func WithServicePort(c *kube.Client, address string) string {
 			} `json:"ports"`
 		} `json:"spec"`
 	}
-	if c.GetInto(rhoai.NamespacedPath("v1", "services", labels[1], labels[0]), &svc) != nil {
-		return ""
+	if err := c.GetInto(rhoai.NamespacedPath("v1", "services", labels[1], labels[0]), &svc); err != nil {
+		return "", err
 	}
 	port := 0
 	for _, p := range svc.Spec.Ports {
-		if strings.EqualFold(p.AppProtocol, "https") || strings.EqualFold(p.Name, "https") {
+		if strings.EqualFold(p.AppProtocol, u.Scheme) || strings.EqualFold(p.Name, u.Scheme) {
 			port = p.Port
 			break
 		}
@@ -223,25 +234,29 @@ func WithServicePort(c *kube.Client, address string) string {
 	if port == 0 && len(svc.Spec.Ports) == 1 {
 		port = svc.Spec.Ports[0].Port
 	}
+	defaultPort := 443
+	if u.Scheme == "http" {
+		defaultPort = 80
+	}
 	switch port {
 	case 0:
-		return ""
-	case 443:
-		return address
+		return "", nil
+	case defaultPort:
+		return address, nil
 	}
 	u.Host = fmt.Sprintf("%s:%d", u.Hostname(), port)
-	return u.String()
+	return u.String(), nil
 }
 
 // PlaygroundNoPortNote says what a model whose in-cluster address does not
 // connect as KServe reports it (AddressMissesPort) means for RHOAI's Gen AI
-// playground: the dashboard's gen-ai backend calls the reported address as
-// it is, with no lookup of the Service's port (odh-dashboard
-// packages/gen-ai/bff token_k8s_client.go
+// playground: the dashboard's gen-ai backend writes the reported address
+// (plus /v1) into the playground's configuration, with no lookup of the
+// Service's port (odh-dashboard packages/gen-ai/bff token_k8s_client.go
 // extractEndpointFromLLMInferenceService), so its chat hangs (seen live on
-// a model without a route). It says what is observed: once KServe reports
-// the port, AddressMissesPort no longer holds and the note goes.
-const PlaygroundNoPortNote = "RHOAI's Gen AI playground cannot use it, because KServe reports its address without the port."
+// a model without a route). It says what is observed now: once KServe
+// reports the port, AddressMissesPort no longer holds and the note goes.
+const PlaygroundNoPortNote = "KServe currently reports its address without the port, so RHOAI's Gen AI playground cannot use it."
 
 // InternalDescription describes a model reached only inside the cluster,
 // the same for cluster-admins (the Models tab) and project users.
@@ -255,6 +270,16 @@ const InternalDescription = "No outside address. Programs on this cluster (for e
 // names no https port) is not known not to connect.
 func AddressMissesPort(reported, working string) bool {
 	return reported != "" && working != "" && reported != working
+}
+
+// DropStaleURL clears s.URL for a model with no route: KServe keeps
+// status.url from a route it has removed (live, RHOAI 3.6: after a
+// MaaS-only model's unpublish it still named the MaaS route), so such a
+// model has no outside address.
+func DropStaleURL(s *types.ModelState, m LLMISvcObject) {
+	if r := m.Spec.Router; r == nil || r.Route == nil {
+		s.URL = ""
+	}
 }
 
 // ModelInClusterAddress is model m's own in-cluster address as it
@@ -828,12 +853,7 @@ func AddModelRouting(c *kube.Client, s *types.ModelState, m LLMISvcObject, def K
 		s.Warning = strings.TrimSpace(s.Warning + " " + unsafeServedNameWarning)
 	}
 	s.InternalURL, _ = ModelInClusterAddress(c, m)
-	if s.Exposure == ExposureInternal {
-		// KServe keeps status.url from a route it has removed (live, RHOAI
-		// 3.6: after a MaaS-only model's unpublish it still named the MaaS
-		// route): a model with no route has no outside address.
-		s.URL = ""
-	}
+	DropStaleURL(s, m)
 	switch s.Exposure {
 	case ExposureMaaS:
 		s.GatewayAuth = "maas"

@@ -161,11 +161,13 @@ export const ProjectActionButton: React.FC<{
   action: string;
   busy: boolean;
   variant?: "primary" | "secondary" | "danger" | "link";
+  /** Why the action cannot work in the project's current state, after what RBAC says. */
+  blockedReason?: string | null;
   onClick: () => void;
   children: React.ReactNode;
-}> = ({ project, action, busy, variant = "secondary", onClick, children }) => {
+}> = ({ project, action, busy, variant = "secondary", blockedReason, onClick, children }) => {
   const { reason } = useProjectCapability(project, action);
-  const disabledReason = reason ?? (busy ? "Another action of this page is running in this project." : null);
+  const disabledReason = reason ?? blockedReason ?? (busy ? "Another action of this page is running in this project." : null);
   // Link variant blends with text links (e.g. Open in MLflow): inline, without extra padding or muted disabled chrome.
   return <TooltipButton variant={variant} isInline={variant === "link"} size="sm" disabledReason={disabledReason} onClick={onClick}>{children}</TooltipButton>;
 };
