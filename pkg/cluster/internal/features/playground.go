@@ -841,7 +841,7 @@ func setPlaygroundRecord(c *kube.Client, project string, rec *PlaygroundRecord) 
 				if err != nil {
 					return err
 				}
-				if err := record.AdmitUserEntry(c, project, prior, data); err != nil {
+				if err := record.AdmitUserEntryNamed(c, playgroundRecordKey, project, project, prior, data); err != nil {
 					return err
 				}
 			}

@@ -132,7 +132,7 @@ func updateRecord(c *kube.Client, project string, change func(e *Recorded)) erro
 			if err != nil {
 				return err
 			}
-			if err := record.AdmitUserEntry(c, project, prior, data); err != nil {
+			if err := record.AdmitUserEntryNamed(c, RecordKey, recordKey(project), project, prior, data); err != nil {
 				return err
 			}
 		}

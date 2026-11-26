@@ -475,7 +475,7 @@ func updateProjectStorageRecord(c *kube.Client, project string, change func(e *P
 			if err != nil {
 				return err
 			}
-			if err := record.AdmitUserEntryFor(c, ProjectS3RecordKey, project, prior, data); err != nil {
+			if err := record.AdmitUserEntryNamed(c, ProjectS3RecordKey, projectS3RecordKey(project), project, prior, data); err != nil {
 				return err
 			}
 		}

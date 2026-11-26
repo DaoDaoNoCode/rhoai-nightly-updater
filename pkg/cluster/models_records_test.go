@@ -91,6 +91,15 @@ func TestUserRecordBytesCeiling(t *testing.T) {
 	if err := record.AdmitUserEntry(u, "proj", nil, []byte(`{}`)); !errors.As(err, &full) || !strings.Contains(full.Msg, "KiB of 500)") {
 		t.Fatalf("a new entry past the bytes ceiling: %v", err)
 	}
+	// An entry that stays the same user's but grows (a model's token
+	// Secret UID) is checked too.
+	gone0 := userClientOf(c, fakeUserToken)
+	gone0.SetUsername("u-0-" + pad)
+	gone0.SetProjectUser("uid-gone-0")
+	prior := &record.RecordOwner{Project: "gone-0", ProjectUID: "uid-gone-0", By: "u-0-" + pad, ActorRole: record.ActorRoleUser}
+	if err := record.AdmitUserEntryNamed(gone0, "workbenches", "gone-0/"+workbench.Name, "gone-0", prior, []byte(strings.Repeat("y", 1900))); !errors.As(err, &full) {
+		t.Fatalf("a user's entry growing past the budget: %v", err)
+	}
 	admin := userClientOf(c, fakeUserToken)
 	admin.SetUsername("kube:admin")
 	if err := record.AdmitUserEntry(admin, "proj", nil, []byte(`{}`)); err != nil {
@@ -189,4 +198,89 @@ func TestSnapshotWritesKeepAnotherPodsEntry(t *testing.T) {
 	if patches != 2 {
 		t.Errorf("writes: %d, want the conflicting one and its retry", patches)
 	}
+}
+
+// One budget for every user's entry: users fill each of their keys until
+// admission refuses (entry ceilings per class, MaxUserRecordBytes in all,
+// entries of projects that are gone, which the project caps do not count),
+// next to a typical cluster-admin set of records, and the snapshot
+// ConfigMap still fits in 1 MiB.
+func TestUserRecordsFillTheBudgetUnder1MiB(t *testing.T) {
+	f, c := newResourceFake(t)
+	path := "/api/v1/namespaces/" + record.GetActivityNamespace() + "/configmaps/" + record.SnapshotConfigMapName
+	pad := func(n int) string { return strings.Repeat("x", n) }
+	// A typical cluster-admin set: their own entries of the same keys, and
+	// the other records (components snapshot, MaaS, pipeline servers).
+	data := map[string]map[string]json.RawMessage{}
+	admin := func(key, name string, size int) {
+		if data[key] == nil {
+			data[key] = map[string]json.RawMessage{}
+		}
+		data[key][name] = json.RawMessage(fmt.Sprintf(`{"uid":"u","by":"kube:admin","pad":%q}`, pad(size)))
+	}
+	for i := range 50 {
+		admin("workbenches", fmt.Sprintf("admin-%d/nightly-workbench", i), 150)
+		admin("playgrounds", fmt.Sprintf("admin-%d", i), 300)
+		admin("models", fmt.Sprintf("admin-%d/qwen3-1-7b", i), 150)
+		admin("pipelineServers", fmt.Sprintf("admin-%d/dspa", i), 200)
+	}
+	extra := map[string]string{"components": pad(120 << 10), "maas": pad(40 << 10), "subscription": pad(4 << 10)}
+	store := func() {
+		out := map[string]string{}
+		for k, v := range extra {
+			out[k] = v
+		}
+		for k, entries := range data {
+			raw, _ := json.Marshal(entries)
+			out[k] = string(raw)
+		}
+		cm, _ := json.Marshal(map[string]any{"metadata": map[string]any{"name": record.SnapshotConfigMapName}, "data": out})
+		f.putJSON(path, string(cm))
+	}
+	store()
+	keys := map[string]string{"workbenches": "/nightly-workbench", "playgrounds": "", "projectStorages": "/nightly-s3", "models": "/qwen3-1-7b"}
+	full := map[string]bool{}
+	for i := 0; len(full) < len(keys); i++ {
+		for key, suffix := range keys {
+			if full[key] {
+				continue
+			}
+			project := fmt.Sprintf("gone-%s-%d", key, i)
+			u := userClientOf(c, fakeUserToken)
+			u.SetUsername(fmt.Sprintf("user-%s-%d", key, i))
+			u.SetProjectUser("uid-" + project)
+			entry := []byte(fmt.Sprintf(`{"uid":"u","by":"user-%s-%d","actorRole":"user","projectUID":"uid-%s","pad":%q}`, key, i, project, pad(850)))
+			var refused *record.RecordsFullError
+			switch err := record.AdmitUserEntryNamed(u, key, project+suffix, project, nil, entry); {
+			case errors.As(err, &refused):
+				full[key] = true
+			case err != nil:
+				t.Fatal(err)
+			default:
+				if data[key] == nil {
+					data[key] = map[string]json.RawMessage{}
+				}
+				data[key][project+suffix] = entry
+				store()
+			}
+		}
+	}
+	owners, err := record.ReadRecordOwners(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	users := 0
+	for _, o := range owners {
+		if o.ActorRole == record.ActorRoleUser {
+			users += o.Bytes
+		}
+	}
+	if users > record.MaxUserRecordBytes {
+		t.Errorf("users' entries take %d bytes, more than the budget %d", users, record.MaxUserRecordBytes)
+	}
+	cm, _ := json.Marshal(f.get(path))
+	if len(cm) >= 1<<20 {
+		t.Errorf("the snapshot ConfigMap takes %d bytes, 1 MiB or more", len(cm))
+	}
+	t.Logf("users' entries %d KiB, ConfigMap %d KiB", users>>10, len(cm)>>10)
 }

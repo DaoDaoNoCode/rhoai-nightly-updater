@@ -134,7 +134,7 @@ func recordModel(c *kube.Client, meta kube.ObjectMeta) error {
 			if err != nil {
 				return err
 			}
-			if err := record.AdmitUserEntry(c, meta.Namespace, prior, data); err != nil {
+			if err := record.AdmitUserEntryNamed(c, ModelsRecordKey, key, meta.Namespace, prior, data); err != nil {
 				return err
 			}
 		}
@@ -154,7 +154,19 @@ func recordTokenSecret(c *kube.Client, project, name, uid string) error {
 		if !ok {
 			return fmt.Errorf("record this tool's models: %s/%s is not recorded", project, name)
 		}
+		prior := record.RecordOwner{Project: project, ProjectUID: e.ProjectUID, By: e.By, ActorRole: e.ActorRole}
 		e.TokenSecretUID = uid
+		// The entry grows by the Secret's UID: a user's is checked against
+		// the users' byte budget too.
+		if e.ActorRole == record.ActorRoleUser {
+			data, err := json.Marshal(e)
+			if err != nil {
+				return err
+			}
+			if err := record.AdmitUserEntryNamed(c, ModelsRecordKey, ModelRecordKey(project, name), project, &prior, data); err != nil {
+				return err
+			}
+		}
 		rec[ModelRecordKey(project, name)] = e
 		return WriteModelsRecord(c, rec)
 	})
@@ -238,7 +250,7 @@ func recordCapRefusal(c *kube.Client, rec ModelsRecord, project, name string) (s
 	if e, has := rec[ModelRecordKey(project, name)]; has {
 		prior = &record.RecordOwner{Project: project, ProjectUID: e.ProjectUID, By: e.By, ActorRole: e.ActorRole}
 	}
-	if err := record.AdmitUserEntry(c, project, prior, nil); err != nil {
+	if err := record.AdmitUserEntryNamed(c, ModelsRecordKey, ModelRecordKey(project, name), project, prior, nil); err != nil {
 		return record.ErrorText(c, err), record.ErrorCode(err)
 	}
 	return "", ""
