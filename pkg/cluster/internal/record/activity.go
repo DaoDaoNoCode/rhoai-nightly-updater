@@ -47,8 +47,21 @@ const (
 	MaxActivityDetail = 1024
 )
 
-// Retention per category, so frequent Dashboard Dev changes do not evict
-// the operator history. At most 50+30+20+20+20+20 = 160 entries are kept.
+// The users' bucket (the non-admin design, decision D6): the entries of
+// actions run by signed-in users who are not cluster-admins (actorRole
+// "user", project actions) are kept apart from the cluster-admins'. At most
+// MaxUserActivityEntries of them are kept, and at most
+// MaxUserActivityEntriesPerUser of one user's (the newest), and they are
+// trimmed first when the log is too large. So users cannot push the
+// admins' history out, which keeps its retention per category.
+const (
+	MaxUserActivityEntries        = 40
+	MaxUserActivityEntriesPerUser = 5
+)
+
+// Retention per category of the cluster-admins' entries, so frequent
+// Dashboard Dev changes do not evict the operator history. At most
+// 50+30+20+20+20+20 = 160 entries are kept, plus the users' bucket.
 var ActivityRetention = map[string]int{
 	"operator":       50,
 	"dashboard-dev":  30,
@@ -179,8 +192,17 @@ func activityBuild(detail string) string {
 	}
 }
 
-// DescribeActivity fills the read-time fields of an entry.
+// DescribeActivity fills the read-time fields of an entry. An entry
+// written before entries had a scope and an actorRole reads as a
+// cluster-admin's cluster action: before project actions, only
+// cluster-admins changed anything through the updater.
 func DescribeActivity(e *types.ActivityEntry) {
+	if e.Scope == nil {
+		e.Scope = &types.ActivityScope{Kind: types.ActivityScopeCluster}
+	}
+	if e.ActorRole == "" {
+		e.ActorRole = ActorRoleAdmin
+	}
 	e.Action = currentActivityAction(e.Action)
 	e.Category = ActivityCategory(e.Action)
 	if l, ok := ActivityFailedLabels[e.Action]; ok && !e.Success {
@@ -195,12 +217,33 @@ func DescribeActivity(e *types.ActivityEntry) {
 	}
 }
 
-// TrimActivity keeps the newest entries of each category within its
-// retention and the whole log within maxActivityBytes, preserving order.
+// userActivity reports whether e is in the users' bucket: an entry of a
+// user who is not a cluster-admin. An entry without an actorRole is a
+// cluster-admin's (DescribeActivity).
+func userActivity(e types.ActivityEntry) bool {
+	return e.ActorRole == ActorRoleUser
+}
+
+// TrimActivity keeps, preserving order, the newest of the users' entries
+// within their bucket (MaxUserActivityEntries in total, at most
+// MaxUserActivityEntriesPerUser each), the newest of the cluster-admins'
+// entries of each category within its retention, and the whole log within
+// MaxActivityBytes: the users' entries are dropped first, oldest first,
+// then the oldest of the rest.
 func TrimActivity(entries []types.ActivityEntry) []types.ActivityEntry {
 	counts := map[string]int{}
+	perUser := map[string]int{}
+	users := 0
 	keep := make([]bool, len(entries))
 	for i := len(entries) - 1; i >= 0; i-- {
+		if e := entries[i]; userActivity(e) {
+			if users < MaxUserActivityEntries && perUser[e.User] < MaxUserActivityEntriesPerUser {
+				users++
+				perUser[e.User]++
+				keep[i] = true
+			}
+			continue
+		}
 		cat := ActivityCategory(entries[i].Action)
 		limit, ok := ActivityRetention[cat]
 		if !ok {
@@ -222,7 +265,14 @@ func TrimActivity(entries []types.ActivityEntry) []types.ActivityEntry {
 		if err != nil || len(data) <= MaxActivityBytes {
 			break
 		}
-		out = out[1:]
+		drop := 0
+		for i, e := range out {
+			if userActivity(e) {
+				drop = i
+				break
+			}
+		}
+		out = append(out[:drop:drop], out[drop+1:]...)
 	}
 	return out
 }
@@ -244,7 +294,11 @@ func GetActivityNamespace() string {
 // a jittered backoff (activityBackoff, waited on the cluster packages'
 // clock).
 // It never returns an error to callers — failures are logged as warnings.
+//
+// The entry's scope and actorRole come from c when the caller did not set
+// them (stampActivity).
 func Activity(c *kube.Client, entry types.ActivityEntry) {
+	entry = stampActivity(c, entry)
 	// Not cancelled with the request (for example an SSE connection drop),
 	// but bounded: activityWriteTimeout for the whole call, retries
 	// included, and never past the operation's shared post-deadline end
@@ -277,6 +331,39 @@ func Action(c *kube.Client, action, detail string, success bool) {
 		Action:    action,
 		Detail:    detail,
 		Success:   success,
+	})
+}
+
+// stampActivity fills what an entry says about the operation of c that
+// wrote it, unless the caller set it: its actorRole (ActorRole: the
+// project actions' gate marks a user's client) and its scope, the project
+// of a project action's context (WithActionScope) or the cluster.
+func stampActivity(c *kube.Client, e types.ActivityEntry) types.ActivityEntry {
+	if c == nil {
+		return e
+	}
+	if e.ActorRole == "" {
+		e.ActorRole = ActorRole(c)
+	}
+	if e.Scope == nil {
+		e.Scope = &types.ActivityScope{Kind: types.ActivityScopeCluster}
+		if project, uid := ActionScope(c); project != "" {
+			e.Scope = &types.ActivityScope{Kind: types.ActivityScopeProject, Project: project, ProjectUID: uid}
+		}
+	}
+	return e
+}
+
+// Cancelled records the action of c's user as failed because it was
+// cancelled at a safe point: reason "Cancelled by you" or "Cancelled by a
+// cluster-admin" (ActionCancelledError.Reason).
+func Cancelled(c *kube.Client, action, detail string, cancel *ActionCancelledError) {
+	Activity(c, types.ActivityEntry{
+		Timestamp: kube.NowRFC3339(),
+		User:      kube.GetUser(c),
+		Action:    action,
+		Detail:    detail,
+		Reason:    cancel.Reason(),
 	})
 }
 

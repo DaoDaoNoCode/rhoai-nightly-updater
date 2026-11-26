@@ -392,6 +392,8 @@ func withProjectMutationAuth(route projectRoute, fn func(c *cluster.Client, w ht
 		defer cancel()
 		opContext, cancelOp := context.WithCancelCause(opContext)
 		defer cancelOp(nil)
+		// Its activity entries are scoped to the project, whoever runs it.
+		opContext = cluster.WithActionScope(opContext, project, uid)
 		changesContext, changes := cluster.TrackChanges(opContext)
 		bookkeeper := cluster.NewClientWithContext(opContext, saToken)
 		bookkeeper.SetUsername(username)

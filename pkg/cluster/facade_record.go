@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"context"
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
@@ -17,7 +18,19 @@ type (
 	LeaseOwner = record.LeaseOwner
 	// LockRenewal is record.LockRenewal.
 	LockRenewal = record.LockRenewal
+	// ActionCancelledError is record.ActionCancelledError.
+	ActionCancelledError = record.ActionCancelledError
 )
+
+// WithActionScope is record.WithActionScope.
+func WithActionScope(ctx context.Context, project, uid string) context.Context {
+	return record.WithActionScope(ctx, project, uid)
+}
+
+// WithCancelCheck is record.WithCancelCheck.
+func WithCancelCheck(ctx context.Context, check func() *ActionCancelledError) context.Context {
+	return record.WithCancelCheck(ctx, check)
+}
 
 // The operation locks (see record).
 const (
