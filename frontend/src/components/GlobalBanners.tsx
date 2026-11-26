@@ -6,11 +6,18 @@ import {
   AlertGroup,
   Button,
   ClipboardCopy,
+  Content,
+  Modal,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
+  ModalVariant,
 } from "@patternfly/react-core";
 import InProgressIcon from "@patternfly/react-icons/dist/esm/icons/in-progress-icon";
 import { useLocation, useNavigate } from "react-router-dom";
 import type { DashboardOverride, InterruptedOperation, ServerOperation } from "../types";
-import { useClusterStatus, useOperation } from "../state/AppState";
+import { useClusterStatus, useOperation, type ProjectActionNotice } from "../state/AppState";
+import { cancelOperation, toApiError } from "../services/api";
 import {
   NO_PERMISSION_REASON,
   describeServerOperation,
@@ -19,6 +26,7 @@ import {
   usePermissions,
   useRole,
   useSessionExpired,
+  useSignedInUser,
   useUpdateCheck,
   useVersion,
 } from "../state/AppInfo";
@@ -95,7 +103,14 @@ const BuildId: React.FC<{ target: string }> = ({ target }) => (
   <code className="pf-v6-u-text-nowrap" title={target}>{shortTarget(target)}</code>
 );
 
-function useOperationNotice(onStatusPage: boolean, pathname = ""): Notice | null {
+/** This tab's own project action, when it runs one (it holds at most one: one per user). */
+interface OwnProjectAction {
+  action: ProjectActionNotice;
+  cancel: React.ReactNode;
+  note: React.ReactNode;
+}
+
+function useOperationNotice(onStatusPage: boolean, pathname = "", own: OwnProjectAction | null = null): Notice | null {
   const { run, server } = useOperation();
   const { status } = useClusterStatus();
   const navigate = useNavigate();
@@ -130,18 +145,23 @@ function useOperationNotice(onStatusPage: boolean, pathname = ""): Notice | null
       ),
     };
   }
-  if (background) return { key: "operation", priority: 1, element: <BackgroundRunAlert run={background} /> };
+  // This tab's run of the Environment page; when it is the user's project action, its Cancel is here (one banner).
+  if (background) return { key: "operation", priority: 1, element: <BackgroundRunAlert run={background} projectAction={!!own} cancel={own?.cancel} note={own?.note} /> };
   if (!server.inProgress) return null;
   if (server.brief) {
-    // A user who is not a cluster-admin: when it started and what it is, never who runs it.
+    // A user who is not a cluster-admin: when a cluster operation started, never who runs it or what.
     const clock = formatClockTime(server.brief.startedAt);
     return {
       key: "operation",
       priority: 1,
       element: (
-        <Alert variant="info" isInline component="p" customIcon={<InProgressIcon />} title={clock ? `An update is running since ${clock}` : "An update is running"}>
-          {server.brief.label ? `${sentence(server.brief.label)} ` : ""}What this page shows may change until it finishes.
-        </Alert>
+        <Alert
+          variant="info"
+          isInline
+          component="p"
+          customIcon={<InProgressIcon />}
+          title={`A cluster operation is running${clock ? ` since ${clock}` : ""}. Project actions can start when it ends.`}
+        />
       ),
     };
   }
@@ -190,6 +210,89 @@ function useOperationNotice(onStatusPage: boolean, pathname = ""): Notice | null
       </Alert>
     ),
   };
+}
+
+/** The banner title of a running project action, by who reads it (the non-admin design, section 6). */
+export function projectActionTitle(a: ProjectActionNotice, admin: boolean, mine: boolean): string {
+  const clock = formatClockTime(a.startedAt);
+  if (mine) return `Your action (${a.label}) in project ${a.project} is running${clock ? ` since ${clock}` : ""}.`;
+  if (admin) return `${a.label} in project ${a.project}, started by ${a.user || "someone"}${clock ? ` at ${clock}` : ""}.`;
+  return `An action (${a.label}) is running in project ${a.project}${clock ? ` since ${clock}` : ""}.`;
+}
+
+/** What a cancel request did, by action ID: in flight, or why it failed. */
+type CancelState = Record<string, { pending?: boolean; error?: string }>;
+
+/**
+ * The running project actions' notices and their Cancel: a cluster-admin
+ * sees every one with who started it; a user the ones in their own
+ * projects (the backend filters them), never who runs another person's.
+ * Cancel asks after a confirmation that says what the action leaves; it is
+ * a request the action takes before its next step. The tab's own action
+ * (it runs the background run) shows in the run's banner instead (own).
+ */
+function useProjectActions(): { notices: Notice[]; own: OwnProjectAction | null; modal: React.ReactElement | null } {
+  const { server, refreshServerOperation } = useOperation();
+  const admin = useRole() === "admin";
+  const me = useSignedInUser();
+  const background = useBackgroundRun();
+  const [asking, setAsking] = useState<ProjectActionNotice | null>(null);
+  const [state, setState] = useState<CancelState>({});
+  const setFor = (id: string, s: { pending?: boolean; error?: string }) => setState((all) => ({ ...all, [id]: s }));
+  const send = (a: ProjectActionNotice) => {
+    const id = a.id as string;
+    setAsking(null);
+    setFor(id, { pending: true });
+    cancelOperation(id)
+      .then(() => setFor(id, {}))
+      .catch((e: unknown) => setFor(id, { error: toApiError(e).message }))
+      .finally(() => refreshServerOperation());
+  };
+  const isMine = (a: ProjectActionNotice) => a.own || (admin && !!me && a.user === me);
+  const cancelLink = (a: ProjectActionNotice) => {
+    if (!a.id || !a.cancellable || a.cancelling) return undefined;
+    return <AlertActionLink onClick={() => setAsking(a)} isDisabled={!!state[a.id]?.pending}>Cancel</AlertActionLink>;
+  };
+  const note = (a: ProjectActionNotice) => {
+    const error = a.id ? state[a.id]?.error : undefined;
+    return <>
+      {a.cancelling && "Cancel requested: it stops before its next step. If it finishes first, it is recorded as done."}
+      {error && sentence(error)}
+    </>;
+  };
+  let own: OwnProjectAction | null = null;
+  const notices: Notice[] = [];
+  for (const a of server.projectActions ?? []) {
+    const mine = isMine(a);
+    if (mine && background && !own) {
+      own = { action: a, cancel: cancelLink(a), note: note(a) };
+      continue;
+    }
+    notices.push({
+      key: `project-action-${a.id ?? `${a.project}-${a.startedAt}`}`,
+      // Other people's actions rank below the permission and interrupted notices.
+      priority: mine ? 1 : 8.5,
+      element: (
+        <Alert variant="info" isInline component="p" customIcon={<InProgressIcon />} title={projectActionTitle(a, admin, mine)} actionLinks={cancelLink(a)}>
+          {note(a)}
+        </Alert>
+      ),
+    });
+  }
+  const modal = asking && (
+    <Modal variant={ModalVariant.small} isOpen aria-labelledby="cancel-project-action-title" onClose={() => setAsking(null)}>
+      <ModalHeader title={`Cancel ${asking.label} in project ${asking.project}?`} labelId="cancel-project-action-title" />
+      <ModalBody>
+        <Content component="p">{asking.cancelNote || "It stops before its next step."}</Content>
+        <Content component="p">If it finishes before its next step, it is recorded as done.</Content>
+      </ModalBody>
+      <ModalFooter>
+        <Button variant="primary" onClick={() => send(asking)}>Cancel action</Button>
+        <Button variant="link" onClick={() => setAsking(null)}>Keep it running</Button>
+      </ModalFooter>
+    </Modal>
+  );
+  return { notices, own, modal: modal || null };
 }
 
 function useInterruptedNotice(pathname: string): Notice | null {
@@ -484,8 +587,10 @@ function useReconcileTimeoutNotice(): Notice | null {
 export const GlobalBanners: React.FC = () => {
   const { pathname } = useLocation();
   const [showAll, setShowAll] = useState(false);
+  const projectActions = useProjectActions();
   const notices = [
-    useOperationNotice(pathname === "/", pathname),
+    useOperationNotice(pathname === "/", pathname, projectActions.own),
+    ...projectActions.notices,
     usePermissionNotice(),
     useInterruptedNotice(pathname),
     useReconcileTimeoutNotice(),
@@ -493,7 +598,7 @@ export const GlobalBanners: React.FC = () => {
     useTemplateNotice(),
     useUpdateNotice(),
   ].filter((n): n is Notice => n !== null).sort((a, b) => a.priority - b.priority);
-  if (notices.length === 0) return null;
+  if (notices.length === 0) return projectActions.modal;
   const hidden = showAll ? 0 : Math.max(0, notices.length - MAX_VISIBLE_NOTICES);
   const visible = hidden > 0 ? notices.slice(0, MAX_VISIBLE_NOTICES) : notices;
   const extra = notices.length - MAX_VISIBLE_NOTICES;
@@ -502,6 +607,7 @@ export const GlobalBanners: React.FC = () => {
       <AlertGroup aria-label="Notices">
         {visible.map((n) => React.cloneElement(n.element, { key: n.key }))}
       </AlertGroup>
+      {projectActions.modal}
       {extra > 0 && (
         // A plain link: AlertGroup's overflow button is styled for toast groups.
         <Button variant="link" isInline className="pf-v6-u-mt-sm" onClick={() => setShowAll(!showAll)} aria-expanded={showAll}>

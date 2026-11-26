@@ -17,6 +17,16 @@ export function getOperation(signal?: AbortSignal): Promise<OperationStatusRespo
   return request('/api/operation', { signal });
 }
 
+/**
+ * Ask a running project action to stop before its next step (its starter
+ * or a cluster-admin). 202: the request is recorded; an action that ends
+ * first is recorded as done. 404 not_found for an action that does not run
+ * here, cannot be cancelled, or that the user may not cancel.
+ */
+export function cancelOperation(id: string): Promise<{ cancelRequested: boolean; message?: string }> {
+  return request('/api/operation/cancel', { method: 'POST', body: JSON.stringify({ id }) });
+}
+
 /** True for the short answer GET /api/operation gives a user who is not a cluster-admin. */
 export function isUserOperation(res: OperationStatusResponse | UserOperationStatus): res is UserOperationStatus {
   return typeof (res as Partial<OperationStatusResponse>).inProgress !== 'boolean' && typeof (res as Partial<UserOperationStatus>).running === 'boolean';

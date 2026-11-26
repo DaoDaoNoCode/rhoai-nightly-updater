@@ -523,10 +523,12 @@ export interface UserOperationEntry {
   startedAt: string;
   /** A project action's project. */
   project?: string;
-  /** The user's own action: only then is id set, and cancellable and cancelling may be. */
+  /** The user's own action: only then is id set, and the cancel fields may be. */
   own?: boolean;
   id?: string;
   cancellable?: boolean;
+  /** What a cancel leaves (the action's own words). */
+  cancelNote?: string;
   cancelling?: boolean;
 }
 
@@ -1500,6 +1502,12 @@ export interface ServerOperation {
   /** Set on the entries of OperationStatusResponse.operations only. */
   scope?: 'cluster' | 'project';
   interrupted?: boolean;
+  /** A project action of the answering updater pod that checks a cancel request at safe points (POST /api/operation/cancel). */
+  cancellable?: boolean;
+  /** What a cancel leaves (the action's own words). */
+  cancelNote?: string;
+  /** A cancel was requested; the action stops before its next step unless it ends first. */
+  cancelling?: boolean;
 }
 
 /** An operation an updater pod started and never finished (its pod stopped). */

@@ -118,7 +118,12 @@ function useNow(): number {
 const midSentence = (title: string) => (/^[A-Z][a-z]/.test(title) ? title.charAt(0).toLowerCase() + title.slice(1) : title);
 
 /** The operation alert while a run of this tab goes on with its dialog closed. */
-export const BackgroundRunAlert: React.FC<{ run: BackgroundRun }> = ({ run }) => {
+/**
+ * The alert of this tab's background run. projectAction: the run is a
+ * project action (its server entry), which holds its project's lock, not
+ * the cluster's; cancel is its Cancel action, when it can be cancelled.
+ */
+export const BackgroundRunAlert: React.FC<{ run: BackgroundRun; projectAction?: boolean; cancel?: React.ReactNode; note?: React.ReactNode }> = ({ run, projectAction, cancel, note }) => {
   const now = useNow();
   // A one-step run's step is the run itself: its name says it.
   const step: React.ReactNode = !run.step ? ": starting" : run.step.count > 1 ? <>: step {run.step.index} of {run.step.count}, {withIds(midSentence(run.step.title))}</> : "";
@@ -129,9 +134,12 @@ export const BackgroundRunAlert: React.FC<{ run: BackgroundRun }> = ({ run }) =>
       component="p"
       customIcon={<InProgressIcon />}
       title={<>{run.title} is running{step} ({formatElapsed(run.startedAt, now)})</>}
-      actionLinks={<ViewProgressLink onOpen={run.open} />}
+      actionLinks={<><ViewProgressLink onOpen={run.open} />{cancel}</>}
     >
-      Closing its dialog does not stop it. Cluster changes from this tool are disabled until it finishes.
+      {projectAction
+        ? "Closing its dialog does not stop it. Your next project action can start when it ends."
+        : "Closing its dialog does not stop it. Cluster changes from this tool are disabled until it finishes."}
+      {note && <> {note}</>}
     </Alert>
   );
 };
