@@ -195,7 +195,9 @@ describe("the banners of running project actions", () => {
 
     // Cancel asks first, saying what the action leaves; "Keep it running" sends nothing.
     fireEvent.click(within(alertOf(own)).getByRole("button", { name: "Cancel" }));
-    let dialog = await screen.findByRole("dialog", { name: "Cancel Set up the workbench in project team-b?" });
+    let dialog = await screen.findByRole("dialog", { name: "Cancel the action?" });
+    expect(within(dialog).getByText("Set up the workbench")).toBeInTheDocument();
+    expect(within(dialog).getByText("team-b")).toBeInTheDocument();
     expect(within(dialog).getByText(note)).toBeInTheDocument();
     expect(within(dialog).getByText("If it finishes before its next step, it is recorded as done.")).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Keep it running" }));
@@ -204,7 +206,7 @@ describe("the banners of running project actions", () => {
 
     const before = polls;
     fireEvent.click(within(alertOf(own)).getByRole("button", { name: "Cancel" }));
-    dialog = await screen.findByRole("dialog", { name: /^Cancel Set up the workbench/ });
+    dialog = await screen.findByRole("dialog", { name: "Cancel the action?" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel action" }));
     await settleApps();
     await waitFor(() => expect(api.bodies["POST /api/operation/cancel"]).toEqual([{ id: "op-own" }]));

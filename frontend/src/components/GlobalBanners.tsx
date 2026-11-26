@@ -281,8 +281,9 @@ function useProjectActions(): { notices: Notice[]; own: OwnProjectAction | null;
   }
   const modal = asking && (
     <Modal variant={ModalVariant.small} isOpen aria-labelledby="cancel-project-action-title" onClose={() => setAsking(null)}>
-      <ModalHeader title={`Cancel ${asking.label} in project ${asking.project}?`} labelId="cancel-project-action-title" />
+      <ModalHeader title="Cancel the action?" labelId="cancel-project-action-title" />
       <ModalBody>
+        <Content component="p"><strong>{asking.label}</strong> in project <code>{asking.project}</code>.</Content>
         <Content component="p">{asking.cancelNote || "It stops before its next step."}</Content>
         <Content component="p">If it finishes before its next step, it is recorded as done.</Content>
       </ModalBody>
