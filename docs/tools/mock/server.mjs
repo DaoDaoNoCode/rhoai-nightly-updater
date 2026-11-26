@@ -883,6 +883,11 @@ function userRead(res, key, u) {
     return send(200, op ? { running: true, label: op.label, startedAt: op.startedAt } : { running: false, label: "", startedAt: "" });
   }
   if (key === "GET /api/resources/projects") return send(200, { projects: world.userProjects ?? [] });
+  if (key === "GET /api/resources/projects/capabilities") {
+    const project = u.searchParams.get("project") || "";
+    if (!(world.userProjects ?? []).includes(project)) return send(403, { error: `Project ${project} is not one of your data science projects.`, errorCode: "forbidden_for_user" });
+    return send(200, F.userCapabilities(project));
+  }
   if (key === "GET /api/resources/status") {
     const project = u.searchParams.get("project");
     if (!project) return adminOnly();

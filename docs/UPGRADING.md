@@ -587,7 +587,7 @@ What users notice:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/page-user-environment-dark.png">
-  <img src="images/page-user-environment-light.png" alt="Environment for a user who is not a cluster-admin: A cluster-admin sets up the shared parts; the project dev-project with its pipeline server dspa Ready, a model, the Gen AI playground, the MLflow sample data and the sample pipeline" width="640">
+  <img src="images/page-user-environment-light.png" alt="Environment for a user who is not a cluster-admin: A cluster-admin sets up the shared parts; the project dev-project with its pipeline server dspa Ready, a model, Set up workbench, the Gen AI playground with Delete, the MLflow sample data with Add and Remove, and the sample pipeline" width="640">
 </picture>
 
 <picture>
