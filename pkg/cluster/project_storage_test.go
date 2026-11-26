@@ -728,3 +728,23 @@ func TestProjectStorageRollbackKeepsTheFenceWhileThePodMayRun(t *testing.T) {
 		t.Fatalf("%+v", res)
 	}
 }
+
+// Repair never makes a new key while a pipeline server uses the storage:
+// its copies would keep the old one. It says to set the pipeline server
+// up again, and changes nothing.
+func TestProjectStorageRepairNeverRotatesAKeyInUse(t *testing.T) {
+	f, u := newProjectStorageEnv(t)
+	if res := runPS(t, u, types.ProjectStorageRequest{Project: "proj", Action: "setup"}); !res.Success {
+		t.Fatalf("%+v", res)
+	}
+	if res := runPP(t, u, types.ProjectPipelineServerRequest{Project: "proj", Action: "setup"}); !res.Success {
+		t.Fatalf("%+v", res)
+	}
+	secret := psSecrets + "/" + storage.ProjectS3Secret
+	f.put(secret, mergeMeta(f.get(secret), map[string]any{"data": map[string]any{}}))
+	before := len(writesOf(f))
+	res := runPS(t, u, types.ProjectStorageRequest{Project: "proj", Action: "repair"})
+	if res.Success || res.ErrorCode != storage.ErrorCodeProjectStorageInUse || !strings.Contains(res.Message, "set the pipeline server up again") || len(writesOf(f)) != before {
+		t.Fatalf("%+v %v", res, writesOf(f)[before:])
+	}
+}

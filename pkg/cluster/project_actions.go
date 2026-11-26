@@ -271,6 +271,8 @@ var (
 	// delete remove the NetworkPolicy only once none is left.
 	projectS3Pods  = scanned("list", "", "pods", "", ScopeProject)
 	projectS3Apply = joinRequests(projectS3Requests("create", "get", "patch", "delete"), []ProjectRequest{projectS3Pods,
+		// Whether a pipeline server uses it, before a new key is made.
+		scanned("list", "datasciencepipelinesapplications.opendatahub.io", "datasciencepipelinesapplications", "", ScopeProject),
 		scanned("create", "", "persistentvolumeclaims", "", ScopeProject),
 		scanned("create", "", "secrets", "", ScopeProject),
 		scanned("create", "networking.k8s.io", "networkpolicies", "", ScopeProject),

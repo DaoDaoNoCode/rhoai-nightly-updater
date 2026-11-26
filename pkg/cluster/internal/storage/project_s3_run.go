@@ -212,8 +212,18 @@ func (r *projectS3Run) apply(repair bool) (*types.OperationResponse, error) {
 			return r.fail(ProjectS3StepCheck, fmt.Sprintf("Cannot make a key: %v. Nothing was changed.", err), "internal", "key generation failed")
 		}
 		// A key the storage already serves stays: only what is missing
-		// is made (a Secret without a key, or the first setup).
+		// is made (a Secret without a key, or the first setup). A new key
+		// while a pipeline server uses the storage would leave its copies
+		// (nightly-dspa-s3, nightly-s3-connection, and ds-pipeline-config
+		// in workbenches) on the old one: refused, never rotated silently.
 		if keys.AccessKey == "" || keys.SecretKey == "" {
+			users, err := projectStorageUsers(c, project)
+			if err != nil {
+				return r.fail(ProjectS3StepCheck, fmt.Sprintf("The storage's key is missing and a new one is needed, but which pipeline servers use the storage cannot be read: %v. Nothing was changed.", err), kube.ErrorCodeFromK8sErr(err), "pipeline servers unreadable")
+			}
+			if len(users) > 0 {
+				return r.fail(ProjectS3StepCheck, fmt.Sprintf("Secret %s in %s holds no S3 key, so %s needs a new one, but pipeline server %s still holds the old key. Delete the pipeline server, run %s again, then set the pipeline server up again (it gets the new key). Nothing was changed.", ProjectS3Secret, project, what, strings.Join(users, ", "), what), ErrorCodeProjectStorageInUse, "new key while in use")
+			}
 			keys.AccessKey, keys.SecretKey = fresh.AccessKey, fresh.SecretKey
 		}
 		keys.AdminPassword = kube.FirstNonEmpty(keys.AdminPassword, fresh.AdminPassword)
