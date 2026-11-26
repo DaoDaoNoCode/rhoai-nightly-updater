@@ -543,7 +543,7 @@ func queueUsers(c *kube.Client, o toolObject, rec Record) (users []string, leavi
 			if w.Spec.QueueName != LocalQueueName || sample {
 				continue
 			}
-			if pods == nil && len(w.Metadata.OwnerReferences) > 0 && !w.Metadata.Terminating() {
+			if pods == nil && podOwned(w) {
 				if pods, err = listPodMetas(c, rec.Project); err != nil {
 					return nil, 0, err
 				}
@@ -579,16 +579,33 @@ func queueUsers(c *kube.Client, o toolObject, rec Record) (users []string, leavi
 	return users, leaving, nil
 }
 
+// podOwned reports whether only Pods own Workload w and it is not being
+// deleted itself: the one case workloadLeaving needs the project's Pods for.
+func podOwned(w Workload) bool {
+	if w.Metadata.Terminating() || len(w.Metadata.OwnerReferences) == 0 {
+		return false
+	}
+	for _, o := range w.Metadata.OwnerReferences {
+		if o.Kind != "Pod" {
+			return false
+		}
+	}
+	return true
+}
+
 // settledUsers is queueUsers once no Workload on queue o is leaving. While
 // every remaining user is a Workload on its way out, it waits for them to
 // go, re-reading every leavingPoll: bounded by the operation's context, and
 // stopped by a cancel request at each poll. A user that is not leaving ends
 // the wait at once (the queue stays). problem is set when the users cannot
-// be read or the wait stopped.
-func (r *run) settledUsers(o toolObject, rec Record) (users []string, problem, code, why string) {
+// be read or the wait stopped; waited when it waited at least once.
+func (r *run) settledUsers(o toolObject, rec Record) (users []string, waited bool, problem, code, why string) {
 	last := 0
-	stopped := func(err error) ([]string, string, string, string) {
-		return nil, fmt.Sprintf("Stopped waiting for workloads of pods being deleted: %v. %s %s stays; clean up again once they are gone.", err, o.kind, o.name), "cancelled", "wait stopped"
+	stopped := func(err error) ([]string, bool, string, string, string) {
+		return nil, true, fmt.Sprintf("Stopped waiting for workloads of pods being deleted: %v. %s %s stays; clean up again once they are gone.", err, o.kind, o.name), "cancelled", "wait stopped"
+	}
+	cancelled := func(cancel *record.ActionCancelledError) ([]string, bool, string, string, string) {
+		return nil, true, fmt.Sprintf("%s while it waited for workloads of pods being deleted; %s %s stays.", cancel.Reason(), o.kind, o.name), "cancelled", "cancelled"
 	}
 	for {
 		users, leaving, err := queueUsers(r.c, o, rec)
@@ -597,20 +614,58 @@ func (r *run) settledUsers(o toolObject, rec Record) (users []string, problem, c
 			return stopped(r.c.Context().Err())
 		}
 		if err != nil {
-			return nil, fmt.Sprintf("Cannot tell what uses %s %s, so it stays: %v.", o.kind, o.name, err), codeOf(err), "users read failed"
+			return nil, last > 0, fmt.Sprintf("Cannot tell what uses %s %s, so it stays: %v.", o.kind, o.name, err), codeOf(err), "users read failed"
 		}
 		if len(users) > 0 || leaving == 0 {
-			return users, "", "", ""
+			if last > 0 {
+				// A cancel or the operation's end that came during the
+				// last sleep or read still stops it, before any delete.
+				if cancel := record.CancelRequested(r.c); cancel != nil {
+					return cancelled(cancel)
+				}
+				if err := r.c.Context().Err(); err != nil {
+					return stopped(err)
+				}
+			}
+			return users, last > 0, "", "", ""
 		}
 		if leaving != last {
 			last = leaving
 			r.step("queues", "running", fmt.Sprintf("Waiting for %s of pods being deleted to finish", kube.Verb(leaving, "the workload", fmt.Sprintf("%d workloads", leaving))))
 		}
 		if cancel := record.CancelRequested(r.c); cancel != nil {
-			return nil, fmt.Sprintf("%s while it waited for workloads of pods being deleted; %s %s stays.", cancel.Reason(), o.kind, o.name), "cancelled", "cancelled"
+			return cancelled(cancel)
 		}
 		if err := kube.Clock().Sleep(r.c.Context(), leavingPoll); err != nil {
 			return stopped(err)
+		}
+	}
+}
+
+// deleteUnchanged deletes queue o after a wait, in which it may have
+// changed: it reads o again and deletes it only while it is still this
+// tool's (the recorded UID and the tool's label), with that UID and the
+// resourceVersion just read as preconditions. A conflict (Kueue updates a
+// queue's status, so it can change between the read and the delete) reads
+// it again, up to labelAttempts times. A queue already gone is no problem.
+func deleteUnchanged(c *kube.Client, o toolObject, uid string) (problem, code, why string) {
+	for attempt := 1; ; attempt++ {
+		q, found, err := o.read()
+		if err != nil {
+			return fmt.Sprintf("Cannot read %s %s: %v.", o.kind, o.name, err), codeOf(err), "read failed"
+		}
+		if !found {
+			return "", "", ""
+		}
+		if !owns(q.Metadata, uid) {
+			return fmt.Sprintf("%s %s changed while this tool waited for the workloads of pods being deleted: it is no longer the one this tool created (another UID, or without the label %s=%s), so this tool does not delete it.", o.kind, o.name, kube.ManagedByLabelKey, kube.ManagedByLabelValue), "not_managed", "foreign queue"
+		}
+		_, err = kube.DeleteWithPreconditions(c, queuePath(o.kind, o.project), uid, q.Metadata.ResourceVersion)
+		if err == nil || kube.IsK8sNotFound(err) {
+			return "", "", ""
+		}
+		if !kube.IsK8sConflict(err) || attempt == labelAttempts {
+			return fmt.Sprintf("Cannot delete %s %s: %v.", o.kind, o.name, err), codeOf(err), "delete failed"
 		}
 	}
 }
@@ -681,14 +736,18 @@ func (r *run) teardown() (*types.OperationResponse, error) {
 		if found {
 			// The Workloads of pods being deleted (a model just deleted
 			// before this teardown) are waited for, not refused.
-			users, problem, code, why := r.settledUsers(o, rec)
+			users, waited, problem, code, why := r.settledUsers(o, rec)
 			if problem != "" {
 				return r.fail("queues", problem, code, why)
 			}
 			if len(users) > 0 {
 				return r.fail("queues", fmt.Sprintf("%s %s is used by %s, so it stays; remove %s first.", o.kind, o.name, kube.JoinTitles(users), kube.Verb(len(users), "it", "them")), "in_use", "queue in use")
 			}
-			if _, err := kube.DeleteWithUID(c, queuePath(o.kind, o.project), uid); err != nil && !kube.IsK8sNotFound(err) {
+			if waited {
+				if problem, code, why := deleteUnchanged(c, o, uid); problem != "" {
+					return r.fail("queues", problem, code, why)
+				}
+			} else if _, err := kube.DeleteWithUID(c, queuePath(o.kind, o.project), uid); err != nil && !kube.IsK8sNotFound(err) {
 				return r.fail("queues", fmt.Sprintf("Cannot delete %s %s: %v.", o.kind, o.name, err), codeOf(err), "delete failed")
 			}
 			// While references remain, Kueue can retain finalizer

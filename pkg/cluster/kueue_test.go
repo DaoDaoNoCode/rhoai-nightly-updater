@@ -1504,6 +1504,18 @@ func TestKueueTeardownWaitsForLeavingWorkloads(t *testing.T) {
 		}
 	})
 
+	t.Run("no pod read without a workload only pods own", func(t *testing.T) {
+		f, u := putKueueCluster(t)
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"}); !res.Success {
+			t.Fatalf("setup: %+v", res)
+		}
+		f.putJSON(kqWorkloads+"/w3", `{"metadata":{"name":"w3","namespace":"proj","ownerReferences":[{"kind":"Pod","name":"p","uid":"pod-uid"},{"kind":"Job","name":"j","uid":"job-uid"}]},"spec":{"queueName":"nightly-kueue"}}`)
+		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"})
+		if res.Success || res.ErrorCode != "in_use" || len(f.callsTo("GET", kqPods)) != 0 {
+			t.Fatalf("got %+v, pod reads %d", res, len(f.callsTo("GET", kqPods)))
+		}
+	})
+
 	t.Run("unreadable pods", func(t *testing.T) {
 		f, u := putKueueCluster(t)
 		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"}); !res.Success {
@@ -1536,6 +1548,82 @@ func TestKueueTeardownWaitsForLeavingWorkloads(t *testing.T) {
 		if res.Success || res.ErrorCode != "cancelled" || !f.has(kqLQ) || lists != 2 ||
 			res.Message != "Cancelled by the user who started it while it waited for workloads of pods being deleted; LocalQueue nightly-kueue stays." {
 			t.Fatalf("got %+v after %d lists", res, lists)
+		}
+	})
+
+	// On one poll, the last Workload goes and the change arrives (a cancel,
+	// the queue edited): the teardown deletes nothing.
+	lastPoll := func(f *resourceFake, change func(lq map[string]any)) *int {
+		lists := 0
+		f.beforeServe = func(method, path string) {
+			if method != "GET" || path != kqWorkloads {
+				return
+			}
+			if lists++; lists == 2 {
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				k, _ := parseFakePath(kqWorkloads + "/w1")
+				delete(f.objects, k)
+				lk, _ := parseFakePath(kqLQ)
+				change(f.objects[lk])
+			}
+		}
+		return &lists
+	}
+
+	t.Run("cancel as the last workload goes", func(t *testing.T) {
+		f, u := putKueueCluster(t)
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"}); !res.Success {
+			t.Fatalf("setup: %+v", res)
+		}
+		f.putJSON(kqWorkloads+"/w1", podWorkload("w1", "pod-uid"))
+		var sw cancelSwitch
+		lists := lastPoll(f, func(map[string]any) { sw.on.Store(true) })
+		res, _ := runKueueOp(t, withCancel(u, &sw), types.KueueRequest{Action: "teardown"})
+		if res.Success || res.ErrorCode != "cancelled" || !f.has(kqLQ) || !f.has(kqCQ) || *lists != 2 || len(f.callsTo("DELETE", kqLQ)) != 0 {
+			t.Fatalf("got %+v after %d lists", res, *lists)
+		}
+	})
+
+	t.Run("the queue loses the tool's label during the wait", func(t *testing.T) {
+		f, u := putKueueCluster(t)
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"}); !res.Success {
+			t.Fatalf("setup: %+v", res)
+		}
+		f.putJSON(kqWorkloads+"/w1", podWorkload("w1", "pod-uid"))
+		lastPoll(f, func(lq map[string]any) {
+			meta := ensureMap(lq, "metadata")
+			delete(ensureMap(meta, "labels"), "app.kubernetes.io/managed-by")
+			meta["resourceVersion"] = "99"
+		})
+		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"})
+		if res.Success || res.ErrorCode != "not_managed" || !f.has(kqLQ) || len(f.callsTo("DELETE", kqLQ)) != 0 ||
+			res.Message != "LocalQueue nightly-kueue changed while this tool waited for the workloads of pods being deleted: it is no longer the one this tool created (another UID, or without the label app.kubernetes.io/managed-by=rhoai-nightly-updater), so this tool does not delete it." {
+			t.Fatalf("got %+v", res)
+		}
+	})
+
+	t.Run("Kueue updates the queue between the re-read and the delete", func(t *testing.T) {
+		f, u := putKueueCluster(t)
+		if res, _ := runKueueOp(t, u, types.KueueRequest{Action: "setup", Project: "proj"}); !res.Success {
+			t.Fatalf("setup: %+v", res)
+		}
+		f.putJSON(kqWorkloads+"/w1", podWorkload("w1", "pod-uid"))
+		goneAfter(f, 2, kqWorkloads+"/w1")
+		bumped := false
+		f.beforeRequest = func(r *http.Request) {
+			if r.Method == "DELETE" && r.URL.Path == kqLQ && !bumped {
+				bumped = true
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				k, _ := parseFakePath(kqLQ)
+				ensureMap(f.objects[k], "metadata")["resourceVersion"] = "100"
+			}
+		}
+		res, _ := runKueueOp(t, u, types.KueueRequest{Action: "teardown"})
+		deletes := f.callsTo("DELETE", kqLQ)
+		if !res.Success || f.has(kqLQ) || len(deletes) != 2 || !strings.Contains(deletes[1].Body, `"resourceVersion":"100"`) {
+			t.Fatalf("got %+v, deletes %+v", res, deletes)
 		}
 	})
 
