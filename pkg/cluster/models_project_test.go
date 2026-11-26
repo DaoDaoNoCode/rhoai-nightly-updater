@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
@@ -618,4 +619,39 @@ func TestUserStreamCarriesNoServiceAccountText(t *testing.T) {
 			t.Fatalf("user: %s", text)
 		}
 	})
+}
+
+// The capacity verdicts of every project and model, at once, come from one
+// read of the cluster's nodes and pods (a shared snapshot, concurrent
+// refreshes coalesced); each answer is a verdict only.
+func TestCapacityFactsShareOneSnapshot(t *testing.T) {
+	mc := newModelsCluster(t)
+	mc.f.putJSON("/api/v1/nodes/worker-1", `{"metadata":{"name":"worker-1","labels":{"kubernetes.io/arch":"amd64"}},"status":{"allocatable":{"cpu":"16","memory":"64Gi"}}}`)
+	u := projectModelUser(mc)
+	var wg sync.WaitGroup
+	answers := make(chan string, 2*len(serving.ModelCatalog))
+	for _, project := range []string{"proj", "other"} {
+		for _, entry := range serving.ModelCatalog {
+			wg.Go(func() { answers <- serving.ModelCapacityFact(u, entry, project) })
+		}
+	}
+	wg.Wait()
+	close(answers)
+	for a := range answers {
+		if a != serving.CapacityFits {
+			t.Errorf("verdict %q", a)
+		}
+	}
+	nodes, pods := 0, 0
+	for _, call := range mc.f.calls {
+		switch {
+		case call.Method == http.MethodGet && call.Path == "/api/v1/nodes":
+			nodes++
+		case call.Method == http.MethodGet && call.Path == "/api/v1/pods":
+			pods++
+		}
+	}
+	if nodes != 1 || pods != 1 {
+		t.Errorf("reads of the nodes %d and pods %d, want one each", nodes, pods)
+	}
 }

@@ -404,6 +404,49 @@ type NodeRoom struct {
 // the requests of its pods; the pods of model in project are not counted
 // (both "" for none).
 func freeRoom(c *kube.Client, project, model string) (map[string]*NodeRoom, error) {
+	snap, err := readCapacity(c)
+	if err != nil {
+		return nil, err
+	}
+	return snap.room(project, model), nil
+}
+
+// capacitySnapshot is the cluster's nodes (their allocatable room) and the
+// requests of its running pods, as one read gives them.
+type capacitySnapshot struct {
+	nodes map[string]NodeRoom
+	pods  []capacityPod
+}
+
+type capacityPod struct {
+	namespace, name, component, node string
+	cpu, mem, eph                    float64
+}
+
+// room is what each node of the snapshot has left; the pods of model in
+// project are not counted (setting it up again replaces them).
+func (s *capacitySnapshot) room(project, model string) map[string]*NodeRoom {
+	free := make(map[string]*NodeRoom, len(s.nodes))
+	for n, r := range s.nodes {
+		free[n] = &NodeRoom{CPU: r.CPU, Mem: r.Mem, Eph: r.Eph, EphKnown: r.EphKnown}
+	}
+	for _, p := range s.pods {
+		r := free[p.node]
+		if r == nil {
+			continue
+		}
+		if project != "" && p.namespace == project && p.name == model && p.component == modelPodComponent {
+			continue
+		}
+		r.CPU -= p.cpu
+		r.Mem -= p.mem
+		r.Eph -= p.eph
+	}
+	return free
+}
+
+// readCapacity lists the nodes and the running pods once.
+func readCapacity(c *kube.Client) (*capacitySnapshot, error) {
 	body, _, err := c.Get("/api/v1/nodes")
 	if err != nil {
 		return nil, err
@@ -425,7 +468,7 @@ func freeRoom(c *kube.Client, project, model string) (map[string]*NodeRoom, erro
 	if err := json.Unmarshal(body, &nodes); err != nil {
 		return nil, err
 	}
-	free := map[string]*NodeRoom{}
+	snap := &capacitySnapshot{nodes: map[string]NodeRoom{}}
 	for _, n := range nodes.Items {
 		if n.Spec.Unschedulable || n.Metadata.Labels["kubernetes.io/arch"] != "amd64" {
 			continue
@@ -441,11 +484,11 @@ func freeRoom(c *kube.Client, project, model string) (map[string]*NodeRoom, erro
 		mm, ok2 := ParseQuantity(n.Status.Allocatable["memory"])
 		if ok1 && ok2 {
 			ee, ok3 := ParseQuantity(n.Status.Allocatable["ephemeral-storage"])
-			free[n.Metadata.Name] = &NodeRoom{CPU: cc, Mem: mm, Eph: ee, EphKnown: ok3}
+			snap.nodes[n.Metadata.Name] = NodeRoom{CPU: cc, Mem: mm, Eph: ee, EphKnown: ok3}
 		}
 	}
-	if len(free) == 0 {
-		return free, nil
+	if len(snap.nodes) == 0 {
+		return snap, nil
 	}
 	body, _, err = c.Get("/api/v1/pods?fieldSelector=" + url.QueryEscape("status.phase!=Succeeded,status.phase!=Failed"))
 	if err != nil {
@@ -471,26 +514,24 @@ func freeRoom(c *kube.Client, project, model string) (map[string]*NodeRoom, erro
 		return nil, err
 	}
 	for _, p := range pods.Items {
-		r := free[p.Spec.NodeName]
-		if r == nil || p.Status.Phase == "Succeeded" || p.Status.Phase == "Failed" {
+		if _, ok := snap.nodes[p.Spec.NodeName]; !ok || p.Status.Phase == "Succeeded" || p.Status.Phase == "Failed" {
 			continue
 		}
-		if project != "" && p.Metadata.Namespace == project && p.Metadata.Labels["app.kubernetes.io/name"] == model && p.Metadata.Labels["app.kubernetes.io/component"] == modelPodComponent {
-			continue
-		}
+		cp := capacityPod{namespace: p.Metadata.Namespace, name: p.Metadata.Labels["app.kubernetes.io/name"], component: p.Metadata.Labels["app.kubernetes.io/component"], node: p.Spec.NodeName}
 		for _, ctr := range p.Spec.Containers {
 			if v, ok := ParseQuantity(ctr.Resources.Requests["cpu"]); ok {
-				r.CPU -= v
+				cp.cpu += v
 			}
 			if v, ok := ParseQuantity(ctr.Resources.Requests["memory"]); ok {
-				r.Mem -= v
+				cp.mem += v
 			}
 			if v, ok := ParseQuantity(ctr.Resources.Requests["ephemeral-storage"]); ok {
-				r.Eph -= v
+				cp.eph += v
 			}
 		}
+		snap.pods = append(snap.pods, cp)
 	}
-	return free, nil
+	return snap, nil
 }
 
 // RoomWarning says that no node in free has the model's requests free, or

@@ -1,6 +1,7 @@
 package serving
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -212,9 +213,36 @@ func maasRefTargets(f *kube.Client, project, model string) (bool, error) {
 	return false, nil
 }
 
-// capacityFacts keeps ModelCapacityFact's answers a minute (it lists every
-// node and pod of the cluster), filled only with the facts client.
-var capacityFacts = kube.NewLRU[string, string](16)
+// The cluster's capacity, shared by every project's model action: one
+// snapshot of the nodes and running pods per cluster, kept
+// capacitySnapshotTTL, read with the facts client; concurrent refreshes
+// are one read (capacityFlights). Each verdict is computed from it.
+var (
+	capacitySnapshots = kube.NewLRU[string, *capacitySnapshot](4)
+	capacityFlights   kube.FlightGroup[*capacitySnapshot]
+)
+
+const capacitySnapshotTTL = 30 * time.Second
+
+// sharedCapacity is the cluster's capacity snapshot, read with f (the
+// facts client) when the kept one is older than capacitySnapshotTTL.
+func sharedCapacity(f *kube.Client) (*capacitySnapshot, error) {
+	key := f.BaseURL()
+	if s, ok := capacitySnapshots.Get(key); ok {
+		return s, nil
+	}
+	s, err, _ := capacityFlights.Do(f.Context(), key, func(context.Context) (*capacitySnapshot, error) {
+		if s, ok := capacitySnapshots.Get(key); ok {
+			return s, nil
+		}
+		s, err := readCapacity(f)
+		if err == nil {
+			capacitySnapshots.Add(key, s, capacitySnapshotTTL)
+		}
+		return s, err
+	})
+	return s, err
+}
 
 // ModelCapacityFact is whether some schedulable amd64 worker has the
 // model's CPU, memory and download requests free ("fits"), none seems to
@@ -223,24 +251,16 @@ var capacityFacts = kube.NewLRU[string, string](16)
 // the nodes and pods with c.Facts() and returns only the answer: no node,
 // pod or project name.
 func ModelCapacityFact(c *kube.Client, entry CatalogModel, project string) string {
-	key := capacityKey(c, entry.Name, project)
-	if v, ok := capacityFacts.Get(key); ok {
-		return v
-	}
-	free, err := freeRoom(c.Facts(), project, entry.Name)
+	snap, err := sharedCapacity(c.Facts())
 	if err != nil {
 		kube.LogFactReadFailure("cannot read the nodes and pods for a project's model", "capacity", err)
 		return CapacityUnknown
 	}
-	v := CapacityFits
-	if RoomWarning(entry, free) != "" {
-		v = CapacityMayNotFit
+	if RoomWarning(entry, snap.room(project, entry.Name)) != "" {
+		return CapacityMayNotFit
 	}
-	capacityFacts.Add(key, v, capacityFactTTL)
-	return v
+	return CapacityFits
 }
-
-const capacityFactTTL = time.Minute
 
 // CapacityFactWords says a "may-not-fit" answer for people, from the
 // catalog's requests only.
