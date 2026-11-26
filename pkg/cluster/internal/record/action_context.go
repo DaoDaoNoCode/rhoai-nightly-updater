@@ -48,27 +48,12 @@ func (e *ActionCancelledError) Error() string { return e.Reason() }
 
 // Reason is the activity entry's reason of a cancelled action, and the
 // start of its step message, in words for every reader: it never names
-// the cluster-admin who cancelled it (the UI says "you" to the starter,
-// CancelledBy).
+// the cluster-admin who cancelled it.
 func (e *ActionCancelledError) Reason() string {
 	if e.ByAdmin {
 		return "Cancelled by a cluster-admin"
 	}
 	return "Cancelled by the user who started it"
-}
-
-// The values of types.ActivityEntry.CancelledBy.
-const (
-	CancelledByStarter = "starter"
-	CancelledByAdmin   = "admin"
-)
-
-// CancelledBy is who asked: CancelledByStarter or CancelledByAdmin.
-func (e *ActionCancelledError) CancelledBy() string {
-	if e.ByAdmin {
-		return CancelledByAdmin
-	}
-	return CancelledByStarter
 }
 
 type cancelCheckKey struct{}

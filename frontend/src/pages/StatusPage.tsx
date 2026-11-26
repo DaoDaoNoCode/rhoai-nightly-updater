@@ -49,7 +49,7 @@ import { errorResult } from "../outcomes";
 import { OutcomeAlert } from "../components/OutcomeAlert";
 import { isSessionExpired } from "../services/api";
 import { useClusterStatus, useOperation } from "../state/AppState";
-import { useClusterBusyHandler, useDashboardOverride, useGitOpsProfile, useMutationBlocker, useProfile, useSignedInUser, useVersion } from "../state/AppInfo";
+import { useClusterBusyHandler, useDashboardOverride, useGitOpsProfile, useMutationBlocker, useProfile, useVersion } from "../state/AppInfo";
 import { GITOPS_PROFILE_UNMANAGED_CATALOG, gitOpsPolicyProblem } from "../profile";
 import { STEP_SETS } from "../operationSteps";
 import { argoTrackingGroups, catalogManaged, gitOpsOperatorReason, operatorGitOpsApp, operatorManaged } from "../gitops";
@@ -58,7 +58,6 @@ import { ArgoCDLeftOverNote, GitOpsNotice, GitOpsProfileNotice } from "../compon
 const REFRESH_PLAN = STEP_SETS.refresh;
 
 export const StatusPage: React.FC = () => {
-  const signedInUser = useSignedInUser();
   const { status, loading, error, lastRefreshed, refresh } = useClusterStatus();
   const operation = useOperation();
   const blocker = useMutationBlocker();
@@ -404,7 +403,7 @@ export const StatusPage: React.FC = () => {
               </Card>
             </GridItem>
             <GridItem lg={6} md={12}>
-              <ActivityLog activity={status.activity} viewer={signedInUser} />
+              <ActivityLog activity={status.activity} />
             </GridItem>
           </Grid>
         </PageSection>

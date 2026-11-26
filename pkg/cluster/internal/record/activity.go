@@ -355,16 +355,14 @@ func stampActivity(c *kube.Client, e types.ActivityEntry) types.ActivityEntry {
 }
 
 // Cancelled records the action of c's user as failed because it was
-// cancelled at a safe point: its reason (ActionCancelledError.Reason) and
-// who asked (CancelledBy: the starter or a cluster-admin).
+// cancelled at a safe point, with its reason (ActionCancelledError.Reason).
 func Cancelled(c *kube.Client, action, detail string, cancel *ActionCancelledError) {
 	Activity(c, types.ActivityEntry{
-		Timestamp:   kube.NowRFC3339(),
-		User:        kube.GetUser(c),
-		Action:      action,
-		Detail:      detail,
-		Reason:      cancel.Reason(),
-		CancelledBy: cancel.CancelledBy(),
+		Timestamp: kube.NowRFC3339(),
+		User:      kube.GetUser(c),
+		Action:    action,
+		Detail:    detail,
+		Reason:    cancel.Reason(),
 	})
 }
 

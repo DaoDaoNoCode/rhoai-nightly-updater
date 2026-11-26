@@ -26,12 +26,6 @@ import { RelativeTime } from "./RelativeTime";
 import { TruncatedText } from "./LongText";
 import { InlineItems } from "./InlineItems";
 
-/** The reason shown for an entry: a cancel by its starter reads "Cancelled by you" to that user. */
-export function activityReason(entry: ActivityEntry, viewer: string | null): string | undefined {
-  if (entry.cancelledBy === "starter" && viewer && entry.user === viewer) return "Cancelled by you";
-  return entry.reason;
-}
-
 /** Fallback category for entries from a backend that predates read-time labels. */
 const LEGACY_CATEGORIES: Record<string, string> = {
   update: "operator",
@@ -72,8 +66,6 @@ interface ActivityLogProps {
   activity?: ActivityEntry[];
   /** Category shown first (default: operator changes). */
   defaultCategory?: string;
-  /** The signed-in user: their own cancelled actions read "Cancelled by you". */
-  viewer?: string | null;
 }
 
 /**
@@ -83,7 +75,7 @@ interface ActivityLogProps {
  * build of operator changes. The category filter is a select in the card
  * header (PF: select menus for more than a few options).
  */
-export const ActivityLog: React.FC<ActivityLogProps> = React.memo(({ activity, defaultCategory = "operator", viewer = null }) => {
+export const ActivityLog: React.FC<ActivityLogProps> = React.memo(({ activity, defaultCategory = "operator" }) => {
   const [filter, setFilter] = useState(defaultCategory);
   const [filterOpen, setFilterOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -171,9 +163,9 @@ export const ActivityLog: React.FC<ActivityLogProps> = React.memo(({ activity, d
                           </InlineItems>
                         )}
                         {detail && !entry.build && <div className="pf-v6-u-font-size-sm pf-v6-u-text-break-word">{detail}</div>}
-                        {!entry.success && activityReason(entry, viewer) && (
+                        {!entry.success && entry.reason && (
                           <div className="pf-v6-u-font-size-sm pf-v6-u-text-color-subtle">
-                            <TruncatedText>{activityReason(entry, viewer)}</TruncatedText>
+                            <TruncatedText>{entry.reason}</TruncatedText>
                           </div>
                         )}
                       </FlexItem>

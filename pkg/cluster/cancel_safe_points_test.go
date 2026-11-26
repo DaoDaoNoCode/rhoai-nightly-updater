@@ -332,7 +332,7 @@ func TestMLflowSamplesCancelAfterAFailedSample(t *testing.T) {
 		t.Fatal("the next sample ran after the cancel")
 	}
 	log := storedActivity(t, env.k8s)
-	if len(log) != 1 || log[0].Success || log[0].CancelledBy != "starter" || !strings.Contains(log[0].Detail, "(failed: ") {
+	if len(log) != 1 || log[0].Success || log[0].Reason != "Cancelled by the user who started it" || !strings.Contains(log[0].Detail, "(failed: ") {
 		t.Fatalf("activity %+v", log)
 	}
 }
