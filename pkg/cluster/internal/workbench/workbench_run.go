@@ -61,7 +61,7 @@ func (r *run) fail(id, msg, code, why string) (*types.OperationResponse, error) 
 		r.emit(types.UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: code})
 	}
 	r.logs = append(r.logs, msg)
-	slog.Warn("workbench operation stopped", "step", id, "reason", why, "user", kube.GetUser(r.c))
+	slog.Warn("workbench operation stopped", "step", id, "reason", why)
 	record.Action(r.c, r.activity, fmt.Sprintf("%s (%s)", r.target, why), false)
 	return &types.OperationResponse{Success: false, Message: msg, Logs: r.logs, ErrorCode: code}, nil
 }
@@ -107,7 +107,7 @@ func (r *run) readOwned(id, project string) (Notebook, *types.OperationResponse)
 	}
 	rec, err := ReadRecord(r.c)
 	if err != nil {
-		res, _ := r.fail(id, err.Error()+" Nothing was changed.", kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record read failed")
+		res, _ := r.fail(id, recordReadText(r.c, err)+" Nothing was changed.", kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record read failed")
 		return nb, res
 	}
 	if !rec.OwnsNotebook(nb.Metadata) {
@@ -143,7 +143,7 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 	}
 	rec, err := ReadRecord(c)
 	if err != nil {
-		return r.fail("check", err.Error()+" Nothing was changed.", kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record read failed")
+		return r.fail("check", recordReadText(c, err)+" Nothing was changed.", kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record read failed")
 	}
 	nb, nbFound, err := readNotebook(c, project)
 	if err != nil {
@@ -156,12 +156,15 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 		r.step("check", "success", "The workbench is already set up.")
 		// The internal registry's copy of the token, which an existing
 		// workbench needs to pull its image again (ROSA HCP).
-		copyLogs := registry.EnsureRegistryPullCopyFromPullSecret(c)
+		copyLogs := r.registryPullCopy()
 		r.logs = append(r.logs, copyLogs...)
 		if registry.CopyChanged(copyLogs) {
 			return r.done(fmt.Sprintf("Workbench %s in %s is already set up; the token was copied for the internal registry, which pulls its image.", Name, project))
 		}
 		return r.done(fmt.Sprintf("Workbench %s in %s is already set up; nothing was changed.", Name, project))
+	}
+	if msg, code := recordCapRefusal(c, rec, project); msg != "" {
+		return r.fail("check", msg+" Nothing was changed.", code, "records full")
 	}
 	pvc, pvcFound, err := readStorage(c, project)
 	if err != nil {
@@ -214,11 +217,13 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 			return r.fail("storage", fmt.Sprintf("Cannot create PersistentVolumeClaim %s in %s: %v. Nothing was changed.", StorageName, project, err), kube.ErrorCodeFromK8sErr(err), "storage create failed")
 		}
 		meta, _ := kube.ParseObjectMeta(body)
-		if err := updateRecord(c, project, func(e *Recorded) { e.StorageUID, e.At, e.By = meta.UID, kube.NowRFC3339(), kube.GetUser(c) }); err != nil {
+		if err := updateRecord(c, project, func(e *Recorded) {
+			e.StorageUID, e.At, e.By, e.ActorRole, e.ProjectUID = meta.UID, kube.NowRFC3339(), kube.GetUser(c), record.ActorRole(c), c.ProjectUID()
+		}); err != nil {
 			if _, delErr := kube.DeleteWithUID(c, storagePath(project), meta.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
-				return r.fail("storage", fmt.Sprintf("PersistentVolumeClaim %s was created, but this tool could not record it (%v) nor delete it again (%v). Delete it yourself (oc delete pvc %s -n %s), then set up again.", StorageName, err, delErr, StorageName, project), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record failed")
+				return r.fail("storage", fmt.Sprintf("PersistentVolumeClaim %s was created, but this tool could not record it (%s) nor delete it again (%v). Delete it yourself (oc delete pvc %s -n %s), then set up again.", StorageName, record.ErrorText(c, err), delErr, StorageName, project), record.ErrorCode(err), "record failed")
 			}
-			return r.fail("storage", fmt.Sprintf("PersistentVolumeClaim %s was created, but this tool could not record it as its own (%v), so it was deleted again. Set up again to retry.", StorageName, err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record failed")
+			return r.fail("storage", fmt.Sprintf("PersistentVolumeClaim %s was created, but this tool could not record it as its own (%s), so it was deleted again. Set up again to retry.", StorageName, record.ErrorText(c, err)), record.ErrorCode(err), "record failed")
 		}
 		r.step("storage", "success", fmt.Sprintf("Created storage %s.", StorageName))
 	}
@@ -234,22 +239,75 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 	// registry, which needs its own copy of the quay.io/rhoai token
 	// (registry.EnsureRegistryPullCopyFromPullSecret); a problem with it is
 	// a warning in the logs, the workbench is created anyway.
-	r.logs = append(r.logs, registry.EnsureRegistryPullCopyFromPullSecret(c)...)
+	r.logs = append(r.logs, r.registryPullCopy()...)
 	r.step("workbench", "running", fmt.Sprintf("Creating workbench %s", Name))
 	body, err := create(c, rhoai.NamespacedPath(notebookAPI, "notebooks", project, ""), nbObj, false)
 	if err != nil {
 		return r.fail("workbench", fmt.Sprintf("Cannot create workbench %s in %s: %v. Its storage %s stays; set up again to retry.", Name, project, err, StorageName), kube.ErrorCodeFromK8sErr(err), "create failed")
 	}
 	meta, _ := kube.ParseObjectMeta(body)
-	if err := updateRecord(c, project, func(e *Recorded) { e.UID, e.At, e.By = meta.UID, kube.NowRFC3339(), kube.GetUser(c) }); err != nil {
+	if err := updateRecord(c, project, func(e *Recorded) {
+		e.UID, e.At, e.By, e.ActorRole, e.ProjectUID = meta.UID, kube.NowRFC3339(), kube.GetUser(c), record.ActorRole(c), c.ProjectUID()
+	}); err != nil {
 		if _, delErr := kube.DeleteWithUID(c, notebookPath(project), meta.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
-			return r.fail("workbench", fmt.Sprintf("Workbench %s was created, but this tool could not record it (%v) nor delete it again (%v). Delete it in the dashboard, then set up again.", Name, err, delErr), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record failed")
+			return r.fail("workbench", fmt.Sprintf("Workbench %s was created, but this tool could not record it (%s) nor delete it again (%v). Delete it in the dashboard, then set up again.", Name, record.ErrorText(c, err), delErr), record.ErrorCode(err), "record failed")
 		}
-		return r.fail("workbench", fmt.Sprintf("Workbench %s was created, but this tool could not record it as its own (%v), so it was deleted again. Set up again to retry.", Name, err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record failed")
+		return r.fail("workbench", fmt.Sprintf("Workbench %s was created, but this tool could not record it as its own (%s), so it was deleted again. Set up again to retry.", Name, record.ErrorText(c, err)), record.ErrorCode(err), "record failed")
 	}
 	r.step("workbench", "success", fmt.Sprintf("Created workbench %s; it is starting (usually 1 to 3 minutes while the image is pulled).", Name))
-	slog.Info("workbench setup", "project", project, "user", kube.GetUser(c))
+	slog.Info("workbench setup", "project", project)
 	return r.done(fmt.Sprintf("Workbench %s is starting in %s with %s (%s) on hardware profile %s.%s", Name, project, plan.Image.DisplayName, plan.Image.Tag, plan.Profile.DisplayName, deprecatedNote(plan.Image)))
+}
+
+// HostedPullCopyNote is what a workbench setup by a user who is not a
+// cluster-admin says on a hosted control plane (ROSA HCP), where the
+// internal registry pulls the workbench image with its own copy of the
+// pull secret: writing that copy (in RHOAI's applications namespace, from
+// the cluster's pull secret) is a cluster-admin's, so the setup does not.
+const HostedPullCopyNote = "On this cluster (hosted control plane) a cluster-admin must have copied the pull secret for the internal registry (Copy for the internal registry, in the pull secret's part of the Status page); if the workbench image does not pull, ask them."
+
+// registryPullCopy makes sure the internal registry has its copy of the
+// pull secret and returns what it did, for a cluster-admin's setup
+// (registry.EnsureRegistryPullCopyFromPullSecret). A setup by a user who
+// is not a cluster-admin writes nothing outside their project: on a
+// hosted control plane (the facts client's read) it notes that a
+// cluster-admin makes the copy, elsewhere it says nothing.
+func (r *run) registryPullCopy() []string {
+	if !r.c.ProjectUser() {
+		return registry.EnsureRegistryPullCopyFromPullSecret(r.c)
+	}
+	if rhoai.CachedControlPlane(r.c) == rhoai.ControlPlaneHosted {
+		r.step("check", "running", HostedPullCopyNote)
+		return []string{HostedPullCopyNote}
+	}
+	return nil
+}
+
+// recordReadText says a failed read of this tool's record (the
+// ServiceAccount's) to c's user: for a project user by its HTTP status or
+// category only (the error is logged), for a cluster-admin as it is.
+func recordReadText(c *kube.Client, err error) string {
+	if c.ProjectUser() {
+		kube.LogFactReadFailure("cannot read the workbench record for a project user's action", "snapshot", err)
+		return "Cannot read this tool's record of its workbenches (" + kube.FactReadProblem(err) + ")."
+	}
+	return err.Error()
+}
+
+// recordCapRefusal is why a setup by a user who is not a cluster-admin
+// must not add or take over the project's entry in the records
+// (record.AdmitUserEntry), with its errorCode; "" for a cluster-admin. The
+// write itself is admitted again (updateRecord), so this early check only
+// refuses before anything is made.
+func recordCapRefusal(c *kube.Client, rec Record, project string) (string, string) {
+	var prior *record.RecordOwner
+	if e, has := rec.Get(project); has {
+		prior = &record.RecordOwner{Project: project, ProjectUID: e.ProjectUID, By: e.By, ActorRole: e.ActorRole}
+	}
+	if err := record.AdmitUserEntry(c, project, prior, nil); err != nil {
+		return err.Error(), record.ErrorCode(err)
+	}
+	return "", ""
 }
 
 // DeprecatedImageNote says that the image is deprecated, as the dashboard
@@ -413,7 +471,7 @@ func (r *run) teardown(project string, deleteStorage bool) (*types.OperationResp
 	r.step("workbench", "running", fmt.Sprintf("Deleting workbench %s in %s", Name, project))
 	rec, err := ReadRecord(c)
 	if err != nil {
-		return r.fail("workbench", err.Error()+" Nothing was deleted.", kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record read failed")
+		return r.fail("workbench", recordReadText(c, err)+" Nothing was deleted.", kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record read failed")
 	}
 	nb, found, err := readNotebook(c, project)
 	if err != nil {
@@ -512,7 +570,7 @@ func (r *run) deleteKeptStorage(project string) (*types.OperationResponse, error
 	}
 	rec, err := ReadRecord(c)
 	if err != nil {
-		return r.fail("storage", err.Error()+" Nothing was deleted.", kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record read failed")
+		return r.fail("storage", recordReadText(c, err)+" Nothing was deleted.", kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal"), "record read failed")
 	}
 	pvc, found, err := readStorage(c, project)
 	if err != nil {
@@ -571,12 +629,15 @@ func withoutEntry(value, project string) (string, bool) {
 // profileGone: the hardware profile the workbench's annotations name no
 // longer exists (the dashboard's binding state Deleted).
 func profileGone(c *kube.Client, nb Notebook) (bool, error) {
-	name, ns := nb.Metadata.Annotations[profileNameAnnotation], nb.Metadata.Annotations[profileNamespaceAnnotation]
+	name := nb.Metadata.Annotations[profileNameAnnotation]
 	if name == "" {
 		return false, nil
 	}
+	// A namespace this tool does not look in (profileNamespace): not known
+	// to be gone, so the annotation stays.
+	ns := profileNamespace(c, nb.Metadata.Namespace, nb.Metadata.Annotations[profileNamespaceAnnotation])
 	if ns == "" {
-		ns = nb.Metadata.Namespace
+		return false, nil
 	}
 	profiles, err := listProfiles(c, ns)
 	if err != nil {

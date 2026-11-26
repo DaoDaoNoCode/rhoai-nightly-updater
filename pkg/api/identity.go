@@ -100,7 +100,7 @@ func writeAuthError(w http.ResponseWriter, err error, unavailableMsg string) {
 		writeError(w, "Your OpenShift session has expired. Log in again.", http.StatusUnauthorized, "session_expired")
 		return
 	}
-	slog.Warn("cannot verify the user with the API server", "error", err)
+	logAuthFailure("cannot verify the user with the API server", err)
 	writeError(w, unavailableMsg, http.StatusServiceUnavailable, "authorization_unavailable")
 }
 
@@ -138,4 +138,12 @@ func devModeWithoutServiceAccount() bool {
 	}
 	_, err := os.Stat(serviceAccountTokenPath)
 	return os.IsNotExist(err)
+}
+
+// devAdminBypass is devModeWithoutServiceAccount unless DEV_ROLE=user: the
+// local setup where the developer counts as a cluster-admin (the mutation
+// gate answers yes, the sign-in check is skipped). With DEV_ROLE=user both
+// gates ask the API server with the request's token.
+func devAdminBypass() bool {
+	return devModeWithoutServiceAccount() && Dev().Role != DevRoleUser
 }

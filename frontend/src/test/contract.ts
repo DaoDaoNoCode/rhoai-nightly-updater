@@ -1,4 +1,4 @@
-import type { KueueStatus, ObservabilityStatus, WorkbenchStatus, ClusterSummary, MLflowSamplesStatus, ModelRegistryStatus, PlaygroundStatus, ProjectStatus, RecipePlan, RecipeRunStatus, UserOperationStatus, UserPermissions } from "../types";
+import type { KueueStatus, ObservabilityStatus, ProjectCapabilities, WorkbenchStatus, ClusterSummary, MLflowSamplesStatus, ModelRegistryStatus, PlaygroundStatus, ProjectStatus, RecipePlan, RecipeRunStatus, UserOperationStatus, UserPermissions } from "../types";
 import summaryJson from "./contract/summary.json";
 import operationUserJson from "./contract/operation-user.json";
 import permissionsUserJson from "./contract/user-permissions-user.json";
@@ -15,6 +15,9 @@ import recipeRunEndedJson from "./contract/recipe-run-ended-admin.json";
 import recipeRunFeaturesJson from "./contract/recipe-run-features-admin.json";
 import modelRegistryJson from "./contract/model-registry-admin.json";
 import workbenchJson from "./contract/workbench-admin.json";
+import workbenchUserJson from "./contract/workbench-user.json";
+import capabilitiesUserJson from "./contract/project-capabilities-user.json";
+import capabilitiesAdminJson from "./contract/project-capabilities-admin.json";
 import kueueJson from "./contract/kueue-admin.json";
 import observabilityJson from "./contract/observability-admin.json";
 
@@ -67,6 +70,12 @@ export const contract = {
   modelRegistry: (): ModelRegistryStatus => clone<ModelRegistryStatus>(modelRegistryJson),
   // A cluster-admin's GET /api/resources/workbench: a running workbench and the plan.
   workbench: (project = CONTRACT_PROJECT): WorkbenchStatus => forProject<WorkbenchStatus>(workbenchJson, CONTRACT_PROJECT, project),
+  // A user's GET /api/resources/workbench: their project's workbench only.
+  workbenchUser: (project = CONTRACT_PROJECT): WorkbenchStatus => forProject<WorkbenchStatus>(workbenchUserJson, CONTRACT_PROJECT, project),
+  // A user's GET /api/resources/projects/capabilities: every action allowed
+  // but Remove MLflow sample data (a review denied) and Regenerate (a cluster-admin's).
+  capabilitiesUser: (project = CONTRACT_PROJECT): ProjectCapabilities => forProject<ProjectCapabilities>(capabilitiesUserJson, CONTRACT_PROJECT, project),
+  capabilitiesAdmin: (project = CONTRACT_PROJECT): ProjectCapabilities => forProject<ProjectCapabilities>(capabilitiesAdminJson, CONTRACT_PROJECT, project),
   // A cluster-admin's GET /api/resources/kueue: set up, the RayCluster sample admitted, the opt-in on.
   kueue: (project = CONTRACT_PROJECT): KueueStatus => forProject<KueueStatus>(kueueJson, CONTRACT_PROJECT, project),
   // A cluster-admin's GET /api/resources/observability: every field set.
@@ -95,6 +104,9 @@ const typed: {
   recipePlan: Widen<RecipePlan>;
   modelRegistry: Widen<ModelRegistryStatus>;
   workbench: Widen<WorkbenchStatus>;
+  workbenchUser: Widen<WorkbenchStatus>;
+  capabilitiesUser: Widen<ProjectCapabilities>;
+  capabilitiesAdmin: Widen<ProjectCapabilities>;
   kueue: Widen<KueueStatus>;
   observability: Widen<ObservabilityStatus>;
 } = {
@@ -113,6 +125,9 @@ const typed: {
   recipePlan: recipePlanJson,
   modelRegistry: modelRegistryJson,
   workbench: workbenchJson,
+  workbenchUser: workbenchUserJson,
+  capabilitiesUser: capabilitiesUserJson,
+  capabilitiesAdmin: capabilitiesAdminJson,
   kueue: kueueJson,
   observability: observabilityJson,
 };

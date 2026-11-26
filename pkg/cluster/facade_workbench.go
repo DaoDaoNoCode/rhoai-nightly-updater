@@ -12,6 +12,11 @@ func GetWorkbenchStatus(sa, u *Client, project string) (*types.WorkbenchStatus, 
 	return workbench.GetStatus(sa, u, project)
 }
 
+// GetWorkbenchProjectStatus is workbench.GetProjectStatus.
+func GetWorkbenchProjectStatus(sa, u *Client, project string) (*types.WorkbenchStatus, error) {
+	return workbench.GetProjectStatus(sa, u, project)
+}
+
 // ValidateWorkbenchRequest is workbench.Validate.
 func ValidateWorkbenchRequest(req types.WorkbenchRequest) string {
 	return workbench.Validate(req)

@@ -98,3 +98,6 @@ func SaveRecipeRun(c *Client, run *types.RecipeRun, replace bool) error {
 
 // ReadRecipeRun is record.ReadRecipeRun.
 func ReadRecipeRun(c *Client) (*types.RecipeRun, error) { return record.ReadRecipeRun(c) }
+
+// RecordsSweepInterval is record.SweepInterval.
+const RecordsSweepInterval = record.SweepInterval

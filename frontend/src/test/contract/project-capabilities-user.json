@@ -1,0 +1,72 @@
+{
+  "actions": {
+    "mlflow-samples.add": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Add MLflow sample data",
+      "missing": []
+    },
+    "mlflow-samples.regenerate": {
+      "allowed": false,
+      "blockedBy": [],
+      "code": "admin_only",
+      "label": "Regenerate the MLflow demo",
+      "missing": [],
+      "reason": "Regenerate the MLflow demo is done by a cluster-admin in this tool."
+    },
+    "mlflow-samples.remove": {
+      "allowed": false,
+      "blockedBy": [],
+      "code": "missing_permissions",
+      "label": "Remove MLflow sample data",
+      "missing": [
+        "delete experiments.mlflow.kubeflow.org nightly-sample-training in namespace team-a: ask an admin of project team-a to give you the edit role there."
+      ],
+      "reason": "Remove MLflow sample data in team-a needs permissions your OpenShift account does not have: delete experiments.mlflow.kubeflow.org nightly-sample-training in namespace team-a: ask an admin of project team-a to give you the edit role there."
+    },
+    "playground.setup": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Set up the playground",
+      "missing": []
+    },
+    "playground.teardown": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Delete the playground",
+      "missing": []
+    },
+    "workbench.delete-storage": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Delete the workbench's kept storage",
+      "missing": []
+    },
+    "workbench.setup": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Set up the workbench",
+      "missing": []
+    },
+    "workbench.start": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Start the workbench",
+      "missing": []
+    },
+    "workbench.stop": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Stop the workbench",
+      "missing": []
+    },
+    "workbench.teardown": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Delete the workbench",
+      "missing": []
+    }
+  },
+  "project": "team-a",
+  "role": "user"
+}

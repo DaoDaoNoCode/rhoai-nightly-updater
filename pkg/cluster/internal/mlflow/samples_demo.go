@@ -1,6 +1,7 @@
 package mlflow
 
 import (
+	"slices"
 	"sort"
 	"strings"
 
@@ -127,6 +128,40 @@ func demoLowMemoryMessage(managed bool) string {
 		return "MLflow's memory limit is 2Gi (spec.resources of MLflow CR " + CRName + "), and generating the demo runs MLflow out of memory. This tool did not create that MLflow, so it does not change the limit: raise it, or remove spec.resources so the operator's defaults (3Gi) apply."
 	}
 	return "MLflow still has the 2Gi memory limit an earlier version of this tool set, and generating the demo runs MLflow out of memory. Add or Regenerate first removes that limit (spec.resources of MLflow CR " + CRName + ", so the operator's defaults of 4 CPU / 3Gi apply) and MLflow restarts; then add the demo again once MLflow is ready."
+}
+
+// demoLowMemoryForUserMessage refuses the demo to a user who is not a
+// cluster-admin while MLflow has the old limit: removing it changes MLflow
+// CR mlflow, which is cluster-wide.
+const demoLowMemoryForUserMessage = "MLflow still has the 2Gi memory limit an earlier version of this tool set, and generating the demo runs MLflow out of memory. Removing the limit changes MLflow CR " + CRName + ", which a cluster-admin does: when a cluster-admin adds this demo on the Environment page, the limit is removed first. Then add the demo again once MLflow is ready."
+
+// demoExistsForUserMessage refuses Add to a user who is not a
+// cluster-admin where the demo's experiment exists: adding there brings
+// the demo's data up to date or resets it, which replaces it.
+const demoExistsForUserMessage = "Experiment '" + DemoExperiment + "' exists in this project already. Adding the demo there brings its data up to date or regenerates it, which replaces what is in it, so a cluster-admin does it (Regenerate on the Environment page). Nothing was changed."
+
+// DemoRemovedForUserMessage is the status of a demo removed in MLflow for
+// a user who is not a cluster-admin: restoring it brings its experiment
+// back and generates its features again, which their Add does not do on
+// an existing experiment (demoExistsForUserMessage).
+const DemoRemovedForUserMessage = "Removed in MLflow. A cluster-admin restores it (Add on the Environment page), which brings the experiment back and generates every feature again."
+
+// SamplesStatusForUser is st as a user who is not a cluster-admin gets it:
+// a demo removed in MLflow offers no Add (theirs would be refused: the
+// experiment exists) and says who restores it.
+func SamplesStatusForUser(st *types.MLflowSamplesStatus) *types.MLflowSamplesStatus {
+	if st == nil {
+		return nil
+	}
+	out := *st
+	out.Samples = slices.Clone(st.Samples)
+	for i, s := range out.Samples {
+		if s.ID == SampleGenAIDemo && s.State == "removed" {
+			out.Samples[i].Actions = []string{}
+			out.Samples[i].Message = DemoRemovedForUserMessage
+		}
+	}
+	return &out
 }
 
 func demoStatusOfExperiment(t *Target) types.SampleStatus {

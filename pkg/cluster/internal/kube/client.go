@@ -206,6 +206,17 @@ type Client struct {
 	// accept, when set, is the Accept header of its requests
 	// (MetadataOnly).
 	accept string
+	// projectUser: the client acts for a signed-in user who is not a
+	// cluster-admin, in one of their own projects, through the project
+	// actions' gate (pkg/api withProjectMutationAuth). A project action
+	// then skips what only a cluster-admin does (the internal registry's
+	// copy of the pull secret, an old MLflow CR's memory limit) and its
+	// records are counted in the caps of users' records
+	// (record.UserRecordCapRefusal).
+	projectUser bool
+	// projectUID is the namespace UID of the project a project user's
+	// action runs in (SetProjectUser): their records are keyed by it.
+	projectUID string
 }
 
 // NewUserClient is NewClientWithContext for the signed-in user's own token:
@@ -219,6 +230,19 @@ func NewUserClient(ctx context.Context, token string) *Client {
 // ActsAsUser reports whether the client carries the signed-in user's own
 // token (NewUserClient) rather than the app's ServiceAccount token.
 func (c *Client) ActsAsUser() bool { return c.asUser }
+
+// SetProjectUser marks the client of a project action run by a signed-in
+// user who is not a cluster-admin (see projectUser), in the project whose
+// namespace has projectUID.
+func (c *Client) SetProjectUser(projectUID string) { c.projectUser, c.projectUID = true, projectUID }
+
+// ProjectUID is the namespace UID SetProjectUser was given ("" for a
+// cluster-admin's client).
+func (c *Client) ProjectUID() string { return c.projectUID }
+
+// ProjectUser reports whether SetProjectUser marked the client: the action
+// runs for a user who is not a cluster-admin.
+func (c *Client) ProjectUser() bool { return c.projectUser }
 
 // SetSignedInUser gives a ServiceAccount client (a read request's, pkg/api
 // withAdminRead) the client of the signed-in user's own token (NewUserClient),

@@ -16,19 +16,43 @@ import {
 } from "@patternfly/react-core";
 import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
-import type { MLflowSamplesStatus, PlaygroundStatus, ProjectProblemCode, ProjectStatus, ResourceState } from "../../types";
-import { getMLflowSamples, getPlayground, getProjectStatus, toApiError, type ApiError } from "../../services/api";
+import type { MLflowSampleId, MLflowSamplesStatus, PlaygroundStatus, ProjectProblemCode, ProjectStatus, ResourceState, WorkbenchStatus } from "../../types";
+import { getMLflowSamples, getPlayground, getProjectStatus, getWorkbench, toApiError, type ApiError } from "../../services/api";
+import { Checkbox } from "@patternfly/react-core";
+import { ConfirmActionModal } from "../ConfirmActionModal";
+import { keptStorage, workbenchStatusOf } from "./workbenchState";
+import { ProjectActionButton, ProjectCapabilitiesProvider, ProjectRunPanel, useProjectRun, type ProjectRunRequest } from "./projectActions";
 import { FORBIDDEN_FOR_USER_BODY, FORBIDDEN_FOR_USER_TITLE, describeError, isNotForUser } from "../../errors";
 import { EnvStatusLabel, envStatus } from "./resourceStatus";
-import { playgroundIn } from "./featureState";
+import { IDLE, playgroundIn } from "./featureState";
 import { PipelineSample } from "./PipelineSample";
-import { SAMPLE_INFO, sampleLabel } from "./samples";
+import { SAMPLE_INFO, sampleLabel, sampleNote } from "./samples";
 import { LinesSkeleton } from "./Loading";
 
 /** What a cluster-admin does on this page for a user who is not one: set up or remove anything. */
 export const ADMIN_SETS_UP = "A cluster-admin sets this up.";
-// What a project's own admin can add themselves (a pipeline server, a model, a playground).
+// What a project's own admin can add themselves (a pipeline server, a model).
 export const IN_PROJECT_HINT = "Add one in the RHOAI dashboard, or ask a cluster-admin to set one up here.";
+
+/** A choice a delete's confirmation offers (a checkbox), and the request for each answer. */
+interface ConfirmChoice {
+  label: string;
+  run: (checked: boolean) => ProjectRunRequest;
+  /** What the checked choice adds to the changes. */
+  changes: string[];
+}
+
+/** A project action the user asked for and confirms first (deletes). */
+interface PendingAction {
+  title: string;
+  changes: string[];
+  confirm: string;
+  run: ProjectRunRequest;
+  choice?: ConfirmChoice;
+}
+
+/** Starts a project action (after confirming a delete). */
+type StartAction = (title: string, run: ProjectRunRequest, confirm?: { changes: string[]; label: string; choice?: ConfirmChoice }) => void;
 
 interface ProjectRead<T> {
   data: T | null;
@@ -212,21 +236,50 @@ const ModelsPart: React.FC<{ project: string; read: ProjectRead<ProjectStatus> }
   return <Part title="Models" id="user-env-models">{body}</Part>;
 };
 
-const PlaygroundPart: React.FC<{ project: string; read: ProjectRead<PlaygroundStatus> }> = ({ project, read }) => {
+const PlaygroundPart: React.FC<{ project: string; read: ProjectRead<PlaygroundStatus>; busy: boolean; start: StartAction }> = ({ project, read, busy, start }) => {
   const item = read.data ? playgroundIn(read.data, project) : undefined;
+  // The project's own ready models, chat and embedding, as the admin's Set up chooses them.
+  const models = (read.data?.models ?? []).filter((m) => m.source === "namespace" && m.ready);
+  const hasChat = models.some((m) => m.chat);
   let body: React.ReactNode;
   if (read.error && !read.data) body = <ReadProblem what="the playground" error={read.error} onRetry={read.reload} />;
   else if (!read.data) body = <LinesSkeleton what="the playground" lines={1} />;
   else if (!item && read.data.apiProblem) body = <PartProblem what="the playground" code={read.data.apiCode} message={read.data.apiProblem} onRetry={read.reload} />;
   else if (!item && read.data.blocked) body = <Note>{read.data.blocked.reason}</Note>;
-  else if (!item || (!item.deployed && !item.terminating)) body = <Note>No playground in {project}. {IN_PROJECT_HINT}</Note>;
-  else {
+  else if (!item || (!item.deployed && !item.terminating)) {
+    body = (
+      <Stack hasGutter>
+        <StackItem>
+          <Note>{hasChat
+            ? `No playground in ${project}. Set up asks the RHOAI dashboard for one with the project's ready models.`
+            : `No playground in ${project}. It needs a ready chat model in the project; add one in the RHOAI dashboard.`}</Note>
+        </StackItem>
+        {hasChat && (
+          <StackItem>
+            <ProjectActionButton project={project} action="playground.setup" busy={busy} variant="primary"
+              onClick={() => start(`Set up the playground in ${project}`, { kind: "playground", req: { action: "setup", project, models: models.map((m) => ({ name: m.name, source: m.source })) } })}>
+              Set up playground
+            </ProjectActionButton>
+          </StackItem>
+        )}
+      </Stack>
+    );
+  } else {
     body = (
       <Stack hasGutter>
         <StackItem>
           <Flex gap={{ default: "gapMd" }} alignItems={{ default: "alignItemsCenter" }}>
             <FlexItem><strong>Gen AI playground</strong></FlexItem>
             <FlexItem><EnvStatusLabel status={envStatus(item)} /></FlexItem>
+            {item.managedByTool && !item.terminating && (
+              <FlexItem>
+                <ProjectActionButton project={project} action="playground.teardown" busy={busy} variant="danger"
+                  onClick={() => start(`Delete the playground in ${project}`, { kind: "playground", req: { action: "teardown", project } },
+                    { changes: [`The playground server, its configuration and its database in ${project}, through the RHOAI dashboard`], label: "Delete" })}>
+                  Delete
+                </ProjectActionButton>
+              </FlexItem>
+            )}
           </Flex>
         </StackItem>
         {!item.ready && item.message && <StackItem><Note>{item.message}</Note></StackItem>}
@@ -237,7 +290,8 @@ const PlaygroundPart: React.FC<{ project: string; read: ProjectRead<PlaygroundSt
   return <Part title="Playground" id="user-env-playground">{body}</Part>;
 };
 
-const SamplesPart: React.FC<{ project: string; read: ProjectRead<MLflowSamplesStatus> }> = ({ project, read }) => {
+const SamplesPart: React.FC<{ project: string; read: ProjectRead<MLflowSamplesStatus>; busy: boolean; start: StartAction }> = ({ project, read, busy, start }) => {
+  const sampleRun = (action: "add" | "remove", id: MLflowSampleId): ProjectRunRequest => ({ kind: "mlflow-samples", req: { project, action, samples: [id] } });
   const data = read.data;
   let body: React.ReactNode;
   if (read.error && !data) body = <ReadProblem what="the MLflow sample data" error={read.error} onRetry={read.reload} />;
@@ -246,29 +300,48 @@ const SamplesPart: React.FC<{ project: string; read: ProjectRead<MLflowSamplesSt
   else {
     body = (
       <Stack hasGutter>
-        <StackItem><Note>Example data in the MLflow workspace of {project}. A cluster-admin adds or removes it.</Note></StackItem>
+        <StackItem><Note>Example data in the MLflow workspace of {project}. Add or remove it here when your role in the project allows it.</Note></StackItem>
         <StackItem>
           <Table aria-label={`MLflow sample data in ${project}`} variant="compact">
             <Thead>
               <Tr>
                 <Th width={50}>Sample</Th>
                 <Th width={25}>State</Th>
-                <Th screenReaderText="Link" />
+                <Th screenReaderText="Actions and link" />
               </Tr>
             </Thead>
             <Tbody>
               {data.samples.map((s) => {
                 const label = sampleLabel(s, null);
+                const note = sampleNote(s);
                 return (
                   <Tr key={s.id}>
-                    <Td dataLabel="Sample">{SAMPLE_INFO[s.id]?.name ?? s.name}</Td>
+                    <Td dataLabel="Sample">
+                      {SAMPLE_INFO[s.id]?.name ?? s.name}
+                      {note && <Content component="small" className="pf-v6-u-display-block pf-v6-u-mt-xs">{note}</Content>}
+                    </Td>
                     <Td dataLabel="State">{label ? <EnvStatusLabel status={label.status} text={label.text} /> : null}</Td>
                     <Td dataLabel="Link" modifier="nowrap">
+                      <Flex gap={{ default: "gapMd" }} flexWrap={{ default: "nowrap" }}>
+                      {s.actions.includes("add") && (
+                        <ProjectActionButton project={project} action="mlflow-samples.add" busy={busy} variant="link"
+                          onClick={() => start(`Add ${SAMPLE_INFO[s.id]?.name ?? s.name} in ${project}`, sampleRun("add", s.id))}>
+                          Add
+                        </ProjectActionButton>
+                      )}
+                      {s.actions.includes("remove") && (
+                        <ProjectActionButton project={project} action="mlflow-samples.remove" busy={busy} variant="link"
+                          onClick={() => start(`Remove ${SAMPLE_INFO[s.id]?.name ?? s.name} from ${project}`, sampleRun("remove", s.id),
+                            { changes: [`${SAMPLE_INFO[s.id]?.name ?? s.name} in the MLflow workspace of ${project}`], label: "Remove" })}>
+                          Remove
+                        </ProjectActionButton>
+                      )}
                       {s.link && (
                         <Button variant="link" isInline component="a" href={s.link} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">
                           Open in MLflow
                         </Button>
                       )}
+                      </Flex>
                     </Td>
                   </Tr>
                 );
@@ -282,28 +355,155 @@ const SamplesPart: React.FC<{ project: string; read: ProjectRead<MLflowSamplesSt
   return <Part title="MLflow sample data" id="user-env-mlflow">{body}</Part>;
 };
 
+const loadWorkbench = (project: string) => getWorkbench(project);
+
+const WorkbenchPart: React.FC<{ project: string; read: ProjectRead<WorkbenchStatus>; busy: boolean; start: StartAction }> = ({ project, read, busy, start }) => {
+  const data = read.data;
+  const item = data?.items?.find((i) => !i.namespace || i.namespace === project);
+  const kept = keptStorage(data, project);
+  const exists = !!item?.deployed || !!item?.terminating;
+  const wbRun = (action: "setup" | "start" | "stop" | "teardown" | "delete-storage", deleteStorage = false): ProjectRunRequest => ({ kind: "workbench", req: { action, project, ...(deleteStorage ? { deleteStorage } : {}) } });
+  const storageName = item?.storage?.name ?? "nightly-workbench-storage";
+  let body: React.ReactNode;
+  if (read.error && !data) body = <ReadProblem what="the workbench" error={read.error} onRetry={read.reload} />;
+  else if (!data) body = <LinesSkeleton what="the workbench" lines={1} />;
+  else if (data.blocked) body = <Note>{data.blocked.reason}</Note>;
+  else if (data.unsupported) body = <Note>{data.unsupported}</Note>;
+  else if (!item || !exists) {
+    const setupText = data.plan
+      ? `No workbench of this tool in ${project}. Set up creates nightly-workbench with ${data.plan.image} on hardware profile ${data.plan.hardwareProfile} and ${kept ? `the kept storage ${kept.name} with its files` : `${data.plan.storageSize} of storage`}.`
+      : `No workbench of this tool in ${project}. ${data.planProblem ?? ""}`;
+    body = (
+      <Stack hasGutter>
+        <StackItem><Note>{setupText}</Note></StackItem>
+        {(data.plan || kept) && (
+          <StackItem>
+            <Flex gap={{ default: "gapSm" }}>
+              {data.plan && (
+                <FlexItem>
+                  <ProjectActionButton project={project} action="workbench.setup" busy={busy} variant="primary" onClick={() => start(`Set up the workbench in ${project}`, wbRun("setup"))}>
+                    Set up workbench
+                  </ProjectActionButton>
+                </FlexItem>
+              )}
+              {kept && (
+                <FlexItem>
+                  <ProjectActionButton project={project} action="workbench.delete-storage" busy={busy} variant="danger"
+                    onClick={() => start(`Delete the kept storage in ${project}`, wbRun("delete-storage"),
+                      { changes: [`Storage ${kept.name} in ${project} and the files on it`], label: "Delete storage" })}>
+                    Delete storage
+                  </ProjectActionButton>
+                </FlexItem>
+              )}
+            </Flex>
+          </StackItem>
+        )}
+      </Stack>
+    );
+  } else {
+    const ours = item.managedByTool;
+    const shown = workbenchStatusOf(data, project, IDLE);
+    body = (
+      <Stack hasGutter>
+        <StackItem>
+          <Flex gap={{ default: "gapMd" }} alignItems={{ default: "alignItemsCenter" }}>
+            <FlexItem><strong>{item.name}</strong></FlexItem>
+            <FlexItem><EnvStatusLabel status={shown.status} text={shown.word} /></FlexItem>
+            {item.url && item.state === "running" && (
+              <FlexItem>
+                <Button variant="link" isInline component="a" href={item.url} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">Open workbench</Button>
+              </FlexItem>
+            )}
+          </Flex>
+        </StackItem>
+        {!ours && <StackItem><Note>This workbench was not created by this tool, so it is not changed here. Use it in the RHOAI dashboard.</Note></StackItem>}
+        {ours && !item.terminating && (
+          <StackItem>
+            <Flex gap={{ default: "gapSm" }}>
+              {item.state === "stopped" ? (
+                <FlexItem><ProjectActionButton project={project} action="workbench.start" busy={busy} onClick={() => start(`Start the workbench in ${project}`, wbRun("start"))}>Start</ProjectActionButton></FlexItem>
+              ) : (
+                <FlexItem><ProjectActionButton project={project} action="workbench.stop" busy={busy} onClick={() => start(`Stop the workbench in ${project}`, wbRun("stop"))}>Stop</ProjectActionButton></FlexItem>
+              )}
+              <FlexItem>
+                <ProjectActionButton project={project} action="workbench.teardown" busy={busy} variant="danger"
+                  onClick={() => start(`Delete the workbench in ${project}`, wbRun("teardown"), {
+                    changes: [`Workbench ${item.name} in ${project}; its storage ${storageName} is kept for the next Set up`], label: "Delete",
+                    choice: { label: `Also delete its storage ${storageName} and the files on it`, run: (checked) => wbRun("teardown", checked), changes: [`Storage ${storageName} and the files on it`] },
+                  })}>
+                  Delete
+                </ProjectActionButton>
+              </FlexItem>
+            </Flex>
+          </StackItem>
+        )}
+      </Stack>
+    );
+  }
+  return <Part title="Workbench" id="user-env-workbench">{body}</Part>;
+};
+
 /**
  * What runs in one of the user's projects, read with their own token
  * (docs/research/per-user-views.md): the pipeline server and the sample
- * pipeline, the models, the playground and the MLflow sample data.
- * Read-only: every set up and removal is a cluster-admin's.
+ * pipeline, the models, the workbench, the playground and the MLflow
+ * sample data. The workbench, the playground and the samples can be set up
+ * and removed here when the user's role in the project allows it (the
+ * non-admin design, B3: GET /api/resources/projects/capabilities); a
+ * control they may not use is disabled with the reason. Pipeline servers
+ * and models stay a cluster-admin's.
  */
 export const UserProjectView: React.FC<{ project: string; refreshKey: number }> = ({ project, refreshKey }) => {
+  const [ran, setRan] = useState(0);
+  const key = refreshKey + ran;
+  return (
+    <ProjectCapabilitiesProvider project={project} refreshKey={key}>
+      <UserProjectParts project={project} refreshKey={key} onRunEnd={() => setRan((n) => n + 1)} />
+    </ProjectCapabilitiesProvider>
+  );
+};
+
+const UserProjectParts: React.FC<{ project: string; refreshKey: number; onRunEnd: () => void }> = ({ project, refreshKey, onRunEnd }) => {
   const status = useProjectRead(loadStatus, project, refreshKey);
   const playground = useProjectRead(loadPlayground, project, refreshKey);
   const samples = useProjectRead(loadSamples, project, refreshKey);
+  const workbench = useProjectRead(loadWorkbench, project, refreshKey);
   const server = projectServer(status.data, project);
+  const { run, start: startRun, running } = useProjectRun(onRunEnd);
+  const [pending, setPending] = useState<PendingAction | null>(null);
+  const [choiceChecked, setChoiceChecked] = useState(false);
+  const start: StartAction = (title, r, confirm) => {
+    if (confirm) {
+      setChoiceChecked(false);
+      setPending({ title, changes: confirm.changes, confirm: confirm.label, run: r, choice: confirm.choice });
+    } else startRun(title, r);
+  };
   return (
     <Stack hasGutter>
+      {run && <StackItem><Card><CardBody><ProjectRunPanel run={run} idPrefix="user-env-run" /></CardBody></Card></StackItem>}
       <StackItem><PipelinesPart project={project} read={status} /></StackItem>
       <StackItem><ModelsPart project={project} read={status} /></StackItem>
-      <StackItem><PlaygroundPart project={project} read={playground} /></StackItem>
-      <StackItem><SamplesPart project={project} read={samples} /></StackItem>
+      <StackItem><WorkbenchPart project={project} read={workbench} busy={running} start={start} /></StackItem>
+      <StackItem><PlaygroundPart project={project} read={playground} busy={running} start={start} /></StackItem>
+      <StackItem><SamplesPart project={project} read={samples} busy={running} start={start} /></StackItem>
       {/* Last: the long how-to would push the project's state below the fold. */}
       {server?.ready && (
         <StackItem>
           <Card><CardBody><PipelineSample project={project} dspa={server.name} apiRoute={server.apiRoute} uiRoute={server.uiRoute} /></CardBody></Card>
         </StackItem>
+      )}
+      {pending && (
+        <ConfirmActionModal isOpen title={`${pending.title}?`} confirmLabel={pending.confirm} confirmVariant="danger"
+          changes={pending.choice && choiceChecked ? [...pending.changes, ...pending.choice.changes] : pending.changes}
+          choice={pending.choice && (
+            <Checkbox id="user-env-confirm-choice" label={pending.choice.label} isChecked={choiceChecked} onChange={(_e, checked) => setChoiceChecked(checked)} />
+          )}
+          onConfirm={() => {
+            const p = pending;
+            setPending(null);
+            startRun(p.title, p.choice ? p.choice.run(choiceChecked) : p.run);
+          }}
+          onCancel={() => setPending(null)} />
       )}
     </Stack>
   );

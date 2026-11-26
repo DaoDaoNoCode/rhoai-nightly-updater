@@ -144,6 +144,11 @@ oc logs -n $NS deploy/$APP -c app --previous
 | An operation stopped with "your OpenShift account is not allowed to do this" (403) | The API server refused your own RBAC for one step (for example a cluster-admin binding removed mid-operation, or a namespace-scoped admin). Ask for cluster-admin, then retry |
 | 401 "Bearer tokens are not accepted" | Something called the API with a bearer token. Use the Route in a browser |
 | 503 "Cannot verify ..." | The API server didn't answer the identity/SAR check. Nothing was changed; retry |
+| A project action refused with "... needs permissions your OpenShift account does not have: ..." (403 `missing_permissions`) | A user who is not a cluster-admin lacks requests the action makes in that project; each is named with who can grant it (usually an admin of the project gives the `edit` role: `oc adm policy add-role-to-user edit <user> -n <project>`). Nothing was changed. The list is what the access reviews with the user's token answered (`oc auth can-i <verb> <resource> -n <project> --as=<user>` shows the same) |
+| "Project P is not one of your data science projects" (403 `forbidden_for_user`) on a project action or its capabilities | The projects API with the user's token does not list P (no role there, P does not exist, or it lacks the label `opendatahub.io/dashboard=true`). The same answer for each, on purpose |
+| "<action> is done by a cluster-admin in this tool" (403 `admin_only`) | The action is not one users may run (Regenerate the MLflow demo, and every cluster or shared part) |
+| "You have this tool's objects in 10 projects ..." or "The updater's records of users' objects are full (100 projects)" (`records_full`) | The caps of users' records. The user deletes the tool's workbench or playground in a project they no longer need; for the total, a cluster-admin runs Clean up. Projects that no longer exist are not counted |
+| A workbench set up by a user on ROSA HCP does not pull its image | A user's setup does not copy the pull secret for the internal registry (a Secret in RHOAI's applications namespace). A cluster-admin uses **Copy for the internal registry** in the pull secret's part of the Status page |
 | 429 | One accepted request per user and endpoint per 30 s. Dry runs and rejected requests don't count |
 
 ### Sign-in and the OAuthClient
@@ -1162,7 +1167,7 @@ A step that still fails says so: `k8s API error 429 (TooManyRequests): ...` in i
 
 ## 12. Activity log
 
-ConfigMap `rhoai-nightly-updater-activity` holds the audit log (`data.entries`, JSON). If it is corrupted, the app logs a parse warning and starts a fresh list on the next write. To reset it (MANUAL ADMIN STEP): `oc delete cm rhoai-nightly-updater-activity -n $NS`.
+ConfigMap `rhoai-nightly-updater-activity` holds the audit log (`data.entries`, JSON). Cluster-admins see every entry; a user who is not one sees only their own (filtered on the server by the identity their token resolves to). If it is corrupted, the app logs a parse warning and starts a fresh list on the next write. To reset it (MANUAL ADMIN STEP): `oc delete cm rhoai-nightly-updater-activity -n $NS`.
 
 ## 13. Clusters managed by Argo CD
 

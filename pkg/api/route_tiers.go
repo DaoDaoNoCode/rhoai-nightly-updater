@@ -47,7 +47,6 @@ const (
 // getRouteTiers is the tier of every GET route of routes.
 var getRouteTiers = map[string]readTier{
 	"GET /api/status":                      tierAdmin,
-	"GET /api/activity":                    tierAdmin,
 	"GET /api/components":                  tierAdmin,
 	"GET /api/components/dsc":              tierAdmin,
 	"GET /api/components/dsc/plan":         tierAdmin,
@@ -64,7 +63,6 @@ var getRouteTiers = map[string]readTier{
 	"GET /api/resources/maas/groups":       tierAdmin,
 	"GET /api/resources/prerequisites":     tierAdmin,
 	"GET /api/resources/models/exposures":  tierAdmin,
-	"GET /api/resources/workbench":         tierAdmin,
 	"GET /api/resources/kueue":             tierAdmin,
 	"GET /api/resources/observability":     tierAdmin,
 	"GET /api/resources/s3/admin-password": tierAdmin,
@@ -76,11 +74,14 @@ var getRouteTiers = map[string]readTier{
 	"GET /api/build-explorer/content":  tierSummary,
 	"GET /api/build-explorer/contains": tierSummary,
 
-	"GET /api/user/permissions":         tierUserToken,
-	"GET /api/resources/projects":       tierUserToken,
-	"GET /api/resources/playground":     tierUserToken,
-	"GET /api/resources/model-registry": tierUserToken,
-	"GET /api/resources/samples/mlflow": tierUserToken,
+	"GET /api/user/permissions":   tierUserToken,
+	"GET /api/resources/projects": tierUserToken,
+	// What the user may do in one of their projects: the project
+	// actions' access reviews with their token (HandleProjectCapabilities).
+	"GET /api/resources/projects/capabilities": tierUserToken,
+	"GET /api/resources/playground":            tierUserToken,
+	"GET /api/resources/model-registry":        tierUserToken,
+	"GET /api/resources/samples/mlflow":        tierUserToken,
 
 	"GET /api/update-check":                    tierNoClusterRead,
 	"GET /api/resources/samples/pipeline/spec": tierNoClusterRead,
@@ -90,6 +91,12 @@ var getRouteTiers = map[string]readTier{
 	// projects, read with their token (HandleResourcesStatus).
 	"GET /api/operation":        tierPerRole,
 	"GET /api/resources/status": tierPerRole,
+	// The activity log: a user gets their own entries only, filtered on
+	// the server (HandleActivity).
+	"GET /api/activity": tierPerRole,
+	// The workbench of one of the user's projects, read with their token
+	// (HandleWorkbenchStatus); the project check comes first.
+	"GET /api/resources/workbench": tierPerRole,
 }
 
 // tierOf is the tier of a route pattern: admin-only unless getRouteTiers
@@ -169,7 +176,7 @@ func requestRole(w http.ResponseWriter, r *http.Request) (admin, ok bool) {
 		return false, false
 	}
 	if err != nil {
-		slog.Warn("cannot verify the user's role; answering as for a user", "path", r.URL.Path, "error", err)
+		logAuthFailure("cannot verify the user's role; answering as for a user", err, "path", r.URL.Path)
 		return false, true
 	}
 	return admin, true
@@ -221,4 +228,13 @@ func writeUserReadError(w http.ResponseWriter, what string, err error) {
 	default:
 		writeError(w, what+": "+err.Error(), code, errorCode)
 	}
+}
+
+// logAuthFailure logs a failed check with the user's token at Warn with
+// its HTTP status or category only, and its text at Debug: the text of a
+// permission review can carry the authorizer's evaluationError, which may
+// name roles and bindings (SECURITY.md, project actions).
+func logAuthFailure(msg string, err error, attrs ...any) {
+	slog.Warn(msg, append(attrs, "problem", cluster.FactReadProblem(err))...)
+	slog.Debug(msg, append(attrs, "error", err)...)
 }

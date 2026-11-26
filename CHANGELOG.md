@@ -24,6 +24,23 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Added
 
+- **Project actions for users who are not cluster-admins.** In one of
+  their own data science projects, a project's admins and editors can set
+  up, start, stop and delete the workbench, set up and delete the
+  playground, and add and remove the MLflow sample data on the Environment
+  page. Each action runs with their own token after an access review with
+  that token allows every request it can make (the requests are derived
+  from the code by the RBAC scan, plus the dashboard's gen-ai API's and
+  MLflow's at pinned sources); otherwise it is refused before anything is
+  written, naming what is missing and who can grant it. A button the user
+  may not use says why (`GET /api/resources/projects/capabilities`).
+  Cluster-admins are unchanged, except that the workbench and playground
+  actions hold the project's lock instead of the cluster's (an admin's MLflow
+  samples action keeps the cluster lock: it may restart the shared MLflow). The activity log shows a user
+  their own entries; users' records are capped (100 projects, 10 per user;
+  cluster-admins' records are outside the caps). `DEV_ROLE=user` tries the
+  non-admin path in local development. No template change
+  ([SECURITY.md](SECURITY.md#project-actions-for-non-admins-500)).
 - **Set up again on a model's card.** The Models tab's model card menu has
   **Set up again** next to Delete model: the model's own setup, in place
   (the same model, project and way it is reached), which applies this

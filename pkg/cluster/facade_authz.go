@@ -39,3 +39,13 @@ func LookupUserWithToken(ctx context.Context, userToken string) (string, error) 
 func ListUserDSProjects(u *Client) ([]string, error) {
 	return authz.ListUserDSProjects(u)
 }
+
+// ProjectUID is authz.ProjectUID.
+func ProjectUID(u *Client, project string) (string, error) {
+	return authz.ProjectUID(u, project)
+}
+
+// IsUserDSProject is authz.IsUserDSProject.
+func IsUserDSProject(u *Client, project string) (bool, error) {
+	return authz.IsUserDSProject(u, project)
+}

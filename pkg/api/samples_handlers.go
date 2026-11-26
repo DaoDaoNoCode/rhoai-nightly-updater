@@ -39,6 +39,15 @@ var HandleMLflowSamplesStatus = withUserRead(func(sa, u *cluster.Client, w http.
 		writeUserReadError(w, "Cannot read the MLflow samples", err)
 		return
 	}
+	// A user who is not a cluster-admin is not offered what their Add would
+	// refuse (a demo removed in MLflow: a cluster-admin restores it).
+	admin, ok := requestRole(w, r)
+	if !ok {
+		return
+	}
+	if !admin {
+		st = cluster.MLflowSamplesStatusForUser(st)
+	}
 	writeJSON(w, st, "mlflow-samples")
 })
 
@@ -57,11 +66,7 @@ var runMLflowSamples = cluster.RunMLflowSamples
 // HandleMLflowSamplesStream adds, removes or regenerates MLflow samples in
 // one project, streaming a step per sample. The samples are MLflow API
 // calls, not Kubernetes writes, so there is no dry run.
-var HandleMLflowSamplesStream = withMutationAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
-	if !lockCluster(w) {
-		return
-	}
-	defer releaseClusterMutationLock()
+var HandleMLflowSamplesStream = withProjectMutationAuth(projectActionRoutes["/api/resources/samples/mlflow/stream"], func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	var req types.MLflowSamplesRequest
 	if !decodeBody(w, r, 4096, &req, false) {
 		return
@@ -74,7 +79,9 @@ var HandleMLflowSamplesStream = withMutationAuth(func(c *cluster.Client, w http.
 		writeError(w, problem, http.StatusBadRequest, "validation")
 		return
 	}
-	beginOperation(w, fmt.Sprintf("%s %s in %s", req.Action, strings.Join(req.Samples, ", "), req.Project))
+	if !beginProject(w, fmt.Sprintf("%s %s in %s", req.Action, strings.Join(req.Samples, ", "), req.Project)) {
+		return
+	}
 	slog.Info("mutation", "op", "mlflow-samples", "action", req.Action, "samples", req.Samples, "project", req.Project)
 	_, runErr := streamOperation(w, "mlflow-samples", func(emit func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 		return runMLflowSamples(c, req, emit)

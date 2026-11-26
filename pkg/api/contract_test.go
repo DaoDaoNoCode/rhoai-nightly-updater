@@ -73,6 +73,9 @@ func TestFrontendContract(t *testing.T) {
 		{"recipe-run-features-admin.json", "/api/recipes/run", "user:admin", HandleRecipeRunStatus, "", stubFeaturesRecipeRun},
 		// The Workbench tab's status (admin-only, read with the admin's token).
 		{"workbench-admin.json", "/api/resources/workbench?project=team-a", "user:admin", HandleWorkbenchStatus, "", nil},
+		{"workbench-user.json", "/api/resources/workbench?project=team-a", "user:carol", HandleWorkbenchStatus, "", nil},
+		{"project-capabilities-user.json", "/api/resources/projects/capabilities?project=team-a", "user:carol", HandleProjectCapabilities, "", nil},
+		{"project-capabilities-admin.json", "/api/resources/projects/capabilities?project=team-a", "user:admin", HandleProjectCapabilities, "", nil},
 		// The Distributed workloads tab's status (admin-only, the admin's token).
 		{"kueue-admin.json", "/api/resources/kueue?project=team-a", "user:admin", HandleKueueStatus, "", nil},
 		// The Observability tab's status (admin-only, the ServiceAccount's reads).
@@ -141,6 +144,18 @@ func TestFrontendContract(t *testing.T) {
 // field set, so a renamed or retyped field shows in the fixtures.
 func stubContractData(t *testing.T) {
 	t.Helper()
+	// The project actions' checks: team-a is the users' project; carol
+	// may not remove MLflow samples there (one review denied).
+	isUserProject = func(_ *cluster.Client, project string) (bool, error) { return project == "team-a", nil }
+	reviewProjectActions = func(_ *cluster.Client, ids []string, project, _ string) (map[string]cluster.ActionReview, error) {
+		req := cluster.AccessRequest{Verb: "delete", Group: "mlflow.kubeflow.org", Resource: "experiments", Namespace: project, Name: "nightly-sample-training"}
+		out := map[string]cluster.ActionReview{}
+		for _, id := range ids {
+			out[id] = cluster.ActionReview{}
+		}
+		out["mlflow-samples.remove"] = cluster.ActionReview{Missing: []cluster.MissingPermission{{Request: req, Text: req.String() + ": ask an admin of project " + project + " to give you the edit role there."}}}
+		return out, nil
+	}
 	origSummary, origProject, origPlayground, origSamples, origRegistry, origWorkbench, origKueue, origObservability := getSummary, getProjectStatus, getPlaygroundStatus, getMLflowSamplesStatus, getModelRegistryStatus, getWorkbenchStatus, getKueueStatus, getObservabilityStatus
 	t.Cleanup(func() {
 		getSummary, getProjectStatus, getPlaygroundStatus, getMLflowSamplesStatus, getModelRegistryStatus, getWorkbenchStatus, getKueueStatus, getObservabilityStatus = origSummary, origProject, origPlayground, origSamples, origRegistry, origWorkbench, origKueue, origObservability
@@ -206,6 +221,9 @@ func stubContractData(t *testing.T) {
 			ItemsProblem: "Cannot read the workbench in team-b: k8s API error 503.", ItemsUnreadable: []string{"team-b"},
 		}, nil
 	}
+	origProjectWorkbench := getWorkbenchProjectStatus
+	t.Cleanup(func() { getWorkbenchProjectStatus = origProjectWorkbench })
+	getWorkbenchProjectStatus = getWorkbenchStatus
 	getSummary = func(*cluster.Client) (*types.Summary, error) {
 		return &types.Summary{
 			RHOAI: types.SummaryRHOAI{Installed: true, Version: "3.6.0", Channel: "beta", Phase: "Succeeded"},

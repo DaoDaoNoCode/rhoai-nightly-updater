@@ -2154,3 +2154,28 @@ export function observabilityWorld(state = "none") {
   }
   return out;
 }
+
+// GET /api/resources/projects/capabilities for a user with the edit role in
+// the project (pkg/api capabilities_handlers.go): every project action
+// allowed except Regenerate, which stays a cluster-admin's.
+const USER_ACTIONS = {
+  "mlflow-samples.add": "Add MLflow sample data",
+  "mlflow-samples.regenerate": "Regenerate the MLflow demo",
+  "mlflow-samples.remove": "Remove MLflow sample data",
+  "playground.setup": "Set up the playground",
+  "playground.teardown": "Delete the playground",
+  "workbench.delete-storage": "Delete the workbench's kept storage",
+  "workbench.setup": "Set up the workbench",
+  "workbench.start": "Start the workbench",
+  "workbench.stop": "Stop the workbench",
+  "workbench.teardown": "Delete the workbench",
+};
+export function userCapabilities(project) {
+  const actions = {};
+  for (const [id, label] of Object.entries(USER_ACTIONS)) {
+    actions[id] = id === "mlflow-samples.regenerate"
+      ? { label, allowed: false, code: "admin_only", reason: `${label} is done by a cluster-admin in this tool.`, missing: [], blockedBy: [] }
+      : { label, allowed: true, missing: [], blockedBy: [] };
+  }
+  return { project, role: "user", actions };
+}

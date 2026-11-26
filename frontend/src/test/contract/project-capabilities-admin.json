@@ -1,0 +1,66 @@
+{
+  "actions": {
+    "mlflow-samples.add": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Add MLflow sample data",
+      "missing": []
+    },
+    "mlflow-samples.regenerate": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Regenerate the MLflow demo",
+      "missing": []
+    },
+    "mlflow-samples.remove": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Remove MLflow sample data",
+      "missing": []
+    },
+    "playground.setup": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Set up the playground",
+      "missing": []
+    },
+    "playground.teardown": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Delete the playground",
+      "missing": []
+    },
+    "workbench.delete-storage": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Delete the workbench's kept storage",
+      "missing": []
+    },
+    "workbench.setup": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Set up the workbench",
+      "missing": []
+    },
+    "workbench.start": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Start the workbench",
+      "missing": []
+    },
+    "workbench.stop": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Stop the workbench",
+      "missing": []
+    },
+    "workbench.teardown": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Delete the workbench",
+      "missing": []
+    }
+  },
+  "project": "team-a",
+  "role": "admin"
+}

@@ -51,11 +51,12 @@ var saReachPruned = map[string]string{
 }
 
 // mutationHandlerVars are the handler variables of pkg/api built with
-// withMutationAuth: their work runs with the user's token.
+// withMutationAuth or withProjectMutationAuth (the project actions'
+// gate): their work runs with the user's token.
 func (pg *profileGraph) mutationHandlerVars() []string {
 	var out []string
 	for node, refs := range pg.graph {
-		if strings.HasPrefix(node, "var "+apiPkg+".") && refs[apiPkg+".withMutationAuth"] {
+		if strings.HasPrefix(node, "var "+apiPkg+".") && (refs[apiPkg+".withMutationAuth"] || refs[apiPkg+".withProjectMutationAuth"]) {
 			out = append(out, node)
 		}
 	}
@@ -194,6 +195,9 @@ func (g refGraph) pathTo(roots []string, pruned map[string]bool, target string) 
 var mutationMachinery = []string{
 	apiPkg + ".withMutationAuth", apiPkg + ".mutationAuth",
 	apiPkg + ".lockCluster", apiPkg + ".beginOperation", apiPkg + ".releaseClusterMutationLock",
+	// The project actions' gate: its bookkeeper and its checks' facts
+	// client are the ServiceAccount's, as withMutationAuth's are.
+	apiPkg + ".withProjectMutationAuth", apiPkg + ".projectCheckClient", apiPkg + ".beginProject",
 }
 
 // saTokenSources are the only ways code gets the ServiceAccount's token or

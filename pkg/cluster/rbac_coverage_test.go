@@ -61,6 +61,11 @@ var rbacCallsNotUsingTheSAToken = map[string]string{
 	"authz.go:CheckUserPermissionWithToken": "SubjectAccessReview sent with the user's token",
 	"authz.go:LookupUserWithToken":          "users/~ read with the user's token",
 	"authz.go:ReadSessionToken":             "the user's own OAuth access token, read with that token",
+	// The project actions' gate and capabilities (pkg/api
+	// withProjectMutationAuth): the preflight's access reviews and the
+	// project's namespace UID (its lock's key), with the user's token.
+	"access_review.go:reviewOne":  "the project actions' preflight: a SelfSubjectAccessReview sent with the user's token",
+	"access_review.go:ProjectUID": "the project actions' lock: the user's project's namespace, read with the user's token for its UID",
 	// The hard reset's namespace guard reads with the signed-in
 	// cluster-admin's own client (SignedInUser): the namespaces, the
 	// owners of any cluster-scoped kind and their API discovery. The
@@ -342,6 +347,11 @@ type sourcePkg struct {
 	// only, when set, limits the scan to these functions (funcPos keys):
 	// their API calls, and the call sites a parameter is resolved from.
 	only map[string]bool
+	// projectAction: the scan of a project action's requests
+	// (project_actions_rbac_test.go), made with the signed-in user's
+	// token: the user-token reads (rbacUserTokenReads) count, and the
+	// calls on c.Bookkeeping() (the ServiceAccount's records) do not.
+	projectAction bool
 
 	// Memos of the resolver, valid for this scan (only is fixed): the
 	// resolver re-walked the whole package for every parameter and call
@@ -1824,6 +1834,9 @@ func (p *sourcePkg) scan(only map[string]bool, onlyBookkeeping bool) ([]rbacRequ
 				if onlyBookkeeping && !p.isBookkeeping(rc.client) {
 					continue
 				}
+				if p.projectAction && p.isBookkeeping(rc.client) {
+					continue
+				}
 				site := fmt.Sprintf("%s:%s", file, fn.Name.Name)
 				if _, excluded := rbacCallsNotUsingTheSAToken[site]; excluded {
 					seenExcluded[site] = true
@@ -1833,7 +1846,7 @@ func (p *sourcePkg) scan(only map[string]bool, onlyBookkeeping bool) ([]rbacRequ
 					seenExcluded[site] = true
 					continue
 				}
-				if _, userRead := rbacUserTokenReads[site]; userRead {
+				if _, userRead := rbacUserTokenReads[site]; userRead && !p.projectAction {
 					seenExcluded[site] = true
 					continue
 				}

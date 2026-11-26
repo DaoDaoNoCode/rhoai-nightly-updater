@@ -86,6 +86,11 @@ const certManagerGroup = "cert-manager.io"
 // playground.
 var dashboardComponent = envkit.FeatureComponent{Feature: "The RHOAI dashboard", Keys: []string{"dashboard"}}
 
+// PlaygroundComponents are the DataScienceCluster components the
+// playground needs: its server operator and the dashboard, whose gen-ai
+// API sets it up.
+var PlaygroundComponents = []envkit.FeatureComponent{playgroundComponent, dashboardComponent}
+
 // featureSetup is what a feature needs on the cluster.
 type featureSetup struct {
 	id, title  string

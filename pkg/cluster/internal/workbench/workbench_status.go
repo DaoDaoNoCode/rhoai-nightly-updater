@@ -1,6 +1,7 @@
 package workbench
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -168,7 +169,7 @@ func itemState(c *kube.Client, project, dashboardURL string, rec Record) (types.
 		}
 		st.ImageDeprecated = runsDeprecatedImage(c, nb, sel)
 	}
-	st.HardwareProfile = profileLabel(c, nb.Metadata.Annotations[profileNamespaceAnnotation], nb.Metadata.Annotations[profileNameAnnotation])
+	st.HardwareProfile = profileLabel(c, profileNamespace(c, project, nb.Metadata.Annotations[profileNamespaceAnnotation]), nb.Metadata.Annotations[profileNameAnnotation])
 	for _, ct := range nb.Spec.Template.Spec.Containers {
 		if ct.Name == Name {
 			st.CPU, st.Memory = ResourceText(ct.Resources.Requests["cpu"]), ResourceText(ct.Resources.Requests["memory"])
@@ -206,6 +207,20 @@ func cutLast(s, sep string) (string, string, bool) {
 // via sa, user-scoped inventory through u, the target project's
 // nightly-workbench, and the resources Set up would apply there.
 func GetStatus(sa, u *kube.Client, project string) (*types.WorkbenchStatus, error) {
+	return getStatus(sa, u, project, false)
+}
+
+// GetProjectStatus is GetStatus of project only, for a user who is not a
+// cluster-admin: nothing is read in the tool's other projects, with the
+// user's token or otherwise.
+func GetProjectStatus(sa, u *kube.Client, project string) (*types.WorkbenchStatus, error) {
+	if project == "" {
+		return nil, fmt.Errorf("a project is required")
+	}
+	return getStatus(sa, u, project, true)
+}
+
+func getStatus(sa, u *kube.Client, project string, onlyProject bool) (*types.WorkbenchStatus, error) {
 	if !u.ActsAsUser() {
 		return nil, authz.ErrNotUserClient
 	}
@@ -221,6 +236,9 @@ func GetStatus(sa, u *kube.Client, project string) (*types.WorkbenchStatus, erro
 		return nil, err
 	}
 	projects := rec.Projects()
+	if onlyProject {
+		projects = nil
+	}
 	if project != "" && !slices.Contains(projects, project) {
 		projects = append(projects, project)
 	}
@@ -242,7 +260,14 @@ func GetStatus(sa, u *kube.Client, project string) (*types.WorkbenchStatus, erro
 		return st, nil
 	}
 	if dscErr != nil {
-		st.PlanProblem, st.PlanProblemCode = fmt.Sprintf("Cannot read the DataScienceCluster: %v.", dscErr), kube.ErrorCodeFromK8sErr(dscErr)
+		// The ServiceAccount's read: a user's answer names how it failed
+		// only, never its text.
+		why := dscErr.Error()
+		if onlyProject {
+			kube.LogFactReadFailure("cannot read the DataScienceCluster for a user's workbench status", "DataScienceCluster", dscErr)
+			why = kube.FactReadProblem(dscErr)
+		}
+		st.PlanProblem, st.PlanProblemCode = fmt.Sprintf("Cannot read the DataScienceCluster: %s.", why), kube.ErrorCodeFromK8sErr(dscErr)
 		return st, nil
 	}
 	plan, msg, code := BuildPlan(u, project, dsc)
@@ -265,6 +290,37 @@ func PlanView(p Plan) *types.WorkbenchPlan {
 		Connection: p.Connection, Pipelines: p.Pipelines, MLflow: p.MLflow,
 	}
 	return v
+}
+
+// ErrPlanUnreadable: what decides a workbench setup's reads could not be
+// read; its text names only the read that failed and how.
+var ErrPlanUnreadable = errors.New("cannot read what a workbench setup in this project needs")
+
+// QueuesNeeded reports whether a workbench setup in project reads the
+// project's Kueue LocalQueues: as BuildPlan decides it, when the project
+// is Kueue-managed (label kueue.openshift.io/managed=true) and Kueue is
+// available to the dashboard (the DataScienceCluster's kueue component,
+// read with the facts client, and the dashboard's disableKueue in apps,
+// read with u). u acts with the signed-in user's token. The project
+// actions' preflight reviews "list localqueues" only then.
+func QueuesNeeded(u *kube.Client, project, apps string) (bool, error) {
+	labels, msg, _ := projectLabels(u, project)
+	if msg != "" {
+		return false, fmt.Errorf("%w (the project)", ErrPlanUnreadable)
+	}
+	if labels[KueueProjectLabel] != "true" {
+		return false, nil
+	}
+	dsc, err := rhoai.ReadFirstDSC(u.Facts())
+	if err != nil {
+		kube.LogFactReadFailure("cannot read the DataScienceCluster for a workbench preflight", "DataScienceCluster", err)
+		return false, fmt.Errorf("%w (the DataScienceCluster: %s)", ErrPlanUnreadable, kube.FactReadProblem(err))
+	}
+	cfg, err := readDashboardConfig(u, apps)
+	if err != nil {
+		return false, fmt.Errorf("%w (the dashboard's settings: %s)", ErrPlanUnreadable, kube.FactReadProblem(err))
+	}
+	return ModeFor(true, envkit.KueueAvailable(dsc, cfg.Spec.DashboardConfig.DisableKueue)) == OnlyKueue, nil
 }
 
 // BuildPlan, acting as c, resolves the payload Set up would create in project—
@@ -345,6 +401,22 @@ func BuildPlan(c *kube.Client, project string, dsc rhoai.DSCRead) (Plan, string,
 // profileLabel is the hardware profile's display name as the
 // dashboard shows it, else its name ("" without one). A profile that
 // cannot be read or is gone shows by name.
+// profileNamespace is where the hardware profile a Notebook's annotation
+// names may be looked up: annotated (the project when it is empty) if that
+// is the project itself or RHOAI's applications namespace (where the
+// dashboard keeps its profiles, discovered with the facts client), else ""
+// (no lookup). Anyone who may edit the Notebook may write the annotation,
+// so a name of another project is never followed with the reader's token.
+func profileNamespace(c *kube.Client, project, annotated string) string {
+	if annotated == "" || annotated == project {
+		return project
+	}
+	if apps := rhoai.ApplicationsNamespace(c); apps != "" && annotated == apps {
+		return apps
+	}
+	return ""
+}
+
 func profileLabel(c *kube.Client, namespace, name string) string {
 	if name == "" || namespace == "" {
 		return name

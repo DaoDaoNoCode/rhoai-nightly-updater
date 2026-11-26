@@ -67,10 +67,25 @@ func resetPackageState(t *testing.T) {
 	testClock = clocktest.NewFake()
 	clk = testClock
 	origSession, origSessionClock := readSessionToken, sessionClock
+	origIsUserProject, origProjectUID, origReview, origBlock, origApps := isUserProject, readProjectUID, reviewProjectActions, projectFeatureBlock, projectAppsNamespace
+	// The project actions' gate: no project is the user's, every project
+	// has the UID "uid-<name>", no prerequisite blocks, every review allows.
+	isUserProject = func(*cluster.Client, string) (bool, error) { return false, nil }
+	readProjectUID = func(_ *cluster.Client, project string) (string, error) { return "uid-" + project, nil }
+	reviewProjectActions = func(_ *cluster.Client, ids []string, _, _ string) (map[string]cluster.ActionReview, error) {
+		out := map[string]cluster.ActionReview{}
+		for _, id := range ids {
+			out[id] = cluster.ActionReview{}
+		}
+		return out, nil
+	}
+	projectFeatureBlock = func(*cluster.Client, string) (string, string) { return "", "" }
+	projectAppsNamespace = func(*cluster.Client) (string, error) { return "redhat-ods-applications", nil }
 	checkGitOpsPolicy = func(*cluster.Client) error { return nil }
 	setGitOpsPolicyState("")
 	mutationLimiter = newRateLimiter()
 	identities.reset()
+	capabilities.reset()
 	apiReady.reset()
 	inflight.reset()
 	markers.reset()
@@ -99,6 +114,7 @@ func resetPackageState(t *testing.T) {
 		checkGitOpsPolicy = origPolicyCheck
 		clk = origClock
 		readSessionToken, sessionClock = origSession, origSessionClock
+		isUserProject, readProjectUID, reviewProjectActions, projectFeatureBlock, projectAppsNamespace = origIsUserProject, origProjectUID, origReview, origBlock, origApps
 		setGitOpsPolicyState("")
 		identities.reset()
 		apiReady.reset()

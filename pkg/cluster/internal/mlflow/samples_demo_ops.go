@@ -93,27 +93,29 @@ func (t *Target) GenerateDemo(log func(string)) (demoGenerateResult, string, err
 // createDemoExperiment creates the demo's experiment with the tool's
 // marker, before the generator runs. When someone created one of that name
 // in the meantime, it is used only if it carries the marker.
-func (t *Target) createDemoExperiment(log func(string)) (*mlflowExperiment, error) {
+// fresh is true only when this call created the experiment: a create
+// that found one made in the meantime returns that one with fresh false.
+func (t *Target) createDemoExperiment(log func(string)) (exp *mlflowExperiment, fresh bool, err error) {
 	tags := []mlflowTag{{Key: SampleMarkerKey, Value: SampleGenAIDemo}}
 	var created struct {
 		ExperimentID string `json:"experiment_id"`
 	}
-	err := t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/create", nil, map[string]any{"name": DemoExperiment, "tags": tags}, &created)
+	err = t.api.sendJSON("POST", "/api/2.0/mlflow/experiments/create", nil, map[string]any{"name": DemoExperiment, "tags": tags}, &created)
 	if IsAlreadyExists(err) {
 		exp, err := t.experimentByName(DemoExperiment)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if exp == nil || !experimentMarked(exp, SampleGenAIDemo) {
-			return nil, &sampleRefusal{"Experiment '" + DemoExperiment + "' was created by someone else in the meantime; MLflow's demo generator would delete traces in it, so it is left unchanged."}
+			return nil, false, &sampleRefusal{"Experiment '" + DemoExperiment + "' was created by someone else in the meantime; MLflow's demo generator would delete traces in it, so it is left unchanged."}
 		}
-		return exp, nil
+		return exp, false, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	log("Created experiment '" + DemoExperiment + "' for the demo")
-	return &mlflowExperiment{ExperimentID: created.ExperimentID, Name: DemoExperiment, LifecycleStage: "active", Tags: tags}, nil
+	return &mlflowExperiment{ExperimentID: created.ExperimentID, Name: DemoExperiment, LifecycleStage: "active", Tags: tags}, true, nil
 }
 
 // dropStaleDemoVersions deletes the version tags still at "0" after a
@@ -174,15 +176,33 @@ func demoAddOrRegenerate(t *Target, log func(string), always bool) (string, erro
 		if !t.cr.managedByTool() {
 			return "", &sampleRefusal{demoLowMemoryMessage(false)}
 		}
+		// Removing the limit patches the MLflow CR, which is cluster-wide
+		// and a cluster-admin's (the non-admin design, section 3.4).
+		if t.c.ProjectUser() {
+			return "", &sampleRefusal{demoLowMemoryForUserMessage}
+		}
 		return "", t.raiseOldMemoryLimit(log)
 	}
 	exp, err := t.experimentByName(DemoExperiment)
 	if err != nil {
 		return "", err
 	}
+	// A user who is not a cluster-admin adds the demo only where there is
+	// none: on an existing demo the generator brings its features up to
+	// date (and a reset deletes them first), which replaces data, and that
+	// is Regenerate, a cluster-admin's (the non-admin design, section 1).
+	if exp != nil && t.c.ProjectUser() {
+		return "", &sampleRefusal{demoExistsForUserMessage}
+	}
 	if exp == nil {
-		if exp, err = t.createDemoExperiment(log); err != nil {
+		var fresh bool
+		if exp, fresh, err = t.createDemoExperiment(log); err != nil {
 			return "", err
+		}
+		// One made in the meantime is an existing demo too: a user's Add
+		// reaches the generator only after its own create.
+		if !fresh && t.c.ProjectUser() {
+			return "", &sampleRefusal{demoExistsForUserMessage}
 		}
 	}
 	if !experimentMarked(exp, SampleGenAIDemo) {

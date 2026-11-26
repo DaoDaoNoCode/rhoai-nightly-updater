@@ -39,6 +39,11 @@ func RevertMLflowImage(c *Client) (*types.OperationResponse, error) {
 	return mlflow.RevertImage(c)
 }
 
+// MLflowSamplesStatusForUser is mlflow.SamplesStatusForUser.
+func MLflowSamplesStatusForUser(st *types.MLflowSamplesStatus) *types.MLflowSamplesStatus {
+	return mlflow.SamplesStatusForUser(st)
+}
+
 // GetMLflowSamplesStatus is mlflow.SamplesStatus.
 func GetMLflowSamplesStatus(sa, u *Client, project string) (*types.MLflowSamplesStatus, error) {
 	return mlflow.SamplesStatus(sa, u, project)

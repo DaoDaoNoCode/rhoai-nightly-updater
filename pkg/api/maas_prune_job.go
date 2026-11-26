@@ -23,7 +23,8 @@ import (
 // fail-closed as in an operation (what cannot be read is kept), and it
 // writes an activity entry only when it changed something.
 var (
-	maasPruneInterval             = 5 * time.Minute
+	// The interval the records caps' refusal names (record.SweepInterval).
+	maasPruneInterval             = cluster.RecordsSweepInterval
 	maasPruneClock    clock.Clock = clock.Real
 	// pruneGoneMaaS runs one check with the client: the MaaS publications
 	// that are gone, then the records' entries of projects that are gone

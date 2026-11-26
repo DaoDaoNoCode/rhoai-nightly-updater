@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
 )
 
 // TestEveryNonGetRouteIsGated sends every registered non-GET route through
@@ -39,10 +41,17 @@ func TestEveryNonGetRouteIsGated(t *testing.T) {
 			t.Errorf("%s has no entry in operationTypes (type and label shown to other users)", rt.Pattern)
 		}
 
+		// A project action's route (withProjectMutationAuth) refuses a
+		// user who is not a cluster-admin in a project that is not theirs
+		// (resetPackageState: none is); every other route refuses them.
+		body, wantCode := "{}", "forbidden"
+		if _, project := projectActionRoutes[path]; project {
+			body, wantCode = projectRouteBodies[path], cluster.ErrorCodeForbiddenForUser
+		}
 		mutationPermission = func(context.Context, string) (bool, error) { return false, nil }
 		w := httptest.NewRecorder()
-		mux.ServeHTTP(w, postJSONMethod(t, method, path, "user:reader", "{}"))
-		if w.Code != http.StatusForbidden || decodeError(t, w)["errorCode"] != "forbidden" {
+		mux.ServeHTTP(w, postJSONMethod(t, method, path, "user:reader", body))
+		if w.Code != http.StatusForbidden || decodeError(t, w)["errorCode"] != wantCode {
 			t.Errorf("%s without cluster-admin: %d %s", rt.Pattern, w.Code, w.Body.String())
 		}
 		if locks.clusterHeld() {
@@ -54,7 +63,7 @@ func TestEveryNonGetRouteIsGated(t *testing.T) {
 			t.Fatal("lock unexpectedly held")
 		}
 		w = httptest.NewRecorder()
-		mux.ServeHTTP(w, postJSONMethod(t, method, path, "user:admin", "{}"))
+		mux.ServeHTTP(w, postJSONMethod(t, method, path, "user:admin", body))
 		releaseClusterMutationLock()
 		if lockFree != "" {
 			continue // TestRecipeStopTakesNoLockAndMakesNoClusterCall
@@ -71,6 +80,13 @@ func TestEveryNonGetRouteIsGated(t *testing.T) {
 			t.Errorf("operationTypes lists %s, which is not a registered POST route", path)
 		}
 	}
+}
+
+// projectRouteBodies are valid bodies of the project actions' routes.
+var projectRouteBodies = map[string]string{
+	"/api/resources/workbench/stream":      `{"action":"setup","project":"team-a"}`,
+	"/api/resources/playground/stream":     `{"action":"teardown","project":"team-a"}`,
+	"/api/resources/samples/mlflow/stream": `{"action":"add","project":"team-a","samples":["training"]}`,
 }
 
 // lockFreeMutationRoutes are the gated routes that take no cluster lock,

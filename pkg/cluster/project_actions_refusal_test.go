@@ -1,0 +1,468 @@
+package cluster
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/features"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/workbench"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
+)
+
+// The hand lists cite their source at a pinned release, and SECURITY.md
+// names the same release, so a bump of either is a reviewed change of
+// both. Every row cites where the request is made.
+func TestHandListsMatchPinnedSource(t *testing.T) {
+	doc, err := os.ReadFile("../../SECURITY.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pinned := range []string{"rhoai-3.6", "efd01a3", "mlflow-kubernetes-plugins v2.1.1", "9694e137"} {
+		if !strings.Contains(features.GenAISource+" "+mlflow.AuthRulesSource, pinned) {
+			t.Errorf("the hand lists' source no longer names %q", pinned)
+		}
+		if !strings.Contains(string(doc), pinned) {
+			t.Errorf("SECURITY.md does not name the hand lists' pinned source %q", pinned)
+		}
+	}
+	for _, r := range features.GenAIRequests {
+		if r.Cite == "" || len(r.Calls) == 0 {
+			t.Errorf("gen-ai request %+v has no source or call", r)
+		}
+	}
+	for _, r := range mlflow.AuthRules {
+		if !strings.Contains(r.Cite, ".py:") || len(r.Actions) == 0 {
+			t.Errorf("MLflow rule %s %s has no source lines or action", r.Method, r.Route)
+		}
+	}
+}
+
+// Each MLflow rule's actions are exactly the samples actions whose runs
+// in the fake use it (the scenarios of TestSampleFakeRulesAreAllUsed): the
+// preflight of an action reviews what its calls need, no more.
+func TestMLflowRuleActionsMatchTheFake(t *testing.T) {
+	env := newSamplesEnv(t)
+	used := map[string]map[string]bool{}
+	runWant := func(want bool, action string, samples ...string) {
+		n := len(env.mlflow.requests)
+		if ok, msg, st := env.run(t, action, samples...); ok != want {
+			t.Fatalf("%s %v: %s\n%s", action, samples, msg, stepMessages(st))
+		}
+		for _, req := range env.mlflow.requests[n:] {
+			method, path, _ := strings.Cut(req, " ")
+			for _, rule := range mlflowFakeRules {
+				if _, ok := rule.match(method, path); ok {
+					if used[rule.key()] == nil {
+						used[rule.key()] = map[string]bool{}
+					}
+					used[rule.key()][action] = true
+				}
+			}
+		}
+	}
+	run := func(action string, samples ...string) { runWant(true, action, samples...) }
+	run("add", mlflow.SampleIDs...)
+	run("remove", SampleTraining, SampleMCPServer, mlflow.SampleSkill)
+	run("add", SampleTraining)
+	run("regenerate", SampleGenAIDemo)
+	env.mlflow.models[mlflow.TrainingModel].aliases = map[string]string{}
+	run("add", SampleTraining)
+	env.mlflow.expByName(mlflow.DemoExperiment).tags[mlflow.DemoVersionTagPrefix+"retired_feature"] = "0"
+	env.mlflow.mlflowDeleteDemo()
+	run("add", SampleGenAIDemo)
+	// Registry entries someone creates while the tool adds them: the add
+	// deletes the version it added (and fails).
+	run("remove", SampleMCPServer, mlflow.SampleSkill)
+	env.mlflow.onRequest = func(method, path string) {
+		if method == "POST" && strings.HasSuffix(path, "/versions") {
+			if strings.Contains(path, "/mcp-servers/") && env.mlflow.mcp[mlflow.MCPSampleName] == nil {
+				env.mlflow.mcp[mlflow.MCPSampleName] = &fakeMCP{tags: map[string]string{}, versions: map[string]string{}, createdBy: "alice"}
+			}
+			if strings.Contains(path, "/skills/") && env.mlflow.skills[mlflow.SkillSampleName] == nil {
+				env.mlflow.skills[mlflow.SkillSampleName] = &fakeSkill{tags: map[string]string{}, createdBy: "alice"}
+			}
+		}
+	}
+	runWant(false, "add", SampleMCPServer, mlflow.SampleSkill)
+	env.mlflow.onRequest = nil
+	for _, rule := range mlflow.AuthRules {
+		key := rule.Method + " " + rule.Route
+		for _, a := range rule.Actions {
+			if !used[key][a] {
+				t.Errorf("%s lists %s, which no %s run uses", key, a, a)
+			}
+		}
+		for a := range used[key] {
+			found := false
+			for _, b := range rule.Actions {
+				found = found || a == b
+			}
+			if !found {
+				t.Errorf("%s is used by %s, which it does not list (the preflight of %s misses it)", key, a, a)
+			}
+		}
+	}
+}
+
+// MLflow refusing an add half-way is a clean refusal: the sample, absent
+// before, is removed again by its own remove path, and the step says so.
+func TestMLflowSamples403IsACleanRefusal(t *testing.T) {
+	env := newSamplesEnv(t)
+	// The experiment is created, then MLflow refuses the run.
+	env.mlflow.userAllow = func(resource, verb, _, _ string) bool { return resource != "experiments" || verb != "update" }
+	ok, msg, steps := env.run(t, "add", SampleTraining)
+	if ok || !strings.Contains(msg, "forbidden") || !strings.Contains(stepMessages(steps), "What this run added was removed again") {
+		t.Fatalf("%s\n%s", msg, stepMessages(steps))
+	}
+	if exp := env.mlflow.expByName(mlflow.TrainingExperiment); exp != nil && exp.stage != "deleted" {
+		t.Fatalf("the refused add left experiment %+v", exp)
+	}
+	if env.mlflow.models[mlflow.TrainingModel] != nil {
+		t.Fatal("the refused add left the registered model")
+	}
+}
+
+// The dashboard's gen-ai API refusing the install is a clean refusal: the
+// step says the dashboard refused, and the tool's record of the request is
+// dropped (the API rolls back its own ConfigMaps, token_k8s_client.go
+// :2143-2160), so nothing is left.
+func TestPlaygroundGenAI403IsACleanRefusal(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	e.g.installFail, e.g.installMessage = 403, "user cannot create ogxservers in proj"
+	res, steps := e.run(t, setup())
+	if res.Success || res.ErrorCode != "forbidden" || !strings.Contains(res.Message, "refused") || !strings.Contains(res.Message, "user cannot create ogxservers") {
+		t.Fatalf("%+v", res)
+	}
+	if _, has := e.records(t)["proj"]; has {
+		t.Fatal("the refused install left the tool's record")
+	}
+	if len(e.g.servers) != 0 {
+		t.Fatal("the refused install left a playground")
+	}
+	last := steps[len(steps)-1]
+	if last.Status != "failed" || last.Step != "install" {
+		t.Fatalf("steps %+v", steps)
+	}
+}
+
+// putUserRecords records a workbench of user in each of n projects, as a
+// project user's setup writes them, and makes the projects exist.
+func putUserRecords(t *testing.T, f *resourceFake, user string, n int) {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	putUserRecordsLocked(f, user, n)
+}
+
+// putUserRecordsLocked is putUserRecords with f.mu held (an intercept).
+func putUserRecordsLocked(f *resourceFake, user string, n int) {
+	rec := map[string]workbench.Recorded{}
+	for i := range n {
+		p := fmt.Sprintf("%s-%d", user, i)
+		rec[p+"/"+workbench.Name] = workbench.Recorded{UID: "uid-" + p, By: user, ActorRole: record.ActorRoleUser, ProjectUID: "uid-ns-" + p}
+		f.putLocked("/api/v1/namespaces/"+p, map[string]any{"metadata": map[string]any{"uid": "uid-ns-" + p}, "status": map[string]any{"phase": "Active"}})
+	}
+	data, _ := json.Marshal(rec)
+	f.putLocked("/api/v1/namespaces/"+record.GetActivityNamespace()+"/configmaps/"+record.SnapshotConfigMapName,
+		map[string]any{"metadata": map[string]any{}, "data": map[string]any{workbench.RecordKey: string(data)}})
+}
+
+// A project user's 11th project is refused before any write; the same
+// setup by a cluster-admin is not; a project user's setup records its
+// entry as a user's and writes nothing outside the project.
+func TestWorkbenchSetupRecordsCapsAndProjectUser(t *testing.T) {
+	f, c := newResourceFake(t)
+	putWorkbenchCluster(t, f, true)
+	putUserRecords(t, f, "alice", record.MaxUserRecordProjectsPerUser)
+	u := userClientOf(c, fakeUserToken)
+	u.SetUsername("alice")
+	u.SetProjectUser("uid-proj")
+	before := len(f.mutations())
+	res := wbSteps(t, u, types.WorkbenchRequest{Action: "setup", Project: "proj"})
+	if res.Success || res.ErrorCode != record.ErrorCodeRecordsFull || !strings.Contains(res.Message, "Nothing was changed") || len(f.mutations()) != before {
+		t.Fatalf("%+v writes %v", res, f.mutations()[before:])
+	}
+
+	f2, c2 := newResourceFake(t)
+	putWorkbenchCluster(t, f2, true)
+	putUserRecords(t, f2, "alice", record.MaxUserRecordProjectsPerUser)
+	admin := userClientOf(c2, fakeUserToken)
+	admin.SetUsername("alice")
+	if res := wbSteps(t, admin, types.WorkbenchRequest{Action: "setup", Project: "proj"}); !res.Success {
+		t.Fatalf("a cluster-admin was refused by the users' caps: %+v", res)
+	}
+
+	f3, c3 := newResourceFake(t)
+	putWorkbenchCluster(t, f3, true)
+	user := userClientOf(c3, fakeUserToken)
+	user.SetUsername("bob")
+	user.SetProjectUser("uid-proj")
+	if res := wbSteps(t, user, types.WorkbenchRequest{Action: "setup", Project: "proj"}); !res.Success {
+		t.Fatalf("a project user's setup: %+v", res)
+	}
+	for _, m := range f3.mutations() {
+		if !strings.Contains(m, "/namespaces/proj/") && !strings.Contains(m, record.SnapshotConfigMapName) {
+			t.Errorf("a project user's setup wrote outside the project: %s", m)
+		}
+	}
+	rec, err := workbench.ReadRecord(c3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := rec.Get("proj"); e.ActorRole != record.ActorRoleUser || e.By != "bob" {
+		t.Fatalf("record %+v", e)
+	}
+}
+
+// A user who is not a cluster-admin adds the demo where there is none,
+// and never brings an existing one up to date or resets it (that replaces
+// its data: Regenerate, a cluster-admin's); nothing is sent to the
+// generator then.
+func TestUserAddNeverResetsAnExistingDemo(t *testing.T) {
+	env := newSamplesEnv(t)
+	env.user.SetProjectUser("uid-proj")
+	if ok, msg, st := env.run(t, "add", SampleGenAIDemo); !ok || env.mlflow.generates != 1 {
+		t.Fatalf("a user's fresh add: %s\n%s", msg, stepMessages(st))
+	}
+	// A partly reset demo (a feature this generator lacks has its tag at
+	// 0): an admin's Add would reset it.
+	env.mlflow.expByName(mlflow.DemoExperiment).tags[mlflow.DemoVersionTagPrefix+"retired_feature"] = "0"
+	n := len(env.mlflow.requests)
+	ok, msg, steps := env.run(t, "add", SampleGenAIDemo)
+	if ok || !strings.Contains(stepMessages(steps), "exists in this project already") || env.mlflow.generates != 1 || len(env.mlflow.writes(n)) != 0 {
+		t.Fatalf("a user's add on an existing demo: %s\n%s writes %v", msg, stepMessages(steps), env.mlflow.writes(n))
+	}
+	// A cluster-admin's Add of the same demo resets and generates it.
+	admin := newSamplesEnv(t)
+	if ok, msg, _ := admin.run(t, "add", SampleGenAIDemo); !ok {
+		t.Fatal(msg)
+	}
+	admin.mlflow.expByName(mlflow.DemoExperiment).tags[mlflow.DemoVersionTagPrefix+"retired_feature"] = "0"
+	if ok, msg, _ := admin.run(t, "add", SampleGenAIDemo); !ok || admin.mlflow.generates != 2 {
+		t.Fatalf("an admin's add on a partly reset demo: %s generates %d", msg, admin.mlflow.generates)
+	}
+}
+
+// The add's preflight covers its rollback: a user who may add MLflow
+// samples but not delete them is refused before anything is made, so a
+// refusal half-way can always be rolled back.
+func TestMLflowAddPreflightCoversTheRollback(t *testing.T) {
+	f := &ssarFake{allow: func(r AccessRequest) bool { return r.Group != mlflow.AuthGroup || r.Verb != "delete" }}
+	u := newSSARClient(t, f)
+	missing, err := ReviewProjectActions(u, []string{"mlflow-samples.add"}, "team-a", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, m := range missing["mlflow-samples.add"].Missing {
+		got[m.Request.Resource+"/"+m.Request.Name] = true
+	}
+	for _, want := range []string{"experiments/" + mlflow.TrainingExperiment, "registeredmodels/" + mlflow.TrainingModel, "mcpservers/" + mlflow.MCPSampleName, "skills/" + mlflow.SkillSampleName} {
+		if !got[want] {
+			t.Errorf("the add's preflight does not review delete %s: %v", want, got)
+		}
+	}
+}
+
+// The caps admit a user's entry in the same step as its write: another
+// action that adds the user's 10th project while this setup creates its
+// storage makes the write refuse, and the storage made is deleted again.
+func TestWorkbenchRecordAdmissionIsAtomic(t *testing.T) {
+	f, c := newResourceFake(t)
+	putWorkbenchCluster(t, f, true)
+	putUserRecords(t, f, "alice", record.MaxUserRecordProjectsPerUser-1)
+	inner := f.intercept
+	f.intercept = func(w http.ResponseWriter, r *http.Request, body []byte) bool {
+		if r.Method == http.MethodPost && r.URL.Path == wbPVCs && r.URL.Query().Get("dryRun") == "" {
+			// Another project action of alice records her 10th project
+			// now.
+			putUserRecordsLocked(f, "alice", record.MaxUserRecordProjectsPerUser)
+		}
+		return inner(w, r, body)
+	}
+	u := userClientOf(c, fakeUserToken)
+	u.SetUsername("alice")
+	u.SetProjectUser("uid-proj")
+	res := wbSteps(t, u, types.WorkbenchRequest{Action: "setup", Project: "proj"})
+	if res.Success || res.ErrorCode != record.ErrorCodeRecordsFull || !strings.Contains(res.Message, "so it was deleted again") {
+		t.Fatalf("%+v", res)
+	}
+	if len(f.callsTo("DELETE", wbPVC)) != 1 {
+		t.Fatalf("the storage made was not deleted again: %v", f.mutations())
+	}
+}
+
+// A user's workbench status reads their project only: the tool's
+// workbenches in other projects are not read, with their token or another.
+func TestWorkbenchProjectStatusReadsNoOtherProject(t *testing.T) {
+	f, c := newResourceFake(t)
+	putWorkbenchCluster(t, f, true)
+	if err := writeWorkbenchRecord(c, "nb-uid", "pvc-uid"); err != nil {
+		t.Fatal(err)
+	}
+	other := map[string]workbench.Recorded{"proj/" + workbench.Name: {UID: "nb-uid"}, "elsewhere/" + workbench.Name: {UID: "x"}}
+	data, _ := json.Marshal(other)
+	f.putJSON("/api/v1/namespaces/"+record.GetActivityNamespace()+"/configmaps/"+record.SnapshotConfigMapName,
+		`{"metadata":{},"data":{"`+workbench.RecordKey+`":`+strconvQuote(string(data))+`}}`)
+	u := userClientOf(c, fakeUserToken)
+	if _, err := GetWorkbenchProjectStatus(c, u, "proj"); err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range f.calls {
+		if strings.Contains(call.Path, "/namespaces/elsewhere/") {
+			t.Fatalf("read in another project: %s", call.Path)
+		}
+	}
+	if _, err := GetWorkbenchStatus(c, u, "proj"); err != nil {
+		t.Fatal(err)
+	}
+	seen := false
+	for _, call := range f.calls {
+		seen = seen || strings.Contains(call.Path, "/namespaces/elsewhere/")
+	}
+	if !seen {
+		t.Fatal("the admin's status no longer reads the tool's other workbenches (the check above proves nothing)")
+	}
+}
+
+func strconvQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// A user's Add whose create finds a demo made in the meantime (the
+// create conflicts and returns that marked experiment) is refused like an
+// Add on an existing demo: no reset and no generator request.
+func TestUserAddRefusedOnCreateConflict(t *testing.T) {
+	env := newSamplesEnv(t)
+	env.user.SetProjectUser("uid-proj")
+	env.mlflow.onRequest = func(method, path string) {
+		if method == "POST" && path == "/api/2.0/mlflow/experiments/create" && env.mlflow.expByName(mlflow.DemoExperiment) == nil {
+			e := &fakeExperiment{id: "made-meanwhile", name: mlflow.DemoExperiment, stage: "active",
+				tags: map[string]string{mlflow.SampleMarkerKey: SampleGenAIDemo, mlflow.DemoVersionTagPrefix + "retired_feature": "0"}}
+			env.mlflow.experiments[e.id] = e
+		}
+	}
+	n := len(env.mlflow.requests)
+	ok, msg, steps := env.run(t, "add", SampleGenAIDemo)
+	if ok || !strings.Contains(stepMessages(steps), "exists in this project already") || env.mlflow.generates != 0 {
+		t.Fatalf("%s\n%s generates %d", msg, stepMessages(steps), env.mlflow.generates)
+	}
+	for _, r := range env.mlflow.requests[n:] {
+		if strings.Contains(r, "set-experiment-tag") || strings.Contains(r, "delete-experiment-tag") || strings.Contains(r, "demo/generate") {
+			t.Fatalf("a reset or generator request after the conflict: %v", env.mlflow.requests[n:])
+		}
+	}
+}
+
+// A Notebook's hardware-profile annotation is followed only into the
+// project or RHOAI's applications namespace: one naming another project
+// sends no request there (status and start alike), and start keeps it.
+func TestWorkbenchProfileAnnotationStaysInTheProject(t *testing.T) {
+	f, c := newResourceFake(t)
+	putWorkbenchCluster(t, f, true)
+	putToolWorkbench(t, f, c)
+	nb := func(ns string) string {
+		return `{"metadata":{"uid":"nb-1","labels":{"app.kubernetes.io/managed-by":"rhoai-nightly-updater"},"annotations":{"kubeflow-resource-stopped":"2026-11-24T09:00:00Z",
+		"opendatahub.io/hardware-profile-name":"any","opendatahub.io/hardware-profile-namespace":"` + ns + `"}},"spec":{"template":{"spec":{"containers":[{"name":"nightly-workbench","volumeMounts":[]}],"volumes":[]}}}}`
+	}
+	const elsewhere = "/apis/infrastructure.opendatahub.io/v1/namespaces/team-b/hardwareprofiles"
+	f.putJSON(wbNotebook, nb("team-b"))
+	u := userClientOf(c, fakeUserToken)
+	if _, err := GetWorkbenchStatus(c, u, "proj"); err != nil {
+		t.Fatal(err)
+	}
+	if res := wbSteps(t, u, types.WorkbenchRequest{Action: "start", Project: "proj"}); !res.Success {
+		t.Fatalf("start: %+v", res)
+	}
+	if n := len(f.callsTo("GET", elsewhere)); n != 0 {
+		t.Fatalf("%d reads of another project's hardware profiles", n)
+	}
+	calls := f.callsTo("PATCH", wbNotebook)
+	if strings.Contains(calls[len(calls)-1].Body, "hardware-profile-name") {
+		t.Fatalf("start dropped an annotation it did not check: %s", calls[len(calls)-1].Body)
+	}
+	// The applications namespace is followed (the check above can fail).
+	f.putJSON(wbNotebook, nb(wbApps))
+	if _, err := GetWorkbenchStatus(c, u, "proj"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.callsTo("GET", "/apis/infrastructure.opendatahub.io/v1/namespaces/"+wbApps+"/hardwareprofiles")) == 0 {
+		t.Fatal("the applications namespace's profiles were not read")
+	}
+}
+
+// For a project user, a failed ServiceAccount read in their workbench
+// status and in a playground delete is answered with its HTTP status only,
+// never the API server's text; a cluster-admin's answer keeps the text.
+func TestUserResponsesCarryNoServiceAccountText(t *testing.T) {
+	const secret = "forbidden: User system:serviceaccount:updater:sa cannot get team-b"
+	f, c := newResourceFake(t)
+	putWorkbenchCluster(t, f, true)
+	f.fail["GET "+wbDSCv2] = 500
+	f.failMessage["GET "+wbDSCv2] = secret
+	u := userClientOf(c, fakeUserToken)
+	st, err := GetWorkbenchProjectStatus(c, u, "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(st.PlanProblem, "team-b") || !strings.Contains(st.PlanProblem, "HTTP 500") {
+		t.Fatalf("a user's plan problem: %q", st.PlanProblem)
+	}
+	admin, err := GetWorkbenchStatus(c, u, "proj")
+	if err != nil || !strings.Contains(admin.PlanProblem, "team-b") {
+		t.Fatalf("an admin's plan problem changed: %q %v", admin.PlanProblem, err)
+	}
+
+	e := newPlaygroundEnv(t)
+	snapshot := "/api/v1/namespaces/" + record.GetActivityNamespace() + "/configmaps/" + record.SnapshotConfigMapName
+	e.k8s.fail["GET "+snapshot] = 500
+	e.k8s.failMessage["GET "+snapshot] = secret
+	user := userClientOf(e.c, fakeUserToken)
+	user.SetProjectUser("uid-proj")
+	res, err := RunPlayground(user, types.PlaygroundRequest{Action: "teardown", Project: "proj"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Success || strings.Contains(res.Message, "team-b") || !strings.Contains(res.Message, "HTTP 500") {
+		t.Fatalf("a user's delete: %+v", res)
+	}
+	res, _ = RunPlayground(e.c, types.PlaygroundRequest{Action: "teardown", Project: "proj"}, nil)
+	if !strings.Contains(res.Message, "team-b") {
+		t.Fatalf("an admin's delete changed: %+v", res)
+	}
+}
+
+// For a project user, a failed read of the tool's workbench record (the
+// ServiceAccount's) in Start, Stop, Set up and Delete is answered with its
+// HTTP status only; a cluster-admin's answer keeps the text.
+func TestWorkbenchRecordReadErrorsForUsers(t *testing.T) {
+	const secret = "configmaps forbidden: User system:serviceaccount:updater:sa in team-b"
+	snapshot := "/api/v1/namespaces/" + record.GetActivityNamespace() + "/configmaps/" + record.SnapshotConfigMapName
+	for _, action := range []string{"start", "stop", "setup", "teardown", "delete-storage"} {
+		f, c := newResourceFake(t)
+		putWorkbenchCluster(t, f, true)
+		putToolWorkbench(t, f, c)
+		if action == "delete-storage" {
+			f.deleteObject(wbNotebook) // only kept storage is left
+		}
+		f.fail["GET "+snapshot] = 500
+		f.failMessage["GET "+snapshot] = secret
+		u := userClientOf(c, fakeUserToken)
+		u.SetProjectUser("uid-proj")
+		res := wbSteps(t, u, types.WorkbenchRequest{Action: action, Project: "proj"})
+		if res.Success || strings.Contains(res.Message, "team-b") || !strings.Contains(res.Message, "HTTP 500") {
+			t.Fatalf("%s for a user: %+v", action, res)
+		}
+		admin := userClientOf(c, fakeUserToken)
+		if res := wbSteps(t, admin, types.WorkbenchRequest{Action: action, Project: "proj"}); !strings.Contains(res.Message, "team-b") {
+			t.Fatalf("%s for an admin changed: %+v", action, res)
+		}
+	}
+}

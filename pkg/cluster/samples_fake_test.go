@@ -138,52 +138,23 @@ type mlflowFakeRule struct {
 	cite  string
 }
 
-var demoNames = []string{mlflow.DemoExperiment}
-var trainingExpNames = []string{mlflow.TrainingExperiment}
-
 // mlflowFakeRules lists every MLflow route the samples call, with the
-// authorization of mlflow-kubernetes-plugins v2.1.1 (9694e137).
-var mlflowFakeRules = []mlflowFakeRule{
-	{"GET", "/api/2.0/mlflow/experiments/get-by-name", []fakeCheck{{"experiments", "get"}}, "query:experiment_name", []string{mlflow.DemoExperiment, mlflow.TrainingExperiment}, "rules_base.py:323-326"},
-	{"POST", "/api/2.0/mlflow/experiments/create", []fakeCheck{{"experiments", "create"}}, "", nil, "rules_base.py:319"},
-	{"POST", "/api/2.0/mlflow/experiments/restore", []fakeCheck{{"experiments", "update"}}, "body:experiment_id", []string{mlflow.DemoExperiment, mlflow.TrainingExperiment}, "rules_base.py:331-334"},
-	{"POST", "/api/2.0/mlflow/experiments/delete", []fakeCheck{{"experiments", "delete"}}, "body:experiment_id", trainingExpNames, "rules_base.py:327-330"},
-	{"POST", "/api/2.0/mlflow/experiments/set-experiment-tag", []fakeCheck{{"experiments", "update"}}, "body:experiment_id", demoNames, "rules_base.py:342-345"},
-	{"POST", "/api/2.0/mlflow/experiments/delete-experiment-tag", []fakeCheck{{"experiments", "update"}}, "body:experiment_id", demoNames, "rules_base.py:347-350"},
-	// SearchRuns: experiments list, else the experiment_ids the caller may
-	// get by name (rules_base.py:653-656; collection_filters.py:123-139,
-	// 161-174).
-	{"POST", "/api/2.0/mlflow/runs/search", []fakeCheck{{"experiments", "list"}}, "body:experiment_ids:get", trainingExpNames, "rules_base.py:653-656"},
-	{"POST", "/api/2.0/mlflow/runs/create", []fakeCheck{{"experiments", "update"}}, "body:experiment_id", trainingExpNames, "rules_base.py:403-407"},
-	{"POST", "/api/2.0/mlflow/runs/log-batch", []fakeCheck{{"experiments", "update"}}, "body:run_id", trainingExpNames, "rules_base.py:428-431"},
-	{"POST", "/api/2.0/mlflow/runs/update", []fakeCheck{{"experiments", "update"}}, "body:run_id", trainingExpNames, "rules_base.py:420-423"},
-	{"GET", "/api/2.0/mlflow/registered-models/get", []fakeCheck{{"registeredmodels", "get"}}, "query:name", []string{mlflow.TrainingModel}, "rules_base.py:659-662"},
-	{"POST", "/api/2.0/mlflow/registered-models/create", []fakeCheck{{"registeredmodels", "create"}}, "", nil, "rules_base.py:658"},
-	{"DELETE", "/api/2.0/mlflow/registered-models/delete", []fakeCheck{{"registeredmodels", "delete"}}, "body:name", []string{mlflow.TrainingModel}, "rules_base.py:663-666"},
-	{"GET", "/api/2.0/mlflow/model-versions/get", []fakeCheck{{"registeredmodels", "get"}}, "query:name", []string{mlflow.TrainingModel}, "rules_base.py:738-741"},
-	{"POST", "/api/2.0/mlflow/model-versions/create", []fakeCheck{{"registeredmodels", "update"}}, "body:name", []string{mlflow.TrainingModel}, "rules_base.py:682-685"},
-	{"POST", "/api/2.0/mlflow/registered-models/alias", []fakeCheck{{"registeredmodels", "update"}}, "body:name", []string{mlflow.TrainingModel}, "rules_base.py:714-717"},
-	{"POST", "/ajax-api/3.0/mlflow/demo/generate", []fakeCheck{{"experiments", "create"}, {"datasets", "create"}, {"registeredmodels", "create"}}, "", nil, "rules_base.py:1178-1182"},
-	{"GET", "/api/3.0/mlflow/mcp-servers/{mcp}", []fakeCheck{{"mcpservers", "get"}}, "path", []string{mlflow.MCPSampleName}, "rules_base.py:1432-1435"},
-	{"PATCH", "/api/3.0/mlflow/mcp-servers/{mcp}", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mlflow.MCPSampleName}, "rules_base.py:1436-1439"},
-	{"DELETE", "/api/3.0/mlflow/mcp-servers/{mcp}", []fakeCheck{{"mcpservers", "delete"}}, "path", []string{mlflow.MCPSampleName}, "rules_base.py:1440-1443"},
-	// A version POST auto-creates a missing parent server
-	// (sqlalchemy_mixin.py:272-330) and is checked as update on it.
-	{"POST", "/api/3.0/mlflow/mcp-servers/{mcp}/versions", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mlflow.MCPSampleName}, "rules_base.py:1351-1354"},
-	{"GET", "/api/3.0/mlflow/mcp-servers/{mcp}/versions", []fakeCheck{{"mcpservers", "get"}}, "path", []string{mlflow.MCPSampleName}, "rules_base.py:1355-1358"},
-	{"GET", "/api/3.0/mlflow/mcp-servers/{mcp}/versions/{v}", []fakeCheck{{"mcpservers", "get"}}, "path", []string{mlflow.MCPSampleName}, "rules_base.py:1359-1362"},
-	{"DELETE", "/api/3.0/mlflow/mcp-servers/{mcp}/versions/{v}", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mlflow.MCPSampleName}, "rules_base.py:1367-1373"},
-	{"PATCH", "/api/3.0/mlflow/mcp-servers/{mcp}/versions/{v}", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mlflow.MCPSampleName}, "rules_base.py:1363-1366"},
-	{"POST", "/api/3.0/mlflow/mcp-servers/{mcp}/endpoints", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mlflow.MCPSampleName}, "rules_base.py:1388-1391"},
-	{"POST", "/api/3.0/mlflow/mcp-servers/{mcp}/tags", []fakeCheck{{"mcpservers", "update"}}, "path", []string{mlflow.MCPSampleName}, "rules_base.py:1411-1414"},
-	{"GET", "/api/3.0/mlflow/skills/{skill}", []fakeCheck{{"skills", "get"}}, "path", []string{mlflow.SkillSampleName}, "rules_skill_registry.py:111-113"},
-	{"DELETE", "/api/3.0/mlflow/skills/{skill}", []fakeCheck{{"skills", "delete"}}, "path", []string{mlflow.SkillSampleName}, "rules_skill_registry.py:117-119"},
-	// "Like MCP, version registration uses parent update even if MLflow
-	// creates the parent" (rules_skill_registry.py:30-33).
-	{"POST", "/api/3.0/mlflow/skills/{skill}/versions", []fakeCheck{{"skills", "update"}}, "path", []string{mlflow.SkillSampleName}, "rules_skill_registry.py:78-80"},
-	{"POST", "/api/3.0/mlflow/skills/{skill}/tags", []fakeCheck{{"skills", "update"}}, "path", []string{mlflow.SkillSampleName}, "rules_skill_registry.py:105-107"},
-	{"GET", "/api/3.0/mlflow/skills/{skill}/versions", []fakeCheck{{"skills", "get"}}, "path", []string{mlflow.SkillSampleName}, "rules_skill_registry.py:80-82"},
-	{"DELETE", "/api/3.0/mlflow/skills/{skill}/versions/{v}", []fakeCheck{{"skills", "update"}}, "path", []string{mlflow.SkillSampleName}, "rules_skill_registry.py:89-91"},
+// authorization of mlflow-kubernetes-plugins v2.1.1 (9694e137): the
+// production table mlflow.AuthRules, which the project actions' preflight
+// checks too.
+var mlflowFakeRules = fakeRulesOf(mlflow.AuthRules)
+
+// fakeRulesOf is the fake's form of the production table.
+func fakeRulesOf(rules []mlflow.AuthRule) []mlflowFakeRule {
+	out := make([]mlflowFakeRule, 0, len(rules))
+	for _, r := range rules {
+		checks := make([]fakeCheck, 0, len(r.Checks))
+		for _, c := range r.Checks {
+			checks = append(checks, fakeCheck{c.Resource, c.Verb})
+		}
+		out = append(out, mlflowFakeRule{r.Method, r.Route, checks, r.Name, r.Names, r.Cite})
+	}
+	return out
 }
 
 func (r mlflowFakeRule) key() string { return r.method + " " + r.route }

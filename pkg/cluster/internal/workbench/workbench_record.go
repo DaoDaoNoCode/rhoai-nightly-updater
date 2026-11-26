@@ -8,6 +8,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Workbench ownership for this tool. Because any project editor can attach the
@@ -29,6 +30,12 @@ type Recorded struct {
 	StorageUID string `json:"storageUID,omitempty"`
 	At         string `json:"at,omitempty"`
 	By         string `json:"by,omitempty"`
+	// ActorRole is record.ActorRoleUser when a user who is not a
+	// cluster-admin set it up (record.UserRecordCapRefusal counts it).
+	ActorRole string `json:"actorRole,omitempty"`
+	// ProjectUID is the project's namespace UID, for a user's entry: the
+	// caps count a project deleted and made again as another one.
+	ProjectUID string `json:"projectUID,omitempty"`
 }
 
 // Record maps each project to its stored workbench metadata.
@@ -81,8 +88,10 @@ func ReadRecord(c *kube.Client) (Record, error) {
 	return rec, nil
 }
 
-// writeRecord server-side-applies the full record. Callers already hold the
-// cluster lock, so read-modify-write cannot race another writer.
+// writeRecord server-side-applies the full record. Callers hold a lock
+// (the cluster lock, or the project's lock of a project action), and
+// updateRecord runs its read-modify-write through record.UpdateSnapshot, so
+// project actions in other projects of this process do not race it.
 func writeRecord(c *kube.Client, rec Record) error {
 	data, err := json.Marshal(rec)
 	if err != nil {
@@ -97,20 +106,83 @@ func writeRecord(c *kube.Client, rec Record) error {
 // updateRecord loads the record, mutates the project entry via change, removes
 // the entry when both UIDs are cleared, then persists the result.
 func updateRecord(c *kube.Client, project string, change func(e *Recorded)) error {
-	rec, err := ReadRecord(c)
-	if err != nil {
-		return err
-	}
-	e := rec[recordKey(project)]
-	before := e
-	change(&e)
-	if e == before {
-		return nil
-	}
-	if e.UID == "" && e.StorageUID == "" {
-		delete(rec, recordKey(project))
-	} else {
+	return record.UpdateSnapshot(c, func() error {
+		rec, err := ReadRecord(c)
+		if err != nil {
+			return err
+		}
+		e, had := rec[recordKey(project)]
+		before := e
+		change(&e)
+		if e == before {
+			return nil
+		}
+		if e.UID == "" && e.StorageUID == "" {
+			delete(rec, recordKey(project))
+			return writeRecord(c, rec)
+		}
+		// A user's entry is admitted by the caps in the same step as its
+		// write (record.AdmitUserEntry): a new one, or one taken over.
+		if e.ActorRole == record.ActorRoleUser {
+			var prior *record.RecordOwner
+			if had {
+				prior = &record.RecordOwner{Project: project, ProjectUID: before.ProjectUID, By: before.By, ActorRole: before.ActorRole}
+			}
+			data, err := json.Marshal(e)
+			if err != nil {
+				return err
+			}
+			if err := record.AdmitUserEntry(c, project, prior, data); err != nil {
+				return err
+			}
+		}
 		rec[recordKey(project)] = e
+		return writeRecord(c, rec)
+	})
+}
+
+// ForgetGoneProjects drops the entries whose project is gone (gone answers
+// for the project and its entry), in one read-change-write through
+// record.UpdateSnapshot, and returns the projects it dropped. An entry
+// gone cannot tell about stays (fail closed: gone says false).
+func ForgetGoneProjects(c *kube.Client, gone func(project string, e Recorded) bool) ([]string, error) {
+	var dropped []string
+	err := record.UpdateSnapshot(c, func() error {
+		rec, err := ReadRecord(c)
+		if err != nil {
+			return err
+		}
+		for key, e := range rec {
+			project, ok := strings.CutSuffix(key, "/"+Name)
+			if ok && gone(project, e) {
+				delete(rec, key)
+				dropped = append(dropped, project)
+			}
+		}
+		if len(dropped) == 0 {
+			return nil
+		}
+		return writeRecord(c, rec)
+	})
+	sort.Strings(dropped)
+	return dropped, err
+}
+
+// StorageLive reports whether project still has the PersistentVolumeClaim
+// with this UID, listed with c (the ServiceAccount's list of
+// PersistentVolumeClaims, which deploy/template.yaml grants cluster-wide):
+// for the background check only, never shown.
+func StorageLive(c *kube.Client, project, uid string) (bool, error) {
+	var items []struct {
+		Metadata kube.ObjectMeta `json:"metadata"`
 	}
-	return writeRecord(c, rec)
+	if err := c.ListInto(rhoai.NamespacedPath("v1", "persistentvolumeclaims", project, ""), &items); err != nil {
+		return false, err
+	}
+	for _, it := range items {
+		if it.Metadata.UID == uid {
+			return true, nil
+		}
+	}
+	return false, nil
 }

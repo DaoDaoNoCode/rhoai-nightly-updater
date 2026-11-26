@@ -677,10 +677,21 @@ type PlaygroundRecord struct {
 	// Models are the models the request asked the dashboard to set the
 	// playground up with (none in a record from before they were kept).
 	Models []types.PlaygroundModelRef `json:"models,omitempty"`
+	// ActorRole is record.ActorRoleUser when a user who is not a
+	// cluster-admin asked for it (record.UserRecordCapRefusal counts it).
+	ActorRole string `json:"actorRole,omitempty"`
+	// ProjectUID is the project's namespace UID, for a user's entry (the
+	// caps count by it).
+	ProjectUID string `json:"projectUID,omitempty"`
 }
 
 func (r PlaygroundRecord) equal(o PlaygroundRecord) bool {
-	return r.RequestedAt == o.RequestedAt && r.By == o.By && r.UID == o.UID && slices.Equal(r.Models, o.Models)
+	return r.RequestedAt == o.RequestedAt && r.By == o.By && r.UID == o.UID && r.ActorRole == o.ActorRole && r.ProjectUID == o.ProjectUID && slices.Equal(r.Models, o.Models)
+}
+
+// owner is the entry's owner for the caps.
+func (r PlaygroundRecord) owner(project string) *record.RecordOwner {
+	return &record.RecordOwner{Project: project, ProjectUID: r.ProjectUID, By: r.By, ActorRole: r.ActorRole}
 }
 
 // playgroundServerName is the OGXServer the dashboard's install makes
@@ -814,29 +825,48 @@ func WritePlaygroundRecords(c *kube.Client, records map[string]PlaygroundRecord)
 	return nil
 }
 
-// setPlaygroundRecord records project's entry (nil drops it).
+// setPlaygroundRecord records project's entry (nil drops it), through
+// record.UpdateSnapshot: project actions in other projects of this process
+// write the same key.
 func setPlaygroundRecord(c *kube.Client, project string, rec *PlaygroundRecord) error {
-	records, err := ReadPlaygroundRecords(c)
-	if err != nil {
-		return err
-	}
-	old, has := records[project]
-	switch {
-	case rec == nil && !has, rec != nil && has && old.equal(*rec):
-		return nil
-	case rec == nil:
-		delete(records, project)
-	default:
-		records[project] = *rec
-	}
-	return WritePlaygroundRecords(c, records)
+	return record.UpdateSnapshot(c, func() error {
+		records, err := ReadPlaygroundRecords(c)
+		if err != nil {
+			return err
+		}
+		old, has := records[project]
+		switch {
+		case rec == nil && !has, rec != nil && has && old.equal(*rec):
+			return nil
+		case rec == nil:
+			delete(records, project)
+		default:
+			// A user's entry is admitted by the caps in the same step as
+			// its write (record.AdmitUserEntry).
+			if rec.ActorRole == record.ActorRoleUser {
+				var prior *record.RecordOwner
+				if has {
+					prior = old.owner(project)
+				}
+				data, err := json.Marshal(rec)
+				if err != nil {
+					return err
+				}
+				if err := record.AdmitUserEntry(c, project, prior, data); err != nil {
+					return err
+				}
+			}
+			records[project] = *rec
+		}
+		return WritePlaygroundRecords(c, records)
+	})
 }
 
 // newPlaygroundRecord is the entry of a request made now.
 func newPlaygroundRecord(c *kube.Client) *PlaygroundRecord {
 	// Seconds, as creationTimestamp: a server made in the same second as
 	// the request counts as made after it.
-	return &PlaygroundRecord{RequestedAt: kube.Clock().Now().UTC().Format(time.RFC3339), By: kube.GetUser(c)}
+	return &PlaygroundRecord{RequestedAt: kube.Clock().Now().UTC().Format(time.RFC3339), By: kube.GetUser(c), ActorRole: record.ActorRole(c), ProjectUID: c.ProjectUID()}
 }
 
 // --- cluster parts (ServiceAccount reads) -------------------------------------------
@@ -1261,7 +1291,7 @@ func (p *playgroundRun) fail(id, msg, code, activity string) (*types.OperationRe
 		p.emit(types.UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: code})
 	}
 	p.logs = append(p.logs, msg)
-	slog.Warn("playground operation stopped", "step", id, "reason", activity, "project", p.project, "user", kube.GetUser(p.c))
+	slog.Warn("playground operation stopped", "step", id, "reason", activity, "project", p.project)
 	p.record(fmt.Sprintf("project=%s (%s)", p.project, activity), false)
 	return &types.OperationResponse{Success: false, Message: msg, Logs: p.logs, ErrorCode: code}, nil
 }
@@ -1511,6 +1541,9 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 		return stopped, nil
 	}
 	if existing == nil {
+		if msg, code := p.recordCapRefusal(); msg != "" {
+			return p.fail("install", msg+" Nothing was set up.", code, "records full")
+		}
 		// Recorded before the install, so a playground whose install
 		// outlives this process is still known as this tool's.
 		rec := newPlaygroundRecord(p.c)
@@ -1518,7 +1551,7 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 			rec.Models = append(rec.Models, types.PlaygroundModelRef{Name: m.Name, Source: m.Source})
 		}
 		if err := setPlaygroundRecord(p.c, p.project, rec); err != nil {
-			return p.fail("install", fmt.Sprintf("Cannot record the request in this tool's namespace; nothing was set up: %v.%s", err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "record")
+			return p.fail("install", fmt.Sprintf("Cannot record the request in this tool's namespace; nothing was set up: %s.%s", record.ErrorText(p.c, err), kube.TemplateHint(err)), record.ErrorCode(err), "record")
 		}
 		body := map[string]any{"enable_guardrails": false, "enable_tracing": false, "vector_stores": []any{}}
 		// model_type and embedding_dimension per model: odh-dashboard
@@ -1624,6 +1657,29 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 	return &types.OperationResponse{Success: true, Message: fmt.Sprintf("The playground in %s is ready. Open it in the dashboard's Gen AI studio.", p.project), Logs: p.logs}, nil
 }
 
+// recordCapRefusal is why a setup by a user who is not a cluster-admin
+// must not add or take over the project's playground entry
+// (record.AdmitUserEntry), with its errorCode; "" for a cluster-admin. The
+// write is admitted again (setPlaygroundRecord).
+func (p *playgroundRun) recordCapRefusal() (string, string) {
+	if !p.c.ProjectUser() {
+		return "", ""
+	}
+	records, err := ReadPlaygroundRecords(p.c)
+	if err != nil {
+		kube.LogFactReadFailure("cannot read this tool's playground records", "snapshot", err)
+		return fmt.Sprintf("Cannot read this tool's records (%s).", kube.FactReadProblem(err)), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
+	}
+	var prior *record.RecordOwner
+	if old, has := records[p.project]; has {
+		prior = old.owner(p.project)
+	}
+	if err := record.AdmitUserEntry(p.c, p.project, prior, nil); err != nil {
+		return err.Error(), record.ErrorCode(err)
+	}
+	return "", ""
+}
+
 func srvPhase(s *GenAIServer) string {
 	if s == nil {
 		return ""
@@ -1644,7 +1700,7 @@ func (p *playgroundRun) forgetIfAbsent() {
 func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
 	records, err := ReadPlaygroundRecords(p.c)
 	if err != nil {
-		return p.fail("delete", fmt.Sprintf("Cannot read this tool's records; nothing was deleted: %v.", err), kube.ErrorCodeFromK8sErr(err), "records")
+		return p.fail("delete", fmt.Sprintf("Cannot read this tool's records; nothing was deleted: %s.", record.ErrorText(p.c, err)), kube.ErrorCodeFromK8sErr(err), "records")
 	}
 	_, recorded := records[p.project]
 	srv, err := p.api.playgroundStatus(p.project)
@@ -1654,7 +1710,7 @@ func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
 	if srv == nil {
 		if recorded {
 			if err := setPlaygroundRecord(p.c, p.project, nil); err != nil {
-				return p.fail("delete", fmt.Sprintf("No playground is left in %s, but this tool's record of it cannot be cleared: %v.", p.project, err), kube.ErrorCodeFromK8sErr(err), "record")
+				return p.fail("delete", fmt.Sprintf("No playground is left in %s, but this tool's record of it cannot be cleared: %s.", p.project, record.ErrorText(p.c, err)), kube.ErrorCodeFromK8sErr(err), "record")
 			}
 		}
 		p.record("project="+p.project+" (none)", true)
@@ -1662,7 +1718,7 @@ func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
 	}
 	ours, err := p.owned(srv)
 	if err != nil {
-		return p.fail("delete", fmt.Sprintf("Cannot tell whether the playground in %s is this tool's, so nothing was deleted: %v.", p.project, err), kube.ErrorCodeFromK8sErr(err), "ownership")
+		return p.fail("delete", fmt.Sprintf("Cannot tell whether the playground in %s is this tool's, so nothing was deleted: %s.", p.project, record.ErrorText(p.c, err)), kube.ErrorCodeFromK8sErr(err), "ownership")
 	}
 	if !ours {
 		return p.fail("delete", fmt.Sprintf("The playground in %s was not set up by this tool, so it was not deleted. Delete it in the dashboard's Gen AI studio if you no longer need it.", p.project), "not_managed", "not managed")
@@ -1689,7 +1745,7 @@ func (p *playgroundRun) teardown() (*types.OperationResponse, error) {
 		return p.fail("gone", fmt.Sprintf("The playground in %s is still being deleted after %s. Delete again to check.", p.project, serving.ClockText(playgroundDeleteTimeout)), "in_progress", "still deleting")
 	}
 	if err := setPlaygroundRecord(p.c, p.project, nil); err != nil {
-		return p.fail("gone", fmt.Sprintf("The playground in %s is deleted, but this tool's record of it cannot be cleared: %v.%s", p.project, err, kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "record")
+		return p.fail("gone", fmt.Sprintf("The playground in %s is deleted, but this tool's record of it cannot be cleared: %s.%s", p.project, record.ErrorText(p.c, err), kube.TemplateHint(err)), kube.ErrorCodeFromK8sErr(err), "record")
 	}
 	p.step("gone", "success", fmt.Sprintf("The playground in %s is gone.", p.project))
 	p.record("project="+p.project, true)

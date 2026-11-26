@@ -120,11 +120,11 @@ Two roles (`role` in `GET /api/user/permissions`): **admin** passes the mutation
 
 | Tier | Routes | Read with | A user gets |
 |---|---|---|---|
-| admin-only | `/api/status`, `/api/activity`, `/api/components`, `/api/components/dsc`, `/api/components/dsc/plan`, `/api/debug`, `/api/dashboard/state`, `/api/dashboard/builds`, `/api/diagnostics`, `/api/setup/dsc/preview`, `/api/test-pull-secret`, `/api/verify-nodes`, `/api/latest-nightly`, `/api/nightly-tags`, `/api/resources/maas`, `/api/resources/maas/groups`, `/api/resources/prerequisites`, `/api/resources/models/exposures`, `/api/resources/s3/admin-password` | SA (as before) | 403 `admin_only` "Only cluster-admins can see this.", from `Register` (`adminOnly`) before the handler runs, so before any SA read |
+| admin-only | `/api/status`, `/api/components`, `/api/components/dsc`, `/api/components/dsc/plan`, `/api/debug`, `/api/dashboard/state`, `/api/dashboard/builds`, `/api/diagnostics`, `/api/setup/dsc/preview`, `/api/test-pull-secret`, `/api/verify-nodes`, `/api/latest-nightly`, `/api/nightly-tags`, `/api/resources/maas`, `/api/resources/maas/groups`, `/api/resources/prerequisites`, `/api/resources/models/exposures`, `/api/resources/s3/admin-password` | SA (as before) | 403 `admin_only` "Only cluster-admins can see this.", from `Register` (`adminOnly`) before the handler runs, so before any SA read |
 | summary or registry | `/api/summary`, `/api/build-explorer/tags`, `/content`, `/contains` | SA | the reviewed summary below; Build Explorer as before (registry build metadata; the pull secret's credential is used, never returned) |
-| user token | `/api/user/permissions`, `/api/resources/projects`, `/api/resources/playground`, `/api/resources/samples/mlflow`, `/api/resources/model-registry` | the user's own token (`withUserRead`, `cluster.NewUserClient`) | what their RBAC and the platform APIs' own access reviews allow |
+| user token | `/api/user/permissions`, `/api/resources/projects`, `/api/resources/projects/capabilities`, `/api/resources/playground`, `/api/resources/samples/mlflow`, `/api/resources/model-registry` | the user's own token (`withUserRead`, `cluster.NewUserClient`) | what their RBAC and the platform APIs' own access reviews allow |
 | no cluster read | `/api/update-check`, `/api/resources/samples/pipeline/spec` | none | as before |
-| per role | `/api/operation`, `/api/resources/status` | SA / the user's token | see below; an admin's answer is unchanged |
+| per role | `/api/operation`, `/api/resources/status`, `/api/activity`, `/api/resources/workbench` | SA / the user's token | see below and [Project actions for non-admins](#project-actions-for-non-admins-500); an admin's answer is unchanged |
 
 Probes (`/api/health`, `/api/health/ready`, `/api/version`, `/metrics`) are outside `Register` and unchanged.
 
@@ -166,11 +166,12 @@ A change and a user read act with the user's token, but a few things they need a
 | The dashboard's address | Dashboard component CRs `list`, Route `rhods-dashboard` `get` | playground, MLflow samples' links |
 | MLflow's address and readiness | MLflow `mlflow` `get` | MLflow samples |
 | The gen-ai backend's state | Deployment `gen-ai-ui` `get` | playground setup |
+| Whether a project with users' records still exists | Namespace `get` (`record.ProjectExists`) | the records caps of project actions (only counted, never shown) |
 
 `types.ProjectFacts` (the applications namespace, the DataScienceCluster's components with state and readiness, hosted or not) is the fixed answer for a project action, read only through the facts client (`ReadProjectFacts`; a new field is a reviewed change); what could not be read is named by a fixed code, never the read's text. Nothing calls `ReadProjectFacts` yet: the project actions' gate and capabilities (design branch B3) will.
 
 - A failed fact read reaches the user and the log with the fact, its HTTP status and a fixed category only, never the API server's text (`kube.FactReadProblem`, `kube.LogFactReadFailure`, `TestFactReadErrorsShowNoServerText`); a not-ready playground operator is reported without the DataScienceCluster's condition message.
-- The facts client's requests are pinned by resource and name (`TestFactsRequestsArePinned`: get Deployment `gen-ai-ui`, Infrastructure `cluster`, MLflow `mlflow`, Route `rhods-dashboard`; list ValidatingWebhookConfigurations, Dashboard component CRs, DataScienceClusters, DSCInitializations), with no Secret, no namespace list and nothing of MaaS: a new fact is a reviewed change of that list.
+- The facts client's requests are pinned by resource and name (`TestFactsRequestsArePinned`: get Namespace (by name, for the records caps), get Deployment `gen-ai-ui`, Infrastructure `cluster`, MLflow `mlflow`, Route `rhods-dashboard`; list ValidatingWebhookConfigurations, Dashboard component CRs, DataScienceClusters, DSCInitializations), with no Secret, no namespace list and nothing of MaaS: a new fact is a reviewed change of that list.
 
 - A component check refuses the setup (`prerequisites_unknown`, with the HTTP status only), for admins too, when the DataScienceCluster cannot be read; before, it blocked nothing. `ReadFirstDSC` moves on to the next served version only for a version that is not served (404) or whose objects the conversion webhook cannot convert (500, or the watch cache's 429, naming the webhook; its Retry-After is not waited for); any other error stops the read (`TestDSCReadFallbackMovesOnOnlyForConversionFailures`).
 - The MLflow samples check the project with the projects API and the user's token (`IsUserDSProject`) before the SA reads MLflow.
@@ -187,6 +188,73 @@ The SA gains no permission. User-token reads are their own category in the RBAC 
 ### Not verified (live checks pending)
 
 The four personas of the design (a cluster-admin, a `rhods-admins` member who is not one, a project admin, a user with no project) on a test instance: every page and GET route per persona, no other user's names or projects. In particular: whether project `view`/`edit` include `list ogxservers` (the gen-ai API's review; a refusal shows as the playground's API problem), and the projects API's answer for each persona.
+
+## Project actions for non-admins (5.0.0)
+
+The design and the owner's decisions: recipes-handoff/env-features/non-admin-design-for-approval.md (branch B3).
+Template revision unchanged: the ServiceAccount gains nothing (`deploy/template.yaml` and `deploy/rbac-gitops.yaml` are unchanged).
+This narrows per-user views decision 2 ("changing things stays cluster-admin only") to cluster-scoped work.
+
+### Who may change what
+
+Cluster changes still need the cluster-admin gate (`*`/`*`/`*`, `mutationPermission`). Project actions (`cluster.ProjectActions`, routes in `projectActionRoutes`) run for any signed-in user in one of their own data science projects (the projects API with their token) when an access review with their token allows every request the action makes. Admins skip the review: their `*` rule covers every request.
+
+| Action | Users who are not cluster-admins |
+|---|---|
+| Workbench: set up, start, stop, delete, delete its kept storage | yes |
+| Playground: set up, delete | yes |
+| MLflow samples: add, remove | yes |
+| MLflow demo: regenerate | no (a cluster-admin's) |
+| Everything else (project S3, models, pipeline servers, recipes, cluster parts) | no; later branches of the design |
+
+A project user's workbench setup does not write the internal registry's copy of the pull secret (a Secret in RHOAI's applications namespace); on a hosted control plane it says that a cluster-admin makes it. A project user's MLflow demo add does not patch the cluster-wide MLflow CR's old memory limit; it says that a cluster-admin's add removes it.
+
+### The gate (`withProjectMutationAuth`)
+
+| # | Check | Token | Class |
+|---|---|---|---|
+| 1 | identity (`users/~`) | user's | b |
+| 2 | body validated before any lock | n/a | b |
+| 3 | sign-in can carry the change (`sessionProblem`) | user's | b |
+| 4 | role (`*`/`*`/`*`); admin skips 5-7 | user's | b |
+| 5 | the action is one users may run (403 `admin_only` otherwise) | n/a | b |
+| 6 | the project is one of the user's (`IsUserDSProject`); a project that does not exist gets the same 403 `forbidden_for_user` and no ServiceAccount read is made before it | user's | b |
+| 7 | rate limit (before any review, so a burst of requests is not a burst of reviews) | n/a | b |
+| 8 | prerequisites from the facts (`ProjectFeatureBlock`: the component is on; an unreadable DataScienceCluster refuses), before the preflight, so a component that is off says so instead of asking for a role | SA (facts) | c |
+| 9 | preflight: one SelfSubjectAccessReview per request of the action (at most 8 at once per call, 32 in the process), from the RBAC scan (`TestProjectActionPreflightMatchesTheScan`) and the hand lists below; a conditional request only where the action makes it (the workbench's LocalQueues: Kueue-managed project and Kueue available, `workbench.QueuesNeeded`); a review that fails refuses (503), a denial refuses with the full list and who can grant each (403 `missing_permissions`), before any write. The decision is `status.allowed`; an `evaluationError` beside it is logged, never returned | user's | a (a copy the API server also enforces, kept so a partial right cannot leave a half-done change) |
+| 10 | the project's UID (read with the user's token), the shutdown gate, the project's lock; a cluster-admin's MLflow samples action takes the cluster lock instead (it may remove the old memory limit from the shared MLflow CR, which restarts MLflow for every project) | user's / SA records | b |
+
+Every refusal says that nothing was changed, and names only an HTTP status or a category when a read failed: never the API server's, the authorizer's or the ServiceAccount's words. Logs of project actions name no user at the default level (the activity record keeps who did what). At debug level, pod logs can still carry an access review's `evaluationError` (it may name roles and bindings) and a user name (`X-Forwarded-User` differing from the token's owner); pod logs are for the same audience as the ConfigMaps that hold user names: cluster-admins and admins of the updater's namespace. `GET /api/resources/projects/capabilities?project=` runs the same checks through the same functions (`projectActionVerdicts`, `projectStartProblem`), advisory, cached a minute by token hash and project (an answer that could not be told is not cached). A read that fails refuses only the actions that need it (an applications namespace or a prerequisite that cannot be read); an access review that fails refuses every action of that request (fail closed), so one failing check hides actions it does not concern until it answers again.
+
+A user's MLflow demo Add runs only where the demo's experiment does not exist: on an existing one the generator brings its data up to date or resets it, which replaces it (Regenerate, a cluster-admin's). An Add's preflight also reviews what the sample's remove path needs, since a refused add rolls back through it. The golden file's `project action requests` section lists each action's requests, with the namespace each goes to (`project`, RHOAI's applications namespace `apps`, or a cluster-scoped read every user may make) and where the row comes from (`scan`, `gen-ai`, `mlflow`).
+
+### Requests made by platform services
+
+The dashboard's gen-ai API (Playground) and MLflow (samples) make Kubernetes requests or access reviews with the user's token. They are listed by hand with their source at a pinned ref (`features.GenAIRequests`: gen-ai `token_k8s_client.go` at odh-dashboard `rhoai-3.6` `efd01a3`; `mlflow.AuthRules`: mlflow-kubernetes-plugins v2.1.1 (9694e137) `rules_base.py`, shared with the tests' MLflow fake) and preflighted like the rest (`TestHandListsMatchPinnedSource`, `TestMLflowRuleActionsMatchTheFake`). A refusal from either service stops the action and removes what it created: the gen-ai API removes its own ConfigMaps and the tool drops its record of the request (`TestPlaygroundGenAI403IsACleanRefusal`); a sample absent before an add is removed again by its own remove path (`TestMLflowSamples403IsACleanRefusal`).
+
+### Locks and busy answers
+
+A project action holds its project's lock (B1's lock table: a key of the operation ConfigMap), admins' too. A project action is refused while a cluster operation runs and the reverse; one project action per user; 20 at once. A user's refusal names no other user: "A cluster operation is running since HH:MM UTC", "An action (<label>) is running in this project since HH:MM UTC", or their own action by its label and project.
+
+### Activity and actor names
+
+`GET /api/activity` is per role: cluster-admins see every entry; a user sees only their own, filtered on the server by the identity resolved from their token (never `X-Forwarded-User`; no identity, no entries). Lock entries and ownership records hold user names; only cluster-admins and admins of the updater's namespace can read those ConfigMaps.
+
+### Records caps
+
+Entries a project user's setup adds to the snapshot ConfigMap (`workbenches`, `playgrounds`) carry `actorRole: user` and the project's namespace UID (`projectUID`): the caps count projects by UID, so a project deleted and made again under its name is another one. At most 100 projects hold users' entries, at most 10 of them one user's, and a user's entry is at most 2 KiB. A hard ceiling of 200 users' entries counts every one persisted, those of projects that are gone included: 200 x 2 KiB = 400 KiB of the snapshot ConfigMap's 1 MiB, leaving at least 600 KiB to cluster-admins' records (200 is the two keys in each of the 100 projects, so live entries alone never reach it). Entries of deleted projects are not reclaimed on write: the background check (with the MaaS prune job, every 5 minutes when no other operation runs) forgets the workbench and playground entries of projects that are gone (a workbench entry also when its project was made again under its name, unless the storage it records still lives there, it records a Notebook (which the ServiceAccount does not read), or the check fails: the namespace may be replaced between a setup's gate and its creates; an entry from before the UID was kept goes by its name), and the ceiling's refusal says so. Every write of a user's entry is admitted inside the per-pod critical section of that write (`record.AdmitUserEntry` in `record.UpdateSnapshot`), a new entry and one taken over from a cluster-admin or another user alike; the setup also checks early, before anything is made, and a refusal at write time deletes what was made (`records_full`). An entry whose project no longer exists, or now has another UID, is not counted (the facts client's Namespace `get`). Entries without `actorRole` (written before, all by cluster-admins) and admins' entries are outside both caps. Read-change-write cycles of the snapshot keys are serialized per pod (`record.UpdateSnapshot`), since project actions in different projects run at once.
+
+### Local development
+
+`DEV_ROLE=user` (dev mode without a ServiceAccount token only) turns off the developer's cluster-admin bypass of the mutation gate and the sign-in check, so a non-admin's bearer token takes the non-admin path, preflight included.
+
+### RBAC
+
+The golden's `project action requests` section lists the gate's own user-token requests and, per action, the scan's requests with each one's namespace class; a scanned request in a literal namespace other than the project's fails the test. No new row in the golden's requests: the preflight's access reviews and the project's namespace UID read are user-token call sites (excluded), the records caps' Namespace `get` is an existing SA row. The project actions' own requests are already in the golden (admins' paths).
+
+### Not verified (live checks pending)
+
+The per-persona live pass of the design (section 9): project admin, editor, viewer, an `rhods-admins` member without a project binding, a user with nothing, and a cluster-admin as the control; each action allowed or refused as the table says, with nothing written on a refusal; whether project `edit` includes the gen-ai API's and MLflow's requests on RHOAI 3.6 and 3.7 (the hand lists' assumption); a role revoked mid-action.
 
 ## Sign-in and access policy (4.0.0)
 
