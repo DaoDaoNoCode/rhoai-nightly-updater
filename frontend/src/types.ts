@@ -13,6 +13,8 @@ export interface ActivityEntry {
   success: boolean;
   /** Why a failed operation failed or was refused. */
   reason?: string;
+  /** A project action cancelled at a safe point: who asked (a cluster-admin is never named). */
+  cancelledBy?: "starter" | "admin";
   /** Read-time fields from the backend: a readable name for `action`. */
   label?: string;
   /** "operator" | "dashboard-dev" | "test-resources" | "setup" | "diagnostics" | "other". */

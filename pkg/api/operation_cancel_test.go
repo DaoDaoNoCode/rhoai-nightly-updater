@@ -99,7 +99,7 @@ func TestCancelOnlyStarterOrAdmin(t *testing.T) {
 	if w.Code != http.StatusAccepted || !accepted.CancelRequested || accepted.Message != cancelAcceptedMessage {
 		t.Fatalf("the starter's cancel: %d %s", w.Code, w.Body.String())
 	}
-	if c := inflight.cancelRequest(id); c == nil || c.ByAdmin || c.Reason() != "Cancelled by you" {
+	if c := inflight.cancelRequest(id); c == nil || c.ByAdmin || c.Reason() != "Cancelled by the user who started it" {
 		t.Fatalf("request %+v", c)
 	}
 	if w := postCancel(t, "user:admin", id); w.Code != http.StatusAccepted || inflight.cancelRequest(id).ByAdmin {

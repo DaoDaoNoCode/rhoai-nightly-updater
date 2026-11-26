@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -35,62 +34,54 @@ func withCancel(c *Client, s *cancelSwitch) *Client {
 	return c.WithContext(WithCancelCheck(c.Context(), s.check))
 }
 
-// abortWatch fails the test when a request ends without its answer (its
-// context ended, or it was cut off): a cancel never interrupts a request.
-type abortWatch struct {
-	t    *testing.T
-	base http.RoundTripper
-	mu   sync.Mutex
-	n    int
+// flipDuring makes the cancel request while the request matching (method,
+// path, not a dry run) is in flight: before the fake answers it. The
+// request still finishes (nothing ends its context).
+type flipDuring struct {
+	base         http.RoundTripper
+	method, path string
+	flip         func()
 }
 
-func (a *abortWatch) RoundTrip(r *http.Request) (*http.Response, error) {
-	resp, err := a.base.RoundTrip(r)
-	a.mu.Lock()
-	a.n++
-	a.mu.Unlock()
-	if err != nil || r.Context().Err() != nil {
-		a.t.Errorf("%s %s ended early: %v (context %v)", r.Method, r.URL.Path, err, r.Context().Err())
+func (d *flipDuring) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Method == d.method && r.URL.Path == d.path && r.URL.Query().Get("dryRun") == "" {
+		d.flip()
 	}
-	return resp, err
+	return d.base.RoundTrip(r)
 }
 
-// A workbench setup cancelled before its first change creates nothing; one
-// cancelled while it creates the storage lets that request finish, keeps
-// the storage recorded (as when the workbench's create fails) and creates
-// no workbench; one cancelled once its last safe point is behind it (the
-// workbench's create) finishes and succeeds.
+// A workbench setup cancelled before its first change stops before the
+// Notebook's dry run (whose webhook changes the project) and changes
+// nothing; one cancelled while the storage's create is in flight lets
+// that request finish, keeps the storage recorded (as when the
+// workbench's create fails) and creates no workbench; one cancelled while
+// the workbench's create is in flight (its last safe point behind it)
+// finishes and succeeds.
 func TestWorkbenchSetupCancelAtEverySafePoint(t *testing.T) {
 	t.Setenv("NAMESPACE", "rhoai-nightly-updater")
 	for _, tc := range []struct {
 		name       string
-		at         string // the step whose "running" event the request arrives with; "" from the start
+		during     string // the create in flight when the request comes; "" from the start
 		pvc, nb    bool
 		success    bool
 		wantPrefix string
 	}{
-		{"before anything", "", false, false, false, "Cancelled by you before this step. Nothing was changed."},
-		{"while the storage is created", "storage", true, false, false, "Cancelled by you before this step. No workbench was created; its storage nightly-workbench-storage stays"},
-		{"after the last safe point", "workbench", true, true, true, ""},
+		{"before anything", "", false, false, false, "Cancelled by the user who started it before this step. Nothing was changed."},
+		{"while the storage is created", wbPVCs, true, false, false, "Cancelled by the user who started it before this step. No workbench was created; its storage nightly-workbench-storage stays"},
+		{"while the workbench is created", wbNotebooks, true, true, true, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newResourceFake(t)
 			putWorkbenchCluster(t, f, true)
-			watch := &abortWatch{t: t}
-			editTestClient(c, func(o *testClientOptions) {
-				watch.base = o.HTTPClient.Transport
-				o.HTTPClient = &http.Client{Transport: watch}
-			})
 			sw := &cancelSwitch{}
-			sw.on.Store(tc.at == "")
+			sw.on.Store(tc.during == "")
+			editTestClient(c, func(o *testClientOptions) {
+				o.HTTPClient = &http.Client{Transport: &flipDuring{base: o.HTTPClient.Transport, method: http.MethodPost, path: tc.during, flip: func() { sw.on.Store(true) }}}
+			})
 			u := withCancel(userClientOf(c, fakeUserToken), sw)
 			u.SetUsername("alice")
 			u.SetProjectUser("uid-proj")
-			res, err := RunWorkbench(u, types.WorkbenchRequest{Action: "setup", Project: "proj"}, func(e UpdateStepEvent) {
-				if e.Step == tc.at && e.Status == "running" {
-					sw.on.Store(true)
-				}
-			})
+			res, err := RunWorkbench(u, types.WorkbenchRequest{Action: "setup", Project: "proj"}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -100,6 +91,11 @@ func TestWorkbenchSetupCancelAtEverySafePoint(t *testing.T) {
 			if f.has(wbPVC) != tc.pvc || f.has(wbNotebook) != tc.nb {
 				t.Fatalf("storage %v, workbench %v", f.has(wbPVC), f.has(wbNotebook))
 			}
+			if tc.during == "" {
+				for _, call := range f.callsTo(http.MethodPost, wbNotebooks) {
+					t.Fatalf("the Notebook's dry run was sent: %+v", call.Query)
+				}
+			}
 			rec, err := workbench.ReadRecord(c)
 			if err != nil {
 				t.Fatal(err)
@@ -108,8 +104,11 @@ func TestWorkbenchSetupCancelAtEverySafePoint(t *testing.T) {
 			if tc.pvc && e.StorageUID != f.get(wbPVC)["metadata"].(map[string]any)["uid"] {
 				t.Fatalf("the storage is not recorded: %+v", e)
 			}
+			if u.Context().Err() != nil {
+				t.Fatal("the operation's context ended")
+			}
 			log := storedActivity(t, f)
-			if len(log) != 1 || log[0].Success != tc.success || !tc.success && log[0].Reason != "Cancelled by you" {
+			if len(log) != 1 || log[0].Success != tc.success || !tc.success && log[0].Reason != "Cancelled by the user who started it" {
 				t.Fatalf("activity %+v", log)
 			}
 		})
@@ -130,8 +129,8 @@ func TestPlaygroundSetupCancelAtEverySafePoint(t *testing.T) {
 		wantStep  string
 		want      string
 	}{
-		{"before the install", "", false, false, "install", "Cancelled by you before this step. Nothing was changed."},
-		{"while the install runs", "install", false, true, "ready", "Cancelled by you before this step. The dashboard was already asked to set up the playground in proj, so it stays, recorded as this tool's"},
+		{"before the install", "", false, false, "install", "Cancelled by the user who started it before this step. Nothing was changed."},
+		{"while the install runs", "install", false, true, "ready", "Cancelled by the user who started it before this step. The dashboard was already asked to set up the playground in proj, so it stays, recorded as this tool's"},
 		{"during the ready wait", "ready", true, true, "ready", "Cancelled by a cluster-admin before this step. The dashboard was already asked"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -201,7 +200,7 @@ func TestMLflowSamplesCancelBetweenSamples(t *testing.T) {
 		t.Fatalf("after the cancel: %+v", st)
 	}
 	log := storedActivity(t, env.k8s)
-	if len(log) != 1 || log[0].Success || log[0].Reason != "Cancelled by you" {
+	if len(log) != 1 || log[0].Success || log[0].Reason != "Cancelled by the user who started it" {
 		t.Fatalf("activity %+v", log)
 	}
 }

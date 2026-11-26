@@ -17,6 +17,10 @@ type ActivityEntry struct {
 	// a cluster-admin's cluster action (pkg/cluster/internal/record).
 	Scope     *ActivityScope `json:"scope,omitempty"`
 	ActorRole string         `json:"actorRole,omitempty"`
+	// CancelledBy is set on a project action that was cancelled at a safe
+	// point: "starter" (whoever started it) or "admin" (a cluster-admin,
+	// never named). The UI says "Cancelled by you" to the starter.
+	CancelledBy string `json:"cancelledBy,omitempty"`
 
 	// Filled in when the log is read (not stored):
 	// Label is a human-readable name for Action, Category groups actions

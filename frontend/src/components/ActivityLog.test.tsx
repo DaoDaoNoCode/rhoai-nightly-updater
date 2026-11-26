@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { ActivityLog, activityCategory } from "./ActivityLog";
+import { ActivityLog, activityCategory, activityReason } from "./ActivityLog";
 import type { ActivityEntry } from "../types";
 
 const refused: ActivityEntry = {
@@ -48,5 +48,20 @@ describe("ActivityLog", () => {
     expect(screen.getByText("S3 storage set up")).toBeTruthy();
     // The menu closes on PatternFly Popper's hide timer (setTimeout).
     await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+  });
+});
+
+describe("the reason of a cancelled project action", () => {
+  const entry: ActivityEntry = { timestamp: "2026-11-25T10:00:00Z", user: "alice", action: "setup-workbench", detail: "workbench in team-a", success: false, reason: "Cancelled by the user who started it", cancelledBy: "starter" };
+
+  it("says you to the user who started it, and the stored words to anyone else", () => {
+    expect(activityReason(entry, "alice")).toBe("Cancelled by you");
+    expect(activityReason(entry, "root")).toBe("Cancelled by the user who started it");
+    expect(activityReason(entry, null)).toBe("Cancelled by the user who started it");
+  });
+
+  it("never turns a cluster-admin's cancel into you", () => {
+    const byAdmin: ActivityEntry = { ...entry, reason: "Cancelled by a cluster-admin", cancelledBy: "admin" };
+    expect(activityReason(byAdmin, "alice")).toBe("Cancelled by a cluster-admin");
   });
 });

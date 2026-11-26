@@ -47,8 +47,9 @@ import (
 // leaves less than finishing (a delete whose record must still be
 // cleared, a start or stop of one object).
 var cancellableActions = map[string]string{
-	"workbench.setup": "It stops before its next step. Before the storage is created nothing stays; after, the storage stays, " +
-		"recorded as this tool's, and the next setup uses it. No workbench is created.",
+	"workbench.setup": "It stops before its next step. Before its checks reach the workbench controller nothing changes; after that, " +
+		"the project keeps what the controller adds on a check (its CA bundle and pipeline settings, as for any workbench), and once " +
+		"the storage is created it stays, recorded as this tool's, for the next setup. No workbench is created.",
 	"playground.setup": "It stops before its next step. Before the dashboard is asked to set it up nothing stays; after, " +
 		"the playground stays, recorded as this tool's, and you can delete it on the Playground tab.",
 	"mlflow-samples.add":    "It stops before its next sample. The samples added by then stay; remove them on the MLflow tab.",

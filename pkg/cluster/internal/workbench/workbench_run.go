@@ -226,6 +226,11 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 			return r.fail("check", fmt.Sprintf("The API server rejects PersistentVolumeClaim %s: %v. Nothing was changed.", StorageName, err), kube.ErrorCodeFromK8sErr(err), "storage dry run failed")
 		}
 	}
+	// Safe point: nothing was made yet. It comes before the Notebook's
+	// dry run, which changes the project (below).
+	if cancel := record.CancelRequested(c); cancel != nil {
+		return r.cancelled("check", cancel, "Nothing was changed.")
+	}
 	// The Notebook's dry run goes through odh-notebook-controller's
 	// webhook, which (as for the dashboard's own dry run and for a real
 	// create) makes ConfigMaps workbench-trusted-ca-bundle and
@@ -243,10 +248,6 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 	}
 	r.step("check", "success", describe(plan))
 
-	// Safe point: nothing was made yet.
-	if cancel := record.CancelRequested(c); cancel != nil {
-		return r.cancelled("storage", cancel, "Nothing was changed.")
-	}
 	if pvcFound {
 		r.step("storage", "success", fmt.Sprintf("Using the storage this tool kept: %s.", StorageName))
 	} else {
