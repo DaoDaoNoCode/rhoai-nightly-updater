@@ -81,7 +81,6 @@ export const ADMIN_ONLY_GETS: RegExp[] = [
   /^\/api\/nightly-tags/,
   /^\/api\/resources\/maas/,
   /^\/api\/resources\/prerequisites/,
-  /^\/api\/resources\/models\/exposures/,
   /^\/api\/resources\/s3\/admin-password/,
   /^\/api\/resources\/status(?!\?project=)/,
   /^\/api\/recipes\//,

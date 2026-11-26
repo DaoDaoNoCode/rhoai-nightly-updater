@@ -28,6 +28,7 @@ import { IDLE, playgroundIn } from "./featureState";
 import { PipelineSample } from "./PipelineSample";
 import { SAMPLE_INFO, sampleLabel, sampleNote } from "./samples";
 import { LinesSkeleton } from "./Loading";
+import { DeployProjectModel } from "./DeployProjectModel";
 
 /** What a cluster-admin does on this page for a user who is not one: set up or remove anything. */
 export const ADMIN_SETS_UP = "A cluster-admin sets this up.";
@@ -292,7 +293,7 @@ const StoragePart: React.FC<{ project: string; read: ProjectRead<ProjectStorageS
   return <Part title="S3 storage" id="user-env-s3">{body}</Part>;
 };
 
-const ModelsPart: React.FC<{ project: string; read: ProjectRead<ProjectStatus> }> = ({ project, read }) => {
+const ModelsPart: React.FC<{ project: string; read: ProjectRead<ProjectStatus>; busy: boolean; start: StartAction; onDeploy: () => void }> = ({ project, read, busy, start, onDeploy }) => {
   const data = read.data;
   const models = data?.models ?? [];
   const inferenceServices = data?.inferenceServices ?? [];
@@ -308,7 +309,8 @@ const ModelsPart: React.FC<{ project: string; read: ProjectRead<ProjectStatus> }
             <Tr>
               <Th width={30}>Model</Th>
               <Th width={20}>Status</Th>
-              <Th width={50}>Address</Th>
+              <Th width={40}>Address</Th>
+              <Th screenReaderText="Actions" />
             </Tr>
           </Thead>
           <Tbody>
@@ -317,6 +319,15 @@ const ModelsPart: React.FC<{ project: string; read: ProjectRead<ProjectStatus> }
                 <Td dataLabel="Model">{m.displayName || m.name}</Td>
                 <Td dataLabel="Status"><EnvStatusLabel status={envStatus(m)} /></Td>
                 <Td dataLabel="Address">{m.url ? <code className="pf-v6-u-text-break-word">{m.url}</code> : <span className="pf-v6-u-text-color-subtle">None</span>}</Td>
+                <Td dataLabel="Actions" modifier="nowrap">
+                  {m.managedByTool && !m.terminating && m.name && (
+                    <ProjectActionButton project={project} action="models.teardown" busy={busy} variant="link"
+                      onClick={() => start(`Delete ${m.displayName || m.name} in ${project}`, { kind: "models", req: { action: "teardown", project, model: m.name } },
+                        { changes: [`Model ${m.name} in ${project}, with its token objects if it has them`], label: "Delete" })}>
+                      Delete
+                    </ProjectActionButton>
+                  )}
+                </Td>
               </Tr>
             ))}
           </Tbody>
@@ -347,9 +358,19 @@ const ModelsPart: React.FC<{ project: string; read: ProjectRead<ProjectStatus> }
           </Tbody>
         </Table>
       ) : null;
-    body = !llm && !isvc
-      ? <Note>No models in {project}. {IN_PROJECT_HINT}</Note>
-      : <Stack hasGutter>{llm && <StackItem>{llm}</StackItem>}{isvc && <StackItem>{isvc}</StackItem>}</Stack>;
+    const deploy = (data.modelCatalog ?? []).length > 0 && !data.modelsProblem && (
+      <ProjectActionButton project={project} action="models.setup" busy={busy} variant="secondary" onClick={onDeploy}>
+        Deploy a model
+      </ProjectActionButton>
+    );
+    body = (
+      <Stack hasGutter>
+        {!llm && !isvc && <StackItem><Note>No models in {project}. Deploy a small CPU model of this tool&apos;s catalog here, or add one in the RHOAI dashboard.</Note></StackItem>}
+        {llm && <StackItem>{llm}</StackItem>}
+        {isvc && <StackItem>{isvc}</StackItem>}
+        {deploy && <StackItem>{deploy}</StackItem>}
+      </Stack>
+    );
   }
   return <Part title="Models" id="user-env-models">{body}</Part>;
 };
@@ -565,12 +586,14 @@ const WorkbenchPart: React.FC<{ project: string; read: ProjectRead<WorkbenchStat
  * What runs in one of the user's projects, read with their own token
  * (docs/research/per-user-views.md): the pipeline server and the sample
  * pipeline, the models, the workbench, the playground and the MLflow
- * sample data. The workbench, the playground and the samples can be set up
- * and removed here when the user's role in the project allows it, as can
- * the project's own S3 storage (its admins: B5) and a pipeline server on it (the
- * non-admin design, B3: GET /api/resources/projects/capabilities); a
- * control they may not use is disabled with the reason. Pipeline servers
- * and models stay a cluster-admin's.
+ * sample data. The workbench, the playground, the samples and the models of
+ * this tool's catalog (B6: inside the cluster, or through the inference
+ * gateway when it admits the project) can be set up and removed here when
+ * the user's role in the project allows it, as can the project's own S3
+ * storage (its admins: B5) and a pipeline server on it (the non-admin
+ * design, B3: GET /api/resources/projects/capabilities); a control they may
+ * not use is disabled with the reason. A pipeline server on the cluster's
+ * shared storage stays a cluster-admin's.
  */
 export const UserProjectView: React.FC<{ project: string; refreshKey: number }> = ({ project, refreshKey }) => {
   const [ran, setRan] = useState(0);
@@ -593,6 +616,7 @@ const UserProjectParts: React.FC<{ project: string; refreshKey: number; onRunEnd
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [choiceChecked, setChoiceChecked] = useState(false);
   const [typedValue, setTypedValue] = useState("");
+  const [deploying, setDeploying] = useState(false);
   const start: StartAction = (title, r, confirm) => {
     if (confirm) {
       setChoiceChecked(false);
@@ -605,7 +629,7 @@ const UserProjectParts: React.FC<{ project: string; refreshKey: number; onRunEnd
       {run && <StackItem><Card><CardBody><ProjectRunPanel run={run} idPrefix="user-env-run" /></CardBody></Card></StackItem>}
       <StackItem><StoragePart project={project} read={storage} busy={running} start={start} /></StackItem>
       <StackItem><PipelinesPart project={project} read={status} storage={storage.data} busy={running} start={start} /></StackItem>
-      <StackItem><ModelsPart project={project} read={status} /></StackItem>
+      <StackItem><ModelsPart project={project} read={status} busy={running} start={start} onDeploy={() => setDeploying(true)} /></StackItem>
       <StackItem><WorkbenchPart project={project} read={workbench} busy={running} start={start} /></StackItem>
       <StackItem><PlaygroundPart project={project} read={playground} busy={running} start={start} /></StackItem>
       <StackItem><SamplesPart project={project} read={samples} busy={running} start={start} /></StackItem>
@@ -614,6 +638,10 @@ const UserProjectParts: React.FC<{ project: string; refreshKey: number; onRunEnd
         <StackItem>
           <Card><CardBody><PipelineSample project={project} dspa={server.name} apiRoute={server.apiRoute} uiRoute={server.uiRoute} /></CardBody></Card>
         </StackItem>
+      )}
+      {deploying && (
+        <DeployProjectModel project={project} catalog={status.data?.modelCatalog ?? []} onClose={() => setDeploying(false)}
+          onDeploy={(choice) => { setDeploying(false); startRun(choice.title, { kind: "models", req: choice.req }); }} />
       )}
       {pending && (
         <ConfirmActionModal isOpen title={`${pending.title}?`} confirmLabel={pending.confirm} confirmVariant="danger"

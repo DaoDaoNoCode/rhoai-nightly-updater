@@ -44,6 +44,9 @@ func GetProjectStatus(sa, u *Client, project string) (*types.ProjectStatus, erro
 		return nil, fmt.Errorf("%w: '%s' is not one of your data science projects", ErrNotDSProject, project)
 	}
 	st := &types.ProjectStatus{Project: project, PipelineServers: []types.ResourceState{}, Models: []types.ModelState{}, InferenceServices: []types.ProjectInferenceService{}}
+	for _, m := range serving.ModelCatalog {
+		st.ModelCatalog = append(st.ModelCatalog, m.CatalogModel)
+	}
 	var (
 		wg                 sync.WaitGroup
 		dspas              []storage.DSPA

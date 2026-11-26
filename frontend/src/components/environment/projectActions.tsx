@@ -1,8 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { Alert, Content, Stack, StackItem } from "@patternfly/react-core";
 import type { MLflowSamplesRequest } from "../../services/api";
-import type { PlaygroundRequest, ProjectCapabilities, ProjectPipelineServerRequest, ProjectStorageRequest, UpdateStep, WorkbenchRequest } from "../../types";
-import { getProjectCapabilities, streamMLflowSamples, streamPlayground, streamProjectPipelineServer, streamProjectStorage, streamWorkbench, toApiError, type ApiError } from "../../services/api";
+import type { PlaygroundRequest, ProjectCapabilities, ProjectModelRequest, ProjectPipelineServerRequest, ProjectStorageRequest, UpdateStep, WorkbenchRequest } from "../../types";
+import { getProjectCapabilities, streamMLflowSamples, streamPlayground, streamProjectModel, streamProjectPipelineServer, streamProjectStorage, streamWorkbench, toApiError, type ApiError } from "../../services/api";
 import { isNotForUser } from "../../errors";
 import { StepProgress, type StepState } from "./StepProgress";
 import { TooltipButton } from "../TooltipButton";
@@ -85,7 +85,8 @@ export type ProjectRunRequest =
   | { kind: "playground"; req: PlaygroundRequest }
   | { kind: "mlflow-samples"; req: MLflowSamplesRequest }
   | { kind: "project-s3"; req: ProjectStorageRequest }
-  | { kind: "project-pipeline-server"; req: ProjectPipelineServerRequest };
+  | { kind: "project-pipeline-server"; req: ProjectPipelineServerRequest }
+  | { kind: "models"; req: ProjectModelRequest };
 
 interface RunState {
   title: string;
@@ -123,6 +124,7 @@ export function useProjectRun(onEnd: () => void) {
       case "mlflow-samples": ctl.current = streamMLflowSamples(r.req, onStep, onDone); break;
       case "project-s3": ctl.current = streamProjectStorage(r.req, onStep, onDone); break;
       case "project-pipeline-server": ctl.current = streamProjectPipelineServer(r.req, onStep, onDone); break;
+      case "models": ctl.current = streamProjectModel(r.req, onStep, onDone); break;
     }
   }, [onEnd]);
   return { run, start, running: !!run?.running, dismiss: () => setRun(null) };

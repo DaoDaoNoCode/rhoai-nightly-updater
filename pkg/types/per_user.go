@@ -125,9 +125,12 @@ type ProjectStatus struct {
 	// none; likewise for the others.
 	PipelineServersProblemCode string `json:"pipelineServersProblemCode,omitempty"`
 	// Models are the project's LLMInferenceServices.
-	Models            []ModelState `json:"models"`
-	ModelsProblem     string       `json:"modelsProblem,omitempty"`
-	ModelsProblemCode string       `json:"modelsProblemCode,omitempty"`
+	Models []ModelState `json:"models"`
+	// ModelCatalog are the models a project model action sets up (this
+	// tool's fixed catalog; no cluster read, no capacity warning).
+	ModelCatalog      []CatalogModel `json:"modelCatalog,omitempty"`
+	ModelsProblem     string         `json:"modelsProblem,omitempty"`
+	ModelsProblemCode string         `json:"modelsProblemCode,omitempty"`
 	// InferenceServices are the project's KServe InferenceServices.
 	InferenceServices            []ProjectInferenceService `json:"inferenceServices"`
 	InferenceServicesProblem     string                    `json:"inferenceServicesProblem,omitempty"`

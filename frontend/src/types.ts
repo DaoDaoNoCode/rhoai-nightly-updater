@@ -495,6 +495,8 @@ export interface ProjectStatus {
   pipelineServersProblem?: string;
   pipelineServersProblemCode?: ProjectProblemCode;
   models: ModelState[] | null;
+  /** The models a project model action sets up (this tool's fixed catalog). */
+  modelCatalog?: CatalogModel[];
   modelsProblem?: string;
   modelsProblemCode?: ProjectProblemCode;
   inferenceServices: ProjectInferenceService[] | null;
@@ -1473,6 +1475,27 @@ export interface ModelsRequest {
   releasedImage?: boolean;
 }
 
+/**
+ * The body of POST /api/resources/models/project/stream (pkg/types ProjectModelRequest): a model
+ * set up or deleted in one project, a project action. Nothing outside the project changes.
+ */
+export interface ProjectModelRequest {
+  action: "setup" | "teardown";
+  project: string;
+  model?: string;
+  /** Setup: "internal" (default) or "default-gateway" (needs tokenAuth). */
+  exposure?: "internal" | "default-gateway";
+  /** Setup: the dashboard's token authentication (a Role and RoleBinding: the project's admin role). */
+  tokenAuth?: boolean;
+  releasedImage?: boolean;
+}
+
+/** Whether the cluster's inference gateway admits one project (pkg/types ProjectGatewayFact): yes or no and a code. */
+export interface ProjectGatewayFact {
+  admits: boolean;
+  problem?: string;
+}
+
 export interface KeptPVC {
   name: string;
   size?: string;
@@ -2072,6 +2095,10 @@ export interface ModelExposures {
   authReady: boolean;
   recommendGateway?: boolean;
   recommendGatewayReason?: string;
+  /** A user's answer: whether the inference gateway admits the project. */
+  gateway?: ProjectGatewayFact;
+  /** A user's answer: whether a worker has the model's requests free. */
+  capacity?: "fits" | "may-not-fit" | "unknown";
 }
 
 /** One "Can it be called?" check (pkg/types ModelCallCheck). */
