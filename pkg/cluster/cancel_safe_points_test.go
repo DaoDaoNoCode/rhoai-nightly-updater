@@ -6,7 +6,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/juntwang/rhoai-nightly-updater/pkg/clock/clocktest"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/workbench"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
@@ -116,14 +119,15 @@ func TestWorkbenchSetupCancelAtEverySafePoint(t *testing.T) {
 }
 
 // A playground setup cancelled before the dashboard is asked sets nothing
-// up; one cancelled while the install call runs lets it finish and stops
-// after it, the playground kept and recorded (as when its ready wait
-// fails), deletable from the tab; one cancelled during the ready wait stops
-// at the next poll, kept the same way. A cluster-admin's cancel says so.
+// up; one cancelled while the install call is in flight (from inside it)
+// lets it finish and stops at the ready wait's first poll, the playground
+// kept and recorded, deletable from the tab; one cancelled during the
+// ready wait stops at the next poll, kept the same way. A cluster-admin's
+// cancel says so.
 func TestPlaygroundSetupCancelAtEverySafePoint(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
-		at        string
+		at        string // "install": from inside the install call; "ready": with the wait's step; "": from the start
 		byAdmin   bool
 		installed bool
 		wantStep  string
@@ -137,6 +141,10 @@ func TestPlaygroundSetupCancelAtEverySafePoint(t *testing.T) {
 			e := newPlaygroundEnv(t)
 			var on atomic.Bool
 			on.Store(tc.at == "")
+			if tc.at == "install" {
+				onInstall := e.g.onInstall
+				e.g.onInstall = func(ns string) { on.Store(true); onInstall(ns) }
+			}
 			e.c = e.c.WithContext(WithCancelCheck(context.Background(), func() *ActionCancelledError {
 				if on.Load() {
 					return &ActionCancelledError{ByAdmin: tc.byAdmin}
@@ -146,7 +154,7 @@ func TestPlaygroundSetupCancelAtEverySafePoint(t *testing.T) {
 			var steps []UpdateStepEvent
 			res, err := RunPlayground(e.c, setup(), func(s UpdateStepEvent) {
 				steps = append(steps, s)
-				if s.Step == tc.at && s.Status == "running" {
+				if tc.at == "ready" && s.Step == "ready" && s.Status == "running" {
 					on.Store(true)
 				}
 			})
@@ -167,6 +175,52 @@ func TestPlaygroundSetupCancelAtEverySafePoint(t *testing.T) {
 				t.Fatal("the operation's context ended")
 			}
 		})
+	}
+}
+
+// A cancel that comes while the setup waits to try the install again (the
+// dashboard answered 409: the previous playground's database is still
+// being removed) is seen right before the next attempt: no second POST,
+// and the request's record goes.
+func TestPlaygroundSetupCancelDuringTheInstallRetryWait(t *testing.T) {
+	e := newPlaygroundEnv(t)
+	clk := clocktest.NewFake()
+	t.Cleanup(kube.SetClockForTest(clk))
+	e.g.conflicts = 1
+	var on atomic.Bool
+	e.c = e.c.WithContext(WithCancelCheck(context.Background(), func() *ActionCancelledError {
+		if on.Load() {
+			return &ActionCancelledError{}
+		}
+		return nil
+	}))
+	type result struct {
+		res *types.OperationResponse
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		res, err := RunPlayground(e.c, setup(), nil)
+		done <- result{res, err}
+	}()
+	clk.WaitForSleepers(1) // the wait before the second attempt
+	on.Store(true)
+	clk.Advance(time.Hour)
+	r := <-done
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if r.res.Success || r.res.ErrorCode != "cancelled" || !strings.HasSuffix(r.res.Message, "Nothing was set up.") {
+		t.Fatalf("result %+v", r.res)
+	}
+	e.g.mu.Lock()
+	installs := len(e.g.installs)
+	e.g.mu.Unlock()
+	if installs != 1 {
+		t.Fatalf("install POSTs: %d", installs)
+	}
+	if _, recorded := e.records(t)["proj"]; recorded {
+		t.Fatal("the request's record stayed")
 	}
 }
 

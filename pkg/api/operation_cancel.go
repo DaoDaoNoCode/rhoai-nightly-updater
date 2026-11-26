@@ -55,8 +55,8 @@ var cancellableActions = map[string]string{
 	"workbench.setup": "It stops before its next step. Before its checks reach the workbench controller nothing changes; after that, " +
 		"the project keeps what the controller adds on a check (its CA bundle and pipeline settings, as for any workbench), and once " +
 		"the storage is created it stays, recorded as this tool's, for the next setup. No workbench is created.",
-	"playground.setup": "It stops before its next step. Before the dashboard is asked to set it up nothing stays; after, " +
-		"the playground stays, recorded as this tool's, and you can delete it on the Playground tab.",
+	"playground.setup": "It stops before its next step. Until the dashboard accepts the setup, nothing stays; after that, " +
+		"the playground stays, recorded as the tool's and deletable from its tab.",
 	"mlflow-samples.add":    "It stops before its next sample. The samples added by then stay; remove them on the MLflow tab.",
 	"mlflow-samples.remove": "It stops before its next sample. The samples removed by then stay removed.",
 }

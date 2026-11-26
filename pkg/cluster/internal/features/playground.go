@@ -1608,6 +1608,13 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 		deadline := kube.Clock().Now().Add(playgroundInstallRetryTimeout)
 		said := false
 		for {
+			// Safe point right before each install attempt (also after a
+			// retry's wait): the dashboard set nothing up yet, and the
+			// request's record goes as when the retries run out.
+			if cancel := record.CancelRequested(p.c); cancel != nil {
+				p.forgetIfAbsent()
+				return p.cancelled("install", cancel, "Nothing was set up.")
+			}
 			installErr = p.api.Call(http.MethodPost, "/lsd/install", p.project, body, nil)
 			if genAIStatus(installErr) != http.StatusConflict || !kube.Clock().Now().Before(deadline) {
 				break
@@ -1615,12 +1622,6 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 			if !said {
 				said = true
 				p.step("install", "running", fmt.Sprintf("The previous playground's database in %s is still being removed; trying again every %s (up to %s)", p.project, playgroundInstallRetryPoll, serving.ClockText(playgroundInstallRetryTimeout)))
-			}
-			// Safe point between attempts: the dashboard set nothing up
-			// yet; the record goes as when the retries run out.
-			if cancel := record.CancelRequested(p.c); cancel != nil {
-				p.forgetIfAbsent()
-				return p.cancelled("install", cancel, "Nothing was set up.")
 			}
 			if err := kube.Clock().Sleep(p.c.Context(), playgroundInstallRetryPoll); err != nil {
 				installErr = err
@@ -1652,10 +1653,6 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 			}
 		}
 		p.step("install", "success", fmt.Sprintf("The dashboard is setting up the playground in %s.", p.project))
-		// Safe point: the install was asked for and is recorded.
-		if cancel := record.CancelRequested(p.c); cancel != nil {
-			return p.cancelled("ready", cancel, playgroundKeptAfterCancel(p.project))
-		}
 	} else {
 		p.step("install", "success", fmt.Sprintf("The playground in %s exists (phase %s); waiting for it.", p.project, kube.FirstNonEmpty(existing.Phase, "unknown")))
 	}
@@ -1664,7 +1661,8 @@ func (p *playgroundRun) setup(wanted []types.PlaygroundModelRef) (*types.Operati
 	var srv *GenAIServer
 	var cancel *record.ActionCancelledError
 	ready, err := kube.WaitForGone(p.c, playgroundReadyTimeout, playgroundPoll, func(cc *kube.Client) (bool, error) {
-		// Safe point at each poll of the wait.
+		// Safe point at each poll of the wait (the first one comes right
+		// after the install).
 		if cancel = record.CancelRequested(p.c); cancel != nil {
 			return true, nil
 		}
