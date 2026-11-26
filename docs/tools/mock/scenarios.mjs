@@ -694,6 +694,20 @@ scenarios["user-update-running"] = (w) => {
   w.operation = { inProgress: true, operation: { id: "op-update", type: "update", label: "Update to nightly", user: "qa-admin", startedAt: new Date(F.NOW - 4 * 60_000).toISOString(), updatedAt: new Date(F.NOW).toISOString() } };
 };
 
+// Project actions running (the non-admin design's banners): the user's own
+// workbench setup in dev-project, another person's playground setup in
+// their llm-eval, and an action in a project that is not theirs (never
+// shown to them). The notes are pkg/api cancellableActions'.
+const WORKBENCH_CANCEL = "It stops before its next step. Before the storage is created nothing stays; after, the storage stays, recorded as this tool's, and the next setup uses it. No workbench is created.";
+const PLAYGROUND_CANCEL = "It stops before its next step. Before the dashboard is asked to set it up nothing stays; after, the playground stays, recorded as this tool's, and you can delete it on the Playground tab.";
+const PROJECT_ACTIONS = () => [
+  { id: "op-7a1c", type: "workbench", label: "Set up the workbench", user: F.USER, project: "dev-project", startedAt: F.ago(2), cancelNote: WORKBENCH_CANCEL },
+  { id: "op-3e9d", type: "playground", label: "Set up the playground", user: "ml-engineer", project: "llm-eval", startedAt: F.ago(6), cancelNote: PLAYGROUND_CANCEL },
+  { id: "op-b52f", type: "mlflow-samples", label: "Add MLflow sample data", user: "data-scientist", project: "fraud-detection", startedAt: F.ago(4) },
+];
+scenarios["user-project-actions"] = (w) => { scenarios.user(w); w.projectActions = PROJECT_ACTIONS(); };
+scenarios["admin-project-actions"] = (w) => { scenarios["env-overview-three"](w); w.status = F.updateAvailableStatus(); w.projectActions = PROJECT_ACTIONS().slice(1, 2); };
+
 // The leftover fixes refused: the module operator that recreates the
 // Deployment is not running (the backend's prerequisites refusal).
 scenarios["diag-leftovers-refused"] = (w) => { scenarios["diag-leftovers"](w); w.leftoverRefusal = true; };
@@ -865,7 +879,12 @@ function summaryOf(w) {
 
 export const reads = {
   "GET /api/status": (w) => w.status,
-  "GET /api/operation": (w) => w.operation,
+  // A cluster-admin's answer lists the running project actions too
+  // (pkg/api OperationStatus.operations), with who started them.
+  "GET /api/operation": (w) => (w.projectActions?.length ? { ...w.operation, operations: w.projectActions.map((a) => ({
+    id: a.id, type: a.type, label: a.label, user: a.user, startedAt: a.startedAt, project: a.project, projectUid: "uid-" + a.project, scope: "project",
+    ...(a.cancelNote ? { cancelNote: a.cancelNote, ...(a.cancelling ? { cancelling: true } : { cancellable: true }) } : {}),
+  })) } : w.operation),
   "GET /api/user/permissions": (w) => ({ canMutate: w.canMutate !== false, user: F.USER, role: w.role || "admin" }),
   "GET /api/summary": (w) => summaryOf(w),
   "GET /api/components": (w) => w.components,

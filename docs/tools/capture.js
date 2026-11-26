@@ -711,6 +711,10 @@ async (page) => {
       const remote = alert("on updater pod");
       await crop("banner-remote-operation", remote);
 
+      // A project action, as a cluster-admin sees it: who started it, and Cancel.
+      await open("/components", "admin-project-actions");
+      await crop("banner-admin-project-action", alert("in project llm-eval, started by"));
+
       await open("/components", "interrupted");
       await alert("was interrupted").locator("button").first().click();
       await wait(400);
@@ -877,7 +881,16 @@ async (page) => {
         await fullPage(`page-user-admin-only-${theme}`);
       }
       await open("/", "user-update-running");
-      await crop("banner-user-update-running", alert("An update is running since"));
+      await crop("banner-user-update-running", alert("A cluster operation is running since"));
+      // Their own project action (with Cancel) and another person's in one of their projects.
+      await open("/", "user-project-actions");
+      await crop("banner-user-project-actions", [alert("Your action (Set up the workbench)"), alert("An action (Set up the playground)")]);
+      // Cancel asks first, saying what the action leaves.
+      await alert("Your action (Set up the workbench)").getByRole("button", { name: "Cancel" }).click();
+      await page.getByRole("dialog").waitFor();
+      await wait(400);
+      await crop("dialog-cancel-project-action", page.getByRole("dialog"));
+      await page.getByRole("button", { name: "Keep it running" }).click();
     },
 
     async builds() {

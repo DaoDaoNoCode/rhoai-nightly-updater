@@ -99,7 +99,10 @@ var projectRouteBodies = map[string]string{
 }
 
 // lockFreeMutationRoutes are the gated routes that take no cluster lock,
-// with why. Each has a test that it makes no cluster call.
+// with why. Each has a test that it changes nothing in the cluster and
+// takes no lock (TestRecipeStopTakesNoLockAndMakesNoClusterCall,
+// TestCancelOnlyStarterOrAdmin); a cancel's only call is the mutation
+// gate's access review with the caller's own token.
 var lockFreeMutationRoutes = map[string]string{
 	"POST /api/recipes/stop":     "asks the running recipe run, which holds the lock, to stop after its step",
 	"POST /api/operation/cancel": "asks a running project action, which holds its lock, to stop at its next safe point",

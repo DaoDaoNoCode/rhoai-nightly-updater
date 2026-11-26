@@ -879,9 +879,20 @@ function userRead(res, key, u) {
   const send = (code, body) => { json(res, code, body); return true; };
   const adminOnly = () => send(403, { error: "Only cluster-admins can see this.", errorCode: "admin_only" });
   if (key === "GET /api/operation") {
+    // pkg/api operationSummary: the cluster operation by label and start;
+    // the project actions in the user's own projects, theirs with what
+    // Cancel needs, never who runs another person's.
     const op = world.operation.inProgress ? world.operation.operation : null;
-    return send(200, op ? { running: true, label: op.label, startedAt: op.startedAt } : { running: false, label: "", startedAt: "" });
+    const operations = op ? [{ scope: "cluster", label: op.label, startedAt: op.startedAt }] : [];
+    for (const a of world.projectActions ?? []) {
+      if (!(world.userProjects ?? []).includes(a.project)) continue;
+      const entry = { scope: "project", label: a.label, startedAt: a.startedAt, project: a.project };
+      if (a.user !== F.USER) { operations.push(entry); continue; }
+      operations.push({ ...entry, own: true, id: a.id, ...(a.cancelNote ? { cancelNote: a.cancelNote, ...(a.cancelling ? { cancelling: true } : { cancellable: true }) } : {}) });
+    }
+    return send(200, op ? { running: true, label: op.label, startedAt: op.startedAt, operations } : { running: false, label: "", startedAt: "", operations });
   }
+  if (key === "POST /api/operation/cancel") return false;
   if (key === "GET /api/resources/projects") return send(200, { projects: world.userProjects ?? [] });
   if (key === "GET /api/resources/projects/capabilities") {
     const project = u.searchParams.get("project") || "";
@@ -923,6 +934,18 @@ async function api(req, res, u) {
     }
   }
   if (world.role === "user" && userRead(res, key, u)) return;
+  if (key === "POST /api/operation/cancel") {
+    // pkg/api HandleOperationCancel: a request, for the starter or a
+    // cluster-admin; anyone else gets the answer of an action that does
+    // not exist.
+    const { id = "" } = await body(req);
+    const a = (world.projectActions ?? []).find((x) => x.id === id && x.cancelNote);
+    if (!a || (world.role === "user" && a.user !== F.USER)) {
+      return json(res, 404, { error: "No running action with this ID that you can cancel (it may have finished). Nothing was changed.", errorCode: "not_found" });
+    }
+    a.cancelling = true;
+    return json(res, 202, { cancelRequested: true, message: "Cancel requested: the action stops before its next step. If it finishes first, it is recorded as done." });
+  }
   if (key === "POST /api/pageview") { res.writeHead(204); res.end(); return; }
   if (world.signIn) {
     // An expired sign-in fails the identity check; a sign-in from before

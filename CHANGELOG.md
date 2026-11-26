@@ -41,6 +41,23 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   cluster-admins' records are outside the caps). `DEV_ROLE=user` tries the
   non-admin path in local development. No template change
   ([SECURITY.md](SECURITY.md#project-actions-for-non-admins-500)).
+- **Project actions: banners, Cancel and their own activity bucket.** A
+  running project action shows a banner: to a cluster-admin with who
+  started it, to its starter as "Your action (<label>) in project <P> is
+  running", and to the other users of that project without a name;
+  projects a user cannot see (also one deleted and made again under its
+  name) show nothing. A workbench setup, a playground setup and MLflow
+  sample changes can be cancelled by whoever started them or a
+  cluster-admin (`POST /api/operation/cancel`), after a confirmation that
+  says what the action leaves. A cancel is a request: the action stops at
+  its next safe point and keeps what it made as its own failure there
+  would; a request in flight always finishes, and an action that finishes
+  first is recorded as done. Activity entries now store their scope
+  (cluster or project) and the actor's role; users' entries are kept
+  apart (40, 5 per user, trimmed first) so they never evict
+  cluster-admins' history. A user's cluster-operation banner reads "A
+  cluster operation is running since HH:MM. Project actions can start
+  when it ends." No template change.
 - **Set up again on a model's card.** The Models tab's model card menu has
   **Set up again** next to Delete model: the model's own setup, in place
   (the same model, project and way it is reached), which applies this
@@ -422,6 +439,9 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **A workbench setup that reaches its deadline right after a create**
+  records the object as this tool's (or deletes it again), on the
+  post-operation context, instead of leaving it unrecorded.
 - **Update waits for OLM's result instead of a fixed time, and says why
   OLM has not resolved yet.** On a ROSA HCP cluster an Update failed after
   8 minutes with "last state: Waiting for OLM to resolve the Subscription":
