@@ -347,7 +347,7 @@ func recordProjectPipelineServer(c *kube.Client, meta kube.ObjectMeta) error {
 	if meta.UID == "" {
 		return fmt.Errorf("record this tool's pipeline servers: %s/%s has no UID", meta.Namespace, meta.Name)
 	}
-	return record.UpdateSnapshot(c, func() error {
+	return record.UpdateSnapshot(c, func(c *kube.Client) error {
 		rec, err := ReadPipelineRecord(c)
 		if err != nil {
 			return err
@@ -361,7 +361,7 @@ func recordProjectPipelineServer(c *kube.Client, meta kube.ObjectMeta) error {
 // storage from the record (none recorded, or one on the shared storage:
 // nothing is written).
 func forgetProjectPipelineServer(c *kube.Client, project string) error {
-	return record.UpdateSnapshot(c, func() error {
+	return record.UpdateSnapshot(c, func(c *kube.Client) error {
 		rec, err := ReadPipelineRecord(c)
 		if err != nil {
 			return err

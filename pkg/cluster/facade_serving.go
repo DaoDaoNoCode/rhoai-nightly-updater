@@ -18,6 +18,31 @@ func RunModels(c *Client, req types.ModelsRequest, onStep func(UpdateStepEvent))
 	return serving.RunModels(c, req, onStep)
 }
 
+// ValidateProjectModelRequest is serving.ValidateProjectModelRequest.
+func ValidateProjectModelRequest(req types.ProjectModelRequest) string {
+	return serving.ValidateProjectModelRequest(req)
+}
+
+// ProjectModelTarget is serving.ProjectModelTarget.
+func ProjectModelTarget(req types.ProjectModelRequest) string {
+	return serving.ProjectModelTarget(req)
+}
+
+// ProjectModelAction is serving.ProjectModelAction.
+func ProjectModelAction(req types.ProjectModelRequest) string {
+	return serving.ProjectModelAction(req)
+}
+
+// RunProjectModel is serving.RunProjectModel.
+func RunProjectModel(c *Client, req types.ProjectModelRequest, onStep func(UpdateStepEvent)) (*types.OperationResponse, error) {
+	return serving.RunProjectModel(c, req, onStep)
+}
+
+// ProjectModelExposures is serving.ProjectModelExposures.
+func ProjectModelExposures(u *Client, project, model string) (*types.ModelExposures, string, string) {
+	return serving.ProjectModelExposures(u, project, model)
+}
+
 // ValidModelName is serving.ValidModelName.
 func ValidModelName(name string) bool {
 	return serving.ValidModelName(name)

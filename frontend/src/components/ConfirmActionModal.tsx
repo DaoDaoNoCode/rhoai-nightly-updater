@@ -20,6 +20,8 @@ export interface ConfirmActionModalProps {
   title: string;
   /** Exactly what changes on the cluster, one item per object or effect. */
   changes: React.ReactNode[];
+  /** The words before the changes; by default "This changes the shared cluster:" (a project action says which project). */
+  changesIntro?: React.ReactNode;
   /**
    * The outcome in words, shown first. With it, the object list moves into
    * a collapsed "Details" section: the facts stay one click away.
@@ -50,13 +52,13 @@ export interface ConfirmActionModalProps {
  * of them; Cancel is always available and Escape closes the dialog.
  */
 export const ConfirmActionModal: React.FC<ConfirmActionModalProps> = ({
-  isOpen, title, changes, summary, children, dataLoss, choice, confirmLabel, confirmVariant = "primary", titleIconVariant, isLoading, confirmDisabled, changesOpen, onConfirm, onCancel,
+  isOpen, title, changes, changesIntro = "This changes the shared cluster:", summary, children, dataLoss, choice, confirmLabel, confirmVariant = "primary", titleIconVariant, isLoading, confirmDisabled, changesOpen, onConfirm, onCancel,
 }) => {
   const titleId = React.useId();
   const [detailsOpen, setDetailsOpen] = React.useState(false);
   const changeList = (
     <>
-      <Content component="p">This changes the shared cluster:</Content>
+      <Content component="p">{changesIntro}</Content>
       <List>
         {changes.map((change, i) => <ListItem key={i}>{change}</ListItem>)}
       </List>

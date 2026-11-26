@@ -106,7 +106,7 @@ func writeRecord(c *kube.Client, rec Record) error {
 // updateRecord loads the record, mutates the project entry via change, removes
 // the entry when both UIDs are cleared, then persists the result.
 func updateRecord(c *kube.Client, project string, change func(e *Recorded)) error {
-	return record.UpdateSnapshot(c, func() error {
+	return record.UpdateSnapshot(c, func(c *kube.Client) error {
 		rec, err := ReadRecord(c)
 		if err != nil {
 			return err
@@ -132,7 +132,7 @@ func updateRecord(c *kube.Client, project string, change func(e *Recorded)) erro
 			if err != nil {
 				return err
 			}
-			if err := record.AdmitUserEntry(c, project, prior, data); err != nil {
+			if err := record.AdmitUserEntryNamed(c, RecordKey, recordKey(project), project, prior, data); err != nil {
 				return err
 			}
 		}
@@ -147,7 +147,9 @@ func updateRecord(c *kube.Client, project string, change func(e *Recorded)) erro
 // gone cannot tell about stays (fail closed: gone says false).
 func ForgetGoneProjects(c *kube.Client, gone func(project string, e Recorded) bool) ([]string, error) {
 	var dropped []string
-	err := record.UpdateSnapshot(c, func() error {
+	err := record.UpdateSnapshot(c, func(c *kube.Client) error {
+		// An attempt's own removals: a retry after a conflict starts over.
+		dropped = nil
 		rec, err := ReadRecord(c)
 		if err != nil {
 			return err
@@ -164,6 +166,10 @@ func ForgetGoneProjects(c *kube.Client, gone func(project string, e Recorded) bo
 		}
 		return writeRecord(c, rec)
 	})
+	if err != nil {
+		// Nothing of a failed change was removed.
+		return nil, err
+	}
 	sort.Strings(dropped)
 	return dropped, err
 }

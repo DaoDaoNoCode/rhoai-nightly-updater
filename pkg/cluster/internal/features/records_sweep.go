@@ -82,25 +82,33 @@ func SweepGoneProjectRecords(c *kube.Client) {
 	}
 	var forgotten []string
 
-	if models, err := serving.ReadModelsRecord(c); err != nil {
-		slog.Warn("background check: the models record cannot be read", "error", err)
-	} else if maas, err := serving.ReadMaaSRecord(c); err != nil {
+	// A model entry stays while its publication is recorded. One that
+	// recorded its project's namespace UID (a user's) is gone also when a
+	// namespace of that name now has another UID, unless the model it
+	// records still lives there (the namespace may have been replaced
+	// between a setup's gate and its create), checked with the
+	// ServiceAccount's get on LLMInferenceServices; a check that fails
+	// keeps it (fail closed).
+	if maas, err := serving.ReadMaaSRecord(c); err != nil {
 		slog.Warn("background check: the MaaS record cannot be read", "error", err)
-	} else {
-		changed := false
-		for key := range models {
-			project, model, _ := strings.Cut(key, "/")
-			if maas.IsPublished(project, model) || !projectGone(project) {
-				continue
-			}
-			delete(models, key)
-			changed = true
-			forgotten = append(forgotten, "model "+key)
+	} else if dropped, err := serving.ForgetGoneModels(c, func(project, name string, e serving.RecordedModel) bool {
+		if maas.IsPublished(project, name) {
+			return false
 		}
-		if changed {
-			if err := serving.WriteModelsRecord(c, models); err != nil {
-				slog.Warn("background check: the models record cannot be written", "error", err)
-			}
+		st := namespace(project)
+		switch {
+		case st.gone:
+			return true
+		case e.ProjectUID == "" || st.uid == "" || st.uid == e.ProjectUID:
+			return false
+		}
+		live, err := serving.ModelLive(c, project, name, e.UID)
+		return err == nil && !live
+	}); err != nil {
+		slog.Warn("background check: the models record cannot be read or written", "error", err)
+	} else {
+		for _, key := range dropped {
+			forgotten = append(forgotten, "model "+key)
 		}
 	}
 

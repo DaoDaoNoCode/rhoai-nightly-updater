@@ -24,6 +24,27 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Added
 
+- **Models for users who are not cluster-admins.** In one of their own
+  data science projects, a project's admins and editors can deploy and
+  delete the models of the tool's catalog on the Environment page
+  (`POST /api/resources/models/project/stream`, a project action), reached
+  only inside the cluster with token authentication off. This is narrower
+  than the non-admin design: a model through the inference gateway, or
+  with token authentication, stays a cluster-admin's (the Models tab,
+  unchanged), because through a gateway the route exists before anything
+  can confirm that the gateway checks its callers, and inside the cluster
+  token authentication protects nothing. Asking for either is refused.
+  Nothing outside the project changes. The cluster facts the setup needs
+  are read by the ServiceAccount with rules it already has and reduced to
+  the project (whether the model fits: fits or may not fit). A deploy can
+  be cancelled before the model is created and at each check of its ready
+  wait. A delete is refused while any MaaSModelRef in the project targets
+  the model (a check before the delete). `GET /api/resources/models/exposures`
+  answers a user for one of their projects. Users' model records count in
+  the records caps (a ceiling of 400 model entries of at most 1 KiB);
+  every user's entry together stays within one budget of 500 KiB. Snapshot
+  record writes are conditional on what they read (the first one
+  create-only) and retried after another updater pod's write.
 - **Project S3 storage.** A project's admins can set up, repair and
   delete S3 storage in their own project (SeaweedFS `nightly-s3`, with
   its volume, key Secret and NetworkPolicy; no Route), with their own
@@ -470,6 +491,33 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
 
 ### Fixed
 
+- **Models the playground cannot use** (B5+B6 live round). KServe reports
+  a model without a route by its Service with no port, and the dashboard's
+  Gen AI playground writes that address (plus /v1) into its configuration,
+  so its chat hung. Set up
+  now leaves such models out of its own choice and says so, refuses one
+  chosen by name, and when no chat model is left names what the playground
+  can use instead (a model on the inference gateway, or a Models as a
+  Service model). The check follows the reported address, so it ends once
+  KServe reports the port. The "Only inside the cluster" description says
+  it, for cluster-admins and users alike.
+- **A user's Environment page**: a model reached only inside the cluster
+  shows its in-cluster address with the Service's port (it read "None");
+  the parts are read again while one is setting up, starting or being
+  deleted, and slowly otherwise, as on the cluster-admin's page (a card
+  stayed "Setting up" until Refresh); a delete's confirmation names the
+  project it changes; the S3 storage says who its network policy lets in;
+  before the project has S3 storage, an editor is told that an admin of the
+  project sets it up; the deploy dialog says which runtime image the model
+  runs (for a new model, in fixed words), and offers the released image
+  only while the plan is the preset's. When the project's only chat models
+  cannot be used by the playground, Set up is disabled and the card says to
+  ask a cluster-admin for a model on the inference gateway; the polling
+  says when it stopped checking quickly.
+- **Permission messages**: a refusal names only what the request needs
+  (the model it asks for, not every model of the catalog), each object once
+  with its verbs, and who grants them once; an action only a project's
+  admins may run says so in one sentence.
 - **A workbench setup that reaches its deadline right after a create**
   records the object as this tool's (or deletes it again), on the
   post-operation context, instead of leaving it unrecorded.

@@ -51,6 +51,8 @@ func TestProjectCapabilitiesPerRole(t *testing.T) {
 				if !ok {
 					t.Fatalf("%s missing", a.ID)
 				}
+				// An editor is not an admin of the project: project S3
+				// storage (B5) is refused.
 				adminOnlyHere := role == roleEditor && needsProjectAdmin(a)
 				want := role == roleClusterAdmin && a.AdminRefusal == "" || (a.ForUsers && role != roleViewer && role != roleClusterAdmin && !adminOnlyHere)
 				if cp.Allowed != want {
@@ -63,9 +65,9 @@ func TestProjectCapabilitiesPerRole(t *testing.T) {
 					t.Errorf("%s: %+v", a.ID, cp)
 				case !want && role != roleClusterAdmin && !a.ForUsers && cp.Code != adminOnlyCode:
 					t.Errorf("%s: %+v", a.ID, cp)
-				case !want && adminOnlyHere && (cp.Code != missingPermissionsCode || !strings.Contains(cp.Reason, "ask an admin of project team-a")):
+				case !want && (adminOnlyHere || role == roleViewer && needsProjectAdmin(a)) && (cp.Code != missingPermissionsCode || !strings.HasPrefix(cp.Reason, "Only an admin of project team-a can ") || !strings.HasSuffix(cp.Reason, "; ask one of them.")):
 					t.Errorf("%s: %+v", a.ID, cp)
-				case !want && role == roleViewer && a.ForUsers && (cp.Code != missingPermissionsCode || len(cp.Missing) == 0 || !strings.Contains(cp.Reason, "edit role")):
+				case !want && role == roleViewer && a.ForUsers && !needsProjectAdmin(a) && (cp.Code != missingPermissionsCode || len(cp.Missing) == 0 || strings.Count(cp.Reason, "edit role") != 1):
 					t.Errorf("%s: %+v", a.ID, cp)
 				}
 			}
@@ -241,5 +243,56 @@ func TestMissingVerdictIsNotAllowed(t *testing.T) {
 	w := serveProjectAction(t, "/api/resources/workbench/stream", `{"action":"setup","project":"team-a"}`)
 	if w.Code != http.StatusServiceUnavailable || decodeError(t, w)["errorCode"] != "authorization_unavailable" {
 		t.Fatalf("the gate: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// The ways a model can be reached, per role: a cluster-admin gets the
+// Models tab's answer; an editor of the project gets the user's answer for
+// it; a user without a role there and a project that does not exist get
+// the same refusal, before anything is read with the ServiceAccount.
+func TestModelExposuresPerRole(t *testing.T) {
+	orig, origUser := getModelExposures, getProjectModelExposures
+	t.Cleanup(func() { getModelExposures, getProjectModelExposures = orig, origUser })
+	adminReads, userReads := 0, 0
+	getModelExposures = func(_ *cluster.Client, project, model string) (*types.ModelExposures, string, string) {
+		adminReads++
+		return &types.ModelExposures{Project: project, Model: model, Default: "maas"}, "", ""
+	}
+	getProjectModelExposures = func(_ *cluster.Client, project, model string) (*types.ModelExposures, string, string) {
+		userReads++
+		return &types.ModelExposures{Project: project, Model: model, Default: "internal", Capacity: "fits"}, "", ""
+	}
+	get := func(project string) *httptest.ResponseRecorder {
+		mux := http.NewServeMux()
+		Register(mux)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/resources/models/exposures?project="+project+"&model=qwen25-05b-instruct", nil)
+		r.Header.Set("X-Forwarded-Access-Token", "user:alice")
+		mux.ServeHTTP(w, r)
+		return w
+	}
+	newProjectGateEnv(t, roleClusterAdmin)
+	if w := get("team-a"); w.Code != http.StatusOK || adminReads != 1 || userReads != 0 || !strings.Contains(w.Body.String(), `"default":"maas"`) {
+		t.Fatalf("admin: %d %s", w.Code, w.Body.String())
+	}
+	newProjectGateEnv(t, roleEditor)
+	w := get("team-a")
+	if w.Code != http.StatusOK || userReads != 1 || adminReads != 1 || !strings.Contains(w.Body.String(), `"capacity":"fits"`) {
+		t.Fatalf("editor: %d %s", w.Code, w.Body.String())
+	}
+	newProjectGateEnv(t, roleNothing)
+	noRole := get("team-a")
+	newProjectGateEnv(t, roleEditor)
+	missing := get("does-not-exist")
+	for _, w := range []*httptest.ResponseRecorder{noRole, missing} {
+		if w.Code != http.StatusForbidden || decodeError(t, w)["errorCode"] != cluster.ErrorCodeForbiddenForUser {
+			t.Fatalf("%d %s", w.Code, w.Body.String())
+		}
+	}
+	if strings.ReplaceAll(noRole.Body.String(), "team-a", "P") != strings.ReplaceAll(missing.Body.String(), "does-not-exist", "P") {
+		t.Errorf("not yours and does not exist differ: %s / %s", noRole.Body.String(), missing.Body.String())
+	}
+	if userReads != 1 || adminReads != 1 {
+		t.Errorf("a refused read reached the ServiceAccount: user %d admin %d", userReads, adminReads)
 	}
 }

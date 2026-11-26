@@ -68,6 +68,8 @@ func TestWithServicePort(t *testing.T) {
 		"/api/v1/namespaces/e2e-400/services/only-one":                                  `{"spec":{"ports":[{"name":"web","port":8443}]}}`,
 		"/api/v1/namespaces/e2e-400/services/on-443":                                    `{"spec":{"ports":[{"name":"https","port":443}]}}`,
 		"/api/v1/namespaces/e2e-400/services/two-plain":                                 `{"spec":{"ports":[{"name":"a","port":1},{"name":"b","port":2}]}}`,
+		"/api/v1/namespaces/e2e-400/services/plain-http":                                `{"spec":{"ports":[{"name":"metrics","port":9090},{"name":"http","port":8080}]}}`,
+		"/api/v1/namespaces/e2e-400/services/on-80":                                     `{"spec":{"ports":[{"name":"http","port":80}]}}`,
 	}
 	reads := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -90,13 +92,24 @@ func TestWithServicePort(t *testing.T) {
 		{"https://gw.openshift-ingress.svc.cluster.local/e2e-400/m", "https://gw.openshift-ingress.svc.cluster.local/e2e-400/m"},
 		{"https://x.e2e-400.svc.cluster.local:9443", "https://x.e2e-400.svc.cluster.local:9443"},
 		{"", ""},
+		// An http address takes the Service's http port; 80 is its default.
+		{"http://plain-http.e2e-400.svc.cluster.local", "http://plain-http.e2e-400.svc.cluster.local:8080"},
+		{"http://on-80.e2e-400.svc.cluster.local", "http://on-80.e2e-400.svc.cluster.local"},
 	} {
 		if got := serving.WithServicePort(c, x.in); got != x.want {
 			t.Errorf("withServicePort(%q) = %q, want %q", x.in, got, x.want)
 		}
 	}
-	if reads != 5 {
-		t.Errorf("read %d Services, want 5 (only port-less Service addresses)", reads)
+	if reads != 7 {
+		t.Errorf("read %d Services, want 7 (only port-less Service addresses)", reads)
+	}
+	// A Service that cannot be read is an error for a check (fail closed);
+	// one that names no port of the scheme is none.
+	if got, err := serving.ServicePortAddress(c, "https://gone.e2e-400.svc.cluster.local"); got != "" || err == nil {
+		t.Errorf("unreadable Service: %q, %v", got, err)
+	}
+	if got, err := serving.ServicePortAddress(c, "https://two-plain.e2e-400.svc.cluster.local"); got != "" || err != nil {
+		t.Errorf("no https port: %q, %v", got, err)
 	}
 }
 

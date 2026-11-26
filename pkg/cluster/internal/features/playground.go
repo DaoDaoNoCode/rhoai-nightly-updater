@@ -387,6 +387,76 @@ func markToolEmbeddingModels(c *kube.Client, project string, models []types.Play
 	}
 }
 
+// markAddressWithoutPort sets Unusable on the project's own models that
+// candidate accepts and whose in-cluster address does not connect as
+// KServe reports it (serving.AddressMissesPort): the dashboard's gen-ai
+// backend writes the reported address (plus /v1) into the playground's
+// configuration (serving.PlaygroundNoPortNote). The dashboard lists an
+// LLMInferenceService by its name (odh-dashboard packages/gen-ai/bff
+// token_k8s_client.go: ModelName llmSvc.Name). It reads with c the
+// project's LLMInferenceServices and, for each candidate whose address
+// names a Service without a port, that Service. A Service that cannot be
+// read is an *addressUncheckedError (the first; the others are still
+// checked): whether that model connects is not known.
+func markAddressWithoutPort(c *kube.Client, project string, models []types.PlaygroundModel, candidate func(types.PlaygroundModel) bool) error {
+	considered := func(m types.PlaygroundModel) bool { return m.Source == "namespace" && candidate(m) }
+	if !slices.ContainsFunc(models, considered) {
+		return nil
+	}
+	list, err := serving.ListProjectModels(c, project)
+	if err != nil {
+		return err
+	}
+	byName := map[string]serving.LLMISvcObject{}
+	for _, m := range list {
+		byName[m.Metadata.Name] = m
+	}
+	var first error
+	for i, m := range models {
+		obj, ok := byName[m.Name]
+		if !ok || !considered(m) {
+			continue
+		}
+		reported := serving.ModelInClusterURL(obj)
+		working, err := serving.ServicePortAddress(c, reported)
+		switch {
+		case err != nil && first == nil:
+			first = &addressUncheckedError{model: m.Name, err: err}
+		case err == nil && serving.AddressMissesPort(reported, working):
+			models[i].Unusable = serving.PlaygroundNoPortNote
+		}
+	}
+	return first
+}
+
+// addressUncheckedError: the Service of model could not be read, so
+// whether the playground can reach the model is not known.
+type addressUncheckedError struct {
+	model string
+	err   error
+}
+
+func (e *addressUncheckedError) Error() string {
+	return fmt.Sprintf("cannot read the Service of model %s: %v", e.model, e.err)
+}
+
+func (e *addressUncheckedError) Unwrap() error { return e.err }
+
+// setUpCandidate: a ready model Set up can add (chat, or an embedding
+// model of known dimension).
+func setUpCandidate(m types.PlaygroundModel) bool {
+	return m.Ready && (m.Chat || m.EmbeddingDimension > 0)
+}
+
+// PlaygroundAlternatives names the models the playground can use when a
+// project's own cannot be used (serving.PlaygroundNoPortNote).
+const PlaygroundAlternatives = "The playground can use a model a cluster-admin exposes through the inference gateway (Environment page, Models tab), or a Models as a Service model your subscriptions include."
+
+// leftOutText names a project model the playground cannot use, with why.
+func leftOutText(m types.PlaygroundModel) string {
+	return fmt.Sprintf("%s (%s)", m.Name, strings.TrimSuffix(m.Unusable, "."))
+}
+
 // maasModel is one entry of maas/models (unknown fields ignored).
 type maasModel struct {
 	ID            string `json:"id"`
@@ -782,10 +852,7 @@ func ToolPlaygroundServerUID(c *kube.Client, project string) (string, error) {
 // ReadPlaygroundRecords returns the recorded projects (none when nothing is
 // recorded).
 func ReadPlaygroundRecords(c *kube.Client) (map[string]PlaygroundRecord, error) {
-	var cm struct {
-		Data map[string]string `json:"data"`
-	}
-	found, err := c.Bookkeeping().GetIntoOptional(rhoai.NamespacedPath("v1", "configmaps", record.GetActivityNamespace(), record.SnapshotConfigMapName), &cm)
+	cmData, found, err := record.ReadSnapshotData(c)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
@@ -796,7 +863,7 @@ func ReadPlaygroundRecords(c *kube.Client) (map[string]PlaygroundRecord, error) 
 		return map[string]PlaygroundRecord{}, nil
 	}
 	out := map[string]PlaygroundRecord{}
-	if raw := cm.Data[playgroundRecordKey]; raw != "" {
+	if raw := cmData[playgroundRecordKey]; raw != "" {
 		if err := json.Unmarshal([]byte(raw), &out); err != nil {
 			return nil, fmt.Errorf("parse this tool's playground records: %w", err)
 		}
@@ -811,15 +878,7 @@ func WritePlaygroundRecords(c *kube.Client, records map[string]PlaygroundRecord)
 	if err != nil {
 		return err
 	}
-	ns := record.GetActivityNamespace()
-	cm, _ := json.Marshal(map[string]any{
-		"apiVersion": "v1",
-		"kind":       "ConfigMap",
-		"metadata":   map[string]any{"name": record.SnapshotConfigMapName, "namespace": ns},
-		"data":       map[string]any{playgroundRecordKey: string(data)},
-	})
-	query := url.Values{"fieldManager": {playgroundRecordManager}, "force": {"true"}}
-	if _, _, err := c.Bookkeeping().Do(http.MethodPatch, rhoai.NamespacedPath("v1", "configmaps", ns, record.SnapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
+	if err := record.ApplySnapshotKeys(c, playgroundRecordManager, map[string]any{playgroundRecordKey: string(data)}); err != nil {
 		return fmt.Errorf("record this tool's playgrounds: %w", err)
 	}
 	return nil
@@ -829,7 +888,7 @@ func WritePlaygroundRecords(c *kube.Client, records map[string]PlaygroundRecord)
 // record.UpdateSnapshot: project actions in other projects of this process
 // write the same key.
 func setPlaygroundRecord(c *kube.Client, project string, rec *PlaygroundRecord) error {
-	return record.UpdateSnapshot(c, func() error {
+	return record.UpdateSnapshot(c, func(c *kube.Client) error {
 		records, err := ReadPlaygroundRecords(c)
 		if err != nil {
 			return err
@@ -852,7 +911,7 @@ func setPlaygroundRecord(c *kube.Client, project string, rec *PlaygroundRecord) 
 				if err != nil {
 					return err
 				}
-				if err := record.AdmitUserEntry(c, project, prior, data); err != nil {
+				if err := record.AdmitUserEntryNamed(c, playgroundRecordKey, project, project, prior, data); err != nil {
 					return err
 				}
 			}
@@ -1092,6 +1151,10 @@ func GetPlaygroundStatus(sa, u *kube.Client, project string) (*types.PlaygroundS
 			models, err := api.listProjectModels(project, false)
 			if err == nil {
 				markToolEmbeddingModels(c, project, models)
+				if err := markAddressWithoutPort(c, project, models, setUpCandidate); err != nil {
+					// Not a block: Set up checks again, and fails closed.
+					kube.LogFactReadFailure("cannot tell which project models the playground can reach", "model addresses", err, "project", project)
+				}
 				models = append(models, listMaaSPlaygroundModels(c)...)
 				if len(models) > playgroundMaxModels {
 					models = models[:playgroundMaxModels]
@@ -1440,13 +1503,35 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 		return stop(msg, code, "models")
 	}
 	markToolEmbeddingModels(p.c, p.project, models)
+	candidate := setUpCandidate
+	if len(wanted) > 0 {
+		candidate = func(m types.PlaygroundModel) bool {
+			return slices.ContainsFunc(wanted, func(w types.PlaygroundModelRef) bool { return w.Source == m.Source && w.Name == m.Name })
+		}
+	}
+	if err := markAddressWithoutPort(p.c, p.project, models, candidate); err != nil {
+		// The error's text is the API server's: only its status goes out.
+		var unchecked *addressUncheckedError
+		if errors.As(err, &unchecked) {
+			return stop(fmt.Sprintf("Cannot check whether %s in %s is reachable (%s); try again.", unchecked.model, p.project, kube.FactReadProblem(err)), kube.ErrorCodeFromK8sErr(err), "model address unchecked")
+		}
+		return stop(fmt.Sprintf("Cannot read the models of %s (%s); try again.", p.project, kube.FactReadProblem(err)), kube.ErrorCodeFromK8sErr(err), "model addresses")
+	}
 	// The dashboard's install checks only the models it is asked to use
 	// (rhoai-3.6 generateLlamaStackConfig), so only those must be ready.
 	var chosen []types.PlaygroundModel
+	// leftOut: the project's ready chat models the playground cannot use.
+	var leftOut []string
 	if len(wanted) == 0 {
 		var left []string
 		for _, m := range models {
 			switch {
+			case m.Source == "namespace" && m.Ready && m.Unusable != "" && (m.Chat || m.EmbeddingDimension > 0):
+				if m.Chat {
+					leftOut = append(leftOut, leftOutText(m))
+				} else {
+					notes = append(notes, "left out "+leftOutText(m))
+				}
 			case m.Source == "namespace" && m.Ready && (m.Chat || m.EmbeddingDimension > 0):
 				chosen = append(chosen, m)
 			case m.Source == "namespace" && m.Chat:
@@ -1473,6 +1558,8 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 				return stop(fmt.Sprintf("The dashboard does not offer model %s in %s. Reload the page and choose again.", w.Name, p.project), "validation", "unknown model")
 			case !found.Ready:
 				return stop(fmt.Sprintf("Model %s is not ready (%s). Choose a ready model.", w.Name, found.Status), "model_not_ready", "model not ready")
+			case found.Unusable != "":
+				return stop(fmt.Sprintf("Model %s cannot be chosen. %s %s", w.Name, found.Unusable, PlaygroundAlternatives), "validation", "address without port")
 			case !found.Chat && found.EmbeddingDimension == 0:
 				return stop(fmt.Sprintf("Model %s is an embedding model this tool did not set up, so its dimension is not known. Add it in the dashboard's Gen AI studio, where you choose Embedding and its dimension.", w.Name), "validation", "embedding model")
 			}
@@ -1485,8 +1572,14 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 			chat++
 		}
 	}
+	if chat == 0 && len(leftOut) > 0 {
+		return stop(fmt.Sprintf("Project %s has no ready chat model the playground can use. Left out: %s. %s", p.project, strings.Join(leftOut, ", "), PlaygroundAlternatives), "no_model", "no usable model")
+	}
 	if chat == 0 {
 		return stop(fmt.Sprintf("Project %s has no ready chat model for the playground to use. Set up a model on the Models tab first (or choose a Models as a Service model, if you have a subscription).", p.project), "no_model", "no model")
+	}
+	for _, m := range leftOut {
+		notes = append(notes, "left out "+m)
 	}
 	names := make([]string, len(chosen))
 	for i, m := range chosen {

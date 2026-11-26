@@ -59,6 +59,8 @@ var cancellableActions = map[string]string{
 		"the playground stays, recorded as the tool's and deletable from its tab.",
 	"mlflow-samples.add":    "It stops before its next sample. The samples added by then stay; remove them on the MLflow tab.",
 	"mlflow-samples.remove": "It stops before its next sample. The samples removed by then stay removed.",
+	"models.setup": "It stops before its next step. Before the model is created nothing changes; after that, the model stays, " +
+		"recorded as this tool's: Delete removes it.",
 }
 
 // noSuchActionMessage answers a cancel of an action that does not run in

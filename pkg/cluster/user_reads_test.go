@@ -103,6 +103,9 @@ func TestUserReadsRefuseTheServiceAccount(t *testing.T) {
 			t.Fatalf("connection state %s: %s %s", conn, state, msg)
 		}
 	}
+	if _, msg, _ := ProjectModelExposures(c, "p", "qwen25-05b-instruct"); msg != authz.ErrNotUserClient.Error() {
+		t.Fatalf("model exposures: %q", msg)
+	}
 	if len(k8s.calls) != 0 {
 		t.Fatalf("calls: %+v", k8s.calls)
 	}

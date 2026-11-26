@@ -870,7 +870,7 @@ const GITOPS_PROFILE_ROUTES = new Set([
 const ADMIN_ONLY_READS = [
   "/api/status", "/api/activity", "/api/components", "/api/debug", "/api/dashboard/", "/api/diagnostics", "/api/setup/dsc/preview",
   "/api/test-pull-secret", "/api/verify-nodes", "/api/latest-nightly", "/api/nightly-tags", "/api/resources/maas",
-  "/api/resources/prerequisites", "/api/resources/models/exposures", "/api/resources/s3/admin-password", "/api/recipes/",
+  "/api/resources/prerequisites", "/api/resources/s3/admin-password", "/api/recipes/",
 ];
 
 /**
@@ -916,9 +916,15 @@ function userRead(res, key, u) {
       project,
       pipelineServers: [...(all.pipelineServers ?? []), ...(all.unmanagedPipelineServers ?? [])].filter((ps) => ps.namespace === project),
       models: (all.models?.items ?? []).filter((m) => m.namespace === project),
+      modelCatalog: F.MODEL_CATALOG,
       inferenceServices: [],
       dashboardUrl: all.dashboardUrl,
     });
+  }
+  if (key === "GET /api/resources/models/exposures") {
+    const project = u.searchParams.get("project") || "";
+    if (!(world.userProjects ?? []).includes(project)) return send(403, { error: `Project ${project} is not one of your data science projects. Nothing was read.`, errorCode: "forbidden_for_user" });
+    return send(200, F.userModelExposures(project, u.searchParams.get("model") || ""));
   }
   if (key.startsWith("GET ") && ADMIN_ONLY_READS.some((p) => u.pathname.startsWith(p))) return adminOnly();
   if (!key.startsWith("GET ") && key !== "POST /api/pageview") return adminOnly();

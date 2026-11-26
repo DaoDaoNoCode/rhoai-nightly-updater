@@ -18,6 +18,18 @@
       "label": "Remove MLflow sample data",
       "missing": []
     },
+    "models.setup": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Deploy a model",
+      "missing": []
+    },
+    "models.teardown": {
+      "allowed": true,
+      "blockedBy": [],
+      "label": "Delete a model",
+      "missing": []
+    },
     "playground.setup": {
       "allowed": true,
       "blockedBy": [],

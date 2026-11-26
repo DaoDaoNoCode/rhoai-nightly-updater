@@ -495,6 +495,8 @@ export interface ProjectStatus {
   pipelineServersProblem?: string;
   pipelineServersProblemCode?: ProjectProblemCode;
   models: ModelState[] | null;
+  /** The models a project model action sets up (this tool's fixed catalog). */
+  modelCatalog?: CatalogModel[];
   modelsProblem?: string;
   modelsProblemCode?: ProjectProblemCode;
   inferenceServices: ProjectInferenceService[] | null;
@@ -1473,6 +1475,19 @@ export interface ModelsRequest {
   releasedImage?: boolean;
 }
 
+/**
+ * The body of POST /api/resources/models/project/stream (pkg/types ProjectModelRequest): a model
+ * set up or deleted in one project, a project action. Nothing outside the project changes.
+ */
+export interface ProjectModelRequest {
+  action: "setup" | "teardown";
+  project: string;
+  model?: string;
+  /** Setup: only inside the cluster; anything else, and tokenAuth, is refused (a cluster-admin's, the Models tab). */
+  exposure?: "internal";
+  releasedImage?: boolean;
+}
+
 export interface KeptPVC {
   name: string;
   size?: string;
@@ -1810,6 +1825,8 @@ export interface PlaygroundModel {
   embeddingDimension?: number;
   /** A MaaS model's subscriptions: a playground chat request for it names one. */
   subscriptions?: string[];
+  /** Why the playground cannot use this project model (its address as KServe reports it does not connect); absent when it can. */
+  unusable?: string;
 }
 
 export interface PlaygroundModelRef {
@@ -2072,6 +2089,11 @@ export interface ModelExposures {
   authReady: boolean;
   recommendGateway?: boolean;
   recommendGatewayReason?: string;
+  /** A user's answer: whether a worker has the model's requests free. */
+  capacity?: "fits" | "may-not-fit" | "unknown";
+  /** A user's answer: the image a new model runs (as ModelsStatus.imagePlan), and why. */
+  imagePlan?: "preset" | "released" | "override";
+  imagePlanReason?: string;
 }
 
 /** One "Can it be called?" check (pkg/types ModelCallCheck). */

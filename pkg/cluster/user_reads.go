@@ -44,6 +44,9 @@ func GetProjectStatus(sa, u *Client, project string) (*types.ProjectStatus, erro
 		return nil, fmt.Errorf("%w: '%s' is not one of your data science projects", ErrNotDSProject, project)
 	}
 	st := &types.ProjectStatus{Project: project, PipelineServers: []types.ResourceState{}, Models: []types.ModelState{}, InferenceServices: []types.ProjectInferenceService{}}
+	for _, m := range serving.ModelCatalog {
+		st.ModelCatalog = append(st.ModelCatalog, m.CatalogModel)
+	}
 	var (
 		wg                 sync.WaitGroup
 		dspas              []storage.DSPA
@@ -104,7 +107,13 @@ func GetProjectStatus(sa, u *Client, project string) (*types.ProjectStatus, erro
 			rec = nil
 		}
 		for _, m := range models {
-			st.Models = append(st.Models, serving.ModelState(u, m, true, rec))
+			s := serving.ModelState(u, m, true, rec)
+			// The address that connects: KServe may report the model's
+			// Service without its port (serving.WithServicePort), read
+			// with the user's token.
+			s.InternalURL, _ = serving.ModelInClusterAddress(u, m)
+			serving.DropStaleURL(&s, m)
+			st.Models = append(st.Models, s)
 		}
 	}
 	if isvcErr != nil {

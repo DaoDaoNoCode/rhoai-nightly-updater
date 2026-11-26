@@ -637,12 +637,25 @@ export function playgroundIn(pg: PlaygroundStatus | null, project: string): Play
 
 /** The project's models the playground can chat with: ready, not embedding. */
 export function playgroundChatModels(pg: PlaygroundStatus | null, project: string): PlaygroundModel[] {
-  return pg?.project === project ? (pg.models ?? []).filter((m) => m.ready && m.chat) : [];
+  return pg?.project === project ? (pg.models ?? []).filter((m) => m.ready && m.chat && !m.unusable) : [];
 }
 
 /** The ready models Set up can add: chat models, and this tool's embedding models (their dimension is known). */
 export function playgroundUsableModels(pg: PlaygroundStatus | null, project: string): PlaygroundModel[] {
-  return pg?.project === project ? (pg.models ?? []).filter((m) => m.ready && (m.chat || !!m.embeddingDimension)) : [];
+  return pg?.project === project ? (pg.models ?? []).filter((m) => m.ready && !m.unusable && (m.chat || !!m.embeddingDimension)) : [];
+}
+
+/** What the playground can use when the project's own models cannot be used (pkg/cluster/internal/features PlaygroundAlternatives). */
+export const PLAYGROUND_ALTERNATIVES = "The playground can use a model a cluster-admin exposes through the inference gateway (Environment page, Models tab), or a Models as a Service model your subscriptions include.";
+
+/** The project's ready models the playground cannot use (their address as KServe reports it does not connect): Set up leaves them out. */
+export function playgroundModelsWithoutPort(pg: PlaygroundStatus | null, project: string): PlaygroundModel[] {
+  return pg?.project === project ? (pg.models ?? []).filter((m) => m.source === "namespace" && m.ready && !!m.unusable) : [];
+}
+
+/** One line per model the playground cannot use: its name and why. */
+export function modelsWithoutPortText(models: PlaygroundModel[]): string {
+  return models.map((m) => `${m.displayName || m.name}: ${m.unusable}`).join(" ");
 }
 
 /** Ready embedding models of the project this tool did not set up: Set up cannot add them (their dimension is unknown). */
@@ -717,7 +730,12 @@ function playgroundInProject(status: ResourcesStatus | null, pg: PlaygroundStatu
   if (item?.deployed) return { status: "unknown", label: `Unknown in ${project}`, ...own, next: null, project };
   let reason = playgroundClusterReason(pg);
   if (!reason && models.status === "unknown") reason = pg?.modelsProblem ?? "The project's models are still loading.";
-  if (!reason && models.status === "not-set-up") reason = `Needs: Models. ${project} has no ready chat model; set one up on the Models tab first.`;
+  if (!reason && models.status === "not-set-up") {
+    const withoutPort = playgroundModelsWithoutPort(pg, project).filter((m) => m.chat);
+    reason = withoutPort.length > 0
+      ? `Needs: a chat model the playground can use. ${modelsWithoutPortText(withoutPort)} ${PLAYGROUND_ALTERNATIVES}`
+      : `Needs: Models. ${project} has no ready chat model; set one up on the Models tab first.`;
+  }
   return {
     status: "not-set-up",
     label: `Not set up in ${project}`,

@@ -3,12 +3,11 @@ package serving
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/url"
+	"sort"
+	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
-	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Which catalog-named models are this tool's.
@@ -47,6 +46,14 @@ type RecordedModel struct {
 	TokenSecretUID string `json:"tokenSecretUID,omitempty"`
 	At             string `json:"at,omitempty"`
 	By             string `json:"by,omitempty"`
+	// ActorRole is record.ActorRoleUser when a user who is not a
+	// cluster-admin set it up (record.UserRecordCapRefusal counts it),
+	// record.ActorRoleAdmin for a cluster-admin; "" before 5.0.0.
+	ActorRole string `json:"actorRole,omitempty"`
+	// ProjectUID is the project's namespace UID, for a user's entry: the
+	// caps count a project deleted and made again as another one, and the
+	// background check forgets the entry once the namespace has another.
+	ProjectUID string `json:"projectUID,omitempty"`
 }
 
 // ModelsRecord is the record, by ModelRecordKey.
@@ -71,10 +78,7 @@ func ownsModel(c *kube.Client, meta kube.ObjectMeta) (bool, error) {
 
 // ReadModelsRecord reads the record (empty when nothing is recorded).
 func ReadModelsRecord(c *kube.Client) (ModelsRecord, error) {
-	var cm struct {
-		Data map[string]string `json:"data"`
-	}
-	found, err := c.Bookkeeping().GetIntoOptional(rhoai.NamespacedPath("v1", "configmaps", record.GetActivityNamespace(), record.SnapshotConfigMapName), &cm)
+	cmData, found, err := record.ReadSnapshotData(c)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
@@ -85,7 +89,7 @@ func ReadModelsRecord(c *kube.Client) (ModelsRecord, error) {
 		return ModelsRecord{}, nil
 	}
 	rec := ModelsRecord{}
-	if raw := cm.Data[ModelsRecordKey]; raw != "" {
+	if raw := cmData[ModelsRecordKey]; raw != "" {
 		if err := json.Unmarshal([]byte(raw), &rec); err != nil {
 			return nil, fmt.Errorf("parse this tool's record of its models: %w", err)
 		}
@@ -93,51 +97,79 @@ func ReadModelsRecord(c *kube.Client) (ModelsRecord, error) {
 	return rec, nil
 }
 
-// WriteModelsRecord applies the whole record (operations hold the cluster
-// lock, so read-change-write does not race another writer).
+// WriteModelsRecord applies the whole record. A cluster-admin's Models
+// operation holds the cluster lock, a project's model action its
+// project's lock; the read-change-write cycles below run through
+// record.UpdateSnapshot, so project actions in other projects of this
+// process do not race them.
 func WriteModelsRecord(c *kube.Client, rec ModelsRecord) error {
 	data, err := json.Marshal(rec)
 	if err != nil {
 		return err
 	}
-	ns := record.GetActivityNamespace()
-	cm, _ := json.Marshal(map[string]any{
-		"apiVersion": "v1",
-		"kind":       "ConfigMap",
-		"metadata":   map[string]any{"name": record.SnapshotConfigMapName, "namespace": ns},
-		"data":       map[string]any{ModelsRecordKey: string(data)},
-	})
-	query := url.Values{"fieldManager": {modelsRecordManager}, "force": {"true"}}
-	if _, _, err := c.Bookkeeping().Do(http.MethodPatch, rhoai.NamespacedPath("v1", "configmaps", ns, record.SnapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
+	if err := record.ApplySnapshotKeys(c, modelsRecordManager, map[string]any{ModelsRecordKey: string(data)}); err != nil {
 		return fmt.Errorf("record this tool's models: %w", err)
 	}
 	return nil
 }
 
 // recordModel records the model the tool just created (meta as the create
-// returned it).
+// returned it). A user's entry is admitted by the caps in the same step as
+// its write (record.AdmitUserEntry): a refusal is a
+// *record.RecordsFullError, and nothing is written.
 func recordModel(c *kube.Client, meta kube.ObjectMeta) error {
-	rec, err := ReadModelsRecord(c)
-	if err != nil {
-		return err
-	}
-	rec[ModelRecordKey(meta.Namespace, meta.Name)] = RecordedModel{UID: meta.UID, At: kube.NowRFC3339(), By: kube.GetUser(c)}
-	return WriteModelsRecord(c, rec)
+	return record.UpdateSnapshot(c, func(c *kube.Client) error {
+		rec, err := ReadModelsRecord(c)
+		if err != nil {
+			return err
+		}
+		key := ModelRecordKey(meta.Namespace, meta.Name)
+		e := RecordedModel{UID: meta.UID, At: kube.NowRFC3339(), By: kube.GetUser(c), ActorRole: record.ActorRole(c), ProjectUID: c.ProjectUID()}
+		if e.ActorRole == record.ActorRoleUser {
+			var prior *record.RecordOwner
+			if old, had := rec[key]; had {
+				prior = &record.RecordOwner{Project: meta.Namespace, ProjectUID: old.ProjectUID, By: old.By, ActorRole: old.ActorRole}
+			}
+			data, err := json.Marshal(e)
+			if err != nil {
+				return err
+			}
+			if err := record.AdmitUserEntryNamed(c, ModelsRecordKey, key, meta.Namespace, prior, data); err != nil {
+				return err
+			}
+		}
+		rec[key] = e
+		return WriteModelsRecord(c, rec)
+	})
 }
 
 // recordTokenSecret records the token Secret the tool made for its model.
 func recordTokenSecret(c *kube.Client, project, name, uid string) error {
-	rec, err := ReadModelsRecord(c)
-	if err != nil {
-		return err
-	}
-	e, ok := rec[ModelRecordKey(project, name)]
-	if !ok {
-		return fmt.Errorf("record this tool's models: %s/%s is not recorded", project, name)
-	}
-	e.TokenSecretUID = uid
-	rec[ModelRecordKey(project, name)] = e
-	return WriteModelsRecord(c, rec)
+	return record.UpdateSnapshot(c, func(c *kube.Client) error {
+		rec, err := ReadModelsRecord(c)
+		if err != nil {
+			return err
+		}
+		e, ok := rec[ModelRecordKey(project, name)]
+		if !ok {
+			return fmt.Errorf("record this tool's models: %s/%s is not recorded", project, name)
+		}
+		prior := record.RecordOwner{Project: project, ProjectUID: e.ProjectUID, By: e.By, ActorRole: e.ActorRole}
+		e.TokenSecretUID = uid
+		// The entry grows by the Secret's UID: a user's is checked against
+		// the users' byte budget too.
+		if e.ActorRole == record.ActorRoleUser {
+			data, err := json.Marshal(e)
+			if err != nil {
+				return err
+			}
+			if err := record.AdmitUserEntryNamed(c, ModelsRecordKey, ModelRecordKey(project, name), project, &prior, data); err != nil {
+				return err
+			}
+		}
+		rec[ModelRecordKey(project, name)] = e
+		return WriteModelsRecord(c, rec)
+	})
 }
 
 // forgetModels drops the entries of keys from the record (nothing is
@@ -146,19 +178,86 @@ func forgetModels(c *kube.Client, keys ...string) error {
 	if len(keys) == 0 {
 		return nil
 	}
-	rec, err := ReadModelsRecord(c)
-	if err != nil {
-		return err
-	}
-	changed := false
-	for _, k := range keys {
-		if _, ok := rec[k]; ok {
-			delete(rec, k)
-			changed = true
+	return record.UpdateSnapshot(c, func(c *kube.Client) error {
+		rec, err := ReadModelsRecord(c)
+		if err != nil {
+			return err
 		}
+		changed := false
+		for _, k := range keys {
+			if _, ok := rec[k]; ok {
+				delete(rec, k)
+				changed = true
+			}
+		}
+		if !changed {
+			return nil
+		}
+		return WriteModelsRecord(c, rec)
+	})
+}
+
+// ForgetGoneModels drops the entries gone answers true for (by project,
+// model name and entry), in one read-change-write through
+// record.UpdateSnapshot, and returns the keys it dropped. An entry gone
+// cannot tell about stays (fail closed: gone says false).
+func ForgetGoneModels(c *kube.Client, gone func(project, name string, e RecordedModel) bool) ([]string, error) {
+	var dropped []string
+	err := record.UpdateSnapshot(c, func(c *kube.Client) error {
+		// An attempt's own removals: a retry after a conflict starts over.
+		dropped = nil
+		rec, err := ReadModelsRecord(c)
+		if err != nil {
+			return err
+		}
+		for key, e := range rec {
+			project, name, _ := strings.Cut(key, "/")
+			if gone(project, name, e) {
+				delete(rec, key)
+				dropped = append(dropped, key)
+			}
+		}
+		if len(dropped) == 0 {
+			return nil
+		}
+		return WriteModelsRecord(c, rec)
+	})
+	if err != nil {
+		// Nothing of a failed change was removed.
+		return nil, err
 	}
-	if !changed {
-		return nil
+	sort.Strings(dropped)
+	return dropped, err
+}
+
+// ModelLive reports whether project still has the catalog model name with
+// this UID, read with c (the ServiceAccount's get on LLMInferenceServices,
+// which deploy/template.yaml grants cluster-wide): for the background
+// check only, never shown.
+func ModelLive(c *kube.Client, project, name, uid string) (bool, error) {
+	path, ok := ToolModelPath(project, name)
+	if !ok || uid == "" {
+		return false, nil
 	}
-	return WriteModelsRecord(c, rec)
+	meta, found, err := kube.ReadObjectMeta(c, path)
+	if err != nil {
+		return false, err
+	}
+	return found && meta.UID == uid, nil
+}
+
+// recordCapRefusal is why a model setup by a user who is not a
+// cluster-admin must not add or take over the model's entry in the
+// records (record.AdmitUserEntry), with its errorCode; "" for a
+// cluster-admin. The write itself is admitted again (recordModel), so
+// this early check only refuses before anything is made.
+func recordCapRefusal(c *kube.Client, rec ModelsRecord, project, name string) (string, string) {
+	var prior *record.RecordOwner
+	if e, has := rec[ModelRecordKey(project, name)]; has {
+		prior = &record.RecordOwner{Project: project, ProjectUID: e.ProjectUID, By: e.By, ActorRole: e.ActorRole}
+	}
+	if err := record.AdmitUserEntryNamed(c, ModelsRecordKey, ModelRecordKey(project, name), project, prior, nil); err != nil {
+		return record.ErrorText(c, err), record.ErrorCode(err)
+	}
+	return "", ""
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LegacyStorageState, ResourceState, ResourcesStatus } from "../../types";
-import { defaultProject, IDLE, loadingState, maasPartLabelStatus, maasState, mlflowState, modelsState, pipelinesState, playgroundState, setUpBlocked, storageState, unreadableState } from "./featureState";
+import { PLAYGROUND_ALTERNATIVES, defaultPlaygroundModels, defaultProject, IDLE, loadingState, playgroundModelsWithoutPort, maasPartLabelStatus, maasState, mlflowState, modelsState, pipelinesState, playgroundState, setUpBlocked, storageState, unreadableState } from "./featureState";
 
 describe("A platform part's own label", () => {
   it("a ready part with a warning needs attention; without one it is ready", () => {
@@ -196,5 +196,23 @@ describe("The S3 storage on its own (its tab and its Overview row)", () => {
   it("Set up running from this page reads Setting up, with nothing to do", () => {
     expect(storageState(FIXTURES.none, { ...IDLE, resAction: "setup-minio" })).toMatchObject({ status: "setting-up", next: null });
     expect(storageState(FIXTURES.storageOnly, { ...IDLE, resAction: "teardown-minio" })).toMatchObject({ status: "deleting", next: null });
+  });
+});
+
+describe("playground models the playground cannot use", () => {
+  const note = "KServe currently reports its address without the port, so RHOAI's Gen AI playground cannot use it.";
+  const pg = {
+    project: "p", items: [],
+    models: [
+      { name: "smol", source: "namespace" as const, ready: true, chat: true, unusable: note },
+      { name: "gpt", source: "maas" as const, ready: true, chat: true },
+    ],
+  };
+  it("are not chosen, and the Set up reason says why when no project chat model is left", () => {
+    expect(defaultPlaygroundModels(pg, "p").map((m) => m.name)).toEqual([]);
+    expect(playgroundModelsWithoutPort(pg, "p").map((m) => m.name)).toEqual(["smol"]);
+    const only = { ...pg, models: [pg.models[0]] };
+    const st = playgroundState({} as ResourcesStatus, only, "p");
+    expect(st.next?.kind === "set-up" && st.next.reason).toBe(`Needs: a chat model the playground can use. smol: ${note} ${PLAYGROUND_ALTERNATIVES}`);
   });
 });

@@ -1449,6 +1449,32 @@ type ModelsRequest struct {
 	GatewayRef string `json:"gatewayRef,omitempty"`
 }
 
+// ProjectModelRequest is the body of POST
+// /api/resources/models/project/stream: a model of the catalog set up or
+// deleted in one data science project, a project action (the non-admin
+// design, branch B6) that any user whose role in the project allows it
+// may run. It never changes anything outside the project: no gateway, no
+// MaaS publication, no Role or RoleBinding.
+type ProjectModelRequest struct {
+	// Action is "setup" or "teardown".
+	Action  string `json:"action"`
+	Project string `json:"project"`
+	// Model is the catalog name; "" means the catalog's default.
+	Model string `json:"model,omitempty"`
+	// Exposure (setup only) is "internal" or "": the model is reached
+	// only inside the cluster, with token authentication off
+	// (security.opendatahub.io/enable-auth "false"). Any other exposure,
+	// and TokenAuth, are refused: a model reached through the inference
+	// gateway or with token authentication is a cluster-admin's (the
+	// Models tab). They are kept in the request so that asking for them
+	// is refused, never ignored.
+	Exposure  string `json:"exposure,omitempty"`
+	TokenAuth bool   `json:"tokenAuth,omitempty"`
+	// ReleasedImage (setup only): run the newest released Red Hat vLLM CPU
+	// image instead of the preset's.
+	ReleasedImage bool `json:"releasedImage,omitempty"`
+}
+
 // WorkbenchStatus is the Workbench feature (GET /api/resources/workbench):
 // what a workbench needs on the cluster, this tool's workbenches, and for
 // the chosen project the workbench there and what Set up would create.
@@ -1637,6 +1663,10 @@ type PlaygroundModel struct {
 	// for a MaaS model names one, or the dashboard cannot mint the MaaS key
 	// it calls the model with.
 	Subscriptions []string `json:"subscriptions,omitempty"`
+	// Unusable says why the playground cannot use this project model
+	// (serving.PlaygroundNoPortNote); "" when it can. Set up leaves it out
+	// of its own choice and refuses it when it is chosen.
+	Unusable string `json:"unusable,omitempty"`
 }
 
 // PlaygroundModelRef is a model a playground setup uses.
@@ -2648,6 +2678,19 @@ type ModelExposures struct {
 	// the cluster; RecommendGatewayReason says why.
 	RecommendGateway       bool   `json:"recommendGateway,omitempty"`
 	RecommendGatewayReason string `json:"recommendGatewayReason,omitempty"`
+
+	// --- A user's answer (one of their projects, the project model actions) ---
+
+	// Capacity is "fits" (a worker has the model's requests free),
+	// "may-not-fit" or "unknown" (a user's answer only), never a node's
+	// name.
+	Capacity string `json:"capacity,omitempty"`
+	// ImagePlan and ImagePlanReason are the image a new model runs, as
+	// ModelsStatus says it (a user's answer only): their deploy dialog
+	// says which image runs, and offers the released image only while the
+	// plan is the preset's.
+	ImagePlan       string `json:"imagePlan,omitempty"`
+	ImagePlanReason string `json:"imagePlanReason,omitempty"`
 }
 
 // ModelExposureOption is one way to reach the model.

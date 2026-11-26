@@ -378,6 +378,8 @@ func TestProjectStorageRollbackPerWrite(t *testing.T) {
 	t.Run("record", func(t *testing.T) {
 		f, u := newProjectStorageEnv(t)
 		f.fail["PATCH /api/v1/namespaces/"+record.GetActivityNamespace()+"/configmaps/"+record.SnapshotConfigMapName] = 500
+		// With no snapshot ConfigMap yet, the record's first write creates it.
+		f.fail["POST /api/v1/namespaces/"+record.GetActivityNamespace()+"/configmaps"] = 500
 		res := runPS(t, u, types.ProjectStorageRequest{Project: "proj", Action: "setup"})
 		if res.Success || f.has(psPVCs+"/"+storage.ProjectS3PVC) || slices.Contains(writesOf(f), "POST "+psSecrets) {
 			t.Fatalf("%+v %v", res, writesOf(f))

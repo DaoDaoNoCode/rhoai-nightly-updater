@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
-	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // The caps of users' records (the non-admin design, decision D6 and
@@ -48,21 +47,30 @@ func ActorRole(c *kube.Client) string {
 
 // UserRecordKeys are the snapshot keys whose entries project actions
 // write, each a JSON object keyed by "<project>" or "<project>/<name>",
-// whose values have "by" and "actorRole". projectStorages (project S3
-// storage, the non-admin design section 4.5) has a ceiling of its own
-// (userRecordCeilings).
-var UserRecordKeys = []string{"workbenches", "playgrounds", "projectStorages"}
+// whose values have "by" and "actorRole": the workbench and the
+// playground (one entry per project each), projectStorages (project S3
+// storage, the non-admin design section 4.5, one per project) and models
+// (one per catalog model in the project, at most four). Each class has an
+// entry ceiling of its own (ceilingOf); all of them share one byte budget
+// (MaxUserRecordBytes).
+var UserRecordKeys = []string{"workbenches", "playgrounds", "projectStorages", "models"}
 
 // RecordOwner is one entry of UserRecordKeys: its project (and, for a
 // user's entry, the project's namespace UID), who wrote it and with which
 // role.
 type RecordOwner struct {
-	// Key is the snapshot key the entry is in (one of UserRecordKeys).
+	// Key is the snapshot key the entry is in (one of UserRecordKeys);
+	// Name is the entry's own key there ("<project>" or
+	// "<project>/<name>").
 	Key        string
+	Name       string
 	Project    string
 	ProjectUID string
 	By         string
 	ActorRole  string
+	// Bytes is what the entry takes in the ConfigMap: its name and its
+	// JSON value (0 for an entry not read from it).
+	Bytes int
 }
 
 // key is what the caps count an entry by: its project's namespace UID, so
@@ -78,10 +86,7 @@ func (o RecordOwner) key() string {
 // ReadRecordOwners reads the entries of UserRecordKeys from the snapshot
 // ConfigMap (none when it is missing).
 func ReadRecordOwners(c *kube.Client) ([]RecordOwner, error) {
-	var cm struct {
-		Data map[string]string `json:"data"`
-	}
-	found, err := c.Bookkeeping().GetIntoOptional(rhoai.NamespacedPath("v1", "configmaps", GetActivityNamespace(), SnapshotConfigMapName), &cm)
+	data, found, err := ReadSnapshotData(c)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
@@ -93,21 +98,25 @@ func ReadRecordOwners(c *kube.Client) ([]RecordOwner, error) {
 	}
 	var out []RecordOwner
 	for _, key := range UserRecordKeys {
-		raw := cm.Data[key]
+		raw := data[key]
 		if raw == "" {
 			continue
 		}
-		entries := map[string]struct {
-			By         string `json:"by"`
-			ActorRole  string `json:"actorRole"`
-			ProjectUID string `json:"projectUID"`
-		}{}
+		entries := map[string]json.RawMessage{}
 		if err := json.Unmarshal([]byte(raw), &entries); err != nil {
 			return nil, fmt.Errorf("parse this tool's records (%s): %w", key, err)
 		}
-		for k, e := range entries {
+		for k, v := range entries {
+			var e struct {
+				By         string `json:"by"`
+				ActorRole  string `json:"actorRole"`
+				ProjectUID string `json:"projectUID"`
+			}
+			if err := json.Unmarshal(v, &e); err != nil {
+				return nil, fmt.Errorf("parse this tool's records (%s): %w", key, err)
+			}
 			project, _, _ := strings.Cut(k, "/")
-			out = append(out, RecordOwner{Key: key, Project: project, ProjectUID: e.ProjectUID, By: e.By, ActorRole: e.ActorRole})
+			out = append(out, RecordOwner{Key: key, Name: k, Project: project, ProjectUID: e.ProjectUID, By: e.By, ActorRole: e.ActorRole, Bytes: entryBytes(k, v)})
 		}
 	}
 	return out, nil
@@ -121,23 +130,34 @@ const ErrorCodeRecordsFull = "records_full"
 // from it), named in the ceiling's refusal.
 const SweepInterval = 5 * time.Minute
 
-// MaxUserRecordEntryBytes bounds one user's entry as written (its JSON).
-// MaxUserRecordEntries bounds every user's entry persisted in the
-// workbenches and playgrounds keys, those of projects that are gone
-// included (which the project caps do not count): 200 x 2 KiB = 400 KiB of
-// the snapshot ConfigMap's 1 MiB. 200 is both keys in each of the
-// MaxUserRecordProjects (100), so live entries alone never reach it.
-// The projectStorages key has a ceiling of its own
-// (MaxUserProjectStorageEntries of at most MaxUserProjectStorageEntryBytes
-// each, 100 KiB): one entry per project. Users' entries together take at
-// most 500 KiB, which leaves more than 500 KiB to the cluster-admins'
-// records.
+// The users' records budget. Every user's entry persisted counts, those
+// of projects that are gone included (which the project caps do not
+// count). One byte budget holds them all: MaxUserRecordBytes (500 KiB of
+// the snapshot ConfigMap's 1 MiB, each entry's name and JSON value), which
+// leaves more than 500 KiB to the cluster-admins' records; every write of a
+// user's entry is checked against it, a growing one too (a model's token
+// Secret UID). Each class also has an entry ceiling, the most its live
+// entries reach in MaxUserRecordProjects (100) projects, and a size for
+// one entry:
+//   - workbenches and playgrounds: 200 (both keys in each project), at
+//     most MaxUserRecordEntryBytes (2 KiB) each;
+//   - projectStorages: 100 (one per project), at most
+//     MaxUserProjectStorageEntryBytes (1 KiB) each;
+//   - models: 400 (the four catalog models in each project), at most
+//     MaxUserModelEntryBytes (1 KiB) each.
 const (
 	MaxUserRecordEntryBytes         = 2048
 	MaxUserRecordEntries            = 200
 	MaxUserProjectStorageEntryBytes = 1024
 	MaxUserProjectStorageEntries    = 100
+	MaxUserModelEntryBytes          = 1024
+	MaxUserModelEntries             = 400
+	MaxUserRecordBytes              = 500 << 10
 )
+
+// entryBytes is what an entry takes in its key's JSON object: its quoted
+// name, the colon and comma, and its value.
+func entryBytes(name string, value []byte) int { return len(name) + 4 + len(value) }
 
 // userRecordCeiling is the hard ceiling of one class of users' entries:
 // how many may be persisted, and how large one may be.
@@ -148,8 +168,11 @@ type userRecordCeiling struct {
 // ceilingOf is the ceiling of the entries of snapshot key key, and the
 // keys that share it.
 func ceilingOf(key string) (userRecordCeiling, []string) {
-	if key == "projectStorages" {
+	switch key {
+	case "projectStorages":
 		return userRecordCeiling{MaxUserProjectStorageEntries, MaxUserProjectStorageEntryBytes}, []string{"projectStorages"}
+	case "models":
+		return userRecordCeiling{MaxUserModelEntries, MaxUserModelEntryBytes}, []string{"models"}
 	}
 	return userRecordCeiling{MaxUserRecordEntries, MaxUserRecordEntryBytes}, []string{"workbenches", "playgrounds"}
 }
@@ -267,6 +290,15 @@ func AdmitUserEntry(c *kube.Client, project string, prior *RecordOwner, entryJSO
 // whose text names only the read's HTTP status (the ServiceAccount's error
 // is logged, not returned).
 func AdmitUserEntryFor(c *kube.Client, key, project string, prior *RecordOwner, entryJSON []byte) error {
+	return AdmitUserEntryNamed(c, key, "", project, prior, entryJSON)
+}
+
+// AdmitUserEntryNamed is AdmitUserEntryFor of the entry named name in key
+// ("" for an entry named by its project, one per project). The byte
+// budget (MaxUserRecordBytes) is checked on every write of a user's entry,
+// one that stays theirs too (it may grow): the entry's old value, if any,
+// is replaced by its new name and value.
+func AdmitUserEntryNamed(c *kube.Client, key, name, project string, prior *RecordOwner, entryJSON []byte) error {
 	if !c.ProjectUser() {
 		return nil
 	}
@@ -275,13 +307,30 @@ func AdmitUserEntryFor(c *kube.Client, key, project string, prior *RecordOwner, 
 		return &RecordsFullError{Msg: fmt.Sprintf("This tool's record of the setup would take %d bytes, more than the %d it keeps for one user's entry.", len(entryJSON), ceiling.bytes)}
 	}
 	entry := RecordOwner{Project: project, ProjectUID: c.ProjectUID(), By: kube.GetUser(c), ActorRole: ActorRoleUser}
-	if prior != nil && prior.ActorRole == ActorRoleUser && prior.By == entry.By && prior.ProjectUID == entry.ProjectUID {
+	stays := prior != nil && prior.ActorRole == ActorRoleUser && prior.By == entry.By && prior.ProjectUID == entry.ProjectUID
+	if stays && entryJSON == nil {
 		return nil
 	}
 	owners, err := ReadRecordOwners(c)
 	if err != nil {
 		kube.LogFactReadFailure("cannot read this tool's records for the users' caps", "snapshot", err)
 		return fmt.Errorf("cannot read this tool's records (%s)", kube.FactReadProblem(err))
+	}
+	if entryJSON != nil {
+		name = kube.FirstNonEmpty(name, project)
+		size := entryBytes(name, entryJSON)
+		for _, o := range owners {
+			replaced := slices.Contains(class, o.Key) && (o.Key == key || key == "") && o.Name == name
+			if o.ActorRole == ActorRoleUser && !replaced {
+				size += o.Bytes
+			}
+		}
+		if size > MaxUserRecordBytes {
+			return &RecordsFullError{Msg: fmt.Sprintf("The updater's records of users' objects are full (%d KiB of %d). Entries of deleted projects are removed by the updater's background check, which runs every %d minutes when no other operation runs; set up again after it. A cluster-admin can free entries now by deleting what is no longer needed (Clean up on the Environment page).", size>>10, MaxUserRecordBytes>>10, int(SweepInterval/time.Minute))}
+		}
+	}
+	if stays {
+		return nil
 	}
 	// The hard ceiling: every user's entry of the same class counts, stale
 	// ones included, when this write adds one.
@@ -335,10 +384,3 @@ func namespaceUID(f *kube.Client, project string) (string, bool, error) {
 // the snapshot ConfigMap's keys (UpdateSnapshot): project actions in
 // different projects run at once, and each record key is applied whole.
 var snapshotWriter = make(podWriter, 1)
-
-// UpdateSnapshot runs change (a read of a snapshot key, its change and
-// its write) once this process's other changes of the snapshot ended, so
-// two project actions never write the same key from the same old value.
-func UpdateSnapshot(c *kube.Client, change func() error) error {
-	return snapshotWriter.do(c.Context(), change)
-}

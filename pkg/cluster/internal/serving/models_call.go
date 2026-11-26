@@ -350,14 +350,25 @@ func checkModelCall(c *kube.Client, project, name string, rec ModelsRecord, prog
 // callModelDirectly is the check of a model reached at its own address
 // (inside the cluster, or through a gateway that is not MaaS's).
 func callModelDirectly(c *kube.Client, model LLMISvcObject, project, name, served, typ, exposure, gw string, rec ModelsRecord, progress func(string)) types.ModelCallCheck {
+	return callModelVia(c, model, project, name, served, typ, exposure, gw, rec, progress, func() string { return gatewayErrorCause(c) })
+}
+
+// callInternalModel is the check of a model reached only inside the
+// cluster: its in-cluster address, without a token.
+func callInternalModel(c *kube.Client, model LLMISvcObject, project, name, served, typ string, progress func(string)) types.ModelCallCheck {
+	if target := WithServicePort(c, kube.FirstNonEmpty(ModelInClusterURL(model), internalAddress(project, name))); target != "" {
+		return runModelCall(c, target, served, typ, "", true, progress)
+	}
+	return types.ModelCallCheck{Result: "not-checked", Message: "Not checked: the model's Service " + name + "-kserve-workload-svc in " + project + " could not be read for its port."}
+}
+
+// callModelVia is callModelDirectly with cause, which says what may be
+// behind a gateway's error (read with the client the caller chooses).
+func callModelVia(c *kube.Client, model LLMISvcObject, project, name, served, typ, exposure, gw string, rec ModelsRecord, progress func(string), cause func() string) types.ModelCallCheck {
 	var check types.ModelCallCheck
 	switch exposure {
 	case ExposureInternal:
-		if target := WithServicePort(c, kube.FirstNonEmpty(ModelInClusterURL(model), internalAddress(project, name))); target == "" {
-			check = types.ModelCallCheck{Result: "not-checked", Message: "Not checked: the model's Service " + name + "-kserve-workload-svc in " + project + " could not be read for its port."}
-		} else {
-			check = runModelCall(c, target, served, typ, "", true, progress)
-		}
+		check = callInternalModel(c, model, project, name, served, typ, progress)
 	default:
 		switch {
 		case model.Status.URL == "":
@@ -375,7 +386,7 @@ func callModelDirectly(c *kube.Client, model LLMISvcObject, project, name, serve
 				check.Message += " (through gateway " + gw + ")"
 			}
 			if check.Result == "gateway-error" {
-				check.Message += gatewayErrorCause(c)
+				check.Message += cause()
 			}
 			if check.OK {
 				check = probeWithoutToken(c, check, model.Status.URL, served, typ, gw)

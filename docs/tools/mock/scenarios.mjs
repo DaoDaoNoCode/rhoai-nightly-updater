@@ -688,6 +688,15 @@ scenarios.user = (w) => {
   w.userProjects = ["dev-project", "llm-eval"];
   w.samples.mlflow["dev-project"] = F.mlflowSamples("dev-project", { "genai-demo": "present", training: "present" });
 };
+// A user's model deployed only inside the cluster (B6): its address is the
+// Service's with the port, and the playground cannot use it.
+scenarios["user-model-internal"] = (w) => {
+  scenarios.user(w);
+  const smol = { ...F.modelStates.released("llm-eval"), name: "smollm2-135m-instruct", displayName: "SmolLM2 135M Instruct (CPU)" };
+  w.resources.models = F.modelsStatus({ items: [...(w.resources.models?.items ?? []), F.routed(smol, { exposure: "internal", check: undefined })] });
+  w.playground.modelsByProject["llm-eval"] = [F.playgroundModels.smolNoPort, F.playgroundModels.maas];
+  w.playground.items = (w.playground.items ?? []).filter((i) => i.namespace !== "llm-eval");
+};
 scenarios["user-no-projects"] = (w) => { scenarios.user(w); w.userProjects = []; };
 scenarios["user-update-running"] = (w) => {
   scenarios.user(w);

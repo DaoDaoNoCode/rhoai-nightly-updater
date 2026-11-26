@@ -338,7 +338,8 @@ func ParseQuantity(s string) (float64, bool) {
 }
 
 // CapacityCache keeps the capacity check for a minute: it lists every
-// pod of the cluster.
+// node and pod of the cluster, with the facts client (the
+// ServiceAccount's), whoever asks.
 var CapacityCache = kube.NewLRU[string, string](16)
 
 const capacityCacheTTL = time.Minute
@@ -359,7 +360,7 @@ func ModelCapacityWarning(c *kube.Client, entry CatalogModel, project string) st
 	if w, ok := CapacityCache.Get(key); ok {
 		return w
 	}
-	free, err := freeRoom(c, project, entry.Name)
+	free, err := freeRoom(c.Facts(), project, entry.Name)
 	if err != nil {
 		return ""
 	}
@@ -380,7 +381,7 @@ func catalogCapacityWarnings(c *kube.Client) map[string]string {
 	if !missing {
 		return out
 	}
-	free, err := freeRoom(c, "", "")
+	free, err := freeRoom(c.Facts(), "", "")
 	if err != nil {
 		return map[string]string{}
 	}
@@ -403,6 +404,49 @@ type NodeRoom struct {
 // the requests of its pods; the pods of model in project are not counted
 // (both "" for none).
 func freeRoom(c *kube.Client, project, model string) (map[string]*NodeRoom, error) {
+	snap, err := readCapacity(c)
+	if err != nil {
+		return nil, err
+	}
+	return snap.room(project, model), nil
+}
+
+// capacitySnapshot is the cluster's nodes (their allocatable room) and the
+// requests of its running pods, as one read gives them.
+type capacitySnapshot struct {
+	nodes map[string]NodeRoom
+	pods  []capacityPod
+}
+
+type capacityPod struct {
+	namespace, name, component, node string
+	cpu, mem, eph                    float64
+}
+
+// room is what each node of the snapshot has left; the pods of model in
+// project are not counted (setting it up again replaces them).
+func (s *capacitySnapshot) room(project, model string) map[string]*NodeRoom {
+	free := make(map[string]*NodeRoom, len(s.nodes))
+	for n, r := range s.nodes {
+		free[n] = &NodeRoom{CPU: r.CPU, Mem: r.Mem, Eph: r.Eph, EphKnown: r.EphKnown}
+	}
+	for _, p := range s.pods {
+		r := free[p.node]
+		if r == nil {
+			continue
+		}
+		if project != "" && p.namespace == project && p.name == model && p.component == modelPodComponent {
+			continue
+		}
+		r.CPU -= p.cpu
+		r.Mem -= p.mem
+		r.Eph -= p.eph
+	}
+	return free
+}
+
+// readCapacity lists the nodes and the running pods once.
+func readCapacity(c *kube.Client) (*capacitySnapshot, error) {
 	body, _, err := c.Get("/api/v1/nodes")
 	if err != nil {
 		return nil, err
@@ -424,7 +468,7 @@ func freeRoom(c *kube.Client, project, model string) (map[string]*NodeRoom, erro
 	if err := json.Unmarshal(body, &nodes); err != nil {
 		return nil, err
 	}
-	free := map[string]*NodeRoom{}
+	snap := &capacitySnapshot{nodes: map[string]NodeRoom{}}
 	for _, n := range nodes.Items {
 		if n.Spec.Unschedulable || n.Metadata.Labels["kubernetes.io/arch"] != "amd64" {
 			continue
@@ -440,11 +484,11 @@ func freeRoom(c *kube.Client, project, model string) (map[string]*NodeRoom, erro
 		mm, ok2 := ParseQuantity(n.Status.Allocatable["memory"])
 		if ok1 && ok2 {
 			ee, ok3 := ParseQuantity(n.Status.Allocatable["ephemeral-storage"])
-			free[n.Metadata.Name] = &NodeRoom{CPU: cc, Mem: mm, Eph: ee, EphKnown: ok3}
+			snap.nodes[n.Metadata.Name] = NodeRoom{CPU: cc, Mem: mm, Eph: ee, EphKnown: ok3}
 		}
 	}
-	if len(free) == 0 {
-		return free, nil
+	if len(snap.nodes) == 0 {
+		return snap, nil
 	}
 	body, _, err = c.Get("/api/v1/pods?fieldSelector=" + url.QueryEscape("status.phase!=Succeeded,status.phase!=Failed"))
 	if err != nil {
@@ -470,26 +514,24 @@ func freeRoom(c *kube.Client, project, model string) (map[string]*NodeRoom, erro
 		return nil, err
 	}
 	for _, p := range pods.Items {
-		r := free[p.Spec.NodeName]
-		if r == nil || p.Status.Phase == "Succeeded" || p.Status.Phase == "Failed" {
+		if _, ok := snap.nodes[p.Spec.NodeName]; !ok || p.Status.Phase == "Succeeded" || p.Status.Phase == "Failed" {
 			continue
 		}
-		if project != "" && p.Metadata.Namespace == project && p.Metadata.Labels["app.kubernetes.io/name"] == model && p.Metadata.Labels["app.kubernetes.io/component"] == modelPodComponent {
-			continue
-		}
+		cp := capacityPod{namespace: p.Metadata.Namespace, name: p.Metadata.Labels["app.kubernetes.io/name"], component: p.Metadata.Labels["app.kubernetes.io/component"], node: p.Spec.NodeName}
 		for _, ctr := range p.Spec.Containers {
 			if v, ok := ParseQuantity(ctr.Resources.Requests["cpu"]); ok {
-				r.CPU -= v
+				cp.cpu += v
 			}
 			if v, ok := ParseQuantity(ctr.Resources.Requests["memory"]); ok {
-				r.Mem -= v
+				cp.mem += v
 			}
 			if v, ok := ParseQuantity(ctr.Resources.Requests["ephemeral-storage"]); ok {
-				r.Eph -= v
+				cp.eph += v
 			}
 		}
+		snap.pods = append(snap.pods, cp)
 	}
-	return free, nil
+	return snap, nil
 }
 
 // RoomWarning says that no node in free has the model's requests free, or
@@ -546,6 +588,22 @@ func memoryWords(q string) string {
 // Subscription and the mirror sets).
 var PlanCache = kube.NewLRU[string, ImagePlan](8)
 
+// statusImagePlan is the image plan a status shows for the preset's image
+// presetImage (PlanModelImage without the released image's lookup), read
+// with c and kept in PlanCache; empty when it cannot be told.
+func statusImagePlan(c *kube.Client, presetImage string) ImagePlan {
+	key := c.BaseURL() + "|" + presetImage
+	if plan, ok := PlanCache.Get(key); ok {
+		return plan
+	}
+	plan, err := PlanModelImage(c, presetImage, false, nil, false)
+	if err != nil {
+		return ImagePlan{}
+	}
+	PlanCache.Add(key, plan, capacityCacheTTL)
+	return plan
+}
+
 // ModelsStatus reports what a model setup needs and the catalog's
 // models in the visible projects. Unknowns stay empty, never a block.
 func ModelsStatus(c *kube.Client, dsc rhoai.DSCRead, dscErr error, models []LLMISvcObject, modelsErr error, visible map[string]bool) types.ModelsStatus {
@@ -587,14 +645,7 @@ func ModelsStatus(c *kube.Client, dsc rhoai.DSCRead, dscErr error, models []LLMI
 	preset := discoverCPUPreset(c)
 	st.Preset, st.PresetProblem = preset.name, preset.problem
 	if preset.problem == "" {
-		key := c.BaseURL() + "|" + preset.image
-		plan, ok := PlanCache.Get(key)
-		if !ok {
-			var err error
-			if plan, err = PlanModelImage(c, preset.image, false, nil, false); err == nil {
-				PlanCache.Add(key, plan, capacityCacheTTL)
-			}
-		}
+		plan := statusImagePlan(c, preset.image)
 		st.ImagePlan, st.ImagePlanReason = plan.Kind, plan.Reason
 	}
 	warnings := catalogCapacityWarnings(c)

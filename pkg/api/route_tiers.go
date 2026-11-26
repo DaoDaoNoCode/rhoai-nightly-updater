@@ -62,7 +62,6 @@ var getRouteTiers = map[string]readTier{
 	"GET /api/resources/maas":              tierAdmin,
 	"GET /api/resources/maas/groups":       tierAdmin,
 	"GET /api/resources/prerequisites":     tierAdmin,
-	"GET /api/resources/models/exposures":  tierAdmin,
 	"GET /api/resources/kueue":             tierAdmin,
 	"GET /api/resources/observability":     tierAdmin,
 	"GET /api/resources/s3/admin-password": tierAdmin,
@@ -100,6 +99,10 @@ var getRouteTiers = map[string]readTier{
 	// The S3 storage of one of the user's projects, read with their token
 	// (HandleProjectStorageStatus); the project check comes first.
 	"GET /api/resources/project-s3": tierPerRole,
+	// The ways a model can be reached from one of the user's projects,
+	// their project checked first; the gateway reduced to a yes or no for
+	// that project (HandleModelExposures).
+	"GET /api/resources/models/exposures": tierPerRole,
 }
 
 // tierOf is the tier of a route pattern: admin-only unless getRouteTiers

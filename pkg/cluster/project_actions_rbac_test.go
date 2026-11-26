@@ -35,6 +35,9 @@ var projectActionRoots = map[string][]string{
 	"project-s3.delete":                {clusterPkg + "/internal/storage.projectS3Run.delete"},
 	"project-pipeline-server.setup":    {clusterPkg + "/internal/storage.setupProjectPipelineServer"},
 	"project-pipeline-server.teardown": {clusterPkg + "/internal/storage.teardownProjectPipelineServer"},
+	// A project's model actions: each its own method.
+	"models.setup":    {servingPkg + ".projectModelRun.setup"},
+	"models.teardown": {servingPkg + ".projectModelRun.teardown"},
 }
 
 // projectActionPruned are what a project action's code names but does not

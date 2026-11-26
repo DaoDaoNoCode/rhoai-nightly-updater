@@ -12,6 +12,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/workbench"
 )
@@ -73,11 +74,6 @@ const (
 // 288-296).
 var projectAdminCheck = ProjectRequest{Verb: "create", Group: "rbac.authorization.k8s.io", Resource: "rolebindings", Scope: ScopeProject, Source: SourceProjectAdmin}
 
-// isProjectAdminCheck reports whether r, as reviewed, is that check.
-func isProjectAdminCheck(r AccessRequest) bool {
-	return r.Verb == projectAdminCheck.Verb && r.Group == projectAdminCheck.Group && r.Resource == projectAdminCheck.Resource && r.Name == ""
-}
-
 // ProjectRequest is one request a project action can send with the user's
 // token: what RBAC decides (verb, API group, resource, name) and where.
 type ProjectRequest struct {
@@ -88,6 +84,10 @@ type ProjectRequest struct {
 	// request on this cluster and project (WhenKueueQueues); the preflight
 	// reviews it only then.
 	When string
+	// Target: the request names the object a request body chooses (a
+	// catalog model, by Name); a request for one target needs only that
+	// target's (MissingFor).
+	Target bool
 }
 
 // WhenKueueQueues: a workbench setup reads the project's LocalQueues only
@@ -159,11 +159,15 @@ func mlflowRequests(action string) []ProjectRequest {
 }
 
 // The playground's own requests (the RBAC scan's): its server, read for
-// ownership; the set up also checks the project and the tool's models.
+// ownership; the set up also checks the project and the tool's models, and
+// which of the project's models have an address the playground can reach
+// (their LLMInferenceServices and Services).
 var playgroundServer = scanned("get", "ogx.io", "ogxservers", "lsd-genai-playground", ScopeProject)
 
 var playgroundScanned = []ProjectRequest{
 	scanned("get", "", "namespaces", ProjectNameSelf, ScopeProject),
+	scanned("get", "", "services", "", ScopeProject),
+	scanned("list", "serving.kserve.io", "llminferenceservices", "", ScopeProject),
 	playgroundServer,
 	scanned("get", "serving.kserve.io", "llminferenceservices", "granite-embedding-125m-english", ScopeProject),
 	scanned("get", "serving.kserve.io", "llminferenceservices", "qwen25-05b-instruct", ScopeProject),
@@ -176,6 +180,45 @@ var playgroundScanned = []ProjectRequest{
 var samplesScanned = []ProjectRequest{
 	scanned("list", "project.openshift.io", "projects", "", ScopeCluster),
 }
+
+// perModel is verb on each catalog model's LLMInferenceService: the code
+// writes each catalog name out (serving.ToolModelPath), so the scan sees
+// one request per name. A request's run acts on the model it names only
+// (its Target).
+func perModel(verb string) []ProjectRequest {
+	var out []ProjectRequest
+	for _, m := range serving.ModelCatalog {
+		r := scanned(verb, "serving.kserve.io", "llminferenceservices", m.Name, ScopeProject)
+		r.Target = true
+		out = append(out, r)
+	}
+	return out
+}
+
+// The model actions' own requests (the RBAC scan's): the model, its
+// rollout (Deployments, pods and their events), the project's quotas, the
+// hardware profiles and the dashboard's settings in RHOAI's applications
+// namespace (as the dashboard's deploy form reads them), the model's
+// Service for its in-cluster address; LocalQueues only where the
+// dashboard uses Kueue (WhenKueueQueues, as the workbench's).
+var modelSetupScanned = joinRequests(
+	[]ProjectRequest{
+		scanned("create", "serving.kserve.io", "llminferenceservices", "", ScopeProject),
+		scanned("get", "", "namespaces", ProjectNameSelf, ScopeProject),
+		scanned("get", "", "services", "", ScopeProject),
+		scanned("get", "opendatahub.io", "odhdashboardconfigs", "odh-dashboard-config", ScopeApps),
+		scanned("list", "", "events", "", ScopeProject),
+		scanned("list", "", "pods", "", ScopeProject),
+		scanned("list", "", "resourcequotas", "", ScopeProject),
+		scanned("list", "apps", "deployments", "", ScopeProject),
+		scanned("list", "infrastructure.opendatahub.io", "hardwareprofiles", "", ScopeApps),
+		{Verb: "list", Group: "kueue.x-k8s.io", Resource: "localqueues", Scope: ScopeProject, When: WhenKueueQueues},
+	},
+	perModel("create"),
+	perModel("delete"),
+	perModel("get"),
+	perModel("patch"),
+)
 
 func joinRequests(parts ...[]ProjectRequest) []ProjectRequest {
 	var out []ProjectRequest
@@ -246,6 +289,17 @@ var projectActions = []ProjectAction{
 		AdminRefusal: storage.AdminUsesSharedStorage, Requests: projectPipelineSetup},
 	{ID: "project-pipeline-server.teardown", Feature: "project-pipeline-server", Action: "teardown", Label: "Delete the pipeline server on the project's S3 storage", ForUsers: true,
 		Requests: projectPipelineTeardown},
+	// A project's models (the design's section 1 row "Model, internal,
+	// token auth off"): reached only inside the cluster, no gateway, no
+	// MaaS, no Role or RoleBinding, nothing outside the project; through
+	// the gateway or with token authentication a cluster-admin's (the
+	// Models tab). The delete leaves token objects a cluster-admin's setup
+	// made to garbage collection, so it needs no rights on them.
+	{ID: "models.setup", Feature: "models", Action: serving.ProjectModelSetup, Label: "Deploy a model", ForUsers: true, Requests: modelSetupScanned},
+	{ID: "models.teardown", Feature: "models", Action: serving.ProjectModelTeardown, Label: "Delete a model", ForUsers: true, Requests: joinRequests(
+		perModel("delete"),
+		perModel("get"),
+	)},
 }
 
 // The project storage's own requests (the RBAC scan's), by its objects'
@@ -369,6 +423,11 @@ type MissingPermission struct {
 	Request AccessRequest `json:"request"`
 	// Text says it for people: the request and who can grant it.
 	Text string `json:"text"`
+	// Source is the request's source in the action's table (its wording).
+	Source string `json:"-"`
+	// Target: the request names the object a request body chooses
+	// (ProjectRequest.Target).
+	Target bool `json:"-"`
 }
 
 // ActionReview is the preflight's answer for one action: what the user's
@@ -394,6 +453,11 @@ func ReviewProjectActions(u *Client, ids []string, project, apps string) (map[st
 	index := map[key]int{}
 	var distinct []AccessRequest
 	per := map[string][]key{}
+	// sources: per action, the source of each request that has its own
+	// wording (the same request may be another action's with another).
+	sources := map[string]map[key]string{}
+	// targets: per action, the requests that name a request's target.
+	targets := map[string]map[key]bool{}
 	type cond struct {
 		v   bool
 		err error
@@ -420,6 +484,8 @@ actions:
 			return nil, fmt.Errorf("%q is not a project action users may run", id)
 		}
 		var reqs []key
+		sources[id] = map[key]string{}
+		targets[id] = map[key]bool{}
 		for _, r := range a.Requests {
 			if r.When != "" {
 				if apps == "" {
@@ -443,6 +509,12 @@ actions:
 			if !slices.Contains(reqs, req) {
 				reqs = append(reqs, req)
 			}
+			if r.Source != SourceScan && sources[id][req] == "" {
+				sources[id][req] = r.Source
+			}
+			if r.Target {
+				targets[id][req] = true
+			}
 		}
 		per[id] = reqs
 		for _, req := range reqs {
@@ -464,7 +536,8 @@ actions:
 		r := ActionReview{}
 		for _, req := range reqs {
 			if no[req] {
-				r.Missing = append(r.Missing, MissingPermission{Request: req, Text: missingText(req, project)})
+				src := sources[id][req]
+				r.Missing = append(r.Missing, MissingPermission{Request: req, Text: missingText(req, src, project), Source: src, Target: targets[id][req]})
 			}
 		}
 		out[id] = r
@@ -473,14 +546,46 @@ actions:
 }
 
 // missingText says a missing request and who can grant it.
-func missingText(r AccessRequest, project string) string {
-	if isProjectAdminCheck(r) && r.Namespace == project {
+// source is the request's source in the action's table: its wording.
+func missingText(r AccessRequest, source, project string) string {
+	switch {
+	case source == SourceProjectAdmin && r.Namespace == project:
 		return fmt.Sprintf("Only an admin of project %s sets up, repairs and deletes its S3 storage (the OpenShift admin role there); ask an admin of project %s.", project, project)
 	}
 	if r.Namespace == project {
 		return fmt.Sprintf("%s: ask an admin of project %s to give you the edit role there.", r, project)
 	}
 	return fmt.Sprintf("%s: RHOAI lets every signed-in user read this, but your account may not; ask a cluster-admin.", r)
+}
+
+// MissingTextFor is the text of a missing request r (from source) of an
+// action in project, with who can grant it.
+func MissingTextFor(r AccessRequest, source, project string) string {
+	return missingText(r, source, project)
+}
+
+// MissingFor is what of missing a request needs. With target (the object
+// its body chooses, a catalog model), a request that names another target
+// is not needed: the run acts on its target only. Without one (the
+// capabilities: any target), the requests that name targets stand for
+// "the one chosen", without a name, each once.
+func MissingFor(missing []MissingPermission, target, project string) []MissingPermission {
+	var out []MissingPermission
+	for _, m := range missing {
+		switch {
+		case !m.Target:
+		case target != "" && m.Request.Name != target:
+			continue
+		case target == "":
+			m.Request.Name = ""
+			m.Text = missingText(m.Request, m.Source, project)
+			if slices.ContainsFunc(out, func(o MissingPermission) bool { return o.Request == m.Request }) {
+				continue
+			}
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // MissingSummary is the refusal of an action whose requests are missing:
@@ -491,13 +596,87 @@ func MissingSummary(label, project string, missing []MissingPermission) string {
 
 // MissingSummaryFor is what a capability says of an action whose requests
 // are missing: the same as the gate's refusal, without "Nothing was
-// changed" (nothing was tried).
+// changed" (nothing was tried). It is short: when the user is not an
+// admin of the project and the action needs one (the project-admin
+// check), only that; else the missing requests in the project, grouped by
+// object, then who grants them once, and the same for the requests outside
+// the project.
 func MissingSummaryFor(label, project string, missing []MissingPermission) string {
+	var inProject, elsewhere []AccessRequest
+	for _, m := range missing {
+		switch {
+		case m.Source == SourceProjectAdmin && m.Request.Namespace == project:
+			return fmt.Sprintf("Only an admin of project %s can %s; ask one of them.", project, lowerFirst(label))
+		case m.Request.Namespace == project:
+			inProject = append(inProject, m.Request)
+		default:
+			elsewhere = append(elsewhere, m.Request)
+		}
+	}
+	var parts []string
+	if len(inProject) > 0 {
+		parts = append(parts, fmt.Sprintf("%s in %s needs permissions your OpenShift account does not have there: %s. Ask an admin of project %s to give you the edit role there.", label, project, requestsText(inProject, false), project))
+	}
+	if len(elsewhere) > 0 {
+		parts = append(parts, fmt.Sprintf("%s needs reads RHOAI lets every signed-in user make, which your account may not: %s. Ask a cluster-admin.", label, requestsText(elsewhere, true)))
+	}
+	return strings.Join(parts, " ")
+}
+
+// requestsText says requests for people, each object once with its verbs
+// ("create, delete and patch llminferenceservices.serving.kserve.io
+// smollm2-135m-instruct"), in the order first seen; withNamespace adds
+// where.
+func requestsText(reqs []AccessRequest, withNamespace bool) string {
+	type object struct{ group, resource, subresource, name, namespace string }
+	var order []object
+	verbs := map[object][]string{}
+	for _, r := range reqs {
+		o := object{r.Group, r.Resource, r.Subresource, r.Name, r.Namespace}
+		if !withNamespace {
+			o.namespace = ""
+		}
+		if _, seen := verbs[o]; !seen {
+			order = append(order, o)
+		}
+		if !slices.Contains(verbs[o], r.Verb) {
+			verbs[o] = append(verbs[o], r.Verb)
+		}
+	}
+	texts := make([]string, 0, len(order))
+	for _, o := range order {
+		v := verbs[o]
+		slices.Sort(v)
+		words := strings.Join(v, ", ")
+		if len(v) > 1 {
+			words = strings.Join(v[:len(v)-1], ", ") + " and " + v[len(v)-1]
+		}
+		// The request's own words without its verb (String starts " <resource>").
+		obj := AccessRequest{Group: o.group, Resource: o.resource, Subresource: o.subresource, Name: o.name, Namespace: o.namespace}.String()
+		texts = append(texts, words+obj)
+	}
+	return strings.Join(texts, "; ")
+}
+
+// lowerFirst is s with its first letter in lower case ("Delete the ..." ->
+// "delete the ...").
+func lowerFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToLower(s[:1]) + s[1:]
+}
+
+// MissingTexts are the texts of missing, each once (requests may share
+// their words).
+func MissingTexts(missing []MissingPermission) []string {
 	texts := make([]string, 0, len(missing))
 	for _, m := range missing {
-		texts = append(texts, m.Text)
+		if !slices.Contains(texts, m.Text) {
+			texts = append(texts, m.Text)
+		}
 	}
-	return fmt.Sprintf("%s in %s needs permissions your OpenShift account does not have: %s", label, project, strings.Join(texts, " "))
+	return texts
 }
 
 // projectFeatureComponents are the DataScienceCluster components a
@@ -512,6 +691,8 @@ func projectFeatureComponents(feature string) []envkit.FeatureComponent {
 		return features.PlaygroundComponents
 	case "project-pipeline-server":
 		return []envkit.FeatureComponent{envkit.PipelinesComponent}
+	case "models":
+		return []envkit.FeatureComponent{serving.KServeComponent}
 	}
 	return nil
 }

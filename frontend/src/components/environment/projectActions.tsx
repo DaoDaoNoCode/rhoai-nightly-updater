@@ -1,8 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { Alert, Content, Stack, StackItem } from "@patternfly/react-core";
 import type { MLflowSamplesRequest } from "../../services/api";
-import type { PlaygroundRequest, ProjectCapabilities, ProjectPipelineServerRequest, ProjectStorageRequest, UpdateStep, WorkbenchRequest } from "../../types";
-import { getProjectCapabilities, streamMLflowSamples, streamPlayground, streamProjectPipelineServer, streamProjectStorage, streamWorkbench, toApiError, type ApiError } from "../../services/api";
+import type { PlaygroundRequest, ProjectCapabilities, ProjectModelRequest, ProjectPipelineServerRequest, ProjectStorageRequest, UpdateStep, WorkbenchRequest } from "../../types";
+import { getProjectCapabilities, streamMLflowSamples, streamPlayground, streamProjectModel, streamProjectPipelineServer, streamProjectStorage, streamWorkbench, toApiError, type ApiError } from "../../services/api";
 import { isNotForUser } from "../../errors";
 import { StepProgress, type StepState } from "./StepProgress";
 import { TooltipButton } from "../TooltipButton";
@@ -53,6 +53,8 @@ export interface ProjectCapabilityAnswer {
   allowed: boolean;
   /** Shown on a disabled control; null if the control is usable. */
   reason: string | null;
+  /** The refusal's code from the capabilities ("missing_permissions", ...), when the backend gave one. */
+  code?: string;
 }
 
 /**
@@ -70,7 +72,7 @@ export function useProjectCapability(project: string, action: string): ProjectCa
   if (!value.caps) return { allowed: false, reason: CAPABILITY_CHECKING };
   const cap = value.caps.actions[action];
   if (!cap) return { allowed: false, reason: CAPABILITY_UNKNOWN };
-  if (!cap.allowed) return { allowed: false, reason: cap.reason || CAPABILITY_UNKNOWN };
+  if (!cap.allowed) return { allowed: false, reason: cap.reason || CAPABILITY_UNKNOWN, code: cap.code };
   return { allowed: true, reason: null };
 }
 
@@ -85,7 +87,8 @@ export type ProjectRunRequest =
   | { kind: "playground"; req: PlaygroundRequest }
   | { kind: "mlflow-samples"; req: MLflowSamplesRequest }
   | { kind: "project-s3"; req: ProjectStorageRequest }
-  | { kind: "project-pipeline-server"; req: ProjectPipelineServerRequest };
+  | { kind: "project-pipeline-server"; req: ProjectPipelineServerRequest }
+  | { kind: "models"; req: ProjectModelRequest };
 
 interface RunState {
   title: string;
@@ -123,6 +126,7 @@ export function useProjectRun(onEnd: () => void) {
       case "mlflow-samples": ctl.current = streamMLflowSamples(r.req, onStep, onDone); break;
       case "project-s3": ctl.current = streamProjectStorage(r.req, onStep, onDone); break;
       case "project-pipeline-server": ctl.current = streamProjectPipelineServer(r.req, onStep, onDone); break;
+      case "models": ctl.current = streamProjectModel(r.req, onStep, onDone); break;
     }
   }, [onEnd]);
   return { run, start, running: !!run?.running, dismiss: () => setRun(null) };
@@ -157,11 +161,13 @@ export const ProjectActionButton: React.FC<{
   action: string;
   busy: boolean;
   variant?: "primary" | "secondary" | "danger" | "link";
+  /** Why the action cannot work in the project's current state, after what RBAC says. */
+  blockedReason?: string | null;
   onClick: () => void;
   children: React.ReactNode;
-}> = ({ project, action, busy, variant = "secondary", onClick, children }) => {
+}> = ({ project, action, busy, variant = "secondary", blockedReason, onClick, children }) => {
   const { reason } = useProjectCapability(project, action);
-  const disabledReason = reason ?? (busy ? "Another action of this page is running in this project." : null);
+  const disabledReason = reason ?? blockedReason ?? (busy ? "Another action of this page is running in this project." : null);
   // Link variant blends with text links (e.g. Open in MLflow): inline, without extra padding or muted disabled chrome.
   return <TooltipButton variant={variant} isInline={variant === "link"} size="sm" disabledReason={disabledReason} onClick={onClick}>{children}</TooltipButton>;
 };

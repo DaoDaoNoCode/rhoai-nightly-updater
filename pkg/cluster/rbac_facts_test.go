@@ -261,17 +261,40 @@ func TestFactsReachIsInTheServiceAccountScan(t *testing.T) {
 // cluster fact the ServiceAccount reads for a change is a reviewed change
 // of this list (non-admin design 3.1), not only a verb the scan allows.
 var wantFactsRequests = []string{
+	// KServe's configuration in the applications namespace: its default
+	// gateway and where a model's download goes (a project's model
+	// action, serving models_project.go).
+	"get /configmaps name=inferenceservice-config",
 	// Whether a project with users' records still exists, for the records
 	// caps (record.ProjectExists): never shown, never a list.
 	"get /namespaces name=*",
 	"get apps/deployments name=gen-ai-ui",
+	// KServe's LLMInferenceService controller: the CPU preset's prefix.
+	"get apps/deployments name=llmisvc-controller-manager",
 	"get config.openshift.io/infrastructures name=cluster",
 	"get mlflow.opendatahub.io/mlflows name=mlflow",
+	// Whether RHOAI is a nightly build (its Subscription's catalog): the
+	// model's image plan.
+	"get operators.coreos.com/subscriptions name=rhods-operator",
 	"get route.openshift.io/routes name=rhods-dashboard",
+	// The CPU preset (its name is the controller's prefix + the suffix).
+	"get serving.kserve.io/llminferenceserviceconfigs name=*",
+	"get serving.kserve.io/llminferenceserviceconfigs name=config-llm-template-cpu",
+	// The room for a model (reduced to fits / may not fit,
+	// serving.ModelCapacityFact) and a young node's pull grace.
+	"list /nodes name=",
+	"list /pods name=",
 	"list admissionregistration.k8s.io/validatingwebhookconfigurations name=",
 	"list components.platform.opendatahub.io/dashboards name=",
+	// Whether a mirror serves the preset's image (the image plan).
+	"list config.openshift.io/imagedigestmirrorsets name=",
+	"list config.openshift.io/imagetagmirrorsets name=",
 	"list datasciencecluster.opendatahub.io/datascienceclusters name=",
 	"list dscinitialization.opendatahub.io/dscinitializations name=",
+	// Whether a MaaSModelRef in the project targets a model (reduced to yes
+	// or no for that project, serving.ProjectMaaSRefFact): the one MaaS
+	// read, in one project, before a project's model is deleted.
+	"list maas.opendatahub.io/maasmodelrefs name=",
 }
 
 // The facts client's requests, pinned by resource and name; and what it
@@ -288,7 +311,9 @@ func TestFactsRequestsArePinned(t *testing.T) {
 			t.Errorf("a facts client reads a Secret: %s (%s)", r.key(), r.Site)
 		case r.Resource == "namespaces" && r.Name == "":
 			t.Errorf("a facts client lists namespaces: %s (%s)", r.key(), r.Site)
-		case strings.HasPrefix(r.Group, "maas.opendatahub.io"):
+		// The one MaaS read: a list of MaaSModelRefs in one namespace (the
+		// project), reduced to a yes or no (serving.ProjectMaaSRefFact).
+		case strings.HasPrefix(r.Group, "maas.opendatahub.io") && (r.Verb != "list" || r.Resource != "maasmodelrefs" || r.Namespace == ""):
 			t.Errorf("a facts client reads MaaS: %s (%s)", r.key(), r.Site)
 		}
 	}

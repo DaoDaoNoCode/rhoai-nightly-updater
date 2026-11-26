@@ -59,6 +59,10 @@ type projectRoute struct {
 	// every project (mlflow raiseOldMemoryLimit). A user's never does
 	// (refused), so theirs holds the project's lock.
 	adminClusterLock bool
+	// target, when set, is the object the body chooses (a catalog model):
+	// the preflight's verdict then needs only that object's requests
+	// (cluster.MissingFor).
+	target func(body []byte) string
 }
 
 // projectActionRoutes are the routes of project actions, by path: the
@@ -105,6 +109,21 @@ var projectActionRoutes = map[string]projectRoute{
 		}
 		return req.Project, req.Action, cluster.ValidateMLflowSamplesRequest(req)
 	}},
+	// A model in one project (cluster.RunProjectModel), reached only inside
+	// the cluster: never a gateway, MaaS or anything outside the project,
+	// so a cluster-admin's request holds the project's lock too. A request
+	// for the gateway or token authentication is refused (validation).
+	"/api/resources/models/project/stream": {feature: "models", maxBody: 4096, parse: func(body []byte) (string, string, string) {
+		var req types.ProjectModelRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			return "", "", "invalid request body"
+		}
+		return req.Project, cluster.ProjectModelAction(req), cluster.ValidateProjectModelRequest(req)
+	}, target: func(body []byte) string {
+		var req types.ProjectModelRequest
+		_ = json.Unmarshal(body, &req)
+		return cluster.ProjectModelTarget(req)
+	}},
 }
 
 // The project actions' cluster reads and checks; tests replace them.
@@ -140,11 +159,7 @@ const notForClusterAdminsCode = "not_for_cluster_admins"
 func writeMissingPermissions(w http.ResponseWriter, label, project string, missing []cluster.MissingPermission) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
-	texts := make([]string, 0, len(missing))
-	for _, m := range missing {
-		texts = append(texts, m.Text)
-	}
-	body := map[string]any{"error": cluster.MissingSummary(label, project, missing), "errorCode": missingPermissionsCode, "missing": texts}
+	body := map[string]any{"error": cluster.MissingSummary(label, project, missing), "errorCode": missingPermissionsCode, "missing": cluster.MissingTexts(missing)}
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		slog.Error("response encode error", "label", "missing-permissions", "error", err)
 	}
@@ -202,7 +217,11 @@ type actionVerdict struct {
 // concerns: an applications namespace that cannot be read refuses only
 // the actions that read there. Texts never carry an API server's,
 // authorizer's or ServiceAccount's words, only an HTTP status or category.
-func projectActionVerdicts(u *cluster.Client, admin bool, ids []string, project string) map[string]actionVerdict {
+//
+// target is the object a request's body chooses ("" for the capabilities):
+// a missing request that names another one does not count, and the
+// requests that name one are said once without a name (cluster.MissingFor).
+func projectActionVerdicts(u *cluster.Client, admin bool, ids []string, project, target string) map[string]actionVerdict {
 	out := map[string]actionVerdict{}
 	blocks := map[string][2]string{}
 	var review []string
@@ -274,8 +293,9 @@ func projectActionVerdicts(u *cluster.Client, admin bool, ids []string, project 
 			out[id] = actionVerdict{status: http.StatusServiceUnavailable, code: "authorization_unavailable", reason: fmt.Sprintf("Cannot check your permissions for %s in %s; try again.", a.Label, project)}
 		case rv.Err != nil:
 			out[id] = actionVerdict{status: http.StatusConflict, code: "prerequisites_unknown", reason: fmt.Sprintf("Cannot check %s in %s: %v.", a.Label, project, rv.Err)}
-		case len(rv.Missing) > 0:
-			out[id] = actionVerdict{status: http.StatusForbidden, code: missingPermissionsCode, reason: cluster.MissingSummaryFor(a.Label, project, rv.Missing), missing: rv.Missing}
+		case len(cluster.MissingFor(rv.Missing, target, project)) > 0:
+			missing := cluster.MissingFor(rv.Missing, target, project)
+			out[id] = actionVerdict{status: http.StatusForbidden, code: missingPermissionsCode, reason: cluster.MissingSummaryFor(a.Label, project, missing), missing: missing}
 		default:
 			out[id] = actionVerdict{}
 		}
@@ -390,7 +410,11 @@ func withProjectMutationAuth(route projectRoute, fn func(c *cluster.Client, w ht
 			return
 		}
 		// 7 and 8. The prerequisites (facts), then the preflight.
-		if v := verdictOf(projectActionVerdicts(u, admin, []string{id}, project), id); v.reason != "" {
+		target := ""
+		if route.target != nil {
+			target = route.target(body)
+		}
+		if v := verdictOf(projectActionVerdicts(u, admin, []string{id}, project, target), id); v.reason != "" {
 			mutationLimiter.release(rateLimitKey, slot)
 			if v.code == missingPermissionsCode {
 				slog.Info("project action refused: missing permissions", "action", id, "missing", len(v.missing))

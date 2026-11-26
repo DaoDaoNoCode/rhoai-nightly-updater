@@ -1,12 +1,12 @@
 /** Environment page coverage: S3 storage, pipeline servers, MLflow, models, playground, MaaS, samples, prerequisites, and clean-up. */
 
-import { OperationResponse, ProjectPipelineServerRequest, ProjectStorageRequest, ProjectStorageStatus, ProjectStatus, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, ModelsRequest, PlaygroundRequest, PlaygroundStatus, WorkbenchRequest, WorkbenchStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelRegistryRequest, ModelRegistryStatus, KueueRequest, KueueStatus, ObservabilityRequest, ObservabilityStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest, ProjectCapabilities } from '../../types';
+import { OperationResponse, ProjectPipelineServerRequest, ProjectStorageRequest, ProjectStorageStatus, ProjectStatus, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, ModelsRequest, ProjectModelRequest, PlaygroundRequest, PlaygroundStatus, WorkbenchRequest, WorkbenchStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelRegistryRequest, ModelRegistryStatus, KueueRequest, KueueStatus, ObservabilityRequest, ObservabilityStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest, ProjectCapabilities } from '../../types';
 import { request } from './client';
 import { StreamDoneHandler, StreamDetachHandler, streamSSE } from './stream';
 
 /** Fetches one project’s status for an ordinary user (not cluster-admin), using that user’s token. */
-export function getProjectStatus(project: string): Promise<ProjectStatus> {
-  return request(`/api/resources/status?project=${encodeURIComponent(project)}`);
+export function getProjectStatus(project: string, signal?: AbortSignal): Promise<ProjectStatus> {
+  return request(`/api/resources/status?project=${encodeURIComponent(project)}`, { signal });
 }
 
 /** Overall Environment status; when project is set (Pipelines tab selection), the dashboard Connection is read for that project too. */
@@ -218,6 +218,19 @@ export function streamModels(
   onConnectionDrop?: StreamDetachHandler,
 ): AbortController {
   return streamSSE('/api/resources/models/stream', req, onStep, onDone, onConnectionDrop);
+}
+
+/**
+ * A model in one project, a project action any user whose role allows it may run: setup streams
+ * "check", "model", "model-ready", "callable"; teardown "model".
+ */
+export function streamProjectModel(
+  req: ProjectModelRequest,
+  onStep: (step: UpdateStep) => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+): AbortController {
+  return streamSSE('/api/resources/models/project/stream', req, onStep, onDone, onConnectionDrop);
 }
 
 // --- Model exposure routes ---

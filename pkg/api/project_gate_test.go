@@ -58,24 +58,24 @@ func newProjectGateEnv(t *testing.T, role string) *projectGateEnv {
 				if role == roleEditor && r.Source == cluster.SourceProjectAdmin {
 					req := cluster.AccessRequest{Verb: r.Verb, Group: r.Group, Resource: r.Resource, Namespace: project}
 					rv := out[id]
-					rv.Missing = append(rv.Missing, cluster.MissingPermission{Request: req, Text: "Only an admin of project " + project + " sets up, repairs and deletes its S3 storage (the OpenShift admin role there); ask an admin of project " + project + "."})
+					rv.Missing = append(rv.Missing, cluster.MissingPermission{Request: req, Text: cluster.MissingTextFor(req, r.Source, project), Source: r.Source})
 					out[id] = rv
 					continue
 				}
 				if role == roleViewer && r.Verb != "get" && r.Verb != "list" {
 					req := cluster.AccessRequest{Verb: r.Verb, Group: r.Group, Resource: r.Resource, Namespace: project, Name: r.Name}
-					r := out[id]
-					r.Missing = append(r.Missing, cluster.MissingPermission{Request: req, Text: req.String() + ": ask an admin of project " + project + " to give you the edit role there."})
-					out[id] = r
+					rv := out[id]
+					rv.Missing = append(rv.Missing, cluster.MissingPermission{Request: req, Text: cluster.MissingTextFor(req, r.Source, project), Source: r.Source})
+					out[id] = rv
 				}
 			}
 		}
 		return out, nil
 	}
-	origW, origP, origS := runWorkbench, runPlayground, runMLflowSamples
+	origW, origP, origS, origM := runWorkbench, runPlayground, runMLflowSamples, runProjectModel
 	origPS, origPP := runProjectStorage, runProjectPipelineServer
 	t.Cleanup(func() {
-		runWorkbench, runPlayground, runMLflowSamples = origW, origP, origS
+		runWorkbench, runPlayground, runMLflowSamples, runProjectModel = origW, origP, origS, origM
 		runProjectStorage, runProjectPipelineServer = origPS, origPP
 	})
 	done := &types.OperationResponse{Success: true, Message: "done"}
@@ -90,6 +90,11 @@ func newProjectGateEnv(t *testing.T, role string) *projectGateEnv {
 		return done, nil
 	}
 	runMLflowSamples = func(c *cluster.Client, _ types.MLflowSamplesRequest, _ func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		env.runs++
+		env.projectUser = c.ProjectUser()
+		return done, nil
+	}
+	runProjectModel = func(c *cluster.Client, _ types.ProjectModelRequest, _ func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 		env.runs++
 		env.projectUser = c.ProjectUser()
 		return done, nil
@@ -124,6 +129,8 @@ var projectActionRequests = map[string][2]string{
 	"project-s3.delete":                {"/api/resources/project-s3/stream", `{"action":"delete","project":"team-a","deleteData":"nightly-s3-data"}`},
 	"project-pipeline-server.setup":    {"/api/resources/project-pipeline-server/stream", `{"action":"setup","project":"team-a"}`},
 	"project-pipeline-server.teardown": {"/api/resources/project-pipeline-server/stream", `{"action":"teardown","project":"team-a","confirmWorkbenches":{"wb":"uid-1"}}`},
+	"models.setup":                     {"/api/resources/models/project/stream", `{"action":"setup","project":"team-a","model":"qwen25-05b-instruct"}`},
+	"models.teardown":                  {"/api/resources/models/project/stream", `{"action":"teardown","project":"team-a","model":"qwen25-05b-instruct"}`},
 }
 
 // needsProjectAdmin reports whether a is for admins of the project only
@@ -542,5 +549,31 @@ func TestRoleCheckFailureKeepsUpstreamTextOut(t *testing.T) {
 	HandleOperation(httptest.NewRecorder(), getAs(t, "/api/operation", "user:alice"))
 	if !strings.Contains(debug.String(), "team-b") {
 		t.Fatalf("the detail is not at debug level:\n%s", debug.String())
+	}
+}
+
+// A project model action reaches a model only inside the cluster without
+// token authentication: asking for the inference gateway or for token
+// authentication is refused for every role, before any check or write,
+// naming who does it; without them an editor deploys.
+func TestProjectModelGatewayAndTokenAreAClusterAdmins(t *testing.T) {
+	for _, role := range []string{roleClusterAdmin, roleEditor} {
+		env := newProjectGateEnv(t, role)
+		for _, body := range []string{
+			`{"action":"setup","project":"team-a","model":"qwen25-05b-instruct","tokenAuth":true}`,
+			`{"action":"setup","project":"team-a","model":"qwen25-05b-instruct","exposure":"default-gateway"}`,
+			`{"action":"setup","project":"team-a","model":"qwen25-05b-instruct","exposure":"maas"}`,
+		} {
+			w := serveProjectAction(t, "/api/resources/models/project/stream", body)
+			if w.Code != http.StatusBadRequest || !strings.Contains(decodeError(t, w)["error"].(string), "A cluster-admin deploys models reached through the inference gateway or with token authentication") {
+				t.Fatalf("%s %s: %d %s", role, body, w.Code, w.Body.String())
+			}
+		}
+		if env.runs != 0 || env.reviews != 0 {
+			t.Fatalf("%s: a refused request reached the checks or the action", role)
+		}
+		if w := serveProjectAction(t, "/api/resources/models/project/stream", projectActionRequests["models.setup"][1]); w.Code != http.StatusOK || env.runs != 1 {
+			t.Fatalf("%s inside the cluster: %d %s", role, w.Code, w.Body.String())
+		}
 	}
 }
