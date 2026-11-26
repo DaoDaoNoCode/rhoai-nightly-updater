@@ -46,10 +46,12 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   started it, to its starter as "Your action (<label>) in project <P> is
   running", and to the other users of that project without a name;
   projects a user cannot see (also one deleted and made again under its
-  name) show nothing. A workbench setup, a playground setup and MLflow
-  sample changes can be cancelled by whoever started them or a
+  name) show nothing. A workbench setup, a playground setup and a user's
+  MLflow sample changes can be cancelled by whoever started them or a
   cluster-admin (`POST /api/operation/cancel`), after a confirmation that
-  says what the action leaves. A cancel is a request: the action stops at
+  says what the action leaves; a cluster-admin's own MLflow sample changes
+  hold the cluster lock (they may restart the shared MLflow) and cannot be
+  cancelled. A cancel is a request: the action stops at
   its next safe point and keeps what it made as its own failure there
   would; a request in flight always finishes, and an action that finishes
   first is recorded as done. Activity entries now store their scope
