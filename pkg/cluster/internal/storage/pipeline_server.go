@@ -787,7 +787,7 @@ func TeardownPipelineServer(c *kube.Client, project, confirmedUID string, confir
 			return fail(msg, code, "workbench change failed")
 		}
 		orphan := &DSPA{Meta: kube.ObjectMeta{UID: "none"}, SecretName: DSPASecretName}
-		note := deleteDSPASecret(c, project, orphan, all, &logs) + deleteConnection(c, project, ConnectionSecretName, rhoai.NamespacedPath("v1", "secrets", project, ConnectionSecretName), &logs)
+		note := deleteDSPASecret(c, project, orphan, all, &logs) + deleteConnection(c, ConnectionSecretName, rhoai.NamespacedPath("v1", "secrets", project, ConnectionSecretName), &logs)
 		if !listMissing {
 			note += deleteProjectKey(c, project, nil, all, &logs)
 		}
@@ -858,7 +858,7 @@ func TeardownPipelineServer(c *kube.Client, project, confirmedUID string, confir
 	// The DSPA finalizer does not read the credentials secret, so it can go
 	// now; doing it before waiting keeps a timed-out teardown from leaving the
 	// secret behind with no pipeline server left to show a Tear down button.
-	secretNote := deleteDSPASecret(c, project, target, all, &logs) + deleteConnection(c, project, ConnectionSecretName, rhoai.NamespacedPath("v1", "secrets", project, ConnectionSecretName), &logs) + deleteProjectKey(c, project, target, all, &logs)
+	secretNote := deleteDSPASecret(c, project, target, all, &logs) + deleteConnection(c, ConnectionSecretName, rhoai.NamespacedPath("v1", "secrets", project, ConnectionSecretName), &logs) + deleteProjectKey(c, project, target, all, &logs)
 
 	gone, waitErr := kube.WaitForDeletion(c, dspaPath, pipelineServerDeleteTimeout, pipelineServerDeletePoll)
 	if waitErr != nil {
@@ -1186,7 +1186,7 @@ func addDashboardDSPASettings(c *kube.Client, spec, apiServer map[string]any) []
 // would delete it too; deleting it here also covers one an interrupted
 // setup left without an owner. It returns a note for the response when it
 // had to be left behind on an error.
-func deleteConnection(c *kube.Client, project, conn, path string, logs *[]string) string {
+func deleteConnection(c *kube.Client, conn, path string, logs *[]string) string {
 	meta, found, err := kube.ReadObjectMeta(c, path)
 	switch {
 	case err != nil:

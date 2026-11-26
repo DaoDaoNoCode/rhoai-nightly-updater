@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -613,9 +612,4 @@ func readProjectS3Object(c *kube.Client, kind, project string) (kube.ObjectMeta,
 	}
 	found, err := c.GetIntoOptional(projectS3Path(kind, project), &obj)
 	return obj.Metadata, found, err
-}
-
-// fieldManagerQuery is the query of a write by the tool.
-func fieldManagerQuery() url.Values {
-	return url.Values{"fieldManager": {envkit.ToolFieldManager}}
 }

@@ -300,7 +300,7 @@ func (r *projectS3Run) apply(repair bool) (*types.OperationResponse, error) {
 		// written.
 		if kind == kindNetworkPolicy {
 			body, found, err := c.GetOptional(projectS3Path(kindNetworkPolicy, project))
-			problem := ""
+			var problem string
 			switch {
 			case err != nil:
 				problem = fmt.Sprintf("it cannot be read back: %v", err)
@@ -513,7 +513,7 @@ func GetProjectStorageStatus(c *kube.Client, project string) *types.ProjectStora
 		if kind == kindDeployment {
 			d, found, err := readProjectS3Deployment(c, project)
 			if err != nil {
-				o.Problem, _ = projectReadProblem(kind, err)
+				o.Problem = projectReadProblem(kind, err)
 			}
 			deploy, deployFound = d, found
 			o.Present, o.Owned = found, found && rec.Owns(kind, d.Metadata)
@@ -521,7 +521,7 @@ func GetProjectStorageStatus(c *kube.Client, project string) *types.ProjectStora
 		} else {
 			meta, found, err := readProjectS3Object(c, kind, project)
 			if err != nil {
-				o.Problem, _ = projectReadProblem(kind, err)
+				o.Problem = projectReadProblem(kind, err)
 			}
 			o.Present, o.Owned = found, found && rec.Owns(kind, meta)
 			st.Terminating = st.Terminating || meta.Terminating()
@@ -564,7 +564,7 @@ func GetProjectStorageStatus(c *kube.Client, project string) *types.ProjectStora
 		st.NetworkPolicyProblem = projectStorageFenceProblem(c, project)
 	}
 	if users, err := projectStorageUsers(c, project); err != nil {
-		st.UsersProblem, _ = projectReadProblem("DataSciencePipelinesApplication", err)
+		st.UsersProblem = projectReadProblem("DataSciencePipelinesApplication", err)
 	} else {
 		st.UsedBy = users
 	}
@@ -595,11 +595,10 @@ func projectStorageFenceProblem(c *kube.Client, project string) string {
 	return ""
 }
 
-// projectReadProblem explains a read of the user's that failed, with its
-// fixed code.
-func projectReadProblem(what string, err error) (string, string) {
+// projectReadProblem explains a read of the user's that failed.
+func projectReadProblem(what string, err error) string {
 	if _, code := kube.HTTPStatusForError(err); code == kube.ErrorCodeForbiddenForUser {
-		return fmt.Sprintf("Your OpenShift account may not read the %s.", what), types.ProblemForbiddenForUser
+		return fmt.Sprintf("Your OpenShift account may not read the %s.", what)
 	}
-	return fmt.Sprintf("Cannot read the %s: %v", what, err), types.ProblemError
+	return fmt.Sprintf("Cannot read the %s: %v", what, err)
 }

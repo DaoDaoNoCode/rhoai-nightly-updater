@@ -442,8 +442,8 @@ func TestProjectStorageDelete(t *testing.T) {
 // A pipeline server set up on project storage gets the project
 // storage's Connection, everywhere the tool reads or writes one.
 func TestConnectionNameFollowsTheStorage(t *testing.T) {
-	onProject := storage.DSPA{Meta: kubeMeta("proj", "dspa", map[string]string{storage.DSPAConnectionAnnotation: storage.ProjectConnectionSecretName}), Host: "nightly-s3.proj.svc:8333"}
-	shared := storage.DSPA{Meta: kubeMeta("proj", "dspa", map[string]string{storage.DSPAConnectionAnnotation: storage.ConnectionSecretName}), Host: storage.S3Host()}
+	onProject := storage.DSPA{Meta: kubeMeta("proj", map[string]string{storage.DSPAConnectionAnnotation: storage.ProjectConnectionSecretName}), Host: "nightly-s3.proj.svc:8333"}
+	shared := storage.DSPA{Meta: kubeMeta("proj", map[string]string{storage.DSPAConnectionAnnotation: storage.ConnectionSecretName}), Host: storage.S3Host()}
 	if storage.ConnectionNameOf(onProject) != storage.ProjectConnectionSecretName || storage.ConnectionNameOf(shared) != storage.ConnectionSecretName {
 		t.Fatal("ConnectionNameOf")
 	}
@@ -610,19 +610,19 @@ func TestPipelineServerStaysOnItsStorage(t *testing.T) {
 // does not hold the shared storage (its teardown's blocker) and gets no
 // key from Secure S3 storage.
 func TestSharedStorageIgnoresProjectStorage(t *testing.T) {
-	d := storage.DSPA{Meta: kubeMeta("proj", "dspa", nil), Host: "nightly-s3.proj.svc:8333"}
+	d := storage.DSPA{Meta: kubeMeta("proj", nil), Host: "nightly-s3.proj.svc:8333"}
 	d.Meta.Labels = map[string]string{"app.kubernetes.io/managed-by": "rhoai-nightly-updater"}
 	shared := storage.Address{Service: "seaweedfs-s3", Namespace: storage.S3Namespace}
 	if live, deleting := storage.Users([]storage.DSPA{d}, shared); len(live)+len(deleting) != 0 {
 		t.Fatalf("the shared storage counts it: %v %v", live, deleting)
 	}
-	if !storage.OnProjectStorage(d) || storage.OnProjectStorage(storage.DSPA{Meta: kubeMeta("other", "dspa", nil), Host: "nightly-s3.proj.svc:8333"}) {
+	if !storage.OnProjectStorage(d) || storage.OnProjectStorage(storage.DSPA{Meta: kubeMeta("other", nil), Host: "nightly-s3.proj.svc:8333"}) {
 		t.Fatal("OnProjectStorage reads another project's storage as its own")
 	}
 }
 
-func kubeMeta(ns, name string, annotations map[string]string) (m kube.ObjectMeta) {
-	m.Namespace, m.Name, m.Annotations, m.UID = ns, name, annotations, "uid-"+name
+func kubeMeta(ns string, annotations map[string]string) (m kube.ObjectMeta) {
+	m.Namespace, m.Name, m.Annotations, m.UID = ns, "dspa", annotations, "uid-dspa"
 	return m
 }
 

@@ -415,7 +415,7 @@ func teardownProjectPipelineServer(c *kube.Client, project string, confirmedWork
 		if msg, code := detachConnection(c, project, wbs, &logs); msg != "" {
 			return fail(msg, code, "workbench change failed")
 		}
-		note := deleteConnection(c, project, ProjectConnectionSecretName, projectPipelineSecretPath(project, ProjectConnectionSecretName), &logs)
+		note := deleteConnection(c, ProjectConnectionSecretName, projectPipelineSecretPath(project, ProjectConnectionSecretName), &logs)
 		if err := forgetProjectPipelineServer(c, project); err != nil {
 			logs = append(logs, "Warning: this tool's record of the pipeline server could not be cleared: "+record.ErrorText(c, err))
 		}
@@ -451,7 +451,7 @@ func teardownProjectPipelineServer(c *kube.Client, project string, confirmedWork
 		}
 		logs = append(logs, "OK: Deletion requested")
 	}
-	note := deleteProjectPipelineSecret(c, project, &logs) + deleteConnection(c, project, ProjectConnectionSecretName, projectPipelineSecretPath(project, ProjectConnectionSecretName), &logs)
+	note := deleteProjectPipelineSecret(c, project, &logs) + deleteConnection(c, ProjectConnectionSecretName, projectPipelineSecretPath(project, ProjectConnectionSecretName), &logs)
 	gone, waitErr := kube.WaitForDeletion(c, dspaPath, pipelineServerDeleteTimeout, pipelineServerDeletePoll)
 	if waitErr != nil || !gone {
 		why := fmt.Sprintf("it is still terminating after %s (waiting for the data-science-pipelines operator to finish cleanup)", pipelineServerDeleteTimeout)
