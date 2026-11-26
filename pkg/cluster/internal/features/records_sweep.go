@@ -140,6 +140,21 @@ func SweepGoneProjectRecords(c *kube.Client) {
 		}
 	}
 
+	// A project storage's objects live in its namespace: an entry whose
+	// namespace is gone, or was made again (another UID), records nothing
+	// that exists.
+	storageGone := func(project string, e storage.ProjectStorageRecorded) bool {
+		st := namespace(project)
+		return st.gone || e.ProjectUID != "" && st.uid != "" && st.uid != e.ProjectUID
+	}
+	if dropped, err := storage.ForgetGoneProjectStorages(c, storageGone); err != nil {
+		slog.Warn("background check: the project storage record cannot be read or written", "error", err)
+	} else {
+		for _, p := range dropped {
+			forgotten = append(forgotten, "project storage in "+p)
+		}
+	}
+
 	if dropped, err := workbench.ForgetGoneProjects(c, workbenchGone); err != nil {
 		slog.Warn("background check: the workbench record cannot be read or written", "error", err)
 	} else {

@@ -405,6 +405,16 @@ func setupPipelineServer(c *kube.Client, project string, recreate bool, confirme
 	if reason, code := envkit.SetupComponentBlock(c, envkit.PipelinesComponent); reason != "" {
 		return fail(reason+" Nothing was changed.", code, envkit.SetupBlockActivity(code))
 	}
+	// A pipeline server stays on the storage it was set up on (the
+	// non-admin design, 4.4 rule 1): one on the project's own storage is
+	// left alone, whatever state the shared storage is in.
+	if dspas, err := ListDSPAs(c, project); err == nil {
+		for _, d := range dspas {
+			if d.Meta.HasToolLabel() && OnProjectStorage(d) {
+				return fail(fmt.Sprintf("The pipeline server in %s uses the project's own S3 storage (%s) and stays on it; it is set up and deleted with the project's own actions. Nothing was changed.", project, ProjectS3Deployment), "validation", "on project storage")
+			}
+		}
+	}
 	storage, storageEP, _ := S3StatusAndEndpoints(c)
 	if !storage.Deployed || !storage.ManagedByTool || !storage.Ready {
 		return fail("The S3 storage is not deployed or not ready. Set it up first (or, with storage from an earlier version, migrate it).", "prerequisites", "S3 storage not ready")
