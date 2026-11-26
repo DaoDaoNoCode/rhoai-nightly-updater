@@ -8,12 +8,12 @@ import { StepProgress, type StepState } from "./StepProgress";
 import { TooltipButton } from "../TooltipButton";
 
 /*
- * Project actions for a user who is not a cluster-admin (the non-admin
- * design, B3): in one of their own projects they may set up and run the
- * workbench, the playground and the MLflow samples when their RBAC allows
- * it. The backend answers per action (GET /api/resources/projects/
- * capabilities); a control the user may not use is disabled with the
- * reason, and the action's own gate checks again.
+ * Actions scoped to a project for users who lack cluster-admin (non-admin
+ * layout, B3): within a project they own they can configure and launch the
+ * workbench, playground, and MLflow samples when RBAC permits. The backend
+ * reports allowance per action (GET /api/resources/projects/capabilities);
+ * controls the user cannot use stay disabled and show why, and each action
+ * re-validates on its own.
  */
 
 interface CapabilitiesValue {
@@ -25,7 +25,7 @@ interface CapabilitiesValue {
 
 const CapabilitiesContext = createContext<CapabilitiesValue | null>(null);
 
-/** Reads what the user may do in project, again when refreshKey changes or after a run. */
+/** Fetches permitted actions for the project whenever refreshKey moves or a run finishes. */
 export const ProjectCapabilitiesProvider: React.FC<React.PropsWithChildren<{ project: string; refreshKey: number }>> = ({ project, refreshKey, children }) => {
   const [state, setState] = useState<{ project: string; caps: ProjectCapabilities | null; error: ApiError | null }>({ project: "", caps: null, error: null });
   const [attempt, setAttempt] = useState(0);
@@ -51,15 +51,15 @@ export const CAPABILITY_UNKNOWN = "What you may do in this project could not be 
 
 export interface ProjectCapabilityAnswer {
   allowed: boolean;
-  /** Why the control is disabled; null when it may be used. */
+  /** Shown on a disabled control; null if the control is usable. */
   reason: string | null;
 }
 
 /**
- * Whether the user may run action ("workbench.setup", ...) in project, with
- * the reason a disabled control shows. Fails closed: while the answer is
- * loading, when it failed, or for an action it does not name, the action
- * is not allowed.
+ * Decides if action ("workbench.setup", ...) may run in project and supplies
+ * the message for a disabled control. Denies by default: no permission while
+ * the query is pending, after an error, or for an action absent from the
+ * capability list.
  */
 export function useProjectCapability(project: string, action: string): ProjectCapabilityAnswer {
   const value = useContext(CapabilitiesContext);
@@ -74,7 +74,7 @@ export function useProjectCapability(project: string, action: string): ProjectCa
   return { allowed: true, reason: null };
 }
 
-/** Reloads the capabilities (after a run changed the project). */
+/** Triggers a fresh capabilities fetch (e.g. once a run has altered the project). */
 export function useReloadCapabilities(): () => void {
   const value = useContext(CapabilitiesContext);
   return value?.reload ?? (() => undefined);
@@ -94,8 +94,8 @@ interface RunState {
 }
 
 /**
- * One project action at a time from this view: start(run) streams its
- * steps; onEnd runs when it ended (the parts read again).
+ * Serializes project actions in this view: start(run) drives step streaming;
+ * onEnd fires after completion (related data is re-fetched).
  */
 export function useProjectRun(onEnd: () => void) {
   const [run, setRun] = useState<RunState | null>(null);
@@ -124,7 +124,7 @@ export function useProjectRun(onEnd: () => void) {
   return { run, start, running: !!run?.running, dismiss: () => setRun(null) };
 }
 
-/** The steps and the outcome of the view's latest run. */
+/** Renders step progress and final outcome for the most recent run in the view. */
 export const ProjectRunPanel: React.FC<{ run: RunState | null; idPrefix: string }> = ({ run, idPrefix }) => {
   if (!run) return null;
   return (
@@ -147,7 +147,7 @@ export const ProjectRunPanel: React.FC<{ run: RunState | null; idPrefix: string 
   );
 };
 
-/** A project action's button: disabled with the reason when the user may not run it, or while another run of this view runs. */
+/** Project action trigger: blocked with an explanation when RBAC forbids it or another run from this view is active. */
 export const ProjectActionButton: React.FC<{
   project: string;
   action: string;
@@ -158,5 +158,6 @@ export const ProjectActionButton: React.FC<{
 }> = ({ project, action, busy, variant = "secondary", onClick, children }) => {
   const { reason } = useProjectCapability(project, action);
   const disabledReason = reason ?? (busy ? "Another action of this page is running in this project." : null);
-  return <TooltipButton variant={variant} size="sm" disabledReason={disabledReason} onClick={onClick}>{children}</TooltipButton>;
+  // Link variant blends with text links (e.g. Open in MLflow): inline, without extra padding or muted disabled chrome.
+  return <TooltipButton variant={variant} isInline={variant === "link"} size="sm" disabledReason={disabledReason} onClick={onClick}>{children}</TooltipButton>;
 };
