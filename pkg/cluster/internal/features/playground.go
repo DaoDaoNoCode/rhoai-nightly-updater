@@ -387,6 +387,48 @@ func markToolEmbeddingModels(c *kube.Client, project string, models []types.Play
 	}
 }
 
+// markAddressWithoutPort sets Unusable on the project's own models whose
+// in-cluster address does not connect as KServe reports it
+// (serving.AddressMissesPort): the playground calls the reported address
+// (serving.PlaygroundNoPortNote). The dashboard lists an
+// LLMInferenceService by its name (odh-dashboard packages/gen-ai/bff
+// token_k8s_client.go: ModelName llmSvc.Name). It reads with c the
+// project's LLMInferenceServices and, for each one whose address names a
+// Service without a port, that Service; nothing when the list has no
+// project model.
+func markAddressWithoutPort(c *kube.Client, project string, models []types.PlaygroundModel) error {
+	if !slices.ContainsFunc(models, func(m types.PlaygroundModel) bool { return m.Source == "namespace" }) {
+		return nil
+	}
+	list, err := serving.ListProjectModels(c, project)
+	if err != nil {
+		return err
+	}
+	byName := map[string]serving.LLMISvcObject{}
+	for _, m := range list {
+		byName[m.Metadata.Name] = m
+	}
+	for i, m := range models {
+		obj, ok := byName[m.Name]
+		if m.Source != "namespace" || !ok {
+			continue
+		}
+		if _, misses := serving.ModelInClusterAddress(c, obj); misses {
+			models[i].Unusable = serving.PlaygroundNoPortNote
+		}
+	}
+	return nil
+}
+
+// PlaygroundAlternatives names the models the playground can use when a
+// project's own cannot be used (serving.PlaygroundNoPortNote).
+const PlaygroundAlternatives = "The playground can use a model a cluster-admin exposes through the inference gateway (Environment page, Models tab), or a Models as a Service model your subscriptions include."
+
+// leftOutText names a project model the playground cannot use, with why.
+func leftOutText(m types.PlaygroundModel) string {
+	return fmt.Sprintf("%s (%s)", m.Name, strings.TrimSuffix(m.Unusable, "."))
+}
+
 // maasModel is one entry of maas/models (unknown fields ignored).
 type maasModel struct {
 	ID            string `json:"id"`
@@ -1081,6 +1123,10 @@ func GetPlaygroundStatus(sa, u *kube.Client, project string) (*types.PlaygroundS
 			models, err := api.listProjectModels(project, false)
 			if err == nil {
 				markToolEmbeddingModels(c, project, models)
+				if err := markAddressWithoutPort(c, project, models); err != nil {
+					// Only a note is missing: Set up checks again.
+					slog.Debug("cannot tell which project models the playground can reach", "project", project, "error", err)
+				}
 				models = append(models, listMaaSPlaygroundModels(c)...)
 				if len(models) > playgroundMaxModels {
 					models = models[:playgroundMaxModels]
@@ -1429,13 +1475,24 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 		return stop(msg, code, "models")
 	}
 	markToolEmbeddingModels(p.c, p.project, models)
+	if err := markAddressWithoutPort(p.c, p.project, models); err != nil {
+		return stop(fmt.Sprintf("Cannot tell which models in %s the playground can reach: %v.", p.project, err), kube.ErrorCodeFromK8sErr(err), "model addresses")
+	}
 	// The dashboard's install checks only the models it is asked to use
 	// (rhoai-3.6 generateLlamaStackConfig), so only those must be ready.
 	var chosen []types.PlaygroundModel
+	// leftOut: the project's ready chat models the playground cannot use.
+	var leftOut []string
 	if len(wanted) == 0 {
 		var left []string
 		for _, m := range models {
 			switch {
+			case m.Source == "namespace" && m.Ready && m.Unusable != "" && (m.Chat || m.EmbeddingDimension > 0):
+				if m.Chat {
+					leftOut = append(leftOut, leftOutText(m))
+				} else {
+					notes = append(notes, "left out "+leftOutText(m))
+				}
 			case m.Source == "namespace" && m.Ready && (m.Chat || m.EmbeddingDimension > 0):
 				chosen = append(chosen, m)
 			case m.Source == "namespace" && m.Chat:
@@ -1462,6 +1519,8 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 				return stop(fmt.Sprintf("The dashboard does not offer model %s in %s. Reload the page and choose again.", w.Name, p.project), "validation", "unknown model")
 			case !found.Ready:
 				return stop(fmt.Sprintf("Model %s is not ready (%s). Choose a ready model.", w.Name, found.Status), "model_not_ready", "model not ready")
+			case found.Unusable != "":
+				return stop(fmt.Sprintf("Model %s cannot be chosen. %s %s", w.Name, found.Unusable, PlaygroundAlternatives), "validation", "address without port")
 			case !found.Chat && found.EmbeddingDimension == 0:
 				return stop(fmt.Sprintf("Model %s is an embedding model this tool did not set up, so its dimension is not known. Add it in the dashboard's Gen AI studio, where you choose Embedding and its dimension.", w.Name), "validation", "embedding model")
 			}
@@ -1474,8 +1533,14 @@ func (p *playgroundRun) checkPlayground(wanted []types.PlaygroundModelRef) ([]ty
 			chat++
 		}
 	}
+	if chat == 0 && len(leftOut) > 0 {
+		return stop(fmt.Sprintf("Project %s has no ready chat model the playground can use. Left out: %s. %s", p.project, strings.Join(leftOut, ", "), PlaygroundAlternatives), "no_model", "no usable model")
+	}
 	if chat == 0 {
 		return stop(fmt.Sprintf("Project %s has no ready chat model for the playground to use. Set up a model on the Models tab first (or choose a Models as a Service model, if you have a subscription).", p.project), "no_model", "no model")
+	}
+	for _, m := range leftOut {
+		notes = append(notes, "left out "+m)
 	}
 	names := make([]string, len(chosen))
 	for i, m := range chosen {

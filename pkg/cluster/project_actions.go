@@ -84,6 +84,10 @@ type ProjectRequest struct {
 	// request on this cluster and project (WhenKueueQueues); the preflight
 	// reviews it only then.
 	When string
+	// Target: the request names the object a request body chooses (a
+	// catalog model, by Name); a request for one target needs only that
+	// target's (MissingFor).
+	Target bool
 }
 
 // WhenKueueQueues: a workbench setup reads the project's LocalQueues only
@@ -155,11 +159,15 @@ func mlflowRequests(action string) []ProjectRequest {
 }
 
 // The playground's own requests (the RBAC scan's): its server, read for
-// ownership; the set up also checks the project and the tool's models.
+// ownership; the set up also checks the project and the tool's models, and
+// which of the project's models have an address the playground can reach
+// (their LLMInferenceServices and Services).
 var playgroundServer = scanned("get", "ogx.io", "ogxservers", "lsd-genai-playground", ScopeProject)
 
 var playgroundScanned = []ProjectRequest{
 	scanned("get", "", "namespaces", ProjectNameSelf, ScopeProject),
+	scanned("get", "", "services", "", ScopeProject),
+	scanned("list", "serving.kserve.io", "llminferenceservices", "", ScopeProject),
 	playgroundServer,
 	scanned("get", "serving.kserve.io", "llminferenceservices", "granite-embedding-125m-english", ScopeProject),
 	scanned("get", "serving.kserve.io", "llminferenceservices", "qwen25-05b-instruct", ScopeProject),
@@ -175,11 +183,14 @@ var samplesScanned = []ProjectRequest{
 
 // perModel is verb on each catalog model's LLMInferenceService: the code
 // writes each catalog name out (serving.ToolModelPath), so the scan sees
-// one request per name.
+// one request per name. A request's run acts on the model it names only
+// (its Target).
 func perModel(verb string) []ProjectRequest {
 	var out []ProjectRequest
 	for _, m := range serving.ModelCatalog {
-		out = append(out, scanned(verb, "serving.kserve.io", "llminferenceservices", m.Name, ScopeProject))
+		r := scanned(verb, "serving.kserve.io", "llminferenceservices", m.Name, ScopeProject)
+		r.Target = true
+		out = append(out, r)
 	}
 	return out
 }
@@ -414,6 +425,9 @@ type MissingPermission struct {
 	Text string `json:"text"`
 	// Source is the request's source in the action's table (its wording).
 	Source string `json:"-"`
+	// Target: the request names the object a request body chooses
+	// (ProjectRequest.Target).
+	Target bool `json:"-"`
 }
 
 // ActionReview is the preflight's answer for one action: what the user's
@@ -442,6 +456,8 @@ func ReviewProjectActions(u *Client, ids []string, project, apps string) (map[st
 	// sources: per action, the source of each request that has its own
 	// wording (the same request may be another action's with another).
 	sources := map[string]map[key]string{}
+	// targets: per action, the requests that name a request's target.
+	targets := map[string]map[key]bool{}
 	type cond struct {
 		v   bool
 		err error
@@ -469,6 +485,7 @@ actions:
 		}
 		var reqs []key
 		sources[id] = map[key]string{}
+		targets[id] = map[key]bool{}
 		for _, r := range a.Requests {
 			if r.When != "" {
 				if apps == "" {
@@ -495,6 +512,9 @@ actions:
 			if r.Source != SourceScan && sources[id][req] == "" {
 				sources[id][req] = r.Source
 			}
+			if r.Target {
+				targets[id][req] = true
+			}
 		}
 		per[id] = reqs
 		for _, req := range reqs {
@@ -517,7 +537,7 @@ actions:
 		for _, req := range reqs {
 			if no[req] {
 				src := sources[id][req]
-				r.Missing = append(r.Missing, MissingPermission{Request: req, Text: missingText(req, src, project), Source: src})
+				r.Missing = append(r.Missing, MissingPermission{Request: req, Text: missingText(req, src, project), Source: src, Target: targets[id][req]})
 			}
 		}
 		out[id] = r
@@ -544,6 +564,30 @@ func MissingTextFor(r AccessRequest, source, project string) string {
 	return missingText(r, source, project)
 }
 
+// MissingFor is what of missing a request needs. With target (the object
+// its body chooses, a catalog model), a request that names another target
+// is not needed: the run acts on its target only. Without one (the
+// capabilities: any target), the requests that name targets stand for
+// "the one chosen", without a name, each once.
+func MissingFor(missing []MissingPermission, target, project string) []MissingPermission {
+	var out []MissingPermission
+	for _, m := range missing {
+		switch {
+		case !m.Target:
+		case target != "" && m.Request.Name != target:
+			continue
+		case target == "":
+			m.Request.Name = ""
+			m.Text = missingText(m.Request, m.Source, project)
+			if slices.ContainsFunc(out, func(o MissingPermission) bool { return o.Request == m.Request }) {
+				continue
+			}
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
 // MissingSummary is the refusal of an action whose requests are missing:
 // what, who can grant it, and that nothing was changed.
 func MissingSummary(label, project string, missing []MissingPermission) string {
@@ -552,9 +596,75 @@ func MissingSummary(label, project string, missing []MissingPermission) string {
 
 // MissingSummaryFor is what a capability says of an action whose requests
 // are missing: the same as the gate's refusal, without "Nothing was
-// changed" (nothing was tried).
+// changed" (nothing was tried). It is short: when the user is not an
+// admin of the project and the action needs one (the project-admin
+// check), only that; else the missing requests in the project, grouped by
+// object, then who grants them once, and the same for the requests outside
+// the project.
 func MissingSummaryFor(label, project string, missing []MissingPermission) string {
-	return fmt.Sprintf("%s in %s needs permissions your OpenShift account does not have: %s", label, project, strings.Join(MissingTexts(missing), " "))
+	var inProject, elsewhere []AccessRequest
+	for _, m := range missing {
+		switch {
+		case m.Source == SourceProjectAdmin && m.Request.Namespace == project:
+			return fmt.Sprintf("Only an admin of project %s can %s; ask one of them.", project, lowerFirst(label))
+		case m.Request.Namespace == project:
+			inProject = append(inProject, m.Request)
+		default:
+			elsewhere = append(elsewhere, m.Request)
+		}
+	}
+	var parts []string
+	if len(inProject) > 0 {
+		parts = append(parts, fmt.Sprintf("%s in %s needs permissions your OpenShift account does not have there: %s. Ask an admin of project %s to give you the edit role there.", label, project, requestsText(inProject, false), project))
+	}
+	if len(elsewhere) > 0 {
+		parts = append(parts, fmt.Sprintf("%s needs reads RHOAI lets every signed-in user make, which your account may not: %s. Ask a cluster-admin.", label, requestsText(elsewhere, true)))
+	}
+	return strings.Join(parts, " ")
+}
+
+// requestsText says requests for people, each object once with its verbs
+// ("create, delete and patch llminferenceservices.serving.kserve.io
+// smollm2-135m-instruct"), in the order first seen; withNamespace adds
+// where.
+func requestsText(reqs []AccessRequest, withNamespace bool) string {
+	type object struct{ group, resource, subresource, name, namespace string }
+	var order []object
+	verbs := map[object][]string{}
+	for _, r := range reqs {
+		o := object{r.Group, r.Resource, r.Subresource, r.Name, r.Namespace}
+		if !withNamespace {
+			o.namespace = ""
+		}
+		if _, seen := verbs[o]; !seen {
+			order = append(order, o)
+		}
+		if !slices.Contains(verbs[o], r.Verb) {
+			verbs[o] = append(verbs[o], r.Verb)
+		}
+	}
+	texts := make([]string, 0, len(order))
+	for _, o := range order {
+		v := verbs[o]
+		slices.Sort(v)
+		words := strings.Join(v, ", ")
+		if len(v) > 1 {
+			words = strings.Join(v[:len(v)-1], ", ") + " and " + v[len(v)-1]
+		}
+		// The request's own words without its verb (String starts " <resource>").
+		obj := AccessRequest{Group: o.group, Resource: o.resource, Subresource: o.subresource, Name: o.name, Namespace: o.namespace}.String()
+		texts = append(texts, words+obj)
+	}
+	return strings.Join(texts, "; ")
+}
+
+// lowerFirst is s with its first letter in lower case ("Delete the ..." ->
+// "delete the ...").
+func lowerFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToLower(s[:1]) + s[1:]
 }
 
 // MissingTexts are the texts of missing, each once (requests may share

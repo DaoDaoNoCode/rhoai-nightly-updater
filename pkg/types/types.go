@@ -1663,6 +1663,10 @@ type PlaygroundModel struct {
 	// for a MaaS model names one, or the dashboard cannot mint the MaaS key
 	// it calls the model with.
 	Subscriptions []string `json:"subscriptions,omitempty"`
+	// Unusable says why the playground cannot use this project model
+	// (serving.PlaygroundNoPortNote); "" when it can. Set up leaves it out
+	// of its own choice and refuses it when it is chosen.
+	Unusable string `json:"unusable,omitempty"`
 }
 
 // PlaygroundModelRef is a model a playground setup uses.
@@ -2681,6 +2685,12 @@ type ModelExposures struct {
 	// "may-not-fit" or "unknown" (a user's answer only), never a node's
 	// name.
 	Capacity string `json:"capacity,omitempty"`
+	// ImagePlan and ImagePlanReason are the image a new model runs, as
+	// ModelsStatus says it (a user's answer only): their deploy dialog
+	// says which image runs, and offers the released image only while the
+	// plan is the preset's.
+	ImagePlan       string `json:"imagePlan,omitempty"`
+	ImagePlanReason string `json:"imagePlanReason,omitempty"`
 }
 
 // ModelExposureOption is one way to reach the model.

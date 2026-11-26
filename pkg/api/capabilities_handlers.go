@@ -68,7 +68,7 @@ func capabilityVerdicts(u *cluster.Client, admin bool, ids []string, token, proj
 	if v, ok := capabilities.get(key, clk.Now()); ok {
 		return v
 	}
-	verdicts := projectActionVerdicts(u, admin, ids, project)
+	verdicts := projectActionVerdicts(u, admin, ids, project, "")
 	if !verdictsFailed(verdicts) {
 		capabilities.put(key, verdicts, clk.Now())
 	}

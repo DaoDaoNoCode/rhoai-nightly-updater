@@ -58,7 +58,7 @@ func newProjectGateEnv(t *testing.T, role string) *projectGateEnv {
 				if role == roleEditor && r.Source == cluster.SourceProjectAdmin {
 					req := cluster.AccessRequest{Verb: r.Verb, Group: r.Group, Resource: r.Resource, Namespace: project}
 					rv := out[id]
-					rv.Missing = append(rv.Missing, cluster.MissingPermission{Request: req, Text: "Only an admin of project " + project + " sets up, repairs and deletes its S3 storage (the OpenShift admin role there); ask an admin of project " + project + "."})
+					rv.Missing = append(rv.Missing, cluster.MissingPermission{Request: req, Text: cluster.MissingTextFor(req, r.Source, project), Source: r.Source})
 					out[id] = rv
 					continue
 				}

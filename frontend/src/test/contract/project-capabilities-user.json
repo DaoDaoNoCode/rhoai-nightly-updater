@@ -22,7 +22,7 @@
       "missing": [
         "delete experiments.mlflow.kubeflow.org nightly-sample-training in namespace team-a: ask an admin of project team-a to give you the edit role there."
       ],
-      "reason": "Remove MLflow sample data in team-a needs permissions your OpenShift account does not have: delete experiments.mlflow.kubeflow.org nightly-sample-training in namespace team-a: ask an admin of project team-a to give you the edit role there."
+      "reason": "Remove MLflow sample data in team-a needs permissions your OpenShift account does not have there: delete experiments.mlflow.kubeflow.org nightly-sample-training. Ask an admin of project team-a to give you the edit role there."
     },
     "models.setup": {
       "allowed": true,

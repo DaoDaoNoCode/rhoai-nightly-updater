@@ -588,6 +588,22 @@ func memoryWords(q string) string {
 // Subscription and the mirror sets).
 var PlanCache = kube.NewLRU[string, ImagePlan](8)
 
+// statusImagePlan is the image plan a status shows for the preset's image
+// presetImage (PlanModelImage without the released image's lookup), read
+// with c and kept in PlanCache; empty when it cannot be told.
+func statusImagePlan(c *kube.Client, presetImage string) ImagePlan {
+	key := c.BaseURL() + "|" + presetImage
+	if plan, ok := PlanCache.Get(key); ok {
+		return plan
+	}
+	plan, err := PlanModelImage(c, presetImage, false, nil, false)
+	if err != nil {
+		return ImagePlan{}
+	}
+	PlanCache.Add(key, plan, capacityCacheTTL)
+	return plan
+}
+
 // ModelsStatus reports what a model setup needs and the catalog's
 // models in the visible projects. Unknowns stay empty, never a block.
 func ModelsStatus(c *kube.Client, dsc rhoai.DSCRead, dscErr error, models []LLMISvcObject, modelsErr error, visible map[string]bool) types.ModelsStatus {
@@ -629,14 +645,7 @@ func ModelsStatus(c *kube.Client, dsc rhoai.DSCRead, dscErr error, models []LLMI
 	preset := discoverCPUPreset(c)
 	st.Preset, st.PresetProblem = preset.name, preset.problem
 	if preset.problem == "" {
-		key := c.BaseURL() + "|" + preset.image
-		plan, ok := PlanCache.Get(key)
-		if !ok {
-			var err error
-			if plan, err = PlanModelImage(c, preset.image, false, nil, false); err == nil {
-				PlanCache.Add(key, plan, capacityCacheTTL)
-			}
-		}
+		plan := statusImagePlan(c, preset.image)
 		st.ImagePlan, st.ImagePlanReason = plan.Kind, plan.Reason
 	}
 	warnings := catalogCapacityWarnings(c)

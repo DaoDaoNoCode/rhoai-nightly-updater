@@ -233,6 +233,39 @@ func WithServicePort(c *kube.Client, address string) string {
 	return u.String()
 }
 
+// PlaygroundNoPortNote says what a model whose in-cluster address does not
+// connect as KServe reports it (AddressMissesPort) means for RHOAI's Gen AI
+// playground: the dashboard's gen-ai backend calls the reported address as
+// it is, with no lookup of the Service's port (odh-dashboard
+// packages/gen-ai/bff token_k8s_client.go
+// extractEndpointFromLLMInferenceService), so its chat hangs (seen live on
+// a model without a route). It says what is observed: once KServe reports
+// the port, AddressMissesPort no longer holds and the note goes.
+const PlaygroundNoPortNote = "RHOAI's Gen AI playground cannot use it, because KServe reports its address without the port."
+
+// InternalDescription describes a model reached only inside the cluster,
+// the same for cluster-admins (the Models tab) and project users.
+const InternalDescription = "No outside address. Programs on this cluster (for example a workbench) can call it without a token. " + PlaygroundNoPortNote
+
+// AddressMissesPort reports whether a model's in-cluster address as KServe
+// reports it (ModelInClusterURL) is not the address that connects
+// (working: WithServicePort of it), because the reported one names the
+// model's Service without the port the Service listens on. An address
+// that could not be completed (working "": the Service cannot be read, or
+// names no https port) is not known not to connect.
+func AddressMissesPort(reported, working string) bool {
+	return reported != "" && working != "" && reported != working
+}
+
+// ModelInClusterAddress is model m's own in-cluster address as it
+// connects (WithServicePort of ModelInClusterURL, the Service read with
+// c) and whether KServe reports it without that port (AddressMissesPort).
+func ModelInClusterAddress(c *kube.Client, m LLMISvcObject) (string, bool) {
+	reported := ModelInClusterURL(m)
+	working := WithServicePort(c, reported)
+	return working, AddressMissesPort(reported, working)
+}
+
 func internalAddress(project, model string) string {
 	return fmt.Sprintf("https://%s-kserve-workload-svc.%s.svc.cluster.local", model, project)
 }
@@ -518,7 +551,7 @@ func (r ExposureReads) Options() (*types.ModelExposures, map[string]ExposurePlan
 	// (e) Inside the cluster only.
 	e := types.ModelExposureOption{Key: ExposureInternal, Exposure: ExposureInternal, Available: true,
 		Title:       "Only inside the cluster",
-		Description: "No outside address. Programs on this cluster (for example a workbench) can call it without a token.",
+		Description: InternalDescription,
 		// No Address: the port of the model's Service is known only once
 		// KServe has made it (WithServicePort).
 		Warning: "Calls to the in-cluster address are not authenticated: any pod on the cluster whose network can reach the project can use the model."}
@@ -794,7 +827,7 @@ func AddModelRouting(c *kube.Client, s *types.ModelState, m LLMISvcObject, def K
 		s.ServedNameWithheld = true
 		s.Warning = strings.TrimSpace(s.Warning + " " + unsafeServedNameWarning)
 	}
-	s.InternalURL = WithServicePort(c, ModelInClusterURL(m))
+	s.InternalURL, _ = ModelInClusterAddress(c, m)
 	if s.Exposure == ExposureInternal {
 		// KServe keeps status.url from a route it has removed (live, RHOAI
 		// 3.6: after a MaaS-only model's unpublish it still named the MaaS

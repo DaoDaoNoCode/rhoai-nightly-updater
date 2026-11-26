@@ -65,9 +65,9 @@ func TestProjectCapabilitiesPerRole(t *testing.T) {
 					t.Errorf("%s: %+v", a.ID, cp)
 				case !want && role != roleClusterAdmin && !a.ForUsers && cp.Code != adminOnlyCode:
 					t.Errorf("%s: %+v", a.ID, cp)
-				case !want && adminOnlyHere && (cp.Code != missingPermissionsCode || !strings.Contains(cp.Reason, "ask an admin of project team-a")):
+				case !want && (adminOnlyHere || role == roleViewer && needsProjectAdmin(a)) && (cp.Code != missingPermissionsCode || !strings.HasPrefix(cp.Reason, "Only an admin of project team-a can ") || !strings.HasSuffix(cp.Reason, "; ask one of them.")):
 					t.Errorf("%s: %+v", a.ID, cp)
-				case !want && role == roleViewer && a.ForUsers && (cp.Code != missingPermissionsCode || len(cp.Missing) == 0 || !strings.Contains(cp.Reason, "edit role")):
+				case !want && role == roleViewer && a.ForUsers && !needsProjectAdmin(a) && (cp.Code != missingPermissionsCode || len(cp.Missing) == 0 || strings.Count(cp.Reason, "edit role") != 1):
 					t.Errorf("%s: %+v", a.ID, cp)
 				}
 			}

@@ -344,6 +344,25 @@ func ReadToolModel(c *kube.Client, project, name string) (LLMISvcObject, bool, e
 	return m, true, nil
 }
 
+// ListProjectModels lists the LLMInferenceServices of project with c, this
+// tool's and any other. A cluster without the API has none.
+func ListProjectModels(c *kube.Client, project string) ([]LLMISvcObject, error) {
+	var list struct {
+		Items []LLMISvcObject `json:"items"`
+	}
+	found, err := c.GetIntoOptional(rhoai.NamespacedPath("serving.kserve.io/v1alpha2", "llminferenceservices", project, ""), &list)
+	if err != nil {
+		if kube.IsDecodeError(err) {
+			return nil, fmt.Errorf("parse the LLMInferenceServices of %s: %w", project, err)
+		}
+		return nil, fmt.Errorf("list the LLMInferenceServices of %s: %w", project, err)
+	}
+	if !found {
+		return nil, nil
+	}
+	return list.Items, nil
+}
+
 func modelPodSelector(name string) string {
 	return "app.kubernetes.io/name=" + name + ",app.kubernetes.io/component=" + modelPodComponent
 }

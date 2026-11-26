@@ -33,7 +33,8 @@ const (
 // /api/resources/models/exposures for one of their projects (pkg/api
 // checks the project with the projects API and their token first): the
 // one way a project model action reaches model, only inside the cluster,
-// and whether the cluster has room for it (a verdict, read with
+// whether the cluster has room for it (a verdict, read with u.Facts()),
+// and which image a deploy runs (the plan's kind and reason, read with
 // u.Facts()). A model reached through the inference gateway is a
 // cluster-admin's (ClusterAdminModelWords). It names no other project,
 // node or pod. A client of the ServiceAccount's token is refused before
@@ -50,10 +51,18 @@ func ProjectModelExposures(u *kube.Client, project, model string) (*types.ModelE
 		return nil, msg, code
 	}
 	in := types.ModelExposureOption{Key: ExposureInternal, Exposure: ExposureInternal, Available: true, Title: "Only inside the cluster",
-		Description: "No outside address. Programs on this cluster (for example a workbench) can call it without a token.",
+		Description: InternalDescription,
 		Warning:     "Calls to the in-cluster address are not authenticated: any pod on the cluster whose network can reach the project can use the model."}
-	return &types.ModelExposures{Project: project, Model: entry.Name, Options: []types.ModelExposureOption{in},
-		Default: ExposureInternal, DefaultReason: ClusterAdminModelWords, Capacity: ModelCapacityFact(u, entry, project)}, "", ""
+	out := &types.ModelExposures{Project: project, Model: entry.Name, Options: []types.ModelExposureOption{in},
+		Default: ExposureInternal, DefaultReason: ClusterAdminModelWords, Capacity: ModelCapacityFact(u, entry, project)}
+	// The image a deploy runs (the setup's own plan, without the lookup):
+	// the preset and the plan are cluster facts, read with the facts
+	// client; only the plan's kind and reason are given.
+	if preset := discoverCPUPreset(u.Facts()); preset.problem == "" {
+		plan := statusImagePlan(u.Facts(), preset.image)
+		out.ImagePlan, out.ImagePlanReason = plan.Kind, plan.Reason
+	}
+	return out, "", ""
 }
 
 // ProjectMaaSRefFact is whether some MaaSModelRef in project, anyone's,

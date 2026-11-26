@@ -107,7 +107,12 @@ func GetProjectStatus(sa, u *Client, project string) (*types.ProjectStatus, erro
 			rec = nil
 		}
 		for _, m := range models {
-			st.Models = append(st.Models, serving.ModelState(u, m, true, rec))
+			s := serving.ModelState(u, m, true, rec)
+			// The address that connects: KServe may report the model's
+			// Service without its port (serving.WithServicePort), read
+			// with the user's token.
+			s.InternalURL, _ = serving.ModelInClusterAddress(u, m)
+			st.Models = append(st.Models, s)
 		}
 	}
 	if isvcErr != nil {
