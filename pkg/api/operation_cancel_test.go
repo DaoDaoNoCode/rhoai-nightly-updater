@@ -453,3 +453,57 @@ func TestMLflowSamplesCancellablePerRole(t *testing.T) {
 		})
 	}
 }
+
+// The audit line names a cluster-admin only when their request made the
+// cancel request, on this pod's path and on another pod's, in either
+// order: the starter first (then the admin's request changes nothing, no
+// line), or the admin first (one line, and the starter's later request
+// adds none).
+func TestAdminCancelAuditOnlyForTheRequestThatMadeIt(t *testing.T) {
+	const audit = "a cluster-admin cancelled a project action"
+	for _, remote := range []bool{false, true} {
+		for _, adminFirst := range []bool{false, true} {
+			name := map[bool]string{false: "this pod", true: "another pod"}[remote] + map[bool]string{false: ", starter first", true: ", admin first"}[adminFirst]
+			t.Run(name, func(t *testing.T) {
+				setupDevMode(t)
+				setAdmin(t)
+				logs := captureLogs(t)
+				var id string
+				if remote {
+					l := otherPodProjectLease("a", "alice", clk.Now())
+					l.ID, l.CancelNote = "aaaaaaaaaaaaaaaa", cancellableActions["workbench.setup"]
+					id = l.ID
+					rec := &cluster.OperationRecord{ProjectLocks: map[string]*types.OperationLease{"a": l}}
+					readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) { return rec, nil }
+					requestOperationCancel = func(_ *cluster.Client, opID string, check func(*cluster.OperationRecord) (*cluster.CancelRequest, error)) error {
+						r, err := check(rec)
+						if err != nil {
+							return err
+						}
+						if rec.CancelRequests == nil {
+							rec.CancelRequests = map[string]*cluster.CancelRequest{opID: r}
+						}
+						return nil
+					}
+				} else {
+					id = cancellableAction(t, "a", "alice")
+				}
+				order := []string{"user:alice", "user:admin"}
+				if adminFirst {
+					order = []string{"user:admin", "user:alice"}
+				}
+				for _, who := range order {
+					if w := postCancel(t, who, id); w.Code != http.StatusAccepted {
+						t.Fatalf("%s: %d %s", who, w.Code, w.Body.String())
+					}
+				}
+				if got, want := strings.Count(logs.String(), audit), map[bool]int{false: 0, true: 1}[adminFirst]; got != want {
+					t.Fatalf("audit lines %d, want %d:\n%s", got, want, logs.String())
+				}
+				if strings.Contains(logs.String(), "alice") {
+					t.Fatalf("the starter is named:\n%s", logs.String())
+				}
+			})
+		}
+	}
+}

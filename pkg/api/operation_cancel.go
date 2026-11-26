@@ -69,22 +69,23 @@ const noSuchActionMessage = "No running action with this ID that you can cancel 
 const cancelAcceptedMessage = "Cancel requested: the action stops before its next step. If it finishes first, it is recorded as done."
 
 // requestCancel marks the project action id of this process as cancelled
-// by user (admin: a cluster-admin), and returns the request; nil when
-// there is no such action that user may cancel: not running here, not a
-// cancellable project action, or another person's for a user who is not
-// a cluster-admin. A second request for the same action changes nothing
-// and returns the first.
-func (t *operationTracker) requestCancel(id, user string, admin bool) *cluster.ActionCancelledError {
+// by user (admin: a cluster-admin), and returns the request and whether
+// this call made it; nil when there is no such action that user may
+// cancel: not running here, not a cancellable project action, or another
+// person's for a user who is not a cluster-admin. A second request for
+// the same action changes nothing and returns the first.
+func (t *operationTracker) requestCancel(id, user string, admin bool) (*cluster.ActionCancelledError, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	op := t.ops[id]
 	if op == nil || op.ProjectUID == "" || !op.confirmed || op.cancelNote == "" || (!admin && (user == "" || op.User != user)) {
-		return nil
+		return nil, false
 	}
-	if op.cancelled == nil {
-		op.cancelled = &cluster.ActionCancelledError{ByAdmin: user != op.User}
+	if op.cancelled != nil {
+		return op.cancelled, false
 	}
-	return op.cancelled
+	op.cancelled = &cluster.ActionCancelledError{ByAdmin: user != op.User}
+	return op.cancelled, true
 }
 
 // operationIDPattern is the form of an operation ID (newOperationID): a
@@ -143,9 +144,11 @@ func HandleOperationCancel(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, err, "Cannot verify your permissions. Nothing was changed.")
 		return
 	}
+	// byAdmin: a cluster-admin other than the starter asked, and this
+	// request made the cancel request (not one already there).
 	var byAdmin bool
-	if cancel := inflight.requestCancel(req.ID, username, admin); cancel != nil {
-		byAdmin = cancel.ByAdmin
+	if cancel, created := inflight.requestCancel(req.ID, username, admin); cancel != nil {
+		byAdmin = created && cancel.ByAdmin
 	} else {
 		byAdmin, err = requestRemoteCancel(r.Context(), req.ID, username, admin)
 		switch {
@@ -159,10 +162,10 @@ func HandleOperationCancel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	accepted = true
-	// The audit of a cluster-admin's cancel, once it is accepted: the pod
-	// log (read by cluster-admins and the updater's namespace admins)
-	// names who asked; the starter's activity entry never does. A
-	// starter's own cancel logs no name.
+	// The audit of a cluster-admin's cancel, once this request made it:
+	// the pod log (read by cluster-admins and the updater's namespace
+	// admins) names who asked; the starter's activity entry never does. A
+	// starter's own cancel, and a request already made, log no name.
 	if byAdmin {
 		slog.Info("a cluster-admin cancelled a project action", "operation", req.ID, "by", username)
 	}
@@ -180,8 +183,9 @@ const remoteCancelTimeout = 5 * time.Second
 // that another updater pod runs, for user (admin: a cluster-admin), when
 // the operation record holds its live lock entry, it can be cancelled, and
 // user started it or is a cluster-admin; otherwise
-// cluster.ErrNoSuchAction. The record is read, and written, with the
-// ServiceAccount.
+// cluster.ErrNoSuchAction. byAdmin: a cluster-admin other than the
+// starter asked, and this request recorded it (none was there). The
+// record is read, and written, with the ServiceAccount.
 func requestRemoteCancel(ctx context.Context, id, user string, admin bool) (byAdmin bool, err error) {
 	token := getClusterToken()
 	if token == "" {
@@ -196,8 +200,10 @@ func requestRemoteCancel(ctx context.Context, id, user string, admin bool) (byAd
 			if l.ID != id || !leaseHeldElsewhere(l) || l.CancelNote == "" || (!admin && (user == "" || l.User != user)) {
 				continue
 			}
-			byAdmin = user != l.User
-			return &cluster.CancelRequest{ByAdmin: byAdmin, At: clk.Now().UTC().Format(time.RFC3339)}, nil
+			// The write is made only when no request is recorded yet
+			// (record.RequestOperationCancel), as of this read.
+			byAdmin = user != l.User && rec.CancelRequests[id] == nil
+			return &cluster.CancelRequest{ByAdmin: user != l.User, At: clk.Now().UTC().Format(time.RFC3339)}, nil
 		}
 		return nil, cluster.ErrNoSuchAction
 	})
