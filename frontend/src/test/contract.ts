@@ -1,4 +1,4 @@
-import type { KueueStatus, ObservabilityStatus, ProjectCapabilities, WorkbenchStatus, ClusterSummary, MLflowSamplesStatus, ModelRegistryStatus, PlaygroundStatus, ProjectStatus, RecipePlan, RecipeRunStatus, UserOperationStatus, UserPermissions } from "../types";
+import type { KueueStatus, ObservabilityStatus, ProjectCapabilities, ProjectStorageStatus, WorkbenchStatus, ClusterSummary, MLflowSamplesStatus, ModelRegistryStatus, PlaygroundStatus, ProjectStatus, RecipePlan, RecipeRunStatus, UserOperationStatus, UserPermissions } from "../types";
 import summaryJson from "./contract/summary.json";
 import operationUserJson from "./contract/operation-user.json";
 import operationUserProjectActionsJson from "./contract/operation-user-project-actions.json";
@@ -17,6 +17,7 @@ import recipeRunFeaturesJson from "./contract/recipe-run-features-admin.json";
 import modelRegistryJson from "./contract/model-registry-admin.json";
 import workbenchJson from "./contract/workbench-admin.json";
 import workbenchUserJson from "./contract/workbench-user.json";
+import projectStorageUserJson from "./contract/project-s3-user.json";
 import capabilitiesUserJson from "./contract/project-capabilities-user.json";
 import capabilitiesAdminJson from "./contract/project-capabilities-admin.json";
 import kueueJson from "./contract/kueue-admin.json";
@@ -75,6 +76,8 @@ export const contract = {
   workbench: (project = CONTRACT_PROJECT): WorkbenchStatus => forProject<WorkbenchStatus>(workbenchJson, CONTRACT_PROJECT, project),
   // A user's GET /api/resources/workbench: their project's workbench only.
   workbenchUser: (project = CONTRACT_PROJECT): WorkbenchStatus => forProject<WorkbenchStatus>(workbenchUserJson, CONTRACT_PROJECT, project),
+  // A user's GET /api/resources/project-s3: the project's own S3 storage, ready, used by its pipeline server.
+  projectStorageUser: (project = CONTRACT_PROJECT): ProjectStorageStatus => forProject<ProjectStorageStatus>(projectStorageUserJson, CONTRACT_PROJECT, project),
   // A user's GET /api/resources/projects/capabilities: every action allowed
   // but Remove MLflow sample data (a review denied) and Regenerate (a cluster-admin's).
   capabilitiesUser: (project = CONTRACT_PROJECT): ProjectCapabilities => forProject<ProjectCapabilities>(capabilitiesUserJson, CONTRACT_PROJECT, project),
@@ -108,6 +111,7 @@ const typed: {
   modelRegistry: Widen<ModelRegistryStatus>;
   workbench: Widen<WorkbenchStatus>;
   workbenchUser: Widen<WorkbenchStatus>;
+  projectStorageUser: Widen<ProjectStorageStatus>;
   capabilitiesUser: Widen<ProjectCapabilities>;
   capabilitiesAdmin: Widen<ProjectCapabilities>;
   kueue: Widen<KueueStatus>;
@@ -129,6 +133,7 @@ const typed: {
   modelRegistry: modelRegistryJson,
   workbench: workbenchJson,
   workbenchUser: workbenchUserJson,
+  projectStorageUser: projectStorageUserJson,
   capabilitiesUser: capabilitiesUserJson,
   capabilitiesAdmin: capabilitiesAdminJson,
   kueue: kueueJson,

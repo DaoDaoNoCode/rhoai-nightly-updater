@@ -1248,6 +1248,9 @@ export interface ResourcesStatus {
   recipeProjects?: RecipeOwnedProject[] | null;
   /** Why those could not be read (none is offered then). */
   recipeProjectsError?: string;
+  /** The project S3 storages this tool recorded (from its record only); Clean up everything offers each, its volume confirmed on its own. */
+  projectStorages?: RecordedProjectStorage[] | null;
+  projectStoragesError?: string;
   /** This tool's pipeline servers in projects that are no longer data science projects (not in the project picker). */
   outsidePipelineServers?: ResourceState[] | null;
 }
@@ -1299,6 +1302,8 @@ export interface ResourceState {
   nonStandardName?: boolean;
   /** The dashboard S3 Connection (a Secret in the project) set up with this pipeline server (pkg/cluster connectionSecretName), when there is one. */
   connection?: string;
+  /** The pipeline server uses its project's own S3 storage (nightly-s3), not the cluster's shared storage. */
+  projectStorage?: boolean;
   /** What the Connection Secret itself says, read only for the selected project (GET /api/resources/status?project=): present, missing, foreign or unreadable; absent when not read. */
   connectionState?: "present" | "missing" | "foreign" | "unreadable";
   connectionMessage?: string;
@@ -1701,6 +1706,61 @@ export interface WorkbenchStorage {
 }
 
 /** POST /api/resources/workbench/stream. */
+/** A project S3 storage in this tool's record (pkg/types RecordedProjectStorage). */
+export interface RecordedProjectStorage {
+  project: string;
+  by?: string;
+  dataVolume: string;
+}
+
+/** One object of a project's S3 storage (pkg/types ProjectStorageObject). */
+export interface ProjectStorageObject {
+  kind: string;
+  name: string;
+  present: boolean;
+  /** Its UID is the one this tool recorded. */
+  owned: boolean;
+  problem?: string;
+}
+
+/** A project's own S3 storage (GET /api/resources/project-s3?project=; pkg/types ProjectStorageStatus), read with the user's token. */
+export interface ProjectStorageStatus {
+  project: string;
+  name: string;
+  endpoint: string;
+  bucket: string;
+  dataVolume: string;
+  deployed: boolean;
+  managedByTool: boolean;
+  recorded: boolean;
+  ready: boolean;
+  terminating: boolean;
+  message: string;
+  missing?: string[] | null;
+  networkPolicyProblem?: string;
+  objects: ProjectStorageObject[];
+  usedBy?: string[] | null;
+  usersProblem?: string;
+  problem?: string;
+  problemCode?: string;
+}
+
+/** POST /api/resources/project-s3/stream (an admin of the project). */
+export interface ProjectStorageRequest {
+  action: "setup" | "repair" | "delete";
+  project: string;
+  /** With delete: the volume's name, typed; the volume and its data go too. */
+  deleteData?: string;
+}
+
+/** POST /api/resources/project-pipeline-server/stream (admins and editors of the project). */
+export interface ProjectPipelineServerRequest {
+  action: "setup" | "teardown";
+  project: string;
+  /** With teardown: the workbenches (name to UID) the Connection comes off. */
+  confirmWorkbenches?: Record<string, string>;
+}
+
 export interface WorkbenchRequest {
   action: "setup" | "start" | "stop" | "teardown" | "delete-storage";
   project: string;

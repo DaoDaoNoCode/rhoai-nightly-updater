@@ -1,0 +1,48 @@
+{
+  "bucket": "pipelines",
+  "dataVolume": "nightly-s3-data",
+  "deployed": true,
+  "endpoint": "http://nightly-s3.team-a.svc:8333",
+  "managedByTool": true,
+  "message": "Running",
+  "name": "nightly-s3",
+  "objects": [
+    {
+      "kind": "PersistentVolumeClaim",
+      "name": "nightly-s3-data",
+      "owned": true,
+      "present": true
+    },
+    {
+      "kind": "Secret",
+      "name": "nightly-s3-credentials",
+      "owned": true,
+      "present": true
+    },
+    {
+      "kind": "NetworkPolicy",
+      "name": "nightly-s3-ingress",
+      "owned": true,
+      "present": true
+    },
+    {
+      "kind": "Deployment",
+      "name": "nightly-s3",
+      "owned": true,
+      "present": true
+    },
+    {
+      "kind": "Service",
+      "name": "nightly-s3",
+      "owned": true,
+      "present": true
+    }
+  ],
+  "project": "team-a",
+  "ready": true,
+  "recorded": true,
+  "terminating": false,
+  "usedBy": [
+    "dspa"
+  ]
+}

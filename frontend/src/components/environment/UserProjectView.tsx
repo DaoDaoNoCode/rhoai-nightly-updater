@@ -16,9 +16,9 @@ import {
 } from "@patternfly/react-core";
 import { Table, Tbody, Td, Th, Thead, Tr } from "@patternfly/react-table";
 import ExternalLinkAltIcon from "@patternfly/react-icons/dist/esm/icons/external-link-alt-icon";
-import type { MLflowSampleId, MLflowSamplesStatus, PlaygroundStatus, ProjectProblemCode, ProjectStatus, ResourceState, WorkbenchStatus } from "../../types";
-import { getMLflowSamples, getPlayground, getProjectStatus, getWorkbench, toApiError, type ApiError } from "../../services/api";
-import { Checkbox } from "@patternfly/react-core";
+import type { MLflowSampleId, MLflowSamplesStatus, PlaygroundStatus, ProjectProblemCode, ProjectStatus, ProjectStorageStatus, ResourceState, WorkbenchStatus } from "../../types";
+import { getMLflowSamples, getPlayground, getProjectStatus, getProjectStorage, getWorkbench, toApiError, type ApiError } from "../../services/api";
+import { Checkbox, TextInput } from "@patternfly/react-core";
 import { ConfirmActionModal } from "../ConfirmActionModal";
 import { keptStorage, workbenchStatusOf } from "./workbenchState";
 import { ProjectActionButton, ProjectCapabilitiesProvider, ProjectRunPanel, useProjectRun, type ProjectRunRequest } from "./projectActions";
@@ -42,6 +42,15 @@ interface ConfirmChoice {
   changes: string[];
 }
 
+/** A choice a delete's confirmation offers by typing a name (data loss), and the request for each answer. */
+interface TypedChoice {
+  label: string;
+  /** What must be typed for the choice to hold. */
+  expect: string;
+  run: (typed: boolean) => ProjectRunRequest;
+  changes: string[];
+}
+
 /** A project action the user asked for and confirms first (deletes). */
 interface PendingAction {
   title: string;
@@ -49,10 +58,11 @@ interface PendingAction {
   confirm: string;
   run: ProjectRunRequest;
   choice?: ConfirmChoice;
+  typed?: TypedChoice;
 }
 
 /** Starts a project action (after confirming a delete). */
-type StartAction = (title: string, run: ProjectRunRequest, confirm?: { changes: string[]; label: string; choice?: ConfirmChoice }) => void;
+type StartAction = (title: string, run: ProjectRunRequest, confirm?: { changes: string[]; label: string; choice?: ConfirmChoice; typed?: TypedChoice }) => void;
 
 interface ProjectRead<T> {
   data: T | null;
@@ -140,17 +150,33 @@ const Note: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 );
 
 const loadStatus = (project: string) => getProjectStatus(project);
+const loadStorage = (project: string) => getProjectStorage(project);
 const loadPlayground = (project: string) => getPlayground(project);
 const loadSamples = (project: string) => getMLflowSamples(project);
 
-const PipelinesPart: React.FC<{ project: string; read: ProjectRead<ProjectStatus> }> = ({ project, read }) => {
+const PipelinesPart: React.FC<{ project: string; read: ProjectRead<ProjectStatus>; storage: ProjectStorageStatus | null; busy: boolean; start: StartAction }> = ({ project, read, storage, busy, start }) => {
   const server = projectServer(read.data, project);
+  const ppRun = (action: "setup" | "teardown", confirmWorkbenches?: Record<string, string>): ProjectRunRequest =>
+    ({ kind: "project-pipeline-server", req: { action, project, ...(confirmWorkbenches ? { confirmWorkbenches } : {}) } });
   let body: React.ReactNode;
   if (read.error && !read.data) body = <ReadProblem what="the pipeline server" error={read.error} onRetry={read.reload} />;
   else if (!read.data) body = <LinesSkeleton what="the pipeline server" lines={1} />;
   else if (read.data.pipelineServersProblem) body = <PartProblem what="the pipeline server" code={read.data.pipelineServersProblemCode} message={read.data.pipelineServersProblem} onRetry={read.reload} />;
-  else if (!server || (!server.deployed && !server.terminating)) body = <Note>No pipeline server in {project}. {IN_PROJECT_HINT}</Note>;
-  else {
+  else if (!server || (!server.deployed && !server.terminating)) {
+    body = storage?.ready && storage.managedByTool ? (
+      <Stack hasGutter>
+        <StackItem><Note>No pipeline server in {project}. Set up makes one on the project&apos;s own S3 storage, with the dashboard connection nightly-s3-connection.</Note></StackItem>
+        <StackItem>
+          <ProjectActionButton project={project} action="project-pipeline-server.setup" busy={busy} variant="primary"
+            onClick={() => start(`Set up the pipeline server in ${project}`, ppRun("setup"))}>
+            Set up pipeline server
+          </ProjectActionButton>
+        </StackItem>
+      </Stack>
+    ) : <Note>No pipeline server in {project}. Once the project&apos;s S3 storage is ready, its pipeline server can be set up here. {IN_PROJECT_HINT}</Note>;
+  } else {
+    const wbs = server.connectionWorkbenches ?? [];
+    const deletable = server.managedByTool && server.projectStorage && !server.terminating;
     body = (
       <Stack hasGutter>
         <StackItem>
@@ -166,12 +192,104 @@ const PipelinesPart: React.FC<{ project: string; read: ProjectRead<ProjectStatus
             )}
           </Flex>
         </StackItem>
+        {server.projectStorage && <StackItem><Note>On the project&apos;s own S3 storage, with the dashboard connection {server.connection || "nightly-s3-connection"}.</Note></StackItem>}
         {!server.ready && server.message && <StackItem><Note>{server.message}</Note></StackItem>}
         {server.ready && <StackItem><Note>Run a sample pipeline below to check that runs work.</Note></StackItem>}
+        {deletable && (
+          <StackItem>
+            <ProjectActionButton project={project} action="project-pipeline-server.teardown" busy={busy} variant="danger"
+              onClick={() => start(`Delete the pipeline server in ${project}`, ppRun("teardown", Object.fromEntries(wbs.map((w) => [w.name, w.uid]))), {
+                changes: [
+                  `Pipeline server ${server.name} in ${project}, with its database (pipeline runs and experiments)`,
+                  `Its secret nightly-dspa-s3 and dashboard connection ${server.connection || "nightly-s3-connection"}`,
+                  ...wbs.map((w) => `The connection comes off workbench ${w.name}${w.running ? ", which restarts" : ""}`),
+                  "The project's S3 storage and its data stay",
+                ], label: "Delete",
+              })}>
+              Delete pipeline server
+            </ProjectActionButton>
+          </StackItem>
+        )}
       </Stack>
     );
   }
   return <Part title="Pipelines" id="user-env-pipelines">{body}</Part>;
+};
+
+/** The ready state of the project's S3 storage, for its label. */
+function storageLabel(st: ProjectStorageStatus): { status: "ready" | "deleting" | "setting-up" | "needs-attention"; text: string } {
+  if (st.terminating) return { status: "deleting", text: "Deleting" };
+  if (st.ready && !st.networkPolicyProblem && !(st.missing?.length)) return { status: "ready", text: "Ready" };
+  if (st.ready || st.missing?.length || st.networkPolicyProblem) return { status: "needs-attention", text: "Needs attention" };
+  return { status: "setting-up", text: "Starting" };
+}
+
+const StoragePart: React.FC<{ project: string; read: ProjectRead<ProjectStorageStatus>; busy: boolean; start: StartAction }> = ({ project, read, busy, start }) => {
+  const st = read.data;
+  const s3Run = (action: "setup" | "repair" | "delete", deleteData?: string): ProjectRunRequest =>
+    ({ kind: "project-s3", req: { action, project, ...(deleteData ? { deleteData } : {}) } });
+  let body: React.ReactNode;
+  if (read.error && !st) body = <ReadProblem what="the S3 storage" error={read.error} onRetry={read.reload} />;
+  else if (!st) body = <LinesSkeleton what="the S3 storage" lines={1} />;
+  else if (st.problem) body = <PartProblem what="the S3 storage" code={st.problemCode} message={st.problem} onRetry={read.reload} />;
+  else if (!st.deployed) {
+    body = (
+      <Stack hasGutter>
+        <StackItem><Note>No S3 storage of this tool in {project}. Set up runs SeaweedFS in {project} for its pipeline server: a 20Gi volume, one key for the project (readable by its admins and editors), and a network policy that lets in only the S3 port from {project} and RHOAI. It has no route outside the cluster.</Note></StackItem>
+        <StackItem>
+          <ProjectActionButton project={project} action="project-s3.setup" busy={busy} variant="primary"
+            onClick={() => start(`Set up the S3 storage in ${project}`, s3Run("setup"))}>
+            Set up S3 storage
+          </ProjectActionButton>
+        </StackItem>
+      </Stack>
+    );
+  } else {
+    const label = storageLabel(st);
+    const inUse = (st.usedBy ?? []).length > 0;
+    body = (
+      <Stack hasGutter>
+        <StackItem>
+          <Flex gap={{ default: "gapMd" }} alignItems={{ default: "alignItemsCenter" }}>
+            <FlexItem><strong>{st.name}</strong></FlexItem>
+            <FlexItem><EnvStatusLabel status={label.status} text={label.text} /></FlexItem>
+          </Flex>
+        </StackItem>
+        {!st.managedByTool && <StackItem><Note>Some of these objects were not created by this tool, so it does not change them.</Note></StackItem>}
+        <StackItem><Note>Address in the cluster: <code>{st.endpoint}</code>, bucket <code>{st.bucket}</code>. Reachable from {project} only.</Note></StackItem>
+        {!st.ready && st.message && <StackItem><Note>{st.message}</Note></StackItem>}
+        {st.networkPolicyProblem && <StackItem><Alert variant="warning" isInline isPlain component="div" title="Network policy changed"><Content component="p">{st.networkPolicyProblem}</Content></Alert></StackItem>}
+        {(st.missing?.length ?? 0) > 0 && <StackItem><Alert variant="warning" isInline isPlain component="div" title="Objects missing"><Content component="p">Missing: {st.missing?.join(", ")}. Repair makes them again.</Content></Alert></StackItem>}
+        {st.managedByTool && !st.terminating && (
+          <StackItem>
+            <Flex gap={{ default: "gapSm" }}>
+              <FlexItem>
+                <ProjectActionButton project={project} action="project-s3.repair" busy={busy}
+                  onClick={() => start(`Repair the S3 storage in ${project}`, s3Run("repair"))}>
+                  Repair
+                </ProjectActionButton>
+              </FlexItem>
+              <FlexItem>
+                {inUse ? (
+                  <Note>Pipeline server {st.usedBy?.join(", ")} uses it: delete that first to delete the storage.</Note>
+                ) : (
+                  <ProjectActionButton project={project} action="project-s3.delete" busy={busy} variant="danger"
+                    onClick={() => start(`Delete the S3 storage in ${project}`, s3Run("delete"), {
+                      changes: [`SeaweedFS ${st.name} in ${project}: its Deployment, Service, key Secret and network policy; the volume ${st.dataVolume} is kept`],
+                      label: "Delete",
+                      typed: { label: `To delete the volume ${st.dataVolume} and all data on it too, type its name`, expect: st.dataVolume, run: (typed) => s3Run("delete", typed ? st.dataVolume : undefined), changes: [`The volume ${st.dataVolume} and all data on it`] },
+                    })}>
+                    Delete
+                  </ProjectActionButton>
+                )}
+              </FlexItem>
+            </Flex>
+          </StackItem>
+        )}
+      </Stack>
+    );
+  }
+  return <Part title="S3 storage" id="user-env-s3">{body}</Part>;
 };
 
 const ModelsPart: React.FC<{ project: string; read: ProjectRead<ProjectStatus> }> = ({ project, read }) => {
@@ -448,7 +566,8 @@ const WorkbenchPart: React.FC<{ project: string; read: ProjectRead<WorkbenchStat
  * (docs/research/per-user-views.md): the pipeline server and the sample
  * pipeline, the models, the workbench, the playground and the MLflow
  * sample data. The workbench, the playground and the samples can be set up
- * and removed here when the user's role in the project allows it (the
+ * and removed here when the user's role in the project allows it, as can
+ * the project's own S3 storage (its admins: B5) and a pipeline server on it (the
  * non-admin design, B3: GET /api/resources/projects/capabilities); a
  * control they may not use is disabled with the reason. Pipeline servers
  * and models stay a cluster-admin's.
@@ -468,20 +587,24 @@ const UserProjectParts: React.FC<{ project: string; refreshKey: number; onRunEnd
   const playground = useProjectRead(loadPlayground, project, refreshKey);
   const samples = useProjectRead(loadSamples, project, refreshKey);
   const workbench = useProjectRead(loadWorkbench, project, refreshKey);
+  const storage = useProjectRead(loadStorage, project, refreshKey);
   const server = projectServer(status.data, project);
   const { run, start: startRun, running } = useProjectRun(onRunEnd);
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [choiceChecked, setChoiceChecked] = useState(false);
+  const [typedValue, setTypedValue] = useState("");
   const start: StartAction = (title, r, confirm) => {
     if (confirm) {
       setChoiceChecked(false);
-      setPending({ title, changes: confirm.changes, confirm: confirm.label, run: r, choice: confirm.choice });
+      setTypedValue("");
+      setPending({ title, changes: confirm.changes, confirm: confirm.label, run: r, choice: confirm.choice, typed: confirm.typed });
     } else startRun(title, r);
   };
   return (
     <Stack hasGutter>
       {run && <StackItem><Card><CardBody><ProjectRunPanel run={run} idPrefix="user-env-run" /></CardBody></Card></StackItem>}
-      <StackItem><PipelinesPart project={project} read={status} /></StackItem>
+      <StackItem><StoragePart project={project} read={storage} busy={running} start={start} /></StackItem>
+      <StackItem><PipelinesPart project={project} read={status} storage={storage.data} busy={running} start={start} /></StackItem>
       <StackItem><ModelsPart project={project} read={status} /></StackItem>
       <StackItem><WorkbenchPart project={project} read={workbench} busy={running} start={start} /></StackItem>
       <StackItem><PlaygroundPart project={project} read={playground} busy={running} start={start} /></StackItem>
@@ -494,14 +617,20 @@ const UserProjectParts: React.FC<{ project: string; refreshKey: number; onRunEnd
       )}
       {pending && (
         <ConfirmActionModal isOpen title={`${pending.title}?`} confirmLabel={pending.confirm} confirmVariant="danger"
-          changes={pending.choice && choiceChecked ? [...pending.changes, ...pending.choice.changes] : pending.changes}
-          choice={pending.choice && (
+          changes={pending.choice && choiceChecked ? [...pending.changes, ...pending.choice.changes]
+            : pending.typed && typedValue === pending.typed.expect ? [...pending.changes, ...pending.typed.changes] : pending.changes}
+          choice={pending.choice ? (
             <Checkbox id="user-env-confirm-choice" label={pending.choice.label} isChecked={choiceChecked} onChange={(_e, checked) => setChoiceChecked(checked)} />
+          ) : pending.typed && (
+            <Stack>
+              <StackItem><label htmlFor="user-env-confirm-typed">{pending.typed.label}</label></StackItem>
+              <StackItem><TextInput id="user-env-confirm-typed" value={typedValue} onChange={(_e, v) => setTypedValue(v)} aria-label={pending.typed.label} /></StackItem>
+            </Stack>
           )}
           onConfirm={() => {
             const p = pending;
             setPending(null);
-            startRun(p.title, p.choice ? p.choice.run(choiceChecked) : p.run);
+            startRun(p.title, p.choice ? p.choice.run(choiceChecked) : p.typed ? p.typed.run(typedValue === p.typed.expect) : p.run);
           }}
           onCancel={() => setPending(null)} />
       )}
