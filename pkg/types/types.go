@@ -9,6 +9,14 @@ type ActivityEntry struct {
 	Success   bool   `json:"success"`
 	// Reason is why a failed operation failed or was refused (stored).
 	Reason string `json:"reason,omitempty"`
+	// Scope is what the action acted on: the cluster, or one project (a
+	// project action). ActorRole is the role it ran with: "admin" (a
+	// cluster-admin) or "user" (a signed-in user who is not one, through
+	// the project actions' gate). Both are stored with every new entry;
+	// entries written before they existed have neither and are read as
+	// a cluster-admin's cluster action (pkg/cluster/internal/record).
+	Scope     *ActivityScope `json:"scope,omitempty"`
+	ActorRole string         `json:"actorRole,omitempty"`
 
 	// Filled in when the log is read (not stored):
 	// Label is a human-readable name for Action, Category groups actions
@@ -19,6 +27,20 @@ type ActivityEntry struct {
 	Category string `json:"category,omitempty"`
 	Build    string `json:"build,omitempty"`
 }
+
+// ActivityScope is what an activity entry's action acted on: Kind
+// "cluster", or "project" with the project's name and namespace UID.
+type ActivityScope struct {
+	Kind       string `json:"kind"`
+	Project    string `json:"project,omitempty"`
+	ProjectUID string `json:"projectUID,omitempty"`
+}
+
+// The kinds of ActivityScope.
+const (
+	ActivityScopeCluster = "cluster"
+	ActivityScopeProject = "project"
+)
 
 // OperationMarker records a running cluster operation in a ConfigMap so a
 // restarted updater can tell that its predecessor died mid-operation.
@@ -64,6 +86,10 @@ type OperationLease struct {
 	Project    string `json:"project,omitempty"`
 	ProjectUID string `json:"projectUid,omitempty"`
 	Begun      bool   `json:"begun,omitempty"`
+	// CancelNote is set on a project lock whose action can be cancelled
+	// (it checks a cancel request at safe points): what a cancel leaves.
+	// Another updater pod takes a cancel request for it on that basis.
+	CancelNote string `json:"cancelNote,omitempty"`
 }
 
 // CompletedOperation is the most recent finished cluster operation, as

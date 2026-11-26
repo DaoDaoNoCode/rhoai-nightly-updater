@@ -56,6 +56,7 @@ func resetPackageState(t *testing.T) {
 	origLimiter, origLookup, origPermission := mutationLimiter, lookupUser, mutationPermission
 	origSave, origComplete, origRead := saveOperationMarker, saveCompletedOperation, readOperationState
 	origAcquireLock, origRenewLocks, origReleaseLock := acquireOperationLock, renewOperationLocks, releaseOperationLock
+	origRequestCancel := requestOperationCancel
 	origInterval, origTTL := leaseHeartbeatInterval, leaseTTL
 	origCheck, origPerm := checkAPIVersion, checkPermission
 	origU, origD, origR, origF := runUpdateStream, runUpdateDryRun, runReinstallStream, runRefreshStream
@@ -99,7 +100,18 @@ func resetPackageState(t *testing.T) {
 		return nil, nil
 	}
 	releaseOperationLock = func(*cluster.Client, string, cluster.LeaseOwner) error { return nil }
+	// A cancel request for another pod is checked against the record as
+	// readOperationState answers it, and written nowhere.
+	requestOperationCancel = func(c *cluster.Client, _ string, check func(*cluster.OperationRecord) (*cluster.CancelRequest, error)) error {
+		rec, err := readOperationState(c)
+		if err != nil {
+			return err
+		}
+		_, err = check(rec)
+		return err
+	}
 	t.Cleanup(func() {
+		requestOperationCancel = origRequestCancel
 		// Stop marker retries and the lease heartbeat before the seams they
 		// call are restored.
 		markers.reset()

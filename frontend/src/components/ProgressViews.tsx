@@ -23,6 +23,8 @@ export interface BackgroundRun {
   step: { title: string; index: number; count: number } | null;
   /** Opens its progress dialog again. Keep its identity across renders (useCallback). */
   open: () => void;
+  /** The operation it follows (GET /api/operation's ID), once its stream named it. */
+  operationId?: string;
 }
 
 interface Registry {
@@ -86,12 +88,13 @@ export function useRegisterBackgroundRun(run: BackgroundRun | null): void {
   const stepIndex = run?.step?.index;
   const stepCount = run?.step?.count;
   const open = run?.open;
+  const operationId = run?.operationId;
   useEffect(() => {
     if (!registry) return;
     registry.set(owner, title !== undefined && startedAt !== undefined && open
-      ? { title, startedAt, open, step: stepTitle !== undefined && stepIndex !== undefined && stepCount !== undefined ? { title: stepTitle, index: stepIndex, count: stepCount } : null }
+      ? { title, startedAt, open, operationId, step: stepTitle !== undefined && stepIndex !== undefined && stepCount !== undefined ? { title: stepTitle, index: stepIndex, count: stepCount } : null }
       : null);
-  }, [registry, owner, title, startedAt, stepTitle, stepIndex, stepCount, open]);
+  }, [registry, owner, title, startedAt, stepTitle, stepIndex, stepCount, open, operationId]);
   useEffect(() => () => registry?.set(owner, null), [registry, owner]);
 }
 
@@ -118,7 +121,12 @@ function useNow(): number {
 const midSentence = (title: string) => (/^[A-Z][a-z]/.test(title) ? title.charAt(0).toLowerCase() + title.slice(1) : title);
 
 /** The operation alert while a run of this tab goes on with its dialog closed. */
-export const BackgroundRunAlert: React.FC<{ run: BackgroundRun }> = ({ run }) => {
+/**
+ * The alert of this tab's background run. projectAction: the run is a
+ * project action (its server entry), which holds its project's lock, not
+ * the cluster's; cancel is its Cancel action, when it can be cancelled.
+ */
+export const BackgroundRunAlert: React.FC<{ run: BackgroundRun; projectAction?: boolean; cancel?: React.ReactNode; note?: React.ReactNode }> = ({ run, projectAction, cancel, note }) => {
   const now = useNow();
   // A one-step run's step is the run itself: its name says it.
   const step: React.ReactNode = !run.step ? ": starting" : run.step.count > 1 ? <>: step {run.step.index} of {run.step.count}, {withIds(midSentence(run.step.title))}</> : "";
@@ -129,9 +137,12 @@ export const BackgroundRunAlert: React.FC<{ run: BackgroundRun }> = ({ run }) =>
       component="p"
       customIcon={<InProgressIcon />}
       title={<>{run.title} is running{step} ({formatElapsed(run.startedAt, now)})</>}
-      actionLinks={<ViewProgressLink onOpen={run.open} />}
+      actionLinks={<><ViewProgressLink onOpen={run.open} />{cancel}</>}
     >
-      Closing its dialog does not stop it. Cluster changes from this tool are disabled until it finishes.
+      {projectAction
+        ? "Closing its dialog does not stop it. Your next project action can start when it ends."
+        : "Closing its dialog does not stop it. Cluster changes from this tool are disabled until it finishes."}
+      {note && <> {note}</>}
     </Alert>
   );
 };

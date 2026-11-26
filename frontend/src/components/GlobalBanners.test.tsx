@@ -5,7 +5,11 @@ import { GlobalBanners } from "./GlobalBanners";
 import { USER_PERMISSIONS, renderWithApp, settleApps } from "../test/providers";
 import { ApiError } from "../services/api";
 import { formatClockTime } from "../utils";
-import type { ServerOperation } from "../types";
+import type { OperationStatusResponse, ServerOperation, UserOperationStatus } from "../types";
+import { contract } from "../test/contract";
+import { stubApi } from "../test/apiStub";
+import { useRegisterBackgroundRun } from "./ProgressViews";
+import { useOperation } from "../state/AppState";
 
 const remoteUpdate: ServerOperation = {
   id: "op1", type: "update", label: "Update to nightly", user: "qa-user",
@@ -85,15 +89,15 @@ describe("the operation banner for a user who is not a cluster-admin", () => {
   const startedAt = "2026-10-06T14:05:00Z";
   const clock = formatClockTime(startedAt);
 
-  it("says when an update started and what it is, never who runs it", async () => {
+  it("says when a cluster operation started, never who runs it or what it is", async () => {
     renderWithApp(<GlobalBanners />, {
       permissions: async () => USER_PERMISSIONS,
       operation: async () => ({ running: true, label: "Update to nightly", startedAt }),
     }, "/");
     await settleApps();
-    expect(await screen.findByText(`An update is running since ${clock}`, { exact: false })).toBeInTheDocument();
-    expect(screen.getByText(/Update to nightly\. What this page shows may change until it finishes\./)).toBeInTheDocument();
-    expect(screen.queryByText(/qa-user|Someone|on updater pod|View progress/)).not.toBeInTheDocument();
+    expect(await screen.findByText(`A cluster operation is running since ${clock}. Project actions can start when it ends.`)).toBeInTheDocument();
+    expect(screen.queryByText(/qa-user|Someone|on updater pod|View progress|Update to nightly/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
     expect(clock).toMatch(/^\d\d:\d\d$/);
     await settleApps();
   });
@@ -161,6 +165,193 @@ describe("notices only a cluster-admin can act on", () => {
     await act(async () => {});
     expect(screen.queryByText(/deployment is out of date/)).not.toBeInTheDocument();
     expect(screen.queryByText(/is available/)).not.toBeInTheDocument();
+    await settleApps();
+  });
+});
+
+describe("the banners of running project actions", () => {
+  const startedAt = "2026-11-20T14:05:00Z";
+  const clock = formatClockTime(startedAt);
+  const note = "It stops before its next step. Before the storage is created nothing stays; after, the storage stays, recorded as this tool's, and the next setup uses it. No workbench is created.";
+  // The generated answer, with the user's own action running in the answering updater pod (cancellable there).
+  const withOwnHere = (): UserOperationStatus => {
+    const res = contract.operationUserProjectActions();
+    res.operations = res.operations?.map((e) => (e.own ? { ...e, cancellable: true, cancelNote: note } : e));
+    return res;
+  };
+  const alertOf = (el: HTMLElement) => el.closest(".pf-v6-c-alert") as HTMLElement;
+
+  it("show a user their own action with Cancel, and another person's in their project without a name", async () => {
+    const api = stubApi({ "POST /api/operation/cancel": { cancelRequested: true } });
+    let polls = 0;
+    renderWithApp(<GlobalBanners />, {
+      permissions: async () => USER_PERMISSIONS,
+      operation: async () => { polls++; return withOwnHere(); },
+    }, "/");
+    await settleApps();
+    const own = await screen.findByText(`Your action (Set up the workbench) in project team-b is running since ${clock}.`);
+    expect(screen.getByText(`An action (Set up the workbench) is running in project team-a since ${clock}.`)).toBeInTheDocument();
+    expect(screen.queryByText(/alice|started by|A cluster operation/)).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Cancel" })).toHaveLength(1);
+
+    // Cancel asks first, saying what the action leaves; "Keep it running" sends nothing.
+    fireEvent.click(within(alertOf(own)).getByRole("button", { name: "Cancel" }));
+    let dialog = await screen.findByRole("dialog", { name: "Cancel the action?" });
+    expect(within(dialog).getByText("Set up the workbench")).toBeInTheDocument();
+    expect(within(dialog).getByText("team-b")).toBeInTheDocument();
+    expect(within(dialog).getByText(note)).toBeInTheDocument();
+    expect(within(dialog).getByText("If it finishes before its next step, it is recorded as done.")).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep it running" }));
+    await settleApps();
+    expect(api.bodies["POST /api/operation/cancel"]).toBeUndefined();
+
+    const before = polls;
+    fireEvent.click(within(alertOf(own)).getByRole("button", { name: "Cancel" }));
+    dialog = await screen.findByRole("dialog", { name: "Cancel the action?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel action" }));
+    await settleApps();
+    await waitFor(() => expect(api.bodies["POST /api/operation/cancel"]).toEqual([{ id: "op-own" }]));
+    await waitFor(() => expect(polls).toBeGreaterThan(before));
+    await settleApps();
+  });
+
+  it("show a stopping action without Cancel", async () => {
+    const res = withOwnHere();
+    res.operations = res.operations?.filter((e) => e.own).map((e) => ({ ...e, cancellable: false, cancelling: true }));
+    renderWithApp(<GlobalBanners />, { permissions: async () => USER_PERMISSIONS, operation: async () => res }, "/");
+    await settleApps();
+    expect(await screen.findByText("Cancel requested: it stops before its next step. If it finishes first, it is recorded as done.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    await settleApps();
+  });
+
+  it("say why a cancel failed, on that action only", async () => {
+    stubApi({ "POST /api/operation/cancel": (url: string, init?: RequestInit) => {
+      const { id } = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as { id: string };
+      return id === "op-a"
+        ? new Response(JSON.stringify({ error: "The cancel request could not be recorded (the updater's operation record could not be read or written). Nothing was changed; try again.", errorCode: "lock_unavailable" }), { status: 503, headers: { "Content-Type": "application/json" } })
+        : new Response(JSON.stringify({ cancelRequested: true }), { status: 202, headers: { "Content-Type": "application/json" } });
+    } });
+    const action = (id: string, user: string, project: string): ServerOperation => ({
+      id, type: "workbench", label: "Set up the workbench", user, startedAt, project, projectUid: "uid-" + project, scope: "project", cancellable: true, cancelNote: note,
+    });
+    const res: OperationStatusResponse = { inProgress: false, operation: null, operations: [action("op-a", "alice", "team-a"), action("op-b", "bob", "team-b")] };
+    renderWithApp(<GlobalBanners />, { operation: async () => res }, "/components");
+    await settleApps();
+    const a = alertOf(await screen.findByText(/^Set up the workbench in project team-a, started by alice/));
+    const b = alertOf(screen.getByText(/^Set up the workbench in project team-b, started by bob/));
+    fireEvent.click(within(a).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Cancel action" }));
+    await settleApps();
+    expect(await within(a).findByText(/The cancel request could not be recorded/)).toBeInTheDocument();
+    expect(within(b).queryByText(/could not be recorded/)).not.toBeInTheDocument();
+    expect(within(b).getByRole("button", { name: "Cancel" })).toBeEnabled();
+    await settleApps();
+  });
+
+  it("show a cluster-admin every action with who started it, Cancel only where this updater pod may cancel it", async () => {
+    const action = (id: string, user: string, project: string, cancellable: boolean): ServerOperation => ({
+      id, type: "workbench", label: "Set up the workbench", user, startedAt, project, projectUid: "uid-" + project, scope: "project", cancellable,
+    });
+    const res: OperationStatusResponse = { inProgress: false, operation: null, operations: [action("op-a", "alice", "team-a", true), action("op-x", "dave", "team-x", false)] };
+    renderWithApp(<GlobalBanners />, { operation: async () => res }, "/components");
+    await settleApps();
+    expect(await screen.findByText(`Set up the workbench in project team-a, started by alice at ${clock}.`)).toBeInTheDocument();
+    expect(screen.getByText(`Set up the workbench in project team-x, started by dave at ${clock}.`)).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Cancel" })).toHaveLength(1);
+    await settleApps();
+  });
+
+  it("rank other people's actions below the interrupted notice", async () => {
+    const res: OperationStatusResponse = {
+      inProgress: false, operation: null,
+      interrupted: { type: "update", label: "Update to nightly", user: "qa-user", startedAt, pod: "updater-old" },
+      operations: [{ id: "op-x", type: "workbench", label: "Set up the workbench", user: "dave", startedAt, project: "team-x", projectUid: "uid-team-x", scope: "project" }],
+    };
+    renderWithApp(<GlobalBanners />, { operation: async () => res }, "/components");
+    await settleApps();
+    await screen.findByText(/^Set up the workbench in project team-x, started by dave/);
+    const titles = Array.from(document.querySelectorAll(".pf-v6-c-alert__title")).map((n) => n.textContent ?? "");
+    const interrupted = titles.findIndex((t) => t.includes("was interrupted"));
+    const others = titles.findIndex((t) => t.includes("started by dave"));
+    expect(interrupted).toBeGreaterThanOrEqual(0);
+    expect(others).toBeGreaterThan(interrupted);
+    await settleApps();
+  });
+
+  const RunOf: React.FC<{ operationId?: string }> = ({ operationId }) => {
+    const open = React.useCallback(() => {}, []);
+    useRegisterBackgroundRun({ title: "Set up the workbench in team-b", startedAt: Date.parse(startedAt), step: null, open, operationId });
+    return null;
+  };
+
+  it("show the tab's own running action once, in its run banner, with Cancel, when the run follows that operation", async () => {
+    stubApi({ "POST /api/operation/cancel": { cancelRequested: true } });
+    renderWithApp(<><RunOf operationId="op-own" /><GlobalBanners /></>, { permissions: async () => USER_PERMISSIONS, operation: async () => withOwnHere() }, "/");
+    await settleApps();
+    const run = alertOf(await screen.findByText(/^Set up the workbench in team-b is running/));
+    expect(within(run).getByText(/Closing its dialog does not stop it\. Your next project action can start when it ends\./)).toBeInTheDocument();
+    expect(within(run).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(screen.queryByText(/^Your action \(Set up the workbench\)/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Cluster changes from this tool are disabled/)).not.toBeInTheDocument();
+    await settleApps();
+  });
+
+  it("keep another action of the same account apart from the tab's run, with its own Cancel", async () => {
+    renderWithApp(<><RunOf operationId="op-this-tab" /><GlobalBanners /></>, { permissions: async () => USER_PERMISSIONS, operation: async () => withOwnHere() }, "/");
+    await settleApps();
+    const run = alertOf(await screen.findByText(/^Set up the workbench in team-b is running/));
+    expect(within(run).queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    const other = alertOf(screen.getByText(`Your action (Set up the workbench) in project team-b is running since ${clock}.`));
+    expect(within(other).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    await settleApps();
+  });
+});
+
+describe("the Cancel dialog of an action that finishes meanwhile", () => {
+  const running = (): UserOperationStatus => {
+    const res = contract.operationUserProjectActions();
+    res.operations = res.operations?.filter((e) => e.own).map((e) => ({ ...e, cancellable: true, cancelNote: "It stops before its next step." }));
+    return res;
+  };
+  const ended: UserOperationStatus = { running: false, operations: [] };
+  const PollOperation: React.FC = () => <button type="button" onClick={useOperation().refreshServerOperation}>Poll operation</button>;
+  const finishedText = "Set up the workbench in project team-b finished before it could be cancelled.";
+
+  it("says the action finished, with only Close, once the polled list no longer has it", async () => {
+    const api = stubApi({});
+    let answer = running();
+    renderWithApp(<><GlobalBanners /><PollOperation /></>, { permissions: async () => USER_PERMISSIONS, operation: async () => answer }, "/");
+    await settleApps();
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    const dialog = await screen.findByRole("dialog", { name: "Cancel the action?" });
+    expect(within(dialog).getByRole("button", { name: "Cancel action" })).toBeInTheDocument();
+    answer = ended;
+    // The dialog hides the rest of the page from the accessibility tree.
+    fireEvent.click(screen.getByRole("button", { name: "Poll operation", hidden: true }));
+    await settleApps();
+    const done = await screen.findByRole("dialog", { name: "The action has finished" });
+    expect(within(done).getByText((_, el) => el?.tagName === "P" && el.textContent === finishedText)).toBeInTheDocument();
+    expect(within(done).queryByRole("button", { name: "Cancel action" })).not.toBeInTheDocument();
+    // The footer's Close (the header's X is the other one).
+    const closes = within(done).getAllByRole("button", { name: "Close" });
+    fireEvent.click(closes[closes.length - 1]);
+    await settleApps();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(api.bodies["POST /api/operation/cancel"]).toBeUndefined();
+  });
+
+  it("says the same when the cancel is answered 404", async () => {
+    stubApi({ "POST /api/operation/cancel": () => new Response(JSON.stringify({ error: "No running action with this ID that you can cancel (it may have finished). Nothing was changed.", errorCode: "not_found" }), { status: 404, headers: { "Content-Type": "application/json" } }) });
+    renderWithApp(<GlobalBanners />, { permissions: async () => USER_PERMISSIONS, operation: async () => running() }, "/");
+    await settleApps();
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    const dialog = await screen.findByRole("dialog", { name: "Cancel the action?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel action" }));
+    await settleApps();
+    const done = await screen.findByRole("dialog", { name: "The action has finished" });
+    expect(within(done).getByText((_, el) => el?.tagName === "P" && el.textContent === finishedText)).toBeInTheDocument();
+    expect(within(done).getAllByRole("button", { name: "Close" })).toHaveLength(2);
     await settleApps();
   });
 });

@@ -48,10 +48,19 @@ func TestEveryNonGetRouteIsGated(t *testing.T) {
 		if _, project := projectActionRoutes[path]; project {
 			body, wantCode = projectRouteBodies[path], cluster.ErrorCodeForbiddenForUser
 		}
+		// Cancel is open to an action's starter: a user who names no
+		// action of theirs gets "no such action" (TestCancelOnlyStarterOrAdmin).
+		if rt.Pattern == "POST /api/operation/cancel" {
+			body, wantCode = `{"id":"0123456789abcdef"}`, "not_found"
+		}
+		wantStatus := map[string]int{"not_found": http.StatusNotFound}[wantCode]
+		if wantStatus == 0 {
+			wantStatus = http.StatusForbidden
+		}
 		mutationPermission = func(context.Context, string) (bool, error) { return false, nil }
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, postJSONMethod(t, method, path, "user:reader", body))
-		if w.Code != http.StatusForbidden || decodeError(t, w)["errorCode"] != wantCode {
+		if w.Code != wantStatus || decodeError(t, w)["errorCode"] != wantCode {
 			t.Errorf("%s without cluster-admin: %d %s", rt.Pattern, w.Code, w.Body.String())
 		}
 		if locks.clusterHeld() {
@@ -90,9 +99,13 @@ var projectRouteBodies = map[string]string{
 }
 
 // lockFreeMutationRoutes are the gated routes that take no cluster lock,
-// with why. Each has a test that it makes no cluster call.
+// with why. Each has a test that it changes nothing in the cluster and
+// takes no lock (TestRecipeStopTakesNoLockAndMakesNoClusterCall,
+// TestCancelOnlyStarterOrAdmin); a cancel's only call is the mutation
+// gate's access review with the caller's own token.
 var lockFreeMutationRoutes = map[string]string{
-	"POST /api/recipes/stop": "asks the running recipe run, which holds the lock, to stop after its step",
+	"POST /api/recipes/stop":     "asks the running recipe run, which holds the lock, to stop after its step",
+	"POST /api/operation/cancel": "asks a running project action, which holds its lock, to stop at its next safe point",
 }
 
 func postJSONMethod(t testing.TB, method, path, token, body string) *http.Request {

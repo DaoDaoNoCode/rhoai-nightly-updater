@@ -332,9 +332,17 @@ Since 5.0.0 whoever RHOAI lets in can sign in: anyone who may `get` `auths.servi
 - **Build Explorer**: as above, without the comparison with the installed build.
 - **Environment**: their own data science projects only (the ones the projects API lists for them), read with their own permissions: the pipeline server, models, workbench, playground and MLflow sample data of the project they pick, and the sample pipeline. A project's admins and editors can set up, start, stop and delete the workbench, set up and delete the playground, and add and remove the MLflow sample data there: each action runs with their own permissions after the updater checked that their role in the project allows every request it makes, and a button they may not use says why. Pipeline servers, models and the shared parts (S3 storage, the inference gateway, MaaS) stay a cluster-admin's. With no projects, the page says to create one in the RHOAI dashboard or to ask a project admin.
 - Components, Dashboard Dev and Diagnostics are not in the navigation; a direct link says **Only cluster-admins can see this page**.
-- A running update shows as a banner with its start time, never who started it:
+- A running cluster operation shows as a banner with its start time, never who started it or what it is:
 
-  <img src="docs/images/banner-user-update-running.png" alt="The banner a user who is not a cluster-admin sees: An update is running since 14:26, Update to nightly. What this page shows may change until it finishes." width="760">
+  <img src="docs/images/banner-user-update-running.png" alt="The banner a user who is not a cluster-admin sees: A cluster operation is running since 14:26. Project actions can start when it ends." width="760">
+
+- Their own running project action shows with **Cancel** when it can be cancelled; another person's action in one of their projects shows with its label and project, never who runs it. Actions in projects that are not theirs do not show:
+
+  <img src="docs/images/banner-user-project-actions.png" alt="Two banners: Your action (Set up the workbench) in project dev-project is running since 14:28., with Cancel; An action (Set up the playground) is running in project llm-eval since 14:24." width="760">
+
+  Cancel asks first and says what the action leaves. It is a request: the action stops before its next step and keeps what it made by then as its own failure there would; one that finishes first is recorded as done:
+
+  <img src="docs/images/dialog-cancel-project-action.png" alt="The Cancel the action dialog: Set up the workbench in project dev-project, what a cancel leaves, and the buttons Cancel action and Keep it running" width="560">
 
 Which token each read uses, and the summary's exact fields: [SECURITY.md, Per-user views](SECURITY.md#per-user-views-500); what a project action checks: [SECURITY.md, Project actions for non-admins](SECURITY.md#project-actions-for-non-admins-500).
 
@@ -386,7 +394,7 @@ The updater changes a shared, stateful system (OLM and the RHOAI operator). Thes
 
 **Who can see and change things.** Every user RHOAI lets in (its allowed groups; by default every OpenShift user) can sign in (5.0.0). Cluster-admins see every page; everyone else sees a short cluster summary, Build Explorer and the Environment page for their own projects, read with their own permissions ([SECURITY.md, Per-user views](SECURITY.md#per-user-views-500)). Changes need the **cluster-admin** role, checked with your own token on every request, and since 4.0.0 every change is made with your own OpenShift token: the cluster checks it against your permissions and its audit log names you ([SECURITY.md](SECURITY.md)). The updater's own ServiceAccount only reads, keeps its records and runs one background clean-up of gone MaaS publications. Which token goes where, and why your own token is never sent to a model or a pipeline server: [SECURITY.md, Which token is used where](SECURITY.md#which-token-is-used-where). Every change asks for confirmation and names what it will touch.
 
-**One operation at a time.** A running operation shows a banner on every page, with who started it and the current step (users who are not cluster-admins see only that an update runs and since when). Action buttons stay disabled until it finishes. A second request gets `409 cluster_busy` and changes nothing. Closing the tab doesn't stop an operation: after a reload, the page reattaches to the running operation. If the connection was lost, the result says "outcome unknown, see the activity log" unless the server reports the final outcome.
+**One operation at a time.** A running operation shows a banner on every page, with who started it and the current step (users who are not cluster-admins see only that a cluster operation runs and since when, and the project actions in their own projects, never who runs another person's). A workbench setup, a playground setup and a user's MLflow sample changes can be cancelled by whoever started them or a cluster-admin: the action stops before its next step. A cluster-admin's MLflow sample changes hold the cluster lock and cannot be cancelled. Action buttons stay disabled until it finishes. A second request gets `409 cluster_busy` and changes nothing. Closing the tab doesn't stop an operation: after a reload, the page reattaches to the running operation. If the connection was lost, the result says "outcome unknown, see the activity log" unless the server reports the final outcome.
 
 **Refuse before changing.** Update, Re-deploy and Install a different build run all their checks first (pull secret, IDMS, a test catalog for the exact image, version, OperatorGroup, a second rhods-operator Subscription). A refusal says "Nothing was changed".
 

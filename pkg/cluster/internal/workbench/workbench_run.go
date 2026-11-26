@@ -66,6 +66,56 @@ func (r *run) fail(id, msg, code, why string) (*types.OperationResponse, error) 
 	return &types.OperationResponse{Success: false, Message: msg, Logs: r.logs, ErrorCode: code}, nil
 }
 
+// afterWriteTimeout bounds each of what may follow a create that went
+// through: recording the object, and deleting it again when that failed.
+// Each has its own budget, so a record write that uses all of its time
+// leaves the delete its own; both stay within the post-operation
+// allowance (record.BookkeepingContext and PostOperationContext end at the
+// operation's deadline plus record.PostDeadlineWork at the latest).
+var afterWriteTimeout = 15 * time.Second
+
+// recordMade runs write, the record of an object the run created, on a
+// post-operation context of its own: it runs also when the operation
+// reached its deadline right after the create. After a lost cross-pod lock
+// nothing is written (record.PostOperationContext is cancelled then).
+func (r *run) recordMade(write func(c *kube.Client) error) error {
+	ctx, cancel := record.PostOperationContext(r.c, afterWriteTimeout)
+	defer cancel()
+	return write(r.c.WithContext(ctx))
+}
+
+// undoCreate runs del, the delete (UID precondition) of an object the run
+// created and could not record, on a post-operation context of its own. Not after
+// the operation lost its cross-pod lock: another updater pod may be
+// changing the same objects, so no cleanup runs.
+func (r *run) undoCreate(del func(c *kube.Client) error) error {
+	if record.OperationLockLost(r.c) {
+		return record.ErrOperationLockLost
+	}
+	ctx, cancel := record.PostOperationContext(r.c, afterWriteTimeout)
+	defer cancel()
+	return del(r.c.WithContext(ctx))
+}
+
+// cancelled ends the run at a safe point because a cancel was requested
+// (record.CancelRequested): step id failed with the reason and what stays
+// (kept: the run's failure path at that point), and the activity entry
+// failed with the reason.
+func (r *run) cancelled(id string, cancel *record.ActionCancelledError, kept string) (*types.OperationResponse, error) {
+	msg := cancel.Reason() + " before this step. " + kept
+	if r.emit != nil {
+		r.emit(types.UpdateStepEvent{Step: id, Status: "failed", Message: msg, ErrorCode: CancelledCode})
+	}
+	r.logs = append(r.logs, msg)
+	slog.Info("workbench operation cancelled", "step", id)
+	record.Cancelled(r.c, r.activity, r.target, cancel)
+	return &types.OperationResponse{Success: false, Message: msg, Logs: r.logs, ErrorCode: CancelledCode}, nil
+}
+
+// CancelledCode is the errorCode of a project action that stopped at a
+// safe point because a cancel was requested.
+const CancelledCode = "cancelled"
+
 func (r *run) done(msg string) (*types.OperationResponse, error) {
 	record.Action(r.c, r.activity, r.target, true)
 	return &types.OperationResponse{Success: true, Message: msg, Logs: r.logs}, nil
@@ -191,6 +241,11 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 			return r.fail("check", fmt.Sprintf("The API server rejects PersistentVolumeClaim %s: %v. Nothing was changed.", StorageName, err), kube.ErrorCodeFromK8sErr(err), "storage dry run failed")
 		}
 	}
+	// Safe point: nothing was made yet. It comes before the Notebook's
+	// dry run, which changes the project (below).
+	if cancel := record.CancelRequested(c); cancel != nil {
+		return r.cancelled("check", cancel, "Nothing was changed.")
+	}
 	// The Notebook's dry run goes through odh-notebook-controller's
 	// webhook, which (as for the dashboard's own dry run and for a real
 	// create) makes ConfigMaps workbench-trusted-ca-bundle and
@@ -208,6 +263,11 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 	}
 	r.step("check", "success", describe(plan))
 
+	// Safe point: after the dry run (which may have added the workbench
+	// controller's objects, as its refusal says), before the storage.
+	if cancel := record.CancelRequested(c); cancel != nil {
+		return r.cancelled("storage", cancel, "No workbench or storage was created.")
+	}
 	if pvcFound {
 		r.step("storage", "success", fmt.Sprintf("Using the storage this tool kept: %s.", StorageName))
 	} else {
@@ -217,10 +277,16 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 			return r.fail("storage", fmt.Sprintf("Cannot create PersistentVolumeClaim %s in %s: %v. Nothing was changed.", StorageName, project, err), kube.ErrorCodeFromK8sErr(err), "storage create failed")
 		}
 		meta, _ := kube.ParseObjectMeta(body)
-		if err := updateRecord(c, project, func(e *Recorded) {
-			e.StorageUID, e.At, e.By, e.ActorRole, e.ProjectUID = meta.UID, kube.NowRFC3339(), kube.GetUser(c), record.ActorRole(c), c.ProjectUID()
-		}); err != nil {
-			if _, delErr := kube.DeleteWithUID(c, storagePath(project), meta.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
+		err = r.recordMade(func(rc *kube.Client) error {
+			return updateRecord(rc, project, func(e *Recorded) {
+				e.StorageUID, e.At, e.By, e.ActorRole, e.ProjectUID = meta.UID, kube.NowRFC3339(), kube.GetUser(c), record.ActorRole(c), c.ProjectUID()
+			})
+		})
+		if err != nil {
+			if delErr := r.undoCreate(func(dc *kube.Client) error {
+				_, err := kube.DeleteWithUID(dc, storagePath(project), meta.UID)
+				return err
+			}); delErr != nil && !kube.IsK8sNotFound(delErr) {
 				return r.fail("storage", fmt.Sprintf("PersistentVolumeClaim %s was created, but this tool could not record it (%s) nor delete it again (%v). Delete it yourself (oc delete pvc %s -n %s), then set up again.", StorageName, record.ErrorText(c, err), delErr, StorageName, project), record.ErrorCode(err), "record failed")
 			}
 			return r.fail("storage", fmt.Sprintf("PersistentVolumeClaim %s was created, but this tool could not record it as its own (%s), so it was deleted again. Set up again to retry.", StorageName, record.ErrorText(c, err)), record.ErrorCode(err), "record failed")
@@ -228,6 +294,11 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 		r.step("storage", "success", fmt.Sprintf("Created storage %s.", StorageName))
 	}
 
+	// Safe point: the storage is made and recorded; as when the
+	// workbench's create fails, it stays for the next setup.
+	if cancel := record.CancelRequested(c); cancel != nil {
+		return r.cancelled("workbench", cancel, fmt.Sprintf("No workbench was created; its storage %s stays, recorded as this tool's, and the next setup uses it (Delete storage on the Workbench tab removes it).", StorageName))
+	}
 	// Again right before the create: a workbench that mounted the kept
 	// storage in the meantime keeps it (fail closed).
 	if pvcFound {
@@ -246,10 +317,15 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 		return r.fail("workbench", fmt.Sprintf("Cannot create workbench %s in %s: %v. Its storage %s stays; set up again to retry.", Name, project, err, StorageName), kube.ErrorCodeFromK8sErr(err), "create failed")
 	}
 	meta, _ := kube.ParseObjectMeta(body)
-	if err := updateRecord(c, project, func(e *Recorded) {
-		e.UID, e.At, e.By, e.ActorRole, e.ProjectUID = meta.UID, kube.NowRFC3339(), kube.GetUser(c), record.ActorRole(c), c.ProjectUID()
+	if err := r.recordMade(func(rc *kube.Client) error {
+		return updateRecord(rc, project, func(e *Recorded) {
+			e.UID, e.At, e.By, e.ActorRole, e.ProjectUID = meta.UID, kube.NowRFC3339(), kube.GetUser(c), record.ActorRole(c), c.ProjectUID()
+		})
 	}); err != nil {
-		if _, delErr := kube.DeleteWithUID(c, notebookPath(project), meta.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
+		if delErr := r.undoCreate(func(dc *kube.Client) error {
+			_, err := kube.DeleteWithUID(dc, notebookPath(project), meta.UID)
+			return err
+		}); delErr != nil && !kube.IsK8sNotFound(delErr) {
 			return r.fail("workbench", fmt.Sprintf("Workbench %s was created, but this tool could not record it (%s) nor delete it again (%v). Delete it in the dashboard, then set up again.", Name, record.ErrorText(c, err), delErr), record.ErrorCode(err), "record failed")
 		}
 		return r.fail("workbench", fmt.Sprintf("Workbench %s was created, but this tool could not record it as its own (%s), so it was deleted again. Set up again to retry.", Name, record.ErrorText(c, err)), record.ErrorCode(err), "record failed")

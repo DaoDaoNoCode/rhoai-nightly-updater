@@ -1,6 +1,7 @@
 import type { KueueStatus, ObservabilityStatus, ProjectCapabilities, WorkbenchStatus, ClusterSummary, MLflowSamplesStatus, ModelRegistryStatus, PlaygroundStatus, ProjectStatus, RecipePlan, RecipeRunStatus, UserOperationStatus, UserPermissions } from "../types";
 import summaryJson from "./contract/summary.json";
 import operationUserJson from "./contract/operation-user.json";
+import operationUserProjectActionsJson from "./contract/operation-user-project-actions.json";
 import permissionsUserJson from "./contract/user-permissions-user.json";
 import permissionsAdminJson from "./contract/user-permissions-admin.json";
 import projectStatusJson from "./contract/project-status-user.json";
@@ -49,6 +50,8 @@ function forProject<T>(v: unknown, from: string, project: string): T {
 export const contract = {
   summary: (): ClusterSummary => clone<ClusterSummary>(summaryJson),
   operationUser: (): UserOperationStatus => clone<UserOperationStatus>(operationUserJson),
+  /** A user's answer while their own project action runs (team-b) and another person's in their team-a. */
+  operationUserProjectActions: (): UserOperationStatus => clone<UserOperationStatus>(operationUserProjectActionsJson),
   permissionsUser: (): UserPermissions => clone<UserPermissions>(permissionsUserJson),
   permissionsAdmin: (): UserPermissions => clone<UserPermissions>(permissionsAdminJson),
   projectStatus: (project = CONTRACT_PROJECT): ProjectStatus => forProject<ProjectStatus>(projectStatusJson, CONTRACT_PROJECT, project),

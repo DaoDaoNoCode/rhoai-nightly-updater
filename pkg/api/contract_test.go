@@ -81,6 +81,10 @@ func TestFrontendContract(t *testing.T) {
 		// The Observability tab's status (admin-only, the ServiceAccount's reads).
 		{"observability-admin.json", "/api/resources/observability", "user:admin", HandleObservabilityStatus, "", nil},
 		{"recipe-plan-admin.json", "/api/recipes/plan", "user:admin", HandleRecipePlan, `{"recipe":` + testRecipe + `}`, nil},
+		// A user's banners: their own project action and another
+		// person's in one of their projects (last: it changes the
+		// operation stubs).
+		{"operation-user-project-actions.json", "/api/operation", "user:carol", HandleOperation, "", stubUserProjectActions(started)},
 	}
 	update := *updateContract || os.Getenv("UPDATE_CONTRACT") == "1"
 	written := map[string]bool{}
@@ -276,6 +280,28 @@ func stubContractData(t *testing.T) {
 			{ID: cluster.SampleTraining, Name: "Training experiment and registered model", State: "present", Link: "https://mlflow.apps.example.com/mlflow/#/experiments/3?workspace=team-a", Actions: []string{"remove"}},
 			{ID: cluster.SampleMCPServer, Name: "MCP server", State: "unknown", Message: "Cannot read the sample's state: MLflow answered 403 PERMISSION_DENIED.", Actions: []string{}},
 		}}, nil
+	}
+}
+
+// stubUserProjectActions makes another updater process run two project
+// actions: carol's own in team-b and alice's in carol's team-a.
+func stubUserProjectActions(started time.Time) func(t *testing.T) {
+	return func(t *testing.T) {
+		lease := func(id, user, project string) *types.OperationLease {
+			return &types.OperationLease{ID: id, BootID: "another-process", Pod: "pod-2", User: user, Type: "workbench", Label: "Set up the workbench",
+				StartedAt: started.Format(time.RFC3339), HeartbeatAt: clk.Now().UTC().Format(time.RFC3339), Project: project, ProjectUID: "uid-" + project, Begun: true}
+		}
+		readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) {
+			return &cluster.OperationRecord{ProjectLocks: map[string]*types.OperationLease{
+				"uid-team-b": lease("op-own", "carol", "team-b"),
+				"uid-team-a": lease("op-other", "alice", "team-a"),
+			}}, nil
+		}
+		orig := listUserDSProjects
+		t.Cleanup(func() { listUserDSProjects = orig })
+		listUserDSProjects = func(*cluster.Client) ([]cluster.UserProject, error) {
+			return []cluster.UserProject{{Name: "team-a", UID: "uid-team-a"}, {Name: "team-b", UID: "uid-team-b"}}, nil
+		}
 	}
 }
 

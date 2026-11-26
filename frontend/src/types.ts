@@ -508,8 +508,28 @@ export interface UserOperationStatus {
   running: boolean;
   label?: string;
   startedAt?: string;
-  /** The running cluster operation as a list entry (pkg/types OperationSummaryEntry); older backends do not send it. */
-  operations?: { scope: 'cluster'; label: string; startedAt: string }[];
+  /**
+   * What runs as far as this user may see it (pkg/types OperationSummaryEntry): the running
+   * cluster operation, and the running project actions in their own projects (never who runs
+   * another person's). Older backends do not send it.
+   */
+  operations?: UserOperationEntry[];
+}
+
+/** One entry of UserOperationStatus.operations. */
+export interface UserOperationEntry {
+  scope: 'cluster' | 'project';
+  label: string;
+  startedAt: string;
+  /** A project action's project. */
+  project?: string;
+  /** The user's own action: only then is id set, and the cancel fields may be. */
+  own?: boolean;
+  id?: string;
+  cancellable?: boolean;
+  /** What a cancel leaves (the action's own words). */
+  cancelNote?: string;
+  cancelling?: boolean;
 }
 
 export interface DashboardState {
@@ -766,6 +786,8 @@ export interface UpdateStep {
   detail?: string;
   elapsedMs: number;
   errorCode?: string;
+  /** The ID of the operation the stream follows (GET /api/operation's); sent to its requester only. */
+  operationId?: string;
 }
 
 // --- Diagnostics types (match backend cluster.DiagnosticResult JSON) ---
@@ -1482,6 +1504,12 @@ export interface ServerOperation {
   /** Set on the entries of OperationStatusResponse.operations only. */
   scope?: 'cluster' | 'project';
   interrupted?: boolean;
+  /** A project action of the answering updater pod that checks a cancel request at safe points (POST /api/operation/cancel). */
+  cancellable?: boolean;
+  /** What a cancel leaves (the action's own words). */
+  cancelNote?: string;
+  /** A cancel was requested; the action stops before its next step unless it ends first. */
+  cancelling?: boolean;
 }
 
 /** An operation an updater pod started and never finished (its pod stopped). */

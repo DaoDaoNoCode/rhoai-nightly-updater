@@ -18,6 +18,10 @@ type UpdateStep struct {
 	Detail    string `json:"detail,omitempty"`    // Extra info (e.g., image URL, channel name)
 	ElapsedMs int64  `json:"elapsedMs"`           // Time since step started
 	ErrorCode string `json:"errorCode,omitempty"` // For error categorization
+	// OperationID is the ID of the operation the stream follows (GET
+	// /api/operation's), sent to its own requester only: the page that
+	// started a project action matches its banner by it.
+	OperationID string `json:"operationId,omitempty"`
 }
 
 // SSEWriter writes Server-Sent Events to an http.ResponseWriter.
@@ -32,6 +36,8 @@ type SSEWriter struct {
 	// onStep sees every progress event, also after the client has gone, so
 	// GET /api/operation can report the step of the running operation.
 	onStep func(UpdateStep)
+	// opID is the operation's ID, set on every event sent.
+	opID string
 }
 
 // NewSSEWriter configures the ResponseWriter for SSE streaming.
@@ -52,6 +58,7 @@ func NewSSEWriter(w http.ResponseWriter) (*SSEWriter, error) {
 	if sw, ok := w.(*statusWriter); ok && sw.opID != "" {
 		id := sw.opID
 		s.onStep = func(step UpdateStep) { inflight.recordStep(id, step) }
+		s.opID = id
 	}
 	return s, nil
 }
@@ -74,6 +81,9 @@ func (s *SSEWriter) SendStep(step UpdateStep) error {
 		return nil
 	}
 	_ = s.rc.SetWriteDeadline(time.Now().Add(15 * time.Second))
+	if step.OperationID == "" {
+		step.OperationID = s.opID
+	}
 	data, err := json.Marshal(step)
 	if err != nil {
 		slog.Error("sse: failed to marshal step", "step", step.Step, "error", err)

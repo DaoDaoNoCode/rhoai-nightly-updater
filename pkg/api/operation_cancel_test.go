@@ -1,0 +1,509 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
+)
+
+// The cooperative cancel of project actions (the non-admin design, B4).
+
+// cancellableAction is localAction for a cancellable action (a workbench
+// setup's note).
+func cancellableAction(t *testing.T, uid, user string) string {
+	t.Helper()
+	id := localAction(t, uid, user)
+	inflight.update(id, func(o *Operation) { o.cancelNote = cancellableActions["workbench.setup"] })
+	return id
+}
+
+func postCancel(t *testing.T, token, id string) *httptest.ResponseRecorder {
+	t.Helper()
+	mux := http.NewServeMux()
+	Register(mux)
+	w := httptest.NewRecorder()
+	body, _ := json.Marshal(map[string]string{"id": id})
+	mux.ServeHTTP(w, postJSON(t, "/api/operation/cancel", token, string(body)))
+	return w
+}
+
+// Cancel: the action's starter or a cluster-admin. Anyone else gets the
+// answer of an action that does not exist; a failed role check is the same
+// answer whether it exists or not. An action that cannot be cancelled, and
+// a cluster operation, answer as none. The cancel only records the request
+// (no lock, nothing written for an action of this pod, the context
+// untouched).
+func TestCancelOnlyStarterOrAdmin(t *testing.T) {
+	setupDevMode(t)
+	setAdmin(t)
+	writes := 0
+	requestOperationCancel = func(c *cluster.Client, _ string, check func(*cluster.OperationRecord) (*cluster.CancelRequest, error)) error {
+		rec, _ := readOperationState(c)
+		if _, err := check(rec); err != nil {
+			return err
+		}
+		writes++
+		return nil
+	}
+	defer func() {
+		if writes != 0 {
+			t.Errorf("%d cancel requests written for other pods", writes)
+		}
+	}()
+	id := cancellableAction(t, "a", "alice")
+
+	missing := postCancel(t, "user:bob", "0123456789abcdef")
+	if missing.Code != http.StatusNotFound || decodeError(t, missing)["errorCode"] != "not_found" {
+		t.Fatalf("an unknown ID: %d %s", missing.Code, missing.Body.String())
+	}
+	if others := postCancel(t, "user:bob", id); others.Code != missing.Code || others.Body.String() != missing.Body.String() {
+		t.Fatalf("another person's action answers differently from none: %d %s", others.Code, others.Body.String())
+	}
+	mutationPermission = func(context.Context, string) (bool, error) { return false, errors.New("api down") }
+	down1, down2 := postCancel(t, "user:bob", id), postCancel(t, "user:bob", "0123456789abcdef")
+	if down1.Code != http.StatusServiceUnavailable || down1.Body.String() != down2.Body.String() {
+		t.Fatalf("role check failed: %d %s / %s", down1.Code, down1.Body.String(), down2.Body.String())
+	}
+	setAdmin(t)
+	if inflight.cancelRequest(id) != nil {
+		t.Fatal("cancelled by a refused request")
+	}
+
+	// Not cancellable: a project action without safe points, a cluster
+	// operation; not even by its starter or an admin.
+	plain := localAction(t, "p", "erin")
+	if w := postCancel(t, "user:erin", plain); w.Code != http.StatusNotFound {
+		t.Fatalf("an action without safe points: %d %s", w.Code, w.Body.String())
+	}
+	clusterOp := inflight.startBackground("update", "Update to nightly", "alice", nil)
+	confirmLock(clusterOp.ID)
+	if w := postCancel(t, "user:admin", clusterOp.ID); w.Code != http.StatusNotFound {
+		t.Fatalf("a cluster operation: %d %s", w.Code, w.Body.String())
+	}
+	inflight.finishID(clusterOp.ID)
+
+	// The starter: accepted, as a request.
+	w := postCancel(t, "user:alice", id)
+	var accepted struct {
+		CancelRequested bool   `json:"cancelRequested"`
+		Message         string `json:"message"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &accepted)
+	if w.Code != http.StatusAccepted || !accepted.CancelRequested || accepted.Message != cancelAcceptedMessage {
+		t.Fatalf("the starter's cancel: %d %s", w.Code, w.Body.String())
+	}
+	if c := inflight.cancelRequest(id); c == nil || c.ByAdmin || c.Reason() != "Cancelled by the user who started it" {
+		t.Fatalf("request %+v", c)
+	}
+	if w := postCancel(t, "user:admin", id); w.Code != http.StatusAccepted || inflight.cancelRequest(id).ByAdmin {
+		t.Fatalf("a second request changed the first: %d", w.Code)
+	}
+	if op := inflight.get(id); op == nil || !op.Cancelling || op.Cancellable {
+		t.Fatalf("after the request: %+v", op)
+	}
+	if locks.clusterHeld() {
+		t.Fatal("the cancel took the cluster lock")
+	}
+
+	// A cluster-admin: "a cluster-admin", never their name (a fresh
+	// window: the admin's request above used theirs).
+	mutationLimiter = newRateLimiter()
+	id2 := cancellableAction(t, "d", "dave")
+	if w := postCancel(t, "user:admin", id2); w.Code != http.StatusAccepted {
+		t.Fatalf("an admin's cancel: %d %s", w.Code, w.Body.String())
+	}
+	if c := inflight.cancelRequest(id2); c == nil || !c.ByAdmin || c.Reason() != "Cancelled by a cluster-admin" {
+		t.Fatalf("request %+v", c)
+	}
+
+	// An accepted cancel counts in the per-user limit of changes; a refused
+	// one gave its slot back (bob's above).
+	id3 := cancellableAction(t, "e", "erin2")
+	if w := postCancel(t, "user:admin", id3); w.Code != http.StatusTooManyRequests || decodeError(t, w)["errorCode"] != "user_rate_limited" {
+		t.Fatalf("a third cancel in the window: %d %s", w.Code, w.Body.String())
+	}
+	if inflight.cancelRequest(id3) != nil {
+		t.Fatal("a rate-limited cancel was recorded")
+	}
+}
+
+// Through the gate: a cancellable action sees the request through its
+// context's check (cluster.CancelRequested), its context stays live, and
+// the action decides when to stop. A lease loss after the request still
+// ends the context with cluster.ErrOperationLockLost, as without one. A
+// user's view offers Cancel with what it leaves, then shows it stopping;
+// the busy refusal of their next action says "or cancel it" only while it
+// can be cancelled.
+func TestCancelIsCheckedThroughTheGate(t *testing.T) {
+	newProjectGateEnv(t, roleEditor)
+	started, proceed := make(chan struct{}), make(chan struct{})
+	type seen struct {
+		cancel *cluster.ActionCancelledError
+		ctxErr error
+		lost   error
+	}
+	result := make(chan seen, 1)
+	var lose func()
+	runWorkbench = func(c *cluster.Client, _ types.WorkbenchRequest, _ func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		close(started)
+		<-proceed
+		s := seen{cancel: cluster.CancelRequested(c), ctxErr: c.Context().Err()}
+		lose()
+		<-c.Context().Done()
+		s.lost = context.Cause(c.Context())
+		result <- s
+		return &types.OperationResponse{Success: false, Message: "stopped", ErrorCode: "lock_lost"}, nil
+	}
+	lose = func() {
+		leases.mu.Lock()
+		var h *heldLease
+		for _, held := range leases.held {
+			h = held
+		}
+		leases.mu.Unlock()
+		leases.lose(h, "test: the lock was lost")
+	}
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- serveProjectAction(t, "/api/resources/workbench/stream", `{"action":"setup","project":"team-a"}`)
+	}()
+	<-started
+	stubUserProjects(t, map[string]string{"team-a": "uid-team-a"}, nil)
+	sum, _ := getUserOperation(t, "user:alice")
+	if len(sum.Operations) != 1 || !sum.Operations[0].Own || !sum.Operations[0].Cancellable || sum.Operations[0].CancelNote != cancellableActions["workbench.setup"] {
+		t.Fatalf("the running action: %+v", sum.Operations)
+	}
+	id := sum.Operations[0].ID
+	busy := serveProjectAction(t, "/api/resources/playground/stream", `{"action":"teardown","project":"team-a"}`)
+	if msg, _ := decodeError(t, busy)["error"].(string); busy.Code != http.StatusConflict || !strings.HasSuffix(msg, "Wait for it to finish or cancel it.") {
+		t.Fatalf("busy: %d %s", busy.Code, busy.Body.String())
+	}
+	if w := postCancel(t, "user:alice", id); w.Code != http.StatusAccepted {
+		t.Fatalf("cancel: %d %s", w.Code, w.Body.String())
+	}
+	sum, _ = getUserOperation(t, "user:alice")
+	if len(sum.Operations) != 1 || sum.Operations[0].Cancellable || !sum.Operations[0].Cancelling {
+		t.Fatalf("after the request: %+v", sum.Operations)
+	}
+	close(proceed)
+	s := <-result
+	if s.cancel == nil || s.cancel.ByAdmin || s.ctxErr != nil {
+		t.Fatalf("the action saw request %+v, context %v", s.cancel, s.ctxErr)
+	}
+	if !errors.Is(s.lost, cluster.ErrOperationLockLost) {
+		t.Fatalf("a lease loss after the request ended the context with %v", s.lost)
+	}
+	<-done
+	if locks.projectOp("uid-team-a") != "" || len(inflight.list()) != 0 {
+		t.Fatal("the action still holds its lock")
+	}
+}
+
+// The busy refusal of a user's own running action: "or cancel it" only
+// when it can be cancelled.
+func TestBusyRefusalOffersCancelOnlyWhenCancellable(t *testing.T) {
+	setupDevMode(t)
+	for _, tc := range []struct {
+		op   *Operation
+		want string
+	}{
+		{&Operation{Label: "Set up the workbench", User: "alice", Project: "team-a", ProjectUID: "a", Cancellable: true}, "You already have an action running (Set up the workbench in project team-a). Wait for it to finish or cancel it."},
+		{&Operation{Label: "Start the workbench", User: "alice", Project: "team-a", ProjectUID: "a"}, "You already have an action running (Start the workbench in project team-a). Wait for it to finish."},
+	} {
+		if got := busyMessageForUser(tc.op, conflictUser, "alice"); got != tc.want {
+			t.Errorf("got %q, want %q", got, tc.want)
+		}
+	}
+}
+
+// A cancel for a project action another updater pod runs: checked against
+// its live lock entry in the record (its starter, or a cluster-admin; it
+// can be cancelled) and recorded for that pod; anyone else, and an action
+// that cannot be cancelled, get the same 404 and nothing is written. An
+// admin then sees it stopping.
+func TestCrossPodCancelIsRecordedForTheHolder(t *testing.T) {
+	setupDevMode(t)
+	setAdmin(t)
+	now := clk.Now()
+	cancellable := otherPodProjectLease("a", "alice", now)
+	cancellable.ID, cancellable.CancelNote = "aaaaaaaaaaaaaaaa", cancellableActions["workbench.setup"]
+	plain := otherPodProjectLease("p", "alice", now)
+	plain.ID = "bbbbbbbbbbbbbbbb"
+	rec := &cluster.OperationRecord{ProjectLocks: map[string]*types.OperationLease{"a": cancellable, "p": plain}}
+	readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) { return rec, nil }
+	var written []*cluster.CancelRequest
+	requestOperationCancel = func(c *cluster.Client, id string, check func(*cluster.OperationRecord) (*cluster.CancelRequest, error)) error {
+		r, err := check(rec)
+		if err != nil {
+			return err
+		}
+		written = append(written, r)
+		return nil
+	}
+	missing := postCancel(t, "user:bob", "0123456789abcdef")
+	for _, tc := range []struct{ token, id string }{{"user:bob", "aaaaaaaaaaaaaaaa"}, {"user:alice", "bbbbbbbbbbbbbbbb"}} {
+		if w := postCancel(t, tc.token, tc.id); w.Code != http.StatusNotFound || w.Body.String() != missing.Body.String() {
+			t.Fatalf("%s cancels %s: %d %s", tc.token, tc.id, w.Code, w.Body.String())
+		}
+	}
+	if len(written) != 0 {
+		t.Fatalf("refused requests were written: %+v", written)
+	}
+	if w := postCancel(t, "user:alice", "aaaaaaaaaaaaaaaa"); w.Code != http.StatusAccepted || len(written) != 1 || written[0].ByAdmin {
+		t.Fatalf("the starter: %d %s %+v", w.Code, w.Body.String(), written)
+	}
+	if w := postCancel(t, "user:admin", "aaaaaaaaaaaaaaaa"); w.Code != http.StatusAccepted || len(written) != 2 || !written[1].ByAdmin {
+		t.Fatalf("a cluster-admin: %d %+v", w.Code, written)
+	}
+
+	// With the request recorded, the action shows as stopping.
+	rec.CancelRequests = map[string]*cluster.CancelRequest{"aaaaaaaaaaaaaaaa": {ByAdmin: true}}
+	for _, op := range getAdminOperation(t).Operations {
+		if op.ID == "aaaaaaaaaaaaaaaa" && (op.Cancellable || !op.Cancelling) {
+			t.Fatalf("after the request: %+v", op)
+		}
+		if op.ID == "bbbbbbbbbbbbbbbb" && (op.Cancellable || op.Cancelling) {
+			t.Fatalf("an action without safe points: %+v", op)
+		}
+	}
+}
+
+// The holder: its heartbeat reads the request another pod recorded and
+// marks the action, which sees it at its next safe point. Its lock is not
+// lost and its context stays live.
+func TestCrossPodCancelIsPickedUpWithoutLeaseLoss(t *testing.T) {
+	newProjectGateEnv(t, roleEditor)
+	started, proceed := make(chan struct{}), make(chan struct{})
+	seen := make(chan *cluster.ActionCancelledError, 1)
+	runWorkbench = func(c *cluster.Client, _ types.WorkbenchRequest, _ func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		close(started)
+		<-proceed
+		if c.Context().Err() != nil {
+			t.Error("the action's context ended")
+		}
+		seen <- cluster.CancelRequested(c)
+		return &types.OperationResponse{Success: false, Message: "cancelled", ErrorCode: "cancelled"}, nil
+	}
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- serveProjectAction(t, "/api/resources/workbench/stream", `{"action":"setup","project":"team-a"}`)
+	}()
+	<-started
+	var id string
+	for _, op := range inflight.list() {
+		id = op.ID
+	}
+	reads := 0
+	readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) {
+		reads++
+		return &cluster.OperationRecord{CancelRequests: map[string]*cluster.CancelRequest{id: {ByAdmin: true}}}, nil
+	}
+	leases.renewOnce(context.Background())
+	if reads != 1 {
+		t.Fatalf("the heartbeat read the record %d times", reads)
+	}
+	op := inflight.get(id)
+	if op == nil || !op.Cancelling || op.lockLost {
+		t.Fatalf("after the heartbeat: %+v", op)
+	}
+	// Once marked, the heartbeat reads no more.
+	leases.renewOnce(context.Background())
+	if reads != 1 {
+		t.Fatalf("read again after the pickup: %d", reads)
+	}
+	close(proceed)
+	if c := <-seen; c == nil || !c.ByAdmin {
+		t.Fatalf("the action saw %+v", c)
+	}
+	<-done
+}
+
+// A cancel names an operation ID of the form the updater makes: anything
+// else is refused with the same 400 before the limit, the role check or
+// any lookup.
+func TestCancelRefusesAMalformedID(t *testing.T) {
+	setupDevMode(t)
+	mutationPermission = func(context.Context, string) (bool, error) {
+		t.Error("the role was checked for a malformed ID")
+		return false, nil
+	}
+	var bodies []string
+	for _, id := range []string{"", "x", "../../etc", "0123456789ABCDEF", "0123456789abcdef0", "remote-a"} {
+		w := postCancel(t, "user:bob", id)
+		if w.Code != http.StatusBadRequest || decodeError(t, w)["errorCode"] != "validation" {
+			t.Fatalf("%q: %d %s", id, w.Code, w.Body.String())
+		}
+		bodies = append(bodies, w.Body.String())
+	}
+	for _, b := range bodies[1:] {
+		if b != bodies[0] {
+			t.Fatalf("different answers: %q / %q", b, bodies[0])
+		}
+	}
+	if mutationLimiter.isRateLimited("bob:/api/operation/cancel") {
+		t.Fatal("a malformed request used the slot")
+	}
+}
+
+// A heartbeat round that must take a lock entry again (its renewal found
+// it free) recovers it and reads no cancel request: the read, however
+// slow, never comes ahead of keeping the lock. The next round, whose
+// renewals all go through, reads it. (The heartbeat's clock is the
+// package's fake one.)
+func TestCancelPickupWaitsForTheLockRecovery(t *testing.T) {
+	newProjectGateEnv(t, roleEditor)
+	started, proceed := make(chan struct{}), make(chan struct{})
+	runWorkbench = func(c *cluster.Client, _ types.WorkbenchRequest, _ func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		close(started)
+		<-proceed
+		return &types.OperationResponse{Success: true, Message: "done"}, nil
+	}
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- serveProjectAction(t, "/api/resources/workbench/stream", `{"action":"setup","project":"team-a"}`)
+	}()
+	<-started
+	defer func() { close(proceed); <-done }()
+	key := cluster.ProjectLockKey("uid-team-a")
+	recovered := 0
+	acquireOperationLock = func(_ *cluster.Client, k, _ string, _ func(*cluster.OperationRecord) error) error {
+		if k == key {
+			recovered++
+		}
+		return nil
+	}
+	free := true
+	renewOperationLocks = func(_ *cluster.Client, renewals []cluster.LockRenewal) (map[string]*types.OperationLease, error) {
+		if free {
+			return map[string]*types.OperationLease{key: nil}, nil
+		}
+		return nil, nil
+	}
+	reads := 0
+	readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) {
+		reads++ // a slow read would hold up the round here
+		return &cluster.OperationRecord{}, nil
+	}
+	leases.renewOnce(context.Background())
+	if recovered != 1 || reads != 0 {
+		t.Fatalf("recovery round: recovered %d, cancel reads %d", recovered, reads)
+	}
+	free = false
+	leases.renewOnce(context.Background())
+	if reads != 1 {
+		t.Fatalf("a round whose renewals went through read the cancel requests %d times", reads)
+	}
+}
+
+// A project action's stream carries its operation ID on every event, for
+// the page that started it (it matches its banner by it).
+func TestProjectActionStreamCarriesItsOperationID(t *testing.T) {
+	newProjectGateEnv(t, roleEditor)
+	var id string
+	runWorkbench = func(_ *cluster.Client, _ types.WorkbenchRequest, onStep func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		for _, op := range inflight.list() {
+			id = op.ID
+		}
+		onStep(cluster.UpdateStepEvent{Step: "check", Status: "running", Message: "Checking"})
+		return &types.OperationResponse{Success: true, Message: "done"}, nil
+	}
+	w := serveProjectAction(t, "/api/resources/workbench/stream", `{"action":"setup","project":"team-a"}`)
+	if id == "" || strings.Count(w.Body.String(), `"operationId":"`+id+`"`) < 2 {
+		t.Fatalf("operation %q, stream %s", id, w.Body.String())
+	}
+}
+
+// MLflow samples Add: a user's holds the project's lock and can be
+// cancelled; a cluster-admin's holds the cluster lock (it may restart the
+// shared MLflow) and cannot.
+func TestMLflowSamplesCancellablePerRole(t *testing.T) {
+	for _, tc := range []struct {
+		role        string
+		cancellable bool
+	}{{roleEditor, true}, {roleClusterAdmin, false}} {
+		t.Run(tc.role, func(t *testing.T) {
+			newProjectGateEnv(t, tc.role)
+			started, proceed := make(chan struct{}), make(chan struct{})
+			runMLflowSamples = func(*cluster.Client, types.MLflowSamplesRequest, func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+				close(started)
+				<-proceed
+				return &types.OperationResponse{Success: true, Message: "done"}, nil
+			}
+			done := make(chan *httptest.ResponseRecorder, 1)
+			go func() {
+				done <- serveProjectAction(t, "/api/resources/samples/mlflow/stream", `{"action":"add","project":"team-a","samples":["training"]}`)
+			}()
+			<-started
+			ops := inflight.list()
+			if len(ops) != 1 || ops[0].Cancellable != tc.cancellable {
+				t.Errorf("the running action: %+v", ops)
+			}
+			if w := postCancel(t, "user:alice", ops[0].ID); (w.Code == http.StatusAccepted) != tc.cancellable {
+				t.Errorf("cancel: %d %s", w.Code, w.Body.String())
+			}
+			close(proceed)
+			<-done
+		})
+	}
+}
+
+// The audit line names a cluster-admin only when their request made the
+// cancel request, on this pod's path and on another pod's, in either
+// order: the starter first (then the admin's request changes nothing, no
+// line), or the admin first (one line, and the starter's later request
+// adds none).
+func TestAdminCancelAuditOnlyForTheRequestThatMadeIt(t *testing.T) {
+	const audit = "a cluster-admin cancelled a project action"
+	for _, remote := range []bool{false, true} {
+		for _, adminFirst := range []bool{false, true} {
+			name := map[bool]string{false: "this pod", true: "another pod"}[remote] + map[bool]string{false: ", starter first", true: ", admin first"}[adminFirst]
+			t.Run(name, func(t *testing.T) {
+				setupDevMode(t)
+				setAdmin(t)
+				logs := captureLogs(t)
+				var id string
+				if remote {
+					l := otherPodProjectLease("a", "alice", clk.Now())
+					l.ID, l.CancelNote = "aaaaaaaaaaaaaaaa", cancellableActions["workbench.setup"]
+					id = l.ID
+					rec := &cluster.OperationRecord{ProjectLocks: map[string]*types.OperationLease{"a": l}}
+					readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) { return rec, nil }
+					requestOperationCancel = func(_ *cluster.Client, opID string, check func(*cluster.OperationRecord) (*cluster.CancelRequest, error)) error {
+						r, err := check(rec)
+						if err != nil {
+							return err
+						}
+						if rec.CancelRequests == nil {
+							rec.CancelRequests = map[string]*cluster.CancelRequest{opID: r}
+						}
+						return nil
+					}
+				} else {
+					id = cancellableAction(t, "a", "alice")
+				}
+				order := []string{"user:alice", "user:admin"}
+				if adminFirst {
+					order = []string{"user:admin", "user:alice"}
+				}
+				for _, who := range order {
+					if w := postCancel(t, who, id); w.Code != http.StatusAccepted {
+						t.Fatalf("%s: %d %s", who, w.Code, w.Body.String())
+					}
+				}
+				if got, want := strings.Count(logs.String(), audit), map[bool]int{false: 0, true: 1}[adminFirst]; got != want {
+					t.Fatalf("audit lines %d, want %d:\n%s", got, want, logs.String())
+				}
+				if strings.Contains(logs.String(), "alice") {
+					t.Fatalf("the starter is named:\n%s", logs.String())
+				}
+			})
+		}
+	}
+}

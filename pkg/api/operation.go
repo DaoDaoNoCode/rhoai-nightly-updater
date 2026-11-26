@@ -202,6 +202,8 @@ func busyMessageForUser(op *Operation, reason, user string) string {
 		return "Another operation is in progress. Please wait."
 	case op.ProjectUID == "":
 		return "A cluster operation is running since " + op.StartedAt.UTC().Format("15:04") + " UTC. Project actions can start when it ends."
+	case user != "" && op.User == user && op.Cancellable:
+		return "You already have an action running (" + op.Label + " in project " + op.Project + "). Wait for it to finish or cancel it."
 	case user != "" && op.User == user:
 		return "You already have an action running (" + op.Label + " in project " + op.Project + "). Wait for it to finish."
 	case reason == conflictProject:
@@ -288,6 +290,14 @@ type Operation struct {
 	// entries of OperationStatus.Operations only.
 	Scope       string `json:"scope,omitempty"`
 	Interrupted bool   `json:"interrupted,omitempty"`
+	// Cancellable: a project action of this process that checks a cancel
+	// request at safe points (cancellableActions), which its starter or a
+	// cluster-admin may make (POST /api/operation/cancel); CancelNote says
+	// what a cancel leaves. Cancelling: the request was made; the action
+	// stops at its next safe point unless it ends first.
+	Cancellable bool   `json:"cancellable,omitempty"`
+	CancelNote  string `json:"cancelNote,omitempty"`
+	Cancelling  bool   `json:"cancelling,omitempty"`
 
 	// bookkeeper writes the operation's lease and marker: always the
 	// ServiceAccount's client, which may outlive the request.
@@ -306,6 +316,10 @@ type Operation struct {
 	// lockLost: the lease heartbeat stopped the operation because its lease
 	// was lost; its outcome is cluster.LockLostMessage.
 	lockLost bool
+	// cancelNote is set for a cancellable project action
+	// (cancellableActions); cancelled is the cancel requested for it.
+	cancelNote string
+	cancelled  *cluster.ActionCancelledError
 }
 
 // operationTypes maps mutation endpoints to a stable type and a label.
@@ -362,6 +376,9 @@ var operationTypes = map[string][2]string{
 	"/api/recipes/resume": {"recipe", "Environment recipe"},
 	// Stop takes no lock (it asks the running run to stop after its step).
 	"/api/recipes/stop": {"recipe-stop", "Stop an environment recipe"},
+	// Cancel takes no lock (it asks a running project action to stop at
+	// its next safe point).
+	"/api/operation/cancel": {"cancel-project-action", "Cancel a project action"},
 }
 
 // Size bounds of what is kept and persisted about an operation.
@@ -597,7 +614,10 @@ func copyOperation(op *Operation) *Operation {
 		return nil
 	}
 	cp := *op
-	cp.bookkeeper, cp.sw, cp.freshBookkeeper = nil, nil, nil
+	if op.ProjectUID != "" && op.cancelNote != "" {
+		cp.Cancellable, cp.CancelNote, cp.Cancelling = op.cancelled == nil, op.cancelNote, op.cancelled != nil
+	}
+	cp.bookkeeper, cp.sw, cp.freshBookkeeper, cp.cancelled = nil, nil, nil, nil
 	return &cp
 }
 
@@ -698,12 +718,20 @@ type OperationStatus struct {
 // a cluster operation it answers from memory; otherwise it reads the
 // operation record, which also tells about other pods' operations.
 //
-// A user who is not a cluster-admin gets types.OperationSummary only:
-// whether a cluster operation runs, its label and when it started; not who
-// started it, its target, its pod, or an interrupted one (tier per-role);
-// of the list, the running cluster operation only (project actions are
-// left out until their per-project view exists). The record is read, and
-// its marker retried, with the ServiceAccount for both.
+// A user who is not a cluster-admin gets types.OperationSummary only
+// (tier per-role, filtered here on the server): whether a cluster
+// operation runs, its label and when it started; and the running project
+// actions in their own data science projects, by label, project and
+// start, theirs with the ID a cancel names. Never who started another
+// person's action, a target, a pod, or an interrupted operation. A
+// project action is listed only when its project is one of theirs now,
+// with the same namespace UID (the projects API with their token: a
+// project they lost access to, or one deleted and made again under its
+// name, is not theirs), their own actions too; the projects are read only
+// while a project action runs. Without the identity (verifiedUser), or
+// when their projects cannot be read, no project action is listed (fail
+// closed). The record is read, and its marker retried, with the
+// ServiceAccount.
 var HandleOperation = withAuth(func(c *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	admin, ok := requestRole(w, r)
 	if !ok {
@@ -711,20 +739,54 @@ var HandleOperation = withAuth(func(c *cluster.Client, w http.ResponseWriter, r 
 	}
 	status := operationStatus(c, admin)
 	if !admin {
-		writeJSON(w, operationSummary(status), "operation")
+		projects := func() ([]cluster.UserProject, error) {
+			return listUserDSProjects(userReadClient(r.Context(), c, extractUserToken(r), resolveUsername(r)))
+		}
+		writeJSON(w, operationSummary(status, verifiedUser(r), projects), "operation")
 		return
 	}
 	writeJSON(w, status, "operation")
 })
 
-// operationSummary is what a user who is not a cluster-admin sees of the
-// operation status.
-func operationSummary(status OperationStatus) types.OperationSummary {
+// operationSummary is what user (verifiedUser), who is not a
+// cluster-admin, sees of the operation status (HandleOperation). projects
+// lists their data science projects; it is called at most once, and only
+// when a project action runs.
+func operationSummary(status OperationStatus, user string, projects func() ([]cluster.UserProject, error)) types.OperationSummary {
 	sum := types.OperationSummary{Running: status.InProgress, Operations: []types.OperationSummaryEntry{}}
+	var theirs map[string]string // name -> namespace UID
 	for _, op := range status.Operations {
-		if op.Scope == scopeCluster && !op.Interrupted {
-			sum.Operations = append(sum.Operations, types.OperationSummaryEntry{Scope: scopeCluster, Label: op.Label, StartedAt: op.StartedAt.UTC().Format(time.RFC3339)})
+		if op.Interrupted {
+			continue
 		}
+		started := op.StartedAt.UTC().Format(time.RFC3339)
+		if op.Scope == scopeCluster {
+			sum.Operations = append(sum.Operations, types.OperationSummaryEntry{Scope: scopeCluster, Label: op.Label, StartedAt: started})
+			continue
+		}
+		if op.Scope != scopeProject || user == "" || op.Project == "" || op.ProjectUID == "" {
+			continue
+		}
+		if theirs == nil {
+			theirs = map[string]string{}
+			listed, err := projects()
+			if err != nil {
+				logAuthFailure("cannot list the user's data science projects; project actions are left out", err)
+				listed = nil
+			}
+			for _, p := range listed {
+				theirs[p.Name] = p.UID
+			}
+		}
+		if theirs[op.Project] != op.ProjectUID {
+			continue
+		}
+		entry := types.OperationSummaryEntry{Scope: scopeProject, Label: op.Label, Project: op.Project, StartedAt: started}
+		if op.User == user {
+			entry.Own, entry.ID = true, op.ID
+			entry.Cancellable, entry.CancelNote, entry.Cancelling = op.Cancellable, op.CancelNote, op.Cancelling
+		}
+		sum.Operations = append(sum.Operations, entry)
 	}
 	if !status.InProgress || status.Operation == nil {
 		return sum
@@ -828,10 +890,13 @@ func operationList(running []*Operation, rec *cluster.OperationRecord, interrupt
 			case leaseHeldElsewhere(l):
 				op := remoteOperation(l)
 				op.Scope = scopeProject
+				if op.Cancellable && rec.CancelRequests[l.ID] != nil {
+					op.Cancellable, op.Cancelling = false, true
+				}
 				out = append(out, op)
 			case kept[uid] != nil:
 				op := remoteOperation(l)
-				op.Scope, op.Interrupted, op.Remote = scopeProject, true, false
+				op.Scope, op.Interrupted, op.Remote, op.Cancellable = scopeProject, true, false, false
 				out = append(out, op)
 			}
 		}

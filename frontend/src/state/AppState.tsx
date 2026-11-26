@@ -109,6 +109,40 @@ export interface ServerOperationState {
    * Null for a cluster-admin, and while nothing runs.
    */
   brief?: { label: string; startedAt: string } | null;
+  /** The running project actions this user may see (the banners'); empty when none. */
+  projectActions?: ProjectActionNotice[];
+}
+
+/**
+ * A running project action as the banners show it. A cluster-admin's answer
+ * says who started it (user); a user's answer never does, and marks their
+ * own actions (own), the only ones with an id to cancel.
+ */
+export interface ProjectActionNotice {
+  id?: string;
+  label: string;
+  project: string;
+  startedAt: string;
+  user?: string;
+  own: boolean;
+  cancellable: boolean;
+  /** What a cancel leaves (the action's own words). */
+  cancelNote?: string;
+  cancelling: boolean;
+}
+
+/** The running project actions of a cluster-admin's answer. */
+export function adminProjectActions(res: OperationStatusResponse): ProjectActionNotice[] {
+  return (res.operations ?? [])
+    .filter((op) => op.scope === "project" && !op.interrupted)
+    .map((op) => ({ id: op.id, label: op.label || op.type, project: op.project ?? "", startedAt: op.startedAt, user: op.user, own: false, cancellable: !!op.cancellable, cancelNote: op.cancelNote, cancelling: !!op.cancelling }));
+}
+
+/** The running project actions of a user's answer: in their own projects. */
+export function userProjectActions(res: UserOperationStatus): ProjectActionNotice[] {
+  return (res.operations ?? [])
+    .filter((e) => e.scope === "project")
+    .map((e) => ({ id: e.own ? e.id : undefined, label: e.label, project: e.project ?? "", startedAt: e.startedAt, own: !!e.own, cancellable: !!e.own && !!e.cancellable, cancelNote: e.own ? e.cancelNote : undefined, cancelling: !!e.own && !!e.cancelling }));
 }
 
 export interface OperationContextValue {
@@ -669,6 +703,7 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
       interrupted: res.interrupted ?? null,
       lastCompleted: res.lastCompleted ?? null,
       brief: null,
+      projectActions: adminProjectActions(res),
     };
     // An unchanged answer keeps the last state: no page renders again for it.
     if (!sameData(serverRef.current, next)) {
@@ -689,6 +724,7 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
       interrupted: null,
       lastCompleted: null,
       brief: res.running ? { label: res.label ?? "", startedAt: res.startedAt ?? "" } : null,
+      projectActions: userProjectActions(res),
     };
     if (!sameData(serverRef.current, next)) {
       serverRef.current = next;
@@ -712,7 +748,9 @@ export const AppStateProvider: React.FC<React.PropsWithChildren<AppStateProvider
   }, [applyServerOperation, applyUserOperation, operationRequest]);
 
   const operationPoller = usePolling(pollServerOperation, {
-    delay: () => (serverRef.current.inProgress || isRunning(stateRef.current.run) || stateRef.current.reconcile.awaitingServer ? OPERATION_POLL_BUSY_MS : OPERATION_POLL_IDLE_MS),
+    // Busy while anything runs, project actions included (their banners
+    // and Cancel follow them).
+    delay: () => (serverRef.current.inProgress || (serverRef.current.projectActions?.length ?? 0) > 0 || isRunning(stateRef.current.run) || stateRef.current.reconcile.awaitingServer ? OPERATION_POLL_BUSY_MS : OPERATION_POLL_IDLE_MS),
     runImmediately: true,
   });
   const refreshServerOperation = useCallback(() => operationPoller.reset({ runNow: true }), [operationPoller]);

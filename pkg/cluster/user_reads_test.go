@@ -54,7 +54,7 @@ func TestListUserDSProjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got, []string{"alpha", "beta"}) {
+	if !reflect.DeepEqual(ProjectNames(got), []string{"alpha", "beta"}) || got[0].UID == "" || got[0].UID == got[1].UID {
 		t.Fatalf("projects %v", got)
 	}
 	for _, call := range k8s.calls {

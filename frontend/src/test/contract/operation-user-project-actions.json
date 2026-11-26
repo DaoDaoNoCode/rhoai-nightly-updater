@@ -1,0 +1,21 @@
+{
+  "label": "",
+  "operations": [
+    {
+      "label": "Set up the workbench",
+      "project": "team-a",
+      "scope": "project",
+      "startedAt": "2026-11-20T14:05:00Z"
+    },
+    {
+      "id": "op-own",
+      "label": "Set up the workbench",
+      "own": true,
+      "project": "team-b",
+      "scope": "project",
+      "startedAt": "2026-11-20T14:05:00Z"
+    }
+  ],
+  "running": false,
+  "startedAt": ""
+}

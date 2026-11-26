@@ -112,6 +112,9 @@ type OperationRecord struct {
 	// ProjectLocks are the project locks, by namespace UID
 	// (ProjectLockKey); an entry that cannot be parsed is left out.
 	ProjectLocks map[string]*types.OperationLease
+	// CancelRequests are the cancel requests for project actions, by
+	// operation ID (CancelRequestKey).
+	CancelRequests map[string]*CancelRequest
 
 	values          map[string]string // the ConfigMap's data as read
 	resourceVersion string            // "" when the ConfigMap does not exist
@@ -145,6 +148,7 @@ func ReadOperationRecord(c *kube.Client) (*OperationRecord, error) {
 		Marker:          DecodeValue[types.OperationMarker](cm.Data, OperationKey),
 		LastCompleted:   DecodeValue[types.CompletedOperation](cm.Data, LastCompletedKey),
 		Lease:           DecodeValue[types.OperationLease](cm.Data, LeaseKey),
+		CancelRequests:  readCancelRequests(cm.Data),
 		values:          cm.Data,
 		resourceVersion: cm.Metadata.ResourceVersion,
 	}
@@ -355,7 +359,8 @@ func writeOperationRecord(c *kube.Client, rec *OperationRecord, data map[string]
 		return err
 	}
 	body := maps.Clone(data)
-	for _, key := range prunableLockKeys(rec, kube.Clock().Now()) {
+	now := kube.Clock().Now()
+	for _, key := range append(prunableLockKeys(rec, now), prunableCancelKeys(rec, now)...) {
 		if _, written := body[key]; !written {
 			body[key] = nil
 		}

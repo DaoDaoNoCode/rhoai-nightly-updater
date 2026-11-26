@@ -143,13 +143,13 @@ describe("Status for a user who is not a cluster-admin", () => {
     });
     await settleApps();
     await screen.findByRole("heading", { name: "RHOAI" });
-    expect(await screen.findByText(/An update is running since/)).toBeInTheDocument();
+    expect(await screen.findByText(/A cluster operation is running since/)).toBeInTheDocument();
     const reads = () => api.calls.filter((c) => c.includes("/api/summary")).length;
     const before = reads();
     running = false;
     fireEvent.click(screen.getByRole("button", { name: "Poll operation" }));
     await settleApps();
-    expect(screen.queryByText(/An update is running since/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/A cluster operation is running since/)).not.toBeInTheDocument();
     await waitFor(() => expect(reads()).toBe(before + 1));
   });
 });
