@@ -5,7 +5,8 @@ import { UserProjectView } from "./UserProjectView";
 import { CLUSTER_ADMIN_MODELS } from "./DeployProjectModel";
 import { projectStatus, stubUserApi } from "../../test/userFixtures";
 import { jsonResponse } from "../../test/apiStub";
-import type { CatalogModel, ModelExposures } from "../../types";
+import { sseEvent, sseResponse } from "../../test/utils";
+import type { CatalogModel, ModelExposures, PlaygroundStatus } from "../../types";
 
 // A user's models in one of their projects (non-admin design B6): Deploy a
 // model reached only inside the cluster, without token authentication;
@@ -71,5 +72,34 @@ describe("a user's models", () => {
     const dialog = await screen.findByRole("dialog", { name: /Delete Qwen2.5 0.5B Instruct \(CPU\) in team-a/ });
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(api.bodies["POST /api/resources/models/project/stream"]).toEqual([{ action: "teardown", project: "team-a", model: "qwen25-05b-instruct" }]));
+  });
+
+  it("reads the Playground part again when the action ends, so it offers the model just deployed", async () => {
+    const stream = sseResponse();
+    let deployed = false;
+    const playground = (): PlaygroundStatus => ({
+      project: "team-a", operatorReady: "True", genAiUi: "available", items: [],
+      models: deployed ? [{ name: "qwen25-05b-instruct", source: "namespace", status: "Running", ready: true, chat: true }] : [],
+    });
+    const api = stubUserApi({
+      "/api/resources/status": () => jsonResponse({ ...projectStatus("team-a"), modelCatalog: CATALOG }),
+      "/api/resources/models/exposures": () => jsonResponse(exposures()),
+      "/api/resources/playground": () => jsonResponse(playground()),
+      "POST /api/resources/models/project/stream": () => stream.response,
+    });
+    const playgroundReads = () => api.calls.filter((c) => c.startsWith("GET /api/resources/playground")).length;
+    render(<UserProjectView project="team-a" refreshKey={0} />);
+    const part = await screen.findByRole("region", { name: "Playground" });
+    expect(await within(part).findByText("No playground in team-a. It needs a ready chat model in the project; add one in the RHOAI dashboard.")).toBeInTheDocument();
+    const dialog = await openDeploy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Deploy" }));
+    await waitFor(() => expect(api.bodies["POST /api/resources/models/project/stream"]).toHaveLength(1));
+    const before = playgroundReads();
+    deployed = true;
+    stream.push(sseEvent("model-ready", "success", "The model is ready."));
+    stream.push(sseEvent("operation_complete", "success", "Deployed the model."));
+    stream.close();
+    await waitFor(() => expect(playgroundReads()).toBeGreaterThan(before));
+    expect(await within(part).findByRole("button", { name: "Set up playground" })).toBeInTheDocument();
   });
 });

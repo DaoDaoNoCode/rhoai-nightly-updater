@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/envkit"
@@ -891,6 +892,16 @@ func ValidateModelsRequest(req types.ModelsRequest) string {
 	return ""
 }
 
+// modelChanges counts the model operations that ended (set up, deleted,
+// refused or failed: any of them may have changed a model). Reads cached
+// for a while that show models, such as the playground's status (the
+// models it offers), key on it, so the first read after a model operation
+// ends is fresh.
+var modelChanges atomic.Int64
+
+// ModelChanges is the number of model operations that have ended.
+func ModelChanges() int64 { return modelChanges.Load() }
+
 // RunModels sets up or deletes the inference gateway and a model, as one
 // operation with a streamed step per part: setup "check", "gateway",
 // "gateway-ready", "model", "model-ready", "publish" (a model reached
@@ -900,6 +911,7 @@ func ValidateModelsRequest(req types.ModelsRequest) string {
 // check "callable". Setup checks everything it writes, and dry-runs every
 // write, before it writes anything.
 func RunModels(c *kube.Client, req types.ModelsRequest, onStep func(types.UpdateStepEvent)) (*types.OperationResponse, error) {
+	defer modelChanges.Add(1)
 	var parts []string
 	if req.Action == "allow" || req.Action == "disallow" {
 		parts = append(parts, fmt.Sprintf("project %s on the inference gateway", req.Project))
@@ -1561,6 +1573,7 @@ func (m *modelsRun) applyToken(p *modelPlan) (string, string) {
 // until KServe's finalizer has removed them, so the gateway they used can
 // go next. Models of the same name it did not create are left alone.
 func TeardownModels(c *kube.Client, project string, names ...string) (*types.OperationResponse, error) {
+	defer modelChanges.Add(1)
 	logs := []string{}
 	detail := "project=" + project
 	if len(names) > 0 {

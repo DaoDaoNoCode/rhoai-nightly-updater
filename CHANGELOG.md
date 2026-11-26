@@ -508,6 +508,11 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   now revalidated by its content, so any other build, older or newer, is
   loaded on the next visit. Rolling back to a release older than this one
   can still need one hard reload (Cmd/Ctrl+Shift+R).
+- **The Playground card after a model was deployed or deleted** kept its
+  old answer (for example "It needs a ready chat model") for up to a
+  minute: the page read it again when the action ended, but the server
+  answered from its few-second cache of the playground's state. That cache
+  now starts afresh whenever a model operation ends.
 - **Models the playground cannot use** (B5+B6 live round). KServe reports
   a model without a route by its Service with no port, and the dashboard's
   Gen AI playground writes that address (plus /v1) into its configuration,

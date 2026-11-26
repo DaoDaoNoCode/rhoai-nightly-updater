@@ -1011,7 +1011,8 @@ func playgroundClusterParts(c *kube.Client, st *types.PlaygroundStatus) {
 var playgroundStatusCache = kube.NewLRU[string, *types.PlaygroundStatus](64)
 
 // playgroundStatusGen is part of every cache key: a change bumps it, so
-// the next status reads afresh.
+// the next status reads afresh. The status's key also holds
+// serving.ModelChanges: the models it offers change with a model operation.
 var playgroundStatusGen atomic.Int64
 
 // PurgePlaygroundStatus drops cached playground status (after a change).
@@ -1107,7 +1108,7 @@ func GetPlaygroundStatus(sa, u *kube.Client, project string) (*types.PlaygroundS
 		return nil, authz.ErrNotUserClient
 	}
 	c := u
-	key := fmt.Sprintf("%d|%s|%s", playgroundStatusGen.Load(), kube.TokenKey(c.BearerToken()), project)
+	key := fmt.Sprintf("%d|%d|%s|%s", playgroundStatusGen.Load(), serving.ModelChanges(), kube.TokenKey(c.BearerToken()), project)
 	if st, ok := playgroundStatusCache.Get(key); ok {
 		return st, nil
 	}
