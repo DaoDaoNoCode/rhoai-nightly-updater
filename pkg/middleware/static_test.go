@@ -184,3 +184,77 @@ func TestAcceptsGzip(t *testing.T) {
 		}
 	}
 }
+
+// Unhashed files (index.html) are revalidated by a strong ETag of the bytes
+// served, with no Last-Modified: after a rollback to an older build, the
+// browser's newer copy, sent back with a newer If-Modified-Since, gets the
+// older index.html (200) rather than a 304 that keeps it loading chunks the
+// older build lacks. Hashed assets keep their dates and stay immutable.
+func TestStaticFilesRevalidateByContent(t *testing.T) {
+	dir := writeDist(t)
+	h := StaticFiles(dir)
+	get := func(path, acceptEncoding string, header map[string]string) *httptest.ResponseRecorder {
+		r := httptest.NewRequestWithContext(t.Context(), "GET", path, nil)
+		if acceptEncoding != "" {
+			r.Header.Set("Accept-Encoding", acceptEncoding)
+		}
+		for k, v := range header {
+			r.Header.Set(k, v)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+
+	first := get("/", "", nil)
+	etag := first.Header().Get("ETag")
+	if first.Code != 200 || !strings.HasPrefix(etag, `"`) || strings.HasPrefix(etag, "W/") || first.Header().Get("Last-Modified") != "" {
+		t.Fatalf("index.html: %d ETag %q Last-Modified %q", first.Code, etag, first.Header().Get("Last-Modified"))
+	}
+	if w := get("/components", "", map[string]string{"If-None-Match": etag}); w.Code != http.StatusNotModified {
+		t.Fatalf("matching If-None-Match: %d", w.Code)
+	}
+
+	// Rollback: the older build's index.html is on disk, with an older
+	// modification time than the copy the browser holds.
+	older := time.Now().Add(-24 * time.Hour)
+	index := filepath.Join(dir, "index.html")
+	if err := os.WriteFile(index, []byte("<html>older build</html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(index, older, older); err != nil {
+		t.Fatal(err)
+	}
+	newer := time.Now().Add(time.Hour).UTC().Format(http.TimeFormat)
+	w := get("/", "", map[string]string{"If-Modified-Since": newer, "If-None-Match": etag})
+	if w.Code != 200 || w.Body.String() != "<html>older build</html>" || w.Header().Get("ETag") == etag {
+		t.Fatalf("after a rollback: %d %q ETag %q", w.Code, w.Body.String(), w.Header().Get("ETag"))
+	}
+	if w := get("/", "", map[string]string{"If-Modified-Since": newer}); w.Code != 200 {
+		t.Fatalf("If-Modified-Since alone: %d", w.Code)
+	}
+
+	// The gzip encoding has an ETag of its own bytes.
+	gz := get("/", "gzip", nil)
+	gzTag := gz.Header().Get("ETag")
+	if gz.Header().Get("Content-Encoding") != "gzip" || gunzip(t, gz.Body.Bytes()) != "<html>older build</html>" || gzTag == "" || gzTag == w.Header().Get("ETag") || gz.Header().Get("Last-Modified") != "" {
+		t.Fatalf("gzip: %v", gz.Header())
+	}
+	if w := get("/", "gzip", map[string]string{"If-None-Match": gzTag}); w.Code != http.StatusNotModified {
+		t.Fatalf("gzip If-None-Match: %d", w.Code)
+	}
+	if w := get("/", "gzip", map[string]string{"If-None-Match": w.Header().Get("ETag")}); w.Code != 200 {
+		t.Fatalf("identity ETag on a gzip request: %d", w.Code)
+	}
+	if w := get("/", "gzip", map[string]string{"If-Modified-Since": newer}); w.Code != 200 {
+		t.Fatalf("gzip If-Modified-Since: %d", w.Code)
+	}
+
+	// Hashed assets: immutable, dated, no ETag.
+	for _, ae := range []string{"", "gzip"} {
+		a := get("/bundle.435605b5.js", ae, nil)
+		if a.Header().Get("Cache-Control") != cacheImmutable || a.Header().Get("Last-Modified") == "" || a.Header().Get("ETag") != "" {
+			t.Fatalf("hashed asset (%q): %v", ae, a.Header())
+		}
+	}
+}

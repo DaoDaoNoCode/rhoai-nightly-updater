@@ -3,6 +3,9 @@ package middleware
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
 	"mime"
 	"net/http"
 	"os"
@@ -22,6 +25,10 @@ const (
 	cacheImmutable = "public, max-age=31536000, immutable"
 	// index.html and other unhashed files must be revalidated so a new
 	// deploy is picked up on the next load (no-cache still allows 304s).
+	// They are revalidated by a strong ETag of their content and carry no
+	// Last-Modified: a date only moves forward, so after a rollback to an
+	// older build the browser's newer copy would be answered 304 and load
+	// chunks the older build does not have.
 	cacheRevalidate = "no-cache"
 )
 
@@ -67,9 +74,17 @@ type gzipEntry struct {
 	data    []byte
 }
 
+// etagEntry is the ETag of a file's content as it was at modTime and size.
+type etagEntry struct {
+	modTime time.Time
+	size    int64
+	etag    string
+}
+
 // StaticFiles serves the built frontend from dir:
 //   - existing files, with long-lived caching for content-hashed names and
-//     revalidation for everything else (index.html);
+//     revalidation by a strong ETag of the served bytes for everything else
+//     (index.html; one ETag per encoding);
 //   - gzip when the client accepts it, from a precompressed "<file>.gz"
 //     next to the file or compressed once in memory;
 //   - index.html for extension-less paths (client-side routes);
@@ -81,7 +96,8 @@ func StaticFiles(dir string) http.Handler {
 	if err != nil {
 		root = dir
 	}
-	var gzCache sync.Map // full path -> *gzipEntry
+	var gzCache sync.Map   // full path -> *gzipEntry
+	var etagCache sync.Map // full path -> *etagEntry
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		urlPath := path.Clean("/" + r.URL.Path)
 		if urlPath == "/api" || strings.HasPrefix(urlPath, "/api/") {
@@ -113,7 +129,8 @@ func StaticFiles(dir string) http.Handler {
 		}
 
 		name := filepath.Base(full)
-		if IsHashedAsset(name) {
+		hashed := IsHashedAsset(name)
+		if hashed {
 			w.Header().Set("Cache-Control", cacheImmutable)
 		} else {
 			w.Header().Set("Cache-Control", cacheRevalidate)
@@ -131,6 +148,10 @@ func StaticFiles(dir string) http.Handler {
 			if acceptsGzip(r.Header.Get("Accept-Encoding")) {
 				if data, modTime, ok := gzipped(&gzCache, full, info); ok {
 					w.Header().Set("Content-Encoding", "gzip")
+					if !hashed {
+						modTime = time.Time{}
+						w.Header().Set("ETag", contentETag(data))
+					}
 					http.ServeContent(w, r, name, modTime, bytes.NewReader(data))
 					return
 				}
@@ -142,8 +163,47 @@ func StaticFiles(dir string) http.Handler {
 			return
 		}
 		defer f.Close()
-		http.ServeContent(w, r, name, info.ModTime(), f)
+		modTime := info.ModTime()
+		if !hashed {
+			// Zero: ServeContent sends no Last-Modified and ignores
+			// If-Modified-Since; If-None-Match decides.
+			modTime = time.Time{}
+			if etag := fileETag(&etagCache, full, info); etag != "" {
+				w.Header().Set("ETag", etag)
+			}
+		}
+		http.ServeContent(w, r, name, modTime, f)
 	})
+}
+
+// contentETag is a strong ETag of b: its SHA-256, shortened to 128 bits.
+func contentETag(b []byte) string {
+	sum := sha256.Sum256(b)
+	return `"` + hex.EncodeToString(sum[:16]) + `"`
+}
+
+// fileETag is contentETag of the file's bytes, computed once per
+// modification time and size; "" when the file cannot be read (the
+// response then has no validator, so it is always sent in full).
+func fileETag(cache *sync.Map, full string, info os.FileInfo) string {
+	if v, ok := cache.Load(full); ok {
+		e := v.(*etagEntry)
+		if e.modTime.Equal(info.ModTime()) && e.size == info.Size() {
+			return e.etag
+		}
+	}
+	f, err := os.Open(full)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	etag := `"` + hex.EncodeToString(h.Sum(nil)[:16]) + `"`
+	cache.Store(full, &etagEntry{modTime: info.ModTime(), size: info.Size(), etag: etag})
+	return etag
 }
 
 // gzipped returns the gzip encoding of a file: a precompressed sibling when

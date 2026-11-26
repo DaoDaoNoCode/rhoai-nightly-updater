@@ -500,6 +500,14 @@ Template revision 8: a full redeploy ([UPGRADING.md](docs/UPGRADING.md#upgrade-t
   being deleted to finish"), within the operation, and then deletes the
   queues. Any other Workload on the queue still stops it at once, as
   before.
+- **"This page could not be loaded" after a rollback**, with a Reload
+  button that did not help: the app's page was revalidated by its file
+  date, so after installing an older build the browser's newer copy was
+  answered "not modified" and asked for files the older build does not
+  have. The page (and every file without a content hash in its name) is
+  now revalidated by its content, so any other build, older or newer, is
+  loaded on the next visit. Rolling back to a release older than this one
+  can still need one hard reload (Cmd/Ctrl+Shift+R).
 - **Models the playground cannot use** (B5+B6 live round). KServe reports
   a model without a route by its Service with no port, and the dashboard's
   Gen AI playground writes that address (plus /v1) into its configuration,

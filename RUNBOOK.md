@@ -100,6 +100,8 @@ What `make rollback` does:
 3. Keeps sessions: a template with a `COOKIE_SECRET` parameter gets the current Secret value.
 4. Skips the legacy cleanup, because the old build may need its legacy objects. Rolling back to a template from before namespaced names recreates a ConsoleLink with a placeholder URL until the next `make upgrade`.
 
+After a rollback to a release older than 5.0.0-alpha.3, a browser that had the newer build open may show "This page could not be loaded", and its Reload button does not help: those releases answer the browser's newer copy of the page with "not modified". Reload once bypassing the cache (Cmd+Shift+R or Ctrl+Shift+R).
+
 **`oc rollout undo` does not work.** `install.sh` (and `make deploy`/`upgrade`) delete old ReplicaSets after a successful rollout, because their pod templates may hold the old plaintext cookie secret. Use `make rollback`.
 
 **Restarts wait for operations.** If an Update/Install a different build is running, the old pod finishes it first (drain up to 980 s, `terminationGracePeriodSeconds: 1020`, `Recreate`). oauth-proxy exits at once, so the UI is unreachable for up to ~17 minutes. `make upgrade`/`rollback` wait up to `ROLLOUT_TIMEOUT=20m`. A direct `oc delete pod` or an eviction is different: the ReplicaSet starts a replacement at once, which shows the old pod's operation as running "on updater pod …" and refuses changes until it ends (§5). Check whether something is running before you restart (`operation` is the marker, `lock` the lease):
