@@ -371,9 +371,17 @@ type renewal struct {
 // The other entries to recover are recovered in the next rounds (their
 // renewals fail their tests again; their deadlines still apply).
 func (k *leaseKeeper) renewOnce(ctx context.Context) {
-	recoveries := k.renewBatch(ctx)
-	k.pickUpCancels(ctx)
-	if len(recoveries) == 0 || ctx.Err() != nil {
+	recoveries, renewedAll := k.renewBatch(ctx)
+	if len(recoveries) == 0 {
+		// Cancel requests of other pods are read only in a round whose
+		// renewals all went through: never ahead of, nor instead of,
+		// keeping the locks.
+		if renewedAll && ctx.Err() == nil {
+			k.pickUpCancels(ctx)
+		}
+		return
+	}
+	if ctx.Err() != nil {
 		return
 	}
 	if len(recoveries) > 1 {
@@ -425,8 +433,9 @@ func (k *leaseKeeper) pickUpCancels(ctx context.Context) {
 }
 
 // renewBatch is renewOnce's renewal of every held entry in one write,
-// under k.round; it returns the entries to recover (in key order).
-func (k *leaseKeeper) renewBatch(ctx context.Context) []renewal {
+// under k.round; it returns the entries to recover (in key order), and
+// whether every entry renewed was renewed (no error, none lost).
+func (k *leaseKeeper) renewBatch(ctx context.Context) ([]renewal, bool) {
 	k.round.Lock()
 	defer k.round.Unlock()
 	k.mu.Lock()
@@ -458,7 +467,7 @@ func (k *leaseKeeper) renewBatch(ctx context.Context) []renewal {
 		}
 	}
 	if len(batch) == 0 {
-		return nil
+		return nil, false
 	}
 	k.mu.Lock()
 	writeDeadline := first.lost
@@ -477,9 +486,10 @@ func (k *leaseKeeper) renewBatch(ctx context.Context) []renewal {
 	}
 	lostKeys, err := renewOperationLocks(wc, renewals)
 	var recoveries []renewal
+	renewedAll := true
 	for _, r := range batch {
 		if ctx.Err() != nil {
-			return nil
+			return nil, false
 		}
 		k.mu.Lock()
 		current := k.held[r.h.key] == r.h && !r.h.gone
@@ -489,6 +499,7 @@ func (k *leaseKeeper) renewBatch(ctx context.Context) []renewal {
 			continue
 		}
 		if holder, isLost := lostKeys[r.h.key]; isLost {
+			renewedAll = false
 			if leaseHeldElsewhere(holder) {
 				k.lose(r.h, "another updater pod took over the cross-pod operation lock", "holder", holder.ID, "holderPod", holder.Pod)
 				continue
@@ -496,9 +507,12 @@ func (k *leaseKeeper) renewBatch(ctx context.Context) []renewal {
 			recoveries = append(recoveries, r)
 			continue
 		}
+		if err != nil || lost.Err() != nil {
+			renewedAll = false
+		}
 		k.settle(r, lost, err)
 	}
-	return recoveries
+	return recoveries, renewedAll
 }
 
 // settle applies the outcome err of r's write.

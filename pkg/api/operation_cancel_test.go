@@ -351,3 +351,53 @@ func TestCancelRefusesAMalformedID(t *testing.T) {
 		t.Fatal("a malformed request used the slot")
 	}
 }
+
+// A heartbeat round that must take a lock entry again (its renewal found
+// it free) recovers it and reads no cancel request: the read, however
+// slow, never comes ahead of keeping the lock. The next round, whose
+// renewals all go through, reads it. (The heartbeat's clock is the
+// package's fake one.)
+func TestCancelPickupWaitsForTheLockRecovery(t *testing.T) {
+	newProjectGateEnv(t, roleEditor)
+	started, proceed := make(chan struct{}), make(chan struct{})
+	runWorkbench = func(c *cluster.Client, _ types.WorkbenchRequest, _ func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		close(started)
+		<-proceed
+		return &types.OperationResponse{Success: true, Message: "done"}, nil
+	}
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- serveProjectAction(t, "/api/resources/workbench/stream", `{"action":"setup","project":"team-a"}`)
+	}()
+	<-started
+	defer func() { close(proceed); <-done }()
+	key := cluster.ProjectLockKey("uid-team-a")
+	recovered := 0
+	acquireOperationLock = func(_ *cluster.Client, k, _ string, _ func(*cluster.OperationRecord) error) error {
+		if k == key {
+			recovered++
+		}
+		return nil
+	}
+	free := true
+	renewOperationLocks = func(_ *cluster.Client, renewals []cluster.LockRenewal) (map[string]*types.OperationLease, error) {
+		if free {
+			return map[string]*types.OperationLease{key: nil}, nil
+		}
+		return nil, nil
+	}
+	reads := 0
+	readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) {
+		reads++ // a slow read would hold up the round here
+		return &cluster.OperationRecord{}, nil
+	}
+	leases.renewOnce(context.Background())
+	if recovered != 1 || reads != 0 {
+		t.Fatalf("recovery round: recovered %d, cancel reads %d", recovered, reads)
+	}
+	free = false
+	leases.renewOnce(context.Background())
+	if reads != 1 {
+		t.Fatalf("a round whose renewals went through read the cancel requests %d times", reads)
+	}
+}
