@@ -43,11 +43,12 @@ func withCancel(c *Client, s *cancelSwitch) *Client {
 type flipDuring struct {
 	base         http.RoundTripper
 	method, path string
+	dryRun       bool // the server-side dry run of that request, not the write
 	flip         func()
 }
 
 func (d *flipDuring) RoundTrip(r *http.Request) (*http.Response, error) {
-	if r.Method == d.method && r.URL.Path == d.path && r.URL.Query().Get("dryRun") == "" {
+	if r.Method == d.method && r.URL.Path == d.path && (r.URL.Query().Get("dryRun") != "") == d.dryRun {
 		d.flip()
 	}
 	return d.base.RoundTrip(r)
@@ -65,13 +66,15 @@ func TestWorkbenchSetupCancelAtEverySafePoint(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		during     string // the create in flight when the request comes; "" from the start
+		dryRun     bool   // during that create's dry run
 		pvc, nb    bool
 		success    bool
 		wantPrefix string
 	}{
-		{"before anything", "", false, false, false, "Cancelled by the user who started it before this step. Nothing was changed."},
-		{"while the storage is created", wbPVCs, true, false, false, "Cancelled by the user who started it before this step. No workbench was created; its storage nightly-workbench-storage stays"},
-		{"while the workbench is created", wbNotebooks, true, true, true, ""},
+		{"before anything", "", false, false, false, false, "Cancelled by the user who started it before this step. Nothing was changed."},
+		{"during the workbench's dry run", wbNotebooks, true, false, false, false, "Cancelled by the user who started it before this step. No workbench or storage was created."},
+		{"while the storage is created", wbPVCs, false, true, false, false, "Cancelled by the user who started it before this step. No workbench was created; its storage nightly-workbench-storage stays"},
+		{"while the workbench is created", wbNotebooks, false, true, true, true, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, c := newResourceFake(t)
@@ -79,7 +82,7 @@ func TestWorkbenchSetupCancelAtEverySafePoint(t *testing.T) {
 			sw := &cancelSwitch{}
 			sw.on.Store(tc.during == "")
 			editTestClient(c, func(o *testClientOptions) {
-				o.HTTPClient = &http.Client{Transport: &flipDuring{base: o.HTTPClient.Transport, method: http.MethodPost, path: tc.during, flip: func() { sw.on.Store(true) }}}
+				o.HTTPClient = &http.Client{Transport: &flipDuring{base: o.HTTPClient.Transport, method: http.MethodPost, path: tc.during, dryRun: tc.dryRun, flip: func() { sw.on.Store(true) }}}
 			})
 			u := withCancel(userClientOf(c, fakeUserToken), sw)
 			u.SetUsername("alice")
@@ -97,6 +100,13 @@ func TestWorkbenchSetupCancelAtEverySafePoint(t *testing.T) {
 			if tc.during == "" {
 				for _, call := range f.callsTo(http.MethodPost, wbNotebooks) {
 					t.Fatalf("the Notebook's dry run was sent: %+v", call.Query)
+				}
+			}
+			if !tc.pvc {
+				for _, call := range f.callsTo(http.MethodPost, wbPVCs) {
+					if !call.dryRun() {
+						t.Fatal("the storage's create was sent")
+					}
 				}
 			}
 			rec, err := workbench.ReadRecord(c)

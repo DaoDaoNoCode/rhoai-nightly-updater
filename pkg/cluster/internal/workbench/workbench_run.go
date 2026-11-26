@@ -263,6 +263,11 @@ func (r *run) setup(project string) (*types.OperationResponse, error) {
 	}
 	r.step("check", "success", describe(plan))
 
+	// Safe point: after the dry run (which may have added the workbench
+	// controller's objects, as its refusal says), before the storage.
+	if cancel := record.CancelRequested(c); cancel != nil {
+		return r.cancelled("storage", cancel, "No workbench or storage was created.")
+	}
 	if pvcFound {
 		r.step("storage", "success", fmt.Sprintf("Using the storage this tool kept: %s.", StorageName))
 	} else {

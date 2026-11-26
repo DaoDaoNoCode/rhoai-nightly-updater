@@ -242,7 +242,7 @@ A cancel is a request: it marks the running action and nothing else. It takes no
 
 | Action | Safe points | A cancel leaves |
 |---|---|---|
-| Workbench: set up | before its first change (ahead of the Notebook's dry run, whose webhook adds ConfigMaps and a Secret to the project); between the storage and the workbench | nothing, or the storage, recorded as the tool's (the next setup uses it) |
+| Workbench: set up | before its first change (ahead of the Notebook's dry run, whose webhook adds ConfigMaps and a Secret to the project); after that dry run, before the storage; between the storage and the workbench | nothing, or the storage, recorded as the tool's (the next setup uses it) |
 | Playground: set up | before the request is recorded; right before each install attempt (also after a retry's wait); each poll of the ready wait (the first right after the install) | nothing, or the playground, recorded as the tool's (Delete removes it) |
 | MLflow samples: add, remove (a user's; a cluster-admin's holds the cluster lock and cannot be cancelled) | between samples (a sample's creates and tags are one step) | the samples done by then, and those that failed before (reported with the cancel) |
 
