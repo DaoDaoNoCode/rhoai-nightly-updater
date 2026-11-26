@@ -26,7 +26,7 @@ import { FORBIDDEN_FOR_USER_BODY, FORBIDDEN_FOR_USER_TITLE, describeError, isNot
 import { EnvStatusLabel, envStatus } from "./resourceStatus";
 import { IDLE, playgroundIn } from "./featureState";
 import { PipelineSample } from "./PipelineSample";
-import { SAMPLE_INFO, sampleLabel } from "./samples";
+import { SAMPLE_INFO, sampleLabel, sampleNote } from "./samples";
 import { LinesSkeleton } from "./Loading";
 
 /** What a cluster-admin does on this page for a user who is not one: set up or remove anything. */
@@ -313,9 +313,13 @@ const SamplesPart: React.FC<{ project: string; read: ProjectRead<MLflowSamplesSt
             <Tbody>
               {data.samples.map((s) => {
                 const label = sampleLabel(s, null);
+                const note = sampleNote(s);
                 return (
                   <Tr key={s.id}>
-                    <Td dataLabel="Sample">{SAMPLE_INFO[s.id]?.name ?? s.name}</Td>
+                    <Td dataLabel="Sample">
+                      {SAMPLE_INFO[s.id]?.name ?? s.name}
+                      {note && <Content component="small" className="pf-v6-u-display-block pf-v6-u-mt-xs">{note}</Content>}
+                    </Td>
                     <Td dataLabel="State">{label ? <EnvStatusLabel status={label.status} text={label.text} /> : null}</Td>
                     <Td dataLabel="Link" modifier="nowrap">
                       <Flex gap={{ default: "gapMd" }} flexWrap={{ default: "nowrap" }}>

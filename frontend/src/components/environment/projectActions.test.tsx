@@ -139,3 +139,15 @@ describe("a user's project view", () => {
     expect(within(workbench).getByRole("button", { name: "Start" })).toBeInTheDocument();
   });
 });
+
+describe("a user's MLflow samples", () => {
+  it("says why a removed demo offers nothing, as the admin's table does", async () => {
+    const samples = contract.mlflowSamples("team-a");
+    const why = "Removed in MLflow. A cluster-admin restores it (Add on the Environment page), which brings the experiment back and generates every feature again.";
+    samples.samples = samples.samples.map((s) => (s.id === "genai-demo" ? { ...s, state: "removed", message: why, actions: [] } : s));
+    stubUserApi({ "/api/resources/samples/mlflow": () => jsonResponse(samples) });
+    render(<UserProjectView project="team-a" refreshKey={0} />);
+    const region = await screen.findByRole("region", { name: "MLflow sample data" });
+    expect(await within(region).findByText(why)).toBeInTheDocument();
+  });
+});
