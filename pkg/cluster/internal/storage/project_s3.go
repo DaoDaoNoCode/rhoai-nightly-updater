@@ -451,7 +451,7 @@ func writeProjectStorageRecord(c *kube.Client, rec ProjectStorageRecord) error {
 // removed. A user's new entry, or one taken over, is admitted by the caps
 // of users' records in the same step.
 func updateProjectStorageRecord(c *kube.Client, project string, change func(e *ProjectStorageRecorded)) error {
-	return record.UpdateSnapshot(c, func() error {
+	return record.UpdateSnapshot(c, func(c *kube.Client) error {
 		rec, err := ReadProjectStorageRecord(c)
 		if err != nil {
 			return err
@@ -489,7 +489,7 @@ func updateProjectStorageRecord(c *kube.Client, project string, change func(e *P
 // projects. An entry gone cannot tell about stays (fail closed).
 func ForgetGoneProjectStorages(c *kube.Client, gone func(project string, e ProjectStorageRecorded) bool) ([]string, error) {
 	var dropped []string
-	err := record.UpdateSnapshot(c, func() error {
+	err := record.UpdateSnapshot(c, func(c *kube.Client) error {
 		rec, err := ReadProjectStorageRecord(c)
 		if err != nil {
 			return err

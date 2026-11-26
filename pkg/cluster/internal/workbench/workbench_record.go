@@ -106,7 +106,7 @@ func writeRecord(c *kube.Client, rec Record) error {
 // updateRecord loads the record, mutates the project entry via change, removes
 // the entry when both UIDs are cleared, then persists the result.
 func updateRecord(c *kube.Client, project string, change func(e *Recorded)) error {
-	return record.UpdateSnapshot(c, func() error {
+	return record.UpdateSnapshot(c, func(c *kube.Client) error {
 		rec, err := ReadRecord(c)
 		if err != nil {
 			return err
@@ -147,7 +147,7 @@ func updateRecord(c *kube.Client, project string, change func(e *Recorded)) erro
 // gone cannot tell about stays (fail closed: gone says false).
 func ForgetGoneProjects(c *kube.Client, gone func(project string, e Recorded) bool) ([]string, error) {
 	var dropped []string
-	err := record.UpdateSnapshot(c, func() error {
+	err := record.UpdateSnapshot(c, func(c *kube.Client) error {
 		rec, err := ReadRecord(c)
 		if err != nil {
 			return err

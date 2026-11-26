@@ -3,14 +3,11 @@ package serving
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
-	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // Which catalog-named models are this tool's.
@@ -81,10 +78,7 @@ func ownsModel(c *kube.Client, meta kube.ObjectMeta) (bool, error) {
 
 // ReadModelsRecord reads the record (empty when nothing is recorded).
 func ReadModelsRecord(c *kube.Client) (ModelsRecord, error) {
-	var cm struct {
-		Data map[string]string `json:"data"`
-	}
-	found, err := c.Bookkeeping().GetIntoOptional(rhoai.NamespacedPath("v1", "configmaps", record.GetActivityNamespace(), record.SnapshotConfigMapName), &cm)
+	cmData, found, err := record.ReadSnapshotData(c)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
@@ -95,7 +89,7 @@ func ReadModelsRecord(c *kube.Client) (ModelsRecord, error) {
 		return ModelsRecord{}, nil
 	}
 	rec := ModelsRecord{}
-	if raw := cm.Data[ModelsRecordKey]; raw != "" {
+	if raw := cmData[ModelsRecordKey]; raw != "" {
 		if err := json.Unmarshal([]byte(raw), &rec); err != nil {
 			return nil, fmt.Errorf("parse this tool's record of its models: %w", err)
 		}
@@ -113,15 +107,7 @@ func WriteModelsRecord(c *kube.Client, rec ModelsRecord) error {
 	if err != nil {
 		return err
 	}
-	ns := record.GetActivityNamespace()
-	cm, _ := json.Marshal(map[string]any{
-		"apiVersion": "v1",
-		"kind":       "ConfigMap",
-		"metadata":   map[string]any{"name": record.SnapshotConfigMapName, "namespace": ns},
-		"data":       map[string]any{ModelsRecordKey: string(data)},
-	})
-	query := url.Values{"fieldManager": {modelsRecordManager}, "force": {"true"}}
-	if _, _, err := c.Bookkeeping().Do(http.MethodPatch, rhoai.NamespacedPath("v1", "configmaps", ns, record.SnapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
+	if err := record.ApplySnapshotKeys(c, modelsRecordManager, map[string]any{ModelsRecordKey: string(data)}); err != nil {
 		return fmt.Errorf("record this tool's models: %w", err)
 	}
 	return nil
@@ -132,7 +118,7 @@ func WriteModelsRecord(c *kube.Client, rec ModelsRecord) error {
 // its write (record.AdmitUserEntry): a refusal is a
 // *record.RecordsFullError, and nothing is written.
 func recordModel(c *kube.Client, meta kube.ObjectMeta) error {
-	return record.UpdateSnapshot(c, func() error {
+	return record.UpdateSnapshot(c, func(c *kube.Client) error {
 		rec, err := ReadModelsRecord(c)
 		if err != nil {
 			return err
@@ -159,7 +145,7 @@ func recordModel(c *kube.Client, meta kube.ObjectMeta) error {
 
 // recordTokenSecret records the token Secret the tool made for its model.
 func recordTokenSecret(c *kube.Client, project, name, uid string) error {
-	return record.UpdateSnapshot(c, func() error {
+	return record.UpdateSnapshot(c, func(c *kube.Client) error {
 		rec, err := ReadModelsRecord(c)
 		if err != nil {
 			return err
@@ -180,7 +166,7 @@ func forgetModels(c *kube.Client, keys ...string) error {
 	if len(keys) == 0 {
 		return nil
 	}
-	return record.UpdateSnapshot(c, func() error {
+	return record.UpdateSnapshot(c, func(c *kube.Client) error {
 		rec, err := ReadModelsRecord(c)
 		if err != nil {
 			return err
@@ -205,7 +191,7 @@ func forgetModels(c *kube.Client, keys ...string) error {
 // cannot tell about stays (fail closed: gone says false).
 func ForgetGoneModels(c *kube.Client, gone func(project, name string, e RecordedModel) bool) ([]string, error) {
 	var dropped []string
-	err := record.UpdateSnapshot(c, func() error {
+	err := record.UpdateSnapshot(c, func(c *kube.Client) error {
 		rec, err := ReadModelsRecord(c)
 		if err != nil {
 			return err

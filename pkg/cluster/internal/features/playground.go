@@ -782,10 +782,7 @@ func ToolPlaygroundServerUID(c *kube.Client, project string) (string, error) {
 // ReadPlaygroundRecords returns the recorded projects (none when nothing is
 // recorded).
 func ReadPlaygroundRecords(c *kube.Client) (map[string]PlaygroundRecord, error) {
-	var cm struct {
-		Data map[string]string `json:"data"`
-	}
-	found, err := c.Bookkeeping().GetIntoOptional(rhoai.NamespacedPath("v1", "configmaps", record.GetActivityNamespace(), record.SnapshotConfigMapName), &cm)
+	cmData, found, err := record.ReadSnapshotData(c)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
@@ -796,7 +793,7 @@ func ReadPlaygroundRecords(c *kube.Client) (map[string]PlaygroundRecord, error) 
 		return map[string]PlaygroundRecord{}, nil
 	}
 	out := map[string]PlaygroundRecord{}
-	if raw := cm.Data[playgroundRecordKey]; raw != "" {
+	if raw := cmData[playgroundRecordKey]; raw != "" {
 		if err := json.Unmarshal([]byte(raw), &out); err != nil {
 			return nil, fmt.Errorf("parse this tool's playground records: %w", err)
 		}
@@ -811,15 +808,7 @@ func WritePlaygroundRecords(c *kube.Client, records map[string]PlaygroundRecord)
 	if err != nil {
 		return err
 	}
-	ns := record.GetActivityNamespace()
-	cm, _ := json.Marshal(map[string]any{
-		"apiVersion": "v1",
-		"kind":       "ConfigMap",
-		"metadata":   map[string]any{"name": record.SnapshotConfigMapName, "namespace": ns},
-		"data":       map[string]any{playgroundRecordKey: string(data)},
-	})
-	query := url.Values{"fieldManager": {playgroundRecordManager}, "force": {"true"}}
-	if _, _, err := c.Bookkeeping().Do(http.MethodPatch, rhoai.NamespacedPath("v1", "configmaps", ns, record.SnapshotConfigMapName), "application/apply-patch+yaml", cm, query); err != nil {
+	if err := record.ApplySnapshotKeys(c, playgroundRecordManager, map[string]any{playgroundRecordKey: string(data)}); err != nil {
 		return fmt.Errorf("record this tool's playgrounds: %w", err)
 	}
 	return nil
@@ -829,7 +818,7 @@ func WritePlaygroundRecords(c *kube.Client, records map[string]PlaygroundRecord)
 // record.UpdateSnapshot: project actions in other projects of this process
 // write the same key.
 func setPlaygroundRecord(c *kube.Client, project string, rec *PlaygroundRecord) error {
-	return record.UpdateSnapshot(c, func() error {
+	return record.UpdateSnapshot(c, func(c *kube.Client) error {
 		records, err := ReadPlaygroundRecords(c)
 		if err != nil {
 			return err

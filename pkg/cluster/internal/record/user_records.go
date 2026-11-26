@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
-	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
 )
 
 // The caps of users' records (the non-admin design, decision D6 and
@@ -87,10 +86,7 @@ func (o RecordOwner) key() string {
 // ReadRecordOwners reads the entries of UserRecordKeys from the snapshot
 // ConfigMap (none when it is missing).
 func ReadRecordOwners(c *kube.Client) ([]RecordOwner, error) {
-	var cm struct {
-		Data map[string]string `json:"data"`
-	}
-	found, err := c.Bookkeeping().GetIntoOptional(rhoai.NamespacedPath("v1", "configmaps", GetActivityNamespace(), SnapshotConfigMapName), &cm)
+	data, found, err := ReadSnapshotData(c)
 	if err != nil {
 		if kube.IsDecodeError(err) {
 			return nil, fmt.Errorf("parse the snapshot ConfigMap: %w", err)
@@ -102,7 +98,7 @@ func ReadRecordOwners(c *kube.Client) ([]RecordOwner, error) {
 	}
 	var out []RecordOwner
 	for _, key := range UserRecordKeys {
-		raw := cm.Data[key]
+		raw := data[key]
 		if raw == "" {
 			continue
 		}
@@ -388,10 +384,3 @@ func namespaceUID(f *kube.Client, project string) (string, bool, error) {
 // the snapshot ConfigMap's keys (UpdateSnapshot): project actions in
 // different projects run at once, and each record key is applied whole.
 var snapshotWriter = make(podWriter, 1)
-
-// UpdateSnapshot runs change (a read of a snapshot key, its change and
-// its write) once this process's other changes of the snapshot ended, so
-// two project actions never write the same key from the same old value.
-func UpdateSnapshot(c *kube.Client, change func() error) error {
-	return snapshotWriter.do(c.Context(), change)
-}

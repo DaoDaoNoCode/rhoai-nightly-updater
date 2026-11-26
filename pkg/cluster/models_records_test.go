@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -132,5 +133,60 @@ func TestSweepDropsModelEntriesOfGoneProjects(t *testing.T) {
 	want := []string{"legacy/" + m, "live/" + m, "remade-live/" + m, "remade-unreadable/" + m}
 	if !slices.Equal(got, want) {
 		t.Fatalf("model entries after the sweep: %v, want %v", got, want)
+	}
+}
+
+// Two updater pods (one drains while its replacement runs) write the
+// models record at once: the other pod's entry lands between this pod's
+// read and its write. The write is conditional on what it read, so it
+// conflicts, and UpdateSnapshot reads, merges and writes again: both
+// entries stay.
+func TestSnapshotWritesKeepAnotherPodsEntry(t *testing.T) {
+	f, c := newResourceFake(t)
+	m := serving.ModelCatalog[0].Name
+	putModelRecord(t, f, serving.ModelsRecord{serving.ModelRecordKey("first", m): {UID: "a"}})
+	path := "/api/v1/namespaces/" + record.GetActivityNamespace() + "/configmaps/" + record.SnapshotConfigMapName
+	otherPod := c.WithContext(t.Context())
+	interleaved, patches := false, 0
+	f.beforeServe = func(method, p string) {
+		if method != http.MethodPatch || p != path {
+			return
+		}
+		patches++
+		if interleaved {
+			return
+		}
+		interleaved = true
+		// The other pod's own read-change-write, outside this pod's writer.
+		rec, err := serving.ReadModelsRecord(otherPod)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		rec[serving.ModelRecordKey("other-pod", m)] = serving.RecordedModel{UID: "b"}
+		cm := f.get(path)
+		raw, _ := json.Marshal(rec)
+		cm["data"].(map[string]any)[serving.ModelsRecordKey] = string(raw)
+		f.bumpRV(cm["metadata"].(map[string]any))
+	}
+	err := record.UpdateSnapshot(c, func(tc *Client) error {
+		rec, err := serving.ReadModelsRecord(tc)
+		if err != nil {
+			return err
+		}
+		rec[serving.ModelRecordKey("this-pod", m)] = serving.RecordedModel{UID: "c"}
+		return serving.WriteModelsRecord(tc, rec)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := serving.ReadModelsRecord(c)
+	for _, p := range []string{"first", "other-pod", "this-pod"} {
+		if _, ok := rec[serving.ModelRecordKey(p, m)]; !ok {
+			t.Errorf("%s's entry is lost: %v", p, rec)
+		}
+	}
+	if patches != 2 {
+		t.Errorf("writes: %d, want the conflicting one and its retry", patches)
 	}
 }
