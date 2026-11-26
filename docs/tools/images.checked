@@ -1,17 +1,17 @@
 # Written by docs/tools/screenshots.sh: each docs image and the commit it was last
 # captured at (make docs-stale). Commit it with the images; do not edit it by hand.
-environment-maas.png aa5be101a142d395a79db99ab855fd44f394ef8e
-environment-mlflow.png aa5be101a142d395a79db99ab855fd44f394ef8e
-environment-models.png aa5be101a142d395a79db99ab855fd44f394ef8e
-environment-pipelines.png aa5be101a142d395a79db99ab855fd44f394ef8e
-environment-playground.png aa5be101a142d395a79db99ab855fd44f394ef8e
-environment-storage.png aa5be101a142d395a79db99ab855fd44f394ef8e
-page-build-explorer.png aa5be101a142d395a79db99ab855fd44f394ef8e
-page-components.png aa5be101a142d395a79db99ab855fd44f394ef8e
-page-dashboard-dev.png aa5be101a142d395a79db99ab855fd44f394ef8e
-page-diagnostics.png aa5be101a142d395a79db99ab855fd44f394ef8e
-page-status.png aa5be101a142d395a79db99ab855fd44f394ef8e
-page-test-resources.png aa5be101a142d395a79db99ab855fd44f394ef8e
-page-user-environment.png aa5be101a142d395a79db99ab855fd44f394ef8e
-page-user-status.png aa5be101a142d395a79db99ab855fd44f394ef8e
-status-cluster-setup.png aa5be101a142d395a79db99ab855fd44f394ef8e
+environment-maas.png e5dd071f2abb137f8b0b18cd0132a7d2253f5f31
+environment-mlflow.png e5dd071f2abb137f8b0b18cd0132a7d2253f5f31
+environment-models.png e5dd071f2abb137f8b0b18cd0132a7d2253f5f31
+environment-pipelines.png e5dd071f2abb137f8b0b18cd0132a7d2253f5f31
+environment-playground.png e5dd071f2abb137f8b0b18cd0132a7d2253f5f31
+environment-storage.png e5dd071f2abb137f8b0b18cd0132a7d2253f5f31
+page-build-explorer.png e5dd071f2abb137f8b0b18cd0132a7d2253f5f31
+page-components.png e5dd071f2abb137f8b0b18cd0132a7d2253f5f31
+page-dashboard-dev.png e5dd071f2abb137f8b0b18cd0132a7d2253f5f31
+page-diagnostics.png e5dd071f2abb137f8b0b18cd0132a7d2253f5f31
+page-status.png e5dd071f2abb137f8b0b18cd0132a7d2253f5f31
+page-test-resources.png e5dd071f2abb137f8b0b18cd0132a7d2253f5f31
+page-user-environment.png e5dd071f2abb137f8b0b18cd0132a7d2253f5f31
+page-user-status.png e5dd071f2abb137f8b0b18cd0132a7d2253f5f31
+status-cluster-setup.png e5dd071f2abb137f8b0b18cd0132a7d2253f5f31
