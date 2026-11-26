@@ -1494,7 +1494,9 @@ func TestKueueTeardownWaitsForLeavingWorkloads(t *testing.T) {
 		f.putJSON(kqWorkloads+"/w3", `{"metadata":{"name":"w3","namespace":"proj","ownerReferences":[{"kind":"Job","name":"j","uid":"job-uid"}]},"spec":{"queueName":"nightly-kueue"}}`)
 		lists := goneAfter(f, 0)
 		res, events := runKueueOp(t, u, types.KueueRequest{Action: "teardown"})
-		if res.Success || res.ErrorCode != "in_use" || !f.has(kqLQ) || res.Message != "LocalQueue nightly-kueue is used by Workload w2 and Workload w3, so it stays; remove them first." {
+		// The list's order is the API server's: either user may come first.
+		if res.Success || res.ErrorCode != "in_use" || !f.has(kqLQ) || !strings.Contains(res.Message, "Workload w2") || !strings.Contains(res.Message, "Workload w3") ||
+			strings.Contains(res.Message, "Workload w1") || !strings.HasSuffix(res.Message, ", so it stays; remove them first.") {
 			t.Fatalf("got %+v", res)
 		}
 		if *lists != 1 || waited(events, "Waiting for the workload of pods being deleted to finish") {
