@@ -560,6 +560,9 @@ func ModelsBlock(dsc rhoai.DSCRead) (*types.ComponentBlock, string) {
 type cpuPreset struct {
 	name, image, problem string
 	err                  error
+	// notReady: the preset reports Ready=False; problem quotes its
+	// condition, which only a cluster-admin is shown.
+	notReady bool
 }
 
 // discoverCPUPreset finds the CPU preset: the controller's config prefix
@@ -633,7 +636,7 @@ func discoverCPUPreset(c *kube.Client) cpuPreset {
 		return cpuPreset{name: name, problem: fmt.Sprintf("Cannot parse the CPU preset %s/%s: %v.", ns, name, err)}
 	}
 	if cond, ok := kube.FindCondition(cfg.Status.Conditions, "Ready"); ok && cond.Status == "False" {
-		return cpuPreset{name: name, problem: fmt.Sprintf("The CPU preset %s/%s is not ready: %s.", ns, name, kube.FirstNonEmpty(cond.Message, cond.Reason))}
+		return cpuPreset{name: name, problem: fmt.Sprintf("The CPU preset %s/%s is not ready: %s.", ns, name, kube.FirstNonEmpty(cond.Message, cond.Reason)), notReady: true}
 	}
 	p := cpuPreset{name: name}
 	if cfg.Spec.Template != nil {
@@ -2046,6 +2049,11 @@ func waitModelReady(c *kube.Client, project, name string, presetImage, workloadO
 				// project user may not read nodes); the node is the one
 				// the model's own pod names.
 				pullGrace, pullNote = modelPullGrace(cc.Facts(), pr.Node)
+				if cc.ProjectUser() && pullNote != "" {
+					// The node's age is the ServiceAccount's read: a
+					// project user gets the reason, not the node.
+					pullNote = " The model's node joined the cluster a few minutes ago: a new node can get its pull credentials a few minutes after it joins."
+				}
 			}
 			if kube.Clock().Since(pullSince) >= pullGrace {
 				res.problem = fmt.Sprintf("%s, for %s.%s Check that the cluster's pull secret can read it (on ROSA, the additional pull secret), that a mirror covers its registry if the cluster uses one, and that the image exists.", pr.PullFailure, ClockText(pullGrace), pullNote)

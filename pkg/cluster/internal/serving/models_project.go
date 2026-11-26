@@ -225,9 +225,13 @@ func (r *projectModelRun) check(token bool) (*modelPlan, []string, *types.Operat
 	preset := discoverCPUPreset(c.Facts())
 	if preset.problem != "" {
 		msg := preset.problem
-		if preset.err != nil {
+		switch {
+		case preset.err != nil && c.ProjectUser():
 			kube.LogFactReadFailure("cannot read KServe's CPU preset for a project's model", "CPU preset", preset.err)
 			msg = fmt.Sprintf("Cannot read KServe's CPU preset (%s).", kube.FactReadProblem(preset.err))
+		case preset.notReady && c.ProjectUser():
+			// The preset's condition is the ServiceAccount's read.
+			msg = "KServe's CPU preset is not ready. A cluster-admin checks it (Components page)."
 		}
 		return stop(msg+" Nothing was changed.", "prerequisites", "no preset")
 	}
@@ -430,7 +434,14 @@ func (r *projectModelRun) setupToken() (*types.OperationResponse, error) {
 			if !SafeServedName(served) {
 				return types.ModelCallCheck{Result: "not-checked", Message: "Not checked: " + unsafeServedNameWarning}
 			}
-			return callModelVia(c, model, p.project, p.entry.Name, served, p.entry.Type, exposure, gw, rec, progress, func() string { return gatewayErrorCause(c.Facts()) })
+			return callModelVia(c, model, p.project, p.entry.Name, served, p.entry.Type, exposure, gw, rec, progress, func() string {
+				if c.ProjectUser() {
+					// Authorino's namespace and settings are the
+					// ServiceAccount's reads.
+					return " Check that Red Hat Connectivity Link's Authorino runs; a cluster-admin can check it."
+				}
+				return gatewayErrorCause(c.Facts())
+			})
 		}
 		return types.ModelCallCheck{Result: "not-checked", Message: "Not checked: the model is reached in a way a cluster-admin set up."}
 	})

@@ -188,6 +188,11 @@ func projectKueueMode(c *kube.Client, project, apps string) (envkit.KueueMode, [
 	// user may not read the DataScienceCluster).
 	dsc, err := rhoai.ReadFirstDSC(c.Facts())
 	if err != nil {
+		if !c.ProjectUser() {
+			return envkit.OnlyNonKueue, nil, err
+		}
+		// A project user gets the read's status, not the ServiceAccount's
+		// error text.
 		kube.LogFactReadFailure("cannot read the DataScienceCluster for a model's hardware profile", "DataScienceCluster", err)
 		return envkit.OnlyNonKueue, nil, fmt.Errorf("the DataScienceCluster cannot be read (%s)", kube.FactReadProblem(err))
 	}

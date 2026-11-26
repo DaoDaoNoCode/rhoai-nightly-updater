@@ -569,3 +569,53 @@ func TestProjectModelDeleteRefusedForAForeignMaaSRef(t *testing.T) {
 		})
 	}
 }
+
+// eventsText is every step message and the result of a run.
+func eventsText(res *types.OperationResponse, events []UpdateStepEvent) string {
+	var b strings.Builder
+	for _, e := range events {
+		b.WriteString(e.Message + "\n")
+	}
+	return b.String() + res.Message
+}
+
+// What the ServiceAccount reads for a project user's setup never reaches
+// their stream as its own text: a CPU preset's Ready=False condition, a
+// DataScienceCluster read's error. A cluster-admin still gets the detail.
+func TestUserStreamCarriesNoServiceAccountText(t *testing.T) {
+	const secret = "SECRET-CONDITION-TEXT"
+	t.Run("preset condition", func(t *testing.T) {
+		mc := newModelsCluster(t)
+		mc.f.putJSON("/apis/serving.kserve.io/v1alpha2/namespaces/redhat-ods-applications/llminferenceserviceconfigs/"+testPresetName, `{
+			"spec":{"template":{"containers":[{"name":"main","image":"`+testPresetImage+`"}]}},
+			"status":{"conditions":[{"type":"Ready","status":"False","message":"`+secret+`"}]}}`)
+		res, events := runProjectModelForTest(t, projectModelUser(mc), types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct"})
+		if text := eventsText(res, events); res.Success || strings.Contains(text, secret) || !strings.Contains(res.Message, "KServe's CPU preset is not ready") {
+			t.Fatalf("user: %s", text)
+		}
+		res, events = runModels(t, mc.c, types.ModelsRequest{Action: "setup", Project: "proj", Exposure: "internal"})
+		if !strings.Contains(eventsText(res, events), secret) {
+			t.Errorf("a cluster-admin lost the detail: %+v", res)
+		}
+	})
+	t.Run("kueue mode read", func(t *testing.T) {
+		mc := newModelsCluster(t)
+		mc.f.putJSON("/api/v1/namespaces/proj", `{"metadata":{"labels":{"opendatahub.io/dashboard":"true","kueue.openshift.io/managed":"true"}}}`)
+		u := projectModelUser(mc)
+		// The setup's own DSC read answers; the Kueue mode's fails.
+		reads := 0
+		mc.f.beforeServe = func(method, p string) {
+			if method == http.MethodGet && strings.HasPrefix(p, "/apis/datasciencecluster.opendatahub.io/") {
+				reads++
+				if reads > 1 {
+					mc.f.fail["GET "+p] = http.StatusInternalServerError
+					mc.f.failMessage["GET "+p] = secret
+				}
+			}
+		}
+		res, events := runProjectModelForTest(t, u, types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct"})
+		if text := eventsText(res, events); res.Success || strings.Contains(text, secret) || !strings.Contains(text, "HTTP 500") {
+			t.Fatalf("user: %s", text)
+		}
+	})
+}
