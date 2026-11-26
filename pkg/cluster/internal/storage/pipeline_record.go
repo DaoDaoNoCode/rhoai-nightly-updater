@@ -60,10 +60,28 @@ const RecordedOnProjectStorage = "project"
 // PipelineRecord is the record, by "<project>/<name>".
 type PipelineRecord map[string]RecordedPipelineServer
 
-// owns: meta is a pipeline server whose UID the tool recorded.
+// Owns: meta is a pipeline server whose UID the tool recorded as one it
+// set up on the shared storage. Only these get the shared storage's keys
+// (Secure, Migrate, the keys' status): one recorded on project storage
+// (set up by a project's admin or editor) never does, even when its host
+// was later pointed at the shared storage (a project editor can change
+// it).
 func (r PipelineRecord) Owns(meta kube.ObjectMeta) bool {
 	e, ok := r[meta.Namespace+"/"+meta.Name]
-	return ok && e.UID != "" && e.UID == meta.UID
+	return ok && e.Storage != RecordedOnProjectStorage && e.UID != "" && e.UID == meta.UID
+}
+
+// OwnsOnProjectStorage: meta is a pipeline server whose UID the tool
+// recorded as set up on its project's own storage.
+func (r PipelineRecord) OwnsOnProjectStorage(meta kube.ObjectMeta) bool {
+	e, ok := r[meta.Namespace+"/"+meta.Name]
+	return ok && e.Storage == RecordedOnProjectStorage && e.UID != "" && e.UID == meta.UID
+}
+
+// OwnsAny: meta is a pipeline server the tool recorded, on either storage
+// (the status's Unrecorded).
+func (r PipelineRecord) OwnsAny(meta kube.ObjectMeta) bool {
+	return r.Owns(meta) || r.OwnsOnProjectStorage(meta)
 }
 
 // ReadPipelineRecord reads the record (empty when nothing is recorded).

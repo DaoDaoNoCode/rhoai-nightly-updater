@@ -170,7 +170,7 @@ func setupProjectPipelineServer(c *kube.Client, project string) (*types.Operatio
 	dspaFound := false
 	for _, d := range existing {
 		switch {
-		case d.Meta.Name == DSPAName && d.Meta.HasToolLabel() && OnProjectStorage(d) && rec.Owns(d.Meta):
+		case d.Meta.Name == DSPAName && d.Meta.HasToolLabel() && OnProjectStorage(d) && rec.OwnsOnProjectStorage(d.Meta):
 			if d.Meta.Terminating() {
 				return fail(fmt.Sprintf("The pipeline server in %s is still being deleted. Wait for it to finish, then retry. Nothing was changed.", project), "terminating", "terminating")
 			}
@@ -241,7 +241,7 @@ func setupProjectPipelineServer(c *kube.Client, project string) (*types.Operatio
 	}
 	dspaPath := rhoai.NamespacedPath(DSPAAPIGroup, "datasciencepipelinesapplications", project, DSPAName)
 	readDSPA := func() (kube.ObjectMeta, bool, error) { return kube.ReadObjectMeta(c, dspaPath) }
-	owned := func(m kube.ObjectMeta) bool { return m.HasToolLabel() && rec.Owns(m) }
+	owned := func(m kube.ObjectMeta) bool { return m.HasToolLabel() && rec.OwnsOnProjectStorage(m) }
 	writeDSPA := func(dryRun bool) (string, error) {
 		action, meta, found, err := envkit.EnsureToolObject(c, fmt.Sprintf("DataSciencePipelinesApplication %s/%s", project, DSPAName), dspaPath,
 			envkit.WithToolFieldManager(rhoai.NamespacedPath(DSPAAPIGroup, "datasciencepipelinesapplications", project, ""))+"&fieldValidation=Strict",
@@ -429,7 +429,7 @@ func teardownProjectPipelineServer(c *kube.Client, project string, confirmedWork
 	if err != nil {
 		return fail(fmt.Sprintf("Cannot check that pipeline server %s in %s is the one this tool set up (%s). Nothing was deleted.", target.Meta.Name, project, record.ErrorText(c, err)), record.ErrorCode(err), "record read failed")
 	}
-	if !rec.Owns(target.Meta) {
+	if !rec.OwnsOnProjectStorage(target.Meta) {
 		return fail(fmt.Sprintf("Pipeline server %s in %s carries this tool's label, but this tool has no record that it set it up (or it was deleted and made again). It was left unchanged; delete it in the RHOAI dashboard. Nothing was deleted.", target.Meta.Name, project), "not_managed", "unrecorded")
 	}
 	wbs, problem, code := connectionWorkbenchesToDetach(c, project, ProjectConnectionSecretName, projectPipelineSecretPath(project, ProjectConnectionSecretName), confirmedWorkbenches)
