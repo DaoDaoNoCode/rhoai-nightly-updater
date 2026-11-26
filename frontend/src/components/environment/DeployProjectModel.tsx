@@ -70,10 +70,14 @@ export const DeployProjectModel: React.FC<{
   const gateway = exposures?.options.find((o) => o.key === "default-gateway");
   const internal = exposures?.options.find((o) => o.key === "internal");
   const gatewayUsable = !!gateway?.available && tokenCap.allowed;
-  const chosen = exposure === "default-gateway" && !gatewayUsable ? "internal" : exposure;
-  const withToken = chosen === "default-gateway" || (tokenAuth && tokenCap.allowed);
+  // The user's choices stay as they made them: when a later answer (another
+  // model, a refreshed capability) no longer allows one, the dialog says so
+  // and Deploy waits for them to choose again; it never switches silently.
+  const withToken = exposure === "default-gateway" || tokenAuth;
+  const gatewayGone = exposure === "default-gateway" && !!exposures && !gatewayUsable;
+  const tokenGone = withToken && !tokenCap.allowed && !!exposures;
   const entry = catalog.find((m) => m.name === model);
-  const canDeploy = !!exposures && (withToken ? tokenCap.allowed : setupCap.allowed);
+  const canDeploy = !!exposures && !gatewayGone && !tokenGone && (withToken ? tokenCap.allowed : setupCap.allowed);
 
   return (
     <Modal variant={ModalVariant.medium} isOpen onClose={onClose} aria-labelledby="user-env-deploy-model-title">
@@ -89,7 +93,7 @@ export const DeployProjectModel: React.FC<{
             {error && <Alert variant="warning" isInline component="div" title="Cannot check how the model can be reached"><Content component="p">{error.message}</Content></Alert>}
             {!error && !exposures && <LinesSkeleton what="how the model can be reached" lines={2} />}
             {exposures && gateway && (
-              <Radio id="user-env-deploy-exposure-gateway" name="user-env-deploy-exposure" isChecked={chosen === "default-gateway"} isDisabled={!gatewayUsable}
+              <Radio id="user-env-deploy-exposure-gateway" name="user-env-deploy-exposure" isChecked={exposure === "default-gateway"} isDisabled={!gatewayUsable}
                 onChange={() => setExposure("default-gateway")} label={gateway.title} description={gateway.description}
                 body={!gateway.available ? (
                   <HelperText><HelperTextItem variant="warning">{gateway.reason ?? "Not available now."}</HelperTextItem></HelperText>
@@ -100,17 +104,17 @@ export const DeployProjectModel: React.FC<{
                 ) : undefined} />
             )}
             {exposures && internal && (
-              <Radio id="user-env-deploy-exposure-internal" name="user-env-deploy-exposure" isChecked={chosen === "internal"}
+              <Radio id="user-env-deploy-exposure-internal" name="user-env-deploy-exposure" isChecked={exposure === "internal"}
                 onChange={() => setExposure("internal")} label={internal.title} description={internal.description}
-                body={chosen === "internal" && internal.warning ? <HelperText><HelperTextItem variant="warning">{internal.warning}</HelperTextItem></HelperText> : undefined} />
+                body={exposure === "internal" && internal.warning ? <HelperText><HelperTextItem variant="warning">{internal.warning}</HelperTextItem></HelperText> : undefined} />
             )}
           </FormGroup>
           <FormGroup fieldId="user-env-deploy-token" isStack>
             <Checkbox id="user-env-deploy-token" label="Require token authentication"
-              description={chosen === "default-gateway"
+              description={exposure === "default-gateway"
                 ? "Needed through the gateway: each call needs a token. Creates a ServiceAccount, a Role, a RoleBinding and a token Secret in the project, as the dashboard does."
                 : "Creates a ServiceAccount, a Role, a RoleBinding and a token Secret in the project, as the dashboard does. Without it the model's token authentication is off."}
-              isChecked={withToken} isDisabled={chosen === "default-gateway" || !tokenCap.allowed} onChange={(_e, checked) => setTokenAuth(checked)}
+              isChecked={withToken} isDisabled={exposure === "default-gateway" || (!tokenCap.allowed && !tokenAuth)} onChange={(_e, checked) => setTokenAuth(checked)}
               body={!tokenCap.allowed ? <HelperText><HelperTextItem variant="warning">{tokenCap.reason}</HelperTextItem></HelperText> : undefined} />
             <Checkbox id="user-env-deploy-released" label="Use the newest released Red Hat image"
               description="Instead of the cluster preset's image; for a nightly build whose runtime image is not published yet."
@@ -125,13 +129,27 @@ export const DeployProjectModel: React.FC<{
               </Alert>
             </StackItem>
           )}
+          {gatewayGone && (
+            <StackItem>
+              <Alert variant="warning" isInline component="div" title="Choose how it is reached again">
+                <Content component="p">The cluster&apos;s inference gateway can no longer be used for this model: {gateway?.available ? tokenCap.reason : (gateway?.reason ?? "it is not available now.")} Choose &quot;Only inside the cluster&quot;, or another model.</Content>
+              </Alert>
+            </StackItem>
+          )}
+          {!gatewayGone && tokenGone && (
+            <StackItem>
+              <Alert variant="warning" isInline component="div" title="Token authentication is no longer allowed">
+                <Content component="p">{tokenCap.reason} Clear &quot;Require token authentication&quot; to deploy without it.</Content>
+              </Alert>
+            </StackItem>
+          )}
           {!setupCap.allowed && setupCap.reason && <StackItem><HelperText><HelperTextItem variant="warning">{setupCap.reason}</HelperTextItem></HelperText></StackItem>}
         </Stack>
       </ModalBody>
       <ModalFooter>
         <Button variant="primary" isDisabled={!canDeploy} onClick={() => onDeploy({
           title: `Deploy ${entry?.displayName ?? model} in ${project}`,
-          req: { action: "setup", project, model, exposure: chosen, ...(withToken ? { tokenAuth: true } : {}), ...(releasedImage ? { releasedImage: true } : {}) },
+          req: { action: "setup", project, model, exposure, ...(withToken ? { tokenAuth: true } : {}), ...(releasedImage ? { releasedImage: true } : {}) },
         })}>Deploy</Button>
         <Button variant="link" onClick={onClose}>Cancel</Button>
       </ModalFooter>

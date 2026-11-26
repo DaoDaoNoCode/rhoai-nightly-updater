@@ -91,4 +91,27 @@ describe("a user's models", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(api.bodies["POST /api/resources/models/project/stream"]).toEqual([{ action: "teardown", project: "team-a", model: "qwen25-05b-instruct" }]));
   });
+
+  it("keeps a choice a later answer no longer allows, says why, and waits for the user to choose again", async () => {
+    const api = stubUserApi({
+      "/api/resources/status": () => jsonResponse({ ...projectStatus("team-a"), modelCatalog: CATALOG }),
+      // The gateway admits the project for Qwen; for SmolLM the answer is no.
+      "/api/resources/models/exposures": (url: string) => jsonResponse(exposures(new URL(url, "http://x").searchParams.get("model") === "qwen25-05b-instruct")),
+    });
+    render(<UserProjectView project="team-a" refreshKey={0} />);
+    const dialog = await openDeploy();
+    const gateway = await within(dialog).findByRole("radio", { name: /Through the cluster's inference gateway/ });
+    await waitFor(() => expect(gateway).not.toBeDisabled());
+    fireEvent.click(gateway);
+    fireEvent.change(within(dialog).getByRole("combobox", { name: "Model" }), { target: { value: "smollm2-135m-instruct" } });
+    expect(await within(dialog).findByText("Choose how it is reached again")).toBeInTheDocument();
+    expect(within(dialog).getByRole("radio", { name: /Through the cluster's inference gateway/ })).toBeChecked();
+    expect(within(dialog).getByRole("radio", { name: /Only inside the cluster/ })).not.toBeChecked();
+    const deploy = within(dialog).getByRole("button", { name: "Deploy" });
+    expect(deploy).toBeDisabled();
+    fireEvent.click(within(dialog).getByRole("radio", { name: /Only inside the cluster/ }));
+    await waitFor(() => expect(deploy).not.toBeDisabled());
+    fireEvent.click(deploy);
+    await waitFor(() => expect(api.bodies["POST /api/resources/models/project/stream"]).toEqual([{ action: "setup", project: "team-a", model: "smollm2-135m-instruct", exposure: "internal" }]));
+  });
 });
