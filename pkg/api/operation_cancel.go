@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster"
@@ -39,6 +42,8 @@ import (
 // cancelled) and records the request under a key of its own there
 // (cluster.RequestOperationCancel, with the ServiceAccount, as every
 // record write); the holder reads it at its heartbeat (pickUpCancels).
+// A cancel counts in the per-user limit of changes (mutationLimiter); only
+// a cluster-admin's accepted cancel is logged with who asked.
 
 // cancellableActions are the project actions (cluster.ProjectActionID)
 // that check a cancel request at safe points, with what a cancel leaves
@@ -64,26 +69,27 @@ const noSuchActionMessage = "No running action with this ID that you can cancel 
 const cancelAcceptedMessage = "Cancel requested: the action stops before its next step. If it finishes first, it is recorded as done."
 
 // requestCancel marks the project action id of this process as cancelled
-// by user (admin: a cluster-admin). It returns false when there is no such
-// action that user may cancel: not running here, not a cancellable project
-// action, or another person's for a user who is not a cluster-admin. A
-// second request for the same action changes nothing and returns true.
-func (t *operationTracker) requestCancel(id, user string, admin bool) bool {
+// by user (admin: a cluster-admin), and returns the request; nil when
+// there is no such action that user may cancel: not running here, not a
+// cancellable project action, or another person's for a user who is not
+// a cluster-admin. A second request for the same action changes nothing
+// and returns the first.
+func (t *operationTracker) requestCancel(id, user string, admin bool) *cluster.ActionCancelledError {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	op := t.ops[id]
 	if op == nil || op.ProjectUID == "" || !op.confirmed || op.cancelNote == "" || (!admin && (user == "" || op.User != user)) {
-		return false
+		return nil
 	}
 	if op.cancelled == nil {
 		op.cancelled = &cluster.ActionCancelledError{ByAdmin: user != op.User}
-		// Who asked, for the pod log (cluster-admins and the updater's
-		// namespace admins read it); the starter's activity entry never
-		// names a cluster-admin.
-		slog.Info("cancel requested for a project action", "operation", id, "type", op.Type, "by", user, "starter", user == op.User)
 	}
-	return true
+	return op.cancelled
 }
+
+// operationIDPattern is the form of an operation ID (newOperationID): a
+// cancel naming anything else is refused before anything is looked up.
+var operationIDPattern = regexp.MustCompile(`^[0-9a-f]{16}$`)
 
 // cancelRequest is the cancel requested for the operation id, nil while
 // none was: what a cancellable action checks at its safe points.
@@ -112,17 +118,36 @@ func HandleOperationCancel(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1024)
 	body, err := io.ReadAll(r.Body)
 	var req cancelRequestBody
-	if err != nil || json.Unmarshal(body, &req) != nil || req.ID == "" {
+	if err != nil || json.Unmarshal(body, &req) != nil || !operationIDPattern.MatchString(req.ID) {
 		writeError(w, "invalid request body: an action id is required", http.StatusBadRequest, "validation")
 		return
 	}
+	// The per-user limit of changes, before the role check and any record
+	// read; a cancel that is not accepted gives its slot back.
+	rateLimitKey := username + ":" + r.URL.Path
+	slot, acquired := mutationLimiter.tryAcquire(rateLimitKey)
+	if !acquired {
+		wait := mutationLimiter.retryAfter(rateLimitKey)
+		w.Header().Set("Retry-After", strconv.Itoa(wait))
+		writeError(w, fmt.Sprintf("This tool allows one change per user every %d seconds on this action. Nothing was changed; try again in %d %s.", int(mutationLimiter.window/time.Second), wait, map[bool]string{true: "second", false: "seconds"}[wait == 1]), http.StatusTooManyRequests, "user_rate_limited")
+		return
+	}
+	accepted := false
+	defer func() {
+		if !accepted {
+			mutationLimiter.release(rateLimitKey, slot)
+		}
+	}()
 	admin, err := mutationPermission(r.Context(), extractUserToken(r))
 	if err != nil {
 		writeAuthError(w, err, "Cannot verify your permissions. Nothing was changed.")
 		return
 	}
-	if !inflight.requestCancel(req.ID, username, admin) {
-		err := requestRemoteCancel(r.Context(), req.ID, username, admin)
+	var byAdmin bool
+	if cancel := inflight.requestCancel(req.ID, username, admin); cancel != nil {
+		byAdmin = cancel.ByAdmin
+	} else {
+		byAdmin, err = requestRemoteCancel(r.Context(), req.ID, username, admin)
 		switch {
 		case errors.Is(err, cluster.ErrNoSuchAction):
 			writeError(w, noSuchActionMessage, http.StatusNotFound, "not_found")
@@ -132,6 +157,14 @@ func HandleOperationCancel(w http.ResponseWriter, r *http.Request) {
 			writeError(w, "The cancel request could not be recorded (the updater's operation record could not be read or written). Nothing was changed; try again.", http.StatusServiceUnavailable, "lock_unavailable")
 			return
 		}
+	}
+	accepted = true
+	// The audit of a cluster-admin's cancel, once it is accepted: the pod
+	// log (read by cluster-admins and the updater's namespace admins)
+	// names who asked; the starter's activity entry never does. A
+	// starter's own cancel logs no name.
+	if byAdmin {
+		slog.Info("a cluster-admin cancelled a project action", "operation", req.ID, "by", username)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
@@ -149,25 +182,26 @@ const remoteCancelTimeout = 5 * time.Second
 // user started it or is a cluster-admin; otherwise
 // cluster.ErrNoSuchAction. The record is read, and written, with the
 // ServiceAccount.
-func requestRemoteCancel(ctx context.Context, id, user string, admin bool) error {
+func requestRemoteCancel(ctx context.Context, id, user string, admin bool) (byAdmin bool, err error) {
 	token := getClusterToken()
 	if token == "" {
-		return errors.New("cluster token not available")
+		return false, errors.New("cluster token not available")
 	}
 	ctx, cancel := context.WithTimeout(ctx, remoteCancelTimeout)
 	defer cancel()
 	c := cluster.NewClientWithContext(ctx, token)
 	c.SetUsername(user)
-	return requestOperationCancel(c, id, func(rec *cluster.OperationRecord) (*cluster.CancelRequest, error) {
+	err = requestOperationCancel(c, id, func(rec *cluster.OperationRecord) (*cluster.CancelRequest, error) {
 		for _, l := range rec.ProjectLocks {
 			if l.ID != id || !leaseHeldElsewhere(l) || l.CancelNote == "" || (!admin && (user == "" || l.User != user)) {
 				continue
 			}
-			slog.Info("cancel requested for a project action of another updater pod", "operation", id, "type", l.Type, "pod", l.Pod, "by", user, "starter", user == l.User)
-			return &cluster.CancelRequest{ByAdmin: user != l.User, At: clk.Now().UTC().Format(time.RFC3339)}, nil
+			byAdmin = user != l.User
+			return &cluster.CancelRequest{ByAdmin: byAdmin, At: clk.Now().UTC().Format(time.RFC3339)}, nil
 		}
 		return nil, cluster.ErrNoSuchAction
 	})
+	return byAdmin, err
 }
 
 // requestOperationCancel records a cancel request; tests replace it.

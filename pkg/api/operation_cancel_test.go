@@ -59,7 +59,7 @@ func TestCancelOnlyStarterOrAdmin(t *testing.T) {
 	}()
 	id := cancellableAction(t, "a", "alice")
 
-	missing := postCancel(t, "user:bob", "no-such-action")
+	missing := postCancel(t, "user:bob", "0123456789abcdef")
 	if missing.Code != http.StatusNotFound || decodeError(t, missing)["errorCode"] != "not_found" {
 		t.Fatalf("an unknown ID: %d %s", missing.Code, missing.Body.String())
 	}
@@ -67,7 +67,7 @@ func TestCancelOnlyStarterOrAdmin(t *testing.T) {
 		t.Fatalf("another person's action answers differently from none: %d %s", others.Code, others.Body.String())
 	}
 	mutationPermission = func(context.Context, string) (bool, error) { return false, errors.New("api down") }
-	down1, down2 := postCancel(t, "user:bob", id), postCancel(t, "user:bob", "no-such-action")
+	down1, down2 := postCancel(t, "user:bob", id), postCancel(t, "user:bob", "0123456789abcdef")
 	if down1.Code != http.StatusServiceUnavailable || down1.Body.String() != down2.Body.String() {
 		t.Fatalf("role check failed: %d %s / %s", down1.Code, down1.Body.String(), down2.Body.String())
 	}
@@ -112,13 +112,25 @@ func TestCancelOnlyStarterOrAdmin(t *testing.T) {
 		t.Fatal("the cancel took the cluster lock")
 	}
 
-	// A cluster-admin: "a cluster-admin", never their name.
+	// A cluster-admin: "a cluster-admin", never their name (a fresh
+	// window: the admin's request above used theirs).
+	mutationLimiter = newRateLimiter()
 	id2 := cancellableAction(t, "d", "dave")
 	if w := postCancel(t, "user:admin", id2); w.Code != http.StatusAccepted {
 		t.Fatalf("an admin's cancel: %d %s", w.Code, w.Body.String())
 	}
 	if c := inflight.cancelRequest(id2); c == nil || !c.ByAdmin || c.Reason() != "Cancelled by a cluster-admin" {
 		t.Fatalf("request %+v", c)
+	}
+
+	// An accepted cancel counts in the per-user limit of changes; a refused
+	// one gave its slot back (bob's above).
+	id3 := cancellableAction(t, "e", "erin2")
+	if w := postCancel(t, "user:admin", id3); w.Code != http.StatusTooManyRequests || decodeError(t, w)["errorCode"] != "user_rate_limited" {
+		t.Fatalf("a third cancel in the window: %d %s", w.Code, w.Body.String())
+	}
+	if inflight.cancelRequest(id3) != nil {
+		t.Fatal("a rate-limited cancel was recorded")
 	}
 }
 
@@ -221,8 +233,9 @@ func TestCrossPodCancelIsRecordedForTheHolder(t *testing.T) {
 	setAdmin(t)
 	now := clk.Now()
 	cancellable := otherPodProjectLease("a", "alice", now)
-	cancellable.CancelNote = cancellableActions["workbench.setup"]
+	cancellable.ID, cancellable.CancelNote = "aaaaaaaaaaaaaaaa", cancellableActions["workbench.setup"]
 	plain := otherPodProjectLease("p", "alice", now)
+	plain.ID = "bbbbbbbbbbbbbbbb"
 	rec := &cluster.OperationRecord{ProjectLocks: map[string]*types.OperationLease{"a": cancellable, "p": plain}}
 	readOperationState = func(*cluster.Client) (*cluster.OperationRecord, error) { return rec, nil }
 	var written []*cluster.CancelRequest
@@ -234,8 +247,8 @@ func TestCrossPodCancelIsRecordedForTheHolder(t *testing.T) {
 		written = append(written, r)
 		return nil
 	}
-	missing := postCancel(t, "user:bob", "no-such-action")
-	for _, tc := range []struct{ token, id string }{{"user:bob", "remote-a"}, {"user:alice", "remote-p"}} {
+	missing := postCancel(t, "user:bob", "0123456789abcdef")
+	for _, tc := range []struct{ token, id string }{{"user:bob", "aaaaaaaaaaaaaaaa"}, {"user:alice", "bbbbbbbbbbbbbbbb"}} {
 		if w := postCancel(t, tc.token, tc.id); w.Code != http.StatusNotFound || w.Body.String() != missing.Body.String() {
 			t.Fatalf("%s cancels %s: %d %s", tc.token, tc.id, w.Code, w.Body.String())
 		}
@@ -243,20 +256,20 @@ func TestCrossPodCancelIsRecordedForTheHolder(t *testing.T) {
 	if len(written) != 0 {
 		t.Fatalf("refused requests were written: %+v", written)
 	}
-	if w := postCancel(t, "user:alice", "remote-a"); w.Code != http.StatusAccepted || len(written) != 1 || written[0].ByAdmin {
+	if w := postCancel(t, "user:alice", "aaaaaaaaaaaaaaaa"); w.Code != http.StatusAccepted || len(written) != 1 || written[0].ByAdmin {
 		t.Fatalf("the starter: %d %s %+v", w.Code, w.Body.String(), written)
 	}
-	if w := postCancel(t, "user:admin", "remote-a"); w.Code != http.StatusAccepted || len(written) != 2 || !written[1].ByAdmin {
+	if w := postCancel(t, "user:admin", "aaaaaaaaaaaaaaaa"); w.Code != http.StatusAccepted || len(written) != 2 || !written[1].ByAdmin {
 		t.Fatalf("a cluster-admin: %d %+v", w.Code, written)
 	}
 
 	// With the request recorded, the action shows as stopping.
-	rec.CancelRequests = map[string]*cluster.CancelRequest{"remote-a": {ByAdmin: true}}
+	rec.CancelRequests = map[string]*cluster.CancelRequest{"aaaaaaaaaaaaaaaa": {ByAdmin: true}}
 	for _, op := range getAdminOperation(t).Operations {
-		if op.ID == "remote-a" && (op.Cancellable || !op.Cancelling) {
+		if op.ID == "aaaaaaaaaaaaaaaa" && (op.Cancellable || !op.Cancelling) {
 			t.Fatalf("after the request: %+v", op)
 		}
-		if op.ID == "remote-p" && (op.Cancellable || op.Cancelling) {
+		if op.ID == "bbbbbbbbbbbbbbbb" && (op.Cancellable || op.Cancelling) {
 			t.Fatalf("an action without safe points: %+v", op)
 		}
 	}
@@ -310,4 +323,31 @@ func TestCrossPodCancelIsPickedUpWithoutLeaseLoss(t *testing.T) {
 		t.Fatalf("the action saw %+v", c)
 	}
 	<-done
+}
+
+// A cancel names an operation ID of the form the updater makes: anything
+// else is refused with the same 400 before the limit, the role check or
+// any lookup.
+func TestCancelRefusesAMalformedID(t *testing.T) {
+	setupDevMode(t)
+	mutationPermission = func(context.Context, string) (bool, error) {
+		t.Error("the role was checked for a malformed ID")
+		return false, nil
+	}
+	var bodies []string
+	for _, id := range []string{"", "x", "../../etc", "0123456789ABCDEF", "0123456789abcdef0", "remote-a"} {
+		w := postCancel(t, "user:bob", id)
+		if w.Code != http.StatusBadRequest || decodeError(t, w)["errorCode"] != "validation" {
+			t.Fatalf("%q: %d %s", id, w.Code, w.Body.String())
+		}
+		bodies = append(bodies, w.Body.String())
+	}
+	for _, b := range bodies[1:] {
+		if b != bodies[0] {
+			t.Fatalf("different answers: %q / %q", b, bodies[0])
+		}
+	}
+	if mutationLimiter.isRateLimited("bob:/api/operation/cancel") {
+		t.Fatal("a malformed request used the slot")
+	}
 }

@@ -51,7 +51,7 @@ func TestEveryNonGetRouteIsGated(t *testing.T) {
 		// Cancel is open to an action's starter: a user who names no
 		// action of theirs gets "no such action" (TestCancelOnlyStarterOrAdmin).
 		if rt.Pattern == "POST /api/operation/cancel" {
-			body, wantCode = `{"id":"not-theirs"}`, "not_found"
+			body, wantCode = `{"id":"0123456789abcdef"}`, "not_found"
 		}
 		wantStatus := map[string]int{"not_found": http.StatusNotFound}[wantCode]
 		if wantStatus == 0 {
