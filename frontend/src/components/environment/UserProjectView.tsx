@@ -20,11 +20,11 @@ import type { MLflowSampleId, MLflowSamplesStatus, PlaygroundStatus, ProjectProb
 import { getMLflowSamples, getPlayground, getProjectStatus, getWorkbench, toApiError, type ApiError } from "../../services/api";
 import { Checkbox } from "@patternfly/react-core";
 import { ConfirmActionModal } from "../ConfirmActionModal";
-import { keptStorage } from "./workbenchState";
+import { keptStorage, workbenchStatusOf } from "./workbenchState";
 import { ProjectActionButton, ProjectCapabilitiesProvider, ProjectRunPanel, useProjectRun, type ProjectRunRequest } from "./projectActions";
 import { FORBIDDEN_FOR_USER_BODY, FORBIDDEN_FOR_USER_TITLE, describeError, isNotForUser } from "../../errors";
 import { EnvStatusLabel, envStatus } from "./resourceStatus";
-import { playgroundIn } from "./featureState";
+import { IDLE, playgroundIn } from "./featureState";
 import { PipelineSample } from "./PipelineSample";
 import { SAMPLE_INFO, sampleLabel } from "./samples";
 import { LinesSkeleton } from "./Loading";
@@ -318,6 +318,7 @@ const SamplesPart: React.FC<{ project: string; read: ProjectRead<MLflowSamplesSt
                     <Td dataLabel="Sample">{SAMPLE_INFO[s.id]?.name ?? s.name}</Td>
                     <Td dataLabel="State">{label ? <EnvStatusLabel status={label.status} text={label.text} /> : null}</Td>
                     <Td dataLabel="Link" modifier="nowrap">
+                      <Flex gap={{ default: "gapMd" }} flexWrap={{ default: "nowrap" }}>
                       {s.actions.includes("add") && (
                         <ProjectActionButton project={project} action="mlflow-samples.add" busy={busy} variant="link"
                           onClick={() => start(`Add ${SAMPLE_INFO[s.id]?.name ?? s.name} in ${project}`, sampleRun("add", s.id))}>
@@ -336,6 +337,7 @@ const SamplesPart: React.FC<{ project: string; read: ProjectRead<MLflowSamplesSt
                           Open in MLflow
                         </Button>
                       )}
+                      </Flex>
                     </Td>
                   </Tr>
                 );
@@ -396,12 +398,13 @@ const WorkbenchPart: React.FC<{ project: string; read: ProjectRead<WorkbenchStat
     );
   } else {
     const ours = item.managedByTool;
+    const shown = workbenchStatusOf(data, project, IDLE);
     body = (
       <Stack hasGutter>
         <StackItem>
           <Flex gap={{ default: "gapMd" }} alignItems={{ default: "alignItemsCenter" }}>
             <FlexItem><strong>{item.name}</strong></FlexItem>
-            <FlexItem><EnvStatusLabel status={envStatus(item)} /></FlexItem>
+            <FlexItem><EnvStatusLabel status={shown.status} text={shown.word} /></FlexItem>
             {item.url && item.state === "running" && (
               <FlexItem>
                 <Button variant="link" isInline component="a" href={item.url} target="_blank" rel="noopener noreferrer" icon={<ExternalLinkAltIcon />} iconPosition="end">Open workbench</Button>

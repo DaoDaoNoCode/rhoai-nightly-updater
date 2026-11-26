@@ -127,4 +127,15 @@ describe("a user's project view", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete storage" }));
     await waitFor(() => expect(api.bodies["POST /api/resources/workbench/stream"]).toEqual([{ action: "delete-storage", project: "team-a" }]));
   });
+
+  it("names a stopped workbench Stopped, as the admin's tab does, and offers Start", async () => {
+    const stopped = contract.workbenchUser("team-a");
+    stopped.items = (stopped.items ?? []).map((i) => ({ ...i, ready: false, state: "stopped" }));
+    stubUserApi({ "/api/resources/workbench": () => jsonResponse(stopped) });
+    render(<UserProjectView project="team-a" refreshKey={0} />);
+    const workbench = await screen.findByRole("region", { name: "Workbench" });
+    expect(await within(workbench).findByText("Stopped")).toBeInTheDocument();
+    expect(within(workbench).queryByText("Setting up")).not.toBeInTheDocument();
+    expect(within(workbench).getByRole("button", { name: "Start" })).toBeInTheDocument();
+  });
 });
