@@ -99,6 +99,7 @@ var projectRouteBodies = map[string]string{
 	"/api/resources/workbench/stream":               `{"action":"setup","project":"team-a"}`,
 	"/api/resources/playground/stream":              `{"action":"teardown","project":"team-a"}`,
 	"/api/resources/samples/mlflow/stream":          `{"action":"add","project":"team-a","samples":["training"]}`,
+	"/api/resources/models/project/stream":          `{"action":"setup","project":"team-a"}`,
 }
 
 // lockFreeMutationRoutes are the gated routes that take no cluster lock,

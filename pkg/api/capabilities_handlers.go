@@ -142,9 +142,7 @@ var HandleProjectCapabilities = withAuth(func(sa *cluster.Client, w http.Respons
 		if allReason != "" {
 			v = actionVerdict{code: allCode, reason: allReason}
 		}
-		for _, m := range v.missing {
-			cp.Missing = append(cp.Missing, m.Text)
-		}
+		cp.Missing = append(cp.Missing, cluster.MissingTexts(v.missing)...)
 		if v.code == "prerequisites" || v.code == "prerequisites_unknown" {
 			cp.BlockedBy = append(cp.BlockedBy, v.code)
 		}

@@ -357,6 +357,7 @@ var operationTypes = map[string][2]string{
 	"/api/resources/mlflow/deploy-pr":               {"deploy-mlflow-pr", "Deploy MLflow PR"},
 	"/api/resources/mlflow/revert":                  {"revert-mlflow", "Revert MLflow"},
 	"/api/resources/models/stream":                  {"models", "Models"},
+	"/api/resources/models/project/stream":          {"project-model", "Model"},
 	"/api/resources/playground/stream":              {"playground", "Playground"},
 	"/api/resources/model-registry/stream":          {"model-registry", "Model registry"},
 	"/api/resources/workbench/stream":               {"workbench", "Workbench"},

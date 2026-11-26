@@ -105,6 +105,17 @@ var projectActionRoutes = map[string]projectRoute{
 		}
 		return req.Project, req.Action, cluster.ValidateMLflowSamplesRequest(req)
 	}},
+	// A model in one project (cluster.RunProjectModel): never a gateway's
+	// list, MaaS or anything outside the project, so a cluster-admin's
+	// request holds the project's lock too. A setup with token
+	// authentication is its own action (models.setup-token).
+	"/api/resources/models/project/stream": {feature: "models", maxBody: 4096, parse: func(body []byte) (string, string, string) {
+		var req types.ProjectModelRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			return "", "", "invalid request body"
+		}
+		return req.Project, cluster.ProjectModelAction(req), cluster.ValidateProjectModelRequest(req)
+	}},
 }
 
 // The project actions' cluster reads and checks; tests replace them.
@@ -140,11 +151,7 @@ const notForClusterAdminsCode = "not_for_cluster_admins"
 func writeMissingPermissions(w http.ResponseWriter, label, project string, missing []cluster.MissingPermission) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
-	texts := make([]string, 0, len(missing))
-	for _, m := range missing {
-		texts = append(texts, m.Text)
-	}
-	body := map[string]any{"error": cluster.MissingSummary(label, project, missing), "errorCode": missingPermissionsCode, "missing": texts}
+	body := map[string]any{"error": cluster.MissingSummary(label, project, missing), "errorCode": missingPermissionsCode, "missing": cluster.MissingTexts(missing)}
 	if err := json.NewEncoder(w).Encode(body); err != nil {
 		slog.Error("response encode error", "label", "missing-permissions", "error", err)
 	}

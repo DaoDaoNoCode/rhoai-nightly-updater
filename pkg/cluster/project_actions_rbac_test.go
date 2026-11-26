@@ -35,6 +35,11 @@ var projectActionRoots = map[string][]string{
 	"project-s3.delete":                {clusterPkg + "/internal/storage.projectS3Run.delete"},
 	"project-pipeline-server.setup":    {clusterPkg + "/internal/storage.setupProjectPipelineServer"},
 	"project-pipeline-server.teardown": {clusterPkg + "/internal/storage.teardownProjectPipelineServer"},
+	// A project's model actions: each its own method, so a setup without
+	// token authentication reaches none of the token objects' requests.
+	"models.setup":       {servingPkg + ".projectModelRun.setup"},
+	"models.setup-token": {servingPkg + ".projectModelRun.setupToken"},
+	"models.teardown":    {servingPkg + ".projectModelRun.teardown"},
 }
 
 // projectActionPruned are what a project action's code names but does not
@@ -114,7 +119,7 @@ func actionName(r rbacRequest) string {
 func tableKeys(a ProjectAction) []string {
 	var out []string
 	for _, r := range a.Requests {
-		if r.Source == SourceScan {
+		if r.IsScanned() {
 			out = append(out, actionKey(r.Verb, r.Group, r.Resource, r.Name))
 		}
 	}
@@ -227,7 +232,7 @@ func writeProjectActionRequests(t *testing.T, b *strings.Builder) {
 		scopes := map[string][]string{}
 		when := map[string]string{}
 		for _, r := range a.Requests {
-			if r.Source == SourceScan {
+			if r.IsScanned() {
 				k := actionKey(r.Verb, r.Group, r.Resource, r.Name)
 				scopes[k] = append(scopes[k], r.Scope)
 				if r.When != "" {
@@ -261,7 +266,7 @@ func writeProjectActionRequests(t *testing.T, b *strings.Builder) {
 			}
 		}
 		for _, r := range a.Requests {
-			if r.Source != SourceScan {
+			if !r.IsScanned() {
 				rows = append(rows, fmt.Sprintf("%s ns=%s %s", actionKey(r.Verb, r.Group, r.Resource, r.Name), r.Scope, r.Source))
 			}
 		}

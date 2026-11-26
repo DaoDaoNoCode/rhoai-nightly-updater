@@ -554,9 +554,12 @@ func ModelsBlock(dsc rhoai.DSCRead) (*types.ComponentBlock, string) {
 	return nil, deps
 }
 
-// cpuPreset is the CPU preset as found at run time.
+// cpuPreset is the CPU preset as found at run time. err is the read
+// error behind a problem, when a read failed (its text may be the API
+// server's; a project user's setup says only its status).
 type cpuPreset struct {
 	name, image, problem string
+	err                  error
 }
 
 // discoverCPUPreset finds the CPU preset: the controller's config prefix
@@ -568,11 +571,11 @@ type cpuPreset struct {
 func discoverCPUPreset(c *kube.Client) cpuPreset {
 	ns, err := rhoai.AppsNamespace(c)
 	if err != nil {
-		return cpuPreset{problem: fmt.Sprintf("Cannot tell which namespace RHOAI's applications (KServe's controller and presets) run in: %v.", err)}
+		return cpuPreset{problem: fmt.Sprintf("Cannot tell which namespace RHOAI's applications (KServe's controller and presets) run in: %v.", err), err: err}
 	}
 	body, exists, err := c.GetOptional(rhoai.NamespacedPath("apps/v1", "deployments", ns, "llmisvc-controller-manager"))
 	if err != nil {
-		return cpuPreset{problem: fmt.Sprintf("Cannot read Deployment %s/%s: %v.%s", ns, llmisvcControllerName, err, kube.TemplateHint(err))}
+		return cpuPreset{problem: fmt.Sprintf("Cannot read Deployment %s/%s: %v.%s", ns, llmisvcControllerName, err, kube.TemplateHint(err)), err: err}
 	}
 	if !exists {
 		return cpuPreset{problem: fmt.Sprintf("KServe's LLMInferenceService controller (Deployment %s in %s) is not there: LLM serving is not installed.", llmisvcControllerName, ns)}
@@ -608,7 +611,7 @@ func discoverCPUPreset(c *kube.Client) cpuPreset {
 	name := prefix + cpuPresetSuffix
 	body, exists, err = c.GetOptional(rhoai.NamespacedPath("serving.kserve.io/v1alpha2", "llminferenceserviceconfigs", ns, name))
 	if err != nil {
-		return cpuPreset{name: name, problem: fmt.Sprintf("Cannot read the CPU preset %s/%s: %v.%s", ns, name, err, kube.TemplateHint(err))}
+		return cpuPreset{name: name, problem: fmt.Sprintf("Cannot read the CPU preset %s/%s: %v.%s", ns, name, err, kube.TemplateHint(err)), err: err}
 	}
 	if !exists {
 		return cpuPreset{name: name, problem: fmt.Sprintf("This RHOAI release has no CPU preset: LLMInferenceServiceConfig %s does not exist in %s.", name, ns)}
@@ -1483,9 +1486,9 @@ func (m *modelsRun) applyModel(p *modelPlan, dryRun bool) (string, string) {
 		// that cannot be recorded would be nobody's: it is deleted again.
 		if recErr := recordModel(c, meta); recErr != nil {
 			if _, delErr := kube.DeleteWithUID(c, path, meta.UID); delErr != nil && !kube.IsK8sNotFound(delErr) {
-				return fmt.Sprintf("%s was created, but this tool could not record it (%v) nor delete it again (%v). Delete it yourself (oc delete llminferenceservice %s -n %s), then set up again.", desc, recErr, delErr, p.entry.Name, p.project), kube.ErrorCodeFromK8sErr(recErr)
+				return fmt.Sprintf("%s was created, but this tool could not record it (%s) nor delete it again (%v). Delete it yourself (oc delete llminferenceservice %s -n %s), then set up again.", desc, record.ErrorText(c, recErr), delErr, p.entry.Name, p.project), record.ErrorCode(recErr)
 			}
-			return fmt.Sprintf("%s was created, but this tool could not record it as its own (%v), so it was deleted again. Set up again to retry.", desc, recErr), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(recErr), "internal")
+			return fmt.Sprintf("%s was created, but this tool could not record it as its own (%s), so it was deleted again. Set up again to retry.", desc, record.ErrorText(c, recErr)), record.ErrorCode(recErr)
 		}
 		p.rec[ModelRecordKey(meta.Namespace, meta.Name)] = RecordedModel{UID: meta.UID}
 	}
@@ -1526,7 +1529,7 @@ func (m *modelsRun) applyToken(p *modelPlan) (string, string) {
 		if _, delErr := kube.DeleteWithUID(c, path, secretUID); delErr != nil && !kube.IsK8sNotFound(delErr) {
 			slog.Warn("cannot delete the unrecorded token Secret; garbage collection removes it with the model", "error", delErr)
 		}
-		return fmt.Sprintf("Secret %s/%s was created, but this tool could not record it (%v), so it was deleted again. Set up again to retry.", p.project, tokenSecretName(p.entry.Name), err), kube.FirstNonEmpty(kube.ErrorCodeFromK8sErr(err), "internal")
+		return fmt.Sprintf("Secret %s/%s was created, but this tool could not record it (%s), so it was deleted again. Set up again to retry.", p.project, tokenSecretName(p.entry.Name), record.ErrorText(c, err)), record.ErrorCode(err)
 	}
 	return "", ""
 }
@@ -1865,6 +1868,9 @@ type modelWait struct {
 	// check ("" when no pull was failing when it ended).
 	pulling string
 	err     error
+	// cancel: the wait stopped at a poll because a cancel was requested
+	// (a project action's).
+	cancel *record.ActionCancelledError
 }
 
 // modelWorkload is the model's workload Deployments (found by the labels
@@ -1977,6 +1983,13 @@ func waitModelReady(c *kube.Client, project, name string, presetImage, workloadO
 		}
 	}
 	ready, err := kube.WaitForGone(c, timeout, modelPoll, func(cc *kube.Client) (bool, error) {
+		// A project action's safe point: each poll (the first right after
+		// the model's write). Only a cancellable action's context has a
+		// cancel check (record.CancelRequested is nil otherwise).
+		if cancel := record.CancelRequested(cc); cancel != nil {
+			res.cancel = cancel
+			return true, nil
+		}
 		model, found, err := ReadToolModel(cc, project, name)
 		if err != nil {
 			return false, err
@@ -2029,7 +2042,10 @@ func waitModelReady(c *kube.Client, project, name string, presetImage, workloadO
 		if pr.PullFailure != "" {
 			if pullSince.IsZero() {
 				pullSince = kube.Clock().Now()
-				pullGrace, pullNote = modelPullGrace(cc, pr.Node)
+				// The node's age is a cluster fact (the facts client: a
+				// project user may not read nodes); the node is the one
+				// the model's own pod names.
+				pullGrace, pullNote = modelPullGrace(cc.Facts(), pr.Node)
 			}
 			if kube.Clock().Since(pullSince) >= pullGrace {
 				res.problem = fmt.Sprintf("%s, for %s.%s Check that the cluster's pull secret can read it (on ROSA, the additional pull secret), that a mirror covers its registry if the cluster uses one, and that the image exists.", pr.PullFailure, ClockText(pullGrace), pullNote)
@@ -2049,6 +2065,6 @@ func waitModelReady(c *kube.Client, project, name string, presetImage, workloadO
 		return false, nil
 	})
 	res.err = err
-	res.ready = ready && res.problem == ""
+	res.ready = ready && res.problem == "" && res.cancel == nil
 	return res
 }

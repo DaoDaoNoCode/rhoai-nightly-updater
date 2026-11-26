@@ -13,6 +13,7 @@ import (
 
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/authz"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/workbench"
 )
 
@@ -373,8 +374,11 @@ func TestAccessReviewDecisionAndErrorText(t *testing.T) {
 // would exceed it is refused with the Clean up wording; an entry the same
 // user already has in the project is not a new one.
 func TestUserRecordEntriesHardCeiling(t *testing.T) {
-	if record.MaxUserRecordEntries*record.MaxUserRecordEntryBytes > 512<<10 {
-		t.Fatalf("users' entries may take %d bytes of the 1 MiB ConfigMap", record.MaxUserRecordEntries*record.MaxUserRecordEntryBytes)
+	if record.MaxUserRecordBytes > 512<<10 {
+		t.Fatalf("users' entries may take %d bytes of the 1 MiB ConfigMap", record.MaxUserRecordBytes)
+	}
+	if want := record.MaxUserRecordProjects * len(serving.ModelCatalog); record.MaxUserModelEntries < want {
+		t.Fatalf("live model entries (%d: every catalog model in each project) reach their ceiling of %d", want, record.MaxUserModelEntries)
 	}
 	f, c := newResourceFake(t)
 	stale := map[string]workbench.Recorded{}
@@ -434,5 +438,25 @@ func TestSweepDropsWorkbenchEntriesOfGoneProjects(t *testing.T) {
 	}
 	if got := rec.Projects(); !slices.Equal(got, []string{"legacy-live", "live", "remade-nb", "remade-pvc", "remade-unreadable", "unreadable"}) {
 		t.Fatalf("workbench entries after the sweep: %v", got)
+	}
+}
+
+// The same request (create rolebindings in the project) is the project S3
+// storage's project-admin check and a model's token authentication: each
+// action says its own words for it, in one review.
+func TestMissingWordingFollowsTheRequestSource(t *testing.T) {
+	f := &ssarFake{allow: func(r AccessRequest) bool { return r.Group != "rbac.authorization.k8s.io" || r.Verb != "create" }}
+	u := newSSARClient(t, f)
+	got, err := ReviewProjectActions(u, []string{"project-s3.setup", "models.setup-token"}, "team-a", "apps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s3 := MissingSummaryFor("Set up", "team-a", got["project-s3.setup"].Missing)
+	tok := MissingSummaryFor("Deploy", "team-a", got["models.setup-token"].Missing)
+	if !strings.Contains(s3, "sets up, repairs and deletes its S3 storage") || strings.Contains(s3, "token") {
+		t.Errorf("S3 storage: %q", s3)
+	}
+	if tok != "Token authentication creates a Role and a RoleBinding in team-a, which needs the project's admin role. Ask an admin of team-a, or deploy without token authentication." {
+		t.Errorf("token authentication: %q", tok)
 	}
 }

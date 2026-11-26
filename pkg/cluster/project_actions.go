@@ -12,6 +12,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/mlflow"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/serving"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/storage"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/workbench"
 )
@@ -65,18 +66,25 @@ const (
 	// project (the non-admin design, amendment G1): a request the action
 	// never sends, which the admin role grants and edit does not.
 	SourceProjectAdmin = "project-admin"
+	// SourceTokenAuth marks requests the RBAC scan derives (they are
+	// scanned rows) that only a model's token authentication sends: its
+	// Role and RoleBinding, which the admin role grants and edit does not.
+	// A missing one gets the token wording (design section 2.2), never the
+	// project S3 storage's, though both ask for create rolebindings.
+	SourceTokenAuth = "token-auth"
 )
+
+// IsScanned reports whether r is a request the RBAC scan derives from the
+// action's code (SourceScan, or tagged SourceTokenAuth for its wording).
+func (r ProjectRequest) IsScanned() bool {
+	return r.Source == SourceScan || r.Source == SourceTokenAuth
+}
 
 // projectAdminCheck is the request whose review tells an admin of the
 // project from an editor: create RoleBindings, which Kubernetes' admin
 // role has and edit lacks (kubernetes v1.31.0 bootstrappolicy policy.go
 // 288-296).
 var projectAdminCheck = ProjectRequest{Verb: "create", Group: "rbac.authorization.k8s.io", Resource: "rolebindings", Scope: ScopeProject, Source: SourceProjectAdmin}
-
-// isProjectAdminCheck reports whether r, as reviewed, is that check.
-func isProjectAdminCheck(r AccessRequest) bool {
-	return r.Verb == projectAdminCheck.Verb && r.Group == projectAdminCheck.Group && r.Resource == projectAdminCheck.Resource && r.Name == ""
-}
 
 // ProjectRequest is one request a project action can send with the user's
 // token: what RBAC decides (verb, API group, resource, name) and where.
@@ -177,6 +185,67 @@ var samplesScanned = []ProjectRequest{
 	scanned("list", "project.openshift.io", "projects", "", ScopeCluster),
 }
 
+// perModel is a request per catalog model, with name(model) its object's
+// name: the code writes each catalog name out (serving.ToolModelPath and
+// the token objects' paths), so the scan sees one request per name.
+func perModel(verb, group, resource string, name func(model string) string) []ProjectRequest {
+	var out []ProjectRequest
+	for _, m := range serving.ModelCatalog {
+		out = append(out, scanned(verb, group, resource, name(m.Name), ScopeProject))
+	}
+	return out
+}
+
+func modelName(m string) string { return m }
+
+// The model actions' own requests (the RBAC scan's): the model, its
+// rollout (Deployments, pods and their events), the project's quotas, the
+// hardware profiles and the dashboard's settings in RHOAI's applications
+// namespace (as the dashboard's deploy form reads them), the model's
+// Service for its in-cluster address; LocalQueues only where the
+// dashboard uses Kueue (WhenKueueQueues, as the workbench's).
+var modelSetupScanned = joinRequests(
+	[]ProjectRequest{
+		scanned("create", "serving.kserve.io", "llminferenceservices", "", ScopeProject),
+		scanned("get", "", "namespaces", ProjectNameSelf, ScopeProject),
+		scanned("get", "", "services", "", ScopeProject),
+		scanned("get", "opendatahub.io", "odhdashboardconfigs", "odh-dashboard-config", ScopeApps),
+		scanned("list", "", "events", "", ScopeProject),
+		scanned("list", "", "pods", "", ScopeProject),
+		scanned("list", "", "resourcequotas", "", ScopeProject),
+		scanned("list", "apps", "deployments", "", ScopeProject),
+		scanned("list", "infrastructure.opendatahub.io", "hardwareprofiles", "", ScopeApps),
+		{Verb: "list", Group: "kueue.x-k8s.io", Resource: "localqueues", Scope: ScopeProject, When: WhenKueueQueues},
+	},
+	perModel("create", "serving.kserve.io", "llminferenceservices", modelName),
+	perModel("delete", "serving.kserve.io", "llminferenceservices", modelName),
+	perModel("get", "serving.kserve.io", "llminferenceservices", modelName),
+	perModel("patch", "serving.kserve.io", "llminferenceservices", modelName),
+)
+
+// The token authentication's requests: the dashboard's four objects
+// (serving models_token.go), made in the project and checked by name; the
+// Role and RoleBinding need the project's admin role.
+var modelTokenScanned = joinRequests(
+	[]ProjectRequest{
+		scanned("create", "", "secrets", "", ScopeProject),
+		scanned("create", "", "serviceaccounts", "", ScopeProject),
+		tokenAuth(scanned("create", "rbac.authorization.k8s.io", "rolebindings", "", ScopeProject)),
+		tokenAuth(scanned("create", "rbac.authorization.k8s.io", "roles", "", ScopeProject)),
+	},
+	perModel("delete", "", "secrets", func(m string) string { return "default-name-" + m + "-sa" }),
+	perModel("get", "", "secrets", func(m string) string { return "default-name-" + m + "-sa" }),
+	perModel("get", "", "serviceaccounts", func(m string) string { return m + "-sa" }),
+	perModel("get", "rbac.authorization.k8s.io", "rolebindings", func(m string) string { return m + "-view" }),
+	perModel("get", "rbac.authorization.k8s.io", "roles", func(m string) string { return m + "-view-role" }),
+)
+
+// tokenAuth is r tagged SourceTokenAuth.
+func tokenAuth(r ProjectRequest) ProjectRequest {
+	r.Source = SourceTokenAuth
+	return r
+}
+
 func joinRequests(parts ...[]ProjectRequest) []ProjectRequest {
 	var out []ProjectRequest
 	for _, p := range parts {
@@ -246,6 +315,20 @@ var projectActions = []ProjectAction{
 		AdminRefusal: storage.AdminUsesSharedStorage, Requests: projectPipelineSetup},
 	{ID: "project-pipeline-server.teardown", Feature: "project-pipeline-server", Action: "teardown", Label: "Delete the pipeline server on the project's S3 storage", ForUsers: true,
 		Requests: projectPipelineTeardown},
+	// A project's models (the design's section 1 rows "Model, internal,
+	// token auth off", "Model with token auth", "Model behind the inference
+	// gateway"): no gateway's list, no MaaS, nothing outside the project.
+	// Token authentication makes a Role and a RoleBinding, so its own
+	// action, which a project editor's preflight refuses with the
+	// admin-role wording (missingText); the delete leaves the token
+	// objects to garbage collection, so it needs neither.
+	{ID: "models.setup", Feature: "models", Action: serving.ProjectModelSetup, Label: "Deploy a model", ForUsers: true, Requests: modelSetupScanned},
+	{ID: "models.setup-token", Feature: "models", Action: serving.ProjectModelSetupToken, Label: "Deploy a model with token authentication", ForUsers: true,
+		Requests: joinRequests(modelSetupScanned, modelTokenScanned)},
+	{ID: "models.teardown", Feature: "models", Action: serving.ProjectModelTeardown, Label: "Delete a model", ForUsers: true, Requests: joinRequests(
+		perModel("delete", "serving.kserve.io", "llminferenceservices", modelName),
+		perModel("get", "serving.kserve.io", "llminferenceservices", modelName),
+	)},
 }
 
 // The project storage's own requests (the RBAC scan's), by its objects'
@@ -369,6 +452,8 @@ type MissingPermission struct {
 	Request AccessRequest `json:"request"`
 	// Text says it for people: the request and who can grant it.
 	Text string `json:"text"`
+	// Source is the request's source in the action's table (its wording).
+	Source string `json:"-"`
 }
 
 // ActionReview is the preflight's answer for one action: what the user's
@@ -394,6 +479,9 @@ func ReviewProjectActions(u *Client, ids []string, project, apps string) (map[st
 	index := map[key]int{}
 	var distinct []AccessRequest
 	per := map[string][]key{}
+	// sources: per action, the source of each request that has its own
+	// wording (the same request may be another action's with another).
+	sources := map[string]map[key]string{}
 	type cond struct {
 		v   bool
 		err error
@@ -420,6 +508,7 @@ actions:
 			return nil, fmt.Errorf("%q is not a project action users may run", id)
 		}
 		var reqs []key
+		sources[id] = map[key]string{}
 		for _, r := range a.Requests {
 			if r.When != "" {
 				if apps == "" {
@@ -443,6 +532,9 @@ actions:
 			if !slices.Contains(reqs, req) {
 				reqs = append(reqs, req)
 			}
+			if r.Source != SourceScan && sources[id][req] == "" {
+				sources[id][req] = r.Source
+			}
 		}
 		per[id] = reqs
 		for _, req := range reqs {
@@ -464,7 +556,8 @@ actions:
 		r := ActionReview{}
 		for _, req := range reqs {
 			if no[req] {
-				r.Missing = append(r.Missing, MissingPermission{Request: req, Text: missingText(req, project)})
+				src := sources[id][req]
+				r.Missing = append(r.Missing, MissingPermission{Request: req, Text: missingText(req, src, project), Source: src})
 			}
 		}
 		out[id] = r
@@ -473,14 +566,30 @@ actions:
 }
 
 // missingText says a missing request and who can grant it.
-func missingText(r AccessRequest, project string) string {
-	if isProjectAdminCheck(r) && r.Namespace == project {
+// source is the request's source in the action's table: its wording.
+func missingText(r AccessRequest, source, project string) string {
+	switch {
+	case source == SourceProjectAdmin && r.Namespace == project:
 		return fmt.Sprintf("Only an admin of project %s sets up, repairs and deletes its S3 storage (the OpenShift admin role there); ask an admin of project %s.", project, project)
+	case source == SourceTokenAuth && r.Namespace == project:
+		return tokenAuthText(project)
 	}
 	if r.Namespace == project {
 		return fmt.Sprintf("%s: ask an admin of project %s to give you the edit role there.", r, project)
 	}
 	return fmt.Sprintf("%s: RHOAI lets every signed-in user read this, but your account may not; ask a cluster-admin.", r)
+}
+
+// tokenAuthText is the design's section 2.2 wording for a model's token
+// authentication refused to a user who is not an admin of the project.
+func tokenAuthText(project string) string {
+	return fmt.Sprintf("Token authentication creates a Role and a RoleBinding in %s, which needs the project's admin role. Ask an admin of %s, or deploy without token authentication.", project, project)
+}
+
+// MissingTextFor is the text of a missing request r (from source) of an
+// action in project, with who can grant it.
+func MissingTextFor(r AccessRequest, source, project string) string {
+	return missingText(r, source, project)
 }
 
 // MissingSummary is the refusal of an action whose requests are missing:
@@ -493,11 +602,23 @@ func MissingSummary(label, project string, missing []MissingPermission) string {
 // are missing: the same as the gate's refusal, without "Nothing was
 // changed" (nothing was tried).
 func MissingSummaryFor(label, project string, missing []MissingPermission) string {
+	// Only a model's token authentication is missing: its own words, alone.
+	if len(missing) > 0 && !slices.ContainsFunc(missing, func(m MissingPermission) bool { return m.Source != SourceTokenAuth }) {
+		return tokenAuthText(project)
+	}
+	return fmt.Sprintf("%s in %s needs permissions your OpenShift account does not have: %s", label, project, strings.Join(MissingTexts(missing), " "))
+}
+
+// MissingTexts are the texts of missing, each once (the Role and the
+// RoleBinding of a model's token authentication share theirs).
+func MissingTexts(missing []MissingPermission) []string {
 	texts := make([]string, 0, len(missing))
 	for _, m := range missing {
-		texts = append(texts, m.Text)
+		if !slices.Contains(texts, m.Text) {
+			texts = append(texts, m.Text)
+		}
 	}
-	return fmt.Sprintf("%s in %s needs permissions your OpenShift account does not have: %s", label, project, strings.Join(texts, " "))
+	return texts
 }
 
 // projectFeatureComponents are the DataScienceCluster components a
@@ -512,6 +633,8 @@ func projectFeatureComponents(feature string) []envkit.FeatureComponent {
 		return features.PlaygroundComponents
 	case "project-pipeline-server":
 		return []envkit.FeatureComponent{envkit.PipelinesComponent}
+	case "models":
+		return []envkit.FeatureComponent{serving.KServeComponent}
 	}
 	return nil
 }

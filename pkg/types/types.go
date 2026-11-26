@@ -1449,6 +1449,52 @@ type ModelsRequest struct {
 	GatewayRef string `json:"gatewayRef,omitempty"`
 }
 
+// ProjectModelRequest is the body of POST
+// /api/resources/models/project/stream: a model of the catalog set up or
+// deleted in one data science project, a project action (the non-admin
+// design, branch B6) that any user whose role in the project allows it
+// may run. It never changes anything outside the project: no gateway's
+// list of projects, no MaaS publication, no Connectivity Link.
+type ProjectModelRequest struct {
+	// Action is "setup" or "teardown".
+	Action  string `json:"action"`
+	Project string `json:"project"`
+	// Model is the catalog name; "" means the catalog's default.
+	Model string `json:"model,omitempty"`
+	// Exposure (setup only) is "internal" (the default: no route, only
+	// inside the cluster) or "default-gateway" (the cluster's default
+	// inference gateway, only when it already admits the project; it needs
+	// TokenAuth).
+	Exposure string `json:"exposure,omitempty"`
+	// TokenAuth (setup only) makes the model's token authentication as the
+	// dashboard's "Require token authentication" does: a ServiceAccount, a
+	// Role and a RoleBinding, and a token Secret, in the project, which
+	// needs the project's admin role. Without it the model's token
+	// authentication is off (security.opendatahub.io/enable-auth "false").
+	TokenAuth bool `json:"tokenAuth,omitempty"`
+	// ReleasedImage (setup only): run the newest released Red Hat vLLM CPU
+	// image instead of the preset's.
+	ReleasedImage bool `json:"releasedImage,omitempty"`
+}
+
+// ProjectGatewayFact is whether the cluster's default inference gateway
+// admits one project, as the ServiceAccount reads it for a user (a cluster
+// fact reduced to that project): yes or no, and when no a fixed code of
+// why. It names no other project and no gateway.
+type ProjectGatewayFact struct {
+	Admits bool `json:"admits"`
+	// Problem is "" when it admits the project, else one of
+	// "not-configured" (KServe names no default gateway), "missing" (the
+	// gateway it names does not exist), "not-ready" (it cannot carry a
+	// model now), "not-for-models" (it is MaaS's or the RHOAI operator's),
+	// "not-admitted" (its listeners do not let the project's routes
+	// attach), "admission-unknown" (it chooses projects in a way this tool
+	// does not evaluate), "auth-unknown" (whether RHOAI checks the callers'
+	// tokens there is not known), "auth-missing" (Red Hat Connectivity Link
+	// is not set up) or "unreadable" (a read failed).
+	Problem string `json:"problem,omitempty"`
+}
+
 // WorkbenchStatus is the Workbench feature (GET /api/resources/workbench):
 // what a workbench needs on the cluster, this tool's workbenches, and for
 // the chosen project the workbench there and what Set up would create.
@@ -2648,6 +2694,16 @@ type ModelExposures struct {
 	// the cluster; RecommendGatewayReason says why.
 	RecommendGateway       bool   `json:"recommendGateway,omitempty"`
 	RecommendGatewayReason string `json:"recommendGatewayReason,omitempty"`
+
+	// --- A user's answer (one of their projects, the project model actions) ---
+
+	// Gateway is whether the cluster's default inference gateway admits
+	// the project (a user's answer only; nil for a cluster-admin's).
+	Gateway *ProjectGatewayFact `json:"gateway,omitempty"`
+	// Capacity is "fits" (a worker has the model's requests free),
+	// "may-not-fit" or "unknown" (a user's answer only), never a node's
+	// name.
+	Capacity string `json:"capacity,omitempty"`
 }
 
 // ModelExposureOption is one way to reach the model.

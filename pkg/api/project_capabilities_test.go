@@ -51,7 +51,9 @@ func TestProjectCapabilitiesPerRole(t *testing.T) {
 				if !ok {
 					t.Fatalf("%s missing", a.ID)
 				}
-				adminOnlyHere := role == roleEditor && needsProjectAdmin(a)
+				// An editor is not an admin of the project: project S3 storage
+				// (B5) and a model's token authentication (B6) are refused.
+				adminOnlyHere := role == roleEditor && (needsProjectAdmin(a) || a.ID == "models.setup-token")
 				want := role == roleClusterAdmin && a.AdminRefusal == "" || (a.ForUsers && role != roleViewer && role != roleClusterAdmin && !adminOnlyHere)
 				if cp.Allowed != want {
 					t.Errorf("%s: allowed %v, want %v (%+v)", a.ID, cp.Allowed, want, cp)
@@ -63,7 +65,9 @@ func TestProjectCapabilitiesPerRole(t *testing.T) {
 					t.Errorf("%s: %+v", a.ID, cp)
 				case !want && role != roleClusterAdmin && !a.ForUsers && cp.Code != adminOnlyCode:
 					t.Errorf("%s: %+v", a.ID, cp)
-				case !want && adminOnlyHere && (cp.Code != missingPermissionsCode || !strings.Contains(cp.Reason, "ask an admin of project team-a")):
+				case !want && adminOnlyHere && a.ID == "models.setup-token" && (cp.Code != missingPermissionsCode || len(cp.Missing) != 1 || !strings.Contains(cp.Reason, "needs the project's admin role") || !strings.Contains(cp.Reason, "or deploy without token authentication")):
+					t.Errorf("%s: an editor's refusal must say the admin role, once: %+v", a.ID, cp)
+				case !want && adminOnlyHere && a.ID != "models.setup-token" && (cp.Code != missingPermissionsCode || !strings.Contains(cp.Reason, "ask an admin of project team-a")):
 					t.Errorf("%s: %+v", a.ID, cp)
 				case !want && role == roleViewer && a.ForUsers && (cp.Code != missingPermissionsCode || len(cp.Missing) == 0 || !strings.Contains(cp.Reason, "edit role")):
 					t.Errorf("%s: %+v", a.ID, cp)

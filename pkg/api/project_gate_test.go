@@ -62,20 +62,23 @@ func newProjectGateEnv(t *testing.T, role string) *projectGateEnv {
 					out[id] = rv
 					continue
 				}
-				if role == roleViewer && r.Verb != "get" && r.Verb != "list" {
+				// Kubernetes edit has no Roles or RoleBindings; admin has
+				// (a model's token authentication, B6).
+				editorLacks := role == roleEditor && r.Source == cluster.SourceTokenAuth
+				if role == roleViewer && r.Verb != "get" && r.Verb != "list" || editorLacks {
 					req := cluster.AccessRequest{Verb: r.Verb, Group: r.Group, Resource: r.Resource, Namespace: project, Name: r.Name}
-					r := out[id]
-					r.Missing = append(r.Missing, cluster.MissingPermission{Request: req, Text: req.String() + ": ask an admin of project " + project + " to give you the edit role there."})
-					out[id] = r
+					rv := out[id]
+					rv.Missing = append(rv.Missing, cluster.MissingPermission{Request: req, Text: cluster.MissingTextFor(req, r.Source, project), Source: r.Source})
+					out[id] = rv
 				}
 			}
 		}
 		return out, nil
 	}
-	origW, origP, origS := runWorkbench, runPlayground, runMLflowSamples
+	origW, origP, origS, origM := runWorkbench, runPlayground, runMLflowSamples, runProjectModel
 	origPS, origPP := runProjectStorage, runProjectPipelineServer
 	t.Cleanup(func() {
-		runWorkbench, runPlayground, runMLflowSamples = origW, origP, origS
+		runWorkbench, runPlayground, runMLflowSamples, runProjectModel = origW, origP, origS, origM
 		runProjectStorage, runProjectPipelineServer = origPS, origPP
 	})
 	done := &types.OperationResponse{Success: true, Message: "done"}
@@ -90,6 +93,11 @@ func newProjectGateEnv(t *testing.T, role string) *projectGateEnv {
 		return done, nil
 	}
 	runMLflowSamples = func(c *cluster.Client, _ types.MLflowSamplesRequest, _ func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		env.runs++
+		env.projectUser = c.ProjectUser()
+		return done, nil
+	}
+	runProjectModel = func(c *cluster.Client, _ types.ProjectModelRequest, _ func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 		env.runs++
 		env.projectUser = c.ProjectUser()
 		return done, nil
@@ -124,6 +132,9 @@ var projectActionRequests = map[string][2]string{
 	"project-s3.delete":                {"/api/resources/project-s3/stream", `{"action":"delete","project":"team-a","deleteData":"nightly-s3-data"}`},
 	"project-pipeline-server.setup":    {"/api/resources/project-pipeline-server/stream", `{"action":"setup","project":"team-a"}`},
 	"project-pipeline-server.teardown": {"/api/resources/project-pipeline-server/stream", `{"action":"teardown","project":"team-a","confirmWorkbenches":{"wb":"uid-1"}}`},
+	"models.setup":                     {"/api/resources/models/project/stream", `{"action":"setup","project":"team-a","model":"qwen25-05b-instruct"}`},
+	"models.setup-token":               {"/api/resources/models/project/stream", `{"action":"setup","project":"team-a","model":"qwen25-05b-instruct","exposure":"default-gateway","tokenAuth":true}`},
+	"models.teardown":                  {"/api/resources/models/project/stream", `{"action":"teardown","project":"team-a","model":"qwen25-05b-instruct"}`},
 }
 
 // needsProjectAdmin reports whether a is for admins of the project only
@@ -173,7 +184,7 @@ func TestProjectActionsPerRoleMatrix(t *testing.T) {
 					wantStatus, wantCode = http.StatusForbidden, adminOnlyCode
 				case role == roleNothing:
 					wantStatus, wantCode = http.StatusForbidden, cluster.ErrorCodeForbiddenForUser
-				case role == roleViewer, role == roleEditor && needsProjectAdmin(a):
+				case role == roleViewer, role == roleEditor && (needsProjectAdmin(a) || a.ID == "models.setup-token"):
 					wantStatus, wantCode = http.StatusForbidden, missingPermissionsCode
 				default:
 					wantStatus = http.StatusOK
@@ -542,5 +553,32 @@ func TestRoleCheckFailureKeepsUpstreamTextOut(t *testing.T) {
 	HandleOperation(httptest.NewRecorder(), getAs(t, "/api/operation", "user:alice"))
 	if !strings.Contains(debug.String(), "team-b") {
 		t.Fatalf("the detail is not at debug level:\n%s", debug.String())
+	}
+}
+
+// An editor asking for a model's token authentication is refused by the
+// preflight before anything runs, with the design's own words (section
+// 2.2) alone, and the gate's "Nothing was changed."
+func TestEditorTokenAuthRefusedWithAdminWording(t *testing.T) {
+	env := newProjectGateEnv(t, roleEditor)
+	w := serveProjectAction(t, "/api/resources/models/project/stream", projectActionRequests["models.setup-token"][1])
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	body := decodeError(t, w)
+	want := "Token authentication creates a Role and a RoleBinding in team-a, which needs the project's admin role. Ask an admin of team-a, or deploy without token authentication. Nothing was changed."
+	if body["error"] != want || body["errorCode"] != missingPermissionsCode {
+		t.Fatalf("refusal: %v", body)
+	}
+	if missing, _ := body["missing"].([]any); len(missing) != 1 {
+		t.Errorf("missing: %v", body["missing"])
+	}
+	if env.runs != 0 {
+		t.Error("the action ran")
+	}
+	// Without token authentication the same editor deploys.
+	w = serveProjectAction(t, "/api/resources/models/project/stream", projectActionRequests["models.setup"][1])
+	if w.Code != http.StatusOK || env.runs != 1 {
+		t.Fatalf("without token authentication: %d %s", w.Code, w.Body.String())
 	}
 }

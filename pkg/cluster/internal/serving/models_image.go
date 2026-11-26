@@ -338,7 +338,8 @@ func ParseQuantity(s string) (float64, bool) {
 }
 
 // CapacityCache keeps the capacity check for a minute: it lists every
-// pod of the cluster.
+// node and pod of the cluster, with the facts client (the
+// ServiceAccount's), whoever asks.
 var CapacityCache = kube.NewLRU[string, string](16)
 
 const capacityCacheTTL = time.Minute
@@ -359,7 +360,7 @@ func ModelCapacityWarning(c *kube.Client, entry CatalogModel, project string) st
 	if w, ok := CapacityCache.Get(key); ok {
 		return w
 	}
-	free, err := freeRoom(c, project, entry.Name)
+	free, err := freeRoom(c.Facts(), project, entry.Name)
 	if err != nil {
 		return ""
 	}
@@ -380,7 +381,7 @@ func catalogCapacityWarnings(c *kube.Client) map[string]string {
 	if !missing {
 		return out
 	}
-	free, err := freeRoom(c, "", "")
+	free, err := freeRoom(c.Facts(), "", "")
 	if err != nil {
 		return map[string]string{}
 	}
