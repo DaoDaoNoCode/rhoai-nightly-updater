@@ -133,10 +133,9 @@ func TestCancelIsCheckedThroughTheGate(t *testing.T) {
 	newProjectGateEnv(t, roleEditor)
 	started, proceed := make(chan struct{}), make(chan struct{})
 	type seen struct {
-		cancel  *cluster.ActionCancelledError
-		ctxErr  error
-		lost    error
-		lastCtx error
+		cancel *cluster.ActionCancelledError
+		ctxErr error
+		lost   error
 	}
 	result := make(chan seen, 1)
 	var lose func()
