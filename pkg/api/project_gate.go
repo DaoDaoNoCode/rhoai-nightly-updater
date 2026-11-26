@@ -78,6 +78,23 @@ var projectActionRoutes = map[string]projectRoute{
 		}
 		return req.Project, req.Action, cluster.ValidatePlaygroundRequest(req)
 	}},
+	"/api/resources/project-s3/stream": {feature: "project-s3", maxBody: 4096, parse: func(body []byte) (string, string, string) {
+		var req types.ProjectStorageRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			return "", "", "invalid request body"
+		}
+		return req.Project, req.Action, cluster.ValidateProjectStorageRequest(req)
+	}},
+	"/api/resources/project-pipeline-server/stream": {feature: "project-pipeline-server", maxBody: pipelineServerBodyLimit, parse: func(body []byte) (string, string, string) {
+		var req types.ProjectPipelineServerRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			return "", "", "invalid request body"
+		}
+		if !validConfirmWorkbenches(req.ConfirmWorkbenches) {
+			return "", "", fmt.Sprintf("confirmWorkbenches maps at most %d workbench names to their UIDs", maxConfirmWorkbenches)
+		}
+		return req.Project, req.Action, cluster.ValidateProjectPipelineServerRequest(req)
+	}},
 	"/api/resources/samples/mlflow/stream": {feature: "mlflow-samples", maxBody: 4096, adminClusterLock: true, parse: func(body []byte) (string, string, string) {
 		var req types.MLflowSamplesRequest
 		if err := json.Unmarshal(body, &req); err != nil {
@@ -113,6 +130,11 @@ func adminOnlyActionMessage(label string) string {
 
 // missingPermissionsCode is the errorCode of a preflight refusal.
 const missingPermissionsCode = "missing_permissions"
+
+// notForClusterAdminsCode refuses a cluster-admin a project action that
+// is not theirs to run (cluster.ProjectAction.AdminRefusal): setting up
+// project S3 storage, and a pipeline server on it.
+const notForClusterAdminsCode = "not_for_cluster_admins"
 
 // writeMissingPermissions answers 403 missing_permissions with the list.
 func writeMissingPermissions(w http.ResponseWriter, label, project string, missing []cluster.MissingPermission) {
@@ -192,6 +214,10 @@ func projectActionVerdicts(u *cluster.Client, admin bool, ids []string, project 
 		}
 		if !admin && (!known || !a.ForUsers) {
 			out[id] = actionVerdict{status: http.StatusForbidden, code: adminOnlyCode, reason: label + " is done by a cluster-admin in this tool."}
+			continue
+		}
+		if admin && a.AdminRefusal != "" {
+			out[id] = actionVerdict{status: http.StatusForbidden, code: notForClusterAdminsCode, reason: a.AdminRefusal}
 			continue
 		}
 		b, seen := blocks[a.Feature]
@@ -339,9 +365,13 @@ func withProjectMutationAuth(route projectRoute, fn func(c *cluster.Client, w ht
 			label = action
 		}
 		u := projectCheckClient(r.Context(), userToken, username, saToken)
-		// 5. An action users may run.
+		// 5. An action users may run; one a cluster-admin may not.
 		if !admin && (!known || !pa.ForUsers) {
 			writeError(w, adminOnlyActionMessage(label), http.StatusForbidden, adminOnlyCode)
+			return
+		}
+		if admin && pa.AdminRefusal != "" {
+			writeError(w, pa.AdminRefusal+" Nothing was changed.", http.StatusForbidden, notForClusterAdminsCode)
 			return
 		}
 		// 6. One of their projects, before any ServiceAccount read.

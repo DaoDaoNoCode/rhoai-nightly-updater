@@ -109,7 +109,9 @@ export function cleanupCandidates(status: ResourcesStatus, scope: CleanupScope, 
   const usageLogs = scope === "all" && !!observability?.managedByTool;
   // The projects recipes created that the cluster has (Clean up everything only).
   const recipeProjects = scope === "all" ? (status.recipeProjects ?? []).map((p) => p.name) : [];
-  return { workbenches, workbenchStorage, keptStorage, runningWorkbenches, storageOf, servers, storage, namespace, mlflow, modelRegistry, kueue: kueueSetup, observability: usageLogs, models, gateway, playgrounds, maasPublished, maasPlatform, recipeProjects };
+  // The project S3 storages this tool recorded (Clean up everything only); each volume is offered unticked.
+  const projectStorages = scope === "all" ? (status.projectStorages ?? []).map((p) => p.project) : [];
+  return { projectStorages, workbenches, workbenchStorage, keptStorage, runningWorkbenches, storageOf, servers, storage, namespace, mlflow, modelRegistry, kueue: kueueSetup, observability: usageLogs, models, gateway, playgrounds, maasPublished, maasPlatform, recipeProjects };
 }
 
 /**
@@ -131,6 +133,7 @@ export function cleanupSteps(req: CleanupRequest): { id: string; title: string }
     ...(req.workbenches ?? []).map((p) => ({ id: `workbench:${p}`, title: (req.workbenchStorage ?? []).includes(p) ? `Delete the workbench and its storage in ${p}` : `Delete the workbench in ${p}` })),
     ...(req.workbenchStorage ?? []).filter((p) => !(req.workbenches ?? []).includes(p)).map((p) => ({ id: `workbench-storage:${p}`, title: `Delete the workbench storage kept in ${p}` })),
     ...(req.pipelineServers ?? []).map((p) => ({ id: `pipeline-server:${p}`, title: `Delete the pipeline server in ${p}` })),
+    ...(req.projectStorages ?? []).map((p) => ({ id: `project-s3:${p}`, title: (req.projectStorageData ?? []).includes(p) ? `Delete the S3 storage of ${p} and its volume` : `Delete the S3 storage of ${p}` })),
     ...(req.observability ? [{ id: "observability", title: "Clean up the usage logs and dashboards" }] : []),
     ...(req.storage ? [{ id: "storage", title: req.deleteNamespace ? `Delete the S3 storage and namespace ${S3_NAMESPACE}` : "Delete the S3 storage" }] : []),
     ...(req.mlflow ? [{ id: "mlflow", title: "Delete MLflow" }] : []),
@@ -253,6 +256,11 @@ export const CleanupModal: React.FC<{
   const [models, setModels] = useState<string[]>(was ? was.models ?? [] : offered.models);
   const [gateway, setGateway] = useState(was ? !!was.inferenceGateway : offered.gateway);
   const [recipeProjects, setRecipeProjects] = useState<string[]>(was ? was.recipeProjects ?? [] : offered.recipeProjects);
+  const [projectStorages, setProjectStorages] = useState<string[]>(was ? was.projectStorages ?? [] : offered.projectStorages);
+  const [projectStorageData, setProjectStorageData] = useState<string[]>(was?.projectStorageData ?? []);
+  const chosenProjectStorages = projectStorages.filter((p) => offered.projectStorages.includes(p));
+  const chosenProjectStorageData = projectStorageData.filter((p) => chosenProjectStorages.includes(p));
+  const toggleIn = (set: React.Dispatch<React.SetStateAction<string[]>>) => (p: string, v: boolean) => set((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
   // Each recipe project is deleted as the user reviewed it (its UID): pinned when the dialog opens (or kept from the
   // refused clean-up), and when the user ticks it. A refresh that shows one made again since (another UID) unticks it,
   // as for an unrecorded pipeline server: only the user's own tick of the project now there confirms it.
@@ -290,6 +298,8 @@ export const CleanupModal: React.FC<{
     ...(chosenWorkbenches.length ? { workbenches: chosenWorkbenches } : {}),
     ...(chosenWorkbenchStorage.length ? { workbenchStorage: chosenWorkbenchStorage } : {}),
     ...(chosenServers.length ? { pipelineServers: chosenServers } : {}),
+    ...(chosenProjectStorages.length ? { projectStorages: chosenProjectStorages } : {}),
+    ...(chosenProjectStorageData.length ? { projectStorageData: chosenProjectStorageData } : {}),
     ...(Object.keys(confirmedServers).length ? { confirmUnrecorded: confirmedServers } : {}),
     ...(Object.keys(confirmWorkbenches).length ? { confirmWorkbenches } : {}),
     ...(storage && offered.storage ? { storage: true, ...(namespace && offered.namespace ? { deleteNamespace: true } : {}) } : {}),
@@ -305,7 +315,7 @@ export const CleanupModal: React.FC<{
     ...(Object.keys(confirmProjectContents).length ? { confirmProjectContents } : {}),
     ...(chosenComponents.length ? { components: chosenComponents } : {}),
   };
-  const nothing = !req.workbenches && !req.workbenchStorage && !req.pipelineServers && !req.storage && !req.mlflow && !req.modelRegistry && !req.kueue && !req.observability && !req.models && !req.inferenceGateway && !req.playgrounds && !req.maasPublished && !req.maasPlatform && !req.components && !req.recipeProjects;
+  const nothing = !req.workbenches && !req.workbenchStorage && !req.pipelineServers && !req.projectStorages && !req.storage && !req.mlflow && !req.modelRegistry && !req.kueue && !req.observability && !req.models && !req.inferenceGateway && !req.playgrounds && !req.maasPublished && !req.maasPlatform && !req.components && !req.recipeProjects;
   const unconfirmed = asking.filter((p) => !confirmedContents.includes(p));
   const reason = baseReason ?? (nothing ? "Select something to delete."
     : unconfirmed.length > 0 ? "Confirm that what the project holds is deleted with it." : cleanupBlocked(status, req, offered.maasPublished, !!observability?.usesS3Storage));
@@ -313,6 +323,7 @@ export const CleanupModal: React.FC<{
     ...(req.workbenchStorage ?? []).map((p) => <>The files in storage <code>nightly-workbench-storage</code> in {p}.</>),
     ...offered.runningWorkbenches.filter((p) => chosenWorkbenches.includes(p)).map((p) => <>Unsaved work in the running workbench in {p}: only files saved under <code>/opt/app-root/src</code> are in its storage.</>),
     ...(req.pipelineServers ?? []).map((p) => <>The runs and experiments of the pipeline server in {p}.</>),
+    ...(req.projectStorageData ?? []).map((p) => <>Every file in the S3 storage of {p} (volume <code>nightly-s3-data</code>).</>),
     ...(req.observability ? [<>Every usage log and metric: the usage-logs bucket{(observability?.volumes ?? []).some((v) => v.setUpByTool) ? <> and the disks of RHOAI&apos;s monitoring this tool&apos;s setup caused ({(observability?.volumes ?? []).filter((v) => v.setUpByTool).length})</> : null}.</>] : []),
     ...(req.storage ? [<>Every file in the S3 storage: pipeline artifacts and uploaded files{status.legacyStorage ? ", and the storage of an earlier version" : ""}.</>] : []),
     ...(req.deleteNamespace ? [<>Everything else in namespace <code>{S3_NAMESPACE}</code>.</>] : []),
@@ -328,7 +339,7 @@ export const CleanupModal: React.FC<{
     setConfirmed(({ [p]: _dropped, ...rest }) => (v && unrecordedUID.has(p) ? { ...rest, [p]: unrecordedUID.get(p)! } : rest));
   };
   const toggleModel = (p: string, v: boolean) => setModels((s) => (v ? [...s.filter((x) => x !== p), p] : s.filter((x) => x !== p)));
-  const nothingOffered = offered.workbenches.length === 0 && offered.keptStorage.length === 0 && offered.servers.length === 0 && !offered.storage && !offered.mlflow && !offered.modelRegistry && !offered.kueue && !offered.observability && offered.models.length === 0 && !offered.gateway && offered.playgrounds.length === 0 && offered.maasPublished.length === 0 && !offered.maasPlatform && offeredComponents.length === 0 && offered.recipeProjects.length === 0;
+  const nothingOffered = offered.projectStorages.length === 0 && offered.workbenches.length === 0 && offered.keptStorage.length === 0 && offered.servers.length === 0 && !offered.storage && !offered.mlflow && !offered.modelRegistry && !offered.kueue && !offered.observability && offered.models.length === 0 && !offered.gateway && offered.playgrounds.length === 0 && offered.maasPublished.length === 0 && !offered.maasPlatform && offeredComponents.length === 0 && offered.recipeProjects.length === 0;
   const title = scope === "all" ? "Clean up everything?" : scope === "pipelines" ? "Clean up Pipelines?" : scope === "models" ? "Clean up Models?" : scope === "playground" ? "Clean up Playground?" : scope === "model-registry" ? "Clean up the model registry?" : scope === "workbench" ? "Clean up Workbench?" : scope === "kueue" ? "Clean up distributed workloads?" : "Clean up MLflow?";
   return (
     <Modal aria-labelledby={titleId} variant={ModalVariant.medium} isOpen onClose={onCancel}>
@@ -443,6 +454,17 @@ export const CleanupModal: React.FC<{
                     <Checkbox id="cleanup-maas-platform" label="MaaS platform" description="Last: MaaS turned back off as it was, then the gateway and database this tool created." isChecked={maasPlatform} onChange={(_e, v) => setMaaSPlatform(v)} />
                   </FormGroup>
                 )}
+                {offered.projectStorages.length > 0 && (
+                  <FormGroup role="group" isStack label="Project S3 storage" fieldId="cleanup-project-storages">
+                    {(status.projectStorages ?? []).map((ps) => (
+                      <Checkbox key={ps.project} id={`cleanup-project-s3-${ps.project}`} label={<>S3 storage of {ps.project}</>} isChecked={projectStorages.includes(ps.project)} onChange={(_e, v) => toggleIn(setProjectStorages)(ps.project, v)}
+                        description={<>Set up by {ps.by || "a project admin"}. Deleted after the pipeline servers; refused while a pipeline server still uses it.</>}
+                        body={projectStorages.includes(ps.project) ? (
+                          <Checkbox id={`cleanup-project-s3-data-${ps.project}`} label={<>Also delete its volume <code>{ps.dataVolume}</code> (its files are lost)</>} isChecked={projectStorageData.includes(ps.project)} onChange={(_e, v) => toggleIn(setProjectStorageData)(ps.project, v)} />
+                        ) : undefined} />
+                    ))}
+                  </FormGroup>
+                )}
                 {offered.recipeProjects.length > 0 && (
                   <FormGroup role="group" isStack label="Projects recipes created" fieldId="cleanup-recipe-projects">
                     {(status.recipeProjects ?? []).map((p) => (
@@ -460,6 +482,11 @@ export const CleanupModal: React.FC<{
                   </FormGroup>
                 )}
               </Form>
+            </StackItem>
+          )}
+          {scope === "all" && status.projectStoragesError && (
+            <StackItem>
+              <Alert variant="warning" isInline component="p" title="Project S3 storages are not offered">{status.projectStoragesError}</Alert>
             </StackItem>
           )}
           {scope === "all" && status.recipeProjectsError && (

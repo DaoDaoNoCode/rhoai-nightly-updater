@@ -87,8 +87,9 @@ export const UserEnvironmentPage: React.FC = () => {
             <Alert variant="info" isInline isPlain component="div" title="A cluster-admin sets up the shared parts">
               <Content component="p">
                 S3 storage, the inference gateway, Models as a Service and the operators these features need, and the
-                project's pipeline server and models. You can set up and remove the workbench, the playground and the
-                MLflow sample data here when your role in the project allows it.
+                project's models. You can set up and remove the workbench, the playground and the MLflow sample data
+                here when your role in the project allows it, and a pipeline server on the project's own S3 storage,
+                which the project's admins set up.
               </Content>
             </Alert>
           </StackItem>

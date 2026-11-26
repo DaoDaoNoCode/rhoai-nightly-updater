@@ -902,6 +902,11 @@ function userRead(res, key, u) {
     if (!(world.userProjects ?? []).includes(project)) return send(403, { error: `Project ${project} is not one of your data science projects.`, errorCode: "forbidden_for_user" });
     return send(200, F.userCapabilities(project));
   }
+  if (key === "GET /api/resources/project-s3") {
+    const project = u.searchParams.get("project") || "";
+    if (!(world.userProjects ?? []).includes(project)) return send(403, { error: `Project ${project} is not one of your data science projects. Nothing was read.`, errorCode: "forbidden_for_user" });
+    return send(200, F.projectStorage(project));
+  }
   if (key === "GET /api/resources/status") {
     const project = u.searchParams.get("project");
     if (!project) return adminOnly();

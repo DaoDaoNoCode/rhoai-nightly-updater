@@ -54,6 +54,7 @@ export function stubUserApi(extra: Record<string, Handler | unknown> = {}) {
     "/api/resources/samples/mlflow": (url: string) => jsonResponse(mlflowSamples(new URL(url, "http://x").searchParams.get("project") ?? "dev-project")),
     "/api/resources/samples/pipeline/spec": PIPELINE_SPEC,
     "/api/resources/workbench": (url: string) => jsonResponse(contract.workbenchUser(new URL(url, "http://x").searchParams.get("project") ?? "dev-project")),
+    "/api/resources/project-s3": (url: string) => jsonResponse(contract.projectStorageUser(new URL(url, "http://x").searchParams.get("project") ?? "dev-project")),
     "/api/resources/projects/capabilities": (url: string) => jsonResponse(contract.capabilitiesUser(new URL(url, "http://x").searchParams.get("project") ?? "dev-project")),
     "/api/status": adminOnly,
     "/api/dashboard/state": adminOnly,
@@ -102,4 +103,6 @@ export const USER_ALLOWED_GETS: RegExp[] = [
   // The project actions (non-admin design B3): one of the user's projects.
   /^\/api\/resources\/workbench\?project=[^&]+$/,
   /^\/api\/resources\/projects\/capabilities\?project=[^&]+$/,
+  // Project S3 storage (B5): one of the user's projects.
+  /^\/api\/resources\/project-s3\?project=[^&]+$/,
 ];

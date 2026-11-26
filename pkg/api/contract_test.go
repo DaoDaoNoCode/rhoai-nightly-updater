@@ -74,6 +74,7 @@ func TestFrontendContract(t *testing.T) {
 		// The Workbench tab's status (admin-only, read with the admin's token).
 		{"workbench-admin.json", "/api/resources/workbench?project=team-a", "user:admin", HandleWorkbenchStatus, "", nil},
 		{"workbench-user.json", "/api/resources/workbench?project=team-a", "user:carol", HandleWorkbenchStatus, "", nil},
+		{"project-s3-user.json", "/api/resources/project-s3?project=team-a", "user:carol", HandleProjectStorageStatus, "", nil},
 		{"project-capabilities-user.json", "/api/resources/projects/capabilities?project=team-a", "user:carol", HandleProjectCapabilities, "", nil},
 		{"project-capabilities-admin.json", "/api/resources/projects/capabilities?project=team-a", "user:admin", HandleProjectCapabilities, "", nil},
 		// The Distributed workloads tab's status (admin-only, the admin's token).
@@ -228,6 +229,17 @@ func stubContractData(t *testing.T) {
 	origProjectWorkbench := getWorkbenchProjectStatus
 	t.Cleanup(func() { getWorkbenchProjectStatus = origProjectWorkbench })
 	getWorkbenchProjectStatus = getWorkbenchStatus
+	origProjectStorage := getProjectStorageStatus
+	t.Cleanup(func() { getProjectStorageStatus = origProjectStorage })
+	// A project admin's ready project storage, used by its pipeline server.
+	getProjectStorageStatus = func(_ *cluster.Client, project string) *types.ProjectStorageStatus {
+		st := &types.ProjectStorageStatus{Project: project, Name: "nightly-s3", Endpoint: "http://nightly-s3." + project + ".svc:8333", Bucket: "pipelines", DataVolume: "nightly-s3-data",
+			Deployed: true, ManagedByTool: true, Recorded: true, Ready: true, Message: "Running", UsedBy: []string{"dspa"}}
+		for _, o := range [][2]string{{"PersistentVolumeClaim", "nightly-s3-data"}, {"Secret", "nightly-s3-credentials"}, {"NetworkPolicy", "nightly-s3-ingress"}, {"Deployment", "nightly-s3"}, {"Service", "nightly-s3"}} {
+			st.Objects = append(st.Objects, types.ProjectStorageObject{Kind: o[0], Name: o[1], Present: true, Owned: true})
+		}
+		return st
+	}
 	getSummary = func(*cluster.Client) (*types.Summary, error) {
 		return &types.Summary{
 			RHOAI: types.SummaryRHOAI{Installed: true, Version: "3.6.0", Channel: "beta", Phase: "Succeeded"},

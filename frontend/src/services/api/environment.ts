@@ -1,6 +1,6 @@
 /** Environment page coverage: S3 storage, pipeline servers, MLflow, models, playground, MaaS, samples, prerequisites, and clean-up. */
 
-import { OperationResponse, ProjectStatus, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, ModelsRequest, PlaygroundRequest, PlaygroundStatus, WorkbenchRequest, WorkbenchStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelRegistryRequest, ModelRegistryStatus, KueueRequest, KueueStatus, ObservabilityRequest, ObservabilityStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest, ProjectCapabilities } from '../../types';
+import { OperationResponse, ProjectPipelineServerRequest, ProjectStorageRequest, ProjectStorageStatus, ProjectStatus, ResourcesStatus, UpdateStep, MLflowSamplesStatus, MLflowSampleAction, MLflowSampleId, PipelineSampleSpec, ModelsRequest, PlaygroundRequest, PlaygroundStatus, WorkbenchRequest, WorkbenchStatus, MaaSGroupProblem, MaaSRequest, MaaSStatus, ModelRegistryRequest, ModelRegistryStatus, KueueRequest, KueueStatus, ObservabilityRequest, ObservabilityStatus, ModelExposures, ModelExposureKind, PrerequisitesStatus, PrerequisitesRequest, ProjectCapabilities } from '../../types';
 import { request } from './client';
 import { StreamDoneHandler, StreamDetachHandler, streamSSE } from './stream';
 
@@ -150,6 +150,9 @@ export interface CleanupRequest {
   /** Projects losing this tool’s workbench (first); workbenchStorage: those whose storage goes too. */
   workbenches?: string[];
   workbenchStorage?: string[];
+  /** Projects whose project S3 storage goes (after their pipeline servers); projectStorageData: those whose volume and data go too. */
+  projectStorages?: string[];
+  projectStorageData?: string[];
   /** Projects whose models this tool unpublishes from MaaS; runs first. */
   maasPublished?: string[];
   /** MaaS platform this tool installed; runs last. */
@@ -277,6 +280,31 @@ export function streamWorkbench(
   onConnectionDrop?: StreamDetachHandler,
 ): AbortController {
   return streamSSE('/api/resources/workbench/stream', req, onStep, onDone, onConnectionDrop);
+}
+
+/** A project's own S3 storage, read with the user's token. */
+export function getProjectStorage(project: string, signal?: AbortSignal): Promise<ProjectStorageStatus> {
+  return request(`/api/resources/project-s3?project=${encodeURIComponent(project)}`, { signal });
+}
+
+/** Set up, repair or delete a project's own S3 storage: steps "check", "storage", "fence", "server", "ready" (delete: "check", "delete"). */
+export function streamProjectStorage(
+  req: ProjectStorageRequest,
+  onStep: (step: UpdateStep) => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+): AbortController {
+  return streamSSE('/api/resources/project-s3/stream', req, onStep, onDone, onConnectionDrop);
+}
+
+/** Set up or delete a project's pipeline server on its own S3 storage: step "pipeline-server". */
+export function streamProjectPipelineServer(
+  req: ProjectPipelineServerRequest,
+  onStep: (step: UpdateStep) => void,
+  onDone: StreamDoneHandler,
+  onConnectionDrop?: StreamDetachHandler,
+): AbortController {
+  return streamSSE('/api/resources/project-pipeline-server/stream', req, onStep, onDone, onConnectionDrop);
 }
 
 /** Models as a Service: platform pieces and this tool’s models with publication state. */

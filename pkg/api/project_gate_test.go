@@ -53,6 +53,15 @@ func newProjectGateEnv(t *testing.T, role string) *projectGateEnv {
 			out[id] = cluster.ActionReview{}
 			a, _ := cluster.ProjectActionByID(id)
 			for _, r := range a.Requests {
+				// An editor is not an admin of the project: the project
+				// S3 storage's check (create rolebindings) is missing.
+				if role == roleEditor && r.Source == cluster.SourceProjectAdmin {
+					req := cluster.AccessRequest{Verb: r.Verb, Group: r.Group, Resource: r.Resource, Namespace: project}
+					rv := out[id]
+					rv.Missing = append(rv.Missing, cluster.MissingPermission{Request: req, Text: "Only an admin of project " + project + " sets up, repairs and deletes its S3 storage (the OpenShift admin role there); ask an admin of project " + project + "."})
+					out[id] = rv
+					continue
+				}
 				if role == roleViewer && r.Verb != "get" && r.Verb != "list" {
 					req := cluster.AccessRequest{Verb: r.Verb, Group: r.Group, Resource: r.Resource, Namespace: project, Name: r.Name}
 					r := out[id]
@@ -64,7 +73,11 @@ func newProjectGateEnv(t *testing.T, role string) *projectGateEnv {
 		return out, nil
 	}
 	origW, origP, origS := runWorkbench, runPlayground, runMLflowSamples
-	t.Cleanup(func() { runWorkbench, runPlayground, runMLflowSamples = origW, origP, origS })
+	origPS, origPP := runProjectStorage, runProjectPipelineServer
+	t.Cleanup(func() {
+		runWorkbench, runPlayground, runMLflowSamples = origW, origP, origS
+		runProjectStorage, runProjectPipelineServer = origPS, origPP
+	})
 	done := &types.OperationResponse{Success: true, Message: "done"}
 	runWorkbench = func(c *cluster.Client, _ types.WorkbenchRequest, _ func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
 		env.runs++
@@ -81,21 +94,47 @@ func newProjectGateEnv(t *testing.T, role string) *projectGateEnv {
 		env.projectUser = c.ProjectUser()
 		return done, nil
 	}
+	runProjectStorage = func(c *cluster.Client, _ types.ProjectStorageRequest, _ func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		env.runs++
+		env.projectUser = c.ProjectUser()
+		return done, nil
+	}
+	runProjectPipelineServer = func(c *cluster.Client, _ types.ProjectPipelineServerRequest, _ func(cluster.UpdateStepEvent)) (*types.OperationResponse, error) {
+		env.runs++
+		env.projectUser = c.ProjectUser()
+		return done, nil
+	}
 	return env
 }
 
 // projectActionRequests are a request of every project action, by ID.
 var projectActionRequests = map[string][2]string{
-	"workbench.setup":           {"/api/resources/workbench/stream", `{"action":"setup","project":"team-a"}`},
-	"workbench.start":           {"/api/resources/workbench/stream", `{"action":"start","project":"team-a"}`},
-	"workbench.stop":            {"/api/resources/workbench/stream", `{"action":"stop","project":"team-a"}`},
-	"workbench.teardown":        {"/api/resources/workbench/stream", `{"action":"teardown","project":"team-a"}`},
-	"workbench.delete-storage":  {"/api/resources/workbench/stream", `{"action":"delete-storage","project":"team-a"}`},
-	"playground.setup":          {"/api/resources/playground/stream", `{"action":"setup","project":"team-a","models":[{"name":"m","source":"namespace"}]}`},
-	"playground.teardown":       {"/api/resources/playground/stream", `{"action":"teardown","project":"team-a"}`},
-	"mlflow-samples.add":        {"/api/resources/samples/mlflow/stream", `{"action":"add","project":"team-a","samples":["training"]}`},
-	"mlflow-samples.remove":     {"/api/resources/samples/mlflow/stream", `{"action":"remove","project":"team-a","samples":["training"]}`},
-	"mlflow-samples.regenerate": {"/api/resources/samples/mlflow/stream", `{"action":"regenerate","project":"team-a","samples":["genai-demo"]}`},
+	"workbench.setup":                  {"/api/resources/workbench/stream", `{"action":"setup","project":"team-a"}`},
+	"workbench.start":                  {"/api/resources/workbench/stream", `{"action":"start","project":"team-a"}`},
+	"workbench.stop":                   {"/api/resources/workbench/stream", `{"action":"stop","project":"team-a"}`},
+	"workbench.teardown":               {"/api/resources/workbench/stream", `{"action":"teardown","project":"team-a"}`},
+	"workbench.delete-storage":         {"/api/resources/workbench/stream", `{"action":"delete-storage","project":"team-a"}`},
+	"playground.setup":                 {"/api/resources/playground/stream", `{"action":"setup","project":"team-a","models":[{"name":"m","source":"namespace"}]}`},
+	"playground.teardown":              {"/api/resources/playground/stream", `{"action":"teardown","project":"team-a"}`},
+	"mlflow-samples.add":               {"/api/resources/samples/mlflow/stream", `{"action":"add","project":"team-a","samples":["training"]}`},
+	"mlflow-samples.remove":            {"/api/resources/samples/mlflow/stream", `{"action":"remove","project":"team-a","samples":["training"]}`},
+	"mlflow-samples.regenerate":        {"/api/resources/samples/mlflow/stream", `{"action":"regenerate","project":"team-a","samples":["genai-demo"]}`},
+	"project-s3.setup":                 {"/api/resources/project-s3/stream", `{"action":"setup","project":"team-a"}`},
+	"project-s3.repair":                {"/api/resources/project-s3/stream", `{"action":"repair","project":"team-a"}`},
+	"project-s3.delete":                {"/api/resources/project-s3/stream", `{"action":"delete","project":"team-a","deleteData":"nightly-s3-data"}`},
+	"project-pipeline-server.setup":    {"/api/resources/project-pipeline-server/stream", `{"action":"setup","project":"team-a"}`},
+	"project-pipeline-server.teardown": {"/api/resources/project-pipeline-server/stream", `{"action":"teardown","project":"team-a","confirmWorkbenches":{"wb":"uid-1"}}`},
+}
+
+// needsProjectAdmin reports whether a is for admins of the project only
+// (project S3 storage: its preflight checks create rolebindings).
+func needsProjectAdmin(a cluster.ProjectAction) bool {
+	for _, r := range a.Requests {
+		if r.Source == cluster.SourceProjectAdmin {
+			return true
+		}
+	}
+	return false
 }
 
 func serveProjectAction(t *testing.T, path, body string) *httptest.ResponseRecorder {
@@ -126,13 +165,15 @@ func TestProjectActionsPerRoleMatrix(t *testing.T) {
 				var wantStatus int
 				var wantCode string
 				switch {
+				case role == roleClusterAdmin && a.AdminRefusal != "":
+					wantStatus, wantCode = http.StatusForbidden, notForClusterAdminsCode
 				case role == roleClusterAdmin:
 					wantStatus = http.StatusOK
 				case !a.ForUsers:
 					wantStatus, wantCode = http.StatusForbidden, adminOnlyCode
 				case role == roleNothing:
 					wantStatus, wantCode = http.StatusForbidden, cluster.ErrorCodeForbiddenForUser
-				case role == roleViewer:
+				case role == roleViewer, role == roleEditor && needsProjectAdmin(a):
 					wantStatus, wantCode = http.StatusForbidden, missingPermissionsCode
 				default:
 					wantStatus = http.StatusOK

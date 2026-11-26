@@ -1002,9 +1002,13 @@ func S3Resources(keys S3Keys, secured bool) []s3Resource {
 						"containers": []map[string]any{{
 							"name":  s3Container,
 							"image": s3Image(),
-							// -bucket creates the bucket before the server
-							// reports ready (weed/command/mini.go:1672-1679 at
-							// 4.54); setup also creates it through the Service.
+							// -bucket creates the bucket once every service,
+							// S3 included, is serving (weed/command/mini.go
+							// 1660-1678 at 4.54), so GET /status can answer 200
+							// before it exists; setup also creates it through
+							// the Service, and the S3 server makes a missing
+							// bucket on an upload with an admin key
+							// (-s3.autoCreateBucket, on by default).
 							// -admin.port.legacy=0 turns off the second admin
 							// listener SeaweedFS keeps on the old port 23646
 							// for compatibility (weed/command/mini.go:598).

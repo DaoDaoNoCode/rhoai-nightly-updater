@@ -173,11 +173,11 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 	if !decodeBody(w, r, cleanupBodyLimit, &req, false) {
 		return
 	}
-	if len(req.PipelineServers) > maxCleanupProjects || len(req.Models) > maxCleanupProjects || len(req.Playgrounds) > maxCleanupProjects || len(req.MaaSPublished) > maxCleanupProjects || len(req.RecipeProjects) > maxCleanupProjects || len(req.Workbenches) > maxCleanupProjects || len(req.WorkbenchStorage) > maxCleanupProjects {
+	if len(req.PipelineServers) > maxCleanupProjects || len(req.Models) > maxCleanupProjects || len(req.Playgrounds) > maxCleanupProjects || len(req.MaaSPublished) > maxCleanupProjects || len(req.RecipeProjects) > maxCleanupProjects || len(req.Workbenches) > maxCleanupProjects || len(req.WorkbenchStorage) > maxCleanupProjects || len(req.ProjectStorages) > maxCleanupProjects || len(req.ProjectStorageData) > maxCleanupProjects {
 		writeError(w, fmt.Sprintf("at most %d pipeline servers, models, playgrounds, workbenches and recipe projects each per clean-up", maxCleanupProjects), http.StatusBadRequest, "validation")
 		return
 	}
-	for _, list := range [][]string{req.PipelineServers, req.Models, req.Playgrounds, req.MaaSPublished, req.RecipeProjects, req.Workbenches, req.WorkbenchStorage} {
+	for _, list := range [][]string{req.PipelineServers, req.Models, req.Playgrounds, req.MaaSPublished, req.RecipeProjects, req.Workbenches, req.WorkbenchStorage, req.ProjectStorages, req.ProjectStorageData} {
 		seen := map[string]bool{}
 		for _, p := range list {
 			if !namespaceRegex.MatchString(p) {
@@ -240,7 +240,13 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 		}
 		seenComponents[k] = true
 	}
-	if len(req.Workbenches) == 0 && len(req.WorkbenchStorage) == 0 && len(req.PipelineServers) == 0 && !req.Storage && !req.MLflow && !req.ModelRegistry && !req.Kueue && !req.Observability && len(req.Models) == 0 && !req.InferenceGateway && len(req.Playgrounds) == 0 && len(req.MaaSPublished) == 0 && !req.MaaSPlatform && len(req.Components) == 0 && len(req.RecipeProjects) == 0 {
+	for _, p := range req.ProjectStorageData {
+		if !slices.Contains(req.ProjectStorages, p) {
+			writeError(w, "projectStorageData goes with its project in projectStorages", http.StatusBadRequest, "validation")
+			return
+		}
+	}
+	if len(req.Workbenches) == 0 && len(req.WorkbenchStorage) == 0 && len(req.PipelineServers) == 0 && len(req.ProjectStorages) == 0 && !req.Storage && !req.MLflow && !req.ModelRegistry && !req.Kueue && !req.Observability && len(req.Models) == 0 && !req.InferenceGateway && len(req.Playgrounds) == 0 && len(req.MaaSPublished) == 0 && !req.MaaSPlatform && len(req.Components) == 0 && len(req.RecipeProjects) == 0 {
 		writeError(w, "nothing to clean up was selected", http.StatusBadRequest, "validation")
 		return
 	}
@@ -256,6 +262,9 @@ var HandleCleanupStream = withMutationAuth(func(c *cluster.Client, w http.Respon
 	}
 	if n := len(req.PipelineServers); n > 0 {
 		target = append(target, fmt.Sprintf("%d pipeline %s", n, map[bool]string{true: "server", false: "servers"}[n == 1]))
+	}
+	if n := len(req.ProjectStorages); n > 0 {
+		target = append(target, fmt.Sprintf("%d project S3 %s", n, map[bool]string{true: "storage", false: "storages"}[n == 1]))
 	}
 	if req.Storage {
 		target = append(target, "S3 storage")

@@ -68,6 +68,42 @@ describe("a user's project view", () => {
     await waitFor(() => expect(api.bodies["POST /api/resources/workbench/stream"]).toEqual([{ action: "stop", project: "team-a" }]));
   });
 
+  it("disables the S3 storage's actions for an editor with the reason, and keeps its pipeline server's", async () => {
+    const caps = contract.capabilitiesUser("team-a");
+    const editorReason = "Set up the project's S3 storage in team-a needs permissions your OpenShift account does not have: Only an admin of project team-a sets up, repairs and deletes its S3 storage (the OpenShift admin role there); ask an admin of project team-a.";
+    for (const id of ["project-s3.setup", "project-s3.repair", "project-s3.delete"]) {
+      caps.actions[id] = { ...caps.actions[id], allowed: false, reason: editorReason, code: "missing_permissions" };
+    }
+    stubUserApi({ "/api/resources/projects/capabilities": caps });
+    render(<UserProjectView project="team-a" refreshKey={0} />);
+    const storage = await screen.findByRole("region", { name: "S3 storage" });
+    const repair = await within(storage).findByRole("button", { name: "Repair" });
+    await waitFor(() => expect(repair).toHaveAttribute("aria-disabled", "true"));
+    // In use by its pipeline server: no Delete, the reason instead.
+    expect(within(storage).getByText("Pipeline server dspa uses it: delete that first to delete the storage.")).toBeInTheDocument();
+    expect(within(storage).getByText("http://nightly-s3.team-a.svc:8333")).toBeInTheDocument();
+  });
+
+  it("deletes the S3 storage's volume only when its name is typed", async () => {
+    const st = contract.projectStorageUser("team-a");
+    const api = stubUserApi({ "/api/resources/project-s3": { ...st, usedBy: [] } });
+    render(<UserProjectView project="team-a" refreshKey={0} />);
+    const storage = await screen.findByRole("region", { name: "S3 storage" });
+    const del = await within(storage).findByRole("button", { name: "Delete" });
+    await waitFor(() => expect(del).not.toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(del);
+    let dialog = await screen.findByRole("dialog", { name: /Delete the S3 storage in team-a/ });
+    fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "nightly-s3" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(api.bodies["POST /api/resources/project-s3/stream"]).toEqual([{ action: "delete", project: "team-a" }]));
+    await waitFor(() => expect(within(storage).getByRole("button", { name: "Delete" })).not.toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(within(storage).getByRole("button", { name: "Delete" }));
+    dialog = await screen.findByRole("dialog", { name: /Delete the S3 storage in team-a/ });
+    fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "nightly-s3-data" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(api.bodies["POST /api/resources/project-s3/stream"]?.[1]).toEqual({ action: "delete", project: "team-a", deleteData: "nightly-s3-data" }));
+  });
+
   it("asks before a delete, and sends nothing when it is cancelled", async () => {
     const api = stubUserApi();
     render(<UserProjectView project="team-a" refreshKey={0} />);

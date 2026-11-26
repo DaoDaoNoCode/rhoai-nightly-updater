@@ -252,7 +252,7 @@ const EnvironmentView: React.FC<QuickResourceCreatorProps> = ({ mutateBlocker, r
   const overviewRows = buildOverviewRows({ storage: storageNow, pipelines: pipelinesSummary, workbench: workbenchSummary, mlflow: mlflowNow, modelRegistry: registryNow, models: modelsSummary, playground: playgroundSummary, kueue: kueueNow, maas: maasNow, observability: observabilityNow }, prereq);
   const anythingToClean = !!resStatus && (() => {
     const c = cleanupCandidates(resStatus, "all", minioLeftovers, pg, maas, registry, wb, kueueData, observabilityData);
-    return c.kueue || c.observability || c.workbenches.length > 0 || c.keptStorage.length > 0 || c.servers.length > 0 || c.storage || c.mlflow || c.modelRegistry || c.models.length > 0 || c.gateway || c.playgrounds.length > 0 || c.maasPublished.length > 0 || c.maasPlatform || c.recipeProjects.length > 0;
+    return c.kueue || c.observability || c.workbenches.length > 0 || c.keptStorage.length > 0 || c.servers.length > 0 || c.storage || c.mlflow || c.modelRegistry || c.models.length > 0 || c.gateway || c.playgrounds.length > 0 || c.maasPublished.length > 0 || c.maasPlatform || c.recipeProjects.length > 0 || c.projectStorages.length > 0;
   })();
 
   const { open: runNext, whatNext } = runFollowUp({

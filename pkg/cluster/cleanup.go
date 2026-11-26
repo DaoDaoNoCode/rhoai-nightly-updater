@@ -52,6 +52,9 @@ var (
 	recipeProjectProblem = recipe.ProjectTeardownProblem
 	// Bound to storage.ConnectionWorkbenchesProblem; swappable in tests.
 	pipelineWorkbenchesProblem = storage.ConnectionWorkbenchesProblem
+	cleanupProjectStorage      = func(c *Client, req types.ProjectStorageRequest) (*types.OperationResponse, error) {
+		return storage.RunProjectStorage(c, req, nil)
+	}
 )
 
 // workbenchesDetail is the detail of a step refused for workbenches that use
@@ -145,6 +148,24 @@ func cleanupParts(c *Client, req types.CleanupRequest, toolOwners map[string][]s
 			title:   fmt.Sprintf("the pipeline server in '%s'", project),
 			run: func() (*types.OperationResponse, error) {
 				return cleanupPipelineServer(c, project, req.ConfirmUnrecorded[project], confirmedWorkbenches(c, req, project))
+			},
+		})
+	}
+	// Project S3 storages after the pipeline servers that use them; a
+	// volume only when its deletion was confirmed (its data goes).
+	for _, project := range req.ProjectStorages {
+		deleteData := ""
+		title := fmt.Sprintf("the S3 storage of '%s' (its volume is kept)", project)
+		if slices.Contains(req.ProjectStorageData, project) {
+			deleteData = storage.ProjectS3PVC
+			title = fmt.Sprintf("the S3 storage of '%s' and its volume %s", project, storage.ProjectS3PVC)
+		}
+		parts = append(parts, cleanupPart{
+			id:      CleanupStepID("project-s3", project),
+			project: project,
+			title:   title,
+			run: func() (*types.OperationResponse, error) {
+				return cleanupProjectStorage(c, types.ProjectStorageRequest{Project: project, Action: "delete", DeleteData: deleteData})
 			},
 		})
 	}

@@ -111,7 +111,7 @@ describe("Environment for a user who is not a cluster-admin", () => {
     });
     render();
     await settleApps();
-    expect(await within(await screen.findByRole("region", { name: "Pipelines" })).findByText("No pipeline server in dev-project. Add one in the RHOAI dashboard, or ask a cluster-admin to set one up here.")).toBeInTheDocument();
+    expect(await within(await screen.findByRole("region", { name: "Pipelines" })).findByText("No pipeline server in dev-project. Set up makes one on the project's own S3 storage, with the dashboard connection nightly-s3-connection.")).toBeInTheDocument();
     expect(within(part("Models")).getByText("No models in dev-project. Add one in the RHOAI dashboard, or ask a cluster-admin to set one up here.")).toBeInTheDocument();
     expect(await within(part("Playground")).findByText("No playground in dev-project. It needs a ready chat model in the project; add one in the RHOAI dashboard.")).toBeInTheDocument();
     expect(await within(part("MLflow sample data")).findByText("MLflow is not set up on this cluster. A cluster-admin sets this up.")).toBeInTheDocument();

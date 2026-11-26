@@ -27,7 +27,7 @@ func TestWithoutConnection(t *testing.T) {
 		{"proj/a , proj/" + c + ",  proj/b ", "proj/a ,  proj/b ", true},
 	}
 	for _, tc := range cases {
-		got, found := withoutConnection(tc.value, "proj")
+		got, found := withoutConnection(tc.value, "proj", ConnectionSecretName)
 		if got != tc.want || found != tc.found {
 			t.Errorf("withoutConnection(%q) = %q, %v; want %q, %v", tc.value, got, found, tc.want, tc.found)
 		}

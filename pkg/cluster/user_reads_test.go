@@ -87,6 +87,22 @@ func TestUserReadsRefuseTheServiceAccount(t *testing.T) {
 	if _, err := GetWorkbenchStatus(c, c, "p"); !errors.Is(err, authz.ErrNotUserClient) {
 		t.Fatalf("workbench status: %v", err)
 	}
+	// Project S3 storage: its objects (its Secret holds the project's
+	// root key) and the Connection of a pipeline server on it.
+	if st := GetProjectStorageStatus(c, "p"); st.Problem != authz.ErrNotUserClient.Error() || st.Deployed {
+		t.Fatalf("project storage status: %+v", st)
+	}
+	if _, _, _, err := storage.ReadProjectS3Keys(c, "p"); !errors.Is(err, authz.ErrNotUserClient) {
+		t.Fatalf("project storage key: %v", err)
+	}
+	if _, _, err := readProjectConnection(c, "p"); !errors.Is(err, authz.ErrNotUserClient) {
+		t.Fatalf("project connection: %v", err)
+	}
+	for _, conn := range []string{storage.ConnectionSecretName, storage.ProjectConnectionSecretName} {
+		if state, msg := connectionState(c, "p", conn, false); state != ConnectionUnreadable || msg != authz.ErrNotUserClient.Error() {
+			t.Fatalf("connection state %s: %s %s", conn, state, msg)
+		}
+	}
 	if len(k8s.calls) != 0 {
 		t.Fatalf("calls: %+v", k8s.calls)
 	}

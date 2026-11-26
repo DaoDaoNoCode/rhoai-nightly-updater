@@ -2,6 +2,7 @@ package storage
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -9,6 +10,7 @@ import (
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/kube"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/record"
 	"github.com/juntwang/rhoai-nightly-updater/pkg/cluster/internal/rhoai"
+	"github.com/juntwang/rhoai-nightly-updater/pkg/types"
 )
 
 // Which pipeline servers are the tool's, for the writes that hand them the
@@ -39,15 +41,72 @@ type RecordedPipelineServer struct {
 	UID string `json:"uid"`
 	At  string `json:"at,omitempty"`
 	By  string `json:"by,omitempty"`
+	// Storage is RecordedOnProjectStorage for a pipeline server on its
+	// project's own S3 storage (set up by a project's admin or editor);
+	// "" for one on the shared storage.
+	Storage string `json:"storage,omitempty"`
+	// ActorRole and ProjectUID, for a pipeline server on project storage:
+	// record.ActorRoleUser for a user who is not a cluster-admin, and the
+	// project's namespace UID.
+	ActorRole  string `json:"actorRole,omitempty"`
+	ProjectUID string `json:"projectUID,omitempty"`
 }
+
+// RecordedOnProjectStorage is RecordedPipelineServer.Storage of a pipeline
+// server on project storage. Such an entry needs no cap of its own: a
+// pipeline server on project storage needs the project's storage, whose
+// entry the caps of users' records count, and deleting the storage drops
+// it (forgetProjectPipelineServer).
+const RecordedOnProjectStorage = "project"
 
 // PipelineRecord is the record, by "<project>/<name>".
 type PipelineRecord map[string]RecordedPipelineServer
 
-// owns: meta is a pipeline server whose UID the tool recorded.
+// Owns: meta is a pipeline server whose UID the tool recorded as one it
+// set up on the shared storage. Only these get the shared storage's keys
+// (Secure, Migrate, the keys' status): one recorded on project storage
+// (set up by a project's admin or editor) never does, even when its host
+// was later pointed at the shared storage (a project editor can change
+// it).
 func (r PipelineRecord) Owns(meta kube.ObjectMeta) bool {
 	e, ok := r[meta.Namespace+"/"+meta.Name]
-	return ok && e.UID != "" && e.UID == meta.UID
+	return ok && e.Storage != RecordedOnProjectStorage && e.UID != "" && e.UID == meta.UID
+}
+
+// OwnsOnProjectStorage: meta is a pipeline server whose UID the tool
+// recorded as set up on its project's own storage.
+func (r PipelineRecord) OwnsOnProjectStorage(meta kube.ObjectMeta) bool {
+	e, ok := r[meta.Namespace+"/"+meta.Name]
+	return ok && e.Storage == RecordedOnProjectStorage && e.UID != "" && e.UID == meta.UID
+}
+
+// OnProjectStorageRecorded reports whether d is handled as a pipeline
+// server on its project's own storage: recorded as set up there (whatever
+// its host says now: a project editor can change it), or, without a
+// shared-storage record, pointing at that storage. Teardown routing, the
+// shared Set up's refusal and the status decide by it.
+func OnProjectStorageRecorded(d DSPA, rec PipelineRecord) bool {
+	return rec.OwnsOnProjectStorage(d.Meta) || OnProjectStorage(d) && !rec.Owns(d.Meta)
+}
+
+// SetProjectStorageState marks state (d's status entry) as a pipeline
+// server on project storage when OnProjectStorageRecorded says so, with
+// that storage's Connection when the DSPA names it.
+func SetProjectStorageState(state *types.ResourceState, d DSPA, rec PipelineRecord) {
+	if !OnProjectStorageRecorded(d, rec) {
+		return
+	}
+	state.ProjectStorage = true
+	state.Connection = ""
+	if d.Meta.Annotations[DSPAConnectionAnnotation] == ProjectConnectionSecretName {
+		state.Connection = ProjectConnectionSecretName
+	}
+}
+
+// OwnsAny: meta is a pipeline server the tool recorded, on either storage
+// (the status's Unrecorded).
+func (r PipelineRecord) OwnsAny(meta kube.ObjectMeta) bool {
+	return r.Owns(meta) || r.OwnsOnProjectStorage(meta)
 }
 
 // ReadPipelineRecord reads the record (empty when nothing is recorded).
@@ -118,4 +177,24 @@ func forgetPipelineServer(c *kube.Client, project, name string) error {
 	}
 	delete(rec, project+"/"+name)
 	return WritePipelineRecord(c, rec)
+}
+
+// PipelineServerLive reports whether project still has the pipeline server
+// with this UID, listed with c (the ServiceAccount's list of pipeline
+// servers, which the status already makes): for the background check
+// only, never shown. A missing API means it has none.
+func PipelineServerLive(c *kube.Client, project, uid string) (bool, error) {
+	dspas, err := ListProjectDSPAs(c, project)
+	if errors.Is(err, ErrDSPACRDMissing) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, d := range dspas {
+		if d.Meta.UID == uid {
+			return true, nil
+		}
+	}
+	return false, nil
 }

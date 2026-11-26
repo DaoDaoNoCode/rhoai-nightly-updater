@@ -280,28 +280,43 @@ func pipelineConfigExists(c *kube.Client, project string) (bool, error) {
 	return found, err
 }
 
-// toolConnection reports whether the project has the tool's S3 Connection:
-// Secret rhoai-nightly-updater-s3 with the tool label, owned by the
-// pipeline server's DSPA (pipeline_server.go setDSPAOwner).
-func toolConnection(c *kube.Client, project string) (bool, error) {
+// toolConnection is the tool's S3 Connection in the project, "" when it
+// has none: the shared storage's Secret rhoai-nightly-updater-s3 or, for a
+// pipeline server on the project's own storage, nightly-s3-connection,
+// with the tool label and owned by the pipeline server's DSPA
+// (pipeline_server.go setDSPAOwner). The setup of a pipeline server makes
+// one or the other, never both.
+func toolConnection(c *kube.Client, project string) (string, error) {
 	if err := userOnly(c); err != nil {
-		return false, err
+		return "", err
 	}
-	var sec secretMeta
-	found, err := c.GetIntoOptional(rhoai.NamespacedPath("v1", "secrets", project, storage.ConnectionSecretName), &sec)
-	if err != nil || !found {
-		return false, err
+	for _, path := range []string{
+		rhoai.NamespacedPath("v1", "secrets", project, storage.ConnectionSecretName),
+		rhoai.NamespacedPath("v1", "secrets", project, storage.ProjectConnectionSecretName),
+	} {
+		var sec secretMeta
+		found, err := c.GetIntoOptional(path, &sec)
+		if err != nil {
+			return "", err
+		}
+		if found && pipelineOwned(sec.Metadata) {
+			return sec.Metadata.Name, nil
+		}
 	}
-	meta := sec.Metadata
+	return "", nil
+}
+
+// pipelineOwned: meta is the tool's and owned by a pipeline server.
+func pipelineOwned(meta kube.ObjectMeta) bool {
 	if !meta.HasToolLabel() || meta.Terminating() {
-		return false, nil
+		return false
 	}
 	for _, o := range meta.OwnerReferences {
 		if o.Kind == "DataSciencePipelinesApplication" {
-			return true, nil
+			return true
 		}
 	}
-	return false, nil
+	return false
 }
 
 // Volume is the part of a pod volume this package reads.

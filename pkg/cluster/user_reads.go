@@ -74,13 +74,18 @@ func GetProjectStatus(sa, u *Client, project string) (*types.ProjectStatus, erro
 				ps.ManagedByTool, ps.DataPVCs = false, nil
 				ps.TeardownBlockedReason = "This pipeline server was not created by this tool, so the tool will not delete it."
 			} else {
-				ps.Unrecorded = !rec.Owns(d.Meta)
+				storage.SetProjectStorageState(&ps, d, rec)
+				ps.Unrecorded = !rec.OwnsAny(d.Meta)
 				if ps.Unrecorded {
 					ps.UID = d.Meta.UID
 				}
-				ps.ConnectionState, ps.ConnectionMessage = connectionState(u, project, ps.Terminating)
+				conn := storage.ConnectionNameOf(d)
+				if ps.ProjectStorage {
+					conn = storage.ProjectConnectionSecretName
+				}
+				ps.ConnectionState, ps.ConnectionMessage = connectionState(u, project, conn, ps.Terminating)
 				if ps.ConnectionState == ConnectionPresent {
-					addConnectionWorkbenches(u, project, &ps)
+					addConnectionWorkbenches(u, project, conn, &ps)
 				}
 			}
 			st.PipelineServers = append(st.PipelineServers, ps)
@@ -109,14 +114,22 @@ func GetProjectStatus(sa, u *Client, project string) (*types.ProjectStatus, erro
 	return st, nil
 }
 
-// connectionState is what the tool's dashboard Connection Secret in
-// project says (as GetResourcesStatusFor), read with the user's token: a
-// project viewer may not read Secrets, which shows as unreadable.
-func connectionState(u *Client, project string, terminating bool) (string, string) {
+// connectionState is what the tool's dashboard Connection Secret conn
+// (storage.ConnectionNameOf its pipeline server) in project says (as
+// GetResourcesStatusFor), read with the user's token: a project viewer may
+// not read Secrets, which shows as unreadable.
+func connectionState(u *Client, project, conn string, terminating bool) (string, string) {
 	if terminating {
 		return "", ""
 	}
-	meta, found, err := kube.ReadObjectMeta(u, rhoai.NamespacedPath("v1", "secrets", project, storage.ConnectionSecretName))
+	if !u.ActsAsUser() {
+		return ConnectionUnreadable, authz.ErrNotUserClient.Error()
+	}
+	var sec struct {
+		Metadata kube.ObjectMeta `json:"metadata"`
+	}
+	found, err := u.GetIntoOptional(storage.ConnectionSecretPath(project, conn), &sec)
+	meta := sec.Metadata
 	switch {
 	case err != nil:
 		msg, _ := userReadProblem("the connection", project, err)
@@ -131,9 +144,9 @@ func connectionState(u *Client, project string, terminating bool) (string, strin
 
 // listConnectionWorkbenches lists, with the user's token, the workbenches
 // of project whose opendatahub.io/connections annotation names the tool's
-// dashboard Connection (storage.ConnectionWorkbenches). A cluster without
-// the Notebook API has none.
-func listConnectionWorkbenches(u *Client, project string) ([]types.ConnectionWorkbench, []string, error) {
+// dashboard Connection conn (storage.ConnectionWorkbenches). A cluster
+// without the Notebook API has none.
+func listConnectionWorkbenches(u *Client, project, conn string) ([]types.ConnectionWorkbench, []string, error) {
 	if !u.ActsAsUser() {
 		return nil, nil, authz.ErrNotUserClient
 	}
@@ -142,7 +155,7 @@ func listConnectionWorkbenches(u *Client, project string) ([]types.ConnectionWor
 	if err != nil || !found {
 		return nil, nil, err
 	}
-	return connectionWorkbenchRefs(storage.ConnectionWorkbenches(list, project)), storage.ConnectionEnvOnlyWorkbenches(list, project), nil
+	return connectionWorkbenchRefs(storage.ConnectionWorkbenches(list, project, conn)), storage.ConnectionEnvOnlyWorkbenches(list, project, conn), nil
 }
 
 // connectionWorkbenchRefs are wbs by name and UID, as the API returns them.
@@ -155,9 +168,9 @@ func connectionWorkbenchRefs(wbs []storage.ConnectionWorkbench) []types.Connecti
 }
 
 // addConnectionWorkbenches sets ps.ConnectionWorkbenches (or why they could
-// not be read) for the tool's present Connection in project.
-func addConnectionWorkbenches(u *Client, project string, ps *types.ResourceState) {
-	names, envOnly, err := listConnectionWorkbenches(u, project)
+// not be read) for the tool's present Connection conn in project.
+func addConnectionWorkbenches(u *Client, project, conn string, ps *types.ResourceState) {
+	names, envOnly, err := listConnectionWorkbenches(u, project, conn)
 	if err != nil {
 		ps.ConnectionWorkbenchesMessage, _ = userReadProblem("the workbenches", project, err)
 		return

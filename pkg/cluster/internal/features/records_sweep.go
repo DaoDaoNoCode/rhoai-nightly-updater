@@ -108,8 +108,20 @@ func SweepGoneProjectRecords(c *kube.Client) {
 		slog.Warn("background check: the pipeline server record cannot be read", "error", err)
 	} else {
 		changed := false
-		for key := range pipes {
-			if projectGone(projectOf(key)) {
+		for key, e := range pipes {
+			// One set up on project storage also goes when its project
+			// was made again (another namespace UID), as that storage's
+			// entry does (it is bounded only through that entry), unless
+			// the pipeline server it records still lives there (the
+			// namespace may have been replaced around it), or that cannot
+			// be told (fail closed), as for a workbench.
+			st := namespace(projectOf(key))
+			remade := e.Storage == storage.RecordedOnProjectStorage && e.ProjectUID != "" && st.uid != "" && st.uid != e.ProjectUID
+			if remade {
+				live, err := storage.PipelineServerLive(c, projectOf(key), e.UID)
+				remade = err == nil && !live
+			}
+			if st.gone || remade {
 				delete(pipes, key)
 				changed = true
 				forgotten = append(forgotten, "pipeline server "+key)
@@ -137,6 +149,21 @@ func SweepGoneProjectRecords(c *kube.Client) {
 			if err := WritePlaygroundRecords(c, pgs); err != nil {
 				slog.Warn("background check: the playground record cannot be written", "error", err)
 			}
+		}
+	}
+
+	// A project storage's objects live in its namespace: an entry whose
+	// namespace is gone, or was made again (another UID), records nothing
+	// that exists.
+	storageGone := func(project string, e storage.ProjectStorageRecorded) bool {
+		st := namespace(project)
+		return st.gone || e.ProjectUID != "" && st.uid != "" && st.uid != e.ProjectUID
+	}
+	if dropped, err := storage.ForgetGoneProjectStorages(c, storageGone); err != nil {
+		slog.Warn("background check: the project storage record cannot be read or written", "error", err)
+	} else {
+		for _, p := range dropped {
+			forgotten = append(forgotten, "project storage in "+p)
 		}
 	}
 
