@@ -2740,6 +2740,9 @@ type ModelExposureOption struct {
 // ModelCallCheck is the result of one "Can it be called?" check: a
 // minimal request through the model's route, with the model's own token.
 type ModelCallCheck struct {
+	// AnonymousRefused: through a gateway, the same request without a
+	// token was refused (401 or 403): the gateway checks who calls.
+	AnonymousRefused bool `json:"anonymousRefused,omitempty"`
 	// Result is "ok" (it answered), "model-name" (404 from the model's
 	// server: the request's model name is not the served one), "route"
 	// (404 without a body: nothing answers on that path), "auth" (401),

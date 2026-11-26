@@ -442,3 +442,89 @@ func TestAdminModelsFlowUnchanged(t *testing.T) {
 		t.Errorf("an admin's entry: %+v", e)
 	}
 }
+
+// Token authentication asked for inside the cluster needs Connectivity
+// Link: when it is not set up, or that cannot be read, the setup is
+// refused before anything is written; it never turns the authentication
+// off unnoticed.
+func TestTokenAuthNeedsConnectivityLink(t *testing.T) {
+	for _, tc := range []struct {
+		name, want, code string
+		breakIt          func(mc *modelsCluster)
+	}{
+		{"not set up", "which is not set up on this cluster", "prerequisites", func(mc *modelsCluster) {
+			delete(mc.f.groups, "/apis/kuadrant.io")
+			delete(mc.f.objects, fakeKey{gv: "kuadrant.io/v1beta1", ns: "kuadrant-system", plural: "kuadrants", name: "kuadrant"})
+		}},
+		{"unreadable", "cannot be checked now (HTTP 500)", "prerequisites_unknown", func(mc *modelsCluster) {
+			delete(mc.f.groups, "/apis/kuadrant.io")
+			mc.f.fail["GET /apis/kuadrant.io"] = http.StatusInternalServerError
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mc := newModelsCluster(t)
+			tc.breakIt(mc)
+			u := projectModelUser(mc)
+			res, _ := runProjectModelForTest(t, u, types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct", TokenAuth: true})
+			if res.Success || res.ErrorCode != tc.code || !strings.Contains(res.Message, tc.want) || !strings.Contains(res.Message, "Deploy without token authentication") {
+				t.Fatalf("%+v", res)
+			}
+			if w := modelWritesOf(mc); len(w) != 0 {
+				t.Errorf("a refused setup wrote %v", w)
+			}
+		})
+	}
+}
+
+// Through the gateway, a setup succeeds only once the gateway refused the
+// same call without a token. When it answers it (no token checks): a model
+// this setup created is deleted again and forgotten; a model set up
+// before, deployed again, is reported and left.
+func TestGatewayPolicyFailureRollsBackANewModel(t *testing.T) {
+	setup := types.ProjectModelRequest{Action: "setup", Project: "proj", Model: "qwen25-05b-instruct", Exposure: "default-gateway", TokenAuth: true}
+	t.Run("first deploy", func(t *testing.T) {
+		mc := newModelsCluster(t)
+		putAdmittingGateway(mc, "openshift-ingress", "proj")
+		mc.calls.open = true
+		res, _ := runProjectModelForTest(t, projectModelUser(mc), setup)
+		if res.Success || res.ErrorCode != "not_authenticated" || !strings.Contains(res.Message, "deleted again") {
+			t.Fatalf("%+v", res)
+		}
+		if mc.f.has(testModelPath) {
+			t.Error("the unchecked model is left")
+		}
+		rec, _ := serving.ReadModelsRecord(mc.c)
+		if _, ok := rec[serving.ModelRecordKey("proj", "qwen25-05b-instruct")]; ok {
+			t.Error("its entry is left")
+		}
+	})
+	t.Run("redeploy", func(t *testing.T) {
+		mc := newModelsCluster(t)
+		putAdmittingGateway(mc, "openshift-ingress", "proj")
+		u := projectModelUser(mc)
+		if res, _ := runProjectModelForTest(t, u, setup); !res.Success {
+			t.Fatalf("first: %+v", res)
+		}
+		mc.calls.open = true
+		res, _ := runProjectModelForTest(t, u, setup)
+		if res.Success || res.ErrorCode != "not_authenticated" || !strings.Contains(res.Message, "left as it is") {
+			t.Fatalf("%+v", res)
+		}
+		if !mc.f.has(testModelPath) {
+			t.Error("a model set up before was deleted")
+		}
+	})
+	t.Run("redeploy after the gateway stopped admitting the project", func(t *testing.T) {
+		mc := newModelsCluster(t)
+		putAdmittingGateway(mc, "openshift-ingress", "proj")
+		u := projectModelUser(mc)
+		if res, _ := runProjectModelForTest(t, u, setup); !res.Success {
+			t.Fatalf("first: %+v", res)
+		}
+		putAdmittingGateway(mc, "openshift-ingress")
+		res, _ := runProjectModelForTest(t, u, setup)
+		if res.Success || !strings.Contains(res.Message, "does not admit project proj") {
+			t.Fatalf("%+v", res)
+		}
+	})
+}
