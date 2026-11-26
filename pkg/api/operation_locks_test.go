@@ -684,6 +684,7 @@ func TestBusyRefusalNamesNobodyForUsers(t *testing.T) {
 		{"user, same project", busyViewer{user: "bob"}, &lockRefusal{holder: projectOp, reason: conflictProject}, "An action (Workbench) is running in this project", []string{"alice", "team-uid-1"}},
 		{"user, own action", busyViewer{user: "alice"}, &lockRefusal{holder: projectOp, reason: conflictUser}, "You already have an action running (Workbench in project team-uid-1)", nil},
 		{"user, cap", busyViewer{user: "bob"}, &lockRefusal{holder: projectOp, reason: conflictCap}, "Too many project actions", []string{"alice", "team-uid-1"}},
+		{"no name on either side", busyViewer{}, &lockRefusal{holder: otherPodProjectLease("uid-1", "", started), reason: conflictProject}, "An action (Workbench) is running in this project", []string{"team-uid-1", "You already"}},
 	} {
 		w := httptest.NewRecorder()
 		writeLockRefusal(&statusWriter{ResponseWriter: w, admin: tc.viewer.admin, user: tc.viewer.user}, tc.refusal)

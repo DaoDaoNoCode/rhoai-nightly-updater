@@ -202,7 +202,7 @@ func busyMessageForUser(op *Operation, reason, user string) string {
 		return "Another operation is in progress. Please wait."
 	case op.ProjectUID == "":
 		return "A cluster operation is running since " + op.StartedAt.UTC().Format("15:04") + " UTC. Project actions can start when it ends."
-	case op.User == user:
+	case user != "" && op.User == user:
 		return "You already have an action running (" + op.Label + " in project " + op.Project + "). Wait for it to finish."
 	case reason == conflictProject:
 		return "An action (" + op.Label + ") is running in this project since " + op.StartedAt.UTC().Format("15:04") + " UTC. Wait for it to finish."
