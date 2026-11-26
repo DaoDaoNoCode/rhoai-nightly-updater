@@ -97,8 +97,9 @@ func verdictsFailed(v map[string]actionVerdict) bool {
 // sign-in and the project's UID (what keeps every action from starting);
 // then per action the prerequisites with the ServiceAccount's facts client
 // and the access reviews with their token (projectActionVerdicts: a
-// failure counts only for the actions it concerns). Cached a minute per
-// token hash and project.
+// failed read refuses only the actions that need it; a failed access
+// review refuses them all, fail closed). Cached a minute per token hash
+// and project.
 // Advisory: each action's gate checks again.
 var HandleProjectCapabilities = withAuth(func(sa *cluster.Client, w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
