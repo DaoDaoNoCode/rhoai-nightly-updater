@@ -275,9 +275,9 @@ const StoragePart: React.FC<{ project: string; read: ProjectRead<ProjectStorageS
                 ) : (
                   <ProjectActionButton project={project} action="project-s3.delete" busy={busy} variant="danger"
                     onClick={() => start(`Delete the S3 storage in ${project}`, s3Run("delete"), {
-                      changes: [`SeaweedFS ${st.name} in ${project}: its Deployment, Service, key Secret and network policy; the volume ${st.dataVolume} is kept`],
+                      changes: [`SeaweedFS ${st.name} in ${project}: its Deployment, Service, key Secret and network policy`],
                       label: "Delete",
-                      typed: { label: `To delete the volume ${st.dataVolume} and all data on it too, type its name`, expect: st.dataVolume, run: (typed) => s3Run("delete", typed ? st.dataVolume : undefined), changes: [`The volume ${st.dataVolume} and all data on it`] },
+                      typed: { label: `The volume ${st.dataVolume} and its data are kept. To delete them too, type its name`, expect: st.dataVolume, run: (typed) => s3Run("delete", typed ? st.dataVolume : undefined), changes: [`The volume ${st.dataVolume} and all data on it`] },
                     })}>
                     Delete
                   </ProjectActionButton>
