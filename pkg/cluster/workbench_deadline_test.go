@@ -84,10 +84,13 @@ func TestWorkbenchSetupRecordsWhatItMadeAtItsDeadline(t *testing.T) {
 	}
 }
 
-// The record write after the deadline fails: the create is undone, its
-// UID-guarded delete reaching the API on a budget of its own; and a
-// project user's setup at its deadline records its storage through the
-// users' records admission (record.AdmitUserEntry) as theirs.
+// The record write after the deadline uses up its whole budget (its
+// request runs until the injected clock is past that budget): the create
+// is still undone, its UID-guarded delete reaching the API on a fresh
+// budget of its own (with one budget for both, the delete would start on
+// an ended context). And a project user's setup at its deadline records
+// its storage through the users' records admission (record.AdmitUserEntry)
+// as theirs.
 func TestWorkbenchSetupUndoesWhatItCannotRecordAtItsDeadline(t *testing.T) {
 	t.Setenv("NAMESPACE", "rhoai-nightly-updater")
 	const snapshot = "/api/v1/namespaces/rhoai-nightly-updater/configmaps/rhoai-nightly-updater-snapshot"
@@ -96,7 +99,7 @@ func TestWorkbenchSetupUndoesWhatItCannotRecordAtItsDeadline(t *testing.T) {
 		failRecord  bool
 		projectUser bool
 	}{
-		{"the record write fails", true, false},
+		{"the record write uses up its budget", true, false},
 		{"a project user's record", false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -105,12 +108,21 @@ func TestWorkbenchSetupUndoesWhatItCannotRecordAtItsDeadline(t *testing.T) {
 			f, c := newResourceFake(t)
 			putWorkbenchCluster(t, f, true)
 			if tc.failRecord {
+				// The record write's request lasts past its budget (15 s),
+				// then fails.
 				f.fail["PATCH "+snapshot] = http.StatusInternalServerError
+				f.beforeRequest = func(r *http.Request) {
+					if r.Method == http.MethodPatch && r.URL.Path == snapshot {
+						clk.Advance(16 * time.Second)
+					}
+				}
 			}
 			ctx, cancel := clk.WithDeadline(context.Background(), clk.Now().Add(15*time.Minute))
 			defer cancel()
+			// Just past the deadline (the post-deadline allowance is
+			// still open for the record and the delete).
 			editTestClient(c, func(o *testClientOptions) {
-				o.HTTPClient = &http.Client{Transport: &deadlineAfter{base: o.HTTPClient.Transport, path: wbPVCs, clk: clk, by: 16 * time.Minute}}
+				o.HTTPClient = &http.Client{Transport: &deadlineAfter{base: o.HTTPClient.Transport, path: wbPVCs, clk: clk, by: 15*time.Minute + time.Second}}
 				o.Ctx = ctx
 			})
 			u := userClientOf(c, fakeUserToken)
