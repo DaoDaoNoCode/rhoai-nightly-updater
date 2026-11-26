@@ -38,7 +38,7 @@ RELEASES_URL ?=
 
 .PHONY: all build push deploy upgrade rollback resolve-image release undeploy dev lint lint-go lint-frontend frontend-deps \
 	test test-go test-frontend test-scripts test-seaweedfs-podman test-chart chart check-chart vuln clean help env docs-fixtures docs-mock frontend-lock \
-	docs-screenshots docs-check shellcheck audit-frontend build-frontend release-check ci-go ci-checks ci-script-tests
+	docs-screenshots docs-check docs-stale shellcheck audit-frontend build-frontend release-check ci-go ci-checks ci-script-tests
 
 .DEFAULT_GOAL := help
 
@@ -98,8 +98,9 @@ rollback:  ## Roll back to an older build with its own template: TAG=<release or
 resolve-image:  ## Print the digest reference deploy/upgrade would apply for IMAGE:TAG, after the template check
 	@TAG='$(TAG)' $(INSTALL) resolve-image
 
-release:  ## Tag a release VERSION=vX.Y.Z on main, or a pre-release VERSION=vX.Y.Z-rc.N on main or integ/* (checks the branch, CHANGELOG and the template guard; prints the push commands)
+release:  ## Tag a release VERSION=vX.Y.Z on main, or a pre-release VERSION=vX.Y.Z-rc.N on main or integ/* (checks the branch, CHANGELOG, the template guard and the docs images; prints the push commands)
 	@test -n "$(VERSION)" || { echo "Usage: make release VERSION=vX.Y.Z (or vX.Y.Z-alpha.N, -beta.N, -rc.N for a pre-release)"; exit 1; }
+	@sh docs/tools/stale-images.sh --release '$(VERSION)'
 	@./scripts/release.sh tag '$(VERSION)'
 
 undeploy:  ## Remove the app, its OAuthClient (revoking its sign-ins), cluster-wide RBAC, Roles in other namespaces, the ConsoleLink and the namespace
@@ -198,9 +199,10 @@ shellcheck:  ## shellcheck every shell script (CI: shellcheck 0.11.0)
 	shellcheck scripts/*.sh dev.sh docs/tools/*.sh
 	shellcheck --shell=bash pkg/cluster/internal/rhoai/node_pull_secret.sh
 
-release-check:  ## The tag pipeline's release guard for TAG=vX.Y.Z (CHANGELOG, chart version, template revision)
+release-check:  ## The tag pipeline's release guard for TAG=vX.Y.Z (CHANGELOG, chart version, template revision; stale docs images stop a final release)
 	@test -n "$(TAG)" || { echo "Usage: make release-check TAG=vX.Y.Z"; exit 1; }
 	sh scripts/release.sh check '$(TAG)' HEAD
+	sh docs/tools/stale-images.sh --release '$(TAG)'
 
 vuln:  ## Check Go and npm dependencies for known vulnerabilities
 	go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
@@ -212,11 +214,14 @@ docs-fixtures:  ## Regenerate the docs mock's Diagnostics answers from the backe
 docs-mock:  ## Serve the built frontend with the docs mock backend (SCENARIO=healthy, PORT=18181, DELAY=<ms> slows Environment reads)
 	node docs/tools/mock/server.mjs --port $(or $(PORT),18181) --scenario $(or $(SCENARIO),healthy) $(if $(DELAY),--delay $(DELAY))
 
-docs-screenshots:  ## Regenerate every docs image and GIF from the mock (JOBS="..." for a subset; needs playwright-cli, ffmpeg, ImageMagick)
+docs-screenshots:  ## Regenerate the docs images from the mock, in the release pass (JOBS="..." for a subset; needs playwright-cli, ImageMagick)
 	./docs/tools/screenshots.sh $(JOBS)
 
-docs-check:  ## Check the Markdown links, anchors and image paths, and that every docs image is used
+docs-check:  ## Check the Markdown links, anchors and image paths, and that every docs image is used and in the manifest
 	node docs/tools/check-docs.mjs
+
+docs-stale:  ## List the docs images whose sources changed after they were captured (git history, no browser; exit 1 when one is)
+	sh docs/tools/stale-images.sh
 
 clean:  ## Remove build artifacts
 	rm -f server

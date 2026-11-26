@@ -238,10 +238,28 @@ script-tests:
     - helm version
     - make -k ci-script-tests
 
+# A warning, never a failure: the docs images whose sources have commits
+# after the image was captured (make docs-stale, docs/tools/images.manifest).
+# Branches do not regenerate docs images; the release pass does, and
+# release-guard stops a final release while one is stale. Git only, in the
+# Go image; it needs the whole history to find each image's capture commit.
+# Nothing needs it, so it never holds up a build or a publish.
+docs-stale:
+  extends: .test
+  image: $GO_IMAGE
+  timeout: 10m
+  variables:
+    GIT_DEPTH: "0"
+  allow_failure: true
+  script:
+    - make docs-stale
+
 # Fails a tag pipeline before anything is published: the tag must
 # match the top dated section of CHANGELOG.md (a pre-release: the top
-# undated one), and a TEMPLATE_REVISION change since the previous release
-# tag (pre-releases do not count) needs a higher MAJOR version.
+# undated one), a TEMPLATE_REVISION change since the previous release
+# tag (pre-releases do not count) needs a higher MAJOR version, and a final
+# release needs docs images captured after their sources' last change (a
+# pre-release only warns; docs/tools/stale-images.sh).
 release-guard:
   extends: .test
   image: $GO_IMAGE
