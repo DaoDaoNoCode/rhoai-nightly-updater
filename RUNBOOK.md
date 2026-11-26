@@ -736,7 +736,7 @@ oc get cm rhoai-nightly-updater-snapshot -n <tool namespace> -o jsonpath='{.data
 
 ### 10.6.1 Project S3 storage
 
-A project's admins set up SeaweedFS in their own project from the user Environment view (`POST /api/resources/project-s3/stream`, actions `setup`, `repair`, `delete`); its admins and editors set up a pipeline server on it (`POST /api/resources/project-pipeline-server/stream`). Everything runs with the user's token; the UIDs are recorded in the snapshot ConfigMap (key `projectStorages`; the pipeline server in `pipelineServers` with `storage: project`). There is no Route: reach the admin UI with `oc port-forward deploy/nightly-s3 12535 -n <project>`.
+A project's admins set up SeaweedFS in their own project from the user Environment view (`POST /api/resources/project-s3/stream`, actions `setup`, `repair`, `delete`); its admins and editors set up a pipeline server on it (`POST /api/resources/project-pipeline-server/stream`). Everything runs with the user's token; the UIDs are recorded in the snapshot ConfigMap (key `projectStorages`; the pipeline server in `pipelineServers` with `storage: project`). There is no Route and no admin UI. Only the S3 port is on the pod network: master, volume and filer listen on 127.0.0.1 inside the pod (`oc exec deploy/nightly-s3 -n <project> -- cat /proc/net/tcp /proc/net/tcp6` lists 8333 and 18333 off loopback, nothing else). Bucket `pipelines` appears on the first upload with the key.
 
 ```bash
 oc get pvc/nightly-s3-data secret/nightly-s3-credentials networkpolicy/nightly-s3-ingress deploy/nightly-s3 svc/nightly-s3 -n <project>
@@ -751,7 +751,9 @@ oc get cm rhoai-nightly-updater-snapshot -n <tool namespace> -o jsonpath='{.data
 | Set up refused: RHOAI's applications namespace could not be read | The NetworkPolicy lets in RHOAI's applications namespace, read from its DSCInitialization; with none (RHOAI not installed, or unreadable) nothing is made |
 | Set up refused: the pod cannot be created (forbidden, exceeded quota) | The project's quota, LimitRange or SCC refuses the pod (requests 64m/256Mi, limits 500m/1Gi, a 20Gi volume). What the setup made was deleted again; raise the quota and set up again |
 | Not ready after 90 s | The pod is pulling or pending (the image from `ghcr.io`, or `SEAWEEDFS_IMAGE` on a mirrored cluster; a volume without a default StorageClass). The objects stay, recorded; the status shows when it is ready, Delete removes them |
-| "NetworkPolicy nightly-s3-ingress was changed" or "is missing" | Someone in the project changed it. Repair applies it again |
+| "NetworkPolicy nightly-s3-ingress was changed" or "is missing" | Someone in the project changed it. Repair applies it again (it is defense in depth: the internal ports are not on the pod network) |
+| Repair refused: a pipeline server holds the old key | The key Secret lost its key, and a new one would leave the pipeline server, its Connection and the workbenches' `ds-pipeline-config` on the old one. Delete the pipeline server, Repair, then set the pipeline server up again |
+| Delete says the pod is still there | The NetworkPolicy stays until no Deployment `nightly-s3` and no pod labelled `app=nightly-s3` is left. Delete again once the pod is gone (`oc get pods -l app=nightly-s3 -n <project>`) |
 | Delete refused: a pipeline server uses it | Delete the pipeline server first (Pipelines part); the storage then goes. The volume goes only when its name is typed |
 
 ### 10.7 Distributed workloads (Kueue)
